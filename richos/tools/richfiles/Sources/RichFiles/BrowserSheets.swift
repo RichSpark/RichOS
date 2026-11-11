@@ -19,6 +19,8 @@ enum BrowserSheet: Identifiable {
     case zip(ZipCatalog)
     case createZip([FileReference], URL)
     case diskUsage(URL)
+    case checksum(FileReference)
+    case duplicates(URL)
     case trash, transfers, searchOptions, batch([FileReference]), connect, workspaces
 
     var id: String {
@@ -30,6 +32,8 @@ enum BrowserSheet: Identifiable {
         case .zip: return "zip"
         case .createZip: return "createZip"
         case .diskUsage: return "diskUsage"
+        case .checksum: return "checksum"
+        case .duplicates: return "duplicates"
         case .trash: return "trash"
         case .transfers: return "transfers"
         case .searchOptions: return "searchOptions"
@@ -37,6 +41,123 @@ enum BrowserSheet: Identifiable {
         case .connect: return "connect"
         case .workspaces: return "workspaces"
         }
+    }
+}
+
+private func readStorage<Result: Sendable>(_ operation: @escaping @Sendable () throws -> Result) async throws -> Result {
+    let worker = Task.detached(priority: .utility, operation: operation)
+    return try await withTaskCancellationHandler { try await worker.value } onCancel: { worker.cancel() }
+}
+
+@MainActor
+struct ChecksumSheet: View {
+    let file: FileReference
+    @Environment(\.dismiss) private var dismiss
+    @State private var checksum: String?
+    @State private var expected = ""
+    @State private var problem = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("SHA-256 Checksum").font(.headline)
+            Text(file.url.lastPathComponent).lineLimit(1).truncationMode(.middle)
+            if let checksum {
+                Text(checksum).font(.system(.body, design: .monospaced)).textSelection(.enabled)
+                TextField("Paste expected SHA-256", text: $expected)
+                if !expected.isEmpty { Text(verification(checksum)).font(.callout) }
+            } else if !problem.isEmpty { Text(problem).foregroundStyle(.secondary) }
+            else { ProgressView("Reading file…") }
+            HStack {
+                if let checksum {
+                    Button("Copy Checksum") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(checksum, forType: .string)
+                    }
+                }
+                Spacer()
+                Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
+            }
+        }.padding(16).frame(width: 570)
+            .task {
+                let reference = file
+                do {
+                    checksum = try await readStorage {
+                        try StorageAnalysis.checksum(of: reference, isCancelled: { Task.isCancelled })
+                    }
+                } catch {
+                    if !Task.isCancelled { problem = error.localizedDescription }
+                }
+            }
+    }
+
+    private func verification(_ checksum: String) -> String {
+        let normalized = expected.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard normalized.utf8.count == 64, normalized.utf8.allSatisfy({
+            (48...57).contains($0) || (97...102).contains($0)
+        }) else { return "A SHA-256 checksum has 64 hexadecimal characters." }
+        return normalized == checksum ? "Checksum matches." : "Checksum does not match."
+    }
+}
+
+@MainActor
+struct DuplicateSheet: View {
+    let folder: URL
+    let openFolder: (URL) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var report: DuplicateFileReport?
+    @State private var problem = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Duplicate Files").font(.headline)
+            Text(folder.path).lineLimit(1).truncationMode(.middle).textSelection(.enabled)
+            if let report {
+                if report.groups.isEmpty {
+                    Text("No duplicates found in the files checked.").foregroundStyle(.secondary)
+                    Spacer()
+                } else {
+                    List(report.groups) { group in
+                        Section("\(group.files.count) files · \(formattedBytes(group.size)) each") {
+                            ForEach(group.files, id: \.self) { file in
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(file.lastPathComponent).lineLimit(1)
+                                    Text(file.deletingLastPathComponent().path).font(.caption).foregroundStyle(.secondary)
+                                        .lineLimit(1).truncationMode(.middle)
+                                    Button("Open Containing Folder") {
+                                        openFolder(file.deletingLastPathComponent())
+                                        dismiss()
+                                    }.buttonStyle(.borderless)
+                                }.padding(.vertical, 3)
+                            }
+                        }
+                    }
+                }
+                if report.unavailable > 0 || report.otherVolumes > 0 {
+                    Text("\(report.unavailable) items unavailable. \(report.otherVolumes) other mounts skipped.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            } else if !problem.isEmpty {
+                Text(problem).foregroundStyle(.secondary)
+                Spacer()
+            } else {
+                ProgressView("Comparing file contents…")
+                Spacer()
+            }
+            HStack {
+                Spacer()
+                Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
+            }
+        }.padding(16).frame(width: 570, height: 430)
+            .task {
+                let requested = folder
+                do {
+                    report = try await readStorage {
+                        try StorageAnalysis.duplicates(in: requested, isCancelled: { Task.isCancelled })
+                    }
+                } catch {
+                    if !Task.isCancelled { problem = error.localizedDescription }
+                }
+            }
     }
 }
 
@@ -100,12 +221,10 @@ struct DiskUsageSheet: View {
                 let requested = folder
                 report = nil
                 problem = ""
-                let worker = Task.detached(priority: .utility) {
-                    try StorageAnalysis.diskUsage(in: requested, isCancelled: { Task.isCancelled })
-                }
                 do {
-                    let result = try await withTaskCancellationHandler { try await worker.value }
-                        onCancel: { worker.cancel() }
+                    let result = try await readStorage {
+                        try StorageAnalysis.diskUsage(in: requested, isCancelled: { Task.isCancelled })
+                    }
                     if !Task.isCancelled { report = result }
                 } catch {
                     if !Task.isCancelled { problem = error.localizedDescription }

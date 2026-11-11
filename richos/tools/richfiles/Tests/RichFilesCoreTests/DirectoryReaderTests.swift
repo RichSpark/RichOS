@@ -40,6 +40,36 @@ final class DirectoryReaderTests: XCTestCase {
         }
     }
 
+    func testChecksumsAndDuplicatesCompareContentsAndIgnoreHardLinksAndSymlinks() throws {
+        try fixture { root in
+            try write("first.txt", in: root, text: "abc")
+            try write("second.txt", in: root, text: "abc")
+            try write("same-size.txt", in: root, text: "xyz")
+            let first = root.appendingPathComponent("first.txt")
+            try FileManager.default.linkItem(at: first, to: root.appendingPathComponent("hard-link.txt"))
+            try FileManager.default.createSymbolicLink(at: root.appendingPathComponent("symbolic.txt"),
+                                                       withDestinationURL: first)
+            let expected = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+            let reference = try FileReference(url: first)
+            XCTAssertEqual(try StorageAnalysis.checksum(of: reference), expected)
+
+            let report = try StorageAnalysis.duplicates(in: root)
+            XCTAssertEqual(report.unavailable, 0)
+            let group = try XCTUnwrap(report.groups.first)
+            XCTAssertEqual(report.groups.count, 1)
+            XCTAssertEqual(group.sha256, expected)
+            XCTAssertEqual(group.files.count, 2)
+            XCTAssertTrue(group.files.contains { $0.lastPathComponent == "second.txt" })
+            XCTAssertFalse(group.files.contains { ["same-size.txt", "symbolic.txt"].contains($0.lastPathComponent) })
+
+            _ = try FileOperations.rename(reference, to: "moved.txt")
+            try write("first.txt", in: root, text: "abc")
+            XCTAssertThrowsError(try StorageAnalysis.checksum(of: reference)) {
+                guard case FileOperationError.sourceChanged = $0 else { return XCTFail("\($0)") }
+            }
+        }
+    }
+
     func testFolderAndRecursiveSearchKeepExplicitScope() throws {
         try fixture { root in
             let manager = FileManager.default

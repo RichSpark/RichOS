@@ -196,7 +196,7 @@ final class TextContentReader {
         return false
     }
 
-    private static func isDataless(_ status: stat) -> Bool {
+    static func isDataless(_ status: stat) -> Bool {
         status.st_flags & UInt32(SF_DATALESS) != 0
     }
 }

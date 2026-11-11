@@ -7,7 +7,7 @@ public struct FileIdentity: Hashable, Codable, Sendable {
     private let birthSeconds: Int
     private let birthNanoseconds: Int
 
-    fileprivate init(_ status: stat) {
+    init(_ status: stat) {
         device = status.st_dev
         inode = status.st_ino
         birthSeconds = status.st_birthtimespec.tv_sec

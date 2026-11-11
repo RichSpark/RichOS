@@ -563,6 +563,9 @@ struct BrowserView: View {
                 }
                 Button("Rename…") { requestRename(first) }.disabled(actions.busy)
                 Button("Properties") { sheet = .properties(first) }
+                if first.kind == .regularFile {
+                    Button("Verify Checksum…") { checksum(first) }
+                }
             } else {
                 Button("Batch Rename…") { withReferences(entries) { sheet = .batch($0) } }.disabled(actions.busy)
             }
@@ -630,6 +633,7 @@ struct BrowserView: View {
         Button("Expand to Current Folder") { expandToCurrentFolder() }
         Button("Workspaces…") { sheet = .workspaces }
         Button("Disk Usage…") { sheet = .diskUsage(model.folder) }
+        Button("Find Duplicate Files…") { sheet = .duplicates(model.folder) }
         Button("Refresh") { _ = perform(.refresh) }
     }
 
@@ -726,6 +730,10 @@ struct BrowserView: View {
         case .revealFolder: expandToCurrentFolder()
         case .workspaces: sheet = .workspaces
         case .diskUsage: sheet = .diskUsage(model.folder)
+        case .duplicates: sheet = .duplicates(model.folder)
+        case .checksum:
+            guard entries.count == 1, let file = entries.first, file.kind == .regularFile else { return false }
+            checksum(file)
         case .search: focus = .search
         case .grid(let dx, let dy, let extend): return moveGrid(dx: dx, dy: dy, extend: extend)
         }
@@ -842,6 +850,12 @@ struct BrowserView: View {
             guard let source = references.first else { return }
             sheet = .name(NameRequest(source: source, folder: model.folder,
                                       directory: entry.kind == .directory, name: entry.name))
+        }
+    }
+
+    private func checksum(_ entry: FileEntry) {
+        withReferences([entry]) { references in
+            if let reference = references.first { sheet = .checksum(reference) }
         }
     }
 
@@ -991,6 +1005,8 @@ struct BrowserView: View {
         case .createZip(let sources, let destination):
             ZipCreateSheet(sources: sources, destination: destination, changed: model.refresh)
         case .diskUsage(let folder): DiskUsageSheet(folder: folder, openFolder: model.openFolder)
+        case .duplicates(let folder): DuplicateSheet(folder: folder, openFolder: model.openFolder)
+        case .checksum(let reference): ChecksumSheet(file: reference)
         case .trash: TrashSheet(actions: actions)
         case .transfers: TransferSheet(actions: actions)
         case .searchOptions: SearchOptionsSheet(model: model)
