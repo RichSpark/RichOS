@@ -364,11 +364,15 @@ async function main() {
           const later = "\n**[02:10] Them:** Later context.\n".repeat(30);
           return { view: "text", text: "# Transcript\n\n" + earlier + "**[02:04] Me:** Approve the pilot.\n" + later };
         }
+        if (command === "output_preview" && args.outputId === "fixture-meeting-brief") {
+          return { view: "text", text: "Approve the pilot. `meeting-source 2026-11-11T11-00-00Z--system--call 123 02:04`" };
+        }
         const result = await original(command, args);
         if (command !== "list_output") return result;
         const base = result.files.find((file) => file.name === "brief.md");
         const file = { ...base, id: "fixture-meeting-transcript", name: "transcript.md", path: folder + "/transcript.md", folder };
-        const files = [...result.files, file];
+        const archive = { ...base, id: "fixture-meeting-brief", path: folder + "/brief.md", folder };
+        const files = [...result.files, file, archive];
         if (document.documentElement.dataset.fixtureOutputArrival) files.push({ ...base, id: "fixture-arrival" });
         return { ...result, files, count: files.length };
       };
@@ -405,6 +409,10 @@ async function main() {
     });
     assertEqual(scroll.after, scroll.before, "new output keeps the reader's place in the open transcript");
     assertEqual(await passage.count(), 1, "the cited passage survives an unrelated output arrival");
+    await sourcePage.evaluate(() => window.RichOutput.open({ file: "fixture-meeting-brief" }));
+    await sourcePage.locator("#op-viewer").getByRole("button", { name: "Source 02:04" }).click();
+    await passage.waitFor();
+    assertEqual((await panelState(sourcePage)).title, "transcript.md", "a saved brief can also open its cited passage");
     await sourcePage.close();
   });
 

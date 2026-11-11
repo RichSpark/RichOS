@@ -765,7 +765,13 @@
         if (f.kind === "md" && !source) {
           const md = node("div", "of-md");
           if (window.RichTimeline && window.RichTimeline.renderMarkdownInto) {
-            window.RichTimeline.renderMarkdownInto(md, a.text, null, { document: true, sourceLine });
+            const briefLinks = /\/evidence\/meetings\/[a-zA-Z0-9._:-]+\/brief\.md$/.test(f.path) ? {
+              forText(text) {
+                const hit = links.forText(text);
+                return hit?.sourcePassage ? hit : null;
+              },
+            } : null;
+            window.RichTimeline.renderMarkdownInto(md, a.text, briefLinks, { document: true, sourceLine });
             const passage = md.querySelector("[data-source-passage]");
             if (passage && !requested.landed) queueMicrotask(() => {
               if (!passage.isConnected || state.sourcePassage !== requested || requested.landed) return;
