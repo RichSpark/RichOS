@@ -24,8 +24,7 @@ test('live transcription checkpoints the flushed prefix and only decodes the tai
   header.writeUInt16LE(4, 32);
   header.writeUInt16LE(16, 34);
   header.write('data', 36);
-  const pcm = Buffer.alloc(30 * bytesPerSecond);
-  pcm.fill(Buffer.from([0, 8]), 21 * bytesPerSecond, 27 * bytesPerSecond);
+  const pcm = Buffer.alloc(130 * bytesPerSecond);
   pcm.writeInt16LE(17, 24 * bytesPerSecond);
   pcm.writeInt16LE(-31, 24 * bytesPerSecond + 2);
   const flush = (seconds) => {
@@ -39,25 +38,25 @@ test('live transcription checkpoints the flushed prefix and only decodes the tai
   const segment = (text, startMs, endMs) => ({ text, startMs, endMs, wordTimesMs: [startMs] });
   const decode = (_cache, wav) => {
     requests.push(wav.readUInt32LE(40) / bytesPerSecond);
-    if (requests.at(-1) === 26) {
+    if (requests.at(-1) === 24) {
       return {
-        me: [segment('First', 23_000, 24_000), segment('Next', 24_000, 25_000)],
+        me: [segment('First', 23_000, 23_900)],
         others: [segment('Other channel', 500, 1_000)],
         toolchain,
       };
     }
-    assert.equal(wav.readInt16LE(44 + 2 * bytesPerSecond), 17);
-    assert.equal(wav.readInt16LE(44 + 2 * bytesPerSecond + 2), -31);
-    return { me: [segment('First', 1_000, 2_000), segment('Next', 2_000, 3_000)], others: [], toolchain };
+    assert.equal(wav.readInt16LE(44), 17);
+    assert.equal(wav.readInt16LE(46), -31);
+    return { me: [segment('Next', 100, 1_000)], others: [], toolchain };
   };
   const options = { model: 'large-v3-turbo-q5_0' };
   const advance = (state) => advanceLiveTranscription(dir, options, { decode, toolchain, ...state });
 
-  flush(28);
+  flush(26);
   assert.equal(supportsLiveTranscription(dir, { capture: { source: 'desktop-companion-macos' } }), true);
   assert.equal(supportsLiveTranscription(dir, { capture: { source: 'chrome' } }), false);
-  assert.equal(advance().decoded, 0, 'Unflushed bytes cannot fill the overlap');
-  flush(29);
+  assert.equal(advance().decoded, 0, 'Unflushed bytes cannot establish a quiet boundary');
+  flush(27);
   const live = advance();
   assert.equal(live.decoded, 1);
   assert.equal(live.asr.me[0].text, 'First');
@@ -68,8 +67,8 @@ test('live transcription checkpoints the flushed prefix and only decodes the tai
   const finished = advance({ closed: true });
   assert.equal(finished.reused, 1);
   assert.equal(finished.decoded, 1);
-  assert.deepEqual(finished.asr.me, [segment('First', 23_000, 24_000), segment('Next', 24_000, 25_000)]);
-  assert.deepEqual(requests, [26, 8]);
+  assert.deepEqual(finished.asr.me, [segment('First', 23_000, 23_900), segment('Next', 24_100, 25_000)]);
+  assert.deepEqual(requests, [24, 6]);
 
   const checkpoint = path.join(dir, '.live-transcription', '0.json');
   fs.writeFileSync(checkpoint, 'truncated');
@@ -124,6 +123,34 @@ test('live transcription checkpoints the flushed prefix and only decodes the tai
   assert.deepEqual(timed.me[0].wordTimesMs, [0]);
   const transcript = renderMarkdown(mergeTranscript(timed));
   assert.match(transcript, /\[00:04\] Me:[\s\S]*\[00:16\] Them:/);
+
+  // Both sides are active across the nominal cut. Wait for the next pause and
+  // send the sentence to Whisper in one window instead of trimming overlapping decodes.
+  pcm.fill(0);
+  pcm.fill(Buffer.from([0, 8]), 21 * bytesPerSecond, 32 * bytesPerSecond);
+  flush(30);
+  assert.equal(advance({ decode: () => assert.fail('continuous speech was cut') }).decoded, 0);
+  flush(40);
+  const continuous = advance({
+    decode: (_cache, wav) => {
+      assert.equal(wav.readUInt32LE(40) / bytesPerSecond, 32.08);
+      return { me: [segment('Read the whole sentence once.', 23_000, 28_000)], others: [], toolchain };
+    },
+  });
+  assert.deepEqual(continuous.asr.me.map((s) => s.text), ['Read the whole sentence once.']);
+  assert.equal(advance({
+    cursor: continuous.cursor, closed: true,
+    decode: (_cache, wav) => {
+      assert.equal(wav.readUInt32LE(40) / bytesPerSecond, 7.92);
+      return { me: [], others: [], toolchain };
+    },
+  }).decoded, 1);
+
+  pcm.fill(Buffer.from([0, 8]));
+  flush(121);
+  assert.throws(() => advance({
+    closed: true, decode: () => assert.fail('unbounded audio was decoded as a chunk'),
+  }), /no quiet meeting boundary/);
 });
 
 test('private session validation tolerates a live worker removing its staging', (t) => {
