@@ -179,7 +179,7 @@ final class BrowserActions: ObservableObject {
         transfer = progress
         status = progress.title + "…"
         transferTask = Task.detached(priority: .userInitiated) {
-            let result = await BrowserTransferJob.perform(request) { progress in
+            let result = await BrowserTransferJob.perform(request, progress: progress) { progress in
                 await self.setTransfer(progress)
             }
             await self.finishTransfer(result, request: request)
@@ -187,6 +187,8 @@ final class BrowserActions: ObservableObject {
     }
 
     private func setTransfer(_ progress: BrowserTransfer) {
+        guard let previous = transfer, previous.running, previous.id == progress.id,
+              previous.revision < progress.revision else { return }
         transfer = progress
     }
 

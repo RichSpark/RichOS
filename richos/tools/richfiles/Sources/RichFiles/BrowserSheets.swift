@@ -420,7 +420,21 @@ struct TransferSheet: View {
                 Text(transfer.destination.path).lineLimit(1).truncationMode(.middle).textSelection(.enabled)
                 ProgressView(value: Double(transfer.completed), total: Double(max(transfer.total, 1)))
                 Text("\(transfer.completed) of \(transfer.total) processed, \(transfer.succeeded) completed")
-                if let current = transfer.currentName { Text("\(transfer.title) · \(current)").lineLimit(1) }
+                if let source = transfer.currentSource {
+                    Text("\(transfer.title) · \(source.lastPathComponent)").lineLimit(1)
+                    Text(source.deletingLastPathComponent().path).font(.caption).foregroundStyle(.secondary)
+                        .lineLimit(1).truncationMode(.middle).textSelection(.enabled)
+                }
+                if let progress = transfer.copyProgress {
+                    ProgressView(value: Double(progress.written), total: Double(progress.total))
+                    HStack(spacing: 8) {
+                        Text("\(formattedBytes(progress.written)) of \(formattedBytes(progress.total))")
+                        if let rate = progress.bytesPerSecond { Text("\(formattedBytes(rate))/s") }
+                        if let seconds = progress.secondsRemaining {
+                            Text("About \(formattedTransferTime(seconds)) left")
+                        }
+                    }.font(.caption).foregroundStyle(.secondary)
+                }
                 if transfer.cancelled { Text("Transfer cancelled.") }
                 List(transfer.issues) { issue in
                     VStack(alignment: .leading) {
@@ -443,6 +457,14 @@ struct TransferSheet: View {
                 Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
             }
         }.padding(16).frame(width: 545, height: 345)
+    }
+
+    private func formattedTransferTime(_ seconds: TimeInterval) -> String {
+        let formatter = DateComponentsFormatter()
+        formatter.allowedUnits = [.day, .hour, .minute, .second]
+        formatter.unitsStyle = .abbreviated
+        formatter.maximumUnitCount = 2
+        return formatter.string(from: max(1, seconds)) ?? "1s"
     }
 }
 

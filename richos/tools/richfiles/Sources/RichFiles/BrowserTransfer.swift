@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 import RichFilesCore
 
 enum BrowserConflictPolicy: Equatable, Sendable {
@@ -20,12 +21,31 @@ struct BrowserTransferIssue: Identifiable, Sendable {
 }
 
 struct BrowserTransfer: Sendable {
+    struct CopyProgress: Sendable {
+        let written: Int64
+        let total: Int64
+        let elapsed: TimeInterval
+
+        var bytesPerSecond: Int64? {
+            guard elapsed >= 1, written > 0 else { return nil }
+            return Int64(exactly: (Double(written) / elapsed).rounded(.down))
+        }
+
+        var secondsRemaining: TimeInterval? {
+            guard let bytesPerSecond, bytesPerSecond > 0, total > written else { return nil }
+            return Double(total - written) / Double(bytesPerSecond)
+        }
+    }
+
+    let id = UUID()
     let destination: URL
     let move: Bool
     let total: Int
+    var revision = 0
     var completed = 0
     var succeeded = 0
-    var currentName: String?
+    var currentSource: URL?
+    var copyProgress: CopyProgress?
     var issues: [BrowserTransferIssue] = []
     var running = true
     var cancelled = false
@@ -89,13 +109,22 @@ struct BrowserTransferResult: Sendable {
 }
 
 enum BrowserTransferJob {
+    private static let logger = Logger(subsystem: "app.richos.richfiles", category: "transfer")
+
     static func perform(
         _ request: BrowserTransferRequest,
-        publish: (BrowserTransfer) async -> Void
+        progress: BrowserTransfer,
+        publish: @escaping @Sendable (BrowserTransfer) async -> Void
     ) async -> BrowserTransferResult {
-        var result = BrowserTransferResult(progress: BrowserTransfer(
-            destination: request.folder, move: request.move, total: request.sources.count
-        ))
+        var result = BrowserTransferResult(progress: progress)
+        let started = ProcessInfo.processInfo.systemUptime
+        let operation = progress.move ? "move" : "copy"
+        logger.info("transfer started id=\(progress.id.uuidString, privacy: .public) operation=\(operation, privacy: .public) count=\(progress.total)")
+        defer {
+            let milliseconds = Int((ProcessInfo.processInfo.systemUptime - started) * 1_000)
+            let status = result.progress.cancelled ? "cancelled" : (result.progress.issues.isEmpty ? "complete" : "issues")
+            logger.info("transfer finished id=\(progress.id.uuidString, privacy: .public) status=\(status, privacy: .public) elapsed_ms=\(milliseconds) succeeded=\(result.progress.succeeded) issues=\(result.progress.issues.count)")
+        }
         let destination: BrowserTransferDestination
         do {
             destination = try request.destination ?? BrowserTransferDestination(folder: request.folder)
@@ -116,7 +145,9 @@ enum BrowserTransferJob {
                 break
             }
             let name = input.url.lastPathComponent
-            result.progress.currentName = name
+            result.progress.currentSource = input.url
+            result.progress.copyProgress = nil
+            result.progress.revision += 1
             await publish(result.progress)
             if Task.isCancelled {
                 result.progress.cancelled = true
@@ -133,11 +164,22 @@ enum BrowserTransferJob {
                     let receipt = try move(source, into: destination, conflict: request.conflict)
                     result.moves.append(receipt)
                 } else {
+                    let copyStarted = ProcessInfo.processInfo.systemUptime
+                    var lastSample: TimeInterval = 0
                     let receipt = try FileOperations.copy(
                         source,
                         into: destination.url,
                         conflictPolicy: request.conflict == .keepBoth ? .keepBoth : .refuse,
-                        isCancelled: { Task.isCancelled }
+                        isCancelled: { Task.isCancelled },
+                        onProgress: { written, total in
+                            let elapsed = ProcessInfo.processInfo.systemUptime - copyStarted
+                            guard total > 0, elapsed - lastSample >= 0.15 else { return }
+                            lastSample = elapsed
+                            result.progress.copyProgress = .init(written: min(written, total), total: total, elapsed: elapsed)
+                            result.progress.revision += 1
+                            let snapshot = result.progress
+                            Task { await publish(snapshot) }
+                        }
                     )
                     if let staging = receipt.remainingStagingFolder {
                         result.progress.issues.append(BrowserTransferIssue(
@@ -167,9 +209,12 @@ enum BrowserTransferJob {
                 if let retrySource, isRetryable(error) { result.retry.append(retrySource) }
             }
             result.progress.completed += 1
+            result.progress.copyProgress = nil
+            result.progress.revision += 1
             await publish(result.progress)
         }
-        result.progress.currentName = nil
+        result.progress.currentSource = nil
+        result.progress.copyProgress = nil
         result.progress.running = false
         return result
     }
