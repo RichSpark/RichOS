@@ -159,7 +159,7 @@ export function whisperVersion(opts = {}) {
  * Transcribe one mono WAV channel.
  * @param {string} wavPath
  * @param {string} speaker "me" | "others"
- * @param {{model?: string, outDir?: string, extraArgs?: string[], language?: string}} [opts]
+ * @param {{model?: string, outDir?: string, extraArgs?: string[], language?: string, timeoutMs?: number}} [opts]
  * @returns {{segments: object[], jsonPath: string, model: string}}
  */
 export function transcribeChannel(wavPath, speaker, opts = {}) {
@@ -186,7 +186,7 @@ export function transcribeChannel(wavPath, speaker, opts = {}) {
       '-ojf',
       '-of', output.slice(0, -5),
     ];
-    execFileSync(whisperBin(), args, { stdio: ['ignore', 'ignore', 'inherit'] });
+    execFileSync(whisperBin(), args, { stdio: ['ignore', 'ignore', 'inherit'], timeout: opts.timeoutMs });
   });
   const json = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
   return { segments: parseWhisperJson(json, speaker), jsonPath, model: modelId, toolchain };
@@ -201,7 +201,7 @@ export function transcribeChannel(wavPath, speaker, opts = {}) {
  * apart and a `brew upgrade` fits comfortably in between.
  *
  * @param {{me: string, others: string}} channels
- * @param {{model?: string, outDir?: string, extraArgs?: string[], language?: string}} [opts]
+ * @param {{model?: string, outDir?: string, extraArgs?: string[], language?: string, timeoutMs?: number}} [opts]
  * @returns {{me: object[], others: object[], model: string, whisper: string, toolchain: object}}
  */
 export function transcribeSession(channels, opts = {}) {

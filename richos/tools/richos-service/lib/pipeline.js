@@ -34,6 +34,7 @@ import {
   CHANNEL_FILES,
 } from './normalize.js';
 import { transcribeSession, transcribeClips, transcribeStyled, whisperVersion } from './transcribe.js';
+import { advanceLiveTranscription, supportsLiveTranscription } from './live-transcription.js';
 import { restyleChannel, restyleWarnings } from './restyle.js';
 import { mergeTranscript, renderMarkdown, verify, wordCount } from './merge.js';
 import { correct } from './correct.js';
@@ -93,7 +94,7 @@ function writeRecord(sessionDir, record) {
  *
  * @param {string} sessionDir absolute path
  * @param {{model?: string, tier?: string, retranscribe?: boolean, extraArgs?: string[], now?: number,
- *          zone?: string, entityMemory?: object}} [opts]
+ *          zone?: string, entityMemory?: object, liveCheckpoints?: boolean}} [opts]
  * @returns {{status: string, transcript?: string, verification?: object, problems?: string[], sessionId: string}}
  */
 export function runPipeline(sessionDir, opts = {}) {
@@ -191,10 +192,19 @@ export function runPipeline(sessionDir, opts = {}) {
           ` (docs/measurements/hardware-model-resolution-2026-09-10/)`,
       );
     }
-    const asr = transcribeSession(
-      { me: path.join(sessionDir, CHANNEL_FILES.me), others: path.join(sessionDir, CHANNEL_FILES.others) },
-      { model, outDir: sessionDir, extraArgs: decodeArgs },
-    );
+    const decodeOptions = { model, outDir: sessionDir, extraArgs: decodeArgs };
+    let asr;
+    if (opts.liveCheckpoints && !opts.retranscribe && supportsLiveTranscription(sessionDir, record)) {
+      try {
+        const start = Date.now();
+        const result = advanceLiveTranscription(sessionDir, decodeOptions, { closed: true });
+        log.info('live transcription finalized', { reused: result.reused, decoded: result.decoded, elapsedMs: Date.now() - start });
+        asr = result.asr;
+      } catch {
+        log.warn('live transcription could not finish; decoding retained audio');
+      }
+    }
+    asr ??= transcribeSession(channelPaths, decodeOptions);
     log.info(`${sessionId} — transcribed: me=${asr.me.length} seg, others=${asr.others.length} seg`);
 
     // The identity of what just decoded this audio. `transcribeChannel` REFUSED before decoding if

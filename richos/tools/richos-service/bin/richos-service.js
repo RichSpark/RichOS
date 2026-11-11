@@ -4,6 +4,7 @@
  *
  *   richos-service watch                 # run the drop-zone watcher (pipeline trigger + reconcile net)
  *   richos-service run <sessionId|dir>   # run the pipeline over one session
+ *   richos-service live-transcribe <id> --recorder-pid <pid> # predecode the growing native WAV
  *   richos-service retranscribe <id> [--model large-v3]   # re-run stages 2-6 on retained audio
  *   richos-service reconcile             # report-only sweep (never transcribes) — the anomaly audit
  *   richos-service claim ...             # coordination (§5.4): own this call or stand down (no double)
@@ -31,6 +32,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { runPipeline } from '../lib/pipeline.js';
+import { watchLiveTranscription } from '../lib/live-transcription.js';
+import { assertPrivateTree } from '../lib/private-files.js';
 import { scanZone, watch } from '../lib/watcher.js';
 import { decideClaimOnDisk, findPromotableOnDisk, markSuperseded } from '../lib/coordination.js';
 import { dropZone, ffmpegBin, whisperBin, resolveModel, resolveModelChecked, modelSearchDirs, resolveTier, resolveTierForHost, MODEL_TIERS, DEFAULT_TIER, DEFAULT_MODEL, REPO_ROOT } from '../lib/config.js';
@@ -109,9 +112,29 @@ function main() {
     case 'run': {
       const dir = resolveSessionDir(process.argv[3], zone);
       if (!dir || !fs.existsSync(dir)) fail(`run: session directory not found: ${dir}`);
-      const result = runPipeline(dir, { model, tier, zone });
+      const result = runPipeline(dir, { model, tier, zone, liveCheckpoints: flag('live-checkpoints') === true });
       report(result);
       process.exit(result.status === 'ready' ? 0 : 2);
+      break;
+    }
+
+    case 'live-transcribe': {
+      const dir = resolveSessionDir(process.argv[3], zone);
+      const pid = Number(flag('recorder-pid', NaN));
+      if (!dir || !fs.existsSync(dir) || !Number.isSafeInteger(pid) || pid <= 1) {
+        fail('live-transcribe requires an existing session and a recorder PID');
+      }
+      const { model: selected, decodeArgs } = resolveTierForHost(tier || model);
+      watchLiveTranscription(assertPrivateTree(dir), { model: selected, extraArgs: decodeArgs }, () => {
+        try {
+          process.kill(pid, 0);
+          return true;
+        } catch {
+          return false;
+        }
+      }, (timing) => log.info('live transcription checkpoint', timing)).catch(() => {
+        fail('live transcription stopped; retained audio can still be decoded');
+      });
       break;
     }
 
@@ -745,7 +768,8 @@ function main() {
         [
           'usage:',
           `  richos-service watch [--zone dir] [--tier ${Object.keys(MODEL_TIERS).map((n) => (n === DEFAULT_TIER ? `${n}*` : n)).join('|')}]   (* = default)`,
-          '  richos-service run <sessionId|dir> [--zone dir] [--tier name | --model id]',
+          '  richos-service run <sessionId|dir> [--zone dir] [--tier name | --model id] [--live-checkpoints]',
+          '  richos-service live-transcribe <sessionId|dir> --recorder-pid <pid>',
           '  richos-service retranscribe <sessionId|dir> [--tier max | --model id]',
           '  richos-service tiers',
           '  richos-service reconcile [--zone dir]',
