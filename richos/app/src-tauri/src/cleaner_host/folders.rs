@@ -15,7 +15,10 @@ use std::{
 };
 
 const MAX_LABELS: usize = 1_000;
-const MAX_ENTRIES: usize = 10_000;
+const MAX_ENTRIES: usize = 40_000;
+// File entries consume I/O even though only folders become labels. Leave part
+// of the overall budget for siblings when a directory holds a large archive.
+const MAX_DIRECTORY_ENTRIES: usize = 12_000;
 const DIRECTORY_FLAGS: i32 = libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC;
 
 struct Directory(NonNull<libc::DIR>);
@@ -78,8 +81,9 @@ impl Directory {
 
     fn names(&mut self, budget: &mut usize, complete: &mut bool) -> Vec<String> {
         let mut names = Vec::new();
+        let mut directory_budget = MAX_DIRECTORY_ENTRIES;
         loop {
-            if *budget == 0 {
+            if *budget == 0 || directory_budget == 0 {
                 *complete = false;
                 break;
             }
@@ -94,6 +98,10 @@ impl Directory {
                 break;
             };
             *budget -= 1;
+            directory_budget -= 1;
+            if !matches!(entry.d_type, libc::DT_DIR | libc::DT_UNKNOWN) {
+                continue;
+            }
             let name = unsafe { CStr::from_ptr(entry.d_name.as_ptr()) };
             let Ok(text) = name.to_str() else { continue };
             if folder_parts(text).is_err() {
@@ -203,4 +211,34 @@ pub(super) fn scan(root: &Path, recent: &[PathBuf]) -> FolderContext {
         }
     }
     context
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn archive_files_do_not_hide_sibling_categories() {
+        let root = std::env::temp_dir().join(format!(
+            "richcleaner-folder-budget-{}",
+            richos_core::cleaner::capture_id()
+        ));
+        let archive = root.join("Archive");
+        std::fs::create_dir_all(&archive).unwrap();
+        std::fs::create_dir_all(root.join("Projects/Notes")).unwrap();
+        for number in 0..10_000 {
+            File::create(archive.join(format!("file-{number}"))).unwrap();
+        }
+        let below_cap = scan(&root, &[]);
+        for number in 10_000..=MAX_DIRECTORY_ENTRIES {
+            File::create(archive.join(format!("file-{number}"))).unwrap();
+        }
+        let at_cap = scan(&root, &[]);
+        std::fs::remove_dir_all(root).unwrap();
+
+        assert!(below_cap.complete);
+        assert_eq!(below_cap.labels, ["Archive", "Projects", "Projects/Notes"]);
+        assert!(!at_cap.complete);
+        assert_eq!(at_cap.labels, below_cap.labels);
+    }
 }
