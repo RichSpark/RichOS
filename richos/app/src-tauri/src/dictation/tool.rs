@@ -888,17 +888,13 @@ impl Tool {
                 Control::App(AppMessage::Writing {..})=>{}, // connection identity is retained above
                 Control::LivePreview { seq, update } => {
                     if seq != self.capture_seq || !matches!(self.session.phase(), Phase::Listening { .. }) { continue; }
-                    match update {
-                        super::live_preview::Update::Words { text, sampled_at, decode_ms } => {
-                            if sampled_at.elapsed() > super::live_preview::DISPLAY_MAX_AGE {
-                                if let Some(t) = &self.timings { t.event("preview_paused", serde_json::json!({"reason":"control_delivery_stale"})); }
-                                self.stop_live_preview();
-                                self.live_preview_paused = true;
-                            } else {
-                                if let Some(t) = &mut self.timings { t.preview(decode_ms, sampled_at.elapsed().as_millis() as u64); }
-                                self.live_words = Some(text);
-                                log::line(&format!("preview decoded in {decode_ms} ms; recent window age {} ms", sampled_at.elapsed().as_millis()));
-                            }
+                    let received_at = std::time::Instant::now();
+                    match update.for_display(received_at) {
+                        super::live_preview::Update::Words { text, sampled_at, decode_ms, .. } => {
+                            let age_ms = received_at.saturating_duration_since(sampled_at).as_millis() as u64;
+                            if let Some(t) = &mut self.timings { t.preview(decode_ms, age_ms); }
+                            self.live_words = Some(text);
+                            log::line(&format!("preview decoded in {decode_ms} ms; recent window age {age_ms} ms"));
                         }
                         super::live_preview::Update::Paused { reason, input_ms } => {
                             if let Some(t) = &self.timings { t.preview_paused(reason, input_ms); }
@@ -906,9 +902,9 @@ impl Tool {
                             self.live_preview_paused = true;
                             log::line("preview paused for this recording; capture and final recognition continue");
                         }
-                        super::live_preview::Update::MissedDeadline { input_ms } => {
+                        super::live_preview::Update::Missed { reason, input_ms } => {
                             if let Some(t) = &self.timings {
-                                t.event("preview_update_missed", serde_json::json!({"reason":"decoder_deadline","input_ms":input_ms}));
+                                t.event("preview_update_missed", serde_json::json!({"reason":reason,"input_ms":input_ms}));
                             }
                             self.live_words = None;
                         }
@@ -918,9 +914,9 @@ impl Tool {
                             self.live_words = None;
                             self.live_preview_paused = false;
                         }
-                        super::live_preview::Update::Quiet => {
+                        super::live_preview::Update::Quiet { clear_words } => {
                             if let Some(t) = &mut self.timings { t.preview_quiet(); }
-                            self.live_words = None;
+                            if !clear_words || self.live_words.take().is_none() { continue; }
                         }
                     }
                     bar::preview(&self.app, self.bar.sequence(), self.live_words.as_deref(), self.live_preview_paused);

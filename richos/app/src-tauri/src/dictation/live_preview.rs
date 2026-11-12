@@ -6,22 +6,36 @@ use richos_voice::{dictation::{judge_transcript, Recording, FASTER}, stt::Recogn
 use std::{path::Path, sync::{atomic::{AtomicBool, Ordering}, Arc, Mutex}, time::{Duration, Instant}};
 
 pub enum Update {
-    Words { text: String, sampled_at: Instant, decode_ms: u64 },
-    MissedDeadline { input_ms: u64 },
+    Words { text: String, sampled_at: Instant, decode_ms: u64, input_ms: u64 },
+    Missed { reason: &'static str, input_ms: u64 },
     Paused { reason: &'static str, input_ms: Option<u64> },
     Unavailable,
-    Quiet,
+    Quiet { clear_words: bool },
+}
+
+impl Update {
+    pub(super) fn for_display(self, received_at: Instant) -> Self {
+        match self {
+            Self::Words { sampled_at, input_ms, .. }
+                if received_at.saturating_duration_since(sampled_at) > DISPLAY_MAX_AGE =>
+                Self::Missed { reason: "control_delivery_stale", input_ms },
+            update => update,
+        }
+    }
 }
 
 // One fixed recent-text allowance; no accumulating provisional transcript.
 const PREVIEW_CHARACTER_LIMIT: usize = 200;
-pub(super) const DISPLAY_MAX_AGE: Duration = Duration::from_secs(3);
+const DISPLAY_MAX_AGE: Duration = Duration::from_secs(3);
 const FIRST_RESULT_MAX_AGE: Duration = Duration::from_secs(2);
 const FIRST_DECODER_LIMIT: Duration = Duration::from_millis(1800);
 const RESULT_HANDOFF_MARGIN: Duration = Duration::from_millis(150);
 const TICK_INTERVAL: Duration = Duration::from_secs(2);
 const RECOVERY_WINDOW_SAMPLES: usize = 8 * SAMPLE_RATE as usize;
 const RECOVERY_SPEECH_SAMPLES: usize = TICK_INTERVAL.as_secs() as usize * SAMPLE_RATE as usize;
+// A pair of fast eight-second results leaves room to try a window twice as long
+// inside the 2.8-second budget. A busy decoder keeps the shorter window.
+const RECOVERY_RESTORE_LIMIT: Duration = Duration::from_millis(1250);
 
 fn preview_limits(has_words: bool, elapsed: Duration) -> (Duration, Duration) {
     let max_age = if has_words { DISPLAY_MAX_AGE - RESULT_HANDOFF_MARGIN } else { FIRST_RESULT_MAX_AGE };
@@ -30,26 +44,52 @@ fn preview_limits(has_words: bool, elapsed: Duration) -> (Duration, Duration) {
 }
 
 #[derive(Default)]
+enum PreviewWindow {
+    #[default]
+    Full,
+    Short,
+    ShortAfterFastResult,
+}
+
+#[derive(Default)]
 struct PreviewProgress {
     has_words: bool,
-    missed_deadline: bool,
+    window: PreviewWindow,
+    last_speech_end: usize,
 }
 
 impl PreviewProgress {
-    fn published(&mut self) {
+    fn published(&mut self, elapsed: Duration) {
         self.has_words = true;
-        self.missed_deadline = false;
+        use PreviewWindow::*;
+        self.window = match (&self.window, elapsed <= RECOVERY_RESTORE_LIMIT) {
+            (Full, _) | (ShortAfterFastResult, true) => Full,
+            (Short, true) => ShortAfterFastResult,
+            (_, false) => Short,
+        };
     }
 
-    fn skip_deadline(&mut self) -> bool {
-        if !self.has_words { return false; }
-        // Keep sampling at the normal cadence. The missed job is already reaped.
-        self.missed_deadline = true;
+    fn miss(&mut self, reason: &str) -> bool {
+        match reason {
+            "stale_result" => {},
+            "decoder_deadline" if self.has_words => {},
+            _ => return false,
+        }
+        self.window = PreviewWindow::Short;
         true
     }
 
+    fn quiet(&mut self, captured: usize, full_window_start: usize) -> bool {
+        if self.has_words && captured.saturating_sub(self.last_speech_end) >= RECOVERY_WINDOW_SAMPLES {
+            self.window = PreviewWindow::Short;
+        }
+        // Keep the displayed words until the original recent window would have
+        // lost its last speech. Quiet ticks need no decoder work.
+        self.last_speech_end <= full_window_start
+    }
+
     fn window<'a>(&self, samples: &'a [f32], new_samples: usize) -> (&'a [f32], usize) {
-        if self.missed_deadline {
+        if !matches!(self.window, PreviewWindow::Full) {
             let start = samples.len().saturating_sub(RECOVERY_WINDOW_SAMPLES);
             (&samples[start..], new_samples.min(RECOVERY_SPEECH_SAMPLES))
         } else {
@@ -96,7 +136,7 @@ pub fn run(recording: Arc<Mutex<Option<Recording>>>, data_dir: &Path, stop: &Ato
         }
         due += TICK_INTERVAL;
         let sampled_at = Instant::now();
-        let (samples, new_samples) = {
+        let (samples, new_samples, captured, full_window_start) = {
             // No wait for a busy capture callback, and no decoding/files/UI while
             // holding this lock. There is only the latest window, never backlog.
             let Ok(held) = recording.try_lock() else { continue };
@@ -105,13 +145,15 @@ pub fn run(recording: Arc<Mutex<Option<Recording>>>, data_dir: &Path, stop: &Ato
             let new_samples = len.saturating_sub(last_samples);
             if new_samples == 0 { continue; }
             last_samples = len;
-            let (samples, speech_samples) = progress.window(recording.preview_samples(), new_samples);
-            (samples.to_vec(), speech_samples)
+            let full_window = recording.preview_samples();
+            let (samples, speech_samples) = progress.window(full_window, new_samples);
+            (samples.to_vec(), speech_samples, len, len - full_window.len())
         };
         if !VoiceEvidence::measure(new_speech_audio(&samples, new_samples)).carried_speech() {
-            send(Update::Quiet);
+            send(Update::Quiet { clear_words: progress.quiet(captured, full_window_start) });
             continue;
         }
+        progress.last_speech_end = captured;
         if stop.load(Ordering::Acquire) { return; }
         let input_ms = samples.len() as u64 * 1000 / u64::from(SAMPLE_RATE);
         let paused = |reason| Update::Paused { reason, input_ms: Some(input_ms) };
@@ -123,18 +165,20 @@ pub fn run(recording: Arc<Mutex<Option<Recording>>>, data_dir: &Path, stop: &Ato
                 .map_err(|error| decoder_failure_reason(&error))
         });
         if stop.load(Ordering::Acquire) { return; }
+        let result = result.and_then(|(decoded, max_age)| {
+            (sampled_at.elapsed() <= max_age).then_some(decoded).ok_or("stale_result")
+        });
         match result {
-            Ok(((text, decode_ms), max_age)) if sampled_at.elapsed() <= max_age => {
+            Ok((text, decode_ms)) => {
                 match judge_transcript(&text) {
                     Ok(text) => {
-                        progress.published();
-                        send(Update::Words { text: recent_text(&text), sampled_at, decode_ms });
+                        progress.published(sampled_at.elapsed());
+                        send(Update::Words { text: recent_text(&text), sampled_at, decode_ms, input_ms });
                     }
                     Err(_) => { send(paused("transcript_rejected")); return; }
                 }
             }
-            Ok(_) => { send(paused("stale_result")); return; }
-            Err("decoder_deadline") if progress.skip_deadline() => send(Update::MissedDeadline { input_ms }),
+            Err(reason) if progress.miss(reason) => send(Update::Missed { reason, input_ms }),
             Err(reason) => { send(paused(reason)); return; }
         }
         // An expired tick has no pending work. Use the next scheduled slot.
@@ -162,13 +206,13 @@ mod tests {
     #[test]
     fn established_preview_skips_consecutive_deadlines() {
         let mut progress = PreviewProgress::default();
-        assert!(!progress.skip_deadline());
-        progress.published();
-        assert!(progress.skip_deadline());
-        assert!(progress.skip_deadline());
-        progress.published();
-        assert!(!progress.missed_deadline);
-        assert!(progress.skip_deadline());
+        assert!(!progress.miss("decoder_deadline"));
+        assert!(progress.miss("stale_result"));
+        progress.published(RECOVERY_RESTORE_LIMIT);
+        assert!(progress.miss("decoder_deadline"));
+        assert!(progress.miss("decoder_deadline"));
+        assert!(progress.miss("stale_result"));
+        assert!(!progress.miss("scratch_unavailable"));
     }
 
     #[test]
@@ -176,16 +220,40 @@ mod tests {
         let mut progress = PreviewProgress::default();
         let samples: Vec<_> = (0..2 * RECOVERY_WINDOW_SAMPLES).map(|i| i as f32).collect();
         let new_samples = 2 * RECOVERY_SPEECH_SAMPLES;
+        let short = (&samples[RECOVERY_WINDOW_SAMPLES..], RECOVERY_SPEECH_SAMPLES);
         assert_eq!(progress.window(&samples, new_samples), (samples.as_slice(), new_samples));
-        progress.published();
-        assert!(progress.skip_deadline());
-        assert_eq!(progress.window(&samples, new_samples),
-            (&samples[RECOVERY_WINDOW_SAMPLES..], RECOVERY_SPEECH_SAMPLES));
-        assert!(progress.skip_deadline());
-        assert_eq!(progress.window(&samples, new_samples),
-            (&samples[RECOVERY_WINDOW_SAMPLES..], RECOVERY_SPEECH_SAMPLES));
-        progress.published();
+        progress.published(RECOVERY_RESTORE_LIMIT);
+        assert!(progress.miss("decoder_deadline"));
+        assert_eq!(progress.window(&samples, new_samples), short);
+        progress.published(RECOVERY_RESTORE_LIMIT);
+        assert_eq!(progress.window(&samples, new_samples), short);
+        progress.published(Duration::from_secs(2));
+        progress.published(RECOVERY_RESTORE_LIMIT);
+        assert_eq!(progress.window(&samples, new_samples), short);
+        progress.published(RECOVERY_RESTORE_LIMIT);
         assert_eq!(progress.window(&samples, new_samples), (samples.as_slice(), new_samples));
+    }
+
+    #[test]
+    fn quiet_holds_the_caption_until_the_last_speech_leaves_the_window() {
+        let mut progress = PreviewProgress::default();
+        let speech_end = 6 * SAMPLE_RATE as usize;
+        progress.last_speech_end = speech_end;
+        progress.published(RECOVERY_RESTORE_LIMIT);
+        let full_window = 2 * RECOVERY_WINDOW_SAMPLES;
+        let before_expiry = speech_end + full_window - 1;
+        assert!(!progress.quiet(before_expiry, before_expiry - full_window));
+        assert!(matches!(progress.window, PreviewWindow::Short));
+        assert!(progress.quiet(speech_end + full_window, speech_end));
+    }
+
+    #[test]
+    fn late_delivery_becomes_a_missed_update_with_the_input_duration() {
+        let sampled_at = Instant::now();
+        let words = || Update::Words { text: "recent words".into(), sampled_at, decode_ms: 900, input_ms: 8000 };
+        assert!(matches!(words().for_display(sampled_at + DISPLAY_MAX_AGE), Update::Words { .. }));
+        assert!(matches!(words().for_display(sampled_at + DISPLAY_MAX_AGE + Duration::from_millis(1)),
+            Update::Missed { reason: "control_delivery_stale", input_ms: 8000 }));
     }
 
     #[test]
@@ -273,12 +341,12 @@ mod tests {
             let (recording, flag, updates, data) = (recording.clone(), stop.clone(), updates.clone(), data.clone());
             std::thread::spawn(move || run(recording, &data, &flag, |update| {
                 let entry = match update {
-                    Update::Words { text, sampled_at, decode_ms } => serde_json::json!({
+                    Update::Words { text, sampled_at, decode_ms, .. } => serde_json::json!({
                         "kind":"words", "at_ms":began.elapsed().as_millis(),
                         "age_ms":sampled_at.elapsed().as_millis(), "decode_ms":decode_ms,
                         "characters":text.chars().count(), "words":text.split_whitespace().count()}),
-                    Update::Quiet => serde_json::json!({"kind":"quiet","at_ms":began.elapsed().as_millis()}),
-                    Update::MissedDeadline { input_ms } => serde_json::json!({"kind":"missed","input_ms":input_ms,"at_ms":began.elapsed().as_millis()}),
+                    Update::Quiet { clear_words } => serde_json::json!({"kind":"quiet","clear_words":clear_words,"at_ms":began.elapsed().as_millis()}),
+                    Update::Missed { reason, input_ms } => serde_json::json!({"kind":"missed","reason":reason,"input_ms":input_ms,"at_ms":began.elapsed().as_millis()}),
                     Update::Paused { reason, input_ms } => serde_json::json!({"kind":"paused","reason":reason,"input_ms":input_ms,"at_ms":began.elapsed().as_millis()}),
                     Update::Unavailable => serde_json::json!({"kind":"unavailable","at_ms":began.elapsed().as_millis()}),
                 };
