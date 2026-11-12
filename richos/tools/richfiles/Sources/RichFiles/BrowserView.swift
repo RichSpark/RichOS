@@ -653,36 +653,51 @@ struct BrowserView: View {
 
     private var compactList: some View {
         GeometryReader { geometry in
-            let rows = max(1, Int((geometry.size.height - 10) / 22))
+            let rowHeight: CGFloat = model.searchActive ? 33 : 22
+            let rows = max(1, Int((geometry.size.height - 10) / rowHeight))
+            let entries = model.entries
+            let columns = (entries.count + rows - 1) / rows
             ScrollViewReader { scroll in
                 ScrollView(.horizontal) {
-                    LazyHGrid(rows: Array(repeating: GridItem(.fixed(22), spacing: 0, alignment: .leading), count: rows),
-                              alignment: .top, spacing: 8) {
-                        ForEach(model.entries) { entry in
-                            selectable(entry) {
-                                VStack(alignment: .leading, spacing: 0) {
-                                    nameLabel(entry)
-                                    if model.searchActive {
-                                        Text(entry.url.deletingLastPathComponent().lastPathComponent)
-                                            .font(.system(size: 9)).lineLimit(1).foregroundStyle(.secondary)
-                                    }
+                    LazyHStack(alignment: .top, spacing: 8) {
+                        ForEach(0..<columns, id: \.self) { column in
+                            let start = column * rows
+                            let end = min(start + rows, entries.count)
+                            VStack(spacing: 0) {
+                                ForEach(entries[start..<end]) { entry in
+                                    selectable(entry) {
+                                        VStack(alignment: .leading, spacing: 1) {
+                                            nameLabel(entry)
+                                            if model.searchActive {
+                                                let path = entry.url.deletingLastPathComponent().path
+                                                Text(path).font(.system(size: 10)).lineLimit(1)
+                                                    .truncationMode(.middle).foregroundStyle(.secondary).help(path)
+                                            }
+                                        }.frame(width: 240, alignment: .leading)
+                                    }.frame(height: rowHeight)
                                 }
-                                .frame(width: 240, alignment: .leading)
-                            }
+                            }.id(column)
                         }
-                    }
-                    .padding(5)
+                    }.padding(5)
                 }
-                .onAppear { listRows = rows; restoreScroll(scroll) }
-                .onChange(of: rows) { listRows = $0 }
-                .onChange(of: selectionCursor) { value in
-                    if let value { scroll.scrollTo(value) }
+                .onAppear { listRows = rows; scrollList(to: model.scrollAnchor, rows: rows, using: scroll) }
+                .onChange(of: rows) {
+                    listRows = $0
+                    scrollList(to: model.scrollAnchor, rows: $0, using: scroll)
                 }
-                .onChange(of: model.busy) { busy in if !busy { restoreScroll(scroll) } }
+                .onChange(of: selectionCursor) { scrollList(to: $0, rows: rows, using: scroll) }
+                .onChange(of: model.busy) { busy in
+                    if !busy { scrollList(to: model.scrollAnchor, rows: rows, using: scroll) }
+                }
             }
         }
         .accessibilityIdentifier("file-list")
         .accessibilityLabel("List view, filenames and extensions")
+    }
+
+    private func scrollList(to url: URL?, rows: Int, using scroll: ScrollViewProxy) {
+        guard let url, let index = model.entries.firstIndex(where: { $0.url == url }) else { return }
+        scroll.scrollTo(index / rows)
     }
 
     private var thumbnailGrid: some View {
