@@ -207,7 +207,8 @@ export function runPipeline(sessionDir, opts = {}) {
         const start = performance.now();
         const result = advanceLiveTranscription(sessionDir, decodeOptions, { closed: true });
         log.info('live transcription finalized', {
-          reused: result.reused, decoded: result.decoded, elapsedMs: Math.round(performance.now() - start),
+          reused: result.reused, decoded: result.decoded, skippedSilentChannels: result.skippedSilentChannels,
+          elapsedMs: Math.round(performance.now() - start),
         });
         asr = result.asr;
       } catch {
