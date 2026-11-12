@@ -3,6 +3,7 @@ package dev.richos.android.ui.attach
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.pdf.PdfRenderer
+import android.media.MediaPlayer
 import android.os.ParcelFileDescriptor
 import android.widget.VideoView
 import androidx.compose.animation.core.Animatable
@@ -186,7 +187,7 @@ fun RichMediaDock(card: RichFileCard, onEvent: (UiEvent) -> Unit) {
     val colors = Rich.colors
     val type = Rich.type
     val player = remember(path) { VideoView(context) }
-    var ready by remember(path) { mutableStateOf(false) }
+    var media by remember(path) { mutableStateOf<MediaPlayer?>(null) }
     var playing by remember(path) { mutableStateOf(false) }
     var failed by remember(path) { mutableStateOf(false) }
     var position by remember(path) { mutableLongStateOf(selection.startMs) }
@@ -207,7 +208,7 @@ fun RichMediaDock(card: RichFileCard, onEvent: (UiEvent) -> Unit) {
             if (event == Lifecycle.Event.ON_PAUSE) { player.pause(); playing = false }
         }
         owner.lifecycle.addObserver(lifecycle)
-        player.setOnPreparedListener { ready = true }
+        player.setOnPreparedListener { media = it }
         player.setOnCompletionListener { playing = false; position = moments.durationMs }
         player.setOnErrorListener { _, _, _ -> failed = true; playing = false; true }
         player.setVideoPath(path)
@@ -216,14 +217,15 @@ fun RichMediaDock(card: RichFileCard, onEvent: (UiEvent) -> Unit) {
             player.stopPlayback()
         }
     }
-    LaunchedEffect(player, ready, selection) {
-        if (!ready || !foreground.value.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) return@LaunchedEffect
+    LaunchedEffect(player, media, selection) {
+        val prepared = media ?: return@LaunchedEffect
+        if (!foreground.value.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) return@LaunchedEffect
         val active = moments.points.lastOrNull { it.startMs <= position }
         if (!firstTap && active?.startMs == selection.startMs) {
             toggle()
         } else {
             firstTap = false
-            player.seekTo(selection.startMs.coerceIn(0, Int.MAX_VALUE.toLong()).toInt())
+            prepared.seekTo(selection.startMs, MediaPlayer.SEEK_CLOSEST)
             position = selection.startMs
             player.start()
             playing = true
@@ -241,7 +243,7 @@ fun RichMediaDock(card: RichFileCard, onEvent: (UiEvent) -> Unit) {
             else Modifier.size(1.dp).graphicsLayer { alpha = 0f })
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             BasicText(if (playing) "Ⅱ" else "▶", Modifier.heightIn(min = 44.dp)
-                .clickable(enabled = ready && !failed, role = Role.Button, onClickLabel = if (playing) "Pause recording" else "Play recording") { toggle() }
+                .clickable(enabled = media != null && !failed, role = Role.Button, onClickLabel = if (playing) "Pause recording" else "Play recording") { toggle() }
                 .padding(10.dp), style = type.body.copy(color = colors.ink))
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 val point = moments.points.lastOrNull { it.startMs <= position }
