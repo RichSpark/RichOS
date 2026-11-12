@@ -5892,7 +5892,8 @@ for prompt,expected in cases:
     send({"type":"control_request","request_id":prompt,"request":{"subtype":"hook_callback","callback_id":"richos-input-context","input":{"hook_event_name":"UserPromptSubmit","prompt":prompt}}})
     response=read()["response"]["response"]
     context=response.get("hookSpecificOutput",{}).get("additionalContext","")
-    assert "execution_routing" in context, context
+    routing=next(json.loads(line) for line in context.splitlines() if line.startswith("{") and "execution_routing" in line)
+    assert routing["owner"]=="rich" and routing["classifier"]=="rich", routing
     assert ("current_recording" in context)==expected, context
     assert "quoted_live_meeting_evidence" not in context and "Three customers" not in context, context
     send({"type":"assistant","message":{"content":[{"type":"text","text":"Context checked."}]}})
@@ -5911,26 +5912,52 @@ for prompt,expected in cases:
         let status_path = root.join("status-scope.json");
         cognition.status_scope = Some(status_path.clone());
         cognition.client.action_grants.push(ActionGrant::Continuity(scope_path.clone()));
-        profile.set_live_meeting_reader(|binding, at| {
-            (binding.thread_id() == "thread-context" && matches!(at, 42 | 43)).then(|| crate::meeting_notes::LiveMeetingSource {
-                dir: "/corpus/meetings/session".into(), zone: "/corpus/meetings".into(),
-                corpus: "/corpus".into(), runtime_bin: None, request_at: at,
+        use crate::ledger::{Ledger, Source};
+        let mut ledger = Ledger::open(root.join("conversation-ledger.jsonl")).unwrap();
+        let company = crate::entity::EntityId::parse("depot").unwrap();
+        let thread = ledger.create_thread("Meeting fixture", &company).unwrap();
+        let binding = ledger.thread_binding(&thread).unwrap();
+        let corpus = root.join("corpus");
+        let zone = crate::meeting_notes::meeting_zone(&corpus, Some(company.as_str()));
+        let dir = zone.join("2000-01-01T12-00-00Z--system--call");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("session.json"), r#"{"status":"open","startedAt":1}"#).unwrap();
+        std::fs::write(dir.join("transcript.md"),
+            "quoted_live_meeting_evidence\nThem: Three customers are in the pilot.\n").unwrap();
+        profile.set_live_meeting_reader(move |binding, at| {
+            (binding.thread_id() == thread && matches!(at, 42 | 43)).then(|| crate::meeting_notes::LiveMeetingSource {
+                dir: dir.clone(), zone: zone.clone(), corpus: corpus.clone(), runtime_bin: None, request_at: at,
             })
         });
-        cognition.classifier = Some(Arc::new(Mutex::new(crate::request_classifier::RequestClassifier::new(
-            Path::new("/usr/bin/false"), &profile, &skills_fixture(),
-        ))));
+        let (classifier_root, bin, classifier_profile, skills) = crate::request_classifier::tests::fixture(r#"
+for line in sys.stdin:
+    data=json.loads(json.loads(line)['message']['content'])
+    if data.get('user_request') and data['user_request'] != 'Readiness check':
+        assert data['current_recording'] == (data['user_request'] in (
+            'Thanks.', 'Rich, please draft the comparison from this call.'))
+        assert data['recent_conversation'] == 'Rich: The approved plan is available.'
+    result='rich_handles_message'
+    print(json.dumps({'type':'assistant','message':{'model':'claude-haiku-5-5','content':[{'type':'text','text':result}]}}),flush=True)
+    print(json.dumps({'type':'result','is_error':False,'result':result}),flush=True)
+"#);
+        let mut classifier = crate::request_classifier::RequestClassifier::new(&bin, &classifier_profile, &skills);
+        let owner = crate::request_classifier::tests::until(|| match classifier.classify("Readiness check", "", false, || false) {
+            Ok(owner) => Some(owner),
+            Err(error) if error == "Classifier not ready" => None,
+            Err(error) => panic!("{error}"),
+        });
+        assert_eq!(owner, "rich");
+        cognition.classifier = Some(Arc::new(Mutex::new(classifier)));
         cognition.engine_profile = Some(profile);
-        let binding = crate::entity::ThreadBinding::new(crate::entity::PersonId::default_ceo(),
-            crate::entity::EntityId::parse("depot").unwrap(), "thread-context", 1);
-        use crate::ledger::Source;
-        for (id, prompt, source, live_meeting_at) in [
-            ("typed", "Thanks.", Source::Text, Some(42)),
-            ("spoken", "Rich, please draft the comparison from this call.", Source::Jam, Some(43)),
-            ("chat", "Draft the follow-up to this meeting.", Source::Text, Some(44)),
-            ("unrelated", "Prepare the agenda.", Source::Text, Some(44)),
+        cognition.set_conversation_context("Rich: The approved plan is available.");
+        for (prompt, source, live_meeting_at) in [
+            ("Thanks.", Source::Text, Some(42)),
+            ("Rich, please draft the comparison from this call.", Source::Jam, Some(43)),
+            ("Draft the follow-up to this meeting.", Source::Text, Some(44)),
+            ("Prepare the agenda.", Source::Text, Some(44)),
         ] {
-            cognition.prepare_work_turn(&binding, id, id, crate::cognition::WorkTurnInput { source, text: prompt, live_meeting_at }, &mut |_| {}).unwrap();
+            let turn = ledger.record_prompt_received(&binding, prompt, source).unwrap();
+            cognition.prepare_work_turn(&binding, &turn, &turn, crate::cognition::WorkTurnInput { source, text: prompt, live_meeting_at }, &mut |_| {}).unwrap();
             let mut answer = String::new();
             assert_eq!(cognition.prompt(prompt, &mut |item| {
                 if let TurnItem::Text { text, .. } = item { answer.push_str(text); }
@@ -5940,6 +5967,8 @@ for prompt,expected in cases:
             let scope: crate::ecs::ToolScope = serde_json::from_slice(&std::fs::read(&scope_path).unwrap()).unwrap();
             assert_eq!(scope.user_instruction.unwrap().text.as_deref(), Some(prompt));
         }
+        drop(cognition);
+        std::fs::remove_dir_all(classifier_root).unwrap();
     }
 
     /// **Host context goes with the session's first input and the first after a compaction,
