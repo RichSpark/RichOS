@@ -21,6 +21,7 @@ pub(crate) struct Live {
     /// Whether this launch may use tools (only [`Provider::writing`] gives it any).
     tools: bool,
     private_text: bool,
+    rate_limit_error: Option<&'static str>,
     pub(crate) initialized_at: Option<Instant>,
 }
 impl Drop for Live {
@@ -227,8 +228,15 @@ impl Provider {
                 if send.send(frame).is_err() || failed {break}
             }
         });
+        let rate_limit_error = if self.private_text {
+            Some("writing-quota")
+        } else if self.folder == "cleaner" {
+            Some("folder-quota")
+        } else {
+            None
+        };
         Ok(Live {child,input:Some(input),frames,readers:vec![writer,reader],
-            model:(self.model==HAIKU).then(||self.model.clone()),tools:!self.tools.is_empty(),private_text:self.private_text,initialized_at:None})
+            model:(self.model==HAIKU).then(||self.model.clone()),tools:!self.tools.is_empty(),private_text:self.private_text,rate_limit_error,initialized_at:None})
     }
 
 }
@@ -249,7 +257,9 @@ impl Live {
                 Ok(frame)=>frame?,Err(mpsc::RecvTimeoutError::Timeout)=>continue,
                 Err(_)=>return Err("Classifier disconnected".into()),
             };
-            if self.private_text && crate::native::usage_limit_signal(&frame).is_some() {return Err("writing-quota".into())}
+            if let Some(reason) = self.rate_limit_error.filter(|_| crate::native::usage_limit_signal(&frame).is_some()) {
+                return Err(reason.into());
+            }
             if !self.tools && frame["type"]=="system" && frame["subtype"]=="init" && frame["tools"].as_array().is_some_and(|tools|!tools.is_empty()) {
                 return Err("Classifier unexpectedly has tools".into())
             }
@@ -282,6 +292,20 @@ fn choice(frame:&Value)->Result<String,String> {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    #[test]
+    fn a_folder_quota_signal_survives_the_tool_free_classifier() {
+        let (root, bin, profile, _) = fixture(r#"
+sys.stdin.readline()
+print(json.dumps({"type":"result","api_error_status":429,"is_error":True}), flush=True)
+"#);
+        let mut live = Provider::new(&bin, &profile, "app/cleaner.md", "cleaner").start().unwrap();
+        // load-bound: this guard limits a broken fake provider. The signal is the verdict.
+        let stop = Instant::now() + Duration::from_secs(30);
+        assert_eq!(live.exchange("{}".into(), stop, || false, choice).unwrap_err(), "folder-quota");
+        drop(live);
+        std::fs::remove_dir_all(root).unwrap();
+    }
     #[test]
     fn decisions_name_the_next_action_and_reject_ambiguous_recipient_names() {
         for (label,handler) in [("rich_handles_message","rich"),("new_stu_handoff","stu"),("uncertain","uncertain")] {

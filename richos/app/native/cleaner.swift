@@ -16,23 +16,66 @@ func canonical(_ u:URL)throws->URL {
     guard standardized==standardized.resolvingSymlinksInPath() else {try fail("Symbolic links are not filed")}
     return standardized
 }
-func identity(_ u:URL,local:Bool=true)throws->[String:Any] {
+func startDownloadForInspection(_ target: URL) throws -> Never {
+    try fm.startDownloadingUbiquitousItem(at: target)
+    try fail("The file is downloading from iCloud. Try again when it is available")
+}
+func identity(_ u:URL,local:Bool=true,makeBookmark:Bool=true)throws->[String:Any] {
     let u=try canonical(u)
     var s=stat();guard lstat(u.path,&s)==0 else {try fail(String(cString:strerror(errno)))}
     guard s.st_mode & S_IFMT == S_IFREG else {try fail("Select a regular file, not a folder or package")}
     let values=try u.resourceValues(forKeys:[.isPackageKey,.isUbiquitousItemKey,.ubiquitousItemIsDownloadingKey,.ubiquitousItemDownloadingStatusKey])
     guard values.isPackage != true else {try fail("Packages are not filed")}
     if local && values.isUbiquitousItem == true && values.ubiquitousItemDownloadingStatus != .current {
-        try fm.startDownloadingUbiquitousItem(at:u)
-        try fail("The file is downloading from iCloud. Try again when it is available")
+        try startDownloadForInspection(u)
     }
-    let bookmark=try s.st_nlink>1 ? Data():u.bookmarkData(options:.suitableForBookmarkFile,includingResourceValuesForKeys:nil,relativeTo:nil)
+    let bookmark=try !makeBookmark || s.st_nlink>1 ? Data():u.bookmarkData(options:.suitableForBookmarkFile,includingResourceValuesForKeys:nil,relativeTo:nil)
     return ["volume":UInt64(UInt32(bitPattern:s.st_dev)),"object":s.st_ino,"size":UInt64(s.st_size),"modified":"\(s.st_mtimespec.tv_sec):\(s.st_mtimespec.tv_nsec)","changed":"\(s.st_ctimespec.tv_sec):\(s.st_ctimespec.tv_nsec)","bookmark":bookmark.base64EncodedString()]
 }
 func same(_ a:[String:Any],_ b:[String:Any],version:Bool=true)throws {
     for key in ["volume","object"]+(version ? ["size","modified","changed"]:[]) {
         guard String(describing:a[key]!)==String(describing:b[key]!) else {try fail("The selected file changed. Nothing was replaced")}
     }
+}
+func original(_ request: [String: Any]) throws -> (URL, [String: Any]) {
+    guard let expected = request["identity"] as? [String: Any] else { try fail("Missing identity") }
+    let path = url(try string(request, "path"))
+    if let actual = try? identity(path, local: false, makeBookmark: false),
+       (try? same(expected, actual, version: false)) != nil {
+        return (path, actual)
+    }
+    if let text = expected["bookmark"] as? String, let data = Data(base64Encoded: text), !data.isEmpty {
+        var stale = false
+        if let target = try? URL(resolvingBookmarkData: data, options: [.withoutUI, .withoutMounting],
+                                 relativeTo: nil, bookmarkDataIsStale: &stale),
+           let actual = try? identity(target, local: false, makeBookmark: false),
+           (try? same(expected, actual, version: false)) != nil {
+            return (target, actual)
+        }
+    }
+    try fail("Locate the original file")
+}
+
+let cloudKeys: Set<URLResourceKey> = [.isUbiquitousItemKey, .ubiquitousItemDownloadingStatusKey,
+                                      .ubiquitousItemDownloadingErrorKey]
+func needsDownload(_ target: URL) throws -> Bool {
+    let values = try target.resourceValues(forKeys: cloudKeys)
+    return values.isUbiquitousItem == true && values.ubiquitousItemDownloadingStatus != .current
+}
+
+func downloadOriginal(_ target: URL) throws {
+    var target = target
+    guard try needsDownload(target) else { return }
+    try fm.startDownloadingUbiquitousItem(at: target)
+    let start = DispatchTime.now().uptimeNanoseconds
+    while DispatchTime.now().uptimeNanoseconds - start < 20_000_000_000 {
+        target.removeAllCachedResourceValues()
+        let values = try target.resourceValues(forKeys: cloudKeys)
+        if values.ubiquitousItemDownloadingStatus == .current { return }
+        if let error = values.ubiquitousItemDownloadingError { throw error }
+        Thread.sleep(forTimeInterval: 0.25)
+    }
+    try fail("Still downloading from iCloud. Open again when the download finishes")
 }
 func checked(_ r:[String:Any],_ u:URL)throws->[String:Any] {
     guard let expected=r["identity"] as? [String:Any] else {try fail("Missing file identity")}
@@ -180,19 +223,42 @@ func main(_ r:[String:Any])throws->[String:Any] {
         if !fm.fileExists(atPath:root.path){guard r["action"] as? String == "root" else {try fail("The configured filing folder is unavailable")};try fm.createDirectory(at:root,withIntermediateDirectories:true)}
         _=try canonical(root)
         var a=stat();var b=stat();guard stat(root.path,&a)==0,stat(desktop.path,&b)==0,a.st_dev==b.st_dev,a.st_mode & S_IFMT == S_IFDIR else {try fail("Choose a folder on the same disk as Desktop")}
-        guard fm.isWritableFile(atPath:root.path) else {try fail("The filing folder is not writable")}
+        guard fm.isWritableFile(atPath:root.path),access(root.path,X_OK)==0 else {try fail("The filing folder is not writable")}
         return ["path":root.path]
     case "inspect":return try identity(url(string(r,"path")))
-    case "resolve":
-        guard let expected=r["identity"] as? [String:Any] else {try fail("Missing identity")}
-        let path=try string(r,"path")
-        if let actual=try? identity(url(path),local:false),(try? same(expected,actual,version:false)) != nil {return ["path":path,"identity":actual]}
-        guard let text=expected["bookmark"] as? String,let data=Data(base64Encoded:text) else {try fail("Locate the original file")}
-        var stale=false;let resolved=try URL(resolvingBookmarkData:data,options:[.withoutUI,.withoutMounting],relativeTo:nil,bookmarkDataIsStale:&stale)
-        let actual=try identity(resolved,local:false);try same(expected,actual,version:false);return ["path":resolved.path,"identity":actual]
+    case "resolve", "resolve-local", "open-check", "open-location":
+        var (target, actual) = try original(r)
+        if r["action"] as? String == "resolve-local", try needsDownload(target) {
+            try startDownloadForInspection(target)
+        }
+        if r["action"] as? String == "open-check" {
+            return ["path":target.path,"identity":actual,"download":try needsDownload(target)]
+        }
+        if r["action"] as? String == "open-location" {
+            try downloadOriginal(target)
+            // The file may have moved or been replaced while iCloud was downloading.
+            (target, actual) = try original(r)
+            try same(actual, identity(target, makeBookmark: false), version: false)
+        }
+        return ["path":target.path,"identity":actual]
     case "destination":
         let root=try canonical(url(string(r,"root")));let parts=r["parts"] as? [String] ?? [];var folder=root
-        for part in parts {guard !part.isEmpty,!part.hasPrefix("."),!part.contains("/"),!part.contains(":"),!part.contains("\\") else {try fail("Invalid folder component")};folder.appendPathComponent(part,isDirectory:true);if !fm.fileExists(atPath:folder.path){try fm.createDirectory(at:folder,withIntermediateDirectories:false)};_ = try canonical(folder)}
+        let existingOnly = r["existingOnly"] as? Bool == true
+        for part in parts {
+            guard !part.isEmpty,!part.hasPrefix("."),!part.contains("/"),!part.contains(":"),!part.contains("\\") else {try fail("Invalid folder component")}
+            folder.appendPathComponent(part,isDirectory:true)
+            if existingOnly {
+                var info = stat()
+                guard lstat(folder.path, &info) == 0, info.st_mode & S_IFMT == S_IFDIR,
+                      (try? canonical(folder)) != nil else {try fail("destination-folder-unavailable")}
+            } else {
+                if !fm.fileExists(atPath:folder.path) {try fm.createDirectory(at:folder,withIntermediateDirectories:false)}
+                _ = try canonical(folder)
+            }
+        }
+        if existingOnly && (!fm.isWritableFile(atPath:folder.path) || access(folder.path, X_OK) != 0) {
+            try fail("destination-folder-unavailable")
+        }
         let name=try string(r,"name");guard name==URL(fileURLWithPath:name).lastPathComponent else {try fail("Invalid filename")}
         let original=folder.appendingPathComponent(name);var candidate=original;var suffix=2
         while fm.fileExists(atPath:candidate.path) {candidate=folder.appendingPathComponent(original.deletingPathExtension().lastPathComponent+" \(suffix)"+(original.pathExtension.isEmpty ? "":"."+original.pathExtension));suffix+=1}

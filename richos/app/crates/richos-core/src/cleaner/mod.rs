@@ -184,39 +184,103 @@ pub fn folder_parts(value: &str) -> Result<Vec<String>> {
 pub trait Files {
     fn inspect(&self, path: &Path) -> Result<Identity>;
     fn resolve(&self, path: &Path, identity: &Identity) -> Result<PathBuf>;
+    fn resolve_local(&self, path: &Path, identity: &Identity) -> Result<(PathBuf, Identity)> {
+        let resolved = self.resolve(path, identity)?;
+        let actual = self.inspect(&resolved)?;
+        Ok((resolved, actual))
+    }
     fn destination(&self, root: &Path, parts: &[String], name: &std::ffi::OsStr)
         -> Result<PathBuf>;
+    fn destination_existing(
+        &self,
+        root: &Path,
+        parts: &[String],
+        name: &std::ffi::OsStr,
+    ) -> Result<PathBuf> {
+        let mut folder = root.to_path_buf();
+        for part in parts {
+            folder.push(part);
+            if !std::fs::symlink_metadata(&folder).is_ok_and(|meta| meta.is_dir()) {
+                return Err(DESTINATION_UNAVAILABLE.into());
+            }
+        }
+        self.destination(&folder, &[], name)
+    }
     fn stage(&self, entry: &Entry) -> Result<Option<Staged>>;
     fn annotate(&self, entry: &Entry, staged: &Staged) -> Result<Staged>;
     fn replace(&self, entry: &Entry, staged: &Staged) -> Result<Identity>;
     fn rename(&self, source: &Path, destination: &Path, identity: &Identity) -> Result<Identity>;
     fn cleanup(&self, staged: &Staged) -> Result<()>;
 }
+pub const DESTINATION_UNAVAILABLE: &str = "destination-folder-unavailable";
+
+pub enum FilingChoice {
+    Category {
+        folder: String,
+        labels: Vec<String>,
+        existing_only: bool,
+    },
+    Inbox {
+        reason: String,
+    },
+}
+
+impl FilingChoice {
+    pub fn category(folder: impl Into<String>, labels: Vec<String>, existing_only: bool) -> Self {
+        Self::Category { folder: folder.into(), labels, existing_only }
+    }
+
+    pub fn folder(&self) -> &str {
+        match self {
+            Self::Category { folder, .. } => folder,
+            Self::Inbox { .. } => "Inbox",
+        }
+    }
+}
+
 pub fn file(
     db: &mut Catalog,
     fs: &impl Files,
     id: &str,
     root: &Path,
-    folder: &str,
-    labels: Vec<String>,
-    inbox: bool,
+    choice: &FilingChoice,
 ) -> Result<Entry> {
     let mut e = db.get(id)?;
     if !matches!(e.phase, Phase::Draft | Phase::Choosing | Phase::Filed) {
         return Err("This file has an operation to recover first".into());
     }
-    e.path = fs.resolve(&e.path, &e.identity)?;
-    if !e.identity.unchanged(&fs.inspect(&e.path)?) {
+    let (path, actual) = fs.resolve_local(&e.path, &e.identity)?;
+    if !e.identity.unchanged(&actual) {
         return Err("The file changed. Your saved note is still here".into());
     }
-    let parts = folder_parts(folder)?;
-    let folder_path = parts
-        .iter()
-        .fold(root.to_path_buf(), |parent, part| parent.join(part));
-    let destination = if e.path.parent() == Some(folder_path.as_path()) {
-        e.path.clone()
-    } else {
-        fs.destination(root, &parts, e.path.file_name().ok_or("Missing filename")?)?
+    e.path = path;
+    let name = e.path.file_name().ok_or("Missing filename")?;
+    let destination_for = |folder: &str, existing_only: bool| -> Result<PathBuf> {
+        let parts = folder_parts(folder)?;
+        let folder_path = parts.iter().fold(root.to_path_buf(), |parent, part| parent.join(part));
+        if e.path.parent() == Some(folder_path.as_path()) {
+            Ok(e.path.clone())
+        } else if existing_only {
+            fs.destination_existing(root, &parts, name)
+        } else {
+            fs.destination(root, &parts, name)
+        }
+    };
+    let (folder, labels, reason, destination) = match choice {
+        FilingChoice::Category { folder, labels, existing_only } => {
+            match destination_for(folder, *existing_only) {
+                Ok(path) => (folder.as_str(), labels.clone(), None, path),
+                Err(error) if *existing_only && error == DESTINATION_UNAVAILABLE => (
+                    "Inbox", vec![],
+                    Some("The chosen folder is no longer available. Use File again to choose a folder".into()),
+                    destination_for("Inbox", false)?,
+                ),
+                Err(error) => return Err(error),
+            }
+        }
+        FilingChoice::Inbox { reason } => (
+            "Inbox", vec![], Some(reason.clone()), destination_for("Inbox", false)?,
+        ),
     };
     if !e.pending_sort && (!e.inbox || e.undo.is_none()) {
         e.undo = Some(e.path.clone());
@@ -229,7 +293,8 @@ pub fn file(
         Phase::Draft
     });
     e.labels = labels;
-    e.problem = None;
+    // Keep the explanation in the same durable intent as the Inbox destination.
+    e.problem = reason;
     e.phase = Phase::Prepared;
     db.save(&e)?;
     {
@@ -271,7 +336,7 @@ pub fn file(
     }
     e.path = e.intended.clone().ok_or("Missing filing destination")?;
     e.folder = folder.into();
-    e.inbox = inbox;
+    e.inbox = folder == "Inbox";
     e.return_phase = None;
     e.intended_folder = None;
     e.pending_sort = false;
@@ -279,8 +344,8 @@ pub fn file(
     e.intended = None;
     e.updated = crate::util::now_millis();
     db.save(&e)?;
-    let resolved = fs.resolve(&e.path, &e.identity)?;
-    if resolved != e.path || !e.identity.same_content(&fs.inspect(&resolved)?) {
+    let (resolved, actual) = fs.resolve_local(&e.path, &e.identity)?;
+    if resolved != e.path || !e.identity.same_content(&actual) {
         return Err("The moved file needs location recovery".into());
     }
     let mut saved = db.get(&e.id)?;
@@ -346,12 +411,19 @@ pub fn store_inbox(db: &mut Catalog, fs: &impl Files, id: &str, root: &Path) -> 
 /// Settle only a canceled folder choice, reading the latest row after any Undo/Edit.
 /// The host serializes this with actual mutations. Never pass an older Entry snapshot.
 pub fn cancel_sort(db: &mut Catalog, id: &str) -> Result<Entry> {
+    stop_sort(db, id, None)
+}
+
+pub fn stop_sort(db: &mut Catalog, id: &str, problem: Option<String>) -> Result<Entry> {
     let mut entry = db.get(id)?;
     if entry.pending_sort {
         entry.pending_sort = false;
         entry.phase = Phase::Filed;
     } else if entry.phase == Phase::Choosing {
         entry.phase = Phase::Draft;
+    }
+    if problem.is_some() {
+        entry.problem = problem;
     }
     db.save(&entry)?;
     Ok(entry)
@@ -1018,7 +1090,8 @@ mod tests {
         .unwrap();
         fs.id = old.id.clone();
         db.save(&old).unwrap();
-        let mut filed = file(&mut db, &fs, &old.id, &folder, "Board", vec![], false).unwrap();
+        let choice = FilingChoice::category("Board", vec![], false);
+        let mut filed = file(&mut db, &fs, &old.id, &folder, &choice).unwrap();
         filed.projection = Projection {
             mode: "embedded".into(),
             reason: String::new(),
@@ -1086,7 +1159,8 @@ mod tests {
         assert_eq!(std::fs::read(&stored.path).unwrap(), b"one original");
         assert!(stored.pending_sort);
         assert_eq!(db.search("kitchen", 0, 65536).unwrap().total, 1);
-        let filed = file(&mut db, &fs, &e.id, &root, "Home/Kitchen", vec![], false).unwrap();
+        let choice = FilingChoice::category("Home/Kitchen", vec![], false);
+        let filed = file(&mut db, &fs, &e.id, &root, &choice).unwrap();
         assert_eq!(filed.undo.as_ref(), Some(&source));
         assert!(!stored.path.exists());
         assert!(filed.path.starts_with(root.join("Home/Kitchen")));
@@ -1122,11 +1196,50 @@ mod tests {
         let before_retry = settled.undo.clone();
         drop(db);
         let mut db = f.db();
-        let retried = file(&mut db, &fs, &e.id, &root, "Home/Kitchen", vec![], false).unwrap();
+        let retried = file(&mut db, &fs, &e.id, &root, &choice).unwrap();
         assert_eq!(retried.undo, before_retry);
         assert!(retried.path.starts_with(root.join("Home/Kitchen")));
         let undone = undo(&mut db, &fs, &e.id).unwrap();
         assert_eq!(Some(undone.path), before_retry);
+    }
+    #[test]
+    fn inbox_reason_survives_quiet_sort_and_recovery_of_a_missing_category() {
+        let f = Fixture::new();
+        let root = f.0.join("Library");
+        std::fs::create_dir(&root).unwrap();
+        let mut db = f.db();
+        for quiet in [true, false] {
+            let source = f.0.join(if quiet { "quiet.txt" } else { "direct.txt" });
+            std::fs::write(&source, b"the original").unwrap();
+            let mut fs = DiskFiles {
+                db: f.0.join("library.sqlite"),
+                id: String::new(),
+                interrupt: false,
+            };
+            let entry = Entry::new(source.clone(), fs.inspect(&source).unwrap(), "Board quote".into()).unwrap();
+            fs.id = entry.id.clone();
+            db.save(&entry).unwrap();
+            if quiet {
+                store_inbox(&mut db, &fs, &entry.id, &root).unwrap();
+                let reason = "The folder model did not answer in time. Use File again to retry";
+                file(&mut db, &fs, &entry.id, &root, &FilingChoice::Inbox { reason: reason.into() }).unwrap();
+                assert_eq!(f.db().get(&entry.id).unwrap().problem.as_deref(), Some(reason));
+            } else {
+                fs.interrupt = true;
+                let choice = FilingChoice::category("Company/Board", vec![], true);
+                assert!(file(&mut db, &fs, &entry.id, &root, &choice).is_err());
+                drop(db);
+                db = f.db();
+                recover_entry(&mut db, &fs, &entry.id).unwrap();
+                assert!(db.get(&entry.id).unwrap().problem.unwrap().contains("no longer available"));
+                assert!(!root.join("Company").exists(), "a vanished listed category was recreated");
+            }
+            let settled = f.db().get(&entry.id).unwrap();
+            assert_eq!(settled.phase, Phase::Filed);
+            assert!(settled.inbox && !settled.pending_sort);
+            assert_eq!(settled.undo.as_ref(), Some(&source));
+            assert_eq!(std::fs::read(settled.path).unwrap(), b"the original");
+        }
     }
     #[test]
     fn interrupted_inbox_move_recovers_its_original_and_settles_sorting_honestly() {

@@ -9,11 +9,13 @@
   const esc = value => String(value == null ? "" : value).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"})[c]);
   const name = entry => String(entry.path || "").split("/").pop();
   let status = {}, operation = {}, entries = [], selected = null, next = null, query = "", generation = 0, loading = false, reload = false, detailGeneration = 0;
+  const opening = new Set(), downloading = new Set();
   const button = (action, text, id, cls) => `<button type="button" class="${cls || "rf-quiet"}" data-action="${action}"${id ? ` data-id="${esc(id)}"` : ""}>${esc(text)}</button>`;
+  const openButton = id => button("open", downloading.has(id) ? "Downloading from iCloud…" : "Open", id, "rf-open");
   function icon(entry) { const ext = name(entry).split(".").pop().toUpperCase().slice(0,5); return `<svg class="fico" viewBox="0 0 40 48" width="44" height="52" aria-hidden="true"><path d="M6 1h19l10 10v36H6z" fill="var(--surface)" stroke="var(--line-control)"/><path d="M25 1v10h10" fill="var(--gold)"/><text x="20" y="38" text-anchor="middle" font-family="var(--font)" font-size="9" fill="var(--ink)">${esc(ext)}</text></svg>`; }
   function tell(error) {let target=document.getElementById("cleaner-error");if(!target){target=document.createElement("p");target.id="cleaner-error";target.className="rf-error";target.setAttribute("role","alert");root.prepend(target);}target.textContent=String(error);}
   function noteMode(e) {return e.projection.mode==="embedded" ? "Note inside the file: current" : e.projection.mode==="older" ? "Note saved in RichOS. The note inside the file is older" : `Note saved in RichOS only. ${e.projection.reason || ""}`;}
-  function actions(e) {return button("open","Open",e.id,"rf-open")+button("reveal","Show in Folder",e.id)+(e.undo ? button("undo","Undo filing",e.id) : "")+button("edit-focus","Edit note",e.id);}
+  function actions(e) {return openButton(e.id)+button("reveal","Show in Folder",e.id)+(e.undo ? button("undo","Undo filing",e.id) : "")+button("edit-focus","Edit note",e.id);}
   function batchSummary(result, folder) {
     const files = count => `${count} ${count === 1 ? "file" : "files"}`;
     return [
@@ -49,7 +51,7 @@
     if(view.stage==="listening") controls=button("finish","Done",view.id,"dov-btn")+button("cancel","Cancel",view.id);
     else if(["checking","writing","choosing"].includes(view.stage)) controls=button("cancel","Cancel",view.id);
     else if(e && ["filed","inbox","inbox-pending","draft","error","busy"].includes(view.stage)) controls=actions(e)+button("library","Recent files");
-    if(view.stage==="error" && !e) controls=button("settings","RichCleaner settings")+button("library","Recent files");
+    if(view.stage==="error" && (!e || view.needsFilingFolder)) controls=button("settings","RichCleaner settings")+button("library","Recent files");
     if(batch && ["inbox-pending","busy","batch-result"].includes(view.stage))controls=button("library","Recent files");
     let sub=view.message || "";
     if(view.stage==="listening") sub=`Tap ${k} to finish`;
@@ -82,7 +84,7 @@
     const detail=document.getElementById("cleaner-details");const e=entries.find(e=>e.id===selected);
     detail.hidden=!e;if(!e)return;
     detail.innerHTML=`<div class="rf-det-top"><span class="rf-det-thumb">${icon(e)}</span><div><h2 class="rf-det-name">${esc(name(e))}</h2><div class="rf-det-kind">${esc(e.identity.size.toLocaleString())} bytes</div></div></div>
-      <div class="rf-det-acts">${verified?.available ? button("open","Open",e.id,"rf-open")+button("reveal","Show in Folder",e.id) : button("locate","Locate original",e.id)}</div>
+      <div class="rf-det-acts">${verified?.available ? openButton(e.id)+button("reveal","Show in Folder",e.id) : button("locate","Locate original",e.id)}</div>
       <section class="rf-sec"><h3 class="rf-sec-t">Where it is</h3><p class="rf-path">${esc(e.path)}</p><p>${esc(noteMode(e))}</p>${e.problem ? `<p class="rf-error">${esc(e.problem)}</p>` : ""}</section>
       <section class="rf-sec"><div class="rf-sec-h"><label class="rf-sec-t" for="cleaner-note">Your note</label><span class="rf-sec-s" id="cleaner-save-state" role="status">Saved</span></div><textarea id="cleaner-note" class="rf-edit" data-id="${esc(e.id)}">${esc(e.note)}</textarea><p>Type or click in the box and tap F${status.key || 1} to say it.</p></section>
       <section class="rf-sec"><h3 class="rf-sec-t">Filing</h3><p>Changing the note does not move the file. File again asks RichCleaner to choose a folder using this note.</p><div class="rf-det-acts">${button("file-again","File again",e.id)}${e.undo ? button("undo","Undo filing",e.id) : ""}</div></section>
@@ -102,6 +104,10 @@
   root.addEventListener("click",async event=>{
     const row=event.target.closest("[data-select]");if(row){try{await flushEdits();}catch(e){tell(e);return;}selected=row.dataset.select;for(const node of root.querySelectorAll("[data-select]"))node.setAttribute("aria-selected",String(node===row));paintDetails();return;}
     const b=event.target.closest("[data-action]");if(!b)return;const action=b.dataset.action,id=b.dataset.id;
+    if(action==="open"){
+      if(opening.has(id))return;
+      opening.add(id);
+    }
     try{
       if(["finish","cancel"].includes(action)){await call("cleaner_capture_control",{id,action});return;}
       if(action==="settings"){await call("cleaner_open_main",{surface:"cleaner"});return;}
@@ -110,7 +116,16 @@
       b.disabled=true;const result=await call("cleaner_action",{id,action,note:null});
       if(panel && result.id) paintPanel({id:operation.id,stage:action==="undo" ? "draft" : operation.stage,entry:result,noteSaved:true,message:action==="undo" ? "Filing undone. Your note is kept." : ""});
       if(!panel) await load(false);
-    }catch(e){tell(e);}finally{b.disabled=false;}
+    }catch(e){tell(e);}finally{
+      b.disabled=false;
+      if(action==="open"){
+        opening.delete(id);
+        downloading.delete(id);
+        for(const control of root.querySelectorAll('[data-action="open"]')){
+          if(control.dataset.id===id)control.textContent="Open";
+        }
+      }
+    }
   });
   root.addEventListener("keydown",event=>{if(event.key==="Escape" && panel && ["checking","listening","writing","choosing"].includes(operation.stage)){event.preventDefault();call("cleaner_capture_control",{id:operation.id,action:"cancel"}).catch(tell);}const row=event.target.closest("[data-select]");if(row && ["ArrowDown","ArrowUp"].includes(event.key)){event.preventDefault();const rows=[...root.querySelectorAll("[data-select]")];const nextRow=rows[rows.indexOf(row)+(event.key==="ArrowDown" ? 1 : -1)];if(nextRow){nextRow.click();nextRow.focus();}}});
   // Save after editing stops or focus leaves. The owner commits locally before updating metadata.
@@ -138,6 +153,14 @@
   document.body.className=panel ? "cleaner-panel" : "cleaner-library";
   document.documentElement.classList.toggle("cleaner-panel",panel);
   native.event.listen("rich://cleaner",event=>{const view=event.payload;if(panel){if(view.stage!=="library-changed")paintPanel(view);}else if(!saveBusy && !dirty() && !document.getElementById("cleaner-note")?.matches(":focus"))load(false);}).catch(tell);
+  native.event.listen("rich://cleaner-download",event=>{
+    const {id}=event.payload;
+    if(!opening.has(id))return;
+    downloading.add(id);
+    for(const control of root.querySelectorAll('[data-action="open"]')){
+      if(control.dataset.id===id)control.textContent="Downloading from iCloud…";
+    }
+  }).catch(tell);
   native.event.listen("cleaner-level",event=>{const level=Math.max(0,Math.min(1,event.payload/100));const pill=root.querySelector(".rf-panel");if(pill)pill.style.setProperty("--lvl",level);root.querySelectorAll(".dh-meter i").forEach((bar,i)=>bar.style.transform=`scaleY(${Math.max(.08,level*[.5,.8,1,.8,.5][i])})`);}).catch(tell);
   if(panel){let last="";new ResizeObserver(()=>{const pill=root.querySelector(".rf-panel");if(!pill)return;const w=630,h=Math.ceil(pill.getBoundingClientRect().height+48),key=`${w}:${h}`;if(key!==last){last=key;call("cleaner_panel_size",{w,h}).catch(tell);}}).observe(root);}
   call("cleaner_status").then(view=>{status=view;if(!panel && window.RichSettings){window.RichSettings.registerCleaner({open:()=>call("cleaner_open_main",{surface:"cleaner"}),paint:()=>{}});window.RichSettings.registerBugReport({open:kind=>call("cleaner_open_main",{surface:kind==="idea" ? "idea" : "bug"}).catch(tell)});window.RichSettings.registerDurable({saveTheme:theme=>call("set_theme",{theme}),saveScale:scale=>call("set_font_scale",{scale})});}if(window.RichTheme)window.RichTheme.sync({theme:view.theme,font_scale:view.fontScale});if(panel)paintPanel(view.operation);else paintLibrary();}).catch(tell);
