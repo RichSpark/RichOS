@@ -20,6 +20,7 @@ struct BrowserView: View {
     @ObservedObject private var workspace: WindowWorkspace
     @ObservedObject private var actions: BrowserActions
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.colorScheme) private var scheme
     private let side: BrowserPaneSide
     private let hostOpenWindow: ((URL) -> Void)?
     private let acceptsKeyboard: () -> Bool
@@ -59,6 +60,11 @@ struct BrowserView: View {
     @State private var commandOwner = UUID()
     @State private var paletteChoice: BrowserCommand?
 
+    private var palette: BrowserPalette { BrowserPalette(scheme) }
+    private var activePane: Bool { !workspace.isSplit || workspace.active == side }
+
+    private var rule: some View { Rectangle().fill(palette.line).frame(height: 1) }
+
     private enum FocusTarget: Hashable { case address, search, items }
 
     private struct DestinationRequest: Hashable {
@@ -84,49 +90,64 @@ struct BrowserView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            navigationBar.focusedValue(\.browserControl, true)
-            if editingAddress && !suggestions.isEmpty {
-                addressSuggestions.focusedValue(\.browserControl, true)
-            }
-            Divider()
-            HSplitView {
-                if sidebarVisible && !workspace.isSplit {
-                    sidebar.frame(minWidth: 160, idealWidth: 200, maxWidth: 340)
-                        .focusedValue(\.browserControl, true)
-                }
+        Group {
+            if activePane {
                 VStack(spacing: 0) {
                     tabs.focusedValue(\.browserControl, true)
-                    Divider()
-                    commandBar.focusedValue(\.browserControl, true)
-                    Divider()
-                    itemPane
-                    Divider()
-                    if transfersVisible, actions.transfer != nil {
-                        TransferPanel(actions: actions) { transfersVisible = false }
-                            .focusedValue(\.browserControl, true)
-                        Divider()
+                    rule
+                    navigationBar.focusedValue(\.browserControl, true)
+                    if editingAddress && !suggestions.isEmpty {
+                        addressSuggestions.focusedValue(\.browserControl, true)
                     }
+                    commandBar.focusedValue(\.browserControl, true)
+                    rule
+                }
+                .font(BrowserTypography.reading(16 * textSize.scale))
+                .background(palette.pane)
+                .layoutValue(key: BrowserLayoutKey.self, value: .toolbar)
+                if sidebarVisible {
+                    sidebar.font(BrowserTypography.reading(16 * textSize.scale))
+                        .focusedValue(\.browserControl, true)
+                        .layoutValue(key: BrowserLayoutKey.self, value: .sidebar)
+                }
+            }
+            paneContent.layoutValue(key: BrowserLayoutKey.self, value: side == .primary ? .primary : .secondary)
+            if activePane {
+                VStack(spacing: 0) {
+                    rule
                     statusBar.focusedValue(\.browserControl, true)
                 }
-                .frame(minWidth: workspace.isSplit ? 355 : 430, maxWidth: .infinity, maxHeight: .infinity)
-                if inspectorVisible && !workspace.isSplit {
-                    inspector.frame(minWidth: 190, idealWidth: 260, maxWidth: 410)
+                .layoutValue(key: BrowserLayoutKey.self, value: .status)
+            }
+        }
+    }
+
+    private var paneContent: some View {
+        HSplitView {
+            VStack(spacing: 0) {
+                if workspace.isSplit { paneHeading }
+                itemPane
+                if transfersVisible, actions.transfer != nil {
+                    rule
+                    TransferPanel(actions: actions) { transfersVisible = false }
                         .focusedValue(\.browserControl, true)
                 }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            if inspectorVisible && !workspace.isSplit {
+                inspector.frame(minWidth: 165, idealWidth: 320, maxWidth: 410)
+                    .background(palette.chrome)
+                    .focusedValue(\.browserControl, true)
+            }
         }
-        .font(textSize == .standard ? nil : .system(size: 13 + textSize.adjustment))
+        .font(BrowserTypography.reading(16 * textSize.scale))
+        .background(palette.pane)
+        .accessibilityIdentifier(side == .primary ? "richfiles-primary-pane" : "richfiles-secondary-pane")
         .background(KeyboardBridge(windowsKeys: windowsKeys, acceptsInput: acceptsKeyboard,
                                    controlFocused: controlFocused == true,
                                    shortcuts: BrowserShortcut.load(shortcutData),
                                    activate: { workspace.select(side) },
                                    perform: perform, prefix: selectPrefix))
-        .overlay(alignment: .top) {
-            if workspace.isSplit && workspace.active == side {
-                Rectangle().fill(Color.accentColor).frame(height: 2).allowsHitTesting(false)
-            }
-        }
         .onAppear { workspace.setCommands(for: side, owner: commandOwner, handler: perform) }
         .onDisappear { workspace.clearCommands(for: side, owner: commandOwner) }
         .onChange(of: model.tabs.map(\.folder)) { _ in sessionChanged() }
@@ -153,7 +174,11 @@ struct BrowserView: View {
                                      refresh: destinationRefresh)) {
             await captureDropDestination()
         }
-        .sheet(item: $sheet, onDismiss: runPaletteChoice) { value in sheetContents(value) }
+        .sheet(item: $sheet, onDismiss: runPaletteChoice) { value in
+            sheetContents(value)
+                .font(BrowserTypography.reading(16 * textSize.scale))
+                .background(palette.floating)
+        }
     }
 
     private func runPaletteChoice() {
@@ -163,69 +188,102 @@ struct BrowserView: View {
     }
 
     private var navigationBar: some View {
-        HStack(spacing: 8) {
-            if !workspace.isSplit { control("Sidebar", "sidebar.left") { sidebarVisible.toggle() } }
-            if side == .primary {
-                control(workspace.isSplit ? "Close Split View" : "Split View", "rectangle.split.2x1") {
-                    workspace.toggleSplit()
-                }
-            }
-            control("Back", "chevron.left") { model.goBack() }.disabled(!model.canGoBack)
-            control("Forward", "chevron.right") { model.goForward() }.disabled(!model.canGoForward)
-            control("Up", "arrow.up") { model.goUp() }.disabled(model.folder.path == "/")
-            control("Refresh", "arrow.clockwise") { _ = perform(.refresh) }
-            Group {
-                if editingAddress {
-                    TextField("Folder path", text: $address)
-                        .textFieldStyle(.plain)
-                        .focused($focus, equals: .address)
-                        .accessibilityLabel("Folder path")
-                        .accessibilityIdentifier("folder-address")
-                        .onSubmit { submitAddress(address) }
-                        .onExitCommand { editingAddress = false; focus = nil }
-                        .task(id: address) {
-                            let requested = address
-                            let result = (try? await BrowserModel.addressSuggestions(
-                                requested, relativeTo: model.folder, showHidden: model.showHidden, limit: 8
-                            )) ?? []
-                            if !Task.isCancelled && editingAddress && address == requested { suggestions = result }
-                        }
-                } else {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 6) {
-                            ForEach(Array(model.breadcrumbs.enumerated()), id: \.element) { index, path in
-                                if index > 0 { Image(systemName: "chevron.right").font(.system(size: 8)).foregroundStyle(.secondary) }
-                                Button(path.path == "/" ? "Computer" : path.lastPathComponent) { model.openFolder(path) }
-                                    .buttonStyle(.plain)
-                                    .help(path.path)
+        HStack(spacing: 7) {
+            barButton("Back", "chevron.left") { model.goBack() }.disabled(!model.canGoBack)
+            barButton("Forward", "chevron.right") { model.goForward() }.disabled(!model.canGoForward)
+            barButton("Up", "arrow.up") { model.goUp() }.disabled(model.folder.path == "/")
+            barButton("Refresh", "arrow.clockwise") { _ = perform(.refresh) }
+            addressBar.layoutPriority(1)
+            searchBar
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+    }
+
+    private var addressBar: some View {
+        HStack(spacing: 2) {
+            if editingAddress {
+                TextField("Folder path", text: $address)
+                    .textFieldStyle(.plain)
+                    .focused($focus, equals: .address)
+                    .accessibilityIdentifier("folder-address")
+                    .onSubmit { submitAddress(address) }
+                    .onExitCommand { editingAddress = false; focus = nil }
+                    .task(id: address) {
+                        let requested = address
+                        let result = (try? await BrowserModel.addressSuggestions(
+                            requested, relativeTo: model.folder, showHidden: model.showHidden, limit: 8
+                        )) ?? []
+                        if !Task.isCancelled && editingAddress && address == requested { suggestions = result }
+                    }
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        ForEach(Array(model.breadcrumbs.enumerated()), id: \.element) { index, path in
+                            if index > 0 {
+                                Image(systemName: "chevron.right").font(.system(size: 9)).foregroundStyle(palette.muted)
                             }
+                            Button { model.openFolder(path) } label: {
+                                if path.path == "/" {
+                                    Label("This Mac", systemImage: "desktopcomputer")
+                                } else {
+                                    Text(path.lastPathComponent)
+                                }
+                            }
+                            .buttonStyle(.plain)
+                            .fontWeight(path == model.breadcrumbs.last ? .semibold : .regular)
+                            .foregroundStyle(path == model.breadcrumbs.last ? palette.ink : palette.muted)
+                            .help(path.path)
                         }
                     }
                 }
             }
-            .frame(maxWidth: .infinity, minHeight: 24, alignment: .leading)
-            .padding(.horizontal, 8)
-            .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
-            control("Edit path", "pencil") { editAddress() }
-            control("Copy current path", "doc.on.doc") { copyPaths([model.folder]) }
-            TextField(model.searchContent ? "Search text contents" : "Search this folder", text: $model.searchText)
-                .textFieldStyle(.roundedBorder)
+            barButton("Edit path", "pencil") { editAddress() }
+            barButton("Copy current path", "doc.on.doc") { copyPaths([model.folder]) }
+        }
+        .padding(.leading, 9).padding(.trailing, 3)
+        .frame(minHeight: 36 * textSize.scale)
+        .background(palette.chrome, in: RoundedRectangle(cornerRadius: 7))
+        .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(
+            focus == .address ? palette.signal : palette.controlLine, lineWidth: focus == .address ? 2 : 1
+        ).allowsHitTesting(false))
+    }
+
+    private var searchBar: some View {
+        HStack(spacing: 5) {
+            Image(systemName: "magnifyingglass").foregroundStyle(palette.muted).accessibilityHidden(true)
+            TextField(model.searchContent ? "Search text contents" : "Search " + model.folder.lastPathComponent,
+                      text: $model.searchText)
+                .textFieldStyle(.plain)
                 .focused($focus, equals: .search)
                 .accessibilityLabel(model.searchContent ? "Search text contents" : "Search this folder")
                 .accessibilityIdentifier("folder-search")
-                .frame(minWidth: workspace.isSplit ? 90 : 130,
-                       idealWidth: workspace.isSplit ? 125 : 190, maxWidth: 240)
                 .onSubmit { startSearch() }
             if model.searchActive {
-                control("Clear Search", "xmark.circle") { model.clearSearch() }
+                barButton("Clear Search", "xmark.circle") { model.clearSearch() }
             }
-            control("Search Filters", "line.3.horizontal.decrease.circle") { sheet = .searchOptions }
-            if side == .primary, let hostSwitchTitle {
-                Button(hostSwitchTitle, action: switchHost).buttonStyle(.borderless)
+            Menu {
+                Button("This Folder") { model.searchRecursively = false }
+                Button("Subfolders") { model.searchRecursively = true }
+                Divider()
+                Button("Search Filters…") { sheet = .searchOptions }
+            } label: {
+                ViewThatFits(in: .horizontal) {
+                    Text(model.searchRecursively ? "Subfolders" : "This Folder").fixedSize()
+                    Image(systemName: "line.3.horizontal.decrease")
+                }
             }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .accessibilityLabel("Search Scope")
         }
-        .padding(9)
-        .background(.bar)
+        .padding(.horizontal, 8)
+        .frame(minWidth: workspace.isSplit ? 110 : 175, idealWidth: 330, maxWidth: 365,
+               minHeight: 36 * textSize.scale)
+        .background(palette.chrome, in: RoundedRectangle(cornerRadius: 7))
+        .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(
+            focus == .search ? palette.signal : palette.controlLine, lineWidth: focus == .search ? 2 : 1
+        ).allowsHitTesting(false))
     }
 
     private var addressSuggestions: some View {
@@ -244,64 +302,71 @@ struct BrowserView: View {
     }
 
     private var sidebar: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
-                VStack(alignment: .leading, spacing: 2) {
-                    sideHeading("Quick Access")
-                    ForEach(model.places) { place in
-                        FolderTreeRow(url: place.url, title: place.title, symbol: place.symbol,
-                                      current: model.folder, showHidden: model.showHidden,
-                                      reveal: reveal(for: place.url), open: model.openFolder)
-                    }
-                    ForEach(Array(model.favorites.enumerated()), id: \.element) { index, url in
-                        FolderTreeRow(url: url, title: url.lastPathComponent, symbol: "pin",
-                                      current: model.folder, showHidden: model.showHidden,
-                                      reveal: reveal(for: url), open: model.openFolder)
-                            .contextMenu {
-                                Button("Remove from Quick Access") { model.removeFavorite(url) }
-                                Button("Move Up") { model.moveFavorite(from: IndexSet(integer: index), to: index - 1) }
-                                    .disabled(index == 0)
-                                Button("Move Down") { model.moveFavorite(from: IndexSet(integer: index), to: index + 2) }
-                                    .disabled(index == model.favorites.count - 1)
-                            }
-                    }
-                    Button { model.addFavorite(model.folder) } label: {
-                        Label("Pin Current Folder", systemImage: "plus").font(textSize.font(.callout, size: 12))
-                    }
-                    .buttonStyle(.plain)
-                    .padding(.vertical, 5)
-                }
-                VStack(alignment: .leading, spacing: 2) {
-                    sideHeading("Computer")
-                    ForEach(model.volumes) { volume in
-                        FolderTreeRow(url: volume.url, title: volume.name,
-                                      symbol: volume.isLocal == false ? "network" : "externaldrive",
-                                      current: model.folder, showHidden: model.showHidden,
-                                      reveal: reveal(for: volume.url), open: model.openFolder)
-                            .help(volume.availableBytes.map { "\(formattedBytes($0)) available" } ?? volume.name)
-                            .contextMenu {
-                                if volume.isEjectable == true {
-                                    Button("Eject") { eject(volume) }.disabled(actions.busy)
+        VStack(spacing: 0) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 10) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        sideHeading("Quick Access")
+                        ForEach(Array(model.favorites.enumerated()), id: \.element) { index, url in
+                            FolderTreeRow(url: url, title: url.lastPathComponent, symbol: "pin",
+                                          current: model.folder, showHidden: model.showHidden,
+                                          reveal: reveal(for: url), open: model.openFolder, isPin: true)
+                                .contextMenu {
+                                    Button("Remove from Quick Access") { model.removeFavorite(url) }
+                                    Button("Move Up") { model.moveFavorite(from: IndexSet(integer: index), to: index - 1) }
+                                        .disabled(index == 0)
+                                    Button("Move Down") { model.moveFavorite(from: IndexSet(integer: index), to: index + 2) }
+                                        .disabled(index == model.favorites.count - 1)
                                 }
-                                Button("Copy Path") { copyPaths([volume.url]) }
+                        }
+                        if !model.favorites.contains(where: { $0.path == model.folder.path }) {
+                            barButton("Pin Current Folder", "plus", showTitle: true) { model.addFavorite(model.folder) }
+                        }
+                    }
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack {
+                            sideHeading("This Mac")
+                            Spacer()
+                            barButton("Expand to Current Folder", "list.bullet.indent") { expandToCurrentFolder() }
+                        }
+                        ForEach(model.places) { place in
+                            FolderTreeRow(url: place.url, title: place.title, symbol: place.symbol,
+                                          current: model.folder, showHidden: model.showHidden,
+                                          reveal: reveal(for: place.url), open: model.openFolder)
+                        }
+                        ForEach(model.volumes) { volume in
+                            HStack(alignment: .top, spacing: 1) {
+                                FolderTreeRow(url: volume.url, title: volume.name,
+                                              symbol: volume.isLocal == false ? "network" : "externaldrive",
+                                              current: model.folder, showHidden: model.showHidden,
+                                              reveal: reveal(for: volume.url), open: model.openFolder, volume: volume)
+                                if volume.isEjectable == true {
+                                    barButton("Eject \(volume.name)", "eject") { eject(volume) }
+                                        .disabled(actions.busy)
+                                }
                             }
+                            .contextMenu { Button("Copy Path") { copyPaths([volume.url]) } }
+                        }
+                        if !model.volumeStatus.isEmpty {
+                            Text(model.volumeStatus).font(textSize.font(size: 14))
+                                .foregroundStyle(palette.muted)
+                        }
+                        barButton("Connect to Server", "network", showTitle: true) { sheet = .connect }
                     }
-                    if !model.volumeStatus.isEmpty {
-                        Text(model.volumeStatus).font(textSize.font(.caption, size: 11)).foregroundStyle(.secondary)
-                    }
-                    Button { sheet = .connect } label: {
-                        Label("Connect to Server", systemImage: "network").font(textSize.font(.callout, size: 12))
-                    }
-                    .buttonStyle(.plain)
-                    .padding(.vertical, 5)
                 }
-                Button { sheet = .trash } label: { Label("Trash", systemImage: "trash") }
-                    .buttonStyle(.plain)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(8)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(10)
+            rule.padding(.horizontal, 8)
+            Button { sheet = .trash } label: {
+                Label("Trash", systemImage: "trash")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.leading, 10)
+            }
+            .buttonStyle(BrowserButtonStyle())
+            .padding(.horizontal, 8).padding(.vertical, 3)
         }
-        .background(.bar)
+        .background(palette.sidebar)
         .accessibilityLabel("Folder sidebar")
     }
 
@@ -320,37 +385,75 @@ struct BrowserView: View {
     }
 
     private func sideHeading(_ label: String) -> some View {
-        Text(label).font(textSize.font(.caption, size: 11).weight(.semibold)).foregroundStyle(.secondary)
-            .padding(.bottom, 3).accessibilityAddTraits(.isHeader)
+        Text(label).fontWeight(.semibold).foregroundStyle(palette.muted)
+            .padding(.leading, 5).padding(.vertical, 5).accessibilityAddTraits(.isHeader)
     }
 
     private var tabs: some View {
         HStack(spacing: 5) {
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 4) {
+                HStack(alignment: .bottom, spacing: 4) {
                     ForEach(model.tabs) { tab in
-                        HStack(spacing: 5) {
-                            Button(tab.title) { model.switchTab(tab.id) }
-                                .buttonStyle(.plain)
-                                .lineLimit(1)
-                                .help(tab.folder.path)
-                                .accessibilityAddTraits(tab.id == model.currentTabID ? .isSelected : [])
+                        let current = tab.id == model.currentTabID
+                        HStack(spacing: 6) {
+                            Button {
+                                workspace.select(side)
+                                model.switchTab(tab.id)
+                            } label: {
+                                Label {
+                                    Text(tab.title).lineLimit(1)
+                                } icon: {
+                                    Image(systemName: "folder.fill").foregroundStyle(palette.folder)
+                                }
+                                .fontWeight(current ? .semibold : .regular)
+                            }
+                            .buttonStyle(.plain)
+                            .help(tab.folder.path)
+                            .accessibilityAddTraits(current ? .isSelected : [])
                             if model.tabs.count > 1 {
                                 Button { model.closeTab(tab.id) } label: {
-                                    Image(systemName: "xmark").font(.system(size: 9))
+                                    Image(systemName: "xmark").font(.system(size: 10)).padding(4)
                                 }.buttonStyle(.plain).accessibilityLabel("Close \(tab.title) tab")
                             }
                         }
-                        .padding(.horizontal, 8).padding(.vertical, 5)
-                        .background(tab.id == model.currentTabID ? Color.accentColor.opacity(0.13) : Color.clear,
-                                    in: RoundedRectangle(cornerRadius: 5))
+                        .padding(.horizontal, 12)
+                        .frame(minHeight: 36 * textSize.scale)
+                        .background(current ? palette.pane : .clear, in: RoundedRectangle(cornerRadius: 6))
+                        .overlay(alignment: .top) {
+                            if current {
+                                Capsule().fill(palette.signal).frame(height: 3).padding(.horizontal, 7)
+                                    .allowsHitTesting(false)
+                            }
+                        }
                     }
+                    barButton("New Tab", "plus") { model.newTab() }
                 }
             }
-            control("New Tab", "plus") { model.newTab() }
-            control("New Window", "macwindow.badge.plus") { openFolderWindow(model.folder) }
+            barButton("Workspaces", "rectangle.on.rectangle", showTitle: true) { sheet = .workspaces }
+            if let hostSwitchTitle {
+                barButton(hostSwitchTitle, hostOpenWindow == nil ? "rectangle.portrait.and.arrow.forward" :
+                            "arrow.up.right.square", showTitle: true, bordered: true, action: switchHost)
+            }
+            barButton("Find a Command", "chevron.right.square") { _ = perform(.actionPalette) }
+            barButton("Settings", "gearshape") { sheet = .settings }
         }
-        .padding(.horizontal, 8).padding(.vertical, 4)
+        .padding(.horizontal, 10)
+        .padding(.top, 5)
+        .background(palette.chrome)
+    }
+
+    private var paneHeading: some View {
+        HStack {
+            Label(model.folder.lastPathComponent, systemImage: "folder.fill").lineLimit(1)
+            Spacer(minLength: 4)
+            if activePane { Text("Active pane").foregroundStyle(palette.signal) }
+        }
+        .fontWeight(.semibold)
+        .padding(.horizontal, 10).padding(.vertical, 6)
+        .overlay(alignment: .top) {
+            if activePane { Rectangle().fill(palette.signal).frame(height: 2) }
+        }
+        .overlay(alignment: .bottom) { rule }
     }
 
     private func openFolderWindow(_ folder: URL) {
@@ -359,64 +462,126 @@ struct BrowserView: View {
     }
 
     private var commandBar: some View {
-        HStack(spacing: 9) {
-            Menu {
-                creationMenu
-            } label: { Label("New", systemImage: "plus") }
-                .disabled(actions.busy || !writableFolder)
-            control("Cut", "scissors") { _ = perform(.cut) }.disabled(model.selected.isEmpty || actions.busy)
-            control("Copy", "doc.on.doc") { _ = perform(.copy) }.disabled(model.selected.isEmpty)
-            Menu {
-                Button("Paste, Skip Conflicts") { paste() }
-                Button("Paste, Keep Both") { paste(.keepBoth) }
-            } label: { Label("Paste", systemImage: "clipboard") }
-                .disabled(!actions.canScheduleTransfer || !writableFolder)
-            control("Move to Trash", "trash") { _ = perform(.trash) }.disabled(model.selected.isEmpty || actions.busy)
-            Menu {
-                folderMenu
-            } label: { Image(systemName: "ellipsis.circle") }
-                .accessibilityLabel("Current folder actions")
-                .help("Current folder actions")
-            if let undo = actions.undoName {
-                control("Undo " + undo, "arrow.uturn.backward") { actions.undo() }.disabled(actions.busy)
-            }
-            Spacer(minLength: 4)
-            Picker("View", selection: $model.viewMode) {
-                ForEach([BrowserViewMode.list, .details, .icons, .columns, .gallery]) { mode in
-                    Text(mode.title).tag(mode)
-                }
-            }
-            .pickerStyle(.menu)
-            .labelsHidden()
-            .frame(width: 112)
-            .accessibilityLabel("File view")
-            Menu {
-                sortButton("Name", .name)
-                sortButton("Extension", .fileExtension)
-                sortButton("Type", .type)
-                sortButton("Size", .size)
-                sortButton("Modified", .modified)
-                Divider()
-                Toggle("Ascending", isOn: Binding(get: { model.sort.ascending }, set: { ascending in
-                    model.sort = FileSort(column: model.sort.column, ascending: ascending, foldersFirst: model.sort.foldersFirst)
-                }))
-                Toggle("Folders First", isOn: Binding(get: { model.sort.foldersFirst }, set: { foldersFirst in
-                    model.sort = FileSort(column: model.sort.column, ascending: model.sort.ascending, foldersFirst: foldersFirst)
-                }))
-                Toggle("Show Hidden Files", isOn: $model.showHidden)
-                Toggle("Remember View for This Folder", isOn: Binding(get: { model.remembersFolderView }, set: {
-                    model.setFolderViewOverride($0)
-                }))
-                if model.viewMode == .icons {
-                    Button("Larger Thumbnails") { model.iconSize = min(model.iconSize + 12, 180) }
-                    Button("Smaller Thumbnails") { model.iconSize = max(model.iconSize - 12, 48) }
-                }
-            } label: { Image(systemName: "arrow.up.arrow.down") }
-                .accessibilityLabel("Sort and view options")
-            if !workspace.isSplit { control("Preview Pane", "sidebar.right") { inspectorVisible.toggle() } }
+        ViewThatFits(in: .horizontal) {
+            commandBar(labeled: true)
+            commandBar(labeled: false)
         }
-        .buttonStyle(.borderless)
-        .padding(.horizontal, 8).padding(.vertical, 6)
+        .padding(.horizontal, 10).padding(.bottom, 6)
+    }
+
+    private func commandBar(labeled: Bool) -> some View {
+        HStack(spacing: 4) {
+            HStack(spacing: 1) {
+                Menu { creationMenu } label: { barLabel("New", "plus", labeled) }
+                    .accessibilityLabel("New")
+                    .disabled(actions.busy || !writableFolder)
+                barButton("Cut", "scissors", showTitle: labeled) { _ = perform(.cut) }
+                    .disabled(model.selected.isEmpty || actions.busy)
+                barButton("Copy", "doc.on.doc", showTitle: labeled) { _ = perform(.copy) }
+                    .disabled(model.selected.isEmpty)
+                Menu {
+                    Button("Paste, Skip Conflicts") { paste() }
+                    Button("Paste, Keep Both") { paste(.keepBoth) }
+                } label: { barLabel("Paste", "clipboard", labeled) }
+                    .accessibilityLabel("Paste")
+                    .disabled(!actions.canScheduleTransfer || !writableFolder)
+                barButton("Rename", "pencil", showTitle: labeled) { _ = perform(.rename) }
+                    .disabled(model.selected.count != 1 || actions.busy)
+                barButton("Move to Trash", "trash", showTitle: labeled, visibleTitle: "Trash") { _ = perform(.trash) }
+                    .disabled(model.selected.isEmpty || actions.busy)
+                Menu { folderMenu } label: { barLabel("This Folder", "folder", labeled) }
+                    .accessibilityLabel("Current folder actions")
+                Menu {
+                    Button("New Window") { openFolderWindow(model.folder) }
+                    Button("Workspaces…") { sheet = .workspaces }
+                    Divider()
+                    Button("Compare Folders…") { sheet = .compare(model.folder) }
+                    Button("Find Duplicate Files…") { sheet = .duplicates(model.folder) }
+                    Button("Disk Usage…") { sheet = .diskUsage(model.folder) }
+                    Button("Connect to Server…") { sheet = .connect }
+                } label: { barLabel("Tools", "ellipsis", labeled) }
+                    .accessibilityLabel("Tools")
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize(horizontal: true, vertical: false)
+            Spacer(minLength: 4)
+            HStack(spacing: 2) {
+                barButton("Sidebar", "sidebar.left", selected: sidebarVisible) { sidebarVisible.toggle() }
+                barButton(workspace.isSplit ? "Close Split View" : "Split View", "rectangle.split.2x1",
+                          selected: workspace.isSplit) { workspace.toggleSplit() }
+                if !workspace.isSplit {
+                    barButton("Preview Pane", "sidebar.right", selected: inspectorVisible) { inspectorVisible.toggle() }
+                }
+                if labeled {
+                    viewButton(.list, "list.bullet", labeled: true)
+                    viewButton(.details, "line.3.horizontal", labeled: true)
+                    viewButton(.icons, "square.grid.2x2", labeled: true)
+                }
+                Menu {
+                    ForEach([BrowserViewMode.list, .details, .icons, .columns, .gallery]) { mode in
+                        Button {
+                            model.viewMode = mode
+                        } label: {
+                            if model.viewMode == mode { Label(mode.title, systemImage: "checkmark") }
+                            else { Text(mode.title) }
+                        }
+                    }
+                } label: { Image(systemName: "square.grid.2x2") }
+                    .accessibilityLabel("File view")
+                if labeled || !workspace.isSplit {
+                    barButton("File Shelf", "tray") { _ = perform(.fileShelf) }
+                }
+                sortMenu
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize(horizontal: true, vertical: false)
+        }
+    }
+
+    private func viewButton(_ mode: BrowserViewMode, _ symbol: String, labeled: Bool) -> some View {
+        barButton(mode.title, symbol, showTitle: labeled, selected: model.viewMode == mode) { model.viewMode = mode }
+            .accessibilityAddTraits(model.viewMode == mode ? .isSelected : [])
+    }
+
+    private var sortMenu: some View {
+        Menu {
+            sortButton("Name", .name)
+            sortButton("Extension", .fileExtension)
+            sortButton("Type", .type)
+            sortButton("Size", .size)
+            sortButton("Modified", .modified)
+            Divider()
+            Toggle("Ascending", isOn: Binding(get: { model.sort.ascending }, set: { ascending in
+                model.sort = FileSort(column: model.sort.column, ascending: ascending, foldersFirst: model.sort.foldersFirst)
+            }))
+            Toggle("Folders First", isOn: Binding(get: { model.sort.foldersFirst }, set: { foldersFirst in
+                model.sort = FileSort(column: model.sort.column, ascending: model.sort.ascending, foldersFirst: foldersFirst)
+            }))
+            Toggle("Show Hidden Files", isOn: $model.showHidden)
+            Toggle("Remember View for This Folder", isOn: Binding(get: { model.remembersFolderView }, set: {
+                model.setFolderViewOverride($0)
+            }))
+            if model.viewMode == .icons {
+                Button("Larger Thumbnails") { model.iconSize = min(model.iconSize + 12, 180) }
+                Button("Smaller Thumbnails") { model.iconSize = max(model.iconSize - 12, 48) }
+            }
+        } label: { Image(systemName: "arrow.up.arrow.down") }
+            .accessibilityLabel("Sort and view options")
+    }
+
+    private func barLabel(_ title: String, _ symbol: String, _ showTitle: Bool) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: symbol).foregroundStyle(palette.muted)
+            if showTitle { Text(title).lineLimit(1) }
+        }
+    }
+
+    private func barButton(_ title: String, _ symbol: String, showTitle: Bool = false,
+                           selected: Bool = false, bordered: Bool = false, visibleTitle: String? = nil,
+                           action: @escaping () -> Void) -> some View {
+        Button(action: action) { barLabel(visibleTitle ?? title, symbol, showTitle) }
+            .buttonStyle(BrowserButtonStyle(selected: selected, bordered: bordered))
+            .accessibilityLabel(title).help(title)
     }
 
     private func sortButton(_ title: String, _ column: FileSort.Column) -> some View {
@@ -455,14 +620,14 @@ struct BrowserView: View {
                     .padding(8).allowsHitTesting(false)
             }
             if let selectionRectangle {
-                Rectangle().fill(Color.accentColor.opacity(0.12))
-                    .overlay(Rectangle().stroke(Color.accentColor.opacity(0.8)))
+                Rectangle().fill(palette.signal.opacity(0.12))
+                    .overlay(Rectangle().stroke(palette.signal))
                     .frame(width: selectionRectangle.width, height: selectionRectangle.height)
                     .position(x: selectionRectangle.midX, y: selectionRectangle.midY)
                     .allowsHitTesting(false)
             }
         }
-        .background(Color(nsColor: .textBackgroundColor))
+        .background(palette.pane)
         .coordinateSpace(name: "richfiles-items")
         .background(BrowserDragSurface(prepare: { point in
             guard let url = rowAt(point),
@@ -535,7 +700,7 @@ struct BrowserView: View {
         VStack(spacing: 8) {
             Image(systemName: model.searchActive ? "magnifyingglass" : "folder").font(.system(size: 32))
             Text(model.isDisconnected ? "Volume disconnected" : (model.searchActive ? "No matching files" : "No items to show"))
-            if !model.status.isEmpty { Text(model.status).font(textSize.font(.callout, size: 12)).multilineTextAlignment(.center) }
+            if !model.status.isEmpty { Text(model.status).font(textSize.font(size: 12)).multilineTextAlignment(.center) }
         }.foregroundStyle(.secondary).padding(24)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -555,7 +720,7 @@ struct BrowserView: View {
                             Divider()
                         }
                         VStack(alignment: .leading, spacing: 0) {
-                            Text(model.folder.lastPathComponent).font(textSize.font(.headline, size: 13).weight(.semibold)).lineLimit(1).padding(8)
+                            Text(model.folder.lastPathComponent).font(textSize.font(size: 13).weight(.semibold)).lineLimit(1).padding(8)
                             Divider()
                             if model.entries.isEmpty && !model.busy {
                                 emptyItems
@@ -628,7 +793,7 @@ struct BrowserView: View {
                                     VStack(spacing: 4) {
                                         FileThumbnail(entry: entry, side: 62)
                                         Text(entry.name)
-                                            .font(textSize.font(.caption, size: 11))
+                                            .font(textSize.font(size: 11))
                                             .lineLimit(1).truncationMode(.middle)
                                         if model.searchActive { resultLocation(entry) }
                                     }.frame(width: 106).padding(3)
@@ -726,14 +891,16 @@ struct BrowserView: View {
 
     private var compactList: some View {
         GeometryReader { geometry in
-            let rowHeight: CGFloat = (model.searchActive ? 33 : 22) +
-                textSize.adjustment * (model.searchActive ? 2 : 1)
-            let rows = max(1, Int((geometry.size.height - 10) / rowHeight))
+            let rowHeight = (model.searchActive ? 48 : 28) * textSize.scale
+            let rows = max(1, Int((geometry.size.height - 12) / rowHeight))
+            let width = max(1, geometry.size.width - 12)
+            let visibleColumns = max(1, Int(width / (325 * textSize.scale)))
+            let columnWidth = width / CGFloat(visibleColumns)
             let entries = model.entries
             let columns = (entries.count + rows - 1) / rows
             ScrollViewReader { scroll in
                 ScrollView(.horizontal) {
-                    LazyHStack(alignment: .top, spacing: 8) {
+                    LazyHStack(alignment: .top, spacing: 0) {
                         ForEach(0..<columns, id: \.self) { column in
                             let start = column * rows
                             let end = min(start + rows, entries.count)
@@ -743,14 +910,22 @@ struct BrowserView: View {
                                         VStack(alignment: .leading, spacing: 1) {
                                             nameLabel(entry)
                                             if model.searchActive {
-                                                resultLocation(entry, font: .system(size: 10 + textSize.adjustment))
+                                                resultLocation(entry, font: BrowserTypography.reading(14 * textSize.scale))
                                             }
-                                        }.frame(width: 240 + textSize.adjustment * 5, alignment: .leading)
+                                        }.frame(maxWidth: .infinity, alignment: .leading)
                                     }.frame(height: rowHeight)
                                 }
-                            }.id(column)
+                            }
+                            .padding(.horizontal, 5)
+                            .frame(width: columnWidth, height: max(0, geometry.size.height - 12), alignment: .top)
+                            .overlay(alignment: .trailing) {
+                                if column + 1 < columns {
+                                    Rectangle().fill(palette.line).frame(width: 1).allowsHitTesting(false)
+                                }
+                            }
+                            .id(column)
                         }
-                    }.padding(5)
+                    }.padding(6)
                 }
                 .onAppear {
                     listRows = rows
@@ -806,10 +981,25 @@ struct BrowserView: View {
 
     private func selectable<Content: View>(_ entry: FileEntry, @ViewBuilder content: () -> Content) -> some View {
         let selected = model.selected.contains(entry.url)
+        let cut = actions.cutURLs.contains { $0.path == entry.url.path }
+        let cursor = focus == .items && selectionCursor == entry.url
         let location = model.searchActive ? entry.url.deletingLastPathComponent().path : ""
+        let outline = RoundedRectangle(cornerRadius: 5)
+        let marker = activePane ? palette.signal : palette.muted
         return content()
-            .padding(.horizontal, 4)
-            .background(selected ? Color.accentColor.opacity(0.25) : Color.clear, in: RoundedRectangle(cornerRadius: 4))
+            .padding(.horizontal, 8)
+            .background(selected ? (activePane ? palette.selected : palette.inactiveSelection) : .clear, in: outline)
+            .overlay {
+                if selected || cursor || cut {
+                    outline.strokeBorder(marker, style: StrokeStyle(lineWidth: cursor ? 2 : 1, dash: cut ? [4, 3] : []))
+                        .allowsHitTesting(false)
+                }
+            }
+            .overlay(alignment: .leading) {
+                if selected {
+                    Capsule().fill(marker).frame(width: 3).padding(.vertical, 2).allowsHitTesting(false)
+                }
+            }
             .background(dragFrame(for: entry.url))
             .contentShape(Rectangle())
             .gesture(TapGesture(count: 2).onEnded {
@@ -847,12 +1037,16 @@ struct BrowserView: View {
     }
 
     private func nameLabel(_ entry: FileEntry) -> some View {
-        Label {
+        let cut = actions.cutURLs.contains { $0.path == entry.url.path }
+        return HStack(spacing: 8) {
+            Image(systemName: fileSymbol(entry))
+                .foregroundStyle(entry.kind == .directory ? palette.folder : palette.muted)
+                .frame(width: 18)
             Text(entry.name).lineLimit(1).truncationMode(.middle)
-        } icon: {
-            Image(systemName: fileSymbol(entry)).foregroundStyle(entry.kind == .directory ? Color.accentColor : .secondary)
+                .font(cut ? BrowserTypography.reading(16 * textSize.scale).italic() : nil)
+            if cut { Image(systemName: "scissors").foregroundStyle(palette.muted).accessibilityLabel("Cut") }
         }
-        .opacity(actions.cutURLs.contains(where: { $0.path == entry.url.path }) ? 0.45 : 1)
+        .opacity(cut ? 0.65 : 1)
         .help(entry.name)
         .accessibilityLabel(entry.name)
     }
@@ -974,14 +1168,14 @@ struct BrowserView: View {
 
     private var inspector: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Preview").font(textSize.font(.headline, size: 13).weight(.semibold))
+            Text("Preview").font(textSize.font(size: 13).weight(.semibold))
             if model.selectedEntries.count == 1, let entry = model.selectedEntries.first {
                 if entry.kind == .directory {
                     FileThumbnail(entry: entry, side: 110)
                 } else {
                     NativePreview(entry: entry).frame(minHeight: 150, maxHeight: .infinity)
                 }
-                Text(entry.name).font(textSize.font(.headline, size: 13).weight(.semibold)).textSelection(.enabled)
+                Text(entry.name).font(textSize.font(size: 13).weight(.semibold)).textSelection(.enabled)
                 Text(entry.typeDescription ?? "File").foregroundStyle(.secondary)
                 if let size = entry.size { Text(formattedBytes(size)).foregroundStyle(.secondary) }
                 Button("Properties") { sheet = .properties(entry) }
@@ -1000,9 +1194,12 @@ struct BrowserView: View {
                 let sizes = model.selectedEntries.compactMap(\.size)
                 if !sizes.isEmpty { Text(formattedBytes(sizes.reduce(0, safeAdd))) }
             }
-            if let available = model.currentVolume?.availableBytes { Text("\(formattedBytes(available)) free") }
             if model.currentVolume?.isReadOnly == true { Text("Read-only") }
             Spacer(minLength: 4)
+            if let undo = actions.undoName {
+                Button("Undo " + undo) { actions.undo() }
+                    .buttonStyle(.borderless).disabled(actions.busy).lineLimit(1)
+            }
             if let transfer = actions.transfer {
                 let queued = actions.queuedTransfers.count
                 let title = transfer.running ? "Transfers \(transfer.completed)/\(transfer.total)" : "Transfers"
@@ -1027,10 +1224,15 @@ struct BrowserView: View {
             }
             let status = !feedback.isEmpty ? feedback : actions.status
             if !status.isEmpty { Text(status).lineLimit(1).truncationMode(.tail).help(status) }
+            if let volume = model.currentVolume, let available = volume.availableBytes {
+                Text("\(formattedBytes(available)) free on \(volume.name)").lineLimit(1)
+            }
+            Label(windowsKeys ? "Windows keys" : "Mac keys", systemImage: "keyboard").fixedSize()
         }
-        .font(textSize.font(.caption, size: 11)).foregroundStyle(.secondary)
-        .padding(.horizontal, 9).padding(.vertical, 5)
-        .background(.bar)
+        .font(BrowserTypography.reading(14 * textSize.scale)).foregroundStyle(palette.muted)
+        .padding(.horizontal, 12)
+        .frame(minHeight: 33 * textSize.scale)
+        .background(palette.chrome)
     }
 
     private func perform(_ command: BrowserCommand) -> Bool {
@@ -1081,6 +1283,7 @@ struct BrowserView: View {
         case .address: editAddress()
         case .revealFolder: expandToCurrentFolder()
         case .workspaces: sheet = .workspaces
+        case .settings: sheet = .settings
         case .splitView: workspace.toggleSplit()
         case .switchPane:
             guard workspace.isSplit else { return false }
@@ -1520,10 +1723,8 @@ struct BrowserView: View {
                 InterruptedTransferSheet(notice: notice, actions: actions, openFolder: model.openFolder)
             }
         case .settings:
-            VStack(alignment: .trailing, spacing: 0) {
-                RichFilesSettings()
-                Button("Done") { sheet = nil }.keyboardShortcut(.cancelAction).padding(12)
-            }.frame(height: 480)
+            RichFilesSettings(workspace: workspace) { sheet = nil }
+                .modifier(BrowserAppearance())
         case .searchOptions: SearchOptionsSheet(model: model)
         case .batch(let references): BatchRenameSheet(sources: references, folder: model.folder, actions: actions)
         case .connect: ConnectSheet()
@@ -1666,9 +1867,14 @@ private struct FolderTreeRow: View {
     let showHidden: Bool
     let reveal: FolderTreeReveal?
     let open: (URL) -> Void
+    var isPin = false
+    var volume: VolumeInfo?
+    @Environment(\.colorScheme) private var scheme
+    @AppStorage("richfiles.textSize") private var textSize = BrowserTextSize.standard
     @State private var expanded = false
     @State private var children: [FileEntry] = []
     @State private var problem = ""
+    @State private var missing = false
 
     private var childToReveal: String? { reveal?.nextChild[url.standardizedFileURL.path] }
 
@@ -1679,6 +1885,8 @@ private struct FolderTreeRow: View {
     }
 
     var body: some View {
+        let palette = BrowserPalette(scheme)
+        let here = current.standardizedFileURL.path == url.standardizedFileURL.path
         DisclosureGroup(isExpanded: $expanded) {
             ForEach(children) { entry in
                 FolderTreeRow(url: entry.url, title: entry.name, symbol: "folder", current: current,
@@ -1687,19 +1895,51 @@ private struct FolderTreeRow: View {
             if !problem.isEmpty { Text(problem).font(.caption).foregroundStyle(.secondary).lineLimit(2) }
         } label: {
             Button { open(url) } label: {
-                Label(title, systemImage: symbol)
-                    .lineLimit(1)
-                    .padding(.vertical, 3)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(current.standardizedFileURL.path == url.standardizedFileURL.path
-                                ? Color.accentColor.opacity(0.15) : Color.clear,
-                                in: RoundedRectangle(cornerRadius: 4))
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 6) {
+                        Image(systemName: missing ? "exclamationmark.triangle" : symbol)
+                            .foregroundStyle(missing ? palette.attention : palette.folder)
+                        Text(title).lineLimit(1)
+                        if missing {
+                            Text("Missing").font(BrowserTypography.reading(13 * textSize.scale))
+                                .foregroundStyle(palette.attention)
+                        }
+                    }
+                    if let volume, let available = volume.availableBytes, let total = volume.totalBytes, total > 0 {
+                        Text("\(formattedBytes(available)) free of \(formattedBytes(total))")
+                            .font(BrowserTypography.reading(14 * textSize.scale))
+                            .foregroundStyle(palette.muted).lineLimit(1)
+                        GeometryReader { geometry in
+                            Capsule().fill(palette.controlLine.opacity(0.35))
+                            Capsule().fill(palette.folder)
+                                .frame(width: geometry.size.width * min(1, max(0, Double(total - available) / Double(total))))
+                        }.frame(height: 4).accessibilityHidden(true)
+                    }
+                }
+                .fontWeight(here ? .semibold : .regular)
+                .padding(.horizontal, 6)
+                .padding(.vertical, volume == nil ? 3 : 5)
+                .frame(maxWidth: .infinity, minHeight: 26 * textSize.scale, alignment: .leading)
+                .background(here ? palette.selected : .clear, in: RoundedRectangle(cornerRadius: 5))
+                .overlay(alignment: .leading) {
+                    if here { Capsule().fill(palette.signal).frame(width: 3).allowsHitTesting(false) }
+                }
             }
             .buttonStyle(.plain)
             .help(url.path)
         }
         .accessibilityLabel(title)
+        .accessibilityAddTraits(here ? .isSelected : [])
+        .accessibilityValue(missing ? "Missing" : "")
         .accessibilityAction(named: "Open Folder") { open(url) }
+        .task(id: current) {
+            guard isPin else { return }
+            let location = url
+            let available = await Task.detached(priority: .utility) {
+                FileManager.default.fileExists(atPath: location.path)
+            }.value
+            if !Task.isCancelled { missing = !available }
+        }
         .onAppear { if childToReveal != nil { expanded = true } }
         .onChange(of: reveal?.id) { _ in if childToReveal != nil { expanded = true } }
         .task(id: LoadRequest(expanded: expanded, showHidden: showHidden, child: childToReveal)) {
@@ -1731,7 +1971,7 @@ func formattedDate(_ date: Date) -> String {
 func fileSymbol(_ entry: FileEntry) -> String {
     if entry.needsDownload { return "icloud.and.arrow.down" }
     switch entry.kind {
-    case .directory: return "folder"
+    case .directory: return "folder.fill"
     case .package: return "app"
     case .symbolicLink: return "link"
     case .regularFile, .other: return "doc"

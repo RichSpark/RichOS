@@ -576,6 +576,7 @@ struct DiskUsageSheet: View {
 @MainActor
 struct WorkspacesSheet: View {
     @ObservedObject var window: WindowWorkspace
+    var embedded = false
     @Environment(\.dismiss) private var dismiss
     @State private var workspaces: [NamedWorkspace] = []
     @State private var name = ""
@@ -583,7 +584,7 @@ struct WorkspacesSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Workspaces").font(.headline)
+            if !embedded { Text("Workspaces").font(.headline) }
             List(workspaces) { workspace in
                 HStack {
                     Text(workspace.name)
@@ -612,11 +613,14 @@ struct WorkspacesSheet: View {
                 }
             }
             if !problem.isEmpty { Text(problem).font(.callout).foregroundStyle(.secondary) }
-            HStack {
-                Spacer()
-                Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
+            if !embedded {
+                HStack {
+                    Spacer()
+                    Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
+                }
             }
-        }.padding(16).frame(width: 470, height: 320)
+        }.padding(embedded ? 0 : 16)
+            .frame(width: embedded ? nil : 470, height: embedded ? nil : 320)
             .onAppear { workspaces = window.primary.namedWorkspaces() }
     }
 

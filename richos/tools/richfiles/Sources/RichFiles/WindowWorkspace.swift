@@ -40,6 +40,20 @@ final class WindowWorkspace: ObservableObject {
         }
     }
 
+    func setHiddenFilesVisible(_ visible: Bool) {
+        primary.showHidden = visible
+        secondary?.showHidden = visible
+    }
+
+    func useDefaultView(for path: String) {
+        var preferences = BrowserPreferences.load(from: defaults)
+        preferences.folders.removeValue(forKey: path)
+        preferences.save(to: defaults)
+        for model in [primary, secondary].compactMap({ $0 }) where model.folder.path == path {
+            model.setFolderViewOverride(false)
+        }
+    }
+
     func setCommands(for pane: BrowserPaneSide, owner: UUID, handler: @escaping (BrowserCommand) -> Bool) {
         commands[pane] = (owner, handler)
     }
@@ -114,6 +128,9 @@ struct WindowBrowserView: View {
     @ObservedObject private var openRequests: FolderOpenDelegate
     @Environment(\.openWindow) private var openWindow
     @Environment(\.scenePhase) private var scenePhase
+    @AppStorage("richfiles.sidebarVisible") private var sidebarVisible = true
+    @State private var sidebarWidth: CGFloat = 264
+    @State private var paneRatio: CGFloat = 0.5
     @AppStorage("richfiles.restoreSession") private var restoreSession = false
     @AppStorage("richfiles.lastBrowserSession.v1") private var lastBrowserSession = Data()
     @AppStorage("richfiles.primaryWindowFrame") private var primaryWindowFrame = ""
@@ -164,16 +181,27 @@ struct WindowBrowserView: View {
     }
 
     var body: some View {
-        Group {
-            if workspace.isSplit, let second = workspace.secondary {
-                HSplitView {
-                    pane(workspace.primary, side: .primary)
-                    pane(second, side: .secondary)
-                }
-            } else {
+        GeometryReader { geometry in
+            let layout = BrowserWindowLayout(sidebarWidth: sidebarWidth, paneRatio: paneRatio)
+            layout {
                 pane(workspace.primary, side: .primary)
+                if workspace.isSplit, let second = workspace.secondary {
+                    pane(second, side: .secondary)
+                    BrowserPaneDivider(name: "Split pane divider") { position in
+                        let side = sidebarVisible ? layout.sidebarWidth(in: geometry.size.width) + BrowserWindowLayout.gutter : 0
+                        let width = max(1, geometry.size.width - side - BrowserWindowLayout.gutter)
+                        paneRatio = min(0.75, max(0.25, (position - side) / width))
+                    }
+                    .layoutValue(key: BrowserLayoutKey.self, value: .splitDivider)
+                }
+                if sidebarVisible {
+                    BrowserPaneDivider(name: "Sidebar divider") { sidebarWidth = $0 }
+                        .layoutValue(key: BrowserLayoutKey.self, value: .sidebarDivider)
+                }
             }
+            .coordinateSpace(name: "richfiles-window")
         }
+        .modifier(BrowserAppearance(setsWindowAppearance: hostOpenWindow == nil))
         .background {
             if hostOpenWindow == nil {
                 BrowserWindowReference(report: attachWindow)
@@ -224,6 +252,9 @@ struct WindowBrowserView: View {
         }
         .onChange(of: workspace.isSplit) { _ in saveSession(rememberWindow: true) }
         .onChange(of: workspace.active) { _ in saveSession(rememberWindow: true) }
+        .onReceive(workspace.activeModel.$folder) { folder in
+            if let number = nativeWindowNumber { updateTitle(of: NSApp.window(withWindowNumber: number), folder: folder) }
+        }
         .onChange(of: scenePhase) { if $0 != .active { saveSession() } }
         .onChange(of: restoreSession) { _ in saveSession(rememberWindow: true) }
         .onChange(of: openRequests.requestID) { _ in receiveFolderOpen() }
@@ -235,8 +266,6 @@ struct WindowBrowserView: View {
                     acceptsKeyboard: { !switching && acceptsKeyboard() && workspace.active == side },
                     returnKeyboardFocus: returnKeyboardFocus, hostSwitchTitle: hostSwitch?.target.title,
                     switchHost: switchHost, sessionChanged: { saveSession(rememberWindow: true) })
-            .frame(minWidth: workspace.isSplit ? 355 : nil)
-            .accessibilityIdentifier(side == .primary ? "richfiles-primary-pane" : "richfiles-secondary-pane")
     }
 
     private func saveSession(rememberWindow: Bool = false) {
@@ -245,9 +274,15 @@ struct WindowBrowserView: View {
         if rememberWindow || !restoreSession { lastBrowserSession = savedSession ?? Data() }
     }
 
+    private func updateTitle(of window: NSWindow?, folder: URL) {
+        let name = folder.path == "/" ? "This Mac" : folder.lastPathComponent
+        window?.title = "\(name) — RichFiles"
+    }
+
     private func attachWindow(_ window: NSWindow?) {
         if nativeWindowNumber != window?.windowNumber {
             nativeWindowNumber = window?.windowNumber
+            updateTitle(of: window, folder: workspace.activeModel.folder)
             if remembersWindowFrame, let window, openRequests.claimPrimaryPlacement(for: window),
                !primaryWindowFrame.isEmpty {
                 window.setFrame(from: primaryWindowFrame)

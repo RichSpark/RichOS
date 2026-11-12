@@ -48,10 +48,15 @@ archive_executable="$(gui_artifact "$archive_artifacts" richfiles-archive bin)"
 rm -- "$archive_artifacts"
 
 app="$output/RichFiles.app"
-mkdir -p "$app/Contents/MacOS"
+mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+fonts="$root/richos/mobile/native-ios/App/Design/Fonts"
+for font in Inter-Variable.ttf Newsreader-Regular.ttf LICENSE-Inter.txt LICENSE-Newsreader.txt; do
+  install -m 644 "$fonts/$font" "$app/Contents/Resources/$font"
+done
 install -m 755 "$build/$configuration/RichFiles" "$app/Contents/MacOS/RichFiles"
 install -m 755 "$archive_executable" "$app/Contents/MacOS/richfiles-archive"
 install -m 644 "$package/Info.plist" "$app/Contents/Info.plist"
+install -m 644 "$package/Resources/RichFiles.icns" "$app/Contents/Resources/RichFiles.icns"
 plutil -lint "$app/Contents/Info.plist"
 codesign --force --sign - "$app/Contents/MacOS/richfiles-archive"
 codesign --force --sign - "$app"

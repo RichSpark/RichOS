@@ -922,7 +922,7 @@ final class BrowserModel: ObservableObject {
 
 }
 
-private struct ViewPreferences: Codable {
+struct ViewPreferences: Codable {
     private enum Column: String, Codable {
         case name, fileExtension, type, size, modified
 
@@ -979,7 +979,7 @@ private struct ViewPreferences: Codable {
     }
 }
 
-private struct BrowserPreferences: Codable {
+struct BrowserPreferences: Codable {
     private static let key = "browser-preferences-v1"
 
     var global = ViewPreferences()

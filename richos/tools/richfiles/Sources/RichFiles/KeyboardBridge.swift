@@ -68,7 +68,7 @@ struct BrowserShortcut: Hashable, Codable {
             Self("enter", .option): .properties, Self("left", .option): .back,
             Self("right", .option): .forward, Self("up", .option): .up, Self("d", .option): .address,
             Self("n", [primary, .shift]): .newFolder, Self("z", [primary, .shift]): .redo,
-            Self("p", [primary, .shift]): .actionPalette,
+            Self("p", [primary, .shift]): .actionPalette, Self(",", primary): .settings,
             Self("tab", [.control, .shift]): .switchPane,
             Self("a", primary): .selectAll, Self("c", primary): .copy, Self("x", primary): .cut,
             Self("v", primary): .paste, Self("z", primary): .undo, Self("y", primary): .redo,

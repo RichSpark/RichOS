@@ -16,6 +16,8 @@
     <string>RichFiles</string>
     <key>CFBundleIdentifier</key>
     <string>app.richos.richfiles</string>
+    <key>CFBundleIconFile</key>
+    <string>RichFiles.icns</string>
     <key>CFBundleName</key>
     <string>RichFiles</string>
     <key>CFBundlePackageType</key>

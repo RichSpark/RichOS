@@ -81,9 +81,6 @@ public struct RichFilesScenes: Scene {
         }
         .defaultSize(width: 1120, height: 700)
 
-        Settings {
-            RichFilesSettings().defaultAppStorage(RichFilesInstallation.preferences)
-        }
     }
 
     private static var dockSwitch: WindowBrowserView.HostSwitch? {
@@ -227,7 +224,7 @@ public final class FolderOpenDelegate: NSObject, NSApplicationDelegate, Observab
 enum BrowserCommand: Codable, Hashable {
     case open, rename, trash, preview, address, search, back, forward, up, refresh, revealFolder
     case selectAll, copy, cut, paste, undo, redo, newFolder, newTab, closeTab, properties, workspaces, diskUsage
-    case duplicates, checksum, compareFolders
+    case duplicates, checksum, compareFolders, settings
     case copyPath, actionPalette, addToShelf, fileShelf, splitView, switchPane
     case grid(Int, Int, Bool)
 }
@@ -263,7 +260,8 @@ struct BrowserAction: Identifiable {
     static let creation: [Self] = [
         .init("New Tab", .newTab), .init("Close Tab", .closeTab), .init("New Folder", .newFolder)
     ]
-    static let all = fileActions + clipboard + tools + navigation + creation + [.init("Select All", .selectAll)]
+    static let all = fileActions + clipboard + tools + navigation + creation
+        + [.init("Select All", .selectAll), .init("Settings", .settings)]
 }
 
 struct BrowserCommandKey: FocusedValueKey {
@@ -281,6 +279,11 @@ struct BrowserCommands: Commands {
     @FocusedValue(\.browserCommand) private var perform
 
     var body: some Commands {
+        CommandGroup(replacing: .appSettings) {
+            Button("Settings…") { perform?(.settings) }
+                .keyboardShortcut(",")
+                .disabled(perform == nil)
+        }
         CommandGroup(after: .newItem) {
             ForEach(BrowserAction.creation) { action($0.title, $0.command) }
         }
@@ -309,20 +312,38 @@ enum BrowserTextSize: Int, CaseIterable {
 
     var title: String {
         switch self {
-        case .standard: return "Standard"
-        case .large: return "Large"
-        case .extraLarge: return "Extra Large"
+        case .standard: return "100%"
+        case .large: return "125%"
+        case .extraLarge: return "150%"
         }
     }
 
-    var adjustment: CGFloat { CGFloat(rawValue) }
+    var adjustment: CGFloat { CGFloat(rawValue) * 4 / 3 }
+    var scale: CGFloat { 1 + adjustment / 16 }
 
-    func font(_ style: Font, size: CGFloat) -> Font {
-        self == .standard ? style : .system(size: size + adjustment)
+    func font(size: CGFloat) -> Font {
+        BrowserTypography.reading(size * scale)
     }
 }
 
+@MainActor
 struct RichFilesSettings: View {
+    @ObservedObject var workspace: WindowWorkspace
+    let close: () -> Void
+    @Environment(\.colorScheme) private var scheme
+    @AppStorage(BrowserTheme.preferenceKey) private var theme = BrowserTheme.defaultTheme
+    @State private var page = Page.general
+    @State private var display = BrowserPreferences()
+
+    private enum Page: String, CaseIterable, Identifiable {
+        case general = "General"
+        case keyboard = "Keyboard"
+        case association = "Default file manager"
+        case launch = "Launch and window"
+        case workspaces = "Workspaces"
+
+        var id: Self { self }
+    }
     @AppStorage("richfiles.windowsKeys") private var windowsKeys = true
     @AppStorage("richfiles.textSize") private var textSize = BrowserTextSize.standard
     @AppStorage("richfiles.restoreSession") private var restoreSession = false
@@ -344,60 +365,224 @@ struct RichFilesSettings: View {
     private var isCurrent: Bool { currentHandler?.resolvingSymlinksInPath() == appURL }
 
     var body: some View {
-        Form {
-            Toggle("Restore tabs when RichFiles reopens", isOn: $restoreSession)
-            Section("Display") {
-                Picker("Browser Text Size", selection: $textSize) {
-                    ForEach(BrowserTextSize.allCases, id: \.self) { size in
-                        Text(size.title).tag(size)
+        let palette = BrowserPalette(scheme)
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 12) {
+                Image(systemName: "gearshape").foregroundStyle(palette.signal)
+                Text("RichFiles Settings").font(BrowserTypography.heading(24 * textSize.scale))
+                    .accessibilityAddTraits(.isHeader)
+                Spacer()
+                Button(action: close) { Image(systemName: "xmark") }
+                    .buttonStyle(BrowserButtonStyle()).accessibilityLabel("Close Settings")
+            }
+            .padding(.horizontal, 20).padding(.vertical, 12)
+            HStack(alignment: .top, spacing: 18) {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(Page.allCases) { choice in
+                        Button { page = choice } label: {
+                            Text(choice.rawValue)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.vertical, 2)
+                        }
+                        .buttonStyle(BrowserButtonStyle(selected: page == choice))
+                        .accessibilityAddTraits(page == choice ? .isSelected : [])
                     }
                 }
-                .accessibilityLabel("Browser Text Size")
-            }
-            Section("Keyboard") {
-                Picker("Shortcuts", selection: $windowsKeys) {
-                    Text("Windows (Control)").tag(true)
-                    Text("Mac (Command)").tag(false)
-                }
-                Text("Enter opens, F2 renames, Delete moves to Trash and Space previews.")
-                    .foregroundStyle(.secondary)
-                Text("For a shortcut that opens RichFiles from other apps, assign Open RichFiles in System Settings → Keyboard → Keyboard Shortcuts → Services.")
-                    .foregroundStyle(.secondary)
-            }
-            Section("Custom Shortcuts") {
-                Picker("File Action", selection: $shortcutAction) {
-                    ForEach(BrowserAction.all + [.init("File Actions", .actionPalette)]) {
-                        Text($0.title).tag($0.command)
+                .frame(width: 164 * textSize.scale)
+                if page == .workspaces {
+                    WorkspacesSheet(window: workspace, embedded: true)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 12) {
+                            switch page {
+                            case .general: general
+                            case .keyboard: keyboard
+                            case .association: association
+                            case .launch: launch
+                            case .workspaces: EmptyView()
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.trailing, 8)
+                        .padding(.bottom, 12)
                     }
                 }
-                TextField("Shortcut", text: $shortcutText, prompt: Text("Control+Shift+J"))
-                    .accessibilityLabel("Shortcut")
+            }
+            .padding(.horizontal, 20).padding(.bottom, 8)
+            Rectangle().fill(palette.line).frame(height: 1)
+            HStack {
+                Spacer()
+                Button("Done", action: close)
+                    .buttonStyle(BrowserButtonStyle(selected: true))
+                    .keyboardShortcut(.cancelAction)
+            }
+            .padding(.horizontal, 20).padding(.vertical, 10)
+        }
+        .font(BrowserTypography.reading(16 * textSize.scale))
+        .frame(minWidth: 600, idealWidth: 900, minHeight: 390, idealHeight: 670)
+        .background(palette.floating)
+        .onAppear { readDisplay(); readHandler(); readShortcut() }
+        .onChange(of: shortcutAction) { _ in readShortcut() }
+    }
+
+    private var general: some View {
+        Group {
+            heading("Appearance")
+            settingRow("Theme", "System follows the Mac’s light or dark appearance.") {
+                segments(BrowserTheme.allCases, selection: $theme, title: \.title, label: "Theme")
+            }
+            settingRow("Text size", "100% is 16-point reading text.") {
+                segments(BrowserTextSize.allCases, selection: $textSize, title: \.title, label: "Text size")
+            }
+            heading("Default view for every folder")
+            LabeledContent("View", value: display.global.mode.title)
+            LabeledContent("Sorted by", value: sortDescription(display.global.fileSort))
+            LabeledContent("Details columns", value: "Name, Size, Kind, Modified")
+            LabeledContent("Thumbnail size", value: "\(Int(display.global.iconSize)) points")
+            Text("Changing the view in a folder changes the default, unless that folder has its own view.")
+                .foregroundStyle(.secondary)
+            heading("Folders with their own view")
+            if display.folders.isEmpty {
+                Text("Turn on Remember View for This Folder in the sort and view menu.")
+                    .foregroundStyle(.secondary)
+            }
+            ForEach(display.folders.keys.sorted(), id: \.self) { path in
                 HStack {
-                    Button("Save Shortcut") { saveShortcut() }
-                    Button("Use Default") { resetShortcut() }
-                        .disabled(BrowserShortcut.load(shortcutData)[shortcutAction] == nil)
+                    Label(URL(fileURLWithPath: path).lastPathComponent, systemImage: "pin")
+                        .lineLimit(1).help(path)
+                    Spacer()
+                    Text(display.folders[path]?.mode.title ?? "")
+                    Button("Use Default") {
+                        workspace.useDefaultView(for: path)
+                        readDisplay()
+                    }
+                    .buttonStyle(BrowserButtonStyle(bordered: true))
                 }
-                if !shortcutProblem.isEmpty { Text(shortcutProblem).foregroundStyle(.secondary) }
             }
-            Section("Folder association") {
-                LabeledContent("Current app", value: currentHandler.map {
-                    FileManager.default.displayName(atPath: $0.path)
-                } ?? "Unavailable")
+            heading("Names")
+            Toggle("Always show filename extensions", isOn: .constant(true)).disabled(true)
+            Toggle("Show hidden files", isOn: Binding(get: { display.showHidden }, set: { value in
+                workspace.setHiddenFilesVisible(value)
+                readDisplay()
+            }))
+            Toggle("Ask before a rename changes the extension", isOn: .constant(true)).disabled(true)
+        }
+    }
+
+    private var keyboard: some View {
+        Group {
+            heading("Shortcut preset")
+            Picker("Shortcut preset", selection: $windowsKeys) {
+                Text("Windows (Control)").tag(true)
+                Text("Mac (Command)").tag(false)
+            }
+            .pickerStyle(.radioGroup)
+            Text("Enter opens, F2 renames, Delete moves to Trash and Space previews.")
+                .foregroundStyle(.secondary)
+            heading("Individual shortcuts")
+            Picker("File Action", selection: $shortcutAction) {
+                ForEach(BrowserAction.all + [.init("File Actions", .actionPalette)]) {
+                    Text($0.title).tag($0.command)
+                }
+            }
+            TextField("Shortcut", text: $shortcutText, prompt: Text("Control+Shift+J"))
+                .accessibilityLabel("Shortcut")
+            HStack {
+                Button("Save Shortcut") { saveShortcut() }
+                Button("Use Default") { resetShortcut() }
+                    .disabled(BrowserShortcut.load(shortcutData)[shortcutAction] == nil)
+            }
+            .buttonStyle(BrowserButtonStyle(bordered: true))
+            if !shortcutProblem.isEmpty { Text(shortcutProblem).foregroundStyle(.secondary) }
+        }
+    }
+
+    private var association: some View {
+        Group {
+            heading("Use RichFiles as my default file manager")
+            LabeledContent("Current app", value: currentHandler.map {
+                FileManager.default.displayName(atPath: $0.path)
+            } ?? "Unavailable")
+            HStack {
                 Button("Use RichFiles for Folders") { change(to: appURL, remember: true) }
                     .disabled(!installedBundle || isCurrent || updating || currentHandler == nil)
                 Button("Restore Previous App") {
                     change(to: URL(fileURLWithPath: previousHandler), remember: false)
                 }
                 .disabled(!isCurrent || previousHandler.isEmpty || updating)
-                Text("Finder still handles Desktop and Reveal in Finder. macOS may ask for consent.")
-                    .foregroundStyle(.secondary)
-                if !status.isEmpty { Text(status).foregroundStyle(.secondary) }
+            }
+            .buttonStyle(BrowserButtonStyle(bordered: true))
+            Text("Finder still handles Desktop and Reveal in Finder. macOS may ask for consent.")
+                .foregroundStyle(.secondary)
+            if !status.isEmpty { Text(status).foregroundStyle(.secondary) }
+        }
+    }
+
+    private var launch: some View {
+        Group {
+            heading("Launch RichFiles")
+            settingRow("Dock and Applications", "Open RichFiles from Applications or keep it in the Dock.") {
+                Image(nsImage: NSWorkspace.shared.icon(forFile: appURL.path))
+                    .resizable().frame(width: 52, height: 52).accessibilityHidden(true)
+            }
+            Text("Assign Open RichFiles in System Settings → Keyboard → Keyboard Shortcuts → Services.")
+            heading("Window")
+            Toggle("Restore tabs when RichFiles reopens", isOn: $restoreSession)
+        }
+    }
+
+    private func heading(_ title: String) -> some View {
+        Text(title).fontWeight(.semibold).foregroundStyle(BrowserPalette(scheme).signal)
+            .accessibilityAddTraits(.isHeader)
+    }
+
+    private func settingRow<Content: View>(
+        _ title: String, _ description: String, @ViewBuilder content: () -> Content
+    ) -> some View {
+        let label = VStack(alignment: .leading, spacing: 3) {
+            Text(title).fontWeight(.semibold)
+            Text(description).foregroundStyle(.secondary)
+        }
+        return ViewThatFits(in: .horizontal) {
+            HStack { label; Spacer(minLength: 12); content() }
+            VStack(alignment: .leading, spacing: 7) { label; content() }
+        }
+        .padding(.vertical, 6)
+        .overlay(alignment: .bottom) { Rectangle().fill(BrowserPalette(scheme).line).frame(height: 1) }
+    }
+
+    private func segments<Value: Hashable>(
+        _ values: [Value], selection: Binding<Value>, title: KeyPath<Value, String>, label: String
+    ) -> some View {
+        HStack(spacing: 1) {
+            ForEach(values, id: \.self) { value in
+                Button(value[keyPath: title]) { selection.wrappedValue = value }
+                    .buttonStyle(BrowserButtonStyle(selected: selection.wrappedValue == value))
+                    .accessibilityAddTraits(selection.wrappedValue == value ? .isSelected : [])
             }
         }
-        .padding(20)
-        .frame(width: 520)
-        .onAppear { readHandler(); readShortcut() }
-        .onChange(of: shortcutAction) { _ in readShortcut() }
+        .fixedSize(horizontal: true, vertical: false)
+        .padding(2)
+        .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(BrowserPalette(scheme).controlLine))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(label)
+    }
+
+    private func readDisplay() {
+        display = BrowserPreferences.load(from: RichFilesInstallation.preferences)
+    }
+
+    private func sortDescription(_ sort: FileSort) -> String {
+        let name: String
+        switch sort.column {
+        case .name: name = "Name"
+        case .fileExtension: name = "Extension"
+        case .type: name = "Kind"
+        case .size: name = "Size"
+        case .modified: name = "Date modified"
+        }
+        return name + (sort.ascending ? ", ascending" : ", descending") + (sort.foldersFirst ? ", folders first" : "")
     }
 
     private func readShortcut() {
