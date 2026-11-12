@@ -301,6 +301,11 @@ final class BrowserActionsTests: XCTestCase {
             let second = try write("second", named: "Second.JPG", in: root)
             let actions = BrowserActions(pasteboard: board)
             let token = actions.beginDrag(primary: first, sources: [first, second, first])
+            let localValue = BrowserDragSelection.pasteboardValue(for: token)
+            let foreignValue = UUID().uuidString + ":" + token.uuidString
+            XCTAssertEqual(BrowserDragSelection.localToken(from: localValue), token)
+            XCTAssertNil(BrowserDragSelection.localToken(from: foreignValue))
+            XCTAssertNil(BrowserDragSelection.localToken(from: token.uuidString))
             XCTAssertNil(actions.takeDrag(UUID(), matching: first.url))
             XCTAssertNil(actions.takeDrag(token, matching: second.url))
             let selection = try XCTUnwrap(actions.takeDrag(token, matching: first.url))

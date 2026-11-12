@@ -1394,17 +1394,22 @@ struct BrowserView: View {
     }
 
     private func receiveDrop(_ providers: [NSItemProvider]) -> Bool {
+        let proposedOperation = dropOperation
         dropOperation = nil
-        guard let destination = currentDropDestination, !providers.isEmpty else { return false }
+        let fileProviders = providers.filter { $0.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) }
+        guard let destination = currentDropDestination, !fileProviders.isEmpty else { return false }
         let option = NSEvent.modifierFlags.contains(.option)
         let local = BrowserDragSurface.pasteboardToken
         Task {
             do {
                 var urls: [URL] = []
-                for provider in providers {
-                    if let url = await Self.fileURL(from: provider) { urls.append(url) }
+                for provider in fileProviders {
+                    guard let url = await Self.fileURL(from: provider) else {
+                        feedback = "Could not read all files in this drop. Select them again."
+                        return
+                    }
+                    urls.append(url)
                 }
-                guard !urls.isEmpty else { feedback = "No local files in this drop."; return }
                 let provider = providers.first { $0.hasItemConformingToTypeIdentifier(BrowserDragSelection.type) }
                 let token: UUID?
                 if let local { token = local }
@@ -1417,8 +1422,8 @@ struct BrowserView: View {
                         feedback = "The drag selection expired. Select the items again."
                         return
                     }
-                    actions.transfer(drag.sources, into: destination.url, move: drag.moves(to: destination, option: option),
-                                     destination: destination)
+                    let move = proposedOperation == .move && drag.moves(to: destination, option: option)
+                    actions.transfer(drag.sources, into: destination.url, move: move, destination: destination)
                 } else {
                     let sources = try await Task.detached { try urls.map { try FileReference(url: $0) } }.value
                     actions.transfer(sources, into: destination.url, move: false, destination: destination)
@@ -1441,7 +1446,9 @@ struct BrowserView: View {
         guard provider.hasItemConformingToTypeIdentifier(BrowserDragSelection.type) else { return nil }
         return await withCheckedContinuation { continuation in
             _ = provider.loadDataRepresentation(forTypeIdentifier: BrowserDragSelection.type) { data, _ in
-                continuation.resume(returning: data.flatMap { UUID(uuidString: String(decoding: $0, as: UTF8.self)) })
+                continuation.resume(returning: data.flatMap {
+                    BrowserDragSelection.localToken(from: String(decoding: $0, as: UTF8.self))
+                })
             }
         }
     }

@@ -138,6 +138,8 @@ extension BrowserTransferRequest {
 
 struct BrowserDragSelection: Sendable {
     static let type = "app.richos.richfiles.local-drag"
+    // Only this process can resolve the marker to its pinned selection.
+    private static let pasteboardPrefix = UUID().uuidString + ":"
 
     let token = UUID()
     let primary: FileReference
@@ -145,6 +147,15 @@ struct BrowserDragSelection: Sendable {
     private let expires = ProcessInfo.processInfo.systemUptime + 180
 
     var expired: Bool { ProcessInfo.processInfo.systemUptime > expires }
+
+    static func pasteboardValue(for token: UUID) -> String {
+        pasteboardPrefix + token.uuidString
+    }
+
+    static func localToken(from value: String) -> UUID? {
+        guard value.hasPrefix(pasteboardPrefix) else { return nil }
+        return UUID(uuidString: String(value.dropFirst(pasteboardPrefix.count)))
+    }
 
     func moves(to destination: BrowserTransferDestination, option: Bool) -> Bool {
         sources.allSatisfy { $0.identity.device == destination.device } != option

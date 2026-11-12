@@ -12,7 +12,7 @@ struct BrowserDragSurface: NSViewRepresentable {
     let controlClick: (CGPoint?, NSPoint, NSWindow) -> Bool
 
     static var pasteboardToken: UUID? {
-        NSPasteboard(name: .drag).string(forType: Source.tokenType).flatMap(UUID.init(uuidString:))
+        NSPasteboard(name: .drag).string(forType: Source.tokenType).flatMap(BrowserDragSelection.localToken(from:))
     }
 
     func makeNSView(context: Context) -> Source { Source() }
@@ -82,7 +82,9 @@ struct BrowserDragSurface: NSViewRepresentable {
             let items = payload.urls.enumerated().map { index, url in
                 let item = NSPasteboardItem()
                 item.setString(url.absoluteString, forType: .fileURL)
-                if index == 0 { item.setString(payload.token.uuidString, forType: Self.tokenType) }
+                if index == 0 {
+                    item.setString(BrowserDragSelection.pasteboardValue(for: payload.token), forType: Self.tokenType)
+                }
                 let dragging = NSDraggingItem(pasteboardWriter: item)
                 let offset = CGFloat(min(index, 5)) * 2
                 dragging.setDraggingFrame(CGRect(x: point.x - 14 + offset, y: point.y - 14 + offset,
