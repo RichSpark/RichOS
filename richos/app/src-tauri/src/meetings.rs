@@ -34,10 +34,11 @@ use richos_voice::dictation_bar::Rect;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Read};
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{ChildStdin, Command, ExitStatus, Stdio};
+use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
 use std::sync::{mpsc, Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 
 /// The floating panel's window label, and the events its page and the main window listen to.
@@ -54,6 +55,9 @@ const CALENDAR_RECONNECT_DEADLINE: Duration = Duration::from_secs(6 * 60);
 /// A meeting's transcription is bounded (whisper on Apple silicon measured 249 s for a 92-minute
 /// channel, `config.js`; two channels of an hour stay well inside this).
 const TRANSCRIBE_DEADLINE: Duration = Duration::from_secs(60 * 60);
+/// Let a nearly complete live chunk finish. The final pass recovers anything still missing.
+const LIVE_TRANSCRIPTION_DRAIN: Duration = Duration::from_secs(3);
+const LIVE_EXCERPT_DEADLINE: Duration = Duration::from_secs(30);
 /// Keep the saved recording waiting for setup for a bounded time.
 const MODEL_WAIT: Duration = Duration::from_secs(5 * 60);
 /// One brief attempt (a bug report's is 90 s; an hour of transcript needs longer).
@@ -124,38 +128,74 @@ pub struct CalendarNotice {
     account: CalendarAccount,
     reconnecting: bool,
     failed: bool,
+    #[serde(rename = "authorizationUrl", skip_serializing_if = "Option::is_none")]
+    authorization_url: Option<String>,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct CalendarSyncStatus {
     calendar_recovery: Option<Vec<String>>,
+    calendar_instances: Option<Vec<String>>,
 }
 
-/// Drain the bounded desktop status while the child runs. Holding stdin ties its life to the app.
-fn run_calendar(mut command: Command, deadline: Duration) -> Result<(ExitStatus, Vec<u8>), String> {
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CalendarConsentStatus {
+    authorization_url: String,
+}
+
+fn calendar_sign_in_address(vendor: &str, line: &[u8]) -> Option<String> {
+    let report = serde_json::from_slice::<CalendarConsentStatus>(line).ok()?;
+    let url = tauri::Url::parse(&report.authorization_url).ok()?;
+    if url.scheme() != "https" || !url.username().is_empty() || url.password().is_some() || url.port().is_some() {
+        return None;
+    }
+    let trusted = match (vendor, url.host_str()) {
+        ("google", Some("accounts.google.com")) => url.path() == "/o/oauth2/v2/auth",
+        ("microsoft", Some("login.microsoftonline.com")) => {
+            url.path().trim_start_matches('/').split_once('/')
+                .is_some_and(|(tenant, route)| !tenant.is_empty() && route == "oauth2/v2.0/authorize")
+        }
+        _ => false,
+    };
+    trusted.then_some(report.authorization_url)
+}
+
+/// Read one bounded line as soon as the child writes it.
+fn run_bounded_line(
+    mut command: Command,
+    deadline: Duration,
+    on_status: impl FnOnce(&[u8]) + Send + 'static,
+) -> Result<(ExitStatus, Vec<u8>), String> {
+    command.process_group(0);
     let mut child = command.spawn().map_err(|e| e.to_string())?;
     let output = child.stdout.take().map(|stdout| std::thread::spawn(move || {
         let mut bytes = Vec::new();
-        stdout.take(64 * 1024).read_to_end(&mut bytes).map(|_| bytes)
+        BufReader::new(stdout.take(64 * 1024)).read_until(b'\n', &mut bytes)?;
+        on_status(&bytes);
+        Ok::<_, std::io::Error>(bytes)
     }));
     let started = std::time::Instant::now();
     let result = loop {
         match child.try_wait() {
             Ok(Some(status)) => break Ok(status),
             Ok(None) if started.elapsed() < deadline => std::thread::sleep(Duration::from_millis(250)),
-            other => {
-                logged("stopping the calendar process", child.kill());
-                logged("reaping the calendar process", child.wait());
-                break Err(match other {
-                    Err(e) => e.to_string(),
-                    _ => "the calendar process took too long".into(),
-                });
+            Ok(None) => {
+                // The command owns this group, including any local decoder.
+                unsafe { libc::killpg(child.id() as i32, libc::SIGKILL) };
+                logged("reaping the bounded command", child.wait());
+                break Err("the command took too long".into());
+            }
+            Err(e) => {
+                logged("stopping the bounded command", child.kill());
+                logged("reaping the bounded command", child.wait());
+                break Err(e.to_string());
             }
         }
     };
     let bytes = match output {
-        Some(reader) => reader.join().map_err(|_| "calendar status reader stopped".to_string())?
+        Some(reader) => reader.join().map_err(|_| "command output reader stopped".to_string())?
             .map_err(|e| e.to_string())?,
         None => Vec::new(),
     };
@@ -189,6 +229,16 @@ struct CaptureRun {
 }
 
 impl CaptureRun {
+    fn live_scope(&self, entity: &str, thread: &str, request_at: u64) -> Option<(PathBuf, PathBuf)> {
+        if self.recording && self.stop.is_none() && request_at >= self.started_at
+            && self.entity.as_deref() == Some(entity) && self.thread.as_deref() == Some(thread)
+        {
+            self.dir.clone().map(|dir| (dir, self.zone.clone()))
+        } else {
+            None
+        }
+    }
+
     /// The first microphone audio clears the initial access suspicion. An actual gap in channel
     /// delivery stays in the record even if that channel later recovers.
     fn update_capture_warning(&mut self, event: &serde_json::Value, message: &str) -> bool {
@@ -315,6 +365,7 @@ struct Inner {
     calendar_recovery: BTreeMap<String, Vec<String>>,
     calendar_reconnecting: Option<CalendarAccount>,
     calendar_reconnect_failed: Option<CalendarAccount>,
+    calendar_sign_in_address: Option<String>,
     /// The panel's last reported size, so the log says a size once, not every frame of a fold.
     last_layout: Option<(i64, i64, bool)>,
     /// Each calendar meeting recorded this launch, by event id: where its first recording went.
@@ -385,6 +436,7 @@ pub fn start(app: &AppHandle) {
             calendar_recovery: BTreeMap::new(),
             calendar_reconnecting: None,
             calendar_reconnect_failed: None,
+            calendar_sign_in_address: None,
             last_layout: None,
             continued: BTreeMap::new(),
         }),
@@ -424,9 +476,11 @@ pub fn start(app: &AppHandle) {
         .name("meeting-calendar".into())
         .spawn(move || {
             let mut known = BTreeMap::new();
+            let mut instances = BTreeMap::new();
             loop {
-                calendar.refresh_calendar(&mut known);
-                match calendar_replies.recv_timeout(Duration::from_millis(meeting_calendar::REFRESH_MS)) {
+                let started = Instant::now();
+                calendar.refresh_calendar(&mut known, &mut instances);
+                match calendar_replies.recv_timeout(meeting_calendar::refresh_delay(started.elapsed())) {
                     Ok(account) => calendar.reconnect_calendar(account),
                     Err(mpsc::RecvTimeoutError::Timeout) => {}
                     Err(mpsc::RecvTimeoutError::Disconnected) => break,
@@ -448,23 +502,28 @@ impl Meetings {
 
     /// One calendar pass: `workspace sync <vendor> --once --source calendar` for each connected
     /// vendor (the existing sync and its Keychain grant), then the latest revisions read back.
-    /// A failed or unconnected sync is logged and never blocks microphone prompts or capture; the
-    /// meetings already synced still prompt. A canceled or moved meeting's prompt is withdrawn.
-    fn refresh_calendar(&self, known: &mut BTreeMap<String, u64>) {
+    /// A failed sync never blocks microphone prompts or capture. The calendar cache can prompt
+    /// only for the most recently confirmed eligible account instances, with cached calendars
+    /// available before the first status report.
+    fn refresh_calendar(&self, known: &mut BTreeMap<String, u64>, instances: &mut BTreeMap<String, Vec<String>>) {
         let zone = meeting_calendar::workspace_zone(&self.corpus_root());
         let vendors = meeting_calendar::connected_vendors(&zone);
         let mut recovery = self.inner.lock().unwrap().calendar_recovery.clone();
         recovery.retain(|vendor, _| vendors.contains(&vendor.as_str()));
+        instances.retain(|vendor, _| vendors.contains(&vendor.as_str()));
         if let Some(service) = service_cli() {
             for &vendor in &vendors {
                 let mut command = self.calendar_command(&service);
                 command.args(["workspace", "sync", vendor, "--once", "--source", "calendar", "--desktop-calendar"])
                     .stdout(Stdio::piped());
-                match run_calendar(command, CALENDAR_SYNC_DEADLINE) {
+                match run_bounded_line(command, CALENDAR_SYNC_DEADLINE, |_| {}) {
                     Ok((status, output)) => {
                         let report = serde_json::from_slice::<CalendarSyncStatus>(&output);
                         match report {
-                            Ok(CalendarSyncStatus { calendar_recovery: Some(accounts) }) => {
+                            Ok(CalendarSyncStatus { calendar_recovery: Some(accounts), calendar_instances }) => {
+                                if let Some(ids) = calendar_instances {
+                                    instances.insert(vendor.to_owned(), ids);
+                                }
                                 if recovery.get(vendor) != Some(&accounts) {
                                     eprintln!("[richos] meeting notes: calendar recovery ({vendor}): {} accounts need sign-in", accounts.len());
                                 }
@@ -480,9 +539,9 @@ impl Meetings {
                 }
             }
         } else if !vendors.is_empty() {
-            eprintln!("[richos] meeting notes: no calendar sync in this build; using what was synced before");
+            eprintln!("[richos] meeting notes: no calendar sync in this build; keeping the last known calendar status");
         }
-        let current = if vendors.is_empty() { Vec::new() } else { meeting_calendar::meetings(&zone) };
+        let current = meeting_calendar::cached_meetings(&zone, &vendors, instances);
         let gone = meeting_calendar::withdrawn(known, &current);
         *known = current.iter().map(|m| (m.event_id.clone(), m.starts_at)).collect();
         let (actions, recovery_changed) = {
@@ -514,15 +573,24 @@ impl Meetings {
         command
     }
 
-    fn reconnect_calendar(&self, account: CalendarAccount) {
+    fn reconnect_calendar(self: &Arc<Self>, account: CalendarAccount) {
         let still_needed = self.inner.lock().unwrap().calendar_recovery
             .get(&account.vendor).is_some_and(|accounts| accounts.contains(&account.account));
         let result = if still_needed {
             service_cli().ok_or_else(|| "the installed calendar service is unavailable".to_string()).and_then(|service| {
                 let mut command = self.calendar_command(&service);
                 // Keep the existing account's source selection. --source on connect would replace it.
-                command.args(["workspace", "connect", &account.vendor, "--account", &account.account, "--desktop-calendar"]);
-                let (status, _) = run_calendar(command, CALENDAR_RECONNECT_DEADLINE)?;
+                command.args(["workspace", "connect", &account.vendor, "--account", &account.account, "--desktop-calendar"])
+                    .stdout(Stdio::piped());
+                let meetings = self.clone();
+                let vendor = account.vendor.clone();
+                let (status, _) = run_bounded_line(command, CALENDAR_RECONNECT_DEADLINE, move |line| {
+                    if let Some(address) = calendar_sign_in_address(&vendor, line) {
+                        eprintln!("[richos] meeting notes: calendar reconnect ({vendor}) browser did not open");
+                        meetings.inner.lock().unwrap().calendar_sign_in_address = Some(address);
+                        meetings.publish_state();
+                    }
+                })?;
                 if status.success() { Ok(()) } else { Err(status.to_string()) }
             })
         } else {
@@ -534,6 +602,7 @@ impl Meetings {
         {
             let mut inner = self.inner.lock().unwrap();
             inner.calendar_reconnecting = None;
+            inner.calendar_sign_in_address = None;
             if result.is_ok() {
                 if let Some(accounts) = inner.calendar_recovery.get_mut(&account.vendor) {
                     accounts.retain(|a| a != &account.account);
@@ -660,8 +729,10 @@ impl Meetings {
             calendar_recovery: inner.calendar_recovery.iter().flat_map(|(vendor, accounts)| {
                 accounts.iter().map(|account| {
                     let account = CalendarAccount { vendor: vendor.clone(), account: account.clone() };
+                    let reconnecting = inner.calendar_reconnecting.as_ref() == Some(&account);
                     CalendarNotice {
-                        reconnecting: inner.calendar_reconnecting.as_ref() == Some(&account),
+                        reconnecting,
+                        authorization_url: if reconnecting { inner.calendar_sign_in_address.clone() } else { None },
                         failed: inner.calendar_reconnect_failed.as_ref() == Some(&account),
                         account,
                     }
@@ -879,26 +950,31 @@ impl Meetings {
         std::thread::Builder::new()
             .name("meeting-capture".into())
             .spawn(move || {
+                let mut live = None;
                 if let Some(out) = stdout {
                     for line in BufReader::new(out).lines() {
                         let Ok(line) = line else { break };
-                        me.capture_line(pid, &line);
+                        if let Some((dir, zone)) = me.capture_line(pid, &line) {
+                            if live.is_none() {
+                                live = me.start_live_transcription(pid, &dir, &zone);
+                            }
+                        }
                     }
                 }
                 let status = child.wait();
-                me.capture_exited(pid, status.ok().and_then(|s| s.code()));
+                me.capture_exited(pid, status.ok().and_then(|s| s.code()), live);
             })
             .ok();
     }
 
-    fn capture_line(&self, pid: u32, line: &str) {
-        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else { return };
+    fn capture_line(&self, pid: u32, line: &str) -> Option<(PathBuf, PathBuf)> {
+        let v = serde_json::from_str::<serde_json::Value>(line).ok()?;
         let kind = v["type"].as_str().unwrap_or("");
         let mut inner = self.inner.lock().unwrap();
         let grant_known = inner.system_audio_seen;
         let current = inner.capture.as_ref().is_some_and(|c| c.pid == pid);
         let run = if current { inner.capture.as_mut() } else { inner.draining.iter_mut().find(|r| r.pid == pid) };
-        let Some(run) = run else { return };
+        let run = run?;
         match kind {
             // A stopped recorder finishing its files: what it reports is logged; the panel and the
             // monitor now belong to whatever came next.
@@ -916,6 +992,7 @@ impl Meetings {
                 }
                 // A calendar meeting's first recording: a rejoin's goes where this one went.
                 let first = run.continued();
+                let recording = run.dir.clone().map(|dir| (dir, run.zone.clone()));
                 let view = PanelView::Recording { started_at: run.started_at, note: None };
                 if let Some((e, first)) = first {
                     inner.continued.entry(e).or_insert(first);
@@ -923,6 +1000,7 @@ impl Meetings {
                 drop(inner);
                 self.show(view);
                 self.publish_state();
+                return recording;
             }
             "closed" => {
                 run.dir = v["dir"].as_str().map(PathBuf::from).or(run.dir.take());
@@ -960,15 +1038,20 @@ impl Meetings {
             }
             _ => {}
         }
+        None
     }
 
     /// The capture process ended. After a stop this is the normal end; otherwise the recording
     /// ended by itself, and the monitor is told so the call does not prompt again.
-    fn capture_exited(&self, pid: u32, code: Option<i32>) {
+    fn capture_exited(&self, pid: u32, code: Option<i32>, live: Option<Child>) {
         let (finished, current) = {
             let mut guard = self.inner.lock().unwrap();
             let inner = &mut *guard;
-            let Some((run, current)) = take_run(&mut inner.capture, &mut inner.draining, pid) else { return };
+            let Some((run, current)) = take_run(&mut inner.capture, &mut inner.draining, pid) else {
+                drop(guard);
+                finish_live_transcription(live);
+                return;
+            };
             if run.stop.is_none() {
                 inner.monitor.input(Input::CaptureEnded);
             }
@@ -994,12 +1077,17 @@ impl Meetings {
             }
         }
         if code == Some(0) && finished.recording {
-            self.recording_closed(finished);
-        } else if let Some(dir) = finished.dir.as_deref().filter(|_| finished.recording) {
-            // A recorder that failed (said beside the call): its session stays as it always has,
-            // without notes, and the meeting.json written at its start must not make the next
-            // launch present it as a meeting RichOS was closed during.
-            logged("removing the failed recording's meeting.json", std::fs::remove_file(dir.join(meeting_notes::MEETING_FILE)));
+            self.recording_closed(finished, live);
+        } else {
+            let had_live_worker = live.is_some();
+            finish_live_transcription(live);
+            if let Some(dir) = finished.dir.as_deref().filter(|_| finished.recording) {
+                if had_live_worker {
+                    clear_live_staging(dir, &finished.zone);
+                }
+                // The failure was already shown. Don't resume this session as a normal quit.
+                logged("removing the failed recording's meeting.json", std::fs::remove_file(dir.join(meeting_notes::MEETING_FILE)));
+            }
         }
         self.publish_state();
     }
@@ -1046,8 +1134,9 @@ impl Meetings {
 
     /// A recording is closed on disk: write down what the app knows about it (`meeting.json`),
     /// say "Preparing your meeting notes…", and turn it into notes on a thread of its own.
-    fn recording_closed(&self, run: CaptureRun) {
+    fn recording_closed(&self, run: CaptureRun, live: Option<Child>) {
         let Some(dir) = run.dir.clone() else {
+            finish_live_transcription(live);
             eprintln!("[richos] meeting notes: the recorder closed without naming its session");
             return;
         };
@@ -1065,7 +1154,10 @@ impl Meetings {
         let me = self.app.state::<Arc<Meetings>>().inner().clone();
         std::thread::Builder::new()
             .name("meeting-notes".into())
-            .spawn(move || me.prepare_notes(&dir, &zone, facts))
+            .spawn(move || {
+                finish_live_transcription(live);
+                me.prepare_notes(&dir, &zone, facts);
+            })
             .ok();
     }
 
@@ -1277,7 +1369,7 @@ impl Meetings {
             let step = if joined { meeting_notes::next_step_joined(&state) } else { meeting_notes::next_step(dir, &state) };
             match step {
                 NextStep::Write(n) => {
-                    match self.write_brief_once(brief_dir, facts, transcript) {
+                    match self.write_brief_once(brief_dir, facts, transcript, transcripts) {
                         Ok(()) => {
                             eprintln!("[richos] meeting notes: brief written on attempt {n}");
                             if joined {
@@ -1358,30 +1450,50 @@ impl Meetings {
         Err("the call transcription model is not installed yet".into())
     }
 
-    /// The pipeline (`richos-service run <session>`): the runtime's own node, ffmpeg and
-    /// whisper-cli, the corpus and company of the meeting, bounded. Its output goes to
-    /// `pipeline.log` in the session.
-    fn transcribe(&self, dir: &Path, zone: &Path, facts: &MeetingFacts) -> Result<(), String> {
-        let service = service_cli().ok_or("this build has no transcription service installed")?;
-        let log = std::fs::File::create(dir.join("pipeline.log")).map_err(|e| e.to_string())?;
-        let mut command = Command::new(node_bin());
-        command
-            .arg(&service)
-            .arg("run")
-            .arg(dir)
-            .env("RICHOS_DROP_ZONE", zone)
-            .env("LORO_CORPUS", self.corpus_root())
-            .stdin(Stdio::null())
-            .stdout(log.try_clone().map_err(|e| e.to_string())?)
-            .stderr(log);
-        installed_paths(&mut command);
-        if let Ok(whisper) = richos_voice::stt::resolve_whisper_bin() {
-            command.env("RICHOS_WHISPER_BIN", whisper);
+    fn live_context(&self, binding: &richos_core::entity::ThreadBinding, request_at: u64) -> Option<meeting_notes::LiveMeetingSource> {
+        let (dir, zone) = self.inner.lock().ok()?.capture.as_ref()?
+            .live_scope(binding.entity_id().as_str(), binding.thread_id(), request_at)?;
+        Some(meeting_notes::LiveMeetingSource {
+            dir, zone, request_at, corpus: self.corpus_root(),
+            runtime_bin: richos_voice::stt::delivered_runtime_bin_dir(),
+        })
+    }
+
+    /// Start the live pass when the bundled decoder is already available.
+    fn start_live_transcription(&self, recorder_pid: u32, dir: &Path, zone: &Path) -> Option<Child> {
+        let Ok(model) = richos_voice::stt::resolve_model(CALL_MODEL) else {
+            eprintln!("[richos] meeting notes: live transcription skipped because the model is unavailable");
+            return None;
+        };
+        let command = transcription_command("live-transcribe", dir, zone, &model, &self.corpus_root());
+        let result = command.and_then(|mut command| {
+            command.arg("--recorder-pid").arg(recorder_pid.to_string())
+                .process_group(0)
+                .stdout(Stdio::null())
+                .stderr(Stdio::inherit())
+                .spawn()
+                .map_err(|e| e.to_string())
+        });
+        match result {
+            Ok(child) => Some(child),
+            Err(e) => {
+                eprintln!("[richos] meeting notes: live transcription could not start: {e}");
+                None
+            }
         }
-        // The selected call model, named outright: setup fetches it into RichOS's own model
-        // folder (`setup_view.rs`, both models), which the service's own search does not visit.
+    }
+
+    /// The final pipeline writes its detailed output to `pipeline.log` beside the session.
+    fn transcribe(&self, dir: &Path, zone: &Path, facts: &MeetingFacts) -> Result<(), String> {
         let model = self.call_model()?;
-        command.env("RICHOS_WHISPER_MODEL", model);
+        let mut command = transcription_command("run", dir, zone, &model, &self.corpus_root())?;
+        let log = std::fs::File::create(dir.join("pipeline.log")).map_err(|e| e.to_string())?;
+        command.stdout(log.try_clone().map_err(|e| e.to_string())?).stderr(log);
+        if std::fs::read_dir(dir.join(".live-transcription")).is_ok_and(|mut files| {
+            files.any(|entry| entry.is_ok_and(|entry| entry.path().extension().is_some_and(|ext| ext == "json")))
+        }) {
+            command.arg("--live-checkpoints");
+        }
         match &facts.entity {
             Some(e) => command.env("RICHOS_ACTIVE_COMPANY", e),
             None => command.env_remove("RICHOS_ACTIVE_COMPANY"),
@@ -1412,15 +1524,18 @@ impl Meetings {
 
     /// One attempt at the brief: one tool-free call under the conversation's account (Bust a
     /// bug's execution), the answer checked, `brief.md` written atomically.
-    fn write_brief_once(&self, dir: &Path, facts: &MeetingFacts, transcript: &str) -> Result<(), String> {
+    fn write_brief_once(&self, dir: &Path, facts: &MeetingFacts, transcript: &str, transcripts: &[PathBuf]) -> Result<(), String> {
         let state = self.app.state::<crate::AppState>();
         let (bin, folder) = crate::bug_report::claude_for(&state);
         let engine = state.engine_dir.lock().unwrap().clone();
-        let prompt = meeting_notes::writer_prompt(&engine, facts, transcript)
+        let (annotated, citations) = meeting_notes::brief_sources(transcripts)
+            .unwrap_or_else(|_| (transcript.to_owned(), Default::default()));
+        let prompt = meeting_notes::writer_prompt(&engine, facts, &annotated)
             .map_err(|err| format!("meeting writer instructions could not be loaded: {err}"))?;
         let input = richos_core::bug_report::writer_input(&prompt, None);
         let answer = crate::bug_report::ask_rich_within(&self.app, &bin, folder.as_deref(), dir, &input, BRIEF_DEADLINE)?;
         let brief = meeting_notes::accept_brief(&answer)?;
+        let brief = meeting_notes::link_brief_sources(&brief, &citations);
         meeting_notes::write_brief(dir, &brief).map(|_| ()).map_err(|e| format!("brief.md could not be written: {e}"))
     }
 
@@ -1459,6 +1574,40 @@ impl Meetings {
     }
 }
 
+fn finish_live_transcription(live: Option<Child>) {
+    let Some(mut child) = live else { return };
+    let start = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                eprintln!("[richos] meeting notes: live transcription ended with {status}");
+                return;
+            }
+            Ok(None) if start.elapsed() < LIVE_TRANSCRIPTION_DRAIN => {
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            _ => {
+                // This child is the leader of a group created for this recording only. End
+                // its decoder too, so the final pass can take over the missing chunk.
+                unsafe { libc::killpg(child.id() as i32, libc::SIGKILL) };
+                logged("reaping live transcription", child.wait());
+                eprintln!("[richos] meeting notes: live transcription did not drain; finishing from retained audio");
+                return;
+            }
+        }
+    }
+}
+
+fn clear_live_staging(dir: &Path, zone: &Path) {
+    let Some(service) = service_cli() else { return };
+    let mut command = Command::new(node_bin());
+    command.arg(service).arg("clear-live-staging").arg(dir).arg("--zone").arg(zone).stdin(Stdio::null());
+    installed_paths(&mut command);
+    if !command.status().is_ok_and(|status| status.success()) {
+        eprintln!("[richos] meeting notes: live transcription staging could not be cleared after capture failed");
+    }
+}
+
 /// The transcription service this launch carries: `RICHOS_SERVICE_BIN` (the pointer the app
 /// already honors for the vocabulary service), else the copy the engine archive carries in the
 /// voice delivery contract's product layout, `<engine>/service/tools/richos-service/...`, whose
@@ -1471,6 +1620,49 @@ pub fn service_cli() -> Option<PathBuf> {
     let engine = richos_voice::stt::delivered_runtime_bin_dir()?.parent()?.parent()?.to_path_buf();
     let p = engine.join(SERVICE_ENTRY);
     p.is_file().then_some(p)
+}
+
+pub fn live_context(app: &AppHandle, binding: &richos_core::entity::ThreadBinding, request_at: u64) -> Option<meeting_notes::LiveMeetingSource> {
+    app.try_state::<Arc<Meetings>>()?.live_context(binding, request_at)
+}
+
+fn transcription_command(action: &str, dir: &Path, zone: &Path, model: &Path, corpus: &Path) -> Result<Command, String> {
+    let service = service_cli().ok_or("this build has no transcription service installed")?;
+    let mut command = Command::new(node_bin());
+    command.arg(service).arg(action).arg(dir).env("RICHOS_DROP_ZONE", zone)
+        .env("LORO_CORPUS", corpus).env("RICHOS_WHISPER_MODEL", model).stdin(Stdio::null());
+    installed_paths(&mut command);
+    if let Ok(whisper) = richos_voice::stt::resolve_whisper_bin() {
+        command.env("RICHOS_WHISPER_BIN", whisper);
+    }
+    Ok(command)
+}
+
+/// Runs in the status MCP process only when Rich asks for current-call evidence.
+pub fn read_live_excerpt(source: &meeting_notes::LiveMeetingSource) -> serde_json::Value {
+    use std::os::unix::fs::DirBuilderExt;
+    let started = Instant::now();
+    richos_voice::stt::set_delivered_runtime_bin(source.runtime_bin.clone());
+    let result = (|| {
+        let model = richos_voice::stt::resolve_model(CALL_MODEL).ok()?;
+        let mut command = transcription_command("live-excerpt", &source.dir, &source.zone, &model, &source.corpus).ok()?;
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok()?.as_nanos();
+        let scratch = std::env::temp_dir().join(format!("richbrief-live-tool-{}-{now}", std::process::id()));
+        std::fs::DirBuilder::new().mode(0o700).create(&scratch).ok()?;
+        command.arg("--at").arg(source.request_at.to_string()).env("TMPDIR", &scratch)
+            .stdout(Stdio::piped()).stderr(Stdio::null());
+        let result = run_bounded_line(command, LIVE_EXCERPT_DEADLINE, |_| {});
+        logged("removing the live meeting excerpt scratch", std::fs::remove_dir_all(scratch));
+        let (status, bytes) = result.ok()?;
+        if !status.success() { return None; }
+        serde_json::from_slice::<serde_json::Value>(&bytes).ok()
+            .filter(|value| value["passages"].as_array().is_some_and(|rows| !rows.is_empty()))
+    })();
+    eprintln!("[richos] meeting notes: live excerpt available={} elapsed_ms={}", result.is_some(), started.elapsed().as_millis());
+    match result {
+        Some(excerpt) => serde_json::json!({ "status": "available", "excerpt": excerpt }),
+        None => serde_json::json!({ "status": "unavailable" }),
+    }
 }
 
 /// The running transcription's pid, beside its session while it runs.
@@ -1744,6 +1936,21 @@ pub fn meeting_state(app: AppHandle) -> MeetingState {
 mod tests {
     use super::*;
 
+    #[test]
+    fn calendar_reconnect_accepts_only_the_selected_providers_sign_in_endpoint() {
+        let address = |vendor, url| {
+            let line = serde_json::to_vec(&serde_json::json!({"authorizationUrl": url})).unwrap();
+            calendar_sign_in_address(vendor, &line)
+        };
+        let google = "https://accounts.google.com/o/oauth2/v2/auth?state=example";
+        let microsoft = "https://login.microsoftonline.com/consumers/oauth2/v2.0/authorize?state=example";
+        assert_eq!(address("google", google).as_deref(), Some(google));
+        assert_eq!(address("microsoft", microsoft).as_deref(), Some(microsoft));
+        assert!(address("microsoft", google).is_none());
+        assert!(address("google", "https://accounts.google.com.example.test/o/oauth2/v2/auth").is_none());
+        assert!(address("google", "https://accounts.google.com@elsewhere.example.test/o/oauth2/v2/auth").is_none());
+    }
+
     fn run(pid: u32) -> CaptureRun {
         CaptureRun {
             pid,
@@ -1777,6 +1984,23 @@ mod tests {
         assert!(capture.update_capture_warning(&recovered, "The microphone is sending audio again."));
         assert_eq!(capture.facts(0).warnings, [gap]);
         assert!(!capture.update_capture_warning(&recovered, "The microphone is sending audio again."));
+    }
+
+    #[test]
+    fn live_excerpt_is_bound_to_the_current_recordings_company_and_thread() {
+        let mut capture = run(9);
+        capture.entity = Some("acme".into());
+        capture.thread = Some("original-thread".into());
+        capture.started_at = 100;
+        capture.zone = PathBuf::from("/corpus/acme/evidence/meetings");
+        let dir = capture.zone.join("this-call");
+        capture.dir = Some(dir.clone());
+        assert_eq!(capture.live_scope("acme", "original-thread", 101), Some((dir, capture.zone.clone())));
+        assert!(capture.live_scope("other", "original-thread", 101).is_none());
+        assert!(capture.live_scope("acme", "other-thread", 101).is_none());
+        assert!(capture.live_scope("acme", "original-thread", 99).is_none());
+        capture.stop = Some(EndReason::CallEnded);
+        assert!(capture.live_scope("acme", "original-thread", 101).is_none());
     }
 
     #[test]
@@ -1899,13 +2123,17 @@ mod tests {
         // and must wait for a transcription the killed launch left running on the same session.
         let dir = std::env::temp_dir().join(format!("richos-orphan-{}", std::process::id()));
         let other = std::env::temp_dir().join(format!("richos-orphan-other-{}", std::process::id()));
-        // `sh -c CMD NAME`: NAME is on its command line, as `richos-service run <session>` is.
-        let mut child = Command::new("/bin/sh").args(["-c", "sleep 30"]).arg(&dir).spawn().unwrap();
+        // Keep the session argument on a process that waits for input. A shell can replace
+        // itself with sleep and lose the argument before ps reads it.
+        let mut child = Command::new("/bin/cat").arg("-").arg(&dir)
+            .stdin(Stdio::piped()).stdout(Stdio::null()).spawn().unwrap();
         let pid = child.id();
-        assert!(transcription_running(pid, &dir));
-        assert!(!transcription_running(pid, &other), "another session's run is not this one");
+        let is_current = transcription_running(pid, &dir);
+        let is_other = transcription_running(pid, &other);
         child.kill().unwrap();
         child.wait().unwrap();
+        assert!(is_current);
+        assert!(!is_other, "another session's run is not this one");
         assert!(!transcription_running(pid, &dir), "an ended run is not waited for");
         // No pid beside the session, or the pid of a run that has ended: it returns (a wait here
         // would hang the test, not pass it).

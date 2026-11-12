@@ -5,9 +5,11 @@ use objc2::{
     runtime::{AnyClass, AnyObject, ClassBuilder, Sel},
     sel,
 };
-use std::{ffi::CStr, sync::OnceLock};
+use richos_core::cleaner::MAX_BATCH_FILES;
+use std::{ffi::CStr, path::PathBuf, sync::OnceLock};
 use tauri::AppHandle;
 static APP: OnceLock<AppHandle> = OnceLock::new();
+
 unsafe fn text(value: &str) -> Option<Retained<AnyObject>> {
     let class = AnyClass::get(c"NSString")?;
     let value = std::ffi::CString::new(value).ok()?;
@@ -15,20 +17,57 @@ unsafe fn text(value: &str) -> Option<Retained<AnyObject>> {
     unsafe { Retained::retain(string) }
 }
 unsafe fn rust_string(value: *mut AnyObject) -> Option<String> {
+    let class = AnyClass::get(c"NSString")?;
     if value.is_null() {
+        return None;
+    }
+    let is_string: bool = unsafe { msg_send![value, isKindOfClass:class] };
+    if !is_string {
         return None;
     }
     let bytes: *const std::ffi::c_char = unsafe { msg_send![value, UTF8String] };
     if bytes.is_null() {
         None
     } else {
-        Some(
-            unsafe { CStr::from_ptr(bytes) }
-                .to_string_lossy()
-                .into_owned(),
-        )
+        let bytes = unsafe { CStr::from_ptr(bytes) }.to_bytes();
+        const UTF8_ENCODING: usize = 4;
+        let length: usize = unsafe { msg_send![value, lengthOfBytesUsingEncoding:UTF8_ENCODING] };
+        // A NUL inside an NSString must never truncate a supplied path into another file.
+        if bytes.len() != length {
+            return None;
+        }
+        std::str::from_utf8(bytes).ok().map(str::to_owned)
     }
 }
+
+fn selected_paths(pasteboard: *mut AnyObject) -> Result<Vec<PathBuf>, String> {
+    if pasteboard.is_null() {
+        return Err("Select files on your Desktop".into());
+    }
+    let kind =
+        unsafe { text("NSFilenamesPboardType") }.ok_or("The file URL type is unavailable")?;
+    let paths: *mut AnyObject = unsafe { msg_send![pasteboard,propertyListForType:&*kind] };
+    let array = AnyClass::get(c"NSArray").ok_or("The file URL list is unavailable")?;
+    let is_array: bool = !paths.is_null() && unsafe { msg_send![paths, isKindOfClass:array] };
+    if !is_array {
+        return Err("macOS did not supply a list of file URLs".into());
+    }
+    let count: usize = unsafe { msg_send![paths, count] };
+    if count == 0 {
+        return Err("Select files on your Desktop".into());
+    }
+    if count > MAX_BATCH_FILES {
+        return Err(format!("Select up to {MAX_BATCH_FILES} Desktop files"));
+    }
+    (0..count)
+        .map(|index| {
+            let path: *mut AnyObject = unsafe { msg_send![paths, objectAtIndex:index] };
+            let path = unsafe { rust_string(path) }.ok_or("The selected file URL is unavailable")?;
+            Ok(PathBuf::from(path))
+        })
+        .collect()
+}
+
 extern "C-unwind" fn receive(
     _: *mut AnyObject,
     _: Sel,
@@ -37,25 +76,11 @@ extern "C-unwind" fn receive(
     error: *mut *mut AnyObject,
 ) {
     let result = objc2::rc::autoreleasepool(|_| -> Result<(), String> {
-        if pasteboard.is_null() {
-            return Err("Select one Desktop file".into());
-        }
-        let kind =
-            unsafe { text("NSFilenamesPboardType") }.ok_or("The file URL type is unavailable")?;
-        let paths: *mut AnyObject = unsafe { msg_send![pasteboard,propertyListForType:&*kind] };
-        if paths.is_null() {
-            return Err("macOS did not supply a file URL".into());
-        }
-        let count: usize = unsafe { msg_send![paths, count] };
-        if count != 1 {
-            return Err("One file at a time".into());
-        }
-        let path: *mut AnyObject = unsafe { msg_send![paths,objectAtIndex:0usize] };
-        let path = unsafe { rust_string(path) }.ok_or("The selected file URL is unavailable")?;
+        let paths = selected_paths(pasteboard)?;
         let app = APP
             .get()
             .ok_or("RichOS is starting. Try again when it is ready")?;
-        crate::cleaner_host::service(app.clone(), std::path::PathBuf::from(path))
+        crate::cleaner_host::service(app.clone(), paths)
     });
     if let Err(message) = result {
         if !error.is_null() {
@@ -104,30 +129,32 @@ pub fn register(app: &AppHandle) -> Result<(), String> {
 mod tests {
     use super::*;
     #[test]
-    fn the_service_reads_supplied_file_paths_and_refuses_zero_or_multiple_files() {
+    fn the_service_reads_each_supplied_path_and_refuses_empty_or_oversized_selections() {
         objc2::rc::autoreleasepool(|_| unsafe {
             let class = AnyClass::get(c"NSPasteboard").unwrap();
             for (count, expected) in [
-                (0usize, "One file at a time"),
-                (2, "One file at a time"),
-                (1, "RichOS is starting"),
+                (0usize, Some("Select files on your Desktop")),
+                (1, None),
+                (2, None),
+                (MAX_BATCH_FILES, None),
+                (MAX_BATCH_FILES + 1, Some("Select up to")),
             ] {
                 let board: *mut AnyObject = msg_send![class, pasteboardWithUniqueName];
-                let path = text("/Users/fixture/Desktop/selected.png").unwrap();
-                let objects = [&*path as *const AnyObject, &*path as *const AnyObject];
+                let names = (0..count)
+                    .map(|i| format!("/Users/fixture/Desktop/selected {i}.png"))
+                    .collect::<Vec<_>>();
+                let paths = names.iter().map(|name| text(name).unwrap()).collect::<Vec<_>>();
+                let objects = paths.iter().map(|path| &**path as *const AnyObject).collect::<Vec<_>>();
                 let array: *mut AnyObject = msg_send![AnyClass::get(c"NSArray").unwrap(),arrayWithObjects:objects.as_ptr(), count:count];
                 let kind = text("NSFilenamesPboardType").unwrap();
                 let _: bool = msg_send![board,setPropertyList:array, forType:&*kind];
-                let mut error = std::ptr::null_mut();
-                receive(
-                    std::ptr::null_mut(),
-                    sel!(richCleanerNote:userData:error:),
-                    board,
-                    std::ptr::null_mut(),
-                    &mut error,
-                );
-                let message = rust_string(error).unwrap();
-                assert!(message.contains(expected), "{count} selected: {message}");
+                let result = selected_paths(board);
+                if let Some(expected) = expected {
+                    let message = result.unwrap_err();
+                    assert!(message.contains(expected), "{count} selected: {message}");
+                } else {
+                    assert_eq!(result.unwrap(), names.into_iter().map(PathBuf::from).collect::<Vec<_>>());
+                }
                 let _: () = msg_send![board, releaseGlobally];
             }
         });

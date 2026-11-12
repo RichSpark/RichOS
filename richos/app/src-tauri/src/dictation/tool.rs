@@ -47,6 +47,36 @@ pub const HANDOVER_WAIT: Duration = Duration::from_secs(2);
 /// the writing worker can be stopped and joined; this is the backstop if the loop never answers.
 const QUIT_BACKSTOP: Duration = Duration::from_secs(5);
 
+fn cleaner_targets(context: &serde_json::Value) -> &[serde_json::Value] {
+    context["targets"]
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or_else(|| std::slice::from_ref(context))
+}
+
+fn same_cleaner_selection(expected: &serde_json::Value, current: &serde_json::Value) -> bool {
+    use richos_core::cleaner::Identity;
+    if expected["route"] != "file" || current["route"] != "file"
+        || expected["service"] != current["service"] || expected["pid"] != current["pid"]
+    {
+        return false;
+    }
+    let expected = cleaner_targets(expected);
+    let current = cleaner_targets(current);
+    // The native adapter sorts both selections by path. Bookmark serialization
+    // can change between reads, so compare the underlying object and version.
+    !expected.is_empty()
+        && expected.len() == current.len()
+        && expected.iter().zip(current).all(|(a, b)| {
+            if a["path"].as_str().is_none() || a["path"] != b["path"] {
+                return false;
+            }
+            let a = serde_json::from_value::<Identity>(a["identity"].clone());
+            let b = serde_json::from_value::<Identity>(b["identity"].clone());
+            matches!((a, b), (Ok(a), Ok(b)) if a.unchanged(&b))
+        })
+}
+
 /// SIGTERM was delivered (launchd's `bootout`, a `kill`): read by a thread, never acted on in
 /// the handler.
 static TERMINATED: AtomicBool = AtomicBool::new(false);
@@ -930,14 +960,25 @@ impl Tool {
                     self.cancel_assistance();self.close_menu();self.publish();
                 }
                 Control::CleanerReady{id,result}=>{
+                    let Some((active, expected)) = self.cleaner_target.as_ref() else { continue };
+                    if active != &id { continue; }
+                    let good = result.as_ref().is_ok_and(|current| same_cleaner_selection(expected, current));
                     if let Some(lookup)=self.cleaner_lookup.take(){lookup.stop_and_join();}
-                    let Some((active,expected))=self.cleaner_target.as_ref() else{continue};if active!=&id{continue}
-                    let good=result.as_ref().is_ok_and(|context|context["route"]=="file" && context["path"]==expected["path"] && context["identity"]["object"]==expected["identity"]["object"] && context["identity"]["changed"]==expected["identity"]["changed"]);
-                    if good{if self.session.tap(now_ms())==TapAction::StartListening{self.listen();}}else{self.cancel_cleaner();self.hub.broadcast(&ToolMessage::Cleaner{id,action:"error".into(),payload:serde_json::json!({"message":"Focus or selection changed. Try again"})});}
+                    if !matches!(self.session.phase(), Phase::Listening { .. }) {
+                        self.cancel_cleaner();
+                        continue;
+                    }
+                    if good {
+                        self.capture_microphone();
+                    } else {
+                        let message = result.err().unwrap_or_else(|| "Focus or selection changed. Try again".into());
+                        self.reset_cleaner();
+                        self.hub.broadcast(&ToolMessage::Cleaner{id,action:"error".into(),payload:serde_json::json!({"message":message})});
+                    }
                 }
                 Control::CleanerLookup{id,result}=>{
-                    if let Some(lookup)=self.cleaner_lookup.take(){lookup.stop_and_join();}
                     if self.cleaner_pending.as_deref()!=Some(id.as_str()){continue;}
+                    if let Some(lookup)=self.cleaner_lookup.take(){lookup.stop_and_join();}
                     self.cleaner_pending=None;
                     match result {
                         Ok(context) if context["route"]=="text"=>{self.cleaner_target=None;self.hub.broadcast(&ToolMessage::Cleaner{id,action:"passthrough".into(),payload:serde_json::json!({})});if self.session.tap(now_ms())==TapAction::StartListening{self.listen();}},
@@ -948,11 +989,17 @@ impl Tool {
                 Control::App(AppMessage::Cleaner{id,action,payload})=>{
                     match action.as_str(){
                         "mode"=>self.cleaner_enabled=payload["enabled"]==true,
-                        "release" if self.cleaner_target.as_ref().is_some_and(|(active,_)|active==&id)=>{self.cleaner_target=None;},
-                        "service-target" if self.settings.on && !matches!(self.session.phase(),Phase::Listening{..}|Phase::Writing) && self.cleaner_target.is_none()=>{self.cleaner_target=Some((id.clone(),payload.clone()));self.hub.broadcast(&ToolMessage::Cleaner{id,action:"target".into(),payload});},
-                        "record" if self.cleaner_target.as_ref().is_some_and(|(active,_)|active==&id)=>{
-                            if self.cleaner_target.as_ref().is_some_and(|(_,context)|context["service"]==true){if self.session.tap(now_ms())==TapAction::StartListening{self.listen();}}
-                            else{let tx=self.tx.clone();let stop=Arc::new(AtomicBool::new(false));let flag=stop.clone();let join=std::thread::spawn(move||{let result=crate::cleaner_native::Native::bundled().and_then(|native|native.context(&flag));if tx.send(Control::CleanerReady{id,result}).is_err(){log::line("RichCleaner target verification receiver ended");}});self.cleaner_lookup=Some(Writing{stop,join});}
+                        "release" if self.cleaner_target.as_ref().is_some_and(|(active,_)|active==&id)=>{self.reset_cleaner();},
+                        "service-target" if !self.ending && self.settings.on && !matches!(self.session.phase(),Phase::Listening{..}|Phase::Writing) && self.cleaner_target.is_none() && self.cleaner_pending.is_none()=>{
+                            self.cleaner_target=Some((id.clone(),payload.clone()));
+                            self.hub.broadcast(&ToolMessage::Cleaner{id,action:"target".into(),payload});
+                        },
+                        "service-target"=>{
+                            self.hub.broadcast(&ToolMessage::Cleaner{id,action:"error".into(),payload:serde_json::json!({"message":"RichScribe is busy. Try again when it is ready"})});
+                        },
+                        "record" if !self.ending && !matches!(self.session.phase(),Phase::Listening{..}|Phase::Writing) && self.cleaner_target.as_ref().is_some_and(|(active,_)|active==&id)
+                            && self.session.tap(now_ms())==TapAction::StartListening=>{
+                            self.listen();
                         },
                         "finish" if self.cleaner_target.as_ref().is_some_and(|(active,_)|active==&id) && matches!(self.session.phase(),Phase::Listening{..})=>self.toggle(true),
                         "cancel" if self.cleaner_pending.as_deref()==Some(id.as_str()) || self.cleaner_target.as_ref().is_some_and(|(active,_)|active==&id)=>{self.cancel_cleaner();if let Some(message)=payload["message"].as_str(){log::line(message);}},
@@ -1414,8 +1461,14 @@ impl Tool {
         if self.ending {
             return;
         }
+        if !from_app && self.capture.is_none()
+            && !matches!(self.session.phase(), Phase::Writing)
+            && (self.cleaner_pending.is_some() || self.cleaner_target.is_some())
+        {
+            self.cancel_cleaner();
+            return;
+        }
         if !from_app && !matches!(self.session.phase(),Phase::Listening{..}|Phase::Writing) && self.cleaner_enabled && insert::front_is_finder() {
-            if self.cleaner_pending.is_some() || self.cleaner_target.is_some(){self.cancel_cleaner();return;}
             let id=richos_core::cleaner::capture_id();self.cleaner_pending=Some(id.clone());
             self.hub.broadcast(&ToolMessage::Cleaner{id:id.clone(),action:"checking".into(),payload:serde_json::json!({"key":self.settings.key()})});
             let tx=self.tx.clone();let stop=Arc::new(AtomicBool::new(false));let flag=stop.clone();
@@ -1429,12 +1482,15 @@ impl Tool {
         }
     }
 
-    fn cancel_cleaner(&mut self){
+    fn reset_cleaner(&mut self) -> Option<String> {
         let id=self.cleaner_pending.take().or_else(||self.cleaner_target.as_ref().map(|(id,_)|id.clone()));
         if let Some(lookup)=self.cleaner_lookup.take(){lookup.stop_and_join();}
         self.cancel_recording();
         self.cleaner_target=None;self.publish();
-        if let Some(id)=id{self.hub.broadcast(&ToolMessage::Cleaner{id,action:"canceled".into(),payload:serde_json::json!({})});}
+        id
+    }
+    fn cancel_cleaner(&mut self) {
+        if let Some(id)=self.reset_cleaner(){self.hub.broadcast(&ToolMessage::Cleaner{id,action:"canceled".into(),payload:serde_json::json!({})});}
     }
     fn listen(&mut self) {
         if !self.instruction_recording() {self.cancel_assistance();self.cleanup_anchor=None;}
@@ -1490,12 +1546,38 @@ impl Tool {
         later(&self.tx, HANDOVER_WAIT, Control::HandoverTimeout(seq));
     }
 
-    /// The microphone, once every app has yielded it.
+    /// Once every app has yielded the microphone, recheck the entire selection
+    /// before opening it for a targeted recording.
     fn open_microphone(&mut self) {
         if !matches!(self.session.phase(), Phase::Listening { .. }) {
             // The key was tapped again, or the input died, while the handover waited.
             return;
         }
+        if let Some((id, context)) = &self.cleaner_target {
+            let request = if context["service"] == true {
+                let paths: Vec<_> = cleaner_targets(context).iter().map(|target| &target["path"]).collect();
+                serde_json::json!({"action":"service-context","paths":paths})
+            } else {
+                serde_json::json!({"action":"context"})
+            };
+            let id = id.clone();
+            let tx = self.tx.clone();
+            let stop = Arc::new(AtomicBool::new(false));
+            let flag = stop.clone();
+            let join = std::thread::spawn(move || {
+                let result = crate::cleaner_native::Native::bundled()
+                    .and_then(|native| native.call(request, Duration::from_secs(1), &flag));
+                if tx.send(Control::CleanerReady { id, result }).is_err() {
+                    log::line("RichCleaner target verification receiver ended");
+                }
+            });
+            self.cleaner_lookup = Some(Writing { stop, join });
+            return;
+        }
+        self.capture_microphone();
+    }
+
+    fn capture_microphone(&mut self) {
         *self.recording.lock().unwrap_or_else(|p| p.into_inner()) = Some(Recording::new());
         let recording = self.recording.clone();
         let tx = self.tx.clone();
@@ -1816,6 +1898,41 @@ mod tests {
 
     fn s(v: &[&str]) -> Vec<String> {
         v.iter().map(|x| x.to_string()).collect()
+    }
+
+    #[test]
+    fn cleaner_selection_rechecks_every_file_and_its_version() {
+        use serde_json::json;
+        let target = |path: &str, object: u64| json!({
+            "path": path, "identity": {
+                "volume": 2, "object": object, "size": 2000,
+                "modified": "1:0", "changed": "1:0", "bookmark": "original",
+            }
+        });
+        let first = target("/Desktop/board.pdf", 10);
+        let second = target("/Desktop/model.xlsx", 20);
+        let batch = json!({"route": "file", "pid": 5, "targets": [first, second]});
+        let mut current = batch.clone();
+        current["targets"][1]["identity"]["bookmark"] = json!("refreshed");
+        assert!(same_cleaner_selection(&batch, &current));
+        for (field, value) in [
+            ("volume", json!(3)), ("object", json!(21)), ("size", json!(2001)),
+            ("modified", json!("2:0")), ("changed", json!("2:0")),
+        ] {
+            let mut changed = current.clone();
+            changed["targets"][1]["identity"][field] = value;
+            assert!(!same_cleaner_selection(&batch, &changed), "{field} changed");
+        }
+        current["targets"][1]["path"] = json!("/Desktop/other.xlsx");
+        assert!(!same_cleaner_selection(&batch, &current));
+        current["targets"] = json!([batch["targets"][0]]);
+        assert!(!same_cleaner_selection(&batch, &current));
+
+        let mut single = batch["targets"][0].clone();
+        single["route"] = json!("file");
+        single["service"] = json!(true);
+        assert!(same_cleaner_selection(&single, &single));
+        assert!(!same_cleaner_selection(&batch, &single));
     }
 
     /// A start that found no engine recovers: the lookup runs BEFORE the models are checked, so a
