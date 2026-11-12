@@ -726,7 +726,10 @@ final class BrowserModel: ObservableObject {
                     ) { batch in
                         pending.append(contentsOf: batch)
                         let now = DispatchTime.now().uptimeNanoseconds
-                        if now >= nextEmission {
+                        // Show the first rows promptly. Each later snapshot adds at least as
+                        // many rows as the last one published to avoid re-merging a large
+                        // sorted prefix for every small batch.
+                        if now >= nextEmission && pending.count >= entries.count {
                             finishBatch()
                             continuation.yield(ListingUpdate(entries: entries))
                             nextEmission = DispatchTime.now().uptimeNanoseconds + 100_000_000
