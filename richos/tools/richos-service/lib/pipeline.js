@@ -31,10 +31,9 @@ import {
   detectSpeechBursts,
   cutSpan,
   measureSpanVolume,
-  CHANNEL_FILES,
 } from './normalize.js';
 import { transcribeSession, transcribeClips, transcribeStyled, whisperVersion } from './transcribe.js';
-import { advanceLiveTranscription, decodeLongWindow, removeLiveTranscriptionScratch, supportsLiveTranscription } from './live-transcription.js';
+import { advanceLiveTranscription, decodeLongWindow, removeLiveTranscriptionScratch, supportsLiveTranscription, takeLiveNormalization } from './live-transcription.js';
 import { restyleChannel, restyleWarnings } from './restyle.js';
 import { mergeTranscript, renderMarkdown, verify, wordCount } from './merge.js';
 import { correct } from './correct.js';
@@ -157,15 +156,15 @@ export function runPipeline(sessionDir, opts = {}) {
 
   try {
     // ---- Stage 2: NORMALIZE ---------------------------------------------------------------------
-    const norm = normalizeSession(sessionDir, { workDir: sessionDir });
+    const prepared = !opts.retranscribe && nativeLive && record.status === 'closed'
+      ? takeLiveNormalization(sessionDir) : null;
+    const norm = prepared ?? normalizeSession(sessionDir, { workDir: sessionDir });
+    if (prepared) log.info('live audio normalization reused');
     log.info(`${sessionId} — normalized ${norm.parts.length} part(s), stereo=${norm.stereo}`);
 
     // Deterministic silence guard: audio that decoded but carries no energy on either channel is a
     // captured-but-nothing-recorded anomaly — caught here, independent of ASR silence-hallucination.
-    const channelPaths = {
-      me: path.join(sessionDir, CHANNEL_FILES.me),
-      others: path.join(sessionDir, CHANNEL_FILES.others),
-    };
+    const channelPaths = { me: norm.me, others: norm.others };
     const silence = detectSilence(channelPaths);
     if (silence.silent) {
       const problems = [

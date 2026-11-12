@@ -20,6 +20,15 @@ import { privateDirectory, writePrivateFile, withPrivateOutputs } from './privat
 export const SAMPLE_RATE = 16000;
 export const CHANNEL_FILES = { me: 'me.wav', others: 'others.wav' };
 
+export function stereoNormalizationArgs(input, me, others) {
+  return [
+    '-y', '-v', 'error', ...input,
+    '-filter_complex', 'channelsplit=channel_layout=stereo[L][R]',
+    '-map', '[L]', '-ac', '1', '-ar', String(SAMPLE_RATE), me,
+    '-map', '[R]', '-ac', '1', '-ar', String(SAMPLE_RATE), others,
+  ];
+}
+
 /** Audio part files, in stable numeric order, as written by any capture surface. */
 export function listAudioParts(sessionDir) {
   return fs
@@ -226,12 +235,7 @@ export function normalizeSession(sessionDir, opts = {}) {
   withPrivateOutputs([mePath, othersPath], ([meOutput, othersOutput]) => {
     if (stereo) {
       // channelsplit gives free me-vs-them separation with no diarization model (§3.1).
-      execFileSync(ffmpeg, [
-        ...flags, '-i', concatInput,
-        '-filter_complex', 'channelsplit=channel_layout=stereo[L][R]',
-        '-map', '[L]', '-ac', '1', '-ar', String(SAMPLE_RATE), meOutput,
-        '-map', '[R]', '-ac', '1', '-ar', String(SAMPLE_RATE), othersOutput,
-      ]);
+      execFileSync(ffmpeg, stereoNormalizationArgs(['-i', concatInput], meOutput, othersOutput));
     } else {
       // In-person / mono fallback (§3.1): both voices on LEFT; the 2-channel split degrades to
       // single-channel gracefully. `others.wav` is a silent placeholder so downstream stays uniform.

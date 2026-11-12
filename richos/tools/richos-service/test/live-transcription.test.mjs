@@ -3,9 +3,77 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
-import { advanceLiveTranscription, recentLiveExcerpt, removeLiveTranscriptionScratch, supportsLiveTranscription } from '../lib/live-transcription.js';
+import { advanceLiveTranscription, prepareLiveNormalization, recentLiveExcerpt, removeLiveTranscriptionScratch, supportsLiveTranscription, takeLiveNormalization } from '../lib/live-transcription.js';
 import { mergeTranscript, renderMarkdown } from '../lib/merge.js';
+import { normalizeSession } from '../lib/normalize.js';
 import { assertPrivateTree } from '../lib/private-files.js';
+
+function nativeHeader(rate, dataBytes = 0) {
+  const header = Buffer.alloc(44);
+  header.write('RIFF', 0);
+  header.writeUInt32LE(36 + dataBytes, 4);
+  header.write('WAVEfmt ', 8);
+  header.writeUInt32LE(16, 16);
+  header.writeUInt16LE(1, 20);
+  header.writeUInt16LE(2, 22);
+  header.writeUInt32LE(rate, 24);
+  header.writeUInt32LE(rate * 4, 28);
+  header.writeUInt16LE(4, 32);
+  header.writeUInt16LE(16, 34);
+  header.write('data', 36);
+  header.writeUInt32LE(dataBytes, 40);
+  return header;
+}
+
+test('live normalization uses flushed native audio and refuses a changed recording', async (t) => {
+  for (const changed of [false, true]) {
+    await t.test(changed ? 'changed retained audio' : 'complete conversion', async (subtest) => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'richbrief-normalize-'));
+      subtest.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+      const audio = path.join(dir, 'audio-part-00.wav');
+      const rate = 48_000;
+      const pcm = Buffer.alloc(rate * 4);
+      for (let offset = 0; offset < pcm.length; offset += 4) {
+        pcm.writeInt16LE(Math.round(2_000 * Math.sin(offset / 70)), offset);
+        pcm.writeInt16LE(Math.round(7_000 * Math.cos(offset / 50)), offset + 2);
+      }
+      const record = { status: 'open', capture: { source: 'desktop-companion-macos' } };
+      const recordPath = path.join(dir, 'session.json');
+      fs.writeFileSync(recordPath, JSON.stringify(record));
+      fs.writeFileSync(audio, Buffer.concat([nativeHeader(rate, pcm.length / 2), pcm]));
+
+      let running = true;
+      const { promise: firstRead, resolve: notifyRead } = Promise.withResolvers();
+      const preparing = prepareLiveNormalization(dir, () => {
+        notifyRead();
+        return running;
+      }, new AbortController().signal);
+      await Promise.race([firstRead, preparing]);
+      assert.equal(takeLiveNormalization(dir), null, 'Unfinished output is unavailable');
+      const fd = fs.openSync(audio, 'r+');
+      fs.writeSync(fd, nativeHeader(rate, pcm.length), 0, 44, 0);
+      fs.closeSync(fd);
+      record.status = 'closed';
+      fs.writeFileSync(recordPath, JSON.stringify(record));
+      running = false;
+      await preparing;
+
+      if (changed) {
+        const changedAudio = fs.readFileSync(audio);
+        changedAudio.writeInt16LE(24_000, 44);
+        fs.writeFileSync(audio, changedAudio);
+        assert.equal(takeLiveNormalization(dir), null, 'Old tracks cannot describe changed audio');
+      } else {
+        const expected = normalizeSession(dir, { workDir: path.join(dir, 'reference') });
+        const actual = takeLiveNormalization(dir);
+        assert.ok(actual, 'Both converted tracks are ready after recorder close');
+        assert.deepEqual(fs.readFileSync(actual.me), fs.readFileSync(expected.me));
+        assert.deepEqual(fs.readFileSync(actual.others), fs.readFileSync(expected.others));
+      }
+      assert.equal(takeLiveNormalization(dir), null, 'The one-use preparation was cleared');
+    });
+  }
+});
 
 test('live transcription checkpoints the flushed prefix and only decodes the tail after close', (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'richbrief-live-'));
@@ -13,17 +81,7 @@ test('live transcription checkpoints the flushed prefix and only decodes the tai
   const audio = path.join(dir, 'audio-part-00.wav');
   const rate = 8_000;
   const bytesPerSecond = rate * 4;
-  const header = Buffer.alloc(44);
-  header.write('RIFF', 0);
-  header.write('WAVEfmt ', 8);
-  header.writeUInt32LE(16, 16);
-  header.writeUInt16LE(1, 20);
-  header.writeUInt16LE(2, 22);
-  header.writeUInt32LE(rate, 24);
-  header.writeUInt32LE(bytesPerSecond, 28);
-  header.writeUInt16LE(4, 32);
-  header.writeUInt16LE(16, 34);
-  header.write('data', 36);
+  const header = nativeHeader(rate);
   const pcm = Buffer.alloc(170 * bytesPerSecond);
   pcm.writeInt16LE(17, 24 * bytesPerSecond);
   pcm.writeInt16LE(-31, 24 * bytesPerSecond + 2);
