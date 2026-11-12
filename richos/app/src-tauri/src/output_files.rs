@@ -652,7 +652,7 @@ impl OutputFiles {
             return self.locate(id).map(|located| (located, None));
         }
         let row = self.media_record(id).ok_or("This conversation does not have those moments.")?;
-        let media_moments::Source::Local { path, version } = row.source else {
+        let media_moments::Source::Local { path, version, .. } = row.source else {
             return Err("Open this moment on YouTube.".into());
         };
         let located = Located { id: row.id, thread_id: row.thread_id, canonical: Some(path.clone()), path };

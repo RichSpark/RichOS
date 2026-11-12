@@ -134,6 +134,9 @@ short label and the relevant words or description of the verified frame.
 For a playable MP4, MOV, M4V or WebM on the Mac, including a YouTube download,
 use `source: {"kind":"local","path":"…"}` with its full persistent path in
 `mcp__richos_files__show_media_moments`. Use that same file for the waveform.
+If you know the local copy came from YouTube, also include the original 11-character
+`video_id` in this local source, so a phone can jump to YouTube if the file is too
+large to send. RichOS on the Mac still plays the saved copy.
 If step 4b didn't already produce `audio.wav`, make it with the ffmpeg command
 from that step. Uploaded captions can answer the question without running
 Whisper, but the waveform comes from the video's sound:

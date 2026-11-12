@@ -143,14 +143,14 @@ pub fn row_from_item(item: &Value) -> Option<Value> {
             }))
         }
         k if k == "rich_message" || is_media_item(item) => {
-            let media = is_media_item(item);
-            let text = if media { media_moments_text(&item["file"], text)? } else { richos_core::meeting_notes::plain_brief_sources(&text) };
+            let file = is_media_item(item).then(|| media_file_for_phone(&item["file"]));
+            let text = if let Some(file) = &file { media_moments_text(file, text)? } else { richos_core::meeting_notes::plain_brief_sources(&text) };
             let mut row = json!({
                 "id": id,
                 "thread_id": thread_id,
                 "cursor": 0,
                 "role": "rich",
-                "kind": if media { "media" } else { "text" },
+                "kind": if file.is_some() { "media" } else { "text" },
                 "text": text,
                 "created_at": iso8601(created_at),
                 "client_id": Value::Null,
@@ -161,7 +161,7 @@ pub fn row_from_item(item: &Value) -> Option<Value> {
                 "state": "complete",
                 "complete": true,
             });
-            if media { row["file"] = item["file"].clone(); }
+            if let Some(file) = file { row["file"] = file; }
             Some(row)
         },
         // A FILE RICH PUT IN FRONT OF THE USER (round 36 screen 3): a Rich row of kind `file`,
@@ -188,6 +188,17 @@ pub fn row_from_item(item: &Value) -> Option<Value> {
         // remembering to skip it.
         _ => None,
     }
+}
+
+/// A downloaded YouTube recording plays from the Mac when it can be sent to the phone.
+/// Give the phone the timestamped link when its copy would exceed the transfer limit.
+fn media_file_for_phone(file: &Value) -> Value {
+    let mut file = file.clone();
+    let too_large = file["bytes"].as_u64().is_some_and(|size| size > richos_core::rich_files::PHONE_LIMIT);
+    if file["source"] == "local" && (file["exists"] == false || !too_large) {
+        file["youtubeId"] = Value::Null;
+    }
+    file
 }
 
 /// Existing phone clients show media evidence in the conversation without fetching the file.

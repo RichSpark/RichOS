@@ -343,6 +343,32 @@ mod tests {
         }
         std::fs::write(&path, b"changed recording").unwrap();
         assert_eq!(get(&thread).unwrap_err(), richos_core::rich_files::Fetch::Gone);
+
+        let download = dir.join("downloaded-video.mp4");
+        std::fs::write(&download, b"video").unwrap();
+        let publish_download = |video_id: &str| media_moments::call(&scope, args(json!({
+            "kind": "local", "path": download, "video_id": video_id,
+        })));
+        assert!(publish_download("bad/id").is_err());
+        let item_for = |published: &serde_json::Value| {
+            let id = published["id"].as_str().unwrap();
+            media_moments::locate(&root, "alpha", &thread, id).unwrap().item()
+        };
+        let small = item_for(&publish_download("ab-cDe_F123").unwrap());
+        assert_eq!(small["file"]["source"], "local");
+        assert_eq!(small["file"]["youtubeId"], "ab-cDe_F123");
+        let small_phone = row_from_item(&small).unwrap();
+        assert!(small_phone["file"]["youtubeId"].is_null());
+        assert!(!small_phone["text"].as_str().unwrap().contains("youtube.com"));
+        let too_large = richos_core::rich_files::PHONE_LIMIT + 1;
+        std::fs::OpenOptions::new().write(true).open(&download).unwrap().set_len(too_large).unwrap();
+        let big = item_for(&publish_download("ab-cDe_F123").unwrap());
+        assert_eq!(big["file"]["source"], "local");
+        let big_phone = row_from_item(&big).unwrap();
+        assert_eq!(big_phone["file"]["youtubeId"], "ab-cDe_F123");
+        assert!(big_phone["text"].as_str().unwrap().contains("https://www.youtube.com/watch?v=ab-cDe_F123&t=53s"));
+        assert_eq!(media_moments::read_for_phone(&root, "alpha", &thread, big["id"].as_str().unwrap()).unwrap_err(),
+            richos_core::rich_files::Fetch::TooLarge(too_large));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

@@ -70,7 +70,12 @@ impl FileVersion {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Source {
-    Local { path: PathBuf, version: FileVersion },
+    Local {
+        path: PathBuf,
+        version: FileVersion,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        video_id: Option<String>,
+    },
     Youtube { video_id: String },
 }
 
@@ -115,9 +120,9 @@ pub struct Row {
 impl Row {
     pub fn item(&self) -> Value {
         let (source, exists, youtube_id, media_type, bytes, download_name) = match &self.source {
-            Source::Local { path, version } => {
+            Source::Local { path, version, video_id } => {
                 let media_type = if output::kind_of(&path.to_string_lossy()) == "mp4" { "video" } else { "audio" };
-                ("local", version.still_at(path), None, media_type, Some(version.size()), Some(download_name(path)))
+                ("local", version.still_at(path), video_id.as_ref(), media_type, Some(version.size()), Some(download_name(path)))
             }
             Source::Youtube { video_id } => ("youtube", true, Some(video_id), "video", None, None),
         };
@@ -140,7 +145,7 @@ fn download_name(path: &Path) -> String {
 pub fn read_for_phone(root: &Path, entity: &str, thread: &str, id: &str) -> Result<(String, Vec<u8>), rich_files::Fetch> {
     use rich_files::{Fetch, PHONE_LIMIT};
     let row = locate(root, entity, thread, id).ok_or(Fetch::NotAttached)?;
-    let Source::Local { path, version } = row.source else { return Err(Fetch::NotAttached) };
+    let Source::Local { path, version, .. } = row.source else { return Err(Fetch::NotAttached) };
     if !version.still_at(&path) {
         return Err(Fetch::Gone);
     }
@@ -168,7 +173,7 @@ pub fn read_for_phone(root: &Path, entity: &str, thread: &str, id: &str) -> Resu
 #[derive(Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 enum InputSource {
-    Local { path: PathBuf },
+    Local { path: PathBuf, video_id: Option<String> },
     Youtube { video_id: String },
 }
 
@@ -195,9 +200,12 @@ impl InputSource {
         match self {
             Self::Youtube { video_id } if valid_video_id(&video_id) => Ok(Source::Youtube { video_id }),
             Self::Youtube { .. } => Err("Give the 11-character YouTube video ID.".into()),
-            Self::Local { path } => {
+            Self::Local { path, video_id } => {
+                if video_id.as_deref().is_some_and(|id| !valid_video_id(id)) {
+                    return Err("Give the 11-character YouTube video ID.".into());
+                }
                 let (path, version) = FileVersion::capture_recording(&path)?;
-                Ok(Source::Local { path, version })
+                Ok(Source::Local { path, version, video_id })
             }
         }
     }
@@ -214,7 +222,8 @@ pub fn definition() -> Value {
                 "name": {"type": "string", "maxLength": 120},
                 "source": {"oneOf": [
                     {"type":"object","additionalProperties":false,"required":["kind","path"],
-                     "properties":{"kind":{"const":"local"},"path":{"type":"string"}}},
+                     "properties":{"kind":{"const":"local"},"path":{"type":"string"},
+                                   "video_id":{"type":"string","pattern":"^[A-Za-z0-9_-]{11}$"}}},
                     {"type":"object","additionalProperties":false,"required":["kind","video_id"],
                      "properties":{"kind":{"const":"youtube"},"video_id":{"type":"string","pattern":"^[A-Za-z0-9_-]{11}$"}}}
                 ]},
