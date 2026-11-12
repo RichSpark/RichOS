@@ -510,13 +510,16 @@ struct BrowserView: View {
                                         LazyVStack(alignment: .leading, spacing: 1) {
                                             ForEach(model.entries) { entry in
                                                 selectable(entry) {
-                                                    HStack {
-                                                        nameLabel(entry)
-                                                        Spacer(minLength: 4)
-                                                        if entry.kind == .directory {
-                                                            Image(systemName: "chevron.right").font(.caption)
-                                                                .foregroundStyle(.secondary)
+                                                    VStack(alignment: .leading, spacing: 1) {
+                                                        HStack {
+                                                            nameLabel(entry)
+                                                            Spacer(minLength: 4)
+                                                            if entry.kind == .directory {
+                                                                Image(systemName: "chevron.right").font(.caption)
+                                                                    .foregroundStyle(.secondary)
+                                                            }
                                                         }
+                                                        if model.searchActive { resultLocation(entry) }
                                                     }.frame(minHeight: 23)
                                                 }
                                             }
@@ -550,6 +553,7 @@ struct BrowserView: View {
                     VStack(spacing: 6) {
                         NativePreview(entry: entry).frame(maxWidth: .infinity, maxHeight: .infinity)
                         Text(entry.name).lineLimit(1).truncationMode(.middle).textSelection(.enabled)
+                        if model.searchActive { resultLocation(entry).textSelection(.enabled) }
                     }.padding(10)
                 } else {
                     Text("Select one item to preview it.").foregroundStyle(.secondary)
@@ -565,11 +569,12 @@ struct BrowserView: View {
                                 VStack(spacing: 4) {
                                     FileThumbnail(entry: entry, side: 62)
                                     Text(entry.name).font(.caption).lineLimit(1).truncationMode(.middle)
+                                    if model.searchActive { resultLocation(entry) }
                                 }.frame(width: 106).padding(3)
                             }
                         }
                     }.padding(6)
-                }.frame(height: 109)
+                }.frame(height: model.searchActive ? 126 : 109)
                     .accessibilityLabel("Gallery thumbnails")
                     .onAppear { restoreScroll(scroll) }
                     .onChange(of: selectionCursor) { if let url = $0 { scroll.scrollTo(url) } }
@@ -669,9 +674,7 @@ struct BrowserView: View {
                                         VStack(alignment: .leading, spacing: 1) {
                                             nameLabel(entry)
                                             if model.searchActive {
-                                                let path = entry.url.deletingLastPathComponent().path
-                                                Text(path).font(.system(size: 10)).lineLimit(1)
-                                                    .truncationMode(.middle).foregroundStyle(.secondary).help(path)
+                                                resultLocation(entry, font: .system(size: 10))
                                             }
                                         }.frame(width: 240, alignment: .leading)
                                     }.frame(height: rowHeight)
@@ -712,10 +715,7 @@ struct BrowserView: View {
                                 VStack(spacing: 3) {
                                     FileThumbnail(entry: entry, side: model.iconSize)
                                     Text(entry.name).lineLimit(2).truncationMode(.middle).multilineTextAlignment(.center)
-                                    if model.searchActive {
-                                        Text(entry.url.deletingLastPathComponent().lastPathComponent)
-                                            .font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                                    }
+                                    if model.searchActive { resultLocation(entry) }
                                 }.frame(maxWidth: .infinity).padding(4)
                             }
                         }
@@ -732,6 +732,7 @@ struct BrowserView: View {
 
     private func selectable<Content: View>(_ entry: FileEntry, @ViewBuilder content: () -> Content) -> some View {
         let selected = model.selected.contains(entry.url)
+        let location = model.searchActive ? entry.url.deletingLastPathComponent().path : ""
         return content()
             .padding(.horizontal, 4)
             .background(selected ? Color.accentColor.opacity(0.25) : Color.clear, in: RoundedRectangle(cornerRadius: 4))
@@ -746,13 +747,20 @@ struct BrowserView: View {
             .contextMenu {
                 selectionMenu(selected ? model.selectedEntries : [entry])
             }
-            .help(entry.name)
+            .help(model.searchActive ? entry.url.path : entry.name)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(entry.name)
+            .accessibilityValue(location)
             .accessibilityAddTraits(selected ? [.isSelected, .isButton] : .isButton)
             .accessibilityAction { select(entry, modifiers: []) }
             .accessibilityAction(named: "Open") { activate([entry]) }
             .id(entry.url)
+    }
+
+    private func resultLocation(_ entry: FileEntry, font: Font = .caption) -> some View {
+        let folder = entry.url.deletingLastPathComponent().path
+        return Text(folder).font(font).lineLimit(1).truncationMode(.middle)
+            .foregroundStyle(.secondary).help(folder)
     }
 
     private func dragFrame(for url: URL) -> some View {
