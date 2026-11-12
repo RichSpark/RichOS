@@ -954,7 +954,7 @@ struct ViewPreferences: Codable {
     var iconSize: Double
     var detailsLayout: Data?
 
-    init(mode: BrowserViewMode = .list, sort: FileSort = FileSort(), iconSize: Double = 64, detailsLayout: Data? = nil) {
+    init(mode: BrowserViewMode = .list, sort: FileSort = FileSort(), iconSize: Double = 112, detailsLayout: Data? = nil) {
         self.mode = mode
         column = Column(sort.column)
         ascending = sort.ascending

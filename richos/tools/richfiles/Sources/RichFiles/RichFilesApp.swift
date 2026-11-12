@@ -329,6 +329,7 @@ enum BrowserTextSize: Int, CaseIterable {
 @MainActor
 struct RichFilesSettings: View {
     @ObservedObject var workspace: WindowWorkspace
+    let windowSize: CGSize
     let close: () -> Void
     @Environment(\.colorScheme) private var scheme
     @AppStorage(BrowserTheme.preferenceKey) private var theme = BrowserTheme.defaultTheme
@@ -420,7 +421,8 @@ struct RichFilesSettings: View {
             .padding(.horizontal, 20).padding(.vertical, 10)
         }
         .font(BrowserTypography.reading(16 * textSize.scale))
-        .frame(minWidth: 600, idealWidth: 900, minHeight: 390, idealHeight: 670)
+        .frame(width: min(992, max(560, windowSize.width - 64)),
+               height: min(768, max(390, windowSize.height - 72)))
         .background(palette.floating)
         .onAppear { readDisplay(); readHandler(); readShortcut() }
         .onChange(of: shortcutAction) { _ in readShortcut() }
@@ -438,7 +440,7 @@ struct RichFilesSettings: View {
             heading("Default view for every folder")
             LabeledContent("View", value: display.global.mode.title)
             LabeledContent("Sorted by", value: sortDescription(display.global.fileSort))
-            LabeledContent("Details columns", value: "Name, Size, Kind, Modified")
+            LabeledContent("Details columns", value: "Name, Date modified, Kind, Size")
             LabeledContent("Thumbnail size", value: "\(Int(display.global.iconSize)) points")
             Text("Changing the view in a folder changes the default, unless that folder has its own view.")
                 .foregroundStyle(.secondary)

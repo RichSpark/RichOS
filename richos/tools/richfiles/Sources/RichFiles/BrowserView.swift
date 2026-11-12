@@ -22,6 +22,7 @@ struct BrowserView: View {
     @Environment(\.openWindow) private var openWindow
     @Environment(\.colorScheme) private var scheme
     private let side: BrowserPaneSide
+    private let windowSize: CGSize
     private let hostOpenWindow: ((URL) -> Void)?
     private let acceptsKeyboard: () -> Bool
     private let returnKeyboardFocus: @MainActor @Sendable () -> Void
@@ -73,13 +74,14 @@ struct BrowserView: View {
         let refresh: UUID
     }
 
-    init(model: BrowserModel, workspace: WindowWorkspace, side: BrowserPaneSide,
+    init(model: BrowserModel, workspace: WindowWorkspace, side: BrowserPaneSide, windowSize: CGSize,
          actions: BrowserActions, openWindow: ((URL) -> Void)? = nil,
          acceptsKeyboard: @escaping () -> Bool, returnKeyboardFocus: @escaping @MainActor @Sendable () -> Void,
          hostSwitchTitle: String?, switchHost: @escaping () -> Void, sessionChanged: @escaping () -> Void) {
         self.model = model
         self.workspace = workspace
         self.side = side
+        self.windowSize = windowSize
         self.actions = actions
         hostOpenWindow = openWindow
         self.acceptsKeyboard = acceptsKeyboard
@@ -219,13 +221,15 @@ struct BrowserView: View {
             } else {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 6) {
-                        ForEach(Array(model.breadcrumbs.enumerated()), id: \.element) { index, path in
+                        ForEach(Array(pathCrumbs.enumerated()), id: \.element) { index, path in
                             if index > 0 {
                                 Image(systemName: "chevron.right").font(.system(size: 9)).foregroundStyle(palette.muted)
                             }
                             Button { model.openFolder(path) } label: {
                                 if path.path == "/" {
                                     Label("This Mac", systemImage: "desktopcomputer")
+                                } else if path.path == FileManager.default.homeDirectoryForCurrentUser.path {
+                                    Label("Home", systemImage: "house")
                                 } else {
                                     Text(path.lastPathComponent)
                                 }
@@ -249,6 +253,13 @@ struct BrowserView: View {
         ).allowsHitTesting(false))
     }
 
+    private var pathCrumbs: [URL] {
+        let paths = model.breadcrumbs
+        guard let home = paths.firstIndex(where: { $0.path == FileManager.default.homeDirectoryForCurrentUser.path }),
+              let root = paths.first, home > 1 else { return paths }
+        return [root] + Array(paths[home...])
+    }
+
     private var searchBar: some View {
         HStack(spacing: 5) {
             Image(systemName: "magnifyingglass").foregroundStyle(palette.muted).accessibilityHidden(true)
@@ -268,8 +279,9 @@ struct BrowserView: View {
                 Divider()
                 Button("Search Filters…") { sheet = .searchOptions }
             } label: {
-                ViewThatFits(in: .horizontal) {
+                if windowSize.width >= 840 {
                     Text(model.searchRecursively ? "Subfolders" : "This Folder").fixedSize()
+                } else {
                     Image(systemName: "line.3.horizontal.decrease")
                 }
             }
@@ -278,8 +290,8 @@ struct BrowserView: View {
             .accessibilityLabel("Search Scope")
         }
         .padding(.horizontal, 8)
-        .frame(minWidth: workspace.isSplit ? 110 : 175, idealWidth: 330, maxWidth: 365,
-               minHeight: 36 * textSize.scale)
+        .frame(width: min(365, max(160, windowSize.width * 0.26)))
+        .frame(minHeight: 36 * textSize.scale)
         .background(palette.chrome, in: RoundedRectangle(cornerRadius: 7))
         .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(
             focus == .search ? palette.signal : palette.controlLine, lineWidth: focus == .search ? 2 : 1
@@ -816,17 +828,17 @@ struct BrowserView: View {
             if #available(macOS 14.0, *) {
                 Table(model.entries, selection: $model.selected, columnCustomization: detailsCustomization) {
                     detailsName.customizationID("name").disabledCustomizationBehavior(.visibility)
-                    detailsSize.customizationID("size")
-                    detailsKind.customizationID("kind")
                     detailsModified.customizationID("modified")
+                    detailsKind.customizationID("kind")
+                    detailsSize.customizationID("size")
                     detailsFolder.customizationID("folder")
                 }
             } else {
                 Table(model.entries, selection: $model.selected) {
                     detailsName
-                    detailsSize
-                    detailsKind
                     detailsModified
+                    detailsKind
+                    detailsSize
                     detailsFolder
                 }
             }
@@ -1038,12 +1050,13 @@ struct BrowserView: View {
 
     private func nameLabel(_ entry: FileEntry) -> some View {
         let cut = actions.cutURLs.contains { $0.path == entry.url.path }
+        let font = BrowserTypography.reading(16 * textSize.scale)
         return HStack(spacing: 8) {
             Image(systemName: fileSymbol(entry))
                 .foregroundStyle(entry.kind == .directory ? palette.folder : palette.muted)
                 .frame(width: 18)
             Text(entry.name).lineLimit(1).truncationMode(.middle)
-                .font(cut ? BrowserTypography.reading(16 * textSize.scale).italic() : nil)
+                .font(cut ? font.italic() : font)
             if cut { Image(systemName: "scissors").foregroundStyle(palette.muted).accessibilityLabel("Cut") }
         }
         .opacity(cut ? 0.65 : 1)
@@ -1723,7 +1736,7 @@ struct BrowserView: View {
                 InterruptedTransferSheet(notice: notice, actions: actions, openFolder: model.openFolder)
             }
         case .settings:
-            RichFilesSettings(workspace: workspace) { sheet = nil }
+            RichFilesSettings(workspace: workspace, windowSize: windowSize) { sheet = nil }
                 .modifier(BrowserAppearance())
         case .searchOptions: SearchOptionsSheet(model: model)
         case .batch(let references): BatchRenameSheet(sources: references, folder: model.folder, actions: actions)

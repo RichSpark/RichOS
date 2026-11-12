@@ -184,9 +184,9 @@ struct WindowBrowserView: View {
         GeometryReader { geometry in
             let layout = BrowserWindowLayout(sidebarWidth: sidebarWidth, paneRatio: paneRatio)
             layout {
-                pane(workspace.primary, side: .primary)
+                pane(workspace.primary, side: .primary, size: geometry.size)
                 if workspace.isSplit, let second = workspace.secondary {
-                    pane(second, side: .secondary)
+                    pane(second, side: .secondary, size: geometry.size)
                     BrowserPaneDivider(name: "Split pane divider") { position in
                         let side = sidebarVisible ? layout.sidebarWidth(in: geometry.size.width) + BrowserWindowLayout.gutter : 0
                         let width = max(1, geometry.size.width - side - BrowserWindowLayout.gutter)
@@ -261,8 +261,8 @@ struct WindowBrowserView: View {
         .onDisappear { saveSession() }
     }
 
-    private func pane(_ model: BrowserModel, side: BrowserPaneSide) -> some View {
-        BrowserView(model: model, workspace: workspace, side: side, actions: actions, openWindow: hostOpenWindow,
+    private func pane(_ model: BrowserModel, side: BrowserPaneSide, size: CGSize) -> some View {
+        BrowserView(model: model, workspace: workspace, side: side, windowSize: size, actions: actions, openWindow: hostOpenWindow,
                     acceptsKeyboard: { !switching && acceptsKeyboard() && workspace.active == side },
                     returnKeyboardFocus: returnKeyboardFocus, hostSwitchTitle: hostSwitch?.target.title,
                     switchHost: switchHost, sessionChanged: { saveSession(rememberWindow: true) })
