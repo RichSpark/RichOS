@@ -20,7 +20,8 @@ machine_lib="$root/richos/engine/scripts/lib"
 richos_machine_settings
 cache="$(python3 "$machine_lib/machine_settings.py" cache)"
 checkout_key="$(printf '%s' "$root" | shasum -a 256 | cut -c1-10)"
-scratch="$(mktemp -d "${TMPDIR:?}/richfiles-test.XXXXXX")"
+temporary="$(cd "${TMPDIR:?}" && pwd -P)"
+scratch="$(mktemp -d "$temporary/richfiles-test.XXXXXX")"
 trap 'rm -rf -- "$scratch"' EXIT
 
 TMPDIR="$scratch" python3 "$machine_lib/native-work.py" -- swift test \
