@@ -517,6 +517,58 @@ async function main() {
       return seen.join(" → ");
     });
 
+    await run.check(`RichFiles ${theme}  the heading and native placement error pass contrast`, async () => {
+      const richFiles = await context.newPage();
+      try {
+        const placementError = "RichFiles could not appear in this window.";
+        await richFiles.addInitScript((message) => {
+          Object.defineProperty(window, "RichBridge", {
+            configurable: true,
+            set(bridge) {
+              const invoke = bridge.invoke.bind(bridge);
+              bridge.invoke = async (command, args, options) => {
+                if (command === "richfiles_pane_available") return true;
+                if (command === "richfiles_request_pending") return false;
+                if (command === "richfiles_place_pane") {
+                  if (args.bounds.visible) throw message;
+                  return;
+                }
+                return invoke(command, args, options);
+              };
+              Object.defineProperty(window, "RichBridge", { value: bridge, writable: true, configurable: true });
+            },
+          });
+        }, placementError);
+        await richFiles.goto(APP);
+        await leaveHome(richFiles);
+        await shellSettled(richFiles);
+        await richFiles.locator("#nr-richfiles").click();
+        await richFiles.locator("#richfiles-title").waitFor({ state: "visible" });
+        await richFiles.locator("#richfiles-pane-error").waitFor({ state: "visible" });
+        await richFiles.mouse.move(700, 80);
+        await flushFrames(richFiles);
+        assertEqual((await railFacts(richFiles)).selected, ["richfiles"], "the rail selected the RichFiles page");
+        assertEqual(await richFiles.locator("#richfiles-title").innerText(), "RichFiles", "the actual heading is visible");
+        assertEqual(await richFiles.locator("#richfiles-pane-error").innerText(), placementError,
+          "the normal native placement error is visible");
+        assertEqual(await richFiles.evaluate(() => document.documentElement.dataset.theme), theme,
+          "the document is using the requested theme");
+        await richFiles.evaluate(C.pageScript());
+        const walk = await richFiles.evaluate((t) => window.__contrastProbe({ surface: "richfiles-page", theme: t }), theme);
+        for (const target of ["h1#richfiles-title", "p#richfiles-pane-error"]) {
+          assert(walk.measuredPaths.includes(target), "the contrast probe did not measure " + target);
+        }
+        const mine = (pairs) => Object.values(pairs).filter((pair) =>
+          /#richfiles-(page|title|pane-error)/.test(pair.selector || pair.path || ""));
+        assertEqual(mine(walk.failures), [], "the contrast walk found a failing pair on the RichFiles page");
+        assertEqual(mine(walk.unresolvable), [], "the contrast walk could not prove a pair on the RichFiles page");
+        assertEqual(mine(walk.exempt), [], "the RichFiles page needs no contrast exemptions");
+        return "the shipped RichFiles heading and placement error were both measured";
+      } finally {
+        await richFiles.close();
+      }
+    });
+
     await run.check(`RichPass ${theme}  opens its page under the header, selected, its icon before its title; Chats and a chat in the sidebar leave it`, async () => {
       await page.click("#nr-pass");
       await page.waitForSelector("#richpass-page", { state: "visible" });
