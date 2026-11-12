@@ -535,6 +535,7 @@ async function main() {
       await p.waitForFunction(() => window.mediaScopeSwitches.length === 1 &&
         document.getElementById("composer-row").dataset.mode !== "opening");
       await reopen.waitFor({ state: "hidden" });
+      assertEqual(await scopeStatus.textContent(), "", "reopening clears the native refusal");
 
       await p.evaluate(() => {
         window.mediaScopeRefused = false;
@@ -547,6 +548,7 @@ async function main() {
       await p.waitForFunction(() => window.mediaScopeSwitches.length === 2 &&
         document.getElementById("composer-row").dataset.mode !== "opening");
       await reopen.waitFor({ state: "hidden" });
+      assertEqual(await scopeStatus.textContent(), "", "reopening clears the local scope mismatch");
       assertEqual(await p.evaluate(() => window.mediaScopeSwitches), ["acme", "acme"], "both paths reopen the card's thread");
       await timestamp.click();
       await p.waitForFunction(() => {

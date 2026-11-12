@@ -266,7 +266,10 @@
     if (opts?.reopenThread) {
       const reopen = node("button", "desk-btn tl-media-reopen", "Reopen conversation");
       reopen.type = "button";
-      reopen.addEventListener("click", () => opts.reopenThread(item.threadId));
+      reopen.addEventListener("click", () => {
+        opts.reopenThread(item.threadId);
+        showScope(false);
+      });
       scope.appendChild(reopen);
     }
     const actions = [];
