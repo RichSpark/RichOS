@@ -756,6 +756,8 @@
     else delete box.dataset.why;
     if (state.media?.id === f.id && a.view === "none") {
       state.media.missing = a.why === "missing" || a.why === "refused";
+      state.media.outOfScope = a.why === "outOfScope";
+      if (state.media.outOfScope) state.media.wantsPlay = false;
       publishMedia(state.media);
     }
     const size = typeof a.bytes === "number" ? humanSize(a.bytes) : typeof f.bytes === "number" ? humanSize(f.bytes) : "";
@@ -944,19 +946,20 @@
   function mediaSnapshot() {
     const media = state.media;
     if (!media) return null;
-    const time = mediaPosition(media);
+    const time = media.outOfScope ? null : mediaPosition(media);
     const point = media.points.findLast(p => p.startMs <= (time ?? -1));
-    return { id: media.id, time, active: point?.startMs, playing: media.wantsPlay, missing: media.missing };
+    return { id: media.id, time, active: point?.startMs, playing: media.wantsPlay,
+      missing: media.missing, outOfScope: media.outOfScope };
   }
 
   function publishMedia(media) {
     if (media !== state.media) return;
     const snapshot = mediaSnapshot();
     const point = media.points.find(p => p.startMs === snapshot.active);
-    const subtitle = point ? clock(point.startMs) + " · " + point.label : clock(snapshot.time ?? 0);
+    const subtitle = media.outOfScope ? "" : point ? clock(point.startMs) + " · " + point.label : clock(snapshot.time ?? 0);
     const sub = el("op-sub");
     if (sub.textContent !== subtitle) sub.textContent = subtitle;
-    sub.hidden = false;
+    sub.hidden = !subtitle;
     window.dispatchEvent(new CustomEvent("rich:media-playback", { detail: snapshot }));
   }
 
@@ -1036,7 +1039,7 @@
 
   function showMedia(file) {
     clearMedia();
-    state.media = { ...file, target: file.startMs, player: null, wantsPlay: true, missing: false };
+    state.media = { ...file, target: file.startMs, player: null, wantsPlay: true, missing: false, outOfScope: false };
     state.view = "media";
     state.file = null;
     const body = el("op-body");
@@ -2389,6 +2392,7 @@
       if (!state.thread || state.thread !== threadId) return false;
       const media = state.media;
       if (media?.id === file.id) {
+        if (media.outOfScope) return false;
         const active = mediaSnapshot().active;
         if (file.toggle && !media.player?.ended && active === file.startMs) {
           media.wantsPlay = !media.wantsPlay;

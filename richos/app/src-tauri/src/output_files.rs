@@ -85,6 +85,7 @@ pub const SCHEME: &str = "richos-output";
 
 /// An id the active thread's record does not hold, or no active thread at all (§5.1).
 pub const NOT_IN_RECORD: &str = "I don't have that file in this thread's output.";
+const MOMENTS_OUTSIDE_CONVERSATION: &str = "This conversation does not have those moments.";
 /// A symbolic link, or a file swapped in under the recorded path (§5.2 steps 2–3).
 pub const LINKED: &str =
     "This file is a link to somewhere else, so I won't open it from here. Show in Finder still works.";
@@ -353,6 +354,11 @@ pub struct Located {
     pub thread_id: String,
     pub path: PathBuf,
     pub canonical: Option<PathBuf>,
+}
+
+enum PreviewLocationError {
+    Refused(String),
+    MomentsOutsideConversation,
 }
 
 /// Why a recorded file is not read or acted on.
@@ -647,20 +653,20 @@ impl OutputFiles {
         media_moments::locate(&source.engine_state, binding.entity_id().as_str(), binding.thread_id(), id)
     }
 
-    fn preview_location(&self, id: &str) -> Result<(Located, Option<FileVersion>), String> {
+    fn preview_location(&self, id: &str) -> Result<(Located, Option<FileVersion>), PreviewLocationError> {
         if !id.starts_with("mm_") {
-            return self.locate(id).map(|located| (located, None));
+            return self.locate(id).map(|located| (located, None)).map_err(PreviewLocationError::Refused);
         }
-        let row = self.media_record(id).ok_or("This conversation does not have those moments.")?;
+        let row = self.media_record(id).ok_or(PreviewLocationError::MomentsOutsideConversation)?;
         let media_moments::Source::Local { path, version, .. } = row.source else {
-            return Err("Open this moment on YouTube.".into());
+            return Err(PreviewLocationError::Refused("Open this moment on YouTube.".into()));
         };
         let located = Located { id: row.id, thread_id: row.thread_id, canonical: Some(path.clone()), path };
         Ok((located, Some(version)))
     }
 
     fn open_media_moment(&self, id: &str, index: usize) -> Result<(), String> {
-        let row = self.media_record(id).ok_or("This conversation does not have those moments.")?;
+        let row = self.media_record(id).ok_or(MOMENTS_OUTSIDE_CONVERSATION)?;
         let point = row.moments.points.get(index).ok_or("That moment is no longer here.")?;
         let url = row.source.youtube_url(point.start_ms).ok_or("This moment can be played in RichOS.")?;
         if (self.runner)(&[url]) { Ok(()) } else { Err("This Mac could not open the moment on YouTube.".into()) }
@@ -727,7 +733,16 @@ impl OutputFiles {
 
     /// `output_preview(output_id)` (§5.4, §7).
     pub fn preview(&self, output_id: &str) -> Result<Preview, String> {
-        let (located, version) = self.preview_location(output_id)?;
+        let (located, version) = match self.preview_location(output_id) {
+            Ok(target) => target,
+            Err(PreviewLocationError::Refused(reason)) => return Err(reason),
+            Err(PreviewLocationError::MomentsOutsideConversation) => {
+                return Ok(Preview::None {
+                    why: "outOfScope",
+                    reason: MOMENTS_OUTSIDE_CONVERSATION.into(),
+                });
+            }
+        };
         let checked = match check(&located) {
             Ok(checked) => checked,
             Err(problem) => return Ok(Preview::None { why: problem.why(), reason: problem.sentence() }),
@@ -1697,7 +1712,8 @@ mod tests {
         assert!(files.list(&thread).unwrap().files.is_empty(), "a source is not a written output");
 
         spine.switch_thread(&other).unwrap();
-        assert!(files.preview(&local).is_err());
+        assert!(matches!(files.preview(&local).unwrap(), Preview::None { why: "outOfScope", reason }
+            if reason == MOMENTS_OUTSIDE_CONVERSATION));
         assert_eq!(files.serve(&request()).status(), StatusCode::NOT_FOUND);
         assert!(files.open_media_moment(&online, 0).is_err());
         spine.switch_thread(&thread).unwrap();

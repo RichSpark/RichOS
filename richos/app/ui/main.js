@@ -1368,7 +1368,7 @@ async function openThread(threadId, opts) {
   // Counted BEFORE the "already there" return below: pressing the row you are on is still a
   // statement of where you want to be, and the restore has nothing to add to it.
   if (!opts.restore) handNavigations++;
-  if (threadId === activeThreadId && mainView === "conversation") return;
+  if (threadId === activeThreadId && mainView === "conversation" && !opts.reopen) return;
 
   // Taken before the first await. `stale()` is true from the instant a newer openThread has run
   // its own synchronous head, so an older chain resuming later paints nothing.
@@ -2177,6 +2177,10 @@ function flushRender() {
     output: window.RichOutput ? window.RichOutput.links : undefined,
     // A file card whose file is gone offers "Ask Rich again" (`rich-files.js`): his words, sent.
     sendText: (text) => send(text, { pressed: "Ask Rich again" }),
+    reopenThread: (threadId) => {
+      window.RichOutput?.close({ keepFocus: true });
+      return openThread(threadId, { reopen: true });
+    },
   });
   // The DOM was just rebuilt; re-mark the open worker's chip.
   markSelectedChip();
