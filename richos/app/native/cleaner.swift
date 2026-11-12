@@ -243,7 +243,19 @@ func main(_ r:[String:Any])throws->[String:Any] {
         return ["path":target.path,"identity":actual]
     case "destination":
         let root=try canonical(url(string(r,"root")));let parts=r["parts"] as? [String] ?? [];var folder=root
-        for part in parts {guard !part.isEmpty,!part.hasPrefix("."),!part.contains("/"),!part.contains(":"),!part.contains("\\") else {try fail("Invalid folder component")};folder.appendPathComponent(part,isDirectory:true);if !fm.fileExists(atPath:folder.path){try fm.createDirectory(at:folder,withIntermediateDirectories:false)};_ = try canonical(folder)}
+        let existingOnly = r["existingOnly"] as? Bool == true
+        for part in parts {
+            guard !part.isEmpty,!part.hasPrefix("."),!part.contains("/"),!part.contains(":"),!part.contains("\\") else {try fail("Invalid folder component")}
+            folder.appendPathComponent(part,isDirectory:true)
+            if existingOnly {
+                var info = stat()
+                guard lstat(folder.path, &info) == 0, info.st_mode & S_IFMT == S_IFDIR,
+                      (try? canonical(folder)) != nil else {try fail("destination-folder-unavailable")}
+            } else {
+                if !fm.fileExists(atPath:folder.path) {try fm.createDirectory(at:folder,withIntermediateDirectories:false)}
+                _ = try canonical(folder)
+            }
+        }
         let name=try string(r,"name");guard name==URL(fileURLWithPath:name).lastPathComponent else {try fail("Invalid filename")}
         let original=folder.appendingPathComponent(name);var candidate=original;var suffix=2
         while fm.fileExists(atPath:candidate.path) {candidate=folder.appendingPathComponent(original.deletingPathExtension().lastPathComponent+" \(suffix)"+(original.pathExtension.isEmpty ? "":"."+original.pathExtension));suffix+=1}

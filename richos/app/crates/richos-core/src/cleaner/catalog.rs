@@ -407,6 +407,16 @@ impl Catalog {
         self.db.query_row("SELECT count(*) FROM files", [], |r| r.get(0))
             .map_err(|e| e.to_string())
     }
+
+    pub fn recent_filed_paths(&self) -> Result<Vec<PathBuf>> {
+        let mut query = self.db.prepare(
+            "SELECT json_extract(record,'$.path') FROM files WHERE phase='\"filed\"'
+             AND NOT json_extract(record,'$.inbox') ORDER BY updated DESC,id LIMIT 256",
+        ).map_err(|e| e.to_string())?;
+        let rows = query.query_map([], |row| row.get::<_, String>(0))
+            .map_err(|e| e.to_string())?;
+        rows.map(|row| row.map(PathBuf::from).map_err(|e| e.to_string())).collect()
+    }
     pub fn search(&self, text: &str, offset: u64, byte_limit: usize) -> Result<Page> {
         if text.len() > 4096 || offset > i64::MAX as u64 {
             return Err("Search is too long".into());

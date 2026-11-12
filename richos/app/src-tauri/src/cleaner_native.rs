@@ -111,6 +111,15 @@ impl Native {
             answer["path"].as_str().ok_or("Locate the original file")?,
         ))
     }
+
+    fn reserve_destination(
+        &self, root: &Path, parts: &[String], name: &std::ffi::OsStr, existing_only: bool,
+    ) -> Result<PathBuf> {
+        let name = name.to_str().ok_or("Invalid filename")?;
+        let answer = self.request(json!({"action":"destination","root":root,"parts":parts,
+                                        "name":name,"existingOnly":existing_only}))?;
+        Ok(PathBuf::from(answer["path"].as_str().ok_or("Missing destination")?))
+    }
     pub fn stage_copy(&self, e: &Entry) -> Result<Staged> {
         let value =
             self.request(json!({"action":"reserve","path":e.path,"identity":e.identity}))?;
@@ -142,10 +151,12 @@ impl Files for Native {
         parts: &[String],
         name: &std::ffi::OsStr,
     ) -> Result<PathBuf> {
-        let v=self.request(json!({"action":"destination","root":root,"parts":parts,"name":name.to_str().ok_or("Invalid filename")?}))?;
-        Ok(PathBuf::from(
-            v["path"].as_str().ok_or("Missing destination")?,
-        ))
+        self.reserve_destination(root, parts, name, false)
+    }
+    fn destination_existing(
+        &self, root: &Path, parts: &[String], name: &std::ffi::OsStr,
+    ) -> Result<PathBuf> {
+        self.reserve_destination(root, parts, name, true)
     }
     fn stage(&self, e: &Entry) -> Result<Option<Staged>> {
         let ext = e

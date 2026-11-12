@@ -4,7 +4,7 @@ use crate::{
     dictation::ipc::{AppMessage, ToolMessage},
     AppState,
 };
-use richos_core::cleaner::{self, choice::Prepared, Catalog, Entry, Files, Identity, Phase};
+use richos_core::cleaner::{self, choice::{FolderContext, Prepared}, Catalog, Entry, Files, FilingChoice, Identity, Phase};
 use serde_json::{json, Value};
 use std::{
     path::{Path, PathBuf},
@@ -16,6 +16,7 @@ use std::{
 };
 use tauri::{AppHandle, Emitter, Manager};
 mod batch;
+mod folders;
 const EVENT: &str = "rich://cleaner";
 const PANEL: &str = "cleaner-panel";
 struct Active {
@@ -260,32 +261,14 @@ fn profile(
         .clone();
     Ok((bin, profile))
 }
-fn folders(root: &Path) -> Result<Vec<String>, String> {
-    let mut labels = vec![];
-    for entry in std::fs::read_dir(root).map_err(|e| e.to_string())? {
-        let entry = entry.map_err(|e| e.to_string())?;
-        if !entry.file_type().map_err(|e| e.to_string())?.is_dir() {
-            continue;
-        }
-        let name = entry.file_name().to_string_lossy().to_string();
-        if cleaner::folder_parts(&name).is_err() {
-            continue;
-        }
-        labels.push(name.clone());
-        for sub in std::fs::read_dir(entry.path()).map_err(|e| e.to_string())? {
-            let sub = sub.map_err(|e| e.to_string())?;
-            if sub.file_type().map_err(|e| e.to_string())?.is_dir() {
-                let label = format!("{name}/{}", sub.file_name().to_string_lossy());
-                if cleaner::folder_parts(&label).is_ok() {
-                    labels.push(label);
-                }
-            }
-            if labels.len() > 1000 {
-                return Err("There are too many folder labels to classify safely".into());
-            }
-        }
-    }
-    Ok(labels)
+fn folder_context(db: &Catalog, root: &Path, id: &str) -> Result<FolderContext, String> {
+    let began = Instant::now();
+    let recent = db.recent_filed_paths()?;
+    let context = folders::scan(root, &recent);
+    let record = json!({"id":id,"scan_ms":began.elapsed().as_millis() as u64,
+        "labels":context.labels.len(),"scan_complete":context.complete});
+    crate::dictation::log::line(&format!("RichCleaner folders {record}"));
+    Ok(context)
 }
 pub fn start(app: &AppHandle) -> Result<(), String> {
     crate::dictation::log::init(&app.state::<AppState>().data_dir);
@@ -702,14 +685,14 @@ fn file_saved(
         db.save(&entry)?;
     }
     let root_check = Native::bundled()?.request(json!({"action":"validate-root","path":root}));
-    let choice = root_check.and_then(|_| folders(&root)).and_then(|labels| {
+    let choice = root_check.and_then(|_| folder_context(&db, &root, id)).and_then(|folders| {
         chooser
             .as_ref()
             .ok_or("The model connection is unavailable".to_string())?
             .choose(
                 &entry.path.file_name().unwrap_or_default().to_string_lossy(),
                 &entry.note,
-                &labels,
+                &folders,
             )
     });
     let h = host(app);
@@ -720,7 +703,7 @@ fn file_saved(
     if cancel.load(Ordering::Acquire) {
         return settle_canceled(app, id, &mut db, entry_id);
     }
-    let (folder, labels, inbox, reason) = folder_outcome(choice);
+    let choice = folder_outcome(choice);
     {
         let mut active = h.active.lock().map_err(|_| "Operation state unavailable")?;
         let a = active
@@ -733,13 +716,13 @@ fn file_saved(
         }
         a.stage = "filing".into();
     }
-    stage(app, id, "filing", json!({"folder":folder,"noteSaved":true}));
+    stage(app, id, "filing", json!({"folder":choice.folder(),"noteSaved":true}));
     let native = Native::bundled()?;
-    match cleaner::file(&mut db, &native, entry_id, &root, &folder, labels, inbox) {
+    match cleaner::file(&mut db, &native, entry_id, &root, &choice) {
         Ok(entry) => finish(
             app,
             id,
-            json!({"id":id,"stage":if entry.inbox{"inbox"}else{"filed"},"entry":entry,"noteSaved":true,"message":reason}),
+            json!({"id":id,"stage":if entry.inbox{"inbox"}else{"filed"},"entry":entry,"noteSaved":true,"message":entry.problem}),
         ),
         Err(error) => {
             cleaner::recover(&mut db, &native)?;
@@ -753,23 +736,15 @@ fn file_saved(
     }
     Ok(())
 }
-fn folder_outcome(
-    choice: Result<cleaner::choice::Choice, String>,
-) -> (String, Vec<String>, bool, String) {
-    match choice {
-        Ok(choice) if choice.clear && choice.folder != "Inbox" => {
-            let mut labels = choice.keywords;
-            labels.extend(choice.aliases);
-            (choice.folder, labels, false, String::new())
-        }
-        Ok(_) => (
-            "Inbox".into(),
-            vec![],
-            true,
-            "The note did not make the right folder clear".into(),
-        ),
-        Err(reason) => ("Inbox".into(), vec![], true, reason),
-    }
+fn folder_outcome(choice: Result<FilingChoice, String>) -> FilingChoice {
+    choice.unwrap_or_else(|error| {
+        let reason = match error.as_str() {
+            "writing-quota" => "The folder model reached its usage limit. Use File again when access returns".into(),
+            "Folder choice timed out" | "Classification deadline" => "The folder model did not answer in time. Use File again to retry".into(),
+            _ => error,
+        };
+        FilingChoice::Inbox { reason }
+    })
 }
 fn canceled(app: &AppHandle, id: &str) {
     let h = host(app);
@@ -1335,12 +1310,47 @@ mod tests {
         std::fs::create_dir_all(root.join(".hidden/Secret")).unwrap();
         std::os::unix::fs::symlink(root.join("Company"), root.join("Linked repository")).unwrap();
         std::fs::write(root.join("ordinary-file.txt"), "not a folder").unwrap();
-        let labels = folders(&root).unwrap();
-        assert!(labels.contains(&"Company/Board".into()));
-        assert!(labels.contains(&"Personal/Medical".into()));
-        assert!(!labels.iter().any(|label| label.contains("Secret")
+        let recent = [
+            root.join("Linked repository/Board/outside.txt"),
+            root.join("Personal/Medical/recent.txt"),
+            root.join("Company/Board/previous.txt"),
+            root.join("Personal/Medical/previous.txt"),
+            root.join("Vanished/file.txt"),
+        ];
+        let context = folders::scan(&root, &recent);
+        assert!(context.complete);
+        assert_eq!(&context.labels[..2], ["Personal/Medical", "Company/Board"]);
+        assert!(!context.labels.iter().any(|label| label.contains("Secret")
             || label.contains("Linked")
-            || label.contains("ordinary-file")));
+            || label.contains("ordinary-file")
+            || label.contains("Vanished")));
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn large_flat_root_retains_recent_folder_and_marks_context_incomplete() {
+        let root =
+            std::env::temp_dir().join(format!("richcleaner-folders-{}", cleaner::capture_id()));
+        std::fs::create_dir_all(root.join("Recent/Board")).unwrap();
+        for number in 0..1_001 {
+            std::fs::create_dir(root.join(format!("Category {number}"))).unwrap();
+        }
+        let context = folders::scan(&root, &[root.join("Recent/Board/file.txt")]);
+        assert_eq!(context.labels.first().unwrap(), "Recent/Board");
+        assert_eq!(context.labels.len(), 1_000);
+        assert!(!context.complete);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_symlink_in_a_filing_root_ancestor_cannot_expose_folder_labels() {
+        let fixture = std::env::temp_dir().join(format!("richcleaner-folders-{}", cleaner::capture_id()));
+        std::fs::create_dir_all(fixture.join("Outside/Library/Private")).unwrap();
+        std::os::unix::fs::symlink(fixture.join("Outside"), fixture.join("Redirected")).unwrap();
+        let root = fixture.join("Redirected/Library");
+        let context = folders::scan(&root, &[root.join("Private/report.pdf")]);
+        assert!(context.labels.is_empty());
+        assert!(!context.complete);
+        std::fs::remove_dir_all(fixture).unwrap();
     }
 }
