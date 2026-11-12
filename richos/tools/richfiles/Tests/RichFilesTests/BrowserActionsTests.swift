@@ -87,6 +87,26 @@ final class BrowserActionsTests: XCTestCase {
     }
 
     @MainActor
+    func testPinnedPasteRefusesAFolderReplacedAtTheSamePath() async throws {
+        try await withFixture { root, destination, board in
+            let source = try write("original", named: "Notes.txt", in: root)
+            let pinned = try BrowserTransferDestination(folder: destination)
+            let original = try FileReference(url: destination)
+            let moved = try FileOperations.rename(original, to: "Moved Destination").moved
+            _ = try FileOperations.createFolder(in: root, named: "Destination")
+            let actions = BrowserActions(pasteboard: board)
+            actions.copy([source], cut: true)
+
+            try await perform(actions) { actions.paste(into: destination, destination: pinned) }
+            XCTAssertEqual(try contents(source.url), "original")
+            XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: moved.url.path).isEmpty)
+            XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: destination.path).isEmpty)
+            XCTAssertEqual(actions.transfer?.succeeded, 0)
+            XCTAssertEqual(actions.cutURLs, [source.url])
+        }
+    }
+
+    @MainActor
     func testShelfCollectsAcrossFoldersAndKeepsUnmovedItems() async throws {
         try await withFixture { root, destination, board in
             let secondFolder = root.appendingPathComponent("Second", isDirectory: true)

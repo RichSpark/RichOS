@@ -109,14 +109,14 @@ final class BrowserActions: ObservableObject {
 
     var canScheduleTransfer: Bool { !settlingTransfer && (!busy || transfer?.running == true) }
 
-    func paste(into folder: URL, conflict: BrowserConflictPolicy = .skip) {
+    func paste(into folder: URL, conflict: BrowserConflictPolicy = .skip, destination: BrowserTransferDestination? = nil) {
         guard canScheduleTransfer else { return }
         refreshClipboard()
         if let clipboard {
             submitTransfer(BrowserTransferRequest(
                 sources: clipboard.sources.map(BrowserTransferSource.captured),
                 folder: folder, move: clipboard.cut, conflict: conflict,
-                clipboardGeneration: clipboard.cut ? clipboard.generation : nil, destination: nil
+                clipboardGeneration: clipboard.cut ? clipboard.generation : nil, destination: destination
             ))
             return
         }
@@ -134,7 +134,7 @@ final class BrowserActions: ObservableObject {
         }
         submitTransfer(BrowserTransferRequest(
             sources: urls.map(BrowserTransferSource.clipboard), folder: folder,
-            move: false, conflict: conflict, clipboardGeneration: nil, destination: nil
+            move: false, conflict: conflict, clipboardGeneration: nil, destination: destination
         ))
     }
 

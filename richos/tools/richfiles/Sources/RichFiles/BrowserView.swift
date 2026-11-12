@@ -45,6 +45,11 @@ struct BrowserView: View {
 
     private enum Field: Hashable { case address, search }
 
+    private struct DestinationRequest: Hashable {
+        let folder: URL
+        let disconnected: Bool
+    }
+
     init(model: BrowserModel, workspace: WindowWorkspace, side: BrowserPaneSide,
          actions: BrowserActions, openWindow: ((URL) -> Void)? = nil,
          acceptsKeyboard: @escaping () -> Bool, returnKeyboardFocus: @escaping @MainActor @Sendable () -> Void,
@@ -116,7 +121,9 @@ struct BrowserView: View {
             prefixTime = 0
         }
         .task(id: model.selected) { await captureSelection() }
-        .task(id: model.folder) { await captureDropDestination() }
+        .task(id: DestinationRequest(folder: model.folder, disconnected: model.isDisconnected)) {
+            await captureDropDestination()
+        }
         .sheet(item: $sheet, onDismiss: runPaletteChoice) { value in sheetContents(value) }
     }
 
@@ -327,14 +334,14 @@ struct BrowserView: View {
             Menu {
                 creationMenu
             } label: { Label("New", systemImage: "plus") }
-                .disabled(actions.busy || model.currentVolume?.isReadOnly == true)
+                .disabled(actions.busy || !writableFolder)
             control("Cut", "scissors") { _ = perform(.cut) }.disabled(model.selected.isEmpty || actions.busy)
             control("Copy", "doc.on.doc") { _ = perform(.copy) }.disabled(model.selected.isEmpty)
             Menu {
-                Button("Paste, Skip Conflicts") { actions.paste(into: model.folder) }
-                Button("Paste, Keep Both") { actions.paste(into: model.folder, conflict: .keepBoth) }
+                Button("Paste, Skip Conflicts") { paste() }
+                Button("Paste, Keep Both") { paste(.keepBoth) }
             } label: { Label("Paste", systemImage: "clipboard") }
-                .disabled(!actions.canScheduleTransfer || model.currentVolume?.isReadOnly == true)
+                .disabled(!actions.canScheduleTransfer || !writableFolder)
             control("Move to Trash", "trash") { _ = perform(.trash) }.disabled(model.selected.isEmpty || actions.busy)
             Menu {
                 folderMenu
@@ -392,7 +399,9 @@ struct BrowserView: View {
     private var itemPane: some View {
         ZStack(alignment: .top) {
             Group {
-                if model.viewMode == .columns {
+                if model.isDisconnected {
+                    emptyItems
+                } else if model.viewMode == .columns {
                     columnBrowser
                 } else if model.entries.isEmpty && !model.busy {
                     emptyItems
@@ -480,7 +489,7 @@ struct BrowserView: View {
     private var emptyItems: some View {
         VStack(spacing: 8) {
             Image(systemName: model.searchActive ? "magnifyingglass" : "folder").font(.system(size: 32))
-            Text(model.searchActive ? "No matching files" : "No items to show")
+            Text(model.isDisconnected ? "Volume disconnected" : (model.searchActive ? "No matching files" : "No items to show"))
             if !model.status.isEmpty { Text(model.status).font(.callout).multilineTextAlignment(.center) }
         }.foregroundStyle(.secondary).padding(24)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -805,12 +814,12 @@ struct BrowserView: View {
             Divider()
             Button("Cut") { withReferences(entries) { actions.copy($0, cut: true) } }
             Button("Copy") { withReferences(entries) { actions.copy($0) } }
-            Button("Paste") { actions.paste(into: model.folder) }
-                .disabled(!actions.canScheduleTransfer || model.currentVolume?.isReadOnly == true)
+            Button("Paste") { paste() }
+                .disabled(!actions.canScheduleTransfer || !writableFolder)
             Button("Create ZIP…") {
                 let destination = model.folder
                 withReferences(entries) { sheet = .createZip($0, destination) }
-            }.disabled(actions.busy)
+            }.disabled(actions.busy || !writableFolder)
             Button("Copy Path") { copyPaths(entries.map(\.url)) }
             Button("Add to File Shelf") { withReferences(entries) { actions.addToShelf($0) } }
             ShareLink(items: entries.map(\.url)) { Label("Share…", systemImage: "square.and.arrow.up") }
@@ -825,7 +834,7 @@ struct BrowserView: View {
                             }
                         }
                     }
-                }.disabled(actions.busy || model.currentVolume?.isReadOnly == true)
+                }.disabled(actions.busy || !writableFolder)
             }
             if model.searchActive {
                 Button("Open Containing Folder") { model.revealFile(first.url) }
@@ -871,15 +880,15 @@ struct BrowserView: View {
             Button("New Text File") { newItem(directory: false, extension: "txt") }
             Button("New Markdown File") { newItem(directory: false, extension: "md") }
             Button("New File from Template…") { chooseTemplate() }
-        }.disabled(actions.busy || model.currentVolume?.isReadOnly == true)
+        }.disabled(actions.busy || !writableFolder)
     }
 
     @ViewBuilder
     private var folderMenu: some View {
         creationMenu
         Divider()
-        Button("Paste") { actions.paste(into: model.folder) }
-                .disabled(!actions.canScheduleTransfer || model.currentVolume?.isReadOnly == true)
+        Button("Paste") { paste() }
+                .disabled(!actions.canScheduleTransfer || !writableFolder)
         Button("Copy Current Path") { copyPaths([model.folder]) }
         Button("Expand to Current Folder") { expandToCurrentFolder() }
         Button("Workspaces…") { sheet = .workspaces }
@@ -971,7 +980,7 @@ struct BrowserView: View {
             guard !entries.isEmpty else { return false }
             withReferences(entries) { actions.copy($0, cut: command == .cut) }
         case .copyPath: copyPaths(entries.isEmpty ? [model.folder] : entries.map(\.url))
-        case .paste: actions.paste(into: model.folder)
+        case .paste: paste()
         case .undo: actions.undo()
         case .redo: actions.redo()
         case .newFolder: newItem(directory: true, extension: nil)
@@ -1265,14 +1274,25 @@ struct BrowserView: View {
     }
 
     private func captureDropDestination() async {
+        dropDestination = nil
+        guard !model.isDisconnected else { return }
         let folder = model.folder
         let worker = Task.detached(priority: .utility) { try BrowserTransferDestination(folder: folder) }
         let result = await withTaskCancellationHandler { try? await worker.value } onCancel: { worker.cancel() }
         if !Task.isCancelled, model.folder == folder { dropDestination = result }
     }
 
+    private var writableFolder: Bool {
+        !model.isDisconnected && model.currentVolume?.isReadOnly != true
+    }
+
+    private func paste(_ conflict: BrowserConflictPolicy = .skip) {
+        guard writableFolder else { return }
+        actions.paste(into: model.folder, conflict: conflict, destination: currentDropDestination)
+    }
+
     private var currentDropDestination: BrowserTransferDestination? {
-        guard actions.canScheduleTransfer, model.currentVolume?.isReadOnly != true,
+        guard actions.canScheduleTransfer, writableFolder,
               let destination = dropDestination, destination.url.path == model.folder.path else { return nil }
         return destination
     }
@@ -1388,7 +1408,7 @@ struct BrowserView: View {
         case .connect: ConnectSheet()
         case .workspaces: WorkspacesSheet(window: workspace)
         case .fileShelf(let destination):
-            FileShelfSheet(actions: actions, destination: destination, readOnly: model.currentVolume?.isReadOnly == true)
+            FileShelfSheet(actions: actions, destination: destination, readOnly: !writableFolder)
         case .actionPalette:
             ActionPaletteSheet(commands: BrowserAction.all.filter { isAvailable($0.command) },
                                shortcutLabels: shortcutLabels()) { paletteChoice = $0 }
@@ -1415,8 +1435,8 @@ struct BrowserView: View {
         case .up: return model.folder.path != "/"
         case .undo: return actions.undoName != nil && !actions.busy
         case .redo: return actions.redoName != nil && !actions.busy
-        case .paste: return actions.canScheduleTransfer && model.currentVolume?.isReadOnly != true
-        case .newFolder: return !actions.busy && model.currentVolume?.isReadOnly != true
+        case .paste: return actions.canScheduleTransfer && writableFolder
+        case .newFolder: return !actions.busy && writableFolder
         case .closeTab: return model.tabs.count > 1 || hostOpenWindow == nil
         case .switchPane: return workspace.isSplit
         default: return true

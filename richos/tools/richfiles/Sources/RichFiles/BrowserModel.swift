@@ -90,6 +90,7 @@ final class BrowserModel: ObservableObject {
     @Published private(set) var busy = false
     @Published private(set) var scanReport: ScanReport?
     @Published private(set) var currentVolume: VolumeInfo?
+    @Published private(set) var isDisconnected = false
     @Published private(set) var volumes: [VolumeInfo] = []
     @Published private(set) var volumeStatus = ""
     @Published private(set) var tabs: [BrowserTab]
@@ -208,6 +209,7 @@ final class BrowserModel: ObservableObject {
     private var navigationID: UUID?
     private var volumeTask: Task<Void, Never>?
     private var volumeChanges: AnyCancellable?
+    private var disconnectedMounts: Set<String> = []
     private let defaults: UserDefaults
 
     init(start: URL, defaults: UserDefaults = RichFilesInstallation.preferences) {
@@ -237,7 +239,7 @@ final class BrowserModel: ObservableObject {
         volumeChanges = notifications.publisher(for: NSWorkspace.didMountNotification)
             .merge(with: notifications.publisher(for: NSWorkspace.didUnmountNotification))
             .receive(on: RunLoop.main)
-            .sink { [weak self] _ in self?.refreshVolumes() }
+            .sink { [weak self] notification in self?.volumeChanged(notification) }
         load()
         refreshVolumes()
     }
@@ -492,6 +494,20 @@ final class BrowserModel: ObservableObject {
         }
     }
 
+    private func volumeChanged(_ notification: Notification) {
+        if let path = (notification.userInfo?[NSWorkspace.volumeURLUserInfoKey] as? URL)?.standardizedFileURL.path
+            ?? (notification.userInfo?["NSDevicePath"] as? String),
+           path.hasPrefix("/"), path != "/" {
+            if notification.name == NSWorkspace.didUnmountNotification {
+                disconnectedMounts.insert(path)
+                if folder.path == path || folder.path.hasPrefix(path + "/") { load() }
+            } else {
+                disconnectedMounts.remove(path)
+            }
+        }
+        refreshVolumes()
+    }
+
     nonisolated static func folderChildren(
         of folder: URL, showHidden: Bool = false, revealing child: String? = nil
     ) async throws -> [FileEntry] {
@@ -641,16 +657,23 @@ final class BrowserModel: ObservableObject {
         scanTask?.cancel()
         let id = UUID()
         scanID = id
+        scanReport = nil
+        currentVolume = nil
+        entries = []
+        setSelection([])
+        isDisconnected = disconnectedMounts.contains { folder.path == $0 || folder.path.hasPrefix($0 + "/") }
+        if isDisconnected {
+            selectionToRestore.removeAll()
+            busy = false
+            status = "Reconnect the volume, then refresh this folder."
+            return
+        }
         busy = true
         if contentQuery != nil {
             status = "Searching file contents…"
         } else {
             status = searchActive ? "Searching…" : "Reading folder…"
         }
-        scanReport = nil
-        currentVolume = nil
-        entries = []
-        setSelection([])
         selectionToRestore = selection
         let location = folder
         let ordering = sort
