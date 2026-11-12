@@ -537,13 +537,15 @@ def pressure_window(candidates, need_bytes, idle_seconds, min_idle_seconds, now)
     return min_idle_seconds
 
 
-def reclaim_to_target(profiles, target, min_idle_seconds, spent=None, max_rounds=50):
+def reclaim_to_target(profiles, target, min_idle_seconds, spent=None, max_rounds=None):
     """Rule 3's top-up, run after the planned rows: while the volume holding `profiles` is below
     `target`, delete the oldest units of those profiles (never one read within min_idle_seconds,
     never under a lock a build holds) and READ THE VOLUME AGAIN. A unit's bytes are not what its
     deletion frees: Cargo keeps a hard link to a binary outside the unit, so the free space read
     from the volume, not the byte count, decides when to stop. Stops on target, when nothing
-    eligible is left, when a round deletes nothing, or when `spent()` says the budget is gone.
+    eligible is left, when a round deletes nothing, or when `spent()` says the budget is gone. No
+    round cap: every round deletes at least one unit or stops, so it ends when the units do
+    (review rv-20261112T133007Z-45bf4e10-69b6: hard links needed more than 50 rounds).
 
     Returns (results, free_before, free_after): results is [(profile, units, bytes, failures)]."""
     profiles = [p for p in profiles if os.path.isdir(p)]
@@ -552,7 +554,9 @@ def reclaim_to_target(profiles, target, min_idle_seconds, spent=None, max_rounds
         return [], None, None
     free_before = free = here[2]
     results = []
-    for _round in range(max_rounds):
+    rounds = 0
+    while max_rounds is None or rounds < max_rounds:
+        rounds += 1
         if free >= target or (spent is not None and spent()):
             break
         now = time.time()

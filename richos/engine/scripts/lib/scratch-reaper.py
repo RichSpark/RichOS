@@ -4813,6 +4813,13 @@ class Reaper(object):
                 lines.append("%s DELETED %s bytes=%d class=%s why=%s"
                              % (stamp, e.path, e.size, e.klass, e.why))
                 continue
+            if e.klass == "cargo-units" and getattr(e, "idle_seconds", None) is not None \
+                    and e.idle_seconds < self.cfg["build_cache_idle_hours"] * 3600:
+                # A FLOOR ROW (rule 3) IS NOT APPLIED HERE: the floor's top-up below reads the
+                # volume after everything else this run deletes and takes the oldest units only
+                # while it is still short (review rv-20261112T133007Z-45bf4e10-69b6: other
+                # cleanup had already put the volume on target, and these rows still went).
+                continue
             if e.klass == "cargo-units":
                 # UNITS, NOT THE DIRECTORY. Re-measured and deleted under Cargo's own
                 # lock (lib/build_caches.py), so a build that started since the plan
@@ -5000,13 +5007,13 @@ class Reaper(object):
                     deleted += 1
                     freed += got
                     lines.append("%s DELETED %s bytes=%d class=cargo-units units=%d why=the volume "
-                                 "was still under its target of %s after the planned rows, so its "
-                                 "oldest units went too" % (stamp, path, got, n, human(group["target"])))
+                                 "was under its target of %s after the rest of this run's cleanup, "
+                                 "so its oldest units went, oldest first" % (stamp, path, got, n, human(group["target"])))
                 for f in bad:
                     failures.append(f)
                     lines.append("%s FAILED %s class=cargo-units error=%s" % (stamp, path, f))
             if before is not None:
-                lines.append("%s FLOOR volume of %s: free %s after the planned rows, %s now, "
+                lines.append("%s FLOOR volume of %s: free %s after the rest of this run's cleanup, %s now, "
                              "target %s" % (stamp, group["profiles"][0], human(before),
                                             human(after), human(group["target"])))
         # THE DOCKER ARM RUNS AFTER THE FILESYSTEM SWEEP, NEVER BEFORE. The

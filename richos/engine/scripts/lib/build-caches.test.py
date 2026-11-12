@@ -33,6 +33,9 @@ every "it kept X" test:
        fixtures/floor_accounting.py), each on a volume one unit short: the app's sweep with the
        oldest unit at 50 h and at 100 h (past the usual 72 h), and the scheduled sweep with a
        hard-linked 100 h unit. Each ends on target, never by taking the unit read 1 h ago.
+  B9e  the reviewer's two edges (review rv-20261112T133007Z-45bf4e10-69b6, fixtures/floor_edges.py):
+       other cleanup in the same run already put the volume on target, so no floor unit goes;
+       and 64 hard-linked units take more than 50 rounds, and the re-read goes on to the target.
   B9w  --floor-check, which the app's disk watcher asks every check, says exit 1 and names the
        drive when a Cargo tree's volume is below its target, exit 0 and nothing when it is not
        (review rv-20261112T112825Z-7f381427-61d2: the cache drive filled, the app's disk was fine).
@@ -506,6 +509,45 @@ class BuildCaches(unittest.TestCase):
                 self.assertGreaterEqual(left, 0, "still %d bytes short of the target" % -left)
                 self.assertNotIn(("unit", old), bc.units(p))
                 self.assertIn(("unit", warm), bc.units(p))
+
+    def test_B9e_other_cleanup_on_the_volume_is_counted_before_any_floor_unit_goes(self):
+        p, (h3, h25, h1) = self.recent_profile("shared-build-v1", (3, 2.5, 1))
+        # On the same simulated volume (under_target counts the blocks under the Cargo root).
+        output = os.path.join(self.cargo, "connected-project", "target")
+        write(os.path.join(output, "unused"), b"x" * 1048576)
+        short = sum(u["bytes"] for k, u in bc.units(p).items() if k != ("unit", h1))
+        with self.under_target(short):
+            plan, r = self.plan()
+            self.assertEqual(plan[p].unit_keys, [("unit", h3), ("unit", h25)])
+            r.entries.append(reaper.Entry(output, "cargo-output", self.blocks(output), reaper.DELETE,
+                                          "unused Cargo output in a connected checkout"))
+            with contextlib.redirect_stdout(io.StringIO()):
+                _d, _f, failures = self.apply(r)
+        self.assertEqual(failures, [])
+        self.assertFalse(os.path.exists(output))
+        self.assertEqual(len(self.left(p)), 3, "the output's 1 MB covered the shortfall")
+
+    def test_B9e_the_re_read_goes_past_fifty_rounds_to_the_target(self):
+        # The reviewer's shape: 64 units whose library Cargo also linked at the top level (deleting
+        # one frees only its tiny fingerprint), one releasable 30 h unit, one warm 1 h unit.
+        p = os.path.join(self.cargo, "shared-build-v1", "debug")
+        keys = []
+        for i, age_h in enumerate([70 - i / 10.0 for i in range(64)] + [30, 1]):
+            h = "%016x" % (0x100 + i)
+            fp = os.path.join(p, ".fingerprint", "dep%d-%s" % (i, h), "lib-dep")
+            lib = os.path.join(p, "deps", "libdep%d-%s.rlib" % (i, h))
+            write(fp, b"f", age=age_h * 3600)
+            write(lib, b"x" * 262144, age=age_h * 3600)
+            age_tree(os.path.dirname(fp), age_h * 3600)
+            if i < 64:
+                os.link(lib, os.path.join(p, "libdep%d.rlib" % i))
+            keys.append(("unit", h))
+        write(os.path.join(p, ".cargo-lock"), b"")
+        with self.under_target(262144):
+            results, _before, after = reaper.build_caches().reclaim_to_target([p], 1024 ** 3, 2 * 3600)
+        self.assertGreaterEqual(after, 1024 ** 3, "still short after the re-read stopped")
+        self.assertGreater(sum(n for _p, n, _b, _f in results), 50, "it took more than 50 rounds")
+        self.assertIn(keys[65], bc.units(p))
 
     def test_B9w_the_floor_check_names_a_short_cache_drive_and_scans_nothing(self):
         cfg = {"cargo_target_roots": [self.cargo], "disk_primary_volume": "",
