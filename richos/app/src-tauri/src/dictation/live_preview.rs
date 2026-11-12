@@ -71,8 +71,7 @@ impl PreviewProgress {
 
     fn miss(&mut self, reason: &str) -> bool {
         match reason {
-            "stale_result" => {},
-            "decoder_deadline" if self.has_words => {},
+            "stale_result" | "decoder_deadline" => {},
             // A short recovery window can contain too little new speech to
             // yield useful words, especially on the first tick after a pause.
             "transcript_rejected" if self.has_words && !matches!(self.window, PreviewWindow::Full) => {},
@@ -206,13 +205,24 @@ mod tests {
     #[test]
     fn established_preview_skips_consecutive_deadlines() {
         let mut progress = PreviewProgress::default();
-        assert!(!progress.miss("decoder_deadline"));
         assert!(progress.miss("stale_result"));
         progress.published(RECOVERY_RESTORE_LIMIT);
         assert!(progress.miss("decoder_deadline"));
         assert!(progress.miss("decoder_deadline"));
         assert!(progress.miss("stale_result"));
         assert!(!progress.miss("scratch_unavailable"));
+    }
+
+    #[test]
+    fn first_deadline_retries_until_preview_is_ready() {
+        let mut progress = PreviewProgress::default();
+        assert!(progress.miss("decoder_deadline"), "a late first update must not end preview");
+        assert!(!progress.has_words);
+        assert!(matches!(progress.window, PreviewWindow::Short));
+        assert!(progress.miss("decoder_deadline"));
+        assert_eq!(preview_limits(progress.has_words, Duration::ZERO).1, FIRST_DECODER_LIMIT);
+        progress.published(RECOVERY_RESTORE_LIMIT);
+        assert!(progress.has_words);
     }
 
     #[test]
