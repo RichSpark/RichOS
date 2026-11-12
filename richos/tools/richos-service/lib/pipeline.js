@@ -34,7 +34,7 @@ import {
   CHANNEL_FILES,
 } from './normalize.js';
 import { transcribeSession, transcribeClips, transcribeStyled, whisperVersion } from './transcribe.js';
-import { advanceLiveTranscription, removeLiveTranscriptionScratch, supportsLiveTranscription } from './live-transcription.js';
+import { advanceLiveTranscription, decodeLongWindow, removeLiveTranscriptionScratch, supportsLiveTranscription } from './live-transcription.js';
 import { restyleChannel, restyleWarnings } from './restyle.js';
 import { mergeTranscript, renderMarkdown, verify, wordCount } from './merge.js';
 import { correct } from './correct.js';
@@ -205,9 +205,13 @@ export function runPipeline(sessionDir, opts = {}) {
     if (opts.liveCheckpoints && !opts.retranscribe && nativeLive) {
       try {
         const start = performance.now();
-        const result = advanceLiveTranscription(sessionDir, decodeOptions, { closed: true });
+        const result = advanceLiveTranscription(sessionDir, decodeOptions, {
+          closed: true,
+          recover: (cache, from, to, options) => decodeLongWindow(cache, channelPaths, from, to, options),
+        });
         log.info('live transcription finalized', {
           reused: result.reused, decoded: result.decoded, skippedSilentChannels: result.skippedSilentChannels,
+          longWindows: result.longWindows,
           elapsedMs: Math.round(performance.now() - start),
         });
         asr = result.asr;
