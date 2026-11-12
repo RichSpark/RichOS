@@ -87,10 +87,10 @@ impl PreviewProgress {
         true
     }
 
-    fn quiet(&mut self, captured: usize, full_window_start: usize) -> bool {
-        if self.has_words && captured.saturating_sub(self.last_speech_end) >= RECOVERY_WINDOW_SAMPLES {
-            self.window = PreviewWindow::Short;
-        }
+    fn quiet(&mut self, full_window_start: usize) -> bool {
+        // The first decode after a quiet tick should spend its budget on the
+        // resumed speech. Restore longer context only after two fast results.
+        self.window = PreviewWindow::Short;
         // Keep the displayed words until the original recent window would have
         // lost its last speech. Quiet ticks need no decoder work.
         self.last_speech_end <= full_window_start
@@ -112,6 +112,13 @@ const SPEECH_CHECK_OVERLAP: usize = SAMPLE_RATE as usize / 4;
 
 fn new_speech_audio(samples: &[f32], new_samples: usize) -> &[f32] {
     &samples[samples.len().saturating_sub(new_samples.saturating_add(SPEECH_CHECK_OVERLAP))..]
+}
+
+fn wait_for_snapshot(due: &mut Instant, now: Instant) -> Option<Duration> {
+    if now < *due { return Some(*due - now); }
+    // Set the next slot from this snapshot, with no old slot to catch up on.
+    *due = now + TICK_INTERVAL;
+    None
 }
 
 pub fn recent_text(text: &str) -> String {
@@ -138,15 +145,11 @@ pub fn run(recording: Arc<Mutex<Option<Recording>>>, data_dir: &Path, stop: &Ato
     let mut progress = PreviewProgress::default();
     loop {
         if stop.load(Ordering::Acquire) { return; }
-        if let Some(wait) = due.checked_duration_since(Instant::now()) {
+        let sampled_at = Instant::now();
+        if let Some(wait) = wait_for_snapshot(&mut due, sampled_at) {
             std::thread::park_timeout(wait);
             continue;
         }
-        let sampled_at = Instant::now();
-        // Keep two seconds between snapshots. If decoding uses that interval
-        // up, the next iteration takes fresh audio instead of waiting for
-        // another slot or catching up on an obsolete snapshot.
-        due = sampled_at + TICK_INTERVAL;
         let (samples, new_samples, captured, full_window_start) = {
             // No wait for a busy capture callback, and no decoding/files/UI while
             // holding this lock. There is only the latest window, never backlog.
@@ -161,7 +164,7 @@ pub fn run(recording: Arc<Mutex<Option<Recording>>>, data_dir: &Path, stop: &Ato
             (samples.to_vec(), speech_samples, len, len - full_window.len())
         };
         if !VoiceEvidence::measure(new_speech_audio(&samples, new_samples)).carried_speech() {
-            send(Update::Quiet { clear_words: progress.quiet(captured, full_window_start) });
+            send(Update::Quiet { clear_words: progress.quiet(full_window_start) });
             continue;
         }
         progress.last_speech_end = captured;
@@ -203,6 +206,20 @@ mod tests {
         assert_eq!(preview_limits(true, Duration::from_millis(100)),
             (Duration::from_millis(2850), Duration::from_millis(2700)));
         assert!(preview_limits(true, DISPLAY_MAX_AGE).1.is_zero());
+    }
+
+    #[test]
+    fn an_overrunning_preview_attempt_can_sample_fresh_audio_without_a_backlog() {
+        let first = Instant::now();
+        let mut due = first;
+        assert_eq!(wait_for_snapshot(&mut due, first), None);
+        assert_eq!(wait_for_snapshot(&mut due, first + Duration::from_millis(500)),
+            Some(Duration::from_millis(1500)), "a fast attempt must not cause another start");
+        let after_deadline = first + Duration::from_millis(2800);
+        assert_eq!(wait_for_snapshot(&mut due, after_deadline), None,
+            "the deadline used up the interval, so the next snapshot is due now");
+        assert_eq!(wait_for_snapshot(&mut due, after_deadline + Duration::from_millis(700)),
+            Some(Duration::from_millis(1300)), "there is no pending old snapshot to catch up on");
     }
 
     #[test]
@@ -248,16 +265,20 @@ mod tests {
     }
 
     #[test]
-    fn quiet_holds_the_caption_until_the_last_speech_leaves_the_window() {
+    fn the_first_quiet_tick_chooses_the_shorter_resume_window_and_keeps_the_caption() {
         let mut progress = PreviewProgress::default();
         let speech_end = 6 * SAMPLE_RATE as usize;
         progress.last_speech_end = speech_end;
         progress.published(RECOVERY_RESTORE_LIMIT);
-        let full_window = 2 * RECOVERY_WINDOW_SAMPLES;
-        let before_expiry = speech_end + full_window - 1;
-        assert!(!progress.quiet(before_expiry, before_expiry - full_window));
-        assert!(matches!(progress.window, PreviewWindow::Short));
-        assert!(progress.quiet(speech_end + full_window, speech_end));
+        let recent = vec![0.0; 2 * RECOVERY_WINDOW_SAMPLES];
+        assert_eq!(progress.window(&recent, RECOVERY_SPEECH_SAMPLES).0.len(), recent.len());
+        assert!(!progress.quiet(0), "a single quiet tick does not clear the existing caption");
+        assert_eq!(progress.window(&recent, RECOVERY_SPEECH_SAMPLES).0.len(), RECOVERY_WINDOW_SAMPLES);
+        assert!(!progress.quiet(speech_end - 1));
+        assert!(progress.quiet(speech_end));
+        let mut first = PreviewProgress::default();
+        first.quiet(0);
+        assert_eq!(first.window(&recent, RECOVERY_SPEECH_SAMPLES).0.len(), RECOVERY_WINDOW_SAMPLES);
     }
 
     #[test]
@@ -271,7 +292,7 @@ mod tests {
         assert!(matches!(progress.window, PreviewWindow::Full));
         assert!(progress.miss("transcript_rejected"), "a full window can also have no usable words");
         progress.last_speech_end = 6 * SAMPLE_RATE as usize;
-        assert!(!progress.quiet(progress.last_speech_end + RECOVERY_WINDOW_SAMPLES, 0));
+        assert!(!progress.quiet(0));
         assert!(progress.miss("transcript_rejected"));
         progress.published(RECOVERY_RESTORE_LIMIT);
         assert!(matches!(progress.window, PreviewWindow::ShortAfterFastResult));
@@ -379,9 +400,10 @@ mod tests {
             let (recording, flag, updates, data) = (recording.clone(), stop.clone(), updates.clone(), data.clone());
             std::thread::spawn(move || run(recording, &data, &flag, |update| {
                 let entry = match update {
-                    Update::Words { text, sampled_at, decode_ms, .. } => serde_json::json!({
+                    Update::Words { text, sampled_at, decode_ms, input_ms } => serde_json::json!({
                         "kind":"words", "at_ms":began.elapsed().as_millis(),
                         "age_ms":sampled_at.elapsed().as_millis(), "decode_ms":decode_ms,
+                        "input_ms":input_ms,
                         "characters":text.chars().count(), "words":text.split_whitespace().count()}),
                     Update::Quiet { clear_words } => serde_json::json!({"kind":"quiet","clear_words":clear_words,"at_ms":began.elapsed().as_millis()}),
                     Update::Missed { reason, input_ms } => serde_json::json!({"kind":"missed","reason":reason,"input_ms":input_ms,"at_ms":began.elapsed().as_millis()}),
