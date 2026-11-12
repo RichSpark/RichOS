@@ -362,7 +362,7 @@ async function main() {
       await scrub.fill("26000");
       await p.waitForFunction(() => {
         const audio = document.querySelector("#op-viewer audio");
-        return audio && !audio.paused && !audio.seeking && audio.currentTime >= 26 && audio.currentTime < 28;
+        return audio && !audio.paused && !audio.seeking && audio.currentTime >= 26.35 && audio.currentTime < 28;
       });
       const wave = await scrub.boundingBox();
       const position = { x: wave.width * 0.18, y: wave.height / 2 };
@@ -370,7 +370,8 @@ async function main() {
       const requested = Number(await scrub.inputValue()) / 1000;
       const playingFrom = (time) => {
         const audio = document.querySelector("#op-viewer audio");
-        return audio && !audio.paused && !audio.seeking && audio.currentTime >= time && audio.currentTime < time + 3;
+        // Observe decoded playback past the seek before issuing another seek on the same player.
+        return audio && !audio.paused && !audio.seeking && audio.currentTime >= time + 0.35 && audio.currentTime < time + 3;
       };
       await p.waitForFunction(playingFrom, requested);
       await player.evaluate((audio) => { audio.currentTime = 70; });
@@ -378,8 +379,11 @@ async function main() {
       assertEqual(Number(await scrub.inputValue()) / 1000, requested, "the focused slider still holds the clicked value");
       await scrub.click({ position });
       await p.waitForFunction(playingFrom, requested);
-      await player.evaluate((audio) => { audio.currentTime = audio.duration; });
-      await p.waitForFunction(() => document.querySelector("#op-viewer audio")?.ended);
+      await player.evaluate((audio) => { audio.currentTime = audio.duration - 0.8; });
+      await p.waitForFunction(() => {
+        const audio = document.querySelector("#op-viewer audio");
+        return audio && audio.ended && audio.paused && !audio.seeking;
+      });
       await local.click();
       await p.waitForFunction(playingFrom, 53.28);
       await p.locator("#op-close").click();

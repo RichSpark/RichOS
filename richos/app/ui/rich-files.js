@@ -214,15 +214,22 @@
     scrub.setAttribute("aria-label", "Seek in " + file.name);
     if (!youtube) {
       track.appendChild(scrub);
-      const seekFromScrub = () => seek(Number(scrub.value), scrub, false);
-      let pressedValue;
-      scrub.addEventListener("pointerdown", () => { pressedValue = scrub.value; });
-      scrub.addEventListener("pointercancel", () => { pressedValue = undefined; });
-      scrub.addEventListener("change", seekFromScrub);
-      // A pointer click at the current slider value does not emit change.
-      scrub.addEventListener("click", () => {
-        if (pressedValue === scrub.value) seekFromScrub();
-        pressedValue = undefined;
+      scrub.addEventListener("change", () => seek(Number(scrub.value), scrub, false));
+      // Native sliders can keep their old value on a track click in WebKit.
+      // Use the visible waveform's position for a mouse or trackpad, and the range for keys.
+      scrub.addEventListener("pointerdown", (event) => {
+        if (event.button !== 0) return;
+        event.preventDefault();
+        scrub.focus({ preventScroll: true });
+        scrub.setPointerCapture(event.pointerId);
+      });
+      scrub.addEventListener("pointerup", (event) => {
+        if (!scrub.hasPointerCapture(event.pointerId)) return;
+        const { left, width } = scrub.getBoundingClientRect();
+        const fraction = Math.max(0, Math.min(1, (event.clientX - left) / width));
+        const startMs = Math.round(fraction * (durationMs - 1));
+        scrub.value = String(startMs);
+        seek(startMs, scrub, false);
       });
     }
     let missing = file.exists === false;
