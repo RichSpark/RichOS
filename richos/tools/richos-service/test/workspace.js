@@ -3535,6 +3535,29 @@ function connectStubs(mock, extra = {}) {
   };
 }
 
+await atest('connect offers a manual address while browser launch fails and the consent listener is still waiting', async () => {
+  const f = wsFixture();
+  try {
+    let offeredAddress;
+    let openedAddress;
+    const result = await connect(f.deps(connectStubs(googleHttpMock(), {
+      openBrowser: async (url) => { openedAddress = url; return false; },
+      onBrowserUnavailable: (url) => {
+        assert.equal(f.record(), null, 'the fallback is offered before consent is exchanged');
+        offeredAddress = url;
+      },
+    })));
+    assert.equal(result.exitCode, 0);
+    assert.equal(offeredAddress, openedAddress);
+    const parsed = new URL(offeredAddress);
+    assert.equal(parsed.origin, 'https://accounts.google.com');
+    assert.equal(parsed.searchParams.get('redirect_uri'), DEFAULT_REDIRECT_URI);
+    assert.ok(f.record(), 'manual browser consent uses the same grant exchange');
+  } finally {
+    f.cleanup();
+  }
+});
+
 await atest('connect REFUSES before the CEO has done Step 5, and prints the file to create', async () => {
   const f = wsFixture({ config: false });
   try {
@@ -3937,6 +3960,7 @@ await atest('sync REFUSES to poll when the grant needs re-consent — loud, and 
     assert.equal(r.exitCode, 1);
     assert.equal(r.polled, false);
     assert.deepEqual(r.calendarRecovery, ['ceo@acme.com']);
+    assert.deepEqual(r.calendarInstances, [], 'expired accounts cannot use cached reminders');
     assert.match(f.text(), /AUTH —/);
     assert.equal(mock.calls.length, 0, 'not one request was made');
     const revoked = await sync(f.deps({
@@ -3945,11 +3969,13 @@ await atest('sync REFUSES to poll when the grant needs re-consent — loud, and 
       only: ['calendar'],
     }));
     assert.deepEqual(revoked.calendarRecovery, ['ceo@acme.com'], 'a revoked refresh token also needs recovery');
+    assert.deepEqual(revoked.calendarInstances, [], 'revoked accounts cannot use cached reminders');
     // PROBE: the same call inside the window polls.
     f.lines.length = 0;
     const healthy = await sync(f.deps({ http: googleHttpMock().http }));
     assert.equal(healthy.polled, true);
     assert.deepEqual(healthy.calendarRecovery, []);
+    assert.deepEqual(healthy.calendarInstances, [new GoogleCalendarAdapter({ accountId: 'ceo@acme.com' }).sourceInstanceId]);
   } finally { f.cleanup(); }
 });
 
@@ -3979,7 +4005,7 @@ await atest('desktop calendar sync reports the saved account with no grant as a 
     });
     assert.equal(signal, null);
     assert.equal(exitCode, 1);
-    assert.equal(out, JSON.stringify({ calendarRecovery: [accountId] }) + '\n');
+    assert.equal(out, JSON.stringify({ calendarRecovery: [accountId], calendarInstances: [] }) + '\n');
   } finally {
     fs.rmSync(zone, { recursive: true, force: true });
   }

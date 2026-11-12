@@ -359,6 +359,8 @@ fn rich_reads_this_companys_meeting_folder_and_no_other() {
     assert!(!told.contains(beta_meetings.to_str().unwrap()));
     assert!(told.contains("copyable subject") && told.contains("Draft only"));
     assert!(told.contains("meeting title and date") && told.contains("completed or withdrawn"));
+    assert!(told.contains("current_recording") && told.contains("mcp__richos_status__live_meeting_excerpt"));
+    assert!(told.contains("what might blindside") && told.contains("separate review draft"));
     // A lease the shell gave no corpus (the work back end) reads no meeting folder.
     let (_, roots)=configured(None);
     assert!(!roots.iter().any(|r|r.contains("evidence/meetings")));

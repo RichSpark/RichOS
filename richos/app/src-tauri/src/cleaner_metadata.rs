@@ -18,18 +18,21 @@ fn append(previous: &str, note: &str) -> String {
         format!("{previous}\n\n{note}")
     }
 }
-fn edited(previous: &str, e: &Entry) -> Result<String> {
-    if e.projection.mode == "embedded" || e.projection.mode == "older" {
-        if previous != e.projection.written {
+fn edited(current: String, e: &Entry) -> Result<Projection> {
+    let previous = if e.projection.mode == "embedded" || e.projection.mode == "older" {
+        if current != e.projection.written {
             return Err(
                 "Another app changed the note inside the file. Your correction is saved in RichOS"
                     .into(),
             );
         }
-        Ok(append(&e.projection.previous, &e.note))
+        // Keep the original description as the base for every later rewrite.
+        e.projection.previous.clone()
     } else {
-        Ok(append(previous, &e.note))
-    }
+        current
+    };
+    let written = append(&previous, &e.note);
+    Ok(projection(previous, written))
 }
 fn projection(previous: String, written: String) -> Projection {
     Projection {
@@ -73,15 +76,15 @@ pub fn write_package(path: &Path, e: &Entry, extension: &str) -> Result<Projecti
     let odf = matches!(extension, "odt" | "ods" | "odp");
     let name = if odf { "meta.xml" } else { "docProps/core.xml" };
     let mut changes = std::collections::HashMap::new();
-    let (previous, written) = if archive {
+    let projected = if archive {
         let previous = std::str::from_utf8(input.comment())
             .map_err(|_| "The existing ZIP comment has an unknown encoding")?
             .to_string();
-        let written = edited(&previous, e)?;
-        if written.len() > u16::MAX as usize {
+        let projected = edited(previous, e)?;
+        if projected.written.len() > u16::MAX as usize {
             return Err("The note exceeds this ZIP file's comment capacity".into());
         }
-        (previous, written)
+        projected
     } else {
         let mut xml = String::new();
         match input.by_name(name) {
@@ -98,8 +101,8 @@ pub fn write_package(path: &Path, e: &Entry, extension: &str) -> Result<Projecti
             xml=if odf{r#"<?xml version="1.0" encoding="UTF-8"?><office:document-meta xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:meta="urn:oasis:names:tc:opendocument:xmlns:meta:1.0" office:version="1.3"><office:meta></office:meta></office:document-meta>"#}else{r#"<?xml version="1.0" encoding="UTF-8"?><cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/"></cp:coreProperties>"#}.into();
         }
         let (_, previous) = document_note(&xml, None, odf)?;
-        let written = edited(&previous, e)?;
-        let (xml, _) = document_note(&xml, Some(&written), odf)?;
+        let projected = edited(previous, e)?;
+        let (xml, _) = document_note(&xml, Some(&projected.written), odf)?;
         let xml = add_document_keywords(&xml, &e.labels, odf)?;
         changes.insert(name.to_string(), xml);
         if !odf && !input.file_names().filter_map(|n| n.ok()).any(|n| n == name) {
@@ -132,7 +135,7 @@ pub fn write_package(path: &Path, e: &Entry, extension: &str) -> Result<Projecti
                 }
             }
         }
-        (previous, written)
+        projected
     };
     let output = path.with_extension(format!("{extension}.rewrite"));
     let run = || -> Result<()> {
@@ -145,7 +148,7 @@ pub fn write_package(path: &Path, e: &Entry, extension: &str) -> Result<Projecti
         );
         writer
             .set_raw_comment(if archive {
-                written.as_bytes().into()
+                projected.written.as_bytes().into()
             } else {
                 input.comment().into()
             })
@@ -187,7 +190,7 @@ pub fn write_package(path: &Path, e: &Entry, extension: &str) -> Result<Projecti
         std::fs::remove_file(&output).map_err(err)?;
     }
     result?;
-    Ok(projection(previous, written))
+    Ok(projected)
 }
 pub fn write_audio(path: &Path, e: &Entry, ext: &str) -> Result<Projection> {
     use lofty::{
@@ -200,7 +203,7 @@ pub fn write_audio(path: &Path, e: &Entry, ext: &str) -> Result<Projection> {
         .write(true)
         .open(path)
         .map_err(err)?;
-    let (previous, written) = match ext {
+    let projected = match ext {
         "mp3" => {
             use lofty::id3::v2::{CommentFrame, Frame};
             use lofty::TextEncoding;
@@ -212,30 +215,30 @@ pub fn write_audio(path: &Path, e: &Entry, ext: &str) -> Result<Projection> {
                 .find(|c| c.language == *b"eng" && c.description.is_empty())
                 .map(|c| c.content.to_string())
                 .unwrap_or_default();
-            let written = edited(&previous, e)?;
+            let projected = edited(previous, e)?;
             tag.insert(Frame::Comment(CommentFrame::new(
                 TextEncoding::UTF8,
                 *b"eng",
                 String::new(),
-                written.clone(),
+                projected.written.clone(),
             )));
             tag.save_to_path(path, WriteOptions::default())
                 .map_err(err)?;
-            (previous, written)
+            projected
         }
         "flac" => {
             let mut audio = lofty::flac::FlacFile::read_from(&mut file, ParseOptions::default())
                 .map_err(err)?;
             let mut tag = audio.vorbis_comments().cloned().unwrap_or_default();
             let previous = tag.get("DESCRIPTION").unwrap_or_default().to_string();
-            let written = edited(&previous, e)?;
+            let projected = edited(previous, e)?;
             let remaining: Vec<_> = tag
                 .get_all("DESCRIPTION")
                 .skip(1)
                 .map(str::to_string)
                 .collect();
             drop(tag.remove("DESCRIPTION").collect::<Vec<_>>());
-            tag.push("DESCRIPTION".into(), written.clone());
+            tag.push("DESCRIPTION".into(), projected.written.clone());
             for value in remaining {
                 tag.push("DESCRIPTION".into(), value);
             }
@@ -243,32 +246,32 @@ pub fn write_audio(path: &Path, e: &Entry, ext: &str) -> Result<Projection> {
             // Save the complete file's tags so a comment edit retains those pictures.
             audio.set_vorbis_comments(tag);
             audio.save_to_path(path, WriteOptions::default()).map_err(err)?;
-            (previous, written)
+            projected
         }
         "ogg" => {
             let audio = lofty::ogg::VorbisFile::read_from(&mut file, ParseOptions::default())
                 .map_err(err)?;
             let mut tag = audio.vorbis_comments().clone();
             let previous = tag.get("DESCRIPTION").unwrap_or_default().to_string();
-            let written = edited(&previous, e)?;
+            let projected = edited(previous, e)?;
             let remaining: Vec<_> = tag
                 .get_all("DESCRIPTION")
                 .skip(1)
                 .map(str::to_string)
                 .collect();
             drop(tag.remove("DESCRIPTION").collect::<Vec<_>>());
-            tag.push("DESCRIPTION".into(), written.clone());
+            tag.push("DESCRIPTION".into(), projected.written.clone());
             for value in remaining {
                 tag.push("DESCRIPTION".into(), value);
             }
             tag.save_to_path(path, WriteOptions::default())
                 .map_err(err)?;
-            (previous, written)
+            projected
         }
         _ => return Err("Unsupported audio type".into()),
     };
     File::open(path).map_err(err)?.sync_all().map_err(err)?;
-    Ok(projection(previous, written))
+    Ok(projected)
 }
 fn exif_command(resources: &Path) -> Result<std::process::Command> {
     let perl = resources.join("perl/bin/perl");
@@ -466,11 +469,11 @@ pub fn write(path: &Path, e: &Entry, resources: &Path) -> Result<Projection> {
         "svg" => {
             let xml = std::fs::read_to_string(path).map_err(err)?;
             let (_, previous) = svg_note(&xml, None)?;
-            let written = edited(&previous, e)?;
-            let (output, _) = svg_note(&xml, Some(&written))?;
+            let projected = edited(previous, e)?;
+            let (output, _) = svg_note(&xml, Some(&projected.written))?;
             let output = add_svg_keywords(&output, &e.labels)?;
             std::fs::write(path, output).map_err(err)?;
-            Ok(projection(previous, written))
+            Ok(projected)
         }
         _ => Ok(Projection {
             reason: "This file type has no supported in-file note field".into(),
@@ -1377,10 +1380,51 @@ mod tests {
             "Existing user comment".into(),
             "Earlier owned projection".into(),
         );
-        assert!(edited("Another app's replacement", &e).is_err());
+        assert!(edited("Another app's replacement".into(), &e).is_err());
         assert_eq!(
-            edited("Earlier owned projection", &e).unwrap(),
+            edited("Earlier owned projection".into(), &e).unwrap().written,
             "Existing user comment\n\nCorrected note"
         );
+    }
+
+    #[test]
+    fn repeated_svg_note_rewrites_keep_the_original_description_once() {
+        let path = std::env::temp_dir().join(format!(
+            "cleaner-svg-note-{}.svg",
+            richos_core::cleaner::capture_id()
+        ));
+        let source = r#"<svg xmlns="http://www.w3.org/2000/svg"><rect width="32" height="32"/></svg>"#;
+        let description = "Original description";
+        let (source, _) = svg_note(source, Some(description)).unwrap();
+        std::fs::write(&path, source).unwrap();
+        let mut entry = Entry::new(
+            path.clone(),
+            richos_core::cleaner::Identity {
+                volume: 1,
+                object: 2,
+                size: 1,
+                modified: "1".into(),
+                changed: "1".into(),
+                bookmark: String::new(),
+            },
+            "First note".into(),
+        )
+        .unwrap();
+        for (mode, note) in [
+            ("local", "First note"),
+            ("embedded", "First note\n\nSecond note"),
+            ("older", "First note\n\nSecond note\n\nThird note"),
+        ] {
+            entry.projection.mode = mode.into();
+            entry.note = note.into();
+            entry.projection = write(&path, &entry, Path::new("")).unwrap();
+            verify_note(&path, &entry.projection, "svg").unwrap();
+            assert_eq!(
+                read_note(&path, "svg").unwrap(),
+                format!("{description}\n\n{note}")
+            );
+            assert_eq!(entry.projection.previous, description);
+        }
+        std::fs::remove_file(path).unwrap();
     }
 }

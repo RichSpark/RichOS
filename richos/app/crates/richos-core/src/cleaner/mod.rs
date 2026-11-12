@@ -10,6 +10,7 @@ pub type Result<T> = std::result::Result<T, String>;
 pub fn capture_id() -> String {
     uuid::Uuid::new_v4().to_string()
 }
+pub const MAX_BATCH_FILES: usize = 20;
 pub const EXTENSIONS: &[&str] = &[
     "png", "jpg", "jpeg", "tif", "tiff", "webp", "heic", "heif", "avif", "psd", "pdf", "docx",
     "xlsx", "pptx", "odt", "ods", "odp", "svg", "mp3", "flac", "ogg", "m4a", "mp4", "m4v", "mov",
@@ -77,6 +78,8 @@ pub struct Staged {
 #[serde(rename_all = "camelCase")]
 pub struct Entry {
     pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub batch_id: Option<String>,
     pub original: PathBuf,
     pub path: PathBuf,
     pub identity: Identity,
@@ -100,16 +103,10 @@ pub struct Entry {
 }
 impl Entry {
     pub fn new(path: PathBuf, identity: Identity, note: String) -> Result<Self> {
-        if note.trim().is_empty()
-            || note.len() > 32 * 1024
-            || note
-                .chars()
-                .any(|c| c.is_control() && !matches!(c, '\n' | '\r' | '\t'))
-        {
-            return Err("The note is empty or too long".into());
-        }
+        validate_note(&note)?;
         Ok(Self {
             id: uuid::Uuid::new_v4().to_string(),
+            batch_id: None,
             original: path.clone(),
             path,
             identity,
@@ -129,6 +126,31 @@ impl Entry {
             pending_sort: false,
         })
     }
+
+    pub fn check_batch_eligibility(&self) -> Result<()> {
+        if !matches!(self.phase, Phase::Draft | Phase::Filed)
+            || self.staged.is_some()
+            || self.intended.is_some()
+            || self.intended_folder.is_some()
+            || self.return_phase.is_some()
+            || self.pending_sort
+        {
+            return Err("A selected file has unfinished RichCleaner work. Open Recent files to finish or recover it, then try again".into());
+        }
+        Ok(())
+    }
+}
+
+fn validate_note(note: &str) -> Result<()> {
+    if note.trim().is_empty()
+        || note.len() > 32 * 1024
+        || note
+            .chars()
+            .any(|c| c.is_control() && !matches!(c, '\n' | '\r' | '\t'))
+    {
+        return Err("The note is empty or too long".into());
+    }
+    Ok(())
 }
 pub fn folder_parts(value: &str) -> Result<Vec<String>> {
     if value.is_empty() || value.len() > 512 {
@@ -196,7 +218,7 @@ pub fn file(
     } else {
         fs.destination(root, &parts, e.path.file_name().ok_or("Missing filename")?)?
     };
-    if !e.pending_sort {
+    if !e.pending_sort && (!e.inbox || e.undo.is_none()) {
         e.undo = Some(e.path.clone());
     }
     e.intended = Some(destination);
@@ -335,14 +357,7 @@ pub fn cancel_sort(db: &mut Catalog, id: &str) -> Result<Entry> {
     Ok(entry)
 }
 pub fn edit(db: &mut Catalog, fs: &impl Files, id: &str, note: String) -> Result<Entry> {
-    if note.trim().is_empty()
-        || note.len() > 32 * 1024
-        || note
-            .chars()
-            .any(|c| c.is_control() && !matches!(c, '\n' | '\r' | '\t'))
-    {
-        return Err("The note is empty or too long".into());
-    }
+    validate_note(&note)?;
     let mut e = db.get(id)?;
     if !matches!(e.phase, Phase::Draft | Phase::Filed) {
         return Err("Recover this file operation before editing its note".into());
@@ -444,7 +459,11 @@ pub fn undo(db: &mut Catalog, fs: &impl Files, id: &str) -> Result<Entry> {
     db.save(&e)?;
     Ok(e)
 }
-fn recover_entries(db: &mut Catalog, fs: &impl Files, entries: Vec<Entry>) -> Result<()> {
+fn recover_entries(
+    db: &mut Catalog,
+    fs: &impl Files,
+    entries: impl IntoIterator<Item = Entry>,
+) -> Result<()> {
     for mut e in entries {
         if matches!(e.phase, Phase::Filed | Phase::Draft) && e.intended.is_none() {
             if let Some(staged) = e.staged.take() {
@@ -501,19 +520,25 @@ fn recover_entries(db: &mut Catalog, fs: &impl Files, entries: Vec<Entry>) -> Re
                 if let Some(staged) = staged {
                     e.projection = staged.projection.clone();
                 }
+                let failed_inbox_store = e.pending_sort
+                    && !e.inbox
+                    && e.phase == Phase::Moving
+                    && e.return_phase.is_none();
                 e.identity = actual;
                 e.phase = e.return_phase.take().unwrap_or(Phase::Draft);
                 e.intended = None;
                 e.intended_folder = None;
                 e.problem = Some("Your note is saved. The file was not filed".into());
                 if e.pending_sort {
-                    e.phase = Phase::Filed;
-                    e.folder = "Inbox".into();
-                    e.inbox = true;
                     e.pending_sort = false;
-                    e.problem = Some(
-                        "Sorting was interrupted. Your file is in Inbox; use File again".into(),
-                    );
+                    if e.inbox {
+                        e.phase = Phase::Filed;
+                        e.problem = Some(
+                            "Sorting was interrupted. Your file is in Inbox; use File again".into(),
+                        );
+                    } else if failed_inbox_store {
+                        e.undo = None;
+                    }
                 }
                 db.save(&e)?;
                 if let Some(staged) = e.staged.take() {
@@ -532,12 +557,33 @@ fn recover_entries(db: &mut Catalog, fs: &impl Files, entries: Vec<Entry>) -> Re
 pub fn recover(db: &mut Catalog, fs: &impl Files) -> Result<()> {
     let pending = db.pending()?;
     recover_entries(db, fs, pending)?;
-    for mut e in db.interrupted_inbox()? {
-        e.pending_sort = false;
-        e.problem=Some("Sorting was interrupted. Your file is stored in Inbox; use File again to finish sorting".into());
-        db.save(&e)?;
+    for e in db.interrupted_inbox()? {
+        settle_interrupted_inbox(db, e)?;
     }
     Ok(())
+}
+
+/// Reconcile a failed mutation without settling other active files in its batch.
+pub fn recover_entry(db: &mut Catalog, fs: &impl Files, id: &str) -> Result<()> {
+    let mut e = db.get(id)?;
+    if !matches!(e.phase, Phase::Filed | Phase::Draft) || e.staged.is_some() {
+        recover_entries(db, fs, [e])?;
+        e = db.get(id)?;
+    }
+    if e.phase == Phase::Filed && e.pending_sort {
+        settle_interrupted_inbox(db, e)?;
+    }
+    Ok(())
+}
+
+fn settle_interrupted_inbox(db: &mut Catalog, mut e: Entry) -> Result<()> {
+    e.pending_sort = false;
+    e.problem = Some(if e.inbox {
+        "Sorting was interrupted. Your file is stored in Inbox; use File again to finish sorting"
+    } else {
+        "Sorting was interrupted. Your file is at its saved location; use File again to sort it"
+    }.into());
+    db.save(&e)
 }
 
 #[cfg(test)]
@@ -607,6 +653,60 @@ mod tests {
         assert_eq!(db.search("", 0, 65536).unwrap().total, 0);
     }
     #[test]
+    fn batch_note_and_search_rows_roll_back_on_duplicate_unsettled_or_oversized_member() {
+        let f = Fixture::new();
+        let mut db = f.db();
+        let mut prior = entry("/Library/prior.png", "keep prior note", 1);
+        prior.phase = Phase::Filed;
+        db.save(&prior).unwrap();
+        let long = entry("long.png", &"A".repeat(32 * 1024), 2);
+        db.save(&long).unwrap();
+        let mut pending = entry("moving.png", "keep the moving note", 3);
+        pending.phase = Phase::Moving;
+        db.save(&pending).unwrap();
+        let watcher = Catalog::watch_filed_context(&f.0.join("library.sqlite"));
+        let selected = (PathBuf::from("/Desktop/prior.png"), prior.identity.clone());
+        let fresh = entry("/Desktop/model.png", "unused fixture note", 4);
+        let new_file = (fresh.path, fresh.identity);
+
+        for rejected in [selected.clone(), (long.path, long.identity), (pending.path, pending.identity)] {
+            assert!(db
+                .enroll_batch(
+                    &capture_id(),
+                    vec![selected.clone(), new_file.clone(), rejected],
+                    "acquisition review",
+                )
+                .is_err());
+            assert_eq!(db.search("acquisition", 0, 65536).unwrap().total, 0);
+            assert!(db.by_identity(1, 4).unwrap().is_none());
+            let unchanged = db.get(&prior.id).unwrap();
+            assert_eq!(unchanged.note, prior.note);
+            assert_eq!(unchanged.path, prior.path);
+            assert_eq!(unchanged.phase, Phase::Filed);
+            assert!(watcher.try_recv().is_err());
+        }
+
+        let batch_id = capture_id();
+        let files = vec![selected, new_file];
+        let enrolled = db
+            .enroll_batch(&batch_id, files.clone(), "acquisition review")
+            .unwrap();
+        assert!(db.enroll_batch(&batch_id, files, "acquisition review").is_err());
+        assert_eq!(watcher.try_recv().unwrap(), [prior.path]);
+        drop(db);
+        let db = f.db();
+        assert_eq!(db.search("acquisition", 0, 65536).unwrap().total, 2);
+        assert_eq!(enrolled[0].id, prior.id);
+        assert_eq!(enrolled[0].note, "keep prior note\n\nacquisition review");
+        assert_eq!(enrolled[1].note, "acquisition review");
+        for e in enrolled {
+            let saved = db.get(&e.id).unwrap();
+            assert_eq!(saved.batch_id.as_deref(), Some(batch_id.as_str()));
+            assert_eq!(saved.note, e.note);
+            assert_eq!(saved.phase, Phase::Draft);
+        }
+    }
+    #[test]
     fn corruption_is_not_replaced_and_newer_schema_is_not_downgraded() {
         let f = Fixture::new();
         let path = f.0.join("broken.sqlite");
@@ -618,6 +718,77 @@ mod tests {
         db.db_for_test_version(99);
         drop(db);
         assert!(Catalog::open(&f.0.join("library.sqlite")).is_err());
+    }
+    #[test]
+    fn v2_catalogue_keeps_existing_notes_search_rows_and_cards() {
+        let f = Fixture::new();
+        let mut db = f.db();
+        let prior = entry("ordinary.txt", "existing note", 2);
+        db.save(&prior).unwrap();
+        let card = db.show("company", "chat", "turn", &prior.id).unwrap();
+        drop(db);
+        rusqlite::Connection::open(f.0.join("library.sqlite"))
+            .unwrap()
+            .execute_batch(
+                "DROP TABLE cleaner_batch_members;
+                 DROP TABLE cleaner_batches;
+                 PRAGMA user_version=2;",
+            )
+            .unwrap();
+
+        let db = f.db();
+        let saved = db.get(&prior.id).unwrap();
+        assert_eq!(saved.note, "existing note");
+        assert_eq!(saved.batch_id, None);
+        assert_eq!(db.search("existing", 0, 65536).unwrap().total, 1);
+        assert_eq!(db.cards().unwrap()[0].id, card);
+    }
+    #[test]
+    fn v3_catalogue_recovers_latest_batch_memberships_without_inventing_a_capture_time() {
+        let f = Fixture::new();
+        let mut db = f.db();
+        let batch_id = capture_id();
+        let mut first = entry("slides.pdf", "Acquisition review", 1);
+        first.batch_id = Some(batch_id.clone());
+        db.save(&first).unwrap();
+        let mut second = entry("model.xlsx", "Acquisition review", 2);
+        second.batch_id = Some(batch_id.clone());
+        db.save(&second).unwrap();
+        let card = db.show("company", "chat", "turn", &first.id).unwrap();
+        drop(db);
+        let path = f.0.join("library.sqlite");
+        rusqlite::Connection::open(&path)
+            .unwrap()
+            .execute_batch(
+                "DROP TABLE cleaner_batch_members;
+                 DROP TABLE cleaner_batches;
+                 CREATE INDEX files_batch ON files(json_extract(record,'$.batchId'))
+                 WHERE json_extract(record,'$.batchId') IS NOT NULL;
+                 PRAGMA user_version=3;",
+            )
+            .unwrap();
+
+        let mut db = f.db();
+        let (batches, total) = db.batch_page(&first.id, 0).unwrap();
+        assert_eq!(total, 1);
+        assert_eq!(batches[0].id, batch_id);
+        assert_eq!(batches[0].note.as_deref(), Some("Acquisition review"));
+        assert_eq!(batches[0].created_at, None);
+        assert_eq!(batches[0].file_count, 2);
+        assert_eq!(db.cards().unwrap()[0].id, card);
+        assert_eq!(db.search("Acquisition", 0, 65536).unwrap().total, 2);
+        let shown = db.show_batch("company", "chat", "turn", &first.id, None).unwrap();
+        assert!(shown.contains(&(first.id.clone(), card)));
+        assert!(shown.iter().any(|(id, _)| id == &second.id));
+
+        db.remove(&first.id).unwrap();
+        assert_eq!(db.batch_page(&second.id, 0).unwrap().0[0].file_count, 1);
+        db.remove(&second.id).unwrap();
+        let headers: u64 = rusqlite::Connection::open(&path)
+            .unwrap()
+            .query_row("SELECT count(*) FROM cleaner_batches", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(headers, 0);
     }
     #[test]
     fn folder_output_cannot_escape_or_create_sentence_trees() {
@@ -824,6 +995,70 @@ mod tests {
         }
     }
     #[test]
+    fn an_undone_original_can_join_a_batch_and_keep_its_embedded_note_history() {
+        let f = Fixture::new();
+        let mut db = f.db();
+        let desktop = f.0.join("Desktop");
+        let folder = f.0.join("Library");
+        std::fs::create_dir(&desktop).unwrap();
+        let source = desktop.join("board.pdf");
+        let other = desktop.join("model.xlsx");
+        std::fs::write(&source, "board document").unwrap();
+        std::fs::write(&other, "financial model").unwrap();
+        let mut fs = DiskFiles {
+            db: f.0.join("library.sqlite"),
+            id: String::new(),
+            interrupt: false,
+        };
+        let old = Entry::new(
+            source.clone(),
+            fs.inspect(&source).unwrap(),
+            "Board's initial notes".into(),
+        )
+        .unwrap();
+        fs.id = old.id.clone();
+        db.save(&old).unwrap();
+        let mut filed = file(&mut db, &fs, &old.id, &folder, "Board", vec![], false).unwrap();
+        filed.projection = Projection {
+            mode: "embedded".into(),
+            reason: String::new(),
+            previous: "Existing metadata".into(),
+            written: "Existing metadata\n\nBoard's initial notes".into(),
+        };
+        db.save(&filed).unwrap();
+        std::fs::write(&source, "new file at the original path").unwrap();
+        let restored = undo(&mut db, &fs, &old.id).unwrap();
+        assert_ne!(restored.path, source);
+        let files = vec![
+            (restored.path.clone(), fs.inspect(&restored.path).unwrap()),
+            (other.clone(), fs.inspect(&other).unwrap()),
+        ];
+        let first = db
+            .enroll_batch(&capture_id(), files.clone(), "Friday's acquisition review")
+            .unwrap();
+        let latest_batch = capture_id();
+        let repeated = db
+            .enroll_batch(&latest_batch, files, "Friday's acquisition review")
+            .unwrap();
+        let now = &repeated[0];
+        assert_eq!(now.id, old.id);
+        assert_eq!(now.original, source);
+        assert_eq!(now.path, restored.path);
+        assert_eq!(now.identity, fs.inspect(&restored.path).unwrap());
+        assert_eq!(now.phase, Phase::Draft);
+        assert_eq!(now.batch_id.as_deref(), Some(latest_batch.as_str()));
+        assert!(now.undo.is_none());
+        assert_eq!(now.note, "Board's initial notes\n\nFriday's acquisition review");
+        assert_eq!(now.note, first[0].note);
+        assert_eq!(now.projection.mode, "older");
+        assert_eq!(now.projection.previous, filed.projection.previous);
+        assert_eq!(now.projection.written, filed.projection.written);
+        assert_eq!(repeated[1].id, first[1].id);
+        assert_eq!(repeated[1].note, "Friday's acquisition review");
+        assert_eq!(std::fs::read_to_string(&restored.path).unwrap(), "board document");
+        assert_eq!(std::fs::read_to_string(&source).unwrap(), "new file at the original path");
+    }
+    #[test]
     fn inbox_first_is_searchable_then_sorted_and_undo_still_targets_desktop() {
         let f = Fixture::new();
         let desktop = f.0.join("Desktop");
@@ -884,6 +1119,14 @@ mod tests {
         assert_eq!(settled.path, pending.path);
         assert_eq!(settled.undo, Some(restored.path));
         assert_eq!(settled.note, "A correction while stored in Inbox");
+        let before_retry = settled.undo.clone();
+        drop(db);
+        let mut db = f.db();
+        let retried = file(&mut db, &fs, &e.id, &root, "Home/Kitchen", vec![], false).unwrap();
+        assert_eq!(retried.undo, before_retry);
+        assert!(retried.path.starts_with(root.join("Home/Kitchen")));
+        let undone = undo(&mut db, &fs, &e.id).unwrap();
+        assert_eq!(Some(undone.path), before_retry);
     }
     #[test]
     fn interrupted_inbox_move_recovers_its_original_and_settles_sorting_honestly() {
@@ -916,6 +1159,83 @@ mod tests {
         assert_eq!(saved.note, e.note);
         assert_eq!(std::fs::read(saved.path).unwrap(), b"one original");
         assert!(!saved.pending_sort);
+    }
+    #[test]
+    fn recovering_one_batch_file_keeps_its_sibling_pending_sort() {
+        let f = Fixture::new();
+        let mut db = f.db();
+        let files = [
+            entry("/Desktop/first.txt", "shared note", 1),
+            entry("/Desktop/second.txt", "shared note", 2),
+        ]
+        .into_iter()
+        .map(|e| (e.path, e.identity))
+        .collect();
+        let mut entries = db.enroll_batch(&capture_id(), files, "shared note").unwrap();
+        for e in &mut entries {
+            e.undo = Some(e.path.clone());
+            e.path = Path::new("/Library/Inbox").join(e.path.file_name().unwrap());
+            e.folder = "Inbox".into();
+            e.phase = Phase::Filed;
+            e.inbox = true;
+            e.pending_sort = true;
+            db.save(e).unwrap();
+        }
+        let fs = Moved {
+            path: entries[0].path.clone(),
+            identity: entries[0].identity.clone(),
+        };
+        recover_entry(&mut db, &fs, &entries[0].id).unwrap();
+        let recovered = db.get(&entries[0].id).unwrap();
+        assert!(!recovered.pending_sort);
+        assert_eq!(recovered.path, entries[0].path);
+        assert_eq!(recovered.undo, entries[0].undo);
+        assert!(recovered.problem.is_some());
+        assert!(db.get(&entries[1].id).unwrap().pending_sort);
+    }
+    #[test]
+    fn failed_initial_inbox_move_leaves_a_draft_at_the_source() {
+        let f = Fixture::new();
+        let mut db = f.db();
+        let mut saved = entry("/Desktop/first.txt", "shared note", 1);
+        saved.undo = Some(saved.path.clone());
+        saved.intended = Some(PathBuf::from("/Library/Inbox/first.txt"));
+        saved.intended_folder = Some("Inbox".into());
+        saved.phase = Phase::Moving;
+        saved.pending_sort = true;
+        db.save(&saved).unwrap();
+        let fs = Moved { path: saved.path.clone(), identity: saved.identity.clone() };
+        recover_entry(&mut db, &fs, &saved.id).unwrap();
+        let recovered = db.get(&saved.id).unwrap();
+        assert_eq!(recovered.path, saved.path);
+        assert_eq!(recovered.phase, Phase::Draft);
+        assert_eq!(recovered.note, saved.note);
+        assert!(!recovered.inbox);
+        assert!(!recovered.pending_sort);
+        assert!(recovered.undo.is_none());
+    }
+    #[test]
+    fn failed_undo_keeps_the_desktop_restore_path_after_an_external_move() {
+        let f = Fixture::new();
+        let mut db = f.db();
+        let mut saved = entry("/Library/Board/first.txt", "shared note", 1);
+        let desktop = PathBuf::from("/Desktop/first.txt");
+        saved.folder = "Board".into();
+        saved.undo = Some(desktop.clone());
+        saved.intended = Some(desktop.clone());
+        saved.phase = Phase::Restoring;
+        saved.return_phase = Some(Phase::Filed);
+        saved.pending_sort = true;
+        db.save(&saved).unwrap();
+        let fs = Moved { path: saved.path.clone(), identity: saved.identity.clone() };
+        recover_entry(&mut db, &fs, &saved.id).unwrap();
+        let recovered = db.get(&saved.id).unwrap();
+        assert_eq!(recovered.phase, Phase::Filed);
+        assert_eq!(recovered.path, saved.path);
+        assert_eq!(recovered.folder, "Board");
+        assert_eq!(recovered.undo, Some(desktop));
+        assert!(!recovered.inbox);
+        assert!(!recovered.pending_sort);
     }
     #[test]
     fn library_cards_reference_the_catalog_and_disappear_without_deleting_originals() {

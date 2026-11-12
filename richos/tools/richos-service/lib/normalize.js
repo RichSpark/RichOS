@@ -196,6 +196,7 @@ export function parseChannels(ffmpegStderr) {
  */
 export function normalizeSession(sessionDir, opts = {}) {
   const ffmpeg = ffmpegBin();
+  const flags = ['-y', '-v', 'error'];
   const parts = listAudioParts(sessionDir);
   if (parts.length === 0) throw new Error('normalize: no audio parts to normalize');
   const workDir = privateDirectory(opts.workDir || sessionDir);
@@ -213,7 +214,7 @@ export function normalizeSession(sessionDir, opts = {}) {
     );
     concatInput = path.join(workDir, '_concat.webm');
     withPrivateOutputs([concatInput], ([output]) =>
-      execFileSync(ffmpeg, ['-y', '-f', 'concat', '-safe', '0', '-i', listFile, '-c', 'copy', output]));
+      execFileSync(ffmpeg, [...flags, '-f', 'concat', '-safe', '0', '-i', listFile, '-c', 'copy', output]));
     cleanup.push(listFile, concatInput);
   }
 
@@ -226,7 +227,7 @@ export function normalizeSession(sessionDir, opts = {}) {
     if (stereo) {
       // channelsplit gives free me-vs-them separation with no diarization model (§3.1).
       execFileSync(ffmpeg, [
-        '-y', '-i', concatInput,
+        ...flags, '-i', concatInput,
         '-filter_complex', 'channelsplit=channel_layout=stereo[L][R]',
         '-map', '[L]', '-ac', '1', '-ar', String(SAMPLE_RATE), meOutput,
         '-map', '[R]', '-ac', '1', '-ar', String(SAMPLE_RATE), othersOutput,
@@ -234,9 +235,9 @@ export function normalizeSession(sessionDir, opts = {}) {
     } else {
       // In-person / mono fallback (§3.1): both voices on LEFT; the 2-channel split degrades to
       // single-channel gracefully. `others.wav` is a silent placeholder so downstream stays uniform.
-      execFileSync(ffmpeg, ['-y', '-i', concatInput, '-ac', '1', '-ar', String(SAMPLE_RATE), meOutput]);
+      execFileSync(ffmpeg, [...flags, '-i', concatInput, '-ac', '1', '-ar', String(SAMPLE_RATE), meOutput]);
       execFileSync(ffmpeg, [
-        '-y', '-f', 'lavfi', '-t', '0.1', '-i', `anullsrc=r=${SAMPLE_RATE}:cl=mono`, othersOutput,
+        ...flags, '-f', 'lavfi', '-t', '0.1', '-i', `anullsrc=r=${SAMPLE_RATE}:cl=mono`, othersOutput,
       ]);
     }
   });
