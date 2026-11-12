@@ -198,19 +198,41 @@ pub fn pieces(stretches: &[Range<usize>], probabilities: &[f32], samples: usize)
     }).collect()
 }
 
-/// **Where a full window is cut**, as a sample in `from..to`: the middle of the last pause
-/// there, or with no pause there, the start of the least speech-like frame.
+/// **Where a full window is cut**, as a sample in `from..to`: the middle of the last real
+/// pause there ([`MIN_PAUSE_FRAMES`] or more of quiet, the same pause [`stretches`] ends a
+/// stretch on). With no real pause there, the middle of the longest dip. With no quiet frame
+/// at all, the start of the least speech-like frame.
+///
+/// A dip of one frame inside a word is not a pause, so it never wins over one (review of
+/// 2026-11-12: a 32 ms dip three seconds after a half-second pause used to take the cut).
 fn window_cut(probabilities: &[f32], from: usize, to: usize) -> usize {
     let (lo, hi) = (from.div_ceil(FRAME_SAMPLES), (to / FRAME_SAMPLES).min(probabilities.len()));
     let quiet = |frame: usize| probabilities[frame] < SILENCE_UNDER;
-    if let Some(last) = (lo..hi).rev().find(|frame| quiet(*frame)) {
-        let mut first = last;
-        while first > lo && quiet(first - 1) {
+    // Every run of quiet frames that touches the range: where it is inside the range, and
+    // how long it really is, counted past the range's edges.
+    let mut runs: Vec<(Range<usize>, usize)> = Vec::new();
+    let mut frame = lo;
+    while frame < hi {
+        if !quiet(frame) {
+            frame += 1;
+            continue;
+        }
+        let (mut first, mut last) = (frame, frame);
+        while first > 0 && quiet(first - 1) {
             first -= 1;
         }
-        return (first + (last + 1 - first) / 2) * FRAME_SAMPLES;
+        while last + 1 < probabilities.len() && quiet(last + 1) {
+            last += 1;
+        }
+        runs.push((frame..(last + 1).min(hi), last + 1 - first));
+        frame = last + 1;
     }
-    (lo..hi).min_by(|a, b| probabilities[*a].total_cmp(&probabilities[*b])).map_or(to, |frame| frame * FRAME_SAMPLES)
+    let chosen = runs.iter().rev().find(|(_, length)| *length >= MIN_PAUSE_FRAMES)
+        .or_else(|| runs.iter().rev().max_by_key(|(_, length)| *length));
+    match chosen {
+        Some((inside, _)) => (inside.start + inside.len() / 2) * FRAME_SAMPLES,
+        None => (lo..hi).min_by(|a, b| probabilities[*a].total_cmp(&probabilities[*b])).map_or(to, |frame| frame * FRAME_SAMPLES),
+    }
 }
 
 /// **The pieces of one recording**: the detector, [`stretches`] and [`pieces`] in one call.
@@ -369,6 +391,35 @@ mod tests {
         let found = pieces(&speech, &p, n);
         assert_eq!(found[0], 0..dip * FRAME_SAMPLES, "{found:?}");
         assert_whole_and_windowed(&speech, &found);
+    }
+
+    /// INVARIANT: a one-frame dip inside a word never takes the cut from a real pause, even
+    /// when the dip is later; with no real pause the longest dip does; and the last of two
+    /// real pauses does, so the window is as full as a clean cut allows.
+    #[test]
+    fn a_real_pause_takes_the_cut_over_a_later_dip() {
+        // Talking from 0, a 0.5 s pause at 24 s, a single quiet frame at 27.5 s, talking to 45 s.
+        let (mut p, n) = timeline(&[(24.0, 0.9), (0.5, 0.02), (20.5, 0.9)]);
+        let dip = (27 * SECOND + SECOND / 2) / FRAME_SAMPLES;
+        p[dip] = 0.05;
+        let found = pieces(&stretches(&p, n), &p, n);
+        let cut = found[0].end as f32 / SECOND as f32;
+        assert!(cut > 24.0 && cut < 24.5, "the cut is in the half-second pause, not at the dip: {cut}");
+
+        // No real pause in the final third: the longer of two dips.
+        let (mut p, n) = timeline(&[(45.0, 0.9)]);
+        let (short, long) = (22 * SECOND / FRAME_SAMPLES, 26 * SECOND / FRAME_SAMPLES);
+        p[short] = 0.05;
+        p[long..long + 4].fill(0.05);
+        p[long + 60] = 0.05;
+        let found = pieces(&stretches(&p, n), &p, n);
+        assert_eq!(found[0].end, (long + 2) * FRAME_SAMPLES, "the middle of the four-frame dip");
+
+        // Two real pauses in the final third: the later one.
+        let (p, n) = timeline(&[(21.0, 0.9), (0.5, 0.02), (4.0, 0.9), (0.5, 0.02), (20.0, 0.9)]);
+        let found = pieces(&stretches(&p, n), &p, n);
+        let cut = found[0].end as f32 / SECOND as f32;
+        assert!(cut > 25.5 && cut < 26.1, "{cut}");
     }
 
     /// INVARIANT: speech with no pause in it for longer than a window is cut where the

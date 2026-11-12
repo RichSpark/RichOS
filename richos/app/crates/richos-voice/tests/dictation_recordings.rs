@@ -63,5 +63,8 @@ fn what_the_dictation_recognizer_hears_in_these_recordings() {
             std::fs::write(&out, serde_json::to_vec_pretty(&heard).unwrap()).unwrap();
         }
     }
-    std::fs::remove_dir_all(&scratch).unwrap();
+    // Absent when the voice gate refused every recording: nothing was decoded.
+    if scratch.exists() {
+        std::fs::remove_dir_all(&scratch).unwrap();
+    }
 }
