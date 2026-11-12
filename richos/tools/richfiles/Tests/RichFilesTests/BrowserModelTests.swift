@@ -201,7 +201,11 @@ final class BrowserModelTests: XCTestCase {
         XCTAssertEqual(model.selected, [photo.id])
         XCTAssertFalse(model.searchActive)
         XCTAssertFalse(model.searchContent)
+        let commonDetails = Data("global columns".utf8)
+        let projectDetails = Data("project columns".utf8)
+        model.detailsLayout = commonDetails
         model.setFolderViewOverride(true)
+        model.detailsLayout = projectDetails
         model.viewMode = .icons
         model.iconSize = 96
         model.addFavorite(projects)
@@ -209,6 +213,7 @@ final class BrowserModelTests: XCTestCase {
         model.switchTab(searchTab)
         try await waitForListing(model, at: root)
         XCTAssertEqual(model.viewMode, .list)
+        XCTAssertEqual(model.detailsLayout, commonDetails)
         XCTAssertTrue(model.searchActive)
         XCTAssertTrue(model.searchContent)
         XCTAssertEqual(model.searchText, "synthetic browser fixture")
@@ -243,6 +248,7 @@ final class BrowserModelTests: XCTestCase {
         let reopened = BrowserModel(start: projects, defaults: defaults)
         try await waitForListing(reopened, at: projects)
         XCTAssertTrue(reopened.remembersFolderView)
+        XCTAssertEqual(reopened.detailsLayout, projectDetails)
         XCTAssertEqual(reopened.viewMode, .icons)
         XCTAssertEqual(reopened.iconSize, 96)
         XCTAssertTrue(reopened.showHidden)

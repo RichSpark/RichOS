@@ -132,6 +132,9 @@ final class BrowserModel: ObservableObject {
     @Published var iconSize: Double {
         didSet { if !restoringView && oldValue != iconSize { saveView() } }
     }
+    @Published var detailsLayout: Data? {
+        didSet { if !restoringView && oldValue != detailsLayout { saveView() } }
+    }
     @Published private(set) var remembersFolderView: Bool
 
     let places: [BrowserPlace]
@@ -222,6 +225,7 @@ final class BrowserModel: ObservableObject {
         sort = view.fileSort
         viewMode = view.mode
         iconSize = view.iconSize
+        detailsLayout = view.detailsLayout
         remembersFolderView = preferences.folders[location.path] != nil
         let home = FileManager.default.homeDirectoryForCurrentUser
         places = [
@@ -736,7 +740,7 @@ final class BrowserModel: ObservableObject {
     }
 
     private var currentView: ViewPreferences {
-        ViewPreferences(mode: viewMode, sort: sort, iconSize: iconSize)
+        ViewPreferences(mode: viewMode, sort: sort, iconSize: iconSize, detailsLayout: detailsLayout)
     }
 
     private func applyView(for location: URL) {
@@ -747,6 +751,7 @@ final class BrowserModel: ObservableObject {
         sort = view.fileSort
         viewMode = view.mode
         iconSize = view.iconSize
+        detailsLayout = view.detailsLayout
         restoringView = false
     }
 
@@ -799,13 +804,15 @@ private struct ViewPreferences: Codable {
     private let ascending: Bool
     private let foldersFirst: Bool
     let iconSize: Double
+    let detailsLayout: Data?
 
-    init(mode: BrowserViewMode = .list, sort: FileSort = FileSort(), iconSize: Double = 64) {
+    init(mode: BrowserViewMode = .list, sort: FileSort = FileSort(), iconSize: Double = 64, detailsLayout: Data? = nil) {
         self.mode = mode
         column = Column(sort.column)
         ascending = sort.ascending
         foldersFirst = sort.foldersFirst
         self.iconSize = iconSize
+        self.detailsLayout = detailsLayout
     }
 
     var fileSort: FileSort {

@@ -549,22 +549,24 @@ struct BrowserView: View {
     }
 
     private var details: some View {
-        Table(model.entries, selection: $model.selected) {
-            TableColumn("Name") { entry in
-                nameLabel(entry)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(dragFrame(for: entry.url))
-            }.width(min: 150, ideal: 260)
-            TableColumn("Size") { entry in Text(entry.size.map(formattedBytes) ?? "–") }
-                .width(min: 70, ideal: 82)
-            TableColumn("Kind") { entry in Text(entry.typeDescription ?? "–").lineLimit(1) }
-                .width(min: 80, ideal: 110)
-            TableColumn("Modified") { entry in Text(entry.modified.map(formattedDate) ?? "–").lineLimit(1) }
-                .width(min: 100, ideal: 130)
-            TableColumn("Folder") { entry in
-                Text(model.searchActive ? entry.url.deletingLastPathComponent().path : "")
-                    .lineLimit(1).truncationMode(.middle)
-            }.width(min: 70, ideal: 125)
+        Group {
+            if #available(macOS 14.0, *) {
+                Table(model.entries, selection: $model.selected, columnCustomization: detailsCustomization) {
+                    detailsName.customizationID("name").disabledCustomizationBehavior(.visibility)
+                    detailsSize.customizationID("size")
+                    detailsKind.customizationID("kind")
+                    detailsModified.customizationID("modified")
+                    detailsFolder.customizationID("folder")
+                }
+            } else {
+                Table(model.entries, selection: $model.selected) {
+                    detailsName
+                    detailsSize
+                    detailsKind
+                    detailsModified
+                    detailsFolder
+                }
+            }
         }
         .accessibilityIdentifier("file-details")
         .contextMenu(forSelectionType: URL.self) { ids in
@@ -572,6 +574,51 @@ struct BrowserView: View {
         } primaryAction: { ids in
             activate(model.entries.filter { ids.contains($0.url) })
         }
+    }
+
+    @available(macOS 14.0, *)
+    private var detailsCustomization: Binding<TableColumnCustomization<FileEntry>> {
+        Binding(get: {
+            guard let data = model.detailsLayout, data.count <= 64 * 1024,
+                  let layout = try? JSONDecoder().decode(TableColumnCustomization<FileEntry>.self, from: data) else {
+                return TableColumnCustomization()
+            }
+            return layout
+        }, set: { layout in
+            if let data = try? JSONEncoder().encode(layout), data.count <= 64 * 1024 {
+                model.detailsLayout = data
+            }
+        })
+    }
+
+    private var detailsName: some TableColumnContent<FileEntry, Never> {
+        TableColumn("Name") { (entry: FileEntry) in
+            nameLabel(entry)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(dragFrame(for: entry.url))
+        }.width(min: 150, ideal: 260)
+    }
+
+    private var detailsSize: some TableColumnContent<FileEntry, Never> {
+        TableColumn("Size") { (entry: FileEntry) in Text(entry.size.map(formattedBytes) ?? "–") }
+            .width(min: 70, ideal: 82)
+    }
+
+    private var detailsKind: some TableColumnContent<FileEntry, Never> {
+        TableColumn("Kind") { (entry: FileEntry) in Text(entry.typeDescription ?? "–").lineLimit(1) }
+            .width(min: 80, ideal: 110)
+    }
+
+    private var detailsModified: some TableColumnContent<FileEntry, Never> {
+        TableColumn("Modified") { (entry: FileEntry) in Text(entry.modified.map(formattedDate) ?? "–") }
+            .width(min: 100, ideal: 130)
+    }
+
+    private var detailsFolder: some TableColumnContent<FileEntry, Never> {
+        TableColumn("Folder") { (entry: FileEntry) in
+            Text(model.searchActive ? entry.url.deletingLastPathComponent().path : "")
+                .lineLimit(1).truncationMode(.middle)
+        }.width(min: 70, ideal: 125)
     }
 
     private var compactList: some View {
