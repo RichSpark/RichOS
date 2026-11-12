@@ -712,22 +712,31 @@ final class BrowserModel: ObservableObject {
             let worker = Task.detached(priority: .userInitiated) {
                 do {
                     var entries: [FileEntry] = []
+                    var pending: [FileEntry] = []
                     var nextEmission: UInt64 = 0
+                    func finishBatch() {
+                        guard !pending.isEmpty else { return }
+                        let added = pending.sorted(by: sort.precedes)
+                        entries = mergeSortedEntries(entries, added, sort: sort)
+                        pending.removeAll(keepingCapacity: true)
+                    }
                     let report = try DirectoryReader.scan(
                         folder, scope: scope, showHidden: showHidden, query: query, content: content,
                         isCancelled: { Task.isCancelled }
                     ) { batch in
-                        entries.append(contentsOf: batch)
+                        pending.append(contentsOf: batch)
                         let now = DispatchTime.now().uptimeNanoseconds
                         if now >= nextEmission {
-                            continuation.yield(ListingUpdate(entries: entries.sorted(by: sort.precedes)))
+                            finishBatch()
+                            continuation.yield(ListingUpdate(entries: entries))
                             nextEmission = DispatchTime.now().uptimeNanoseconds + 100_000_000
                         }
                     }
                     try Task.checkCancellation()
+                    finishBatch()
                     let volume = try? VolumeInfo(containing: folder)
                     try Task.checkCancellation()
-                    continuation.yield(ListingUpdate(entries: entries.sorted(by: sort.precedes), report: report, volume: volume))
+                    continuation.yield(ListingUpdate(entries: entries, report: report, volume: volume))
                     continuation.finish()
                 } catch {
                     continuation.finish(throwing: error)
@@ -735,6 +744,26 @@ final class BrowserModel: ObservableObject {
             }
             continuation.onTermination = { _ in worker.cancel() }
         }
+    }
+
+    private nonisolated static func mergeSortedEntries(_ first: [FileEntry], _ second: [FileEntry], sort: FileSort) -> [FileEntry] {
+        guard !first.isEmpty else { return second }
+        var merged: [FileEntry] = []
+        merged.reserveCapacity(first.count + second.count)
+        var left = 0
+        var right = 0
+        while left < first.count && right < second.count {
+            if sort.precedes(second[right], first[left]) {
+                merged.append(second[right])
+                right += 1
+            } else {
+                merged.append(first[left])
+                left += 1
+            }
+        }
+        merged.append(contentsOf: first[left...])
+        merged.append(contentsOf: second[right...])
+        return merged
     }
 
     private var currentView: ViewPreferences {

@@ -119,6 +119,26 @@ final class BrowserModelTests: XCTestCase {
     }
 
     @MainActor
+    func testMultipleListingBatchesKeepEveryFileInNaturalOrder() async throws {
+        let temporary = try XCTUnwrap(ProcessInfo.processInfo.environment["TMPDIR"])
+        let root = URL(fileURLWithPath: temporary, isDirectory: true)
+            .appendingPathComponent("RichFilesBatched-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let expected = (1...385).map { "Photo\($0).PNG" }
+        for name in expected.reversed() {
+            try Data().write(to: root.appendingPathComponent(name))
+        }
+
+        let domain = "app.richos.richfiles.tests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: domain))
+        defer { defaults.removePersistentDomain(forName: domain) }
+        let model = BrowserModel(start: root, defaults: defaults)
+        try await waitForListing(model, at: root)
+        XCTAssertEqual(model.entries.map(\.name), expected)
+    }
+
+    @MainActor
     func testChangesFromTwoBrowsersPreserveEachOthersPreferences() throws {
         let temporary = try XCTUnwrap(ProcessInfo.processInfo.environment["TMPDIR"])
         let root = URL(fileURLWithPath: temporary, isDirectory: true)
