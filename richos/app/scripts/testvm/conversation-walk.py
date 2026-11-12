@@ -379,10 +379,14 @@ class ConversationWalk(adopt_walk.Walk):
         for remote, local in ((self.home + '/.claude/projects', native),
                               (self.data + '/conversation-ledger.jsonl', self.out / 'ledger.jsonl'),
                               (self.payload + '/app.log', self.out / 'app.log'),
-                              (self.home + '/myrichos/companies', self.out / 'companies')):
-            if remote.endswith('/myrichos/companies') and \
-                    adopt_walk.guest(self.vm, 'test -d %s && echo yes || echo no' % shlex.quote(remote), 60).strip() != 'yes':
-                continue  # Rich saved no company notes: nothing to pull, nothing to say
+                              (self.home + '/myrichos/companies', self.out / 'companies'),
+                              # The user's own details (person.rs) and the app's company list
+                              # (a company Rich added with add_company is in it).
+                              (self.home + '/myrichos/person.md', self.out / 'person.md'),
+                              (self.data + '/entities.json', self.out / 'entities.json')):
+            if (remote.endswith('/myrichos/companies') or remote.endswith('/person.md')) and \
+                    adopt_walk.guest(self.vm, 'test -e %s && echo yes || echo no' % shlex.quote(remote), 60).strip() != 'yes':
+                continue  # Rich saved nothing there: nothing to pull, nothing to say
             r = subprocess.run([str(HERE / 'guest.sh'), self.vm, '--pull', remote, str(local)],
                                capture_output=True, text=True, timeout=300)
             if r.returncode:
