@@ -772,17 +772,21 @@ impl OutputFiles {
     /// `output_reveal(output_id)` (§5.4): `open -R` on the recorded path. Works on a link or a
     /// swapped file (§6.7: *Show in Finder still works*); refused when nothing is there.
     pub fn reveal(&self, output_id: &str) -> Result<String, String> {
-        let located = self.locate(output_id)?;
-        match std::fs::symlink_metadata(&located.path) {
-            Ok(_) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err(MISSING.into()),
-            Err(e) => return Err(read_failed(&e)),
-        }
-        let args = vec!["-R".to_string(), located.path.to_string_lossy().into_owned()];
+        let path = self.path_to_reveal(output_id)?;
+        let args = vec!["-R".to_string(), path.to_string_lossy().into_owned()];
         if !(self.runner)(&args) {
             return Err(WOULD_NOT_OPEN.into());
         }
-        Ok(format!("Finder opens {} with {} selected.", folder_label(&located.path), file_name(&located.path)))
+        Ok(format!("Finder opens {} with {} selected.", folder_label(&path), file_name(&path)))
+    }
+
+    pub fn path_to_reveal(&self, output_id: &str) -> Result<PathBuf, String> {
+        let located = self.locate(output_id)?;
+        match std::fs::symlink_metadata(&located.path) {
+            Ok(_) => Ok(located.path),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(MISSING.into()),
+            Err(e) => Err(read_failed(&e)),
+        }
     }
 
     /// `output_save_copy(output_id)` (§5.4, slice S6): §5.2 first — a missing file, a link or
@@ -1686,6 +1690,8 @@ mod tests {
             parent.parent().unwrap().file_name().unwrap().to_string_lossy(),
             parent.file_name().unwrap().to_string_lossy()
         );
+        assert_eq!(files.path_to_reveal(&id).unwrap(), brief);
+        assert!(files.path_to_reveal("../brief.md").is_err());
         assert_eq!(files.reveal(&id).unwrap(), format!("Finder opens {two} with brief.md selected."));
         let path = brief.to_string_lossy().into_owned();
         assert_eq!(*ran.lock().unwrap(), vec![vec![path.clone()], vec!["-R".to_string(), path]]);

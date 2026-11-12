@@ -1538,6 +1538,8 @@
         }
         return "Opening " + e.name + " in " + shown[index] + ".";
       }
+      case "output_reveal_in_richfiles":
+        return problem === "missing" ? Promise.reject(OUTPUT_SAID.missing) : "Showing " + e.name + " in RichFiles.";
       case "output_reveal": {
         if (problem === "missing") return Promise.reject(OUTPUT_SAID.missing);
         return "Finder opens " + outputFolderLabel(e.path) + " with " + e.name + " selected.";
@@ -4393,6 +4395,7 @@
         case "output_file":
         case "output_open":
         case "output_reveal":
+        case "output_reveal_in_richfiles":
         case "output_save_copy":
           return outputAction(cmd, args);
         // A file Rich put in front of the user (round 36 screen 3): opened through the opener.

@@ -158,14 +158,20 @@ public final class RichFilesDockTarget {
         self.actions = actions
     }
 
-    /// The containing webview can become visible before SwiftUI appears.
+    public func reveal(_ location: URL) async throws {
+        try await attachedWorkspace().activeModel.revealFile(location)
+    }
+
     public func accept(_ id: UUID) async throws {
+        let workspace = try await attachedWorkspace()
+        guard actions?.busy == false else { throw WorkspaceHandoff.HandoffError.busy }
+        try WorkspaceHandoff.accept(id, for: .docked, into: workspace)
+    }
+
+    // The webview can become visible before SwiftUI appears.
+    private func attachedWorkspace() async throws -> WindowWorkspace {
         for _ in 0..<20 {
-            if let workspace, let actions {
-                guard !actions.busy else { throw WorkspaceHandoff.HandoffError.busy }
-                try WorkspaceHandoff.accept(id, for: .docked, into: workspace)
-                return
-            }
+            if let workspace { return workspace }
             try await Task.sleep(nanoseconds: 50_000_000)
         }
         throw WorkspaceHandoff.HandoffError.noApp

@@ -97,6 +97,28 @@ final class BrowserModelTests: XCTestCase {
     }
 
     @MainActor
+    func testRevealingAnItemSelectsItsExactPathAndPreservesBackNavigation() async throws {
+        let temporary = try XCTUnwrap(ProcessInfo.processInfo.environment["TMPDIR"])
+        let root = URL(fileURLWithPath: temporary, isDirectory: true)
+            .resolvingSymlinksInPath().appendingPathComponent("RichFilesReveal-\(UUID().uuidString)", isDirectory: true)
+        let output = root.appendingPathComponent("Output", isDirectory: true)
+        let photo = output.appendingPathComponent("Launch plan.PNG", isDirectory: false)
+        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try Data("fixture".utf8).write(to: photo)
+
+        let model = BrowserModel(start: root)
+        try await waitForListing(model, at: root)
+        model.revealFile(photo)
+        try await waitForListing(model, at: output)
+        XCTAssertEqual(model.selected.map(\.path), [photo.path])
+        XCTAssertEqual(model.scrollAnchor?.path, photo.path)
+        model.goBack()
+        try await waitForListing(model, at: root)
+        XCTAssertTrue(model.selected.isEmpty)
+    }
+
+    @MainActor
     func testListDefaultNavigationSearchAndPreferences() async throws {
         let temporary = try XCTUnwrap(ProcessInfo.processInfo.environment["TMPDIR"])
         let root = URL(fileURLWithPath: temporary, isDirectory: true)

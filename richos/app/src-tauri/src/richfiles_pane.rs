@@ -1,4 +1,5 @@
 use serde::Deserialize;
+use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::{State, WebviewWindow};
 
@@ -58,39 +59,100 @@ pub async fn richfiles_place_pane(window: WebviewWindow, bounds: PaneBounds) -> 
 }
 
 #[derive(Default)]
-pub struct DockRequest(Mutex<Option<String>>);
+pub struct PaneRequests(Mutex<Requests>);
 
-#[tauri::command]
-pub fn richfiles_dock_pending(window: WebviewWindow, request: State<'_, DockRequest>) -> bool {
-    window.label() == "main" && request.0.lock().is_ok_and(|pending| pending.is_some())
+#[derive(Default)]
+struct Requests {
+    workspace: Option<String>,
+    reveal: Option<PathBuf>,
 }
 
 #[tauri::command]
-pub fn richfiles_accept_dock(
+pub fn richfiles_request_pending(window: WebviewWindow, request: State<'_, PaneRequests>) -> bool {
+    window.label() == "main"
+        && request
+            .0
+            .lock()
+            .is_ok_and(|pending| pending.workspace.is_some() || pending.reveal.is_some())
+}
+
+#[tauri::command]
+pub fn richfiles_accept_request(
     window: WebviewWindow,
-    request: State<'_, DockRequest>,
+    request: State<'_, PaneRequests>,
 ) -> Result<(), String> {
     if window.label() != "main" {
         return Err("RichFiles could not reach the window.".to_owned());
     }
-    let id = request
-        .0
-        .lock()
-        .map_err(|_| "The RichFiles workspace is unavailable.".to_owned())?
-        .take();
+    let Requests { workspace, reveal } = std::mem::take(
+        &mut *request
+            .0
+            .lock()
+            .map_err(|_| "The RichFiles request is unavailable.".to_owned())?,
+    );
     #[cfg(target_os = "macos")]
-    if let Some(id) = id {
+    if workspace.is_some() || reveal.is_some() {
         window
             .run_on_main_thread(move || {
-                if let Err(error) = mac::accept(&id) {
-                    eprintln!("[richos] could not deliver the RichFiles workspace: {error}");
+                if let Some(id) = workspace {
+                    if let Err(error) = mac::accept(&id) {
+                        eprintln!("[richos] could not deliver the RichFiles workspace: {error}");
+                    }
+                }
+                if let Some(path) = reveal {
+                    if let Err(error) = mac::reveal(&path) {
+                        eprintln!(
+                            "[richos] could not reveal the selected output in RichFiles: {error}"
+                        );
+                    }
                 }
             })
             .map_err(|_| "RichFiles could not reach the window.".to_owned())?;
     }
     #[cfg(not(target_os = "macos"))]
-    drop(id);
+    drop((workspace, reveal));
     Ok(())
+}
+
+#[tauri::command]
+pub fn output_reveal_in_richfiles(
+    app: tauri::AppHandle,
+    files: State<'_, crate::output_files::OutputFiles>,
+    output_id: String,
+) -> Result<String, String> {
+    let path = files.path_to_reveal(&output_id)?;
+    let name = path
+        .file_name()
+        .ok_or_else(|| "The output has no filename.".to_owned())?
+        .to_string_lossy()
+        .into_owned();
+    reveal_output(&app, path)?;
+    Ok(format!("Showing {name} in RichFiles."))
+}
+
+fn reveal_output(app: &tauri::AppHandle, path: PathBuf) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        use tauri::Manager;
+        if !mac::available() {
+            return Err("This build does not contain RichFiles.".to_owned());
+        }
+        let request = app
+            .try_state::<PaneRequests>()
+            .ok_or_else(|| "The RichFiles window is unavailable.".to_owned())?;
+        request
+            .0
+            .lock()
+            .map_err(|_| "The RichFiles request is unavailable.".to_owned())?
+            .reveal = Some(path);
+        notify_pane(app);
+        Ok(())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _unused = (app, path);
+        Err("RichFiles requires macOS.".to_owned())
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -122,7 +184,7 @@ fn dock_id(url: &tauri::Url) -> Option<String> {
 
 #[cfg(target_os = "macos")]
 pub fn opened(app: &tauri::AppHandle, urls: &[tauri::Url]) {
-    use tauri::{Emitter, Manager};
+    use tauri::Manager;
 
     let Ok(data_dir) = app.path().app_data_dir() else {
         return;
@@ -130,7 +192,7 @@ pub fn opened(app: &tauri::AppHandle, urls: &[tauri::Url]) {
     let Some(support) = data_dir.parent() else {
         return;
     };
-    let Some(request) = app.try_state::<DockRequest>() else {
+    let Some(request) = app.try_state::<PaneRequests>() else {
         return;
     };
     let folder = support.join("app.richos.richfiles/Handoff");
@@ -146,13 +208,21 @@ pub fn opened(app: &tauri::AppHandle, urls: &[tauri::Url]) {
             return;
         };
         if pending
+            .workspace
             .as_ref()
             .is_some_and(|old| folder.join(format!("{old}.json")).is_file())
         {
             return;
         }
-        *pending = Some(id);
+        pending.workspace = Some(id);
     }
+    notify_pane(app);
+}
+
+#[cfg(target_os = "macos")]
+fn notify_pane(app: &tauri::AppHandle) {
+    use tauri::Emitter;
+
     let app = app.clone();
     std::thread::spawn(move || {
         let shown = crate::conversation_window(&app)
@@ -161,10 +231,8 @@ pub fn opened(app: &tauri::AppHandle, urls: &[tauri::Url]) {
             crate::reopen_window(&app);
         }
         if let Some(window) = crate::conversation_window(&app) {
-            if let Err(error) = window.emit("rich://richfiles-dock", ()) {
-                eprintln!(
-                    "[richos] could not notify the window about the RichFiles workspace: {error}"
-                );
+            if let Err(error) = window.emit("rich://richfiles-show", ()) {
+                eprintln!("[richos] could not show the RichFiles window: {error}");
             }
         }
     });
@@ -174,7 +242,7 @@ pub fn opened(app: &tauri::AppHandle, urls: &[tauri::Url]) {
 mod mac {
     use std::ffi::{c_void, CString};
     use std::os::unix::ffi::OsStrExt;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::sync::OnceLock;
 
     use super::PaneBounds;
@@ -185,6 +253,7 @@ mod mac {
     struct Bridge {
         place: Place,
         accept: Accept,
+        reveal: Accept,
     }
 
     static BRIDGE: OnceLock<Result<Bridge, &'static str>> = OnceLock::new();
@@ -212,7 +281,8 @@ mod mac {
         }
         let symbol = unsafe { libc::dlsym(library, c"richfiles_rail_place".as_ptr()) };
         let accept = unsafe { libc::dlsym(library, c"richfiles_rail_receive_workspace".as_ptr()) };
-        if symbol.is_null() || accept.is_null() {
+        let reveal = unsafe { libc::dlsym(library, c"richfiles_rail_reveal".as_ptr()) };
+        if symbol.is_null() || accept.is_null() || reveal.is_null() {
             unsafe { libc::dlclose(library) };
             return Err("This installation has an incompatible RichFiles pane.");
         }
@@ -221,6 +291,7 @@ mod mac {
         Ok(Bridge {
             place: unsafe { std::mem::transmute::<*mut c_void, Place>(symbol) },
             accept: unsafe { std::mem::transmute::<*mut c_void, Accept>(accept) },
+            reveal: unsafe { std::mem::transmute::<*mut c_void, Accept>(reveal) },
         })
     }
 
@@ -249,6 +320,20 @@ mod mac {
             Err("RichFiles could not appear in this window.".to_owned())
         }
     }
+    pub fn reveal(path: &Path) -> Result<(), String> {
+        let path = CString::new(path.as_os_str().as_bytes())
+            .map_err(|_| "Invalid file path.".to_owned())?;
+        let bridge = BRIDGE
+            .get_or_init(load)
+            .as_ref()
+            .map_err(|message| (*message).to_owned())?;
+        if unsafe { (bridge.reveal)(path.as_ptr()) } == 1 {
+            Ok(())
+        } else {
+            Err("RichFiles could not show this file.".to_owned())
+        }
+    }
+
     pub fn accept(id: &str) -> Result<(), String> {
         let id = CString::new(id).map_err(|_| "Invalid RichFiles workspace.".to_owned())?;
         let bridge = BRIDGE

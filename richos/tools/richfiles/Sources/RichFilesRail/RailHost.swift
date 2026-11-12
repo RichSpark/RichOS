@@ -21,6 +21,14 @@ public func receiveRichFilesWorkspace(_ identifier: UnsafePointer<CChar>?) -> In
     return MainActor.assumeIsolated { RailHost.shared.receive(id) ? 1 : 0 }
 }
 
+@_cdecl("richfiles_rail_reveal")
+public func revealRichFilesItem(_ path: UnsafePointer<CChar>?) -> Int32 {
+    guard Thread.isMainThread, let path, let value = String(validatingUTF8: path), value.hasPrefix("/") else { return 0 }
+    return MainActor.assumeIsolated {
+        RailHost.shared.reveal(URL(fileURLWithPath: value)) ? 1 : 0
+    }
+}
+
 @MainActor
 private final class RailHost {
     static let shared = RailHost()
@@ -74,9 +82,17 @@ private final class RailHost {
     }
 
     func receive(_ id: UUID) -> Bool {
+        performInPane { try await $0.accept(id) }
+    }
+
+    func reveal(_ location: URL) -> Bool {
+        performInPane { try await $0.reveal(location) }
+    }
+
+    private func performInPane(_ action: @escaping @MainActor (RichFilesDockTarget) async throws -> Void) -> Bool {
         guard let dockTarget, hosting?.isHidden == false else { return false }
         Task {
-            do { try await dockTarget.accept(id); focusPane() }
+            do { try await action(dockTarget); focusPane() }
             catch {
                 let alert = NSAlert(error: error)
                 if let window = hosting?.window { alert.beginSheetModal(for: window, completionHandler: nil) }

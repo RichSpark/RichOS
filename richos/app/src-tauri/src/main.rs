@@ -2569,7 +2569,7 @@ fn main() {
                 Ok(monitor) => Some(monitor),
                 Err(error) => { eprintln!("[richos] resources unavailable: {error}"); None }
             };
-            app.manage(richfiles_pane::DockRequest::default());
+            app.manage(richfiles_pane::PaneRequests::default());
             app.manage(ResourceMonitor(Mutex::new(resources)));
             let activation = activation::decide(&activation::gather(&data_dir, &app.config().identifier));
             eprintln!("[richos] {}", activation.log_message());
@@ -3902,7 +3902,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             system_resources,
             richfiles_pane::richfiles_pane_available, richfiles_pane::richfiles_place_pane,
-            richfiles_pane::richfiles_dock_pending, richfiles_pane::richfiles_accept_dock,
+            richfiles_pane::richfiles_request_pending, richfiles_pane::richfiles_accept_request,
             question_host::answer_question, question_host::question_shown, question_host::open_question_counts,
             claude_quota,
             claude_quota_activity,
@@ -4094,6 +4094,7 @@ fn main() {
             output_files::output_preview,
             output_files::output_open,
             output_files::output_reveal,
+            richfiles_pane::output_reveal_in_richfiles,
             output_files::output_save_copy,
             // --- Rich's one offer of dictation (dictation plan slice 4) — appended ---
             dictation_offer,

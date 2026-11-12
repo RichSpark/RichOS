@@ -187,6 +187,7 @@ final class BrowserModel: ObservableObject {
 
     private enum Navigation {
         case open, back, forward
+        case reveal(String)
     }
 
     private var savedTabs: [UUID: TabState] = [:]
@@ -241,6 +242,12 @@ final class BrowserModel: ObservableObject {
 
     func openFolder(_ url: URL) {
         navigate(.open) { try DirectoryReader.directoryURL(url) }
+    }
+
+    func revealFile(_ location: URL) {
+        navigate(.reveal(location.lastPathComponent)) {
+            try FileReference(url: location).url.deletingLastPathComponent()
+        }
     }
 
     func openAddress(_ text: String) {
@@ -552,6 +559,14 @@ final class BrowserModel: ObservableObject {
             back.append(leaving)
             forward.removeAll()
             restore(Visit(folder: url, search: SearchState(recursive: searchRecursively)))
+        case .reveal(let name):
+            if url.path != folder.path || searchActive {
+                back.append(leaving)
+                forward.removeAll()
+            }
+            let item = url.appendingPathComponent(name).standardizedFileURL
+            restore(Visit(folder: url, selection: [item], anchor: item,
+                          search: SearchState(recursive: searchRecursively)))
         case .back:
             guard let target = back.popLast() else { return }
             forward.append(leaving)
@@ -654,9 +669,16 @@ final class BrowserModel: ObservableObject {
     private func apply(_ update: ListingUpdate) {
         entries = update.entries
         if !selectionToRestore.isEmpty {
-            let available = selectionToRestore.intersection(entries.map(\.id))
-            selectionToRestore.subtract(available)
-            if !available.isEmpty { setSelection(selected.union(available)) }
+            let requested = Set(selectionToRestore.map(\.path))
+            let available = entries.map(\.id).filter { requested.contains($0.path) }
+            if !available.isEmpty {
+                let restored = Set(available.map(\.path))
+                selectionToRestore = selectionToRestore.filter { !restored.contains($0.path) }
+                setSelection(selected.union(available))
+            }
+        }
+        if let anchor = scrollAnchor, let listed = entries.first(where: { $0.id.path == anchor.path })?.id, listed != anchor {
+            scrollAnchor = listed
         }
         guard let report = update.report else {
             status = "\(entries.count) \(searchActive ? "results" : "items") loaded…"

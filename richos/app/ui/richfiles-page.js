@@ -14,7 +14,7 @@
   let frame = 0;
   let waiting = false;
   let again = false;
-  let dockRequested = false;
+  let showRequested = false;
 
   function intersects(first, second) {
     return first.left < second.right && second.left < first.right
@@ -43,16 +43,16 @@
     if (waiting) { again = true; return; }
     const next = bounds();
     const key = JSON.stringify(next);
-    if (key === last && (!next.visible || !dockRequested)) return;
+    if (key === last && (!next.visible || !showRequested)) return;
     waiting = true;
     try {
       if (key !== last) {
         await bridge.invoke("richfiles_place_pane", { bounds: next });
         last = key;
       }
-      if (next.visible && dockRequested) {
-        dockRequested = false;
-        await bridge.invoke("richfiles_accept_dock", {});
+      if (next.visible && showRequested) {
+        showRequested = false;
+        await bridge.invoke("richfiles_accept_request", {});
       }
       error.hidden = true;
     } catch (reason) {
@@ -86,9 +86,10 @@
     refresh();
   }
 
-  function requestDock() {
-    dockRequested = true;
-    if (!window.RichDismiss?.question?.()) window.RichHome?.hide?.("richfiles-dock");
+  function requestPane() {
+    showRequested = true;
+    if (!window.RichDismiss?.question?.()) window.RichHome?.hide?.("richfiles");
+    window.RichOutput?.close?.({ keepFocus: true });
     rail.showPage("richfiles");
     schedule();
   }
@@ -97,9 +98,10 @@
     if (available !== true) return;
     rail.registerPage("richfiles", { show, hide });
     button.hidden = false;
-    if (bridge.listen) bridge.listen("rich://richfiles-dock", requestDock);
-    bridge.invoke("richfiles_dock_pending", {}).then((pending) => {
-      if (pending === true) requestDock();
+    window.RichFilesPage = { available: true };
+    if (bridge.listen) bridge.listen("rich://richfiles-show", requestPane);
+    bridge.invoke("richfiles_request_pending", {}).then((pending) => {
+      if (pending === true) requestPane();
     }).catch(() => {});
   }).catch(() => {});
 })();

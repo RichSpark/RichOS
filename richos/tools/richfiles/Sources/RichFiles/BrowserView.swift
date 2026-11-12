@@ -728,7 +728,7 @@ struct BrowserView: View {
                 }.disabled(actions.busy || model.currentVolume?.isReadOnly == true)
             }
             if model.searchActive {
-                Button("Open Containing Folder") { model.openFolder(first.url.deletingLastPathComponent()) }
+                Button("Open Containing Folder") { model.revealFile(first.url) }
             }
             if canSendToRichCleaner(entries) {
                 Button(RichOSServices.cleanerTitle) { addSpokenNote(entries) }.disabled(actions.busy)
