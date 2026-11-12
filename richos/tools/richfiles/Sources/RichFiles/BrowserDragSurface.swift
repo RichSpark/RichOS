@@ -9,6 +9,7 @@ struct BrowserDragSurface: NSViewRepresentable {
     }
 
     let prepare: (CGPoint) -> Payload?
+    let controlClick: (CGPoint?, NSPoint, NSWindow) -> Bool
 
     static var pasteboardToken: UUID? {
         NSPasteboard(name: .drag).string(forType: Source.tokenType).flatMap(UUID.init(uuidString:))
@@ -18,13 +19,16 @@ struct BrowserDragSurface: NSViewRepresentable {
 
     func updateNSView(_ view: Source, context: Context) {
         view.prepare = prepare
+        view.controlClick = controlClick
     }
 
     final class Source: NSView, NSDraggingSource {
         static let tokenType = NSPasteboard.PasteboardType(BrowserDragSelection.type)
         var prepare: ((CGPoint) -> Payload?)?
+        var controlClick: ((CGPoint?, NSPoint, NSWindow) -> Bool)?
         private var monitor: Any?
         private var down: NSEvent?
+        private var consumedClick = false
 
         override var isFlipped: Bool { true }
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
@@ -34,6 +38,7 @@ struct BrowserDragSurface: NSViewRepresentable {
             if let monitor { NSEvent.removeMonitor(monitor) }
             monitor = nil
             down = nil
+            consumedClick = false
             guard window != nil else { return }
             monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .leftMouseDragged, .leftMouseUp]) { [weak self] event in
                 guard let self else { return event }
@@ -48,14 +53,24 @@ struct BrowserDragSurface: NSViewRepresentable {
         private func track(_ event: NSEvent) -> Bool {
             guard let window, event.window === window, window.attachedSheet == nil else {
                 down = nil
+                consumedClick = false
                 return false
             }
             if event.type == .leftMouseDown {
                 let point = convert(event.locationInWindow, from: nil)
-                down = bounds.contains(point) ? event : nil
-                return false
+                let inside = bounds.contains(point)
+                let modifiers = event.modifierFlags.intersection([.control, .command, .option, .shift])
+                consumedClick = modifiers == .control &&
+                    controlClick?(inside ? point : nil, event.locationInWindow, window) == true
+                down = inside && !consumedClick ? event : nil
+                return consumedClick
             }
-            if event.type == .leftMouseUp { down = nil }
+            if event.type == .leftMouseUp {
+                down = nil
+                let handled = consumedClick
+                consumedClick = false
+                return handled
+            }
             guard let down,
                   hypot(event.locationInWindow.x - down.locationInWindow.x,
                         event.locationInWindow.y - down.locationInWindow.y) >= 5 else { return false }

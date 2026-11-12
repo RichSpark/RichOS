@@ -30,6 +30,19 @@ final class DetailsViewport {
         scrollIfReady()
     }
 
+    func focusTable() {
+        if let table { table.window?.makeFirstResponder(table) }
+    }
+
+    func item(at locationInWindow: NSPoint, in window: NSWindow) -> URL? {
+        guard let table, table.window === window, let model,
+              table.numberOfRows == model.entries.count else { return nil }
+        let point = table.convert(locationInWindow, from: nil)
+        guard table.visibleRect.contains(point) else { return nil }
+        let row = table.row(at: point)
+        return model.entries.indices.contains(row) ? model.entries[row].url : nil
+    }
+
     func detach() {
         scrolling = nil
         pending = nil

@@ -444,11 +444,20 @@ struct BrowserView: View {
         }
         .background(Color(nsColor: .textBackgroundColor))
         .coordinateSpace(name: "richfiles-items")
-        .background(BrowserDragSurface { point in
+        .background(BrowserDragSurface(prepare: { point in
             guard let url = rowAt(point),
                   let entry = model.entries.first(where: { $0.url == url }) else { return nil }
             return beginDrag(entry)
-        })
+        }, controlClick: { point, windowPoint, window in
+            guard windowsKeys else { return false }
+            let nativeRow = model.viewMode == .details ? detailsViewport.item(at: windowPoint, in: window) : nil
+            guard let url = nativeRow ?? point.flatMap(rowAt),
+                  let entry = model.entries.first(where: { $0.url == url }) else { return false }
+            workspace.select(side)
+            select(entry, modifiers: .control)
+            if model.viewMode == .details { detailsViewport.focusTable() }
+            return true
+        }))
         .onPreferenceChange(RowFramesKey.self) { rowFrames = $0 }
         .onPreferenceChange(FileColumnFrameKey.self) { fileColumnFrame = $0 }
         .simultaneousGesture(DragGesture(minimumDistance: 5, coordinateSpace: .named("richfiles-items"))
