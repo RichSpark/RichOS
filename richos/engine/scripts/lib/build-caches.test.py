@@ -36,6 +36,9 @@ every "it kept X" test:
   B9e  the reviewer's two edges (review rv-20261112T133007Z-45bf4e10-69b6, fixtures/floor_edges.py):
        other cleanup in the same run already put the volume on target, so no floor unit goes;
        and 64 hard-linked units take more than 50 rounds, and the re-read goes on to the target.
+  B9l  a build takes the oldest profile's lock after the plan (review
+       rv-20261112T143113Z-f972fff8-cdd8, fixtures/floor_review.py): the re-read leaves that
+       profile out and takes the next oldest unit elsewhere, and reaches the target.
   B9w  --floor-check, which the app's disk watcher asks every check, says exit 1 and names the
        drive when a Cargo tree's volume is below its target, exit 0 and nothing when it is not
        (review rv-20261112T112825Z-7f381427-61d2: the cache drive filled, the app's disk was fine).
@@ -548,6 +551,22 @@ class BuildCaches(unittest.TestCase):
         self.assertGreaterEqual(after, 1024 ** 3, "still short after the re-read stopped")
         self.assertGreater(sum(n for _p, n, _b, _f in results), 50, "it took more than 50 rounds")
         self.assertIn(keys[65], bc.units(p))
+
+    def test_B9l_a_build_that_takes_a_lock_after_the_plan_does_not_end_the_reclaim(self):
+        oldest, (h50,) = self.recent_profile("a-shared", (50,))
+        available, (h30, h1) = self.recent_profile("b-codex", (30, 1))
+        short = bc.units(oldest)[("unit", h50)]["bytes"]
+        with self.under_target(short) as space:
+            _plan, r = self.plan()
+            self.children.append(hold_lock(os.path.join(oldest, ".cargo-lock")))
+            with contextlib.redirect_stdout(io.StringIO()):
+                _d, _f, failures = self.apply(r)
+            left = space(available)[2] - 1024 ** 3
+        self.assertEqual(failures, [])
+        self.assertGreaterEqual(left, 0, "still %d bytes short of the target" % -left)
+        self.assertIn(("unit", h50), bc.units(oldest), "the held profile was touched")
+        self.assertNotIn(("unit", h30), bc.units(available))
+        self.assertIn(("unit", h1), bc.units(available))
 
     def test_B9w_the_floor_check_names_a_short_cache_drive_and_scans_nothing(self):
         cfg = {"cargo_target_roots": [self.cargo], "disk_primary_volume": "",

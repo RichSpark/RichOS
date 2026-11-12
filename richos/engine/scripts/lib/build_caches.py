@@ -560,22 +560,35 @@ def reclaim_to_target(profiles, target, min_idle_seconds, spent=None, max_rounds
         if free >= target or (spent is not None and spent()):
             break
         now = time.time()
-        inventory = [(p, units(p)) for p in profiles]
+        # ONLY PROFILES NO BUILD HOLDS RIGHT NOW count toward this round's window: a build that
+        # took a lock after the plan would otherwise put its oldest units in the window, their
+        # deletion would be refused, and the younger units elsewhere would fall outside it
+        # (review rv-20261112T143113Z-f972fff8-cdd8). A profile whose lock is taken between this
+        # look and its deletion is dropped for the rest of the run and the round goes on.
+        free_now = []
+        for p in profiles:
+            with CargoLock(p) as lock:
+                if lock.held:
+                    free_now.append(p)
+        inventory = [(p, units(p)) for p in free_now]
         candidates = [(u["newest"], u["bytes"]) for _p, us in inventory for u in us.values()
                       if now - u["newest"] >= min_idle_seconds]
         if not candidates:
             break
         window = pressure_window(candidates, target - free, float("inf"), min_idle_seconds, now)
-        gone = 0
+        gone = refused = 0
         for p, us in inventory:
             keys = sorted(k for k, u in us.items() if now - u["newest"] >= window)
             if not keys:
                 continue
             n, freed, failures, why_not = delete_units(p, keys, window, now=now)
+            if why_not:
+                profiles = [q for q in profiles if q != p]
+                refused += 1
             if n or failures:
                 results.append((p, n, freed, failures))
             gone += n
-        if not gone:
+        if not gone and not refused:
             break
         again = volume_space(profiles[0])
         if again is None:
