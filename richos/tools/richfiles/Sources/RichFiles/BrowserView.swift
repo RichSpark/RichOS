@@ -37,6 +37,7 @@ struct BrowserView: View {
     @State private var selectedReferences: [URL: FileReference] = [:]
     @State private var preparingAction = false
     @State private var rowFrames: [URL: CGRect] = [:]
+    @State private var fileColumnFrame: CGRect = .null
     @State private var selectionRectangle: CGRect?
     @State private var folderReveal: FolderTreeReveal?
     @State private var commandOwner = UUID()
@@ -426,15 +427,15 @@ struct BrowserView: View {
         .background(Color(nsColor: .textBackgroundColor))
         .coordinateSpace(name: "richfiles-items")
         .background(BrowserDragSurface { point in
-            guard let url = rowFrames.first(where: { $0.value.contains(point) })?.key,
+            guard let url = rowAt(point),
                   let entry = model.entries.first(where: { $0.url == url }) else { return nil }
             return beginDrag(entry)
         })
         .onPreferenceChange(RowFramesKey.self) { rowFrames = $0 }
+        .onPreferenceChange(FileColumnFrameKey.self) { fileColumnFrame = $0 }
         .simultaneousGesture(DragGesture(minimumDistance: 5, coordinateSpace: .named("richfiles-items"))
             .onChanged { change in
-                guard model.viewMode != .details, model.viewMode != .columns,
-                      !rowFrames.values.contains(where: { $0.contains(change.startLocation) }) else { return }
+                guard canSelectFromBlankSpace(at: change.startLocation) else { return }
                 let rect = CGRect(
                     x: min(change.startLocation.x, change.location.x),
                     y: min(change.startLocation.y, change.location.y),
@@ -442,13 +443,38 @@ struct BrowserView: View {
                     height: abs(change.startLocation.y - change.location.y)
                 )
                 selectionRectangle = rect
-                model.selected = Set(rowFrames.compactMap { rect.intersects($0.value) ? $0.key : nil })
+                model.selected = Set(rowFrames.compactMap { item in
+                    let frame = item.value
+                    let intersects = model.viewMode == .details
+                        ? frame.minY < rect.maxY && rect.minY < frame.maxY : rect.intersects(frame)
+                    return intersects ? item.key : nil
+                })
             }
             .onEnded { _ in selectionRectangle = nil })
         .onDrop(of: [UTType.fileURL.identifier, BrowserDragSelection.type], delegate: BrowserDropTarget(
             proposal: proposeDrop, exited: { dropOperation = nil }, receive: receiveDrop
         ))
         .contextMenu { folderMenu }
+    }
+
+    private func rowAt(_ point: CGPoint) -> URL? {
+        rowFrames.first { row in
+            let frame = row.value
+            if model.viewMode == .details { return frame.minY <= point.y && point.y < frame.maxY }
+            return frame.contains(point)
+        }?.key
+    }
+
+    private func canSelectFromBlankSpace(at point: CGPoint) -> Bool {
+        guard rowAt(point) == nil else { return false }
+        switch model.viewMode {
+        case .details:
+            return rowFrames.values.allSatisfy { $0.maxY <= point.y }
+        case .columns:
+            return fileColumnFrame.contains(point)
+        default:
+            return true
+        }
     }
 
     private var emptyItems: some View {
@@ -503,6 +529,10 @@ struct BrowserView: View {
                         }
                         .frame(width: currentWidth)
                         .frame(maxHeight: .infinity, alignment: .top)
+                        .background(GeometryReader { geometry in
+                            Color.clear.preference(key: FileColumnFrameKey.self,
+                                                   value: geometry.frame(in: .named("richfiles-items")))
+                        })
                         .id(model.folder)
                         Spacer(minLength: 0)
                     }.frame(minWidth: geometry.size.width, maxHeight: .infinity)
@@ -1424,6 +1454,14 @@ private struct AncestorColumn: View {
                     if !Task.isCancelled { children = []; problem = error.localizedDescription; loading = false }
                 }
             }
+    }
+}
+
+private struct FileColumnFrameKey: PreferenceKey {
+    static var defaultValue: CGRect = .null
+    static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
+        let next = nextValue()
+        if !next.isNull { value = next }
     }
 }
 
