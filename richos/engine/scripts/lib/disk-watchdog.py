@@ -205,6 +205,19 @@ def volume_consumers(mount, roots, min_bytes, limit=8, max_depth=6, budget_s=240
     return found[:limit]
 
 
+def consumer_roots(candidates, mount):
+    """Where the consumer walk starts on a volume that is not the primary one: RichOS's own
+    folders (storage_candidates) that sit on it, never the volume itself. A configured root
+    that IS the mount is dropped; the folders the settings name below it are still walked."""
+    roots = []
+    for path in candidates:
+        path = expand(path)
+        if (path and os.path.isdir(path) and on_volume(path, mount)
+                and os.path.realpath(path) != os.path.realpath(mount)):
+            roots.append(path)
+    return roots
+
+
 def reclaim_under_floor(reaper_cmd, prev, now, volumes):
     """THE SCHEDULED CLEANUP, RUN WHEN A VOLUME IS UNDER ITS FLOOR (2026-11-10).
 
@@ -1184,9 +1197,12 @@ def main():
         for v in low:
             mount = v["mount"]
             # ONLY FOLDERS ON THIS VOLUME, found by walking it (volume_consumers), plus the
-            # declared candidates that sit on it.
-            roots = [mount] if mount != primary else [home, os.path.join(home, "Library/Developer/CoreSimulator"),
-                                                      os.path.join(home, "Library/Developer/Xcode")]
+            # declared candidates that sit on it. Another volume is walked from RichOS's own
+            # folders on it, never from its mount: a walk from /Volumes/E1TB measured every
+            # other user's and app's folder on the drive (2026-11-12, found by W27).
+            roots = (consumer_roots(candidates, mount) if mount != primary
+                     else [home, os.path.join(home, "Library/Developer/CoreSimulator"),
+                           os.path.join(home, "Library/Developer/Xcode")])
             found = volume_consumers(mount, roots, min_b)
             for b, p in found:
                 consumers.append({"path": p, "bytes": b, "human": human(b), "mount": mount,

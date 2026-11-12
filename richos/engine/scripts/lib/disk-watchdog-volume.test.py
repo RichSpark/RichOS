@@ -60,6 +60,17 @@ class Consumers(unittest.TestCase):
         with patch.object(wd, "du_kb", return_value=None):
             self.assertEqual(wd.volume_consumers(self.tmp, [self.root], 1024), [])
 
+    def test_another_volume_is_walked_from_our_folders_never_its_mount(self):
+        """2026-11-12 (W27): the walk of an external drive started at /Volumes/E1TB and measured
+        every user's and app's folder on it. It starts at RichOS's own folders on that volume."""
+        ours = os.path.join(self.tmp, "cache-root")
+        os.makedirs(ours)
+        missing = os.path.join(self.tmp, "not-there")
+        roots = wd.consumer_roots([self.tmp, ours, missing, self.root], self.tmp)
+        self.assertEqual(roots, [ours, self.root])
+        with patch.object(wd, "on_volume", return_value=False):
+            self.assertEqual(wd.consumer_roots([ours], self.tmp), [])
+
     def test_our_cargo_output_counts_as_ours(self):
         self.assertTrue(wd.is_ours(self.deep))
         self.assertFalse(wd.is_ours(os.path.join(self.root, "small")))
