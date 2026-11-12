@@ -181,6 +181,7 @@ async function main() {
       assertEqual((await text(page,".dhx-top")).toLowerCase(),"preview","the empty panel only shows its label");
       assertEqual(await page.locator(".dhx-words").count(),0,"there are no blank caption lines at startup");
       const baseline = await page.evaluate(()=> {
+        window.__previewTag=document.querySelector(".dhx-tag");
         window.__previewRow=document.querySelector(".dhx-row");
         window.__previewMeter=document.querySelector(".dh-meter");
         window.__previewClock=document.getElementById("dhTime");
@@ -200,6 +201,7 @@ async function main() {
           lastVisible:last.top>=box.top-1&&last.bottom<=box.bottom+1&&last.right<=box.right+1,
           noHorizontalOverflow:el.scrollWidth<=el.clientWidth+1,
           report:calls[calls.length-1][1],
+          labelKept:window.__previewTag===document.querySelector(".dhx-tag"),
           controlsKept:window.__previewRow===document.querySelector(".dhx-row")&&
             window.__previewMeter===document.querySelector(".dh-meter")&&window.__previewClock===document.getElementById("dhTime")};
       });
@@ -211,6 +213,7 @@ async function main() {
         const current=await inspect();
         assert(current.lines>=1&&current.lines<=5,"the preview has at most five text lines");
         assert(current.height<=5*current.lineHeight+1,"the text area cannot grow past its cap");
+        assert(current.labelKept,"caption updates retain the preview label node");
         assert(current.controlsKept,"updates retain the live meter, clock and controls");
         assert(current.lastVisible,"the newest word is readable");
         assert(current.noHorizontalOverflow,"words wrap inside the preview");
@@ -242,6 +245,14 @@ async function main() {
       assertEqual(short.report.h,token.report.h,"a shorter result cannot shrink the bar");
       assertEqual(short.report.w,token.report.w,"a shorter result cannot shrink the preview width");
       assert(short.controlsKept,"a shorter result leaves the live controls in place");
+      const layoutCount=()=>page.evaluate(()=>window.__calls.filter(c=>c[0]==="dictation_bar_laid_out").length);
+      await page.evaluate(()=>window.__captionText=document.querySelector(".dhx-words").firstChild);
+      const placed=await layoutCount();
+      await say(page,"dictation-live-preview",{seq:7,text:"Revised."});
+      assertEqual(await text(page,".dhx-words"),"Revised.");
+      assert(await page.evaluate(()=>window.__captionText===document.querySelector(".dhx-words").firstChild),
+        "an updated caption keeps its text node");
+      assertEqual(await layoutCount(),placed,"an equal-sized caption does not ask macOS to show the window again");
       await say(page,"dictation-live-preview",{seq:7,text:""});
       assertEqual((await text(page,".dhx-top")).toLowerCase(),"preview","the label stays while old words expire");
       assertEqual(await page.evaluate(()=>window.RichDictationBar.layout()),short.report,"expired words leave the panel in place");

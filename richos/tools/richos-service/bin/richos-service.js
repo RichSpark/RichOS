@@ -127,14 +127,8 @@ function main() {
         fail('live-transcribe requires an existing session and a recorder PID');
       }
       const { model: selected, decodeArgs } = resolveTierForHost(tier || model);
-      watchLiveTranscription(assertPrivateTree(dir), { model: selected, extraArgs: decodeArgs }, () => {
-        try {
-          process.kill(pid, 0);
-          return true;
-        } catch {
-          return false;
-        }
-      }, (timing) => log.info('live transcription checkpoint', timing)).catch(() => {
+      watchLiveTranscription(assertPrivateTree(dir), { model: selected, extraArgs: decodeArgs }, pid,
+        (timing) => log.info('live transcription checkpoint', timing)).catch(() => {
         fail('live transcription stopped; retained audio can still be decoded');
       });
       break;
