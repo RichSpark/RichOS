@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
+import { once } from 'node:events';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
+import { Worker } from 'node:worker_threads';
 import { advanceLiveTranscription, prepareLiveNormalization, recentLiveExcerpt, removeLiveTranscriptionScratch, supportsLiveTranscription, takeLiveNormalization } from '../lib/live-transcription.js';
 import { mergeTranscript, renderMarkdown } from '../lib/merge.js';
 import { normalizeSession } from '../lib/normalize.js';
@@ -29,6 +31,18 @@ function nativeHeader(rate, dataBytes = 0) {
 
 test('the engine archive verifier can import the live normalization worker', async () => {
   await import('../lib/live-normalization-worker.js');
+});
+
+test('the live normalization worker reads the session passed by its parent', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'richbrief-worker-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const worker = new Worker(new URL('../lib/live-normalization-worker.js', import.meta.url), {
+    workerData: { dir, recorderPid: process.pid },
+  });
+  // This empty session reaches the normalizer and fails at its first audio read.
+  await assert.rejects(once(worker, 'exit'), {
+    code: 'ENOENT', path: path.join(dir, 'audio-part-00.wav'),
+  });
 });
 
 test('live normalization uses flushed native audio and refuses a changed recording', async (t) => {
