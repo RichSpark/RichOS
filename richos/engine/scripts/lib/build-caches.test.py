@@ -29,6 +29,10 @@ every "it kept X" test:
        (review rv-20261112T102721Z-317c4e7a-1985 #2), never one read within the minimum.
   B9a  the app's own sweep (--app, the only sweep a user's app runs) applies the floor to the
        shared Cargo trees too (the same review, #1); on a volume at its target it walks nothing.
+  B9s  the reviewer's three cases (review rv-20261112T122930Z-beaaa3c2-fb0a,
+       fixtures/floor_accounting.py), each on a volume one unit short: the app's sweep with the
+       oldest unit at 50 h and at 100 h (past the usual 72 h), and the scheduled sweep with a
+       hard-linked 100 h unit. Each ends on target, never by taking the unit read 1 h ago.
   B9w  --floor-check, which the app's disk watcher asks every check, says exit 1 and names the
        drive when a Cargo tree's volume is below its target, exit 0 and nothing when it is not
        (review rv-20261112T112825Z-7f381427-61d2: the cache drive filled, the app's disk was fine).
@@ -343,7 +347,7 @@ class BuildCaches(unittest.TestCase):
         mod = reaper.build_caches()
         # The volume gains exactly what the deletions really release (blocks, each inode once).
         start = self.blocks(self.cargo)
-        return patch.object(mod, "volume_space", lambda _p: (
+        return patch.object(mod, "volume_space", new=lambda _p: (
             1, 100 * gib, gib - short_bytes + (start - self.blocks(self.cargo))))
 
     def left(self, p):
@@ -455,6 +459,53 @@ class BuildCaches(unittest.TestCase):
                 else:
                     self.assertEqual(plan[p].action, reaper.DELETE, plan[p].why)
                     self.assertEqual(plan[p].unit_keys, expect)
+
+    def app_sweep(self):
+        """The app's own sweep (scan_app) with its other arms answering nothing, as in B9a."""
+        data = os.path.join(self.tmp, "app-data")
+        os.makedirs(data, exist_ok=True)
+        r = object.__new__(reaper.Reaper)
+        r.cfg = {"claude_roots": [], "build_cache_root": self.cache,
+                 "cargo_target_roots": [self.cargo], "build_cache_idle_hours": 72,
+                 "build_cache_min_idle_hours": 2, "disk_primary_volume": "",
+                 "disk_scale_extra_volumes": True}
+        r.cfg.update(self.cfg_extra)
+        r.entries, r.roots, r.now, r.floor = [], [], time.time(), 3600
+        r.ws = Mock()
+        r.app_sessions = Mock(return_value=set())
+        r.app_account_session_dirs = Mock(return_value=[])
+        r.app_repositories = Mock(return_value=[])
+        for name in ("scan_app_profiles", "scan_app_voice", "scan_app_dictation",
+                     "scan_app_mcp_logs", "scan_cargo_output"):
+            setattr(r, name, Mock())
+        with patch.object(reaper, "Liveness"), \
+                patch.object(reaper, "registered_workspaces", return_value=[]), \
+                patch.object(reaper, "never_touch", return_value=[]):
+            r.scan_app({"data": data})
+        return r
+
+    def test_B9s_the_reviewers_three_cases_each_end_on_target(self):
+        cases = (("the app's sweep, oldest unit 50 h", 50, True, False),
+                 ("the app's sweep, oldest unit 100 h", 100, True, False),
+                 ("the scheduled sweep, hard-linked oldest unit 100 h", 100, False, True))
+        for label, oldest_h, app, hardlink in cases:
+            with self.subTest(label):
+                shutil.rmtree(self.cargo, ignore_errors=True)
+                os.makedirs(self.cargo)
+                p, (old, _younger, warm) = self.recent_profile("shared-build-v1", (oldest_h, 30, 1))
+                if hardlink:
+                    os.link(os.path.join(p, "deps", "libdep0-%s.rlib" % old),
+                            os.path.join(p, "libdep0.rlib"))
+                short = bc.units(p)[("unit", old)]["bytes"]
+                with self.under_target(short) as space:
+                    r = self.app_sweep() if app else self.plan()[1]
+                    with contextlib.redirect_stdout(io.StringIO()):
+                        _d, _f, failures = self.apply(r)
+                    left = space(p)[2] - 1024 ** 3        # free minus target: >= 0 is on target
+                self.assertEqual(failures, [])
+                self.assertGreaterEqual(left, 0, "still %d bytes short of the target" % -left)
+                self.assertNotIn(("unit", old), bc.units(p))
+                self.assertIn(("unit", warm), bc.units(p))
 
     def test_B9w_the_floor_check_names_a_short_cache_drive_and_scans_nothing(self):
         cfg = {"cargo_target_roots": [self.cargo], "disk_primary_volume": "",

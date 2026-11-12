@@ -3086,9 +3086,12 @@ class Reaper(object):
         # short of its target, less what the rows above already free on it, decides the window.
         windows = self.build_cache_windows(bc, free_profiles, idle_s)
         for profile, us in free_profiles:
-            window, why = windows.get(profile, (idle_s, ""))
-            if window >= idle_s and not usual:
+            # The app's sweep plans only on a short volume (`windows` names its profiles), and
+            # there it plans the units past the usual window too: they are what the volume's
+            # shortfall was measured against.
+            if not usual and profile not in windows:
                 continue
+            window, why = windows.get(profile, (idle_s, ""))
             idle = sorted(((k, u) for k, u in us.items() if self.now - u["newest"] >= window),
                           key=lambda kv: kv[0])
             if not idle:
@@ -3120,9 +3123,11 @@ class Reaper(object):
         return False
 
     def build_cache_windows(self, bc, free_profiles, idle_s):
-        """{profile: (idle window in seconds, why)} for the profiles on a volume below its
-        free-space target (lib/build_caches.py rule 3). A volume at or above it is absent, and
-        its profiles keep the usual window."""
+        """{profile: (idle window in seconds, why)} for every profile on a volume below its
+        free-space target (lib/build_caches.py rule 3): the usual window when what is already
+        planned covers the shortfall, a shorter one when it does not. A volume at or above its
+        target is absent, and its profiles keep the usual window. Every short volume is also
+        recorded for apply()'s re-read, before anything decides whether it is needed."""
         min_s = self.cfg.get("build_cache_min_idle_hours", 2) * 3600
         by_dev = {}
         for profile, us in free_profiles:
@@ -3138,6 +3143,16 @@ class Reaper(object):
             if t is None:
                 continue
             target, floor, free = t
+            if free >= target:
+                continue
+            # A SHORT VOLUME IS ALWAYS RE-READ AFTER THE PLANNED ROWS (apply(): reclaim_to_target),
+            # whatever the rows below are expected to free: a unit's bytes are not what deleting it
+            # releases, because Cargo keeps a hard link to a binary outside the unit (reviews
+            # rv-20261112T102721Z-317c4e7a-1985 and rv-20261112T122930Z-beaaa3c2-fb0a).
+            if not hasattr(self, "cargo_floors"):
+                self.cargo_floors = {}
+            self.cargo_floors[dev] = {"profiles": [p for p, _us in rows], "target": target,
+                                      "min_s": min_s}
             # What this arm already plans on this volume: orphan folders, the trash, and the
             # units past the usual window.
             planned = sum(e.size for e in self.entries
@@ -3146,21 +3161,13 @@ class Reaper(object):
             planned += sum(u["bytes"] for _p, us in rows for u in us.values()
                            if self.now - u["newest"] >= idle_s)
             need = target - free - planned
-            if need <= 0:
-                continue
-            window = bc.pressure_window([(u["newest"], u["bytes"]) for _p, us in rows
-                                         for u in us.values()], need, idle_s, min_s, self.now)
+            window = idle_s if need <= 0 else bc.pressure_window(
+                [(u["newest"], u["bytes"]) for _p, us in rows for u in us.values()],
+                need, idle_s, min_s, self.now)
             why = ("the volume has %s free, under its target of %s (floor %s); deleted oldest "
                    "first until the volume is back on target" % (human(free), human(target), human(floor)))
             for profile, _us in rows:
                 out[profile] = (window, why)
-            # apply() re-reads the volume after these rows and goes on until it is back on target
-            # or nothing eligible is left: a unit's bytes are not what deleting it frees, because
-            # Cargo keeps a hard link to a binary outside the unit (review rv-20261112T102721Z).
-            if not hasattr(self, "cargo_floors"):
-                self.cargo_floors = {}
-            self.cargo_floors[dev] = {"profiles": [p for p, _us in rows], "target": target,
-                                      "min_s": min_s}
         return out
 
     def codex_app_root(self):
