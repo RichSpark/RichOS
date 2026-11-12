@@ -16,7 +16,7 @@
 const fs = require("fs");
 const path = require("path");
 const contrast = require("./lib/contrast");
-const { loadPlaywright, createRun, assert, assertEqual, UI_DIR, shot } = require("./lib/harness");
+const { loadPlaywright, createRun, assert, assertEqual, UI_DIR, shot, flushFrames } = require("./lib/harness");
 
 const MIN_GAP = 4; // round 22.1's floor: comfortably apart at 196px, never merely not touching
 const plain = s => s.replace(/[’‘]/g, "'").replace(/\s+/g, " ").trim();
@@ -619,7 +619,10 @@ async function main() {
     let smallest = Infinity;
     const note = (what, r) => {
       smallest = Math.min(smallest, r.gap);
-      if (r.gap < MIN_GAP || !(r.x + r.w <= r.colRight + 0.5) || !r.inkA || !r.inkB) bad.push(`${what} ${r.text} ${r.size}px gap ${r.gap}`);
+      const right = r.x + r.w;
+      if (r.gap < MIN_GAP || !(right <= r.colRight + 0.5) || !r.inkA || !r.inkB) {
+        bad.push(`${what} ${r.text} ${r.size}px gap ${r.gap}, right ${right.toFixed(1)}/${r.colRight.toFixed(1)}, ink ${r.inkA}/${r.inkB}`);
+      }
     };
     for (const theme of ["dark", "light"]) {
       const page = await open(theme, undefined);
@@ -634,8 +637,9 @@ async function main() {
         out.push(`${theme} ${p} ${r.text} ${r.size}px gap ${r.gap}`);
       }
       await page.evaluate(() => document.body.classList.add("bug-dock-open"));
-      await page.waitForFunction(() => parseFloat(getComputedStyle(document.getElementById("spend-fig")).fontSize) > 0);
       await settle(page);
+      // Let the column resize and its ResizeObserver refit the figure before reading its bounds.
+      await flushFrames(page);
       { const r = await shoot(page); note(theme + " docked", r); out.push(`${theme} docked ${r.text} ${r.size}px gap ${r.gap}`); }
       if (theme === "dark") {
         await page.evaluate(() => document.body.classList.remove("bug-dock-open"));
