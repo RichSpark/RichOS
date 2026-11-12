@@ -266,9 +266,9 @@ class ConversationWalk(adopt_walk.Walk):
         except profile_walk.StepFailed as exc:
             raise StepFailed('the stand-in site: %s' % str(exc)[:500])
         if getattr(self.a, "no_accessibility", False):
-            # The guest image carries com.richos.app with auth_value 0 (a Deny already given; walk
-            # of 2026-11-12), and macOS does not ask again after a decision. tccutil forgets it,
-            # so RichOS is never-asked, as on a new user's Mac.
+            # The guest image carries a com.richos.app row with auth_value 0. macOS still put its
+            # request up with it (walk of 2026-11-12, final.png), but tccutil forgets it anyway so
+            # the run does not depend on what the image holds: never asked, as on a new Mac.
             before = self.accessibility_rows() or 'none'
             reset = adopt_walk.guest(self.vm, 'sudo -n tccutil reset Accessibility com.richos.app 2>&1 || true', 60).strip()
             print("Accessibility: not granted to RichOS (--no-accessibility); its rows before: %s; %s; after: %s"
@@ -406,10 +406,11 @@ class AccessibilityRequests(threading.Thread):
     second request after a refusal, or a second process asking, is a second entry: the record
     of whether the user was asked again. Looks every 3 s from the guest's ssh session."""
     OWNER = 'universalAccessAuthWarn'
-    WINDOWS = ("osascript -l JavaScript -e 'ObjC.import(\"CoreGraphics\"); "
-               "ObjC.deepUnwrap($.CFBridgingRelease($.CGWindowListCopyWindowInfo(1|16, 0)))"
-               ".filter(function(w){return w.kCGWindowOwnerName == \"universalAccessAuthWarn\"})"
-               ".map(function(w){return w.kCGWindowOwnerPID}).join(\" \")'")
+    # Not the window list: CGWindowList read from the guest's ssh session lists none of the GUI
+    # session's windows, so a watcher built on it counted 0 while the request sat on screen (both
+    # no-grant walks of 2026-11-12, their final.png). Accessibility from the ssh session does see
+    # it, as ax.py sees SecurityAgent's window.
+    PIDS = 'pgrep -x universalAccessAuthWarn || true'
 
     def __init__(self, walk, deny):
         super().__init__(daemon=True)
@@ -418,9 +419,17 @@ class AccessibilityRequests(threading.Thread):
     def run(self):
         while not self.done.wait(3):
             try:
-                self.look(adopt_walk.guest(self.walk.vm, self.WINDOWS + ' 2>/dev/null || true', 30).split())
+                pids = adopt_walk.guest(self.walk.vm, self.PIDS, 30).split()
+                self.look(pids if pids and self.showing() else [])
             except (StepFailed, RuntimeError, subprocess.TimeoutExpired):
                 continue
+
+    def showing(self):
+        """Whether macOS's request window is up: its Deny button, found through Accessibility."""
+        try:
+            return self.walk.present('Deny', app=self.OWNER)
+        except (StepFailed, subprocess.TimeoutExpired):
+            return False
 
     def look(self, pids):
         """One look's request windows (their owners' pids): a window after none, or one owned by a

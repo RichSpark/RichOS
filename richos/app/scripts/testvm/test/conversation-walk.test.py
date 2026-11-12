@@ -139,6 +139,17 @@ class Actors(unittest.TestCase):
         self.assertEqual(watcher.seen[0]['words'], ['Deny'])
         self.assertEqual([c for c in clicks if c[0] == 'click'][0][2], 'universalAccessAuthWarn')
 
+    def test_the_request_is_up_only_when_accessibility_finds_its_deny_button(self):
+        def present(found):
+            def answer(s, title, app=None):
+                if found is None:
+                    raise walk.StepFailed('ax: no such process')
+                return found and title == 'Deny' and app == 'universalAccessAuthWarn'
+            return answer
+        for found, up in ((True, True), (False, False), (None, False)):
+            fake = type('W', (), {'present': present(found)})()
+            self.assertEqual(walk.AccessibilityRequests(fake, deny=False).showing(), up, found)
+
     def test_a_read_before_the_walks_first_step_does_not_count(self):
         with tempfile.TemporaryDirectory() as d:
             a = self.walk_out(d, helper_reads=True)  # the read is at 10:00:00Z
