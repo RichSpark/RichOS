@@ -165,6 +165,34 @@ final class BrowserModelTests: XCTestCase {
     }
 
     @MainActor
+    func testRefreshAndSessionDoNotSelectAnItemThatReusedTheSamePath() async throws {
+        let root = FileManager.default.temporaryDirectory.resolvingSymlinksInPath()
+            .appendingPathComponent("RichFilesSelectionIdentity-\(UUID().uuidString)", isDirectory: true)
+        let file = root.appendingPathComponent("Selected.txt")
+        let parked = root.appendingPathComponent("Original.txt")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try Data("old".utf8).write(to: file)
+
+        let model = BrowserModel(start: root)
+        try await waitForListing(model, at: root)
+        model.selected = [try XCTUnwrap(model.entries.first?.id)]
+        let session = try XCTUnwrap(model.sessionData())
+        try FileManager.default.moveItem(at: file, to: parked)
+        try Data("new".utf8).write(to: file)
+
+        model.refresh()
+        try await waitForListing(model, at: root)
+        XCTAssertTrue(model.selected.isEmpty)
+        XCTAssertEqual(Set(model.entries.map(\.name)), ["Selected.txt", "Original.txt"])
+        XCTAssertTrue(model.restoreSession(session))
+        try await waitForListing(model, at: root)
+        XCTAssertTrue(model.selected.isEmpty)
+        XCTAssertEqual(try String(contentsOf: parked, encoding: .utf8), "old")
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), "new")
+    }
+
+    @MainActor
     func testMultipleListingBatchesKeepEveryFileInNaturalOrder() async throws {
         let temporary = try XCTUnwrap(ProcessInfo.processInfo.environment["TMPDIR"])
         let root = URL(fileURLWithPath: temporary, isDirectory: true)

@@ -467,7 +467,8 @@ struct BrowserView: View {
         .background(BrowserDragSurface(prepare: { point in
             guard let url = rowAt(point),
                   let entry = model.entries.first(where: { $0.url == url }) else { return nil }
-            return beginDrag(entry)
+            let entries = model.selected.contains(entry.url) ? model.selectedEntries : [entry]
+            return { beginDrag(entry, entries: entries) }
         }, controlClick: { point, windowPoint, window in
             guard windowsKeys else { return false }
             let nativeRow = model.viewMode == .details ? detailsViewport.item(at: windowPoint, in: window) : nil
@@ -1313,7 +1314,7 @@ struct BrowserView: View {
     private func captureSelection() async {
         let selected = model.selected
         selectedReferences = selectedReferences.filter { selected.contains($0.key) }
-        let entries = model.selectedEntries.filter { selectedReferences[$0.url] == nil }
+        let entries = model.selectedEntries.filter { cachedReference(for: $0) == nil }
         if entries.isEmpty { return }
         let captured = try? await Self.capture(entries)
         guard !Task.isCancelled, model.selected == selected else { return }
@@ -1324,7 +1325,7 @@ struct BrowserView: View {
 
     private func withReferences(_ entries: [FileEntry], action: @escaping ([FileReference]) -> Void) {
         guard !entries.isEmpty else { return }
-        let cached = entries.compactMap { selectedReferences[$0.url] }
+        let cached = entries.compactMap { cachedReference(for: $0) }
         if cached.count == entries.count { action(cached); return }
         guard !preparingAction else { return }
         preparingAction = true
@@ -1335,17 +1336,19 @@ struct BrowserView: View {
         }
     }
 
+    private func cachedReference(for entry: FileEntry) -> FileReference? {
+        guard let reference = selectedReferences[entry.url], reference.identity == entry.identity else { return nil }
+        return reference
+    }
+
     nonisolated private static func capture(_ entries: [FileEntry]) async throws -> [FileReference] {
         try entries.map { entry in
             try Task.checkCancellation()
-            let url = URL(fileURLWithPath: entry.url.path)
-            let reference = try FileReference(url: url)
-            let current = try FileEntry(url: url)
-            guard current.created == entry.created, current.modified == entry.modified,
+            let reference = try entry.operationReference()
+            let current = try FileEntry(url: URL(fileURLWithPath: entry.url.path))
+            guard current.identity == entry.identity,
+                  current.created == entry.created, current.modified == entry.modified,
                   current.size == entry.size, current.kind == entry.kind else {
-                throw FileOperationError.sourceChanged(entry.url)
-            }
-            guard try FileReference(url: url).identity == reference.identity else {
                 throw FileOperationError.sourceChanged(entry.url)
             }
             return reference
@@ -1359,17 +1362,17 @@ struct BrowserView: View {
         feedback = urls.count == 1 ? "Path copied." : "Paths copied."
     }
 
-    private func beginDrag(_ entry: FileEntry) -> BrowserDragSurface.Payload? {
-        let entries = model.selected.contains(entry.url) ? model.selectedEntries : [entry]
-        let references = entries.compactMap { selectedReferences[$0.url] }
+    private func beginDrag(_ entry: FileEntry, entries: [FileEntry]) -> BrowserDragSurface.Payload? {
         let sources: [FileReference]
-        if entries.count == 1, references.isEmpty, let source = try? FileReference(url: entry.url) {
+        if entries.count == 1, let source = try? entry.operationReference() {
             sources = [source]
+        } else if entries.count > 1 {
+            sources = entries.compactMap { cachedReference(for: $0) }
         } else {
-            sources = references
+            sources = []
         }
         guard sources.count == entries.count, let primary = sources.first(where: { $0.url.path == entry.url.path }) else {
-            feedback = "The file selection changed. Select the items again."
+            feedback = "The file selection changed. Refresh this folder and select the items again."
             return nil
         }
         let token = actions.beginDrag(primary: primary, sources: sources)

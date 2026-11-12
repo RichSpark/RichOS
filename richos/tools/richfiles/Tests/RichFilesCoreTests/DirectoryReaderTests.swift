@@ -16,6 +16,39 @@ final class DirectoryReaderTests: XCTestCase {
         try Data(text.utf8).write(to: root.appendingPathComponent(path))
     }
 
+    func testListedFileRefusesADifferentInodeWithMatchingMetadata() throws {
+        try fixture { root in
+            let original = root.appendingPathComponent("selected.txt")
+            let incoming = root.appendingPathComponent("incoming.txt")
+            let parked = root.appendingPathComponent("parked.txt")
+            let time = Date(timeIntervalSince1970: 1_700_000_000)
+            for (url, bytes) in [(original, "old"), (incoming, "new")] {
+                try Data(bytes.utf8).write(to: url)
+                try FileManager.default.setAttributes([.creationDate: time, .modificationDate: time],
+                                                      ofItemAtPath: url.path)
+            }
+
+            var listed: [FileEntry] = []
+            _ = try DirectoryReader.scan(root) { listed.append(contentsOf: $0) }
+            let row = try XCTUnwrap(listed.first { $0.name == original.lastPathComponent })
+            XCTAssertEqual(try row.operationReference().identity, row.identity)
+            try FileManager.default.moveItem(at: original, to: parked)
+            try FileManager.default.moveItem(at: incoming, to: original)
+
+            let replacement = try FileEntry(url: original)
+            XCTAssertEqual(replacement.created, row.created)
+            XCTAssertEqual(replacement.modified, row.modified)
+            XCTAssertEqual(replacement.size, row.size)
+            XCTAssertEqual(replacement.kind, row.kind)
+            XCTAssertNotEqual(replacement.identity, row.identity)
+            XCTAssertThrowsError(try row.operationReference()) {
+                guard case FileOperationError.sourceChanged = $0 else { return XCTFail("\($0)") }
+            }
+            XCTAssertEqual(try String(contentsOf: parked, encoding: .utf8), "old")
+            XCTAssertEqual(try String(contentsOf: original, encoding: .utf8), "new")
+        }
+    }
+
     func testDiskUsageCountsNestedFilesAndHiddenItemsWithoutFollowingLinks() throws {
         try fixture { root in
             let folder = root.appendingPathComponent("Measure", isDirectory: true)

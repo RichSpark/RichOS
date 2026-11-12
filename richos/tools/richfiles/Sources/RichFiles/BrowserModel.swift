@@ -175,9 +175,19 @@ final class BrowserModel: ObservableObject {
 
     private struct Visit: Codable, Sendable {
         let folder: URL
-        var selection: Set<URL> = []
+        var selectedFiles: [String: FileIdentity]?
         var anchor: URL?
         var search = SearchState()
+    }
+
+    private enum SelectionTarget {
+        case sameFile(FileIdentity)
+        case reveal
+
+        var identity: FileIdentity? {
+            if case .sameFile(let identity) = self { return identity }
+            return nil
+        }
     }
 
     private struct TabState: Codable {
@@ -208,7 +218,7 @@ final class BrowserModel: ObservableObject {
     private var restoringVisit = false
     private var restoringView = false
     private var settingSelection = false
-    private var selectionToRestore: Set<URL> = []
+    private var selectionToRestore: [String: SelectionTarget] = [:]
     private var firstVisibleItem: URL?
     private var scanTask: Task<Void, Never>?
     private var scanID: UUID?
@@ -370,7 +380,9 @@ final class BrowserModel: ObservableObject {
               let session = try? JSONDecoder().decode(Session.self, from: data),
               session.tabs.indices.contains(session.activeTab), session.tabs.allSatisfy({ state in
                   ([state.visit] + state.back + state.forward).allSatisfy { visit in
-                      Self.isSessionURL(visit.folder) && visit.selection.allSatisfy(Self.isSessionURL)
+                      let selected = (visit.selectedFiles ?? [:]).keys
+                      return Self.isSessionURL(visit.folder)
+                          && selected.allSatisfy { $0.hasPrefix("/") && !$0.utf8.contains(0) }
                           && (visit.anchor.map(Self.isSessionURL) ?? true)
                   }
               }) else { return false }
@@ -620,8 +632,8 @@ final class BrowserModel: ObservableObject {
                 forward.removeAll()
             }
             let item = url.appendingPathComponent(name).standardizedFileURL
-            restore(Visit(folder: url, selection: [item], anchor: item,
-                          search: SearchState(recursive: searchRecursively)))
+            restore(Visit(folder: url, anchor: item,
+                          search: SearchState(recursive: searchRecursively)), revealing: item)
         case .search(let state):
             if url.path != folder.path {
                 back.append(leaving)
@@ -631,11 +643,11 @@ final class BrowserModel: ObservableObject {
         case .back:
             guard let target = back.popLast() else { return }
             forward.append(leaving)
-            restore(Visit(folder: url, selection: target.selection, anchor: target.anchor, search: target.search))
+            restore(Visit(folder: url, selectedFiles: target.selectedFiles, anchor: target.anchor, search: target.search))
         case .forward:
             guard let target = forward.popLast() else { return }
             back.append(leaving)
-            restore(Visit(folder: url, selection: target.selection, anchor: target.anchor, search: target.search))
+            restore(Visit(folder: url, selectedFiles: target.selectedFiles, anchor: target.anchor, search: target.search))
         }
     }
 
@@ -645,8 +657,15 @@ final class BrowserModel: ObservableObject {
     }
 
     private func captureVisit() -> Visit {
-        Visit(folder: folder, selection: selected.union(selectionToRestore), anchor: firstVisibleItem ?? scrollAnchor,
+        Visit(folder: folder, selectedFiles: selectionSnapshot().compactMapValues(\.identity),
+              anchor: firstVisibleItem ?? scrollAnchor,
               search: captureSearch())
+    }
+
+    private func selectionSnapshot() -> [String: SelectionTarget] {
+        var snapshot = selectionToRestore
+        for entry in selectedEntries { snapshot[entry.url.path] = .sameFile(entry.identity) }
+        return snapshot
     }
 
     private func captureSearch() -> SearchState {
@@ -657,7 +676,7 @@ final class BrowserModel: ObservableObject {
         )
     }
 
-    private func restore(_ visit: Visit) {
+    private func restore(_ visit: Visit, revealing item: URL? = nil) {
         folder = visit.folder
         if let index = tabs.firstIndex(where: { $0.id == currentTabID }) {
             tabs[index].folder = folder
@@ -667,7 +686,9 @@ final class BrowserModel: ObservableObject {
         scrollAnchor = visit.anchor
         setSearch(visit.search)
         applyView(for: folder)
-        load(restoring: visit.selection)
+        var selection = (visit.selectedFiles ?? [:]).mapValues(SelectionTarget.sameFile)
+        if let item { selection[item.path] = .reveal }
+        load(restoring: selection)
     }
 
     private func setSearch(_ state: SearchState) {
@@ -687,10 +708,10 @@ final class BrowserModel: ObservableObject {
 
     private func reloadPreservingSelection() {
         if let firstVisibleItem { scrollAnchor = firstVisibleItem }
-        load(restoring: selected.union(selectionToRestore))
+        load(restoring: selectionSnapshot())
     }
 
-    private func load(restoring selection: Set<URL> = []) {
+    private func load(restoring selection: [String: SelectionTarget] = [:]) {
         scanTask?.cancel()
         firstVisibleItem = nil
         let id = UUID()
@@ -744,13 +765,12 @@ final class BrowserModel: ObservableObject {
     private func apply(_ update: ListingUpdate) {
         entries = update.entries
         if !selectionToRestore.isEmpty {
-            let requested = Set(selectionToRestore.map(\.path))
-            let available = entries.map(\.id).filter { requested.contains($0.path) }
-            if !available.isEmpty {
-                let restored = Set(available.map(\.path))
-                selectionToRestore = selectionToRestore.filter { !restored.contains($0.path) }
-                setSelection(selected.union(available))
+            let available = entries.compactMap { entry -> URL? in
+                guard let target = selectionToRestore.removeValue(forKey: entry.url.path) else { return nil }
+                if let identity = target.identity, identity != entry.identity { return nil }
+                return entry.id
             }
+            if !available.isEmpty { setSelection(selected.union(available)) }
         }
         if let anchor = scrollAnchor, let listed = entries.first(where: { $0.id.path == anchor.path })?.id, listed != anchor {
             scrollAnchor = listed

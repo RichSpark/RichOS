@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 public enum FileKind: Equatable, Sendable {
@@ -11,6 +12,7 @@ public enum FileKind: Equatable, Sendable {
 public struct FileEntry: Sendable, Identifiable {
     public var id: URL { url }
     public let url: URL
+    public let identity: FileIdentity
     public let name: String
     public let kind: FileKind
     public let typeDescription: String?
@@ -22,30 +24,46 @@ public struct FileEntry: Sendable, Identifiable {
     public let needsDownload: Bool
 
     fileprivate static let resourceKeys: Set<URLResourceKey> = [
-        .isDirectoryKey, .isPackageKey, .isRegularFileKey, .isSymbolicLinkKey,
-        .localizedTypeDescriptionKey, .fileSizeKey, .contentModificationDateKey,
-        .creationDateKey, .isHiddenKey, .isUbiquitousItemKey, .ubiquitousItemDownloadingStatusKey
+        .isPackageKey, .localizedTypeDescriptionKey, .isHiddenKey,
+        .isUbiquitousItemKey, .ubiquitousItemDownloadingStatusKey
     ]
 
     public init(url: URL) throws {
         try requireLocalFileURL(url)
+        var status = stat()
+        guard lstat(url.path, &status) == 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
         let values = try url.resourceValues(forKeys: Self.resourceKeys)
         self.url = url
+        identity = FileIdentity(status)
         name = url.lastPathComponent
-        if values.isSymbolicLink == true {
-            kind = .symbolicLink
-        } else if values.isDirectory == true {
-            kind = values.isPackage == true ? .package : .directory
-        } else {
-            kind = values.isRegularFile == true ? .regularFile : .other
+        switch status.st_mode & S_IFMT {
+        case S_IFLNK: kind = .symbolicLink
+        case S_IFDIR: kind = values.isPackage == true ? .package : .directory
+        case S_IFREG: kind = .regularFile
+        default: kind = .other
         }
         typeDescription = values.localizedTypeDescription
-        size = kind == .regularFile ? values.fileSize.map(Int64.init) : nil
-        modified = values.contentModificationDate
-        created = values.creationDate
+        size = kind == .regularFile ? status.st_size : nil
+        modified = Self.date(status.st_mtimespec)
+        let birth = status.st_birthtimespec
+        created = birth.tv_sec != 0 || birth.tv_nsec != 0 ? Self.date(birth) : nil
         isHidden = values.isHidden == true || name.hasPrefix(".")
         needsDownload = values.isUbiquitousItem == true
             && values.ubiquitousItemDownloadingStatus == .notDownloaded
+    }
+
+    public func operationReference() throws -> FileReference {
+        let reference = try FileReference(url: url)
+        guard reference.identity == identity else {
+            throw FileOperationError.sourceChanged(url)
+        }
+        return reference
+    }
+
+    private static func date(_ time: timespec) -> Date {
+        Date(timeIntervalSince1970: Double(time.tv_sec) + Double(time.tv_nsec) / 1_000_000_000)
     }
 }
 

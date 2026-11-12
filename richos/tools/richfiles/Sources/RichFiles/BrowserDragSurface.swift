@@ -8,7 +8,7 @@ struct BrowserDragSurface: NSViewRepresentable {
         let urls: [URL]
     }
 
-    let prepare: (CGPoint) -> Payload?
+    let prepare: (CGPoint) -> (() -> Payload?)?
     let controlClick: (CGPoint?, NSPoint, NSWindow) -> Bool
 
     static var pasteboardToken: UUID? {
@@ -24,10 +24,10 @@ struct BrowserDragSurface: NSViewRepresentable {
 
     final class Source: NSView, NSDraggingSource {
         static let tokenType = NSPasteboard.PasteboardType(BrowserDragSelection.type)
-        var prepare: ((CGPoint) -> Payload?)?
+        var prepare: ((CGPoint) -> (() -> Payload?)?)?
         var controlClick: ((CGPoint?, NSPoint, NSWindow) -> Bool)?
         private var monitor: Any?
-        private var down: NSEvent?
+        private var down: (event: NSEvent, prepare: () -> Payload?)?
         private var consumedClick = false
 
         override var isFlipped: Bool { true }
@@ -62,7 +62,10 @@ struct BrowserDragSurface: NSViewRepresentable {
                 let modifiers = event.modifierFlags.intersection([.control, .command, .option, .shift])
                 consumedClick = modifiers == .control &&
                     controlClick?(inside ? point : nil, event.locationInWindow, window) == true
-                down = inside && !consumedClick ? event : nil
+                down = nil
+                if inside && !consumedClick, let start = prepare?(point) {
+                    down = (event, start)
+                }
                 return consumedClick
             }
             if event.type == .leftMouseUp {
@@ -72,11 +75,11 @@ struct BrowserDragSurface: NSViewRepresentable {
                 return handled
             }
             guard let down,
-                  hypot(event.locationInWindow.x - down.locationInWindow.x,
-                        event.locationInWindow.y - down.locationInWindow.y) >= 5 else { return false }
+                  hypot(event.locationInWindow.x - down.event.locationInWindow.x,
+                        event.locationInWindow.y - down.event.locationInWindow.y) >= 5 else { return false }
             self.down = nil
-            let point = convert(down.locationInWindow, from: nil)
-            guard let payload = prepare?(point) else { return false }
+            let point = convert(down.event.locationInWindow, from: nil)
+            guard let payload = down.prepare() else { return false }
 
             let icon = NSImage(systemSymbolName: "doc", accessibilityDescription: nil)
             let items = payload.urls.enumerated().map { index, url in
@@ -91,7 +94,7 @@ struct BrowserDragSurface: NSViewRepresentable {
                                                  width: 28, height: 28), contents: icon)
                 return dragging
             }
-            let session = beginDraggingSession(with: items, event: down, source: self)
+            let session = beginDraggingSession(with: items, event: down.event, source: self)
             session.draggingFormation = .pile
             return true
         }
