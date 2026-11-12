@@ -433,8 +433,8 @@ mod tests {
         let decode = Instant::now();
         let scratch = Scratch::new(&data).unwrap();
         let final_stop = AtomicBool::new(false);
-        let (text, decoder_ms) = Recognizer::for_model(MORE_ACCURATE).unwrap()
-            .transcribe_bounded_until(&samples, scratch.path(), decode_bound(samples.len()), &final_stop).unwrap();
+        let richos_voice::stt::Dictated { words: text, decode_ms: decoder_ms, .. } = Recognizer::for_model(MORE_ACCURATE).unwrap()
+            .transcribe_dictation_until(&samples, scratch.path(), decode_bound(samples.len()), &final_stop).unwrap();
         drop(scratch);
         let final_ms = decode.elapsed().as_millis();
         let scratch_empty = std::fs::read_dir(data.join("dictation-scratch")).unwrap().next().is_none();

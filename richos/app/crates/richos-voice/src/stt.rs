@@ -942,22 +942,74 @@ impl Recognizer {
                                    stop: &std::sync::atomic::AtomicBool) -> Result<(String, u64), SttError> {
         self.transcribe_inner(samples, scratch_dir, Some(timeout), Some(stop), &["-bs", "3"])
     }
+    /// **A finished dictation**, of any length, decoded in the pieces [`crate::speech`] cuts it
+    /// into: each piece is one stretch of talking that fits one decode window, so no window
+    /// holds only the room (where Whisper writes "Thank you.") and no word sits across two
+    /// (where it was lost). Every piece is decoded with the same measured flags as one
+    /// utterance, [`decode_args`], in ONE decoder run, so the model is loaded once. Bounded and
+    /// stoppable exactly as [`Self::transcribe_bounded_until`] is.
+    ///
+    /// Every doubt keeps the words: if the speech detector cannot run, or hears no speech in a
+    /// recording [`crate::dictation::judge_recording`] already heard a voice in, the recording
+    /// is decoded whole, as it was before 2026-11-12.
+    pub fn transcribe_dictation_until(&self, samples: &[f32], scratch_dir: &Path, timeout: std::time::Duration,
+                                      stop: &std::sync::atomic::AtomicBool) -> Result<Dictated, SttError> {
+        let started = Instant::now();
+        let whole = || std::iter::once(0..samples.len()).collect::<Vec<_>>();
+        let pieces = match crate::speech::pieces_of(samples) {
+            Ok(pieces) if !pieces.is_empty() => pieces,
+            Ok(_) => whole(),
+            Err(why) => {
+                eprintln!("richos-voice: the speech detector did not run, so this dictation is decoded whole: {why}");
+                whole()
+            }
+        };
+        let detect_ms = started.elapsed().as_millis() as u64;
+        let mut dictated = self.transcribe_pieces(samples, &pieces, scratch_dir, timeout, stop)?;
+        dictated.detect_ms = detect_ms;
+        Ok(dictated)
+    }
+    /// The decoder half of [`Self::transcribe_dictation_until`], over pieces the caller names.
+    fn transcribe_pieces(&self, samples: &[f32], pieces: &[std::ops::Range<usize>], scratch_dir: &Path, timeout: std::time::Duration,
+                         stop: &std::sync::atomic::AtomicBool) -> Result<Dictated, SttError> {
+        let audio: Vec<&[f32]> = pieces.iter().map(|piece| &samples[piece.clone()]).collect();
+        let (words, decode_ms) = self.decode(&audio, scratch_dir, Some(timeout), Some(stop), &[])?;
+        Ok(Dictated { words, decode_ms, detect_ms: 0, pieces: pieces.len() })
+    }
     fn transcribe_inner(&self,samples:&[f32],scratch_dir:&Path,timeout:Option<std::time::Duration>,stop:Option<&std::sync::atomic::AtomicBool>,extra_args:&[&str])->Result<(String,u64),SttError> {
+        self.decode(&[samples], scratch_dir, timeout, stop, extra_args)
+    }
+    /// One decoder run over `audio`, one WAV per entry, in order: the words, and how long it took.
+    fn decode(&self,audio:&[&[f32]],scratch_dir:&Path,timeout:Option<std::time::Duration>,stop:Option<&std::sync::atomic::AtomicBool>,extra_args:&[&str])->Result<(String,u64),SttError> {
         std::fs::create_dir_all(scratch_dir).map_err(|e| SttError::Io(e.to_string()))?;
-        let wav_path = scratch_dir.join(format!("utt-{}.wav", std::process::id()));
-        wav::write_pcm16_mono(&wav_path, samples, SAMPLE_RATE).map_err(|e| SttError::Io(e.to_string()))?;
+        // One recording keeps the name it always had; the pieces of a dictation are numbered.
+        let wav_paths: Vec<PathBuf> = (0..audio.len()).map(|n| scratch_dir.join(match audio.len() {
+            1 => format!("utt-{}.wav", std::process::id()),
+            _ => format!("utt-{}-{n:03}.wav", std::process::id()),
+        })).collect();
+        // The recording is removed whatever happens next: a failed write, a timeout, a stop or
+        // a decoder failure leaves no voice on disk here (the caller's scratch folder removes
+        // the rest).
+        let remove = || wav_paths.iter().for_each(|path| { let _ = std::fs::remove_file(path); });
+        for (path, samples) in wav_paths.iter().zip(audio) {
+            if let Err(e) = wav::write_pcm16_mono(path, samples, SAMPLE_RATE) {
+                remove();
+                return Err(SttError::Io(e.to_string()));
+            }
+        }
 
         let started = Instant::now();
         let mut cmd = decoder_command(&self.bin);
-        cmd.arg("-m").arg(&self.model).arg("-f").arg(&wav_path);
+        cmd.arg("-m").arg(&self.model);
+        for path in &wav_paths {
+            cmd.arg("-f").arg(path);
+        }
         cmd.args(decode_args(self.prompt.as_deref())).args(extra_args);
         let out = match timeout {
             Some(timeout)=>bounded_decoder_until(&mut cmd,scratch_dir,timeout,stop),
             None=>tethered_output(&mut cmd),
         };
-        // The recording is removed whatever the decoder did: a timeout, a stop or a failure
-        // leaves no voice on disk here (the caller's scratch folder removes the rest).
-        let _ = std::fs::remove_file(&wav_path);
+        remove();
         let out = out.map_err(|e| SttError::Io(e.to_string()))?;
         let elapsed_ms = started.elapsed().as_millis() as u64;
 
@@ -969,6 +1021,19 @@ impl Recognizer {
         }
         Ok((clean_transcript(&String::from_utf8_lossy(&out.stdout)), elapsed_ms))
     }
+}
+
+/// **A finished dictation as [`Recognizer::transcribe_dictation_until`] returns it.**
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Dictated {
+    /// The words, on one line.
+    pub words: String,
+    /// The decoder's measured wall-clock time.
+    pub decode_ms: u64,
+    /// The speech detector's measured wall-clock time, before the decoder started.
+    pub detect_ms: u64,
+    /// How many pieces the recording was decoded in. A count for the local timing record.
+    pub pieces: usize,
 }
 
 /// **`whisper-cli` TIED TO THIS PROCESS'S LIFE**: `bin` and the arguments added after this, run
@@ -1166,6 +1231,58 @@ mod tests {
         let (final_words, _) = recognizer.transcribe_bounded_until(&[0.0; 256], &root.join("final"), bound, &stop).unwrap();
         assert!(preview.ends_with("-l en -t 4 -fa -np -nt -mc 0 -bs 3"));
         assert!(final_words.ends_with("-l en -t 4 -fa -np -nt -mc 0"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// INVARIANT: the pieces of a dictation reach the decoder as one numbered WAV each, in
+    /// order, in ONE run with the measured flags and nothing else, and none of them outlives
+    /// the decode. One utterance is still one `utt-<pid>.wav`.
+    #[test]
+    fn a_dictation_is_decoded_piece_by_piece_in_one_run_with_the_measured_flags() {
+        use std::{os::unix::fs::PermissionsExt, sync::atomic::AtomicBool, time::Duration};
+        let root = std::env::temp_dir().join(format!("richos-dictation-pieces-{}", std::process::id()));
+        std::fs::remove_dir_all(&root).ok();
+        std::fs::create_dir_all(&root).unwrap();
+        let bin = root.join("decoder");
+        // Prints its arguments, then the size in bytes of every file named by `-f`.
+        std::fs::write(&bin, "#!/bin/sh\nprintf '%s\\n' \"$*\"\nprev=\nfor a in \"$@\"; do [ \"$prev\" = -f ] && wc -c < \"$a\"; prev=$a; done\n").unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let recognizer = test_recognizer(&root, bin);
+        let scratch = root.join("scratch");
+        let samples = vec![0.0f32; 5 * SAMPLE_RATE as usize];
+        let pieces = [0..16_000, 20_000..52_000, 60_000..80_000];
+        let dictated = recognizer.transcribe_pieces(&samples, &pieces, &scratch, Duration::from_secs(5), &AtomicBool::new(false)).unwrap();
+        let pid = std::process::id();
+        let model = root.join("model");
+        let name = |n: usize| scratch.join(format!("utt-{pid}-{n:03}.wav"));
+        assert_eq!(dictated.pieces, 3);
+        assert_eq!(dictated.words, format!(
+            "-m {} -f {} -f {} -f {} -l en -t 4 -fa -np -nt -mc 0 {} {} {}",
+            model.display(), name(0).display(), name(1).display(), name(2).display(),
+            44 + 2 * 16_000, 44 + 2 * 32_000, 44 + 2 * 20_000),
+            "three WAVs of the pieces' own lengths (a 44-byte header and two bytes a sample), the shipped flags");
+        assert!((0..3).all(|n| !name(n).exists()), "no piece outlives the decode");
+
+        let (one, _) = recognizer.transcribe_bounded_until(&samples[..256], &root.join("one"), Duration::from_secs(5), &AtomicBool::new(false)).unwrap();
+        assert!(one.starts_with(&format!("-m {} -f {} -l en", model.display(), root.join("one").join(format!("utt-{pid}.wav")).display())), "{one}");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// INVARIANT: a recording the detector hears no speech in is still decoded, whole: the
+    /// voice gate already let it through, and every doubt keeps the words.
+    #[test]
+    fn a_dictation_the_detector_hears_nothing_in_is_decoded_whole() {
+        use std::{os::unix::fs::PermissionsExt, sync::atomic::AtomicBool, time::Duration};
+        let root = std::env::temp_dir().join(format!("richos-dictation-whole-{}", std::process::id()));
+        std::fs::remove_dir_all(&root).ok();
+        std::fs::create_dir_all(&root).unwrap();
+        let bin = root.join("decoder");
+        std::fs::write(&bin, "#!/bin/sh\nprev=\nfor a in \"$@\"; do [ \"$prev\" = -f ] && wc -c < \"$a\"; prev=$a; done\n").unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let recognizer = test_recognizer(&root, bin);
+        let silence = vec![0.0f32; 3 * SAMPLE_RATE as usize];
+        let dictated = recognizer.transcribe_dictation_until(&silence, &root.join("scratch"), Duration::from_secs(5), &AtomicBool::new(false)).unwrap();
+        assert_eq!((dictated.words.as_str(), dictated.pieces), ((44 + 2 * silence.len()).to_string().as_str(), 1));
         std::fs::remove_dir_all(root).unwrap();
     }
 

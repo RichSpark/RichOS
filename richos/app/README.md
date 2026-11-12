@@ -647,6 +647,11 @@ richos/app/
                               AUDIO holds a 6-window (0.112 s) voiced run whose pitch moved
                               by 2.00 % — the gate that stops a silent room being submitted
                               as the CEO's own words (2026-09-04, published v1.0.1)
+    src/speech.rs            WHERE THE SPEECH IS in a finished dictation (Silero VAD, in
+                              process, compiled in) and the pieces it is decoded in: one
+                              stretch of talking per 30-second decode window, every cut in a
+                              pause, so no window holds only the room and no word sits across
+                              two (2026-11-12, the unspoken "Thank you." and the lost words)
     src/chunk.rs             streaming sentence chunker + clean output FOR THE EAR
     src/state.rs             the voice-mode state machine (mic state is never a guess)
     src/wav.rs               hand-rolled PCM16 WAV codec + rate conversion
@@ -717,6 +722,11 @@ richos/app/
                               transfer, a resume that still verifies, a full disk. NO SOCKET
                               IS OPENED: the bytes are supplied directly, which is the whole
                               reason the transport and the judgment are separate files
+    tests/dictation_recordings.rs  opt-in measurement, never a gate: what the dictation tool's
+                              voice gate and recognizer (`speech.rs` pieces, then the pinned
+                              decoder, both speech choices) hear in recordings the caller
+                              names. Its 2026-11-12 results are in
+                              `docs/measurements/richscribe-2026-11-12/`
     examples/voice_loop.rs   the reproducible end-to-end proof (audio -> Claude -> speakers)
     examples/device_probe.rs what the audio hardware on THIS machine actually reports
     examples/noaudio_live.rs live mute/unmute check on the real device (PASS 2026-08-24)
