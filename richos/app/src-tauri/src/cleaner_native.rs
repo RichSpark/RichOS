@@ -98,6 +98,19 @@ impl Native {
     pub fn context(&self, cancel: &AtomicBool) -> Result<Value> {
         self.call(json!({"action":"context"}), Duration::from_secs(1), cancel)
     }
+    pub fn open_location(
+        &self, path: &Path, identity: &Identity, reveal: bool, downloading: impl FnOnce(),
+    ) -> Result<PathBuf> {
+        let action = if reveal { "resolve" } else { "open-check" };
+        let mut answer = self.request(json!({"action":action,"path":path,"identity":identity}))?;
+        if answer["download"] == true {
+            downloading();
+            answer = self.request(json!({"action":"open-location","path":path,"identity":identity}))?;
+        }
+        Ok(PathBuf::from(
+            answer["path"].as_str().ok_or("Locate the original file")?,
+        ))
+    }
     pub fn stage_copy(&self, e: &Entry) -> Result<Staged> {
         let value =
             self.request(json!({"action":"reserve","path":e.path,"identity":e.identity}))?;
@@ -115,10 +128,7 @@ impl Files for Native {
             .map_err(|e| e.to_string())
     }
     fn resolve(&self, path: &Path, identity: &Identity) -> Result<PathBuf> {
-        let v = self.request(json!({"action":"resolve","path":path,"identity":identity}))?;
-        Ok(PathBuf::from(
-            v["path"].as_str().ok_or("Locate the original file")?,
-        ))
+        self.open_location(path, identity, true, || {})
     }
     fn destination(
         &self,

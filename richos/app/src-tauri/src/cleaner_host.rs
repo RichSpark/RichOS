@@ -861,13 +861,65 @@ pub fn cleaner_capture_control(app: AppHandle, id: String, action: String) -> Re
     }
 }
 #[richos_command::command]
-pub fn cleaner_action(
+pub async fn cleaner_action(
     app: AppHandle,
     id: String,
     action: String,
     note: Option<String>,
 ) -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(move || run_action(app, id, action, note))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn open_original(app: &AppHandle, native: &Native, id: &str, reveal: bool) -> Result<Entry, String> {
+    use std::os::unix::fs::MetadataExt;
+    let entry = catalog(app)?.get(id)?;
+    let path = native.open_location(&entry.path, &entry.identity, reveal, || {
+        drop(app.emit("rich://cleaner-download", json!({"id":id})));
+    })?;
+    // The native helper may have waited for iCloud. Recheck the catalog and path
+    // under the same lock as file changes before handing the path to macOS.
+    let h = host(app);
+    let _guard = h.mutation.lock().map_err(|_| "File operations unavailable")?;
+    let mut db = catalog(app)?;
+    let mut current = db.get(id)?;
+    if !entry.identity.same_object(&current.identity) {
+        return Err("The original changed while opening. Try again".into());
+    }
+    if !std::fs::symlink_metadata(&path).is_ok_and(|meta| {
+        meta.is_file()
+            && meta.ino() == current.identity.object
+            && u64::from(meta.dev() as u32) == current.identity.volume
+    }) {
+        return Err("The original moved while opening. Try again".into());
+    }
+    if current.path != path {
+        located(app, &mut current, path);
+        db.save(&current)?;
+        drop(app.emit(EVENT, json!({"stage":"library-changed"})));
+    }
+    let mut command = std::process::Command::new("/usr/bin/open");
+    if reveal {
+        command.arg("-R");
+    }
+    if !command.arg(&current.path).status().map_err(|e| e.to_string())?.success() {
+        return Err("macOS could not open the file".into());
+    }
+    Ok(current)
+}
+
+fn run_action(app: AppHandle, id: String, action: String, note: Option<String>) -> Result<Value, String> {
     let native = Native::bundled()?;
+    if matches!(action.as_str(), "open" | "reveal") {
+        let start = std::time::Instant::now();
+        let result = open_original(&app, &native, &id, action == "reveal");
+        crate::dictation::log::line(&format!("RichCleaner original {}", json!({
+            "action":action, "elapsed_ms":start.elapsed().as_millis() as u64, "success":result.is_ok()
+        })));
+        let entry = result?;
+        return serde_json::to_value(entry).map_err(|e| e.to_string());
+    }
     let h = host(&app);
     let _guard = h
         .mutation
@@ -876,23 +928,6 @@ pub fn cleaner_action(
     let mut db = catalog(&app)?;
     let mut entry = db.get(&id)?;
     match action.as_str() {
-        "open" | "reveal" => {
-            let path = native.resolve(&entry.path, &entry.identity)?;
-            let actual = native.inspect(&path)?;
-            if !entry.identity.same_object(&actual) {
-                return Err("Locate the original file".into());
-            }
-            located(&app, &mut entry, path);
-            db.save(&entry)?;
-            let mut command = std::process::Command::new("/usr/bin/open");
-            if action == "reveal" {
-                command.arg("-R");
-            }
-            command.arg(&entry.path);
-            if !command.status().map_err(|e| e.to_string())?.success() {
-                return Err("macOS could not open the file".into());
-            }
-        }
         "locate" => {
             use tauri_plugin_dialog::DialogExt;
             if let Some(path) = app
@@ -913,6 +948,8 @@ pub fn cleaner_action(
                 if batch::skip(&h, &id) {
                     entry = cleaner::cancel_sort(&mut db, &id)?;
                 }
+            } else {
+                return Ok(json!({}));
             }
         }
         "undo" => {
@@ -1153,13 +1190,6 @@ pub fn cards(
             continue;
         }
         let e = db.get(&card.file)?;
-        use std::os::unix::fs::MetadataExt;
-        let exists = std::fs::symlink_metadata(&e.path).is_ok_and(|meta| {
-            meta.is_file()
-                && !meta.file_type().is_symlink()
-                && meta.ino() == e.identity.object
-                && meta.dev() == e.identity.volume
-        });
         let name = e.path.file_name().unwrap_or_default().to_string_lossy();
         let ext = e
             .path
@@ -1167,7 +1197,7 @@ pub fn cards(
             .unwrap_or_default()
             .to_string_lossy()
             .to_uppercase();
-        items.push(json!({"id":card.id,"kind":"rich_file","entityId":card.entity,"threadId":card.thread,"turnId":card.turn,"visibility":"ceo","createdAt":card.at,"sequence":card.at,"text":name,"file":{"id":e.id,"library":true,"name":name,"ext":ext,"meta":e.folder,"folder":e.folder,"note":e.note,"exists":exists}}));
+        items.push(json!({"id":card.id,"kind":"rich_file","entityId":card.entity,"threadId":card.thread,"turnId":card.turn,"visibility":"ceo","createdAt":card.at,"sequence":card.at,"text":name,"file":{"id":e.id,"library":true,"name":name,"ext":ext,"meta":e.folder,"folder":e.folder,"note":e.note}}));
     }
     Ok(items)
 }

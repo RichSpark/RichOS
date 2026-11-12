@@ -51,6 +51,21 @@ replaced=native("replace",path=str(source),identity=identity,staged=stage["path"
 target=root/"filed.txt";native("rename",path=str(source),destination=str(target),identity=replaced)
 assert before==attributes(target),"Native filing changed original filesystem attributes"
 assert not source.exists() and target.read_bytes()==b"one original with a staged annotation"
+filed=native("inspect",path=str(target))
+moved=root/"renamed-outside-richcleaner.txt";target.rename(moved)
+for action in ("resolve","open-check","open-location"):
+    opened=native(action,path=str(target),identity=filed)
+    assert opened["path"]==str(moved), "The bookmark must find the externally renamed original"
+    assert opened["identity"]["object"]==filed["object"]
+    assert not opened.get("download"), "A local file must take the fast path"
+moved.unlink()
+target.write_bytes(b"a different file with the old name")
+try:
+    native("open-location",path=str(target),identity=filed)
+except RuntimeError as error:
+    assert "Locate the original file" in str(error)
+else:
+    raise AssertionError("A different file must not open when the bookmarked original is gone")
 native("cleanup",path=stage["path"],identity=staged)
 native("cleanup",path=stage["path"],identity=staged)
 print("Native attributes, single-original move and idempotent staging cleanup passed")
