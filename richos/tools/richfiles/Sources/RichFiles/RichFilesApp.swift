@@ -25,6 +25,11 @@ public enum RichFilesInstallation {
     }
 }
 
+struct FolderWindowRequest: Codable, Hashable {
+    var id = UUID()
+    let folder: URL
+}
+
 @MainActor
 public struct RichFilesScenes: Scene {
     private let delegate: FolderOpenDelegate
@@ -47,6 +52,14 @@ public struct RichFilesScenes: Scene {
         .commands {
             BrowserCommands()
         }
+
+        WindowGroup("RichFiles", id: "richfiles-folder", for: FolderWindowRequest.self) { $request in
+            WindowBrowserView(start: request?.folder ?? FileManager.default.homeDirectoryForCurrentUser,
+                              actions: actions, openRequests: delegate, hostSwitch: Self.dockSwitch)
+                .frame(minWidth: 720, minHeight: 420)
+                .defaultAppStorage(RichFilesInstallation.preferences)
+        }
+        .defaultSize(width: 1120, height: 700)
 
         WindowGroup("RichFiles", id: "richfiles-handoff", for: String.self) { $ticket in
             WindowBrowserView(start: FileManager.default.homeDirectoryForCurrentUser, actions: actions,

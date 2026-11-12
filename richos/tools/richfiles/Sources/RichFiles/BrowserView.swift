@@ -311,12 +311,14 @@ struct BrowserView: View {
                 }
             }
             control("New Tab", "plus") { model.newTab() }
-            control("New Window", "macwindow.badge.plus") {
-                if let hostOpenWindow { hostOpenWindow(model.folder) }
-                else { openWindow(id: "browser") }
-            }
+            control("New Window", "macwindow.badge.plus") { openFolderWindow(model.folder) }
         }
         .padding(.horizontal, 8).padding(.vertical, 4)
+    }
+
+    private func openFolderWindow(_ folder: URL) {
+        if let hostOpenWindow { hostOpenWindow(folder) }
+        else { openWindow(id: "richfiles-folder", value: FolderWindowRequest(folder: folder)) }
     }
 
     private var commandBar: some View {
@@ -675,6 +677,7 @@ struct BrowserView: View {
             if entries.count == 1 {
                 if first.kind == .directory {
                     Button("Open in New Tab") { model.newTab(first.url) }
+                    Button("Open in New Window") { openFolderWindow(first.url) }
                     Button("Pin to Quick Access") { model.addFavorite(first.url) }
                 } else {
                     Button("Open With…") { chooseApplication(first) }
