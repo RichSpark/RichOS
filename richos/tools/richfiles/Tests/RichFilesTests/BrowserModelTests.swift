@@ -119,6 +119,34 @@ final class BrowserModelTests: XCTestCase {
     }
 
     @MainActor
+    func testChangesFromTwoBrowsersPreserveEachOthersPreferences() throws {
+        let temporary = try XCTUnwrap(ProcessInfo.processInfo.environment["TMPDIR"])
+        let root = URL(fileURLWithPath: temporary, isDirectory: true)
+            .appendingPathComponent("RichFilesPreferences-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let domain = "app.richos.richfiles.tests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: domain))
+        defer { defaults.removePersistentDomain(forName: domain) }
+        let first = BrowserModel(start: root, defaults: defaults)
+        let second = BrowserModel(start: root, defaults: defaults)
+
+        first.viewMode = .details
+        first.detailsLayout = Data("custom columns".utf8)
+        first.addFavorite(root.appendingPathComponent("First"))
+        second.iconSize = 96
+        second.showHidden = true
+        second.addFavorite(root.appendingPathComponent("Second"))
+
+        let reopened = BrowserModel(start: root, defaults: defaults)
+        XCTAssertEqual(reopened.viewMode, .details)
+        XCTAssertEqual(reopened.detailsLayout, Data("custom columns".utf8))
+        XCTAssertEqual(reopened.iconSize, 96)
+        XCTAssertTrue(reopened.showHidden)
+        XCTAssertEqual(reopened.favorites.map(\.lastPathComponent), ["First", "Second"])
+    }
+
+    @MainActor
     func testListDefaultNavigationSearchAndPreferences() async throws {
         let temporary = try XCTUnwrap(ProcessInfo.processInfo.environment["TMPDIR"])
         let root = URL(fileURLWithPath: temporary, isDirectory: true)

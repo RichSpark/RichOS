@@ -112,9 +112,8 @@ final class BrowserModel: ObservableObject {
     }
     @Published var showHidden: Bool {
         didSet {
-            guard oldValue != showHidden else { return }
-            preferences.showHidden = showHidden
-            savePreferences()
+            guard !restoringView, oldValue != showHidden else { return }
+            changePreferences { $0.showHidden = showHidden }
             reloadPreservingSelection()
         }
     }
@@ -122,18 +121,18 @@ final class BrowserModel: ObservableObject {
         didSet {
             guard !restoringView else { return }
             guard ViewPreferences.sameSort(oldValue, sort) == false else { return }
-            saveView()
+            changeView { $0.fileSort = sort }
             reloadPreservingSelection()
         }
     }
     @Published var viewMode: BrowserViewMode {
-        didSet { if !restoringView && oldValue != viewMode { saveView() } }
+        didSet { if !restoringView && oldValue != viewMode { changeView { $0.mode = viewMode } } }
     }
     @Published var iconSize: Double {
-        didSet { if !restoringView && oldValue != iconSize { saveView() } }
+        didSet { if !restoringView && oldValue != iconSize { changeView { $0.iconSize = iconSize } } }
     }
     @Published var detailsLayout: Data? {
-        didSet { if !restoringView && oldValue != detailsLayout { saveView() } }
+        didSet { if !restoringView && oldValue != detailsLayout { changeView { $0.detailsLayout = detailsLayout } } }
     }
     @Published private(set) var remembersFolderView: Bool
 
@@ -208,7 +207,6 @@ final class BrowserModel: ObservableObject {
     private var navigationID: UUID?
     private var volumeTask: Task<Void, Never>?
     private let defaults: UserDefaults
-    private var preferences: BrowserPreferences
 
     init(start: URL, defaults: UserDefaults = RichFilesInstallation.preferences) {
         let id = UUID()
@@ -216,7 +214,6 @@ final class BrowserModel: ObservableObject {
         let preferences = BrowserPreferences.load(from: defaults)
         let view = preferences.folders[location.path] ?? preferences.global
         self.defaults = defaults
-        self.preferences = preferences
         folder = location
         currentTabID = id
         tabs = [BrowserTab(id: id, folder: location)]
@@ -429,35 +426,36 @@ final class BrowserModel: ObservableObject {
     func addFavorite(_ url: URL) {
         guard url.isFileURL else { return }
         let location = url.standardizedFileURL
-        guard !favorites.contains(where: { $0.path == location.path }) else { return }
-        favorites.append(location)
-        saveFavorites()
+        favorites = changePreferences { preferences in
+            if !preferences.favorites.contains(where: { $0.path == location.path }) {
+                preferences.favorites.append(location)
+            }
+        }.favorites
     }
 
     func removeFavorite(_ url: URL) {
-        favorites.removeAll { $0.path == url.path }
-        saveFavorites()
+        favorites = changePreferences { $0.favorites.removeAll { $0.path == url.path } }.favorites
     }
 
     func moveFavorite(from offsets: IndexSet, to destination: Int) {
         guard (0...favorites.count).contains(destination),
               offsets.allSatisfy(favorites.indices.contains) else { return }
-        let moving = offsets.map { favorites[$0] }
-        var remaining = favorites.enumerated().filter { !offsets.contains($0.offset) }.map(\.element)
-        let adjusted = destination - offsets.filter { $0 < destination }.count
-        remaining.insert(contentsOf: moving, at: adjusted)
-        favorites = remaining
-        saveFavorites()
+        favorites = changePreferences { preferences in
+            guard preferences.favorites == favorites else { return }
+            let moving = offsets.map { favorites[$0] }
+            var remaining = favorites.enumerated().filter { !offsets.contains($0.offset) }.map(\.element)
+            let adjusted = destination - offsets.filter { $0 < destination }.count
+            remaining.insert(contentsOf: moving, at: adjusted)
+            preferences.favorites = remaining
+        }.favorites
     }
 
     func setFolderViewOverride(_ enabled: Bool) {
         guard enabled != remembersFolderView else { return }
-        if enabled {
-            preferences.folders[folder.path] = currentView
-        } else {
-            preferences.folders.removeValue(forKey: folder.path)
+        changePreferences { preferences in
+            if enabled { preferences.folders[folder.path] = currentView }
+            else { preferences.folders.removeValue(forKey: folder.path) }
         }
-        savePreferences()
         applyView(for: folder)
         reloadPreservingSelection()
     }
@@ -745,6 +743,7 @@ final class BrowserModel: ObservableObject {
 
     private func applyView(for location: URL) {
         restoringView = true
+        let preferences = BrowserPreferences.load(from: defaults)
         let override = preferences.folders[location.path]
         let view = override ?? preferences.global
         remembersFolderView = override != nil
@@ -752,26 +751,30 @@ final class BrowserModel: ObservableObject {
         viewMode = view.mode
         iconSize = view.iconSize
         detailsLayout = view.detailsLayout
+        showHidden = preferences.showHidden
+        if favorites != preferences.favorites { favorites = preferences.favorites }
         restoringView = false
     }
 
-    private func saveView() {
-        if remembersFolderView {
-            preferences.folders[folder.path] = currentView
-        } else {
-            preferences.global = currentView
+    private func changeView(_ change: (inout ViewPreferences) -> Void) {
+        changePreferences { preferences in
+            if var override = preferences.folders[folder.path] {
+                change(&override)
+                preferences.folders[folder.path] = override
+            } else {
+                change(&preferences.global)
+            }
         }
-        savePreferences()
     }
 
-    private func saveFavorites() {
-        preferences.favorites = favorites
-        savePreferences()
-    }
-
-    private func savePreferences() {
+    @discardableResult
+    private func changePreferences(_ change: (inout BrowserPreferences) -> Void) -> BrowserPreferences {
+        var preferences = BrowserPreferences.load(from: defaults)
+        change(&preferences)
         preferences.save(to: defaults)
+        return preferences
     }
+
 }
 
 private struct ViewPreferences: Codable {
@@ -799,12 +802,12 @@ private struct ViewPreferences: Codable {
         }
     }
 
-    let mode: BrowserViewMode
-    private let column: Column
-    private let ascending: Bool
-    private let foldersFirst: Bool
-    let iconSize: Double
-    let detailsLayout: Data?
+    var mode: BrowserViewMode
+    private var column: Column
+    private var ascending: Bool
+    private var foldersFirst: Bool
+    var iconSize: Double
+    var detailsLayout: Data?
 
     init(mode: BrowserViewMode = .list, sort: FileSort = FileSort(), iconSize: Double = 64, detailsLayout: Data? = nil) {
         self.mode = mode
@@ -816,7 +819,12 @@ private struct ViewPreferences: Codable {
     }
 
     var fileSort: FileSort {
-        FileSort(column: column.fileColumn, ascending: ascending, foldersFirst: foldersFirst)
+        get { FileSort(column: column.fileColumn, ascending: ascending, foldersFirst: foldersFirst) }
+        set {
+            column = Column(newValue.column)
+            ascending = newValue.ascending
+            foldersFirst = newValue.foldersFirst
+        }
     }
 
     static func sameSort(_ left: FileSort, _ right: FileSort) -> Bool {
