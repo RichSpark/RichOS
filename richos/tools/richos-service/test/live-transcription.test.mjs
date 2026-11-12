@@ -7,6 +7,7 @@ import { advanceLiveTranscription, prepareLiveNormalization, recentLiveExcerpt, 
 import { mergeTranscript, renderMarkdown } from '../lib/merge.js';
 import { normalizeSession } from '../lib/normalize.js';
 import { runPipeline } from '../lib/pipeline.js';
+import { log } from '../lib/log.js';
 import { assertPrivateTree } from '../lib/private-files.js';
 
 function nativeHeader(rate, dataBytes = 0) {
@@ -359,4 +360,25 @@ test('the final pipeline clears prepared tracks when it skips conversion', async
       assert.equal(fs.existsSync(prepared), false);
     });
   }
+});
+
+test('live normalization reuse logs the interval from the app recording end', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'richbrief-normalize-timing-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const rate = 48_000;
+  const pcm = Buffer.alloc(rate * 4);
+  const wav = Buffer.concat([nativeHeader(rate, pcm.length), pcm]);
+  fs.writeFileSync(path.join(dir, 'audio-part-00.wav'), wav);
+  fs.writeFileSync(path.join(dir, 'session.json'), JSON.stringify({
+    status: 'closed', capture: { source: 'desktop-companion-macos' },
+    audio: { parts: [{ bytes: wav.length }], bytesTotal: wav.length },
+  }));
+  await prepareLiveNormalization(dir, () => false, new AbortController().signal);
+  const receipt = path.join(dir, '.live-transcription', 'normalized-audio', 'source.json');
+  const { readyAt } = JSON.parse(fs.readFileSync(receipt, 'utf8'));
+  fs.writeFileSync(path.join(dir, 'meeting.json'), JSON.stringify({ endedAt: readyAt - 25 }));
+  const info = t.mock.method(log, 'info', () => {});
+  assert.equal(runPipeline(dir).status, 'anomaly', 'Silence never reaches the speech decoder');
+  const reuse = info.mock.calls.find(({ arguments: args }) => args[0] === 'live audio normalization reused');
+  assert.deepEqual(reuse?.arguments[1], { readyAt, afterRecordedEndMs: 25 });
 });

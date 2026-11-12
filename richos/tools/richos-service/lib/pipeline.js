@@ -45,7 +45,7 @@ import { guardDeletions, deletionWarnings, informativeWords, lexicalText, DELETI
 import { guardSubstitution, substitutionWarnings, SUBSTITUTION_GUARD_DEFAULTS } from './substitution-guard.js';
 import { diarizeOthers } from './diarize.js';
 import { log } from './log.js';
-import { assertPrivateTree, privateDirectory, writePrivateFile } from './private-files.js';
+import { assertPrivateTree, privateDirectory, privateFile, writePrivateFile } from './private-files.js';
 
 export const ARTIFACTS = { transcript: 'transcript.md', verification: 'verification.json' };
 
@@ -161,7 +161,19 @@ export function runPipeline(sessionDir, opts = {}) {
     // ---- Stage 2: NORMALIZE ---------------------------------------------------------------------
     const prepared = keepPrepared ? takeLiveNormalization(sessionDir) : null;
     const norm = prepared ?? normalizeSession(sessionDir, { workDir: sessionDir });
-    if (prepared) log.info('live audio normalization reused', { readyAt: prepared.readyAt });
+    if (prepared) {
+      let endedAt;
+      try {
+        // The app records the recorder's exit here when it ends the capture normally.
+        endedAt = JSON.parse(fs.readFileSync(privateFile(path.join(sessionDir, 'meeting.json'), sessionDir), 'utf8'))?.endedAt;
+      } catch {
+        // Standalone transcription may have no app meeting facts.
+      }
+      const { readyAt } = prepared;
+      const afterRecordedEndMs = Number.isSafeInteger(endedAt) && endedAt > 0
+        && Number.isSafeInteger(readyAt) && readyAt >= endedAt ? readyAt - endedAt : undefined;
+      log.info('live audio normalization reused', { readyAt, afterRecordedEndMs });
+    }
     log.info(`${sessionId} — normalized ${norm.parts.length} part(s), stereo=${norm.stereo}`);
 
     // Deterministic silence guard: audio that decoded but carries no energy on either channel is a
