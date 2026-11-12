@@ -32,6 +32,7 @@ struct FolderWindowRequest: Codable, Hashable {
 
 @MainActor
 public struct RichFilesScenes: Scene {
+    private static let fileEvents: Set<String> = ["file://"]
     private let delegate: FolderOpenDelegate
     @StateObject private var actions = BrowserActions(recoveryURL: BrowserActions.recoveryLocation)
 
@@ -47,6 +48,7 @@ public struct RichFilesScenes: Scene {
                         launchHandoffID: Self.requestedHandoff, hostSwitch: Self.dockSwitch)
                 .frame(minWidth: 720, minHeight: 420)
                 .defaultAppStorage(RichFilesInstallation.preferences)
+                .handlesExternalEvents(preferring: Self.fileEvents, allowing: Self.fileEvents)
         }
         .defaultSize(width: 1120, height: 700)
         .commands {
@@ -58,6 +60,7 @@ public struct RichFilesScenes: Scene {
                               actions: actions, openRequests: delegate, hostSwitch: Self.dockSwitch)
                 .frame(minWidth: 720, minHeight: 420)
                 .defaultAppStorage(RichFilesInstallation.preferences)
+                .handlesExternalEvents(preferring: Self.fileEvents, allowing: Self.fileEvents)
         }
         .defaultSize(width: 1120, height: 700)
 
@@ -67,6 +70,7 @@ public struct RichFilesScenes: Scene {
                               handoffID: ticket, hostSwitch: Self.dockSwitch)
                 .frame(minWidth: 720, minHeight: 420)
                 .defaultAppStorage(RichFilesInstallation.preferences)
+                .handlesExternalEvents(preferring: Self.fileEvents, allowing: Self.fileEvents)
         }
         .defaultSize(width: 1120, height: 700)
 
