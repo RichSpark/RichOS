@@ -885,32 +885,41 @@ struct PropertiesSheet: View {
 
 struct OpenWithSheet: View {
     let entry: FileEntry
-    let apps: WorkspaceApplications
+    private let applications: [WorkspaceApplication]
     @Environment(\.dismiss) private var dismiss
     @State private var problem = ""
     @State private var selected: WorkspaceApplication?
+    @State private var preferred: WorkspaceApplication?
     @State private var confirmDefault = false
+    @State private var changingDefault = false
+
+    init(entry: FileEntry, apps: WorkspaceApplications) {
+        self.entry = entry
+        applications = [apps.defaultApplication].compactMap { $0 } + apps.alternatives
+        _preferred = State(initialValue: apps.defaultApplication)
+        _selected = State(initialValue: applications.first)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Open With").font(.headline)
             Text(entry.name).lineLimit(1).help(entry.name)
             List {
-                if let preferred = apps.defaultApplication { applicationRow(preferred, preferred: true) }
-                ForEach(apps.alternatives) { applicationRow($0, preferred: false) }
-                if apps.defaultApplication == nil && apps.alternatives.isEmpty {
+                if let preferred { applicationRow(preferred, preferred: true) }
+                ForEach(applications.filter { $0.id != preferred?.id }) { applicationRow($0, preferred: false) }
+                if applications.isEmpty {
                     Text("macOS found no associated apps.").foregroundStyle(.secondary)
                 }
-            }.frame(minHeight: 125)
+            }.frame(minHeight: 125).disabled(changingDefault)
             if !problem.isEmpty { Text(problem).foregroundStyle(.secondary) }
             HStack {
-                Button("Set Default App…") { confirmDefault = true }.disabled(selected == nil)
+                Button("Set Default App…") { confirmDefault = true }
+                    .disabled(changingDefault || selected == nil)
                 Spacer()
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
-                Button("Open") { open() }.keyboardShortcut(.defaultAction).disabled(selected == nil)
+                Button("Open") { open() }.keyboardShortcut(.defaultAction).disabled(changingDefault || selected == nil)
             }
         }.padding(15).frame(width: 450, height: 330)
-            .onAppear { selected = apps.defaultApplication ?? apps.alternatives.first }
             .alert("Change the Default App for This File Type?", isPresented: $confirmDefault) {
                 Button("Cancel", role: .cancel) {}
                 Button("Change Default") { setDefault() }
@@ -928,6 +937,7 @@ struct OpenWithSheet: View {
                 if selected?.id == app.id { Image(systemName: "checkmark").foregroundStyle(Color.accentColor) }
             }.contentShape(Rectangle())
         }.buttonStyle(.plain)
+            .accessibilityLabel(preferred ? "\(app.name), Default" : app.name)
     }
 
     private func open() {
@@ -939,8 +949,10 @@ struct OpenWithSheet: View {
     }
 
     private func setDefault() {
-        guard let selected else { return }
+        guard let selected, !changingDefault else { return }
+        changingDefault = true
         Task {
+            defer { changingDefault = false }
             do {
                 guard let type = try entry.url.resourceValues(forKeys: [.contentTypeKey]).contentType else {
                     problem = "macOS did not identify this file type."
@@ -948,8 +960,13 @@ struct OpenWithSheet: View {
                 }
                 try await NSWorkspace.shared.setDefaultApplication(at: selected.url, toOpen: type)
                 let actual = NSWorkspace.shared.urlForApplication(toOpen: type)?.resolvingSymlinksInPath()
-                problem = actual == selected.url.resolvingSymlinksInPath()
-                    ? "Default app updated." : "macOS did not confirm the change."
+                if actual == selected.url.resolvingSymlinksInPath() {
+                    let defaultForFile = NSWorkspace.shared.urlForApplication(toOpen: entry.url)?.resolvingSymlinksInPath()
+                    preferred = applications.first { $0.url.resolvingSymlinksInPath() == defaultForFile }
+                    problem = "Default app updated."
+                } else {
+                    problem = "macOS did not confirm the change."
+                }
             } catch { problem = error.localizedDescription }
         }
     }
