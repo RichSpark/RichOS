@@ -284,6 +284,62 @@ final class FileOperationsTests: XCTestCase {
         }
     }
 
+    func testStreamCopyFailsWhenAnExtendedAttributeCannotBeWritten() throws {
+        try XCTSkipIf(geteuid() == 0, "Requires ordinary file access permissions")
+        try withFixture { root in
+            let source = root.appendingPathComponent("Source.txt")
+            let target = root.appendingPathComponent("Staged.txt")
+            let bytes = Data("source data".utf8)
+            let attribute = "com.richfiles.fixture"
+            let metadata = Data("source metadata".utf8)
+            try bytes.write(to: source, options: .withoutOverwriting)
+            XCTAssertEqual(metadata.withUnsafeBytes {
+                setxattr(source.path, attribute, $0.baseAddress, $0.count, 0, 0)
+            }, 0)
+            try Data().write(to: target, options: .withoutOverwriting)
+
+            let denyAttributeWrites = Process()
+            denyAttributeWrites.executableURL = URL(fileURLWithPath: "/bin/chmod")
+            denyAttributeWrites.arguments = ["+a", "everyone deny writeextattr", target.path]
+            try denyAttributeWrites.run()
+            denyAttributeWrites.waitUntilExit()
+            XCTAssertEqual(denyAttributeWrites.terminationStatus, 0)
+
+            let input = open(source.path, O_RDONLY | O_CLOEXEC)
+            let output = open(target.path, O_RDWR | O_CLOEXEC)
+            defer { _ = close(input); _ = close(output) }
+            XCTAssertGreaterThanOrEqual(input, 0)
+            XCTAssertGreaterThanOrEqual(output, 0)
+            XCTAssertEqual(bytes.withUnsafeBytes { pwrite(output, $0.baseAddress, 1, 0) }, 1)
+            XCTAssertEqual(ftruncate(output, 0), 0)
+            let (attributeWrite, denied) = metadata.withUnsafeBytes {
+                let result = fsetxattr(output, attribute, $0.baseAddress, $0.count, 0, 0)
+                return (result, errno)
+            }
+            XCTAssertEqual(attributeWrite, -1)
+            XCTAssertEqual(denied, EACCES)
+
+            XCTAssertThrowsError(try FileOperations.copyFileDescriptors(
+                input, output, from: source, to: target, size: Int64(bytes.count),
+                isCancelled: { false }, onProgress: { _, _ in }
+            )) {
+                guard case FileOperationError.system(_, let location, let code) = $0 else {
+                    return XCTFail("Expected the native metadata error, got \($0)")
+                }
+                XCTAssertEqual(location.path, source.path)
+                XCTAssertEqual(code, denied)
+            }
+            XCTAssertTrue(try Data(contentsOf: target).isEmpty)
+            XCTAssertEqual(try Data(contentsOf: source), bytes)
+            var retainedMetadata = Data(count: metadata.count)
+            let read = retainedMetadata.withUnsafeMutableBytes {
+                getxattr(source.path, attribute, $0.baseAddress, $0.count, 0, 0)
+            }
+            XCTAssertEqual(read, metadata.count)
+            XCTAssertEqual(retainedMetadata, metadata)
+        }
+    }
+
     func testFolderCannotBeMovedOrCopiedIntoAChildViaASymlink() throws {
         try withFixture { root in
             let tree = try FileOperations.createFolder(in: root, named: "Tree")

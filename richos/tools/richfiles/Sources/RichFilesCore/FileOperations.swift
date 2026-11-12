@@ -974,7 +974,7 @@ public enum FileOperations {
             throw FileOperationError.system(operation: "Could not stage the copy", location: stagedURL, code: errno)
         }
         defer { _ = close(output) }
-        try copyFileDescriptors(input, output, to: stagedURL, size: size,
+        try copyFileDescriptors(input, output, from: source.url, to: stagedURL, size: size,
                                 isCancelled: isCancelled, onProgress: onProgress)
         if parent.identity.device != staging.identity.device, fsync(output) != 0 {
             throw FileOperationError.system(operation: "Could not flush the copy", location: stagedURL, code: errno)
@@ -982,16 +982,17 @@ public enum FileOperations {
     }
 
     static func copyFileDescriptors(
-        _ input: Int32, _ output: Int32, to location: URL, size: Int64,
+        _ input: Int32, _ output: Int32, from source: URL? = nil, to location: URL, size: Int64,
         isCancelled: () -> Bool, onProgress: (Int64, Int64) -> Void
     ) throws {
-        try copyUsingNative(to: location, size: size, isCancelled: isCancelled, onProgress: onProgress) {
+        try copyUsingNative(to: location, from: source, size: size, isCancelled: isCancelled, onProgress: onProgress) {
             fcopyfile(input, output, $0, copyfile_flags_t(COPYFILE_ALL | COPYFILE_DATA_SPARSE))
         }
     }
 
     private static func copyUsingNative(
-        to location: URL, size: Int64? = nil, recursiveSource: (url: URL, device: Int32)? = nil,
+        to location: URL, from source: URL? = nil, size: Int64? = nil,
+        recursiveSource: (url: URL, device: Int32)? = nil,
         isCancelled: () -> Bool, onNestedProgress: ((NestedCopyProgress) -> Void)? = nil,
         onProgress: (Int64, Int64) -> Void = { _, _ in }, copy: (copyfile_state_t) -> Int32
     ) throws {
@@ -1001,7 +1002,8 @@ public enum FileOperations {
         defer { _ = copyfile_state_free(state) }
         try withoutActuallyEscaping(isCancelled) { cancel in
             try withoutActuallyEscaping(onProgress) { progress in
-                let context = CopyCallbacks(size: size, recursiveSource: recursiveSource, cancel: cancel,
+                let context = CopyCallbacks(metadataLocation: source ?? recursiveSource?.url ?? location,
+                                            size: size, recursiveSource: recursiveSource, cancel: cancel,
                                             progress: progress, nestedProgress: onNestedProgress)
                 let pointer = Unmanaged.passUnretained(context).toOpaque()
                 let callback = unsafeBitCast(CopyCallbacks.status, to: UnsafeRawPointer.self)
@@ -1266,6 +1268,7 @@ public enum FileOperations {
 }
 
 private final class CopyCallbacks {
+    let metadataLocation: URL
     let size: Int64?
     let recursiveSource: (url: URL, device: Int32)?
     let cancel: () -> Bool
@@ -1276,8 +1279,10 @@ private final class CopyCallbacks {
     private var nestedFile: (started: TimeInterval, total: Int64?)?
     private var nextNestedSample: TimeInterval = 0
 
-    init(size: Int64?, recursiveSource: (url: URL, device: Int32)?, cancel: @escaping () -> Bool,
-         progress: @escaping (Int64, Int64) -> Void, nestedProgress: ((NestedCopyProgress) -> Void)?) {
+    init(metadataLocation: URL, size: Int64?, recursiveSource: (url: URL, device: Int32)?,
+         cancel: @escaping () -> Bool, progress: @escaping (Int64, Int64) -> Void,
+         nestedProgress: ((NestedCopyProgress) -> Void)?) {
+        self.metadataLocation = metadataLocation
         self.size = size
         self.recursiveSource = recursiveSource
         self.cancel = cancel
@@ -1289,12 +1294,25 @@ private final class CopyCallbacks {
         let recursiveError = stage == COPYFILE_ERR &&
             (what == COPYFILE_RECURSE_ERROR || what == COPYFILE_RECURSE_FILE ||
              what == COPYFILE_RECURSE_DIR || what == COPYFILE_RECURSE_DIR_CLEANUP)
-        let errorCode = recursiveError ? errno : 0
+        let metadataError = stage == COPYFILE_ERR && what == COPYFILE_COPY_XATTR
+        let errorCode = recursiveError || metadataError ? errno : 0
         guard let pointer else { return COPYFILE_QUIT }
         let context = Unmanaged<CopyCallbacks>.fromOpaque(pointer).takeUnretainedValue()
         if context.cancelled || context.failure != nil { return COPYFILE_QUIT }
         if context.cancel() {
             context.cancelled = true
+            return COPYFILE_QUIT
+        }
+        if metadataError {
+            var name: UnsafePointer<CChar>?
+            if copyfile_state_get(state, UInt32(COPYFILE_STATE_XATTRNAME), &name) == 0,
+               let name, String(cString: name) == "com.apple.quarantine" {
+                // Preserve copyfile's kernel-labeling fallback for quarantine.
+                return COPYFILE_CONTINUE
+            }
+            let entry = source.map { URL(fileURLWithFileSystemRepresentation: $0, isDirectory: false, relativeTo: nil) }
+            context.failure = .system(operation: "Could not preserve file metadata", location: entry ?? context.metadataLocation,
+                                      code: errorCode == 0 ? EIO : errorCode)
             return COPYFILE_QUIT
         }
         if let root = context.recursiveSource, recursiveError {
