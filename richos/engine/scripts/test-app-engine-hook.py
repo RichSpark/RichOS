@@ -314,6 +314,7 @@ class DesktopHooks(unittest.TestCase):
             given[Path(command[-1]).name] = timeout
         real_load = hook.load
         work = types.SimpleNamespace(
+            LINKEDIN_READER="mcp__richos_linkedin__read_profile",  # app.py's constant the hook reads
             validate_shell_target=lambda payload: None, worker_context=lambda active, payload: None,
             dispatch_intent=lambda *args, **kwargs: None,
             W=types.SimpleNamespace(_recovery_adapter=lambda: (
@@ -355,6 +356,7 @@ class DesktopHooks(unittest.TestCase):
         spec = importlib.util.spec_from_file_location(name, ENGINE / "scripts/app-engine-hook.py")
         hook = importlib.util.module_from_spec(spec); spec.loader.exec_module(hook)
         work = types.SimpleNamespace(
+            LINKEDIN_READER="mcp__richos_linkedin__read_profile",  # app.py's constant the hook reads
             validate_shell_target=lambda payload: None, worker_context=lambda active, payload: None,
             dispatch_intent=lambda *args, **kwargs: None,
             W=types.SimpleNamespace(fallback_notice=lambda *args: "", _recovery_adapter=lambda: (
