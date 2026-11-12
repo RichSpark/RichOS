@@ -264,7 +264,11 @@ class ConversationWalk(adopt_walk.Walk):
             li.default(profile_walk.SAFARI)
         except profile_walk.StepFailed as exc:
             raise StepFailed('the stand-in site: %s' % str(exc)[:500])
-        self.grant_accessibility()
+        if getattr(self.a, "no_accessibility", False):
+            print("Accessibility: not granted to RichOS (--no-accessibility); its rows: %s"
+                  % (self.accessibility_rows() or 'none'), flush=True)
+        else:
+            self.grant_accessibility()
         adopt_walk.guest(self.vm, 'open -g -b %s %s/sign-in' % (profile_walk.SAFARI, li.base), 60)
         time.sleep(4)
         self.allow_local_network()
@@ -281,6 +285,14 @@ class ConversationWalk(adopt_walk.Walk):
         shim.flush_tcc = lambda: app_walk.Walk.flush_tcc(shim)
         shim.ax_clients = lambda: app_walk.Walk.ax_clients(shim)
         app_walk.Walk.tcc(shim)
+
+    def accessibility_rows(self):
+        """com.richos.app's Accessibility rows in the guest's system TCC database, by
+        linkedin-app-walk.py's own query helper; '' when there are none."""
+        app_walk = load('linkedin_app_walk', HERE / 'linkedin-app-walk.py')
+        query = app_walk.sql(app_walk.SYS_DB, "select client, auth_value from access where "
+                             "service = 'kTCCServiceAccessibility' and client = 'com.richos.app'", True)
+        return adopt_walk.guest(self.vm, query + ' 2>&1 || true', 60).strip()
 
     def allow_local_network(self):
         """macOS asks 'Allow "Python" to find devices on local networks?' once the stand-in's server
@@ -412,6 +424,9 @@ def main():
     p.add_argument('--press-grace', type=float, default=20, help='seconds a press waits for a turn to start (default 20)')
     p.add_argument('--site', type=Path, help='the stand-in LinkedIn site linkedin-standin.py built: served in the guest, the '
                    "default browser (Safari) signed in to it before the conversation, so Rich's LinkedIn tool can read it")
+    p.add_argument('--no-accessibility', action='store_true', help='with --site: leave RichOS without the macOS '
+                   'Accessibility permission, as on a Mac where it was never allowed (the first-run case); its '
+                   'rows in the TCC database are printed, none expected')
     p.add_argument('--check', nargs='+', type=Path, metavar='FILE', help='check conversation files without a guest')
     p.add_argument('--action', action='append', default=[], help='NAME=TOOL[~TEXT]: an action whose actor is reported '
                    '(native-transcript.py --actors)')
