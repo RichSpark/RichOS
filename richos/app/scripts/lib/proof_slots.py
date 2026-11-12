@@ -129,6 +129,18 @@ folder both), so it ends by itself when the run ends, killed or not, and a forgo
 anyone back; the run removes the file when it releases its slot. One run at a time: naming another
 replaces it. `status` shows it.
 
+AT WORKER ADMISSION TOO (2026-11-12, review rv-20261112T122352Z-b96ae5c7-c28b). The order above
+counted only checks the Mac refused, and the machine worker queue (engine_pass.Admission) kept its
+own order: a background request refused for BACKGROUND_PRIORITY_AGE (120 s) passes every newer
+one. So an older run whose worker request had aged kept precedence after the lead named another
+run: the named run was refused a worker before any CPU sample, a worker refusal published nothing,
+and the older run took the next free worker. Every run the lead had to stop that morning was such
+an old run. Now a run that goes first (`goes_first`: the nightly's or the named one) also publishes
+its checks waiting for a machine worker while its worker request is queued, so the runs behind it
+give way and withdraw their requests (proof-run.py `schedule`), and its own requests pass older
+ones however aged. A check waiting for its own run's workers still counts for nothing. Nothing is
+stopped, running checks finish, and it ends with the run like the name.
+
 NESTED RUNS. A suite that runs the real proof-run.py (proof-run.test.py, test-results.test.sh)
 inside a check of a proof run works inside its caller's slot: the caller exports its holder
 record's path as RICHOS_PROOF_RUN_SLOT_HELD, and the nested run borrows only if that record is
@@ -464,6 +476,20 @@ def ahead_of(slot):
     own = os.path.realpath(slot.holder_path)
     return [dict(r, named=_is_named(r, named)) for r in waiting_holders(d)
             if os.path.realpath(r["holder_file"]) != own and _rank(r, named) < mine]
+
+
+def goes_first(slot):
+    """True when `slot`'s run goes first (header): a nightly or release command's run, or the run
+    the lead named, while it is named. proof-run.py then publishes its checks waiting for a machine
+    worker too, and its worker requests pass older ones however aged (engine_pass.Admission.first),
+    so the runs behind it give way at worker admission as well (header, AT WORKER ADMISSION TOO).
+    False for a borrowed slot and for no slot at all."""
+    if slot is None or slot.borrowed or not slot.fds or not slot.holder_path:
+        return False
+    record = _read(slot.holder_path)
+    if getattr(slot, "first", record.get("first")):
+        return True
+    return _is_named(record, named_first(os.path.dirname(slot.holder_path)))
 
 
 def describe_behind(rows):

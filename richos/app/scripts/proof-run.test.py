@@ -1403,6 +1403,92 @@ try:
           "giving way, and the name ends with the run; a forgotten or unknown name holds nobody back",
           (q_seen, q_item.state, q_item.notes, q_buf.getvalue()[-400:]))
 
+    # P16q2 — ... and at machine worker admission too (review rv-20261112T122352Z-b96ae5c7-c28b, its
+    # fixtures/worker_admission_order.py with the assertions turned round). An older run was refused
+    # a worker and its request has aged past BACKGROUND_PRIORITY_AGE (120 s) when the lead names the
+    # urgent run. Worker admission used to refuse the named run for that aged request before any CPU
+    # sample, a worker refusal published nothing, and the older run took the next free worker. Now
+    # the named run is admitted to a free worker at once; with none free it publishes its check
+    # waiting for one, so the older run gives way and withdraws its request, nothing of it stopped;
+    # the named run takes the next free worker, and once it ends the older run is admitted. Real
+    # Admission and slot locks in a private directory, P16m's simulated clock, no commands run.
+    class Q2Budget(M16Budget):
+        free = True
+
+        def try_acquire(self):
+            self.attempts += 1
+            if not self.admission.begin():
+                return None
+            if not self.free:      # every machine worker busy: what Budget.try_acquire meets
+                self.admission.attempted(False)
+                return None
+            self.admission.attempted(True)
+            raise M16Admitted()
+
+    q2_dir = os.path.join(tmp, "p16-q2")
+    os.makedirs(q2_dir)
+    q2_seen = {}
+    with contextlib.ExitStack() as q2_stack:
+        q2_stack.enter_context(mock16m.patch.object(pr.time, "monotonic", lambda: m_clock.now))
+        q2_stack.enter_context(mock16m.patch.object(pr.time, "sleep", m_clock.sleep))
+        q2_stack.enter_context(mock16m.patch.object(pr.engine_pass, "is_main_checkout", lambda p: False))
+        q2_stack.enter_context(mock16m.patch.object(pr.engine_pass, "birth", lambda *a: "fixture"))
+        q2_stack.enter_context(mock16m.patch.object(pr, "discount_held_gap", lambda *a: 0))
+        q2_stack.enter_context(mock16m.patch.object(pr, "checkpoint", lambda *a: None))
+        q2_stack.enter_context(mock16m.patch.object(pr, "STALL", type("S", (), {
+            "over": staticmethod(lambda: None), "refused": staticmethod(lambda *a: None)})()))
+        q2_older = pr.proof_slots._try(q2_dir, 2, {"waiter": "p16-q2-older",
+                                                   "logs": os.path.join(q2_dir, "older")}, checks=0)
+        q2_urgent = pr.proof_slots._try(q2_dir, 2, {"waiter": "p16-q2-urgent",
+                                                    "logs": os.path.join(q2_dir, "urgent")}, checks=0)
+        q2_old_adm = pr.engine_pass.Admission(q2_dir, "older-worktree")
+        q2_urg_adm = pr.engine_pass.Admission(q2_dir, "urgent-worktree")
+        q2_old_budget, q2_urg_budget = Q2Budget(q2_old_adm), Q2Budget(q2_urg_adm)
+        q2_old_item = pr.Item("p16-q2-older-ready", q2_dir, ["true"])
+        q2_urg_item = pr.Item("p16-q2-urgent-ready", q2_dir, ["true"])
+        try:
+            # The older run found every worker busy; its request ages past 120 s, then the lead names.
+            q2_old_adm.begin()
+            q2_old_adm.attempted(False)
+            m_clock.now += pr.engine_pass.BACKGROUND_PRIORITY_AGE + 1
+            pr.proof_slots.name_first("p16-q2-urgent", q2_dir)
+            # A worker is free: the named run is admitted to it, past the aged request.
+            q2_seen["urgent_free_worker"] = m_passes(q2_urgent, q2_urg_item, q2_urg_budget, None)
+            # Every worker busy: the named run's check waits for one, and it says so to the runs behind.
+            q2_urg_budget.free = False
+            q2_seen["urgent_busy"] = m_passes(q2_urgent, q2_urg_item, q2_urg_budget, None)
+            q2_seen["urgent_wait_reason"] = q2_urg_item.wait_reason
+            q2_seen["published"] = [(r.get("waiter"), r.get("waiting")) for r in pr.proof_slots.waiting_holders(q2_dir)]
+            # A worker frees: the older run gives way and withdraws its aged request, asking for none.
+            q2_old_budget.attempts = 0
+            q2_seen["older_admitted"] = m_passes(q2_older, q2_old_item, q2_old_budget, None)
+            q2_seen["older_wait_reason"] = q2_old_item.wait_reason
+            q2_seen["older_attempts"] = q2_old_budget.attempts
+            q2_seen["older_request_queued"] = q2_old_adm.wait_fd is not None
+            q2_urg_budget.free = True
+            q2_seen["urgent_next_worker"] = m_passes(q2_urgent, q2_urg_item, q2_urg_budget, None)
+            # The named run ends: the name and its count go with it, and the older run is admitted.
+            q2_urgent.release()
+            q2_urgent = None
+            q2_seen["named_after"] = pr.proof_slots.named_first(q2_dir)
+            q2_seen["older_admitted_after"] = m_passes(q2_older, q2_old_item, q2_old_budget, None)
+        finally:
+            for q2_adm in (q2_old_adm, q2_urg_adm):
+                q2_adm.close()
+            if q2_urgent is not None:
+                q2_urgent.release()
+            q2_older.release()
+            pr.SLOT = None
+    check(q2_seen.get("urgent_free_worker") is True and q2_seen.get("urgent_busy") is False
+          and q2_seen.get("urgent_wait_reason") == "worker" and q2_seen.get("published") == [("p16-q2-urgent", 1)]
+          and q2_seen.get("older_admitted") is False and q2_seen.get("older_wait_reason") == "older-run"
+          and q2_seen.get("older_attempts") == 0 and q2_seen.get("older_request_queued") is False
+          and q2_seen.get("urgent_next_worker") is True and q2_seen.get("named_after") is None
+          and q2_seen.get("older_admitted_after") is True,
+          "P16q2 the named run passes an older run's aged worker request: admitted to a free worker at once, "
+          "and with none free the older run gives way and withdraws its request until the named run ends",
+          q2_seen)
+
     # P40 — the merge gate's caps (2026-09-30). --cap is ONE number for every check, engine
     # units included, whatever a dated weight predicts (`workspace-spec-fourteen` was planned
     # at 2812 s and ran in 172-554 s); --run-cap ends the run on its own clock and ends, never

@@ -188,7 +188,9 @@ nightly or release command's own run first (it never waits in the line, 2026-11-
 the nightly names with --release-state, never a fixture run a test starts inside the build's
 tree) and the run the lead names with `proof_slots.py first RUN` (2026-11-12: the same go-first
 path, ending by itself when that run ends), then the order slots were taken, except a land holding
-integration priority, which goes first.
+integration priority, which goes first. A run that goes first holds that place at machine worker
+admission too: it publishes its checks refused a worker, and its requests pass older ones however
+aged (proof_slots.py, AT WORKER ADMISSION TOO).
 """
 import argparse
 import copy
@@ -1414,12 +1416,24 @@ def admitted(args, sampler):
 MAC_REFUSALS = frozenset({"host", "pressure", "resource-envelope"})
 
 
-def refused_by_the_mac(order):
+def refused_by_the_mac(order, machine_workers=False):
     """How many of the run's waiting checks the Mac refused at its last admission attempt (above):
     what it publishes in its proof-run slot. A check waiting for this run's own worker budget, its
     ramp, its lane or prerequisite, the engine slot, another run's identical check, the integration
-    plan, or a run ahead of it is not one: the Mac may have room for the runs behind it."""
-    return sum(1 for it in order if it.state == "waiting" and it.wait_reason in MAC_REFUSALS)
+    plan, or a run ahead of it is not one: the Mac may have room for the runs behind it.
+    `machine_workers`: a run that goes first counts its checks refused a machine worker too, while
+    its worker request is queued (proof_slots.goes_first, 2026-11-12), so the runs behind it give
+    way at worker admission as well."""
+    reasons = MAC_REFUSALS | {"worker"} if machine_workers else MAC_REFUSALS
+    return sum(1 for it in order if it.state == "waiting" and it.wait_reason in reasons)
+
+
+def worker_request_queued(budget):
+    """True while this run's machine worker request is queued (engine_pass.Admission.waiting): its
+    last attempt reached the machine budget and was refused. A check waiting for this run's own
+    workers never reaches it, so it never queues one."""
+    admission = getattr(budget.shared or budget, "admission", None)
+    return admission is not None and getattr(admission, "waiting", lambda: False)()
 
 
 def refusal_counts(running):
@@ -1847,7 +1861,9 @@ def schedule(items, order, running, args, logdir, tokens_dir, budget, reserved, 
         if SLOT is not None and not SLOT.borrowed:
             # A run behind this one gives way only while the Mac refuses this run's checks
             # (refused_by_the_mac, proof_slots.ahead_of): then there is not room for both.
-            SLOT.publish_waiting(refused_by_the_mac(order))
+            # A run that goes first counts its checks refused a machine worker too (2026-11-12).
+            SLOT.publish_waiting(refused_by_the_mac(
+                order, machine_workers=proof_slots.goes_first(SLOT) and worker_request_queued(budget)))
         for it in order:
             if it.state == "waiting":
                 it.wait_times[it.wait_reason] = it.wait_times.get(it.wait_reason, 0.0) + interval
@@ -2102,6 +2118,11 @@ def schedule(items, order, running, args, logdir, tokens_dir, budget, reserved, 
             # left on it would count this run's own queue as the Mac refusing.
             pressure_owner = budget.shared or budget
             pressure_owner.refusal = None
+            # A run that goes first passes older worker requests however aged (2026-11-12, review
+            # rv-20261112T122352Z-b96ae5c7-c28b): the runs behind it give way and withdraw theirs.
+            first_request = getattr(pressure_owner, "admission", None)
+            if first_request is not None:
+                first_request.first = proof_slots.goes_first(SLOT)
             token = budget.try_acquire()
             ok, s = (False, None)
             if token is not None:

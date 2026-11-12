@@ -355,6 +355,12 @@ class Admission:
     The guard spans the actual permit attempt, closing the check-then-acquire race.
     No queue age can override an integration waiter. Borrowing a caller's already
     held permit remains possible, so nested work can release occupied capacity.
+
+    `first` is set by the caller before each attempt when its run goes first (proof-run.py: a
+    nightly or release command's run, or the run the lead named with `proof_slots.py first`):
+    then no older background request, however aged, holds its attempt back (2026-11-12, review
+    rv-20261112T122352Z-b96ae5c7-c28b). The older runs give way to it in their own order
+    (proof_slots.ahead_of) and withdraw their requests, so this is one order, not a second one.
     """
     def __init__(self, root, checkout, permits=None):
         self.root = os.path.join(root, "admission")
@@ -364,7 +370,12 @@ class Admission:
         self.wait_fd = None
         self.since = None
         self.permits = permits
+        self.first = False
         self.marker = os.path.join(self.root, "wait-%s-%s.json" % (os.getpid(), uuid.uuid4().hex))
+
+    def waiting(self):
+        """True while this request is queued: refused at its last attempt and not admitted since."""
+        return self.wait_fd is not None
 
     def register(self):
         if self.wait_fd is not None:
@@ -417,7 +428,7 @@ class Admission:
             os.close(fd)
             return False
         self.fd = fd
-        if not self.main and self.older_background_waiting():
+        if not self.main and not self.first and self.older_background_waiting():
             os.close(self.fd)
             self.fd = None
             return False
