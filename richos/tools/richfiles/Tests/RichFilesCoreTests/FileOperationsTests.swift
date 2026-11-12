@@ -24,6 +24,44 @@ final class FileOperationsTests: XCTestCase {
         }
     }
 
+    func testMoveReplacementUndoAndRedoPreserveBothFiles() throws {
+        try withFixture { root in
+            let target = try FileOperations.createFolder(in: root, named: "Target")
+            let archive = try FileOperations.createFolder(in: root, named: "Test Archive")
+            let incoming = try write("incoming", named: "Photo.png", in: root)
+            let previous = try write("existing", named: "Photo.png", in: target.url)
+            func archivePrevious(_ file: FileReference) throws -> TrashReceipt {
+                let parked = try FileOperations.move(file, into: archive.url).moved
+                return TrashReceipt(original: file, trashedAt: Date(), trashLocation: parked.url, trashed: parked)
+            }
+
+            let replacement = try FileOperations.replaceMove(ReviewedFile(incoming), replacing: ReviewedFile(previous),
+                                                             sendToTrash: archivePrevious)
+            XCTAssertFalse(FileManager.default.fileExists(atPath: incoming.url.path))
+            XCTAssertEqual(replacement.installed.reference.identity, incoming.identity)
+            XCTAssertEqual(try contents(replacement.installed.reference), "incoming")
+            XCTAssertEqual(try contents(XCTUnwrap(replacement.previous.trashed)), "existing")
+
+            let blocker = try write("new occupant", named: "Photo.png", in: root)
+            XCTAssertThrowsError(try FileOperations.undoMoveReplacement(incoming, installed: replacement.installed,
+                                                                        previous: replacement.previous))
+            XCTAssertEqual(try contents(blocker), "new occupant")
+            XCTAssertEqual(try contents(replacement.installed.reference), "incoming")
+            try FileManager.default.removeItem(at: blocker.url)
+
+            let restored = try FileOperations.undoMoveReplacement(incoming, installed: replacement.installed,
+                                                                   previous: replacement.previous)
+            XCTAssertEqual(restored.source.reference, incoming)
+            XCTAssertEqual(restored.destination.reference, previous)
+            XCTAssertEqual(try contents(restored.source.reference), "incoming")
+            XCTAssertEqual(try contents(restored.destination.reference), "existing")
+            let repeated = try FileOperations.replaceMove(restored.source, replacing: restored.destination,
+                                                          sendToTrash: archivePrevious)
+            XCTAssertEqual(repeated.installed.reference.identity, incoming.identity)
+            XCTAssertEqual(try contents(XCTUnwrap(repeated.previous.trashed)), "existing")
+        }
+    }
+
     func testPermanentDeletionRejectsReplacedSelection() throws {
         try withFixture { root in
             let original = try write("original", named: "item.png", in: root)

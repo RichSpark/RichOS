@@ -1177,7 +1177,9 @@ struct TransferSheet: View {
             .confirmationDialog("Replace the existing file?", isPresented: $confirmingReplacement, presenting: replacement) { issue in
                 Button("Replace File", role: .destructive) { actions.replaceConflict(issue) }
             } message: { _ in
-                Text("The previous file goes to Trash. You can undo this replacement in RichFiles.")
+                Text(actions.transfer?.move == true
+                     ? "The incoming file moves here and the previous file goes to Trash. Undo restores both locations."
+                     : "The previous file goes to Trash. You can undo this replacement in RichFiles.")
             }
     }
 

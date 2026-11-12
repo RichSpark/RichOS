@@ -485,6 +485,62 @@ public enum FileOperations {
         return ReplaceReceipt(installed: installed, previous: previous, remainingStagingFolder: remaining)
     }
 
+    public static func replaceMove(_ source: ReviewedFile, replacing target: ReviewedFile) throws -> ReplaceReceipt {
+        try replaceMove(source, replacing: target, sendToTrash: trash)
+    }
+
+    static func replaceMove(
+        _ source: ReviewedFile, replacing target: ReviewedFile, sendToTrash: (FileReference) throws -> TrashReceipt
+    ) throws -> ReplaceReceipt {
+        let input = source.reference
+        let occupant = target.reference
+        guard input.identity != occupant.identity else { throw FileOperationError.replacementRequiresFiles }
+        guard input.identity.device == occupant.identity.device else { throw FileOperationError.crossVolumeMove }
+        let parent = try OpenFolder(input.parent)
+        let destination = try OpenFolder(occupant.parent)
+        try validateReviewed(source, in: parent)
+        let (installed, previous) = try replaceKeepingBackup(target, in: destination, sendToTrash: sendToTrash) {
+            try validateReviewed(source, in: parent)
+            return try relocate(input, into: destination, named: occupant.name).moved
+        }
+        return ReplaceReceipt(installed: installed, previous: previous, remainingStagingFolder: nil)
+    }
+
+    public static func undoMoveReplacement(
+        _ original: FileReference, installed: ReviewedFile, previous: TrashReceipt
+    ) throws -> (source: ReviewedFile, destination: ReviewedFile) {
+        let occupied = installed.reference
+        guard original.identity == occupied.identity, previous.original.url.path == occupied.url.path,
+              let archived = previous.trashed, archived.identity == previous.original.identity else {
+            throw FileOperationError.trashLocationUnknown
+        }
+        let sourceFolder = try OpenFolder(original.parent)
+        try sourceFolder.requireIdentity(original.parentIdentity)
+        try sourceFolder.requireFree(original.name)
+        let destination = try OpenFolder(occupied.parent)
+        try validateReviewed(installed, in: destination)
+        let trashFolder = try OpenFolder(archived.parent)
+        _ = try trashFolder.verifiedStatus(of: archived)
+        let restoredSource = try relocate(occupied, into: sourceFolder, named: original.name).moved
+
+        let restoredDestination: FileReference
+        do {
+            restoredDestination = try restore(previous)
+        } catch FileOperationError.moveNeedsReview {
+            throw FileOperationError.replacementNeedsReview(occupied.url)
+        } catch {
+            let restoreError = error
+            do { _ = try relocate(restoredSource, into: destination, named: occupied.name) }
+            catch { throw FileOperationError.replacementNeedsReview(occupied.url) }
+            throw restoreError
+        }
+        guard let reviewedSource = try? ReviewedFile(restoredSource),
+              let reviewedDestination = try? ReviewedFile(restoredDestination) else {
+            throw FileOperationError.replacementNeedsReview(occupied.url)
+        }
+        return (reviewedSource, reviewedDestination)
+    }
+
     public static func restoreReplacedFile(_ displaced: TrashReceipt, replacing installed: ReviewedFile) throws -> ReplaceReceipt {
         try restoreReplacedFile(displaced, replacing: installed, sendToTrash: trash)
     }

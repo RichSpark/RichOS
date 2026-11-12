@@ -317,7 +317,7 @@ enum BrowserTransferJob {
                 break
             } catch FileOperationError.destinationExists(let occupied) where request.conflict == .skip {
                 let conflict = retrySource.flatMap {
-                    describeConflict($0, existing: occupied, allowReplace: !request.move)
+                    describeConflict($0, existing: occupied, move: request.move)
                 }
                 result.progress.issues.append(BrowserTransferIssue(
                     name: name,
@@ -345,21 +345,22 @@ enum BrowserTransferJob {
     }
 
     private static func describeConflict(
-        _ source: BrowserTransferSource, existing: URL, allowReplace: Bool
+        _ source: BrowserTransferSource, existing: URL, move: Bool
     ) -> BrowserFileConflict? {
         guard let incoming = try? source.reference(), let occupant = try? FileReference(url: existing),
               let first = try? FileEntry(url: incoming.url), let second = try? FileEntry(url: occupant.url) else {
             return nil
         }
         let reviewed: BrowserFileConflict.Replacement?
-        if allowReplace, let a = try? ReviewedFile(incoming), let b = try? ReviewedFile(occupant),
+        if !move || incoming.identity.device == occupant.identity.device,
+           let a = try? ReviewedFile(incoming), let b = try? ReviewedFile(occupant),
            incoming.identity != occupant.identity {
             reviewed = .init(incoming: a, existing: b)
         } else {
             reviewed = nil
         }
         let merge: BrowserFileConflict.Merge?
-        if allowReplace, first.kind == .directory, second.kind == .directory, incoming.identity != occupant.identity {
+        if !move, first.kind == .directory, second.kind == .directory, incoming.identity != occupant.identity {
             merge = .init(incoming: incoming, existing: occupant)
         } else {
             merge = nil

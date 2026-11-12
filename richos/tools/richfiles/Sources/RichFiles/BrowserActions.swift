@@ -277,30 +277,40 @@ final class BrowserActions: ObservableObject {
         guard let current = transfer, !current.running, current.issues.contains(where: { $0.id == issue.id }),
               let reviewed = issue.conflict?.reviewed, let destination = retryRequest?.destination else { return }
         runMutation(title: "Replace", onSuccess: { [weak self] _ in
-            self?.resolveConflict(issue, transferID: current.id, source: reviewed.incoming.reference.url)
+            self?.resolveConflict(issue, transferID: current.id, source: reviewed.incoming.reference.url,
+                                  moved: current.move ? reviewed.incoming.reference : nil)
         }) {
             try destination.verify()
-            let receipt = try FileOperations.replaceCopy(reviewed.incoming, replacing: reviewed.existing)
+            let receipt = current.move
+                ? try FileOperations.replaceMove(reviewed.incoming, replacing: reviewed.existing)
+                : try FileOperations.replaceCopy(reviewed.incoming, replacing: reviewed.existing)
             let previous = BrowserTrashItem(receipt: receipt.previous)
+            let undo: HistoryStep = current.move
+                ? .undoMoveReplacement(reviewed.incoming.reference, receipt.installed, previous)
+                : .replacement(receipt.installed, previous)
             let warnings = receipt.remainingStagingFolder.map {
                 ["Temporary cleanup failed at \($0.path)."]
             } ?? []
             return MutationResult(message: "Replaced \(receipt.installed.reference.url.lastPathComponent). The previous file is in Trash.",
                                   issues: warnings, changed: true,
-                                  undo: [.replacement(receipt.installed, previous)], trashChanges: [.add(previous)])
+                                  undo: [undo], trashChanges: [.add(previous)])
         }
     }
 
-    private func resolveConflict(_ issue: BrowserTransferIssue, transferID: UUID, source: URL) {
+    private func resolveConflict(_ issue: BrowserTransferIssue, transferID: UUID, source: URL, moved: FileReference? = nil) {
         guard var current = transfer, current.id == transferID else { return }
         current.issues.removeAll { $0.id == issue.id }
         current.succeeded += 1
         transfer = current
+        if let moved { shelf.removeAll { $0 == moved } }
         if let request = retryRequest {
+            let generation: Int?
+            if let moved { generation = consumeCut(request.clipboardGeneration, originals: [moved]) }
+            else { generation = request.clipboardGeneration }
             let remaining = request.sources.filter { $0.url.path != source.path }
             retryRequest = remaining.isEmpty ? nil : BrowserTransferRequest(
                 sources: remaining, folder: request.folder, move: request.move, conflict: request.conflict,
-                clipboardGeneration: request.clipboardGeneration, destination: request.destination
+                clipboardGeneration: generation, destination: request.destination
             )
             canRetryTransfer = retryRequest != nil
         }
@@ -345,7 +355,7 @@ final class BrowserActions: ObservableObject {
             let originals = Dictionary(uniqueKeysWithValues: changed.map { ($0.original.url.path, $0.original) })
             shelf.removeAll { originals[$0.url.path] == $0 }
         }
-        let generation = consumeCut(request.clipboardGeneration, moves: result.moves)
+        let generation = consumeCut(request.clipboardGeneration, originals: result.moves.map(\.original))
         if !result.retry.isEmpty, let destination = result.destination {
             retryRequest = BrowserTransferRequest(
                 sources: result.retry, folder: request.folder, move: request.move, conflict: request.conflict,
@@ -380,12 +390,12 @@ final class BrowserActions: ObservableObject {
         startNextQueuedTransfer()
     }
 
-    private func consumeCut(_ generation: Int?, moves: [BrowserCompletedMove]) -> Int? {
+    private func consumeCut(_ generation: Int?, originals: [FileReference]) -> Int? {
         refreshClipboard()
         guard let generation, let clipboard,
               clipboard.cut, clipboard.generation == generation else { return nil }
-        guard !moves.isEmpty else { return generation }
-        let moved = Set(moves.map { $0.original.url.path })
+        guard !originals.isEmpty else { return generation }
+        let moved = Set(originals.map { $0.url.path })
         let remaining = clipboard.sources.filter { !moved.contains($0.url.path) }
         let board = pasteboard
         guard board.changeCount == generation else {
@@ -738,6 +748,8 @@ private enum HistoryStep: Codable, Sendable {
     case trashEmpty(FileReference)
     case restoreEmpty(BrowserTrashItem)
     case replacement(ReviewedFile, BrowserTrashItem)
+    case undoMoveReplacement(FileReference, ReviewedFile, BrowserTrashItem)
+    case redoMoveReplacement(ReviewedFile, ReviewedFile)
     case crossVolumeMove(CrossVolumeMoveReceipt, BrowserTrashItem)
 
     func perform() throws -> (inverse: HistoryStep?, trashChanges: [TrashChange]) {
@@ -764,6 +776,13 @@ private enum HistoryStep: Codable, Sendable {
             let restored = try FileOperations.restoreReplacedFile(displaced.receipt, replacing: installed)
             let previous = BrowserTrashItem(receipt: restored.previous)
             return (.replacement(restored.installed, previous), [.remove(displaced.id), .add(previous)])
+        case .undoMoveReplacement(let original, let installed, let previous):
+            let restored = try FileOperations.undoMoveReplacement(original, installed: installed, previous: previous.receipt)
+            return (.redoMoveReplacement(restored.source, restored.destination), [.remove(previous.id)])
+        case .redoMoveReplacement(let source, let destination):
+            let receipt = try FileOperations.replaceMove(source, replacing: destination)
+            let previous = BrowserTrashItem(receipt: receipt.previous)
+            return (.undoMoveReplacement(source.reference, receipt.installed, previous), [.add(previous)])
         case .crossVolumeMove(let move, let archived):
             let reversed = try FileOperations.reverse(move)
             let previous = BrowserTrashItem(receipt: reversed.backup)
