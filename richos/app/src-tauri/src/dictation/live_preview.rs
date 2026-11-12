@@ -42,7 +42,8 @@ impl PreviewProgress {
     }
 
     fn skip_deadline(&mut self) -> bool {
-        if !self.has_words || self.missed_deadline { return false; }
+        if !self.has_words { return false; }
+        // Keep sampling at the normal cadence. The missed job is already reaped.
         self.missed_deadline = true;
         true
     }
@@ -159,13 +160,14 @@ mod tests {
     }
 
     #[test]
-    fn preview_skips_one_deadline_only_between_published_results() {
+    fn established_preview_skips_consecutive_deadlines() {
         let mut progress = PreviewProgress::default();
         assert!(!progress.skip_deadline());
         progress.published();
         assert!(progress.skip_deadline());
-        assert!(!progress.skip_deadline());
+        assert!(progress.skip_deadline());
         progress.published();
+        assert!(!progress.missed_deadline);
         assert!(progress.skip_deadline());
     }
 
@@ -176,6 +178,9 @@ mod tests {
         let new_samples = 2 * RECOVERY_SPEECH_SAMPLES;
         assert_eq!(progress.window(&samples, new_samples), (samples.as_slice(), new_samples));
         progress.published();
+        assert!(progress.skip_deadline());
+        assert_eq!(progress.window(&samples, new_samples),
+            (&samples[RECOVERY_WINDOW_SAMPLES..], RECOVERY_SPEECH_SAMPLES));
         assert!(progress.skip_deadline());
         assert_eq!(progress.window(&samples, new_samples),
             (&samples[RECOVERY_WINDOW_SAMPLES..], RECOVERY_SPEECH_SAMPLES));
