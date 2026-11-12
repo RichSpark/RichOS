@@ -117,6 +117,7 @@ struct WindowBrowserView: View {
     @AppStorage("richfiles.lastBrowserSession.v1") private var lastBrowserSession = Data()
     @SceneStorage("richfiles.browserSession.v1") private var savedSession: Data?
     @State private var appeared = false
+    @State private var nativeWindowNumber: Int?
     @State private var cleanLaunchDeadline: TimeInterval?
     @State private var switching = false
     @State private var switchError = ""
@@ -166,6 +167,19 @@ struct WindowBrowserView: View {
                 }
             } else {
                 pane(workspace.primary, side: .primary)
+            }
+        }
+        .background {
+            if hostOpenWindow == nil {
+                BrowserWindowReference { number in
+                    nativeWindowNumber = number
+                    receiveFolderOpen()
+                }
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { notice in
+            if let window = notice.object as? NSWindow, window.windowNumber == nativeWindowNumber {
+                receiveFolderOpen()
             }
         }
         .disabled(switching)
@@ -257,9 +271,42 @@ struct WindowBrowserView: View {
             acceptHandoff(id)
         }
         for id in openRequests.takeHandoffs() { openWindow(id: "richfiles-handoff", value: id.uuidString) }
-        for (index, url) in openRequests.takePending().enumerated() {
-            if index == 0 { workspace.activeModel.openFolder(url) }
-            else { workspace.activeModel.newTab(url) }
+        guard let nativeWindowNumber,
+              (NSApp.keyWindow ?? NSApp.mainWindow)?.windowNumber == nativeWindowNumber else { return }
+        let folders = openRequests.takePending()
+        if folders.count == 1, let folder = folders.first {
+            workspace.activeModel.openFolder(folder)
+        } else {
+            for folder in folders { workspace.activeModel.newTab(folder) }
+        }
+    }
+}
+
+private struct BrowserWindowReference: NSViewRepresentable {
+    let report: (Int?) -> Void
+
+    func makeNSView(context: Context) -> Reporter { Reporter(report: report) }
+
+    func updateNSView(_ view: Reporter, context: Context) { view.report = report }
+
+    final class Reporter: NSView {
+        var report: (Int?) -> Void
+
+        init(report: @escaping (Int?) -> Void) {
+            self.report = report
+            super.init(frame: .zero)
+        }
+
+        required init?(coder: NSCoder) { nil }
+
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.report(self.window?.windowNumber)
+            }
         }
     }
 }
