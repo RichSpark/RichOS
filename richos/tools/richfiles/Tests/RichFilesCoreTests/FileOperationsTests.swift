@@ -349,6 +349,31 @@ final class FileOperationsTests: XCTestCase {
         }
     }
 
+    func testDirectoryCopyDoesNotPublishWhenANestedFileCannotBeRead() throws {
+        try XCTSkipIf(geteuid() == 0, "Requires ordinary file access permissions")
+        try withFixture { root in
+            let source = try FileOperations.createFolder(in: root, named: "Source")
+            let child = try FileOperations.createFolder(in: source.url, named: "Child")
+            let readable = try write("readable bytes", named: "Readable.txt", in: child.url)
+            let blocked = try write("blocked bytes", named: "Blocked.txt", in: child.url)
+            let destination = try FileOperations.createFolder(in: root, named: "Destination")
+            XCTAssertEqual(chmod(blocked.url.path, 0), 0)
+            defer { _ = chmod(blocked.url.path, 0o600) }
+
+            XCTAssertThrowsError(try FileOperations.copy(source, into: destination.url)) {
+                guard case FileOperationError.system(_, let location, let code) = $0 else {
+                    return XCTFail("Expected the original access error, got \($0)")
+                }
+                XCTAssertEqual(location.path, blocked.url.path)
+                XCTAssertEqual(code, EACCES)
+            }
+            XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: destination.url.path).isEmpty)
+            XCTAssertEqual(try contents(readable), "readable bytes")
+            XCTAssertEqual(chmod(blocked.url.path, 0o600), 0)
+            XCTAssertEqual(try contents(blocked), "blocked bytes")
+        }
+    }
+
     func testVerifiedTreeChecksNestedContentAndRefusesAnEditedDescendant() throws {
         try withFixture { root in
             let source = try FileOperations.createFolder(in: root, named: "Project")

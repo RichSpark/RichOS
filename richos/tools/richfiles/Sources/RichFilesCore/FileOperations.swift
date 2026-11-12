@@ -903,7 +903,8 @@ public enum FileOperations {
             case S_IFDIR:
                 let flags = copyfile_flags_t(COPYFILE_ALL | COPYFILE_RECURSIVE | COPYFILE_NOFOLLOW
                                              | COPYFILE_EXCL | COPYFILE_DATA_SPARSE)
-                try copyUsingNative(to: stagedURL, sourceDevice: initial.st_dev, isCancelled: isCancelled) { state in
+                try copyUsingNative(to: stagedURL, recursiveSource: (source.url, initial.st_dev),
+                                    isCancelled: isCancelled) { state in
                     copyfile(source.url.path, stagedURL.path, state, flags)
                 }
             default:
@@ -977,7 +978,7 @@ public enum FileOperations {
     }
 
     private static func copyUsingNative(
-        to location: URL, size: Int64? = nil, sourceDevice: Int32? = nil,
+        to location: URL, size: Int64? = nil, recursiveSource: (url: URL, device: Int32)? = nil,
         isCancelled: () -> Bool, onProgress: (Int64, Int64) -> Void = { _, _ in },
         copy: (copyfile_state_t) -> Int32
     ) throws {
@@ -987,7 +988,7 @@ public enum FileOperations {
         defer { _ = copyfile_state_free(state) }
         try withoutActuallyEscaping(isCancelled) { cancel in
             try withoutActuallyEscaping(onProgress) { progress in
-                let context = CopyCallbacks(size: size, sourceDevice: sourceDevice, cancel: cancel, progress: progress)
+                let context = CopyCallbacks(size: size, recursiveSource: recursiveSource, cancel: cancel, progress: progress)
                 let pointer = Unmanaged.passUnretained(context).toOpaque()
                 let callback = unsafeBitCast(CopyCallbacks.status, to: UnsafeRawPointer.self)
                 guard copyfile_state_set(state, UInt32(COPYFILE_STATE_STATUS_CTX), pointer) == 0,
@@ -997,7 +998,7 @@ public enum FileOperations {
                 let result = withExtendedLifetime(context) { copy(state) }
                 let code = errno
                 if context.cancelled { throw CancellationError() }
-                if let rejected = context.rejected { throw FileOperationError.unsupportedCopySource(rejected) }
+                if let failure = context.failure { throw failure }
                 if result != 0 {
                     throw FileOperationError.system(operation: "Could not complete the copy", location: location, code: code)
                 }
@@ -1252,35 +1253,47 @@ public enum FileOperations {
 
 private final class CopyCallbacks {
     let size: Int64?
-    let sourceDevice: Int32?
+    let recursiveSource: (url: URL, device: Int32)?
     let cancel: () -> Bool
     let progress: (Int64, Int64) -> Void
     var cancelled = false
-    var rejected: URL?
+    var failure: FileOperationError?
 
-    init(size: Int64?, sourceDevice: Int32?, cancel: @escaping () -> Bool,
+    init(size: Int64?, recursiveSource: (url: URL, device: Int32)?, cancel: @escaping () -> Bool,
          progress: @escaping (Int64, Int64) -> Void) {
         self.size = size
-        self.sourceDevice = sourceDevice
+        self.recursiveSource = recursiveSource
         self.cancel = cancel
         self.progress = progress
     }
 
     static let status: copyfile_callback_t = { what, stage, state, source, _, pointer in
+        let recursiveError = stage == COPYFILE_ERR &&
+            (what == COPYFILE_RECURSE_ERROR || what == COPYFILE_RECURSE_FILE ||
+             what == COPYFILE_RECURSE_DIR || what == COPYFILE_RECURSE_DIR_CLEANUP)
+        let errorCode = recursiveError ? errno : 0
         guard let pointer else { return COPYFILE_QUIT }
         let context = Unmanaged<CopyCallbacks>.fromOpaque(pointer).takeUnretainedValue()
-        if context.cancelled || context.rejected != nil { return COPYFILE_QUIT }
+        if context.cancelled || context.failure != nil { return COPYFILE_QUIT }
         if context.cancel() {
             context.cancelled = true
             return COPYFILE_QUIT
         }
-        if let sourceDevice = context.sourceDevice, let source, stage == COPYFILE_START,
+        if let root = context.recursiveSource, recursiveError {
+            // Continuing here can silently skip a member of the copied tree.
+            let failedEntry = source.map { URL(fileURLWithFileSystemRepresentation: $0, isDirectory: false, relativeTo: nil) }
+            context.failure = .system(operation: "Could not copy the folder entry", location: failedEntry ?? root.url,
+                                      code: errorCode == 0 ? EIO : errorCode)
+            return COPYFILE_QUIT
+        }
+        if let root = context.recursiveSource, let source, stage == COPYFILE_START,
            what == COPYFILE_RECURSE_FILE || what == COPYFILE_RECURSE_DIR {
             var status = stat()
             let read = lstat(source, &status)
             let kind = status.st_mode & S_IFMT
-            if read != 0 || status.st_dev != sourceDevice || (kind != S_IFREG && kind != S_IFDIR && kind != S_IFLNK) {
-                context.rejected = URL(fileURLWithPath: String(cString: source))
+            if read != 0 || status.st_dev != root.device || (kind != S_IFREG && kind != S_IFDIR && kind != S_IFLNK) {
+                let entry = URL(fileURLWithFileSystemRepresentation: source, isDirectory: false, relativeTo: nil)
+                context.failure = .unsupportedCopySource(entry)
                 return COPYFILE_QUIT
             }
         }
