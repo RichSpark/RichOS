@@ -403,6 +403,20 @@ impl Catalog {
         }
         Ok(entries)
     }
+    pub(super) fn total_files(&self) -> Result<u64> {
+        self.db.query_row("SELECT count(*) FROM files", [], |r| r.get(0))
+            .map_err(|e| e.to_string())
+    }
+
+    pub fn recent_filed_paths(&self) -> Result<Vec<PathBuf>> {
+        let mut query = self.db.prepare(
+            "SELECT json_extract(record,'$.path') FROM files WHERE phase='\"filed\"'
+             AND NOT json_extract(record,'$.inbox') ORDER BY updated DESC,id LIMIT 256",
+        ).map_err(|e| e.to_string())?;
+        let rows = query.query_map([], |row| row.get::<_, String>(0))
+            .map_err(|e| e.to_string())?;
+        rows.map(|row| row.map(PathBuf::from).map_err(|e| e.to_string())).collect()
+    }
     pub fn search(&self, text: &str, offset: u64, byte_limit: usize) -> Result<Page> {
         if text.len() > 4096 || offset > i64::MAX as u64 {
             return Err("Search is too long".into());
@@ -413,20 +427,13 @@ impl Catalog {
             .map(|s| format!("\"{s}\""))
             .collect::<Vec<_>>()
             .join(" AND ");
-        let (sql, count) = if literal.is_empty() {
-            (
-                "SELECT record FROM files WHERE ?1='' ORDER BY updated DESC,id LIMIT 256 OFFSET ?2",
-                "SELECT count(*) FROM files",
-            )
+        let (sql, total) = if literal.is_empty() {
+            ("SELECT record FROM files WHERE ?1='' ORDER BY updated DESC,id LIMIT 256 OFFSET ?2", self.total_files()?)
         } else {
-            ("SELECT files.record FROM search JOIN files ON files.id=search.id WHERE search MATCH ?1 ORDER BY rank,updated DESC LIMIT 256 OFFSET ?2","SELECT count(*) FROM search WHERE search MATCH ?1")
+            let total = self.db.query_row("SELECT count(*) FROM search WHERE search MATCH ?1", [&literal], |r| r.get(0))
+                .map_err(|e| e.to_string())?;
+            ("SELECT files.record FROM search JOIN files ON files.id=search.id WHERE search MATCH ?1 ORDER BY rank,updated DESC LIMIT 256 OFFSET ?2", total)
         };
-        let total: u64 = if literal.is_empty() {
-            self.db.query_row(count, [], |r| r.get(0))
-        } else {
-            self.db.query_row(count, [&literal], |r| r.get(0))
-        }
-        .map_err(|e| e.to_string())?;
         let mut statement = self.db.prepare(sql).map_err(|e| e.to_string())?;
         let rows = statement
             .query_map(params![literal, offset], |r| r.get::<_, String>(0))

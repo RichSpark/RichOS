@@ -30,6 +30,24 @@ def attributes(path):
     stat=path.stat()
     return (attrs,acl,stat.st_mode,stat.st_flags,stat.st_mtime_ns,stat.st_birthtime)
 source=root/"original.txt";source.write_bytes(b"one original")
+available=root/"Existing";available.mkdir()
+assert native("destination",root=str(root),parts=["Existing"],name="report.txt",existingOnly=True)["path"]==str(available/"report.txt")
+try:
+    native("destination",root=str(root),parts=["Existing","Missing"],name="report.txt",existingOnly=True)
+except RuntimeError as error:
+    assert "destination-folder-unavailable" in str(error)
+else:
+    raise AssertionError("A missing listed folder must not be recreated")
+assert not (available/"Missing").exists()
+available.chmod(0o500)
+try:
+    native("destination",root=str(root),parts=["Existing"],name="report.txt",existingOnly=True)
+except RuntimeError as error:
+    assert "destination-folder-unavailable" in str(error)
+else:
+    raise AssertionError("An unwritable listed folder must fall back before staging")
+finally:
+    available.chmod(0o700)
 for name,value in {"com.apple.metadata:kMDItemFinderComment":plistlib.dumps("Existing Finder context",fmt=plistlib.FMT_BINARY),"com.apple.metadata:_kMDItemUserTags":plistlib.dumps(["Fixture\n6"],fmt=plistlib.FMT_BINARY),"com.apple.quarantine":b"0081;69000000;RichCleaner fixture;00000000-0000-0000-0000-000000000001"}.items():
     subprocess.run(["/usr/bin/xattr","-wx",name,value.hex(),source],check=True)
 subprocess.run(["chmod","+a","everyone allow readattr,readextattr,readsecurity",source],check=True)
@@ -51,6 +69,21 @@ replaced=native("replace",path=str(source),identity=identity,staged=stage["path"
 target=root/"filed.txt";native("rename",path=str(source),destination=str(target),identity=replaced)
 assert before==attributes(target),"Native filing changed original filesystem attributes"
 assert not source.exists() and target.read_bytes()==b"one original with a staged annotation"
+filed=native("inspect",path=str(target))
+moved=root/"renamed-outside-richcleaner.txt";target.rename(moved)
+for action in ("resolve","resolve-local","open-check","open-location"):
+    opened=native(action,path=str(target),identity=filed)
+    assert opened["path"]==str(moved), "The bookmark must find the externally renamed original"
+    assert opened["identity"]["object"]==filed["object"]
+    assert not opened.get("download"), "A local file must take the fast path"
+moved.unlink()
+target.write_bytes(b"a different file with the old name")
+try:
+    native("open-location",path=str(target),identity=filed)
+except RuntimeError as error:
+    assert "Locate the original file" in str(error)
+else:
+    raise AssertionError("A different file must not open when the bookmarked original is gone")
 native("cleanup",path=stage["path"],identity=staged)
 native("cleanup",path=stage["path"],identity=staged)
 print("Native attributes, single-original move and idempotent staging cleanup passed")

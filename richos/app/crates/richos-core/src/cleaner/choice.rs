@@ -1,13 +1,13 @@
 //! One tool-free folder choice. Startup overlaps speech; one request follows durable note save.
-use super::{folder_parts, Result};
+use super::{folder_parts, FilingChoice, Result};
 use crate::{engine_profile::EngineProfile, request_classifier::Provider};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
-    path::Path,
+    path::PathBuf,
     sync::{
-        atomic::{AtomicBool, Ordering},
-        mpsc, Arc,
+        atomic::{AtomicU8, Ordering},
+        mpsc, Arc, OnceLock,
     },
     thread::JoinHandle,
     time::{Duration, Instant},
@@ -20,45 +20,148 @@ pub struct Choice {
     pub aliases: Vec<String>,
     pub clear: bool,
 }
+
+pub struct FolderContext {
+    pub labels: Vec<String>,
+    pub complete: bool,
+}
+
+const MAX_REQUEST_BYTES: usize = 60 * 1024;
+const INCOMPLETE: &str =
+    "The folder list was incomplete and no listed folder fit. Edit the note or choose a smaller filing folder, then use File again";
+const INVALID: &str = "The folder model returned an invalid choice. Use File again to retry";
+const UNCLEAR: &str = "The note did not make the right folder clear. Edit the note, then use File again";
+const INPUT_LIMIT: &str = "The note and filenames exceed the folder model's input limit. Shorten the note, then use File again";
+const UNAVAILABLE: &str = "The folder model is unavailable. Use File again to retry";
+const TIMEOUT: &str = "The folder model did not answer in time. Use File again to retry";
+const QUOTA: &str = "The folder model reached its usage limit. Use File again when access returns";
+
+pub fn fallback(error: &str) -> FilingChoice {
+    let reason = match error {
+        INVALID => INVALID,
+        INPUT_LIMIT => INPUT_LIMIT,
+        "folder-quota" => QUOTA,
+        "Folder choice timed out" | "Classification deadline" | "Classification canceled or slow" => TIMEOUT,
+        _ => UNAVAILABLE,
+    };
+    FilingChoice::Inbox { reason: reason.into() }
+}
+
+pub fn outcome(choice: &FilingChoice) -> &'static str {
+    match choice {
+        FilingChoice::Category { .. } => "category",
+        FilingChoice::Inbox { reason } => match reason.as_str() {
+            UNCLEAR => "unclear",
+            INCOMPLETE => "incomplete_context",
+            INVALID => "invalid_answer",
+            INPUT_LIMIT => "input_limit",
+            TIMEOUT => "timeout",
+            QUOTA => "quota",
+            _ => "unavailable",
+        },
+    }
+}
+
+fn wire(input: &Value) -> String {
+    json!({"type":"user","message":{"role":"user","content":input.to_string()}}).to_string()
+}
+
+fn request(mut input: Value, folders: &FolderContext) -> Result<(String, usize, bool)> {
+    input["folders"] = json!([]);
+    input["foldersComplete"] = json!(false);
+    let mut remaining = MAX_REQUEST_BYTES.checked_sub(wire(&input).len())
+        .ok_or(INPUT_LIMIT)?;
+    let mut sent = 0;
+    for label in &folders.labels {
+        // Each label is a JSON string inside the provider's JSON content string.
+        let encoded = json!(label).to_string();
+        let cost = json!(encoded).to_string().len() - 2 + usize::from(sent > 0);
+        let Some(rest) = remaining.checked_sub(cost) else { break };
+        remaining = rest;
+        sent += 1;
+    }
+    let complete = folders.complete && sent == folders.labels.len();
+    input["folders"] = json!(folders.labels[..sent]);
+    input["foldersComplete"] = json!(complete);
+    Ok((wire(&input), sent, complete))
+}
+
+fn selection(choice: Choice, sent: &[String], complete: bool) -> FilingChoice {
+    if !choice.clear || choice.folder.eq_ignore_ascii_case("Inbox") {
+        return FilingChoice::Inbox {
+            reason: if complete {
+                UNCLEAR
+            } else {
+                INCOMPLETE
+            }.into(),
+        };
+    }
+    let existing_only = sent.contains(&choice.folder);
+    if !complete && !existing_only {
+        return FilingChoice::Inbox { reason: INCOMPLETE.into() };
+    }
+    let mut labels = choice.keywords;
+    labels.extend(choice.aliases);
+    FilingChoice::category(choice.folder, labels, existing_only)
+}
+
 struct Request {
     body: String,
-    deadline: Instant,
+    saved: Instant,
     reply: mpsc::Sender<Result<Choice>>,
 }
 pub struct Prepared {
     started: Instant,
+    launched: Arc<OnceLock<Instant>>,
     send: Option<mpsc::Sender<Request>>,
-    stop: Arc<AtomicBool>,
+    state: Arc<AtomicU8>,
     worker: Option<JoinHandle<()>>,
 }
+const LAUNCHING: u8 = 1;
+const CANCELED: u8 = 2;
+
+fn deadline(launch: Instant, saved: Instant) -> Instant {
+    (launch + Duration::from_secs(30)).max(saved + Duration::from_secs(5))
+}
+
 impl Prepared {
-    pub fn start(bin: &Path, profile: &EngineProfile) -> Self {
+    pub fn start(
+        prepare: impl FnOnce() -> Result<(PathBuf, EngineProfile)> + Send + 'static,
+    ) -> Self {
         let started = Instant::now();
-        let stop = Arc::new(AtomicBool::new(false));
-        let canceled = stop.clone();
+        let state = Arc::new(AtomicU8::new(0));
+        let worker_state = state.clone();
+        let launched = Arc::new(OnceLock::new());
+        let worker_launch = launched.clone();
         let (send, receive) = mpsc::channel::<Request>();
-        let profile = profile.clone();
-        let bin = bin.to_path_buf();
         let worker = std::thread::spawn(move || {
-            let mut live = Provider::new(&bin, &profile, "app/cleaner.md", "cleaner").start();
-            loop {
-                if canceled.load(Ordering::Acquire) {
-                    break;
-                }
+            let canceled = || worker_state.load(Ordering::Acquire) & CANCELED != 0;
+            if canceled() {
+                return;
+            }
+            let setup = prepare();
+            let mut live = setup
+                .as_ref()
+                .map_err(String::clone)
+                .and_then(|(bin, profile)| {
+                    // Cancellation during profile preparation must prevent a late provider launch.
+                    worker_launch.get_or_init(Instant::now);
+                    worker_state
+                        .compare_exchange(0, LAUNCHING, Ordering::AcqRel, Ordering::Acquire)
+                        .map_err(|_| "Folder choice canceled".to_string())?;
+                    Provider::new(bin, profile, "app/cleaner.md", "cleaner").start()
+                });
+            while !canceled() {
                 match receive.recv_timeout(Duration::from_millis(50)) {
                     Ok(request) => {
                         let answer = live
                             .as_mut()
                             .map_err(|e| e.clone())
                             .and_then(|live| {
-                                live.exchange(
-                                    request.body,
-                                    request.deadline,
-                                    || canceled.load(Ordering::Acquire),
-                                    answer,
-                                )
+                                let launch = worker_launch.get().copied().unwrap_or(started);
+                                live.exchange(request.body, deadline(launch, request.saved), canceled, answer)
                             })
-                            .and_then(|text| serde_json::from_str(&text).map_err(|e| e.to_string()))
+                            .and_then(|text| serde_json::from_str(&text).map_err(|_| INVALID.into()))
                             .and_then(validate);
                         if request.reply.send(answer).is_err() {
                             eprintln!(
@@ -72,46 +175,57 @@ impl Prepared {
                 }
             }
             drop(live);
-            profile.remove_session_files();
+            if let Ok((_, profile)) = setup {
+                profile.remove_session_files();
+            }
         });
         Self {
             started,
+            launched,
             send: Some(send),
-            stop,
+            state,
             worker: Some(worker),
         }
     }
-    pub fn choose(&self, name: &str, note: &str, folders: &[String]) -> Result<Choice> {
-        self.choose_from(json!({"filename":name,"note":note,"folders":folders}))
+    pub fn choose(&self, name: &str, note: &str, folders: &FolderContext, report: impl FnOnce(usize, bool)) -> Result<FilingChoice> {
+        self.choose_from(json!({"filename":name,"note":note}), folders, report)
     }
-    pub fn choose_batch(&self, names: &[String], note: &str, folders: &[String]) -> Result<Choice> {
-        self.choose_from(json!({"filenames":names,"note":note,"folders":folders}))
+    pub fn choose_batch(&self, names: &[String], note: &str, folders: &FolderContext, report: impl FnOnce(usize, bool)) -> Result<FilingChoice> {
+        self.choose_from(json!({"filenames":names,"note":note}), folders, report)
     }
-    fn choose_from(&self, input: Value) -> Result<Choice> {
-        let body = json!({"type":"user","message":{"role":"user","content":input.to_string()}})
-            .to_string();
-        if body.len() > 60 * 1024 {
-            return Err("Folder context exceeds its metadata budget".into());
-        }
-        let deadline =
-            (self.started + Duration::from_secs(30)).max(Instant::now() + Duration::from_secs(5));
+    fn choose_from(&self, input: Value, folders: &FolderContext, report: impl FnOnce(usize, bool)) -> Result<FilingChoice> {
+        let (body, sent, complete) = request(input, folders)?;
+        let saved = Instant::now();
         let (reply, receive) = mpsc::channel();
         self.send
             .as_ref()
             .ok_or("Folder choice is closed")?
             .send(Request {
                 body,
-                deadline,
+                saved,
                 reply,
             })
             .map_err(|e| e.to_string())?;
-        while !self.stop.load(Ordering::Acquire) {
-            let remaining = deadline.saturating_duration_since(Instant::now());
+        report(sent, complete);
+        while self.state.load(Ordering::Acquire) & CANCELED == 0 {
+            // Bound profile preparation until the provider starts, then give the
+            // single request its full launch-relative allowance.
+            let launch = self.launched.get().copied();
+            let remaining = deadline(launch.unwrap_or(self.started), saved).saturating_duration_since(Instant::now());
             if remaining.is_zero() {
+                if launch.is_none() {
+                    match self.state.compare_exchange(0, CANCELED, Ordering::AcqRel, Ordering::Acquire) {
+                        // The worker published its launch time before claiming launch.
+                        Err(state) if state == LAUNCHING => continue,
+                        Ok(_) => return Err("Folder choice timed out".into()),
+                        Err(_) => break,
+                    }
+                }
+                self.cancel();
                 return Err("Folder choice timed out".into());
             }
             match receive.recv_timeout(remaining.min(Duration::from_millis(50))) {
-                Ok(answer) => return answer,
+                Ok(answer) => return answer.map(|choice| selection(choice, &folders.labels[..sent], complete)),
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
                 Err(_) => return Err("Folder helper stopped".into()),
             }
@@ -119,24 +233,29 @@ impl Prepared {
         Err("Folder choice canceled".into())
     }
     pub fn cancel(&self) {
-        self.stop.store(true, Ordering::Release);
+        self.state.fetch_or(CANCELED, Ordering::AcqRel);
     }
 }
 impl Drop for Prepared {
     fn drop(&mut self) {
         self.cancel();
         drop(self.send.take());
-        if let Some(worker) = self.worker.take() {
-            if worker.join().is_err() {
-                eprintln!("[richos] RichCleaner folder helper failed while stopping");
-            }
+        // A worker still preparing its profile can clean it up without blocking the
+        // caller. Once launch has begun, keep the existing synchronous child reaping.
+        if self.state.load(Ordering::Acquire) & LAUNCHING != 0
+            && self
+                .worker
+                .take()
+                .is_some_and(|worker| worker.join().is_err())
+        {
+            eprintln!("[richos] RichCleaner folder helper failed while stopping");
         }
     }
 }
 fn answer(frame: &Value) -> Result<String> {
     Ok(frame["result"]
         .as_str()
-        .ok_or("No folder choice")?
+        .ok_or(INVALID)?
         .trim()
         .trim_start_matches("```json")
         .trim_start_matches("```")
@@ -145,21 +264,47 @@ fn answer(frame: &Value) -> Result<String> {
         .into())
 }
 fn validate(choice: Choice) -> Result<Choice> {
-    folder_parts(&choice.folder)?;
-    if choice.keywords.len() + choice.aliases.len() > 20
+    let parts = folder_parts(&choice.folder).map_err(|_| INVALID)?;
+    if parts.join("/") != choice.folder
+        || choice.keywords.len() + choice.aliases.len() > 20
         || choice
             .keywords
             .iter()
             .chain(&choice.aliases)
             .any(|v| v.len() > 160 || v.chars().any(char::is_control))
     {
-        return Err("Invalid search aliases".into());
+        return Err(INVALID.into());
     }
     Ok(choice)
 }
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn canceled_preparation_cleans_up_without_launching_a_provider() {
+        let (root, bin, profile, _) = crate::request_classifier::tests::fixture("");
+        let plugin = profile.plugin.clone();
+        std::fs::create_dir(&plugin).unwrap();
+        let provider_dir = profile.state.join("cleaner");
+        let (entered, preparing) = mpsc::channel();
+        let (release, released) = mpsc::channel();
+        let mut chooser = Prepared::start(move || {
+            entered.send(()).unwrap();
+            // load-bound: hang guard for the fixture barrier; the verdict uses filesystem state.
+            released.recv_timeout(Duration::from_secs(30)).unwrap();
+            Ok((bin, profile))
+        });
+        // load-bound: hang guard for the fixture barrier; the verdict uses filesystem state.
+        preparing.recv_timeout(Duration::from_secs(30)).unwrap();
+        chooser.cancel();
+        release.send(()).unwrap();
+        chooser.worker.take().unwrap().join().unwrap();
+        assert!(!provider_dir.exists());
+        assert!(!plugin.exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn model_paths_are_data_and_invalid_paths_are_refused() {
         let parse = |folder: &str| {
@@ -173,5 +318,62 @@ mod tests {
         assert!(parse("Home/Kitchen").is_ok());
         assert!(parse("/Desktop").is_err());
         assert!(parse("../../elsewhere").is_err());
+        assert!(parse("Home//Kitchen").is_err());
+    }
+
+    #[test]
+    fn wire_budget_preserves_recent_prefix_and_only_offers_what_was_sent() {
+        let recent = "Company/Board".to_string();
+        let mut labels = vec![recent.clone()];
+        labels.extend((0..500).map(|n| format!("{} {n}", "\"📷".repeat(70))));
+        let folders = FolderContext { labels, complete: true };
+        let input = json!({"filenames":["a.pdf","b.pdf"],"note":"Quote \"café\""});
+        let (body, sent, complete) = request(input, &folders).unwrap();
+        assert!(body.len() <= MAX_REQUEST_BYTES);
+        assert!(sent > 1 && sent < folders.labels.len() && !complete);
+        let frame: Value = serde_json::from_str(&body).unwrap();
+        let fields: Value = serde_json::from_str(frame["message"]["content"].as_str().unwrap()).unwrap();
+        assert_eq!(fields["foldersComplete"], false);
+        assert_eq!(fields["folders"], json!(folders.labels[..sent]));
+        let selected = |folder: String, complete| selection(
+            Choice { folder, keywords: vec![], aliases: vec![], clear: true },
+            &folders.labels[..sent],
+            complete,
+        );
+        assert!(matches!(selected(recent, false), FilingChoice::Category { existing_only: true, .. }));
+        assert!(matches!(selected(folders.labels[sent].clone(), false), FilingChoice::Inbox { .. }));
+        assert!(matches!(selected("New Category".into(), true), FilingChoice::Category { existing_only: false, .. }));
+    }
+
+    #[test]
+    fn scan_incompleteness_reaches_provider_even_if_all_collected_labels_fit() {
+        let folders = FolderContext { labels: vec!["Company".into()], complete: false };
+        let (body, sent, complete) = request(json!({"filename":"a.pdf","note":"quote"}), &folders).unwrap();
+        assert_eq!(sent, 1);
+        assert!(!complete);
+        let frame: Value = serde_json::from_str(&body).unwrap();
+        let fields: Value = serde_json::from_str(frame["message"]["content"].as_str().unwrap()).unwrap();
+        assert_eq!(fields["foldersComplete"], false);
+    }
+
+    #[test]
+    fn reserved_inbox_and_provider_failures_keep_distinct_reasons() {
+        let inbox = selection(Choice {
+            folder: "inbox".into(), keywords: vec![], aliases: vec![], clear: true,
+        }, &[], true);
+        assert_eq!(outcome(&inbox), "unclear");
+        assert_eq!(outcome(&fallback("folder-quota")), "quota");
+        assert_eq!(outcome(&fallback("Classification deadline")), "timeout");
+        assert_eq!(outcome(&fallback(INVALID)), "invalid_answer");
+        assert_eq!(outcome(&fallback("an internal transport error")), "unavailable");
+    }
+
+    #[test]
+    fn provider_launch_keeps_its_allowance_and_a_saved_note_gets_at_least_five_seconds() {
+        let start = Instant::now();
+        let launch = start + Duration::from_secs(6);
+        assert_eq!(deadline(launch, start + Duration::from_secs(2)), launch + Duration::from_secs(30));
+        let saved = start + Duration::from_secs(35);
+        assert_eq!(deadline(launch, saved), saved + Duration::from_secs(5));
     }
 }

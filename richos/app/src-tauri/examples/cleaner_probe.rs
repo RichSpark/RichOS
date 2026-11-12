@@ -6,7 +6,7 @@ mod cleaner_metadata;
 #[path = "../src/cleaner_native.rs"]
 mod cleaner_native;
 use cleaner_native::Native;
-use richos_core::cleaner::{self, Catalog, Entry, Files, Identity, Staged};
+use richos_core::cleaner::{self, Catalog, Entry, Files, FilingChoice, Identity, Staged};
 use serde_json::json;
 use std::path::{Path, PathBuf};
 fn main() {
@@ -55,9 +55,7 @@ fn run() -> Result<(), String> {
             &native,
             &e.id,
             &library,
-            "Home/Kitchen",
-            vec!["renovation".into()],
-            false,
+            &FilingChoice::category("Home/Kitchen", vec!["renovation".into()], false),
         )?;
         let ext = input
             .extension()
@@ -154,9 +152,7 @@ fn run() -> Result<(), String> {
                 &fault,
                 &entry.id,
                 &library,
-                "Home/Kitchen",
-                vec![],
-                false,
+                &FilingChoice::category("Home/Kitchen", vec![], false),
             )
         };
         // Unsupported types have no replacement, so the replace fault is not reached.
@@ -211,7 +207,8 @@ fn run() -> Result<(), String> {
             let mut db = Catalog::open(&path)?;
             let entry = Entry::new(source, native.inspect(&case.join("original.png"))?, "Initial note".into())?;
             db.save(&entry)?;
-            let filed = cleaner::file(&mut db, &native, &entry.id, &case.join("Library"), "Home/Kitchen", vec![], false)?;
+            let choice = FilingChoice::category("Home/Kitchen", vec![], false);
+            let filed = cleaner::file(&mut db, &native, &entry.id, &case.join("Library"), &choice)?;
             let saved = cleaner::edit(&mut db, &Fault { native: &native, step }, &entry.id, "Corrected note survives the native error".into())?;
             if saved.path != filed.path || saved.phase != cleaner::Phase::Filed
                 || !native.inspect(&saved.path)?.same_content(&saved.identity)

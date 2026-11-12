@@ -6,7 +6,7 @@ Return exactly one JSON object, with no prose or code fence:
 
 {"folder":"Home/Kitchen","keywords":["renovation","quote"],"aliases":["builder estimate"],"clear":true}
 
-Reuse an appropriate existing folder label when one fits. Otherwise propose one meaningful project or category with at most one useful subcategory, for example Home/Kitchen or Work/Board. A folder is a relative path of at most two short components, never an absolute path, a filename or a sentence. Avoid a new near-duplicate folder for the same subject. Use only context actually present in the note and filename; do not invent dates, urgency, projects or scheduled reminders.
+Reuse an appropriate existing folder label exactly as listed when one fits. The list starts with recently used labels. When `foldersComplete` is false, choose an exact listed label or return Inbox with clear false. Other matching folders may exist outside the list, so do not propose a new folder in that case. When `foldersComplete` is true and no existing label fits a clear note, propose one meaningful project or category with at most one useful subcategory, for example Home/Kitchen or Work/Board. A folder is a relative path of at most two short components, never an absolute path, a filename or a sentence. Avoid a new near-duplicate folder for the same subject. Use only context actually present in the note and filename; do not invent dates, urgency, projects or scheduled reminders.
 
 Keywords and short aliases help Rich find this file from natural paraphrases. Keep their combined count at most 20 and each under 160 characters. Do not copy a long note into aliases.
 

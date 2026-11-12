@@ -1,8 +1,8 @@
 //! One accepted note and one folder choice for a frozen Desktop selection.
 //! Each member uses the existing recoverable single-file move and Undo.
-use super::{catalog, finish, host, settings, stage, start_target, Host};
+use super::{catalog, finish, host, stage, start_target, Host};
 use crate::{cleaner_native::Native, AppState};
-use richos_core::cleaner::{self, Catalog, Files, Identity, Phase};
+use richos_core::cleaner::{self, Catalog, Files, FilingChoice, Identity, Phase};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
@@ -164,9 +164,8 @@ pub(super) fn accept(
     let outcome = (|| {
         stage(app, id, "saved", json!({"noteSaved":true,"batchNote":note}));
         record["drafts_saved_ms"] = json!(began.elapsed().as_millis() as u64);
-        let root = settings(app)?.1.ok_or("Choose a filing folder")?;
         let native = Native::bundled()?;
-        native.request(json!({"action":"validate-root","path":root}))?;
+        let root = super::validated_filing_root(app, &native)?;
         let mut outcomes = Outcome::default();
         let mut ready = Vec::with_capacity(total);
         for entry in entries {
@@ -220,24 +219,31 @@ pub(super) fn accept(
                         .into_owned()
                 })
                 .collect::<Vec<_>>();
-            Some(super::folders(&root).and_then(|folders| {
+            Some(super::folder_context(&db, &root, id).and_then(|folders| {
                 chooser
                     .as_ref()
                     .ok_or("The model connection is unavailable".to_string())?
-                    .choose_batch(&names, &note, &folders)
+                    .choose_batch(&names, &note, &folders, |count, complete| {
+                        super::folder_request_context(id, count, complete)
+                    })
             }))
         };
-        let (folder, labels, inbox, reason) =
-            super::folder_outcome(choice.unwrap_or_else(|| Err("Folder choice canceled".into())));
+        let choice = super::folder_outcome(choice.unwrap_or_else(|| Err("Folder choice canceled".into())));
+        let folder = choice.folder();
         record["choice_ms"] = json!(choice_started.elapsed().as_millis() as u64);
         record["choice"] = json!(if cancel.load(Ordering::Acquire) {
             "canceled"
         } else if ready.is_empty() {
             "unavailable"
-        } else if inbox {
+        } else if matches!(&choice, FilingChoice::Inbox { .. }) {
             "inbox"
         } else {
             "category"
+        });
+        record["decision"] = json!(if cancel.load(Ordering::Acquire) {
+            "canceled"
+        } else {
+            cleaner::choice::outcome(&choice)
         });
         if enter_filing(&h, id)? && !ready.is_empty() {
             stage(
@@ -247,6 +253,7 @@ pub(super) fn accept(
                 json!({"folder":folder,"noteSaved":true,"force":false,"message":null}),
             );
         }
+        let mut unavailable_destinations = 0;
         for entry in ready {
             let _mutation = h
                 .mutation
@@ -266,17 +273,16 @@ pub(super) fn accept(
                     &native,
                     &entry.id,
                     &root,
-                    &folder,
-                    labels.clone(),
-                    inbox,
+                    &choice,
                 ) {
-                    Ok(mut saved) => {
+                    Ok(saved) => {
                         if saved.projection.mode != "embedded" {
                             outcomes.local_note += 1;
                         }
-                        if inbox {
-                            saved.problem = Some(reason.clone());
-                            db.save(&saved)?;
+                        if saved.inbox {
+                            if !matches!(&choice, FilingChoice::Inbox { .. }) {
+                                unavailable_destinations += 1;
+                            }
                             ResultKind::Inbox
                         } else {
                             ResultKind::Filed
@@ -291,7 +297,8 @@ pub(super) fn accept(
             skip(&h, &entry.id);
             outcomes.add(result);
         }
-        Ok::<_, String>((folder, outcomes))
+        record["unavailable_destinations"] = json!(unavailable_destinations);
+        Ok::<_, String>((folder.to_owned(), outcomes))
     })();
     if outcome.is_err() {
         let mut unresolved = 0;
@@ -439,6 +446,7 @@ mod tests {
             stage: "choosing".into(),
             cancel: cancel.clone(),
             chooser: None,
+            timings: Default::default(),
         });
         assert!(skip(&host, "one"));
         assert!(matches!(
