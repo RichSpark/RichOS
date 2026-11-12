@@ -205,6 +205,13 @@ test('live transcription checkpoints the flushed prefix and only decodes the tai
   assert.equal(recentLiveExcerpt(dir, options, startedAt - 1, () => assert.fail('future recording decoded')), null);
   fs.writeFileSync(record, JSON.stringify({ status: 'closed', capture, startedAt }));
   assert.equal(recentLiveExcerpt(dir, options, requestedAt, () => assert.fail('closed recording decoded')), null);
+
+  pcm.fill(0);
+  flush(24);
+  const silence = advanceLiveTranscription(dir, options, { closed: true, toolchain });
+  assert.equal(silence.decoded, 1);
+  assert.equal(silence.skippedSilentChannels, 2);
+  assert.deepEqual([silence.asr.me, silence.asr.others], [[], []]);
 });
 
 test('private session validation tolerates a live worker removing its staging', (t) => {
