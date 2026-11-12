@@ -374,6 +374,30 @@ final class FileOperationsTests: XCTestCase {
         }
     }
 
+    func testDirectoryCopyReportsNestedBytesAndCancelsBeforePublication() throws {
+        try withFixture { root in
+            let source = try FileOperations.createFolder(in: root, named: "Source")
+            let child = try FileOperations.createFolder(in: source.url, named: "Child")
+            let file = child.url.appendingPathComponent("Nested.bin")
+            let data = Data(repeating: 0x5a, count: 2 * 1024 * 1024)
+            try data.write(to: file, options: .withoutOverwriting)
+            let destination = try FileOperations.createFolder(in: root, named: "Destination")
+
+            var sample: NestedCopyProgress?
+            XCTAssertThrowsError(try FileOperations.copy(
+                source, into: destination.url, isCancelled: { sample != nil }, onNestedProgress: { sample = $0 }
+            )) { XCTAssertTrue($0 is CancellationError, "\($0)") }
+            let reported = try XCTUnwrap(sample)
+            XCTAssertEqual(reported.source.path, file.path)
+            XCTAssertGreaterThan(reported.written, 0)
+            XCTAssertLessThanOrEqual(reported.written, Int64(data.count))
+            XCTAssertEqual(reported.total, Int64(data.count))
+            XCTAssertGreaterThanOrEqual(reported.elapsed, 0)
+            XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: destination.url.path).isEmpty)
+            XCTAssertEqual(try Data(contentsOf: file), data)
+        }
+    }
+
     func testVerifiedTreeChecksNestedContentAndRefusesAnEditedDescendant() throws {
         try withFixture { root in
             let source = try FileOperations.createFolder(in: root, named: "Project")

@@ -67,6 +67,13 @@ public struct CopyReceipt: Sendable {
     public let remainingStagingFolder: URL?
 }
 
+public struct NestedCopyProgress: Sendable {
+    public let source: URL
+    public let written: Int64
+    public let total: Int64?
+    public let elapsed: TimeInterval
+}
+
 public enum CopyConflictPolicy: Sendable {
     case refuse
     case keepBoth
@@ -383,6 +390,7 @@ public enum FileOperations {
         expectedFolder: FileIdentity? = nil,
         conflictPolicy: CopyConflictPolicy = .refuse,
         isCancelled: () -> Bool = { false },
+        onNestedProgress: ((NestedCopyProgress) -> Void)? = nil,
         onProgress: (Int64, Int64) -> Void = { _, _ in },
         onVerify: () -> Void = {}
     ) throws -> CrossVolumeMoveResult {
@@ -401,7 +409,8 @@ public enum FileOperations {
         let version = FileVersion(original)
         let originalTree = kind == S_IFDIR ? try TreeInventory(source, expected: version, isCancelled: isCancelled) : nil
         let ((installed, copiedDescendants), remaining) = try stageCopy(
-            source, from: parent, initial: original, into: destination, isCancelled: isCancelled, onProgress: onProgress
+            source, from: parent, initial: original, into: destination, isCancelled: isCancelled,
+            onNestedProgress: onNestedProgress, onProgress: onProgress
         ) { staged in
             onVerify()
             let copiedDescendants: String?
@@ -510,12 +519,13 @@ public enum FileOperations {
         expectedFolder: FileIdentity? = nil,
         conflictPolicy: CopyConflictPolicy = .refuse,
         isCancelled: () -> Bool = { false },
+        onNestedProgress: ((NestedCopyProgress) -> Void)? = nil,
         onProgress: (Int64, Int64) -> Void = { _, _ in }
     ) throws -> CopyReceipt {
         let destination = try OpenFolder(folder)
         if let expectedFolder { try destination.requireIdentity(expectedFolder) }
         return try copy(source, into: destination, named: name, conflictPolicy: conflictPolicy,
-                        isCancelled: isCancelled, onProgress: onProgress)
+                        isCancelled: isCancelled, onNestedProgress: onNestedProgress, onProgress: onProgress)
     }
 
     public static func copyTemplate(
@@ -531,7 +541,8 @@ public enum FileOperations {
     static func copy(
         _ source: FileReference, into destination: OpenFolder, named name: String? = nil,
         conflictPolicy: CopyConflictPolicy = .refuse, expected: FileVersion? = nil,
-        isCancelled: () -> Bool, onProgress: (Int64, Int64) -> Void = { _, _ in }
+        isCancelled: () -> Bool, onNestedProgress: ((NestedCopyProgress) -> Void)? = nil,
+        onProgress: (Int64, Int64) -> Void = { _, _ in }
     ) throws -> CopyReceipt {
         if isCancelled() { throw CancellationError() }
         let name = name ?? source.name
@@ -547,7 +558,8 @@ public enum FileOperations {
         if conflictPolicy == .refuse { try destination.requireFree(name) }
 
         let (copied, remaining) = try stageCopy(
-            source, from: sourceFolder, initial: initial, into: destination, isCancelled: isCancelled, onProgress: onProgress
+            source, from: sourceFolder, initial: initial, into: destination, isCancelled: isCancelled,
+            onNestedProgress: onNestedProgress, onProgress: onProgress
         ) { staged in
             try publishCopy(staged, into: destination, named: name, policy: conflictPolicy,
                             allowRegularCopyFallback: true, isCancelled: isCancelled)
@@ -871,7 +883,8 @@ public enum FileOperations {
 
     private static func stageCopy<Result>(
         _ source: FileReference, from sourceFolder: OpenFolder, initial: stat, into destination: OpenFolder,
-        isCancelled: () -> Bool, onProgress: (Int64, Int64) -> Void, publish: (FileReference) throws -> Result
+        isCancelled: () -> Bool, onNestedProgress: ((NestedCopyProgress) -> Void)? = nil,
+        onProgress: (Int64, Int64) -> Void, publish: (FileReference) throws -> Result
     ) throws -> (Result, URL?) {
 
         let manager = FileManager.default
@@ -904,7 +917,7 @@ public enum FileOperations {
                 let flags = copyfile_flags_t(COPYFILE_ALL | COPYFILE_RECURSIVE | COPYFILE_NOFOLLOW
                                              | COPYFILE_EXCL | COPYFILE_DATA_SPARSE)
                 try copyUsingNative(to: stagedURL, recursiveSource: (source.url, initial.st_dev),
-                                    isCancelled: isCancelled) { state in
+                                    isCancelled: isCancelled, onNestedProgress: onNestedProgress) { state in
                     copyfile(source.url.path, stagedURL.path, state, flags)
                 }
             default:
@@ -979,8 +992,8 @@ public enum FileOperations {
 
     private static func copyUsingNative(
         to location: URL, size: Int64? = nil, recursiveSource: (url: URL, device: Int32)? = nil,
-        isCancelled: () -> Bool, onProgress: (Int64, Int64) -> Void = { _, _ in },
-        copy: (copyfile_state_t) -> Int32
+        isCancelled: () -> Bool, onNestedProgress: ((NestedCopyProgress) -> Void)? = nil,
+        onProgress: (Int64, Int64) -> Void = { _, _ in }, copy: (copyfile_state_t) -> Int32
     ) throws {
         guard let state = copyfile_state_alloc() else {
             throw FileOperationError.system(operation: "Could not start the copy", location: location, code: ENOMEM)
@@ -988,7 +1001,8 @@ public enum FileOperations {
         defer { _ = copyfile_state_free(state) }
         try withoutActuallyEscaping(isCancelled) { cancel in
             try withoutActuallyEscaping(onProgress) { progress in
-                let context = CopyCallbacks(size: size, recursiveSource: recursiveSource, cancel: cancel, progress: progress)
+                let context = CopyCallbacks(size: size, recursiveSource: recursiveSource, cancel: cancel,
+                                            progress: progress, nestedProgress: onNestedProgress)
                 let pointer = Unmanaged.passUnretained(context).toOpaque()
                 let callback = unsafeBitCast(CopyCallbacks.status, to: UnsafeRawPointer.self)
                 guard copyfile_state_set(state, UInt32(COPYFILE_STATE_STATUS_CTX), pointer) == 0,
@@ -1256,15 +1270,19 @@ private final class CopyCallbacks {
     let recursiveSource: (url: URL, device: Int32)?
     let cancel: () -> Bool
     let progress: (Int64, Int64) -> Void
+    let nestedProgress: ((NestedCopyProgress) -> Void)?
     var cancelled = false
     var failure: FileOperationError?
+    private var nestedFile: (started: TimeInterval, total: Int64?)?
+    private var nextNestedSample: TimeInterval = 0
 
     init(size: Int64?, recursiveSource: (url: URL, device: Int32)?, cancel: @escaping () -> Bool,
-         progress: @escaping (Int64, Int64) -> Void) {
+         progress: @escaping (Int64, Int64) -> Void, nestedProgress: ((NestedCopyProgress) -> Void)?) {
         self.size = size
         self.recursiveSource = recursiveSource
         self.cancel = cancel
         self.progress = progress
+        self.nestedProgress = nestedProgress
     }
 
     static let status: copyfile_callback_t = { what, stage, state, source, _, pointer in
@@ -1296,11 +1314,30 @@ private final class CopyCallbacks {
                 context.failure = .unsupportedCopySource(entry)
                 return COPYFILE_QUIT
             }
+            if what == COPYFILE_RECURSE_FILE, kind == S_IFREG, context.nestedProgress != nil {
+                let size = status.st_size
+                // Sparse files may write fewer data bytes than their logical size.
+                let total = size > 0 && status.st_blocks >= (size - 1) / 512 + 1 ? size : nil
+                context.nestedFile = (ProcessInfo.processInfo.systemUptime, total)
+            } else {
+                context.nestedFile = nil
+            }
         }
-        if let size = context.size, what == COPYFILE_COPY_DATA && stage == COPYFILE_PROGRESS {
+        guard what == COPYFILE_COPY_DATA, stage == COPYFILE_PROGRESS else { return COPYFILE_CONTINUE }
+        if let size = context.size {
             var written: off_t = 0
             if copyfile_state_get(state, UInt32(COPYFILE_STATE_COPIED), &written) == 0 {
                 context.progress(written, size)
+            }
+        } else if let progress = context.nestedProgress, let file = context.nestedFile, let source {
+            let now = ProcessInfo.processInfo.systemUptime
+            guard now >= context.nextNestedSample else { return COPYFILE_CONTINUE }
+            var written: off_t = 0
+            if copyfile_state_get(state, UInt32(COPYFILE_STATE_COPIED), &written) == 0, written > 0 {
+                context.nextNestedSample = now + 0.15
+                let location = URL(fileURLWithFileSystemRepresentation: source, isDirectory: false, relativeTo: nil)
+                let total = file.total.flatMap { $0 >= written ? $0 : nil }
+                progress(NestedCopyProgress(source: location, written: written, total: total, elapsed: now - file.started))
             }
         }
         return COPYFILE_CONTINUE

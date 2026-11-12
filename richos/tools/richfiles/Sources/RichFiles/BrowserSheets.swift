@@ -1252,18 +1252,26 @@ struct TransferPanel: View {
                         Text(transfer.destination.path).lineLimit(1).truncationMode(.middle).textSelection(.enabled)
                         ProgressView(value: Double(transfer.completed), total: Double(max(transfer.total, 1)))
                         Text("\(transfer.completed) of \(transfer.total) processed, \(transfer.succeeded) completed")
-                        if let source = transfer.currentSource {
+                        if let source = transfer.copyProgress?.source ?? transfer.currentSource {
                             Text("\(transfer.title) · \(source.lastPathComponent)").lineLimit(1)
                             Text(source.deletingLastPathComponent().path).font(.caption).foregroundStyle(.secondary)
                                 .lineLimit(1).truncationMode(.middle).textSelection(.enabled)
                         }
                         if let progress = transfer.copyProgress {
-                            ProgressView(value: Double(progress.written), total: Double(progress.total))
+                            if let total = progress.total {
+                                ProgressView(value: Double(progress.written), total: Double(total))
+                            } else {
+                                ProgressView().controlSize(.small)
+                            }
                             HStack(spacing: 8) {
-                                Text("\(formattedBytes(progress.written)) of \(formattedBytes(progress.total))")
+                                if let total = progress.total {
+                                    Text("\(formattedBytes(progress.written)) of \(formattedBytes(total))")
+                                } else {
+                                    Text("\(formattedBytes(progress.written)) written")
+                                }
                                 if let rate = progress.bytesPerSecond { Text("\(formattedBytes(rate))/s") }
                                 if let seconds = progress.secondsRemaining {
-                                    Text("About \(formattedTransferTime(seconds)) left")
+                                    Text("About \(formattedTransferTime(seconds)) left for this file")
                                 }
                             }.font(.caption).foregroundStyle(.secondary)
                         }

@@ -41,8 +41,9 @@ struct BrowserFileConflict: Sendable {
 
 struct BrowserTransfer: Sendable {
     struct CopyProgress: Sendable {
+        let source: URL?
         let written: Int64
-        let total: Int64
+        let total: Int64?
         let elapsed: TimeInterval
 
         var bytesPerSecond: Int64? {
@@ -51,7 +52,7 @@ struct BrowserTransfer: Sendable {
         }
 
         var secondsRemaining: TimeInterval? {
-            guard let bytesPerSecond, bytesPerSecond > 0, total > written else { return nil }
+            guard let total, let bytesPerSecond, bytesPerSecond > 0, total > written else { return nil }
             return Double(total - written) / Double(bytesPerSecond)
         }
     }
@@ -300,14 +301,21 @@ enum BrowserTransferJob {
                 retrySource = .captured(source)
                 let copyStarted = ProcessInfo.processInfo.systemUptime
                 var lastSample: TimeInterval = 0
+                func publishBytes(_ bytes: BrowserTransfer.CopyProgress) {
+                    result.progress.copyProgress = bytes
+                    result.progress.revision += 1
+                    let snapshot = result.progress
+                    Task { await publish(snapshot) }
+                }
                 func showBytes(_ written: Int64, _ total: Int64) {
                     let elapsed = ProcessInfo.processInfo.systemUptime - copyStarted
                     guard total > 0, elapsed - lastSample >= 0.15 else { return }
                     lastSample = elapsed
-                    result.progress.copyProgress = .init(written: min(written, total), total: total, elapsed: elapsed)
-                    result.progress.revision += 1
-                    let snapshot = result.progress
-                    Task { await publish(snapshot) }
+                    publishBytes(.init(source: nil, written: min(written, total), total: total, elapsed: elapsed))
+                }
+                func showNestedBytes(_ sample: NestedCopyProgress) {
+                    publishBytes(.init(source: sample.source, written: sample.written, total: sample.total,
+                                       elapsed: sample.elapsed))
                 }
                 if request.move {
                     do {
@@ -317,7 +325,8 @@ enum BrowserTransferJob {
                         let moved = try FileOperations.moveAcrossVolumes(
                             source, into: destination.url, expectedFolder: destination.identity,
                             conflictPolicy: request.conflict == .keepBoth ? .keepBoth : .refuse,
-                            isCancelled: { Task.isCancelled }, onProgress: showBytes, onVerify: {
+                            isCancelled: { Task.isCancelled }, onNestedProgress: showNestedBytes,
+                            onProgress: showBytes, onVerify: {
                                 result.progress.verifyingCopy = true
                                 result.progress.copyProgress = nil
                                 result.progress.revision += 1
@@ -337,7 +346,7 @@ enum BrowserTransferJob {
                         into: destination.url,
                         expectedFolder: destination.identity,
                         conflictPolicy: request.conflict == .keepBoth ? .keepBoth : .refuse,
-                        isCancelled: { Task.isCancelled }, onProgress: showBytes
+                        isCancelled: { Task.isCancelled }, onNestedProgress: showNestedBytes, onProgress: showBytes
                     )
                     if let staging = receipt.remainingStagingFolder {
                         result.progress.issues.append(BrowserTransferIssue(
