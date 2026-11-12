@@ -21,6 +21,7 @@ import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeDown
 import dev.richos.android.core.Action
+import dev.richos.android.core.MediaMoments
 import dev.richos.android.core.RichFile
 import dev.richos.android.core.Sheet
 import dev.richos.android.core.Theme
@@ -289,6 +290,20 @@ class InteractionTest {
         compose.onNodeWithTag("rich-file").performScrollTo().performClick()
         compose.onNodeWithTag("message-field").assertIsNotFocused()
         assertEquals(Action.OpenRichFile("f-lease"), actions.last())
+    }
+
+    @Test
+    fun `a Ledger timestamp sends the scoped recording and moment to the core`() {
+        val idle = screen("comp-idle")
+        val file = Row(
+            id = "mm-ledger", threadId = "general", cursor = 202609220834, role = "rich", kind = "media",
+            createdAt = "2026-09-22T08:34:00.000Z",
+            file = RichFile(id = "mm-ledger", name = "Board interview", downloadName = "recording.m4a",
+                moments = MediaMoments(60000, listOf(MediaMoments.Point(13000, "The decision", "We chose the new plan.")))),
+        )
+        show(idle.copy(app = idle.app.copy(messages = idle.app.messages + file)))
+        compose.onNodeWithTag("media.mm-ledger.13000").performScrollTo().performClick()
+        assertEquals(Action.OpenRichFile("mm-ledger", 13000), actions.last())
     }
 
     @Test

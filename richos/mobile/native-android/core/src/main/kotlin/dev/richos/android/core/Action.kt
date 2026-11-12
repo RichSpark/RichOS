@@ -25,7 +25,7 @@ sealed interface Action {
     data class StopReply(val id: String) : Action
     /** A tap on a file Rich attached ([RichFile.id]): it comes over from the Mac, then opens. */
     @Serializable @SerialName("file-open")
-    data class OpenRichFile(val id: String) : Action
+    data class OpenRichFile(val id: String, val at: Long? = null) : Action
     /** The × on a file coming over: it stops, and nothing half-written is kept. */
     @Serializable @SerialName("file-stop")
     data class StopRichFile(val id: String) : Action

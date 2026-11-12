@@ -55,6 +55,11 @@ class Scope(unittest.TestCase):
         self.assertIn('--only InteractionTests/testComposeAndSendAddsTheMessageAndFollowsIt', plan)
         self.assertNotIn('--only PairWaitInteractionTests', plan)
 
+    def test_conversation_rows_select_the_ledger_timestamp_case(self):
+        plan = self.selection(['richos/mobile/native-ios/App/Features/Conversation/Rows.swift'])
+        self.assertIn('--only InteractionTests/testLedgerTimestampStartsThePhoneFileFlow', plan)
+        self.assertNotIn('--only PairWaitInteractionTests', plan)
+
     def test_new_app_source_is_conservative_and_test_source_selects_its_cases(self):
         self.assertIsNone(ios_ui_scope.select(ROOT, ['richos/mobile/native-ios/App/NewFeature/New.swift']))
         selected = ios_ui_scope.select(ROOT, ['richos/mobile/native-ios/UITests/QuestionTests.swift'])

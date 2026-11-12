@@ -76,12 +76,67 @@ async function openApp(browser, opts) {
     window.__RICHOS_MOCK_PRESET__ = v;
   }, { richFiles: opts.missing ? "round-36-missing" : "round-36" });
   await page.goto(APP);
+  if (opts.prepare) await page.evaluate(opts.prepare);
   await leaveHome(page);
   await page.waitForSelector(".nav-thread", { state: "attached" });
   await openThread(page, "acme");
   await page.waitForSelector(".tl-rfile");
   page.__errors = errors;
   return page;
+}
+
+function mediaMomentsFixture() {
+  const localId = "mm_0000000000000001";
+  const youtubeId = "mm_0000000000000002";
+  const durationMs = 102007;
+  // A seekable PCM WAV with a real metadata event. No codec, private recording or
+  // playback-property stub is needed to observe the browser's actual seek.
+  const sampleRate = 8000;
+  const samples = Math.round(durationMs * sampleRate / 1000);
+  const headerBytes = 44;
+  const audio = new Uint8Array(headerBytes + samples);
+  const encoder = new TextEncoder();
+  for (const [offset, tag] of [[0, "RIFF"], [8, "WAVEfmt "], [36, "data"]]) audio.set(encoder.encode(tag), offset);
+  audio.fill(128, headerBytes);
+  const header = new DataView(audio.buffer);
+  header.setUint32(4, audio.length - 8, true);
+  header.setUint32(16, 16, true);
+  header.setUint16(20, 1, true);
+  header.setUint16(22, 1, true);
+  header.setUint32(24, sampleRate, true);
+  header.setUint32(28, sampleRate, true);
+  header.setUint16(32, 1, true);
+  header.setUint16(34, 8, true);
+  header.setUint32(40, samples, true);
+  const url = URL.createObjectURL(new Blob([audio], { type: "audio/wav" }));
+  const localFile = {
+    id: localId, name: "Founder interview.wav", source: "local", exists: true,
+    moments: { durationMs, points: [
+      { startMs: 7140, label: "Mission", quote: "Put the customer first." },
+      { startMs: 53280, label: "Customer focus", quote: "Stay focused on the customer." },
+    ] },
+  };
+  const youtubeFile = {
+    id: youtubeId, name: "Product interview", source: "youtube", exists: true,
+    moments: { durationMs, points: [
+      { startMs: 12000, label: "First question", quote: "Here is what people asked for." },
+      { startMs: 26170, label: "First useful task", quote: "Give a new customer one real task." },
+    ] },
+  };
+  const invoke = window.RichBridge.invoke.bind(window.RichBridge);
+  window.mediaMomentCalls = [];
+  window.RichBridge.invoke = async (cmd, args, options) => {
+    if (cmd === "media_moment_open" || (cmd === "output_preview" && args.outputId === localId)) {
+      window.mediaMomentCalls.push({ cmd, args });
+      return cmd === "output_preview" ? { view: "audio", url, durationMs, bytes: audio.length } : undefined;
+    }
+    const payload = await invoke(cmd, args, options);
+    if (args?.threadId === "acme" && cmd === "get_timeline") {
+      const row = payload.items.find((item) => item.kind === "rich_file");
+      for (const file of [localFile, youtubeFile]) payload.items.push({ ...row, id: file.id, text: file.name, file });
+    }
+    return payload;
+  };
 }
 
 /// The cards as the user sees them, read from the DOM.
@@ -337,6 +392,106 @@ async function main() {
     assertEqual(got.map((c) => c.name), ["Acme-counteroffer.pdf", "Acme-comparables.xlsx"], "the cards after the turn ended");
     assertEqual(p.__errors, [], "the page reported errors");
     await p.context().close();
+  });
+
+  await run.check("media moments play and pause in Output or open the selected online moment", async () => {
+    const p = await openApp(browser, { prepare: mediaMomentsFixture });
+    try {
+      const local = p.getByRole("button", { name: /^0?0:53 Customer focus$/ });
+      const youtube = p.getByRole("button", { name: /^0?0:26 First useful task$/ });
+      await local.click();
+      const player = p.locator("#op-viewer audio");
+      await player.waitFor();
+      await p.waitForFunction(() => {
+        const audio = document.querySelector("#op-viewer audio");
+        return audio && audio.readyState >= 1 && !audio.paused && !audio.seeking && audio.currentTime >= 53.28 && audio.currentTime < 55;
+      });
+      assertEqual(await p.evaluate(() => window.RichOutput.snapshot().view), "media", "Output is showing the media preview");
+      assertEqual(await player.getAttribute("aria-label"), "Founder interview.wav", "the selected recording owns the player");
+      await local.click();
+      await p.waitForFunction(() => document.querySelector("#op-viewer audio")?.paused);
+      assertEqual(await local.getAttribute("aria-current"), "true", "the paused moment stays selected");
+      assert((await p.locator("#op-sub").textContent()).includes("Customer focus"), "the panel names the current moment");
+      const scrub = p.locator('.tl-media input[type="range"]');
+      await scrub.fill("26000");
+      await p.waitForFunction(() => {
+        const audio = document.querySelector("#op-viewer audio");
+        return audio && !audio.paused && !audio.seeking && audio.currentTime >= 26.35 && audio.currentTime < 28;
+      });
+      const wave = await scrub.boundingBox();
+      const position = { x: wave.width * 0.18, y: wave.height / 2 };
+      await scrub.click({ position });
+      const requested = Number(await scrub.inputValue()) / 1000;
+      const playingFrom = (time) => {
+        const audio = document.querySelector("#op-viewer audio");
+        // Observe decoded playback past the seek before issuing another seek on the same player.
+        return audio && !audio.paused && !audio.seeking && audio.currentTime >= time + 0.35 && audio.currentTime < time + 3;
+      };
+      await p.waitForFunction(playingFrom, requested);
+      await player.evaluate((audio) => { audio.currentTime = 70; });
+      await p.waitForFunction(playingFrom, 70);
+      assertEqual(Number(await scrub.inputValue()) / 1000, requested, "the focused slider still holds the clicked value");
+      await scrub.click({ position });
+      await p.waitForFunction(playingFrom, requested);
+      await player.evaluate((audio) => { audio.currentTime = audio.duration - 0.8; });
+      await p.waitForFunction(() => {
+        const audio = document.querySelector("#op-viewer audio");
+        return audio && audio.ended && audio.paused && !audio.seeking;
+      });
+      await local.click();
+      await p.waitForFunction(playingFrom, 53.28);
+      await p.locator("#op-close").click();
+      await player.waitFor({ state: "detached" });
+      assertEqual(await p.locator(".tl-media-playhead:visible").count(), 0, "closing Output clears the playhead");
+      await youtube.click();
+      await p.waitForFunction(() => window.mediaMomentCalls.some(({ cmd }) => cmd === "media_moment_open"));
+      const calls = await p.evaluate(() => window.mediaMomentCalls);
+      assert(calls.some(({ cmd, args }) => cmd === "output_preview" && args.outputId === "mm_0000000000000001"),
+        "the player gets its URL from the selected Output id");
+      assertEqual(calls.filter(({ cmd }) => cmd === "media_moment_open"), [
+        { cmd: "media_moment_open", args: { fileId: "mm_0000000000000002", momentIndex: 1 } },
+      ], "the shell receives the scoped id and selected index");
+      await openThread(p, "hiring");
+      assertEqual(await p.locator(".tl-media-moment").count(), 0, "another conversation does not show the moments");
+      await openThread(p, "acme");
+      await local.waitFor();
+      assertEqual(await p.locator(".tl-media-moment").count(), 4, "reopening draws each moment once");
+      assertEqual(p.__errors, [], "the page reported errors");
+    } finally {
+      await p.context().close();
+    }
+  });
+
+  await run.check("a changed recording offers Ask Rich again beside the refused moments", async () => {
+    const p = await openApp(browser, { prepare: mediaMomentsFixture });
+    try {
+      await p.evaluate(() => {
+        const invoke = RichBridge.invoke.bind(RichBridge);
+        window.mediaRequests = [];
+        RichBridge.invoke = (name, args, ...options) => {
+          if (name === "output_preview" && args.outputId === "mm_0000000000000001") {
+            return Promise.resolve({
+              view: "none", why: "refused", reason: "The recording changed. Ask Rich to find the moments again.",
+            });
+          }
+          if (name === "send_message") window.mediaRequests.push(args);
+          return invoke(name, args, ...options);
+        };
+      });
+      await p.getByRole("button", { name: /^0?0:53 Customer focus$/ }).click();
+      await p.locator("#op-viewer").getByText("The recording changed. Ask Rich to find the moments again.").waitFor();
+      const card = p.locator('.tl-media[data-file-id="mm_0000000000000001"][data-s="missing"]');
+      await card.getByText("The recording was moved, deleted or changed. Ask Rich to find the moments again.").waitFor();
+      assert(await card.getByRole("button", { name: /^0?0:53 Customer focus$/ }).isDisabled(), "stale timestamp is disabled");
+      await card.getByRole("button", { name: "Ask Rich again", exact: true }).click();
+      await p.waitForFunction(() => window.mediaRequests.length === 1);
+      const request = await p.evaluate(() => window.mediaRequests[0]);
+      assertEqual(request.text, "Please find the moments in Founder interview.wav again.");
+      assertEqual(request.pressed, true, "the generated request is attributed to the button");
+      assertEqual(p.__errors, [], "the page reported errors");
+    } finally {
+      await p.context().close();
+    }
   });
 
   for (const theme of ["dark", "light"]) {

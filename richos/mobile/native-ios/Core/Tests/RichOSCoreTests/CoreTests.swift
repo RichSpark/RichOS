@@ -663,11 +663,14 @@ actor FakePlatform: EffectHandler {
 
     @Test func thereIsOneFixturePerRound12AppScreen() {
         #expect(Self.round12AppScreens.count == 63)
-        let added = Self.pairingV2Screens + Self.acceptanceScreens + ["ask-open"]
+        let laterDesigns = ["ask-open", "media-ledger"]
+        let added = Self.pairingV2Screens + Self.acceptanceScreens + laterDesigns
         #expect(Fixture.all.map(\.name).filter { !added.contains($0) } == Self.round12AppScreens)
         #expect(Fixture.all.map(\.name).filter(Self.pairingV2Screens.contains) == Self.pairingV2Screens)
         #expect(Fixture.all.map(\.name).filter(Self.acceptanceScreens.contains) == Self.acceptanceScreens)
-        #expect(Fixture.all.filter { $0.name == "ask-open" }.count == 1)
+        for name in laterDesigns {
+            #expect(Fixture.all.filter { $0.name == name }.count == 1)
+        }
     }
 
     @Test func everyFixtureIsOnTheFullScreenSurfaceItsDesignShows() throws {

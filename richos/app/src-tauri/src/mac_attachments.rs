@@ -40,8 +40,9 @@
 //!
 //! * **The plus** (round 50/51) opens macOS's own picker for files and folders
 //!   ([`attach_pick_files`]); what he picks is shelved like a drop and takes the drop's road.
-//! * **A folder**, dropped or picked, is not copied: it goes on the tray as itself and Send names
-//!   it to Rich by its real path ([`FolderRef`]), where he reads it.
+//! * **A folder or recording** goes on the tray by reference. Send names it to Rich by its real
+//!   path ([`LocalRef`]), where he reads it. Recordings stay on the Mac and can exceed the
+//!   upload limit because the composer does not read their bytes into memory.
 //!
 //! # What this does NOT do, said rather than left to be discovered
 //!
@@ -52,6 +53,7 @@
 
 use crate::output_files::{self, OutputFiles};
 use crate::phone::attachments::{self, AttachmentDesk, Origin, Upload};
+use richos_core::media_moments::FileVersion;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
@@ -91,20 +93,24 @@ struct DropShelf {
 pub struct MacAttachments {
     desk: AttachmentDesk,
     shelf: Mutex<DropShelf>,
-    /// The folders on composers' trays, by (draft, attachment id). In memory, like the tray that
-    /// shows them: nothing of a folder is stored, so there is nothing to sweep.
-    folders: Mutex<HashMap<(String, String), FolderRef>>,
+    /// Paths on composers' trays, by (draft, attachment id). In memory like the tray itself.
+    references: Mutex<HashMap<(String, String), LocalRef>>,
 }
 
-/// **A folder he handed over** (round 51: "just add files and folders"). Left where it is and
-/// named to Rich by its full path, as dropping a folder on the terminal does: Rich reads it there
-/// with his own tools (the session runs with permission prompts off and without
-/// `blockReadsOutsideWorkingDirectories`, `engine_profile.rs`). Copying it instead would push a
-/// whole tree through a desk built for ten files of 25 MB.
+/// A folder or recording the user selected. The tray holds its display details and Send names
+/// the original path so Rich can read it with the tools available in the conversation.
 #[derive(Clone, Debug)]
-struct FolderRef {
+struct LocalRef {
     path: PathBuf,
     view: AttachedView,
+    /// A recording must still be the same file when Send is pressed. Folders can change contents.
+    version: Option<FileVersion>,
+}
+
+impl LocalRef {
+    fn available(&self) -> bool {
+        self.version.as_ref().map_or_else(|| self.path.is_dir(), |v| v.still_at(&self.path))
+    }
 }
 
 /// One file as the composer shows it before Send.
@@ -216,7 +222,7 @@ fn percent_decode(value: &str) -> Option<String> {
 impl MacAttachments {
     /// No I/O, like the desk it wraps.
     pub fn open(data_dir: &Path) -> Self {
-        MacAttachments { desk: AttachmentDesk::open(data_dir), shelf: Mutex::new(DropShelf::default()), folders: Mutex::new(HashMap::new()) }
+        MacAttachments { desk: AttachmentDesk::open(data_dir), shelf: Mutex::new(DropShelf::default()), references: Mutex::new(HashMap::new()) }
     }
 
     /// Remember a drop's paths and say what the page may know about them.
@@ -267,17 +273,20 @@ impl MacAttachments {
     }
 
     /// **Attach what is at a path the OS dropped or the picker returned.** A file is typed by its
-    /// name and checked by its bytes; a folder takes [`Self::attach_folder`].
+    /// name and checked by its bytes. Folders and recordings go on the tray by reference.
     pub fn attach_path(&self, draft: &str, id: &str, path: &Path) -> Result<AttachedView, String> {
         Self::check_ids(draft, id)?;
         let meta = std::fs::metadata(path).map_err(|_| UNREADABLE.to_string())?;
         if meta.is_dir() {
             return self.attach_folder(draft, id, path);
         }
+        if Self::recording(path) {
+            return self.attach_recording(draft, id, path);
+        }
         self.stage_file(draft, id, &display_name(path), meta.len(), || std::fs::read(path))
     }
 
-    /// **A folder goes on the tray as itself** ([`FolderRef`]): its real path (links resolved, so
+    /// **A folder goes on the tray as itself** ([`LocalRef`]): its real path (links resolved, so
     /// Rich is told where it actually is), the number of things directly inside it, and nothing
     /// copied. Send names it to Rich ([`Self::commit`]).
     fn attach_folder(&self, draft: &str, id: &str, path: &Path) -> Result<AttachedView, String> {
@@ -292,7 +301,35 @@ impl MacAttachments {
             sha256: crate::phone::hex(&crate::phone::sha256(real.as_os_str().as_encoded_bytes())),
             items: Some(items),
         };
-        self.folders.lock().unwrap().insert((draft.to_string(), id.to_string()), FolderRef { path: real, view: view.clone() });
+        self.references.lock().unwrap().insert((draft.to_string(), id.to_string()), LocalRef {
+            path: real, view: view.clone(), version: None,
+        });
+        Ok(view)
+    }
+
+    fn recording(path: &Path) -> bool {
+        let mime = output_files::mime_of(path);
+        mime.starts_with("audio/") || mime.starts_with("video/")
+    }
+
+    fn attach_recording(&self, draft: &str, id: &str, path: &Path) -> Result<AttachedView, String> {
+        let (real, version) = FileVersion::capture_recording(path)?;
+        let real_name = real.to_str().ok_or(UNREADABLE)?;
+        let media_type = output_files::mime_of(&real);
+        let label = if media_type.starts_with("audio/") { "Audio" } else { "Video" };
+        let identity = serde_json::to_vec(&(real_name, &version)).map_err(|_| NOT_SAVED.to_string())?;
+        let view = AttachedView {
+            id: id.to_string(),
+            name: display_name(path),
+            media_type: media_type.into(),
+            label: label.into(),
+            size: version.size(),
+            sha256: crate::phone::hex(&crate::phone::sha256(&identity)),
+            items: None,
+        };
+        self.references.lock().unwrap().insert((draft.to_string(), id.to_string()), LocalRef {
+            path: real, view: view.clone(), version: Some(version),
+        });
         Ok(view)
     }
 
@@ -370,7 +407,7 @@ impl MacAttachments {
         if !attachments::valid_id(draft) {
             return Ok(false);
         }
-        if self.folders.lock().unwrap().remove(&(draft.to_string(), id.to_string())).is_some() {
+        if self.references.lock().unwrap().remove(&(draft.to_string(), id.to_string())).is_some() {
             return Ok(true);
         }
         self.desk.discard(MAC_DEVICE, draft, id).map_err(|e| {
@@ -393,16 +430,19 @@ impl MacAttachments {
         if thread.is_empty() || !attachments::valid_id(draft) || wanted.is_empty() || wanted.len() > attachments::MAX_FILES_PER_MESSAGE {
             return Err(NOT_SAVED.into());
         }
-        let held: Vec<Option<FolderRef>> = {
-            let folders = self.folders.lock().unwrap();
-            wanted.iter().map(|w| folders.get(&(draft.to_string(), w.id.clone())).cloned()).collect()
+        let held: Vec<Option<LocalRef>> = {
+            let references = self.references.lock().unwrap();
+            wanted.iter().map(|w| references.get(&(draft.to_string(), w.id.clone())).cloned()).collect()
         };
         let mut folders = Vec::new();
+        let mut recordings = Vec::new();
         let mut missing = Vec::new();
         let mut pairs = Vec::new();
-        for (w, folder) in wanted.iter().zip(held) {
-            match folder {
-                Some(f) if f.view.sha256 == w.sha256 && f.path.is_dir() => folders.push(f),
+        for (w, reference) in wanted.iter().zip(held) {
+            match reference {
+                Some(f) if f.view.sha256 == w.sha256 && f.available() => {
+                    if f.version.is_some() { recordings.push(f); } else { folders.push(f); }
+                }
                 Some(_) => missing.push(w.id.clone()),
                 None => pairs.push((w.id.clone(), w.sha256.clone())),
             }
@@ -437,6 +477,17 @@ impl MacAttachments {
             }
             described.push_str(&describe_folders(&folders));
         }
+        if !recordings.is_empty() {
+            if !described.is_empty() {
+                described.push_str("\n\n");
+            }
+            let word = if recordings.len() == 1 { "recording" } else { "recordings" };
+            described.push_str(&format!("{RECORDING_HEADING}{} {word}{RECORDING_TAIL}", recordings.len()));
+            for recording in &recordings {
+                let path = serde_json::Value::String(recording.path.to_string_lossy().into_owned());
+                described.push_str(&format!("\n- {path} ({}, {} bytes)", recording.view.media_type, recording.view.size));
+            }
+        }
         let mut files: Vec<AttachedView> = stored
             .iter()
             .zip(staged.iter())
@@ -450,8 +501,8 @@ impl MacAttachments {
                 items: None,
             })
             .collect();
-        let mut held = self.folders.lock().unwrap();
-        for f in folders {
+        let mut held = self.references.lock().unwrap();
+        for f in folders.into_iter().chain(recordings) {
             held.remove(&(draft.to_string(), f.view.id.clone()));
             files.push(f.view);
         }
@@ -460,9 +511,38 @@ impl MacAttachments {
     }
 }
 
+const RECORDING_HEADING: &str = "Attached on this Mac (";
+const RECORDING_TAIL: &str = ", read where it is):";
+
+/// The phone gets the attachment count. Rich's input on the Mac keeps the original paths.
+pub(crate) fn phone_recording_summary(text: &str) -> Option<String> {
+    let (message, block) = text.rsplit_once("\n\n").unwrap_or(("", text));
+    let (heading, entries) = block.split_once('\n')?;
+    let (count, word) = heading.strip_prefix(RECORDING_HEADING)?.strip_suffix(RECORDING_TAIL)?.split_once(' ')?;
+    let count: usize = count.parse().ok()?;
+    if !(1..=attachments::MAX_FILES_PER_MESSAGE).contains(&count)
+        || word != if count == 1 { "recording" } else { "recordings" }
+        || entries.lines().count() != count
+    {
+        return None;
+    }
+    for entry in entries.lines() {
+        let (path, details) = entry.strip_prefix("- ")?.rsplit_once(" (")?;
+        let path: String = serde_json::from_str(path).ok()?;
+        let (media, bytes) = details.strip_suffix(" bytes)")?.split_once(", ")?;
+        if !Path::new(&path).is_absolute() || !(media.starts_with("audio/") || media.starts_with("video/"))
+            || bytes.parse::<u64>().is_err()
+        {
+            return None;
+        }
+    }
+    let summary = format!("{count} {word} attached on your Mac.");
+    Some(if message.is_empty() { summary } else { format!("{message}\n\n{summary}") })
+}
+
 /// The words Rich reads for the folders of one message, under the files' block when there is one:
 /// each folder's real path, where he reads it, and how much is directly inside it.
-fn describe_folders(folders: &[FolderRef]) -> String {
+fn describe_folders(folders: &[LocalRef]) -> String {
     let count = if folders.len() == 1 { "1 folder".to_string() } else { format!("{} folders", folders.len()) };
     let mut out = format!("Folders on this Mac ({count}, not copied; read them where they are):");
     for f in folders {
@@ -910,6 +990,47 @@ mod tests {
         assert!(!data.0.join("attachments").join("thr_1").exists());
         let again = mac.commit("thr_1", "draft-2", "", &wanted[..1]).unwrap();
         assert_eq!(again.text.unwrap().lines().next().unwrap(), "Attached on this Mac (1 file, saved by RichOS):");
+    }
+
+    #[test]
+    fn dropped_recordings_reach_rich_at_the_original_path_without_a_copy() {
+        let data = Scratch::new("data");
+        let desktop = canonical_scratch("recordings");
+        let video = desktop.0.join("Founder interview.mp4");
+        let size = 32 * 1024 * 1024;
+        std::fs::File::create(&video).unwrap().set_len(size).unwrap();
+        let audio = write(&desktop.0, "Interview audio.m4a", b"audio");
+        let mac = MacAttachments::open(&data.0);
+        let drop = mac.record_drop(vec![video.clone(), audio.clone()]);
+        let video_chip = mac.attach_path("draft-r", "v", &mac.take_dropped(drop.drop, 0).unwrap()).unwrap();
+        let audio_chip = mac.attach_path("draft-r", "a", &mac.take_dropped(drop.drop, 1).unwrap()).unwrap();
+        assert_eq!((video_chip.media_type.as_str(), video_chip.size), ("video/mp4", size));
+        assert_eq!(audio_chip.media_type, "audio/mp4");
+        let wanted = [video_chip, audio_chip].map(|chip| Wanted { id: chip.id, sha256: chip.sha256 });
+        let done = mac.commit("thr_rec", "draft-r", "Find the best moment.", &wanted).unwrap();
+        let text = done.text.unwrap();
+        assert!(text.starts_with("Find the best moment.\n\nAttached on this Mac (2 recordings, read where it is):"));
+        assert!(text.contains(&format!("{:?} (video/mp4, {size} bytes)", video)));
+        assert!(text.contains(&format!("{:?} (audio/mp4, 5 bytes)", audio)));
+        let expected = "Find the best moment.\n\n2 recordings attached on your Mac.";
+        let snapshot = serde_json::json!({"kind":"user_message","id":"turn:user","threadId":"thr_rec",
+            "source":"text","text":text});
+        assert_eq!(crate::phone::rows::row_from_item(&snapshot).unwrap()["text"], expected);
+        let live = serde_json::json!({"messageId":"turn:user","threadId":"thr_rec","source":"text","text":text});
+        assert_eq!(crate::phone::rows::event_from_live("rich://ceo-message", &live, 1).unwrap().1["text"], expected);
+        let attachment_only = text.split_once("\n\n").unwrap().1;
+        assert_eq!(super::phone_recording_summary(attachment_only).as_deref(), Some("2 recordings attached on your Mac."));
+        let quotation = format!("{text}\n\nThat was only an example.");
+        assert!(super::phone_recording_summary(&quotation).is_none());
+        assert!(staged_nothing(&data.0, "draft-r"));
+        assert!(!data.0.join("attachments").exists());
+
+        let chip = mac.attach_path("draft-r2", "v", &video).unwrap();
+        std::fs::rename(&video, desktop.0.join("previous.mp4")).unwrap();
+        std::fs::File::create(&video).unwrap().set_len(size).unwrap();
+        let done = mac.commit("thr_rec", "draft-r2", "Find it again.", &[Wanted { id: chip.id, sha256: chip.sha256 }]).unwrap();
+        assert!(done.text.is_none());
+        assert_eq!(done.missing, ["v"]);
     }
 
     // ---- a folder: picked with the plus or dropped (round 51, "just add files and folders") ----

@@ -1,11 +1,11 @@
 ---
 name: audio-transcription
-description: Use whenever a job involves transcribing, listening to, or getting the words out of an audio file (a voice memo, a call, a podcast, an mp3/m4a/wav/aiff/ogg file the CEO sent or attached). The tools are already installed by RichOS (ffmpeg, whisper-cli and a speech model); this says which commands to run. A video or screen recording you also need to SEE goes to the watch-video skill instead.
+description: Use whenever a job involves transcribing, listening to or getting the words out of an audio file (a voice memo, a call, a podcast, an mp3/m4a/wav/aiff/ogg file the CEO sent or attached). The tools are already installed by RichOS (ffmpeg, whisper-cli and a speech model); this says which commands to run. A video or screen recording you also need to SEE goes to the watch-video skill instead.
 ---
 
 # Audio: get the words out of a recording
 
-RichOS installs everything this needs on the CEO's Mac: `ffmpeg`, `whisper-cli`, and a speech
+RichOS installs everything this needs on the CEO's Mac: `ffmpeg`, `whisper-cli` and a speech
 model whose path is in `$RICHOS_SPEECH_MODEL`. They are bare commands on your PATH.
 
 **Never install anything for an audio job.** No `pip install`, `brew install`, `npm install`, no
@@ -29,29 +29,49 @@ rm -rf "${work:?}"
 
 ## 2. Transcribe it
 
-Any format `ffmpeg` reads works (mp3, m4a, wav, aiff, ogg, webm, and the sound of a video file).
+Any format `ffmpeg` reads works (mp3, m4a, wav, aiff, ogg, webm and the sound of a video file).
 Convert it to 16 kHz mono first, then transcribe:
 
 ```bash
-ffmpeg -nostdin -hide_banner -loglevel error -i "<audio file>" -vn -ar 16000 -ac 1 -c:a pcm_s16le "$work/audio.wav"
-whisper-cli -m "$RICHOS_SPEECH_MODEL" -f "$work/audio.wav" -l en -t 4 -fa -mc 0 -np -otxt -of "$work/transcript"
+ffmpeg -nostdin -hide_banner -loglevel error -i "<audio file>" -vn -af aresample=async=1:first_pts=0 -ar 16000 -ac 1 -c:a pcm_s16le "$work/audio.wav"
+whisper-cli -m "$RICHOS_SPEECH_MODEL" -f "$work/audio.wav" -l en -t 4 -fa -mc 0 -np -otxt -ovtt -of "$work/transcript"
 ```
 
 Use these flags exactly. `-mc 0` matters most: without it whisper-cli carries its own earlier
-words forward, and on an hour-long recording it repeats one phrase hundreds of times and drops
+words forward and on an hour-long recording it repeats one phrase hundreds of times and drops
 most of what was said. Do not add `-nt`: without timestamps it loses the words at every
 30-second seam. Read `$work/transcript.txt`.
 
 For speech that is not English, put `-l auto` (or the language's code, for example `-l de`) in
 place of `-l en`. A long recording takes minutes: for anything longer than a few minutes, start
 the `whisper-cli` command with your shell tool's background option, say it is in progress rather
-than going quiet, and read the transcript when it has finished.
+than going quiet and read the transcript when it has finished.
 
 If `ffmpeg` says the file has no audio stream, there is nothing to transcribe: say so.
 
+## 3. Let the user jump to the evidence
+
+When answering a question about a recording, use the `transcript.vtt` cues for the
+exact start and source excerpt of the moments that answer it. A short answer with
+one to three useful moments is often enough. Get the recording's actual duration
+with `ffprobe`. For an MP4, MOV, M4V, WebM, M4A, MP3 or WAV the user supplied,
+use its original absolute path in `mcp__richos_files__show_media_moments` with
+`source: {"kind":"local","path":"…"}`. Supply `durationMs` and each point's
+`startMs` in milliseconds. Keep the quotation short and true to the source.
+
+For the waveform, run `python3 "$RICHOS_ENGINE_ROOT/app/skills/audio-transcription/waveform.py" "$work/audio.wav"`
+and pass the single line it prints as `waveform`. If it fails, omit the waveform.
+Use the original file as the playable source. The working WAV is only for
+analysis and is deleted along with the transcript when the job is done.
+
+If a named specialist is doing this work and does not have the presentation tool,
+give Stu the source, duration, points and any waveform in the findings, so he
+can put them in the original conversation. If a source or time could not be
+verified, say what you were able to check and leave that moment out.
+
 ## When something is missing or fails
 
-- **No `$RICHOS_SPEECH_MODEL`, or the file it names is not there, or `whisper-cli` fails:** say
+- **No `$RICHOS_SPEECH_MODEL` or the file it names is not there or `whisper-cli` fails:** say
   plainly that the speech model is not ready on this Mac yet and that RichOS installs it by
   itself. Do not look for another way to transcribe.
 - **`ffmpeg` is not found:** say that the audio tools are missing from this installation.

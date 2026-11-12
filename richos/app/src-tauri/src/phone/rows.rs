@@ -43,6 +43,7 @@
 //! re-projection by construction (`timeline.rs`: *"Re-projecting the same durable inputs after a
 //! restart produces the same id"*).
 
+use richos_core::media_moments::{Moments, Source};
 use serde_json::{json, Value};
 
 /// The rows the phone understands, in order, cursors assigned.
@@ -50,35 +51,42 @@ use serde_json::{json, Value};
 /// **A file Rich attached goes under his words** (round 36 screen 3): the tool is called while
 /// he works, so its item can sort before the reply it belongs to. Each `rich_file` item is
 /// moved to just after the last `rich_message` of its own turn; a file with no reply in its
-/// turn (one Stu attached for a job) keeps its own place.
+/// turn (one Stu attached for a job) keeps its own place. A file cannot move across a media
+/// row, since that would change a cursor the phone may already have acknowledged. Files
+/// arriving after media in their own turn keep their live positions as well.
 pub fn rows_from_payload(payload: &Value) -> Vec<Value> {
     let empty: Vec<Value> = Vec::new();
     let items = payload.get("items").and_then(|v| v.as_array()).unwrap_or(&empty);
-    let last_reply: std::collections::HashMap<&str, usize> = items
-        .iter()
-        .enumerate()
-        .filter(|(_, i)| i["kind"] == "rich_message")
-        .filter_map(|(at, i)| Some((i["turnId"].as_str()?, at)))
-        .collect();
     let mut ordered: Vec<&Value> = Vec::with_capacity(items.len());
-    let mut held: Vec<(usize, &Value)> = Vec::new();
-    for (at, item) in items.iter().enumerate() {
-        let after = (item["kind"] == richos_core::rich_files::ITEM_KIND)
-            .then(|| item["turnId"].as_str().and_then(|t| last_reply.get(t)).copied())
-            .flatten()
-            .filter(|reply| *reply > at);
-        match after {
-            Some(reply) => held.push((reply, item)),
-            None => ordered.push(item),
-        }
-        held.retain(|(reply, file)| {
-            if *reply == at {
-                ordered.push(file);
-                false
-            } else {
-                true
+    let mut media_turns = std::collections::HashSet::new();
+    for part in items.split_inclusive(is_media_item) {
+        let last_reply: std::collections::HashMap<&str, usize> = part.iter().enumerate()
+            .filter(|(_, item)| item["kind"] == "rich_message")
+            .filter_map(|(at, item)| Some((item["turnId"].as_str()?, at)))
+            .collect();
+        let mut held: Vec<(usize, &Value)> = Vec::new();
+        for (at, item) in part.iter().enumerate() {
+            let turn = item["turnId"].as_str();
+            if is_media_item(item) {
+                media_turns.extend(turn);
             }
-        });
+            let after = turn
+                .filter(|turn| item["kind"] == richos_core::rich_files::ITEM_KIND && !media_turns.contains(turn))
+                .and_then(|turn| last_reply.get(turn).copied())
+                .filter(|reply| *reply > at);
+            match after {
+                Some(reply) => held.push((reply, item)),
+                None => ordered.push(item),
+            }
+            held.retain(|(reply, file)| {
+                if *reply == at {
+                    ordered.push(file);
+                    false
+                } else {
+                    true
+                }
+            });
+        }
     }
     let mut out: Vec<Value> = Vec::new();
     for item in ordered {
@@ -90,14 +98,17 @@ pub fn rows_from_payload(payload: &Value) -> Vec<Value> {
     out
 }
 
+fn is_media_item(item: &Value) -> bool {
+    item["kind"] == richos_core::rich_files::ITEM_KIND && item["file"]["moments"].is_object()
+}
+
 /// Select the completed turn's reply without renumbering its conversation cursor.
 pub fn reply_for_turn(payload: &Value, turn: &str) -> Option<Value> {
     let ids: std::collections::HashSet<&str> = payload.get("items")?.as_array()?.iter()
-        .filter(|item| item["turnId"] == turn)
+        .filter(|item| item["kind"] == "rich_message" && item["turnId"] == turn)
         .filter_map(|item| item["id"].as_str()).collect();
     rows_from_payload(payload).into_iter().rev().find(|row|
-        row["role"] == "rich" && row["kind"] != "question" && row["kind"] != "file"
-            && row["id"].as_str().is_some_and(|id| ids.contains(id)))
+        row["id"].as_str().is_some_and(|id| ids.contains(id)))
 }
 
 /// One gated timeline item as a phone row, or `None` when it is not a message.
@@ -114,6 +125,7 @@ pub fn row_from_item(item: &Value) -> Option<Value> {
             // `source` is the ledger's own word for how the input arrived. `jam` is a spoken
             // turn, which the phone shows with its microphone marker; anything else is typed.
             let spoken = item.get("source").and_then(|v| v.as_str()) == Some("jam");
+            let text = crate::mac_attachments::phone_recording_summary(&text).unwrap_or(text);
             Some(json!({
                 "id": id,
                 "thread_id": thread_id,
@@ -130,22 +142,28 @@ pub fn row_from_item(item: &Value) -> Option<Value> {
                 "complete": true,
             }))
         }
-        "rich_message" => Some(json!({
-            "id": id,
-            "thread_id": thread_id,
-            "cursor": 0,
-            "role": "rich",
-            "kind": "text",
-            "text": richos_core::meeting_notes::plain_brief_sources(&text),
-            "created_at": iso8601(created_at),
-            "client_id": Value::Null,
-            // Nothing is synthesized until he asks for it (plan §3.4 verb 4), so a projected
-            // row never claims audio is waiting. Slice B is what makes this ever true.
-            "has_audio": false,
-            "from_microphone": false,
-            "state": "complete",
-            "complete": true,
-        })),
+        k if k == "rich_message" || is_media_item(item) => {
+            let file = is_media_item(item).then(|| media_file_for_phone(&item["file"]));
+            let text = if let Some(file) = &file { media_moments_text(file, text)? } else { richos_core::meeting_notes::plain_brief_sources(&text) };
+            let mut row = json!({
+                "id": id,
+                "thread_id": thread_id,
+                "cursor": 0,
+                "role": "rich",
+                "kind": if file.is_some() { "media" } else { "text" },
+                "text": text,
+                "created_at": iso8601(created_at),
+                "client_id": Value::Null,
+                // Nothing is synthesized until he asks for it (plan §3.4 verb 4), so a projected
+                // row never claims audio is waiting. Slice B is what makes this ever true.
+                "has_audio": false,
+                "from_microphone": false,
+                "state": "complete",
+                "complete": true,
+            });
+            if let Some(file) = file { row["file"] = file; }
+            Some(row)
+        },
         // A FILE RICH PUT IN FRONT OF THE USER (round 36 screen 3): a Rich row of kind `file`,
         // carrying the card's own description (`rich_files::file_value`): an id to ask the Mac
         // for, never a path. The phone fetches the bytes only when the user taps it
@@ -170,6 +188,45 @@ pub fn row_from_item(item: &Value) -> Option<Value> {
         // remembering to skip it.
         _ => None,
     }
+}
+
+/// A downloaded YouTube recording plays from the Mac when it can be sent to the phone.
+/// Give the phone the timestamped link when its copy would exceed the transfer limit.
+fn media_file_for_phone(file: &Value) -> Value {
+    let mut file = file.clone();
+    let too_large = file["bytes"].as_u64().is_some_and(|size| size > richos_core::rich_files::PHONE_LIMIT);
+    if file["source"] == "local" && (file["exists"] == false || !too_large) {
+        file["youtubeId"] = Value::Null;
+    }
+    file
+}
+
+/// Existing phone clients show media evidence in the conversation without fetching the file.
+fn media_moments_text(file: &Value, name: String) -> Option<String> {
+    let moments: Moments = serde_json::from_value(file["moments"].clone()).ok()?;
+    let youtube = file["youtubeId"].as_str().map(|video_id| Source::Youtube { video_id: video_id.to_string() });
+    let mut lines = vec![name];
+    if file["source"] == "local" {
+        let message = if file["exists"] == false {
+            "The recording was moved, deleted or changed."
+        } else {
+            "Play the recording in RichOS on your Mac."
+        };
+        lines.push(message.into());
+    }
+    for point in moments.points {
+        let seconds = point.start_ms / 1000;
+        let time = if seconds >= 3600 {
+            format!("{}:{:02}:{:02}", seconds / 3600, (seconds / 60) % 60, seconds % 60)
+        } else {
+            format!("{}:{:02}", seconds / 60, seconds % 60)
+        };
+        lines.push(format!("{time}  {}\n{}", point.label, point.quote));
+        if let Some(url) = youtube.as_ref().and_then(|source| source.youtube_url(point.start_ms)) {
+            lines.push(url);
+        }
+    }
+    Some(lines.join("\n"))
 }
 
 /// **The `client_id` a CEO row carries: the one the phone sent with the message, or `null`.**
@@ -240,6 +297,8 @@ pub fn event_from_live(name: &str, payload: &Value, cursor: u64) -> Option<(&'st
             // The same rule `row_from_item` applies to a projected user message, in the same
             // words: `jam` is a spoken turn, anything else is typed.
             let spoken = payload.get("source").and_then(|v| v.as_str()) == Some("jam");
+            let text = payload["text"].as_str().unwrap_or("");
+            let summary = crate::mac_attachments::phone_recording_summary(text);
             Some((
                 "message",
                 json!({
@@ -250,7 +309,7 @@ pub fn event_from_live(name: &str, payload: &Value, cursor: u64) -> Option<(&'st
                     // **THE ROW THAT CAN BEAT THE RECEIPT**, so a voice note is a voice row here
                     // already — see [`message_kind`].
                     "kind": message_kind(spoken, payload),
-                    "text": payload.get("text").and_then(|v| v.as_str()).unwrap_or(""),
+                    "text": summary.as_deref().unwrap_or(text),
                     // The TURN's instant, not this event's: the projected row carries the same
                     // one, and two timestamps for one message is two orderings for one thread.
                     "created_at": iso8601(payload.get("createdAt").and_then(|v| v.as_u64()).unwrap_or(at)),
@@ -428,6 +487,37 @@ mod tests {
                   "entityId": "femcboost", "bindingRevision": 1 }
             ]
         })
+    }
+
+    #[test]
+    fn an_ordinary_file_in_a_media_turn_does_not_reuse_an_acknowledged_cursor() {
+        let file = |id, turn, at| json!({"kind":"rich_file","id":id,"turnId":turn,"createdAt":at,
+            "threadId":"t","text":"Transcript","file":{"id":id,"name":"Transcript.txt","exists":true}});
+        let media = |turn, at| {
+            let mut item = file("media", turn, at);
+            item["file"]["moments"] = json!({"durationMs":2000,
+                "points":[{"startMs":1000,"label":"The point","quote":"The words."}]});
+            item
+        };
+        let reply = |id, turn, at| json!({"kind":"rich_message","id":id,"turnId":turn,"createdAt":at,
+            "threadId":"t","text":"Here is what I found."});
+        for media_turn in ["mixed", "stu-obligation"] {
+            let mut items = vec![file("earlier", "mixed", 1), media(media_turn, 2), file("later", media_turn, 3)];
+            let seen = rows_from_payload(&json!({"items":items}));
+            items.extend([reply("mixed-reply", "mixed", 4), file("normal-file", "ordinary", 5), reply("normal-reply", "ordinary", 6)]);
+            let snapshot = json!({"items":items});
+            let rows = rows_from_payload(&snapshot);
+            assert_eq!(rows[..seen.len()], seen);
+            let last_seen = seen.last().unwrap()["cursor"].as_u64().unwrap();
+            assert!(reply_for_turn(&snapshot, "mixed").unwrap()["cursor"].as_u64().unwrap() > last_seen);
+            assert_eq!(rows[4]["id"], "normal-reply");
+            assert_eq!(rows[5]["id"], "normal-file");
+        }
+        let mut items = vec![file("file", "mixed", 1), reply("interim", "mixed", 2)];
+        let seen = rows_from_payload(&json!({"items":items}));
+        items.extend([media("mixed", 3), reply("final", "mixed", 4)]);
+        let rows = rows_from_payload(&json!({"items":items}));
+        assert_eq!(rows[..seen.len()], seen, "evidence arriving after interim prose keeps the earlier order");
     }
 
     #[test]

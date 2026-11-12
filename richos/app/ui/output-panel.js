@@ -74,7 +74,8 @@
     loading: false,
     ticket: 0,
     open: false,
-    view: "list", // "list" | "file"
+    view: "list", // "list" | "file" | "media"
+    media: null,
     file: null, // the output id the file view shows
     sourcePassage: null,
     /// The row kept selected when the file view steps back to the list (§6.4).
@@ -253,7 +254,7 @@
       if (ctx.announce) ctx.announce(filesWord(state.list.count) + " from this thread");
     }
     if (ctx.onLinksChanged) ctx.onLinksChanged();
-    if (!state.open) return;
+    if (!state.open || state.view === "media") return;
     // Redrawn under him: focus stays on the same control of the same file (D6's re-read can land
     // a few milliseconds after the panel put focus on its first row).
     const anchor = focusAnchor();
@@ -499,6 +500,7 @@
 
   function showList(opts) {
     opts = opts || {};
+    clearMedia();
     state.view = "list";
     state.file = null;
     state.sourcePassage = null;
@@ -531,6 +533,7 @@
     // Showing a file asks the shell about it NOW (D6): its tools must never be lit from an
     // answer given before the file went. `detailOf`'s answer reconciles the list if it differs.
     act.details.delete(id);
+    clearMedia();
     state.view = "file";
     state.file = id;
     state.sourcePassage = opts?.sourcePassage ? { ...opts.sourcePassage, landed: false } : null;
@@ -751,6 +754,10 @@
     box.dataset.preview = a.view;
     if (a.why) box.dataset.why = a.why;
     else delete box.dataset.why;
+    if (state.media?.id === f.id && a.view === "none") {
+      state.media.missing = a.why === "missing" || a.why === "refused";
+      publishMedia(state.media);
+    }
     const size = typeof a.bytes === "number" ? humanSize(a.bytes) : typeof f.bytes === "number" ? humanSize(f.bytes) : "";
     const ext = extension(f.name);
     switch (a.view) {
@@ -876,6 +883,7 @@
         player.addEventListener("error", () => {
           if (!box.querySelector(".of-none")) player.after(couldNotShow(a.app));
         });
+        connectMedia(player, f);
         player.src = a.url;
         box.appendChild(player);
         box.appendChild(
@@ -895,6 +903,7 @@
         player.addEventListener("error", () => {
           if (!box.querySelector(".of-none")) player.after(couldNotShow(a.app));
         });
+        connectMedia(player, f);
         player.src = a.url;
         box.appendChild(player);
         box.appendChild(factsLine([typeof a.durationMs === "number" ? clock(a.durationMs) : null, KIND_WORD.audio, size]));
@@ -924,6 +933,124 @@
         // tooLarge or noViewer — the shell's §6.7 sentence, verbatim.
         box.appendChild(node("p", "of-none", a.reason || ""));
     }
+  }
+
+  function mediaPosition(media) {
+    const player = media.player;
+    return player && player.readyState && media.target === null
+      ? player.currentTime * 1000 : media.target;
+  }
+
+  function mediaSnapshot() {
+    const media = state.media;
+    if (!media) return null;
+    const time = mediaPosition(media);
+    const point = media.points.findLast(p => p.startMs <= (time ?? -1));
+    return { id: media.id, time, active: point?.startMs, playing: media.wantsPlay, missing: media.missing };
+  }
+
+  function publishMedia(media) {
+    if (media !== state.media) return;
+    const snapshot = mediaSnapshot();
+    const point = media.points.find(p => p.startMs === snapshot.active);
+    const subtitle = point ? clock(point.startMs) + " · " + point.label : clock(snapshot.time ?? 0);
+    const sub = el("op-sub");
+    if (sub.textContent !== subtitle) sub.textContent = subtitle;
+    sub.hidden = false;
+    window.dispatchEvent(new CustomEvent("rich:media-playback", { detail: snapshot }));
+  }
+
+  function clearMedia() {
+    const media = state.media;
+    if (!media) return;
+    state.media = null;
+    if (media.player) {
+      media.player.pause();
+      media.player.removeAttribute("src");
+      media.player.load();
+    }
+    window.dispatchEvent(new CustomEvent("rich:media-playback", { detail: null }));
+  }
+
+  function applyMedia(media) {
+    const player = media.player;
+    if (player && player.readyState >= 1) {
+      if (media.target !== null) {
+        const end = Math.min(media.durationMs - 1, player.duration * 1000 - 1);
+        if (Number.isFinite(end) && end >= 0) {
+          player.currentTime = Math.max(0, Math.min(media.target, end)) / 1000;
+          media.target = null;
+        }
+      }
+      if (media.wantsPlay) {
+        player.play().catch(error => {
+          if (media !== state.media || error.name === "AbortError") return;
+          media.wantsPlay = false;
+          publishMedia(media);
+        });
+      } else {
+        player.pause();
+      }
+    }
+    publishMedia(media);
+  }
+
+  function connectMedia(player, file) {
+    const media = state.media;
+    if (!media || media.id !== file.id) return;
+    media.player = player;
+    const started = performance.now();
+    let reported = false;
+    function report(outcome) {
+      if (reported || media !== state.media) return;
+      reported = true;
+      const elapsedMs = Math.round(performance.now() - started);
+      bridge.invoke("media_moment_playback", { outcome, elapsedMs }).catch(() => {});
+    }
+    player.addEventListener("loadedmetadata", () => {
+      if (media !== state.media) return;
+      applyMedia(media);
+      if (media.target !== null) report("outsideRecording");
+      else if (!player.seeking) report("seeked");
+    }, { once: true });
+    player.addEventListener("seeked", () => report("seeked"), { once: true });
+    player.addEventListener("error", () => {
+      media.wantsPlay = false;
+      report("couldNotPlay");
+      publishMedia(media);
+    }, { once: true });
+    player.addEventListener("play", () => {
+      media.wantsPlay = !player.paused;
+      publishMedia(media);
+    });
+    for (const event of ["pause", "ended"]) {
+      player.addEventListener(event, () => {
+        media.wantsPlay = !player.paused && !player.ended;
+        publishMedia(media);
+      });
+    }
+    for (const event of ["timeupdate", "seeking", "seeked"]) {
+      player.addEventListener(event, () => publishMedia(media));
+    }
+  }
+
+  function showMedia(file) {
+    clearMedia();
+    state.media = { ...file, target: file.startMs, player: null, wantsPlay: true, missing: false };
+    state.view = "media";
+    state.file = null;
+    const body = el("op-body");
+    body.dataset.view = "media";
+    body.scrollTop = 0;
+    setHead("Output", file.name, null);
+    publishMedia(state.media);
+    const view = node("div", "op-view");
+    const box = node("div", "of-view");
+    box.id = "op-viewer";
+    view.appendChild(box);
+    body.replaceChildren(view);
+    viewPreview(file, box);
+    el("op-close")?.focus({ preventScroll: true });
   }
 
   /// Preview | Source, for Markdown and plain text (§6.4, §11 row 11), in the file view's tools
@@ -998,7 +1125,8 @@
       panel.classList.add("is-opening");
     }
     paintButtons();
-    if (opts.file) showFile(opts.file, opts);
+    if (opts.media) showMedia(opts.media);
+    else if (opts.file) showFile(opts.file, opts);
     else showList(opts);
     // OPENING READS THE DISK AGAIN (§4.6: "every read re-stats … never cached across calls").
     // The list it holds is only as fresh as the last `rich://output`: a file deleted, moved or
@@ -1019,6 +1147,8 @@
     // Closing brings the WHOLE conversation back and clears *open completely* (§9.4), before
     // the panel hides: the composer goes home first, so focus can return to it.
     pullReset();
+    clearMedia();
+    if (state.view === "media") el("op-body").replaceChildren();
     state.open = false;
     state.view = "list";
     state.file = null;
@@ -1139,6 +1269,8 @@
       paintButtons();
       return;
     }
+    clearMedia();
+    if (state.view === "media") el("op-body").replaceChildren();
     state.thread = next;
     // The pill names the thread the panel now shows (§9.4).
     if (next) pullPaintPill();
@@ -2244,6 +2376,24 @@
     init,
     setThread,
     open,
+    mediaSnapshot,
+    openMoment(threadId, file, from) {
+      if (!state.thread || state.thread !== threadId) return false;
+      const media = state.media;
+      if (media?.id === file.id) {
+        const active = mediaSnapshot().active;
+        if (file.toggle && !media.player?.ended && active === file.startMs) {
+          media.wantsPlay = !media.wantsPlay;
+        } else {
+          media.target = file.startMs;
+          media.wantsPlay = true;
+        }
+        applyMedia(media);
+      } else {
+        open({ media: file, returnTo: from });
+      }
+      return true;
+    },
     close,
     toggle,
     escape,

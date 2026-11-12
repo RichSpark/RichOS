@@ -5,6 +5,16 @@ import XCTest
 /// and the conversation following the newest message unless the reader scrolls up, with every send
 /// resuming it (PRD §5; ledger §2.8 M2 with RichOS's resume-on-send).
 final class InteractionTests: XCTestCase {
+    func testLedgerTimestampStartsThePhoneFileFlow() {
+        let app = Screen.launch("media-ledger")
+        let stamp = app.buttons["media.mm_ledger.13000"]
+        XCTAssertTrue(stamp.waitForExistence(timeout: 5))
+        stamp.tap()
+        let status = app.staticTexts.matching(NSPredicate(format: "label IN %@",
+            ["Coming over from your Mac", "Opens when your Mac is back online"])).firstMatch
+        XCTAssertTrue(status.waitForExistence(timeout: 5))
+    }
+
     override func setUp() {
         continueAfterFailure = false
     }

@@ -479,6 +479,12 @@ pub async fn bug_report_write(app: AppHandle, answer: String, screen: bug::Scree
             prompt.push_str("\n\nRecent local RichFinder timing measurements (milliseconds):\n");
             prompt.push_str(&timings);
         }
+        if post == bug::Post::Bug {
+            if let Some(media) = crate::output_files::recent_media_diagnostics() {
+                prompt.push_str("\n\nRecent media moment playback outcomes:\n");
+                prompt.push_str(&media);
+            }
+        }
         let input = bug::writer_input(&prompt, picture.as_ref());
         // Rich writes it, the scanner goes over it, and Rich gets the last word (CEO §115).
         let last = |prompt: &str| ask_rich(&app, &bin, folder.as_deref(), &bugs.quiet_dir, &bug::writer_input(prompt, None));

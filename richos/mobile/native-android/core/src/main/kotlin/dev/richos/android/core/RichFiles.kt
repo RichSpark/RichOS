@@ -20,7 +20,36 @@ data class RichFile(
     val bytes: Long? = null,
     /** False when the file was moved or deleted on the Mac. */
     val exists: Boolean = true,
-)
+    val moments: MediaMoments? = null,
+    val youtubeId: String? = null,
+    val mediaType: String? = null,
+    val downloadName: String? = null,
+) {
+    val transferName: String get() = downloadName ?: name
+}
+
+@Serializable
+data class MediaMoments(val durationMs: Long, val points: List<Point>, val waveform: String? = null) {
+    @Serializable
+    data class Point(val startMs: Long, val label: String, val quote: String)
+
+    companion object {
+        private val youtubeId = Regex("[A-Za-z0-9_-]{11}")
+        fun youtube(id: String, atMs: Long): String? = id.takeIf(youtubeId::matches)?.let {
+            "https://www.youtube.com/watch?v=$it&t=${maxOf(0, atMs / 1000)}s"
+        }
+        fun time(milliseconds: Long): String {
+            val seconds = maxOf(0, milliseconds / 1000)
+            val mm = (seconds / 60 % 60).toString()
+            val ss = (seconds % 60).toString().padStart(2, '0')
+            return if (seconds < 3600) "$mm:$ss" else "${seconds / 3600}:${mm.padStart(2, '0')}:$ss"
+        }
+    }
+}
+
+@Serializable
+data class MediaSelection(val startMs: Long, val tap: Int)
+
 
 /** Where one of Rich's files stands on this phone. */
 @Serializable
@@ -50,6 +79,7 @@ data class FileFetch(
     val path: String? = null,
     /** The user tapped it: open the viewer as soon as it is here. */
     val open: Boolean = false,
+    val media: MediaSelection? = null,
 )
 
 /** The phone's copies of Rich's files: written once, kept after (round 36 README, "keeps it after"). */

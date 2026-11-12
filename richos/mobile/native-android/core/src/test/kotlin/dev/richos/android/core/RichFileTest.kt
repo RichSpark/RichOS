@@ -83,6 +83,25 @@ class RichFileTest {
     }
 
     @Test
+    fun `selecting a second moment keeps one transfer and closing the app closes playback`() {
+        val kept = Kept()
+        val core = core(kept)
+        val row = """{"id":"mm_1","thread_id":"general","cursor":3,"role":"rich","kind":"media","text":"Fallback","file":{"id":"mm_1","name":"Interview","downloadName":"recording.mp4","mediaType":"video","moments":{"durationMs":3000,"points":[{"startMs":1000,"label":"First","quote":"One."},{"startMs":2000,"label":"Second","quote":"Two."}]}}}"""
+        runBlocking {
+            core.dispatch(Action.Receive("id: 3\nevent: message\ndata: $row\n\n"))
+            core.dispatch(Action.OpenRichFile("mm_1", 1000))
+            core.dispatch(Action.OpenRichFile("mm_1", 2000))
+            val ready = core.state.fileFetches.getValue("mm_1")
+            assertEquals("/kept/mm_1/recording.mp4", ready.path)
+            assertEquals(MediaSelection(2000, 2), ready.media)
+            assertTrue(ready.open)
+            assertEquals(1, requests.size)
+            core.backgrounded()
+            assertEquals(false, core.state.fileFetches.getValue("mm_1").open)
+        }
+    }
+
+    @Test
     fun `a tap brings the file over on one signed request, keeps it, and a second tap opens it at once`() {
         val kept = Kept()
         val core = core(kept)
