@@ -200,8 +200,13 @@ struct ArchiveBrowserSheet: View {
                 Spacer()
                 Button("Choose Destination…") { chooseDestination() }.disabled(task != nil)
             }
-            TextField("New folder name", text: $name).disabled(task != nil)
-            if !status.isEmpty { Text(status).foregroundStyle(.secondary) }
+            TextField("New folder name", text: $name)
+                .accessibilityLabel("New folder name").disabled(task != nil)
+            if task != nil {
+                ProgressView(status).controlSize(.small)
+            } else if !status.isEmpty {
+                Text(status).foregroundStyle(.secondary)
+            }
             HStack {
                 if task != nil { Button("Cancel Extraction") { task?.cancel() } }
                 Spacer()
@@ -254,8 +259,13 @@ struct ZipCreateSheet: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Create ZIP").font(.headline)
             Text("\(sources.count) selected in \(destination.path)").lineLimit(2)
-            TextField("ZIP filename", text: $name).disabled(task != nil)
-            if !status.isEmpty { Text(status).foregroundStyle(.secondary) }
+            TextField("ZIP filename", text: $name)
+                .accessibilityLabel("ZIP filename").disabled(task != nil)
+            if task != nil {
+                ProgressView(status).controlSize(.small)
+            } else if !status.isEmpty {
+                Text(status).foregroundStyle(.secondary)
+            }
             HStack {
                 if task != nil { Button("Cancel Compression") { task?.cancel() } }
                 Spacer()
