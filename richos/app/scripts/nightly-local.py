@@ -2249,13 +2249,17 @@ class Runner:
                               "the whole richos-core crate ran (a land runs only the targets its change "
                               "selects)")
             with self.phase(LAND_PROVEN_GATE):
-                self.command("cargo", "test", "--locked", "--manifest-path",
+                # THROUGH THE CARGO DISPATCHER, never raw cargo: the gate environment carries
+                # RICHOS_CARGO_CACHE_ROOT and no CARGO_TARGET_DIR, which raw cargo ignores, so a
+                # raw `cargo test` here recreated <source>/richos/app/target on the internal disk
+                # (2026-11-10: 40 GB). The dispatcher puts the output in the shared cache.
+                self.command(self.source / SCRIPTS / "bin" / "cargo", "test", "--locked", "--manifest-path",
                              "richos/app/Cargo.toml", "-p", "richos-core",
                              timeout=GATE_BUDGETS[LAND_PROVEN_GATE])
 
         def updater_tests():
             with self.phase("gates/updater-tests"):
-                self.command("cargo", "test", "--locked", "--manifest-path",
+                self.command(self.source / SCRIPTS / "bin" / "cargo", "test", "--locked", "--manifest-path",
                              "richos/app/crates/richos-user-update/Cargo.toml",
                              timeout=GATE_BUDGETS["gates/updater-tests"])
 

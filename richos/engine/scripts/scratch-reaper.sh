@@ -140,10 +140,11 @@ fi
 # the key, and nothing anywhere says the two never met. The list of names was the
 # defect; deriving the list from the config is the fix. `compgen -v` is bash's own
 # enumeration of what sourcing actually set, so a key cannot be declared and
-# missed, and nothing has to be remembered by anybody.
+# missed, and nothing has to be remembered by anybody. DISK_* too (2026-11-12): the Cargo arm
+# keeps each volume above the disk watchdog's own declared floor.
 while read -r _k; do
     case "$_k" in
-        SCRATCH_*|APP_TEST_INSTANCE_*|APP_INSTANCE_*) export "$_k" ;;
+        SCRATCH_*|APP_TEST_INSTANCE_*|APP_INSTANCE_*|DISK_*) export "$_k" ;;
     esac
 done < <(compgen -v)
 unset _k

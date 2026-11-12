@@ -3371,6 +3371,13 @@ fn main() {
             let cleanup = richos_core::app_cleanup::hook(Arc::clone(&engine_cell), data_dir.clone());
             work.set_cleanup(Arc::clone(&cleanup));
             cleanup(richos_core::app_cleanup::Moment::Start);
+            // And whenever the user's disk drops low while the app runs (every user, not only the
+            // scheduled job on one Mac): the same sweep, now also taking build output in the
+            // repositories the user connected.
+            // And when a drive holding the shared Cargo caches drops below its target, even with
+            // the app's own disk fine: the engine is asked each check (`--floor-check`).
+            richos_core::app_cleanup::watch_disk(data_dir.clone(), Arc::clone(&cleanup),
+                richos_core::app_cleanup::floor_check(Arc::clone(&engine_cell), data_dir.clone()));
 
             // Release grants from the old process. Stu owns job recovery through his inbox.
             work.set_screen(std::sync::Arc::new(screen::MacScreen));

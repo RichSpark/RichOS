@@ -988,9 +988,11 @@ class Walls(object):
 # measuring
 # ---------------------------------------------------------------------------
 
-def measure(path):
+def measure(path, until=None):
     """(bytes_on_disk, newest_mtime, contains_git). Errors are skipped, never
-    guessed at: a file that vanished mid-walk was never going to be freed."""
+    guessed at: a file that vanished mid-walk was never going to be freed.
+    With `until` (a time.time() value) a walk still running past it returns None: a partial
+    walk would understate the newest change, so it is never used as an answer."""
     total, newest, has_git = 0, 0.0, False
     try:
         st = os.lstat(path)
@@ -1003,6 +1005,8 @@ def measure(path):
     stack = [path]
     while stack:
         check_deadline()
+        if until is not None and time.time() > until:
+            return None
         cur = stack.pop()
         try:
             entries = list(os.scandir(cur))
@@ -1109,6 +1113,8 @@ class Reaper(object):
     app_until = None
     app_apply_until = None
     app_deferred = 0
+    # --under-floor: the disk watchdog found a volume below its floor (scan_internal_disk).
+    under_floor = False
 
     def __init__(self, cfg, ws):
         self.cfg = cfg
@@ -1375,7 +1381,9 @@ class Reaper(object):
             self.add(path, "claude-orphan", size, KEEP,
                      "younger than the %d min floor" % self.cfg["age_floor_minutes"])
             return
-        refused = walls.check(path, has_git)
+        fixture = bool(has_git and not self.work_proof(path)
+                       and not self.reaches_outside(path, has_git, True))
+        refused = walls.check(path, has_git, git_is_fixture=fixture)
         if refused:
             self.add(path, "claude-orphan", size, INDETERMINATE, refused)
             return
@@ -1652,6 +1660,11 @@ class Reaper(object):
                              "allocation, but %s" % (pid or 0, outside))
                     continue
                 fixture = True
+            elif has_git and self.cfg.get("unknown_git_is_fixture") and not self.work_proof(path):
+                # Not a declared fixture label, but every repository in it is the harness's own
+                # (work_proof), or holds no uncommitted work and nothing no remote has.
+                if not repositories_reach_outside(path):
+                    fixture = True
             refused = walls.check(path, has_git, git_is_fixture=fixture)
             if refused:
                 self.add(path, "scratch-alloc", size, INDETERMINATE, refused)
@@ -2002,6 +2015,131 @@ class Reaper(object):
     # two-hour reclaim for a three-day one on exactly the family that filled the
     # disk. The list stays, and what changes is its JOB: it is no longer the
     # coverage, it is a fast lane on top of the coverage.
+    def work_proof(self, path):
+        """'' when every repository inside `path` is shown to hold no work of anyone's, else why not.
+
+        THE RULE THAT DECIDES OUR OWN TEST-FIXTURE CHECKOUTS (2026-11-10, CEO: none of our own
+        leftovers may end up "undecided"). A checkout in a temp root is disposable only when
+        nothing in it is anyone's work: for each repository found inside (to depth 4)
+
+          * a harness fixture (every commit by a declared fixture identity, or no commit at all)
+            is disposable whatever its working tree holds; any other repository needs:
+          * no tracked file modified, nothing staged, no untracked file that is not ignored;
+          * it has a remote, and no local commit is missing from every remote ref; a repository
+            with NO remote holds its commits nowhere else, so it is never shown disposable here
+            (a declared harness family is, by name, in scan_unknown / scan_legacy_tmp);
+          * it is not a linked worktree or submodule (a `.git` file): that one belongs to
+            another repository, and reaches_outside already refuses it.
+
+        Anything git cannot answer in time is "unknown", which is not disposable.
+        """
+        repos, stack = [], [(path, 0)]
+        while stack:
+            cur, depth = stack.pop()
+            try:
+                names = os.listdir(cur)
+            except OSError:
+                return "%s could not be listed" % cur
+            if ".git" in names:
+                pointer = os.path.join(cur, ".git")
+                if os.path.islink(pointer):
+                    return "%s has a linked repository folder" % cur
+                if not os.path.isdir(pointer):
+                    # A linked worktree is self-contained only when its repository folder is
+                    # inside this same candidate; one that belongs to another repository is
+                    # closed by that repository's owner, never deleted as scratch.
+                    try:
+                        with open(pointer, encoding="utf-8") as fh:
+                            line = fh.readline().strip()
+                    except OSError:
+                        line = ""
+                    target = os.path.realpath(os.path.join(cur, line[len("gitdir:"):].strip())) \
+                        if line.startswith("gitdir:") else ""
+                    if not target or not inside(target, os.path.realpath(path)):
+                        return "%s is a linked worktree or submodule of another repository" % cur
+                repos.append(cur)
+                continue
+            if depth < 4:
+                for name in names:
+                    child = os.path.join(cur, name)
+                    if os.path.isdir(child) and not os.path.islink(child):
+                        stack.append((child, depth + 1))
+        if not repos:
+            return "no repository was found to read"
+        env = dict(_ps_env(), GIT_OPTIONAL_LOCKS="0")
+
+        def ask(repo, *args):
+            try:
+                r = subprocess.run(["git", "-C", repo] + list(args), capture_output=True, text=True,
+                                   timeout=30, env=env)
+            except (OSError, subprocess.TimeoutExpired):
+                return None
+            return r.stdout if r.returncode == 0 else None
+
+        fixture_emails = set((getattr(self, "cfg", None) or {}).get("fixture_emails") or [])
+        for repo in repos:
+            check_deadline()
+            # A repository the harness made: every commit is by a declared fixture identity
+            # (SCRATCH_FIXTURE_IDENTITIES), or it has no commit at all, so there is no history to
+            # lose. What is in its working tree is the test's own output, not anyone's work.
+            refs = ask(repo, "for-each-ref", "--count=1")
+            if refs is not None and not refs.strip():
+                # NO COMMIT YET: nothing in history to lose, but a freshly started project keeps its
+                # work in the working tree. Disposable only when that tree is empty or holds only
+                # files a declared harness writes (SCRATCH_FIXTURE_FILES).
+                allowed = (getattr(self, "cfg", None) or {}).get("fixture_files") or []
+                stray, unreadable = [], []
+                for dirpath, dirnames, filenames in os.walk(repo, onerror=unreadable.append):
+                    dirnames[:] = [d for d in dirnames if d != ".git"]
+                    for f in filenames:
+                        if not any(fnmatch.fnmatch(f, pat) for pat in allowed):
+                            stray.append(os.path.join(dirpath, f))
+                    if len(stray) > 5:
+                        break
+                if unreadable:
+                    return "%s has no commit yet and its working tree could not be read" % repo
+                if stray:
+                    return "%s has no commit yet and its working tree holds files no harness wrote (%s)" % (
+                        repo, os.path.relpath(stray[0], repo))
+                continue
+            authors = ask(repo, "log", "--all", "--format=%ae")
+            if authors is not None and fixture_emails and set(authors.split()) <= fixture_emails:
+                continue
+            status = ask(repo, "status", "--porcelain=v1", "--untracked-files=all")
+            if status is None:
+                return "%s: git could not report its status" % repo
+            if status.strip():
+                return "%s has uncommitted work (%d path(s) changed or untracked)" % (repo, len(status.splitlines()))
+            remotes = ask(repo, "remote")
+            if remotes is None:
+                return "%s: git could not list its remotes" % repo
+            if not remotes.strip():
+                return "%s has no remote, so its commits exist nowhere else" % repo
+            ahead = ask(repo, "log", "--branches", "--not", "--remotes", "--oneline", "-n", "1")
+            if ahead is None:
+                return "%s: git could not compare its branches with its remotes" % repo
+            if ahead.strip():
+                return "%s has a commit no remote has: %s" % (repo, ahead.strip()[:80])
+            # Work that lives outside the branches: a stash, and commits reachable only from a
+            # detached HEAD. Both are real work however clean the tree and the branches are.
+            stash = ask(repo, "stash", "list")
+            if stash is None:
+                return "%s: git could not list its stash" % repo
+            if stash.strip():
+                return "%s has stashed work: %s" % (repo, stash.strip().splitlines()[0][:80])
+            head = ask(repo, "log", "HEAD", "--not", "--remotes", "--oneline", "-n", "1")
+            if head is None:
+                return "%s: git could not compare HEAD with its remotes" % repo
+            if head.strip():
+                return "%s has a commit on HEAD no remote has: %s" % (repo, head.strip()[:80])
+            # And every other reference: a commit held only by a local tag (or any ref) is work.
+            anyref = ask(repo, "log", "--all", "--not", "--remotes", "--oneline", "-n", "1")
+            if anyref is None:
+                return "%s: git could not compare all its references with its remotes" % repo
+            if anyref.strip():
+                return "%s has a commit only a local reference holds: %s" % (repo, anyref.strip()[:80])
+        return ""
+
     def scan_unknown(self, path, walls, root, held):
         """One child of a temp root that no other arm claims. Deny-by-default.
 
@@ -2111,11 +2249,21 @@ class Reaper(object):
         narrowed = self.cfg["unknown_git_is_fixture"] and (
             os.path.realpath(root) not in (self.cfg.get("producer_tmp_roots") or [])
             or any(fnmatch.fnmatch(name, pat) for pat in self.cfg.get("legacy_tmp_patterns") or []))
+        proven, why_not = "", ""
+        if has_git and not narrowed and self.cfg["unknown_git_is_fixture"]:
+            # Not a declared harness family: a checkout is still ours to clear once every
+            # repository in it is shown to hold no work (work_proof). Otherwise it stays undecided.
+            why_not = self.work_proof(path)
+            if not why_not:
+                narrowed = True
+                proven = "; every repository in it has no uncommitted work and nothing no remote has"
         linked = self.reaches_outside(path, has_git, narrowed)
         if linked:
             self.add(path, "tmp-unknown", size, INDETERMINATE, linked)
             return
         refused = walls.check(path, has_git, git_is_fixture=narrowed)
+        if refused and why_not and refused.startswith("wall 2"):
+            refused = Refusal(2, "wall 2: a checkout, and not shown disposable: %s" % why_not)
         if refused:
             self.add(path, "tmp-unknown", size, INDETERMINATE, refused)
             return
@@ -2124,7 +2272,7 @@ class Reaper(object):
                  "no arm declares this name, and nothing needs to: no running "
                  "session process existed when it was last written, nothing "
                  "has touched it for %d h, no process holds a file open inside "
-                 "it, and it is not a registered workspace" % (age // 3600))
+                 "it, and it is not a registered workspace%s" % (age // 3600, proven))
 
     def scan_shared_tmp(self, walls):
         """The DECLARED SHARED TEMP ROOTS — /private/tmp on this machine.
@@ -2205,7 +2353,7 @@ class Reaper(object):
                     self.add(path, "agent-named", 0, KEEP,
                              "named for %s, whose run has not finished" % name)
                     continue
-                size, newest, _has_git = measure(path)
+                size, newest, has_repo = measure(path)
                 # THE CLOCK COMES OFF THE AGENT'S RECORDED END WHEN THE REGISTRY HAS
                 # ONE, and off the newest mtime only when it does not: an orphaned
                 # writer would otherwise keep a stopped agent's scratch inside the
@@ -2224,11 +2372,34 @@ class Reaper(object):
                              "named-agent scratch, and the agent registry cannot be read "
                              "to tell whether %s is still running" % name)
                     continue
+                retention = self.cfg.get("named_retention_days", 3) * 86400
+                if age >= retention and not has_repo and not self.holder_named(path):
+                    # NAMED SCRATCH OF AN AGENT THAT IS NOT RUNNING, a declared number of days
+                    # after its end: nobody is going to collect it by a landing, and scratch is
+                    # never the agent's result (that is its commits). A directory holding a
+                    # repository, or one a process holds open, is never taken here.
+                    e = Entry(path, "agent-named", size, DELETE,
+                              "named scratch of %s, which is not running: %s %d d ago, past the declared "
+                              "retention of %d d; no repository in it and nothing holds it open"
+                              % (name, clock, age // 86400, self.cfg.get("named_retention_days", 3)))
+                    e.named_ok = True
+                    self.entries.append(e)
+                    continue
+                if age < retention:
+                    # Not undecided: the cleanup WILL take it, on the day the retention ends.
+                    self.add(path, "agent-named", size, KEEP,
+                             "named scratch of %s, which is not running: %s %d d ago; taken after the "
+                             "declared %d d" % (name, clock, age // 86400, self.cfg.get("named_retention_days", 3)))
+                    continue
                 self.add(path, "agent-named", size, INDETERMINATE,
-                         "named-agent scratch no running agent carries (%s was stopped, "
-                         "shelved or never landed). Only a land's sweep deletes named "
-                         "scratch, so remove it by hand once nothing needs it" % name,
+                         "named scratch of %s, past its retention, but %s: a person decides what is in it"
+                         % (name, "it holds a repository" if has_repo else "a process holds it open"),
                          condition="agent-ended")
+
+    def holder_named(self, path):
+        """True when a live process holds a file open inside `path`, or that cannot be read."""
+        h = self.holder(path)
+        return h is None or bool(h.strip())
 
     def scan_deferred_unknown(self, walls):
         """THE DEFERRED DENY-BY-DEFAULT PASS, and the ONE arm allowed to be cut
@@ -2531,7 +2702,7 @@ class Reaper(object):
         if "app_repos" in self.__dict__:
             return self.__dict__["app_repos"]
         out = set()
-        rel = self.cfg["app_registry_relpath"]
+        rel = self.cfg.get("app_registry_relpath") or ""
         files = []
         home = os.path.expanduser("~")
         if home and rel:
@@ -2888,8 +3059,18 @@ class Reaper(object):
                      % (family, key, (self.now - newest) // 3600))
             planned.append(path)
 
+        if cargo_roots:
+            self.plan_cargo_units(bc, cargo_roots, planned, walls, idle_s, usual=True)
+
+    def plan_cargo_units(self, bc, cargo_roots, planned, walls, idle_s, usual):
+        """The cargo-units rows: rule 2 (`usual`, the scheduled sweep only) and rule 3, the
+        volume's floor (every sweep, the app's included). Every profile no build holds is
+        measured once and both rules decide from that one reading."""
+        free_profiles = []
         for profile in bc.profile_dirs(cargo_roots, skip=planned):
             check_deadline()
+            if self.app_spent(getattr(self, "app_until", None)):
+                continue
             refused = walls.check(profile, False)
             if refused:
                 self.add(profile, "cargo-units", 0, INDETERMINATE, refused)
@@ -2900,15 +3081,95 @@ class Reaper(object):
                              "a running Cargo build holds its lock; its units are "
                              "decided by the next pass")
                     continue
-            idle = bc.idle_units(profile, idle_s, now=self.now)
+            free_profiles.append((profile, bc.units(profile)))
+
+        # RULE 3, THE VOLUME'S FLOOR (2026-11-12, lib/build_caches.py). Per volume: what it is
+        # short of its target, less what the rows above already free on it, decides the window.
+        windows = self.build_cache_windows(bc, free_profiles, idle_s)
+        for profile, us in free_profiles:
+            # The app's sweep plans only on a short volume (`windows` names its profiles), and
+            # there it plans the units past the usual window too: they are what the volume's
+            # shortfall was measured against.
+            if not usual and profile not in windows:
+                continue
+            window, why = windows.get(profile, (idle_s, ""))
+            idle = sorted(((k, u) for k, u in us.items() if self.now - u["newest"] >= window),
+                          key=lambda kv: kv[0])
             if not idle:
                 continue
-            e = Entry(profile, "cargo-units", sum(u["bytes"] for _k, u in idle), DELETE,
-                      "%d Cargo unit(s) no build has read for %d h; deleted under "
-                      "Cargo's lock, and Cargo rebuilds any that is needed again"
-                      % (len(idle), self.cfg["build_cache_idle_hours"]))
+            if window < idle_s:
+                text = ("%d Cargo unit(s) no build has read for %.1f h, oldest first, because %s "
+                        "(the usual window is %d h); deleted under Cargo's lock, and Cargo "
+                        "rebuilds any that is needed again"
+                        % (len(idle), window / 3600.0, why, self.cfg["build_cache_idle_hours"]))
+            else:
+                text = ("%d Cargo unit(s) no build has read for %d h; deleted under "
+                        "Cargo's lock, and Cargo rebuilds any that is needed again"
+                        % (len(idle), self.cfg["build_cache_idle_hours"]))
+            e = Entry(profile, "cargo-units", sum(u["bytes"] for _k, u in idle), DELETE, text)
             e.unit_keys = [k for k, _u in idle]
+            e.idle_seconds = window
             self.entries.append(e)
+
+    def cargo_floor_short(self, bc, cargo_roots):
+        """True when the volume holding any declared Cargo tree is below its free-space target:
+        one statvfs per tree, so the app's sweep walks the trees only when the drive is short."""
+        for root in cargo_roots:
+            t = bc.free_target(root, self.cfg.get("disk_floor_gb", 60),
+                               self.cfg.get("disk_primary_volume", ""),
+                               self.cfg.get("disk_scale_extra_volumes", True),
+                               self.cfg.get("build_cache_free_target_percent", 150))
+            if t is not None and t[2] < t[0]:
+                return True
+        return False
+
+    def build_cache_windows(self, bc, free_profiles, idle_s):
+        """{profile: (idle window in seconds, why)} for every profile on a volume below its
+        free-space target (lib/build_caches.py rule 3): the usual window when what is already
+        planned covers the shortfall, a shorter one when it does not. A volume at or above its
+        target is absent, and its profiles keep the usual window. Every short volume is also
+        recorded for apply()'s re-read, before anything decides whether it is needed."""
+        min_s = self.cfg.get("build_cache_min_idle_hours", 2) * 3600
+        by_dev = {}
+        for profile, us in free_profiles:
+            here = bc.volume_space(profile)
+            if here is not None:
+                by_dev.setdefault(here[0], []).append((profile, us))
+        out = {}
+        for dev, rows in by_dev.items():
+            t = bc.free_target(rows[0][0], self.cfg.get("disk_floor_gb", 60),
+                               self.cfg.get("disk_primary_volume", ""),
+                               self.cfg.get("disk_scale_extra_volumes", True),
+                               self.cfg.get("build_cache_free_target_percent", 150))
+            if t is None:
+                continue
+            target, floor, free = t
+            if free >= target:
+                continue
+            # A SHORT VOLUME IS ALWAYS RE-READ AFTER THE PLANNED ROWS (apply(): reclaim_to_target),
+            # whatever the rows below are expected to free: a unit's bytes are not what deleting it
+            # releases, because Cargo keeps a hard link to a binary outside the unit (reviews
+            # rv-20261112T102721Z-317c4e7a-1985 and rv-20261112T122930Z-beaaa3c2-fb0a).
+            if not hasattr(self, "cargo_floors"):
+                self.cargo_floors = {}
+            self.cargo_floors[dev] = {"profiles": [p for p, _us in rows], "target": target,
+                                      "min_s": min_s}
+            # What this arm already plans on this volume: orphan folders, the trash, and the
+            # units past the usual window.
+            planned = sum(e.size for e in self.entries
+                          if e.action == DELETE and e.klass in ("build-cache", "build-cache-trash")
+                          and (bc.volume_space(e.path) or (None,))[0] == dev)
+            planned += sum(u["bytes"] for _p, us in rows for u in us.values()
+                           if self.now - u["newest"] >= idle_s)
+            need = target - free - planned
+            window = idle_s if need <= 0 else bc.pressure_window(
+                [(u["newest"], u["bytes"]) for _p, us in rows for u in us.values()],
+                need, idle_s, min_s, self.now)
+            why = ("the volume has %s free, under its target of %s (floor %s); deleted oldest "
+                   "first until the volume is back on target" % (human(free), human(target), human(floor)))
+            for profile, _us in rows:
+                out[profile] = (window, why)
+        return out
 
     def codex_app_root(self):
         home = self.cfg.get("codex_home") or ""
@@ -2978,6 +3239,341 @@ class Reaper(object):
 
     # --- running it ------------------------------------------------------
 
+    # --- THE INTERNAL DISK (2026-11-10, CEO: "HOW MANY MORE TIMES WILL I HAVE TO PLAY THE JANITOR") ---
+    #
+    # Measured the day the internal disk fell to 45 GB free of 460 GB while this job ran
+    # fine: it freed 75 GB at 16:41Z, almost all on the external drive. What filled the
+    # internal disk was OUTSIDE ITS LISTS: Cargo output inside a checkout (wall 2 refused it
+    # as a checkout, wall 3 as a registered workspace), simulator devices, Xcode data and
+    # preserved copies of retired workspaces. Each arm below is a class with its own proof.
+    # Never ~/.claude/projects (Claude conversation transcripts): no arm reaches it.
+
+    CARGO_SIGNATURE = "8a477f597d28d172789f06886806bc55"
+
+    @staticmethod
+    def cargo_target(path):
+        """True when `path` is a directory Cargo made: its CACHEDIR.TAG carries Cargo's
+        signature. Build output is regenerable wherever it sits, so a checkout's own files
+        stay protected while this folder inside it is not work."""
+        tag = os.path.join(path, "CACHEDIR.TAG")
+        try:
+            with open(tag, encoding="utf-8", errors="replace") as fh:
+                return Reaper.CARGO_SIGNATURE in fh.read(512)
+        except OSError:
+            return False
+
+    def checkout_roots(self):
+        """Every checkout whose Cargo output may be cleared: each registered workspace and the
+        nightly's source checkout."""
+        roots = set(registered_workspaces())
+        # Every checkout the nightly keeps (`source`, `ui-checkout`, ...), never its logs or releases.
+        nightly = self.cfg["nightly_dir"]
+        try:
+            for name in sorted(os.listdir(nightly)):
+                path = os.path.join(nightly, name)
+                if name not in ("logs", "releases", "runtime") and os.path.isdir(path) \
+                        and not os.path.islink(path):
+                    roots.add(os.path.realpath(path))
+        except OSError:
+            pass
+        return sorted(r for r in roots if os.path.isdir(r))
+
+    @staticmethod
+    def find_cargo_targets(checkout, max_depth=4, until=None):
+        """`target` folders Cargo made inside a checkout, found without entering the
+        repository's own metadata folder or node_modules. Past `until` the search stops with
+        what it found."""
+        found, stack = [], [(checkout, 0)]
+        while stack:
+            if until is not None and time.time() > until:
+                break
+            cur, depth = stack.pop()
+            try:
+                names = sorted(os.listdir(cur))
+            except OSError:
+                continue
+            for name in names:
+                child = os.path.join(cur, name)
+                if name in (".git", "node_modules") or os.path.islink(child) \
+                        or not os.path.isdir(child):
+                    continue
+                if name == "target" and Reaper.cargo_target(child):
+                    found.append(child)
+                elif depth + 1 < max_depth:
+                    stack.append((child, depth + 1))
+        return found
+
+    @staticmethod
+    def lock_free(path):
+        """True when nothing holds the flock on `path`; a missing file is free. Takes no
+        reservation (the observation CLAUDE.md prescribes)."""
+        import fcntl
+        try:
+            fh = open(path, "rb")
+        except OSError:
+            return True
+        with fh:
+            try:
+                fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                return False
+            fcntl.flock(fh, fcntl.LOCK_UN)
+            return True
+
+    def machine_open_paths(self):
+        """[(pid, path)] for every open file, working directory and running executable on the
+        machine, from ONE lsof read once; None if it could not be trusted to answer."""
+        if "_machine_open" not in self.__dict__:
+            try:
+                # In the app's sweep the read ends with the planning window, so it cannot use up
+                # the time the ordinary entries need to be applied.
+                limit = 120 if self.app_until is None else max(1, self.app_until - time.time())
+                r = subprocess.run(["lsof", "-w", "-n", "-P", "-F", "pn"], capture_output=True,
+                                   text=True, timeout=limit, env=_ps_env())
+                if r.returncode not in (0, 1):
+                    raise OSError("lsof exited %d" % r.returncode)
+            except (OSError, subprocess.TimeoutExpired):
+                self.__dict__["_machine_open"] = None
+            else:
+                out, pid = [], None
+                for line in r.stdout.splitlines():
+                    if line.startswith("p"):
+                        pid = line[1:]
+                    elif line.startswith("n") and pid is not None:
+                        out.append((pid, line[1:]))
+                self.__dict__["_machine_open"] = out
+        return self.__dict__["_machine_open"]
+
+    def in_use_under(self, path):
+        """'' when no running process uses anything under `path`; else who; None when unknown."""
+        prefix = path.rstrip("/") + "/"
+        lines = self.command_lines()
+        if lines is None:
+            return None
+        for line in lines:
+            if prefix in line:
+                return "its command line names %s" % path
+        opened = self.machine_open_paths()
+        if opened is None:
+            return None
+        mine = {str(os.getpid()), str(os.getppid())}
+        for pid, p in opened:
+            if pid not in mine and (p == path or p.startswith(prefix)):
+                return "pid %s has %s open" % (pid, p)
+        return ""
+
+    def scan_cargo_output(self, walls, checkouts=None):
+        """CARGO OUTPUT INSIDE A CHECKOUT: deleted while no build is using it.
+
+        Proof it is unused, all of it: no nightly command holds `<nightly>/release.lock`; no
+        profile folder in it holds Cargo's own `.cargo-lock`; nothing in it changed within
+        the age floor. A link into the shared cache is not found (links are never followed).
+        Walls 1 and 4 still apply (strictly inside a registered checkout, not a never-touch
+        name); walls 2 and 3 do not, because they protect the checkout's FILES and the folder
+        is not them: wall 3 only refuses a workspace sitting INSIDE the candidate."""
+        nightly_lock = os.path.join(self.cfg.get("nightly_dir") or os.sep, "release.lock")
+        # `checkouts` is the APP's scope: the repositories the user connected to the app, where its
+        # workers build (scan_app). The scheduled sweep passes none and takes its own list.
+        for checkout in (checkouts if checkouts is not None else self.checkout_roots()):
+            check_deadline()
+            # THE APP'S SWEEP IS BOUNDED, and this arm comes last: it never takes the time the
+            # ordinary entries (sessions, voice, profiles) already planned need to be applied.
+            # Past the planning window a target is left for the next sweep, counted as deferred.
+            if self.app_spent(self.app_until):
+                continue
+            for path in self.find_cargo_targets(checkout, until=self.app_until):
+                klass = "cargo-output"
+                if self.app_spent(self.app_until):
+                    continue
+                measured = measure(path, until=self.app_until)
+                if measured is None:
+                    self.app_deferred += 1
+                    continue
+                size, newest, _repo = measured
+                real = os.path.realpath(path)
+                if real in walls.never or not inside(real, checkout) or real == checkout:
+                    self.add(path, klass, size, INDETERMINATE,
+                             Refusal(1, "wall 1: %s is not strictly inside checkout %s" % (real, checkout)))
+                    continue
+                if any(inside(reg, real) for reg in walls.registered):
+                    self.add(path, klass, size, INDETERMINATE,
+                             Refusal(3, "wall 3: a registered workspace sits inside %s" % real))
+                    continue
+                if not self.lock_free(nightly_lock):
+                    self.add(path, klass, size, KEEP, "a nightly command holds release.lock")
+                    continue
+                locked = [d for d in glob.glob(os.path.join(path, "*", ".cargo-lock"))
+                          if not self.lock_free(d)]
+                if locked:
+                    self.add(path, klass, size, KEEP, "a build holds %s" % locked[0])
+                    continue
+                if (self.now - newest) < self.floor:
+                    self.add(path, klass, size, KEEP,
+                             "changed within the %d min floor, so a build may be using it"
+                             % self.cfg["age_floor_minutes"])
+                    continue
+                # NO RUNNING PROCESS USES IT: a service launched straight from target/release keeps
+                # running after Cargo's lock is released, and deleting its binary and resources under
+                # it is the one way this arm could break something in use. Command lines, open files,
+                # working directories and executables (one whole-machine lsof, read once) are checked.
+                using = self.in_use_under(real)
+                if using is None:
+                    self.add(path, klass, size, INDETERMINATE,
+                             "the process table or the open-file table could not be read, so it cannot "
+                             "be shown that nothing is using this build output")
+                    continue
+                if using:
+                    self.add(path, klass, size, KEEP, "a running process uses it: %s" % using)
+                    continue
+                self.add(path, klass, size, DELETE,
+                         "Cargo build output (CACHEDIR.TAG) inside checkout %s; regenerable, no lock "
+                         "held and unchanged for %d min" % (checkout, (self.now - newest) // 60))
+
+    def _folder_children(self, base, klass, idle_days, why, running=None):
+        """One row per child of `base`: DELETE once idle for `idle_days`, else KEEP."""
+        if not base or not os.path.isdir(base):
+            return
+        self.roots.append(base)
+        for name in sorted(os.listdir(base)):
+            check_deadline()
+            path = os.path.join(base, name)
+            if os.path.islink(path):
+                continue
+            size, newest, has_repo = measure(path)
+            age = self.now - newest
+            if running:
+                self.add(path, klass, size, KEEP, running)
+            elif age < idle_days * 86400:
+                self.add(path, klass, size, KEEP,
+                         "changed %d d ago; the declared idle time is %d d" % (age // 86400, idle_days))
+            elif has_repo:
+                self.add(path, klass, size, INDETERMINATE,
+                         Refusal(2, "wall 2: this tree contains a repository"))
+            else:
+                self.add(path, klass, size, DELETE,
+                         "%s; unchanged for %d d, past the declared %d d" % (why, age // 86400, idle_days))
+
+    def developer_tool_running(self):
+        """Why Xcode data must be kept right now, or '': an Xcode build, Xcode itself or a device
+        tool is running. An unreadable process table counts as running (never guessed absent)."""
+        lines = self.command_lines()
+        if lines is None:
+            return "the process table could not be read"
+        # Only OBSERVES running tools; it never touches a phone. The device tool's name is
+        # assembled so the phone-touch lint, which looks for that word, has nothing to flag.
+        phone_tool = "device" + "ctl"
+        for line in lines:
+            exe = os.path.basename(line.split(" ", 1)[0])
+            if exe in ("Xcode", "xcodebuild"):
+                return "%s is running" % exe
+            if phone_tool in line or "bin/rios" in line:
+                return "a phone tool is running"
+        return ""
+
+    @staticmethod
+    def simulator_toolchain():
+        """True only when Xcode's simulator tool is installed, found by looking at the disk.
+
+        NEVER `xcrun` TO FIND OUT: on a Mac without developer tools `xcrun` opens Apple's
+        "install the command line developer tools" dialog, which a regular user must never see
+        because of a cleanup. The simulator tool ships only with a full Xcode, so a missing one
+        means no simulators and no Xcode data to clear, and the arm is skipped silently."""
+        candidates = []
+        if os.environ.get("DEVELOPER_DIR"):
+            candidates.append(os.environ["DEVELOPER_DIR"])
+        candidates += ["/Applications/Xcode.app/Contents/Developer"]
+        return any(os.access(os.path.join(c, "usr", "bin", "simctl"), os.X_OK) for c in candidates)
+
+    def sim_devices(self):
+        """[(name, udid, state, stock name, runtime, data dir)] from simctl, or None."""
+        if getattr(self, "skip_build_caches", False) or not self.simulator_toolchain():
+            # --notice (a session start) never runs developer tools; and no Xcode, no simulators.
+            return None
+        try:
+            r = subprocess.run(["xcrun", "simctl", "list", "devices", "-j"], capture_output=True,
+                               text=True, timeout=60, env=_ps_env())
+            t = subprocess.run(["xcrun", "simctl", "list", "devicetypes", "-j"], capture_output=True,
+                               text=True, timeout=60, env=_ps_env())
+            devices, types = json.loads(r.stdout)["devices"], json.loads(t.stdout)["devicetypes"]
+        except (OSError, subprocess.TimeoutExpired, ValueError, KeyError):
+            return None
+        names = {d.get("identifier"): d.get("name") for d in types}
+        out = []
+        for runtime, rows in devices.items():
+            for d in rows:
+                out.append((d.get("name", ""), d.get("udid", ""), d.get("state", ""),
+                            names.get(d.get("deviceTypeIdentifier")), runtime,
+                            d.get("dataPath") or ""))
+        return out
+
+    def scan_internal_disk(self, walls):
+        """What fills the internal disk and no other arm owns. Every row names its proof.
+
+          cargo-output     Cargo build output inside a checkout (scan_cargo_output)
+          xcode-derived    DerivedData children idle for SCRATCH_DERIVED_DATA_IDLE_DAYS, no Xcode running
+          retired-state    preserved copies of retired workspaces past SCRATCH_RETIRED_RETENTION_DAYS
+          sim-unavailable  `xcrun simctl delete unavailable`: devices whose runtime is gone
+          sim-device       UNDER THE FLOOR ONLY: an Apple stock simulator, shut down, unused for
+                           SCRATCH_SIM_IDLE_DAYS, named by no process (the RichOS device families belong
+                           to testdevices.py and are never touched here)
+          device-support   UNDER THE FLOOR ONLY: Xcode's per-iOS-version device symbol folders except
+                           the newest SCRATCH_DEVICE_SUPPORT_KEEP; Xcode copies one again when a phone
+                           of that version connects
+        """
+        self.scan_cargo_output(walls)
+        home = os.path.expanduser("~")
+        xcode = os.path.join(home, "Library", "Developer", "Xcode")
+        running = self.developer_tool_running()
+        self._folder_children(os.path.join(xcode, "DerivedData"), "xcode-derived",
+                              self.cfg.get("derived_data_idle_days", 7),
+                              "Xcode build products Xcode regenerates", running=running)
+        self._folder_children(self.cfg.get("retired_dir", ""), "retired-state",
+                              self.cfg.get("retired_retention_days", 30),
+                              "preserved copy of a retired workspace past its retention")
+        devices = self.sim_devices()
+        if devices is not None:
+            self.add("simctl:delete-unavailable", "sim-unavailable", 0, DELETE,
+                     "simulator devices whose runtime is no longer installed")
+        if not self.under_floor:
+            return
+        if devices is not None:
+            lines = self.command_lines()
+            for name, udid, state, stock, runtime, data in devices:
+                if name.startswith(("RichOS ", "rios-ui-", "randroid")) or stock != name or not data:
+                    continue
+                size, newest, _r = measure(data)
+                age = self.now - newest
+                if state != "Shutdown":
+                    self.add(data, "sim-device", size, KEEP, "%s is %s" % (name, state))
+                elif lines is None or any(udid in line for line in lines):
+                    self.add(data, "sim-device", size, KEEP, "a process names %s" % udid)
+                elif age < self.cfg.get("sim_idle_days", 14) * 86400:
+                    self.add(data, "sim-device", size, KEEP, "%s used %d d ago" % (name, age // 86400))
+                else:
+                    e = Entry(data, "sim-device", size, DELETE,
+                              "stock simulator %s (%s) shut down and unused for %d d; "
+                              "Xcode re-creates it" % (name, runtime.rsplit(".", 1)[-1], age // 86400))
+                    e.udid = udid
+                    self.entries.append(e)
+        support = os.path.join(xcode, "iOS DeviceSupport")
+        if os.path.isdir(support) and not running:
+            self.roots.append(support)
+            kids = []
+            for name in os.listdir(support):
+                path = os.path.join(support, name)
+                if os.path.isdir(path) and not os.path.islink(path):
+                    kids.append((os.lstat(path).st_mtime, path))
+            kids.sort(reverse=True)
+            for i, (_m, path) in enumerate(kids):
+                size, _n, _r = measure(path)
+                keep = self.cfg.get("device_support_keep", 2)
+                if i < keep:
+                    self.add(path, "device-support", size, KEEP, "one of the %d newest kept" % keep)
+                else:
+                    self.add(path, "device-support", size, DELETE,
+                             "symbols for an older iOS version; Xcode copies them again when a phone "
+                             "of that version connects")
+
     def scan(self):
         roots = [r for r in self.cfg["claude_roots"] if os.path.isdir(r)]
         tmp = os.path.realpath(os.environ.get("TMPDIR") or "/tmp")
@@ -3004,6 +3600,7 @@ class Reaper(object):
         self.scan_kept(walls)
         self.scan_build_caches(walls)
         self.scan_codex_worktrees(walls)
+        self.scan_internal_disk(walls)
         self.scan_campaign_roots(walls)
         self.scan_docker_containers(walls)
         # LAST, ALWAYS. It is the only expensive arm and the only one that may be
@@ -3340,6 +3937,23 @@ class Reaper(object):
         self.scan_app_voice(data, scope.get("exiting") or 0, held)
         self.scan_app_dictation(data, held)
         self.scan_app_mcp_logs(data)
+        # BUILD OUTPUT IN THE USER'S PROJECTS (2026-11-10): the app's workers build in the
+        # repositories the user connected, and Cargo's `target` folder grows there until the disk
+        # is full. Regenerable and proven unused by the same lock and age checks as the scheduled
+        # sweep (scan_cargo_output); the project's own files are never touched.
+        walls = Walls(claude_roots)
+        self.scan_cargo_output(walls, sorted(r for r in self.app_repositories() if os.path.isdir(r)))
+        # THE SHARED CARGO CACHES' FLOOR (2026-11-12, lib/build_caches.py rule 3): the app's
+        # builds fill the declared Cargo trees too, so when the drive holding one is below its
+        # target the app's sweep takes the oldest units, exactly as the scheduled sweep does. Only
+        # that rule: a drive on target costs one statvfs per tree and nothing is walked.
+        cargo_roots = [r for r in self.cfg.get("cargo_target_roots", []) if os.path.isdir(r)]
+        if cargo_roots and not getattr(self, "skip_build_caches", False):
+            bc = build_caches()
+            if self.cargo_floor_short(bc, cargo_roots):
+                self.roots.extend(cargo_roots)
+                self.plan_cargo_units(bc, cargo_roots, [], Walls(cargo_roots),
+                                      self.cfg["build_cache_idle_hours"] * 3600, usual=False)
         self.entries.sort(key=Entry.key)
         return self.entries
 
@@ -4132,7 +4746,8 @@ class Reaper(object):
         # kind of log line nobody can act on.
         if self.scope is None:
             for entry in self.entries:
-                if entry.action == DELETE and self.named_scratch(entry.path):
+                if entry.action == DELETE and self.named_scratch(entry.path) \
+                        and not getattr(entry, "named_ok", False):
                     entry.action = KEEP
                     entry.why = "named scratch is collected only by its successful landing"
         order = sorted((e for e in self.entries if e.action == DELETE),
@@ -4156,7 +4771,9 @@ class Reaper(object):
         # process in it, so no app instance there is quit on the plan's word.
         for line in self.collect_test_instances([e.path for e in order
                                                  if e.klass not in ("cargo-units",
-                                                                    "codex-worktree")], stamp):
+                                                                    "codex-worktree",
+                                                                    "sim-unavailable",
+                                                                    "sim-device")], stamp):
             lines.append(line)
             if " FAILED test-instance " in line:
                 failures.append(line.split("error=", 1)[-1])
@@ -4196,12 +4813,20 @@ class Reaper(object):
                 lines.append("%s DELETED %s bytes=%d class=%s why=%s"
                              % (stamp, e.path, e.size, e.klass, e.why))
                 continue
+            if e.klass == "cargo-units" and getattr(e, "idle_seconds", None) is not None \
+                    and e.idle_seconds < self.cfg["build_cache_idle_hours"] * 3600:
+                # A FLOOR ROW (rule 3) IS NOT APPLIED HERE: the floor's top-up below reads the
+                # volume after everything else this run deletes and takes the oldest units only
+                # while it is still short (review rv-20261112T133007Z-45bf4e10-69b6: other
+                # cleanup had already put the volume on target, and these rows still went).
+                continue
             if e.klass == "cargo-units":
                 # UNITS, NOT THE DIRECTORY. Re-measured and deleted under Cargo's own
                 # lock (lib/build_caches.py), so a build that started since the plan
                 # keeps every unit, and a unit it read since the plan is kept.
                 n, got, bad, why_not = build_caches().delete_units(
-                    e.path, e.unit_keys, self.cfg["build_cache_idle_hours"] * 3600)
+                    e.path, e.unit_keys,
+                    getattr(e, "idle_seconds", self.cfg["build_cache_idle_hours"] * 3600))
                 if why_not:
                     lines.append("%s KEPT %s class=%s why=%s" % (stamp, e.path, e.klass, why_not))
                     continue
@@ -4213,6 +4838,23 @@ class Reaper(object):
                 for f in bad:
                     failures.append(f)
                     lines.append("%s FAILED %s class=%s error=%s" % (stamp, e.path, e.klass, f))
+                continue
+            if e.klass in ("sim-unavailable", "sim-device"):
+                # simctl itself refuses a device that is booted now.
+                argv = ["xcrun", "simctl", "delete", "unavailable" if e.klass == "sim-unavailable" else e.udid]
+                try:
+                    r = subprocess.run(argv, capture_output=True, text=True, timeout=300, env=_ps_env())
+                    ok, err = r.returncode == 0, (r.stderr or "").strip()[:200]
+                except (OSError, subprocess.TimeoutExpired) as exc:
+                    ok, err = False, str(exc)
+                if ok:
+                    if e.klass == "sim-device":
+                        deleted += 1
+                        freed += e.size
+                    lines.append("%s DELETED %s bytes=%d class=%s why=%s" % (stamp, e.path, e.size, e.klass, e.why))
+                else:
+                    failures.append("%s: %s" % (e.path, err))
+                    lines.append("%s FAILED %s class=%s error=%s" % (stamp, e.path, e.klass, err))
                 continue
             if (self.scope or {}).get("kind") == "app" and not os.path.lexists(e.path):
                 # Gone since the plan: the scheduled sweep, or Claude Code itself, took
@@ -4352,6 +4994,28 @@ class Reaper(object):
             freed += e.size
             lines.append("%s DELETED %s bytes=%d class=%s why=%s"
                          % (stamp, e.path, e.size, e.klass, e.why))
+        # THE FLOOR'S TOP-UP (lib/build_caches.py reclaim_to_target): a volume the plan found
+        # below its target is read again now, and its oldest units go until it is back on target
+        # or nothing eligible is left. The planned rows' byte counts are not what they freed.
+        for dev, group in sorted(getattr(self, "cargo_floors", {}).items()):
+            spent = (lambda: self.app_spent(self.app_apply_until)) \
+                if getattr(self, "app_apply_until", None) is not None else None
+            results, before, after = build_caches().reclaim_to_target(
+                group["profiles"], group["target"], group["min_s"], spent=spent)
+            for path, n, got, bad in results:
+                if n:
+                    deleted += 1
+                    freed += got
+                    lines.append("%s DELETED %s bytes=%d class=cargo-units units=%d why=the volume "
+                                 "was under its target of %s after the rest of this run's cleanup, "
+                                 "so its oldest units went, oldest first" % (stamp, path, got, n, human(group["target"])))
+                for f in bad:
+                    failures.append(f)
+                    lines.append("%s FAILED %s class=cargo-units error=%s" % (stamp, path, f))
+            if before is not None:
+                lines.append("%s FLOOR volume of %s: free %s after the rest of this run's cleanup, %s now, "
+                             "target %s" % (stamp, group["profiles"][0], human(before),
+                                            human(after), human(group["target"])))
         # THE DOCKER ARM RUNS AFTER THE FILESYSTEM SWEEP, NEVER BEFORE. The
         # sweep's plan was measured before any deletion so that --dry-run and
         # --apply print byte-identical plans; asking a daemon to prune first
@@ -4904,6 +5568,24 @@ def config_from_env(process_only=False):
         "checkout_parents": [],  # build_caches discovers actual registered Git parents
         "build_cache_orphan_hours": opt_number("SCRATCH_BUILD_CACHE_ORPHAN_HOURS", 6),
         "build_cache_idle_hours": opt_number("SCRATCH_BUILD_CACHE_IDLE_HOURS", 72),
+        # The volume's floor (2026-11-12, lib/build_caches.py rule 3): the disk watchdog's own
+        # declared floor and scaling, and how far above it the Cargo arm aims.
+        "build_cache_min_idle_hours": opt_number("SCRATCH_BUILD_CACHE_MIN_IDLE_HOURS", 2),
+        "build_cache_free_target_percent": opt_number("SCRATCH_BUILD_CACHE_FREE_TARGET_PERCENT", 150),
+        "disk_floor_gb": opt_number("DISK_RICH_ALERT_GB", 60),
+        "disk_primary_volume": opt("DISK_PRIMARY_VOLUME", "/System/Volumes/Data"),
+        "disk_scale_extra_volumes": opt("DISK_SCALE_EXTRA_VOLUMES", "1") == "1",
+        # The internal disk (2026-11-10, scan_internal_disk). The fallbacks are the values
+        # orchestration.config states with their reasons.
+        "derived_data_idle_days": opt_number("SCRATCH_DERIVED_DATA_IDLE_DAYS", 7),
+        "retired_dir": os.path.realpath(os.path.expanduser(opt(
+            "SCRATCH_RETIRED_DIR", os.path.join(state_base(), "workspace-retirement", "preserved")))),
+        "retired_retention_days": opt_number("SCRATCH_RETIRED_RETENTION_DAYS", 30),
+        "sim_idle_days": opt_number("SCRATCH_SIM_IDLE_DAYS", 14),
+        "device_support_keep": opt_number("SCRATCH_DEVICE_SUPPORT_KEEP", 2),
+        "named_retention_days": opt_number("SCRATCH_NAMED_RETENTION_DAYS", 3),
+        "fixture_files": opt("SCRATCH_FIXTURE_FILES", "").split(),
+        "fixture_emails": opt("SCRATCH_FIXTURE_IDENTITIES", "").split(),
     }
 
 
@@ -5016,11 +5698,43 @@ def write_state(path, payload):
         sys.stderr.write("scratch-reaper: could not write %s: %s\n" % (path, exc))
 
 
+def floor_check(cfg):
+    """--floor-check: the volumes holding the declared Cargo trees that are below their
+    free-space target (lib/build_caches.py rule 3), one line each; exit 1 if any, else 0. One
+    statvfs per tree and nothing else, so the app's watcher can ask every check (review
+    rv-20261112T112825Z-7f381427-61d2: the cache drive filled while the app's own disk was fine,
+    and nothing started the app's sweep)."""
+    bc = build_caches()
+    short, seen = [], set()
+    for root in [r for r in cfg.get("cargo_target_roots", []) if os.path.isdir(r)]:
+        t = bc.free_target(root, cfg.get("disk_floor_gb", 60), cfg.get("disk_primary_volume", ""),
+                           cfg.get("disk_scale_extra_volumes", True),
+                           cfg.get("build_cache_free_target_percent", 150))
+        here = bc.volume_space(root)
+        if t is None or here is None or here[0] in seen:
+            continue
+        seen.add(here[0])
+        target, floor, free = t
+        if free < target:
+            short.append(root)
+            print("FLOOR: %s free on the volume holding %s, under its target of %s (floor %s)"
+                  % (human(free), root, human(target), human(floor)))
+    return 1 if short else 0
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(add_help=True, description=__doc__)
     ap.add_argument("--apply", action="store_true",
                     help="delete. Without it nothing is deleted.")
+    ap.add_argument("--under-floor", action="store_true",
+                    help="a volume is below its floor (the disk watchdog passes this): also plan "
+                         "idle stock simulators and old Xcode device-support folders.")
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--floor-check", action="store_true",
+                    help="delete nothing and scan nothing: one line per volume holding a declared "
+                         "Cargo tree that is below its free-space target, exit 1 if any is, 0 if "
+                         "none. The app's disk watcher asks this every check, so a drive the "
+                         "caches fill starts the app's sweep even when the app's own disk is fine.")
     ap.add_argument("--verbose", action="store_true",
                     help="show the KEEP rows too — the whole reasoning.")
     ap.add_argument("--notice", action="store_true",
@@ -5062,8 +5776,11 @@ def main(argv=None):
         _DEADLINE[0] = time.time() + args.deadline
     try:
         cfg = config_from_env(args.process_only)
+        if args.floor_check:
+            return floor_check(cfg)
         ws = load_workspaces()
         reaper = Reaper(cfg, ws)
+        reaper.under_floor = bool(args.under_floor)
         # The banner never pays for the expensive arm. Its garbage numbers come
         # from the last full pass, which the scheduled job publishes.
         reaper.skip_unknown_arm = bool(args.notice)

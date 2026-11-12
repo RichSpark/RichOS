@@ -77,6 +77,10 @@ PROTECTED_RELATIVE = (
 PROTECTED_USER_DIRS = ("Desktop", "Documents", "Downloads", "Movies", "Music", "Pictures",
                        "Library")
 OWN_NAMES = ("RichOS", "com.richos.", "group.com.richos.")
+# Developer tooling's own folders under ~/Library/Developer: simulator devices and Xcode's build
+# and device-support data. They are not another app's sandboxed data (that is Containers and
+# Group Containers), and they are what the disk cleanup measures and clears (2026-11-10).
+DEVELOPER_TOOL_DIRS = ("CoreSimulator", "Xcode")
 
 # The per-user Darwin folders under /private/var/folders/<xx>/<id>/: T is every app's
 # temporary folder (their TemporaryItems are sandbox-protected; measured 2026-10-29,
@@ -125,6 +129,8 @@ def _own(p, h):
     if not p.startswith(lib):
         return False
     parts = p[len(lib):].split(os.sep)
+    if parts[0] == "Developer" and len(parts) >= 2 and parts[1] in DEVELOPER_TOOL_DIRS:
+        return True
     return len(parts) >= 2 and parts[1].startswith(OWN_NAMES)
 
 

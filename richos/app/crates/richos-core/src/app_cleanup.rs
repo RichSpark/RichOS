@@ -34,6 +34,9 @@ pub enum Moment {
     Start,
     Settled,
     Quit,
+    /// The user's disk is low ([`disk_is_low`]): the same sweep, with the time deleting build
+    /// output takes ([`DISK_LOW_BOUND`]); never at quit, which cannot wait that long.
+    DiskLow,
 }
 
 impl Moment {
@@ -42,7 +45,90 @@ impl Moment {
             Moment::Start => "start",
             Moment::Settled => "settled",
             Moment::Quit => "quit",
+            Moment::DiskLow => "disk-low",
         }
+    }
+
+    /// How long this moment's sweep may run before it is ended.
+    pub fn bound(self) -> Duration {
+        match self {
+            Moment::DiskLow => DISK_LOW_BOUND,
+            _ => BOUND,
+        }
+    }
+}
+
+/// A disk-low sweep deletes build output (a Cargo `target` folder is tens of gigabytes and
+/// millions of files), which takes minutes; the other moments' [`BOUND`] would end it half done.
+pub const DISK_LOW_BOUND: Duration = Duration::from_secs(600);
+/// The user's disk is low below this fraction free: on a 460 GB disk, 69 GB.
+pub const LOW_FREE_FRACTION: f64 = 0.15;
+/// How often the app looks at its disk while it runs.
+pub const DISK_CHECK_EVERY: Duration = Duration::from_secs(15 * 60);
+
+/// True when `free` bytes of `capacity` is under [`LOW_FREE_FRACTION`]. An unreadable disk
+/// (capacity 0) is never "low": nothing is deleted on a guess.
+pub fn disk_is_low(free: u64, capacity: u64) -> bool {
+    capacity > 0 && (free as f64) < (capacity as f64) * LOW_FREE_FRACTION
+}
+
+/// (free bytes an ordinary write can reach, capacity) of the volume holding `path`.
+#[cfg(unix)]
+pub fn disk_space(path: &Path) -> Option<(u64, u64)> {
+    use std::os::unix::ffi::OsStrExt;
+    let c = std::ffi::CString::new(path.as_os_str().as_bytes()).ok()?;
+    let mut st: libc::statvfs = unsafe { std::mem::zeroed() };
+    if unsafe { libc::statvfs(c.as_ptr(), &mut st) } != 0 {
+        return None;
+    }
+    let block = st.f_frsize as u64;
+    Some((block * st.f_bavail as u64, block * st.f_blocks as u64))
+}
+
+#[cfg(not(unix))]
+pub fn disk_space(_path: &Path) -> Option<(u64, u64)> {
+    None
+}
+
+/// The disk watcher's second question: is a drive holding the shared Cargo caches below its
+/// free-space target? Answered by the engine (`scratch-reaper.sh --floor-check`), which owns where
+/// the caches are and what each drive's floor is.
+pub type FloorCheck = Arc<dyn Fn() -> bool + Send + Sync>;
+
+/// How long the engine's floor check may take: one statvfs per Cargo tree after Python starts.
+pub const FLOOR_CHECK_BOUND: Duration = Duration::from_secs(60);
+
+/// Why the watcher starts a sweep now, or `None`: the app's own disk below
+/// [`LOW_FREE_FRACTION`] free, or a drive holding the shared Cargo caches below its target
+/// (review rv-20261112T112825Z-7f381427-61d2: the caches filled an external drive while the app's
+/// own disk was fine, and no sweep started).
+pub fn low_reason(data_dir: &Path, cargo_short: &dyn Fn() -> bool) -> Option<String> {
+    if let Some((free, capacity)) = disk_space(data_dir) {
+        if disk_is_low(free, capacity) {
+            return Some(format!("disk low ({} of {} GB free)", free / 1_000_000_000, capacity / 1_000_000_000));
+        }
+    }
+    if cargo_short() {
+        return Some("a drive holding the Cargo caches is below its target".into());
+    }
+    None
+}
+
+/// **The app starts the cleanup itself when the user's disk drops low** (CEO 2026-11-10: a user
+/// must never be the hard-drive janitor). Every [`DISK_CHECK_EVERY`], and once right away, the
+/// volume holding the app's data folder is read, and the engine is asked about the drives holding
+/// the shared Cargo caches ([`low_reason`]); when either is low, `hook` is called with
+/// [`Moment::DiskLow`], which runs the same app-scoped sweep as start and settled.
+pub fn watch_disk(data_dir: PathBuf, hook: Hook, cargo_short: FloorCheck) {
+    let spawned = std::thread::Builder::new().name("richos-disk-watch".into()).spawn(move || loop {
+        if let Some(reason) = low_reason(&data_dir, &*cargo_short) {
+            eprintln!("[richos] {reason}: starting the cleanup");
+            hook(Moment::DiskLow);
+        }
+        std::thread::sleep(DISK_CHECK_EVERY);
+    });
+    if let Err(error) = spawned {
+        eprintln!("[richos] disk watch: could not start ({error})");
     }
 }
 
@@ -158,6 +244,12 @@ impl Sweeper {
         if moment == Moment::Quit {
             command.arg("--app-exiting").arg(std::process::id().to_string());
         }
+        if moment == Moment::DiskLow {
+            // The reaper's own budget (past half no new candidate is weighed, past all no deletion
+            // starts) matches this sweep's bound, less a margin to finish: its default is seconds,
+            // and a build output folder takes longer than that to measure.
+            command.arg("--app-budget").arg((DISK_LOW_BOUND.as_secs() - 60).to_string());
+        }
         command
             .env_clear()
             .envs(&self.env)
@@ -167,10 +259,81 @@ impl Sweeper {
         command
     }
 
-    /// Sweep now, waiting at most [`BOUND`]; one line to the app's log either way.
+    /// The engine's floor check, byte-exact: deletes nothing, scans nothing.
+    pub fn floor_command(&self) -> Command {
+        let mut command = Command::new("/bin/bash");
+        command
+            .arg(self.engine.join("scripts/scratch-reaper.sh"))
+            .arg("--floor-check")
+            .env_clear()
+            .envs(&self.env)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        command
+    }
+
+    /// True when the engine says a drive holding a declared Cargo tree is below its target (exit 1).
+    /// Anything else (on target, a refusal, an engine without the check, a hang past
+    /// [`FLOOR_CHECK_BOUND`]) is false: the watcher never sweeps on a guess.
+    pub fn cargo_floor_short(&self) -> bool {
+        let mut command = self.floor_command();
+        crate::owned_process::OwnedChild::configure(&mut command);
+        let Ok(mut child) = command.spawn() else { return false };
+        let stdout = child.stdout.take();
+        let mut child = crate::owned_process::OwnedChild::new(child);
+        let out = std::thread::spawn(move || {
+            let mut s = String::new();
+            if let Some(mut o) = stdout { o.read_to_string(&mut s).ok(); }
+            s
+        });
+        let deadline = Instant::now() + FLOOR_CHECK_BOUND;
+        let status = loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break status,
+                Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(50)),
+                _ => {
+                    child.kill().ok();
+                    child.wait().ok();
+                    return false;
+                }
+            }
+        };
+        let out = out.join().unwrap_or_default();
+        let short = status.code() == Some(1);
+        if short {
+            eprintln!("[richos] {}", out.trim().lines().next().unwrap_or("a Cargo cache drive is below its target"));
+        }
+        short
+    }
+
+    /// Sweep now, waiting at most the moment's bound for the sweep ahead of it and then running at
+    /// most that long itself; one line to the app's log either way.
     pub fn run(&self, moment: Moment) -> Result<Outcome, String> {
-        let _turn = ONE_AT_A_TIME.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        let result = self.run_bounded(moment, BOUND);
+        self.run_within(moment, moment.bound())
+    }
+
+    /// [`Self::run`] with an explicit bound. A sweep waits for the one ahead of it for at most the
+    /// bound; **a quit never waits at all**: it must not be held up behind a low-disk sweep that is
+    /// deleting build output for minutes, so it is skipped when one is running (the sweep ahead is
+    /// already doing the same work, and the next start takes what is left).
+    pub(crate) fn run_within(&self, moment: Moment, bound: Duration) -> Result<Outcome, String> {
+        let wait = if moment == Moment::Quit { Duration::ZERO } else { bound };
+        let waited = Instant::now();
+        let _turn = loop {
+            match ONE_AT_A_TIME.try_lock() {
+                Ok(guard) => break guard,
+                Err(std::sync::TryLockError::Poisoned(poisoned)) => break poisoned.into_inner(),
+                Err(std::sync::TryLockError::WouldBlock) if waited.elapsed() >= wait => {
+                    let result = Err(format!("another sweep was still running (waited {} ms); this one is skipped",
+                                             wait.as_millis()));
+                    eprintln!("{}", log_line(moment, &result));
+                    return result;
+                }
+                Err(std::sync::TryLockError::WouldBlock) => std::thread::sleep(Duration::from_millis(20)),
+            }
+        };
+        let result = self.run_bounded(moment, bound);
         eprintln!("{}", log_line(moment, &result));
         result
     }
@@ -253,6 +416,15 @@ pub fn hook(engine: Arc<Mutex<PathBuf>>, data_dir: PathBuf) -> Hook {
             Some(sweeper) => Arc::new(sweeper).spawn(moment),
             None => eprintln!("[richos] cleanup at {}: no verified engine yet, the next sweep takes it", moment.as_str()),
         }
+    })
+}
+
+/// The disk watcher's [`FloorCheck`], asked of the engine in `engine` AT THAT MOMENT, like [`hook`].
+/// No verified engine yet is "not short": nothing is swept on a guess.
+pub fn floor_check(engine: Arc<Mutex<PathBuf>>, data_dir: PathBuf) -> FloorCheck {
+    Arc::new(move || {
+        let dir = engine.lock().map(|d| d.clone()).unwrap_or_default();
+        Sweeper::for_engine(&dir, &data_dir).is_some_and(|sweeper| sweeper.cargo_floor_short())
     })
 }
 
@@ -456,6 +628,56 @@ mod tests {
         assert!(!running.exists(), "a session that ended is gone at quit: {quit:?}");
         assert!(!mine.exists() && !mine_standing.exists(), "the quitting app's own profile is gone at quit: {quit:?}");
         assert!(open.exists() && foreign.exists(), "{quit:?}");
+    }
+
+    /// A quit never waits behind a long low-disk sweep; the other moments wait only their own bound.
+    #[test]
+    fn a_quit_never_waits_for_the_sweep_ahead_and_the_others_wait_only_their_bound() {
+        let s = Sweeper::new(Path::new("/E"), "/R/bin", Path::new("/D/com.richos.app"));
+        let ahead = ONE_AT_A_TIME.lock().unwrap_or_else(|p| p.into_inner());
+        // The facts, not the clock: each skip says how long it was allowed to wait.
+        let quit = s.run_within(Moment::Quit, Duration::from_secs(10));
+        let other = s.run_within(Moment::Settled, Duration::from_millis(150));
+        drop(ahead);
+        assert!(quit.as_ref().is_err_and(|e| e.contains("skipped") && e.contains("waited 0 ms")),
+                "a quit never waits: {quit:?}");
+        assert!(other.as_ref().is_err_and(|e| e.contains("skipped") && e.contains("waited 150 ms")),
+                "another moment waits for its bound: {other:?}");
+    }
+
+    /// A low disk is judged on the fraction free, an unreadable disk is never low, and the disk-low
+    /// sweep gets minutes where the others get seconds (a `target` folder takes minutes to delete).
+    #[test]
+    fn a_low_disk_starts_the_sweep_and_it_gets_the_time_deleting_build_output_takes() {
+        assert!(disk_is_low(60_000_000_000, 460_000_000_000));
+        assert!(!disk_is_low(100_000_000_000, 460_000_000_000));
+        assert!(!disk_is_low(0, 0), "an unreadable disk is never low");
+        assert!(Moment::DiskLow.bound() > Moment::Quit.bound());
+        assert_eq!(Moment::DiskLow.as_str(), "disk-low");
+        let s = Sweeper::new(Path::new("/E"), "/R/bin", Path::new("/D/com.richos.app"));
+        let args = s.command(Moment::DiskLow).get_args().map(|a| a.to_string_lossy().into_owned()).collect::<Vec<_>>();
+        assert_eq!(args, ["/E/scripts/scratch-reaper.sh", "--apply", "--app", "/D/com.richos.app",
+                          "--app-budget", "540"], "the reaper is given the same longer budget");
+        #[cfg(unix)]
+        assert!(disk_space(Path::new("/")).is_some_and(|(free, capacity)| capacity > 0 && free <= capacity));
+    }
+
+    /// A drive holding the Cargo caches below its target starts the sweep even when the app's own
+    /// disk is fine; neither low starts nothing; the floor check is the engine's, deleting nothing.
+    #[test]
+    fn a_cargo_cache_drive_below_its_target_starts_the_sweep_when_the_apps_disk_is_fine() {
+        let healthy = std::env::temp_dir();
+        let fine = disk_space(&healthy).is_some_and(|(free, capacity)| !disk_is_low(free, capacity));
+        if fine {
+            assert!(low_reason(&healthy, &|| true).is_some_and(|r| r.contains("Cargo caches")));
+            assert_eq!(low_reason(&healthy, &|| false), None);
+        }
+        let s = Sweeper::new(Path::new("/E"), "/R/bin", Path::new("/D/com.richos.app"));
+        let c = s.floor_command();
+        assert_eq!(c.get_program(), "/bin/bash");
+        assert_eq!(c.get_args().map(|a| a.to_string_lossy().into_owned()).collect::<Vec<_>>(),
+                   ["/E/scripts/scratch-reaper.sh", "--floor-check"]);
+        assert!(!s.cargo_floor_short(), "an engine that is not there is never short");
     }
 
     #[test]
