@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { resolveModel, whisperArgs } from './config.js';
 import { listAudioParts, normalizeSession } from './normalize.js';
-import { checkToolchain, transcribeSession } from './transcribe.js';
+import { checkToolchain, transcribeChannel } from './transcribe.js';
 import { privateDirectory, privateFile, withPrivateOutputs, writePrivateFile } from './private-files.js';
 
 const SOURCE = 'desktop-companion-macos';
@@ -144,11 +144,32 @@ function absoluteSegments(segments, from, to, rate, firstAudible) {
   });
 }
 
-function decodeWindow(cache, wav, options) {
+function decodeWindow(cache, wav, options, knownToolchain) {
+  let me = false;
+  let others = false;
+  for (let i = HEADER_BYTES; i < wav.length && !(me && others); i += FRAME_BYTES) {
+    me ||= wav.readInt16LE(i) !== 0;
+    others ||= wav.readInt16LE(i + 2) !== 0;
+  }
+  const toolchain = knownToolchain ?? checkToolchain(resolveModel(options.model), options.model);
+  const result = { me: [], others: [], toolchain, skippedSilentChannels: Number(!me) + Number(!others) };
+  // Only digital zero is safe to skip. Keep even the quietest nonzero audio.
+  if (!me && !others) return result;
   const work = fs.mkdtempSync(path.join(cache, 'decode-'));
   try {
     writePrivateFile(path.join(work, AUDIO), wav, work);
-    return transcribeSession(normalizeSession(work), { ...options, outDir: work, timeoutMs: 90_000, quiet: true });
+    const channels = normalizeSession(work);
+    for (const speaker of ['me', 'others']) {
+      if (speaker === 'me' ? !me : !others) continue;
+      const decoded = transcribeChannel(channels[speaker], speaker, {
+        ...options, outDir: work, timeoutMs: 90_000, quiet: true,
+      });
+      if (decoded.toolchain?.provenance !== toolchain.provenance) {
+        throw new Error('native decoder changed while transcribing a chunk');
+      }
+      result[speaker] = decoded.segments;
+    }
+    return result;
   } finally {
     fs.rmSync(work, { recursive: true, force: true });
   }
@@ -176,7 +197,7 @@ function readCheckpoint(file, key, fromMs, toMs) {
 
 function checkpointKey(wav, from, to, options, toolchain) {
   return createHash('sha256')
-    .update(JSON.stringify([4, from, to, options.model, whisperArgs(options), toolchain.provenance]))
+    .update(JSON.stringify([5, from, to, options.model, whisperArgs(options), toolchain.provenance]))
     .update(wav)
     .digest('hex');
 }
@@ -197,6 +218,7 @@ export function advanceLiveTranscription(dir, options, {
     const output = { me: [], others: [], model: options.model, toolchain, whisper: toolchain.provenance };
     let reused = 0;
     let decoded = 0;
+    let skippedSilentChannels = 0;
     while (cursor < frames && recorderIsRunning()) {
       const to = nextQuietCut(fd, cursor, frames, rate, closed);
       if (to === null) break;
@@ -207,7 +229,7 @@ export function advanceLiveTranscription(dir, options, {
       if (result) {
         reused += 1;
       } else {
-        const segments = decode(cache, wav, options);
+        const segments = decode(cache, wav, options, toolchain);
         if (segments.toolchain?.provenance !== toolchain.provenance) {
           throw new Error('native decoder changed while transcribing a chunk');
         }
@@ -217,13 +239,14 @@ export function advanceLiveTranscription(dir, options, {
           others: absoluteSegments(segments.others, cursor, to, rate, firstAudibleMs(wav, 2, rate)),
         };
         withPrivateOutputs([file], ([temp]) => writePrivateFile(temp, JSON.stringify(result)));
+        skippedSilentChannels += segments.skippedSilentChannels ?? 0;
         decoded += 1;
       }
       output.me.push(...result.me);
       output.others.push(...result.others);
       cursor = to;
     }
-    return { asr: output, cursor, reused, decoded };
+    return { asr: output, cursor, reused, decoded, skippedSilentChannels };
   } finally {
     fs.closeSync(fd);
   }
@@ -306,7 +329,7 @@ export function recentLiveExcerpt(dir, options, at, decode = decodeWindow, known
       if (meAudible !== null || othersAudible !== null) {
         const work = fs.mkdtempSync(path.join(os.tmpdir(), 'richbrief-excerpt-'));
         try {
-          const decoded = decode(work, wav, options);
+          const decoded = decode(work, wav, options, knownToolchain);
           if (meAudible !== null) cached.me.push(...absoluteSegments(decoded.me, cached.through, through, rate, meAudible));
           if (othersAudible !== null) cached.others.push(...absoluteSegments(decoded.others, cached.through, through, rate, othersAudible));
         } finally {
@@ -338,7 +361,10 @@ export async function watchLiveTranscription(dir, options, recorderIsRunning, on
     const result = advanceLiveTranscription(dir, options, { cursor, toolchain, recorderIsRunning });
     cursor = result.cursor;
     if (result.decoded || result.reused) {
-      onChunk({ decoded: result.decoded, reused: result.reused, elapsedMs: Math.round(performance.now() - start) });
+      onChunk({
+        decoded: result.decoded, reused: result.reused, skippedSilentChannels: result.skippedSilentChannels,
+        elapsedMs: Math.round(performance.now() - start),
+      });
     }
     await delay(1_000);
   }
