@@ -32,8 +32,8 @@ struct BrowserView: View {
     @State private var prefixTime: TimeInterval = 0
     @State private var listRows = 12
     @State private var iconColumns = 4
-    @State private var dropTarget = false
-    @State private var localDrag: (token: UUID, reference: FileReference)?
+    @State private var dropOperation: DropOperation?
+    @State private var dropDestination: BrowserTransferDestination?
     @State private var selectedReferences: [URL: FileReference] = [:]
     @State private var preparingAction = false
     @State private var rowFrames: [URL: CGRect] = [:]
@@ -115,6 +115,7 @@ struct BrowserView: View {
             prefixTime = 0
         }
         .task(id: model.selected) { await captureSelection() }
+        .task(id: model.folder) { await captureDropDestination() }
         .sheet(item: $sheet, onDismiss: runPaletteChoice) { value in sheetContents(value) }
     }
 
@@ -407,8 +408,9 @@ struct BrowserView: View {
                     .frame(maxWidth: .infinity, alignment: .trailing)
                     .accessibilityLabel("Reading files")
             }
-            if dropTarget {
-                Text("Drop files here").padding(7).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 6))
+            if let dropOperation {
+                Text(dropOperation == .move ? "Move here" : "Copy here")
+                    .padding(7).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 6))
                     .padding(8).allowsHitTesting(false)
             }
             if let selectionRectangle {
@@ -436,7 +438,9 @@ struct BrowserView: View {
                 model.selected = Set(rowFrames.compactMap { rect.intersects($0.value) ? $0.key : nil })
             }
             .onEnded { _ in selectionRectangle = nil })
-        .onDrop(of: [UTType.fileURL], isTargeted: $dropTarget, perform: receiveDrop)
+        .onDrop(of: [UTType.fileURL.identifier, BrowserDragSelection.type], delegate: BrowserDropTarget(
+            proposal: proposeDrop, exited: { dropOperation = nil }, receive: receiveDrop
+        ))
         .contextMenu { folderMenu }
     }
 
@@ -1078,26 +1082,58 @@ struct BrowserView: View {
     }
 
     private func beginDrag(_ entry: FileEntry) -> NSItemProvider {
-        let provider = NSItemProvider(object: entry.url as NSURL)
-        if let reference = selectedReferences[entry.url] {
-            let token = UUID()
-            localDrag = (token, reference)
-            provider.registerDataRepresentation(forTypeIdentifier: Self.dragTokenType, visibility: .ownProcess) { complete in
-                complete(Data(token.uuidString.utf8), nil)
-                return nil
-            }
+        let entries = model.selected.contains(entry.url) ? model.selectedEntries : [entry]
+        let references = entries.compactMap { selectedReferences[$0.url] }
+        let sources: [FileReference]
+        if entries.count == 1, references.isEmpty, let source = try? FileReference(url: entry.url) {
+            sources = [source]
         } else {
-            localDrag = nil
+            sources = references
+        }
+        guard sources.count == entries.count, let primary = sources.first(where: { $0.url.path == entry.url.path }) else {
+            feedback = "The file selection changed. Select the items again."
+            return NSItemProvider()
+        }
+        let token = actions.beginDrag(primary: primary, sources: sources)
+        let provider = NSItemProvider(object: entry.url as NSURL)
+        provider.registerDataRepresentation(forTypeIdentifier: BrowserDragSelection.type, visibility: .ownProcess) { complete in
+            complete(Data(token.uuidString.utf8), nil)
+            return nil
         }
         return provider
     }
 
+    private func captureDropDestination() async {
+        let folder = model.folder
+        let worker = Task.detached(priority: .utility) { try BrowserTransferDestination(folder: folder) }
+        let result = await withTaskCancellationHandler { try? await worker.value } onCancel: { worker.cancel() }
+        if !Task.isCancelled, model.folder == folder { dropDestination = result }
+    }
+
+    private var currentDropDestination: BrowserTransferDestination? {
+        guard actions.canScheduleTransfer, model.currentVolume?.isReadOnly != true,
+              let destination = dropDestination, destination.url.path == model.folder.path else { return nil }
+        return destination
+    }
+
+    private func proposeDrop(_ info: DropInfo) -> DropProposal {
+        guard let destination = currentDropDestination else {
+            dropOperation = nil
+            return DropProposal(operation: .forbidden)
+        }
+        let operation: DropOperation
+        if info.hasItemsConforming(to: [BrowserDragSelection.type]), let drag = actions.currentDrag {
+            operation = drag.moves(to: destination, option: NSEvent.modifierFlags.contains(.option)) ? .move : .copy
+        } else {
+            operation = .copy
+        }
+        dropOperation = operation
+        return DropProposal(operation: operation)
+    }
+
     private func receiveDrop(_ providers: [NSItemProvider]) -> Bool {
-        guard !providers.isEmpty, actions.canScheduleTransfer,
-              model.currentVolume?.isReadOnly != true else { return false }
-        let destination = model.folder
-        let dragged = localDrag
-        localDrag = nil
+        dropOperation = nil
+        guard let destination = currentDropDestination, !providers.isEmpty else { return false }
         let option = NSEvent.modifierFlags.contains(.option)
         Task {
             do {
@@ -1106,25 +1142,21 @@ struct BrowserView: View {
                     if let url = await Self.fileURL(from: provider) { urls.append(url) }
                 }
                 guard !urls.isEmpty else { feedback = "No local files in this drop."; return }
-                let sameVolume = urls.allSatisfy { Self.sameVolume($0, destination) }
-                if providers.count == 1, let dragged, urls[0].path == dragged.reference.url.path,
-                   await Self.dragToken(from: providers[0]) == dragged.token {
-                    actions.transfer([dragged.reference], into: destination, move: sameVolume != option)
+                if let provider = providers.first(where: { $0.hasItemConformingToTypeIdentifier(BrowserDragSelection.type) }) {
+                    guard providers.count == 1, let token = await Self.dragToken(from: provider),
+                          let drag = actions.takeDrag(token, matching: urls[0]) else {
+                        feedback = "The drag selection expired. Select the items again."
+                        return
+                    }
+                    actions.transfer(drag.sources, into: destination.url, move: drag.moves(to: destination, option: option),
+                                     destination: destination)
                 } else {
                     let sources = try await Task.detached { try urls.map { try FileReference(url: $0) } }.value
-                    actions.transfer(sources, into: destination, move: false)
+                    actions.transfer(sources, into: destination.url, move: false, destination: destination)
                 }
             } catch { feedback = error.localizedDescription }
         }
         return true
-    }
-
-    private static func sameVolume(_ file: URL, _ folder: URL) -> Bool {
-        guard let a = (try? file.resourceValues(forKeys: [.volumeIdentifierKey]))?.volumeIdentifier as? AnyHashable,
-              let b = (try? folder.resourceValues(forKeys: [.volumeIdentifierKey]))?.volumeIdentifier as? AnyHashable else {
-            return false
-        }
-        return a == b
     }
 
     private static func fileURL(from provider: NSItemProvider) async -> URL? {
@@ -1136,12 +1168,10 @@ struct BrowserView: View {
         }
     }
 
-    private static let dragTokenType = "app.richos.richfiles.local-drag"
-
     private static func dragToken(from provider: NSItemProvider) async -> UUID? {
-        guard provider.hasItemConformingToTypeIdentifier(dragTokenType) else { return nil }
+        guard provider.hasItemConformingToTypeIdentifier(BrowserDragSelection.type) else { return nil }
         return await withCheckedContinuation { continuation in
-            _ = provider.loadDataRepresentation(forTypeIdentifier: dragTokenType) { data, _ in
+            _ = provider.loadDataRepresentation(forTypeIdentifier: BrowserDragSelection.type) { data, _ in
                 continuation.resume(returning: data.flatMap { UUID(uuidString: String(decoding: $0, as: UTF8.self)) })
             }
         }
@@ -1213,6 +1243,19 @@ struct BrowserView: View {
         case .switchPane: return workspace.isSplit
         default: return true
         }
+    }
+}
+
+private struct BrowserDropTarget: DropDelegate {
+    let proposal: (DropInfo) -> DropProposal
+    let exited: () -> Void
+    let receive: ([NSItemProvider]) -> Bool
+
+    func dropEntered(info: DropInfo) { _ = proposal(info) }
+    func dropUpdated(info: DropInfo) -> DropProposal? { proposal(info) }
+    func dropExited(info: DropInfo) { exited() }
+    func performDrop(info: DropInfo) -> Bool {
+        receive(info.itemProviders(for: [UTType.fileURL.identifier, BrowserDragSelection.type]))
     }
 }
 

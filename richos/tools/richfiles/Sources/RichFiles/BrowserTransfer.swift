@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import OSLog
 import RichFilesCore
@@ -128,8 +129,24 @@ extension BrowserTransferRequest {
     }
 }
 
+struct BrowserDragSelection: Sendable {
+    static let type = "app.richos.richfiles.local-drag"
+
+    let token = UUID()
+    let primary: FileReference
+    let sources: [FileReference]
+    private let expires = ProcessInfo.processInfo.systemUptime + 180
+
+    var expired: Bool { ProcessInfo.processInfo.systemUptime > expires }
+
+    func moves(to destination: BrowserTransferDestination, option: Bool) -> Bool {
+        sources.allSatisfy { $0.identity.device == destination.device } != option
+    }
+}
+
 struct BrowserTransferDestination: Sendable {
     let url: URL
+    let device: Int32
     private let reference: FileReference?
     var identity: FileIdentity? { reference?.identity }
 
@@ -137,7 +154,18 @@ struct BrowserTransferDestination: Sendable {
         url = try DirectoryReader.directoryURL(folder)
         // The root has no named directory entry. Other destinations retain the
         // selected folder's identity while a batch waits or is retried.
-        reference = url.path == "/" ? nil : try FileReference(url: url)
+        if url.path == "/" {
+            reference = nil
+            var status = stat()
+            guard lstat(url.path, &status) == 0 else {
+                throw FileOperationError.folderChanged(url)
+            }
+            device = status.st_dev
+        } else {
+            let captured = try FileReference(url: url)
+            reference = captured
+            device = captured.identity.device
+        }
     }
 
     func verify() throws {

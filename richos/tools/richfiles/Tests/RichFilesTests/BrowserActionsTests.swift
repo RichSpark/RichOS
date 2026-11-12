@@ -117,6 +117,32 @@ final class BrowserActionsTests: XCTestCase {
     }
 
     @MainActor
+    func testInternalDragPinsTheWholeSelectionAndConsumesItsTokenOnce() async throws {
+        try await withFixture { root, destination, board in
+            let first = try write("first", named: "First.PNG", in: root)
+            let second = try write("second", named: "Second.JPG", in: root)
+            let actions = BrowserActions(pasteboard: board)
+            let token = actions.beginDrag(primary: first, sources: [first, second, first])
+            XCTAssertNil(actions.takeDrag(UUID(), matching: first.url))
+            XCTAssertNil(actions.takeDrag(token, matching: second.url))
+            let selection = try XCTUnwrap(actions.takeDrag(token, matching: first.url))
+            XCTAssertEqual(selection.sources, [first, second])
+            XCTAssertNil(actions.takeDrag(token, matching: first.url))
+
+            let target = try BrowserTransferDestination(folder: destination)
+            XCTAssertTrue(selection.moves(to: target, option: false))
+            XCTAssertFalse(selection.moves(to: target, option: true))
+            try await perform(actions) {
+                actions.transfer(selection.sources, into: target.url, move: true, destination: target)
+            }
+            XCTAssertEqual(try contents(destination.appendingPathComponent("First.PNG")), "first")
+            XCTAssertEqual(try contents(destination.appendingPathComponent("Second.JPG")), "second")
+            XCTAssertFalse(FileManager.default.fileExists(atPath: first.url.path))
+            XCTAssertFalse(FileManager.default.fileExists(atPath: second.url.path))
+        }
+    }
+
+    @MainActor
     func testTransferQueuePausesForAConflictThenContinuesOnRequest() async throws {
         try await withFixture { root, destination, board in
             let first = try write("incoming", named: "Conflict.txt", in: root)

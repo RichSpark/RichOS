@@ -40,6 +40,7 @@ final class BrowserActions: ObservableObject {
     private let pasteboard: NSPasteboard
     private let recoveryURL: URL?
     private var clipboard: ClipboardSelection?
+    private var localDrag: BrowserDragSelection?
     private var transferTask: Task<Void, Never>?
     private var preparingQueue: [UUID: Task<Void, Never>] = [:]
     private var settlingTransfer = false
@@ -138,13 +139,30 @@ final class BrowserActions: ObservableObject {
 
     func transfer(
         _ sources: [FileReference], into folder: URL, move: Bool,
-        conflict: BrowserConflictPolicy = .skip
+        conflict: BrowserConflictPolicy = .skip, destination: BrowserTransferDestination? = nil
     ) {
         submitTransfer(BrowserTransferRequest(
             sources: unique(sources).map(BrowserTransferSource.captured),
             folder: folder, move: move, conflict: conflict,
-            clipboardGeneration: nil, destination: nil
+            clipboardGeneration: nil, destination: destination
         ))
+    }
+
+    var currentDrag: BrowserDragSelection? {
+        guard let localDrag, !localDrag.expired else { return nil }
+        return localDrag
+    }
+
+    func beginDrag(primary: FileReference, sources: [FileReference]) -> UUID {
+        let selection = BrowserDragSelection(primary: primary, sources: unique(sources))
+        localDrag = selection
+        return selection.token
+    }
+
+    func takeDrag(_ token: UUID, matching url: URL) -> BrowserDragSelection? {
+        guard let drag = currentDrag, drag.token == token, drag.primary.url.path == url.path else { return nil }
+        localDrag = nil
+        return drag
     }
 
     func addToShelf(_ sources: [FileReference]) {
