@@ -592,7 +592,8 @@ struct Tool {
     writing_client: Option<u64>,
     timings: Option<super::timings::Timings>,
     live_preview: Option<Writing>,
-    live_words: Option<String>,
+    live_preview_enabled: bool,
+    live_words: Option<(String, Instant)>,
     live_preview_paused: bool,
     destination: Option<insert::Destination>,
     destination_name: String,
@@ -666,6 +667,7 @@ impl Tool {
             writing_client: None,
             timings: None,
             live_preview: None,
+            live_preview_enabled: false,
             live_words: None,
             live_preview_paused: false,
             destination: None,
@@ -775,7 +777,8 @@ impl Tool {
             destination: (!self.destination_name.is_empty()).then(|| self.destination_name.clone()),
             vocabulary: self.recording_vocabulary.as_ref().map(|v| v.company.name.clone()),
             delivery: self.notice.clone(),
-            preview: self.live_words.clone(),
+            preview: self.live_words.as_ref().map(|(text, _)| text.clone()),
+            preview_enabled: started.is_some() && self.live_preview_enabled,
             preview_paused: self.live_preview_paused,
         };
         let seq = self.bar.show(&self.app, view, self.settings.key(), started, bar::look(&self.data_dir), details);
@@ -887,18 +890,21 @@ impl Tool {
                 Control::WritingReply {client,id,action,payload}=>self.writing_reply(client,id,action,payload),
                 Control::App(AppMessage::Writing {..})=>{}, // connection identity is retained above
                 Control::LivePreview { seq, update } => {
-                    if seq != self.capture_seq || !matches!(self.session.phase(), Phase::Listening { .. }) { continue; }
-                    let received_at = std::time::Instant::now();
+                    if seq != self.capture_seq || !self.live_preview_enabled || !matches!(self.session.phase(), Phase::Listening { .. }) { continue; }
+                    let received_at = Instant::now();
+                    let caption_expired = self.live_words.as_ref().is_some_and(|(_, sampled_at)|
+                        super::live_preview::caption_expired(*sampled_at, received_at));
                     match update.for_display(received_at) {
                         super::live_preview::Update::Words { text, sampled_at, decode_ms, .. } => {
                             let age_ms = received_at.saturating_duration_since(sampled_at).as_millis() as u64;
                             if let Some(t) = &mut self.timings { t.preview(decode_ms, age_ms); }
-                            self.live_words = Some(text);
+                            self.live_words = Some((text, sampled_at));
                             log::line(&format!("preview decoded in {decode_ms} ms; recent window age {age_ms} ms"));
                         }
                         super::live_preview::Update::Paused { reason, input_ms } => {
                             if let Some(t) = &self.timings { t.preview_paused(reason, input_ms); }
                             self.stop_live_preview();
+                            self.live_words = None;
                             self.live_preview_paused = true;
                             log::line("preview paused for this recording; capture and final recognition continue");
                         }
@@ -906,20 +912,22 @@ impl Tool {
                             if let Some(t) = &self.timings {
                                 t.event("preview_update_missed", serde_json::json!({"reason":reason,"input_ms":input_ms}));
                             }
+                            if !caption_expired { continue; }
                             self.live_words = None;
                         }
                         super::live_preview::Update::Unavailable => {
                             if let Some(t) = &self.timings { t.event("preview_unavailable", serde_json::json!({"reason":"model_unavailable"})); }
                             self.stop_live_preview();
                             self.live_words = None;
-                            self.live_preview_paused = false;
+                            self.live_preview_paused = true;
                         }
                         super::live_preview::Update::Quiet { clear_words } => {
                             if let Some(t) = &mut self.timings { t.preview_quiet(); }
-                            if !clear_words || self.live_words.take().is_none() { continue; }
+                            if !(clear_words || caption_expired) || self.live_words.take().is_none() { continue; }
                         }
                     }
-                    bar::preview(&self.app, self.bar.sequence(), self.live_words.as_deref(), self.live_preview_paused);
+                    bar::preview(&self.app, self.bar.sequence(), true,
+                        self.live_words.as_ref().map(|(text, _)| text.as_str()), self.live_preview_paused);
                 }
                 Control::DraftExpiry => {} // next loop expires and clears any open panel
                 Control::Vocabulary { seq, client, publication } => {
@@ -1149,9 +1157,10 @@ impl Tool {
                     }
                     if !self.settings.live_preview {
                         self.stop_live_preview();
+                        self.live_preview_enabled = false;
                         self.live_words = None;
                         self.live_preview_paused = false;
-                        bar::preview(&self.app, self.bar.sequence(), None, false);
+                        bar::preview(&self.app, self.bar.sequence(), false, None, false);
                     }
                     if !self.settings.on {
                         log::line("dictation was turned off; the tool stops");
@@ -1503,6 +1512,7 @@ impl Tool {
         self.close_menu();
         self.show_bar(BarView::Hidden);
         self.notice = None;
+        self.live_preview_enabled = self.settings.live_preview && self.cleaner_target.is_none();
         self.live_words = None;
         self.live_preview_paused = false;
         self.destination = self.cleaner_target.is_none().then(insert::Destination::capture);
@@ -1602,11 +1612,11 @@ impl Tool {
         }) {
             Ok(c) => {
                 self.timings = Some(super::timings::Timings::new(self.capture_seq, &self.recording_model,
-                    self.settings.live_preview && self.cleaner_target.is_none(), &self.version));
+                    self.live_preview_enabled, &self.version));
                 if !self.instruction_recording() {self.drafts.recording_started(draft_now());}
                 log::line(&format!("listening ({})", c.source_label));
                 self.capture = Some(c);
-                if self.settings.live_preview && self.cleaner_target.is_none() {
+                if self.live_preview_enabled {
                     let recording = self.recording.clone();
                     let data_dir = self.data_dir.clone();
                     let sender = self.tx.clone();
@@ -1704,6 +1714,7 @@ impl Tool {
         self.recording.lock().unwrap_or_else(|p| p.into_inner()).take();
         self.end_navigation();
         self.destination = None;
+        self.live_preview_enabled = false;
         self.live_words = None;
         self.live_preview_paused = false;
         self.notice = None;

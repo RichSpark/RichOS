@@ -27,6 +27,7 @@ impl Update {
 // One fixed recent-text allowance; no accumulating provisional transcript.
 const PREVIEW_CHARACTER_LIMIT: usize = 200;
 const DISPLAY_MAX_AGE: Duration = Duration::from_secs(3);
+const CAPTION_HOLD: Duration = Duration::from_secs(16);
 const FIRST_RESULT_MAX_AGE: Duration = Duration::from_secs(2);
 const FIRST_DECODER_LIMIT: Duration = Duration::from_millis(1800);
 const RESULT_HANDOFF_MARGIN: Duration = Duration::from_millis(150);
@@ -36,6 +37,12 @@ const RECOVERY_SPEECH_SAMPLES: usize = TICK_INTERVAL.as_secs() as usize * SAMPLE
 // A pair of fast eight-second results leaves room to try a window twice as long
 // inside the 2.8-second budget. A busy decoder keeps the shorter window.
 const RECOVERY_RESTORE_LIMIT: Duration = Duration::from_millis(1250);
+
+// A missed update does not invalidate the last caption. The existing 16-second
+// preview horizon also bounds how long old words can remain through repeated misses.
+pub(super) fn caption_expired(sampled_at: Instant, received_at: Instant) -> bool {
+    received_at.saturating_duration_since(sampled_at) >= CAPTION_HOLD
+}
 
 fn preview_limits(has_words: bool, elapsed: Duration) -> (Duration, Duration) {
     let max_age = if has_words { DISPLAY_MAX_AGE - RESULT_HANDOFF_MARGIN } else { FIRST_RESULT_MAX_AGE };
@@ -278,6 +285,14 @@ mod tests {
         assert!(matches!(words().for_display(sampled_at + DISPLAY_MAX_AGE), Update::Words { .. }));
         assert!(matches!(words().for_display(sampled_at + DISPLAY_MAX_AGE + Duration::from_millis(1)),
             Update::Missed { reason: "control_delivery_stale", input_ms: 8000 }));
+    }
+
+    #[test]
+    fn last_caption_outlives_a_miss_but_not_the_recent_audio_horizon() {
+        let sampled_at = Instant::now();
+        assert!(!caption_expired(sampled_at, sampled_at + DISPLAY_MAX_AGE));
+        assert!(!caption_expired(sampled_at, sampled_at + Duration::from_secs(12)));
+        assert!(caption_expired(sampled_at, sampled_at + CAPTION_HOLD));
     }
 
     #[test]

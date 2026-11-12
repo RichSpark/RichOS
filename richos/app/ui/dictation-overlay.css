@@ -423,7 +423,7 @@ body {
 /* Recording feedback, honest delivery and the single recovery panel. */
 .dhx-row { display: flex; align-items: center; gap: 14px; height: 3.625rem; padding: 0 .5625rem; }
 .dhx-row > .dh-orb { margin-right: 0; }
-.dhx-top { display: flex; align-items: baseline; gap: 12px; padding: .8125rem 1.375rem 0 1.25rem; min-width: 0; max-width: 46rem; }
+.dhx-top { display: flex; align-items: baseline; gap: 12px; box-sizing: border-box; padding: .8125rem 1.375rem 0 1.25rem; min-width: 0; width: min(46rem, calc(var(--dictation-screen-width, 1024px) - 80px)); }
 .dhx-tag { flex-shrink: 0; font-size: .875rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--gold-text); }
 .dhx-words { font-size: 1.125rem; line-height: 1.4; max-height: 7em; color: var(--ink); overflow: hidden; white-space: normal; overflow-wrap: anywhere; min-width: 0; }
 .dhx-words .is-new { color: var(--ink); text-decoration: underline; text-decoration-color: var(--gold); text-decoration-thickness: 2px; text-underline-offset: 4px; }
