@@ -326,6 +326,7 @@ enum BrowserTransferJob {
                     let receipt = try FileOperations.copy(
                         source,
                         into: destination.url,
+                        expectedFolder: destination.identity,
                         conflictPolicy: request.conflict == .keepBoth ? .keepBoth : .refuse,
                         isCancelled: { Task.isCancelled }, onProgress: showBytes
                     )
@@ -431,7 +432,7 @@ enum BrowserTransferJob {
         conflict: BrowserConflictPolicy
     ) throws -> MoveReceipt {
         do {
-            return try FileOperations.move(source, into: destination.url)
+            return try FileOperations.move(source, into: destination.url, expectedFolder: destination.identity)
         } catch FileOperationError.destinationExists where conflict == .keepBoth {
             // An exclusive move refused the original name. Try another name and
             // leave every occupant untouched.
@@ -445,7 +446,7 @@ enum BrowserTransferJob {
             try destination.verify()
             let name = "\(basename) (\(index))" + suffix
             do {
-                return try FileOperations.move(source, into: destination.url, named: name)
+                return try FileOperations.move(source, into: destination.url, named: name, expectedFolder: destination.identity)
             } catch FileOperationError.destinationExists {
                 continue
             }

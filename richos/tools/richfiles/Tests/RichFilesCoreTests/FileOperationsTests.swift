@@ -169,6 +169,30 @@ final class FileOperationsTests: XCTestCase {
         }
     }
 
+    func testCopyAndMoveRefuseAReplacementOfThePinnedDestination() throws {
+        try withFixture { root in
+            let source = try write("original", named: "file.txt", in: root)
+            let destination = try FileOperations.createFolder(in: root, named: "Destination")
+            let moved = try FileOperations.rename(destination, to: "Moved Destination").moved
+            let replacement = try FileOperations.createFolder(in: root, named: "Destination")
+
+            let operations: [() throws -> Void] = [
+                { _ = try FileOperations.copy(source, into: destination.url, expectedFolder: destination.identity) },
+                { _ = try FileOperations.move(source, into: destination.url, expectedFolder: destination.identity) }
+            ]
+            for operation in operations {
+                XCTAssertThrowsError(try operation()) {
+                    guard case FileOperationError.folderChanged = $0 else {
+                        return XCTFail("Expected the changed folder to be refused, got \($0)")
+                    }
+                }
+            }
+            XCTAssertEqual(try contents(source), "original")
+            XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: moved.url.path), [])
+            XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: replacement.url.path), [])
+        }
+    }
+
     func testUndoRefusesAReplacementOfTheOriginalFolder() throws {
         try withFixture { root in
             let origin = try FileOperations.createFolder(in: root, named: "Origin")

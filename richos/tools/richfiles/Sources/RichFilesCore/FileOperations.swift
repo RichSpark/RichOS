@@ -362,11 +362,14 @@ public enum FileOperations {
 
     /// Move one entry on its current volume. The system atomically refuses an occupied target.
     public static func move(
-        _ source: FileReference, into folder: URL, named name: String? = nil
+        _ source: FileReference, into folder: URL, named name: String? = nil,
+        expectedFolder: FileIdentity? = nil
     ) throws -> MoveReceipt {
         let name = name ?? source.name
         try validateName(name)
-        return try relocate(source, into: OpenFolder(folder), named: name)
+        let destination = try OpenFolder(folder)
+        if let expectedFolder { try destination.requireIdentity(expectedFolder) }
+        return try relocate(source, into: destination, named: name)
     }
 
     public static func undo(_ receipt: MoveReceipt) throws -> FileReference {
@@ -504,11 +507,14 @@ public enum FileOperations {
         _ source: FileReference,
         into folder: URL,
         named name: String? = nil,
+        expectedFolder: FileIdentity? = nil,
         conflictPolicy: CopyConflictPolicy = .refuse,
         isCancelled: () -> Bool = { false },
         onProgress: (Int64, Int64) -> Void = { _, _ in }
     ) throws -> CopyReceipt {
-        try copy(source, into: OpenFolder(folder), named: name, conflictPolicy: conflictPolicy,
+        let destination = try OpenFolder(folder)
+        if let expectedFolder { try destination.requireIdentity(expectedFolder) }
+        return try copy(source, into: destination, named: name, conflictPolicy: conflictPolicy,
                         isCancelled: isCancelled, onProgress: onProgress)
     }
 
