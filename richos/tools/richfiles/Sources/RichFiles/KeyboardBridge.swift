@@ -153,7 +153,7 @@ struct KeyboardBridge: NSViewRepresentable {
             monitor = NSEvent.addLocalMonitorForEvents(
                 matching: [.keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown, .swipe]
             ) { [weak self] event in
-                guard let self, let window = self.window, event.window === window,
+                guard let self, !self.isHiddenOrHasHiddenAncestor, let window = self.window, event.window === window,
                       window.attachedSheet == nil else { return event }
                 if event.type == .leftMouseDown || event.type == .rightMouseDown {
                     if self.bounds.contains(self.convert(event.locationInWindow, from: nil)) { self.activate?() }

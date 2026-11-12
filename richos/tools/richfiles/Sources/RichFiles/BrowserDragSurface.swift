@@ -51,7 +51,7 @@ struct BrowserDragSurface: NSViewRepresentable {
         }
 
         private func track(_ event: NSEvent) -> Bool {
-            guard let window, event.window === window, window.attachedSheet == nil else {
+            guard !isHiddenOrHasHiddenAncestor, let window, event.window === window, window.attachedSheet == nil else {
                 down = nil
                 consumedClick = false
                 return false
