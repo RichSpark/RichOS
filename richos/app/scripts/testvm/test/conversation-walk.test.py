@@ -126,6 +126,19 @@ class Actors(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             self.assertFalse(walk.actors(self.walk_out(d, helper_reads=False)))
 
+    def test_each_new_accessibility_request_is_counted_and_denied_once(self):
+        clicks = []
+        fake = type('W', (), {'vm': 'g', 'clock': lambda s: 1794304800000.0, 'shot': lambda s, name: None,
+                              'ax': lambda s, mode, *args, app=None: clicks.append((mode, args, app)) or
+                              ([{'meta': True}, {'title': 'Deny'}] if mode == 'tree' else [])})()
+        watcher = walk.AccessibilityRequests(fake, deny=True)
+        for look in ('', '715', '715', '', '820', '820'):
+            watcher.look(look.split())
+        self.assertEqual([e['pids'] for e in watcher.seen], [['715'], ['820']])
+        self.assertEqual([e['answered'] for e in watcher.seen], ['Deny', 'Deny'])
+        self.assertEqual(watcher.seen[0]['words'], ['Deny'])
+        self.assertEqual([c for c in clicks if c[0] == 'click'][0][2], 'universalAccessAuthWarn')
+
     def test_a_read_before_the_walks_first_step_does_not_count(self):
         with tempfile.TemporaryDirectory() as d:
             a = self.walk_out(d, helper_reads=True)  # the read is at 10:00:00Z
