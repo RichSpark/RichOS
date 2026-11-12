@@ -134,23 +134,39 @@ public struct CrossVolumeMoveReceipt: Codable, Sendable {
     fileprivate let item: Installed
     public let backup: TrashReceipt
     fileprivate let backupDescendants: String?
+    fileprivate let backupVersion: FileVersion?
     public var original: FileReference { backup.original }
     public var moved: FileReference { item.reference }
 
     private enum CodingKeys: String, CodingKey {
-        case installed, directory, backup, backupDescendants
+        case installed, directory, backup, backupDescendants, backupVersion
     }
 
-    fileprivate init(item: Installed, backup: TrashReceipt, backupDescendants: String? = nil) {
+    fileprivate init(item: Installed, backup: TrashReceipt, backupDescendants: String?,
+                     originalVersion: FileVersion) throws {
+        guard let archived = backup.trashed, archived.identity == backup.original.identity else {
+            throw FileOperationError.trashLocationUnknown
+        }
         self.item = item
         self.backup = backup
         self.backupDescendants = backupDescendants
+        switch item {
+        case .file:
+            let reviewed = try ReviewedFile(archived)
+            guard reviewed.size == originalVersion.size, reviewed.version.hasSameModifiedDate(as: originalVersion) else {
+                throw FileOperationError.sourceChanged(archived.url)
+            }
+            backupVersion = reviewed.version
+        case .directory:
+            backupVersion = nil
+        }
     }
 
     public init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         backup = try values.decode(TrashReceipt.self, forKey: .backup)
         backupDescendants = try values.decodeIfPresent(String.self, forKey: .backupDescendants)
+        backupVersion = try values.decodeIfPresent(FileVersion.self, forKey: .backupVersion)
         if let directory = try values.decodeIfPresent(ReviewedTree.self, forKey: .directory) {
             guard backupDescendants != nil else {
                 throw DecodingError.dataCorruptedError(forKey: .backupDescendants, in: values,
@@ -165,6 +181,7 @@ public struct CrossVolumeMoveReceipt: Codable, Sendable {
     public func encode(to encoder: Encoder) throws {
         var values = encoder.container(keyedBy: CodingKeys.self)
         try values.encode(backup, forKey: .backup)
+        try values.encodeIfPresent(backupVersion, forKey: .backupVersion)
         switch item {
         case .file(let file): try values.encode(file, forKey: .installed)
         case .directory(let tree):
@@ -448,9 +465,8 @@ public enum FileOperations {
             }
             try destination.verifyLocation()
             let backup = try trash(source, expected: version)
-            guard backup.trashed != nil else { throw FileOperationError.trashLocationUnknown }
-            let receipt = CrossVolumeMoveReceipt(item: reviewed, backup: backup,
-                                                backupDescendants: originalTree?.descendants)
+            let receipt = try CrossVolumeMoveReceipt(item: reviewed, backup: backup,
+                                                    backupDescendants: originalTree?.descendants, originalVersion: version)
             return CrossVolumeMoveResult(receipt: receipt, remainingStagingFolder: remaining)
         } catch {
             throw FileOperationError.crossVolumeMoveNeedsReview(source: source.url, destination: installed.url)
@@ -458,36 +474,73 @@ public enum FileOperations {
     }
 
     public static func reverse(_ receipt: CrossVolumeMoveReceipt) throws -> CrossVolumeMoveReceipt {
+        try reverse(receipt, sendToTrash: { try trash($0, expected: $1) })
+    }
+
+    static func reverse(
+        _ receipt: CrossVolumeMoveReceipt, sendToTrash: (FileReference, FileVersion) throws -> TrashReceipt
+    ) throws -> CrossVolumeMoveReceipt {
         let current = receipt.moved
         try validateCrossVolumeItem(receipt.item)
-        if let expected = receipt.backupDescendants {
-            guard let archived = receipt.backup.trashed else { throw FileOperationError.trashLocationUnknown }
-            guard try TreeInventory(archived).descendants == expected else {
-                throw FileOperationError.sourceChanged(archived.url)
-            }
-        }
+        let archivedVersion = try validateCrossVolumeBackup(receipt)
         let restored = try restore(receipt.backup)
         do {
             let restoredItem: CrossVolumeMoveReceipt.Installed
             if let expected = receipt.backupDescendants {
                 restoredItem = .directory(try ReviewedTree(restored, descendants: expected))
             } else {
-                restoredItem = .file(try ReviewedFile(restored))
+                let file = try ReviewedFile(restored)
+                // A rename can change ctime without changing the file's contents.
+                guard let archivedVersion, file.size == archivedVersion.size,
+                      file.version.hasSameModifiedDate(as: archivedVersion) else {
+                    throw FileOperationError.sourceChanged(restored.url)
+                }
+                restoredItem = .file(file)
             }
             try validateCrossVolumeItem(restoredItem)
-            try validateCrossVolumeItem(receipt.item)
-            let backup = try trash(current)
-            guard backup.trashed != nil else { throw FileOperationError.trashLocationUnknown }
-            return CrossVolumeMoveReceipt(item: restoredItem, backup: backup, backupDescendants: receipt.item.descendants)
+            let currentVersion = try validateCrossVolumeItem(receipt.item)
+            let backup = try sendToTrash(current, currentVersion)
+            return try CrossVolumeMoveReceipt(item: restoredItem, backup: backup,
+                                              backupDescendants: receipt.item.descendants, originalVersion: currentVersion)
         } catch {
             throw FileOperationError.crossVolumeMoveNeedsReview(source: current.url, destination: restored.url)
         }
     }
 
-    private static func validateCrossVolumeItem(_ item: CrossVolumeMoveReceipt.Installed) throws {
+    private static func validateCrossVolumeBackup(_ receipt: CrossVolumeMoveReceipt) throws -> FileVersion? {
+        guard let archived = receipt.backup.trashed, archived.identity == receipt.backup.original.identity else {
+            throw FileOperationError.trashLocationUnknown
+        }
+        if let expected = receipt.backupDescendants {
+            guard try TreeInventory(archived).descendants == expected else {
+                throw FileOperationError.sourceChanged(archived.url)
+            }
+            return nil
+        }
+        guard case .file(let live) = receipt.item else { throw FileOperationError.trashLocationUnknown }
+        let backup = try ReviewedFile(archived)
+        if let expected = receipt.backupVersion {
+            guard backup.version == expected else { throw FileOperationError.sourceChanged(archived.url) }
+        } else {
+            // Older receipts lack a backup version. Check exact bytes before restoring them.
+            guard backup.size == live.size,
+                  try StorageAnalysis.digest(archived.url, expected: backup.version, isCancelled: { false }) ==
+                      StorageAnalysis.digest(live.reference.url, expected: live.version, isCancelled: { false }) else {
+                throw FileOperationError.sourceChanged(archived.url)
+            }
+        }
+        return backup.version
+    }
+
+    @discardableResult
+    private static func validateCrossVolumeItem(_ item: CrossVolumeMoveReceipt.Installed) throws -> FileVersion {
         switch item {
-        case .file(let file): try validateReviewed(file, in: OpenFolder(file.reference.parent))
-        case .directory(let tree): try tree.verify()
+        case .file(let file):
+            try validateReviewed(file, in: OpenFolder(file.reference.parent))
+            return file.version
+        case .directory(let tree):
+            try tree.verify()
+            return tree.rootVersion
         }
     }
 

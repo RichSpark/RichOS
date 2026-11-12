@@ -88,6 +88,64 @@ final class FileOperationsTests: XCTestCase {
         }
     }
 
+    func testCrossVolumeUndoRefusesASameSizeEditToTheArchivedOriginal() throws {
+        for hasBackupVersion in [true, false] {
+            try withFixture { root in
+                let fixture = try crossVolumeFileMoveFixture(in: root, hasBackupVersion: hasBackupVersion)
+                let before = try FileManager.default.attributesOfItem(atPath: fixture.archived.url.path)
+                let modified = try XCTUnwrap(before[.modificationDate] as? Date)
+                let editor = try FileHandle(forWritingTo: fixture.archived.url)
+                try editor.write(contentsOf: Data("edited".utf8))
+                try editor.close()
+                try FileManager.default.setAttributes(
+                    [.modificationDate: hasBackupVersion ? modified.addingTimeInterval(1) : modified],
+                    ofItemAtPath: fixture.archived.url.path
+                )
+                XCTAssertEqual(try FileReference(url: fixture.archived.url), fixture.archived)
+
+                XCTAssertThrowsError(try FileOperations.reverse(fixture.receipt, sendToTrash: { _, _ in
+                    XCTFail("A changed backup must stop Undo before archiving the live file")
+                    throw CocoaError(.fileWriteUnknown)
+                })) {
+                    guard case FileOperationError.sourceChanged(let changed) = $0 else {
+                        return XCTFail("Expected the archived file to be refused, got \($0)")
+                    }
+                    XCTAssertEqual(changed.path, fixture.archived.url.path)
+                }
+                XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.original.url.path))
+                XCTAssertEqual(try contents(fixture.installed), "before")
+                XCTAssertEqual(try contents(fixture.archived), "edited")
+            }
+        }
+    }
+
+    func testCrossVolumeUndoUpgradesALegacyReceiptAndCanRedoAfterRelaunch() throws {
+        try withFixture { root in
+            let fixture = try crossVolumeFileMoveFixture(in: root, hasBackupVersion: false)
+            let archive = fixture.archived.url.deletingLastPathComponent()
+            func archiveLiveFile(_ file: FileReference, expected: FileVersion) throws -> TrashReceipt {
+                let parent = try OpenFolder(file.url.deletingLastPathComponent())
+                XCTAssertEqual(try FileVersion(parent.verifiedStatus(of: file)), expected)
+                let parked = try FileOperations.move(file, into: archive).moved
+                return TrashReceipt(original: file, trashedAt: Date(), trashLocation: parked.url, trashed: parked)
+            }
+
+            let undone = try FileOperations.reverse(fixture.receipt, sendToTrash: archiveLiveFile)
+            XCTAssertEqual(undone.moved, fixture.original)
+            XCTAssertEqual(try contents(undone.moved), "before")
+            XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.installed.url.path))
+            let saved = try JSONEncoder().encode(undone)
+            let record = try XCTUnwrap(JSONSerialization.jsonObject(with: saved) as? [String: Any])
+            XCTAssertNotNil(record["backupVersion"])
+            let reopened = try JSONDecoder().decode(CrossVolumeMoveReceipt.self, from: saved)
+            let redone = try FileOperations.reverse(reopened, sendToTrash: archiveLiveFile)
+            XCTAssertEqual(redone.moved, fixture.installed)
+            XCTAssertEqual(try contents(redone.moved), "before")
+            XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.original.url.path))
+            XCTAssertEqual(try contents(XCTUnwrap(redone.backup.trashed)), "before")
+        }
+    }
+
     func testTemplateCopyKeepsTheSourceAndRefusesAnExistingName() throws {
         try withFixture { root in
             let source = try write("template contents", named: "Plan.md", in: root)
@@ -618,6 +676,34 @@ final class FileOperationsTests: XCTestCase {
             XCTAssertEqual(try contents(first), "first")
             XCTAssertEqual(try contents(second), "second")
         }
+    }
+
+    private struct CrossVolumeFileMoveFixture: Encodable {
+        let installed: ReviewedFile
+        let backup: TrashReceipt
+        let backupVersion: FileVersion?
+    }
+
+    private func crossVolumeFileMoveFixture(in root: URL, hasBackupVersion: Bool) throws -> (
+        receipt: CrossVolumeMoveReceipt, original: FileReference, installed: FileReference, archived: FileReference
+    ) {
+        let destination = try FileOperations.createFolder(in: root, named: "Destination")
+        let archive = try FileOperations.createFolder(in: root, named: "Test Archive")
+        let source = try write("before", named: "Notes.txt", in: root)
+        let modified = Date(timeIntervalSince1970: 2_000_000_000)
+        try FileManager.default.setAttributes([.modificationDate: modified], ofItemAtPath: source.url.path)
+        let original = try FileReference(url: source.url)
+        let installed = try write("before", named: "Notes.txt", in: destination.url)
+        let archived = try FileOperations.move(original, into: archive.url).moved
+        let backup = TrashReceipt(original: original, trashedAt: Date(), trashLocation: archived.url, trashed: archived)
+        let archivedVersion = try FileVersion(OpenFolder(archive.url).verifiedStatus(of: archived))
+        let fixture = CrossVolumeFileMoveFixture(installed: try ReviewedFile(installed), backup: backup,
+                                                 backupVersion: hasBackupVersion ? archivedVersion : nil)
+        let encoder = JSONEncoder()
+        let decoder = JSONDecoder()
+        let receipt = try decoder.decode(CrossVolumeMoveReceipt.self, from: encoder.encode(fixture))
+        let reopened = try decoder.decode(CrossVolumeMoveReceipt.self, from: encoder.encode(receipt))
+        return (reopened, original, installed, archived)
     }
 
     private func withFixture(_ test: (URL) throws -> Void) throws {
