@@ -2569,6 +2569,7 @@ fn main() {
                 Ok(monitor) => Some(monitor),
                 Err(error) => { eprintln!("[richos] resources unavailable: {error}"); None }
             };
+            app.manage(richfiles_pane::DockRequest::default());
             app.manage(ResourceMonitor(Mutex::new(resources)));
             let activation = activation::decide(&activation::gather(&data_dir, &app.config().identifier));
             eprintln!("[richos] {}", activation.log_message());
@@ -3901,6 +3902,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             system_resources,
             richfiles_pane::richfiles_pane_available, richfiles_pane::richfiles_place_pane,
+            richfiles_pane::richfiles_dock_pending, richfiles_pane::richfiles_accept_dock,
             question_host::answer_question, question_host::question_shown, question_host::open_question_counts,
             claude_quota,
             claude_quota_activity,
@@ -4248,6 +4250,10 @@ fn main() {
         // launch is read as a crash-restart — an undercount by one, no splash once — which
         // is not worth refusing to close the app over.
         .run(|handle, event| {
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Opened { urls, .. } = &event {
+                richfiles_pane::opened(handle, urls);
+            }
             if matches!(&event, tauri::RunEvent::Exit) {richpass_host::shutdown(handle);}
             // =========================================================================
             // ROW 5 — "You close the window. The work keeps going. Quit ends it."

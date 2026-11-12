@@ -535,38 +535,46 @@ struct DiskUsageSheet: View {
 
 @MainActor
 struct WorkspacesSheet: View {
-    let window: WindowWorkspace
+    @ObservedObject var window: WindowWorkspace
     @Environment(\.dismiss) private var dismiss
     @State private var workspaces: [NamedWorkspace] = []
-    @State private var selected: UUID?
     @State private var name = ""
     @State private var problem = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Workspaces").font(.headline)
-            List(workspaces, selection: $selected) { workspace in
-                Text(workspace.name).tag(workspace.id)
-            }
+            List(workspaces) { workspace in
+                HStack {
+                    Text(workspace.name)
+                    Spacer()
+                    Button("Open Here") {
+                        if window.restoreSession(workspace.session) { dismiss() }
+                        else { problem = "RichFiles could not read that workspace." }
+                    }.accessibilityLabel("Open \(workspace.name)")
+                    Button {
+                        window.primary.removeWorkspace(workspace.id)
+                        workspaces = window.primary.namedWorkspaces()
+                    } label: {
+                        Image(systemName: "trash")
+                    }.accessibilityLabel("Remove \(workspace.name)")
+                }.buttonStyle(.borderless)
+            }.accessibilityLabel("Saved workspaces")
             HStack {
                 TextField("Workspace name", text: $name)
                 Button("Save Current Workspace") { save() }
                     .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
+            if window.previousDockedSession != nil {
+                Button("Restore Previous Docked Workspace") {
+                    if window.restorePreviousDockedSession() { dismiss() }
+                    else { problem = "RichFiles could not reopen the previous workspace." }
+                }
+            }
             if !problem.isEmpty { Text(problem).font(.callout).foregroundStyle(.secondary) }
             HStack {
-                Button("Remove Workspace") {
-                    if let selected { window.primary.removeWorkspace(selected) }
-                    selected = nil
-                    workspaces = window.primary.namedWorkspaces()
-                }.disabled(selected == nil)
                 Spacer()
                 Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
-                Button("Open Here") {
-                    guard let workspace = workspaces.first(where: { $0.id == selected }) else { return }
-                    if window.restoreSession(workspace.session) { dismiss() }
-                    else { problem = "RichFiles could not read that workspace." }
-                }.keyboardShortcut(.defaultAction).disabled(selected == nil)
             }
         }.padding(16).frame(width: 470, height: 320)
             .onAppear { workspaces = window.primary.namedWorkspaces() }

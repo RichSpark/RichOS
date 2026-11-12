@@ -10,6 +10,16 @@ public enum RichFilesInstallation {
         Bundle.main.bundleURL.appendingPathComponent("Contents/Applications/RichFiles.app", isDirectory: true)
     }
 
+    @MainActor static var richOSApplication: URL? {
+        let contents = Bundle.main.bundleURL.deletingLastPathComponent().deletingLastPathComponent()
+        let candidates = [contents.lastPathComponent == "Contents" ? contents.deletingLastPathComponent() : nil,
+                          NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.richos.app")]
+        return candidates.compactMap { $0 }.first {
+            Bundle(url: $0)?.bundleIdentifier == "com.richos.app"
+                && FileManager.default.fileExists(atPath: $0.appendingPathComponent("Contents/Frameworks/libRichFilesRail.dylib").path)
+        }
+    }
+
     @MainActor public static var dockedRecoveryStore: URL? {
         BrowserActions.recoveryLocation?.deletingLastPathComponent().appendingPathComponent("DockedRecovery.json")
     }
@@ -28,7 +38,8 @@ public struct RichFilesScenes: Scene {
         WindowGroup("RichFiles", id: "browser") {
             WindowBrowserView(start: Self.requestedFolder ?? FileManager.default.homeDirectoryForCurrentUser,
                         actions: actions, openRequests: delegate,
-                        supportsSessionRestore: Self.requestedFolder == nil)
+                        supportsSessionRestore: Self.requestedFolder == nil,
+                        launchHandoffID: Self.requestedHandoff, hostSwitch: Self.dockSwitch)
                 .frame(minWidth: 720, minHeight: 420)
                 .defaultAppStorage(RichFilesInstallation.preferences)
         }
@@ -37,9 +48,30 @@ public struct RichFilesScenes: Scene {
             BrowserCommands()
         }
 
+        WindowGroup("RichFiles", id: "richfiles-handoff", for: String.self) { $ticket in
+            WindowBrowserView(start: FileManager.default.homeDirectoryForCurrentUser, actions: actions,
+                              openRequests: delegate, supportsSessionRestore: true,
+                              handoffID: ticket, hostSwitch: Self.dockSwitch)
+                .frame(minWidth: 720, minHeight: 420)
+                .defaultAppStorage(RichFilesInstallation.preferences)
+        }
+        .defaultSize(width: 1120, height: 700)
+
         Settings {
             RichFilesSettings().defaultAppStorage(RichFilesInstallation.preferences)
         }
+    }
+
+    private static var dockSwitch: WindowBrowserView.HostSwitch? {
+        RichFilesInstallation.richOSApplication.map { .init(target: .docked, application: $0) }
+    }
+
+    private static var requestedHandoff: String? {
+        let arguments = CommandLine.arguments
+        guard let flag = arguments.firstIndex(of: "--receive-workspace"),
+              arguments.indices.contains(flag + 1),
+              let id = UUID(uuidString: arguments[flag + 1]) else { return nil }
+        return id.uuidString
     }
 
     private static var requestedFolder: URL? {
@@ -61,24 +93,32 @@ public struct RichFilesPane: View {
     private let openWindow: (URL) -> Void
     private let acceptsKeyboard: () -> Bool
     private let returnKeyboardFocus: @MainActor @Sendable () -> Void
+    private let dockTarget: RichFilesDockTarget?
+    private let didUndock: (() -> Void)?
 
     public init(
         folder: URL,
         recoveryStore: URL?,
         openWindow: @escaping (URL) -> Void,
         acceptsKeyboard: @escaping () -> Bool,
-        returnKeyboardFocus: @escaping @MainActor @Sendable () -> Void = {}
+        returnKeyboardFocus: @escaping @MainActor @Sendable () -> Void = {},
+        dockTarget: RichFilesDockTarget? = nil, didUndock: (() -> Void)? = nil
     ) {
         self.folder = folder
         self.openWindow = openWindow
         self.acceptsKeyboard = acceptsKeyboard
         self.returnKeyboardFocus = returnKeyboardFocus
+        self.dockTarget = dockTarget
+        self.didUndock = didUndock
         _actions = StateObject(wrappedValue: BrowserActions(recoveryURL: recoveryStore))
     }
 
     public var body: some View {
         WindowBrowserView(start: folder, actions: actions, openRequests: openRequests,
-                    openWindow: openWindow, acceptsKeyboard: acceptsKeyboard, returnKeyboardFocus: returnKeyboardFocus)
+                    openWindow: openWindow, acceptsKeyboard: acceptsKeyboard, returnKeyboardFocus: returnKeyboardFocus,
+                    dockTarget: dockTarget, hostSwitch: dockTarget.map { _ in
+                        .init(target: .standalone, application: RichFilesInstallation.embeddedApplication, didUndock: didUndock)
+                    })
             .defaultAppStorage(RichFilesInstallation.preferences)
     }
 }
@@ -87,15 +127,41 @@ public struct RichFilesPane: View {
 public final class FolderOpenDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     @Published private(set) var requestID = UUID()
     private var pending: [URL] = []
+    private var handoffs: [UUID] = []
+    private var openedHandoffs: Set<UUID> = []
     private var openedInitialBrowser = false
 
     public func application(_ application: NSApplication, open urls: [URL]) {
         pending.append(contentsOf: urls.filter(\.isFileURL))
+        for url in urls {
+            if let id = WorkspaceHandoff.ticketID(from: url, for: .standalone),
+               !openedHandoffs.contains(id), !handoffs.contains(id), WorkspaceHandoff.hasPendingTicket(id) {
+                handoffs.append(id)
+            }
+        }
         requestID = UUID()
     }
 
     func takePending() -> [URL] {
         defer { pending.removeAll() }
+        return pending
+    }
+
+    func markHandoffOpened(_ id: UUID) {
+        openedHandoffs.insert(id)
+        handoffs.removeAll { $0 == id }
+    }
+
+    func takeFirstHandoff() -> UUID? {
+        guard let id = handoffs.first else { return nil }
+        markHandoffOpened(id)
+        return id
+    }
+
+    func takeHandoffs() -> [UUID] {
+        let pending = handoffs
+        openedHandoffs.formUnion(pending)
+        handoffs.removeAll()
         return pending
     }
 

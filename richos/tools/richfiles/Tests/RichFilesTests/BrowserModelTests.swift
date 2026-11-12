@@ -44,6 +44,16 @@ final class BrowserModelTests: XCTestCase {
     }
 
     @MainActor
+    func testHandoffRecognizesOnlyTheExpectedAppAndTicketURL() throws {
+        let id = UUID()
+        let url = try XCTUnwrap(URL(string: "richfiles-workspace://receive/\(id.uuidString)"))
+        XCTAssertEqual(WorkspaceHandoff.ticketID(from: url, for: .standalone), id)
+        XCTAssertNil(WorkspaceHandoff.ticketID(from: url, for: .docked))
+        let extra = try XCTUnwrap(URL(string: url.absoluteString + "?extra=true"))
+        XCTAssertNil(WorkspaceHandoff.ticketID(from: extra, for: .standalone))
+    }
+
+    @MainActor
     func testNamedSplitWorkspaceRestoresBothPanesAndTheActiveTab() async throws {
         let temporary = try XCTUnwrap(ProcessInfo.processInfo.environment["TMPDIR"])
         let root = URL(fileURLWithPath: temporary, isDirectory: true)

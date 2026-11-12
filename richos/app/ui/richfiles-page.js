@@ -14,6 +14,7 @@
   let frame = 0;
   let waiting = false;
   let again = false;
+  let dockRequested = false;
 
   function intersects(first, second) {
     return first.left < second.right && second.left < first.right
@@ -42,11 +43,17 @@
     if (waiting) { again = true; return; }
     const next = bounds();
     const key = JSON.stringify(next);
-    if (key === last) return;
+    if (key === last && (!next.visible || !dockRequested)) return;
     waiting = true;
     try {
-      await bridge.invoke("richfiles_place_pane", { bounds: next });
-      last = key;
+      if (key !== last) {
+        await bridge.invoke("richfiles_place_pane", { bounds: next });
+        last = key;
+      }
+      if (next.visible && dockRequested) {
+        dockRequested = false;
+        await bridge.invoke("richfiles_accept_dock", {});
+      }
       error.hidden = true;
     } catch (reason) {
       if (!page.hidden) {
@@ -79,9 +86,20 @@
     refresh();
   }
 
+  function requestDock() {
+    dockRequested = true;
+    if (!window.RichDismiss?.question?.()) window.RichHome?.hide?.("richfiles-dock");
+    rail.showPage("richfiles");
+    schedule();
+  }
+
   bridge.invoke("richfiles_pane_available", {}).then((available) => {
     if (available !== true) return;
     rail.registerPage("richfiles", { show, hide });
     button.hidden = false;
+    if (bridge.listen) bridge.listen("rich://richfiles-dock", requestDock);
+    bridge.invoke("richfiles_dock_pending", {}).then((pending) => {
+      if (pending === true) requestDock();
+    }).catch(() => {});
   }).catch(() => {});
 })();

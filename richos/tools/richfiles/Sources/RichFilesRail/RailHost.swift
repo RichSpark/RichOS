@@ -1,6 +1,7 @@
 import AppKit
 import RichFiles
 import SwiftUI
+import WebKit
 
 @_cdecl("richfiles_rail_place")
 public func placeRichFilesRail(_ webViewPointer: UnsafeMutableRawPointer?, _ left: Double, _ top: Double,
@@ -13,11 +14,19 @@ public func placeRichFilesRail(_ webViewPointer: UnsafeMutableRawPointer?, _ lef
     }
 }
 
+@_cdecl("richfiles_rail_receive_workspace")
+public func receiveRichFilesWorkspace(_ identifier: UnsafePointer<CChar>?) -> Int32 {
+    guard Thread.isMainThread, let identifier, let value = String(validatingUTF8: identifier),
+          let id = UUID(uuidString: value) else { return 0 }
+    return MainActor.assumeIsolated { RailHost.shared.receive(id) ? 1 : 0 }
+}
+
 @MainActor
 private final class RailHost {
     static let shared = RailHost()
     private weak var webView: NSView?
     private var hosting: PaneHostingView?
+    private var dockTarget: RichFilesDockTarget?
     private var monitor: Any?
 
     func place(beside webView: NSView, normalizedFrame: CGRect, visible: Bool) -> Bool {
@@ -34,10 +43,13 @@ private final class RailHost {
             hosting?.removeFromSuperview()
             self.webView = webView
             let home = FileManager.default.homeDirectoryForCurrentUser
+            let destination = RichFilesDockTarget()
+            dockTarget = destination
             let pane = RichFilesPane(folder: home, recoveryStore: RichFilesInstallation.dockedRecoveryStore,
                                      openWindow: { [weak self] folder in self?.openStandalone(folder: folder) },
                                      acceptsKeyboard: { [weak self] in self?.hasPaneFocus() == true },
-                                     returnKeyboardFocus: { [weak self] in self?.focusPane() })
+                                     returnKeyboardFocus: { [weak self] in self?.focusPane() },
+                                     dockTarget: destination, didUndock: { [weak self] in self?.showChats() })
             let view = PaneHostingView(rootView: pane)
             view.sizingOptions = []
             view.autoresizingMask = []
@@ -59,6 +71,23 @@ private final class RailHost {
             focusPane()
         }
         return true
+    }
+
+    func receive(_ id: UUID) -> Bool {
+        guard let dockTarget, hosting?.isHidden == false else { return false }
+        Task {
+            do { try await dockTarget.accept(id); focusPane() }
+            catch {
+                let alert = NSAlert(error: error)
+                if let window = hosting?.window { alert.beginSheetModal(for: window, completionHandler: nil) }
+            }
+        }
+        return true
+    }
+
+    private func showChats() {
+        guard let web = webView as? WKWebView else { return }
+        web.evaluateJavaScript("window.RichNavRail?.showPage('chats')")
     }
 
     private func hide() {

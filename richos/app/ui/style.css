@@ -14056,6 +14056,10 @@ body.page-open #scope-crumb,
 body.page-open #out-top {
   display: none !important;
 }
+body[data-page="richfiles"] #rail,
+body[data-page="richfiles"] #sidebar-resize {
+  display: none;
+}
 .richfiles-page {
   display: flex;
   flex: 1;

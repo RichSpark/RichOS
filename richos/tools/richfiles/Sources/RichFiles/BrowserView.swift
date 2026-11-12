@@ -14,6 +14,8 @@ struct BrowserView: View {
     private let acceptsKeyboard: () -> Bool
     private let returnKeyboardFocus: @MainActor @Sendable () -> Void
     private let sessionChanged: () -> Void
+    private let hostSwitchTitle: String?
+    private let switchHost: () -> Void
     @AppStorage("richfiles.windowsKeys") private var windowsKeys = true
     @AppStorage("richfiles.shortcuts.v1") private var shortcutData = Data()
     @AppStorage("richfiles.sidebarVisible") private var sidebarVisible = true
@@ -45,7 +47,7 @@ struct BrowserView: View {
     init(model: BrowserModel, workspace: WindowWorkspace, side: BrowserPaneSide,
          actions: BrowserActions, openWindow: ((URL) -> Void)? = nil,
          acceptsKeyboard: @escaping () -> Bool, returnKeyboardFocus: @escaping @MainActor @Sendable () -> Void,
-         sessionChanged: @escaping () -> Void) {
+         hostSwitchTitle: String?, switchHost: @escaping () -> Void, sessionChanged: @escaping () -> Void) {
         self.model = model
         self.workspace = workspace
         self.side = side
@@ -54,6 +56,8 @@ struct BrowserView: View {
         self.acceptsKeyboard = acceptsKeyboard
         self.returnKeyboardFocus = returnKeyboardFocus
         self.sessionChanged = sessionChanged
+        self.hostSwitchTitle = hostSwitchTitle
+        self.switchHost = switchHost
     }
 
     var body: some View {
@@ -178,6 +182,9 @@ struct BrowserView: View {
                 control("Clear Search", "xmark.circle") { model.clearSearch() }
             }
             control("Search Filters", "line.3.horizontal.decrease.circle") { sheet = .searchOptions }
+            if side == .primary, let hostSwitchTitle {
+                Button(hostSwitchTitle, action: switchHost).buttonStyle(.borderless)
+            }
         }
         .padding(9)
         .background(.bar)

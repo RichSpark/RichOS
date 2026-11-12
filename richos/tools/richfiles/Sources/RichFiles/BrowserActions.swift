@@ -167,6 +167,14 @@ final class BrowserActions: ObservableObject {
         transferTask?.cancel()
     }
 
+    func settleForHostSwitch() async throws {
+        if let running = transferTask {
+            cancelTransfer()
+            await running.value
+        }
+        guard !busy else { throw WorkspaceHandoff.HandoffError.busy }
+    }
+
     func retryTransfer(conflict: BrowserConflictPolicy? = nil) {
         guard let request = retryRequest, !busy else { return }
         startTransfer(BrowserTransferRequest(
