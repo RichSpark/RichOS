@@ -23,7 +23,7 @@ impl PaneBounds {
     }
 }
 
-#[tauri::command]
+#[richos_command::command]
 pub fn richfiles_pane_available(window: WebviewWindow) -> bool {
     if window.label() != "main" {
         return false;
@@ -36,7 +36,7 @@ pub fn richfiles_pane_available(window: WebviewWindow) -> bool {
     false
 }
 
-#[tauri::command]
+#[richos_command::command]
 pub async fn richfiles_place_pane(window: WebviewWindow, bounds: PaneBounds) -> Result<(), String> {
     if window.label() != "main" || !bounds.valid() {
         return Err("RichFiles could not use that window area.".to_owned());
@@ -67,7 +67,7 @@ struct Requests {
     reveal: Option<PathBuf>,
 }
 
-#[tauri::command]
+#[richos_command::command]
 pub fn richfiles_request_pending(window: WebviewWindow, request: State<'_, PaneRequests>) -> bool {
     window.label() == "main"
         && request
@@ -76,7 +76,7 @@ pub fn richfiles_request_pending(window: WebviewWindow, request: State<'_, PaneR
             .is_ok_and(|pending| pending.workspace.is_some() || pending.reveal.is_some())
 }
 
-#[tauri::command]
+#[richos_command::command]
 pub fn richfiles_accept_request(
     window: WebviewWindow,
     request: State<'_, PaneRequests>,
@@ -114,7 +114,7 @@ pub fn richfiles_accept_request(
     Ok(())
 }
 
-#[tauri::command]
+#[richos_command::command]
 pub fn output_reveal_in_richfiles(
     app: tauri::AppHandle,
     files: State<'_, crate::output_files::OutputFiles>,
