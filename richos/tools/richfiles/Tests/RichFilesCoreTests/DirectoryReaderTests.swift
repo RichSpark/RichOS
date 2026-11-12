@@ -259,6 +259,7 @@ final class DirectoryReaderTests: XCTestCase {
             XCTAssertThrowsError(try DirectoryReader.address("Research notes/brief.txt", relativeTo: root))
             XCTAssertThrowsError(try DirectoryReader.directoryURL(XCTUnwrap(URL(string: "https://example.invalid/"))))
             let properties = try FileProperties(url: file)
+            XCTAssertFalse(properties.needsDownload)
             XCTAssertEqual(properties.entry.name, "brief.txt")
             XCTAssertEqual(properties.entry.size, 4)
             XCTAssertNotNil(properties.permissions)

@@ -858,6 +858,9 @@ struct PropertiesSheet: View {
             Form {
                 LabeledContent("Path", value: entry.url.path).textSelection(.enabled)
                 LabeledContent("Kind", value: entry.typeDescription ?? "Unknown")
+                if properties?.needsDownload ?? entry.needsDownload {
+                    LabeledContent("Availability", value: "Download required")
+                }
                 LabeledContent("Size", value: entry.size.map(formattedBytes) ?? (folderSize.isEmpty ? "–" : folderSize))
                 LabeledContent("Created", value: entry.created.map(formattedDate) ?? "–")
                 LabeledContent("Modified", value: entry.modified.map(formattedDate) ?? "–")
@@ -876,8 +879,12 @@ struct PropertiesSheet: View {
             }
         }.padding(15).frame(width: 520, height: 375)
             .task {
-                do { properties = try await Task.detached { try FileProperties(url: entry.url) }.value }
-                catch { problem = error.localizedDescription }
+                do {
+                    let result = try await readStorage { try FileProperties(url: entry.url) }
+                    if !Task.isCancelled { properties = result }
+                } catch {
+                    if !Task.isCancelled { problem = error.localizedDescription }
+                }
             }
             .onDisappear { sizeTask?.cancel() }
     }

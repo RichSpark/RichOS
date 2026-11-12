@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 public struct VolumeInfo: Sendable, Identifiable {
@@ -52,14 +53,22 @@ public struct VolumeInfo: Sendable, Identifiable {
 
 public struct FileProperties: Sendable {
     public let entry: FileEntry
+    public let needsDownload: Bool
     public let permissions: Int?
     public let owner: String?
     public let group: String?
 
     public init(url: URL) throws {
         try requireLocalFileURL(url)
+        let previous = try TextContentReader.disableDatalessMaterialization()
+        defer { TextContentReader.restoreDatalessMaterialization(previous) }
         // A URL received from enumeration may still hold its earlier resource values.
         entry = try FileEntry(url: URL(fileURLWithPath: url.path))
+        var status = stat()
+        guard lstat(url.path, &status) == 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+        needsDownload = entry.needsDownload || TextContentReader.isDataless(status)
         let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
         permissions = (attributes[.posixPermissions] as? NSNumber)?.intValue
         owner = attributes[.ownerAccountName] as? String
