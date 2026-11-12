@@ -890,7 +890,7 @@ impl Tool {
                     if seq != self.capture_seq || !matches!(self.session.phase(), Phase::Listening { .. }) { continue; }
                     match update {
                         super::live_preview::Update::Words { text, sampled_at, decode_ms } => {
-                            if sampled_at.elapsed() > Duration::from_secs(3) {
+                            if sampled_at.elapsed() > super::live_preview::DISPLAY_MAX_AGE {
                                 if let Some(t) = &self.timings { t.event("preview_paused", serde_json::json!({"reason":"control_delivery_stale"})); }
                                 self.stop_live_preview();
                                 self.live_preview_paused = true;

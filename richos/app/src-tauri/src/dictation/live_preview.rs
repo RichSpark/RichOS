@@ -14,6 +14,16 @@ pub enum Update {
 
 // One fixed recent-text allowance; no accumulating provisional transcript.
 const PREVIEW_CHARACTER_LIMIT: usize = 200;
+pub(super) const DISPLAY_MAX_AGE: Duration = Duration::from_secs(3);
+const FIRST_RESULT_MAX_AGE: Duration = Duration::from_secs(2);
+const FIRST_DECODER_LIMIT: Duration = Duration::from_millis(1800);
+const RESULT_HANDOFF_MARGIN: Duration = Duration::from_millis(150);
+
+fn preview_limits(has_words: bool, elapsed: Duration) -> (Duration, Duration) {
+    let max_age = if has_words { DISPLAY_MAX_AGE - RESULT_HANDOFF_MARGIN } else { FIRST_RESULT_MAX_AGE };
+    let max_decode = if has_words { max_age - Duration::from_millis(50) } else { FIRST_DECODER_LIMIT };
+    (max_age, max_decode.saturating_sub(elapsed))
+}
 
 // A short overlap keeps enough audio to recognize speech across adjacent ticks.
 // Older words may provide decoder context, but cannot trigger a new decode.
@@ -32,7 +42,8 @@ pub fn recent_text(text: &str) -> String {
 
 /// Owned by the ordinary dictation's writing-worker lifecycle. `park_timeout`
 /// wakes immediately when that owner unparks it on Stop/Cancel/quit. The only
-/// blocking decode uses the existing kill/reap tether and a 1.8-second deadline.
+/// blocking decode uses the existing kill/reap tether. Later updates may use
+/// more of the freshness allowance after the first words have appeared.
 pub fn run(recording: Arc<Mutex<Option<Recording>>>, data_dir: &Path, stop: &AtomicBool,
            mut send: impl FnMut(Update)) {
     if stop.load(Ordering::Acquire) { return; }
@@ -43,6 +54,7 @@ pub fn run(recording: Arc<Mutex<Option<Recording>>>, data_dir: &Path, stop: &Ato
     };
     let mut due = started + Duration::from_secs(1);
     let mut last_samples = 0;
+    let mut has_words = false;
     loop {
         if stop.load(Ordering::Acquire) { return; }
         if let Some(wait) = due.checked_duration_since(Instant::now()) {
@@ -69,14 +81,21 @@ pub fn run(recording: Arc<Mutex<Option<Recording>>>, data_dir: &Path, stop: &Ato
         if stop.load(Ordering::Acquire) { return; }
         let input_ms = samples.len() as u64 * 1000 / u64::from(SAMPLE_RATE);
         let paused = |reason| Update::Paused { reason, input_ms: Some(input_ms) };
-        let result = Scratch::new(data_dir).map_err(|_| "scratch_unavailable").and_then(|scratch|
-            recognizer.transcribe_preview_until(&samples, scratch.path(), Duration::from_millis(1800), stop)
-                .map_err(|error| decoder_failure_reason(&error)));
+        let result = Scratch::new(data_dir).map_err(|_| "scratch_unavailable").and_then(|scratch| {
+            let (max_age, budget) = preview_limits(has_words, sampled_at.elapsed());
+            if budget.is_zero() { return Err("stale_result"); }
+            recognizer.transcribe_preview_until(&samples, scratch.path(), budget, stop)
+                .map(|result| (result, max_age))
+                .map_err(|error| decoder_failure_reason(&error))
+        });
         if stop.load(Ordering::Acquire) { return; }
         match result {
-            Ok((text, decode_ms)) if sampled_at.elapsed() <= Duration::from_secs(2) => {
+            Ok(((text, decode_ms), max_age)) if sampled_at.elapsed() <= max_age => {
                 match judge_transcript(&text) {
-                    Ok(text) => send(Update::Words { text: recent_text(&text), sampled_at, decode_ms }),
+                    Ok(text) => {
+                        has_words = true;
+                        send(Update::Words { text: recent_text(&text), sampled_at, decode_ms });
+                    }
                     Err(_) => { send(paused("transcript_rejected")); return; }
                 }
             }
@@ -91,6 +110,15 @@ pub fn run(recording: Arc<Mutex<Option<Recording>>>, data_dir: &Path, stop: &Ato
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn preview_budget_charges_preparation_and_leaves_time_for_display() {
+        assert_eq!(preview_limits(false, Duration::from_millis(100)),
+            (Duration::from_secs(2), Duration::from_millis(1700)));
+        assert_eq!(preview_limits(true, Duration::from_millis(100)),
+            (Duration::from_millis(2850), Duration::from_millis(2700)));
+        assert!(preview_limits(true, DISPLAY_MAX_AGE).1.is_zero());
+    }
 
     #[test]
     fn old_speech_cannot_trigger_a_decode_during_a_pause() {
