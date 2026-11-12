@@ -33,6 +33,17 @@ async function main() {
       await page.close();
     });
 
+    await run.check("a company Rich added during his turn redraws the company list when the app adopts it", async () => {
+      const page = await openApp(browser, { onboarding: "partial" });
+      await page.waitForSelector("#first-run:not([hidden])");
+      await page.evaluate(() => { window.__calls = []; });
+      await page.evaluate(() => window.__emit("rich://companies-changed", null));
+      const cmds = await page.evaluate(() => window.__calls.map((c) => c.cmd));
+      assert(cmds.includes("entity_choice") && cmds.includes("navigation_tree"),
+        "the company setting and the rail are read again: " + JSON.stringify(cmds));
+      await page.close();
+    });
+
     await run.check("partial answers offer Resume and send a continuation, in both themes", async () => {
       for (const theme of ["light", "dark"]) {
         const page = await openApp(browser, { onboarding: "partial" }, theme);

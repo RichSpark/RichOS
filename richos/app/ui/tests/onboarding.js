@@ -81,13 +81,16 @@ async function openApp(browser, preset, theme) {
         // spine does (check 4c).
         const listen = v.listen.bind(v);
         window.__turnStatusListeners = [];
+        window.__listeners = {};
         v.listen = function (name, cb) {
           if (name === "rich://turn-status") window.__turnStatusListeners.push(cb);
+          (window.__listeners[name] = window.__listeners[name] || []).push(cb);
           return listen(name, cb);
         };
       },
     });
     window.__emitTurnStatus = (payload) => window.__turnStatusListeners.forEach((cb) => cb({ payload }));
+    window.__emit = (name, payload) => Promise.all((window.__listeners[name] || []).map((cb) => cb({ payload })));
   });
   await page.addInitScript((p) => {
     window.__RICHOS_MOCK_PRESET__ = p;

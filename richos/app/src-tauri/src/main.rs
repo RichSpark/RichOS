@@ -47,7 +47,7 @@ use richos_core::correction::{
     CliLoroWriter, CorrectionDesk, Proposal, ProposalObserver, ProposedWrite,
     SharedCorrectionDesk, WriteOutput, EVENT_LORO_PROPOSED,
 };
-use richos_core::entity::{Entity, EntityId, EntityRegistry, RegistrySource, ENTITY_ID_MAX_LEN};
+use richos_core::entity::{Entity, EntityId, EntityRegistry, RegistrySource};
 use richos_core::feedback::{
     ContributingCondition, DiagnosisTerm, Disclosure, FailureClass, FeedbackEntry, FeedbackPayload,
     FeedbackStore, Occurrences, PromptOutcome, Rating, ReportDecision, DISCLOSURE_HEADING,
@@ -217,6 +217,8 @@ impl TurnObserver for TauriEmitter {
             |receipt| eprintln!("[richos] ui-emit {receipt}"),
         );
         if let StreamEvent::TurnCompleted { thread_id, turn_id, .. } = event {
+            let app = self.app.clone();
+            tauri::async_runtime::spawn_blocking(move || adopt_companies_added_during_the_turn(&app));
             if let Some(runtime) = self.app.try_state::<Arc<phone::PhoneRuntime>>() {
                 let runtime=Arc::clone(&runtime);
                 let (thread_id,turn_id)=(thread_id.clone(),turn_id.clone());
@@ -227,6 +229,40 @@ impl TurnObserver for TauriEmitter {
             }
         }
     }
+}
+
+/// The window redraws its company list on this (`main.js`).
+const EVENT_COMPANIES_CHANGED: &str = "rich://companies-changed";
+
+/// A COMPANY RICH ADDED DURING A TURN (`onboarding_tools.rs` `add_company`) is in the registry
+/// file but not in the spine: his tool cannot take the spine the turn holds. When the turn has
+/// let go of it, the app adopts the file's list if it has a company the spine lacks, and tells
+/// the window. Every app write saves the file first (`register_entity`, PROPERTY 1), so the file
+/// is never behind the spine; a list that adds nothing is left alone.
+fn adopt_companies_added_during_the_turn(app: &AppHandle) {
+    let Some(state) = app.try_state::<AppState>() else { return };
+    let load = EntityRegistry::load(&state.registry_path);
+    if load.is_unreadable() {
+        return;
+    }
+    let mut spine = take_the_spine(&state.spine);
+    let current = spine.entity_registry();
+    if !adopts_disk_registry(current, &load.registry) {
+        return;
+    }
+    eprintln!("[richos] companies: adopting {} added during the turn",
+        load.registry.entities().iter().filter(|e| !current.contains(&e.id)).map(|e| e.id.to_string()).collect::<Vec<_>>().join(", "));
+    spine.set_entity_registry(load.registry);
+    drop(spine);
+    // As `register_entity` does after adding a company: dictation learns the new name.
+    #[cfg(target_os = "macos")]
+    if let Some(host) = app.try_state::<Arc<dictation_app::Host>>() { host.publish_vocabulary(); }
+    app.emit(EVENT_COMPANIES_CHANGED, ()).ok();
+}
+
+/// True when the file's list adds a company the spine lacks and drops none it has.
+fn adopts_disk_registry(current: &EntityRegistry, disk: &EntityRegistry) -> bool {
+    disk.entities().iter().any(|e| !current.contains(&e.id)) && current.entities().iter().all(|e| disk.contains(&e.id))
 }
 
 /// The SPOKEN-CORRECTION sink (`staging.rs`): forwards §7's ask to the webview on
@@ -6611,42 +6647,9 @@ fn company_folder_message(folder: &Path, why: &str) -> String {
 /// who has just typed a name should not have to guess why it was rejected. The suffix is
 /// bounded: after 99 tries it gives up rather than looping.
 fn entity_id_from_name(name: &str, registry: &EntityRegistry) -> Result<EntityId, String> {
-    let mut slug = String::new();
-    for c in name.trim().to_lowercase().chars() {
-        if c.is_ascii_lowercase() || c.is_ascii_digit() {
-            slug.push(c);
-        } else if !slug.ends_with('-') {
-            slug.push('-');
-        }
-    }
-    let base: String = slug.trim_matches('-').chars().take(ENTITY_ID_MAX_LEN).collect();
-    let base = base.trim_end_matches('-').to_string();
-    if base.is_empty() {
-        return Err(
-            "That name doesn't have any letters or numbers in it, so I can't make a file-safe \
-             label out of it. Try a name with a word in it."
-                .to_string(),
-        );
-    }
-    for n in 1..=99u32 {
-        let candidate = if n == 1 {
-            base.clone()
-        } else {
-            // Keep the WHOLE thing inside the bound, suffix included.
-            let suffix = format!("-{n}");
-            let keep = ENTITY_ID_MAX_LEN.saturating_sub(suffix.len());
-            format!("{}{suffix}", base.chars().take(keep).collect::<String>().trim_end_matches('-'))
-        };
-        if let Ok(id) = EntityId::parse(&candidate) {
-            if !registry.contains(&id) {
-                return Ok(id);
-            }
-        }
-    }
-    Err(format!(
-        "I already have a lot of companies with names like \"{name}\" and I couldn't make a \
-         distinct label for another one. Try a name that's a bit more specific."
-    ))
+    // In richos-core since 2026-11-12, so the onboarding tool's add_company derives ids the
+    // same way (`EntityRegistry::id_for_name`).
+    registry.id_for_name(name)
 }
 
 /// Resolve the folder the CEO typed, or refuse in words he can act on.
@@ -7908,6 +7911,7 @@ mod entity_choice_tests {
 
     use super::*;
     use richos_core::config::ConfigStore;
+    use richos_core::entity::ENTITY_ID_MAX_LEN;
     use std::path::Path;
 
     /// THE REGISTRY THESE TESTS RUN AGAINST — a local fixture, since 2026-09-04.
@@ -8164,6 +8168,18 @@ mod entity_choice_tests {
     // The pure halves of `register_entity`. The command itself takes a `State<AppState>` that
     // only a running Tauri app can supply; what is testable here is everything it decides
     // BEFORE it touches the app, which is every decision it makes.
+
+    #[test]
+    fn a_company_rich_added_during_the_turn_is_adopted_and_nothing_else_is() {
+        let one = EntityRegistry::new(vec![Entity::new("alpha", "Alpha", &[] as &[&str]).unwrap()]).unwrap();
+        let two = EntityRegistry::new(vec![Entity::new("alpha", "Alpha", &[] as &[&str]).unwrap(),
+            Entity::new("beta", "Beta", &[] as &[&str]).unwrap()]).unwrap();
+        let other = EntityRegistry::new(vec![Entity::new("beta", "Beta", &[] as &[&str]).unwrap()]).unwrap();
+        assert!(adopts_disk_registry(&one, &two), "the file has a company the spine lacks");
+        assert!(!adopts_disk_registry(&two, &two), "nothing added, nothing adopted");
+        assert!(!adopts_disk_registry(&two, &one), "a file that drops a company is never adopted");
+        assert!(!adopts_disk_registry(&one, &other), "nor one that swaps a company out");
+    }
 
     #[test]
     fn an_id_is_derived_from_the_name_he_typed_and_never_asked_of_him() {

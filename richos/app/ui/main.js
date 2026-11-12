@@ -4627,6 +4627,14 @@ Bridge.listen("rich://turn-completed", ({ payload }) => {
   drainWorkNotices();
 });
 
+// A company Rich added during his turn (`add_company`) is adopted by the app when the turn ends
+// (`main.rs` `adopt_companies_added_during_the_turn`): the rail and the company setting redraw.
+Bridge.listen("rich://companies-changed", async () => {
+  await refreshEntityChoice();
+  refreshCompanySetting();
+  await refreshNavigation();
+});
+
 Bridge.listen("rich://turn-error", ({ payload }) => {
   if (payload.threadId !== activeThreadId) return;
   drillItems = [];
