@@ -1390,6 +1390,7 @@ struct BatchRenameSheet: View {
                     }
                 }.disabled(presets.isEmpty)
                 TextField("Name for this rule", text: $presetName)
+                    .accessibilityLabel("Name for this rule")
                 Button("Save Rule") { savePreset() }
                     .disabled(plan == nil || presetName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
@@ -1436,18 +1437,25 @@ struct BatchRenameSheet: View {
         switch method {
         case .regex, .replace:
             TextField(method == .regex ? "Pattern" : "Find text", text: operation.text)
+                .accessibilityLabel(method == .regex ? "Pattern" : "Find text")
             TextField("Replacement", text: operation.replacement)
+                .accessibilityLabel("Replacement")
         case .metadata:
             TextField("Name template", text: operation.text, prompt: Text("{modified} {name}"))
+                .accessibilityLabel("Name template")
             Text("{name}, {created}, {modified}, {number}").font(.caption).foregroundStyle(.secondary)
         case .number:
             TextField("Prefix", text: operation.text)
+                .accessibilityLabel("Prefix")
             HStack {
                 TextField("Start at", value: operation.start, format: .number)
+                    .accessibilityLabel("Start at")
                 TextField("Minimum digits", value: operation.digits, format: .number)
+                    .accessibilityLabel("Minimum digits")
             }
         case .prefix, .suffix:
             TextField("Text", text: operation.text)
+                .accessibilityLabel("Text")
         }
     }
 
