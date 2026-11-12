@@ -68,7 +68,7 @@ window.RichDictationBar = (function () {
   /// Fix it is on the microphone and Accessibility bars only (`dictation_bar::has_fix`).
   var FIX = { "no-microphone": true, "no-accessibility": true };
 
-  var D = { seq: 0, view: "hidden", started: 0, level: 0, target: 0, raf: 0, bars: [], previewEnabled: false, previewHeight: 0 };
+  var D = { seq: 0, view: "hidden", started: 0, level: 0, target: 0, raf: 0, bars: [], previewEnabled: false, previewHeight: 0, lastLayout: null };
 
   function look(msg) {
     if (window.RichTheme && msg && msg.theme) {
@@ -137,26 +137,43 @@ window.RichDictationBar = (function () {
   }
 
   function updatePreview(message) {
-    if (message.seq !== D.seq || D.view !== "listening") return;
+    if (message.seq !== D.seq || D.view !== "listening") return false;
     if (message.enabled !== undefined) D.previewEnabled = message.enabled;
     var pill = document.getElementById("dhEl");
-    if (!pill) return;
+    if (!pill) return false;
     var line = document.getElementById("dhPreview");
     if (!D.previewEnabled) {
       D.previewHeight = 0;
-      if (line) { line.remove(); report(); }
-      return;
+      if (line) line.remove();
+      return !!line;
     }
     if (!line) {
       line = document.createElement("div"); line.id = "dhPreview"; line.className = "dhx-top";
-      line.setAttribute("aria-live", "off"); pill.insertBefore(line, pill.firstChild);
+      line.setAttribute("aria-live", "off");
+      line.innerHTML = '<span class="dhx-tag">Preview</span>';
+      pill.insertBefore(line, pill.firstChild);
       if (D.previewHeight) line.style.minHeight = D.previewHeight + "px";
     }
-    line.innerHTML = message.paused ? '<span class="dhx-paused">Preview paused</span>'
-      : '<span class="dhx-tag">Preview</span>' + (message.text
-        ? '<span class="dhx-words" aria-live="off">' + esc(message.text) + '</span>'
-        : "");
-    report();
+    // Keep the live nodes in WebKit's accessibility tree as caption text changes.
+    var tag = line.firstElementChild;
+    var tagText = message.paused ? "Preview paused" : "Preview";
+    if (tag.textContent !== tagText) {
+      tag.className = message.paused ? "dhx-paused" : "dhx-tag";
+      tag.textContent = tagText;
+    }
+    var words = line.querySelector(".dhx-words");
+    if (message.paused || !message.text) {
+      if (words) words.remove();
+    } else {
+      if (!words) {
+        words = document.createElement("span"); words.className = "dhx-words";
+        words.setAttribute("aria-live", "off");
+        words.appendChild(document.createTextNode(""));
+        line.appendChild(words);
+      }
+      if (words.firstChild.data !== message.text) words.firstChild.data = message.text;
+    }
+    return true;
   }
 
   /// Draw one view: { seq, view, problem, key, startedMs, theme, fontScale }.
@@ -270,9 +287,14 @@ window.RichDictationBar = (function () {
     return out;
   }
 
-  function report() {
+  function report(captionUpdate) {
     var l = layout();
-    if (l) invoke("dictation_bar_laid_out", l);
+    if (!l) return;
+    var key = JSON.stringify(l);
+    // Refresh scrolling on every caption. Only ask macOS to place the window again
+    // if the caption changed its geometry; ordinary view and resize reports still run.
+    if (captionUpdate !== true || key !== D.lastLayout) invoke("dictation_bar_laid_out", l);
+    D.lastLayout = key;
   }
 
   /// The meter (round 19 `meterTick`): the tool's level, at most 30 a second, eased here.
@@ -356,7 +378,7 @@ window.RichDictationBar = (function () {
       ? [
           tauri.event.listen("dictation-bar", function (e) { render(e.payload); }),
           tauri.event.listen("dictation-level", function (e) { level(e.payload.level); }),
-          tauri.event.listen("dictation-live-preview", function (e) { updatePreview(e.payload); }),
+          tauri.event.listen("dictation-live-preview", function (e) { if (updatePreview(e.payload)) report(true); }),
         ]
       : [tauri.event.listen("dictation-flight", function (e) { fly(e.payload); })];
     Promise.all(heard).then(function () {
