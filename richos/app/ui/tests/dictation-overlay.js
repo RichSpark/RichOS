@@ -178,7 +178,8 @@ async function main() {
       await say(page,"dictation-bar",bar("listening",{theme,fontScale,destination:"Mail",vocabulary:"Example Company",previewEnabled:true}));
       await page.evaluate(()=>document.fonts.ready.then(()=>true));
       assert(await page.locator(".dhx-tag").isVisible(),"enabled preview is visible before the first words");
-      assertEqual(await text(page,".dhx-paused"),"Waiting for words…");
+      assertEqual((await text(page,".dhx-top")).toLowerCase(),"preview","the empty panel only shows its label");
+      assertEqual(await page.locator(".dhx-words").count(),0,"there are no blank caption lines at startup");
       const baseline = await page.evaluate(()=> {
         window.__previewRow=document.querySelector(".dhx-row");
         window.__previewMeter=document.querySelector(".dh-meter");
@@ -242,7 +243,7 @@ async function main() {
       assertEqual(short.report.w,token.report.w,"a shorter result cannot shrink the preview width");
       assert(short.controlsKept,"a shorter result leaves the live controls in place");
       await say(page,"dictation-live-preview",{seq:7,text:""});
-      assertEqual(await text(page,".dhx-paused"),"Waiting for words…");
+      assertEqual((await text(page,".dhx-top")).toLowerCase(),"preview","the label stays while old words expire");
       assertEqual(await page.evaluate(()=>window.RichDictationBar.layout()),short.report,"expired words leave the panel in place");
       await say(page,"dictation-live-preview",{seq:7,enabled:false,text:""});
       assertEqual(await page.locator(".dhx-top").count(),0,"explicitly disabling preview removes it");

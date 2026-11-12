@@ -155,7 +155,7 @@ window.RichDictationBar = (function () {
     line.innerHTML = message.paused ? '<span class="dhx-paused">Preview paused</span>'
       : '<span class="dhx-tag">Preview</span>' + (message.text
         ? '<span class="dhx-words" aria-live="off">' + esc(message.text) + '</span>'
-        : '<span class="dhx-paused">Waiting for words…</span>');
+        : "");
     report();
   }
 
