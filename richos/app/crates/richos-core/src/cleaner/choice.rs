@@ -82,7 +82,14 @@ impl Prepared {
         }
     }
     pub fn choose(&self, name: &str, note: &str, folders: &[String]) -> Result<Choice> {
-        let body=json!({"type":"user","message":{"role":"user","content":json!({"filename":name,"note":note,"folders":folders}).to_string()}}).to_string();
+        self.choose_from(json!({"filename":name,"note":note,"folders":folders}))
+    }
+    pub fn choose_batch(&self, names: &[String], note: &str, folders: &[String]) -> Result<Choice> {
+        self.choose_from(json!({"filenames":names,"note":note,"folders":folders}))
+    }
+    fn choose_from(&self, input: Value) -> Result<Choice> {
+        let body = json!({"type":"user","message":{"role":"user","content":input.to_string()}})
+            .to_string();
         if body.len() > 60 * 1024 {
             return Err("Folder context exceeds its metadata budget".into());
         }

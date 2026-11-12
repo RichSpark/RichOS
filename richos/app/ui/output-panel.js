@@ -76,6 +76,7 @@
     open: false,
     view: "list", // "list" | "file"
     file: null, // the output id the file view shows
+    sourcePassage: null,
     /// The row kept selected when the file view steps back to the list (§6.4).
     selected: null,
     /// When the read in flight started, so *Looking…* waits its 150 ms whenever it is drawn.
@@ -257,7 +258,7 @@
     // a few milliseconds after the panel put focus on its first row).
     const anchor = focusAnchor();
     if (state.view === "file") {
-      if (entry(state.file)) renderFile(state.file, { keepFocus: true });
+      if (entry(state.file)) renderFile(state.file, { keepFocus: true, keepScroll: true });
       else showList({ keepFocus: true });
       restoreFocus(anchor);
       reattachMenu();
@@ -500,6 +501,7 @@
     opts = opts || {};
     state.view = "list";
     state.file = null;
+    state.sourcePassage = null;
     render();
     const body = el("op-body");
     if (opts.focusFile) {
@@ -531,6 +533,7 @@
     act.details.delete(id);
     state.view = "file";
     state.file = id;
+    state.sourcePassage = opts?.sourcePassage ? { ...opts.sourcePassage, landed: false } : null;
     state.selected = id;
     renderFile(id, opts);
   }
@@ -543,6 +546,7 @@
     const list = files();
     const idx = list.indexOf(f);
     const body = el("op-body");
+    const scroll = opts.keepScroll ? body.scrollTop : 0;
     body.dataset.view = "file";
     let sub = f.exists ? "Written " + whenLabel(f.writtenAt).replace(/^(Today|Yesterday|Just now)/, (m) => m.toLowerCase()) : MISSING_LINE;
     if (f.exists && typeof f.bytes === "number") sub += " · " + humanSize(f.bytes);
@@ -605,7 +609,7 @@
 
     body.textContent = "";
     body.appendChild(view);
-    body.scrollTop = 0;
+    body.scrollTop = scroll;
     if (opts.keepFocus) return;
     if (opts.focusStep === "prev") prev.focus({ preventScroll: true });
     else if (opts.focusStep === "next") next.focus({ preventScroll: true });
@@ -752,10 +756,30 @@
     switch (a.view) {
       case "text": {
         const source = SOURCE_KINDS[f.kind] && preview.source;
+        const lines = a.text ? a.text.split("\n") : [];
+        const requested = state.file === f.id ? state.sourcePassage : null;
+        const sourceLine = requested && lines[requested.line - 1]?.startsWith("**[" + requested.stamp + "] ")
+          ? requested.line
+          : null;
+        if (requested && !sourceLine) box.appendChild(node("p", "of-note", "This source passage could not be located."));
         if (f.kind === "md" && !source) {
           const md = node("div", "of-md");
           if (window.RichTimeline && window.RichTimeline.renderMarkdownInto) {
-            window.RichTimeline.renderMarkdownInto(md, a.text, null, { document: true });
+            const briefLinks = /\/evidence\/meetings\/[a-zA-Z0-9._:-]+\/brief\.md$/.test(f.path) ? {
+              forText(text) {
+                const hit = links.forText(text);
+                return hit?.sourcePassage ? hit : null;
+              },
+            } : null;
+            window.RichTimeline.renderMarkdownInto(md, a.text, briefLinks, { document: true, sourceLine });
+            const passage = md.querySelector("[data-source-passage]");
+            if (passage && !requested.landed) queueMicrotask(() => {
+              if (!passage.isConnected || state.sourcePassage !== requested || requested.landed) return;
+              const body = el("op-body");
+              const rect = passage.getBoundingClientRect();
+              body.scrollTop += rect.top - body.getBoundingClientRect().top - (body.clientHeight - rect.height) / 2;
+              requested.landed = true;
+            });
           } else {
             md.textContent = a.text;
           }
@@ -764,11 +788,11 @@
           box.appendChild(node("pre", source ? "of-src" : "of-text", a.text));
         }
         if (a.truncated) box.appendChild(node("p", "of-note", TEXT_CAP_LINE));
-        const lines = a.text ? a.text.split("\n").length - (a.text.endsWith("\n") ? 1 : 0) : 0;
+        const lineCount = lines.length - (a.text && a.text.endsWith("\n") ? 1 : 0);
         box.appendChild(
           f.kind === "md"
             ? factsLine([plural(countWords(a.text), "word", "words"), "Markdown"])
-            : factsLine([plural(lines, "line", "lines"), KIND_WORD.txt])
+            : factsLine([plural(lineCount, "line", "lines"), KIND_WORD.txt])
         );
         return;
       }
@@ -1050,6 +1074,7 @@
     state.open = false;
     state.view = "list";
     state.file = null;
+    state.sourcePassage = null;
     state.selected = null;
     panel.hidden = true;
     panel.classList.remove("is-opening");
@@ -1094,9 +1119,10 @@
   }
 
   /// A file named in Rich's message: the link pulses once and the panel opens on that file.
-  function openFile(id, from) {
+  function openFile(id, from, sourcePassage) {
     flash(from);
-    open({ file: id, returnTo: "conversation" });
+    if (sourcePassage) preview.source = false;
+    open({ file: id, returnTo: "conversation", sourcePassage });
   }
 
   /// The turn's *Wrote N files*: the panel opens at the list and that turn's group pulses once.
@@ -1119,6 +1145,14 @@
     forText(text) {
       const t = String(text || "").trim();
       if (!t || !state.list) return null;
+      const source = window.RichTimeline?.meetingSource(t);
+      if (source) {
+        const suffix = "/" + source.session + "/transcript.md";
+        const files = state.list.files.filter((f) => f.kind === "md" && ("/" + f.path).endsWith(suffix));
+        return files.length === 1 ? {
+          ...files[0], sourcePassage: { line: source.line, stamp: source.stamp },
+        } : null;
+      }
       let byName = null;
       let names = 0;
       for (const f of state.list.files) {
@@ -1168,6 +1202,7 @@
     state.rev += 1;
     state.view = "list";
     state.file = null;
+    state.sourcePassage = null;
     state.selected = null;
     if (!next) {
       close({ keepFocus: true });

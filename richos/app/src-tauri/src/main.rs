@@ -535,6 +535,8 @@ fn meetings_corpus_root(install: Option<&richos_core::loro::LoroInstall>) -> Pat
 }
 
 struct EngineLeaseFactory {
+    #[cfg(target_os = "macos")]
+    app: AppHandle,
     quota: Arc<richos_core::quota::Service>,
     claude_bin: Arc<Mutex<PathBuf>>,
     engine_dir: Arc<Mutex<PathBuf>>,
@@ -753,6 +755,11 @@ impl EngineLeaseFactory {
             }
         }
         profile.meetings_corpus = Some(corpus);
+        #[cfg(target_os = "macos")]
+        {
+            let app = self.app.clone();
+            profile.set_live_meeting_reader(move |binding, at| meetings::live_context(&app, binding, at));
+        }
         // Fill-first: the conversation lease runs under the Claude account in use now.
         profile.claude_account = Some(self.quota.lease_account());
         profile.token_sink = Some(self.quota.token_sink()); // what the lease spends, counted on that account
@@ -2383,8 +2390,13 @@ fn main() {
             // and the front desk's answer carries the screen as it is right now beside the
             // work that is waiting for it. A short-lived child of the GUI session reads the
             // same session dictionary the app does.
-            .and_then(|scope| richos_core::status_tools::run_stdio(Path::new(&scope), &screen::MacScreen)
-                .map_err(|e| e.to_string()));
+            .and_then(|scope| {
+                #[cfg(target_os = "macos")]
+                let result = richos_core::status_tools::run_stdio_with_meeting(Path::new(&scope), &screen::MacScreen, meetings::read_live_excerpt);
+                #[cfg(not(target_os = "macos"))]
+                let result = richos_core::status_tools::run_stdio(Path::new(&scope), &screen::MacScreen);
+                result.map_err(|e| e.to_string())
+            });
         if let Err(error) = result {
             startup_alert::cannot_start(
                 &format!("status tool server: {error}"),
@@ -3310,6 +3322,8 @@ fn main() {
                 Some(engine::EngineSource::EnvEngineDir) | Some(engine::EngineSource::EnvEngineRoot)
             );
             let lease_factory = || EngineLeaseFactory {
+                #[cfg(target_os = "macos")]
+                app: app.handle().clone(),
                 quota: quota.clone(),
 
                 claude_bin: Arc::clone(&claude_bin_cell),

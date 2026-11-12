@@ -352,6 +352,75 @@ async function main() {
     return "`" + before.text + "` → the panel on that file; an unrecorded name stays a code span";
   });
 
+  await run.check("a meeting source opens the witnessed transcript at its supporting passage", async () => {
+    const sourcePage = await openApp(browser);
+    await openThread(sourcePage, "acme", 9);
+    await sourcePage.evaluate(async () => {
+      const folder = "/acme/evidence/meetings/2026-11-11T11-00-00Z--system--call";
+      const original = window.RichBridge.invoke.bind(window.RichBridge);
+      window.RichBridge.invoke = async (command, args) => {
+        if (command === "output_preview" && args.outputId === "fixture-meeting-transcript") {
+          const earlier = "**[00:03] Them:** Earlier context.\n\n".repeat(60);
+          const later = "\n**[02:10] Them:** Later context.\n".repeat(30);
+          return { view: "text", text: "# Transcript\n\n" + earlier + "**[02:04] Me:** Approve the pilot.\n" + later };
+        }
+        if (command === "output_preview" && args.outputId === "fixture-meeting-brief") {
+          return { view: "text", text: "Approve the pilot. `meeting-source 2026-11-11T11-00-00Z--system--call 123 02:04`" };
+        }
+        const result = await original(command, args);
+        if (command !== "list_output") return result;
+        const base = result.files.find((file) => file.name === "brief.md");
+        const file = { ...base, id: "fixture-meeting-transcript", name: "transcript.md", path: folder + "/transcript.md", folder };
+        const archive = { ...base, id: "fixture-meeting-brief", path: folder + "/brief.md", folder };
+        const files = [...result.files, file, archive];
+        if (document.documentElement.dataset.fixtureOutputArrival) files.push({ ...base, id: "fixture-arrival" });
+        return { ...result, files, count: files.length };
+      };
+      await window.RichOutput.reload();
+      const note = document.createElement("div");
+      note.id = "fixture-meeting-source";
+      document.getElementById("conversation").appendChild(note);
+      const before = document.createElement("div");
+      before.id = "fixture-before-output";
+      document.getElementById("conversation").appendChild(before);
+      window.RichTimeline.renderMarkdownInto(before, "Approve the pilot. `meeting-source 2026-11-11T11-00-00Z--system--call 123 02:04`");
+      window.RichTimeline.renderMarkdownInto(note,
+        "Approve the pilot. `meeting-source 2026-11-11T11-00-00Z--system--call 123 02:04` " +
+        "`meeting-source 2026-11-11T11-00-00Z--system--call 123 02:05` " +
+        "`meeting-source 2026-11-12T11-00-00Z--system--call 123 02:04`",
+        window.RichOutput.links);
+    });
+    const note = sourcePage.locator("#fixture-meeting-source");
+    assertEqual(await sourcePage.locator("#fixture-before-output").innerText(), "Approve the pilot. Source 02:04");
+    assertEqual(await note.getByRole("button").allTextContents(), ["Source 02:04", "Source 02:05"]);
+    assertEqual(await note.locator("code").count(), 0, "unwitnessed transcript is a readable source time");
+    await note.getByRole("button", { name: "Source 02:04" }).click();
+    const passage = sourcePage.locator('#op-viewer [data-source-passage="123"]');
+    await passage.waitFor();
+    assert((await passage.innerText()).includes("Approve the pilot."));
+    assertEqual((await panelState(sourcePage)).title, "transcript.md");
+    await note.getByRole("button", { name: "Source 02:05" }).click();
+    await sourcePage.getByText("This source passage could not be located.").waitFor();
+    assertEqual(await passage.count(), 0, "stale line did not select another passage");
+    await note.getByRole("button", { name: "Source 02:04" }).click();
+    await sourcePage.waitForFunction(() => document.getElementById("op-body").scrollTop > 100);
+    const scroll = await sourcePage.evaluate(async () => {
+      const body = document.getElementById("op-body");
+      body.scrollTop -= 100;
+      const before = body.scrollTop;
+      document.documentElement.dataset.fixtureOutputArrival = "true";
+      await window.RichOutput.reload();
+      return { before, after: body.scrollTop };
+    });
+    assertEqual(scroll.after, scroll.before, "new output keeps the reader's place in the open transcript");
+    assertEqual(await passage.count(), 1, "the cited passage survives an unrelated output arrival");
+    await sourcePage.evaluate(() => window.RichOutput.open({ file: "fixture-meeting-brief" }));
+    await sourcePage.locator("#op-viewer").getByRole("button", { name: "Source 02:04" }).click();
+    await passage.waitFor();
+    assertEqual((await panelState(sourcePage)).title, "transcript.md", "a saved brief can also open its cited passage");
+    await sourcePage.close();
+  });
+
   await run.check("from-digest — 'Wrote 3 files' opens the panel at the list and that turn's group pulses", async () => {
     const turn = byName("brief.md").turnId;
     const sel = '[id="wrote:' + turn + '"]';

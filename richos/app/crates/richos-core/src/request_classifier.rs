@@ -115,11 +115,12 @@ impl RequestClassifier {
         Self {skills:skills.to_path_buf(),requests:Some(send),stopped,worker:Some(worker)}
     }
 
-    pub fn classify(&mut self, original:&str, context:&str, canceled:impl Fn()->bool)->Result<String,String> {
+    pub fn classify(&mut self, original:&str, context:&str, current_recording:bool, canceled:impl Fn()->bool)->Result<String,String> {
         if canceled() {return Err("Classification canceled".into())}
         let roles=|name|std::fs::read_to_string(self.skills.join(format!("agents/{name}.md"))).map_err(|e|e.to_string());
         let body=json!({"type":"user","message":{"role":"user","content":json!({"user_request":original,
-            "recent_conversation":context,"roles":{"rich":roles("rich")?,"stu":roles("stu")?}}).to_string()}}).to_string();
+            "recent_conversation":context,"current_recording":current_recording,
+            "roles":{"rich":roles("rich")?,"stu":roles("stu")?}}).to_string()}}).to_string();
         if body.len()>MAX_BYTES {return Err("Request exceeds classifier context budget".into())}
         let (reply,result)=mpsc::channel();
         let cancel=Arc::new(AtomicBool::new(false));
@@ -308,7 +309,7 @@ pub(crate) mod tests {
             runtime:crate::runtime::EngineRuntime {root:PathBuf::from("/usr"),python:PathBuf::from("/usr/bin/python3"),
                 node:PathBuf::from("/usr/bin/false"),git:PathBuf::from("/usr/bin/git"),versions:Default::default()},
             work_scope:None, search_binding:None, codex_root:root.join("codex-coordination"),
-            claude_account:None,token_sink:None,speech_model:None,meetings_corpus:None,
+            claude_account:None,token_sink:None,speech_model:None,meetings_corpus:None,live_meeting_reader:None,
             lease_models:Default::default(),machine_settings:Default::default(),
         };
         (root,bin,profile,skills)
@@ -319,7 +320,7 @@ pub(crate) mod tests {
         let (root,bin,profile,skills)=fixture("for line in sys.stdin:\n    with open('received.jsonl','a') as f: f.write(line)\n    time.sleep(60) # Stalled provider; owned teardown, not timing, decides cleanup.");
         let mut classifier=RequestClassifier::new(&bin,&profile,&skills);
         let calls=std::sync::atomic::AtomicUsize::new(0);
-        let answer=classifier.classify("Visible request", "context",|| {
+        let answer=classifier.classify("Visible request", "context",false,|| {
             calls.fetch_add(1,std::sync::atomic::Ordering::Relaxed);false
         });
         assert_eq!(answer.unwrap_err(),"Classifier not ready");
@@ -359,7 +360,7 @@ for line in sys.stdin:
         let mut classifier=RequestClassifier::new(&bin,&profile,&skills);
         let seen=profile.state.join("classification/seen.jsonl");
         until(||std::fs::read_to_string(&seen).ok().filter(|text|text.contains("warmup")));
-        let mut route=|text:&str|until(|| match classifier.classify(text,"recent conversation",||false) {
+        let mut route=|text:&str|until(|| match classifier.classify(text,"recent conversation",false,||false) {
             Ok(answer)=>Some(answer),
             Err(error) if error=="Classifier not ready"=>None,
             Err(error)=>panic!("{error}"),
@@ -397,7 +398,7 @@ for line in sys.stdin:
         // assertion. `until` supplies the existing fixture hang guard.
         let answer=until(|| {
             let polls=std::cell::Cell::new(0);
-            match classifier.classify("Substantial work","context",|| {
+            match classifier.classify("Substantial work","context",false,|| {
                 let count=polls.get()+1;polls.set(count);
                 if count==40 {std::fs::write(&release,"ready").unwrap();}
                 false

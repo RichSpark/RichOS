@@ -143,7 +143,7 @@ pub fn row_from_item(item: &Value) -> Option<Value> {
             }))
         }
         k if k == "rich_message" || is_media_item(item) => {
-            let text = if k == "rich_message" { text } else { media_moments_text(&item["file"], text)? };
+            let text = if k == "rich_message" { richos_core::meeting_notes::plain_brief_sources(&text) } else { media_moments_text(&item["file"], text)? };
             Some(json!({
                 "id": id,
                 "thread_id": thread_id,
@@ -413,6 +413,15 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn phone_brief_rows_show_readable_source_times() {
+        let text = "Approved `meeting-source 2026-11-11T11-00-00Z--system--call 3 02:04`. Keep `other code`.";
+        let rich = row_from_item(&json!({"kind":"rich_message","id":"r","text":text})).unwrap();
+        assert_eq!(rich["text"], "Approved Source 02:04. Keep `other code`.");
+        let user = row_from_item(&json!({"kind":"user_message","id":"u","text":text})).unwrap();
+        assert_eq!(user["text"], text);
+    }
 
     #[test]
     fn a_completed_turns_push_keeps_its_reply_when_a_later_turn_is_already_streaming() {
