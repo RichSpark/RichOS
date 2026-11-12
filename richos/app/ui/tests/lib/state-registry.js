@@ -3754,11 +3754,6 @@ module.exports = [
       "and the control it describes is the one it names.",
   },
   {
-    s: "Start onboarding",
-    c: "CONTROL",
-    why: "The label of `#first-run-start`.",
-  },
-  {
     s: "Let's do the onboarding.",
     c: "CONTROL",
     why:
@@ -3817,7 +3812,6 @@ module.exports = [
   { s: "Waiting for Rich to accept it", c: "INFORMATIONAL", why: "The local request has no authoritative queued event yet." },
   { s: "Your message is recorded.", c: "INFORMATIONAL", why: "The queued event follows the durable acceptance." },
   { s: "Rich is picking this back up.", c: "INFORMATIONAL", why: "A one-time announcement of an authoritative recovery transition." },
-  { s: "Resume onboarding", c: "CONTROL", why: "The existing Start control continues an incomplete onboarding." },
   { s: "Let's pick up onboarding where we stopped.", c: "CONTROL", why: "The explicit Resume acceptance sent through the ordinary message path." },
   { s: "Your onboarding is started.", c: "ACTIONABLE", control: "#first-run-start", fixture: "first-run-partial", why: "Saved partial answers have a Resume control in the same panel." },
   { s: "What you've shared is kept, so we can pick up where we stopped.", c: "ACTIONABLE", control: "#first-run-start", fixture: "first-run-partial", why: "Explains that resuming keeps what he already shared, beside the Resume control." },
