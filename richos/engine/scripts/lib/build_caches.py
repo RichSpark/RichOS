@@ -37,7 +37,23 @@ THE LANDER TAKES A WORKSPACE'S OWN FOLDERS AT THE MOMENT IT IS DELETED (owned_pa
 mega-lander/workspaces.py), so rule 1 only catches what that missed: a crashed agent, a
 workspace removed some other way, and everything from before 2026-10-08.
 
-NO SIZE CAP ANYWHERE. What stays is what is in use or was used recently.
+THE FLOOR (2026-11-12). The two rules above let /Volumes/E1TB fall to 1.1 GB free while builds
+were running. Measured at 09:30Z: the 536 GB under cargo-target/ held NO unit older than 72 hours
+(the sweep had removed every one), and everything in it had been read within three days, 174 GB
+of it in the shared target alone. Dozens of branches build every day, each with its own feature
+set, so the shared targets gain about 170 GB of new units a day, and a fixed three-day window
+holds three days of that whatever the drive's size. So:
+
+  3. WHILE THE VOLUME HOLDING A CARGO TREE IS BELOW ITS FREE-SPACE TARGET, the idle window of
+     that volume's units is shortened, oldest first, to the window that frees what the volume
+     is short of. The target is the disk watchdog's alert floor for that volume (DISK_RICH_ALERT_GB,
+     scaled by capacity exactly as disk-watchdog.py scales it) times
+     SCRATCH_BUILD_CACHE_FREE_TARGET_PERCENT. The window never goes below
+     SCRATCH_BUILD_CACHE_MIN_IDLE_HOURS, a profile a build holds is never counted or touched, and
+     the deletion is the same as rule 2's (under Cargo's lock, re-measured). Oldest first means
+     the warm part of the shared target, which every build reads, goes last.
+
+No size cap: what stays is what is in use or was used recently, and the drive keeps its floor.
 """
 import fcntl
 import hashlib
@@ -460,6 +476,61 @@ def delete_units(profile, keys, idle_seconds, now=None):
                 deleted += 1
                 freed += u["bytes"]
     return deleted, freed, failures, ""
+
+
+# --- rule 3: the volume's floor ----------------------------------------------------------------
+
+GIB = 1024 ** 3
+
+
+def volume_space(path):
+    """(device, capacity_bytes, free_bytes) of the volume holding `path`, or None. Free is
+    f_bavail, what an ordinary write can reach, as disk-watchdog.py reads it."""
+    try:
+        st = os.statvfs(path)
+        dev = os.stat(path).st_dev
+    except OSError:
+        return None
+    return dev, st.f_frsize * st.f_blocks, st.f_frsize * st.f_bavail
+
+
+def free_target(path, floor_gb, primary, scale, percent):
+    """(target_bytes, floor_bytes, free_bytes) for the volume holding `path`, or None.
+
+    The floor is the disk watchdog's alert floor for that volume (disk-watchdog.py main):
+    floor_gb on the primary volume and, when `scale`, floor_gb times this volume's capacity over
+    the primary's on any other. The target is `percent` of it, so a heavy day's growth between
+    two sweeps lands above the floor, not on it."""
+    here = volume_space(path)
+    if here is None:
+        return None
+    dev, cap, free = here
+    floor = float(floor_gb) * GIB
+    prim = volume_space(primary) if primary else None
+    if scale and prim is not None and prim[0] != dev and prim[1]:
+        floor *= cap / float(prim[1])
+    return int(floor * percent / 100.0), int(floor), free
+
+
+def pressure_window(candidates, need_bytes, idle_seconds, min_idle_seconds, now):
+    """The idle window that frees `need_bytes` from `candidates` [(newest, bytes)], oldest first.
+
+    Units older than idle_seconds are already rule 2's and not counted. Returns idle_seconds when
+    nothing is needed; never less than min_idle_seconds, so when even that frees too little it is
+    min_idle_seconds and the caller reports the shortfall."""
+    if need_bytes <= 0:
+        return idle_seconds
+    freed = 0
+    for newest, size in sorted(candidates):
+        age = now - newest
+        if age >= idle_seconds:
+            continue
+        if age < min_idle_seconds:
+            break
+        freed += size
+        if freed >= need_bytes:
+            return max(min_idle_seconds, age)
+    return min_idle_seconds
 
 
 # --- the lander's half -----------------------------------------------------------------------

@@ -80,7 +80,9 @@ class Inputs(unittest.TestCase):
         # 125 since the internal-disk cleanup (2026-11-10): SCRATCH_DERIVED_DATA_IDLE_DAYS, _RETIRED_DIR,
         # _RETIRED_RETENTION_DAYS, _SIM_IDLE_DAYS, _DEVICE_SUPPORT_KEEP, _NAMED_RETENTION_DAYS,
         # _FIXTURE_IDENTITIES, _FIXTURE_FILES, and DISK_RECLAIM_ENABLE, _MIN_GAP_MINUTES, DISK_CONSUMER_MIN_GB.
-        self.assertEqual(len(parsed), 125)
+        # 127 since SCRATCH_BUILD_CACHE_FREE_TARGET_PERCENT and _MIN_IDLE_HOURS (2026-11-12, the
+        # Cargo arm keeps each volume above its floor).
+        self.assertEqual(len(parsed), 127)
         self.assertIsNone(inputs.config_change("", (HERE.parent / "orchestration.config").read_text())["fallback"])
 
     def test_semantic_values_ignore_comments_spacing_and_equivalent_quotes(self):
@@ -1402,7 +1404,9 @@ class Closure(unittest.TestCase):
                     'SCRATCH_DOCKER_PRUNE', 'ALLOWED_MODELS', 'SEAL_WAIT_SECONDS'):
             self.assertIn(key, closure['keys'])
             self.assertIn(unit, graph.config_units(inputs.config_change(key+'=a', key+'=b'), [unit]))
-        for key in ('QA_TOOLKIT_DIR', 'QUOTA_PAUSE_PERCENT', 'DISK_RICH_ALERT_GB'):
+        # DISK_CEO_NOTIFY_GB, not DISK_RICH_ALERT_GB: since 2026-11-12 the reaper reads the
+        # watchdog's floor (its Cargo arm keeps each volume above it), so that key is an input here.
+        for key in ('QA_TOOLKIT_DIR', 'QUOTA_PAUSE_PERCENT', 'DISK_CEO_NOTIFY_GB'):
             self.assertNotIn(unit, graph.config_units(inputs.config_change(key+'=a', key+'=b'), [unit]))
         for helper in ('scripts/scratch-sweep.sh', 'scripts/lib/qa-toolkit.py#type',
                        'scripts/lib/appinstances.py#declared-reader', 'scripts/hooks/observe-created-refs.sh'):

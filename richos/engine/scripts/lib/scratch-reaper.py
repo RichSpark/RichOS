@@ -3059,6 +3059,9 @@ class Reaper(object):
                      % (family, key, (self.now - newest) // 3600))
             planned.append(path)
 
+        # Every profile no build holds, with its units measured once: rule 2 and rule 3 both
+        # decide from this one reading.
+        free_profiles = []
         for profile in bc.profile_dirs(cargo_roots, skip=planned):
             check_deadline()
             refused = walls.check(profile, False)
@@ -3071,15 +3074,67 @@ class Reaper(object):
                              "a running Cargo build holds its lock; its units are "
                              "decided by the next pass")
                     continue
-            idle = bc.idle_units(profile, idle_s, now=self.now)
+            free_profiles.append((profile, bc.units(profile)))
+
+        # RULE 3, THE VOLUME'S FLOOR (2026-11-12, lib/build_caches.py). Per volume: what it is
+        # short of its target, less what the rows above already free on it, decides the window.
+        windows = self.build_cache_windows(bc, free_profiles, idle_s)
+        for profile, us in free_profiles:
+            window, why = windows.get(profile, (idle_s, ""))
+            idle = sorted(((k, u) for k, u in us.items() if self.now - u["newest"] >= window),
+                          key=lambda kv: kv[0])
             if not idle:
                 continue
-            e = Entry(profile, "cargo-units", sum(u["bytes"] for _k, u in idle), DELETE,
-                      "%d Cargo unit(s) no build has read for %d h; deleted under "
-                      "Cargo's lock, and Cargo rebuilds any that is needed again"
-                      % (len(idle), self.cfg["build_cache_idle_hours"]))
+            if window < idle_s:
+                text = ("%d Cargo unit(s) no build has read for %.1f h, oldest first, because %s "
+                        "(the usual window is %d h); deleted under Cargo's lock, and Cargo "
+                        "rebuilds any that is needed again"
+                        % (len(idle), window / 3600.0, why, self.cfg["build_cache_idle_hours"]))
+            else:
+                text = ("%d Cargo unit(s) no build has read for %d h; deleted under "
+                        "Cargo's lock, and Cargo rebuilds any that is needed again"
+                        % (len(idle), self.cfg["build_cache_idle_hours"]))
+            e = Entry(profile, "cargo-units", sum(u["bytes"] for _k, u in idle), DELETE, text)
             e.unit_keys = [k for k, _u in idle]
+            e.idle_seconds = window
             self.entries.append(e)
+
+    def build_cache_windows(self, bc, free_profiles, idle_s):
+        """{profile: (idle window in seconds, why)} for the profiles on a volume below its
+        free-space target (lib/build_caches.py rule 3). A volume at or above it is absent, and
+        its profiles keep the usual window."""
+        min_s = self.cfg.get("build_cache_min_idle_hours", 2) * 3600
+        by_dev = {}
+        for profile, us in free_profiles:
+            here = bc.volume_space(profile)
+            if here is not None:
+                by_dev.setdefault(here[0], []).append((profile, us))
+        out = {}
+        for dev, rows in by_dev.items():
+            t = bc.free_target(rows[0][0], self.cfg.get("disk_floor_gb", 60),
+                               self.cfg.get("disk_primary_volume", ""),
+                               self.cfg.get("disk_scale_extra_volumes", True),
+                               self.cfg.get("build_cache_free_target_percent", 150))
+            if t is None:
+                continue
+            target, floor, free = t
+            # What this arm already plans on this volume: orphan folders, the trash, and the
+            # units past the usual window.
+            planned = sum(e.size for e in self.entries
+                          if e.action == DELETE and e.klass in ("build-cache", "build-cache-trash")
+                          and (bc.volume_space(e.path) or (None,))[0] == dev)
+            planned += sum(u["bytes"] for _p, us in rows for u in us.values()
+                           if self.now - u["newest"] >= idle_s)
+            need = target - free - planned
+            if need <= 0:
+                continue
+            window = bc.pressure_window([(u["newest"], u["bytes"]) for _p, us in rows
+                                         for u in us.values()], need, idle_s, min_s, self.now)
+            why = ("the volume has %s free, under its target of %s (floor %s)"
+                   % (human(free), human(target), human(floor)))
+            for profile, _us in rows:
+                out[profile] = (window, why)
+        return out
 
     def codex_app_root(self):
         home = self.cfg.get("codex_home") or ""
@@ -4717,7 +4772,8 @@ class Reaper(object):
                 # lock (lib/build_caches.py), so a build that started since the plan
                 # keeps every unit, and a unit it read since the plan is kept.
                 n, got, bad, why_not = build_caches().delete_units(
-                    e.path, e.unit_keys, self.cfg["build_cache_idle_hours"] * 3600)
+                    e.path, e.unit_keys,
+                    getattr(e, "idle_seconds", self.cfg["build_cache_idle_hours"] * 3600))
                 if why_not:
                     lines.append("%s KEPT %s class=%s why=%s" % (stamp, e.path, e.klass, why_not))
                     continue
@@ -5437,6 +5493,13 @@ def config_from_env(process_only=False):
         "checkout_parents": [],  # build_caches discovers actual registered Git parents
         "build_cache_orphan_hours": opt_number("SCRATCH_BUILD_CACHE_ORPHAN_HOURS", 6),
         "build_cache_idle_hours": opt_number("SCRATCH_BUILD_CACHE_IDLE_HOURS", 72),
+        # The volume's floor (2026-11-12, lib/build_caches.py rule 3): the disk watchdog's own
+        # declared floor and scaling, and how far above it the Cargo arm aims.
+        "build_cache_min_idle_hours": opt_number("SCRATCH_BUILD_CACHE_MIN_IDLE_HOURS", 2),
+        "build_cache_free_target_percent": opt_number("SCRATCH_BUILD_CACHE_FREE_TARGET_PERCENT", 150),
+        "disk_floor_gb": opt_number("DISK_RICH_ALERT_GB", 60),
+        "disk_primary_volume": opt("DISK_PRIMARY_VOLUME", "/System/Volumes/Data"),
+        "disk_scale_extra_volumes": opt("DISK_SCALE_EXTRA_VOLUMES", "1") == "1",
         # The internal disk (2026-11-10, scan_internal_disk). The fallbacks are the values
         # orchestration.config states with their reasons.
         "derived_data_idle_days": opt_number("SCRATCH_DERIVED_DATA_IDLE_DAYS", 7),

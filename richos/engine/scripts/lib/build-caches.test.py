@@ -18,6 +18,12 @@ every "it kept X" test:
   B7   the lander's half: a checkout's own folders are found from its path, a neighbor's
        are not, and discard() moves them out of place at once.
   B8   with a repository whose worktree list cannot be read, no orphan is deleted.
+  B9   THE FLOOR (2026-11-12): with every unit read within 72 h and the volume under its
+       target, units go oldest first until the shortfall is covered; the warm unit stays.
+  B9c  the same units on a volume at its target are all kept (control).
+  B9m  a unit read within SCRATCH_BUILD_CACHE_MIN_IDLE_HOURS stays even when the volume is
+       still short, and a profile a running build holds is neither counted nor touched.
+  B9f  the floor is the disk watchdog's: scaled by capacity on a volume other than the primary.
 
 Everything lives in a temporary directory; nothing outside it is read or written except
 `git`, run against checkouts created here.
@@ -143,7 +149,12 @@ class BuildCaches(unittest.TestCase):
         r = object.__new__(reaper.Reaper)
         r.cfg = {"build_cache_root": self.cache, "cargo_target_roots": [self.cargo],
                  "checkout_parents": [self.parents], "age_floor_minutes": 60,
-                 "build_cache_orphan_hours": 6, "build_cache_idle_hours": 72}
+                 "build_cache_orphan_hours": 6, "build_cache_idle_hours": 72,
+                 # The floor (rule 3) is off unless a test sets it: the machine running this
+                 # suite has whatever free space it has.
+                 "build_cache_free_target_percent": 0, "build_cache_min_idle_hours": 2,
+                 "disk_floor_gb": 1, "disk_primary_volume": "", "disk_scale_extra_volumes": True}
+        r.cfg.update(getattr(self, "cfg_extra", {}))
         r.entries, r.roots, r.now, r.floor = [], [], time.time(), 3600
         r.skip_build_caches = False
         r.scan_build_caches(NoWalls())
@@ -301,6 +312,74 @@ class BuildCaches(unittest.TestCase):
         plan, _r = self.plan()
         for f in dead:
             self.assertEqual(plan[f].action, reaper.INDETERMINATE, (f, plan[f].why))
+
+    # -- rule 3: the volume's floor ---------------------------------------------------------
+    def recent_profile(self, name, ages_h):
+        """A profile whose units were all read within 72 h, one unit per age, oldest first."""
+        p = os.path.join(self.cargo, name, "debug")
+        hashes = []
+        for i, age_h in enumerate(ages_h):
+            h = "%016x" % (0xa0 + i)
+            for rel in (os.path.join(".fingerprint", "dep%d-%s" % (i, h), "lib-dep"),
+                        os.path.join("deps", "libdep%d-%s.rlib" % (i, h))):
+                write(os.path.join(p, rel), b"x" * 65536, age=age_h * 3600)
+            age_tree(os.path.join(p, ".fingerprint", "dep%d-%s" % (i, h)), age_h * 3600)
+            hashes.append(h)
+        write(os.path.join(p, ".cargo-lock"), b"")
+        return p, hashes
+
+    def under_target(self, short_bytes):
+        """The volume is `short_bytes` below its target: the floor is 1 GiB, the target 100% of it."""
+        gib = 1024 ** 3
+        self.cfg_extra = {"build_cache_free_target_percent": 100, "disk_floor_gb": 1}
+        mod = reaper.build_caches()
+        return patch.object(mod, "volume_space", lambda _p: (1, 100 * gib, gib - short_bytes))
+
+    def left(self, p):
+        return sorted(n for n in os.listdir(os.path.join(p, "deps")))
+
+    def test_B9_under_the_floor_recent_units_go_oldest_first_and_the_warm_one_stays(self):
+        p, (h50, h30, h3) = self.recent_profile("shared-build-v1", (50, 30, 3))
+        oldest = bc.units(p)[("unit", h50)]["bytes"]
+        with self.under_target(oldest):
+            plan, r = self.plan()
+            self.assertEqual(plan[p].action, reaper.DELETE, plan[p].why)
+            self.assertEqual(plan[p].unit_keys, [("unit", h50)])
+            self.assertIn("under its target", plan[p].why)
+            _d, freed, failures = self.apply(r)
+        self.assertEqual(failures, [])
+        self.assertEqual(freed, oldest)
+        self.assertEqual(self.left(p), ["libdep1-%s.rlib" % h30, "libdep2-%s.rlib" % h3])
+
+    def test_B9c_the_same_units_on_a_volume_at_its_target_are_kept(self):
+        p, _h = self.recent_profile("shared-build-v1", (50, 30, 3))
+        with self.under_target(0):
+            plan, _r = self.plan()
+        self.assertNotIn(p, plan)
+        self.assertEqual(len(self.left(p)), 3)
+
+    def test_B9m_the_minimum_idle_and_a_held_profile_are_never_taken(self):
+        p, (h50, h30, h1) = self.recent_profile("shared-build-v1", (50, 30, 1))
+        busy, _hb = self.recent_profile("codex/shared-build-v1", (60,))
+        self.children.append(hold_lock(os.path.join(busy, ".cargo-lock")))
+        with self.under_target(1024 ** 3):              # far more than everything here
+            plan, r = self.plan()
+            self.assertEqual(plan[p].unit_keys, [("unit", h50), ("unit", h30)])
+            self.assertEqual(plan[busy].action, reaper.KEEP, plan[busy].why)
+            self.apply(r)
+        self.assertEqual(self.left(p), ["libdep2-%s.rlib" % h1])
+        self.assertEqual(len(self.left(busy)), 1)
+
+    def test_B9f_the_floor_is_scaled_like_the_disk_watchdog(self):
+        gib = 1024 ** 3
+        space = {"/primary": (1, 460 * gib, 100 * gib), "/external/cargo": (2, 954 * gib, 20 * gib)}
+        with patch.object(bc, "volume_space", lambda path: space[path]):
+            target, floor, free = bc.free_target("/external/cargo", 60, "/primary", True, 150)
+            self.assertEqual(floor, int(60 * gib * 954 / 460.0))      # about 124 GiB
+            self.assertEqual(target, int(floor * 1.5))
+            self.assertEqual(free, 20 * gib)
+            self.assertEqual(bc.free_target("/external/cargo", 60, "/primary", False, 100)[1], 60 * gib)
+            self.assertEqual(bc.free_target("/primary", 60, "/primary", True, 100)[1], 60 * gib)
 
     def test_installed_engine_has_no_git_but_registered_owners_remain_checked(self):
         library = Path(self.tmp) / 'installed-engine/scripts/lib'
