@@ -46,9 +46,9 @@ class Actors(unittest.TestCase):
         (folder / f'agent-{aid}.jsonl').write_text(''.join(json.dumps(r) + '\n' for r in rows))
         (folder / f'agent-{aid}.meta.json').write_text(json.dumps({'agentType': agent_type, 'toolUseId': launch}))
 
-    def check(self, *expect):
+    def check(self, *expect, extra=()):
         args = [sys.executable, str(READER), str(self.root), '--actors',
-                '--action', f'linkedin={LI}', '--action', 'website=WebFetch~walkergoods.example', '--json']
+                '--action', f'linkedin={LI}', '--action', 'website=WebFetch~walkergoods.example', '--json', *extra]
         for e in expect:
             args += ['--expect', e]
         done = subprocess.run(args, capture_output=True, text=True, timeout=30)
@@ -125,6 +125,19 @@ class Actors(unittest.TestCase):
         self.specialist_did_both()
         self.assertEqual(self.check('linkedin=clark')[0], 1)
         self.assertEqual(self.check('linkedin=reed|clark')[0], 0)
+
+    def test_an_earlier_onboardings_read_never_passes_the_one_being_checked(self):
+        # The review's case: company A's read succeeded at 09:00, company B's failed at 10:00.
+        for sid, hour, failed in (('compA001', '09', False), ('compB001', '10', True)):
+            self.session(sid, [use(f'2026-11-10T{hour}:00:00.000Z', 'a-' + sid, 'Agent', {'subagent_type': 'richos-app-engine:reed'})])
+            self.helper(sid, 'r', 'richos-app-engine:reed', 'a-' + sid, [
+                use(f'2026-11-10T{hour}:00:10.000Z', 'l-' + sid, LI, {'url': f'https://www.linkedin.com/in/{sid}/'}, agent=None),
+                result(f'2026-11-10T{hour}:00:40.000Z', 'l-' + sid, 'NOT read' if failed else 'Profile', error=failed)])
+        self.assertEqual(self.check('linkedin=specialist')[0], 0)  # unscoped: A's read answers for B
+        code, out = self.check('linkedin=specialist', extra=['--since', '2026-11-10T09:30:00.000Z'])
+        self.assertEqual(code, 1)
+        self.assertEqual(out['verdicts']['linkedin']['why'], 'called, but no allowed actor got a result without error')
+        self.assertEqual({r['session'] for r in out['records']}, {'compB001/r'})
 
     def test_an_expectation_without_its_action_is_refused(self):
         self.specialist_did_both()

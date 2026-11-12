@@ -74,6 +74,7 @@ OUTPUT: one line per step on stdout: `<n> say|press|wait_for_rich "<what>": repl
 <chars> chars`, then the exit code: 0 only when every step passed.
 """
 import argparse
+import datetime
 import importlib.util
 import json
 from pathlib import Path
@@ -219,6 +220,7 @@ class ConversationWalk(adopt_walk.Walk):
         self.company = self.home + '/' + a.company
         self.steps = steps_of(a.conversation)
         self.records = []
+        self.began_ms = None
 
     def ledger_rows(self):
         text = adopt_walk.guest(self.vm, 'cat ' + shlex.quote(self.data + '/conversation-ledger.jsonl') + ' 2>/dev/null || true', 60)
@@ -373,10 +375,19 @@ class ConversationWalk(adopt_walk.Walk):
             print('final screenshot failed: %s' % str(exc)[-200:], file=sys.stderr)
 
 
-def actors(a):
+def iso_utc(ms):
+    """Guest milliseconds as the transcript's own stamp: 2026-11-10T10:00:00.123Z."""
+    return datetime.datetime.fromtimestamp(ms / 1000, datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
+
+
+def actors(a, since_ms=None):
     """Who performed each declared action, from the pulled transcripts, by the committed reader.
-    Saved as actors.json; its PASS/FAIL lines are printed. True when every expectation passed."""
+    Saved as actors.json; its PASS/FAIL lines are printed. True when every expectation passed.
+    SINCE_MS (the guest clock just before the walk's first step) keeps only calls this walk's conversation made:
+    an earlier read in the pulled history never answers for it."""
     args = [sys.executable, str(HERE.parent / 'qa' / 'native-transcript.py'), str(a.out / 'native-projects'), '--actors', '--json']
+    if since_ms is not None:
+        args += ['--since', iso_utc(since_ms)]
     for spec in a.action:
         args += ['--action', spec]
     for spec in a.expect:
@@ -428,6 +439,7 @@ def main():
             for step in walk.steps:
                 if step['kind'] == 'say':
                     step['text'] = step['text'].replace(PROFILE_PLACEHOLDER, profile)
+        walk.began_ms = walk.clock()  # the actor verdicts cover this conversation from here on
         for n, step in enumerate(walk.steps, 1):
             try:
                 record = walk.run_step(n, step)
@@ -450,7 +462,7 @@ def main():
     finally:
         (a.out / 'turns.json').write_text(json.dumps(walk.records, indent=2) + '\n')
         walk.pull()
-    if a.action and not actors(a):
+    if a.action and not actors(a, walk.began_ms):
         ok = False
     print('exit %d' % (0 if ok else 1), flush=True)
     return 0 if ok else 1

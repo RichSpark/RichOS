@@ -126,6 +126,14 @@ class Actors(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             self.assertFalse(walk.actors(self.walk_out(d, helper_reads=False)))
 
+    def test_a_read_before_the_walks_first_step_does_not_count(self):
+        with tempfile.TemporaryDirectory() as d:
+            a = self.walk_out(d, helper_reads=True)  # the read is at 10:00:00Z
+            later = 1794304800000 + 60000  # 2026-11-10T10:01:00Z, guest ms
+            self.assertEqual(walk.iso_utc(later), '2026-11-10T10:01:00.000Z')
+            self.assertFalse(walk.actors(a, later))
+            self.assertTrue(walk.actors(a, later - 120000))
+
 
 if __name__ == '__main__':
     unittest.main()

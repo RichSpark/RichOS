@@ -3,7 +3,8 @@
 
   native-transcript.py ROOT [--since T] [--until T] [--tool NAME ...] [--grep TEXT]
                             [--results] [--text] [--sessions] [--width N]
-  native-transcript.py ROOT --actors --action NAME=TOOL[~TEXT] ... [--expect NAME=ROLE ...] [--json]
+  native-transcript.py ROOT --actors --action NAME=TOOL[~TEXT] ... [--expect NAME=ROLE ...]
+                            [--since T] [--until T] [--json]
 
 ROOT is a Claude Code `projects` folder, one project folder inside it, or one session's .jsonl
 (a walk keeps the guest's `~/.claude/projects` as `native-projects`). Every session file under
@@ -42,7 +43,11 @@ A streamed message repeats its blocks across rows; each tool call, result and te
                       declares who may perform it (`specialist` is any helper, never Rich or Stu)
                       and prints PASS or FAIL per action: FAIL when a lead itself got a result,
                       when no allowed actor got one without error, or when it was never called.
-                      A lead's refused attempt is reported and is not a takeover. --json prints
+                      A lead's refused attempt is reported and is not a takeover. --since/--until
+                      keep only calls made inside the window, so a verdict is about the onboarding
+                      being checked, never an earlier one in the same history (a walk passes its
+                      first step's time); one onboarding among several in a window is told apart by
+                      its own source in the action's TEXT (`linkedin=...read_profile~in/ada/`). --json prints
                       the records and verdicts as one object, to keep beside a walk's evidence.
                       Exit 0 when every expectation passes, 1 when one fails, 2 on bad arguments.
 
@@ -321,8 +326,10 @@ def calls_with_results(path):
         yield ts, cid, name, inp, ok, text
 
 
-def actor_records(files, actions):
-    """One record per call matching a declared action, oldest first."""
+def actor_records(files, actions, a=None):
+    """One record per call matching a declared action, oldest first. With A, only calls inside
+    its --since/--until window: the onboarding being checked, never an earlier one whose read
+    succeeded (review rv-20261110T222955Z-e9dfb1b6-c63e #1)."""
     facts = {path: session_facts(path) for path in files}
     launches = {}  # Agent call id -> (session8, parent actor, subagent_type, description)
     for path in files:
@@ -334,6 +341,8 @@ def actor_records(files, actions):
     for path in files:
         actor, launched = facts[path]
         for ts, cid, name, inp, ok, text in calls_with_results(path):
+            if a is not None and not in_window(ts, a):
+                continue
             for action, tool, needle in actions:
                 if not named(name, [tool]) or (needle and needle not in json.dumps(inp)):
                     continue
@@ -386,7 +395,7 @@ def run_actors(a, files):
     if missing or not actions:
         print(f'native-transcript: --actors needs an --action for every --expect (missing: {", ".join(sorted(missing)) or "all"})', file=sys.stderr)
         return 2
-    records = actor_records(files, actions)
+    records = actor_records(files, actions, a)
     judged = verdicts(records, expectations)
     if a.json:
         print(json.dumps({'records': records, 'verdicts': {k: {'verdict': v, 'why': w} for k, (v, w) in judged.items()}}, indent=1))
