@@ -1600,6 +1600,8 @@ private struct FolderTreeRow: View {
             .buttonStyle(.plain)
             .help(url.path)
         }
+        .accessibilityLabel(title)
+        .accessibilityAction(named: "Open Folder") { open(url) }
         .onAppear { if childToReveal != nil { expanded = true } }
         .onChange(of: reveal?.id) { _ in if childToReveal != nil { expanded = true } }
         .task(id: LoadRequest(expanded: expanded, showHidden: showHidden, child: childToReveal)) {
