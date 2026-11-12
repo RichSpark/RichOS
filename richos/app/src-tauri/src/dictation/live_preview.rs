@@ -78,10 +78,9 @@ impl PreviewProgress {
 
     fn miss(&mut self, reason: &str) -> bool {
         match reason {
-            "stale_result" | "decoder_deadline" => {},
-            // A short recovery window can contain too little new speech to
-            // yield useful words, especially on the first tick after a pause.
-            "transcript_rejected" if self.has_words && !matches!(self.window, PreviewWindow::Full) => {},
+            // Even a full input window can produce no usable provisional
+            // words. Keep listening; a later window can contain clear speech.
+            "stale_result" | "decoder_deadline" | "transcript_rejected" => {},
             _ => return false,
         }
         self.window = PreviewWindow::Short;
@@ -143,8 +142,11 @@ pub fn run(recording: Arc<Mutex<Option<Recording>>>, data_dir: &Path, stop: &Ato
             std::thread::park_timeout(wait);
             continue;
         }
-        due += TICK_INTERVAL;
         let sampled_at = Instant::now();
+        // Keep two seconds between snapshots. If decoding uses that interval
+        // up, the next iteration takes fresh audio instead of waiting for
+        // another slot or catching up on an obsolete snapshot.
+        due = sampled_at + TICK_INTERVAL;
         let (samples, new_samples, captured, full_window_start) = {
             // No wait for a busy capture callback, and no decoding/files/UI while
             // holding this lock. There is only the latest window, never backlog.
@@ -186,12 +188,6 @@ pub fn run(recording: Arc<Mutex<Option<Recording>>>, data_dir: &Path, stop: &Ato
             }
             Err(reason) if progress.miss(reason) => send(Update::Missed { reason, input_ms }),
             Err(reason) => { send(paused(reason)); return; }
-        }
-        // An expired tick has no pending work. Use the next scheduled slot.
-        let now = Instant::now();
-        if due <= now {
-            due += TICK_INTERVAL;
-            if due <= now { due = now + TICK_INTERVAL; }
         }
     }
 }
@@ -265,12 +261,15 @@ mod tests {
     }
 
     #[test]
-    fn empty_result_during_pause_recovery_does_not_end_preview() {
+    fn empty_result_in_any_window_does_not_end_preview() {
         assert!(judge_transcript("").is_err());
         let mut progress = PreviewProgress::default();
-        assert!(!progress.miss("transcript_rejected"));
+        assert!(progress.miss("transcript_rejected"), "an empty first decode must keep listening");
+        assert!(!progress.has_words);
         progress.published(RECOVERY_RESTORE_LIMIT);
-        assert!(!progress.miss("transcript_rejected"));
+        progress.published(RECOVERY_RESTORE_LIMIT);
+        assert!(matches!(progress.window, PreviewWindow::Full));
+        assert!(progress.miss("transcript_rejected"), "a full window can also have no usable words");
         progress.last_speech_end = 6 * SAMPLE_RATE as usize;
         assert!(!progress.quiet(progress.last_speech_end + RECOVERY_WINDOW_SAMPLES, 0));
         assert!(progress.miss("transcript_rejected"));
