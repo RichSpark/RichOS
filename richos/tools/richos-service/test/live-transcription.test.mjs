@@ -6,6 +6,7 @@ import { test } from 'node:test';
 import { advanceLiveTranscription, prepareLiveNormalization, recentLiveExcerpt, removeLiveTranscriptionScratch, supportsLiveTranscription, takeLiveNormalization } from '../lib/live-transcription.js';
 import { mergeTranscript, renderMarkdown } from '../lib/merge.js';
 import { normalizeSession } from '../lib/normalize.js';
+import { runPipeline } from '../lib/pipeline.js';
 import { assertPrivateTree } from '../lib/private-files.js';
 
 function nativeHeader(rate, dataBytes = 0) {
@@ -325,12 +326,37 @@ test('finalization clears abandoned live decoder copies and keeps checkpoints', 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'richbrief-drain-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const cache = path.join(dir, '.live-transcription');
-  for (const name of ['decode-A1b2c3', '.richos-output-d4E5f6', 'excerpt-Abcd12']) {
+  for (const name of ['decode-A1b2c3', '.richos-output-d4E5f6', 'excerpt-Abcd12', 'normalized-audio']) {
     const staging = path.join(cache, name);
     fs.mkdirSync(staging, { recursive: true });
     fs.writeFileSync(path.join(staging, 'audio-part-00.wav'), 'audio');
   }
   fs.writeFileSync(path.join(cache, '0.json'), '{}');
+  removeLiveTranscriptionScratch(dir, { keepPrepared: true });
+  assert.deepEqual(fs.readdirSync(cache).sort(), ['0.json', 'excerpt-Abcd12', 'normalized-audio']);
   removeLiveTranscriptionScratch(dir);
   assert.deepEqual(fs.readdirSync(cache).sort(), ['0.json', 'excerpt-Abcd12']);
+});
+
+test('the final pipeline clears prepared tracks when it skips conversion', async (t) => {
+  for (const ready of [false, true]) {
+    await t.test(ready ? 'already ready' : 'no usable audio', (subtest) => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'richbrief-unused-normalize-'));
+      subtest.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+      const prepared = path.join(dir, '.live-transcription', 'normalized-audio');
+      fs.mkdirSync(prepared, { recursive: true });
+      fs.writeFileSync(path.join(prepared, 'source.json'), '{}');
+      const status = ready ? 'ready' : 'anomaly';
+      fs.writeFileSync(path.join(dir, 'session.json'), JSON.stringify({
+        status: 'closed', capture: { source: 'desktop-companion-macos' },
+        audio: ready ? { parts: [{ bytes: 48 }], bytesTotal: 48 } : {}, pipeline: { status },
+      }));
+      if (ready) {
+        fs.writeFileSync(path.join(dir, 'audio-part-00.wav'), Buffer.concat([nativeHeader(48_000, 4), Buffer.alloc(4)]));
+        fs.writeFileSync(path.join(dir, 'transcript.md'), 'Existing transcript.');
+      }
+      assert.equal(runPipeline(dir).status, status);
+      assert.equal(fs.existsSync(prepared), false);
+    });
+  }
 });

@@ -125,8 +125,19 @@ export function runPipeline(sessionDir, opts = {}) {
     hasTranscript,
     now,
   });
+  const usableAudio = hasUsableAudio(record);
+  const alreadyReady = hasTranscript && record?.pipeline?.status === PIPELINE_STATUS.ready && !opts.retranscribe;
+  const nativeLive = Boolean(record && supportsLiveTranscription(sessionDir, record));
+  const keepPrepared = usableAudio && !alreadyReady && !opts.retranscribe && nativeLive && record.status === 'closed';
+  if (record?.status === 'closed') {
+    try {
+      removeLiveTranscriptionScratch(sessionDir, { keepPrepared });
+    } catch {
+      log.warn('live transcription staging could not be cleared');
+    }
+  }
   // A genuine capture anomaly (no audio / captions-only / unreadable) can never yield a transcript.
-  if (!record || !hasUsableAudio(record)) {
+  if (!usableAudio) {
     const problems = recon.problems.length ? recon.problems : ['no usable audio to transcribe'];
     log.alarm(`${sessionId} — cannot transcribe`, { problems });
     if (record) {
@@ -139,27 +150,18 @@ export function runPipeline(sessionDir, opts = {}) {
   }
 
   record = upgradeRecord(record);
-  const nativeLive = supportsLiveTranscription(sessionDir, record);
-  if (record.status === 'closed' && nativeLive) {
-    try {
-      removeLiveTranscriptionScratch(sessionDir);
-    } catch {
-      log.warn('live transcription staging could not be cleared');
-    }
-  }
 
   // Idempotency: a ready transcript is only re-made on explicit retranscribe.
-  if (hasTranscript && record.pipeline.status === PIPELINE_STATUS.ready && !opts.retranscribe) {
+  if (alreadyReady) {
     log.info(`${sessionId} — transcript already exists; skipping (use retranscribe to re-run)`);
     return { status: PIPELINE_STATUS.ready, sessionId, transcript: path.join(sessionDir, ARTIFACTS.transcript) };
   }
 
   try {
     // ---- Stage 2: NORMALIZE ---------------------------------------------------------------------
-    const prepared = !opts.retranscribe && nativeLive && record.status === 'closed'
-      ? takeLiveNormalization(sessionDir) : null;
+    const prepared = keepPrepared ? takeLiveNormalization(sessionDir) : null;
     const norm = prepared ?? normalizeSession(sessionDir, { workDir: sessionDir });
-    if (prepared) log.info('live audio normalization reused');
+    if (prepared) log.info('live audio normalization reused', { readyAt: prepared.readyAt });
     log.info(`${sessionId} — normalized ${norm.parts.length} part(s), stereo=${norm.stereo}`);
 
     // Deterministic silence guard: audio that decoded but carries no energy on either channel is a

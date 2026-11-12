@@ -6,6 +6,7 @@ import { createHash } from 'node:crypto';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { setTimeout as delay } from 'node:timers/promises';
+import { Worker } from 'node:worker_threads';
 import { ffmpegBin, resolveModel, whisperArgs } from './config.js';
 import { CHANNEL_FILES, cutSpan, listAudioParts, normalizeSession, stereoNormalizationArgs } from './normalize.js';
 import { log } from './log.js';
@@ -298,6 +299,15 @@ export function supportsLiveTranscription(dir, record) {
   return parts.length === 1 && parts[0] === AUDIO;
 }
 
+export function recorderIsRunning(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function fileIdentity(stat) {
   return [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].join(':');
 }
@@ -308,13 +318,12 @@ function identifyFile(file) {
 
 // Native capture appends PCM and only rewrites the RIFF header. Give the existing
 // normalizer the flushed samples in order, with one resampler for the whole call.
-export async function prepareLiveNormalization(dir, recorderIsRunning, signal) {
+export async function prepareLiveNormalization(dir, isRecording, signal) {
   const audio = privateFile(path.join(dir, AUDIO), dir);
   const fd = fs.openSync(audio, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
   let work;
   let child;
   let stopped;
-  let closingAt;
   try {
     const { rate } = readHeader(fd);
     const ffmpeg = ffmpegBin();
@@ -334,8 +343,7 @@ export async function prepareLiveNormalization(dir, recorderIsRunning, signal) {
       let cursor = 0;
       for (;;) {
         signal.throwIfAborted();
-        const running = recorderIsRunning();
-        if (!running) closingAt = performance.now();
+        const running = isRecording();
         const header = readHeader(fd);
         if (header.rate !== rate || header.frames < cursor) throw new Error('native audio changed while normalizing');
         while (cursor < header.frames) {
@@ -360,9 +368,9 @@ export async function prepareLiveNormalization(dir, recorderIsRunning, signal) {
     if (record.status !== 'closed' || !supportsLiveTranscription(dir, record)
       || source !== identifyFile(audio) || converter !== identifyFile(ffmpegBin())) return;
     const tracks = outputs.map((file) => identifyFile(privateFile(file, work)));
-    writePrivateFile(path.join(work, NORMALIZATION_RECEIPT), JSON.stringify({ source, converter, tracks }), work);
+    const readyAt = Date.now();
+    writePrivateFile(path.join(work, NORMALIZATION_RECEIPT), JSON.stringify({ source, converter, tracks, readyAt }), work);
     fs.renameSync(work, path.join(cache, NORMALIZED_AUDIO));
-    log.info('live audio normalization prepared', { closeMs: Math.round(performance.now() - closingAt) });
   } finally {
     fs.closeSync(fd);
     if (child && child.exitCode === null && child.signalCode === null) {
@@ -381,7 +389,7 @@ export function takeLiveNormalization(dir) {
   try {
     if (!fs.lstatSync(prepared, { throwIfNoEntry: false })?.isDirectory()) return null;
     cache = privateDirectory(prepared, dir);
-    const { source, converter, tracks } = JSON.parse(fs.readFileSync(
+    const { source, converter, tracks, readyAt } = JSON.parse(fs.readFileSync(
       privateFile(path.join(cache, NORMALIZATION_RECEIPT), dir), 'utf8',
     ));
     const files = names.map((name) => privateFile(path.join(cache, name), dir));
@@ -391,7 +399,7 @@ export function takeLiveNormalization(dir) {
     withPrivateOutputs(outputs, (staging) => {
       for (const [index, file] of files.entries()) fs.renameSync(file, staging[index]);
     });
-    return { me: outputs[0], others: outputs[1], parts: [AUDIO], stereo: true, ffmpeg: null };
+    return { me: outputs[0], others: outputs[1], parts: [AUDIO], stereo: true, ffmpeg: null, readyAt };
   } catch {
     return null;
   } finally {
@@ -407,12 +415,13 @@ export function takeLiveNormalization(dir) {
 }
 
 /** Remove staging left by a worker terminated before its cleanup could run. */
-export function removeLiveTranscriptionScratch(dir) {
+export function removeLiveTranscriptionScratch(dir, { keepPrepared = false } = {}) {
   const candidate = path.join(dir, CHECKPOINTS);
   if (!fs.lstatSync(candidate, { throwIfNoEntry: false })) return;
   const cache = privateDirectory(candidate, dir);
   for (const entry of fs.readdirSync(cache, { withFileTypes: true })) {
-    if (entry.isDirectory() && /^(?:decode-|\.richos-output-)[a-zA-Z0-9]{6}$/.test(entry.name)) {
+    if (entry.isDirectory() && (/^(?:decode-|\.richos-output-)[a-zA-Z0-9]{6}$/.test(entry.name)
+      || (entry.name === NORMALIZED_AUDIO && !keepPrepared))) {
       fs.rmSync(path.join(cache, entry.name), { recursive: true, force: true });
     }
   }
@@ -500,24 +509,37 @@ export function recentLiveExcerpt(dir, options, at, decode = decodeWindow, known
   }
 }
 
-export async function watchLiveTranscription(dir, options, recorderIsRunning, onChunk) {
+export async function watchLiveTranscription(dir, options, recorderPid, onChunk) {
   let cursor = 0;
   let scanFrom;
   const toolchain = checkToolchain(resolveModel(options.model), options.model);
-  const normalization = new AbortController();
+  const isRecording = () => recorderIsRunning(recorderPid);
+  let normalizer;
   let preparing;
   try {
-    while (recorderIsRunning()) {
+    while (isRecording()) {
       const record = JSON.parse(fs.readFileSync(privateFile(path.join(dir, 'session.json'), dir), 'utf8'));
       if (record.status !== 'open' || !supportsLiveTranscription(dir, record)) {
-        if (record.status !== 'closed') normalization.abort();
+        if (record.status !== 'closed') normalizer?.postMessage('abort');
         break;
       }
-      preparing ??= prepareLiveNormalization(dir, recorderIsRunning, normalization.signal).catch(() => {
-        if (!normalization.signal.aborted) log.warn('live audio normalization could not finish; using the retained WAV');
-      });
+      if (!preparing) {
+        try {
+          // Whisper decodes synchronously. Keep the PCM feed running while it decodes.
+          normalizer = new Worker(new URL('./live-normalization-worker.js', import.meta.url), {
+            workerData: { dir, recorderPid },
+          });
+          preparing = new Promise((resolve) => {
+            normalizer.once('error', () => log.warn('live audio normalization could not finish; using the retained WAV'));
+            normalizer.once('exit', resolve);
+          });
+        } catch {
+          preparing = Promise.resolve();
+          log.warn('live audio normalization could not start; using the retained WAV');
+        }
+      }
       const start = performance.now();
-      const result = advanceLiveTranscription(dir, options, { cursor, scanFrom, toolchain, recorderIsRunning });
+      const result = advanceLiveTranscription(dir, options, { cursor, scanFrom, toolchain, recorderIsRunning: isRecording });
       cursor = result.cursor;
       scanFrom = result.scanFrom;
       if (result.decoded || result.reused || result.longWindows) {
@@ -530,7 +552,7 @@ export async function watchLiveTranscription(dir, options, recorderIsRunning, on
       await delay(1_000);
     }
   } catch (error) {
-    normalization.abort();
+    normalizer?.postMessage('abort');
     throw error;
   } finally {
     await preparing;
