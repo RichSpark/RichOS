@@ -136,7 +136,7 @@ pub fn row_from_item(item: &Value) -> Option<Value> {
             "cursor": 0,
             "role": "rich",
             "kind": "text",
-            "text": text,
+            "text": richos_core::meeting_notes::plain_brief_sources(&text),
             "created_at": iso8601(created_at),
             "client_id": Value::Null,
             // Nothing is synthesized until he asks for it (plan §3.4 verb 4), so a projected
@@ -368,6 +368,15 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn phone_brief_rows_show_readable_source_times() {
+        let text = "Approved `meeting-source 2026-11-11T11-00-00Z--system--call 3 02:04`. Keep `other code`.";
+        let rich = row_from_item(&json!({"kind":"rich_message","id":"r","text":text})).unwrap();
+        assert_eq!(rich["text"], "Approved Source 02:04. Keep `other code`.");
+        let user = row_from_item(&json!({"kind":"user_message","id":"u","text":text})).unwrap();
+        assert_eq!(user["text"], text);
+    }
 
     #[test]
     fn a_completed_turns_push_keeps_its_reply_when_a_later_turn_is_already_streaming() {

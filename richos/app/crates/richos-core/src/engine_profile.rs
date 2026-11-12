@@ -124,6 +124,17 @@ pub fn user_work_guards(engine: &Path) -> Result<Vec<String>, RuntimeError> {
     Ok(guards)
 }
 
+type LiveMeetingRead = dyn Fn(&crate::entity::ThreadBinding, u64) -> Option<crate::meeting_notes::LiveMeetingSource> + Send + Sync;
+
+#[derive(Clone)]
+pub(crate) struct LiveMeetingReader(std::sync::Arc<LiveMeetingRead>);
+
+impl std::fmt::Debug for LiveMeetingReader {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("LiveMeetingReader")
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct EngineProfile {
     pub engine: PathBuf,
@@ -157,6 +168,7 @@ pub struct EngineProfile {
     /// when it exists) to the read roots and describes its layout. Never another company's
     /// folder. `None` everywhere else.
     pub meetings_corpus: Option<PathBuf>,
+    pub(crate) live_meeting_reader: Option<LiveMeetingReader>,
     /// **The model each session starts on** (the CEO's §119, 2026-10-10): read by
     /// [`Self::prepare`] from `config.json` in the data directory, so every lease spawn sees the
     /// setting as it is at that moment. `native.rs` gives the conversation lease (Rich) `rich`
@@ -717,10 +729,22 @@ impl EngineProfile {
         write(&plugin.join("spawn-preflight.json"),
               &json!({"hooks":{"PreToolUse":[{"matcher":"Agent","hooks":preflight}]}}).to_string())?;
         let profile = Self { engine, coordination, plugin, state, runtime, work_scope: None, search_binding: None, codex_root:crate::codex_bridge::root(),
-                  claude_account: None, token_sink: None, speech_model: None, meetings_corpus: None,
+                  claude_account: None, token_sink: None, speech_model: None, meetings_corpus: None, live_meeting_reader: None,
                   lease_models: crate::config::lease_models_from_config(&data), machine_settings, user };
         write(&profile.plugin.join(COMMANDS_ENV), &profile.commands_env())?;
         Ok(profile)
+    }
+
+    /// The app may provide the current recording for this exact conversation.
+    pub fn set_live_meeting_reader(
+        &mut self,
+        read: impl Fn(&crate::entity::ThreadBinding, u64) -> Option<crate::meeting_notes::LiveMeetingSource> + Send + Sync + 'static,
+    ) {
+        self.live_meeting_reader = Some(LiveMeetingReader(std::sync::Arc::new(read)));
+    }
+
+    pub(crate) fn read_live_meeting(&self, binding: &crate::entity::ThreadBinding, request_at: u64) -> Option<crate::meeting_notes::LiveMeetingSource> {
+        self.live_meeting_reader.as_ref().and_then(|reader| (reader.0)(binding, request_at))
     }
     /// Install the desktop executable's quota wrapper. Source-test clients which
     /// do not implement that CLI entrypoint keep their canonical hooks unchanged.

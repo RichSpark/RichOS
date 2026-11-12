@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
-import { advanceLiveTranscription, removeLiveTranscriptionScratch, supportsLiveTranscription } from '../lib/live-transcription.js';
+import { advanceLiveTranscription, recentLiveExcerpt, removeLiveTranscriptionScratch, supportsLiveTranscription } from '../lib/live-transcription.js';
 import { mergeTranscript, renderMarkdown } from '../lib/merge.js';
 import { assertPrivateTree } from '../lib/private-files.js';
 
@@ -154,6 +154,57 @@ test('live transcription checkpoints the flushed prefix and only decodes the tai
   assert.throws(() => advance({
     closed: true, decode: () => assert.fail('unbounded audio was decoded as a chunk'),
   }), /no quiet meeting boundary/);
+
+  // A handoff may arrive before the worker checkpoints the sentence just spoken.
+  pcm.fill(0);
+  pcm.fill(Buffer.from([0, 0, 0, 8]), 16 * bytesPerSecond, 17 * bytesPerSecond);
+  pcm.fill(Buffer.from([0, 8, 0, 0]), 68 * bytesPerSecond, 69 * bytesPerSecond);
+  pcm.fill(Buffer.from([0, 8, 0, 0]), 72 * bytesPerSecond, 73 * bytesPerSecond);
+  flush(75);
+  const record = path.join(dir, 'session.json');
+  const capture = { source: 'desktop-companion-macos' };
+  const startedAt = 1_000_000;
+  const requestedAt = startedAt + 70_000;
+  fs.writeFileSync(record, JSON.stringify({ status: 'open', capture, startedAt }));
+  let excerptScratch;
+  const fresh = recentLiveExcerpt(dir, options, requestedAt, (scratch, wav) => {
+    excerptScratch = scratch;
+    assert.equal(wav.readUInt32LE(40) / bytesPerSecond, 60);
+    return {
+      me: [{ ...segment('The new decision.', 58_000, 59_000), speaker: 'me' }],
+      others: [{ ...segment('An earlier fact.', 6_000, 7_000), speaker: 'others' }],
+    };
+  }, toolchain);
+  assert.deepEqual(fresh, {
+    fromMs: 10_000, throughMs: 70_000,
+    passages: [
+      { speaker: 'Them', atMs: 16_000, text: 'An earlier fact.' },
+      { speaker: 'Me', atMs: 68_000, text: 'The new decision.' },
+    ],
+  });
+  assert(!fs.existsSync(excerptScratch), 'a completed excerpt keeps no audio copy');
+  let windows = 0;
+  advance({ decode: () => ({
+    me: [],
+    others: windows++ === 0 ? [segment('An earlier fact.', 16_000, 17_000)] : [],
+    toolchain,
+  }) });
+  const reused = recentLiveExcerpt(dir, options, requestedAt, (_scratch, wav) => {
+    assert.equal(wav.readUInt32LE(40) / bytesPerSecond, 22);
+    return { me: [segment('The new decision.', 20_000, 21_000)], others: [] };
+  }, toolchain);
+  assert.deepEqual(reused, fresh, 'cached text and a newly decoded tail respect the same cutoff');
+  const crossing = JSON.parse(fs.readFileSync(checkpoint, 'utf8'));
+  crossing.others = [segment('Words that continue after the cutoff.', 8_000, 12_000)];
+  fs.writeFileSync(checkpoint, JSON.stringify(crossing));
+  const clipped = recentLiveExcerpt(dir, options, requestedAt, (_scratch, wav) => {
+    assert.equal(wav.readUInt32LE(40) / bytesPerSecond, 60);
+    return { me: [], others: [segment('After the cutoff.', 100, 300)] };
+  }, toolchain);
+  assert.equal(clipped.passages[0].text, 'After the cutoff.', 'a cut through a sentence decodes the leading continuation');
+  assert.equal(recentLiveExcerpt(dir, options, startedAt - 1, () => assert.fail('future recording decoded')), null);
+  fs.writeFileSync(record, JSON.stringify({ status: 'closed', capture, startedAt }));
+  assert.equal(recentLiveExcerpt(dir, options, requestedAt, () => assert.fail('closed recording decoded')), null);
 });
 
 test('private session validation tolerates a live worker removing its staging', (t) => {
