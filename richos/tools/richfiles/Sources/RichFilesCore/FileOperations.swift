@@ -425,6 +425,16 @@ public enum FileOperations {
                         isCancelled: isCancelled, onProgress: onProgress)
     }
 
+    public static func copyTemplate(
+        _ template: ReviewedFile, into folder: URL, expectedFolder: FileIdentity?, named name: String,
+        isCancelled: () -> Bool = { false }
+    ) throws -> CopyReceipt {
+        let destination = try OpenFolder(folder)
+        if let expectedFolder { try destination.requireIdentity(expectedFolder) }
+        return try copy(template.reference, into: destination, named: name, expected: template.version,
+                        isCancelled: isCancelled)
+    }
+
     static func copy(
         _ source: FileReference, into destination: OpenFolder, named name: String? = nil,
         conflictPolicy: CopyConflictPolicy = .refuse, expected: FileVersion? = nil,

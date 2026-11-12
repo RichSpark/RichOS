@@ -5,10 +5,16 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct NameRequest {
+    struct Template: Sendable {
+        let file: ReviewedFile
+        let destination: BrowserTransferDestination
+    }
+
     let source: FileReference?
     let folder: URL
     let directory: Bool
     let name: String
+    var template: Template? = nil
 }
 
 enum BrowserSheet: Identifiable {
@@ -635,7 +641,7 @@ struct NameSheet: View {
     }
 
     private var changesExtension: Bool {
-        request.source != nil && !request.directory &&
+        (request.source != nil || request.template != nil) && !request.directory &&
         (name as NSString).pathExtension.caseInsensitiveCompare((request.name as NSString).pathExtension) != .orderedSame
     }
 

@@ -62,6 +62,25 @@ final class FileOperationsTests: XCTestCase {
         }
     }
 
+    func testTemplateCopyKeepsTheSourceAndRefusesAnExistingName() throws {
+        try withFixture { root in
+            let source = try write("template contents", named: "Plan.md", in: root)
+            let destination = try FileOperations.createFolder(in: root, named: "New Project")
+            let template = try ReviewedFile(source)
+            let copy = try FileOperations.copyTemplate(template, into: destination.url,
+                                                       expectedFolder: destination.identity, named: "Client.md")
+            XCTAssertEqual(try contents(copy.copied), "template contents")
+            XCTAssertEqual(try contents(source), "template contents")
+            assertCollision(try FileOperations.copyTemplate(template, into: destination.url,
+                                                            expectedFolder: destination.identity, named: "Client.md"))
+            try Data("edited template".utf8).write(to: source.url)
+            XCTAssertThrowsError(try FileOperations.copyTemplate(template, into: destination.url,
+                                                                expectedFolder: destination.identity, named: "Other.md"))
+            XCTAssertEqual(try contents(copy.copied), "template contents")
+            XCTAssertEqual(try contents(source), "edited template")
+        }
+    }
+
     func testPermanentDeletionRejectsReplacedSelection() throws {
         try withFixture { root in
             let original = try write("original", named: "item.png", in: root)

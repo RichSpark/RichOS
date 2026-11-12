@@ -817,6 +817,7 @@ struct BrowserView: View {
             Button("New Folder") { newItem(directory: true, extension: nil) }
             Button("New Text File") { newItem(directory: false, extension: "txt") }
             Button("New Markdown File") { newItem(directory: false, extension: "md") }
+            Button("New File from Template…") { chooseTemplate() }
         }.disabled(actions.busy || model.currentVolume?.isReadOnly == true)
     }
 
@@ -1099,6 +1100,31 @@ struct BrowserView: View {
         sheet = .name(NameRequest(source: nil, folder: model.folder, directory: directory, name: name))
     }
 
+    private func chooseTemplate() {
+        guard let destination = currentDropDestination else {
+            feedback = "The destination folder is unavailable."
+            return
+        }
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.resolvesAliases = false
+        panel.directoryURL = destination.url
+        panel.prompt = "Use Template"
+        panel.begin { result in
+            guard result == .OK, let url = panel.url else { return }
+            Task {
+                do {
+                    let template = try await Task.detached { try ReviewedFile(FileReference(url: url)) }.value
+                    sheet = .name(NameRequest(source: nil, folder: destination.url, directory: false,
+                                              name: "New " + url.lastPathComponent,
+                                              template: .init(file: template, destination: destination)))
+                } catch { feedback = error.localizedDescription }
+            }
+        }
+    }
+
     private func captureSelection() async {
         let selected = model.selected
         selectedReferences = selectedReferences.filter { selected.contains($0.key) }
@@ -1260,6 +1286,7 @@ struct BrowserView: View {
         case .name(let request):
             NameSheet(request: request) { name in
                 if let source = request.source { actions.rename(source, to: name) }
+                else if let template = request.template { actions.create(from: template, named: name) }
                 else { actions.create(in: request.folder, named: name, directory: request.directory) }
                 sheet = nil
             }
