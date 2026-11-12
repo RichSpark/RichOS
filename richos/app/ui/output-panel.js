@@ -74,7 +74,8 @@
     loading: false,
     ticket: 0,
     open: false,
-    view: "list", // "list" | "file"
+    view: "list", // "list" | "file" | "media"
+    media: null,
     file: null, // the output id the file view shows
     sourcePassage: null,
     /// The row kept selected when the file view steps back to the list (§6.4).
@@ -499,6 +500,7 @@
 
   function showList(opts) {
     opts = opts || {};
+    clearMedia();
     state.view = "list";
     state.file = null;
     state.sourcePassage = null;
@@ -531,6 +533,7 @@
     // Showing a file asks the shell about it NOW (D6): its tools must never be lit from an
     // answer given before the file went. `detailOf`'s answer reconciles the list if it differs.
     act.details.delete(id);
+    clearMedia();
     state.view = "file";
     state.file = id;
     state.sourcePassage = opts?.sourcePassage ? { ...opts.sourcePassage, landed: false } : null;
@@ -750,6 +753,10 @@
     box.dataset.key = key;
     box.dataset.preview = a.view;
     if (a.why) box.dataset.why = a.why;
+    if (state.media?.id === f.id && a.view === "none") {
+      state.media.missing = a.why === "missing" || a.why === "refused";
+      publishMedia(state.media);
+    }
     else delete box.dataset.why;
     const size = typeof a.bytes === "number" ? humanSize(a.bytes) : typeof f.bytes === "number" ? humanSize(f.bytes) : "";
     const ext = extension(f.name);
@@ -876,7 +883,7 @@
         player.addEventListener("error", () => {
           if (!box.querySelector(".of-none")) player.after(couldNotShow(a.app));
         });
-        seekToMoment(player, f, box);
+        connectMedia(player, f);
         player.src = a.url;
         box.appendChild(player);
         box.appendChild(
@@ -896,7 +903,7 @@
         player.addEventListener("error", () => {
           if (!box.querySelector(".of-none")) player.after(couldNotShow(a.app));
         });
-        seekToMoment(player, f, box);
+        connectMedia(player, f);
         player.src = a.url;
         box.appendChild(player);
         box.appendChild(factsLine([typeof a.durationMs === "number" ? clock(a.durationMs) : null, KIND_WORD.audio, size]));
@@ -928,45 +935,115 @@
     }
   }
 
-  function seekToMoment(player, file, box) {
-    if (!Number.isSafeInteger(file.startMs)) return;
+  function mediaPosition(media) {
+    const player = media.player;
+    return player && player.readyState && media.target === null
+      ? player.currentTime * 1000 : media.target;
+  }
+
+  function mediaSnapshot() {
+    const media = state.media;
+    if (!media) return null;
+    const time = mediaPosition(media);
+    const point = media.points.findLast(p => p.startMs <= (time ?? -1));
+    return { id: media.id, time, active: point?.startMs, playing: media.wantsPlay, missing: media.missing };
+  }
+
+  function publishMedia(media) {
+    if (media !== state.media) return;
+    const snapshot = mediaSnapshot();
+    const point = media.points.find(p => p.startMs === snapshot.active);
+    const subtitle = point ? clock(point.startMs) + " · " + point.label : clock(snapshot.time ?? 0);
+    const sub = el("op-sub");
+    if (sub.textContent !== subtitle) sub.textContent = subtitle;
+    sub.hidden = false;
+    window.dispatchEvent(new CustomEvent("rich:media-playback", { detail: snapshot }));
+  }
+
+  function clearMedia() {
+    const media = state.media;
+    if (!media) return;
+    state.media = null;
+    if (media.player) {
+      media.player.pause();
+      media.player.removeAttribute("src");
+      media.player.load();
+    }
+    window.dispatchEvent(new CustomEvent("rich:media-playback", { detail: null }));
+  }
+
+  function applyMedia(media) {
+    const player = media.player;
+    if (player && player.readyState >= 1) {
+      if (media.target !== null) {
+        const end = Math.min(media.durationMs - 1, player.duration * 1000 - 1);
+        if (Number.isFinite(end) && end >= 0) {
+          player.currentTime = Math.max(0, Math.min(media.target, end)) / 1000;
+          media.target = null;
+        }
+      }
+      if (media.wantsPlay) {
+        player.play().catch(error => {
+          if (media !== state.media || error.name === "AbortError") return;
+          media.wantsPlay = false;
+          publishMedia(media);
+        });
+      } else {
+        player.pause();
+      }
+    }
+    publishMedia(media);
+  }
+
+  function connectMedia(player, file) {
+    const media = state.media;
+    if (!media || media.id !== file.id) return;
+    media.player = player;
     const started = performance.now();
     let reported = false;
     function report(outcome) {
-      if (reported || !box.isConnected) return;
+      if (reported || media !== state.media) return;
       reported = true;
       const elapsedMs = Math.round(performance.now() - started);
       bridge.invoke("media_moment_playback", { outcome, elapsedMs }).catch(() => {});
     }
-    player.addEventListener("error", () => report("couldNotPlay"), { once: true });
     player.addEventListener("loadedmetadata", () => {
-      if (!box.isConnected) return;
-      const time = file.startMs / 1000;
-      if (Number.isFinite(player.duration) && time < player.duration) {
-        try {
-          if (player.currentTime === time) report("seeked");
-          else {
-            player.addEventListener("seeked", () => report("seeked"), { once: true });
-            player.currentTime = time;
-          }
-        } catch {
-          report("couldNotPlay");
-          player.after(node("p", "of-none", "This Mac could not jump to that moment."));
-        }
-      } else {
-        report("outsideRecording");
-        player.after(node("p", "of-none", "That moment is outside this recording."));
-      }
+      if (media !== state.media) return;
+      applyMedia(media);
+      if (media.target !== null) report("outsideRecording");
+      else if (!player.seeking) report("seeked");
     }, { once: true });
+    player.addEventListener("seeked", () => report("seeked"), { once: true });
+    player.addEventListener("error", () => {
+      media.wantsPlay = false;
+      report("couldNotPlay");
+      publishMedia(media);
+    }, { once: true });
+    player.addEventListener("play", () => {
+      media.wantsPlay = !player.paused;
+      publishMedia(media);
+    });
+    for (const event of ["pause", "ended"]) {
+      player.addEventListener(event, () => {
+        media.wantsPlay = !player.paused && !player.ended;
+        publishMedia(media);
+      });
+    }
+    for (const event of ["timeupdate", "seeking", "seeked"]) {
+      player.addEventListener(event, () => publishMedia(media));
+    }
   }
 
   function showMedia(file) {
+    clearMedia();
+    state.media = { ...file, target: file.startMs, player: null, wantsPlay: true, missing: false };
     state.view = "media";
     state.file = null;
     const body = el("op-body");
     body.dataset.view = "media";
     body.scrollTop = 0;
-    setHead("Output", file.name, file.label);
+    setHead("Output", file.name, null);
+    publishMedia(state.media);
     const view = node("div", "op-view");
     const box = node("div", "of-view");
     box.id = "op-viewer";
@@ -1070,6 +1147,7 @@
     // Closing brings the WHOLE conversation back and clears *open completely* (§9.4), before
     // the panel hides: the composer goes home first, so focus can return to it.
     pullReset();
+    clearMedia();
     if (state.view === "media") el("op-body").replaceChildren();
     state.open = false;
     state.view = "list";
@@ -1191,6 +1269,7 @@
       paintButtons();
       return;
     }
+    clearMedia();
     if (state.view === "media") el("op-body").replaceChildren();
     state.thread = next;
     // The pill names the thread the panel now shows (§9.4).
@@ -2297,9 +2376,22 @@
     init,
     setThread,
     open,
+    mediaSnapshot,
     openMoment(threadId, file, from) {
       if (!state.thread || state.thread !== threadId) return false;
-      open({ media: file, returnTo: from });
+      const media = state.media;
+      if (media?.id === file.id) {
+        const active = mediaSnapshot().active;
+        if (file.toggle && active === file.startMs) {
+          media.wantsPlay = !media.wantsPlay;
+        } else {
+          media.target = file.startMs;
+          media.wantsPlay = true;
+        }
+        applyMedia(media);
+      } else {
+        open({ media: file, returnTo: from });
+      }
       return true;
     },
     close,

@@ -75,7 +75,7 @@
 
   function card(item, opts) {
     const f = item.file || {};
-    if (f.moments) return mediaCard(item, f);
+    if (f.moments) return mediaCard(item, f, opts);
     const name = f.name || item.text || "File";
     const app = f.app || "";
     const openLabel = app ? "Open in " + app : "Open";
@@ -151,65 +151,164 @@
     return hours ? hours + ":" + String(minutes).padStart(2, "0") + ":" + seconds : minutes + ":" + seconds;
   }
 
-  function mediaCard(item, file) {
+  const MEDIA_GONE = "The recording was moved, deleted or changed. Ask Rich to find the moments again.";
+  const PLAY = "▶";
+  const PAUSE = "Ⅱ";
+  const mediaViews = new WeakMap();
+  window.addEventListener("rich:media-playback", ({ detail }) => {
+    for (const card of document.querySelectorAll(".tl-media")) mediaViews.get(card)?.(detail);
+  });
+
+  function mediaCard(item, file, opts) {
     const el = node("div", "tl-media");
     el.setAttribute("role", "listitem");
     el.dataset.fileId = file.id;
     const { durationMs, points, waveform } = file.moments;
+    const youtube = file.source === "youtube";
+    const kind = youtube ? "YouTube" : file.mediaType === "video" ? "Video" : "Audio";
     const head = node("div", "tl-media-head");
-    head.append(node("strong", null, file.name), node("span", null, mediaClock(durationMs)));
+    const glyph = node("span", "tl-media-glyph", youtube ? PLAY : "∿");
+    glyph.setAttribute("aria-hidden", "true");
+    const title = node("div", "tl-media-title");
+    title.append(node("strong", null, file.name), node("span", null,
+      [kind, mediaClock(durationMs), youtube ? "" : "on this Mac"].filter(Boolean).join(" · ")));
+    const current = node("span", "tl-media-current");
+    head.append(glyph, title, current);
+
     const track = node("div", "tl-media-track");
-    track.setAttribute("aria-hidden", "true");
+    const wave = node("div", "tl-media-wave");
+    wave.setAttribute("aria-hidden", "true");
     if (typeof waveform === "string" && /^[0-9]{96}$/.test(waveform)) {
-      const wave = node("div", "tl-media-wave");
       for (const level of waveform) {
         const bar = node("i");
-        bar.style.height = (6 + Number(level) * 10) + "%";
+        bar.style.height = (8 + Number(level) * 10) + "%";
         wave.appendChild(bar);
       }
-      track.appendChild(wave);
+    } else {
+      track.classList.add("tl-media-rail");
     }
+    const playhead = node("span", "tl-media-playhead");
+    playhead.hidden = true;
+    track.append(wave, playhead);
     const list = node("div", "tl-media-points");
     const status = node("p", "tl-media-status");
     status.setAttribute("role", "status");
-    const available = file.exists !== false;
-    if (!available) status.textContent = "The recording was moved, deleted or changed. Ask Rich to find the moments again.";
+    const gone = node("div", "tl-media-gone");
+    const ask = node("button", "desk-btn tl-rfile-ask", "Ask Rich again");
+    ask.type = "button";
+    ask.addEventListener("click", () => opts?.sendText?.("Please find the moments in " + file.name + " again."));
+    gone.append(node("p", null, MEDIA_GONE), ask);
+    const actions = [];
+    const seek = (startMs, from, toggle) => {
+      status.textContent = "";
+      if (!window.RichOutput?.openMoment(item.threadId, { id: file.id, name: file.name, startMs, durationMs, points, toggle }, from)) {
+        status.textContent = "Reopen this conversation to play the recording.";
+      }
+    };
+    const scrub = node("input", "tl-media-scrub");
+    scrub.type = "range";
+    scrub.min = "0";
+    scrub.max = String(durationMs - 1);
+    scrub.step = "1";
+    scrub.value = "0";
+    scrub.setAttribute("aria-label", "Seek in " + file.name);
+    if (!youtube) {
+      track.appendChild(scrub);
+      scrub.addEventListener("change", () => seek(Number(scrub.value), scrub, false));
+    }
+    let missing = file.exists === false;
+    const setMissing = () => {
+      gone.hidden = !missing;
+      scrub.disabled = missing;
+      el.dataset.s = missing ? "missing" : "ready";
+      for (const { button, pin } of actions) {
+        button.disabled = missing;
+        pin.disabled = missing;
+      }
+    };
+
     points.forEach((point, momentIndex) => {
-      const dot = node("i", "tl-media-mark");
-      dot.style.left = (100 * point.startMs / durationMs) + "%";
-      track.appendChild(dot);
+      const pin = node("button", "tl-media-mark");
+      pin.type = "button";
+      pin.tabIndex = -1;
+      pin.setAttribute("aria-hidden", "true");
+      pin.style.left = (100 * point.startMs / durationMs) + "%";
+      track.appendChild(pin);
       const time = mediaClock(point.startMs);
       const button = node("button", "tl-media-moment");
       button.type = "button";
       button.setAttribute("aria-label", time + " " + point.label);
-      button.disabled = !available;
       const body = node("span", "tl-media-copy");
-      const excerpt = node("span", null, point.quote);
+      const excerpt = node("span", "tl-media-quote", "“" + point.quote + "”");
       excerpt.id = file.id + "-excerpt-" + momentIndex;
       button.setAttribute("aria-describedby", excerpt.id);
       body.append(node("strong", null, point.label), excerpt);
-      button.append(node("span", "tl-media-time", time), body);
+      const mark = node("span", "tl-media-act", youtube ? "↗" : PLAY);
+      mark.setAttribute("aria-hidden", "true");
+      const stamp = node("span", "tl-media-time");
+      stamp.append(mark, node("span", null, time));
+      button.append(stamp, body);
       button.addEventListener("click", async () => {
+        if (!youtube) {
+          seek(point.startMs, button, true);
+          return;
+        }
         status.textContent = "";
-        if (file.source === "youtube") {
-          button.disabled = true;
-          try {
-            await window.RichBridge.invoke("media_moment_open", { fileId: file.id, momentIndex });
-          } catch (error) {
-            status.textContent = String(error?.message || error);
-          } finally {
-            button.disabled = false;
-          }
-        } else if (!window.RichOutput?.openMoment(item.threadId, {
-          id: file.id, name: file.name, startMs: point.startMs, label: time + " · " + point.label,
-        }, button)) {
-          status.textContent = "Reopen this conversation to play the recording.";
+        button.disabled = true;
+        try {
+          await window.RichBridge.invoke("media_moment_open", { fileId: file.id, momentIndex });
+        } catch (error) {
+          status.textContent = String(error?.message || error);
+        } finally {
+          button.disabled = false;
         }
       });
-      dot.addEventListener("click", () => button.click());
+      pin.addEventListener("click", () => button.click());
+      const hot = (on) => { button.classList.toggle("is-hot", on); pin.classList.toggle("is-hot", on); };
+      for (const target of [button, pin]) {
+        target.addEventListener("mouseenter", () => hot(true));
+        target.addEventListener("mouseleave", () => hot(false));
+        target.addEventListener("focus", () => hot(true));
+        target.addEventListener("blur", () => hot(false));
+      }
       list.appendChild(button);
+      actions.push({ button, pin, mark, point });
     });
-    el.append(head, track, list, status);
+    const bars = [...wave.children];
+    let bucket = -1;
+    const paint = (snapshot) => {
+      const active = snapshot?.id === file.id ? snapshot : null;
+      if (active?.missing && !missing) {
+        missing = true;
+        setMissing();
+      }
+      const time = missing ? null : active?.time;
+      current.textContent = time == null ? "" : mediaClock(time) + " / " + mediaClock(durationMs);
+      playhead.hidden = time == null;
+      if (time != null) {
+        playhead.style.left = (100 * time / durationMs) + "%";
+        if (document.activeElement !== scrub) scrub.value = String(Math.round(time));
+      }
+      const nextBucket = time == null ? -1 : Math.floor(bars.length * time / durationMs);
+      if (nextBucket !== bucket) {
+        bars.forEach((bar, i) => bar.classList.toggle("is-played", i <= nextBucket));
+        bucket = nextBucket;
+      }
+      for (const { button, pin, mark, point } of actions) {
+        const selected = !missing && active?.active === point.startMs;
+        const playing = selected && active.playing;
+        button.classList.toggle("is-active", selected);
+        pin.classList.toggle("is-active", selected);
+        if (selected) button.setAttribute("aria-current", "true");
+        else button.removeAttribute("aria-current");
+        mark.textContent = youtube ? "↗" : playing ? PAUSE : PLAY;
+        mark.hidden = missing;
+      }
+    };
+    mediaViews.set(el, paint);
+    setMissing();
+    paint(window.RichOutput?.mediaSnapshot());
+    el.append(head, gone, track, list, status);
     return el;
   }
 

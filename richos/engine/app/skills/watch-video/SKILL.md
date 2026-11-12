@@ -38,12 +38,28 @@ are done here.
 
 ## 3. Watch a video: the pictures
 
-You need the video file. A file on his Mac is used where it is. For a link, take a copy no larger
-than 720p into the working folder (the copy he asked you to download in step 2 also works):
+Use a local video where it already is. Reuse a copy you can identify as the
+same video, including a download from step 2. When asked about a YouTube link and
+no local copy is known, save a playable copy in the user's Downloads under
+RichOS Videos so that the answer can play it again after the job is done:
+
+```bash
+yt-dlp --no-playlist --no-overwrites \
+  -f 'bv[ext=mp4][vcodec^=avc1][height<=720]+ba[ext=m4a]/b[ext=mp4][vcodec^=avc1][height<=720]' \
+  --merge-output-format mp4 -P "$HOME/Downloads/RichOS Videos" \
+  -o '%(title).120B [%(id)s].%(ext)s' --print after_move:filepath "<url>"
+```
+
+Use the full path the command prints as the local source. The work folder
+holds only analysis files. For other links, a copy taken just to inspect the
+video can go in the work folder:
 
 ```bash
 yt-dlp -S "res:720" -P "$work" -o "video.%(ext)s" --print after_move:filepath "<url>"
 ```
+
+If you can only obtain captions for a link, use them without pretending a local
+video exists. Only extract frames if you have the video.
 
 Find its length, then take one frame every 10 seconds:
 
@@ -115,16 +131,22 @@ the verified frames. Use the duration from `ffprobe` or the source's media
 metadata and give `durationMs` and each point's `startMs` in milliseconds. Use a
 short label and the relevant words or description of the verified frame.
 
-For a YouTube video use its 11-character video ID with
-`source: {"kind":"youtube","video_id":"…"}` in
-`mcp__richos_files__show_media_moments`. For an MP4, MOV, M4V or WebM the user
-supplied, use `source: {"kind":"local","path":"…"}` with the file's original
-absolute path. If the recording was transcribed, you can supply a waveform by
-running `python3 "$RICHOS_ENGINE_ROOT/app/skills/audio-transcription/waveform.py" "$work/audio.wav"`
-and using the single line it prints. Leave it out when only captions or frames
-are available. Give the moments in your answer when there is no supported
-playable source. Keep a temporary download out of the card because it will be
-deleted at the end of the job.
+For a playable MP4, MOV, M4V or WebM on the Mac, including a YouTube download,
+use `source: {"kind":"local","path":"…"}` with its full persistent path in
+`mcp__richos_files__show_media_moments`. Use that same file for the waveform.
+If step 4b didn't already produce `audio.wav`, make it with the ffmpeg command
+from that step. Uploaded captions can answer the question without running
+Whisper, but the waveform comes from the video's sound:
+
+```bash
+python3 "$RICHOS_ENGINE_ROOT/app/skills/audio-transcription/waveform.py" "$work/audio.wav"
+```
+
+Use the single line as `waveform`. Omit it if the video has no audio stream or
+the tools cannot read it. For a YouTube link with no playable local copy, use
+`source: {"kind":"youtube","video_id":"…"}` with its 11-character video ID.
+Give the moments in your answer when neither source is available. Delete the
+analysis files and keep the saved video used by the card.
 
 If a named specialist is doing the viewing and does not have the presentation
 tool, give Stu the source, duration, points and any waveform in the findings,

@@ -114,16 +114,19 @@ pub struct Row {
 
 impl Row {
     pub fn item(&self) -> Value {
-        let (source, exists, youtube_id) = match &self.source {
-            Source::Local { path, version } => ("local", version.still_at(path), None),
-            Source::Youtube { video_id } => ("youtube", true, Some(video_id)),
+        let (source, exists, youtube_id, media_type) = match &self.source {
+            Source::Local { path, version } => {
+                let media_type = if output::kind_of(&path.to_string_lossy()) == "mp4" { "video" } else { "audio" };
+                ("local", version.still_at(path), None, media_type)
+            }
+            Source::Youtube { video_id } => ("youtube", true, Some(video_id), "video"),
         };
         json!({
             "kind": rich_files::ITEM_KIND, "id": self.id, "entityId": self.entity_id,
             "threadId": self.thread_id, "turnId": self.turn_id, "visibility": "ceo",
             "createdAt": self.at, "sequence": self.at, "text": self.name,
             "file": {"id": self.id, "name": self.name, "source": source,
-                     "exists": exists, "moments": self.moments, "youtubeId": youtube_id}
+                     "exists": exists, "moments": self.moments, "youtubeId": youtube_id, "mediaType": media_type}
         })
     }
 }

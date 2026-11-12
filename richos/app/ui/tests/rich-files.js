@@ -340,7 +340,7 @@ async function main() {
     await p.context().close();
   });
 
-  await run.check("media moments seek in Output or ask the shell to open the selected YouTube moment", async () => {
+  await run.check("media moments play and pause in Output or open the selected online moment", async () => {
     const p = await openApp(browser, { prepare: mediaMomentsFixture });
     try {
       const local = p.getByRole("button", { name: /^0?0:53 Customer focus$/ });
@@ -350,10 +350,22 @@ async function main() {
       await player.waitFor();
       await p.waitForFunction(() => {
         const audio = document.querySelector("#op-viewer audio");
-        return audio && audio.readyState >= 1 && !audio.seeking && Math.abs(audio.currentTime - 53.28) < 0.05;
+        return audio && audio.readyState >= 1 && !audio.paused && !audio.seeking && audio.currentTime >= 53.28 && audio.currentTime < 55;
       });
       assertEqual(await p.evaluate(() => window.RichOutput.snapshot().view), "media", "Output is showing the media preview");
       assertEqual(await player.getAttribute("aria-label"), "Founder interview.wav", "the selected recording owns the player");
+      await local.click();
+      await p.waitForFunction(() => document.querySelector("#op-viewer audio")?.paused);
+      assertEqual(await local.getAttribute("aria-current"), "true", "the paused moment stays selected");
+      assert((await p.locator("#op-sub").textContent()).includes("Customer focus"), "the panel names the current moment");
+      await p.locator('.tl-media:has(.tl-media-moment[aria-current="true"]) input[type="range"]').fill("26000");
+      await p.waitForFunction(() => {
+        const audio = document.querySelector("#op-viewer audio");
+        return audio && !audio.paused && !audio.seeking && audio.currentTime >= 26 && audio.currentTime < 28;
+      });
+      await p.locator("#op-close").click();
+      await player.waitFor({ state: "detached" });
+      assertEqual(await p.locator(".tl-media-playhead:visible").count(), 0, "closing Output clears the playhead");
       await youtube.click();
       await p.waitForFunction(() => window.mediaMomentCalls.some(({ cmd }) => cmd === "media_moment_open"));
       const calls = await p.evaluate(() => window.mediaMomentCalls);
