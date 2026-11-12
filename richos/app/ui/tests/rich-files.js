@@ -518,9 +518,14 @@ async function main() {
       const card = p.locator('.tl-media[data-file-id="mm_0000000000000001"]');
       const timestamp = card.getByRole("button", { name: /^0?0:53 Customer focus$/ });
       const reopen = card.getByRole("button", { name: "Reopen conversation", exact: true });
+      const scopeStatus = card.locator(".tl-media-scope-status");
+      assert(await scopeStatus.evaluate((node) => node.getAttribute("role") === "status" &&
+        !node.hidden && getComputedStyle(node).display !== "none" && !node.textContent),
+        "the empty live region is exposed before playback is refused");
       await timestamp.click();
       await p.locator("#op-viewer").getByText("This conversation does not have those moments.").waitFor();
-      await card.getByText("Reopen this conversation to play the recording.").waitFor();
+      await scopeStatus.waitFor();
+      assertEqual(await scopeStatus.textContent(), "Reopen this conversation to play the recording.");
       assertEqual(await card.getAttribute("data-s"), "ready", "scope refusal does not mark the recording missing");
       assertEqual(await card.getByRole("button", { name: "Ask Rich again" }).count(), 0);
       assertEqual(await timestamp.getAttribute("aria-current"), null, "refused playback leaves no active timestamp");

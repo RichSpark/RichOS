@@ -254,11 +254,15 @@
     ask.type = "button";
     ask.addEventListener("click", () => opts?.sendText?.("Please find the moments in " + file.name + " again."));
     gone.append(node("p", null, MEDIA_GONE), ask);
+    const scopeStatus = node("div", "tl-media-scope-status");
+    scopeStatus.setAttribute("role", "status");
     const scope = node("div", "tl-media-status");
     scope.hidden = true;
-    const scopeText = node("p", null, "Reopen this conversation to play the recording.");
-    scopeText.setAttribute("role", "status");
-    scope.appendChild(scopeText);
+    const showScope = (show) => {
+      scope.hidden = !show;
+      const message = show ? "Reopen this conversation to play the recording." : "";
+      if (scopeStatus.textContent !== message) scopeStatus.textContent = message;
+    };
     if (opts?.reopenThread) {
       const reopen = node("button", "desk-btn tl-media-reopen", "Reopen conversation");
       reopen.type = "button";
@@ -268,7 +272,7 @@
     const actions = [];
     const seek = (startMs, from, toggle) => {
       status.textContent = "";
-      scope.hidden = Boolean(window.RichOutput?.openMoment(
+      showScope(!window.RichOutput?.openMoment(
         item.threadId, { id: file.id, name: file.name, startMs, durationMs, points, toggle }, from
       ));
     };
@@ -365,7 +369,7 @@
         missing = true;
         setMissing();
       }
-      if (active?.outOfScope) scope.hidden = false;
+      if (active?.outOfScope) showScope(true);
       const time = missing ? null : active?.time;
       current.textContent = time == null ? "" : mediaClock(time) + " / " + mediaClock(durationMs);
       playhead.hidden = time == null;
@@ -392,7 +396,7 @@
     mediaViews.set(el, paint);
     setMissing();
     paint(window.RichOutput?.mediaSnapshot());
-    el.append(head, gone, track, list, scope, status);
+    el.append(head, gone, track, list, scopeStatus, scope, status);
     return el;
   }
 
