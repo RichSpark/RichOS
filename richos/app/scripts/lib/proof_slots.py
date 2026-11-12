@@ -4,6 +4,10 @@
     proof_slots.py [status] [--json]   who holds a slot and who waits, in line order
     proof_slots.py set N               the host's limit: N proof runs at once (Rich sets it)
     proof_slots.py set default         back to the measured default (below)
+    proof_slots.py first RUN           the lead names one run to go first: RUN is its pid, its name as
+                                       `status` shows it, or its logs folder (below); it ends by itself
+                                       when that run ends
+    proof_slots.py first clear         no named run goes first any more
 
     import: acquire(meta, wait_seconds, say) -> Slot (its .fds are passed to the run's checks);
             Slot.release(); status(); limit()
@@ -111,6 +115,20 @@ refused request ages past engine_pass BACKGROUND_PRIORITY_AGE and worker admissi
 over the run ahead, which it waits for, so neither moved with every worker free (review
 rv-20261101T094016Z-2c1ea15a-8a00).
 
+THE RUN THE LEAD NAMES GOES FIRST (2026-11-12). On 2026-11-12, four times in one morning, a single
+urgent check the CEO was waiting on (one focused test) sat behind broad plans whose 130+ checks the
+Mac refused, and each time the lead had to ask every other run's owner to stop and restart later
+with --reuse. The CEO: "Rich sets how much runs at once." `first RUN` writes the run's identity
+(its pid and logs folder) to `first.json`, and that run then ranks with a nightly's run (`_rank`):
+it takes a slot at once, past the limit when none is free, and every run that took its slot before
+it gives way check by check while the Mac refuses its checks (`ahead_of`). It is the nightly's path,
+not a second one: nothing is stopped, the other runs keep their slots and their running checks, the
+CPU and memory rule admits each check as before, and a nightly's run still goes before it when it
+took its slot first. The name counts only while a live holder or waiter is that run (pid and logs
+folder both), so it ends by itself when the run ends, killed or not, and a forgotten name never holds
+anyone back; the run removes the file when it releases its slot. One run at a time: naming another
+replaces it. `status` shows it.
+
 NESTED RUNS. A suite that runs the real proof-run.py (proof-run.test.py, test-results.test.sh)
 inside a check of a proof run works inside its caller's slot: the caller exports its holder
 record's path as RICHOS_PROOF_RUN_SLOT_HELD, and the nested run borrows only if that record is
@@ -149,6 +167,8 @@ POLL_SECONDS = 1.0
 # 3615 s alone, so this is the line behind two full runs. The lead hears of it at ten minutes.
 DEFAULT_WAIT_SECONDS = 3 * 3600
 STALE_WAITER_SECONDS = 5.0
+# The run the lead named to go first (header, THE RUN THE LEAD NAMES GOES FIRST).
+FIRST_FILE = "first.json"
 SAY_EVERY_SECONDS = 120.0
 # What a `.waiting` file counts (header, ONLY CHECKS THE MAC REFUSED COUNT). A file without it was
 # written by a runner from an older checkout, whose count includes checks waiting for that run's
@@ -257,9 +277,84 @@ def release_owned(checkout, state):
             and _locked(os.path.join(state, "release.lock")) is True)
 
 
-def _rank(record):
-    """The order runs are admitted in (header): a build's run before any other, then by slot taken."""
-    return (0 if record.get("first") else 1, record.get("since") or 0,
+def _is_named(record, named):
+    """True when `record` (a holder or waiter record) is the run `named` names: same pid, same logs."""
+    return bool(named) and record.get("pid") == named.get("pid") and record.get("logs") == named.get("logs")
+
+
+def _live_runs(d):
+    """Waiter records, then holder records. Waiters are read first: a run that leaves the line has
+    already written its holder record, so it is never missing from both."""
+    return [_read(path) for path in _waiters(d)] + holders(d)
+
+
+def named_first(d=None):
+    """The run the lead named to go first (header), while a live waiter or holder is that run; else
+    None, so a name outlives nothing."""
+    d = d or directory()
+    named = _read(os.path.join(d, FIRST_FILE))
+    if not isinstance(named.get("pid"), int):
+        return None
+    return named if any(_is_named(rec, named) for rec in _live_runs(d)) else None
+
+
+def _end_named(holder_path):
+    """A named run releasing its slot removes the name, so `status` stops showing it at once."""
+    path = os.path.join(os.path.dirname(holder_path), FIRST_FILE)
+    named = _read(path)
+    if named and named.get("pid") == os.getpid() and named.get("logs") == _read(holder_path).get("logs"):
+        try:
+            os.unlink(path)
+        except FileNotFoundError:
+            pass
+
+
+def name_first(run, d=None):
+    """`first RUN` (header): the one live run whose pid, name or logs folder is `run` goes first.
+    Returns (named record, the live run it replaced or None). Raises ValueError, naming the live
+    runs, when none or more than one matches."""
+    d = d or directory()
+    runs, seen = [], set()
+    for rec in _live_runs(d):
+        key = (rec.get("pid"), rec.get("logs"))
+        if isinstance(rec.get("pid"), int) and key not in seen:
+            seen.add(key)
+            runs.append(rec)
+
+    def matches(rec):
+        return (str(rec.get("pid")) == run or rec.get("waiter") == run
+                or (bool(rec.get("logs")) and os.path.realpath(rec["logs"]) == os.path.realpath(run)))
+
+    found = [rec for rec in runs if matches(rec)]
+    listed = "; ".join("%s (pid %s, logs %s)" % (r.get("waiter", "?"), r.get("pid"), r.get("logs") or "-")
+                       for r in (found if len(found) > 1 else runs)) or "none"
+    if not found:
+        raise ValueError("no proof run on this Mac is %r; the runs holding or waiting: %s" % (run, listed))
+    if len(found) > 1:
+        raise ValueError("%r is more than one run: %s; name one by its pid or logs folder" % (run, listed))
+    previous = named_first(d)
+    rec = found[0]
+    named = {"pid": rec["pid"], "logs": rec.get("logs"), "waiter": rec.get("waiter"),
+             "named_at": time.time(), "by": _waiter_name()}
+    path = os.path.join(d, FIRST_FILE)
+    with open(path + ".new", "w") as fh:
+        json.dump(named, fh)
+    os.replace(path + ".new", path)
+    return named, (previous if previous and not _is_named(rec, previous) else None)
+
+
+def clear_first(d=None):
+    try:
+        os.unlink(os.path.join(d or directory(), FIRST_FILE))
+        return True
+    except FileNotFoundError:
+        return False
+
+
+def _rank(record, named=None):
+    """The order runs are admitted in (header): a build's run and the run the lead named before any
+    other, then by slot taken."""
+    return (0 if record.get("first") or _is_named(record, named) else 1, record.get("since") or 0,
             record.get("slot") if isinstance(record.get("slot"), int) else -1)
 
 
@@ -286,6 +381,7 @@ class Slot(object):
     def release(self):
         if not self.borrowed and self._fds:
             _publish(self.holder_path, 0)
+            _end_named(self.holder_path)
         for fd in reversed(self._fds):
             try:
                 fcntl.flock(fd, fcntl.LOCK_UN)
@@ -352,24 +448,29 @@ def waiting_holders(d=None):
 
 def ahead_of(slot):
     """The holders ahead of `slot` in the admission order (`_rank`: a nightly or release command's
-    run first, then the order slots were taken) whose checks the Mac refused at their last attempt
-    (header): there is not room for both, so while there is one, `slot`'s run starts none of its
-    own. Empty for a borrowed slot (a proof run inside a check of its caller is part of that
+    run and the run the lead named first, then the order slots were taken) whose checks the Mac
+    refused at their last attempt (header): there is not room for both, so while there is one,
+    `slot`'s run starts none of its own. Empty for a borrowed slot (a proof run inside a check of its caller is part of that
     caller's run) and for no slot at all."""
     if slot is None or slot.borrowed or not slot.fds or not slot.holder_path:
         return []
     record = _read(slot.holder_path)
-    mine = _rank({"first": getattr(slot, "first", record.get("first")),
-                  "since": getattr(slot, "since", None) or record.get("since") or time.time(), "slot": slot.index})
+    d = os.path.dirname(slot.holder_path)
+    named = named_first(d)
+    mine = _rank({"first": getattr(slot, "first", record.get("first")), "pid": record.get("pid"),
+                  "logs": record.get("logs"),
+                  "since": getattr(slot, "since", None) or record.get("since") or time.time(), "slot": slot.index},
+                 named)
     own = os.path.realpath(slot.holder_path)
-    return [r for r in waiting_holders(os.path.dirname(slot.holder_path))
-            if os.path.realpath(r["holder_file"]) != own and _rank(r) < mine]
+    return [dict(r, named=_is_named(r, named)) for r in waiting_holders(d)
+            if os.path.realpath(r["holder_file"]) != own and _rank(r, named) < mine]
 
 
 def describe_behind(rows):
     return "; ".join("%s (pid %s%s): the Mac refused %d of its checks, so it goes first" % (
-        r.get("waiter", "?"), r.get("pid", "?"), ", a nightly or release command's run" if r.get("first") else "",
-        r["waiting"]) for r in rows)
+        r.get("waiter", "?"), r.get("pid", "?"),
+        ", a nightly or release command's run" if r.get("first") else
+        ", named by the lead to go first" if r.get("named") else "", r["waiting"]) for r in rows)
 
 
 def _ancestors(pid):
@@ -439,10 +540,14 @@ def status(d=None):
         rec = _read(path)
         rec["position"] = k
         waiting.append(rec)
+    named = named_first(d)
+    for rec in waiting:
+        rec["named"] = _is_named(rec, named)
     behind = {rec["holder_file"]: rec["waiting"] for rec in waiting_holders(d)}
-    held = [dict(rec, checks_waiting=behind.get(rec["holder_file"], 0)) for rec in holders(d)]
+    held = [dict(rec, checks_waiting=behind.get(rec["holder_file"], 0), named=_is_named(rec, named))
+            for rec in holders(d)]
     return {"dir": d, "limit": n, "limit_source": source, "measured_default": measured_default(),
-            "holders": held, "waiting": waiting}
+            "first": named, "holders": held, "waiting": waiting}
 
 
 def describe_holders(rows, now=None):
@@ -495,9 +600,13 @@ def acquire(meta, wait_seconds=DEFAULT_WAIT_SECONDS, say=None, checks=0):
         while True:
             n, _source = limit(d)
             line = _waiters(d)
-            if meta.get("first") or (line and line[0] == mine):
-                slot = _try(d, n + cores() if meta.get("first") else n, meta, checks)
+            ahead = meta.get("first") or _is_named(dict(meta, pid=os.getpid()), named_first(d))
+            if ahead or (line and line[0] == mine):
+                slot = _try(d, n + cores() if ahead else n, meta, checks)
                 if slot is not None:
+                    if ahead and not meta.get("first"):
+                        say("proof-run: named by the lead to go first: took slot %d at once (this Mac runs "
+                            "%d at once)" % (slot.index, n))
                     return slot, time.time() - started
             position = line.index(mine) + 1 if mine in line else 1
             held = holders(d)
@@ -538,6 +647,11 @@ def print_status(s):
     now = time.time()
     print("proof-run slots on this Mac: %d at once (%s; the measured default is %d) in %s"
           % (s["limit"], s["limit_source"], s["measured_default"], s["dir"]))
+    if s.get("first"):
+        f = s["first"]
+        print("  goes first: %s (pid %s), named at %s; it ends by itself when that run ends, or now with "
+              "`proof_slots.py first clear`" % (f.get("waiter", "?"), f.get("pid", "?"),
+                                                 _utc(f.get("named_at", now))))
     if not s["holders"]:
         print("  holding: nobody")
     for h in s["holders"]:
@@ -546,6 +660,9 @@ def print_status(s):
             _utc(h.get("since", now))))
         if h.get("first"):
             print("           a nightly or release command's run: it goes first, past the limit if it must")
+        elif h.get("named"):
+            print("           named by the lead to go first: runs that took their slot before it give way "
+                  "while the Mac refuses its checks")
         for key in ("checkout", "logs", "selection"):
             if h.get(key):
                 print("           %s: %s" % (key, h[key]))
@@ -558,6 +675,9 @@ def print_status(s):
         print("  waiting: #%d  %s (pid %s) for %s since %s%s" % (
             w["position"], w.get("waiter", "?"), w.get("pid", "?"), _minutes(now - w.get("since", now)),
             _utc(w.get("since", now)), ("  checkout " + w["checkout"]) if w.get("checkout") else ""))
+        if w.get("named"):
+            print("           named by the lead to go first: it takes a slot at its next look, past the limit "
+                  "if it must")
 
 
 def main(argv):
@@ -569,6 +689,22 @@ def main(argv):
                   "the limit is a whole number of runs from 1 to %d, or `default`" % cores()), file=sys.stderr)
             return 2
         print("proof-run slots on this Mac: %d at once from the next admission" % n)
+        return 0
+    if argv[:1] == ["first"] and len(argv) == 2:
+        if argv[1] == "clear":
+            print("proof-run: %s" % ("no named run goes first any more" if clear_first()
+                                     else "no run was named to go first"))
+            return 0
+        try:
+            named, replaced = name_first(argv[1])
+        except ValueError as exc:
+            print("proof_slots.py: %s" % exc, file=sys.stderr)
+            return 1
+        print("proof-run: %s (pid %s) goes first from its next admission%s. The runs that took their slot "
+              "before it give way for new checks while the Mac refuses its checks; nothing is stopped. It ends "
+              "by itself when that run ends; `proof_slots.py first clear` ends it now." % (
+                  named.get("waiter", "?"), named["pid"],
+                  " (it replaces %s, pid %s)" % (replaced.get("waiter", "?"), replaced.get("pid")) if replaced else ""))
         return 0
     rest = argv[1:] if argv[:1] == ["status"] else argv
     if rest in ([], ["--json"]):

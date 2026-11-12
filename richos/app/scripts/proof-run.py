@@ -186,8 +186,9 @@ admits is admitted whichever run it belongs to, and the order between runs decid
 first when there is not room for both. Ahead means a
 nightly or release command's own run first (it never waits in the line, 2026-11-01; only the run
 the nightly names with --release-state, never a fixture run a test starts inside the build's
-tree), then the order slots were taken, except a land holding integration priority, which goes
-first.
+tree) and the run the lead names with `proof_slots.py first RUN` (2026-11-12: the same go-first
+path, ending by itself when that run ends), then the order slots were taken, except a land holding
+integration priority, which goes first.
 """
 import argparse
 import copy

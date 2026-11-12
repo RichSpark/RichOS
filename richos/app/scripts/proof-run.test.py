@@ -1314,6 +1314,95 @@ try:
           "which includes checks waiting for that run's own work", p2_seen)
     slots("set", "1")
 
+    # P16q — the run the lead names goes first (2026-11-12: four times in one morning a single
+    # urgent check sat behind broad plans whose 130+ checks the Mac refused, and the lead had to ask
+    # every other run's owner to stop). Under a limit of 1, an older broad run holds the only slot
+    # with 130 checks the Mac refused; the urgent run waits in line. The lead runs `proof_slots.py
+    # first p16-q-urgent`: the urgent run takes a slot at once, past the limit; the older run gives
+    # way to it while the Mac refuses its check, it gives way to nobody, its check runs and passes,
+    # and the older run keeps its slot throughout. The name ends by itself with the run, a name no
+    # live run answers to holds nobody back, and a name matching no run is refused.
+    q_seen = {}
+    q_logs = os.path.join(tmp, "p16-q-urgent.log")
+    q_older = pr.proof_slots._try(slots_dir, 1, {"waiter": "p16-q-older-broad",
+                                                 "logs": os.path.join(tmp, "p16-q-older.log")}, checks=130)
+    q_slot = None
+    q_done = threading.Event()
+
+    def q_lead():
+        while not q_done.is_set():
+            if any(w.get("waiter") == "p16-q-urgent" for w in json.loads(slots("status", "--json").stdout)["waiting"]):
+                r = slots("first", "p16-q-urgent")
+                q_seen["named_rc"], q_seen["named_out"] = r.returncode, (r.stdout + r.stderr)[-300:]
+                return
+            time.sleep(0.1)
+
+    q_thread = threading.Thread(target=q_lead, daemon=True)
+    q_saved_waiter = os.environ.get("RICHOS_WAITER")
+    os.environ["RICHOS_WAITER"] = "p16-q-urgent"
+    q_item = pr.Item("p16-q-urgent-check", os.path.join(pr.ROOT, "richos/app"),
+                     ["bash", "-c", "touch %s/q.urgent" % mark], None, 1.0)
+    q_buf = io.StringIO()
+    try:
+        q_thread.start()
+        try:
+            q_slot, q_seen["waited"] = pr.proof_slots.acquire({"logs": q_logs, "checkout": pr.ROOT}, 15, checks=0)
+        except TimeoutError as exc:
+            q_seen["refused"] = str(exc)[:300]
+        finally:
+            q_done.set()
+            q_thread.join(30)
+        if q_slot is not None:
+            q_seen["slot"] = q_slot.index
+            q_status = json.loads(slots("status", "--json").stdout)
+            q_seen["status_first"] = (q_status.get("first") or {}).get("waiter")
+            q_seen["status_named"] = [h.get("slot") for h in q_status["holders"] if h.get("named")]
+            q_seen["status_text"] = "goes first: p16-q-urgent" in slots("status").stdout
+            q_slot.publish_waiting(1)   # its one check, refused by the Mac at its first attempt
+            q_ahead = pr.proof_slots.ahead_of(q_older)
+            q_seen["older_gives_way_to"] = [(r.get("waiter"), r.get("named")) for r in q_ahead]
+            q_seen["older_says"] = "named by the lead to go first" in pr.proof_slots.describe_behind(q_ahead)
+            q_seen["urgent_gives_way_to"] = [r.get("waiter") for r in pr.proof_slots.ahead_of(q_slot)]
+            pr.SLOT = q_slot
+            with background_run(), contextlib.redirect_stdout(q_buf):
+                pr.run([q_item], Args(admission_wait=1), os.path.join(tmp, "p16-q"), sampler=idle)
+            q_seen["older_kept_slot"] = [h.get("waiter") for h in pr.proof_slots.holders(slots_dir)
+                                         if h.get("waiter") == "p16-q-older-broad"]
+            pr.SLOT = None
+            q_slot.release()
+            q_slot = None
+            q_seen["ended_with_run"] = json.loads(slots("status", "--json").stdout).get("first")
+            q_seen["older_after"] = [r.get("waiter") for r in pr.proof_slots.ahead_of(q_older)]
+            # A name no live run answers to (its run killed before it could remove it) holds nobody back.
+            with open(os.path.join(slots_dir, pr.proof_slots.FIRST_FILE), "w") as fh:
+                json.dump({"pid": os.getpid(), "logs": q_logs, "waiter": "p16-q-urgent"}, fh)
+            q_seen["forgotten"] = pr.proof_slots.named_first(slots_dir)
+            q_seen["clear_rc"] = slots("first", "clear").returncode
+            q_seen["cleared"] = not exists(os.path.join(slots_dir, pr.proof_slots.FIRST_FILE))
+        q_seen["unknown_rc"] = slots("first", "p16-q-no-such-run").returncode
+    finally:
+        pr.SLOT = None
+        if q_saved_waiter is None:
+            os.environ.pop("RICHOS_WAITER", None)
+        else:
+            os.environ["RICHOS_WAITER"] = q_saved_waiter
+        if q_slot is not None:
+            q_slot.release()
+        q_older.release()
+    check(q_seen.get("named_rc") == 0 and q_slot is None and q_seen.get("waited", 99) < 10
+          and q_seen.get("slot", 0) >= 1 and q_seen.get("status_first") == "p16-q-urgent"
+          and q_seen.get("status_named") == [q_seen.get("slot")] and q_seen.get("status_text")
+          and q_seen.get("older_gives_way_to") == [("p16-q-urgent", True)] and q_seen.get("older_says")
+          and q_seen.get("urgent_gives_way_to") == [] and q_item.state == "passed"
+          and "gives way" not in q_buf.getvalue() and q_seen.get("older_kept_slot") == ["p16-q-older-broad"]
+          and q_seen.get("ended_with_run") is None and q_seen.get("older_after") == []
+          and q_seen.get("forgotten") is None and q_seen.get("clear_rc") == 0 and q_seen.get("cleared")
+          and q_seen.get("unknown_rc") == 1,
+          "P16q the run the lead names with `proof_slots.py first` takes a slot at once past the limit, the "
+          "older run with 130 refused checks gives way to it and keeps its slot, its check runs without "
+          "giving way, and the name ends with the run; a forgotten or unknown name holds nobody back",
+          (q_seen, q_item.state, q_item.notes, q_buf.getvalue()[-400:]))
+
     # P40 — the merge gate's caps (2026-09-30). --cap is ONE number for every check, engine
     # units included, whatever a dated weight predicts (`workspace-spec-fourteen` was planned
     # at 2812 s and ran in 172-554 s); --run-cap ends the run on its own clock and ends, never
