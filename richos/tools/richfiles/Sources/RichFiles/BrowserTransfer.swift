@@ -372,7 +372,7 @@ enum BrowserTransferJob {
         guard let error = error as? FileOperationError else { return true }
         switch error {
         case .moveNeedsReview, .replacementNeedsReview, .sourceChanged, .folderChanged, .crossVolumeMove, .crossVolumeMoveNeedsReview,
-             .destinationInsideSource, .stagingCleanupFailed:
+             .copyNeedsReview, .exclusiveRenameUnsupported, .destinationInsideSource, .stagingCleanupFailed:
             return false
         default:
             return true

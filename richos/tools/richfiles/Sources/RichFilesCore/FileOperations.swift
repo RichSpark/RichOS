@@ -182,6 +182,8 @@ public enum FileOperationError: LocalizedError {
     case moveNeedsReview(source: URL, destination: URL)
     case crossVolumeMove
     case crossVolumeMoveNeedsReview(source: URL, destination: URL)
+    case exclusiveRenameUnsupported(URL)
+    case copyNeedsReview(destination: URL, error: Error)
     case copyVerificationFailed(URL)
     case destinationInsideSource
     case unsupportedCopySource(URL)
@@ -211,6 +213,10 @@ public enum FileOperationError: LocalizedError {
             return "This item cannot be moved between volumes. Choose Copy to keep the source."
         case .crossVolumeMoveNeedsReview(let source, let destination):
             return "A verified file was placed at \(destination.path). Check \(source.path) and Trash before retrying the move."
+        case .exclusiveRenameUnsupported(let url):
+            return "This volume cannot safely rename an item to \(url.path) without replacing an existing name."
+        case .copyNeedsReview(let destination, let error):
+            return "The original was kept. Check the incomplete or unverified copy at \(destination.path). \(error.localizedDescription)"
         case .copyVerificationFailed(let url):
             return "The copy of \(url.path) did not match. The original stays where it was."
         case .destinationInsideSource:
@@ -456,7 +462,8 @@ public enum FileOperations {
         let (copied, remaining) = try stageCopy(
             source, from: sourceFolder, initial: initial, into: destination, isCancelled: isCancelled, onProgress: onProgress
         ) { staged in
-            try publishCopy(staged, into: destination, named: name, policy: conflictPolicy, isCancelled: isCancelled)
+            try publishCopy(staged, into: destination, named: name, policy: conflictPolicy,
+                            allowRegularCopyFallback: true, isCancelled: isCancelled)
         }
         return CopyReceipt(copied: copied, remainingStagingFolder: remaining)
     }
@@ -746,11 +753,19 @@ public enum FileOperations {
         into destination: OpenFolder,
         named name: String,
         policy: CopyConflictPolicy,
+        allowRegularCopyFallback: Bool = false,
         isCancelled: () -> Bool
     ) throws -> FileReference {
-        if isCancelled() { throw CancellationError() }
+        func publish(named name: String) throws -> FileReference {
+            if isCancelled() { throw CancellationError() }
+            do {
+                return try relocate(staged, into: destination, named: name).moved
+            } catch FileOperationError.exclusiveRenameUnsupported where allowRegularCopyFallback {
+                return try publishRegularCopy(staged, into: destination, named: name, isCancelled: isCancelled)
+            }
+        }
         do {
-            return try relocate(staged, into: destination, named: name).moved
+            return try publish(named: name)
         } catch FileOperationError.destinationExists where policy == .keepBoth {
             // The staged copy remains in place after a name collision, so try another
             // name without copying the source a second time.
@@ -765,12 +780,60 @@ public enum FileOperations {
             let candidate = "\(basename) (\(index))" + suffix
             if try destination.existingStatus(named: candidate) != nil { continue }
             do {
-                return try relocate(staged, into: destination, named: candidate).moved
+                return try publish(named: candidate)
             } catch FileOperationError.destinationExists {
                 continue
             }
         }
         throw FileOperationError.noAvailableCopyName(target)
+    }
+
+    /// Some filesystems support exclusive creation but cannot rename without
+    /// overwriting. Reserve the final name only after the staged copy is complete.
+    /// Leave any uncertain output for review and keep the original in place.
+    private static func publishRegularCopy(
+        _ staged: FileReference, into destination: OpenFolder, named name: String,
+        isCancelled: () -> Bool
+    ) throws -> FileReference {
+        let parent = try OpenFolder(staged.parent)
+        let status = try parent.verifiedStatus(of: staged)
+        let target = destination.childURL(name)
+        guard status.st_mode & S_IFMT == S_IFREG else {
+            throw FileOperationError.exclusiveRenameUnsupported(target)
+        }
+        let input = openat(parent.descriptor, staged.name, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
+        guard input >= 0 else {
+            throw FileOperationError.system(operation: "Could not read the staged file", location: staged.url, code: errno)
+        }
+        defer { _ = close(input) }
+        let version = FileVersion(status)
+        guard FileVersion(try fileStatus(input, staged.url)) == version else {
+            throw FileOperationError.sourceChanged(staged.url)
+        }
+        try destination.verifyLocation()
+        if isCancelled() { throw CancellationError() }
+        let output = openat(destination.descriptor, name, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
+        guard output >= 0 else { throw destinationError("Could not create the copy", target, errno) }
+        defer { _ = close(output) }
+        do {
+            try copyFileDescriptors(input, output, to: target, size: status.st_size,
+                                    isCancelled: { false }, onProgress: { _, _ in })
+            guard fsync(output) == 0 else {
+                throw FileOperationError.system(operation: "Could not flush the copy", location: target, code: errno)
+            }
+            let copied = try fileStatus(output, target)
+            guard copied.st_size == status.st_size, FileVersion(try fileStatus(input, staged.url)) == version else {
+                throw FileOperationError.copyVerificationFailed(staged.url)
+            }
+            try destination.verifyLocation()
+            let reference = try destination.reference(named: name)
+            guard reference.identity == FileIdentity(copied) else {
+                throw FileOperationError.sourceChanged(target)
+            }
+            return reference
+        } catch {
+            throw FileOperationError.copyNeedsReview(destination: target, error: error)
+        }
     }
 
     public static func trash(_ source: FileReference) throws -> TrashReceipt {
@@ -873,7 +936,10 @@ public enum FileOperations {
         guard renameatx_np(
             parent.descriptor, source.name, destination.descriptor, name, UInt32(RENAME_EXCL)
         ) == 0 else {
-            throw destinationError("Could not move the item", destination.childURL(name), errno)
+            let code = errno
+            let target = destination.childURL(name)
+            if code == ENOTSUP || code == EOPNOTSUPP { throw FileOperationError.exclusiveRenameUnsupported(target) }
+            throw destinationError("Could not move the item", target, code)
         }
         // A different process can change a name during the syscall. Confirm the object
         // before recording an undo. An uncertain result must never trigger a rollback.

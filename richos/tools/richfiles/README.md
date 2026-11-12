@@ -23,6 +23,8 @@ The script builds and ad hoc signs a development bundle. RichOS packaging uses t
 
 Core browsing and file operations work locally. The optional RichFinder and RichCleaner menu actions use the corresponding RichOS services when installed.
 
+On volumes such as exFAT, regular file copies reserve the destination name exclusively after staging the file. A failed publication keeps the source and reports the output for review. Rename, move into and staged folder copy require the destination volume to support exclusive rename.
+
 ## Verify
 
 Run the native suite and packaged archive checks from the repository root.
