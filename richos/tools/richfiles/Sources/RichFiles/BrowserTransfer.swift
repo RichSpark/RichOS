@@ -120,8 +120,8 @@ struct BrowserQueuedTransfer: Identifiable, Sendable {
 
 extension BrowserTransferRequest {
     func pinned() throws -> Self {
+        // The worker checks this captured destination again when the queued transfer starts.
         let target = try destination ?? BrowserTransferDestination(folder: folder)
-        try target.verify()
         let captured = try sources.map { source in
             try Task.checkCancellation()
             let selected = try source.reference()
@@ -230,6 +230,7 @@ enum BrowserTransferJob {
         let destination: BrowserTransferDestination
         do {
             destination = try request.destination ?? BrowserTransferDestination(folder: request.folder)
+            result.destination = destination
             try destination.verify()
             if let recoveryURL {
                 do {
@@ -247,13 +248,16 @@ enum BrowserTransferJob {
                 }
             }
         } catch {
-            result.progress.issues.append(BrowserTransferIssue(
-                name: request.folder.lastPathComponent, message: error.localizedDescription, kind: .failed
-            ))
+            if result.destination != nil {
+                retainUnstarted(request.sources[...], for: request.folder, in: &result)
+            } else {
+                result.progress.issues.append(BrowserTransferIssue(
+                    name: request.folder.lastPathComponent, message: error.localizedDescription, kind: .failed
+                ))
+            }
             result.progress.running = false
             return result
         }
-        result.destination = destination
 
         for (index, input) in request.sources.enumerated() {
             if Task.isCancelled {
@@ -274,6 +278,12 @@ enum BrowserTransferJob {
             }
 
             do {
+                try destination.verify()
+            } catch {
+                retainUnstarted(request.sources[index...], for: destination.url, in: &result)
+                break
+            }
+            do {
                 try result.journal?.begin(input.url)
             } catch {
                 logger.warning("recovery write refused id=\(progress.id.uuidString, privacy: .public) phase=item-start")
@@ -286,7 +296,6 @@ enum BrowserTransferJob {
             let previousMoves = result.moves.count
             var retrySource: BrowserTransferSource?
             do {
-                try destination.verify()
                 let source = try input.reference()
                 retrySource = .captured(source)
                 let copyStarted = ProcessInfo.processInfo.systemUptime
@@ -381,6 +390,25 @@ enum BrowserTransferJob {
         result.progress.verifyingCopy = false
         result.progress.running = false
         return result
+    }
+
+    private static func retainUnstarted(
+        _ inputs: ArraySlice<BrowserTransferSource>, for destination: URL, in result: inout BrowserTransferResult
+    ) {
+        result.progress.issues.append(BrowserTransferIssue(
+            name: destination.lastPathComponent,
+            message: "The original destination is unavailable. Restore access to it or choose a folder for a new transfer.",
+            kind: .failed
+        ))
+        for input in inputs {
+            do {
+                result.retry.append(.captured(try input.reference()))
+            } catch {
+                result.progress.issues.append(BrowserTransferIssue(
+                    name: input.url.lastPathComponent, message: error.localizedDescription, kind: .failed
+                ))
+            }
+        }
     }
 
     private static func describeConflict(

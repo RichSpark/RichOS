@@ -177,22 +177,63 @@ final class BrowserActionsTests: XCTestCase {
     }
 
     @MainActor
-    func testPinnedPasteRefusesAFolderReplacedAtTheSamePath() async throws {
+    func testTransferRetainsOnlyUnstartedItemsWhenDestinationDisappears() async throws {
+        try await withFixture { root, destination, _ in
+            let first = try write("first bytes", named: "First.txt", in: root)
+            let next = try write("next bytes", named: "Next.txt", in: root)
+            let original = try FileReference(url: destination)
+            let pinned = try BrowserTransferDestination(folder: destination)
+            let request = BrowserTransferRequest(sources: [.captured(first), .captured(next)],
+                                                 folder: destination, move: false, conflict: .skip,
+                                                 clipboardGeneration: nil, destination: pinned)
+            let progress = BrowserTransfer(destination: destination, move: false, total: 2)
+            let result = await BrowserTransferJob.perform(request, progress: progress, recoveryURL: nil) { update in
+                if update.currentSource == next.url {
+                    _ = try? FileOperations.rename(original, to: "Parked")
+                }
+            }
+            let parked = root.appendingPathComponent("Parked", isDirectory: true)
+            XCTAssertEqual(try contents(parked.appendingPathComponent("First.txt")), "first bytes")
+            XCTAssertEqual(try contents(next.url), "next bytes")
+            XCTAssertEqual(result.progress.succeeded, 1)
+            XCTAssertEqual(result.progress.completed, 1)
+            XCTAssertEqual(result.retry.map(\.url), [next.url])
+            XCTAssertEqual(result.destination?.identity, original.identity)
+        }
+    }
+
+    @MainActor
+    func testPinnedPasteCanRetryOnlyAfterTheOriginalFolderReturns() async throws {
         try await withFixture { root, destination, board in
             let source = try write("original", named: "Notes.txt", in: root)
             let pinned = try BrowserTransferDestination(folder: destination)
             let original = try FileReference(url: destination)
             let moved = try FileOperations.rename(original, to: "Moved Destination").moved
-            _ = try FileOperations.createFolder(in: root, named: "Destination")
+            let replacement = try FileOperations.createFolder(in: root, named: "Destination")
             let actions = BrowserActions(pasteboard: board)
             actions.copy([source], cut: true)
 
             try await perform(actions) { actions.paste(into: destination, destination: pinned) }
+            XCTAssertTrue(actions.canRetryTransfer)
+            try await perform(actions) { actions.retryTransfer() }
+            XCTAssertTrue(actions.canRetryTransfer)
             XCTAssertEqual(try contents(source.url), "original")
             XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: moved.url.path).isEmpty)
             XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: destination.path).isEmpty)
             XCTAssertEqual(actions.transfer?.succeeded, 0)
             XCTAssertEqual(actions.cutURLs, [source.url])
+
+            let unrelated = try FileOperations.rename(replacement, to: "Unrelated Destination").moved
+            _ = try FileOperations.rename(moved, to: "Destination")
+            try await perform(actions) { actions.retryTransfer() }
+            let installed = destination.appendingPathComponent("Notes.txt")
+            XCTAssertEqual(try contents(installed), "original")
+            XCTAssertEqual(try FileReference(url: installed).identity, source.identity)
+            XCTAssertFalse(FileManager.default.fileExists(atPath: source.url.path))
+            XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: unrelated.url.path).isEmpty)
+            XCTAssertEqual(actions.transfer?.succeeded, 1)
+            XCTAssertTrue(actions.cutURLs.isEmpty)
+            XCTAssertFalse(actions.canRetryTransfer)
         }
     }
 

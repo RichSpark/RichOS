@@ -34,6 +34,7 @@ struct BrowserView: View {
     @State private var iconColumns = 4
     @State private var dropOperation: DropOperation?
     @State private var dropDestination: BrowserTransferDestination?
+    @State private var destinationRefresh = UUID()
     @State private var selectedReferences: [URL: FileReference] = [:]
     @State private var preparingAction = false
     @State private var rowFrames: [URL: CGRect] = [:]
@@ -48,6 +49,7 @@ struct BrowserView: View {
     private struct DestinationRequest: Hashable {
         let folder: URL
         let disconnected: Bool
+        let refresh: UUID
     }
 
     init(model: BrowserModel, workspace: WindowWorkspace, side: BrowserPaneSide,
@@ -121,7 +123,8 @@ struct BrowserView: View {
             prefixTime = 0
         }
         .task(id: model.selected) { await captureSelection() }
-        .task(id: DestinationRequest(folder: model.folder, disconnected: model.isDisconnected)) {
+        .task(id: DestinationRequest(folder: model.folder, disconnected: model.isDisconnected,
+                                     refresh: destinationRefresh)) {
             await captureDropDestination()
         }
         .sheet(item: $sheet, onDismiss: runPaletteChoice) { value in sheetContents(value) }
@@ -144,7 +147,7 @@ struct BrowserView: View {
             control("Back", "chevron.left") { model.goBack() }.disabled(!model.canGoBack)
             control("Forward", "chevron.right") { model.goForward() }.disabled(!model.canGoForward)
             control("Up", "arrow.up") { model.goUp() }.disabled(model.folder.path == "/")
-            control("Refresh", "arrow.clockwise") { model.refreshVolumes(); model.refresh() }
+            control("Refresh", "arrow.clockwise") { _ = perform(.refresh) }
             Group {
                 if editingAddress {
                     TextField("Folder path", text: $address)
@@ -1015,7 +1018,11 @@ struct BrowserView: View {
             guard model.canGoForward else { return false }
             model.goForward()
         case .up: model.goUp()
-        case .refresh: model.refreshVolumes(); model.refresh()
+        case .refresh:
+            dropDestination = nil
+            destinationRefresh = UUID()
+            model.refreshVolumes()
+            model.refresh()
         case .address: editAddress()
         case .revealFolder: expandToCurrentFolder()
         case .workspaces: sheet = .workspaces
@@ -1306,8 +1313,12 @@ struct BrowserView: View {
     }
 
     private func paste(_ conflict: BrowserConflictPolicy = .skip) {
-        guard writableFolder else { return }
-        actions.paste(into: model.folder, conflict: conflict, destination: currentDropDestination)
+        guard writableFolder, actions.canScheduleTransfer else { return }
+        guard let destination = currentDropDestination else {
+            feedback = "The destination folder is unavailable. Refresh this folder and try again."
+            return
+        }
+        actions.paste(into: destination.url, conflict: conflict, destination: destination)
     }
 
     private var currentDropDestination: BrowserTransferDestination? {
