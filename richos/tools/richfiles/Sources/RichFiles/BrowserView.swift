@@ -833,6 +833,9 @@ struct BrowserView: View {
         Button("Disk Usage…") { sheet = .diskUsage(model.folder) }
         Button("Find Duplicate Files…") { sheet = .duplicates(model.folder) }
         Button("Compare Folders…") { sheet = .compare(model.folder) }
+        if hostOpenWindow != nil {
+            Button("RichFiles Settings…") { sheet = .settings }
+        }
         Button("Refresh") { _ = perform(.refresh) }
     }
 
@@ -1273,6 +1276,11 @@ struct BrowserView: View {
         case .trash: TrashSheet(actions: actions)
         case .trashFailures(let sources): TrashFailuresSheet(sources: sources, actions: actions)
         case .transfers: TransferSheet(actions: actions)
+        case .settings:
+            VStack(alignment: .trailing, spacing: 0) {
+                RichFilesSettings()
+                Button("Done") { sheet = nil }.keyboardShortcut(.cancelAction).padding(12)
+            }.frame(height: 480)
         case .searchOptions: SearchOptionsSheet(model: model)
         case .batch(let references): BatchRenameSheet(sources: references, folder: model.folder, actions: actions)
         case .connect: ConnectSheet()

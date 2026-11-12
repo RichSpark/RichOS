@@ -24,7 +24,7 @@ enum BrowserSheet: Identifiable {
     case compare(URL)
     case fileShelf(BrowserTransferDestination)
     case trashFailures([FileReference])
-    case trash, transfers, searchOptions, batch([FileReference]), connect, workspaces, actionPalette
+    case trash, transfers, searchOptions, batch([FileReference]), connect, workspaces, actionPalette, settings
 
     var id: String {
         switch self {
@@ -47,6 +47,7 @@ enum BrowserSheet: Identifiable {
         case .connect: return "connect"
         case .workspaces: return "workspaces"
         case .actionPalette: return "actionPalette"
+        case .settings: return "settings"
         }
     }
 }

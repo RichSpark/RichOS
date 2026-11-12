@@ -275,8 +275,12 @@ struct RichFilesSettings: View {
     @State private var shortcutText = ""
     @State private var shortcutProblem = ""
 
-    private var appURL: URL { Bundle.main.bundleURL.resolvingSymlinksInPath() }
-    private var installedBundle: Bool { appURL.pathExtension == "app" }
+    private var appURL: URL {
+        let bundle = Bundle.main
+        let app = bundle.bundleIdentifier == "app.richos.richfiles" ? bundle.bundleURL : RichFilesInstallation.embeddedApplication
+        return app.resolvingSymlinksInPath()
+    }
+    private var installedBundle: Bool { Bundle(url: appURL)?.bundleIdentifier == "app.richos.richfiles" }
     private var isCurrent: Bool { currentHandler?.resolvingSymlinksInPath() == appURL }
 
     var body: some View {
@@ -297,6 +301,7 @@ struct RichFilesSettings: View {
                     }
                 }
                 TextField("Shortcut", text: $shortcutText, prompt: Text("Control+Shift+J"))
+                    .accessibilityLabel("Shortcut")
                 HStack {
                     Button("Save Shortcut") { saveShortcut() }
                     Button("Use Default") { resetShortcut() }
