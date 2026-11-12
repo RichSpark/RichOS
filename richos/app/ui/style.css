@@ -11072,7 +11072,7 @@ body.bp-narrow #out-bottom .out-word {
   border-radius: 999px;
   color: var(--accent-text);
 }
-.tl-media-act { font-size: .8em; }
+.tl-media-act { font-size: .875rem; }
 .tl-media-moment.is-active { background: var(--gold-soft); }
 .tl-media-moment.is-active .tl-media-time { background: var(--gold); color: var(--on-gold); }
 .tl-media-copy { display: grid; gap: 2px; min-width: 0; }
