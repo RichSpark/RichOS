@@ -286,6 +286,13 @@ final class BrowserModel: ObservableObject {
         reloadPreservingSelection()
     }
 
+    func selectCreatedItem(_ item: FileReference) {
+        selected = [item.url]
+        selectionToRestore = [item.url.path: .sameFile(item.identity)]
+        firstVisibleItem = nil
+        scrollAnchor = item.url
+    }
+
     func recordViewport(_ firstItem: URL, in folder: URL, tab: UUID, mode: BrowserViewMode) {
         guard !busy, viewMode == mode, self.folder == folder, currentTabID == tab else { return }
         firstVisibleItem = firstItem
@@ -664,7 +671,9 @@ final class BrowserModel: ObservableObject {
 
     private func selectionSnapshot() -> [String: SelectionTarget] {
         var snapshot = selectionToRestore
-        for entry in selectedEntries { snapshot[entry.url.path] = .sameFile(entry.identity) }
+        for entry in selectedEntries where snapshot[entry.url.path] == nil {
+            snapshot[entry.url.path] = .sameFile(entry.identity)
+        }
         return snapshot
     }
 

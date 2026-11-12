@@ -1277,8 +1277,7 @@ struct BrowserView: View {
         actions.create(in: destination.url, named: name, directory: directory,
                        expectedFolder: destination.identity, useAvailableName: true) { item in
             guard model.folder == folder, model.currentTabID == tab, workspace.active == side, sheet == nil else { return }
-            model.selected = [item.url]
-            model.scrollAnchor = item.url
+            model.selectCreatedItem(item)
             rangeAnchor = item.url
             selectionCursor = item.url
             sheet = .name(NameRequest(source: item, folder: folder, directory: directory,

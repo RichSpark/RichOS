@@ -1,5 +1,6 @@
 import Combine
 import Foundation
+import RichFilesCore
 import XCTest
 @testable import RichFiles
 
@@ -162,6 +163,48 @@ final class BrowserModelTests: XCTestCase {
         model.refresh()
         try await waitForListing(model, at: beta)
         XCTAssertEqual(model.scrollAnchor, firstInBeta)
+    }
+
+    @MainActor
+    func testCreatedItemStaysSelectedWhenTheMutationRefreshesItsFolder() async throws {
+        let temporary = try XCTUnwrap(ProcessInfo.processInfo.environment["TMPDIR"])
+        let root = URL(fileURLWithPath: temporary, isDirectory: true).resolvingSymlinksInPath()
+            .appendingPathComponent("RichFilesCreateSelection-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let existing = root.appendingPathComponent("Existing.txt")
+        try Data("existing".utf8).write(to: existing)
+
+        let model = BrowserModel(start: root)
+        try await waitForListing(model, at: root)
+        let listed = try XCTUnwrap(model.entries.first)
+        model.selected = [listed.id]
+        model.refresh()
+        try await waitForListing(model, at: root)
+        XCTAssertEqual(model.selected, [listed.id])
+
+        for (name, directory) in [("New Folder", true), ("New File.txt", false)] {
+            let created = try FileOperations.createItem(in: root, named: name, directory: directory,
+                                                        expectedFolder: nil, useAvailableName: true)
+            XCTAssertFalse(model.entries.contains { $0.url.path == created.url.path })
+            model.selectCreatedItem(created)
+            model.refresh()
+            try await waitForListing(model, at: root)
+            XCTAssertEqual(model.selectedEntries.map(\.name), [name])
+            XCTAssertEqual(model.selectedEntries.map(\.identity), [created.identity])
+        }
+
+        let created = try FileOperations.createItem(in: root, named: "Replaced.txt", directory: false,
+                                                    expectedFolder: nil, useAvailableName: true)
+        model.selectCreatedItem(created)
+        let parked = root.appendingPathComponent("Original.txt")
+        try FileManager.default.moveItem(at: created.url, to: parked)
+        try Data("replacement".utf8).write(to: created.url)
+        model.refresh()
+        try await waitForListing(model, at: root)
+        XCTAssertTrue(model.selected.isEmpty)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: parked.path))
+        XCTAssertEqual(try String(contentsOf: created.url, encoding: .utf8), "replacement")
     }
 
     @MainActor
