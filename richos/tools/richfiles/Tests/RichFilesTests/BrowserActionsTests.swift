@@ -202,7 +202,9 @@ final class BrowserActionsTests: XCTestCase {
             XCTAssertTrue(actions.isCut(source.url))
             XCTAssertEqual(actions.transfer?.issues.first?.conflict?.incoming.size, Int64("selected".utf8.count))
             XCTAssertEqual(actions.transfer?.issues.first?.conflict?.existing.size, Int64("already here".utf8.count))
-            XCTAssertNil(actions.transfer?.issues.first?.conflict?.reviewed)
+            let reviewed = try XCTUnwrap(actions.transfer?.issues.first?.conflict?.reviewed)
+            XCTAssertEqual(reviewed.incoming.reference, source)
+            XCTAssertEqual(reviewed.existing.reference, occupant)
 
             try await perform(actions) { actions.retryTransfer(conflict: .keepBoth) }
             let movedURL = destination.appendingPathComponent("Report (2).txt")
