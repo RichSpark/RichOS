@@ -170,6 +170,60 @@ async function main() {
 
   const page = await openApp(browser);
 
+  await run.check("a library card tries the bookmark even when its recorded path is stale", async () => {
+    await page.evaluate(() => {
+      const original = window.__libraryTestBridge = window.RichBridge;
+      window.RichBridge = {
+        ...original,
+        invoke(command, args) {
+          if (command === "cleaner_action") {
+            window.__libraryOpen = args;
+            if (args.action !== "open") return Promise.resolve({});
+            window.__libraryOpenCount++;
+            return new Promise((_, reject) => { window.__libraryReject = reject; });
+          }
+          return original.invoke(command, args);
+        },
+      };
+      window.__libraryOpenCount = 0;
+      window.__libraryRender = () => window.RichFiles.render([{
+        id: "bookmark-test", file: { id: "saved-note", library: true, exists: false, name: "Moved.txt" },
+      }]);
+      document.querySelector(".tl-rfiles").after(window.__libraryRender());
+    });
+    const card = page.locator('.tl-rfile[data-file-id="saved-note"]');
+    await card.locator(".tl-rfile-finder").click();
+    assertEqual(await page.evaluate(() => window.__libraryOpen.action), "reveal");
+    await card.locator(".tl-rfile-main").click();
+    await card.evaluate((el) => {
+      window.RichFiles.downloading("saved-note");
+      el.closest(".tl-rfiles").replaceWith(window.__libraryRender());
+    });
+    assertEqual(await card.locator(".tl-rfile-meta").textContent(), "Downloading from iCloud…");
+    await card.locator(".tl-rfile-main").click();
+    assertEqual(await page.evaluate(() => window.__libraryOpenCount), 1, "a rebuilt card must not open twice");
+    await page.evaluate(() => window.__libraryReject("Locate the original file"));
+    await page.waitForFunction(() =>
+      document.querySelector('[data-file-id="saved-note"]').dataset.s === "missing"
+    );
+    assertEqual(await page.evaluate(() => window.__libraryOpen), {
+      id: "saved-note", action: "open", note: null,
+    });
+    assertEqual(await card.locator(".tl-rfile-ask").textContent(), "Locate original");
+    await card.locator(".tl-rfile-ask").click();
+    assertEqual(await page.evaluate(() => window.__libraryOpen.action), "locate");
+    assertEqual(await page.evaluate(() => window.__libraryOpen.id), "saved-note");
+    await card.evaluate((el) => el.closest(".tl-rfiles").remove());
+    await page.evaluate(() => {
+      window.RichBridge = window.__libraryTestBridge;
+      delete window.__libraryTestBridge;
+      delete window.__libraryOpen;
+      delete window.__libraryOpenCount;
+      delete window.__libraryRender;
+      delete window.__libraryReject;
+    });
+  });
+
   await run.check("the files sit under Rich's words in his reply, one card each, built like the attachment chip", async () => {
     const got = await cards(page);
     assertEqual(got.length, 2, "cards in the conversation");

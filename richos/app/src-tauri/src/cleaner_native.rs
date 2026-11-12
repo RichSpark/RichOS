@@ -98,6 +98,28 @@ impl Native {
     pub fn context(&self, cancel: &AtomicBool) -> Result<Value> {
         self.call(json!({"action":"context"}), Duration::from_secs(1), cancel)
     }
+    pub fn open_location(
+        &self, path: &Path, identity: &Identity, reveal: bool, downloading: impl FnOnce(),
+    ) -> Result<PathBuf> {
+        let action = if reveal { "resolve" } else { "open-check" };
+        let mut answer = self.request(json!({"action":action,"path":path,"identity":identity}))?;
+        if answer["download"] == true {
+            downloading();
+            answer = self.request(json!({"action":"open-location","path":path,"identity":identity}))?;
+        }
+        Ok(PathBuf::from(
+            answer["path"].as_str().ok_or("Locate the original file")?,
+        ))
+    }
+
+    fn reserve_destination(
+        &self, root: &Path, parts: &[String], name: &std::ffi::OsStr, existing_only: bool,
+    ) -> Result<PathBuf> {
+        let name = name.to_str().ok_or("Invalid filename")?;
+        let answer = self.request(json!({"action":"destination","root":root,"parts":parts,
+                                        "name":name,"existingOnly":existing_only}))?;
+        Ok(PathBuf::from(answer["path"].as_str().ok_or("Missing destination")?))
+    }
     pub fn stage_copy(&self, e: &Entry) -> Result<Staged> {
         let value =
             self.request(json!({"action":"reserve","path":e.path,"identity":e.identity}))?;
@@ -115,10 +137,13 @@ impl Files for Native {
             .map_err(|e| e.to_string())
     }
     fn resolve(&self, path: &Path, identity: &Identity) -> Result<PathBuf> {
-        let v = self.request(json!({"action":"resolve","path":path,"identity":identity}))?;
-        Ok(PathBuf::from(
-            v["path"].as_str().ok_or("Locate the original file")?,
-        ))
+        self.open_location(path, identity, true, || {})
+    }
+    fn resolve_local(&self, path: &Path, identity: &Identity) -> Result<(PathBuf, Identity)> {
+        let answer = self.request(json!({"action":"resolve-local","path":path,"identity":identity}))?;
+        let resolved = PathBuf::from(answer["path"].as_str().ok_or("Locate the original file")?);
+        let actual = serde_json::from_value(answer["identity"].clone()).map_err(|e| e.to_string())?;
+        Ok((resolved, actual))
     }
     fn destination(
         &self,
@@ -126,10 +151,12 @@ impl Files for Native {
         parts: &[String],
         name: &std::ffi::OsStr,
     ) -> Result<PathBuf> {
-        let v=self.request(json!({"action":"destination","root":root,"parts":parts,"name":name.to_str().ok_or("Invalid filename")?}))?;
-        Ok(PathBuf::from(
-            v["path"].as_str().ok_or("Missing destination")?,
-        ))
+        self.reserve_destination(root, parts, name, false)
+    }
+    fn destination_existing(
+        &self, root: &Path, parts: &[String], name: &std::ffi::OsStr,
+    ) -> Result<PathBuf> {
+        self.reserve_destination(root, parts, name, true)
     }
     fn stage(&self, e: &Entry) -> Result<Option<Staged>> {
         let ext = e

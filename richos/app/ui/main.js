@@ -11449,6 +11449,7 @@ async function hydrateRunningTurn() {
 init();
 
 // Feature windows return to the existing Settings and report surfaces.
+Bridge.listen("rich://cleaner-download", ({ payload }) => window.RichFiles.downloading(payload.id));
 Bridge.listen("rich://cleaner-settings", ({payload}) => {
   if(payload.surface === "accounts") window.RichAccounts?.open();
   else if(payload.surface === "cleaner") window.RichCleaner?.open();

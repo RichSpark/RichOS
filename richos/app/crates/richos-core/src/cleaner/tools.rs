@@ -62,7 +62,7 @@ pub fn call(scope: &Scope, name: &str, args: &Value) -> Result<Value> {
                 .transpose()?
                 .unwrap_or_default();
             let page = db.search(query, offset, 512 * 1024)?;
-            let total = db.search("", 0, 512 * 1024)?.total;
+            let total = db.total_files()?;
             let mut entries = vec![];
             let mut bytes = 1024;
             for e in page.entries {

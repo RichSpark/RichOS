@@ -12,6 +12,8 @@
   const PAGE = '<svg viewBox="0 0 40 48" aria-hidden="true"><path class="pg" d="M4 4.5A4 4 0 0 1 8 .5h18l13.5 13.5v29.5a4 4 0 0 1-4 4H8a4 4 0 0 1-4-4z"/><path class="fold" d="M26 .5v9.5a4 4 0 0 0 4 4h9.5z"/></svg>';
   const OUT = '<svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10L10 4M5 4h5v5"/></svg>';
   const GONE = "No longer on this Mac. It was moved or deleted.";
+  const LOCATE = "Locate the original. Your note is saved.";
+  const libraryStatus = new Map();
 
   function node(tag, cls, text) {
     const el = document.createElement(tag);
@@ -21,8 +23,12 @@
   }
 
   // What a click on the card says when it could not open: the sentence Rust wrote.
+  function message(error) {
+    return String((error && error.message) || error || "This Mac would not open it.");
+  }
+
   function failed(card, meta, error) {
-    const sentence = String((error && error.message) || error || "This Mac would not open it.");
+    const sentence = message(error);
     if (sentence === GONE) {
       card.dataset.s = "missing";
       meta.textContent = GONE;
@@ -31,6 +37,34 @@
       meta.textContent = sentence;
     }
     named(card.querySelector(".tl-rfile-main"), meta);
+  }
+
+  function applyLibraryStatus(card, status) {
+    card.dataset.s = status?.state || "ready";
+    const meta = card.querySelector(".tl-rfile-meta");
+    meta.textContent = status?.text || card.dataset.fileMeta;
+    named(card.querySelector(".tl-rfile-main"), meta);
+  }
+
+  function updateLibraryStatus(key, status) {
+    libraryStatus.delete(key);
+    if (status) libraryStatus.set(key, status);
+    if (libraryStatus.size > 64) {
+      for (const [old, value] of libraryStatus) {
+        if (value.state !== "opening") { libraryStatus.delete(old); break; }
+      }
+    }
+    for (const card of document.querySelectorAll(".tl-rfile[data-library-card]")) {
+      if (card.dataset.libraryCard === key) applyLibraryStatus(card, status);
+    }
+  }
+
+  function downloading(id) {
+    for (const [key, status] of libraryStatus) {
+      if (status.file === id && status.state === "opening" && status.text !== "Downloading from iCloud…") {
+        updateLibraryStatus(key, { ...status, text: "Downloading from iCloud…" });
+      }
+    }
   }
 
   // The card button's name: what pressing it does, then its line (type, size, pages, or why it
@@ -82,7 +116,8 @@
     const el = node("div", "tl-rfile");
     el.setAttribute("role", "listitem");
     el.dataset.fileId = f.id || item.id;
-    el.dataset.s = f.exists === false ? "missing" : "ready";
+    const missing = !f.library && f.exists === false;
+    el.dataset.s = missing ? "missing" : "ready";
     carryArrival(el, el.dataset.fileId);
 
     const main = node("button", "tl-rfile-main");
@@ -95,7 +130,7 @@
     glyph.appendChild(node("span", "tl-rfile-ext", f.ext || "FILE"));
     const text = node("span", "tl-rfile-text");
     text.appendChild(node("span", "tl-rfile-name", name));
-    const meta = node("span", "tl-rfile-meta", f.exists === false ? (f.library ? "Locate the original. Your note is saved." : GONE) : (f.meta || ""));
+    const meta = node("span", "tl-rfile-meta", missing ? GONE : (f.meta || ""));
     text.appendChild(meta);
     if(f.library && f.note)text.appendChild(node("span","tl-rfile-note",f.note));
     named(main, meta);
@@ -108,19 +143,40 @@
     open.insertAdjacentHTML("beforeend", OUT);
     const finder = node("button", "tl-rfile-finder", f.library ? "Show in Folder" : "Show in Finder");
     finder.type = "button";
-    const ask = node("button", "desk-btn tl-rfile-ask", "Ask Rich again");
+    const ask = node("button", "desk-btn tl-rfile-ask", f.library ? "Locate original" : "Ask Rich again");
     ask.type = "button";
-    if(f.library && f.exists===false)ask.textContent="Locate in RichCleaner";
     acts.append(open, finder, ask);
     el.append(main, acts);
 
-    const invoke = (command) => f.library
-      ? window.RichBridge.invoke("cleaner_action",{id:f.id,action:command==="rich_file_reveal" ? "reveal" : "open",note:null})
-      : window.RichBridge.invoke(command, { threadId: item.threadId, fileId: f.id || item.id });
+    if (f.library) {
+      const key = String(item.id || f.id);
+      el.dataset.libraryCard = key;
+      el.dataset.fileMeta = f.meta || "";
+      meta.setAttribute("aria-live", "polite");
+      applyLibraryStatus(el, libraryStatus.get(key));
+      el.addEventListener("click", async (event) => {
+        if (el.dataset.s === "opening") return;
+        const missing = el.dataset.s === "missing";
+        if (missing && !event.target.closest(".tl-rfile-ask")) return;
+        const action = missing ? "locate" : event.target.closest(".tl-rfile-finder") ? "reveal" : "open";
+        const opening = action === "open";
+        updateLibraryStatus(key, { file: opening ? f.id : null, state: "opening", text: opening ? "Opening…" : "" });
+        try {
+          const result = await window.RichBridge.invoke("cleaner_action", { id: f.id, action, note: null });
+          updateLibraryStatus(key, missing && !result?.id ? { state: "missing", text: LOCATE } : null);
+        } catch (error) {
+          const text = message(error);
+          const unavailable = missing || text === "Locate the original file";
+          updateLibraryStatus(key, { state: unavailable ? "missing" : "ready", text: text === "Locate the original file" ? LOCATE : text });
+        }
+      });
+      return el;
+    }
+
+    const invoke = (command) => window.RichBridge.invoke(command, { threadId: item.threadId, fileId: f.id || item.id });
 
     el.addEventListener("click", (e) => {
       if (el.dataset.s === "missing") {
-        if(f.library && e.target.closest(".tl-rfile-ask")){window.RichBridge.invoke("cleaner_open_window").catch(error=>failed(el,meta,error));return;}
         if (e.target.closest(".tl-rfile-ask") && opts && opts.sendText) {
           opts.sendText("Please send " + name + " again.");
         }
@@ -338,5 +394,5 @@
     return list;
   }
 
-  window.RichFiles = { render, arrived };
+  window.RichFiles = { render, arrived, downloading };
 })();
