@@ -352,9 +352,18 @@ enum BrowserTransferJob {
             return nil
         }
         let reviewed: BrowserFileConflict.Replacement?
-        if !move || incoming.identity.device == occupant.identity.device,
-           let a = try? ReviewedFile(incoming), let b = try? ReviewedFile(occupant),
-           incoming.identity != occupant.identity {
+        let targetFolder = existing.deletingLastPathComponent()
+        let replacementFolders = incoming.identity.device != occupant.identity.device && move
+            ? [incoming.url.deletingLastPathComponent(), targetFolder]
+            : [targetFolder]
+        let canReplace = replacementFolders.allSatisfy { folder in
+            guard let values = try? folder.resourceValues(forKeys: [.volumeSupportsExclusiveRenamingKey, .volumeIsReadOnlyKey]) else {
+                return false
+            }
+            return values.volumeSupportsExclusiveRenaming == true && values.volumeIsReadOnly != true
+        }
+        if canReplace, incoming.identity != occupant.identity,
+           let a = try? ReviewedFile(incoming), let b = try? ReviewedFile(occupant) {
             reviewed = .init(incoming: a, existing: b)
         } else {
             reviewed = nil

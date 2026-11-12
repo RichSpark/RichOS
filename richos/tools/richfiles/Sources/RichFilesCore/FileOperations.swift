@@ -172,6 +172,52 @@ public struct CrossVolumeMoveResult: Sendable {
     public let remainingStagingFolder: URL?
 }
 
+public struct CrossVolumeReplacementReceipt: Codable, Sendable {
+    public let installed: ReviewedFile
+    fileprivate let sourceArchive: ArchivedReplacementFile
+    fileprivate let targetArchive: ArchivedReplacementFile
+
+    public var sourceBackup: TrashReceipt { sourceArchive.receipt }
+    public var previousTarget: TrashReceipt { targetArchive.receipt }
+}
+
+public struct ReversedCrossVolumeReplacementReceipt: Codable, Sendable {
+    public let source: ReviewedFile
+    public let destination: ReviewedFile
+    fileprivate let copyArchive: ArchivedReplacementFile
+
+    public var archivedCopy: TrashReceipt { copyArchive.receipt }
+}
+
+public struct CrossVolumeReplacementNeedsReview: LocalizedError, Sendable {
+    public let addedTrash: [TrashReceipt]
+    public let restoredTrash: [FileReference]
+    fileprivate let source: URL
+    fileprivate let destination: URL
+    fileprivate let reason: String
+
+    public var errorDescription: String? {
+        "Could not complete the replacement. Check \(source.path), \(destination.path) and Trash. \(reason)"
+    }
+}
+
+fileprivate struct ArchivedReplacementFile: Codable, Sendable {
+    let receipt: TrashReceipt
+    let reviewed: ReviewedFile
+
+    init(_ receipt: TrashReceipt, archiving original: ReviewedFile) throws {
+        guard let archived = receipt.trashed, archived.identity == original.reference.identity,
+              receipt.original == original.reference else {
+            throw FileOperationError.trashLocationUnknown
+        }
+        self.receipt = receipt
+        reviewed = try ReviewedFile(archived)
+        guard reviewed.size == original.size, reviewed.version.hasSameModifiedDate(as: original.version) else {
+            throw FileOperationError.sourceChanged(archived.url)
+        }
+    }
+}
+
 public enum FileOperationError: LocalizedError {
     case invalidName
     case sourceChanged(URL)
@@ -365,13 +411,7 @@ public enum FileOperations {
                 try copy.verify(isCancelled: isCancelled)
                 copiedDescendants = copy.descendants
             } else {
-                let sourceDigest = try StorageAnalysis.digest(source.url, expected: version, isCancelled: isCancelled)
-                let stageFolder = try OpenFolder(staged.parent)
-                let stageVersion = FileVersion(try stageFolder.verifiedStatus(of: staged))
-                let copiedDigest = try StorageAnalysis.digest(staged.url, expected: stageVersion, isCancelled: isCancelled)
-                guard stageVersion.size == version.size, sourceDigest == copiedDigest else {
-                    throw FileOperationError.copyVerificationFailed(source.url)
-                }
+                _ = try verifyRegularFileCopy(staged, of: source, expected: version, isCancelled: isCancelled)
                 copiedDescendants = nil
             }
             try parent.verifyLocation()
@@ -437,6 +477,18 @@ public enum FileOperations {
         case .file(let file): try validateReviewed(file, in: OpenFolder(file.reference.parent))
         case .directory(let tree): try tree.verify()
         }
+    }
+
+    private static func verifyRegularFileCopy(
+        _ staged: FileReference, of source: FileReference, expected: FileVersion, isCancelled: () -> Bool
+    ) throws -> ReviewedFile {
+        let reviewed = try ReviewedFile(staged)
+        let sourceDigest = try StorageAnalysis.digest(source.url, expected: expected, isCancelled: isCancelled)
+        let copiedDigest = try StorageAnalysis.digest(staged.url, expected: reviewed.version, isCancelled: isCancelled)
+        guard reviewed.size == expected.size, sourceDigest == copiedDigest else {
+            throw FileOperationError.copyVerificationFailed(source.url)
+        }
+        return reviewed
     }
 
     /// Returns the verified inverse receipt so the operation can safely be replayed.
@@ -552,6 +604,171 @@ public enum FileOperations {
         return ReplaceReceipt(installed: installed, previous: previous, remainingStagingFolder: nil)
     }
 
+    public static func replaceMoveAcrossVolumes(
+        _ source: ReviewedFile, replacing target: ReviewedFile, isCancelled: () -> Bool = { false }
+    ) throws -> (receipt: CrossVolumeReplacementReceipt, remainingStagingFolder: URL?) {
+        if isCancelled() { throw CancellationError() }
+        let input = source.reference
+        let occupant = target.reference
+        guard input.identity.device != occupant.identity.device else { throw FileOperationError.crossVolumeMove }
+        let parent = try OpenFolder(input.parent)
+        let destination = try OpenFolder(occupant.parent)
+        try validateReviewed(source, in: parent)
+        try validateReviewed(target, in: destination)
+        try requireReplacementVolume(parent)
+        try requireReplacementVolume(destination)
+
+        let initial = try parent.verifiedStatus(of: input)
+        let changes = CrossVolumeReplacementChanges()
+        do {
+            let ((installed, previous), remaining) = try stageCopy(
+                input, from: parent, initial: initial, into: destination, isCancelled: isCancelled, onProgress: { _, _ in }
+            ) { staged in
+                let verified = try verifyRegularFileCopy(staged, of: input, expected: source.version, isCancelled: isCancelled)
+                try validateReviewed(source, in: parent)
+                if isCancelled() { throw CancellationError() }
+                let result = try replaceCrossVolumeTarget(target, in: destination, changes: changes) {
+                    try validateReviewed(verified, in: OpenFolder(staged.parent))
+                    return try relocate(staged, into: destination, named: occupant.name).moved
+                }
+                guard result.0.size == verified.size, result.0.version.hasSameModifiedDate(as: verified.version) else {
+                    throw FileOperationError.copyVerificationFailed(input.url)
+                }
+                return result
+            }
+            let targetArchive = try ArchivedReplacementFile(previous, archiving: target)
+            try validateReviewed(installed, in: destination)
+            let sourceBackup = try archiveCrossVolumeFile(source, changes: changes)
+            let sourceArchive = try ArchivedReplacementFile(sourceBackup, archiving: source)
+            return (CrossVolumeReplacementReceipt(installed: installed, sourceArchive: sourceArchive,
+                                                  targetArchive: targetArchive), remaining)
+        } catch {
+            throw changes.error(error, source: input.url, destination: occupant.url)
+        }
+    }
+
+    public static func reverse(_ receipt: CrossVolumeReplacementReceipt) throws -> ReversedCrossVolumeReplacementReceipt {
+        let original = receipt.sourceBackup.original
+        let current = receipt.installed.reference
+        let sourceFolder = try OpenFolder(original.parent)
+        try sourceFolder.requireIdentity(original.parentIdentity)
+        try sourceFolder.requireFree(original.name)
+        let destination = try OpenFolder(current.parent)
+        try validateReviewed(receipt.installed, in: destination)
+        try validateReplacementArchive(receipt.sourceArchive, for: original)
+        try validateReplacementArchive(receipt.targetArchive, for: current)
+        try requireReplacementVolume(sourceFolder)
+        try requireReplacementVolume(destination)
+
+        let changes = CrossVolumeReplacementChanges()
+        do {
+            let restoredSource = try restoreReplacementArchive(receipt.sourceArchive, changes: changes)
+            let reviewedSource = try ReviewedFile(restoredSource)
+            let (restoredTarget, copyBackup) = try replaceCrossVolumeTarget(receipt.installed, in: destination, changes: changes) {
+                try restoreReplacementArchive(receipt.targetArchive, changes: changes)
+            }
+            let copyArchive = try ArchivedReplacementFile(copyBackup, archiving: receipt.installed)
+            return ReversedCrossVolumeReplacementReceipt(source: reviewedSource, destination: restoredTarget,
+                                                         copyArchive: copyArchive)
+        } catch {
+            throw changes.error(error, source: original.url, destination: current.url)
+        }
+    }
+
+    public static func reverse(_ receipt: ReversedCrossVolumeReplacementReceipt) throws -> CrossVolumeReplacementReceipt {
+        let original = receipt.source.reference
+        let current = receipt.destination.reference
+        let sourceFolder = try OpenFolder(original.parent)
+        let destination = try OpenFolder(current.parent)
+        try validateReviewed(receipt.source, in: sourceFolder)
+        try validateReviewed(receipt.destination, in: destination)
+        try validateReplacementArchive(receipt.copyArchive, for: current)
+        try requireReplacementVolume(sourceFolder)
+        try requireReplacementVolume(destination)
+
+        let changes = CrossVolumeReplacementChanges()
+        do {
+            let (installed, previous) = try replaceCrossVolumeTarget(receipt.destination, in: destination, changes: changes) {
+                try restoreReplacementArchive(receipt.copyArchive, changes: changes)
+            }
+            let targetArchive = try ArchivedReplacementFile(previous, archiving: receipt.destination)
+            try validateReviewed(installed, in: destination)
+            let sourceBackup = try archiveCrossVolumeFile(receipt.source, changes: changes)
+            let sourceArchive = try ArchivedReplacementFile(sourceBackup, archiving: receipt.source)
+            return CrossVolumeReplacementReceipt(installed: installed, sourceArchive: sourceArchive,
+                                                 targetArchive: targetArchive)
+        } catch {
+            throw changes.error(error, source: original.url, destination: current.url)
+        }
+    }
+
+    private static func requireReplacementVolume(_ folder: OpenFolder) throws {
+        let volume = try VolumeInfo(containing: folder.url)
+        if volume.isReadOnly == true {
+            throw FileOperationError.system(operation: "Could not replace the file", location: folder.url, code: EROFS)
+        }
+        guard volume.supportsExclusiveRename == true else {
+            throw FileOperationError.exclusiveRenameUnsupported(folder.url)
+        }
+    }
+
+    private static func validateReplacementArchive(_ archive: ArchivedReplacementFile, for original: FileReference) throws {
+        let archived = archive.reviewed.reference
+        guard archive.receipt.trashed == archived, archive.receipt.original.identity == archived.identity,
+              archive.receipt.original.url.path == original.url.path,
+              archive.receipt.original.parentIdentity == original.parentIdentity else {
+            throw FileOperationError.trashLocationUnknown
+        }
+        try validateReviewed(archive.reviewed, in: OpenFolder(archived.parent))
+    }
+
+    private static func restoreReplacementArchive(
+        _ archive: ArchivedReplacementFile, changes: CrossVolumeReplacementChanges
+    ) throws -> FileReference {
+        try validateReplacementArchive(archive, for: archive.receipt.original)
+        let restored = try restore(archive.receipt)
+        changes.restored.append(archive.reviewed.reference)
+        return restored
+    }
+
+    private static func archiveCrossVolumeFile(
+        _ file: ReviewedFile, changes: CrossVolumeReplacementChanges
+    ) throws -> TrashReceipt {
+        let archived = try trash(file.reference, expected: file.version)
+        changes.added.append(archived)
+        return archived
+    }
+
+    private static func replaceCrossVolumeTarget(
+        _ target: ReviewedFile, in destination: OpenFolder, changes: CrossVolumeReplacementChanges,
+        publish: () throws -> FileReference
+    ) throws -> (ReviewedFile, TrashReceipt) {
+        try replaceKeepingBackup(target, in: destination, sendToTrash: { _ in
+            try archiveCrossVolumeFile(target, changes: changes)
+        }, didRestore: { previous in
+            changes.added.removeAll { $0.original == previous.original }
+        }, publish: publish)
+    }
+
+    private final class CrossVolumeReplacementChanges {
+        var added: [TrashReceipt] = []
+        var restored: [FileReference] = []
+
+        func error(_ cause: Error, source: URL, destination: URL) -> Error {
+            guard !added.isEmpty || !restored.isEmpty || Self.isUncertain(cause) else { return cause }
+            return CrossVolumeReplacementNeedsReview(addedTrash: added, restoredTrash: restored, source: source,
+                                                     destination: destination, reason: cause.localizedDescription)
+        }
+
+        private static func isUncertain(_ error: Error) -> Bool {
+            switch error as? FileOperationError {
+            case .moveNeedsReview, .replacementNeedsReview: return true
+            case .stagingCleanupFailed(_, let underlying, _): return isUncertain(underlying)
+            default: return false
+            }
+        }
+    }
+
     public static func undoMoveReplacement(
         _ original: FileReference, installed: ReviewedFile, previous: TrashReceipt
     ) throws -> (source: ReviewedFile, destination: ReviewedFile) {
@@ -610,8 +827,10 @@ public enum FileOperations {
 
     private static func replaceKeepingBackup(
         _ target: ReviewedFile, in destination: OpenFolder,
-        sendToTrash: (FileReference) throws -> TrashReceipt, publish: () throws -> FileReference
+        sendToTrash: (FileReference) throws -> TrashReceipt, didRestore: (TrashReceipt) -> Void = { _ in },
+        publish: () throws -> FileReference
     ) throws -> (ReviewedFile, TrashReceipt) {
+        try requireReplacementVolume(destination)
         try validateReviewed(target, in: destination)
         let occupant = target.reference
         let previous = try sendToTrash(occupant)
@@ -625,7 +844,10 @@ public enum FileOperations {
             throw FileOperationError.replacementNeedsReview(occupant.url)
         } catch {
             let publicationError = error
-            do { _ = try restore(previous) }
+            do {
+                _ = try restore(previous)
+                didRestore(previous)
+            }
             catch { throw FileOperationError.replacementNeedsReview(occupant.url) }
             throw publicationError
         }

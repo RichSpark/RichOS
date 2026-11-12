@@ -1149,6 +1149,11 @@ struct TransferSheet: View {
                     }.font(.caption).foregroundStyle(.secondary)
                 }
                 if transfer.verifyingCopy { ProgressView("Verifying the copy…").controlSize(.small) }
+                if actions.replacingFile {
+                    ProgressView("Replacing file…").controlSize(.small)
+                } else if !transfer.running && !actions.status.isEmpty {
+                    Text(actions.status).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                }
                 if transfer.cancelled { Text("Transfer cancelled.") }
                 List {
                     ForEach(transfer.issues) { issue in
@@ -1196,7 +1201,7 @@ struct TransferSheet: View {
                     }
                 }
                 HStack {
-                    if transfer.running { Button("Cancel Transfer") { actions.cancelTransfer() } }
+                    if transfer.running || actions.replacingFile { Button("Cancel Transfer") { actions.cancelTransfer() } }
                     if actions.queuePaused && !actions.busy {
                         Button("Continue Queue") { actions.continueQueue() }
                     }
@@ -1220,10 +1225,15 @@ struct TransferSheet: View {
             }
             .confirmationDialog("Replace the existing file?", isPresented: $confirmingReplacement, presenting: replacement) { issue in
                 Button("Replace File", role: .destructive) { actions.replaceConflict(issue) }
-            } message: { _ in
-                Text(actions.transfer?.move == true
-                     ? "The incoming file moves here and the previous file goes to Trash. Undo restores both locations."
-                     : "The previous file goes to Trash. You can undo this replacement in RichFiles.")
+            } message: { issue in
+                if actions.transfer?.move == true, let pair = issue.conflict?.reviewed,
+                   pair.incoming.reference.identity.device != pair.existing.reference.identity.device {
+                    Text("RichFiles verifies the incoming copy before moving the original to Trash. The previous file also goes to Trash. Undo restores both locations.")
+                } else {
+                    Text(actions.transfer?.move == true
+                         ? "The incoming file moves here and the previous file goes to Trash. Undo restores both locations."
+                         : "The previous file goes to Trash. You can undo this replacement in RichFiles.")
+                }
             }
     }
 

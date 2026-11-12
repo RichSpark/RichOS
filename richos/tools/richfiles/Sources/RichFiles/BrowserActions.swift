@@ -25,6 +25,7 @@ final class BrowserActions: ObservableObject {
     @Published private(set) var issues: [String] = []
     @Published private(set) var busy = false
     @Published private(set) var transfer: BrowserTransfer?
+    @Published private(set) var replacingFile = false
     @Published private(set) var canRetryTransfer = false
     @Published private(set) var queuedTransfers: [BrowserQueuedTransfer] = []
     @Published private(set) var queuePaused = false
@@ -107,7 +108,7 @@ final class BrowserActions: ObservableObject {
         status = cut ? "Cut \(itemCount(sources.count))." : "Copied \(itemCount(sources.count)) to the clipboard."
     }
 
-    var canScheduleTransfer: Bool { !settlingTransfer && (!busy || transfer?.running == true) }
+    var canScheduleTransfer: Bool { !settlingTransfer && !replacingFile && (!busy || transfer?.running == true) }
 
     func paste(into folder: URL, conflict: BrowserConflictPolicy = .skip, destination: BrowserTransferDestination? = nil) {
         guard canScheduleTransfer else { return }
@@ -187,7 +188,7 @@ final class BrowserActions: ObservableObject {
     }
 
     func cancelTransfer() {
-        guard transfer?.running == true else { return }
+        guard transfer?.running == true || replacingFile else { return }
         status = "Cancelling transfer…"
         transferTask?.cancel()
     }
@@ -266,7 +267,7 @@ final class BrowserActions: ObservableObject {
     }
 
     func dismissTransfer() {
-        guard transfer?.running != true else { return }
+        guard transfer?.running != true, !replacingFile else { return }
         transfer = nil
         retryRequest = nil
         canRetryTransfer = false
@@ -275,14 +276,49 @@ final class BrowserActions: ObservableObject {
     func replaceConflict(_ issue: BrowserTransferIssue) {
         guard let current = transfer, !current.running, current.issues.contains(where: { $0.id == issue.id }),
               let reviewed = issue.conflict?.reviewed, let destination = retryRequest?.destination else { return }
-        runMutation(title: "Replace", onSuccess: { [weak self] _ in
-            self?.resolveConflict(issue, transferID: current.id, source: reviewed.incoming.reference.url,
-                                  moved: current.move ? reviewed.incoming.reference : nil)
+        let knownTrash = trashItems
+        let source = reviewed.incoming.reference
+        let task = runMutation(title: "Replace", onSuccess: { [weak self] mutation in
+            if mutation.completed {
+                self?.resolveConflict(issue, transferID: current.id, source: source.url,
+                                      moved: current.move ? source : nil)
+            } else if mutation.changed {
+                self?.resolveConflict(issue, transferID: current.id, source: source.url,
+                                      partialFailure: mutation.issues.first ?? mutation.message)
+            }
+        }, onFinish: { [weak self] in
+            self?.replacingFile = false
+            self?.transferTask = nil
         }) {
+            try Task.checkCancellation()
             try destination.verify()
+            if current.move, source.identity.device != reviewed.existing.reference.identity.device {
+                do {
+                    let result = try FileOperations.replaceMoveAcrossVolumes(
+                        reviewed.incoming, replacing: reviewed.existing, isCancelled: { Task.isCancelled }
+                    )
+                    let receipt = result.receipt
+                    let original = BrowserTrashItem(receipt: receipt.sourceBackup)
+                    let previous = BrowserTrashItem(receipt: receipt.previousTarget)
+                    let warnings = result.remainingStagingFolder.map { ["Temporary cleanup failed at \($0.path)."] } ?? []
+                    return MutationResult(
+                        message: "Moved \(receipt.installed.reference.url.lastPathComponent). Both originals are recoverable in Trash.",
+                        issues: warnings, changed: true,
+                        undo: [.undoCrossVolumeReplacement(receipt, original, previous)],
+                        trashChanges: [.add(original), .add(previous)]
+                    )
+                } catch let partial as CrossVolumeReplacementNeedsReview {
+                    return MutationResult(message: "Replacement needs review.", issues: [partial.localizedDescription],
+                                          changed: true, trashChanges: changes(for: partial, known: knownTrash),
+                                          completed: false)
+                } catch is CancellationError {
+                    return MutationResult(message: "Replacement cancelled.", completed: false)
+                }
+            }
             let receipt = current.move
                 ? try FileOperations.replaceMove(reviewed.incoming, replacing: reviewed.existing)
-                : try FileOperations.replaceCopy(reviewed.incoming, replacing: reviewed.existing)
+                : try FileOperations.replaceCopy(reviewed.incoming, replacing: reviewed.existing,
+                                                 isCancelled: { Task.isCancelled })
             let previous = BrowserTrashItem(receipt: receipt.previous)
             let undo: HistoryStep = current.move
                 ? .undoMoveReplacement(reviewed.incoming.reference, receipt.installed, previous)
@@ -294,12 +330,22 @@ final class BrowserActions: ObservableObject {
                                   issues: warnings, changed: true,
                                   undo: [undo], trashChanges: [.add(previous)])
         }
+        if let task {
+            replacingFile = true
+            transferTask = task
+        }
     }
 
-    private func resolveConflict(_ issue: BrowserTransferIssue, transferID: UUID, source: URL, moved: FileReference? = nil) {
-        guard var current = transfer, current.id == transferID else { return }
-        current.issues.removeAll { $0.id == issue.id }
-        current.succeeded += 1
+    private func resolveConflict(_ issue: BrowserTransferIssue, transferID: UUID, source: URL,
+                                 moved: FileReference? = nil, partialFailure: String? = nil) {
+        guard var current = transfer, current.id == transferID,
+              let index = current.issues.firstIndex(where: { $0.id == issue.id }) else { return }
+        if let partialFailure {
+            current.issues[index] = BrowserTransferIssue(name: issue.name, message: partialFailure, kind: .failed)
+        } else {
+            current.issues.remove(at: index)
+            current.succeeded += 1
+        }
         transfer = current
         if let moved { shelf.removeAll { $0 == moved } }
         if let request = retryRequest {
@@ -638,7 +684,8 @@ final class BrowserActions: ObservableObject {
 
     @discardableResult
     private func runMutation(
-        title: String, onSuccess: ((MutationResult) -> Void)? = nil, _ operation: @escaping @Sendable () throws -> MutationResult
+        title: String, onSuccess: ((MutationResult) -> Void)? = nil, onFinish: (() -> Void)? = nil,
+        _ operation: @escaping @Sendable () throws -> MutationResult
     ) -> Task<Void, Never>? {
         guard !busy else { return nil }
         busy = true
@@ -652,11 +699,15 @@ final class BrowserActions: ObservableObject {
             case .success(let mutation):
                 onSuccess?(mutation)
                 finishMutation(mutation, title: title)
+            case .failure(let error) where error is CancellationError:
+                status = "Operation cancelled."
+                notifyMutation()
             case .failure(let error):
                 status = error.localizedDescription
                 issues = [status]
                 notifyMutation()
             }
+            onFinish?()
             startNextQueuedTransfer()
         }
     }
@@ -676,6 +727,10 @@ final class BrowserActions: ObservableObject {
                         switch step {
                         case .restore(let item), .restoreEmpty(let item), .replacement(_, let item), .crossVolumeMove(_, let item):
                             return !restoredIDs.contains(item.id)
+                        case .undoCrossVolumeReplacement(_, let source, let previous):
+                            return !restoredIDs.contains(source.id) && !restoredIDs.contains(previous.id)
+                        case .redoCrossVolumeReplacement(_, let archived):
+                            return !restoredIDs.contains(archived.id)
                         default: return true
                         }
                     }
@@ -698,8 +753,9 @@ final class BrowserActions: ObservableObject {
         busy = true
         issues = []
         status = "\(undo ? "Undoing" : "Redoing") \(group.title)…"
+        let knownTrash = trashItems
         Task {
-            let result = await Task.detached(priority: .userInitiated) { group.perform() }.value
+            let result = await Task.detached(priority: .userInitiated) { group.perform(knownTrash: knownTrash) }.value
             busy = false
             applyTrashChanges(result.trashChanges)
             let pending = HistoryGroup(title: group.title, steps: result.remaining)
@@ -778,6 +834,14 @@ private enum TrashChange: Sendable {
     case remove(UUID)
 }
 
+private func changes(for partial: CrossVolumeReplacementNeedsReview, known: [BrowserTrashItem]) -> [TrashChange] {
+    let restored = known.filter { item in
+        guard let reference = item.reference else { return false }
+        return partial.restoredTrash.contains(reference)
+    }
+    return restored.map { .remove($0.id) } + partial.addedTrash.map { .add(BrowserTrashItem(receipt: $0)) }
+}
+
 private enum HistoryStep: Codable, Sendable {
     // Keep the serialized fields so earlier recovery snapshots still open.
     case undoMove(MoveReceipt, canRedoRename: Bool)
@@ -790,6 +854,8 @@ private enum HistoryStep: Codable, Sendable {
     case undoMoveReplacement(FileReference, ReviewedFile, BrowserTrashItem)
     case redoMoveReplacement(ReviewedFile, ReviewedFile)
     case crossVolumeMove(CrossVolumeMoveReceipt, BrowserTrashItem)
+    case undoCrossVolumeReplacement(CrossVolumeReplacementReceipt, BrowserTrashItem, BrowserTrashItem)
+    case redoCrossVolumeReplacement(ReversedCrossVolumeReplacementReceipt, BrowserTrashItem)
 
     func perform() throws -> (inverse: HistoryStep?, trashChanges: [TrashChange]) {
         switch self {
@@ -826,6 +892,17 @@ private enum HistoryStep: Codable, Sendable {
             let reversed = try FileOperations.reverse(move)
             let previous = BrowserTrashItem(receipt: reversed.backup)
             return (.crossVolumeMove(reversed, previous), [.remove(archived.id), .add(previous)])
+        case .undoCrossVolumeReplacement(let receipt, let original, let previous):
+            let reversed = try FileOperations.reverse(receipt)
+            let archived = BrowserTrashItem(receipt: reversed.archivedCopy)
+            return (.redoCrossVolumeReplacement(reversed, archived),
+                    [.remove(original.id), .remove(previous.id), .add(archived)])
+        case .redoCrossVolumeReplacement(let receipt, let archived):
+            let redone = try FileOperations.reverse(receipt)
+            let original = BrowserTrashItem(receipt: redone.sourceBackup)
+            let previous = BrowserTrashItem(receipt: redone.previousTarget)
+            return (.undoCrossVolumeReplacement(redone, original, previous),
+                    [.remove(archived.id), .add(original), .add(previous)])
         }
     }
 }
@@ -842,7 +919,7 @@ private struct HistoryGroup: Codable, Sendable {
         var issue: String?
     }
 
-    func perform() -> Result {
+    func perform(knownTrash: [BrowserTrashItem]) -> Result {
         var result = Result()
         for (index, step) in steps.enumerated() {
             do {
@@ -850,6 +927,11 @@ private struct HistoryGroup: Codable, Sendable {
                 if let inverse = applied.inverse { result.inverse.append(inverse) }
                 result.trashChanges.append(contentsOf: applied.trashChanges)
                 result.completed += 1
+            } catch let partial as CrossVolumeReplacementNeedsReview {
+                result.issue = partial.localizedDescription
+                result.trashChanges.append(contentsOf: changes(for: partial, known: knownTrash))
+                result.remaining = Array(steps.dropFirst(index + 1))
+                break
             } catch {
                 result.issue = error.localizedDescription
                 switch error as? FileOperationError {
