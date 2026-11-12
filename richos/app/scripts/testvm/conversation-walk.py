@@ -266,8 +266,13 @@ class ConversationWalk(adopt_walk.Walk):
         except profile_walk.StepFailed as exc:
             raise StepFailed('the stand-in site: %s' % str(exc)[:500])
         if getattr(self.a, "no_accessibility", False):
-            print("Accessibility: not granted to RichOS (--no-accessibility); its rows: %s"
-                  % (self.accessibility_rows() or 'none'), flush=True)
+            # The guest image carries com.richos.app with auth_value 0 (a Deny already given; walk
+            # of 2026-11-12), and macOS does not ask again after a decision. tccutil forgets it,
+            # so RichOS is never-asked, as on a new user's Mac.
+            before = self.accessibility_rows() or 'none'
+            reset = adopt_walk.guest(self.vm, 'sudo -n tccutil reset Accessibility com.richos.app 2>&1 || true', 60).strip()
+            print("Accessibility: not granted to RichOS (--no-accessibility); its rows before: %s; %s; after: %s"
+                  % (before, reset, self.accessibility_rows() or 'none'), flush=True)
         else:
             self.grant_accessibility()
         adopt_walk.guest(self.vm, 'open -g -b %s %s/sign-in' % (profile_walk.SAFARI, li.base), 60)
@@ -484,8 +489,9 @@ def main():
     p.add_argument('--site', type=Path, help='the stand-in LinkedIn site linkedin-standin.py built: served in the guest, the '
                    "default browser (Safari) signed in to it before the conversation, so Rich's LinkedIn tool can read it")
     p.add_argument('--no-accessibility', action='store_true', help='with --site: leave RichOS without the macOS '
-                   'Accessibility permission, as on a Mac where it was never allowed (the first-run case); its '
-                   'rows in the TCC database are printed, none expected; every Accessibility request macOS puts '
+                   'Accessibility permission, as on a Mac where it was never asked (the first-run case): any '
+                   'earlier decision is reset with tccutil, its rows before and after are printed; every '
+                   'Accessibility request macOS puts '
                    'up during the walk is kept (accessibility-requests.json, a screenshot each)')
     p.add_argument('--deny-accessibility', action='store_true', help='with --no-accessibility: answer each '
                    'request Deny, as a user who refuses it')
