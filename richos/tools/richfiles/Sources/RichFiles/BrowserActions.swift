@@ -107,19 +107,22 @@ final class BrowserActions: ObservableObject {
     private func readInterruptedTransfer(at url: URL) {
         busy = true
         status = "Checking transfer recovery…"
+        let started = ProcessInfo.processInfo.systemUptime
         let read = Task.detached(priority: .utility) { Result { try TransferJournal.interrupted(at: url) } }
         Task { [weak self] in
             let result = await read.value
-            self?.finishInterruptedTransfer(result)
+            self?.finishInterruptedTransfer(result, started: started)
         }
     }
 
-    private func finishInterruptedTransfer(_ result: Result<InterruptedTransfer?, Error>) {
+    private func finishInterruptedTransfer(_ result: Result<InterruptedTransfer?, Error>, started: TimeInterval) {
         busy = false
         status = ""
         switch result {
         case .failure:
             Self.recoveryLog.warning("interrupted transfer record unreadable")
+            RichFilesDiagnostics.record(.recovery, id: UUID(), outcome: .unavailable,
+                                        started: started, total: 0, confirmed: 0)
             status = "Could not read the interrupted transfer record."
         case .success(nil):
             break
@@ -139,6 +142,9 @@ final class BrowserActions: ObservableObject {
             updateHistoryNames()
             status = "An interrupted transfer needs review."
             Self.recoveryLog.info("interrupted transfer found id=\(interrupted.notice.id.uuidString, privacy: .public) processed=\(interrupted.notice.processed) confirmed=\(interrupted.notice.succeeded) undoable=\(history.undo.count) incomplete_tail=\(interrupted.notice.incompleteTail)")
+            RichFilesDiagnostics.record(.recovery, id: interrupted.notice.id, outcome: .interrupted,
+                                        started: started, total: interrupted.notice.total,
+                                        confirmed: interrupted.notice.succeeded)
             if persistRecovery() { clearSettledTransfer { try interrupted.discard() } }
         }
     }

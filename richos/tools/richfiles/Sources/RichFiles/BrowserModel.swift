@@ -782,6 +782,9 @@ final class BrowserModel: ObservableObject {
     ) -> AsyncThrowingStream<ListingUpdate, Error> {
         AsyncThrowingStream(bufferingPolicy: .bufferingNewest(1)) { continuation in
             let worker = Task.detached(priority: .userInitiated) {
+                let started = ProcessInfo.processInfo.systemUptime
+                let operationID = UUID()
+                var firstRowsMS: Int?
                 do {
                     var entries: [FileEntry] = []
                     var pending: [FileEntry] = []
@@ -803,6 +806,7 @@ final class BrowserModel: ObservableObject {
                         // sorted prefix for every small batch.
                         if now >= nextEmission && pending.count >= entries.count {
                             finishBatch()
+                            if firstRowsMS == nil { firstRowsMS = RichFilesDiagnostics.milliseconds(since: started) }
                             continuation.yield(ListingUpdate(entries: entries))
                             nextEmission = DispatchTime.now().uptimeNanoseconds + 100_000_000
                         }
@@ -813,8 +817,15 @@ final class BrowserModel: ObservableObject {
                     try Task.checkCancellation()
                     continuation.yield(ListingUpdate(entries: entries, report: report, volume: volume))
                     continuation.finish()
+                    RichFilesDiagnostics.record(.listing, id: operationID,
+                                                outcome: report.inaccessible == 0 ? .complete : .issues,
+                                                started: started, total: report.examined, confirmed: report.matched,
+                                                firstRowsMS: firstRowsMS)
                 } catch {
                     continuation.finish(throwing: error)
+                    RichFilesDiagnostics.record(.listing, id: operationID,
+                                                outcome: error is CancellationError ? .cancelled : .unavailable,
+                                                started: started, total: 0, confirmed: 0, firstRowsMS: firstRowsMS)
                 }
             }
             continuation.onTermination = { _ in worker.cancel() }

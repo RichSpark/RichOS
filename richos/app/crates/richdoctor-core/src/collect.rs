@@ -8,7 +8,7 @@
 //! | installation | RichDoctor's version; RichOS's Info.plist in `/Applications` and `~/Applications`; macOS version (`SystemVersion.plist`), CPU kind, memory class |
 //! | startup_crash | `~/Library/Logs/RichOS/startup.log` and `.log.1`; `launches.json` under `~/Library/Application Support/com.richos.app/`; matching `.ips` reports under `~/Library/Logs/DiagnosticReports/` |
 //! | conversation_failure | `conversation-ledger.jsonl` under the app data root: allowlisted fields of `UpstreamFailure`, `TurnInterruptionCause` and `TurnInterrupted` only |
-//! | configuration | `config.json` current settings; bounded `richpass.log` checks with no paths or HTML |
+//! | configuration | `config.json` current settings; bounded RichPass checks and RichFiles timing records |
 //! | richscribe | `dictation.log`'s lines in the window (model, timing, errors; it never holds words) |
 //! | claude_availability | whether the CLI is found, its version, and whether the default sign-in answers |
 //!
@@ -221,7 +221,11 @@ pub fn collect(category: Category, scope: &Scope, ctx: &Context, used: u64) -> V
         Category::Installation => vec![installation(scope, ctx)],
         Category::StartupCrash => startup_crash(scope, ctx, &mut budget),
         Category::ConversationFailure => vec![conversation_failure(scope, ctx, &mut budget)],
-        Category::Configuration => vec![configuration(scope, ctx, &mut budget), richpass(scope, ctx, &mut budget)],
+        Category::Configuration => vec![
+            configuration(scope, ctx, &mut budget),
+            richpass(scope, ctx, &mut budget),
+            richfiles_timing(scope, ctx, &mut budget),
+        ],
         Category::Richscribe => vec![richscribe(scope, ctx, &mut budget)],
         Category::RichFinder => vec![richfinder_timing(scope, ctx, &mut budget)],
         Category::ClaudeAvailability => vec![claude_availability(scope)],
@@ -693,6 +697,50 @@ fn richfinder_timing(scope: &Scope, ctx: &Context, budget: &mut u64) -> Item {
     finish(item, &text, ctx, reads.iter().any(|read| read.truncated))
 }
 
+fn richfiles_timing(scope: &Scope, ctx: &Context, budget: &mut u64) -> Item {
+    let category = Category::Configuration;
+    let source = "RichFiles timing log";
+    let root = scope.logs_root();
+    let read = match read_source(&root, &root.join("richfiles-timing.jsonl"), scope, budget, true) {
+        Ok(read) => read,
+        Err(status) => return unread(category, source, status),
+    };
+    let lines: Vec<_> = read.text.lines().filter_map(|line| {
+        let record: serde_json::Value = serde_json::from_str(line).ok()?;
+        let at = record["atMS"].as_u64()?;
+        let id = record["id"].as_str()?;
+        let build = record["build"].as_str()?;
+        let operation = record["operation"].as_str()?;
+        let outcome = record["outcome"].as_str()?;
+        let duration = record["workerMS"].as_u64()?;
+        let total = record["total"].as_u64()?;
+        let confirmed = record["confirmed"].as_u64()?;
+        if id.len() != 36 || !id.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-')
+            || build.len() > 40 || !build.bytes().all(|b| b.is_ascii_alphanumeric() || b".-+".contains(&b))
+            || !matches!(operation, "listing" | "copy" | "move" | "recovery")
+            || !matches!(outcome, "complete" | "issues" | "canceled" | "unavailable" | "interrupted")
+            || confirmed > total {
+            return None;
+        }
+        let first_rows = record["firstRowsMS"].as_u64().filter(|ms| *ms <= duration)
+            .map(|ms| format!(" first_rows={ms}ms")).unwrap_or_default();
+        Some((at, format!("{} build={build} id={id} operation={operation} outcome={outcome} worker={duration}ms{first_rows} confirmed={confirmed}/{total}",
+                          crate::util::utc_stamp(at))))
+    }).collect();
+    if lines.is_empty() {
+        return unread(category, source, if read.text.is_empty() { Status::Absent } else { Status::Unreadable });
+    }
+    let (picked, coverage) = pick(&lines, |row| Some(row.0), &scope.window, 10);
+    let selected: Vec<_> = picked.into_iter().rev().take(50).rev().collect();
+    let mut item = Item::new(category, source).expect("random source");
+    item.input_bytes = read.bytes;
+    item.coverage = coverage;
+    item.observed_at = selected.last().map(|row| row.0);
+    item.summary = format!("{} RichFiles timing record(s).", selected.len());
+    let text = selected.into_iter().map(|row| row.1).collect::<Vec<_>>().join("\n");
+    finish(item, &text, ctx, read.truncated)
+}
+
 // ---------------------------------------------------------------------------------------
 // richscribe
 // ---------------------------------------------------------------------------------------
@@ -879,6 +927,31 @@ mod tests {
         assert_eq!(timing.coverage, Coverage::InWindow);
         assert!(timing.text.contains("response=152.1ms embedding=10.2ms"), "{}", timing.text);
         assert!(!timing.text.contains("private-"));
+    }
+
+    #[test]
+    fn richfiles_diagnostics_collect_counts_without_file_paths() {
+        let h = home();
+        let scope = scope(&h.0, Window::around(T));
+        let record = serde_json::json!({
+            "atMS": T,
+            "id": "0F048A0D-D200-48DE-9294-FF8C71B8E1AF",
+            "build": "1",
+            "operation": "listing",
+            "outcome": "canceled",
+            "workerMS": 145,
+            "firstRowsMS": 32,
+            "total": 300,
+            "confirmed": 290,
+            "path": "/Users/person/Private/Customer names"
+        });
+        write(&scope.logs_root().join("richfiles-timing.jsonl"), &record.to_string());
+        let items = collect(Category::Configuration, &scope, &Context::default(), 0);
+        let timing = items.iter().find(|item| item.source == "RichFiles timing log").unwrap();
+        assert_eq!(timing.status, Status::Collected);
+        assert_eq!(timing.coverage, Coverage::InWindow);
+        assert!(timing.text.contains("outcome=canceled worker=145ms first_rows=32ms confirmed=290/300"));
+        assert!(!timing.text.contains("Customer names"));
     }
 
     #[test]

@@ -6,6 +6,31 @@ import XCTest
 
 final class BrowserActionsTests: XCTestCase {
     @MainActor
+    func testRichFilesDiagnosticLogKeepsTheLatestStructuredRecordWithinItsCap() async throws {
+        try await withFixture { _, logs, _ in
+            let url = logs.appendingPathComponent(RichFilesDiagnostics.filename)
+            let sample = RichFilesDiagnostics.Sample(
+                atMS: 1_792_658_590_000, id: UUID(), build: "1", operation: .listing, outcome: .cancelled,
+                workerMS: 145, firstRowsMS: 32, total: 300, confirmed: 290
+            )
+            try RichFilesDiagnostics.append(sample, in: logs)
+            let file = try FileHandle(forWritingTo: url)
+            try file.truncate(atOffset: 128 * 1024)
+            try file.close()
+            try RichFilesDiagnostics.append(sample, in: logs)
+            let data = try Data(contentsOf: url)
+            XCTAssertLessThan(data.count, 1024)
+            let record = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+            XCTAssertEqual(record["id"] as? String, sample.id.uuidString)
+            XCTAssertEqual(record["outcome"] as? String, "canceled")
+            XCTAssertEqual(record["workerMS"] as? Int, 145)
+            XCTAssertEqual(record["firstRowsMS"] as? Int, 32)
+            XCTAssertEqual(Set(record.keys), ["atMS", "id", "build", "operation", "outcome",
+                                              "workerMS", "firstRowsMS", "total", "confirmed"])
+        }
+    }
+
+    @MainActor
     func testRestoreSelectedKeepsOccupiedNameAndGroupsSuccessfulRestores() async throws {
         try await withFixture { root, trash, board in
             let names = ["Alpha.png", "Beta.jpg", "Gamma.pdf"]

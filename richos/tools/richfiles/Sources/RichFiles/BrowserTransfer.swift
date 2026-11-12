@@ -227,6 +227,10 @@ enum BrowserTransferJob {
             let milliseconds = Int((ProcessInfo.processInfo.systemUptime - started) * 1_000)
             let status = result.progress.cancelled ? "cancelled" : (result.progress.issues.isEmpty ? "complete" : "issues")
             logger.info("transfer finished id=\(progress.id.uuidString, privacy: .public) status=\(status, privacy: .public) elapsed_ms=\(milliseconds) succeeded=\(result.progress.succeeded) issues=\(result.progress.issues.count)")
+            let outcome: RichFilesDiagnostics.Outcome = result.progress.cancelled ? .cancelled
+                : result.progress.issues.isEmpty ? .complete : .issues
+            RichFilesDiagnostics.record(progress.move ? .move : .copy, id: progress.id, outcome: outcome,
+                                        started: started, total: progress.total, confirmed: result.progress.succeeded)
         }
         let destination: BrowserTransferDestination
         do {
