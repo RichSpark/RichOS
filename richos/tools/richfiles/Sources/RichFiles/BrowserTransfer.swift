@@ -190,7 +190,7 @@ enum BrowserCompletedMove: Sendable {
     var moved: FileReference {
         switch self {
         case .sameVolume(let move): return move.moved
-        case .crossVolume(let move): return move.installed.reference
+        case .crossVolume(let move): return move.moved
         }
     }
 }

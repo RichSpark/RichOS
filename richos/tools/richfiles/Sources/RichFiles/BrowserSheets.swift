@@ -991,7 +991,7 @@ struct TransferSheet: View {
                         }
                     }.font(.caption).foregroundStyle(.secondary)
                 }
-                if transfer.verifyingCopy { ProgressView("Verifying the copied file…").controlSize(.small) }
+                if transfer.verifyingCopy { ProgressView("Verifying the copy…").controlSize(.small) }
                 if transfer.cancelled { Text("Transfer cancelled.") }
                 List {
                     ForEach(transfer.issues) { issue in

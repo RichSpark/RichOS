@@ -107,9 +107,64 @@ public struct ReplaceReceipt: Sendable {
 }
 
 public struct CrossVolumeMoveReceipt: Codable, Sendable {
-    public let installed: ReviewedFile
+    fileprivate enum Installed: Sendable {
+        case file(ReviewedFile)
+        case directory(ReviewedTree)
+
+        var reference: FileReference {
+            switch self {
+            case .file(let file): return file.reference
+            case .directory(let tree): return tree.reference
+            }
+        }
+
+        var descendants: String? {
+            if case .directory(let tree) = self { return tree.descendants }
+            return nil
+        }
+    }
+
+    fileprivate let item: Installed
     public let backup: TrashReceipt
+    fileprivate let backupDescendants: String?
     public var original: FileReference { backup.original }
+    public var moved: FileReference { item.reference }
+
+    private enum CodingKeys: String, CodingKey {
+        case installed, directory, backup, backupDescendants
+    }
+
+    fileprivate init(item: Installed, backup: TrashReceipt, backupDescendants: String? = nil) {
+        self.item = item
+        self.backup = backup
+        self.backupDescendants = backupDescendants
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        backup = try values.decode(TrashReceipt.self, forKey: .backup)
+        backupDescendants = try values.decodeIfPresent(String.self, forKey: .backupDescendants)
+        if let directory = try values.decodeIfPresent(ReviewedTree.self, forKey: .directory) {
+            guard backupDescendants != nil else {
+                throw DecodingError.dataCorruptedError(forKey: .backupDescendants, in: values,
+                                                      debugDescription: "Missing folder recovery snapshot.")
+            }
+            item = .directory(directory)
+        } else {
+            item = .file(try values.decode(ReviewedFile.self, forKey: .installed))
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(backup, forKey: .backup)
+        switch item {
+        case .file(let file): try values.encode(file, forKey: .installed)
+        case .directory(let tree):
+            try values.encode(tree, forKey: .directory)
+            try values.encode(backupDescendants, forKey: .backupDescendants)
+        }
+    }
 }
 
 public struct CrossVolumeMoveResult: Sendable {
@@ -235,7 +290,7 @@ public enum FileOperations {
     }
 
     /// A cross-volume move publishes a verified copy first and keeps the original
-    /// in native Trash for undo. Ordinary directories still use the Copy action.
+    /// in native Trash for undo. Directory verification includes nested files and link targets.
     public static func moveAcrossVolumes(
         _ source: FileReference, into folder: URL,
         expectedFolder: FileIdentity? = nil,
@@ -249,61 +304,100 @@ public enum FileOperations {
         let original = try parent.verifiedStatus(of: source)
         let destination = try OpenFolder(folder)
         if let expectedFolder { try destination.requireIdentity(expectedFolder) }
-        guard original.st_mode & S_IFMT == S_IFREG, parent.identity.device != destination.identity.device else {
+        let kind = original.st_mode & S_IFMT
+        guard kind == S_IFREG || kind == S_IFDIR, parent.identity.device != destination.identity.device else {
             throw FileOperationError.crossVolumeMove
         }
+        try checkAncestry(source: original, destination: destination)
         if conflictPolicy == .refuse { try destination.requireFree(source.name) }
 
         let version = FileVersion(original)
-        let (installed, remaining) = try stageCopy(
+        let originalTree = kind == S_IFDIR ? try TreeInventory(source, expected: version, isCancelled: isCancelled) : nil
+        let ((installed, copiedDescendants), remaining) = try stageCopy(
             source, from: parent, initial: original, into: destination, isCancelled: isCancelled, onProgress: onProgress
         ) { staged in
             onVerify()
-            let sourceDigest = try StorageAnalysis.digest(source.url, expected: version, isCancelled: isCancelled)
-            let stageFolder = try OpenFolder(staged.parent)
-            let stageVersion = FileVersion(try stageFolder.verifiedStatus(of: staged))
-            let copiedDigest = try StorageAnalysis.digest(staged.url, expected: stageVersion, isCancelled: isCancelled)
-            guard stageVersion.size == version.size, sourceDigest == copiedDigest else {
-                throw FileOperationError.copyVerificationFailed(source.url)
+            let copiedDescendants: String?
+            if let originalTree {
+                let copy = try TreeInventory(staged, isCancelled: isCancelled)
+                guard try originalTree.contentDigest(isCancelled: isCancelled) == copy.contentDigest(isCancelled: isCancelled) else {
+                    throw FileOperationError.copyVerificationFailed(source.url)
+                }
+                try originalTree.verify(isCancelled: isCancelled)
+                try copy.verify(isCancelled: isCancelled)
+                copiedDescendants = copy.descendants
+            } else {
+                let sourceDigest = try StorageAnalysis.digest(source.url, expected: version, isCancelled: isCancelled)
+                let stageFolder = try OpenFolder(staged.parent)
+                let stageVersion = FileVersion(try stageFolder.verifiedStatus(of: staged))
+                let copiedDigest = try StorageAnalysis.digest(staged.url, expected: stageVersion, isCancelled: isCancelled)
+                guard stageVersion.size == version.size, sourceDigest == copiedDigest else {
+                    throw FileOperationError.copyVerificationFailed(source.url)
+                }
+                copiedDescendants = nil
             }
             try parent.verifyLocation()
             guard FileVersion(try parent.verifiedStatus(of: source)) == version else {
                 throw FileOperationError.sourceChanged(source.url)
             }
-            return try publishCopy(staged, into: destination, named: source.name, policy: conflictPolicy,
-                                   isCancelled: isCancelled)
+            let published = try publishCopy(staged, into: destination, named: source.name, policy: conflictPolicy,
+                                            isCancelled: isCancelled)
+            return (published, copiedDescendants)
         }
 
         // Once published, finish the move or report both locations for review.
-        // Never remove a published file after a source-retirement failure.
+        // Keep the verified destination if retiring the source cannot finish.
         do {
-            let reviewed = try ReviewedFile(installed)
-            try destination.verifyLocation()
-            guard FileVersion(try parent.verifiedStatus(of: source)) == version else {
-                throw FileOperationError.sourceChanged(source.url)
+            let reviewed: CrossVolumeMoveReceipt.Installed
+            if let copiedDescendants {
+                reviewed = .directory(try ReviewedTree(installed, descendants: copiedDescendants))
+                try validateCrossVolumeItem(reviewed)
+                try originalTree?.verify()
+            } else {
+                reviewed = .file(try ReviewedFile(installed))
             }
-            let backup = try trash(source)
+            try destination.verifyLocation()
+            let backup = try trash(source, expected: version)
             guard backup.trashed != nil else { throw FileOperationError.trashLocationUnknown }
-            return CrossVolumeMoveResult(receipt: CrossVolumeMoveReceipt(installed: reviewed, backup: backup),
-                                         remainingStagingFolder: remaining)
+            let receipt = CrossVolumeMoveReceipt(item: reviewed, backup: backup,
+                                                backupDescendants: originalTree?.descendants)
+            return CrossVolumeMoveResult(receipt: receipt, remainingStagingFolder: remaining)
         } catch {
             throw FileOperationError.crossVolumeMoveNeedsReview(source: source.url, destination: installed.url)
         }
     }
 
     public static func reverse(_ receipt: CrossVolumeMoveReceipt) throws -> CrossVolumeMoveReceipt {
-        let current = receipt.installed.reference
-        let folder = try OpenFolder(current.parent)
-        try validateReviewed(receipt.installed, in: folder)
+        let current = receipt.moved
+        try validateCrossVolumeItem(receipt.item)
+        if let expected = receipt.backupDescendants {
+            guard let archived = receipt.backup.trashed else { throw FileOperationError.trashLocationUnknown }
+            guard try TreeInventory(archived).descendants == expected else {
+                throw FileOperationError.sourceChanged(archived.url)
+            }
+        }
         let restored = try restore(receipt.backup)
         do {
-            let original = try ReviewedFile(restored)
-            try validateReviewed(receipt.installed, in: folder)
+            let restoredItem: CrossVolumeMoveReceipt.Installed
+            if let expected = receipt.backupDescendants {
+                restoredItem = .directory(try ReviewedTree(restored, descendants: expected))
+            } else {
+                restoredItem = .file(try ReviewedFile(restored))
+            }
+            try validateCrossVolumeItem(restoredItem)
+            try validateCrossVolumeItem(receipt.item)
             let backup = try trash(current)
             guard backup.trashed != nil else { throw FileOperationError.trashLocationUnknown }
-            return CrossVolumeMoveReceipt(installed: original, backup: backup)
+            return CrossVolumeMoveReceipt(item: restoredItem, backup: backup, backupDescendants: receipt.item.descendants)
         } catch {
             throw FileOperationError.crossVolumeMoveNeedsReview(source: current.url, destination: restored.url)
+        }
+    }
+
+    private static func validateCrossVolumeItem(_ item: CrossVolumeMoveReceipt.Installed) throws {
+        switch item {
+        case .file(let file): try validateReviewed(file, in: OpenFolder(file.reference.parent))
+        case .directory(let tree): try tree.verify()
         }
     }
 

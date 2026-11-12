@@ -226,6 +226,29 @@ final class FileOperationsTests: XCTestCase {
         }
     }
 
+    func testVerifiedTreeChecksNestedContentAndRefusesAnEditedDescendant() throws {
+        try withFixture { root in
+            let source = try FileOperations.createFolder(in: root, named: "Project")
+            let nested = try FileOperations.createFolder(in: source.url, named: "Nested")
+            let note = try write("original", named: "Note.txt", in: nested.url)
+            let link = source.url.appendingPathComponent("Shortcut")
+            try FileManager.default.createSymbolicLink(atPath: link.path, withDestinationPath: "Nested/Note.txt")
+            let destination = try FileOperations.createFolder(in: root, named: "Destination")
+            let original = try TreeInventory(source)
+            let copied = try FileOperations.copy(source, into: destination.url).copied
+            let copy = try TreeInventory(copied)
+            XCTAssertEqual(try original.contentDigest(isCancelled: { false }), try copy.contentDigest(isCancelled: { false }))
+            let reviewed = try ReviewedTree(copied, descendants: copy.descendants)
+            XCTAssertNoThrow(try reviewed.verify())
+
+            let copiedNote = copied.url.appendingPathComponent("Nested/Note.txt")
+            try Data("modified".utf8).write(to: copiedNote)
+            XCTAssertThrowsError(try reviewed.verify())
+            XCTAssertEqual(try contents(note), "original")
+            XCTAssertEqual(try Data(contentsOf: copiedNote), Data("modified".utf8))
+        }
+    }
+
     func testStreamCopyReportsBytesAndStopsBetweenWrites() throws {
         try withFixture { root in
             let source = root.appendingPathComponent("Large.bin")
