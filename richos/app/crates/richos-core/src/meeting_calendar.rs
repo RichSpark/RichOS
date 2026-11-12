@@ -15,6 +15,7 @@
 use crate::meeting::{MeetingApp, Scheduled};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 /// The calendar vendors the service syncs, each with the client file `workspace connect` writes in
 /// the zone (`config.js` `workspaceClientConfigPath`).
@@ -25,6 +26,12 @@ pub const PROMPT_LEAD_MS: u64 = 60_000;
 
 /// How often the app pulls the calendar (PRD V4: at launch and every five minutes).
 pub const REFRESH_MS: u64 = 5 * 60_000;
+
+/// Wait for the next poll tick after the one just finished. Skip ticks that elapsed during sync.
+pub fn refresh_delay(elapsed: Duration) -> Duration {
+    let elapsed_in_interval = elapsed.as_millis() % u128::from(REFRESH_MS);
+    Duration::from_millis(REFRESH_MS - elapsed_in_interval as u64)
+}
 
 /// The Google adapter's stored key for a canceled event, spelled as the service writes it.
 const GOOGLE_CANCELED_KEY: &str = "cancelled"; // dialect-exempt: the service's stored JSON key
@@ -68,8 +75,20 @@ impl CalendarMeeting {
     }
 }
 
-/// Every meeting in the zone that may prompt, earliest first.
-pub fn meetings(zone: &Path) -> Vec<CalendarMeeting> {
+/// Cached meetings for connected vendors, earliest first. A vendor without a sync report
+/// can use its cache. A report with no eligible accounts suppresses that vendor's prompts.
+pub fn cached_meetings(
+    zone: &Path,
+    connected: &[&str],
+    reported_instances: &BTreeMap<String, Vec<String>>,
+) -> Vec<CalendarMeeting> {
+    meetings(zone, |vendor, instance| {
+        connected.contains(&vendor)
+            && reported_instances.get(vendor).is_none_or(|ids| ids.iter().any(|id| id == instance))
+    })
+}
+
+fn meetings(zone: &Path, eligible: impl Fn(&str, &str) -> bool) -> Vec<CalendarMeeting> {
     let mut latest: BTreeMap<PathBuf, (u64, serde_json::Value, PathBuf)> = BTreeMap::new();
     for (vendor, _) in VENDORS {
         let Ok(events) = std::fs::read_dir(zone.join(vendor).join("calendar")) else { continue };
@@ -78,6 +97,8 @@ pub fn meetings(zone: &Path) -> Vec<CalendarMeeting> {
             for revision in revisions.flatten() {
                 let Ok(text) = std::fs::read_to_string(revision.path().join("item.json")) else { continue };
                 let Ok(item) = serde_json::from_str::<serde_json::Value>(&text) else { continue };
+                let Some(instance) = item["sourceItemId"].as_str().and_then(|id| id.split(':').nth(2)) else { continue };
+                if !eligible(vendor, instance) { continue; }
                 let fetched = item["provenance"]["fetchedAt"].as_u64().unwrap_or(0);
                 let newer = latest.get(&event.path()).is_none_or(|(at, _, _)| fetched >= *at);
                 if newer {
@@ -167,6 +188,13 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    #[test]
+    fn calendar_polling_skips_ticks_while_a_pass_is_running() {
+        assert_eq!(refresh_delay(Duration::from_secs(90)), Duration::from_secs(210));
+        assert_eq!(refresh_delay(Duration::from_secs(300)), Duration::from_secs(300));
+        assert_eq!(refresh_delay(Duration::from_secs(360)), Duration::from_secs(240));
+    }
+
     struct Zone(PathBuf);
     impl Zone {
         fn new(name: &str) -> Zone {
@@ -233,11 +261,30 @@ mod tests {
             "content": {"title": "Partner sync", "text": "Join: https://teams.microsoft.com/l/meetup-join/x",
                         "structured": {"location": "Microsoft Teams Meeting", "isAllDay": false, "withdrawn": false}}
         }));
-        let found = meetings(&z.0);
+        let found = meetings(&z.0, |_, _| true);
         let titles: Vec<(&str, u64)> = found.iter().map(|m| (m.title.as_str(), m.starts_at)).collect();
         assert_eq!(titles, vec![("Acme pricing review", 4_600_000), ("Partner sync", 5_000_000)]);
         // The meeting link's app, from the location or else the invite text.
         assert_eq!(found.iter().map(|m| m.app).collect::<Vec<_>>(), vec![Some(MeetingApp::Zoom), Some(MeetingApp::Teams)]);
+    }
+
+    #[test]
+    fn only_eligible_calendar_accounts_can_prompt_from_the_cache() {
+        let z = Zone::new("eligible");
+        let event = |id, title| google(id, title, 1_000_000, 1, false, &["other@example.com"]);
+        z.revision("google", "a", "rev-1", event("google:calendar:expired:a", "Canceled while disconnected"));
+        z.revision("google", "b", "rev-1", event("google:calendar:expired:b", "Shared invite"));
+        z.revision("google", "c", "rev-1", event("google:calendar:healthy:c", "Shared invite"));
+        let mut reports = BTreeMap::new();
+        let found = cached_meetings(&z.0, &["google"], &reports);
+        assert_eq!(found.len(), 2, "a connected vendor can prompt before its first report");
+        assert!(cached_meetings(&z.0, &[], &reports).is_empty(), "a removed vendor cannot prompt");
+
+        reports.insert("google".to_string(), vec!["healthy".to_string()]);
+        let found = cached_meetings(&z.0, &["google"], &reports);
+        assert_eq!(found.iter().map(|m| m.event_id.as_str()).collect::<Vec<_>>(), ["google:calendar:healthy:c"]);
+        reports.insert("google".to_string(), vec![]);
+        assert!(cached_meetings(&z.0, &["google"], &reports).is_empty(), "a report with no eligible accounts suppresses prompts");
     }
 
     #[test]
@@ -260,7 +307,7 @@ mod tests {
                         "structured": {"location": "Microsoft Teams Meeting", "isAllDay": false, "withdrawn": false,
                                        "meetingLinks": ["https://teams.microsoft.com/l/meetup-join/fixture"]}}
         }));
-        let found = meetings(&z.0);
+        let found = meetings(&z.0, |_, _| true);
         assert_eq!(found.iter().map(|m| (m.title.as_str(), m.app)).collect::<Vec<_>>(), vec![("Google Meet A", Some(MeetingApp::Meet)), ("Teams B", Some(MeetingApp::Teams))]);
     }
 
@@ -276,7 +323,7 @@ mod tests {
         z.revision("google", "z", "rev-1", zoom);
         let dir = z.0.join("google").join("calendar").join("z").join("rev-1");
         std::fs::write(dir.join("content.txt"), "<a href=\"https://us02web.zoom.us/j/123\">Join Zoom</a>").unwrap();
-        let found = meetings(&z.0);
+        let found = meetings(&z.0, |_, _| true);
         assert_eq!(found.iter().map(|m| (m.title.as_str(), m.app)).collect::<Vec<_>>(), vec![("Google HTML Zoom invite", Some(MeetingApp::Zoom))]);
     }
 

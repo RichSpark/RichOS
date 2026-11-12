@@ -14,26 +14,56 @@
   function tell(error) {let target=document.getElementById("cleaner-error");if(!target){target=document.createElement("p");target.id="cleaner-error";target.className="rf-error";target.setAttribute("role","alert");root.prepend(target);}target.textContent=String(error);}
   function noteMode(e) {return e.projection.mode==="embedded" ? "Note inside the file: current" : e.projection.mode==="older" ? "Note saved in RichOS. The note inside the file is older" : `Note saved in RichOS only. ${e.projection.reason || ""}`;}
   function actions(e) {return button("open","Open",e.id,"rf-open")+button("reveal","Show in Folder",e.id)+(e.undo ? button("undo","Undo filing",e.id) : "")+button("edit-focus","Edit note",e.id);}
+  function batchSummary(result, folder) {
+    const files = count => `${count} ${count === 1 ? "file" : "files"}`;
+    return [
+      result.filed && `${files(result.filed)} filed to ${folder}`,
+      result.inbox && `${files(result.inbox)} in Inbox`,
+      result.draft && `${files(result.draft)} left in place`,
+      result.skipped && `${files(result.skipped)} handled separately`,
+      result.failed && `${files(result.failed)} ${result.failed === 1 ? "needs" : "need"} attention`,
+    ].filter(Boolean).join(". ");
+  }
+  function selectedNames(names) {
+    const visible = names.slice(0,2).map(name=>{
+      const characters = Array.from(name);
+      return characters.length <= 32 ? name : characters.slice(0,20).join("")+"…"+characters.slice(-11).join("");
+    }).join(", ");
+    return names.length > 2 ? `${visible} and ${names.length-2} more` : visible;
+  }
   function paintPanel(view) {
     operation=view;
     if(view.quiet)return;
     if (view.stage==="idle") { root.innerHTML="";return; }
     const e=view.entry, f=e || view.file, k=`F${view.key || status.key || 1}`;
+    const batch = view.batch;
+    const selection = batch?.names;
     const texts={busy:"Still sorting the previous file",checking:"Checking the file…",listening:"Listening",writing:"Writing it down…",saved:"Note saved",choosing:"Choosing a folder…",filing:`Filing to ${view.folder || "your folder"}…`,filed:`Filed to ${e ? e.folder : "your folder"}`,"inbox-pending":"Safely stored in Inbox",inbox:"Stored in Inbox",draft:"Note saved, not filed",canceled:"Canceled",error:"Couldn't complete it"};
+    if(batch){
+      texts.busy="Still sorting the previous selection";
+      texts.checking=`Checking ${batch.total} files…`;
+      texts["inbox-pending"]=`${view.batchStored} of ${batch.total} files in Inbox`;
+      if(view.batchResult)texts["batch-result"]=batchSummary(view.batchResult,view.folder);
+    }
     let controls="";
     if(view.stage==="listening") controls=button("finish","Done",view.id,"dov-btn")+button("cancel","Cancel",view.id);
     else if(["checking","writing","choosing"].includes(view.stage)) controls=button("cancel","Cancel",view.id);
     else if(e && ["filed","inbox","inbox-pending","draft","error","busy"].includes(view.stage)) controls=actions(e)+button("library","Recent files");
     if(view.stage==="error" && !e) controls=button("settings","RichCleaner settings")+button("library","Recent files");
+    if(batch && ["inbox-pending","busy","batch-result"].includes(view.stage))controls=button("library","Recent files");
     let sub=view.message || "";
     if(view.stage==="listening") sub=`Tap ${k} to finish`;
-    if(view.stage==="choosing") sub="Cancel keeps the note and leaves the file where it is.";
+    if(view.stage==="choosing") sub=batch ? "Cancel keeps the note and leaves the files where they are." : "Cancel keeps the note and leaves the file where it is.";
+    if(view.batchResult?.localNote) {
+      const count = view.batchResult.localNote;
+      sub = `The note is saved in RichOS only for ${count} ${count === 1 ? "file" : "files"}. See Recent files for details.`;
+    }
     root.innerHTML=`<section class="rf-panel ${view.stage==="listening" ? "is-listen" : ""}" aria-label="RichCleaner capture">
-      ${f ? `<div class="rf-file"><span class="rf-thumb">${icon(f)}</span><div class="rf-ident"><div class="rf-name">${esc(f.name || name(f))}</div><div class="rf-where">${esc(f.path)}</div></div><span class="rf-mark"><img src="cleaner-icon.png" alt=""></span></div>` : ""}
+      ${f || selection ? `<div class="rf-file"><span class="rf-thumb">${icon(f || {path:"FILES"})}</span><div class="rf-ident"><div class="rf-name">${esc(batch ? `${batch.total} Desktop files` : f.name || name(f))}</div><div class="rf-where" title="${esc(selection ? selection.join(", ") : f.path)}">${esc(selection ? selectedNames(selection) : f.path)}</div></div><span class="rf-mark"><img src="cleaner-icon.png" alt=""></span></div>` : ""}
       <div class="rf-stage"><span class="dh-orb" aria-hidden="true">${view.stage==="listening" ? "●" : ["filed","saved","inbox-pending","inbox"].includes(view.stage) ? "✓" : ""}</span>
       <strong class="dh-label" role="status">${esc(texts[view.stage] || view.stage)}</strong>${view.stage==="listening" ? '<span class="dh-meter" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>' : ""}
       ${sub ? `<p class="rf-sub">${esc(sub)}</p>` : ""}<div class="rf-acts is-row">${controls}</div></div>
-      ${view.noteSaved && e ? `<div class="rf-note"><span class="rf-note-k">Your note</span>${esc(e.note)}</div>` : ""}
+      ${view.noteSaved && (e || view.batchNote) ? `<div class="rf-note"><span class="rf-note-k">Your note</span>${esc(e?.note || view.batchNote)}</div>` : ""}
       ${["filed","inbox","inbox-pending"].includes(view.stage) && e ? `<p class="rf-sub">${esc(noteMode(e))}</p>` : ""}
       ${["checking","writing","choosing","filing"].includes(view.stage) ? '<div class="rf-bar" aria-hidden="true"></div>' : ""}
       </section>`;
@@ -43,7 +73,7 @@
     list.innerHTML=`<div class="rf-list-head"><b>${query ? "Search results" : "Recent files"}</b><span>${total} ${total===1 ? "file" : "files"}</span></div>`;
     // Off, the empty window says so and offers the switch, rather than steps that cannot work (round 58).
     if(!entries.length && !query && status.enabled===false) {list.innerHTML+=`<div class="rf-empty"><img src="cleaner-icon.png" alt=""><h3>RichCleaner is off</h3><p>Turn it on to file the Desktop files you describe. Your files stay where they are until you do.</p>${button("settings","Turn on RichCleaner",null,"rf-open")}</div>`;selected=null;paintDetails();return;}
-    if(!entries.length) {list.innerHTML+=`<div class="rf-empty"><img src="cleaner-icon.png" alt=""><h3>${query ? "No matching notes" : "A clear Desktop starts here"}</h3><p>${query ? "Try a different description, or ask Rich to find it." : `Select one Desktop file, tap F${status.key || 1}, describe it and tap the same key again.`}</p></div>`;selected=null;paintDetails();return;}
+    if(!entries.length) {list.innerHTML+=`<div class="rf-empty"><img src="cleaner-icon.png" alt=""><h3>${query ? "No matching notes" : "A clear Desktop starts here"}</h3><p>${query ? "Try a different description, or ask Rich to find it." : `Select the Desktop files, tap F${status.key || 1}, describe your selection and tap the same key again.`}</p></div>`;selected=null;paintDetails();return;}
     for(const e of entries) { const fileName=name(e); list.insertAdjacentHTML("beforeend",`<button type="button" role="option" aria-selected="${selected===e.id}" class="rf-row" data-select="${esc(e.id)}"><span class="rf-ico">${icon(e)}</span><span class="rf-row-text"><span class="rf-nm" title="${esc(fileName)}"><span class="h">${esc(fileName.slice(0,-15))}</span><span class="t">${esc(fileName.slice(-15))}</span></span><span class="rf-row-note">${esc(e.note)}</span><span class="rf-row-meta">${esc(e.folder || "Not filed")} · ${esc(new Date(e.updated).toLocaleString())}${e.pendingSort ? '<span class="rf-chip">In Inbox · sorting</span>' : e.phase==="draft" ? '<span class="rf-chip">Not filed</span>' : e.inbox ? '<span class="rf-chip">Inbox</span>' : ""}</span></span></button>`); }
     if(!selected || !entries.some(e=>e.id===selected)) selected=entries[0].id;
     for(const row of list.querySelectorAll("[data-select]")) row.setAttribute("aria-selected",String(row.dataset.select===selected));paintDetails();
