@@ -160,6 +160,17 @@ def find_turn(rows, kind, text, after_ms):
     return None
 
 
+def notice_turns(rows):
+    """Turn ids that are only an app notice: a ProactiveMessage and no delivered prompt."""
+    notices, prompted = set(), set()
+    for r in rows:
+        if r.get('event') == 'ProactiveMessage':
+            notices.add(r.get('turn_id'))
+        elif r.get('event') == 'PromptReceived':
+            prompted.add(r.get('turn_id'))
+    return notices - prompted
+
+
 def turn_record(rows, tid):
     """What the ledger says about turn TID: state (completed|interrupted|stopped|failed|open),
     Rich's reply text, and the time its closing row was written (guest ms)."""
@@ -285,10 +296,14 @@ class ConversationWalk(adopt_walk.Walk):
         print('no local-network sheet to allow: %s' % (r.stderr or r.stdout).strip()[-200:], file=sys.stderr)
 
     def wait_idle(self, seconds):
-        """Until no turn on the ledger is open: the previous reply has finished."""
+        """Until no turn on the ledger is open: the previous reply has finished. An app notice
+        (a ProactiveMessage under its own turn id, never closed) is not a turn anyone is waiting
+        on: counting it blocked every later step (review rv-20261110T222955Z-e9dfb1b6-c63e #2)."""
         end = time.monotonic() + seconds
         while True:
-            open_turns = [tid for tid, t in turn_states(self.ledger_rows()).items() if t['open']]
+            rows = self.ledger_rows()
+            notices = notice_turns(rows)
+            open_turns = [tid for tid, t in turn_states(rows).items() if t['open'] and tid not in notices]
             if not open_turns:
                 return
             if time.monotonic() >= end:

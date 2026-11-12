@@ -57,6 +57,15 @@ class Turns(unittest.TestCase):
                        row('AssistantDelta', 't2', 450, text='Here is what we learned.'), row('TurnCompleted', 't2', 500)]
         self.assertEqual(walk.find_turn(rows, 'wait_for_rich', '900', 250), 't2')
 
+    def test_an_app_notice_does_not_hold_the_next_step_but_an_open_reply_still_does(self):
+        notice = ROWS + [row('ProactiveMessage', 'n1', 300, text='Your account has used 90% of this week.')]
+        instance = object.__new__(walk.ConversationWalk)
+        instance.ledger_rows = lambda: notice
+        instance.wait_idle(0)  # returns: the only open turn is the notice
+        instance.ledger_rows = lambda: notice + [row('PromptReceived', 't2', 400, text='next')]
+        with self.assertRaises(walk.StepFailed):
+            instance.wait_idle(0)
+
     def test_a_press_takes_the_first_turn_that_started_after_it(self):
         self.assertEqual(walk.find_turn(ROWS, 'press', 'Start the questions', 50), 't1')
 
