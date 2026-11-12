@@ -966,6 +966,10 @@ struct BrowserView: View {
             if !actions.untrashed.isEmpty {
                 Button("Review Trash Failures…") { sheet = .trashFailures(actions.untrashed) }.buttonStyle(.borderless)
             }
+            if !actions.operationIssues.isEmpty {
+                Button("Review Operation Issues…") { sheet = .operationIssues(actions.operationIssues) }
+                    .buttonStyle(.borderless)
+            }
             if model.busy && model.searchActive { Button("Stop Search") { model.stopSearch() }.buttonStyle(.borderless) }
             let itemCount = "\(model.entries.count) \(model.searchActive ? "results" : "items")"
             if !model.status.isEmpty && model.status != itemCount {
@@ -1449,6 +1453,7 @@ struct BrowserView: View {
         case .checksum(let reference): ChecksumSheet(file: reference)
         case .trash: TrashSheet(actions: actions)
         case .trashFailures(let sources): TrashFailuresSheet(sources: sources, actions: actions)
+        case .operationIssues(let issues): OperationIssuesSheet(issues: issues)
         case .transfers: TransferSheet(actions: actions)
         case .interruptedTransfer:
             if let notice = actions.interruptedTransfer {

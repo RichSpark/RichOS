@@ -31,6 +31,7 @@ enum BrowserSheet: Identifiable {
     case compare(URL)
     case fileShelf(BrowserTransferDestination)
     case trashFailures([FileReference])
+    case operationIssues([String])
     case interruptedTransfer
     case trash, transfers, searchOptions, batch([FileReference]), connect, workspaces, actionPalette, settings
 
@@ -48,6 +49,7 @@ enum BrowserSheet: Identifiable {
         case .compare: return "compare"
         case .fileShelf: return "fileShelf"
         case .trashFailures: return "trashFailures"
+        case .operationIssues: return "operationIssues"
         case .trash: return "trash"
         case .transfers: return "transfers"
         case .interruptedTransfer: return "interrupted-transfer"
@@ -1059,11 +1061,11 @@ struct TrashSheet: View {
                 Spacer()
             }
             if !actions.status.isEmpty { Text(actions.status).font(.callout).foregroundStyle(.secondary) }
-            if actions.issues.count > 1 {
-                DisclosureGroup("Restore and Trash issues (\(actions.issues.count))") {
+            if actions.operationIssues.count > 1 {
+                DisclosureGroup("Operation issues (\(actions.operationIssues.count))") {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 4) {
-                            ForEach(Array(actions.issues.enumerated()), id: \.offset) { _, issue in
+                            ForEach(Array(actions.operationIssues.enumerated()), id: \.offset) { _, issue in
                                 Text(issue).textSelection(.enabled)
                             }
                         }.frame(maxWidth: .infinity, alignment: .leading)
@@ -1123,6 +1125,26 @@ struct TrashSheet: View {
               let finder = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.finder") else { return }
         NSWorkspace.shared.open([folder], withApplicationAt: finder,
                                 configuration: NSWorkspace.OpenConfiguration(), completionHandler: nil)
+    }
+}
+
+struct OperationIssuesSheet: View {
+    let issues: [String]
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Operation Issues").font(.headline).accessibilityAddTraits(.isHeader)
+            List(issues.indices, id: \.self) { index in
+                Text(issues[index])
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+            }
+            HStack {
+                Spacer()
+                Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
+            }
+        }.padding(16).frame(width: 530, height: 320)
     }
 }
 

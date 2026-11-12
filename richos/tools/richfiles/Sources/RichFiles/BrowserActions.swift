@@ -41,6 +41,7 @@ final class BrowserActions: ObservableObject {
     @Published private(set) var mutationRevision = UUID()
 
     var didMutate: (() -> Void)?
+    var operationIssues: [String] { issuesAreFromTransfer ? [] : issues }
 
     private let pasteboard: NSPasteboard
     private let recoveryURL: URL?
@@ -49,6 +50,7 @@ final class BrowserActions: ObservableObject {
     private var transferTask: Task<Void, Never>?
     private var preparingQueue: [UUID: Task<Void, Never>] = [:]
     private var settlingTransfer = false
+    private var issuesAreFromTransfer = false
     private var retryRequest: BrowserTransferRequest?
     private var settledTransferID: UUID?
     private var unreadableRecoveryStore = false
@@ -434,6 +436,7 @@ final class BrowserActions: ObservableObject {
         busy = true
         retryRequest = nil
         canRetryTransfer = false
+        issuesAreFromTransfer = true
         issues = []
         let progress = BrowserTransfer(
             destination: request.folder, move: request.move, total: request.sources.count
@@ -746,6 +749,7 @@ final class BrowserActions: ObservableObject {
     ) -> Task<Void, Never>? {
         guard !busy else { return nil }
         busy = true
+        issuesAreFromTransfer = false
         issues = []
         status = title + "…"
         let worker = Task.detached(priority: .userInitiated) { Result { try operation() } }
@@ -809,6 +813,7 @@ final class BrowserActions: ObservableObject {
     private func replay(undo: Bool) {
         guard !busy, let group = undo ? undoHistory.last : redoHistory.last else { return }
         busy = true
+        issuesAreFromTransfer = false
         issues = []
         status = "\(undo ? "Undoing" : "Redoing") \(group.title)…"
         let knownTrash = trashItems

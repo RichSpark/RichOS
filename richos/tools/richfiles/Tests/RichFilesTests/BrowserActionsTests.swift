@@ -31,6 +31,8 @@ final class BrowserActionsTests: XCTestCase {
             XCTAssertEqual(actions.undoName, "Restore Selected")
             XCTAssertEqual(actions.trashItems.map(\.originalURL.lastPathComponent), [names[1]])
             XCTAssertTrue(actions.status.contains("Restored 2 of 3 selected items."))
+            XCTAssertEqual(actions.operationIssues.count, 1)
+            XCTAssertTrue(actions.operationIssues.first?.contains(names[1]) == true)
             XCTAssertEqual(try contents(occupant.url), "late occupant")
             XCTAssertEqual(try contents(trash.appendingPathComponent(names[1])), "original " + names[1])
             for name in [names[0], names[2]] {
@@ -442,6 +444,7 @@ final class BrowserActionsTests: XCTestCase {
             XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: destination.path).isEmpty)
             XCTAssertEqual(actions.transfer?.succeeded, 0)
             XCTAssertFalse(actions.issues.isEmpty)
+            XCTAssertTrue(actions.operationIssues.isEmpty)
             XCTAssertFalse(actions.canRetryTransfer)
         }
     }
