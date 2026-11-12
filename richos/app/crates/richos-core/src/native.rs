@@ -5917,10 +5917,16 @@ for prompt,expected in cases:
         let company = crate::entity::EntityId::parse("depot").unwrap();
         let thread = ledger.create_thread("Meeting fixture", &company).unwrap();
         let binding = ledger.thread_binding(&thread).unwrap();
+        let corpus = root.join("corpus");
+        let zone = crate::meeting_notes::meeting_zone(&corpus, Some(company.as_str()));
+        let dir = zone.join("2000-01-01T12-00-00Z--system--call");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("session.json"), r#"{"status":"open","startedAt":1}"#).unwrap();
+        std::fs::write(dir.join("transcript.md"),
+            "quoted_live_meeting_evidence\nThem: Three customers are in the pilot.\n").unwrap();
         profile.set_live_meeting_reader(move |binding, at| {
             (binding.thread_id() == thread && matches!(at, 42 | 43)).then(|| crate::meeting_notes::LiveMeetingSource {
-                dir: "/corpus/meetings/session".into(), zone: "/corpus/meetings".into(),
-                corpus: "/corpus".into(), runtime_bin: None, request_at: at,
+                dir: dir.clone(), zone: zone.clone(), corpus: corpus.clone(), runtime_bin: None, request_at: at,
             })
         });
         let (classifier_root, bin, classifier_profile, skills) = crate::request_classifier::tests::fixture(r#"
@@ -5929,7 +5935,7 @@ for line in sys.stdin:
     if data.get('user_request') and data['user_request'] != 'Readiness check':
         assert data['current_recording'] == (data['user_request'] in (
             'Thanks.', 'Rich, please draft the comparison from this call.'))
-        assert 'quoted_live_meeting_evidence' not in data['recent_conversation']
+        assert data['recent_conversation'] == 'Rich: The approved plan is available.'
     result='rich_handles_message'
     print(json.dumps({'type':'assistant','message':{'model':'claude-haiku-5-5','content':[{'type':'text','text':result}]}}),flush=True)
     print(json.dumps({'type':'result','is_error':False,'result':result}),flush=True)
@@ -5943,6 +5949,7 @@ for line in sys.stdin:
         assert_eq!(owner, "rich");
         cognition.classifier = Some(Arc::new(Mutex::new(classifier)));
         cognition.engine_profile = Some(profile);
+        cognition.set_conversation_context("Rich: The approved plan is available.");
         for (prompt, source, live_meeting_at) in [
             ("Thanks.", Source::Text, Some(42)),
             ("Rich, please draft the comparison from this call.", Source::Jam, Some(43)),
