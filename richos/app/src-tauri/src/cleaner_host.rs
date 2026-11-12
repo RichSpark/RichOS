@@ -261,6 +261,22 @@ fn profile(
         .clone();
     Ok((bin, profile))
 }
+fn start_chooser(app: &AppHandle, id: &str) -> Arc<Prepared> {
+    let app = app.clone();
+    let id = id.to_owned();
+    Arc::new(Prepared::start(move || {
+        let began = Instant::now();
+        let result = profile(&app).map_err(|_| "The model connection is unavailable".to_string());
+        let record = json!({
+            "id":id,
+            "build":app.package_info().version.to_string(),
+            "profile_ms":began.elapsed().as_millis() as u64,
+            "outcome":if result.is_ok() {"ready"} else {"unavailable"},
+        });
+        crate::dictation::log::line(&format!("RichCleaner profile {record}"));
+        result
+    }))
+}
 fn folder_context(db: &Catalog, root: &Path, id: &str) -> Result<FolderContext, String> {
     let began = Instant::now();
     let recent = db.recent_filed_paths()?;
@@ -570,9 +586,6 @@ fn begin_target(app: &AppHandle, id: &str, target: Value) -> Result<(), String> 
     start_target(app, id, target, json!({"file":{"name":path.file_name().map(|v|v.to_string_lossy()),"path":path}}))
 }
 fn start_target(app: &AppHandle, id: &str, target: Value, preview: Value) -> Result<(), String> {
-    let chooser = profile(app)
-        .map(|(bin, profile)| Arc::new(Prepared::start(&bin, &profile)))
-        .ok();
     let h = host(app);
     let mut active = h.active.lock().map_err(|_| "The capture was canceled")?;
     let a = active
@@ -580,7 +593,7 @@ fn start_target(app: &AppHandle, id: &str, target: Value, preview: Value) -> Res
         .filter(|a| a.id == id && !a.cancel.load(Ordering::Acquire))
         .ok_or("The capture was canceled")?;
     a.target = Some(target);
-    a.chooser = chooser;
+    a.chooser = Some(start_chooser(app, id));
     a.stage = "starting".into();
     drop(active);
     stage(app, id, "checking", preview);
@@ -1084,9 +1097,7 @@ fn run_action(app: AppHandle, id: String, action: String, note: Option<String>) 
             db.save(&entry)?;
             let request = cleaner::capture_id();
             let cancel = Arc::new(AtomicBool::new(false));
-            let chooser = profile(&app)
-                .map(|(bin, p)| Arc::new(Prepared::start(&bin, &p)))
-                .ok();
+            let chooser = Some(start_chooser(&app, &request));
             *active = Some(Active {
                 id: request.clone(),
                 target: None,

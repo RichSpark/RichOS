@@ -4,9 +4,9 @@ use crate::{engine_profile::EngineProfile, request_classifier::Provider};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
-    path::Path,
+    path::PathBuf,
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicU8, Ordering},
         mpsc, Arc,
     },
     thread::JoinHandle,
@@ -82,35 +82,44 @@ struct Request {
 pub struct Prepared {
     started: Instant,
     send: Option<mpsc::Sender<Request>>,
-    stop: Arc<AtomicBool>,
+    state: Arc<AtomicU8>,
     worker: Option<JoinHandle<()>>,
 }
+const LAUNCHING: u8 = 1;
+const CANCELED: u8 = 2;
+
 impl Prepared {
-    pub fn start(bin: &Path, profile: &EngineProfile) -> Self {
+    pub fn start(
+        prepare: impl FnOnce() -> Result<(PathBuf, EngineProfile)> + Send + 'static,
+    ) -> Self {
         let started = Instant::now();
-        let stop = Arc::new(AtomicBool::new(false));
-        let canceled = stop.clone();
+        let state = Arc::new(AtomicU8::new(0));
+        let worker_state = state.clone();
         let (send, receive) = mpsc::channel::<Request>();
-        let profile = profile.clone();
-        let bin = bin.to_path_buf();
         let worker = std::thread::spawn(move || {
-            let mut live = Provider::new(&bin, &profile, "app/cleaner.md", "cleaner").start();
-            loop {
-                if canceled.load(Ordering::Acquire) {
-                    break;
-                }
+            let canceled = || worker_state.load(Ordering::Acquire) & CANCELED != 0;
+            if canceled() {
+                return;
+            }
+            let setup = prepare();
+            let mut live = setup
+                .as_ref()
+                .map_err(String::clone)
+                .and_then(|(bin, profile)| {
+                    // Cancellation during profile preparation must prevent a late provider launch.
+                    worker_state
+                        .compare_exchange(0, LAUNCHING, Ordering::AcqRel, Ordering::Acquire)
+                        .map_err(|_| "Folder choice canceled".to_string())?;
+                    Provider::new(bin, profile, "app/cleaner.md", "cleaner").start()
+                });
+            while !canceled() {
                 match receive.recv_timeout(Duration::from_millis(50)) {
                     Ok(request) => {
                         let answer = live
                             .as_mut()
                             .map_err(|e| e.clone())
                             .and_then(|live| {
-                                live.exchange(
-                                    request.body,
-                                    request.deadline,
-                                    || canceled.load(Ordering::Acquire),
-                                    answer,
-                                )
+                                live.exchange(request.body, request.deadline, canceled, answer)
                             })
                             .and_then(|text| serde_json::from_str(&text).map_err(|_| INVALID.into()))
                             .and_then(validate);
@@ -126,12 +135,14 @@ impl Prepared {
                 }
             }
             drop(live);
-            profile.remove_session_files();
+            if let Ok((_, profile)) = setup {
+                profile.remove_session_files();
+            }
         });
         Self {
             started,
             send: Some(send),
-            stop,
+            state,
             worker: Some(worker),
         }
     }
@@ -155,7 +166,7 @@ impl Prepared {
                 reply,
             })
             .map_err(|e| e.to_string())?;
-        while !self.stop.load(Ordering::Acquire) {
+        while self.state.load(Ordering::Acquire) & CANCELED == 0 {
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
                 return Err("Folder choice timed out".into());
@@ -169,17 +180,22 @@ impl Prepared {
         Err("Folder choice canceled".into())
     }
     pub fn cancel(&self) {
-        self.stop.store(true, Ordering::Release);
+        self.state.fetch_or(CANCELED, Ordering::AcqRel);
     }
 }
 impl Drop for Prepared {
     fn drop(&mut self) {
         self.cancel();
         drop(self.send.take());
-        if let Some(worker) = self.worker.take() {
-            if worker.join().is_err() {
-                eprintln!("[richos] RichCleaner folder helper failed while stopping");
-            }
+        // A worker still preparing its profile can clean it up without blocking the
+        // caller. Once launch has begun, keep the existing synchronous child reaping.
+        if self.state.load(Ordering::Acquire) & LAUNCHING != 0
+            && self
+                .worker
+                .take()
+                .is_some_and(|worker| worker.join().is_err())
+        {
+            eprintln!("[richos] RichCleaner folder helper failed while stopping");
         }
     }
 }
@@ -211,6 +227,31 @@ fn validate(choice: Choice) -> Result<Choice> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn canceled_preparation_cleans_up_without_launching_a_provider() {
+        let (root, bin, profile, _) = crate::request_classifier::tests::fixture("");
+        let plugin = profile.plugin.clone();
+        std::fs::create_dir(&plugin).unwrap();
+        let provider_dir = profile.state.join("cleaner");
+        let (entered, preparing) = mpsc::channel();
+        let (release, released) = mpsc::channel();
+        let mut chooser = Prepared::start(move || {
+            entered.send(()).unwrap();
+            // load-bound: hang guard for the fixture barrier; the verdict uses filesystem state.
+            released.recv_timeout(Duration::from_secs(30)).unwrap();
+            Ok((bin, profile))
+        });
+        // load-bound: hang guard for the fixture barrier; the verdict uses filesystem state.
+        preparing.recv_timeout(Duration::from_secs(30)).unwrap();
+        chooser.cancel();
+        release.send(()).unwrap();
+        chooser.worker.take().unwrap().join().unwrap();
+        assert!(!provider_dir.exists());
+        assert!(!plugin.exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn model_paths_are_data_and_invalid_paths_are_refused() {
         let parse = |folder: &str| {
