@@ -7,6 +7,7 @@ use std::{path::Path, sync::{atomic::{AtomicBool, Ordering}, Arc, Mutex}, time::
 
 pub enum Update {
     Words { text: String, sampled_at: Instant, decode_ms: u64 },
+    MissedDeadline { input_ms: u64 },
     Paused { reason: &'static str, input_ms: Option<u64> },
     Unavailable,
     Quiet,
@@ -18,11 +19,31 @@ pub(super) const DISPLAY_MAX_AGE: Duration = Duration::from_secs(3);
 const FIRST_RESULT_MAX_AGE: Duration = Duration::from_secs(2);
 const FIRST_DECODER_LIMIT: Duration = Duration::from_millis(1800);
 const RESULT_HANDOFF_MARGIN: Duration = Duration::from_millis(150);
+const TICK_INTERVAL: Duration = Duration::from_secs(2);
 
 fn preview_limits(has_words: bool, elapsed: Duration) -> (Duration, Duration) {
     let max_age = if has_words { DISPLAY_MAX_AGE - RESULT_HANDOFF_MARGIN } else { FIRST_RESULT_MAX_AGE };
     let max_decode = if has_words { max_age - Duration::from_millis(50) } else { FIRST_DECODER_LIMIT };
     (max_age, max_decode.saturating_sub(elapsed))
+}
+
+#[derive(Default)]
+struct PreviewProgress {
+    has_words: bool,
+    missed_deadline: bool,
+}
+
+impl PreviewProgress {
+    fn published(&mut self) {
+        self.has_words = true;
+        self.missed_deadline = false;
+    }
+
+    fn skip_deadline(&mut self) -> bool {
+        if !self.has_words || self.missed_deadline { return false; }
+        self.missed_deadline = true;
+        true
+    }
 }
 
 // A short overlap keeps enough audio to recognize speech across adjacent ticks.
@@ -54,14 +75,14 @@ pub fn run(recording: Arc<Mutex<Option<Recording>>>, data_dir: &Path, stop: &Ato
     };
     let mut due = started + Duration::from_secs(1);
     let mut last_samples = 0;
-    let mut has_words = false;
+    let mut progress = PreviewProgress::default();
     loop {
         if stop.load(Ordering::Acquire) { return; }
         if let Some(wait) = due.checked_duration_since(Instant::now()) {
             std::thread::park_timeout(wait);
             continue;
         }
-        due += Duration::from_secs(2);
+        due += TICK_INTERVAL;
         let sampled_at = Instant::now();
         let (samples, new_samples) = {
             // No wait for a busy capture callback, and no decoding/files/UI while
@@ -82,7 +103,7 @@ pub fn run(recording: Arc<Mutex<Option<Recording>>>, data_dir: &Path, stop: &Ato
         let input_ms = samples.len() as u64 * 1000 / u64::from(SAMPLE_RATE);
         let paused = |reason| Update::Paused { reason, input_ms: Some(input_ms) };
         let result = Scratch::new(data_dir).map_err(|_| "scratch_unavailable").and_then(|scratch| {
-            let (max_age, budget) = preview_limits(has_words, sampled_at.elapsed());
+            let (max_age, budget) = preview_limits(progress.has_words, sampled_at.elapsed());
             if budget.is_zero() { return Err("stale_result"); }
             recognizer.transcribe_preview_until(&samples, scratch.path(), budget, stop)
                 .map(|result| (result, max_age))
@@ -93,17 +114,22 @@ pub fn run(recording: Arc<Mutex<Option<Recording>>>, data_dir: &Path, stop: &Ato
             Ok(((text, decode_ms), max_age)) if sampled_at.elapsed() <= max_age => {
                 match judge_transcript(&text) {
                     Ok(text) => {
-                        has_words = true;
+                        progress.published();
                         send(Update::Words { text: recent_text(&text), sampled_at, decode_ms });
                     }
                     Err(_) => { send(paused("transcript_rejected")); return; }
                 }
             }
             Ok(_) => { send(paused("stale_result")); return; }
+            Err("decoder_deadline") if progress.skip_deadline() => send(Update::MissedDeadline { input_ms }),
             Err(reason) => { send(paused(reason)); return; }
         }
-        // A slow startup/tick never causes a burst of catch-up decodes.
-        if due < Instant::now() { due = Instant::now() + Duration::from_secs(2); }
+        // An expired tick has no pending work. Use the next scheduled slot.
+        let now = Instant::now();
+        if due <= now {
+            due += TICK_INTERVAL;
+            if due <= now { due = now + TICK_INTERVAL; }
+        }
     }
 }
 
@@ -118,6 +144,17 @@ mod tests {
         assert_eq!(preview_limits(true, Duration::from_millis(100)),
             (Duration::from_millis(2850), Duration::from_millis(2700)));
         assert!(preview_limits(true, DISPLAY_MAX_AGE).1.is_zero());
+    }
+
+    #[test]
+    fn preview_skips_one_deadline_only_between_published_results() {
+        let mut progress = PreviewProgress::default();
+        assert!(!progress.skip_deadline());
+        progress.published();
+        assert!(progress.skip_deadline());
+        assert!(!progress.skip_deadline());
+        progress.published();
+        assert!(progress.skip_deadline());
     }
 
     #[test]
@@ -210,6 +247,7 @@ mod tests {
                         "age_ms":sampled_at.elapsed().as_millis(), "decode_ms":decode_ms,
                         "characters":text.chars().count(), "words":text.split_whitespace().count()}),
                     Update::Quiet => serde_json::json!({"kind":"quiet","at_ms":began.elapsed().as_millis()}),
+                    Update::MissedDeadline { input_ms } => serde_json::json!({"kind":"missed","input_ms":input_ms,"at_ms":began.elapsed().as_millis()}),
                     Update::Paused { reason, input_ms } => serde_json::json!({"kind":"paused","reason":reason,"input_ms":input_ms,"at_ms":began.elapsed().as_millis()}),
                     Update::Unavailable => serde_json::json!({"kind":"unavailable","at_ms":began.elapsed().as_millis()}),
                 };

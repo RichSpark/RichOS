@@ -906,6 +906,12 @@ impl Tool {
                             self.live_preview_paused = true;
                             log::line("preview paused for this recording; capture and final recognition continue");
                         }
+                        super::live_preview::Update::MissedDeadline { input_ms } => {
+                            if let Some(t) = &self.timings {
+                                t.event("preview_update_missed", serde_json::json!({"reason":"decoder_deadline","input_ms":input_ms}));
+                            }
+                            self.live_words = None;
+                        }
                         super::live_preview::Update::Unavailable => {
                             if let Some(t) = &self.timings { t.event("preview_unavailable", serde_json::json!({"reason":"model_unavailable"})); }
                             self.stop_live_preview();
