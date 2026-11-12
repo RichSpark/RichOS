@@ -130,6 +130,12 @@ impl Files for Native {
     fn resolve(&self, path: &Path, identity: &Identity) -> Result<PathBuf> {
         self.open_location(path, identity, true, || {})
     }
+    fn resolve_local(&self, path: &Path, identity: &Identity) -> Result<(PathBuf, Identity)> {
+        let answer = self.request(json!({"action":"resolve-local","path":path,"identity":identity}))?;
+        let resolved = PathBuf::from(answer["path"].as_str().ok_or("Locate the original file")?);
+        let actual = serde_json::from_value(answer["identity"].clone()).map_err(|e| e.to_string())?;
+        Ok((resolved, actual))
+    }
     fn destination(
         &self,
         root: &Path,

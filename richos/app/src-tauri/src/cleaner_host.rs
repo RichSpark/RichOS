@@ -12,6 +12,7 @@ use std::{
         atomic::{AtomicBool, Ordering},
         Arc, Mutex,
     },
+    time::Instant,
 };
 use tauri::{AppHandle, Emitter, Manager};
 mod batch;
@@ -25,6 +26,62 @@ struct Active {
     stage: String,
     cancel: Arc<AtomicBool>,
     chooser: Option<Arc<Prepared>>,
+    timings: FilingTimings,
+}
+struct FilingTimings {
+    checking: Instant,
+    listening: Option<Instant>,
+    writing: Option<Instant>,
+    saved: Option<Instant>,
+    inbox: Option<Instant>,
+    choosing: Option<Instant>,
+    filing: Option<Instant>,
+}
+impl Default for FilingTimings {
+    fn default() -> Self {
+        Self {
+            checking: Instant::now(),
+            listening: None,
+            writing: None,
+            saved: None,
+            inbox: None,
+            choosing: None,
+            filing: None,
+        }
+    }
+}
+impl FilingTimings {
+    fn stage(&mut self, name: &str, at: Instant) {
+        let slot = match name {
+            "listening" => &mut self.listening,
+            "writing" => &mut self.writing,
+            "saved" => &mut self.saved,
+            "inbox-pending" => &mut self.inbox,
+            "choosing" => &mut self.choosing,
+            "filing" => &mut self.filing,
+            _ => return,
+        };
+        slot.get_or_insert(at);
+    }
+
+    fn record(&self, id: &str, build: &str, outcome: &str, published: Instant) -> Value {
+        let span = |from: Option<Instant>, to: Option<Instant>| {
+            from.zip(to)
+                .and_then(|(from, to)| to.checked_duration_since(from))
+                .map(|duration| duration.as_millis() as u64)
+        };
+        json!({
+            "id": id,
+            "build": build,
+            "outcome": outcome,
+            "checking_to_listening_ms": span(Some(self.checking), self.listening),
+            "writing_to_note_saved_ms": span(self.writing, self.saved),
+            "note_saved_to_inbox_ms": span(self.saved, self.inbox),
+            "choosing_to_filing_ms": span(self.choosing, self.filing),
+            "filing_to_result_ms": span(self.filing, Some(published)),
+            "writing_to_result_ms": span(self.writing, Some(published)),
+        })
+    }
 }
 pub struct Host {
     active: Mutex<Option<Active>>,
@@ -117,9 +174,10 @@ fn show(app: &AppHandle, mut value: Value) {
 }
 fn stage(app: &AppHandle, id: &str, name: &str, extra: Value) {
     let h = host(app);
-    let active = h.active.lock().unwrap_or_else(|p| p.into_inner());
-    if id != "recovery" && active.as_ref().is_none_or(|a| a.id != id) {
-        return;
+    let mut active = h.active.lock().unwrap_or_else(|p| p.into_inner());
+    if id != "recovery" {
+        let Some(operation) = active.as_mut().filter(|a| a.id == id) else { return };
+        operation.timings.stage(name, Instant::now());
     }
     let mut value = h.view.lock().unwrap_or_else(|p| p.into_inner()).clone();
     value["id"] = json!(id);
@@ -144,8 +202,12 @@ fn finish(app: &AppHandle, id: &str, value: Value) {
     if let Err(e) = link(app, id, "release", json!({})) {
         eprintln!("[richos] RichCleaner release: {e}");
     }
+    let outcome = value["stage"].as_str().unwrap_or("unknown").to_string();
     show(app, value);
+    let published = Instant::now();
     drop(active);
+    let record = done.timings.record(id, &app.package_info().version.to_string(), &outcome, published);
+    crate::dictation::log::line(&format!("RichCleaner filing {record}"));
 }
 fn error(app: &AppHandle, id: &str, message: String) {
     let h = host(app);
@@ -406,6 +468,7 @@ pub fn on_message(app: &AppHandle, message: Option<&ToolMessage>) {
                 stage: "checking".into(),
                 cancel: Arc::new(AtomicBool::new(false)),
                 chooser: None,
+                timings: FilingTimings::default(),
             });
             drop(active);
             show(
@@ -1057,6 +1120,7 @@ fn run_action(app: AppHandle, id: String, action: String, note: Option<String>) 
                 stage: "choosing".into(),
                 cancel: cancel.clone(),
                 chooser: chooser.clone(),
+                timings: FilingTimings::default(),
             });
             drop(active);
             let app = app.clone();
@@ -1223,6 +1287,45 @@ pub fn cleaner_open_main(app: AppHandle, surface: String) -> Result<(), String> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn richdoctor_collects_filing_milestones_and_preserves_unmeasured_spans() {
+        use richdoctor_core::{
+            collect::{collect, Category, Scope, Window},
+            evidence::Status,
+            scrub::Context,
+        };
+        use std::time::Duration;
+        let home = std::env::temp_dir().join(format!("richcleaner-timings-{}", cleaner::capture_id()));
+        let data = home.join("Library/Application Support/com.richos.app");
+        std::fs::create_dir_all(&data).unwrap();
+        let mut timings = FilingTimings::default();
+        let start = timings.checking;
+        timings.stage("listening", start + Duration::from_millis(150));
+        timings.stage("writing", start + Duration::from_millis(900));
+        timings.stage("saved", start + Duration::from_millis(1_100));
+        timings.stage("choosing", start + Duration::from_millis(1_110));
+        timings.stage("filing", start + Duration::from_millis(1_310));
+        let record = timings.record("fixture-op", "1.2.0", "filed", start + Duration::from_millis(1_550));
+        let at = 1_798_784_000_000;
+        std::fs::write(
+            data.join("dictation.log"),
+            format!("{} RichCleaner filing {record}\n", richdoctor_core::util::utc_stamp(at)),
+        ).unwrap();
+        let scope = Scope { home: home.clone(), window: Window::around(at), claude_bin: None, diagnostics: true };
+        let items = collect(Category::Richscribe, &scope, &Context::default(), 0);
+        std::fs::remove_dir_all(home).unwrap();
+        assert_eq!(items[0].status, Status::Collected);
+        let raw = items[0].text.split_once("RichCleaner filing ").unwrap().1;
+        let actual: Value = serde_json::from_str(raw).unwrap();
+        assert_eq!(actual, json!({
+            "id":"fixture-op", "build":"1.2.0", "outcome":"filed",
+            "checking_to_listening_ms":150, "writing_to_note_saved_ms":200,
+            "note_saved_to_inbox_ms":null, "choosing_to_filing_ms":200,
+            "filing_to_result_ms":240, "writing_to_result_ms":650
+        }));
+    }
+
     #[test]
     fn folders_are_browsable_categories_and_never_follow_linked_repositories() {
         let root =

@@ -439,6 +439,7 @@ mod tests {
             stage: "choosing".into(),
             cancel: cancel.clone(),
             chooser: None,
+            timings: Default::default(),
         });
         assert!(skip(&host, "one"));
         assert!(matches!(

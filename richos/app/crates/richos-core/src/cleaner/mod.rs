@@ -184,6 +184,11 @@ pub fn folder_parts(value: &str) -> Result<Vec<String>> {
 pub trait Files {
     fn inspect(&self, path: &Path) -> Result<Identity>;
     fn resolve(&self, path: &Path, identity: &Identity) -> Result<PathBuf>;
+    fn resolve_local(&self, path: &Path, identity: &Identity) -> Result<(PathBuf, Identity)> {
+        let resolved = self.resolve(path, identity)?;
+        let actual = self.inspect(&resolved)?;
+        Ok((resolved, actual))
+    }
     fn destination(&self, root: &Path, parts: &[String], name: &std::ffi::OsStr)
         -> Result<PathBuf>;
     fn stage(&self, entry: &Entry) -> Result<Option<Staged>>;
@@ -205,10 +210,11 @@ pub fn file(
     if !matches!(e.phase, Phase::Draft | Phase::Choosing | Phase::Filed) {
         return Err("This file has an operation to recover first".into());
     }
-    e.path = fs.resolve(&e.path, &e.identity)?;
-    if !e.identity.unchanged(&fs.inspect(&e.path)?) {
+    let (path, actual) = fs.resolve_local(&e.path, &e.identity)?;
+    if !e.identity.unchanged(&actual) {
         return Err("The file changed. Your saved note is still here".into());
     }
+    e.path = path;
     let parts = folder_parts(folder)?;
     let folder_path = parts
         .iter()
@@ -279,8 +285,8 @@ pub fn file(
     e.intended = None;
     e.updated = crate::util::now_millis();
     db.save(&e)?;
-    let resolved = fs.resolve(&e.path, &e.identity)?;
-    if resolved != e.path || !e.identity.same_content(&fs.inspect(&resolved)?) {
+    let (resolved, actual) = fs.resolve_local(&e.path, &e.identity)?;
+    if resolved != e.path || !e.identity.same_content(&actual) {
         return Err("The moved file needs location recovery".into());
     }
     let mut saved = db.get(&e.id)?;

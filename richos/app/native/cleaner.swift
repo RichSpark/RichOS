@@ -16,6 +16,10 @@ func canonical(_ u:URL)throws->URL {
     guard standardized==standardized.resolvingSymlinksInPath() else {try fail("Symbolic links are not filed")}
     return standardized
 }
+func startDownloadForInspection(_ target: URL) throws -> Never {
+    try fm.startDownloadingUbiquitousItem(at: target)
+    try fail("The file is downloading from iCloud. Try again when it is available")
+}
 func identity(_ u:URL,local:Bool=true,makeBookmark:Bool=true)throws->[String:Any] {
     let u=try canonical(u)
     var s=stat();guard lstat(u.path,&s)==0 else {try fail(String(cString:strerror(errno)))}
@@ -23,8 +27,7 @@ func identity(_ u:URL,local:Bool=true,makeBookmark:Bool=true)throws->[String:Any
     let values=try u.resourceValues(forKeys:[.isPackageKey,.isUbiquitousItemKey,.ubiquitousItemIsDownloadingKey,.ubiquitousItemDownloadingStatusKey])
     guard values.isPackage != true else {try fail("Packages are not filed")}
     if local && values.isUbiquitousItem == true && values.ubiquitousItemDownloadingStatus != .current {
-        try fm.startDownloadingUbiquitousItem(at:u)
-        try fail("The file is downloading from iCloud. Try again when it is available")
+        try startDownloadForInspection(u)
     }
     let bookmark=try !makeBookmark || s.st_nlink>1 ? Data():u.bookmarkData(options:.suitableForBookmarkFile,includingResourceValuesForKeys:nil,relativeTo:nil)
     return ["volume":UInt64(UInt32(bitPattern:s.st_dev)),"object":s.st_ino,"size":UInt64(s.st_size),"modified":"\(s.st_mtimespec.tv_sec):\(s.st_mtimespec.tv_nsec)","changed":"\(s.st_ctimespec.tv_sec):\(s.st_ctimespec.tv_nsec)","bookmark":bookmark.base64EncodedString()]
@@ -223,8 +226,11 @@ func main(_ r:[String:Any])throws->[String:Any] {
         guard fm.isWritableFile(atPath:root.path) else {try fail("The filing folder is not writable")}
         return ["path":root.path]
     case "inspect":return try identity(url(string(r,"path")))
-    case "resolve", "open-check", "open-location":
+    case "resolve", "resolve-local", "open-check", "open-location":
         var (target, actual) = try original(r)
+        if r["action"] as? String == "resolve-local", try needsDownload(target) {
+            try startDownloadForInspection(target)
+        }
         if r["action"] as? String == "open-check" {
             return ["path":target.path,"identity":actual,"download":try needsDownload(target)]
         }

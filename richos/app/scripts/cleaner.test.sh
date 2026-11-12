@@ -53,7 +53,7 @@ assert before==attributes(target),"Native filing changed original filesystem att
 assert not source.exists() and target.read_bytes()==b"one original with a staged annotation"
 filed=native("inspect",path=str(target))
 moved=root/"renamed-outside-richcleaner.txt";target.rename(moved)
-for action in ("resolve","open-check","open-location"):
+for action in ("resolve","resolve-local","open-check","open-location"):
     opened=native(action,path=str(target),identity=filed)
     assert opened["path"]==str(moved), "The bookmark must find the externally renamed original"
     assert opened["identity"]["object"]==filed["object"]
