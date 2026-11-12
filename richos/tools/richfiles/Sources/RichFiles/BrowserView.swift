@@ -3,6 +3,17 @@ import RichFilesCore
 import SwiftUI
 import UniformTypeIdentifiers
 
+private struct BrowserControlFocusKey: FocusedValueKey {
+    typealias Value = Bool
+}
+
+private extension FocusedValues {
+    var browserControl: Bool? {
+        get { self[BrowserControlFocusKey.self] }
+        set { self[BrowserControlFocusKey.self] = newValue }
+    }
+}
+
 @MainActor
 struct BrowserView: View {
     @ObservedObject private var model: BrowserModel
@@ -21,7 +32,8 @@ struct BrowserView: View {
     @AppStorage("richfiles.shortcuts.v1") private var shortcutData = Data()
     @AppStorage("richfiles.sidebarVisible") private var sidebarVisible = true
     @AppStorage("richfiles.inspectorVisible") private var inspectorVisible = false
-    @FocusState private var focus: Field?
+    @FocusState private var focus: FocusTarget?
+    @FocusedValue(\.browserControl) private var controlFocused
     @State private var editingAddress = false
     @State private var address = ""
     @State private var suggestions: [URL] = []
@@ -47,7 +59,7 @@ struct BrowserView: View {
     @State private var commandOwner = UUID()
     @State private var paletteChoice: BrowserCommand?
 
-    private enum Field: Hashable { case address, search }
+    private enum FocusTarget: Hashable { case address, search, items }
 
     private struct DestinationRequest: Hashable {
         let folder: URL
@@ -73,34 +85,40 @@ struct BrowserView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            navigationBar
-            if editingAddress && !suggestions.isEmpty { addressSuggestions }
+            navigationBar.focusedValue(\.browserControl, true)
+            if editingAddress && !suggestions.isEmpty {
+                addressSuggestions.focusedValue(\.browserControl, true)
+            }
             Divider()
             HSplitView {
                 if sidebarVisible && !workspace.isSplit {
                     sidebar.frame(minWidth: 160, idealWidth: 200, maxWidth: 340)
+                        .focusedValue(\.browserControl, true)
                 }
                 VStack(spacing: 0) {
-                    tabs
+                    tabs.focusedValue(\.browserControl, true)
                     Divider()
-                    commandBar
+                    commandBar.focusedValue(\.browserControl, true)
                     Divider()
                     itemPane
                     Divider()
                     if transfersVisible, actions.transfer != nil {
                         TransferPanel(actions: actions) { transfersVisible = false }
+                            .focusedValue(\.browserControl, true)
                         Divider()
                     }
-                    statusBar
+                    statusBar.focusedValue(\.browserControl, true)
                 }
                 .frame(minWidth: workspace.isSplit ? 355 : 430, maxWidth: .infinity, maxHeight: .infinity)
                 if inspectorVisible && !workspace.isSplit {
                     inspector.frame(minWidth: 190, idealWidth: 260, maxWidth: 410)
+                        .focusedValue(\.browserControl, true)
                 }
             }
         }
         .font(textSize == .standard ? nil : .system(size: 13 + textSize.adjustment))
         .background(KeyboardBridge(windowsKeys: windowsKeys, acceptsInput: acceptsKeyboard,
+                                   controlFocused: controlFocused == true,
                                    shortcuts: BrowserShortcut.load(shortcutData),
                                    activate: { workspace.select(side) },
                                    perform: perform, prefix: selectPrefix))
@@ -458,6 +476,7 @@ struct BrowserView: View {
             workspace.select(side)
             select(entry, modifiers: .control)
             if model.viewMode == .details { detailsViewport.focusTable() }
+            else { focus = .items }
             return true
         }))
         .onPreferenceChange(RowFramesKey.self) { rowFrames = $0 }
@@ -479,11 +498,16 @@ struct BrowserView: View {
                     return intersects ? item.key : nil
                 })
             }
-            .onEnded { _ in selectionRectangle = nil })
+            .onEnded { _ in
+                if selectionRectangle != nil && model.viewMode != .details { focus = .items }
+                selectionRectangle = nil
+            })
         .onDrop(of: [UTType.fileURL.identifier, BrowserDragSelection.type], delegate: BrowserDropTarget(
             proposal: proposeDrop, exited: { dropOperation = nil }, receive: receiveDrop
         ))
         .contextMenu { folderMenu }
+        .focusable(model.viewMode != .details)
+        .focused($focus, equals: .items)
     }
 
     private func rowAt(_ point: CGPoint) -> URL? {
@@ -525,6 +549,7 @@ struct BrowserView: View {
                         ForEach(Array(zip(path.dropLast(), path.dropFirst())), id: \.0) { folder, child in
                             AncestorColumn(folder: folder, child: child, showHidden: model.showHidden,
                                            revision: actions.mutationRevision, open: model.openFolder)
+                                .focusedValue(\.browserControl, true)
                                 .frame(width: 185).id(folder)
                             Divider()
                         }
@@ -787,9 +812,11 @@ struct BrowserView: View {
             .background(dragFrame(for: entry.url))
             .contentShape(Rectangle())
             .gesture(TapGesture(count: 2).onEnded {
+                focus = .items
                 select(entry, modifiers: [])
                 activate([entry])
             }.exclusively(before: TapGesture().onEnded {
+                focus = .items
                 select(entry, modifiers: NSEvent.modifierFlags)
             }))
             .contextMenu {

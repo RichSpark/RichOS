@@ -118,6 +118,7 @@ struct BrowserShortcut: Hashable, Codable {
 struct KeyboardBridge: NSViewRepresentable {
     var windowsKeys: Bool
     var acceptsInput: () -> Bool
+    var controlFocused: Bool
     var shortcuts: [BrowserCommand: BrowserShortcut]
     var activate: () -> Void
     var perform: (BrowserCommand) -> Bool
@@ -128,6 +129,7 @@ struct KeyboardBridge: NSViewRepresentable {
     func updateNSView(_ view: KeyView, context: Context) {
         view.windowsKeys = windowsKeys
         view.acceptsInput = acceptsInput
+        view.controlFocused = controlFocused
         view.shortcuts = shortcuts
         view.activate = activate
         view.perform = perform
@@ -137,6 +139,7 @@ struct KeyboardBridge: NSViewRepresentable {
     final class KeyView: NSView {
         var windowsKeys = true
         var acceptsInput: () -> Bool = { false }
+        var controlFocused = false
         var shortcuts: [BrowserCommand: BrowserShortcut] = [:]
         var activate: (() -> Void)?
         var perform: ((BrowserCommand) -> Bool)?
@@ -188,6 +191,9 @@ struct KeyboardBridge: NSViewRepresentable {
             let modifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
             let chord = BrowserShortcut(event: event, modifiers: modifiers)
             let preset = BrowserShortcut.preset(windowsKeys)[chord]
+            if controlFocused && modifiers.isEmpty && (preset == .open || preset == .preview) {
+                return false
+            }
             if editing {
                 let primary: NSEvent.ModifierFlags = windowsKeys ? .control : .command
                 if modifiers == primary, let preset, [.address, .search].contains(preset), shortcuts[preset] == nil {
