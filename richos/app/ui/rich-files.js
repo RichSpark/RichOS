@@ -214,7 +214,16 @@
     scrub.setAttribute("aria-label", "Seek in " + file.name);
     if (!youtube) {
       track.appendChild(scrub);
-      scrub.addEventListener("change", () => seek(Number(scrub.value), scrub, false));
+      const seekFromScrub = () => seek(Number(scrub.value), scrub, false);
+      let pressedValue;
+      scrub.addEventListener("pointerdown", () => { pressedValue = scrub.value; });
+      scrub.addEventListener("pointercancel", () => { pressedValue = undefined; });
+      scrub.addEventListener("change", seekFromScrub);
+      // A pointer click at the current slider value does not emit change.
+      scrub.addEventListener("click", () => {
+        if (pressedValue === scrub.value) seekFromScrub();
+        pressedValue = undefined;
+      });
     }
     let missing = file.exists === false;
     const setMissing = () => {

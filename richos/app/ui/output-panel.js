@@ -753,11 +753,11 @@
     box.dataset.key = key;
     box.dataset.preview = a.view;
     if (a.why) box.dataset.why = a.why;
+    else delete box.dataset.why;
     if (state.media?.id === f.id && a.view === "none") {
       state.media.missing = a.why === "missing" || a.why === "refused";
       publishMedia(state.media);
     }
-    else delete box.dataset.why;
     const size = typeof a.bytes === "number" ? humanSize(a.bytes) : typeof f.bytes === "number" ? humanSize(f.bytes) : "";
     const ext = extension(f.name);
     switch (a.view) {
@@ -2382,7 +2382,7 @@
       const media = state.media;
       if (media?.id === file.id) {
         const active = mediaSnapshot().active;
-        if (file.toggle && active === file.startMs) {
+        if (file.toggle && !media.player?.ended && active === file.startMs) {
           media.wantsPlay = !media.wantsPlay;
         } else {
           media.target = file.startMs;

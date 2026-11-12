@@ -189,6 +189,7 @@ fun RichMediaDock(card: RichFileCard, onEvent: (UiEvent) -> Unit) {
     val player = remember(path) { VideoView(context) }
     var media by remember(path) { mutableStateOf<MediaPlayer?>(null) }
     var playing by remember(path) { mutableStateOf(false) }
+    var ended by remember(path) { mutableStateOf(false) }
     var failed by remember(path) { mutableStateOf(false) }
     var position by remember(path) { mutableLongStateOf(selection.startMs) }
     var firstTap by remember(path) { mutableStateOf(true) }
@@ -199,6 +200,7 @@ fun RichMediaDock(card: RichFileCard, onEvent: (UiEvent) -> Unit) {
             position = player.currentPosition.toLong()
             playing = false
         } else if (owner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
+            ended = false
             player.start()
             playing = true
         }
@@ -209,7 +211,11 @@ fun RichMediaDock(card: RichFileCard, onEvent: (UiEvent) -> Unit) {
         }
         owner.lifecycle.addObserver(lifecycle)
         player.setOnPreparedListener { media = it }
-        player.setOnCompletionListener { playing = false; position = moments.durationMs }
+        player.setOnCompletionListener {
+            playing = false
+            ended = true
+            position = moments.durationMs
+        }
         player.setOnErrorListener { _, _, _ -> failed = true; playing = false; true }
         player.setVideoPath(path)
         onDispose {
@@ -221,10 +227,11 @@ fun RichMediaDock(card: RichFileCard, onEvent: (UiEvent) -> Unit) {
         val prepared = media ?: return@LaunchedEffect
         if (!foreground.value.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) return@LaunchedEffect
         val active = moments.points.lastOrNull { it.startMs <= position }
-        if (!firstTap && active?.startMs == selection.startMs) {
+        if (!firstTap && !ended && active?.startMs == selection.startMs) {
             toggle()
         } else {
             firstTap = false
+            ended = false
             prepared.seekTo(selection.startMs, MediaPlayer.SEEK_CLOSEST)
             position = selection.startMs
             player.start()

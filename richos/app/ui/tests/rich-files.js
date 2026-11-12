@@ -358,11 +358,30 @@ async function main() {
       await p.waitForFunction(() => document.querySelector("#op-viewer audio")?.paused);
       assertEqual(await local.getAttribute("aria-current"), "true", "the paused moment stays selected");
       assert((await p.locator("#op-sub").textContent()).includes("Customer focus"), "the panel names the current moment");
-      await p.locator('.tl-media:has(.tl-media-moment[aria-current="true"]) input[type="range"]').fill("26000");
+      const scrub = p.locator('.tl-media input[type="range"]');
+      await scrub.fill("26000");
       await p.waitForFunction(() => {
         const audio = document.querySelector("#op-viewer audio");
         return audio && !audio.paused && !audio.seeking && audio.currentTime >= 26 && audio.currentTime < 28;
       });
+      const wave = await scrub.boundingBox();
+      const position = { x: wave.width * 0.18, y: wave.height / 2 };
+      await scrub.click({ position });
+      const requested = Number(await scrub.inputValue()) / 1000;
+      const playingFrom = (time) => {
+        const audio = document.querySelector("#op-viewer audio");
+        return audio && !audio.paused && !audio.seeking && audio.currentTime >= time && audio.currentTime < time + 3;
+      };
+      await p.waitForFunction(playingFrom, requested);
+      await player.evaluate((audio) => { audio.currentTime = 70; });
+      await p.waitForFunction(playingFrom, 70);
+      assertEqual(Number(await scrub.inputValue()) / 1000, requested, "the focused slider still holds the clicked value");
+      await scrub.click({ position });
+      await p.waitForFunction(playingFrom, requested);
+      await player.evaluate((audio) => { audio.currentTime = audio.duration; });
+      await p.waitForFunction(() => document.querySelector("#op-viewer audio")?.ended);
+      await local.click();
+      await p.waitForFunction(playingFrom, 53.28);
       await p.locator("#op-close").click();
       await player.waitFor({ state: "detached" });
       assertEqual(await p.locator(".tl-media-playhead:visible").count(), 0, "closing Output clears the playhead");

@@ -205,6 +205,7 @@ struct RichMediaPlayer: View {
     @Environment(\.scenePhase) private var phase
     @State private var player = AVPlayer()
     @State private var running = false
+    @State private var ended = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -245,13 +246,16 @@ struct RichMediaPlayer: View {
             seek(viewer.selection.startMs)
         }
         .onChange(of: viewer.selection) { _, selection in
-            if viewer.file.moments?.points.last(where: { $0.startMs <= milliseconds })?.startMs == selection.startMs {
+            if !ended, viewer.file.moments?.points.last(where: { $0.startMs <= milliseconds })?.startMs == selection.startMs {
                 toggle()
             } else {
                 seek(selection.startMs)
             }
         }
         .onReceive(player.publisher(for: \.timeControlStatus)) { running = $0 != .paused }
+        .onReceive(NotificationCenter.default.publisher(for: AVPlayerItem.didPlayToEndTimeNotification)) { note in
+            if (note.object as? AVPlayerItem) === player.currentItem { ended = true }
+        }
         .onChange(of: phase) { _, phase in if phase != .active { player.pause() } }
         .onDisappear { player.pause(); player.replaceCurrentItem(with: nil) }
     }
@@ -262,13 +266,15 @@ struct RichMediaPlayer: View {
     }
 
     private func seek(_ milliseconds: Int) {
+        ended = false
         let time = CMTime(value: Int64(milliseconds), timescale: 1000)
         player.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero)
         if phase == .active { player.play() }
     }
 
     private func toggle() {
-        if player.timeControlStatus == .paused, phase == .active { player.play() }
+        if ended { seek(0) }
+        else if player.timeControlStatus == .paused, phase == .active { player.play() }
         else { player.pause() }
     }
 }
