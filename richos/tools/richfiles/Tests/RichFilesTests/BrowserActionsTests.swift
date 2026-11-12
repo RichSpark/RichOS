@@ -117,6 +117,50 @@ final class BrowserActionsTests: XCTestCase {
     }
 
     @MainActor
+    func testTransferQueuePausesForAConflictThenContinuesOnRequest() async throws {
+        try await withFixture { root, destination, board in
+            let first = try write("incoming", named: "Conflict.txt", in: root)
+            let existing = try write("existing", named: "Conflict.txt", in: destination)
+            let second = try write("next file", named: "Next.png", in: root)
+            let actions = BrowserActions(pasteboard: board)
+            try await perform(actions) {
+                actions.transfer([first], into: destination, move: false)
+                actions.transfer([second], into: destination, move: false)
+                XCTAssertEqual(actions.queuedTransfers.count, 1)
+            }
+            XCTAssertTrue(actions.queuePaused)
+            XCTAssertFalse(FileManager.default.fileExists(atPath: destination.appendingPathComponent("Next.png").path))
+            XCTAssertEqual(try contents(existing.url), "existing")
+
+            try await perform(actions) { actions.continueQueue() }
+            XCTAssertTrue(actions.queuedTransfers.isEmpty)
+            XCTAssertFalse(actions.queuePaused)
+            XCTAssertEqual(try contents(destination.appendingPathComponent("Next.png")), "next file")
+            XCTAssertEqual(try contents(second.url), "next file")
+        }
+    }
+
+    @MainActor
+    func testHostSwitchDropsWaitingTransfersAndPreservesTheirSources() async throws {
+        try await withFixture { root, destination, board in
+            let first = try write("incoming", named: "Conflict.txt", in: root)
+            _ = try write("existing", named: "Conflict.txt", in: destination)
+            let waiting = try write("waiting", named: "Waiting.png", in: root)
+            let actions = BrowserActions(pasteboard: board)
+            try await perform(actions) {
+                actions.transfer([first], into: destination, move: false)
+                actions.transfer([waiting], into: destination, move: true)
+            }
+            XCTAssertEqual(actions.queuedTransfers.count, 1)
+            try await actions.settleForHostSwitch()
+            XCTAssertTrue(actions.queuedTransfers.isEmpty)
+            XCTAssertFalse(actions.busy)
+            XCTAssertEqual(try contents(waiting.url), "waiting")
+            XCTAssertFalse(FileManager.default.fileExists(atPath: destination.appendingPathComponent("Waiting.png").path))
+        }
+    }
+
+    @MainActor
     func testCutSkipKeepBothAndUndoPreserveTheExistingItem() async throws {
         try await withFixture { root, destination, board in
             let source = try write("selected", named: "Report.txt", in: root)

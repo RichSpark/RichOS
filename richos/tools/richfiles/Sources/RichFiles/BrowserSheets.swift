@@ -151,7 +151,7 @@ struct FileShelfSheet: View {
         }.padding(16).frame(width: 560, height: 365)
     }
 
-    private var transferDisabled: Bool { actions.shelf.isEmpty || actions.busy || readOnly }
+    private var transferDisabled: Bool { actions.shelf.isEmpty || !actions.canScheduleTransfer || readOnly }
 
     private func transfer(move: Bool) {
         actions.transferShelf(to: destination, move: move)
@@ -993,26 +993,52 @@ struct TransferSheet: View {
                 }
                 if transfer.verifyingCopy { ProgressView("Verifying the copied file…").controlSize(.small) }
                 if transfer.cancelled { Text("Transfer cancelled.") }
-                List(transfer.issues) { issue in
-                    VStack(alignment: .leading, spacing: 5) {
-                        Text(issue.name).font(.body.weight(.medium))
-                        Text(issue.message).font(.callout).foregroundStyle(.secondary)
-                        if let conflict = issue.conflict {
-                            HStack(alignment: .top, spacing: 16) {
-                                conflictDetails("Incoming", conflict.incoming)
-                                conflictDetails("Existing", conflict.existing)
+                List {
+                    ForEach(transfer.issues) { issue in
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text(issue.name).font(.body.weight(.medium))
+                            Text(issue.message).font(.callout).foregroundStyle(.secondary)
+                            if let conflict = issue.conflict {
+                                HStack(alignment: .top, spacing: 16) {
+                                    conflictDetails("Incoming", conflict.incoming)
+                                    conflictDetails("Existing", conflict.existing)
+                                }
+                                if conflict.reviewed != nil {
+                                    Button("Replace File…") {
+                                        replacement = issue
+                                        confirmingReplacement = true
+                                    }.disabled(actions.busy).buttonStyle(.borderless)
+                                }
                             }
-                            if conflict.reviewed != nil {
-                                Button("Replace File…") {
-                                    replacement = issue
-                                    confirmingReplacement = true
-                                }.disabled(actions.busy).buttonStyle(.borderless)
+                        }
+                    }
+                    if !actions.queuedTransfers.isEmpty {
+                        Section("Waiting") {
+                            ForEach(actions.queuedTransfers) { item in
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        Text(item.title)
+                                        Text(item.folder.path).font(.caption).foregroundStyle(.secondary)
+                                            .lineLimit(1).truncationMode(.head)
+                                        switch item.state {
+                                        case .preparing: Text("Checking files…").font(.caption)
+                                        case .unavailable(let problem): Text(problem).font(.caption)
+                                        case .ready: EmptyView()
+                                        }
+                                    }
+                                    Spacer()
+                                    Button("Remove") { actions.removeQueuedTransfer(item.id) }
+                                        .buttonStyle(.borderless)
+                                }
                             }
                         }
                     }
                 }
                 HStack {
                     if transfer.running { Button("Cancel Transfer") { actions.cancelTransfer() } }
+                    if actions.queuePaused && !actions.busy {
+                        Button("Continue Queue") { actions.continueQueue() }
+                    }
                     if actions.canRetryTransfer && !actions.busy {
                         Button("Retry") { actions.retryTransfer() }
                         Button("Retry, Keep Both") { actions.retryTransfer(conflict: .keepBoth) }

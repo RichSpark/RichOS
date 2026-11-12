@@ -95,6 +95,39 @@ struct BrowserTransferRequest: Sendable {
     let destination: BrowserTransferDestination?
 }
 
+struct BrowserQueuedTransfer: Identifiable, Sendable {
+    enum State: Sendable {
+        case preparing
+        case ready(BrowserTransferRequest)
+        case unavailable(String)
+    }
+
+    let id = UUID()
+    let folder: URL
+    let move: Bool
+    let total: Int
+    var state = State.preparing
+
+    var title: String { move ? "Move \(total) items" : "Copy \(total) items" }
+}
+
+extension BrowserTransferRequest {
+    func pinned() throws -> Self {
+        let target = try destination ?? BrowserTransferDestination(folder: folder)
+        try target.verify()
+        let captured = try sources.map { source in
+            try Task.checkCancellation()
+            let selected = try source.reference()
+            guard try FileReference(url: selected.url) == selected else {
+                throw FileOperationError.sourceChanged(selected.url)
+            }
+            return BrowserTransferSource.captured(selected)
+        }
+        return Self(sources: captured, folder: target.url, move: move, conflict: conflict,
+                    clipboardGeneration: clipboardGeneration, destination: target)
+    }
+}
+
 struct BrowserTransferDestination: Sendable {
     let url: URL
     private let reference: FileReference?

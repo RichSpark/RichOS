@@ -330,7 +330,7 @@ struct BrowserView: View {
                 Button("Paste, Skip Conflicts") { actions.paste(into: model.folder) }
                 Button("Paste, Keep Both") { actions.paste(into: model.folder, conflict: .keepBoth) }
             } label: { Label("Paste", systemImage: "clipboard") }
-                .disabled(actions.busy || model.currentVolume?.isReadOnly == true)
+                .disabled(!actions.canScheduleTransfer || model.currentVolume?.isReadOnly == true)
             control("Move to Trash", "trash") { _ = perform(.trash) }.disabled(model.selected.isEmpty || actions.busy)
             Menu {
                 folderMenu
@@ -687,7 +687,8 @@ struct BrowserView: View {
             Divider()
             Button("Cut") { withReferences(entries) { actions.copy($0, cut: true) } }
             Button("Copy") { withReferences(entries) { actions.copy($0) } }
-            Button("Paste") { actions.paste(into: model.folder) }.disabled(actions.busy)
+            Button("Paste") { actions.paste(into: model.folder) }
+                .disabled(!actions.canScheduleTransfer || model.currentVolume?.isReadOnly == true)
             Button("Create ZIP…") {
                 let destination = model.folder
                 withReferences(entries) { sheet = .createZip($0, destination) }
@@ -758,7 +759,8 @@ struct BrowserView: View {
     private var folderMenu: some View {
         creationMenu
         Divider()
-        Button("Paste") { actions.paste(into: model.folder) }.disabled(actions.busy)
+        Button("Paste") { actions.paste(into: model.folder) }
+                .disabled(!actions.canScheduleTransfer || model.currentVolume?.isReadOnly == true)
         Button("Copy Current Path") { copyPaths([model.folder]) }
         Button("Expand to Current Folder") { expandToCurrentFolder() }
         Button("Workspaces…") { sheet = .workspaces }
@@ -801,7 +803,9 @@ struct BrowserView: View {
             if model.currentVolume?.isReadOnly == true { Text("Read-only") }
             Spacer(minLength: 4)
             if let transfer = actions.transfer {
-                Button(transfer.running ? "Transfers \(transfer.completed)/\(transfer.total)" : "Transfers") {
+                let queued = actions.queuedTransfers.count
+                let title = transfer.running ? "Transfers \(transfer.completed)/\(transfer.total)" : "Transfers"
+                Button(queued > 0 ? title + " · \(queued) queued" : title) {
                     sheet = .transfers
                 }.buttonStyle(.borderless)
             }
@@ -1089,7 +1093,8 @@ struct BrowserView: View {
     }
 
     private func receiveDrop(_ providers: [NSItemProvider]) -> Bool {
-        guard !providers.isEmpty, !actions.busy else { return false }
+        guard !providers.isEmpty, actions.canScheduleTransfer,
+              model.currentVolume?.isReadOnly != true else { return false }
         let destination = model.folder
         let dragged = localDrag
         localDrag = nil
@@ -1202,7 +1207,8 @@ struct BrowserView: View {
         case .up: return model.folder.path != "/"
         case .undo: return actions.undoName != nil && !actions.busy
         case .redo: return actions.redoName != nil && !actions.busy
-        case .paste, .newFolder: return !actions.busy && model.currentVolume?.isReadOnly != true
+        case .paste: return actions.canScheduleTransfer && model.currentVolume?.isReadOnly != true
+        case .newFolder: return !actions.busy && model.currentVolume?.isReadOnly != true
         case .closeTab: return model.tabs.count > 1 || hostOpenWindow == nil
         case .switchPane: return workspace.isSplit
         default: return true

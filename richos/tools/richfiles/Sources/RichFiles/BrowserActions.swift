@@ -25,6 +25,8 @@ final class BrowserActions: ObservableObject {
     @Published private(set) var busy = false
     @Published private(set) var transfer: BrowserTransfer?
     @Published private(set) var canRetryTransfer = false
+    @Published private(set) var queuedTransfers: [BrowserQueuedTransfer] = []
+    @Published private(set) var queuePaused = false
     @Published private(set) var shelf: [FileReference] = []
     @Published private(set) var cutURLs: Set<URL> = []
     @Published private(set) var trashItems: [BrowserTrashItem] = []
@@ -39,6 +41,8 @@ final class BrowserActions: ObservableObject {
     private let recoveryURL: URL?
     private var clipboard: ClipboardSelection?
     private var transferTask: Task<Void, Never>?
+    private var preparingQueue: [UUID: Task<Void, Never>] = [:]
+    private var settlingTransfer = false
     private var retryRequest: BrowserTransferRequest?
     private var undoHistory: [HistoryGroup] = []
     private var redoHistory: [HistoryGroup] = []
@@ -101,11 +105,13 @@ final class BrowserActions: ObservableObject {
         status = cut ? "Cut \(itemCount(sources.count))." : "Copied \(itemCount(sources.count)) to the clipboard."
     }
 
+    var canScheduleTransfer: Bool { !settlingTransfer && (!busy || transfer?.running == true) }
+
     func paste(into folder: URL, conflict: BrowserConflictPolicy = .skip) {
-        guard !busy else { return }
+        guard canScheduleTransfer else { return }
         refreshClipboard()
         if let clipboard {
-            startTransfer(BrowserTransferRequest(
+            submitTransfer(BrowserTransferRequest(
                 sources: clipboard.sources.map(BrowserTransferSource.captured),
                 folder: folder, move: clipboard.cut, conflict: conflict,
                 clipboardGeneration: clipboard.cut ? clipboard.generation : nil, destination: nil
@@ -124,7 +130,7 @@ final class BrowserActions: ObservableObject {
             status = "The clipboard contains no files."
             return
         }
-        startTransfer(BrowserTransferRequest(
+        submitTransfer(BrowserTransferRequest(
             sources: urls.map(BrowserTransferSource.clipboard), folder: folder,
             move: false, conflict: conflict, clipboardGeneration: nil, destination: nil
         ))
@@ -134,7 +140,7 @@ final class BrowserActions: ObservableObject {
         _ sources: [FileReference], into folder: URL, move: Bool,
         conflict: BrowserConflictPolicy = .skip
     ) {
-        startTransfer(BrowserTransferRequest(
+        submitTransfer(BrowserTransferRequest(
             sources: unique(sources).map(BrowserTransferSource.captured),
             folder: folder, move: move, conflict: conflict,
             clipboardGeneration: nil, destination: nil
@@ -155,7 +161,7 @@ final class BrowserActions: ObservableObject {
     }
 
     func transferShelf(to destination: BrowserTransferDestination, move: Bool) {
-        startTransfer(BrowserTransferRequest(
+        submitTransfer(BrowserTransferRequest(
             sources: shelf.map(BrowserTransferSource.captured), folder: destination.url,
             move: move, conflict: .skip, clipboardGeneration: nil, destination: destination
         ))
@@ -168,11 +174,67 @@ final class BrowserActions: ObservableObject {
     }
 
     func settleForHostSwitch() async throws {
+        guard !busy || transferTask != nil else { throw WorkspaceHandoff.HandoffError.busy }
+        settlingTransfer = true
+        defer { settlingTransfer = false }
+        let pendingCount = queuedTransfers.count
+        for task in preparingQueue.values { task.cancel() }
+        preparingQueue.removeAll()
+        queuedTransfers.removeAll()
+        queuePaused = false
         if let running = transferTask {
             cancelTransfer()
             await running.value
         }
-        guard !busy else { throw WorkspaceHandoff.HandoffError.busy }
+        if pendingCount > 0 { status += " Stopped \(itemCount(pendingCount)) in the transfer queue." }
+    }
+
+    func removeQueuedTransfer(_ id: UUID) {
+        preparingQueue.removeValue(forKey: id)?.cancel()
+        queuedTransfers.removeAll { $0.id == id }
+        if queuedTransfers.isEmpty { queuePaused = false }
+        startNextQueuedTransfer()
+    }
+
+    func continueQueue() {
+        queuePaused = false
+        startNextQueuedTransfer()
+    }
+
+    private func submitTransfer(_ request: BrowserTransferRequest) {
+        guard canScheduleTransfer, !request.sources.isEmpty else { return }
+        if !busy && queuedTransfers.isEmpty {
+            startTransfer(request)
+            return
+        }
+        let item = BrowserQueuedTransfer(folder: request.folder, move: request.move, total: request.sources.count)
+        queuedTransfers.append(item)
+        status = "Transfer queued."
+        preparingQueue[item.id] = Task { [weak self] in
+            let worker = Task.detached(priority: .utility) { Result { try request.pinned() } }
+            let result = await withTaskCancellationHandler { await worker.value } onCancel: { worker.cancel() }
+            guard !Task.isCancelled, let self,
+                  let index = self.queuedTransfers.firstIndex(where: { $0.id == item.id }) else { return }
+            self.preparingQueue.removeValue(forKey: item.id)
+            switch result {
+            case .success(let ready): self.queuedTransfers[index].state = .ready(ready)
+            case .failure(let error): self.queuedTransfers[index].state = .unavailable(error.localizedDescription)
+            }
+            self.startNextQueuedTransfer()
+        }
+    }
+
+    private func startNextQueuedTransfer() {
+        guard !busy, !queuePaused, !settlingTransfer, let next = queuedTransfers.first else { return }
+        switch next.state {
+        case .preparing: return
+        case .unavailable:
+            queuePaused = true
+            status = "A queued transfer needs attention."
+        case .ready(let request):
+            queuedTransfers.removeFirst()
+            startTransfer(request)
+        }
     }
 
     func retryTransfer(conflict: BrowserConflictPolicy? = nil) {
@@ -294,6 +356,8 @@ final class BrowserActions: ObservableObject {
             changed: request.move ? !changed.isEmpty : succeeded > 0,
             undo: undo, trashChanges: recovered
         ), title: "Move")
+        queuePaused = !queuedTransfers.isEmpty && (result.progress.cancelled || !result.progress.issues.isEmpty)
+        startNextQueuedTransfer()
     }
 
     private func consumeCut(_ generation: Int?, moves: [BrowserCompletedMove]) -> Int? {
@@ -471,6 +535,7 @@ final class BrowserActions: ObservableObject {
                 issues = [status]
                 notifyMutation()
             }
+            startNextQueuedTransfer()
         }
     }
 
