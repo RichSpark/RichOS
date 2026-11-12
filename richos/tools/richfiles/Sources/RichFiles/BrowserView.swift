@@ -1148,7 +1148,10 @@ struct BrowserView: View {
                 if horizontal {
                     return lhs.minX == rhs.minX ? lhs.minY < rhs.minY : lhs.minX < rhs.minX
                 }
-                return lhs.minY == rhs.minY ? lhs.minX < rhs.minX : lhs.minY < rhs.minY
+                // Wrapped filenames change card heights while the cards share a row center.
+                let leftRow = mode == .icons ? lhs.midY : lhs.minY
+                let rightRow = mode == .icons ? rhs.midY : rhs.minY
+                return leftRow == rightRow ? lhs.minX < rhs.minX : leftRow < rightRow
             }
             if let first { model.recordViewport(first.key, in: folder, tab: tab, mode: mode) }
         }
