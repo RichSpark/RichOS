@@ -17,6 +17,7 @@ struct BrowserView: View {
     private let hostSwitchTitle: String?
     private let switchHost: () -> Void
     @AppStorage("richfiles.windowsKeys") private var windowsKeys = true
+    @AppStorage("richfiles.textSize") private var textSize = BrowserTextSize.standard
     @AppStorage("richfiles.shortcuts.v1") private var shortcutData = Data()
     @AppStorage("richfiles.sidebarVisible") private var sidebarVisible = true
     @AppStorage("richfiles.inspectorVisible") private var inspectorVisible = false
@@ -98,6 +99,7 @@ struct BrowserView: View {
                 }
             }
         }
+        .font(textSize == .standard ? nil : .system(size: 13 + textSize.adjustment))
         .background(KeyboardBridge(windowsKeys: windowsKeys, acceptsInput: acceptsKeyboard,
                                    shortcuts: BrowserShortcut.load(shortcutData),
                                    activate: { workspace.select(side) },
@@ -246,7 +248,7 @@ struct BrowserView: View {
                             }
                     }
                     Button { model.addFavorite(model.folder) } label: {
-                        Label("Pin Current Folder", systemImage: "plus").font(.callout)
+                        Label("Pin Current Folder", systemImage: "plus").font(textSize.font(.callout, size: 12))
                     }
                     .buttonStyle(.plain)
                     .padding(.vertical, 5)
@@ -267,10 +269,10 @@ struct BrowserView: View {
                             }
                     }
                     if !model.volumeStatus.isEmpty {
-                        Text(model.volumeStatus).font(.caption).foregroundStyle(.secondary)
+                        Text(model.volumeStatus).font(textSize.font(.caption, size: 11)).foregroundStyle(.secondary)
                     }
                     Button { sheet = .connect } label: {
-                        Label("Connect to Server", systemImage: "network").font(.callout)
+                        Label("Connect to Server", systemImage: "network").font(textSize.font(.callout, size: 12))
                     }
                     .buttonStyle(.plain)
                     .padding(.vertical, 5)
@@ -300,7 +302,7 @@ struct BrowserView: View {
     }
 
     private func sideHeading(_ label: String) -> some View {
-        Text(label).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+        Text(label).font(textSize.font(.caption, size: 11).weight(.semibold)).foregroundStyle(.secondary)
             .padding(.bottom, 3).accessibilityAddTraits(.isHeader)
     }
 
@@ -508,7 +510,7 @@ struct BrowserView: View {
         VStack(spacing: 8) {
             Image(systemName: model.searchActive ? "magnifyingglass" : "folder").font(.system(size: 32))
             Text(model.isDisconnected ? "Volume disconnected" : (model.searchActive ? "No matching files" : "No items to show"))
-            if !model.status.isEmpty { Text(model.status).font(.callout).multilineTextAlignment(.center) }
+            if !model.status.isEmpty { Text(model.status).font(textSize.font(.callout, size: 12)).multilineTextAlignment(.center) }
         }.foregroundStyle(.secondary).padding(24)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -527,7 +529,7 @@ struct BrowserView: View {
                             Divider()
                         }
                         VStack(alignment: .leading, spacing: 0) {
-                            Text(model.folder.lastPathComponent).font(.headline).lineLimit(1).padding(8)
+                            Text(model.folder.lastPathComponent).font(textSize.font(.headline, size: 13).weight(.semibold)).lineLimit(1).padding(8)
                             Divider()
                             if model.entries.isEmpty && !model.busy {
                                 emptyItems
@@ -599,7 +601,9 @@ struct BrowserView: View {
                                 selectable(entry) {
                                     VStack(spacing: 4) {
                                         FileThumbnail(entry: entry, side: 62)
-                                        Text(entry.name).font(.caption).lineLimit(1).truncationMode(.middle)
+                                        Text(entry.name)
+                                            .font(textSize.font(.caption, size: 11))
+                                            .lineLimit(1).truncationMode(.middle)
                                         if model.searchActive { resultLocation(entry) }
                                     }.frame(width: 106).padding(3)
                                 }
@@ -607,7 +611,7 @@ struct BrowserView: View {
                         }.padding(6)
                     }
                     .onPreferenceChange(RowFramesKey.self, perform: viewportObserver(viewport, mode: .gallery))
-                }.frame(height: model.searchActive ? 126 : 109)
+                }.frame(height: (model.searchActive ? 126 : 109) + textSize.adjustment * 2)
                     .accessibilityLabel("Gallery thumbnails")
                     .onAppear { restoreScroll(scroll, anchor: .leading) }
                     .onChange(of: selectionCursor) { if let url = $0 { scroll.scrollTo(url) } }
@@ -696,7 +700,8 @@ struct BrowserView: View {
 
     private var compactList: some View {
         GeometryReader { geometry in
-            let rowHeight: CGFloat = model.searchActive ? 33 : 22
+            let rowHeight: CGFloat = (model.searchActive ? 33 : 22) +
+                textSize.adjustment * (model.searchActive ? 2 : 1)
             let rows = max(1, Int((geometry.size.height - 10) / rowHeight))
             let entries = model.entries
             let columns = (entries.count + rows - 1) / rows
@@ -712,9 +717,9 @@ struct BrowserView: View {
                                         VStack(alignment: .leading, spacing: 1) {
                                             nameLabel(entry)
                                             if model.searchActive {
-                                                resultLocation(entry, font: .system(size: 10))
+                                                resultLocation(entry, font: .system(size: 10 + textSize.adjustment))
                                             }
-                                        }.frame(width: 240, alignment: .leading)
+                                        }.frame(width: 240 + textSize.adjustment * 5, alignment: .leading)
                                     }.frame(height: rowHeight)
                                 }
                             }.id(column)
@@ -938,14 +943,14 @@ struct BrowserView: View {
 
     private var inspector: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Preview").font(.headline)
+            Text("Preview").font(textSize.font(.headline, size: 13).weight(.semibold))
             if model.selectedEntries.count == 1, let entry = model.selectedEntries.first {
                 if entry.kind == .directory {
                     FileThumbnail(entry: entry, side: 110)
                 } else {
                     NativePreview(entry: entry).frame(minHeight: 150, maxHeight: .infinity)
                 }
-                Text(entry.name).font(.headline).textSelection(.enabled)
+                Text(entry.name).font(textSize.font(.headline, size: 13).weight(.semibold)).textSelection(.enabled)
                 Text(entry.typeDescription ?? "File").foregroundStyle(.secondary)
                 if let size = entry.size { Text(formattedBytes(size)).foregroundStyle(.secondary) }
                 Button("Properties") { sheet = .properties(entry) }
@@ -992,7 +997,7 @@ struct BrowserView: View {
             let status = !feedback.isEmpty ? feedback : actions.status
             if !status.isEmpty { Text(status).lineLimit(1).truncationMode(.tail).help(status) }
         }
-        .font(.caption).foregroundStyle(.secondary)
+        .font(textSize.font(.caption, size: 11)).foregroundStyle(.secondary)
         .padding(.horizontal, 9).padding(.vertical, 5)
         .background(.bar)
     }

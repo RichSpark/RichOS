@@ -300,8 +300,29 @@ struct BrowserCommands: Commands {
     }
 }
 
+enum BrowserTextSize: Int, CaseIterable {
+    case standard = 0
+    case large = 3
+    case extraLarge = 6
+
+    var title: String {
+        switch self {
+        case .standard: return "Standard"
+        case .large: return "Large"
+        case .extraLarge: return "Extra Large"
+        }
+    }
+
+    var adjustment: CGFloat { CGFloat(rawValue) }
+
+    func font(_ style: Font, size: CGFloat) -> Font {
+        self == .standard ? style : .system(size: size + adjustment)
+    }
+}
+
 struct RichFilesSettings: View {
     @AppStorage("richfiles.windowsKeys") private var windowsKeys = true
+    @AppStorage("richfiles.textSize") private var textSize = BrowserTextSize.standard
     @AppStorage("richfiles.restoreSession") private var restoreSession = false
     @AppStorage("richfiles.shortcuts.v1") private var shortcutData = Data()
     @AppStorage("richfiles.previousFolderHandler") private var previousHandler = ""
@@ -323,6 +344,14 @@ struct RichFilesSettings: View {
     var body: some View {
         Form {
             Toggle("Restore tabs when RichFiles reopens", isOn: $restoreSession)
+            Section("Display") {
+                Picker("Browser Text Size", selection: $textSize) {
+                    ForEach(BrowserTextSize.allCases, id: \.self) { size in
+                        Text(size.title).tag(size)
+                    }
+                }
+                .accessibilityLabel("Browser Text Size")
+            }
             Section("Keyboard") {
                 Picker("Shortcuts", selection: $windowsKeys) {
                     Text("Windows (Control)").tag(true)
