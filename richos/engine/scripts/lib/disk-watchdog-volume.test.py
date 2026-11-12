@@ -92,6 +92,18 @@ class Consumers(unittest.TestCase):
             with patch.object(wd, "on_volume", return_value=False):
                 self.assertEqual(wd.walk_roots(self.tmp, "/System/Volumes/Data"), [])
 
+    def test_a_subfolder_of_a_marked_cargo_target_is_ours(self):
+        """Review rv-20261112T231306Z-0b3e30af-4a55: the walk names target/debug/deps, and the
+        CACHEDIR.TAG sits on target. Its subfolders inherit the mark."""
+        target = os.path.join(self.tmp, "cache-root", "cargo", "target")
+        deps = os.path.join(target, "debug", "deps")
+        os.makedirs(deps)
+        self.assertFalse(wd.is_ours(deps))
+        Path(target, "CACHEDIR.TAG").write_text("Signature: 8a477f597d28d172789f06886806bc55\n")
+        self.assertTrue(wd.is_ours(deps))
+        self.assertTrue(wd.is_ours(target))
+        self.assertFalse(wd.is_ours(os.path.join(self.tmp, "cache-root")))
+
     def test_our_cargo_output_counts_as_ours(self):
         self.assertTrue(wd.is_ours(self.deep))
         self.assertFalse(wd.is_ours(os.path.join(self.root, "small")))

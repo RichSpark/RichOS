@@ -270,12 +270,29 @@ def reclaim_under_floor(reaper_cmd, prev, now, volumes):
     return {"epoch": now, "exit": code, "verdict": tail[0][:300], "free_before": before}
 
 
+def marked_cache(path):
+    """True when `path` or a folder above it carries CACHEDIR.TAG, the mark Cargo writes at the
+    top of its target folder: the walk names target/debug/deps, and that subfolder is ours too
+    (review rv-20261112T231306Z-0b3e30af-4a55). The climb stops at a mount and at any folder
+    macOS protects or that holds one (the home folder, ~/Library, /), never looking inside it."""
+    cur = os.path.realpath(path)
+    while True:
+        if foreign_app_data.entering(cur):
+            return False
+        if os.path.isfile(os.path.join(cur, "CACHEDIR.TAG")):
+            return True
+        parent = os.path.dirname(cur)
+        if parent == cur or os.path.ismount(cur):
+            return False
+        cur = parent
+
+
 def is_ours(path):
     """True for a folder RichOS's own builds and tools make: Cargo output, anything under the
     nightly's folder or the cleanup's own state. Our build output counts as ours (2026-11-10: the
     alert called a disk full of our own Cargo output "other")."""
     path = expand(path)
-    if os.path.isfile(os.path.join(path, "CACHEDIR.TAG")):
+    if marked_cache(path):
         return True
     for root in (env("SCRATCH_NIGHTLY_DIR", "~/.richos-nightly"),
                  os.path.join(state_base(), "workspace-retirement")):
