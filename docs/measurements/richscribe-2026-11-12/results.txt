@@ -1,0 +1,1339 @@
+{
+ "corpus": {
+  "dictations": 97,
+  "human": 63,
+  "synthesized": 28,
+  "room_only": 6,
+  "minutes": 79.1,
+  "reference_words": 10987,
+  "note": "No recording is committed. Human speech: LibriSpeech test-clean, 40 speakers. Room tone: a desk microphone capture."
+ },
+ "new_recognizer_at_654fb0d1a": {
+  "large-v3-turbo-q5_0": {
+   "total": {
+    "dictations": 97,
+    "words": 10987,
+    "S": 152,
+    "D": 15,
+    "I": 11,
+    "ended_in_unspoken_words": 0,
+    "lost_3_in_a_row": 0,
+    "words_from_room_alone": 0,
+    "no_punctuation": 11,
+    "lowercase_start": 27,
+    "styled": 91,
+    "pieces": 208,
+    "decode_ms": 361800,
+    "audio_seconds": 4744.8,
+    "word_error_percent": 1.62
+   },
+   "style_by_kind": {
+    "human": {
+     "no_punctuation": 11,
+     "lowercase_start": 27,
+     "of": 63
+    },
+    "synthesized": {
+     "no_punctuation": 0,
+     "lowercase_start": 0,
+     "of": 28
+    }
+   },
+   "notable": [],
+   "other_recordings": [
+    {
+     "recording": "tail-quiet-short-accurate-captured-openwispr-off",
+     "seconds": 32.32,
+     "pieces": 2,
+     "decode_ms": 3043
+    },
+    {
+     "recording": "boundary-quiet-accurate-captured-openwispr-off",
+     "seconds": 41.17,
+     "pieces": 1,
+     "decode_ms": 1683
+    },
+    {
+     "recording": "boundary-quiet-faster-captured-openwispr-off",
+     "seconds": 41.44,
+     "pieces": 1,
+     "decode_ms": 1715
+    },
+    {
+     "recording": "tail-quiet-short-accurate-captured-openwispr-off",
+     "seconds": 32.48,
+     "pieces": 2,
+     "decode_ms": 3091
+    },
+    {
+     "recording": "tail-quiet-short-faster-captured-openwispr-off",
+     "seconds": 32.27,
+     "pieces": 2,
+     "decode_ms": 3637
+    },
+    {
+     "recording": "tail-spoken-short-accurate-captured-openwispr-off",
+     "seconds": 33.36,
+     "pieces": 2,
+     "decode_ms": 6085
+    },
+    {
+     "recording": "tail-spoken-short-faster-captured-openwispr-off",
+     "seconds": 33.33,
+     "pieces": 2,
+     "decode_ms": 3486
+    }
+   ]
+  },
+  "small.en": {
+   "total": {
+    "dictations": 97,
+    "words": 10987,
+    "S": 186,
+    "D": 23,
+    "I": 14,
+    "ended_in_unspoken_words": 0,
+    "lost_3_in_a_row": 1,
+    "words_from_room_alone": 0,
+    "no_punctuation": 0,
+    "lowercase_start": 2,
+    "styled": 91,
+    "pieces": 208,
+    "decode_ms": 182202,
+    "audio_seconds": 4744.8,
+    "word_error_percent": 2.03
+   },
+   "style_by_kind": {
+    "human": {
+     "no_punctuation": 0,
+     "lowercase_start": 2,
+     "of": 63
+    },
+    "synthesized": {
+     "no_punctuation": 0,
+     "lowercase_start": 0,
+     "of": 28
+    }
+   },
+   "notable": [
+    {
+     "name": "human-121-24s-pause6.0at1-lead14.0",
+     "unspoken_ending": "",
+     "lost_run": 7,
+     "lost": "angor pain painful to hear hay fever",
+     "pieces": 2,
+     "ends": "o be raised to. Hedge. A fence. Heredity. The cause of all our faults."
+    }
+   ],
+   "other_recordings": [
+    {
+     "recording": "tail-quiet-short-accurate-captured-openwispr-off",
+     "seconds": 32.32,
+     "pieces": 2,
+     "decode_ms": 2282
+    },
+    {
+     "recording": "boundary-quiet-accurate-captured-openwispr-off",
+     "seconds": 41.17,
+     "pieces": 1,
+     "decode_ms": 1427
+    },
+    {
+     "recording": "boundary-quiet-faster-captured-openwispr-off",
+     "seconds": 41.44,
+     "pieces": 1,
+     "decode_ms": 1504
+    },
+    {
+     "recording": "tail-quiet-short-accurate-captured-openwispr-off",
+     "seconds": 32.48,
+     "pieces": 2,
+     "decode_ms": 1271
+    },
+    {
+     "recording": "tail-quiet-short-faster-captured-openwispr-off",
+     "seconds": 32.27,
+     "pieces": 2,
+     "decode_ms": 1189
+    },
+    {
+     "recording": "tail-spoken-short-accurate-captured-openwispr-off",
+     "seconds": 33.36,
+     "pieces": 2,
+     "decode_ms": 1374
+    },
+    {
+     "recording": "tail-spoken-short-faster-captured-openwispr-off",
+     "seconds": 33.33,
+     "pieces": 2,
+     "decode_ms": 1338
+    }
+   ]
+  }
+ },
+ "shipped_flags_and_alternatives": {
+  "large-v3-turbo-q5_0": {
+   "shipped (-nt, whole recording)": {
+    "total": {
+     "dictations": 97,
+     "words": 10987,
+     "S": 160,
+     "D": 598,
+     "I": 48,
+     "ended_in_unspoken_words": 11,
+     "lost_3_in_a_row": 38,
+     "words_from_room_alone": 8,
+     "no_punctuation": 3,
+     "lowercase_start": 8,
+     "styled": 91,
+     "decode_seconds": 582,
+     "word_error_percent": 7.34
+    },
+    "style_by_kind": {
+     "human": {
+      "no_punctuation": 3,
+      "lowercase_start": 8,
+      "of": 63
+     },
+     "synthesized": {
+      "no_punctuation": 0,
+      "lowercase_start": 0,
+      "of": 28
+     }
+    },
+    "notable": [
+     {
+      "name": "human-2300-20s-tail5.0",
+      "unspoken_ending": "thank you",
+      "lost_run": 1,
+      "lost": "3"
+     },
+     {
+      "name": "human-1284-27s-tail2.3",
+      "unspoken_ending": "",
+      "lost_run": 13,
+      "lost": "no 1 would disturb their little house even if anyone came so far"
+     },
+     {
+      "name": "human-260-29.2s-tail2.5",
+      "unspoken_ending": "",
+      "lost_run": 16,
+      "lost": "i take this as my answer and i leave the professor to bite his lips with"
+     },
+     {
+      "name": "human-4446-29.2s-tail2.5",
+      "unspoken_ending": "",
+      "lost_run": 6,
+      "lost": "irene burgoyne 1 of her family"
+     },
+     {
+      "name": "human-7176-31.5s-tail2.3",
+      "unspoken_ending": "",
+      "lost_run": 10,
+      "lost": "but such was his keenness that even while the wide"
+     },
+     {
+      "name": "human-4970-33s-tail1.0",
+      "unspoken_ending": "",
+      "lost_run": 45,
+      "lost": "he has no traditions to bind him or guide him and his impulse is to break away from the oc"
+     },
+     {
+      "name": "human-8224-45s-tail2.3",
+      "unspoken_ending": "",
+      "lost_run": 11,
+      "lost": "while the former foretold that the scottish covenanters were secretly forming"
+     },
+     {
+      "name": "human-1188-45s-tail2.3",
+      "unspoken_ending": "you",
+      "lost_run": 5,
+      "lost": "1 touch of black is"
+     },
+     {
+      "name": "human-2094-45s-tail2.3",
+      "unspoken_ending": "",
+      "lost_run": 8,
+      "lost": "in the middle of the floor some empty"
+     },
+     {
+      "name": "human-3575-58.5s-tail3.0",
+      "unspoken_ending": "",
+      "lost_run": 6,
+      "lost": "she a tory and clergymans daughter"
+     },
+     {
+      "name": "human-5105-58.5s-tail3.0",
+      "unspoken_ending": "",
+      "lost_run": 4,
+      "lost": "altogether being in no"
+     },
+     {
+      "name": "human-6930-58.5s-tail3.0",
+      "unspoken_ending": "",
+      "lost_run": 8,
+      "lost": "the count had thrown himself back on his"
+     },
+     {
+      "name": "human-8455-62s-tail12.0",
+      "unspoken_ending": "",
+      "lost_run": 37,
+      "lost": "by rose water we are quite satisfied now captain battleax said my wife quite satisfied sai"
+     },
+     {
+      "name": "human-1221-62s-tail12.0",
+      "unspoken_ending": "",
+      "lost_run": 3,
+      "lost": "hester could only"
+     },
+     {
+      "name": "human-4077-95s-tail2.3",
+      "unspoken_ending": "",
+      "lost_run": 38,
+      "lost": "their eyes were from the first turned in anticipation toward the evening sun not merely th"
+     },
+     {
+      "name": "human-5639-95s-tail2.3",
+      "unspoken_ending": "",
+      "lost_run": 7,
+      "lost": "it is the only amends i ask"
+     },
+     {
+      "name": "human-7127-95s-tail2.3",
+      "unspoken_ending": "",
+      "lost_run": 7,
+      "lost": "followed him closely to form a quadrille"
+     },
+     {
+      "name": "human-8555-185s-tail2.3",
+      "unspoken_ending": "",
+      "lost_run": 16,
+      "lost": "in 1 place at the head of the room was a raised platform for the royal"
+     },
+     {
+      "name": "human-1320-185s-tail2.3",
+      "unspoken_ending": "",
+      "lost_run": 15,
+      "lost": "after proceeding a few miles the progress of hawkeye who led the advance became more"
+     },
+     {
+      "name": "human-2830-185s-tail2.3",
+      "unspoken_ending": "",
+      "lost_run": 29,
+      "lost": "indeed he persecuted the church of christ for a long time do you suppose that god for the "
+     },
+     {
+      "name": "human-4507-40s-pause5.0at2-lead0.3",
+      "unspoken_ending": "",
+      "lost_run": 6,
+      "lost": "we have never understood this sort"
+     },
+     {
+      "name": "human-61-40s-pause5.0at2-lead0.3",
+      "unspoken_ending": "",
+      "lost_run": 7,
+      "lost": "sister nell do you hear these marvels"
+     },
+     {
+      "name": "human-7729-40s-pause5.0at2-lead0.3",
+      "unspoken_ending": "",
+      "lost_run": 6,
+      "lost": "the conspiracy had its secret combination"
+     },
+     {
+      "name": "human-4992-70s-pause12.0at5-lead0.3",
+      "unspoken_ending": "",
+      "lost_run": 9,
+      "lost": "to ask any more questions of you i believe"
+     },
+     {
+      "name": "human-6829-70s-pause12.0at5-lead0.3",
+      "unspoken_ending": "",
+      "lost_run": 13,
+      "lost": "it was a deliberate theft from his employers to protect a girl he"
+     },
+     {
+      "name": "human-5142-50s-pause20.0at0-lead0.3",
+      "unspoken_ending": "",
+      "lost_run": 4,
+      "lost": "the rest of you"
+     },
+     {
+      "name": "human-7021-50s-pause20.0at0-lead0.3",
+      "unspoken_ending": "",
+      "lost_run": 3,
+      "lost": "door step her"
+     },
+     {
+      "name": "human-8463-50s-pause20.0at0-lead0.3",
+      "unspoken_ending": "thank you",
+      "lost_run": 3,
+      "lost": "hollan john wesley"
+     },
+     {
+      "name": "human-1284-31.5s-sp-40-room-64",
+      "unspoken_ending": "",
+      "lost_run": 19,
+      "lost": "at the foot of the mountain that separated the country of the munchkins from the country o"
+     },
+     {
+      "name": "human-7176-62s-sp-26-room-46",
+      "unspoken_ending": "",
+      "lost_run": 13,
+      "lost": "but here he was at a terrible disadvantage as compared with the owls"
+     },
+     {
+      "name": "human-1580-31.5s-sp-34-room-50",
+      "unspoken_ending": "",
+      "lost_run": 10,
+      "lost": "the moment i looked at my table i was aware"
+     },
+     {
+      "name": "human-8224-62s-sp-18-room-64",
+      "unspoken_ending": "thank you",
+      "lost_run": 0,
+      "lost": ""
+     },
+     {
+      "name": "tts-Samantha-8sent-closing-tail2.3",
+      "unspoken_ending": "",
+      "lost_run": 5,
+      "lost": "my suggestion is that dana"
+     },
+     {
+      "name": "tts-Samantha-11sent-noclosing-tail5.0",
+      "unspoken_ending": "",
+      "lost_run": 8,
+      "lost": "my suggestion is that dana covers the product"
+     },
+     {
+      "name": "tts-Samantha-11sent-closing-tail2.3",
+      "unspoken_ending": "",
+      "lost_run": 6,
+      "lost": "my suggestion is that dana covers"
+     },
+     {
+      "name": "tts-Daniel-5sent-noclosing-tail2.3",
+      "unspoken_ending": "thank you",
+      "lost_run": 0,
+      "lost": ""
+     },
+     {
+      "name": "tts-Karen-5sent-noclosing-tail2.3",
+      "unspoken_ending": "thank you",
+      "lost_run": 0,
+      "lost": ""
+     },
+     {
+      "name": "tts-Karen-8sent-closing-tail2.3",
+      "unspoken_ending": "",
+      "lost_run": 5,
+      "lost": "my suggestion is that dana"
+     },
+     {
+      "name": "tts-Karen-11sent-noclosing-tail5.0",
+      "unspoken_ending": "",
+      "lost_run": 7,
+      "lost": "my suggestion is that dana covers the"
+     },
+     {
+      "name": "tts-Karen-11sent-closing-tail2.3",
+      "unspoken_ending": "",
+      "lost_run": 5,
+      "lost": "my suggestion is that dana"
+     },
+     {
+      "name": "tts-Rishi-5sent-noclosing-tail2.3",
+      "unspoken_ending": "thank you",
+      "lost_run": 0,
+      "lost": ""
+     },
+     {
+      "name": "tts-Rishi-5sent-closing-tail1.2",
+      "unspoken_ending": "",
+      "lost_run": 15,
+      "lost": "we also need to decide who presents the launch plan to the board next week"
+     },
+     {
+      "name": "tts-Rishi-8sent-closing-tail2.3",
+      "unspoken_ending": "",
+      "lost_run": 14,
+      "lost": "we also need to decide who presents the launch plan to the board next"
+     },
+     {
+      "name": "room-only-31s-room-64",
+      "unspoken_ending": "thank you",
+      "lost_run": 0,
+      "lost": ""
+     },
+     {
+      "name": "room-only-45s-room-64",
+      "unspoken_ending": "thank you",
+      "lost_run": 0,
+      "lost": ""
+     },
+     {
+      "name": "room-only-10s-room-46",
+      "unspoken_ending": "thank you",
+      "lost_run": 0,
+      "lost": ""
+     },
+     {
+      "name": "room-only-33s-room-46",
+      "unspoken_ending": "thank you",
+      "lost_run": 0,
+      "lost": ""
+     }
+    ]
+   },
+   "built-in detector, tuned sub-flags, own seeking": {
+    "total": {
+     "dictations": 97,
+     "words": 10987,
+     "S": 155,
+     "D": 15,
+     "I": 24,
+     "ended_in_unspoken_words": 2,
+     "lost_3_in_a_row": 0,
+     "words_from_room_alone": 0,
+     "no_punctuation": 28,
+     "lowercase_start": 37,
+     "styled": 91,
+     "decode_seconds": 1070,
+     "word_error_percent": 1.77
+    },
+    "style_by_kind": {
+     "human": {
+      "no_punctuation": 27,
+      "lowercase_start": 35,
+      "of": 63
+     },
+     "synthesized": {
+      "no_punctuation": 1,
+      "lowercase_start": 2,
+      "of": 28
+     }
+    },
+    "notable": [
+     {
+      "name": "human-61-40s-pause5.0at2-lead0.3",
+      "unspoken_ending": "thank you",
+      "lost_run": 0,
+      "lost": ""
+     },
+     {
+      "name": "human-672-31.5s-sp-18-room-64",
+      "unspoken_ending": "ill see you next time",
+      "lost_run": 0,
+      "lost": ""
+     }
+    ]
+   },
+   "built-in detector, vendor sub-flags, own seeking": {
+    "total": {
+     "dictations": 88,
+     "words": 10516,
+     "S": 150,
+     "D": 20,
+     "I": 12,
+     "ended_in_unspoken_words": 0,
+     "lost_3_in_a_row": 0,
+     "words_from_room_alone": 0,
+     "no_punctuation": 8,
+     "lowercase_start": 11,
+     "styled": 88,
+     "decode_seconds": 1001,
+     "word_error_percent": 1.73
+    },
+    "style_by_kind": {
+     "human": {
+      "no_punctuation": 8,
+      "lowercase_start": 11,
+      "of": 63
+     },
+     "synthesized": {
+      "no_punctuation": 0,
+      "lowercase_start": 0,
+      "of": 25
+     }
+    },
+    "notable": []
+   },
+   "own seeking, no detector": {
+    "total": {
+     "dictations": 36,
+     "words": 3681,
+     "S": 67,
+     "D": 9,
+     "I": 8,
+     "ended_in_unspoken_words": 3,
+     "lost_3_in_a_row": 0,
+     "words_from_room_alone": 0,
+     "no_punctuation": 8,
+     "lowercase_start": 18,
+     "styled": 36,
+     "decode_seconds": 259,
+     "word_error_percent": 2.28
+    },
+    "style_by_kind": {
+     "human": {
+      "no_punctuation": 8,
+      "lowercase_start": 18,
+      "of": 36
+     }
+    },
+    "notable": [
+     {
+      "name": "human-2300-20s-tail5.0",
+      "unspoken_ending": "thank you",
+      "lost_run": 1,
+      "lost": "3"
+     },
+     {
+      "name": "human-8455-62s-tail12.0",
+      "unspoken_ending": "thank you",
+      "lost_run": 1,
+      "lost": "rose"
+     },
+     {
+      "name": "human-237-62s-tail12.0",
+      "unspoken_ending": "thank you",
+      "lost_run": 0,
+      "lost": ""
+     }
+    ]
+   },
+   "tuned detector, style prompt carried (-mc 16)": {
+    "total": {
+     "dictations": 4,
+     "words": 183,
+     "S": 2,
+     "D": 1,
+     "I": 0,
+     "ended_in_unspoken_words": 0,
+     "lost_3_in_a_row": 0,
+     "words_from_room_alone": 0,
+     "no_punctuation": 0,
+     "lowercase_start": 0,
+     "styled": 3,
+     "decode_seconds": 12,
+     "word_error_percent": 1.64
+    },
+    "style_by_kind": {
+     "human": {
+      "no_punctuation": 0,
+      "lowercase_start": 0,
+      "of": 2
+     },
+     "synthesized": {
+      "no_punctuation": 0,
+      "lowercase_start": 0,
+      "of": 1
+     }
+    },
+    "notable": []
+   },
+   "tuned detector, style prompt given once (-mc 16)": {
+    "total": {
+     "dictations": 51,
+     "words": 6807,
+     "S": 128,
+     "D": 36,
+     "I": 15,
+     "ended_in_unspoken_words": 1,
+     "lost_3_in_a_row": 1,
+     "words_from_room_alone": 0,
+     "no_punctuation": 1,
+     "lowercase_start": 1,
+     "styled": 51,
+     "decode_seconds": 559,
+     "word_error_percent": 2.63
+    },
+    "style_by_kind": {
+     "human": {
+      "no_punctuation": 1,
+      "lowercase_start": 1,
+      "of": 51
+     }
+    },
+    "notable": [
+     {
+      "name": "human-2830-185s-tail2.3",
+      "unspoken_ending": "",
+      "lost_run": 22,
+      "lost": "if i had my way about it they would republish only those of my books which have doctrine m"
+     },
+     {
+      "name": "human-61-40s-pause5.0at2-lead0.3",
+      "unspoken_ending": "thank you",
+      "lost_run": 0,
+      "lost": ""
+     }
+    ]
+   }
+  },
+  "small.en": {
+   "shipped (-nt, whole recording)": {
+    "total": {
+     "dictations": 97,
+     "words": 10987,
+     "S": 188,
+     "D": 709,
+     "I": 32,
+     "ended_in_unspoken_words": 0,
+     "lost_3_in_a_row": 23,
+     "words_from_room_alone": 0,
+     "no_punctuation": 0,
+     "lowercase_start": 2,
+     "styled": 91,
+     "decode_seconds": 597,
+     "word_error_percent": 8.46
+    },
+    "style_by_kind": {
+     "human": {
+      "no_punctuation": 0,
+      "lowercase_start": 2,
+      "of": 63
+     },
+     "synthesized": {
+      "no_punctuation": 0,
+      "lowercase_start": 0,
+      "of": 28
+     }
+    },
+    "notable": [
+     {
+      "name": "human-4446-29.2s-tail2.5",
+      "unspoken_ending": "",
+      "lost_run": 74,
+      "lost": "do you know alexander mainhall looked with perplexity up into the top of the hansom and ru"
+     },
+     {
+      "name": "human-672-33s-tail1.0",
+      "unspoken_ending": "",
+      "lost_run": 45,
+      "lost": "in winter when the snow lay glittering on the ground a hare would often come leaping along"
+     },
+     {
+      "name": "human-1188-45s-tail2.3",
+      "unspoken_ending": "",
+      "lost_run": 52,
+      "lost": "it is the head of a parrot with a little flower in his beak from a picture of carpaccios 1"
+     },
+     {
+      "name": "human-3575-58.5s-tail3.0",
+      "unspoken_ending": "",
+      "lost_run": 6,
+      "lost": "she a tory and clergymans daughter"
+     },
+     {
+      "name": "human-5105-58.5s-tail3.0",
+      "unspoken_ending": "",
+      "lost_run": 44,
+      "lost": "ben zoofs most ambitious desire was to induce the captain to go with him and end his days "
+     },
+     {
+      "name": "human-6930-58.5s-tail3.0",
+      "unspoken_ending": "",
+      "lost_run": 43,
+      "lost": "congratulations were poured in upon the princess everywhere during her journey from the re"
+     },
+     {
+      "name": "human-1221-62s-tail12.0",
+      "unspoken_ending": "",
+      "lost_run": 3,
+      "lost": "hester could only"
+     },
+     {
+      "name": "human-4077-95s-tail2.3",
+      "unspoken_ending": "",
+      "lost_run": 57,
+      "lost": "nevertheless the mustard seed among the smallest of all seeds has attained the proportions"
+     },
+     {
+      "name": "human-5639-95s-tail2.3",
+      "unspoken_ending": "",
+      "lost_run": 52,
+      "lost": "rodolfo arrived at his own house without any impediment and leocadias parents reached thei"
+     },
+     {
+      "name": "human-8555-185s-tail2.3",
+      "unspoken_ending": "",
+      "lost_run": 58,
+      "lost": "i had a notion it was you mate as saved me from the knife i couldnt shiver much bein bound"
+     },
+     {
+      "name": "human-1320-185s-tail2.3",
+      "unspoken_ending": "",
+      "lost_run": 7,
+      "lost": "a circle of a few hundred feet"
+     },
+     {
+      "name": "human-2830-185s-tail2.3",
+      "unspoken_ending": "",
+      "lost_run": 34,
+      "lost": "men paul takes pride in his ministry not to his own praise but to the praise of god paul a"
+     },
+     {
+      "name": "human-61-40s-pause5.0at2-lead0.3",
+      "unspoken_ending": "",
+      "lost_run": 7,
+      "lost": "sister nell do you hear these marvels"
+     },
+     {
+      "name": "human-5142-50s-pause20.0at0-lead0.3",
+      "unspoken_ending": "",
+      "lost_run": 4,
+      "lost": "the rest of you"
+     },
+     {
+      "name": "human-8463-50s-pause20.0at0-lead0.3",
+      "unspoken_ending": "",
+      "lost_run": 3,
+      "lost": "hollan john wesley"
+     },
+     {
+      "name": "human-7176-62s-sp-26-room-46",
+      "unspoken_ending": "",
+      "lost_run": 3,
+      "lost": "owls hawks and"
+     },
+     {
+      "name": "tts-Samantha-8sent-closing-tail2.3",
+      "unspoken_ending": "",
+      "lost_run": 5,
+      "lost": "my suggestion is that dana"
+     },
+     {
+      "name": "tts-Samantha-11sent-noclosing-tail5.0",
+      "unspoken_ending": "",
+      "lost_run": 8,
+      "lost": "my suggestion is that dana covers the product"
+     },
+     {
+      "name": "tts-Samantha-11sent-closing-tail2.3",
+      "unspoken_ending": "",
+      "lost_run": 6,
+      "lost": "my suggestion is that dana covers"
+     },
+     {
+      "name": "tts-Karen-8sent-closing-tail2.3",
+      "unspoken_ending": "",
+      "lost_run": 6,
+      "lost": "my suggestion is that dana covers"
+     },
+     {
+      "name": "tts-Karen-11sent-noclosing-tail5.0",
+      "unspoken_ending": "",
+      "lost_run": 7,
+      "lost": "my suggestion is that dana covers the"
+     },
+     {
+      "name": "tts-Karen-11sent-closing-tail2.3",
+      "unspoken_ending": "",
+      "lost_run": 5,
+      "lost": "my suggestion is that dana"
+     },
+     {
+      "name": "tts-Rishi-11sent-noclosing-tail5.0",
+      "unspoken_ending": "",
+      "lost_run": 3,
+      "lost": "lets plan to"
+     }
+    ]
+   },
+   "built-in detector, tuned sub-flags, own seeking": {
+    "total": {
+     "dictations": 30,
+     "words": 2996,
+     "S": 57,
+     "D": 11,
+     "I": 3,
+     "ended_in_unspoken_words": 0,
+     "lost_3_in_a_row": 0,
+     "words_from_room_alone": 0,
+     "no_punctuation": 0,
+     "lowercase_start": 5,
+     "styled": 30,
+     "decode_seconds": 200,
+     "word_error_percent": 2.37
+    },
+    "style_by_kind": {
+     "human": {
+      "no_punctuation": 0,
+      "lowercase_start": 5,
+      "of": 30
+     }
+    },
+    "notable": []
+   },
+   "built-in detector, vendor sub-flags, own seeking": {
+    "total": {
+     "dictations": 83,
+     "words": 10064,
+     "S": 195,
+     "D": 35,
+     "I": 16,
+     "ended_in_unspoken_words": 0,
+     "lost_3_in_a_row": 2,
+     "words_from_room_alone": 0,
+     "no_punctuation": 0,
+     "lowercase_start": 7,
+     "styled": 83,
+     "decode_seconds": 816,
+     "word_error_percent": 2.44
+    },
+    "style_by_kind": {
+     "human": {
+      "no_punctuation": 0,
+      "lowercase_start": 7,
+      "of": 63
+     },
+     "synthesized": {
+      "no_punctuation": 0,
+      "lowercase_start": 0,
+      "of": 20
+     }
+    },
+    "notable": [
+     {
+      "name": "human-8555-185s-tail2.3",
+      "unspoken_ending": "",
+      "lost_run": 3,
+      "lost": "replied the boolooroo"
+     },
+     {
+      "name": "human-121-24s-pause6.0at1-lead14.0",
+      "unspoken_ending": "",
+      "lost_run": 7,
+      "lost": "angor pain painful to hear hay fever"
+     }
+    ]
+   },
+   "tuned detector, style prompt carried (-mc 16)": {
+    "total": {
+     "dictations": 5,
+     "words": 372,
+     "S": 26,
+     "D": 62,
+     "I": 0,
+     "ended_in_unspoken_words": 0,
+     "lost_3_in_a_row": 1,
+     "words_from_room_alone": 0,
+     "no_punctuation": 0,
+     "lowercase_start": 0,
+     "styled": 4,
+     "decode_seconds": 15,
+     "word_error_percent": 23.66
+    },
+    "style_by_kind": {
+     "human": {
+      "no_punctuation": 0,
+      "lowercase_start": 0,
+      "of": 3
+     },
+     "synthesized": {
+      "no_punctuation": 0,
+      "lowercase_start": 0,
+      "of": 1
+     }
+    },
+    "notable": [
+     {
+      "name": "human-8455-62s-tail12.0",
+      "unspoken_ending": "",
+      "lost_run": 26,
+      "lost": "the far corner of the room talking to eva and was now reduced to silence by his praises si"
+     }
+    ]
+   },
+   "tuned detector, style prompt given once (-mc 16)": {
+    "total": {
+     "dictations": 49,
+     "words": 6638,
+     "S": 159,
+     "D": 13,
+     "I": 10,
+     "ended_in_unspoken_words": 0,
+     "lost_3_in_a_row": 0,
+     "words_from_room_alone": 0,
+     "no_punctuation": 0,
+     "lowercase_start": 0,
+     "styled": 49,
+     "decode_seconds": 560,
+     "word_error_percent": 2.74
+    },
+    "style_by_kind": {
+     "human": {
+      "no_punctuation": 0,
+      "lowercase_start": 0,
+      "of": 49
+     }
+    },
+    "notable": []
+   }
+  }
+ },
+ "time": [
+  {
+   "model": "large-v3-turbo-q5_0",
+   "seconds": 13.9,
+   "shipped_s": 1.96,
+   "new_s": 2.72,
+   "of_which_detector_s": 0.13,
+   "pieces": 1
+  },
+  {
+   "model": "large-v3-turbo-q5_0",
+   "seconds": 32.22,
+   "shipped_s": 3.81,
+   "new_s": 3.72,
+   "of_which_detector_s": 0.52,
+   "pieces": 1
+  },
+  {
+   "model": "large-v3-turbo-q5_0",
+   "seconds": 42.92,
+   "shipped_s": 4.34,
+   "new_s": 4.89,
+   "of_which_detector_s": 0.31,
+   "pieces": 2
+  },
+  {
+   "model": "large-v3-turbo-q5_0",
+   "seconds": 78.85,
+   "shipped_s": 6.33,
+   "new_s": 7.31,
+   "of_which_detector_s": 0.4,
+   "pieces": 3
+  },
+  {
+   "model": "large-v3-turbo-q5_0",
+   "seconds": 101.9,
+   "shipped_s": 7.61,
+   "new_s": 10.25,
+   "of_which_detector_s": 0.98,
+   "pieces": 4
+  },
+  {
+   "model": "large-v3-turbo-q5_0",
+   "seconds": 191.45,
+   "shipped_s": 15.61,
+   "new_s": 17.63,
+   "of_which_detector_s": 0.85,
+   "pieces": 7
+  },
+  {
+   "model": "small.en",
+   "seconds": 13.9,
+   "shipped_s": 1.06,
+   "new_s": 1.45,
+   "of_which_detector_s": 0.12,
+   "pieces": 1
+  },
+  {
+   "model": "small.en",
+   "seconds": 32.22,
+   "shipped_s": 2.91,
+   "new_s": 2.06,
+   "of_which_detector_s": 0.25,
+   "pieces": 1
+  },
+  {
+   "model": "small.en",
+   "seconds": 42.92,
+   "shipped_s": 2.54,
+   "new_s": 3.17,
+   "of_which_detector_s": 0.28,
+   "pieces": 2
+  },
+  {
+   "model": "small.en",
+   "seconds": 78.85,
+   "shipped_s": 3.99,
+   "new_s": 3.65,
+   "of_which_detector_s": 0.37,
+   "pieces": 3
+  },
+  {
+   "model": "small.en",
+   "seconds": 101.9,
+   "shipped_s": 3.72,
+   "new_s": 4.73,
+   "of_which_detector_s": 0.49,
+   "pieces": 4
+  },
+  {
+   "model": "small.en",
+   "seconds": 191.45,
+   "shipped_s": 11.01,
+   "new_s": 9.19,
+   "of_which_detector_s": 0.64,
+   "pieces": 7
+  }
+ ],
+ "desk_run_signed_app_1d204b542": [
+  {
+   "case": "across-thirty-seconds",
+   "model": "large-v3-turbo-q5_0",
+   "source": "1d204b542031f72de2eb42244eaf98ac153011fa",
+   "passed": true,
+   "checks": {
+    "actualMicrophone": true,
+    "deliveredToTextEdit": true,
+    "nothingAddedAfterTheLastSpokenWord": true,
+    "noRunOfThreeWordsLost": true,
+    "atMostFivePercentWordErrors": true,
+    "spokenClosingKept": true,
+    "loadedCheckpoints": true
+   },
+   "score": {
+    "n": 166,
+    "S": 1,
+    "D": 0,
+    "I": 0,
+    "tail": "",
+    "lost_run": 0
+   },
+   "recognition": {
+    "model": "large-v3-turbo-q5_0",
+    "recognition_ms": 4908,
+    "pieces": 2,
+    "speech_detection_ms": 321
+   },
+   "fresh_preview_words_after_pause_s": [],
+   "preview_panel_samples": 0
+  },
+  {
+   "case": "across-thirty-seconds",
+   "model": "small.en",
+   "source": "1d204b542031f72de2eb42244eaf98ac153011fa",
+   "passed": true,
+   "checks": {
+    "actualMicrophone": true,
+    "deliveredToTextEdit": true,
+    "nothingAddedAfterTheLastSpokenWord": true,
+    "noRunOfThreeWordsLost": true,
+    "atMostFivePercentWordErrors": true,
+    "spokenClosingKept": true,
+    "loadedCheckpoints": true
+   },
+   "score": {
+    "n": 166,
+    "S": 1,
+    "D": 0,
+    "I": 0,
+    "tail": "",
+    "lost_run": 0
+   },
+   "recognition": {
+    "model": "small.en",
+    "recognition_ms": 2595,
+    "pieces": 2,
+    "speech_detection_ms": 151
+   },
+   "fresh_preview_words_after_pause_s": [],
+   "preview_panel_samples": 0
+  },
+  {
+   "case": "ending-in-silence",
+   "model": "large-v3-turbo-q5_0",
+   "source": "1d204b542031f72de2eb42244eaf98ac153011fa",
+   "passed": true,
+   "checks": {
+    "actualMicrophone": true,
+    "deliveredToTextEdit": true,
+    "nothingAddedAfterTheLastSpokenWord": true,
+    "noRunOfThreeWordsLost": true,
+    "atMostFivePercentWordErrors": true,
+    "spokenClosingKept": true,
+    "loadedCheckpoints": true
+   },
+   "score": {
+    "n": 86,
+    "S": 0,
+    "D": 0,
+    "I": 0,
+    "tail": "",
+    "lost_run": 0
+   },
+   "recognition": {
+    "model": "large-v3-turbo-q5_0",
+    "recognition_ms": 2383,
+    "pieces": 1,
+    "speech_detection_ms": 137
+   },
+   "fresh_preview_words_after_pause_s": [],
+   "preview_panel_samples": 0
+  },
+  {
+   "case": "ending-in-silence",
+   "model": "small.en",
+   "source": "1d204b542031f72de2eb42244eaf98ac153011fa",
+   "passed": true,
+   "checks": {
+    "actualMicrophone": true,
+    "deliveredToTextEdit": true,
+    "nothingAddedAfterTheLastSpokenWord": true,
+    "noRunOfThreeWordsLost": true,
+    "atMostFivePercentWordErrors": true,
+    "spokenClosingKept": true,
+    "loadedCheckpoints": true
+   },
+   "score": {
+    "n": 86,
+    "S": 0,
+    "D": 0,
+    "I": 0,
+    "tail": "",
+    "lost_run": 0
+   },
+   "recognition": {
+    "model": "small.en",
+    "recognition_ms": 3084,
+    "pieces": 1,
+    "speech_detection_ms": 545
+   },
+   "fresh_preview_words_after_pause_s": [],
+   "preview_panel_samples": 0
+  },
+  {
+   "case": "ending-in-spoken-thanks",
+   "model": "large-v3-turbo-q5_0",
+   "source": "1d204b542031f72de2eb42244eaf98ac153011fa",
+   "passed": true,
+   "checks": {
+    "actualMicrophone": true,
+    "deliveredToTextEdit": true,
+    "nothingAddedAfterTheLastSpokenWord": true,
+    "noRunOfThreeWordsLost": true,
+    "atMostFivePercentWordErrors": true,
+    "spokenClosingKept": true,
+    "loadedCheckpoints": true
+   },
+   "score": {
+    "n": 88,
+    "S": 0,
+    "D": 0,
+    "I": 0,
+    "tail": "",
+    "lost_run": 0
+   },
+   "recognition": {
+    "model": "large-v3-turbo-q5_0",
+    "recognition_ms": 2498,
+    "pieces": 1,
+    "speech_detection_ms": 121
+   },
+   "fresh_preview_words_after_pause_s": [],
+   "preview_panel_samples": 0
+  },
+  {
+   "case": "ending-in-spoken-thanks",
+   "model": "small.en",
+   "source": "1d204b542031f72de2eb42244eaf98ac153011fa",
+   "passed": true,
+   "checks": {
+    "actualMicrophone": true,
+    "deliveredToTextEdit": true,
+    "nothingAddedAfterTheLastSpokenWord": true,
+    "noRunOfThreeWordsLost": true,
+    "atMostFivePercentWordErrors": true,
+    "spokenClosingKept": true,
+    "loadedCheckpoints": true
+   },
+   "score": {
+    "n": 88,
+    "S": 0,
+    "D": 0,
+    "I": 0,
+    "tail": "",
+    "lost_run": 0
+   },
+   "recognition": {
+    "model": "small.en",
+    "recognition_ms": 3438,
+    "pieces": 2,
+    "speech_detection_ms": 917
+   },
+   "fresh_preview_words_after_pause_s": [],
+   "preview_panel_samples": 0
+  },
+  {
+   "case": "twelve-second-pause",
+   "model": "large-v3-turbo-q5_0",
+   "source": "1d204b542031f72de2eb42244eaf98ac153011fa",
+   "passed": true,
+   "checks": {
+    "actualMicrophone": true,
+    "deliveredToTextEdit": true,
+    "nothingAddedAfterTheLastSpokenWord": true,
+    "noRunOfThreeWordsLost": true,
+    "atMostFivePercentWordErrors": true,
+    "spokenClosingKept": true,
+    "loadedCheckpoints": true,
+    "previewPanelStaysVisible": true,
+    "previewPanelDoesNotShrink": true,
+    "previewFreshWordsAfterPauseWithin7s": true,
+    "renderedFreshWordsAfterPauseWithin7s": true,
+    "noTerminalPreviewPause": true
+   },
+   "score": {
+    "n": 146,
+    "S": 0,
+    "D": 0,
+    "I": 0,
+    "tail": "",
+    "lost_run": 0
+   },
+   "recognition": {
+    "model": "large-v3-turbo-q5_0",
+    "recognition_ms": 4442,
+    "pieces": 2,
+    "speech_detection_ms": 170
+   },
+   "fresh_preview_words_after_pause_s": [
+    1.882
+   ],
+   "preview_panel_samples": 119
+  },
+  {
+   "case": "twelve-second-pause",
+   "model": "small.en",
+   "source": "1d204b542031f72de2eb42244eaf98ac153011fa",
+   "passed": true,
+   "checks": {
+    "actualMicrophone": true,
+    "deliveredToTextEdit": true,
+    "nothingAddedAfterTheLastSpokenWord": true,
+    "noRunOfThreeWordsLost": true,
+    "atMostFivePercentWordErrors": true,
+    "spokenClosingKept": true,
+    "loadedCheckpoints": true,
+    "previewPanelStaysVisible": true,
+    "previewPanelDoesNotShrink": true,
+    "previewFreshWordsAfterPauseWithin7s": true,
+    "renderedFreshWordsAfterPauseWithin7s": true,
+    "noTerminalPreviewPause": true
+   },
+   "score": {
+    "n": 146,
+    "S": 0,
+    "D": 0,
+    "I": 0,
+    "tail": "",
+    "lost_run": 0
+   },
+   "recognition": {
+    "model": "small.en",
+    "recognition_ms": 2544,
+    "pieces": 2,
+    "speech_detection_ms": 179
+   },
+   "fresh_preview_words_after_pause_s": [
+    1.952
+   ],
+   "preview_panel_samples": 119
+  }
+ ]
+}
