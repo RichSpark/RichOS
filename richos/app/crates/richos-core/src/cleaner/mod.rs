@@ -411,12 +411,19 @@ pub fn store_inbox(db: &mut Catalog, fs: &impl Files, id: &str, root: &Path) -> 
 /// Settle only a canceled folder choice, reading the latest row after any Undo/Edit.
 /// The host serializes this with actual mutations. Never pass an older Entry snapshot.
 pub fn cancel_sort(db: &mut Catalog, id: &str) -> Result<Entry> {
+    stop_sort(db, id, None)
+}
+
+pub fn stop_sort(db: &mut Catalog, id: &str, problem: Option<String>) -> Result<Entry> {
     let mut entry = db.get(id)?;
     if entry.pending_sort {
         entry.pending_sort = false;
         entry.phase = Phase::Filed;
     } else if entry.phase == Phase::Choosing {
         entry.phase = Phase::Draft;
+    }
+    if problem.is_some() {
+        entry.problem = problem;
     }
     db.save(&entry)?;
     Ok(entry)

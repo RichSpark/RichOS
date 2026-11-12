@@ -51,7 +51,7 @@
     if(view.stage==="listening") controls=button("finish","Done",view.id,"dov-btn")+button("cancel","Cancel",view.id);
     else if(["checking","writing","choosing"].includes(view.stage)) controls=button("cancel","Cancel",view.id);
     else if(e && ["filed","inbox","inbox-pending","draft","error","busy"].includes(view.stage)) controls=actions(e)+button("library","Recent files");
-    if(view.stage==="error" && !e) controls=button("settings","RichCleaner settings")+button("library","Recent files");
+    if(view.stage==="error" && (!e || view.needsFilingFolder)) controls=button("settings","RichCleaner settings")+button("library","Recent files");
     if(batch && ["inbox-pending","busy","batch-result"].includes(view.stage))controls=button("library","Recent files");
     let sub=view.message || "";
     if(view.stage==="listening") sub=`Tap ${k} to finish`;

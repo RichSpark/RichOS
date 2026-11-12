@@ -39,6 +39,15 @@ except RuntimeError as error:
 else:
     raise AssertionError("A missing listed folder must not be recreated")
 assert not (available/"Missing").exists()
+available.chmod(0o500)
+try:
+    native("destination",root=str(root),parts=["Existing"],name="report.txt",existingOnly=True)
+except RuntimeError as error:
+    assert "destination-folder-unavailable" in str(error)
+else:
+    raise AssertionError("An unwritable listed folder must fall back before staging")
+finally:
+    available.chmod(0o700)
 for name,value in {"com.apple.metadata:kMDItemFinderComment":plistlib.dumps("Existing Finder context",fmt=plistlib.FMT_BINARY),"com.apple.metadata:_kMDItemUserTags":plistlib.dumps(["Fixture\n6"],fmt=plistlib.FMT_BINARY),"com.apple.quarantine":b"0081;69000000;RichCleaner fixture;00000000-0000-0000-0000-000000000001"}.items():
     subprocess.run(["/usr/bin/xattr","-wx",name,value.hex(),source],check=True)
 subprocess.run(["chmod","+a","everyone allow readattr,readextattr,readsecurity",source],check=True)

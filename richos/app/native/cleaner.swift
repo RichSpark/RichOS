@@ -223,7 +223,7 @@ func main(_ r:[String:Any])throws->[String:Any] {
         if !fm.fileExists(atPath:root.path){guard r["action"] as? String == "root" else {try fail("The configured filing folder is unavailable")};try fm.createDirectory(at:root,withIntermediateDirectories:true)}
         _=try canonical(root)
         var a=stat();var b=stat();guard stat(root.path,&a)==0,stat(desktop.path,&b)==0,a.st_dev==b.st_dev,a.st_mode & S_IFMT == S_IFDIR else {try fail("Choose a folder on the same disk as Desktop")}
-        guard fm.isWritableFile(atPath:root.path) else {try fail("The filing folder is not writable")}
+        guard fm.isWritableFile(atPath:root.path),access(root.path,X_OK)==0 else {try fail("The filing folder is not writable")}
         return ["path":root.path]
     case "inspect":return try identity(url(string(r,"path")))
     case "resolve", "resolve-local", "open-check", "open-location":
@@ -255,6 +255,9 @@ func main(_ r:[String:Any])throws->[String:Any] {
                 if !fm.fileExists(atPath:folder.path) {try fm.createDirectory(at:folder,withIntermediateDirectories:false)}
                 _ = try canonical(folder)
             }
+        }
+        if existingOnly && (!fm.isWritableFile(atPath:folder.path) || access(folder.path, X_OK) != 0) {
+            try fail("destination-folder-unavailable")
         }
         let name=try string(r,"name");guard name==URL(fileURLWithPath:name).lastPathComponent else {try fail("Invalid filename")}
         let original=folder.appendingPathComponent(name);var candidate=original;var suffix=2

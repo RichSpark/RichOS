@@ -7,7 +7,7 @@ use std::{
     path::PathBuf,
     sync::{
         atomic::{AtomicU8, Ordering},
-        mpsc, Arc,
+        mpsc, Arc, OnceLock,
     },
     thread::JoinHandle,
     time::{Duration, Instant},
@@ -30,6 +30,37 @@ const MAX_REQUEST_BYTES: usize = 60 * 1024;
 const INCOMPLETE: &str =
     "The folder list was incomplete and no listed folder fit. Edit the note or choose a smaller filing folder, then use File again";
 const INVALID: &str = "The folder model returned an invalid choice. Use File again to retry";
+const UNCLEAR: &str = "The note did not make the right folder clear. Edit the note, then use File again";
+const INPUT_LIMIT: &str = "The note and filenames exceed the folder model's input limit. Shorten the note, then use File again";
+const UNAVAILABLE: &str = "The folder model is unavailable. Use File again to retry";
+const TIMEOUT: &str = "The folder model did not answer in time. Use File again to retry";
+const QUOTA: &str = "The folder model reached its usage limit. Use File again when access returns";
+
+pub fn fallback(error: &str) -> FilingChoice {
+    let reason = match error {
+        INVALID => INVALID,
+        INPUT_LIMIT => INPUT_LIMIT,
+        "folder-quota" => QUOTA,
+        "Folder choice timed out" | "Classification deadline" | "Classification canceled or slow" => TIMEOUT,
+        _ => UNAVAILABLE,
+    };
+    FilingChoice::Inbox { reason: reason.into() }
+}
+
+pub fn outcome(choice: &FilingChoice) -> &'static str {
+    match choice {
+        FilingChoice::Category { .. } => "category",
+        FilingChoice::Inbox { reason } => match reason.as_str() {
+            UNCLEAR => "unclear",
+            INCOMPLETE => "incomplete_context",
+            INVALID => "invalid_answer",
+            INPUT_LIMIT => "input_limit",
+            TIMEOUT => "timeout",
+            QUOTA => "quota",
+            _ => "unavailable",
+        },
+    }
+}
 
 fn wire(input: &Value) -> String {
     json!({"type":"user","message":{"role":"user","content":input.to_string()}}).to_string()
@@ -39,7 +70,7 @@ fn request(mut input: Value, folders: &FolderContext) -> Result<(String, usize, 
     input["folders"] = json!([]);
     input["foldersComplete"] = json!(false);
     let mut remaining = MAX_REQUEST_BYTES.checked_sub(wire(&input).len())
-        .ok_or("The note and filenames exceed the folder model's input limit. Shorten the note, then use File again")?;
+        .ok_or(INPUT_LIMIT)?;
     let mut sent = 0;
     for label in &folders.labels {
         // Each label is a JSON string inside the provider's JSON content string.
@@ -56,10 +87,10 @@ fn request(mut input: Value, folders: &FolderContext) -> Result<(String, usize, 
 }
 
 fn selection(choice: Choice, sent: &[String], complete: bool) -> FilingChoice {
-    if !choice.clear || choice.folder == "Inbox" {
+    if !choice.clear || choice.folder.eq_ignore_ascii_case("Inbox") {
         return FilingChoice::Inbox {
             reason: if complete {
-                "The note did not make the right folder clear. Edit the note, then use File again"
+                UNCLEAR
             } else {
                 INCOMPLETE
             }.into(),
@@ -76,17 +107,22 @@ fn selection(choice: Choice, sent: &[String], complete: bool) -> FilingChoice {
 
 struct Request {
     body: String,
-    deadline: Instant,
+    saved: Instant,
     reply: mpsc::Sender<Result<Choice>>,
 }
 pub struct Prepared {
     started: Instant,
+    launched: Arc<OnceLock<Instant>>,
     send: Option<mpsc::Sender<Request>>,
     state: Arc<AtomicU8>,
     worker: Option<JoinHandle<()>>,
 }
 const LAUNCHING: u8 = 1;
 const CANCELED: u8 = 2;
+
+fn deadline(launch: Instant, saved: Instant) -> Instant {
+    (launch + Duration::from_secs(30)).max(saved + Duration::from_secs(5))
+}
 
 impl Prepared {
     pub fn start(
@@ -95,6 +131,8 @@ impl Prepared {
         let started = Instant::now();
         let state = Arc::new(AtomicU8::new(0));
         let worker_state = state.clone();
+        let launched = Arc::new(OnceLock::new());
+        let worker_launch = launched.clone();
         let (send, receive) = mpsc::channel::<Request>();
         let worker = std::thread::spawn(move || {
             let canceled = || worker_state.load(Ordering::Acquire) & CANCELED != 0;
@@ -107,6 +145,7 @@ impl Prepared {
                 .map_err(String::clone)
                 .and_then(|(bin, profile)| {
                     // Cancellation during profile preparation must prevent a late provider launch.
+                    worker_launch.get_or_init(Instant::now);
                     worker_state
                         .compare_exchange(0, LAUNCHING, Ordering::AcqRel, Ordering::Acquire)
                         .map_err(|_| "Folder choice canceled".to_string())?;
@@ -119,7 +158,8 @@ impl Prepared {
                             .as_mut()
                             .map_err(|e| e.clone())
                             .and_then(|live| {
-                                live.exchange(request.body, request.deadline, canceled, answer)
+                                let launch = worker_launch.get().copied().unwrap_or(started);
+                                live.exchange(request.body, deadline(launch, request.saved), canceled, answer)
                             })
                             .and_then(|text| serde_json::from_str(&text).map_err(|_| INVALID.into()))
                             .and_then(validate);
@@ -141,34 +181,47 @@ impl Prepared {
         });
         Self {
             started,
+            launched,
             send: Some(send),
             state,
             worker: Some(worker),
         }
     }
-    pub fn choose(&self, name: &str, note: &str, folders: &FolderContext) -> Result<FilingChoice> {
-        self.choose_from(json!({"filename":name,"note":note}), folders)
+    pub fn choose(&self, name: &str, note: &str, folders: &FolderContext, report: impl FnOnce(usize, bool)) -> Result<FilingChoice> {
+        self.choose_from(json!({"filename":name,"note":note}), folders, report)
     }
-    pub fn choose_batch(&self, names: &[String], note: &str, folders: &FolderContext) -> Result<FilingChoice> {
-        self.choose_from(json!({"filenames":names,"note":note}), folders)
+    pub fn choose_batch(&self, names: &[String], note: &str, folders: &FolderContext, report: impl FnOnce(usize, bool)) -> Result<FilingChoice> {
+        self.choose_from(json!({"filenames":names,"note":note}), folders, report)
     }
-    fn choose_from(&self, input: Value, folders: &FolderContext) -> Result<FilingChoice> {
+    fn choose_from(&self, input: Value, folders: &FolderContext, report: impl FnOnce(usize, bool)) -> Result<FilingChoice> {
         let (body, sent, complete) = request(input, folders)?;
-        let deadline =
-            (self.started + Duration::from_secs(30)).max(Instant::now() + Duration::from_secs(5));
+        let saved = Instant::now();
         let (reply, receive) = mpsc::channel();
         self.send
             .as_ref()
             .ok_or("Folder choice is closed")?
             .send(Request {
                 body,
-                deadline,
+                saved,
                 reply,
             })
             .map_err(|e| e.to_string())?;
+        report(sent, complete);
         while self.state.load(Ordering::Acquire) & CANCELED == 0 {
-            let remaining = deadline.saturating_duration_since(Instant::now());
+            // Bound profile preparation until the provider starts, then give the
+            // single request its full launch-relative allowance.
+            let launch = self.launched.get().copied();
+            let remaining = deadline(launch.unwrap_or(self.started), saved).saturating_duration_since(Instant::now());
             if remaining.is_zero() {
+                if launch.is_none() {
+                    match self.state.compare_exchange(0, CANCELED, Ordering::AcqRel, Ordering::Acquire) {
+                        // The worker published its launch time before claiming launch.
+                        Err(state) if state == LAUNCHING => continue,
+                        Ok(_) => return Err("Folder choice timed out".into()),
+                        Err(_) => break,
+                    }
+                }
+                self.cancel();
                 return Err("Folder choice timed out".into());
             }
             match receive.recv_timeout(remaining.min(Duration::from_millis(50))) {
@@ -202,7 +255,7 @@ impl Drop for Prepared {
 fn answer(frame: &Value) -> Result<String> {
     Ok(frame["result"]
         .as_str()
-        .ok_or("No folder choice")?
+        .ok_or(INVALID)?
         .trim()
         .trim_start_matches("```json")
         .trim_start_matches("```")
@@ -301,5 +354,26 @@ mod tests {
         let frame: Value = serde_json::from_str(&body).unwrap();
         let fields: Value = serde_json::from_str(frame["message"]["content"].as_str().unwrap()).unwrap();
         assert_eq!(fields["foldersComplete"], false);
+    }
+
+    #[test]
+    fn reserved_inbox_and_provider_failures_keep_distinct_reasons() {
+        let inbox = selection(Choice {
+            folder: "inbox".into(), keywords: vec![], aliases: vec![], clear: true,
+        }, &[], true);
+        assert_eq!(outcome(&inbox), "unclear");
+        assert_eq!(outcome(&fallback("folder-quota")), "quota");
+        assert_eq!(outcome(&fallback("Classification deadline")), "timeout");
+        assert_eq!(outcome(&fallback(INVALID)), "invalid_answer");
+        assert_eq!(outcome(&fallback("an internal transport error")), "unavailable");
+    }
+
+    #[test]
+    fn provider_launch_keeps_its_allowance_and_a_saved_note_gets_at_least_five_seconds() {
+        let start = Instant::now();
+        let launch = start + Duration::from_secs(6);
+        assert_eq!(deadline(launch, start + Duration::from_secs(2)), launch + Duration::from_secs(30));
+        let saved = start + Duration::from_secs(35);
+        assert_eq!(deadline(launch, saved), saved + Duration::from_secs(5));
     }
 }

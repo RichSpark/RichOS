@@ -1,6 +1,6 @@
 //! One accepted note and one folder choice for a frozen Desktop selection.
 //! Each member uses the existing recoverable single-file move and Undo.
-use super::{catalog, finish, host, settings, stage, start_target, Host};
+use super::{catalog, finish, host, stage, start_target, Host};
 use crate::{cleaner_native::Native, AppState};
 use richos_core::cleaner::{self, Catalog, Files, FilingChoice, Identity, Phase};
 use serde::{Deserialize, Serialize};
@@ -164,9 +164,8 @@ pub(super) fn accept(
     let outcome = (|| {
         stage(app, id, "saved", json!({"noteSaved":true,"batchNote":note}));
         record["drafts_saved_ms"] = json!(began.elapsed().as_millis() as u64);
-        let root = settings(app)?.1.ok_or("Choose a filing folder")?;
         let native = Native::bundled()?;
-        native.request(json!({"action":"validate-root","path":root}))?;
+        let root = super::validated_filing_root(app, &native)?;
         let mut outcomes = Outcome::default();
         let mut ready = Vec::with_capacity(total);
         for entry in entries {
@@ -224,7 +223,9 @@ pub(super) fn accept(
                 chooser
                     .as_ref()
                     .ok_or("The model connection is unavailable".to_string())?
-                    .choose_batch(&names, &note, &folders)
+                    .choose_batch(&names, &note, &folders, |count, complete| {
+                        super::folder_request_context(id, count, complete)
+                    })
             }))
         };
         let choice = super::folder_outcome(choice.unwrap_or_else(|| Err("Folder choice canceled".into())));
@@ -239,6 +240,11 @@ pub(super) fn accept(
         } else {
             "category"
         });
+        record["decision"] = json!(if cancel.load(Ordering::Acquire) {
+            "canceled"
+        } else {
+            cleaner::choice::outcome(&choice)
+        });
         if enter_filing(&h, id)? && !ready.is_empty() {
             stage(
                 app,
@@ -247,6 +253,7 @@ pub(super) fn accept(
                 json!({"folder":folder,"noteSaved":true,"force":false,"message":null}),
             );
         }
+        let mut unavailable_destinations = 0;
         for entry in ready {
             let _mutation = h
                 .mutation
@@ -273,6 +280,9 @@ pub(super) fn accept(
                             outcomes.local_note += 1;
                         }
                         if saved.inbox {
+                            if !matches!(&choice, FilingChoice::Inbox { .. }) {
+                                unavailable_destinations += 1;
+                            }
                             ResultKind::Inbox
                         } else {
                             ResultKind::Filed
@@ -287,6 +297,7 @@ pub(super) fn accept(
             skip(&h, &entry.id);
             outcomes.add(result);
         }
+        record["unavailable_destinations"] = json!(unavailable_destinations);
         Ok::<_, String>((folder.to_owned(), outcomes))
     })();
     if outcome.is_err() {

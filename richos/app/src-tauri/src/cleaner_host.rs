@@ -286,6 +286,15 @@ fn folder_context(db: &Catalog, root: &Path, id: &str) -> Result<FolderContext, 
     crate::dictation::log::line(&format!("RichCleaner folders {record}"));
     Ok(context)
 }
+fn validated_filing_root(app: &AppHandle, native: &Native) -> Result<PathBuf, String> {
+    let root = settings(app)?.1.ok_or("Choose your filing folder in RichCleaner settings")?;
+    native.request(json!({"action":"validate-root","path":root}))?;
+    Ok(root)
+}
+fn folder_request_context(id: &str, wire_labels: usize, wire_complete: bool) {
+    let record = json!({"id":id,"wire_labels":wire_labels,"wire_complete":wire_complete});
+    crate::dictation::log::line(&format!("RichCleaner folder request context {record}"));
+}
 pub fn start(app: &AppHandle) -> Result<(), String> {
     crate::dictation::log::init(&app.state::<AppState>().data_dir);
     app.manage(Arc::new(Host::default()));
@@ -634,14 +643,17 @@ fn accept(app: &AppHandle, id: &str, note: String) -> Result<(), String> {
         .map_err(|_| "Settings unavailable")?
         .cleaner_inbox_first();
     if fast {
-        let (_, root) = settings(app)?;
-        let root = root.ok_or("Choose a filing folder")?;
         let _mutation = h
             .mutation
             .lock()
             .map_err(|_| "File operations unavailable")?;
         if !cancel.load(Ordering::Acquire) {
-            let native = Native::bundled()?;
+            let (native, root) = match Native::bundled().and_then(|native| {
+                validated_filing_root(app, &native).map(|root| (native, root))
+            }) {
+                Ok(ready) => ready,
+                Err(problem) => return settle_filing_error(app, id, &mut db, &entry.id, problem),
+            };
             let stored = match cleaner::store_inbox(&mut db, &native, &entry.id, &root) {
                 Ok(stored) => stored,
                 Err(error) => {
@@ -674,11 +686,20 @@ fn settle_canceled(
     entry_id: &str,
 ) -> Result<(), String> {
     let entry = cleaner::cancel_sort(db, entry_id)?;
+    let stage = if entry.phase != Phase::Filed { "draft" } else if entry.inbox { "inbox" } else { "filed" };
     finish(
         app,
         id,
-        json!({"id":id,"stage":if entry.phase==Phase::Filed{"inbox"}else{"draft"},"entry":entry,"noteSaved":true}),
+        json!({"id":id,"stage":stage,"entry":entry,"noteSaved":true}),
     );
+    Ok(())
+}
+fn settle_filing_error(
+    app: &AppHandle, id: &str, db: &mut Catalog, entry_id: &str, problem: String,
+) -> Result<(), String> {
+    let entry = cleaner::stop_sort(db, entry_id, Some(problem))?;
+    finish(app, id, json!({"id":id,"stage":"error","message":entry.problem,
+        "entry":entry,"noteSaved":true,"force":true,"needsFilingFolder":true}));
     Ok(())
 }
 fn file_saved(
@@ -689,16 +710,25 @@ fn file_saved(
     cancel: Arc<AtomicBool>,
 ) -> Result<(), String> {
     stage(app, id, "choosing", json!({"noteSaved":true}));
-    let (_, root) = settings(app)?;
-    let root = root.ok_or("Choose your filing folder in RichCleaner settings")?;
+    let h = host(app);
     let mut db = catalog(app)?;
-    let mut entry = db.get(entry_id)?;
-    if !entry.pending_sort {
-        entry.phase = Phase::Choosing;
-        db.save(&entry)?;
-    }
-    let root_check = Native::bundled()?.request(json!({"action":"validate-root","path":root}));
-    let choice = root_check.and_then(|_| folder_context(&db, &root, id)).and_then(|folders| {
+    // The saved record remains Draft or Filed while the panel says Choosing.
+    // A canceled refile must leave the previous filing and its Undo intact.
+    let entry = db.get(entry_id)?;
+    let (native, root) = match Native::bundled().and_then(|native| {
+        validated_filing_root(app, &native).map(|root| (native, root))
+    }) {
+        Ok(ready) => ready,
+        Err(problem) => {
+            let _mutation = h.mutation.lock().map_err(|_| "File operations are unavailable")?;
+            if cancel.load(Ordering::Acquire) {
+                return settle_canceled(app, id, &mut db, entry_id);
+            }
+            return settle_filing_error(app, id, &mut db, entry_id, problem);
+        }
+    };
+    let choice_started = Instant::now();
+    let choice = folder_context(&db, &root, id).and_then(|folders| {
         chooser
             .as_ref()
             .ok_or("The model connection is unavailable".to_string())?
@@ -706,9 +736,13 @@ fn file_saved(
                 &entry.path.file_name().unwrap_or_default().to_string_lossy(),
                 &entry.note,
                 &folders,
+                |count, complete| folder_request_context(id, count, complete),
             )
     });
-    let h = host(app);
+    let choice = folder_outcome(choice);
+    let record = json!({"id":id,"choice_ms":choice_started.elapsed().as_millis() as u64,
+        "decision":if cancel.load(Ordering::Acquire) { "canceled" } else { cleaner::choice::outcome(&choice) }});
+    crate::dictation::log::line(&format!("RichCleaner folder result {record}"));
     let _mutation = h
         .mutation
         .lock()
@@ -716,7 +750,6 @@ fn file_saved(
     if cancel.load(Ordering::Acquire) {
         return settle_canceled(app, id, &mut db, entry_id);
     }
-    let choice = folder_outcome(choice);
     {
         let mut active = h.active.lock().map_err(|_| "Operation state unavailable")?;
         let a = active
@@ -730,13 +763,14 @@ fn file_saved(
         a.stage = "filing".into();
     }
     stage(app, id, "filing", json!({"folder":choice.folder(),"noteSaved":true}));
-    let native = Native::bundled()?;
     match cleaner::file(&mut db, &native, entry_id, &root, &choice) {
-        Ok(entry) => finish(
-            app,
-            id,
-            json!({"id":id,"stage":if entry.inbox{"inbox"}else{"filed"},"entry":entry,"noteSaved":true,"message":entry.problem}),
-        ),
+        Ok(entry) => {
+            if entry.inbox && !matches!(choice, FilingChoice::Inbox { .. }) {
+                crate::dictation::log::line(&format!("RichCleaner folder result {}", json!({"id":id,"decision":"destination_unavailable"})));
+            }
+            finish(app, id, json!({"id":id,"stage":if entry.inbox{"inbox"}else{"filed"},
+                "entry":entry,"noteSaved":true,"message":entry.problem}));
+        }
         Err(error) => {
             cleaner::recover(&mut db, &native)?;
             let entry = db.get(entry_id)?;
@@ -750,14 +784,7 @@ fn file_saved(
     Ok(())
 }
 fn folder_outcome(choice: Result<FilingChoice, String>) -> FilingChoice {
-    choice.unwrap_or_else(|error| {
-        let reason = match error.as_str() {
-            "writing-quota" => "The folder model reached its usage limit. Use File again when access returns".into(),
-            "Folder choice timed out" | "Classification deadline" => "The folder model did not answer in time. Use File again to retry".into(),
-            _ => error,
-        };
-        FilingChoice::Inbox { reason }
-    })
+    choice.unwrap_or_else(|error| cleaner::choice::fallback(&error))
 }
 fn canceled(app: &AppHandle, id: &str) {
     let h = host(app);
