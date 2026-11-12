@@ -1266,6 +1266,21 @@ struct SearchOptionsSheet: View {
         return low >= 0 && high >= low && (!byDate || from <= through)
     }
 
+    private var draft: BrowserModel.SearchState {
+        let start = Calendar.current.startOfDay(for: from)
+        let end = Calendar.current.date(byAdding: .day, value: 1, to: Calendar.current.startOfDay(for: through)) ?? through
+        return BrowserModel.SearchState(
+            text: queryText, extensions: extensions, minimumBytes: Int64(minimum), maximumBytes: Int64(maximum),
+            modified: byDate && from <= through ? start...end.addingTimeInterval(-0.000001) : nil,
+            recursive: recursively, contentMode: content
+        )
+    }
+
+    private var hasQuery: Bool {
+        !queryText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+            (!content && (!extensions.isEmpty || !minimum.isEmpty || !maximum.isEmpty || byDate))
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Search Options").font(.headline)
@@ -1277,6 +1292,7 @@ struct SearchOptionsSheet: View {
                 TextField(content ? "Text to find" : "Name or wildcard", text: $queryText)
                 TextField("Extensions", text: $extensions, prompt: Text("png, pdf"))
                 Toggle("Include Subfolders", isOn: $recursively)
+                Button("Search Another Folder…") { chooseScope() }.disabled(!valid || !hasQuery)
                 if content {
                     Text(BrowserModel.contentSearchCoverageDescription).font(.caption).foregroundStyle(.secondary)
                 }
@@ -1301,15 +1317,7 @@ struct SearchOptionsSheet: View {
                 Spacer()
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
                 Button("Search") {
-                    model.searchText = queryText
-                    model.searchExtensions = extensions
-                    model.searchRecursively = recursively
-                    model.searchContent = content
-                    model.searchMinimumBytes = Int64(minimum)
-                    model.searchMaximumBytes = Int64(maximum)
-                    let end = Calendar.current.date(byAdding: .day, value: 1, to: Calendar.current.startOfDay(for: through)) ?? through
-                    model.searchModified = byDate ? Calendar.current.startOfDay(for: from)...end.addingTimeInterval(-0.000001) : nil
-                    model.submitSearch()
+                    model.submitSearch(draft)
                     dismiss()
                 }.keyboardShortcut(.defaultAction).disabled(!valid)
             }
@@ -1327,6 +1335,22 @@ struct SearchOptionsSheet: View {
                     through = range.upperBound
                 }
             }
+    }
+
+    private func chooseScope() {
+        let search = draft
+        let panel = NSOpenPanel()
+        panel.directoryURL = model.folder
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Search Folder"
+        panel.begin { result in
+            if result == .OK, let folder = panel.url {
+                model.submitSearch(search, in: folder)
+                dismiss()
+            }
+        }
     }
 }
 

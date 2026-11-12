@@ -283,6 +283,15 @@ final class BrowserModelTests: XCTestCase {
         XCTAssertEqual(model.scanReport?.contentCoverage?.searchedFiles, 2)
         XCTAssertEqual(model.scanReport?.contentCoverage?.skippedItems, 2)
 
+        model.submitSearch(BrowserModel.SearchState(text: "*.png"), in: projects)
+        try await waitForListing(model, at: projects)
+        XCTAssertFalse(model.searchContent)
+        XCTAssertEqual(Set(model.entries.map(\.name)), [".hidden.png", "Photo.PNG"])
+        model.goBack()
+        try await waitForListing(model, at: root)
+        XCTAssertTrue(model.searchContent)
+        XCTAssertEqual(Set(model.entries.map(\.name)), ["Notes.md", "Report.TXT"])
+
         model.switchTab(firstTab)
         try await waitForListing(model, at: projects)
         XCTAssertEqual(model.selected, [photo.id])

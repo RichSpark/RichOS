@@ -160,7 +160,7 @@ final class BrowserModel: ObservableObject {
         return Array(result.reversed())
     }
 
-    private struct SearchState: Codable, Sendable {
+    struct SearchState: Codable, Sendable {
         var text = ""
         var extensions = ""
         var minimumBytes: Int64?
@@ -196,6 +196,7 @@ final class BrowserModel: ObservableObject {
     private enum Navigation {
         case open, back, forward
         case reveal(String)
+        case search(SearchState)
     }
 
     private var savedTabs: [UUID: TabState] = [:]
@@ -401,41 +402,54 @@ final class BrowserModel: ObservableObject {
     }
 
     func submitSearch(query explicitQuery: FileQuery? = nil) {
-        let text = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let extensions = Set(searchExtensions.split { $0 == "," || $0.isWhitespace }.map(String.init))
-        let lower = searchMinimumBytes ?? 0
-        let upper = searchMaximumBytes ?? Int64.max
+        submitSearch(captureSearch(), query: explicitQuery)
+    }
+
+    func submitSearch(_ draft: SearchState, in root: URL? = nil, query explicitQuery: FileQuery? = nil) {
+        let text = draft.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let extensions = Set(draft.extensions.split { $0 == "," || $0.isWhitespace }.map(String.init))
+        let lower = draft.minimumBytes ?? 0
+        let upper = draft.maximumBytes ?? Int64.max
         guard lower >= 0, upper >= lower else {
             status = "Enter a valid size range."
             return
         }
-        let size: ClosedRange<Int64>? = searchMinimumBytes == nil && searchMaximumBytes == nil ? nil : lower...upper
-        if explicitQuery == nil && text.isEmpty && extensions.isEmpty && size == nil && searchModified == nil {
-            clearSearch()
+        let size: ClosedRange<Int64>? = draft.minimumBytes == nil && draft.maximumBytes == nil ? nil : lower...upper
+        if explicitQuery == nil && text.isEmpty && extensions.isEmpty && size == nil && draft.modified == nil {
+            clearSearch(recursively: draft.recursive, contentMode: draft.contentMode)
             return
         }
-        let contents = searchContent && explicitQuery == nil
+        var state = draft
+        let contents = draft.contentMode && explicitQuery == nil
         if contents {
             guard let content = TextContentQuery(phrase: text) else {
                 status = "Enter text to search in file contents."
                 return
             }
-            contentQuery = content
+            state.content = content
         } else {
-            contentQuery = nil
+            state.content = nil
         }
         let name: FileQuery.Name? = text.isEmpty || contents ? nil : (
             text.contains("*") || text.contains("?") ? .wildcard(text) : .contains(text)
         )
-        query = explicitQuery ?? FileQuery(name: name, extensions: extensions, size: size, modified: searchModified)
-        searchActive = true
+        state.query = explicitQuery ?? FileQuery(name: name, extensions: extensions, size: size, modified: draft.modified)
+        if let root {
+            navigate(.search(state)) { try DirectoryReader.directoryURL(root) }
+            return
+        }
+        setSearch(state)
         scrollAnchor = nil
         load()
     }
 
     func clearSearch() {
+        clearSearch(recursively: searchRecursively, contentMode: searchContent)
+    }
+
+    private func clearSearch(recursively: Bool, contentMode: Bool) {
         let wasSearching = searchActive
-        setSearch(SearchState(recursive: searchRecursively, contentMode: searchContent))
+        setSearch(SearchState(recursive: recursively, contentMode: contentMode))
         if wasSearching { reloadPreservingSelection() }
     }
 
@@ -607,6 +621,12 @@ final class BrowserModel: ObservableObject {
             let item = url.appendingPathComponent(name).standardizedFileURL
             restore(Visit(folder: url, selection: [item], anchor: item,
                           search: SearchState(recursive: searchRecursively)))
+        case .search(let state):
+            if url.path != folder.path {
+                back.append(leaving)
+                forward.removeAll()
+            }
+            restore(Visit(folder: url, search: state))
         case .back:
             guard let target = back.popLast() else { return }
             forward.append(leaving)
@@ -625,11 +645,16 @@ final class BrowserModel: ObservableObject {
 
     private func captureVisit() -> Visit {
         let anchor = viewMode == .list ? visibleListItem ?? scrollAnchor : scrollAnchor
-        return Visit(folder: folder, selection: selected.union(selectionToRestore), anchor: anchor, search: SearchState(
+        return Visit(folder: folder, selection: selected.union(selectionToRestore), anchor: anchor,
+              search: captureSearch())
+    }
+
+    private func captureSearch() -> SearchState {
+        SearchState(
             text: searchText, extensions: searchExtensions, minimumBytes: searchMinimumBytes,
             maximumBytes: searchMaximumBytes, modified: searchModified, recursive: searchRecursively,
             contentMode: searchContent, query: query, content: contentQuery
-        ))
+        )
     }
 
     private func restore(_ visit: Visit) {
