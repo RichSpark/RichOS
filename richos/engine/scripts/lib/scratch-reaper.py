@@ -5683,6 +5683,30 @@ def write_state(path, payload):
         sys.stderr.write("scratch-reaper: could not write %s: %s\n" % (path, exc))
 
 
+def floor_check(cfg):
+    """--floor-check: the volumes holding the declared Cargo trees that are below their
+    free-space target (lib/build_caches.py rule 3), one line each; exit 1 if any, else 0. One
+    statvfs per tree and nothing else, so the app's watcher can ask every check (review
+    rv-20261112T112825Z-7f381427-61d2: the cache drive filled while the app's own disk was fine,
+    and nothing started the app's sweep)."""
+    bc = build_caches()
+    short, seen = [], set()
+    for root in [r for r in cfg.get("cargo_target_roots", []) if os.path.isdir(r)]:
+        t = bc.free_target(root, cfg.get("disk_floor_gb", 60), cfg.get("disk_primary_volume", ""),
+                           cfg.get("disk_scale_extra_volumes", True),
+                           cfg.get("build_cache_free_target_percent", 150))
+        here = bc.volume_space(root)
+        if t is None or here is None or here[0] in seen:
+            continue
+        seen.add(here[0])
+        target, floor, free = t
+        if free < target:
+            short.append(root)
+            print("FLOOR: %s free on the volume holding %s, under its target of %s (floor %s)"
+                  % (human(free), root, human(target), human(floor)))
+    return 1 if short else 0
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(add_help=True, description=__doc__)
     ap.add_argument("--apply", action="store_true",
@@ -5691,6 +5715,11 @@ def main(argv=None):
                     help="a volume is below its floor (the disk watchdog passes this): also plan "
                          "idle stock simulators and old Xcode device-support folders.")
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--floor-check", action="store_true",
+                    help="delete nothing and scan nothing: one line per volume holding a declared "
+                         "Cargo tree that is below its free-space target, exit 1 if any is, 0 if "
+                         "none. The app's disk watcher asks this every check, so a drive the "
+                         "caches fill starts the app's sweep even when the app's own disk is fine.")
     ap.add_argument("--verbose", action="store_true",
                     help="show the KEEP rows too — the whole reasoning.")
     ap.add_argument("--notice", action="store_true",
@@ -5732,6 +5761,8 @@ def main(argv=None):
         _DEADLINE[0] = time.time() + args.deadline
     try:
         cfg = config_from_env(args.process_only)
+        if args.floor_check:
+            return floor_check(cfg)
         ws = load_workspaces()
         reaper = Reaper(cfg, ws)
         reaper.under_floor = bool(args.under_floor)

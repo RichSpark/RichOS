@@ -90,18 +90,40 @@ pub fn disk_space(_path: &Path) -> Option<(u64, u64)> {
     None
 }
 
+/// The disk watcher's second question: is a drive holding the shared Cargo caches below its
+/// free-space target? Answered by the engine (`scratch-reaper.sh --floor-check`), which owns where
+/// the caches are and what each drive's floor is.
+pub type FloorCheck = Arc<dyn Fn() -> bool + Send + Sync>;
+
+/// How long the engine's floor check may take: one statvfs per Cargo tree after Python starts.
+pub const FLOOR_CHECK_BOUND: Duration = Duration::from_secs(60);
+
+/// Why the watcher starts a sweep now, or `None`: the app's own disk below
+/// [`LOW_FREE_FRACTION`] free, or a drive holding the shared Cargo caches below its target
+/// (review rv-20261112T112825Z-7f381427-61d2: the caches filled an external drive while the app's
+/// own disk was fine, and no sweep started).
+pub fn low_reason(data_dir: &Path, cargo_short: &dyn Fn() -> bool) -> Option<String> {
+    if let Some((free, capacity)) = disk_space(data_dir) {
+        if disk_is_low(free, capacity) {
+            return Some(format!("disk low ({} of {} GB free)", free / 1_000_000_000, capacity / 1_000_000_000));
+        }
+    }
+    if cargo_short() {
+        return Some("a drive holding the Cargo caches is below its target".into());
+    }
+    None
+}
+
 /// **The app starts the cleanup itself when the user's disk drops low** (CEO 2026-11-10: a user
 /// must never be the hard-drive janitor). Every [`DISK_CHECK_EVERY`], and once right away, the
-/// volume holding the app's data folder is read; below [`LOW_FREE_FRACTION`] free, `hook` is
-/// called with [`Moment::DiskLow`], which runs the same app-scoped sweep as start and settled.
-pub fn watch_disk(data_dir: PathBuf, hook: Hook) {
+/// volume holding the app's data folder is read, and the engine is asked about the drives holding
+/// the shared Cargo caches ([`low_reason`]); when either is low, `hook` is called with
+/// [`Moment::DiskLow`], which runs the same app-scoped sweep as start and settled.
+pub fn watch_disk(data_dir: PathBuf, hook: Hook, cargo_short: FloorCheck) {
     let spawned = std::thread::Builder::new().name("richos-disk-watch".into()).spawn(move || loop {
-        if let Some((free, capacity)) = disk_space(&data_dir) {
-            if disk_is_low(free, capacity) {
-                eprintln!("[richos] disk low ({} of {} GB free): starting the cleanup",
-                          free / 1_000_000_000, capacity / 1_000_000_000);
-                hook(Moment::DiskLow);
-            }
+        if let Some(reason) = low_reason(&data_dir, &*cargo_short) {
+            eprintln!("[richos] {reason}: starting the cleanup");
+            hook(Moment::DiskLow);
         }
         std::thread::sleep(DISK_CHECK_EVERY);
     });
@@ -237,6 +259,54 @@ impl Sweeper {
         command
     }
 
+    /// The engine's floor check, byte-exact: deletes nothing, scans nothing.
+    pub fn floor_command(&self) -> Command {
+        let mut command = Command::new("/bin/bash");
+        command
+            .arg(self.engine.join("scripts/scratch-reaper.sh"))
+            .arg("--floor-check")
+            .env_clear()
+            .envs(&self.env)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        command
+    }
+
+    /// True when the engine says a drive holding a declared Cargo tree is below its target (exit 1).
+    /// Anything else (on target, a refusal, an engine without the check, a hang past
+    /// [`FLOOR_CHECK_BOUND`]) is false: the watcher never sweeps on a guess.
+    pub fn cargo_floor_short(&self) -> bool {
+        let mut command = self.floor_command();
+        crate::owned_process::OwnedChild::configure(&mut command);
+        let Ok(mut child) = command.spawn() else { return false };
+        let stdout = child.stdout.take();
+        let mut child = crate::owned_process::OwnedChild::new(child);
+        let out = std::thread::spawn(move || {
+            let mut s = String::new();
+            if let Some(mut o) = stdout { o.read_to_string(&mut s).ok(); }
+            s
+        });
+        let deadline = Instant::now() + FLOOR_CHECK_BOUND;
+        let status = loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break status,
+                Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(50)),
+                _ => {
+                    child.kill().ok();
+                    child.wait().ok();
+                    return false;
+                }
+            }
+        };
+        let out = out.join().unwrap_or_default();
+        let short = status.code() == Some(1);
+        if short {
+            eprintln!("[richos] {}", out.trim().lines().next().unwrap_or("a Cargo cache drive is below its target"));
+        }
+        short
+    }
+
     /// Sweep now, waiting at most the moment's bound for the sweep ahead of it and then running at
     /// most that long itself; one line to the app's log either way.
     pub fn run(&self, moment: Moment) -> Result<Outcome, String> {
@@ -346,6 +416,15 @@ pub fn hook(engine: Arc<Mutex<PathBuf>>, data_dir: PathBuf) -> Hook {
             Some(sweeper) => Arc::new(sweeper).spawn(moment),
             None => eprintln!("[richos] cleanup at {}: no verified engine yet, the next sweep takes it", moment.as_str()),
         }
+    })
+}
+
+/// The disk watcher's [`FloorCheck`], asked of the engine in `engine` AT THAT MOMENT, like [`hook`].
+/// No verified engine yet is "not short": nothing is swept on a guess.
+pub fn floor_check(engine: Arc<Mutex<PathBuf>>, data_dir: PathBuf) -> FloorCheck {
+    Arc::new(move || {
+        let dir = engine.lock().map(|d| d.clone()).unwrap_or_default();
+        Sweeper::for_engine(&dir, &data_dir).is_some_and(|sweeper| sweeper.cargo_floor_short())
     })
 }
 
@@ -581,6 +660,24 @@ mod tests {
                           "--app-budget", "540"], "the reaper is given the same longer budget");
         #[cfg(unix)]
         assert!(disk_space(Path::new("/")).is_some_and(|(free, capacity)| capacity > 0 && free <= capacity));
+    }
+
+    /// A drive holding the Cargo caches below its target starts the sweep even when the app's own
+    /// disk is fine; neither low starts nothing; the floor check is the engine's, deleting nothing.
+    #[test]
+    fn a_cargo_cache_drive_below_its_target_starts_the_sweep_when_the_apps_disk_is_fine() {
+        let healthy = std::env::temp_dir();
+        let fine = disk_space(&healthy).is_some_and(|(free, capacity)| !disk_is_low(free, capacity));
+        if fine {
+            assert!(low_reason(&healthy, &|| true).is_some_and(|r| r.contains("Cargo caches")));
+            assert_eq!(low_reason(&healthy, &|| false), None);
+        }
+        let s = Sweeper::new(Path::new("/E"), "/R/bin", Path::new("/D/com.richos.app"));
+        let c = s.floor_command();
+        assert_eq!(c.get_program(), "/bin/bash");
+        assert_eq!(c.get_args().map(|a| a.to_string_lossy().into_owned()).collect::<Vec<_>>(),
+                   ["/E/scripts/scratch-reaper.sh", "--floor-check"]);
+        assert!(!s.cargo_floor_short(), "an engine that is not there is never short");
     }
 
     #[test]

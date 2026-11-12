@@ -29,6 +29,9 @@ every "it kept X" test:
        (review rv-20261112T102721Z-317c4e7a-1985 #2), never one read within the minimum.
   B9a  the app's own sweep (--app, the only sweep a user's app runs) applies the floor to the
        shared Cargo trees too (the same review, #1); on a volume at its target it walks nothing.
+  B9w  --floor-check, which the app's disk watcher asks every check, says exit 1 and names the
+       drive when a Cargo tree's volume is below its target, exit 0 and nothing when it is not
+       (review rv-20261112T112825Z-7f381427-61d2: the cache drive filled, the app's disk was fine).
 
 Everything lives in a temporary directory; nothing outside it is read or written except
 `git`, run against checkouts created here.
@@ -452,6 +455,21 @@ class BuildCaches(unittest.TestCase):
                 else:
                     self.assertEqual(plan[p].action, reaper.DELETE, plan[p].why)
                     self.assertEqual(plan[p].unit_keys, expect)
+
+    def test_B9w_the_floor_check_names_a_short_cache_drive_and_scans_nothing(self):
+        cfg = {"cargo_target_roots": [self.cargo], "disk_primary_volume": "",
+               "disk_scale_extra_volumes": True, "disk_floor_gb": 1,
+               "build_cache_free_target_percent": 100}
+        gib = 1024 ** 3
+        mod = reaper.build_caches()
+        for free, code in ((gib - 1, 1), (gib, 0)):
+            with self.subTest(free=free), \
+                    patch.object(mod, "volume_space", lambda _p, f=free: (1, 100 * gib, f)), \
+                    patch.object(mod, "profile_dirs") as walked, \
+                    contextlib.redirect_stdout(io.StringIO()) as out:
+                self.assertEqual(reaper.floor_check(cfg), code)
+                walked.assert_not_called()
+            self.assertEqual(self.cargo in out.getvalue(), code == 1, out.getvalue())
 
     def test_installed_engine_has_no_git_but_registered_owners_remain_checked(self):
         library = Path(self.tmp) / 'installed-engine/scripts/lib'
