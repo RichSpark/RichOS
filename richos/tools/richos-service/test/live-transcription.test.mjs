@@ -34,7 +34,7 @@ test('the engine archive verifier can import the live normalization worker', asy
 });
 
 test('the live normalization worker reads the session passed by its parent', async (t) => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'richbrief-worker-'));
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'richbrief-worker-')));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const worker = new Worker(new URL('../lib/live-normalization-worker.js', import.meta.url), {
     workerData: { dir, recorderPid: process.pid },
