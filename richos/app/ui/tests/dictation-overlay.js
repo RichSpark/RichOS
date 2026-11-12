@@ -170,14 +170,18 @@ async function main() {
     await menu.close();
   });
 
-  await run.check("preview shows two hundred recent characters, grows naturally and keeps its controls", async () => {
+  await run.check("enabled preview stays open from the first silence through shorter words and gaps", async () => {
     const notes = [];
     for (const width of [900,1440]) for (const fontScale of [100,150]) for (const theme of ["dark","light"]) {
       const page = await open(browser,BAR,theme,true,{viewport:{width,height:700},screen:{width,height:900}});
       await page.evaluate(w=>Object.defineProperty(window.screen,"availWidth",{value:w}),width);
-      await say(page,"dictation-bar",bar("listening",{theme,fontScale,destination:"Mail",vocabulary:"Example Company"}));
+      await say(page,"dictation-bar",bar("listening",{theme,fontScale,destination:"Mail",vocabulary:"Example Company",previewEnabled:true}));
       await page.evaluate(()=>document.fonts.ready.then(()=>true));
+      assert(await page.locator(".dhx-tag").isVisible(),"enabled preview is visible before the first words");
+      assertEqual((await text(page,".dhx-top")).toLowerCase(),"preview","the empty panel only shows its label");
+      assertEqual(await page.locator(".dhx-words").count(),0,"there are no blank caption lines at startup");
       const baseline = await page.evaluate(()=> {
+        window.__previewTag=document.querySelector(".dhx-tag");
         window.__previewRow=document.querySelector(".dhx-row");
         window.__previewMeter=document.querySelector(".dh-meter");
         window.__previewClock=document.getElementById("dhTime");
@@ -197,6 +201,7 @@ async function main() {
           lastVisible:last.top>=box.top-1&&last.bottom<=box.bottom+1&&last.right<=box.right+1,
           noHorizontalOverflow:el.scrollWidth<=el.clientWidth+1,
           report:calls[calls.length-1][1],
+          labelKept:window.__previewTag===document.querySelector(".dhx-tag"),
           controlsKept:window.__previewRow===document.querySelector(".dhx-row")&&
             window.__previewMeter===document.querySelector(".dh-meter")&&window.__previewClock===document.getElementById("dhTime")};
       });
@@ -208,6 +213,7 @@ async function main() {
         const current=await inspect();
         assert(current.lines>=1&&current.lines<=5,"the preview has at most five text lines");
         assert(current.height<=5*current.lineHeight+1,"the text area cannot grow past its cap");
+        assert(current.labelKept,"caption updates retain the preview label node");
         assert(current.controlsKept,"updates retain the live meter, clock and controls");
         assert(current.lastVisible,"the newest word is readable");
         assert(current.noHorizontalOverflow,"words wrap inside the preview");
@@ -235,10 +241,24 @@ async function main() {
       assert(token.lines<=5&&token.noHorizontalOverflow&&token.lastVisible,"a long token keeps the cap and latest word");
       await say(page,"dictation-live-preview",{seq:7,text:"Approved."});
       const short=await inspect();
-      assertEqual(short.lines,1,"a shorter provisional result shrinks again");
-      assert(short.report.h<heights[2]&&short.controlsKept,"shrinking keeps the controls alive");
+      assertEqual(await text(page,".dhx-words"),"Approved.","the shorter result is still shown");
+      assertEqual(short.report.h,token.report.h,"a shorter result cannot shrink the bar");
+      assertEqual(short.report.w,token.report.w,"a shorter result cannot shrink the preview width");
+      assert(short.controlsKept,"a shorter result leaves the live controls in place");
+      const layoutCount=()=>page.evaluate(()=>window.__calls.filter(c=>c[0]==="dictation_bar_laid_out").length);
+      await page.evaluate(()=>window.__captionText=document.querySelector(".dhx-words").firstChild);
+      const placed=await layoutCount();
+      await say(page,"dictation-live-preview",{seq:7,text:"Revised."});
+      assertEqual(await text(page,".dhx-words"),"Revised.");
+      assert(await page.evaluate(()=>window.__captionText===document.querySelector(".dhx-words").firstChild),
+        "an updated caption keeps its text node");
+      assertEqual(await layoutCount(),placed,"an equal-sized caption does not ask macOS to show the window again");
       await say(page,"dictation-live-preview",{seq:7,text:""});
-      assertEqual(await page.evaluate(()=>window.RichDictationBar.layout()),baseline,"no words reserve no preview space");
+      assertEqual((await text(page,".dhx-top")).toLowerCase(),"preview","the label stays while old words expire");
+      assertEqual(await page.evaluate(()=>window.RichDictationBar.layout()),short.report,"expired words leave the panel in place");
+      await say(page,"dictation-live-preview",{seq:7,enabled:false,text:""});
+      assertEqual(await page.locator(".dhx-top").count(),0,"explicitly disabling preview removes it");
+      assert((await page.evaluate(()=>window.RichDictationBar.layout())).h<baseline.h,"disabled preview stays compact");
       assertEqual(page.__errors,[]);
       notes.push(width+"px / "+fontScale+"% / "+theme+": "+heights.join(" → "));
       await page.close();
@@ -248,7 +268,7 @@ async function main() {
 
   await run.check("preview stays provisional and quiet for VoiceOver; Finish and Cancel reach the owning recording", async () => {
     const page = await open(browser, BAR);
-    await say(page, "dictation-bar", bar("listening", {destination:"Mail",vocabulary:"Example Company",preview:"Please send the forecast"}));
+    await say(page, "dictation-bar", bar("listening", {destination:"Mail",vocabulary:"Example Company",previewEnabled:true,preview:"Please send the forecast"}));
     assertEqual(await text(page,".dhx-dest"), "To Mail · Vocabulary: Example Company");
     assertEqual(await text(page,".dhx-words"), "Please send the forecast");
     assertEqual(await page.locator(".dhx-top").getAttribute("aria-live"), "off");
@@ -595,8 +615,8 @@ async function main() {
         }
       };
       const views = [bar("listening", { startedMs: Date.now() }),
-        bar("listening", {destination:"Mail",vocabulary:"Example Company",preview:"Please send the revised forecast."}),
-        bar("listening", {destination:"Mail",previewPaused:true,blockedKeys:true,blockedBy:"1Password"}),
+        bar("listening", {destination:"Mail",vocabulary:"Example Company",previewEnabled:true,preview:"Please send the revised forecast."}),
+        bar("listening", {destination:"Mail",previewEnabled:true,previewPaused:true,blockedKeys:true,blockedBy:"1Password"}),
         ...[{state:"sent"},{state:"check",recoverable:true},{state:"not-added",copied:true,destinationChanged:true},
           {state:"not-added",copied:false,recoverable:true},{state:"not-added",copied:true,earlierDraft:true,replacedCopiedDraft:true},
           {state:"secure-field"},{state:"discarded-secure"}].map(delivery=>bar("delivery",{delivery:{destination:"Mail",...delivery}})),
@@ -606,6 +626,7 @@ async function main() {
         for (const [gname, ground] of [["over white", WHITE], ["over black", BLACK]]) {
           const page = await open(browser, BAR, theme);
           await say(page, "dictation-bar", Object.assign(v, { theme }));
+          if (v.preview) assertEqual(await text(page,".dhx-words"),v.preview,"the preview words are present for the contrast walk");
           const ind = v.view === "listening" ? BAR_INDICATORS
             : v.view === "problem" ? [["the problem ring", ".dh-orb", "borderTopColor", ".dh"]].concat(
               v.problem === "no-microphone" || v.problem === "no-accessibility" ? [["Fix it's fill", "#fixIt", "backgroundColor", ".dh"]] : [])

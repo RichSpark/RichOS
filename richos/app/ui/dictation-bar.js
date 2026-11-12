@@ -68,7 +68,7 @@ window.RichDictationBar = (function () {
   /// Fix it is on the microphone and Accessibility bars only (`dictation_bar::has_fix`).
   var FIX = { "no-microphone": true, "no-accessibility": true };
 
-  var D = { seq: 0, view: "hidden", started: 0, level: 0, target: 0, raf: 0, bars: [] };
+  var D = { seq: 0, view: "hidden", started: 0, level: 0, target: 0, raf: 0, bars: [], previewEnabled: false, previewHeight: 0, lastLayout: null };
 
   function look(msg) {
     if (window.RichTheme && msg && msg.theme) {
@@ -137,18 +137,43 @@ window.RichDictationBar = (function () {
   }
 
   function updatePreview(message) {
-    if (message.seq !== D.seq || D.view !== "listening") return;
+    if (message.seq !== D.seq || D.view !== "listening") return false;
+    if (message.enabled !== undefined) D.previewEnabled = message.enabled;
     var pill = document.getElementById("dhEl");
-    if (!pill) return;
+    if (!pill) return false;
     var line = document.getElementById("dhPreview");
+    if (!D.previewEnabled) {
+      D.previewHeight = 0;
+      if (line) line.remove();
+      return !!line;
+    }
     if (!line) {
       line = document.createElement("div"); line.id = "dhPreview"; line.className = "dhx-top";
-      line.setAttribute("aria-live", "off"); pill.insertBefore(line, pill.firstChild);
+      line.setAttribute("aria-live", "off");
+      line.innerHTML = '<span class="dhx-tag">Preview</span>';
+      pill.insertBefore(line, pill.firstChild);
+      if (D.previewHeight) line.style.minHeight = D.previewHeight + "px";
     }
-    line.innerHTML = message.paused ? '<span class="dhx-paused">Preview paused</span>'
-      : message.text ? '<span class="dhx-tag">Preview</span><span class="dhx-words" aria-live="off">' + esc(message.text) + '</span>' : "";
-    line.hidden = !message.paused && !message.text;
-    report();
+    // Keep the live nodes in WebKit's accessibility tree as caption text changes.
+    var tag = line.firstElementChild;
+    var tagText = message.paused ? "Preview paused" : "Preview";
+    if (tag.textContent !== tagText) {
+      tag.className = message.paused ? "dhx-paused" : "dhx-tag";
+      tag.textContent = tagText;
+    }
+    var words = line.querySelector(".dhx-words");
+    if (message.paused || !message.text) {
+      if (words) words.remove();
+    } else {
+      if (!words) {
+        words = document.createElement("span"); words.className = "dhx-words";
+        words.setAttribute("aria-live", "off");
+        words.appendChild(document.createTextNode(""));
+        line.appendChild(words);
+      }
+      if (words.firstChild.data !== message.text) words.firstChild.data = message.text;
+    }
+    return true;
   }
 
   /// Draw one view: { seq, view, problem, key, startedMs, theme, fontScale }.
@@ -157,10 +182,13 @@ window.RichDictationBar = (function () {
     var h = document.getElementById("dhud");
     var k = msg.key || "F1";
     var html = "";
+    var started = msg.startedMs || Date.now();
+    if (msg.view !== "listening" || D.view !== "listening" || D.started !== started) D.previewHeight = 0;
     D.seq = msg.seq || 0;
     D.view = msg.view;
     if (msg.view === "listening") {
-      D.started = msg.startedMs || Date.now();
+      D.started = started;
+      D.previewEnabled = !!msg.previewEnabled;
       var warning = msg.blockedKeys ? '<p class="dhx-warn">' + IC.alert + '<span>' +
         (msg.blockedBy ? '<b>' + esc(msg.blockedBy) + '</b>' : 'Another app') + ' is hiding your keys, so ' + kcap(k) + " can't reach me.</span></p>" : "";
       var destination = msg.destination ? '<span class="dhx-dest"><span>To <b>' + esc(msg.destination) + '</b></span>' +
@@ -226,6 +254,13 @@ window.RichDictationBar = (function () {
     document.documentElement.style.setProperty("--dictation-screen-width", width + "px");
     var pill = document.querySelector("#dhud > *");
     if (!pill) return null;
+    // Reserve the largest preview height before reporting the native frame.
+    // A shorter result never shrinks the bar during the same recording.
+    var preview = pill.querySelector("#dhPreview");
+    if (preview && preview.offsetHeight > D.previewHeight) {
+      D.previewHeight = preview.offsetHeight;
+      preview.style.minHeight = D.previewHeight + "px";
+    }
     // At three lines keep the newest words visible, including after a desktop
     // width change. Hidden overflow has no scrollbar or transcript history UI.
     var words = pill.querySelector(".dhx-words");
@@ -252,9 +287,14 @@ window.RichDictationBar = (function () {
     return out;
   }
 
-  function report() {
+  function report(captionUpdate) {
     var l = layout();
-    if (l) invoke("dictation_bar_laid_out", l);
+    if (!l) return;
+    var key = JSON.stringify(l);
+    // Refresh scrolling on every caption. Only ask macOS to place the window again
+    // if the caption changed its geometry; ordinary view and resize reports still run.
+    if (captionUpdate !== true || key !== D.lastLayout) invoke("dictation_bar_laid_out", l);
+    D.lastLayout = key;
   }
 
   /// The meter (round 19 `meterTick`): the tool's level, at most 30 a second, eased here.
@@ -338,7 +378,7 @@ window.RichDictationBar = (function () {
       ? [
           tauri.event.listen("dictation-bar", function (e) { render(e.payload); }),
           tauri.event.listen("dictation-level", function (e) { level(e.payload.level); }),
-          tauri.event.listen("dictation-live-preview", function (e) { updatePreview(e.payload); }),
+          tauri.event.listen("dictation-live-preview", function (e) { if (updatePreview(e.payload)) report(true); }),
         ]
       : [tauri.event.listen("dictation-flight", function (e) { fly(e.payload); })];
     Promise.all(heard).then(function () {

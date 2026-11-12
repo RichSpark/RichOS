@@ -31,10 +31,9 @@ import {
   detectSpeechBursts,
   cutSpan,
   measureSpanVolume,
-  CHANNEL_FILES,
 } from './normalize.js';
 import { transcribeSession, transcribeClips, transcribeStyled, whisperVersion } from './transcribe.js';
-import { advanceLiveTranscription, decodeLongWindow, removeLiveTranscriptionScratch, supportsLiveTranscription } from './live-transcription.js';
+import { advanceLiveTranscription, decodeLongWindow, removeLiveTranscriptionScratch, supportsLiveTranscription, takeLiveNormalization } from './live-transcription.js';
 import { restyleChannel, restyleWarnings } from './restyle.js';
 import { mergeTranscript, renderMarkdown, verify, wordCount } from './merge.js';
 import { correct } from './correct.js';
@@ -46,7 +45,7 @@ import { guardDeletions, deletionWarnings, informativeWords, lexicalText, DELETI
 import { guardSubstitution, substitutionWarnings, SUBSTITUTION_GUARD_DEFAULTS } from './substitution-guard.js';
 import { diarizeOthers } from './diarize.js';
 import { log } from './log.js';
-import { assertPrivateTree, privateDirectory, writePrivateFile } from './private-files.js';
+import { assertPrivateTree, privateDirectory, privateFile, writePrivateFile } from './private-files.js';
 
 export const ARTIFACTS = { transcript: 'transcript.md', verification: 'verification.json' };
 
@@ -126,8 +125,19 @@ export function runPipeline(sessionDir, opts = {}) {
     hasTranscript,
     now,
   });
+  const usableAudio = hasUsableAudio(record);
+  const alreadyReady = hasTranscript && record?.pipeline?.status === PIPELINE_STATUS.ready && !opts.retranscribe;
+  const nativeLive = Boolean(record && supportsLiveTranscription(sessionDir, record));
+  const keepPrepared = usableAudio && !alreadyReady && !opts.retranscribe && nativeLive && record.status === 'closed';
+  if (record?.status === 'closed') {
+    try {
+      removeLiveTranscriptionScratch(sessionDir, { keepPrepared });
+    } catch {
+      log.warn('live transcription staging could not be cleared');
+    }
+  }
   // A genuine capture anomaly (no audio / captions-only / unreadable) can never yield a transcript.
-  if (!record || !hasUsableAudio(record)) {
+  if (!usableAudio) {
     const problems = recon.problems.length ? recon.problems : ['no usable audio to transcribe'];
     log.alarm(`${sessionId} — cannot transcribe`, { problems });
     if (record) {
@@ -140,32 +150,35 @@ export function runPipeline(sessionDir, opts = {}) {
   }
 
   record = upgradeRecord(record);
-  const nativeLive = supportsLiveTranscription(sessionDir, record);
-  if (record.status === 'closed' && nativeLive) {
-    try {
-      removeLiveTranscriptionScratch(sessionDir);
-    } catch {
-      log.warn('live transcription staging could not be cleared');
-    }
-  }
 
   // Idempotency: a ready transcript is only re-made on explicit retranscribe.
-  if (hasTranscript && record.pipeline.status === PIPELINE_STATUS.ready && !opts.retranscribe) {
+  if (alreadyReady) {
     log.info(`${sessionId} — transcript already exists; skipping (use retranscribe to re-run)`);
     return { status: PIPELINE_STATUS.ready, sessionId, transcript: path.join(sessionDir, ARTIFACTS.transcript) };
   }
 
   try {
     // ---- Stage 2: NORMALIZE ---------------------------------------------------------------------
-    const norm = normalizeSession(sessionDir, { workDir: sessionDir });
+    const prepared = keepPrepared ? takeLiveNormalization(sessionDir) : null;
+    const norm = prepared ?? normalizeSession(sessionDir, { workDir: sessionDir });
+    if (prepared) {
+      let endedAt;
+      try {
+        // The app records the recorder's exit here when it ends the capture normally.
+        endedAt = JSON.parse(fs.readFileSync(privateFile(path.join(sessionDir, 'meeting.json'), sessionDir), 'utf8'))?.endedAt;
+      } catch {
+        // Standalone transcription may have no app meeting facts.
+      }
+      const { readyAt } = prepared;
+      const afterRecordedEndMs = Number.isSafeInteger(endedAt) && endedAt > 0
+        && Number.isSafeInteger(readyAt) && readyAt >= endedAt ? readyAt - endedAt : undefined;
+      log.info('live audio normalization reused', { readyAt, afterRecordedEndMs });
+    }
     log.info(`${sessionId} — normalized ${norm.parts.length} part(s), stereo=${norm.stereo}`);
 
     // Deterministic silence guard: audio that decoded but carries no energy on either channel is a
     // captured-but-nothing-recorded anomaly — caught here, independent of ASR silence-hallucination.
-    const channelPaths = {
-      me: path.join(sessionDir, CHANNEL_FILES.me),
-      others: path.join(sessionDir, CHANNEL_FILES.others),
-    };
+    const channelPaths = { me: norm.me, others: norm.others };
     const silence = detectSilence(channelPaths);
     if (silence.silent) {
       const problems = [

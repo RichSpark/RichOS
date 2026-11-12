@@ -962,7 +962,7 @@ impl Meetings {
                     }
                 }
                 let status = child.wait();
-                me.capture_exited(pid, status.ok().and_then(|s| s.code()), live);
+                me.capture_exited(pid, status.ok().and_then(|s| s.code()), live, now_millis());
             })
             .ok();
     }
@@ -1043,7 +1043,7 @@ impl Meetings {
 
     /// The capture process ended. After a stop this is the normal end; otherwise the recording
     /// ended by itself, and the monitor is told so the call does not prompt again.
-    fn capture_exited(&self, pid: u32, code: Option<i32>, live: Option<Child>) {
+    fn capture_exited(&self, pid: u32, code: Option<i32>, live: Option<Child>, exited_at: u64) {
         let (finished, current) = {
             let mut guard = self.inner.lock().unwrap();
             let inner = &mut *guard;
@@ -1077,7 +1077,7 @@ impl Meetings {
             }
         }
         if code == Some(0) && finished.recording {
-            self.recording_closed(finished, live);
+            self.recording_closed(finished, live, exited_at);
         } else {
             let had_live_worker = live.is_some();
             finish_live_transcription(live);
@@ -1134,13 +1134,13 @@ impl Meetings {
 
     /// A recording is closed on disk: write down what the app knows about it (`meeting.json`),
     /// say "Preparing your meeting notes…", and turn it into notes on a thread of its own.
-    fn recording_closed(&self, run: CaptureRun, live: Option<Child>) {
+    fn recording_closed(&self, run: CaptureRun, live: Option<Child>, exited_at: u64) {
         let Some(dir) = run.dir.clone() else {
             finish_live_transcription(live);
             eprintln!("[richos] meeting notes: the recorder closed without naming its session");
             return;
         };
-        let facts = run.facts(now_millis());
+        let facts = run.facts(exited_at);
         eprintln!(
             "[richos] meeting notes: recorded {} ({}, company {}, partial: {}) into {}",
             facts.title.as_deref().unwrap_or("a call"),

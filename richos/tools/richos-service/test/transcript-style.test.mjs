@@ -69,7 +69,7 @@ const runOnText = (segs) => segs.slice(1, 5).map((s) => s.text).join(' ');
 
 console.log('transcript style (CEO report 2026-10-04)');
 
-test('1. paragraphs end only at sentence ends — a segment cut mid-sentence never starts a new paragraph', () => {
+test('1. contiguous paragraphs end only at sentence ends — a segment cut mid-sentence never starts a new paragraph', () => {
   const md = renderMarkdown({ segments: SEGMENTS, speakers: ['Me'] }, { sessionId: 's' });
   const body = md.split('\n').filter((l) => /^\*\*\[/.test(l));
   for (const line of body.slice(0, -1)) {
@@ -86,6 +86,20 @@ test('1. paragraphs end only at sentence ends — a segment cut mid-sentence nev
   const longBody = longMd.split('\n').filter((l) => /^\*\*\[/.test(l));
   assert.ok(longBody.length >= 2, `a ${4 * 25}-word run of sentences must not be one paragraph`);
   for (const line of longBody.slice(0, -1)) assert.match(line, /[.?!]$/, `a paragraph ended mid-sentence:\n${line}`);
+});
+
+test('a late passage after a long gap keeps its own source timestamp', () => {
+  const segments = [
+    seg(2_833_000, 'the earlier count has no punctuation'),
+    { ...seg(3_543_160, 'Priya owns the security sign-off'), endMs: 3_567_880, displayStartMs: 3_564_840 },
+    seg(3_568_160, 'by December 3 at noon.'),
+  ];
+  const md = renderMarkdown({ segments, speakers: ['Me'] }, { sessionId: 's' });
+  const body = md.split('\n').filter((line) => line.startsWith('**['));
+  assert.deepEqual(body, [
+    '**[47:13] Me:** the earlier count has no punctuation',
+    '**[59:24] Me:** Priya owns the security sign-off by December 3 at noon.',
+  ]);
 });
 
 test('2. punctuation holds: a run-on window gets the model\'s own punctuation back, conditioned on the text before it, words unchanged', () => {

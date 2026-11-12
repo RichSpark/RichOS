@@ -1,11 +1,99 @@
 import assert from 'node:assert/strict';
+import { once } from 'node:events';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
-import { advanceLiveTranscription, recentLiveExcerpt, removeLiveTranscriptionScratch, supportsLiveTranscription } from '../lib/live-transcription.js';
+import { Worker } from 'node:worker_threads';
+import { advanceLiveTranscription, prepareLiveNormalization, recentLiveExcerpt, removeLiveTranscriptionScratch, supportsLiveTranscription, takeLiveNormalization } from '../lib/live-transcription.js';
 import { mergeTranscript, renderMarkdown } from '../lib/merge.js';
+import { normalizeSession } from '../lib/normalize.js';
+import { runPipeline } from '../lib/pipeline.js';
+import { log } from '../lib/log.js';
 import { assertPrivateTree } from '../lib/private-files.js';
+
+function nativeHeader(rate, dataBytes = 0) {
+  const header = Buffer.alloc(44);
+  header.write('RIFF', 0);
+  header.writeUInt32LE(36 + dataBytes, 4);
+  header.write('WAVEfmt ', 8);
+  header.writeUInt32LE(16, 16);
+  header.writeUInt16LE(1, 20);
+  header.writeUInt16LE(2, 22);
+  header.writeUInt32LE(rate, 24);
+  header.writeUInt32LE(rate * 4, 28);
+  header.writeUInt16LE(4, 32);
+  header.writeUInt16LE(16, 34);
+  header.write('data', 36);
+  header.writeUInt32LE(dataBytes, 40);
+  return header;
+}
+
+test('the engine archive verifier can import the live normalization worker', async () => {
+  await import('../lib/live-normalization-worker.js');
+});
+
+test('the live normalization worker reads the session passed by its parent', async (t) => {
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'richbrief-worker-')));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const worker = new Worker(new URL('../lib/live-normalization-worker.js', import.meta.url), {
+    workerData: { dir, recorderPid: process.pid },
+  });
+  // This empty session reaches the normalizer and fails at its first audio read.
+  await assert.rejects(once(worker, 'exit'), {
+    code: 'ENOENT', path: path.join(dir, 'audio-part-00.wav'),
+  });
+});
+
+test('live normalization uses flushed native audio and refuses a changed recording', async (t) => {
+  for (const changed of [false, true]) {
+    await t.test(changed ? 'changed retained audio' : 'complete conversion', async (subtest) => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'richbrief-normalize-'));
+      subtest.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+      const audio = path.join(dir, 'audio-part-00.wav');
+      const rate = 48_000;
+      const pcm = Buffer.alloc(rate * 4);
+      for (let offset = 0; offset < pcm.length; offset += 4) {
+        pcm.writeInt16LE(Math.round(2_000 * Math.sin(offset / 70)), offset);
+        pcm.writeInt16LE(Math.round(7_000 * Math.cos(offset / 50)), offset + 2);
+      }
+      const record = { status: 'open', capture: { source: 'desktop-companion-macos' } };
+      const recordPath = path.join(dir, 'session.json');
+      fs.writeFileSync(recordPath, JSON.stringify(record));
+      fs.writeFileSync(audio, Buffer.concat([nativeHeader(rate, pcm.length / 2), pcm]));
+
+      let running = true;
+      const { promise: firstRead, resolve: notifyRead } = Promise.withResolvers();
+      const preparing = prepareLiveNormalization(dir, () => {
+        notifyRead();
+        return running;
+      }, new AbortController().signal);
+      await Promise.race([firstRead, preparing]);
+      assert.equal(takeLiveNormalization(dir), null, 'Unfinished output is unavailable');
+      const fd = fs.openSync(audio, 'r+');
+      fs.writeSync(fd, nativeHeader(rate, pcm.length), 0, 44, 0);
+      fs.closeSync(fd);
+      record.status = 'closed';
+      fs.writeFileSync(recordPath, JSON.stringify(record));
+      running = false;
+      await preparing;
+
+      if (changed) {
+        const changedAudio = fs.readFileSync(audio);
+        changedAudio.writeInt16LE(24_000, 44);
+        fs.writeFileSync(audio, changedAudio);
+        assert.equal(takeLiveNormalization(dir), null, 'Old tracks cannot describe changed audio');
+      } else {
+        const expected = normalizeSession(dir, { workDir: path.join(dir, 'reference') });
+        const actual = takeLiveNormalization(dir);
+        assert.ok(actual, 'Both converted tracks are ready after recorder close');
+        assert.deepEqual(fs.readFileSync(actual.me), fs.readFileSync(expected.me));
+        assert.deepEqual(fs.readFileSync(actual.others), fs.readFileSync(expected.others));
+      }
+      assert.equal(takeLiveNormalization(dir), null, 'The one-use preparation was cleared');
+    });
+  }
+});
 
 test('live transcription checkpoints the flushed prefix and only decodes the tail after close', (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'richbrief-live-'));
@@ -13,17 +101,7 @@ test('live transcription checkpoints the flushed prefix and only decodes the tai
   const audio = path.join(dir, 'audio-part-00.wav');
   const rate = 8_000;
   const bytesPerSecond = rate * 4;
-  const header = Buffer.alloc(44);
-  header.write('RIFF', 0);
-  header.write('WAVEfmt ', 8);
-  header.writeUInt32LE(16, 16);
-  header.writeUInt16LE(1, 20);
-  header.writeUInt16LE(2, 22);
-  header.writeUInt32LE(rate, 24);
-  header.writeUInt32LE(bytesPerSecond, 28);
-  header.writeUInt16LE(4, 32);
-  header.writeUInt16LE(16, 34);
-  header.write('data', 36);
+  const header = nativeHeader(rate);
   const pcm = Buffer.alloc(170 * bytesPerSecond);
   pcm.writeInt16LE(17, 24 * bytesPerSecond);
   pcm.writeInt16LE(-31, 24 * bytesPerSecond + 2);
@@ -267,12 +345,58 @@ test('finalization clears abandoned live decoder copies and keeps checkpoints', 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'richbrief-drain-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const cache = path.join(dir, '.live-transcription');
-  for (const name of ['decode-A1b2c3', '.richos-output-d4E5f6', 'excerpt-Abcd12']) {
+  for (const name of ['decode-A1b2c3', '.richos-output-d4E5f6', 'excerpt-Abcd12', 'normalized-audio']) {
     const staging = path.join(cache, name);
     fs.mkdirSync(staging, { recursive: true });
     fs.writeFileSync(path.join(staging, 'audio-part-00.wav'), 'audio');
   }
   fs.writeFileSync(path.join(cache, '0.json'), '{}');
+  removeLiveTranscriptionScratch(dir, { keepPrepared: true });
+  assert.deepEqual(fs.readdirSync(cache).sort(), ['0.json', 'excerpt-Abcd12', 'normalized-audio']);
   removeLiveTranscriptionScratch(dir);
   assert.deepEqual(fs.readdirSync(cache).sort(), ['0.json', 'excerpt-Abcd12']);
+});
+
+test('the final pipeline clears prepared tracks when it skips conversion', async (t) => {
+  for (const ready of [false, true]) {
+    await t.test(ready ? 'already ready' : 'no usable audio', (subtest) => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'richbrief-unused-normalize-'));
+      subtest.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+      const prepared = path.join(dir, '.live-transcription', 'normalized-audio');
+      fs.mkdirSync(prepared, { recursive: true });
+      fs.writeFileSync(path.join(prepared, 'source.json'), '{}');
+      const status = ready ? 'ready' : 'anomaly';
+      fs.writeFileSync(path.join(dir, 'session.json'), JSON.stringify({
+        status: 'closed', capture: { source: 'desktop-companion-macos' },
+        audio: ready ? { parts: [{ bytes: 48 }], bytesTotal: 48 } : {}, pipeline: { status },
+      }));
+      if (ready) {
+        fs.writeFileSync(path.join(dir, 'audio-part-00.wav'), Buffer.concat([nativeHeader(48_000, 4), Buffer.alloc(4)]));
+        fs.writeFileSync(path.join(dir, 'transcript.md'), 'Existing transcript.');
+      }
+      assert.equal(runPipeline(dir).status, status);
+      assert.equal(fs.existsSync(prepared), false);
+    });
+  }
+});
+
+test('live normalization reuse logs the interval from the app recording end', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'richbrief-normalize-timing-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const rate = 48_000;
+  const pcm = Buffer.alloc(rate * 4);
+  const wav = Buffer.concat([nativeHeader(rate, pcm.length), pcm]);
+  fs.writeFileSync(path.join(dir, 'audio-part-00.wav'), wav);
+  fs.writeFileSync(path.join(dir, 'session.json'), JSON.stringify({
+    status: 'closed', capture: { source: 'desktop-companion-macos' },
+    audio: { parts: [{ bytes: wav.length }], bytesTotal: wav.length },
+  }));
+  await prepareLiveNormalization(dir, () => false, new AbortController().signal);
+  const receipt = path.join(dir, '.live-transcription', 'normalized-audio', 'source.json');
+  const { readyAt } = JSON.parse(fs.readFileSync(receipt, 'utf8'));
+  fs.writeFileSync(path.join(dir, 'meeting.json'), JSON.stringify({ endedAt: readyAt - 25 }));
+  const info = t.mock.method(log, 'info', () => {});
+  assert.equal(runPipeline(dir).status, 'anomaly', 'Silence never reaches the speech decoder');
+  const reuse = info.mock.calls.find(({ arguments: args }) => args[0] === 'live audio normalization reused');
+  assert.deepEqual(reuse?.arguments[1], { readyAt, afterRecordedEndMs: 25 });
 });

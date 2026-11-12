@@ -253,6 +253,8 @@ pub struct BarDetails {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub preview: Option<String>,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub preview_enabled: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub preview_paused: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub delivery: Option<DeliveryMessage>,
@@ -368,8 +370,8 @@ pub fn level(app: &AppHandle, level: f32) {
     app.emit_to(BAR, EVENT_LEVEL, serde_json::json!({ "level": level })).ok();
 }
 
-pub fn preview(app: &AppHandle, seq: u64, text: Option<&str>, paused: bool) {
-    app.emit_to(BAR, EVENT_PREVIEW, serde_json::json!({"seq": seq, "text": text, "paused": paused})).ok();
+pub fn preview(app: &AppHandle, seq: u64, enabled: bool, text: Option<&str>, paused: bool) {
+    app.emit_to(BAR, EVENT_PREVIEW, serde_json::json!({"seq": seq, "enabled": enabled, "text": text, "paused": paused})).ok();
 }
 
 /// What the flight page is told: where the orb is and where the words are, in its own window.

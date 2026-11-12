@@ -4,7 +4,7 @@ use crate::{
     dictation::ipc::{AppMessage, ToolMessage},
     AppState,
 };
-use richos_core::cleaner::{self, choice::Prepared, Catalog, Entry, Files, Identity, Phase};
+use richos_core::cleaner::{self, choice::{FolderContext, Prepared}, Catalog, Entry, Files, FilingChoice, Identity, Phase};
 use serde_json::{json, Value};
 use std::{
     path::{Path, PathBuf},
@@ -12,9 +12,11 @@ use std::{
         atomic::{AtomicBool, Ordering},
         Arc, Mutex,
     },
+    time::Instant,
 };
 use tauri::{AppHandle, Emitter, Manager};
 mod batch;
+mod folders;
 const EVENT: &str = "rich://cleaner";
 const PANEL: &str = "cleaner-panel";
 struct Active {
@@ -25,6 +27,62 @@ struct Active {
     stage: String,
     cancel: Arc<AtomicBool>,
     chooser: Option<Arc<Prepared>>,
+    timings: FilingTimings,
+}
+struct FilingTimings {
+    checking: Instant,
+    listening: Option<Instant>,
+    writing: Option<Instant>,
+    saved: Option<Instant>,
+    inbox: Option<Instant>,
+    choosing: Option<Instant>,
+    filing: Option<Instant>,
+}
+impl Default for FilingTimings {
+    fn default() -> Self {
+        Self {
+            checking: Instant::now(),
+            listening: None,
+            writing: None,
+            saved: None,
+            inbox: None,
+            choosing: None,
+            filing: None,
+        }
+    }
+}
+impl FilingTimings {
+    fn stage(&mut self, name: &str, at: Instant) {
+        let slot = match name {
+            "listening" => &mut self.listening,
+            "writing" => &mut self.writing,
+            "saved" => &mut self.saved,
+            "inbox-pending" => &mut self.inbox,
+            "choosing" => &mut self.choosing,
+            "filing" => &mut self.filing,
+            _ => return,
+        };
+        slot.get_or_insert(at);
+    }
+
+    fn record(&self, id: &str, build: &str, outcome: &str, published: Instant) -> Value {
+        let span = |from: Option<Instant>, to: Option<Instant>| {
+            from.zip(to)
+                .and_then(|(from, to)| to.checked_duration_since(from))
+                .map(|duration| duration.as_millis() as u64)
+        };
+        json!({
+            "id": id,
+            "build": build,
+            "outcome": outcome,
+            "checking_to_listening_ms": span(Some(self.checking), self.listening),
+            "writing_to_note_saved_ms": span(self.writing, self.saved),
+            "note_saved_to_inbox_ms": span(self.saved, self.inbox),
+            "choosing_to_filing_ms": span(self.choosing, self.filing),
+            "filing_to_result_ms": span(self.filing, Some(published)),
+            "writing_to_result_ms": span(self.writing, Some(published)),
+        })
+    }
 }
 pub struct Host {
     active: Mutex<Option<Active>>,
@@ -117,9 +175,10 @@ fn show(app: &AppHandle, mut value: Value) {
 }
 fn stage(app: &AppHandle, id: &str, name: &str, extra: Value) {
     let h = host(app);
-    let active = h.active.lock().unwrap_or_else(|p| p.into_inner());
-    if id != "recovery" && active.as_ref().is_none_or(|a| a.id != id) {
-        return;
+    let mut active = h.active.lock().unwrap_or_else(|p| p.into_inner());
+    if id != "recovery" {
+        let Some(operation) = active.as_mut().filter(|a| a.id == id) else { return };
+        operation.timings.stage(name, Instant::now());
     }
     let mut value = h.view.lock().unwrap_or_else(|p| p.into_inner()).clone();
     value["id"] = json!(id);
@@ -144,8 +203,12 @@ fn finish(app: &AppHandle, id: &str, value: Value) {
     if let Err(e) = link(app, id, "release", json!({})) {
         eprintln!("[richos] RichCleaner release: {e}");
     }
+    let outcome = value["stage"].as_str().unwrap_or("unknown").to_string();
     show(app, value);
+    let published = Instant::now();
     drop(active);
+    let record = done.timings.record(id, &app.package_info().version.to_string(), &outcome, published);
+    crate::dictation::log::line(&format!("RichCleaner filing {record}"));
 }
 fn error(app: &AppHandle, id: &str, message: String) {
     let h = host(app);
@@ -198,32 +261,39 @@ fn profile(
         .clone();
     Ok((bin, profile))
 }
-fn folders(root: &Path) -> Result<Vec<String>, String> {
-    let mut labels = vec![];
-    for entry in std::fs::read_dir(root).map_err(|e| e.to_string())? {
-        let entry = entry.map_err(|e| e.to_string())?;
-        if !entry.file_type().map_err(|e| e.to_string())?.is_dir() {
-            continue;
-        }
-        let name = entry.file_name().to_string_lossy().to_string();
-        if cleaner::folder_parts(&name).is_err() {
-            continue;
-        }
-        labels.push(name.clone());
-        for sub in std::fs::read_dir(entry.path()).map_err(|e| e.to_string())? {
-            let sub = sub.map_err(|e| e.to_string())?;
-            if sub.file_type().map_err(|e| e.to_string())?.is_dir() {
-                let label = format!("{name}/{}", sub.file_name().to_string_lossy());
-                if cleaner::folder_parts(&label).is_ok() {
-                    labels.push(label);
-                }
-            }
-            if labels.len() > 1000 {
-                return Err("There are too many folder labels to classify safely".into());
-            }
-        }
-    }
-    Ok(labels)
+fn start_chooser(app: &AppHandle, id: &str) -> Arc<Prepared> {
+    let app = app.clone();
+    let id = id.to_owned();
+    Arc::new(Prepared::start(move || {
+        let began = Instant::now();
+        let result = profile(&app).map_err(|_| "The model connection is unavailable".to_string());
+        let record = json!({
+            "id":id,
+            "build":app.package_info().version.to_string(),
+            "profile_ms":began.elapsed().as_millis() as u64,
+            "outcome":if result.is_ok() {"ready"} else {"unavailable"},
+        });
+        crate::dictation::log::line(&format!("RichCleaner profile {record}"));
+        result
+    }))
+}
+fn folder_context(db: &Catalog, root: &Path, id: &str) -> Result<FolderContext, String> {
+    let began = Instant::now();
+    let recent = db.recent_filed_paths()?;
+    let context = folders::scan(root, &recent);
+    let record = json!({"id":id,"scan_ms":began.elapsed().as_millis() as u64,
+        "labels":context.labels.len(),"scan_complete":context.complete});
+    crate::dictation::log::line(&format!("RichCleaner folders {record}"));
+    Ok(context)
+}
+fn validated_filing_root(app: &AppHandle, native: &Native) -> Result<PathBuf, String> {
+    let root = settings(app)?.1.ok_or("Choose your filing folder in RichCleaner settings")?;
+    native.request(json!({"action":"validate-root","path":root}))?;
+    Ok(root)
+}
+fn folder_request_context(id: &str, wire_labels: usize, wire_complete: bool) {
+    let record = json!({"id":id,"wire_labels":wire_labels,"wire_complete":wire_complete});
+    crate::dictation::log::line(&format!("RichCleaner folder request context {record}"));
 }
 pub fn start(app: &AppHandle) -> Result<(), String> {
     crate::dictation::log::init(&app.state::<AppState>().data_dir);
@@ -406,6 +476,7 @@ pub fn on_message(app: &AppHandle, message: Option<&ToolMessage>) {
                 stage: "checking".into(),
                 cancel: Arc::new(AtomicBool::new(false)),
                 chooser: None,
+                timings: FilingTimings::default(),
             });
             drop(active);
             show(
@@ -524,9 +595,6 @@ fn begin_target(app: &AppHandle, id: &str, target: Value) -> Result<(), String> 
     start_target(app, id, target, json!({"file":{"name":path.file_name().map(|v|v.to_string_lossy()),"path":path}}))
 }
 fn start_target(app: &AppHandle, id: &str, target: Value, preview: Value) -> Result<(), String> {
-    let chooser = profile(app)
-        .map(|(bin, profile)| Arc::new(Prepared::start(&bin, &profile)))
-        .ok();
     let h = host(app);
     let mut active = h.active.lock().map_err(|_| "The capture was canceled")?;
     let a = active
@@ -534,7 +602,7 @@ fn start_target(app: &AppHandle, id: &str, target: Value, preview: Value) -> Res
         .filter(|a| a.id == id && !a.cancel.load(Ordering::Acquire))
         .ok_or("The capture was canceled")?;
     a.target = Some(target);
-    a.chooser = chooser;
+    a.chooser = Some(start_chooser(app, id));
     a.stage = "starting".into();
     drop(active);
     stage(app, id, "checking", preview);
@@ -575,14 +643,17 @@ fn accept(app: &AppHandle, id: &str, note: String) -> Result<(), String> {
         .map_err(|_| "Settings unavailable")?
         .cleaner_inbox_first();
     if fast {
-        let (_, root) = settings(app)?;
-        let root = root.ok_or("Choose a filing folder")?;
         let _mutation = h
             .mutation
             .lock()
             .map_err(|_| "File operations unavailable")?;
         if !cancel.load(Ordering::Acquire) {
-            let native = Native::bundled()?;
+            let (native, root) = match Native::bundled().and_then(|native| {
+                validated_filing_root(app, &native).map(|root| (native, root))
+            }) {
+                Ok(ready) => ready,
+                Err(problem) => return settle_filing_error(app, id, &mut db, &entry.id, problem),
+            };
             let stored = match cleaner::store_inbox(&mut db, &native, &entry.id, &root) {
                 Ok(stored) => stored,
                 Err(error) => {
@@ -615,11 +686,20 @@ fn settle_canceled(
     entry_id: &str,
 ) -> Result<(), String> {
     let entry = cleaner::cancel_sort(db, entry_id)?;
+    let stage = if entry.phase != Phase::Filed { "draft" } else if entry.inbox { "inbox" } else { "filed" };
     finish(
         app,
         id,
-        json!({"id":id,"stage":if entry.phase==Phase::Filed{"inbox"}else{"draft"},"entry":entry,"noteSaved":true}),
+        json!({"id":id,"stage":stage,"entry":entry,"noteSaved":true}),
     );
+    Ok(())
+}
+fn settle_filing_error(
+    app: &AppHandle, id: &str, db: &mut Catalog, entry_id: &str, problem: String,
+) -> Result<(), String> {
+    let entry = cleaner::stop_sort(db, entry_id, Some(problem))?;
+    finish(app, id, json!({"id":id,"stage":"error","message":entry.problem,
+        "entry":entry,"noteSaved":true,"force":true,"needsFilingFolder":true}));
     Ok(())
 }
 fn file_saved(
@@ -630,26 +710,39 @@ fn file_saved(
     cancel: Arc<AtomicBool>,
 ) -> Result<(), String> {
     stage(app, id, "choosing", json!({"noteSaved":true}));
-    let (_, root) = settings(app)?;
-    let root = root.ok_or("Choose your filing folder in RichCleaner settings")?;
+    let h = host(app);
     let mut db = catalog(app)?;
-    let mut entry = db.get(entry_id)?;
-    if !entry.pending_sort {
-        entry.phase = Phase::Choosing;
-        db.save(&entry)?;
-    }
-    let root_check = Native::bundled()?.request(json!({"action":"validate-root","path":root}));
-    let choice = root_check.and_then(|_| folders(&root)).and_then(|labels| {
+    // The saved record remains Draft or Filed while the panel says Choosing.
+    // A canceled refile must leave the previous filing and its Undo intact.
+    let entry = db.get(entry_id)?;
+    let (native, root) = match Native::bundled().and_then(|native| {
+        validated_filing_root(app, &native).map(|root| (native, root))
+    }) {
+        Ok(ready) => ready,
+        Err(problem) => {
+            let _mutation = h.mutation.lock().map_err(|_| "File operations are unavailable")?;
+            if cancel.load(Ordering::Acquire) {
+                return settle_canceled(app, id, &mut db, entry_id);
+            }
+            return settle_filing_error(app, id, &mut db, entry_id, problem);
+        }
+    };
+    let choice_started = Instant::now();
+    let choice = folder_context(&db, &root, id).and_then(|folders| {
         chooser
             .as_ref()
             .ok_or("The model connection is unavailable".to_string())?
             .choose(
                 &entry.path.file_name().unwrap_or_default().to_string_lossy(),
                 &entry.note,
-                &labels,
+                &folders,
+                |count, complete| folder_request_context(id, count, complete),
             )
     });
-    let h = host(app);
+    let choice = folder_outcome(choice);
+    let record = json!({"id":id,"choice_ms":choice_started.elapsed().as_millis() as u64,
+        "decision":if cancel.load(Ordering::Acquire) { "canceled" } else { cleaner::choice::outcome(&choice) }});
+    crate::dictation::log::line(&format!("RichCleaner folder result {record}"));
     let _mutation = h
         .mutation
         .lock()
@@ -657,7 +750,6 @@ fn file_saved(
     if cancel.load(Ordering::Acquire) {
         return settle_canceled(app, id, &mut db, entry_id);
     }
-    let (folder, labels, inbox, reason) = folder_outcome(choice);
     {
         let mut active = h.active.lock().map_err(|_| "Operation state unavailable")?;
         let a = active
@@ -670,14 +762,15 @@ fn file_saved(
         }
         a.stage = "filing".into();
     }
-    stage(app, id, "filing", json!({"folder":folder,"noteSaved":true}));
-    let native = Native::bundled()?;
-    match cleaner::file(&mut db, &native, entry_id, &root, &folder, labels, inbox) {
-        Ok(entry) => finish(
-            app,
-            id,
-            json!({"id":id,"stage":if entry.inbox{"inbox"}else{"filed"},"entry":entry,"noteSaved":true,"message":reason}),
-        ),
+    stage(app, id, "filing", json!({"folder":choice.folder(),"noteSaved":true}));
+    match cleaner::file(&mut db, &native, entry_id, &root, &choice) {
+        Ok(entry) => {
+            if entry.inbox && !matches!(choice, FilingChoice::Inbox { .. }) {
+                crate::dictation::log::line(&format!("RichCleaner folder result {}", json!({"id":id,"decision":"destination_unavailable"})));
+            }
+            finish(app, id, json!({"id":id,"stage":if entry.inbox{"inbox"}else{"filed"},
+                "entry":entry,"noteSaved":true,"message":entry.problem}));
+        }
         Err(error) => {
             cleaner::recover(&mut db, &native)?;
             let entry = db.get(entry_id)?;
@@ -690,23 +783,8 @@ fn file_saved(
     }
     Ok(())
 }
-fn folder_outcome(
-    choice: Result<cleaner::choice::Choice, String>,
-) -> (String, Vec<String>, bool, String) {
-    match choice {
-        Ok(choice) if choice.clear && choice.folder != "Inbox" => {
-            let mut labels = choice.keywords;
-            labels.extend(choice.aliases);
-            (choice.folder, labels, false, String::new())
-        }
-        Ok(_) => (
-            "Inbox".into(),
-            vec![],
-            true,
-            "The note did not make the right folder clear".into(),
-        ),
-        Err(reason) => ("Inbox".into(), vec![], true, reason),
-    }
+fn folder_outcome(choice: Result<FilingChoice, String>) -> FilingChoice {
+    choice.unwrap_or_else(|error| cleaner::choice::fallback(&error))
 }
 fn canceled(app: &AppHandle, id: &str) {
     let h = host(app);
@@ -861,13 +939,65 @@ pub fn cleaner_capture_control(app: AppHandle, id: String, action: String) -> Re
     }
 }
 #[richos_command::command]
-pub fn cleaner_action(
+pub async fn cleaner_action(
     app: AppHandle,
     id: String,
     action: String,
     note: Option<String>,
 ) -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(move || run_action(app, id, action, note))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn open_original(app: &AppHandle, native: &Native, id: &str, reveal: bool) -> Result<Entry, String> {
+    use std::os::unix::fs::MetadataExt;
+    let entry = catalog(app)?.get(id)?;
+    let path = native.open_location(&entry.path, &entry.identity, reveal, || {
+        drop(app.emit("rich://cleaner-download", json!({"id":id})));
+    })?;
+    // The native helper may have waited for iCloud. Recheck the catalog and path
+    // under the same lock as file changes before handing the path to macOS.
+    let h = host(app);
+    let _guard = h.mutation.lock().map_err(|_| "File operations unavailable")?;
+    let mut db = catalog(app)?;
+    let mut current = db.get(id)?;
+    if !entry.identity.same_object(&current.identity) {
+        return Err("The original changed while opening. Try again".into());
+    }
+    if !std::fs::symlink_metadata(&path).is_ok_and(|meta| {
+        meta.is_file()
+            && meta.ino() == current.identity.object
+            && u64::from(meta.dev() as u32) == current.identity.volume
+    }) {
+        return Err("The original moved while opening. Try again".into());
+    }
+    if current.path != path {
+        located(app, &mut current, path);
+        db.save(&current)?;
+        drop(app.emit(EVENT, json!({"stage":"library-changed"})));
+    }
+    let mut command = std::process::Command::new("/usr/bin/open");
+    if reveal {
+        command.arg("-R");
+    }
+    if !command.arg(&current.path).status().map_err(|e| e.to_string())?.success() {
+        return Err("macOS could not open the file".into());
+    }
+    Ok(current)
+}
+
+fn run_action(app: AppHandle, id: String, action: String, note: Option<String>) -> Result<Value, String> {
     let native = Native::bundled()?;
+    if matches!(action.as_str(), "open" | "reveal") {
+        let start = std::time::Instant::now();
+        let result = open_original(&app, &native, &id, action == "reveal");
+        crate::dictation::log::line(&format!("RichCleaner original {}", json!({
+            "action":action, "elapsed_ms":start.elapsed().as_millis() as u64, "success":result.is_ok()
+        })));
+        let entry = result?;
+        return serde_json::to_value(entry).map_err(|e| e.to_string());
+    }
     let h = host(&app);
     let _guard = h
         .mutation
@@ -876,23 +1006,6 @@ pub fn cleaner_action(
     let mut db = catalog(&app)?;
     let mut entry = db.get(&id)?;
     match action.as_str() {
-        "open" | "reveal" => {
-            let path = native.resolve(&entry.path, &entry.identity)?;
-            let actual = native.inspect(&path)?;
-            if !entry.identity.same_object(&actual) {
-                return Err("Locate the original file".into());
-            }
-            located(&app, &mut entry, path);
-            db.save(&entry)?;
-            let mut command = std::process::Command::new("/usr/bin/open");
-            if action == "reveal" {
-                command.arg("-R");
-            }
-            command.arg(&entry.path);
-            if !command.status().map_err(|e| e.to_string())?.success() {
-                return Err("macOS could not open the file".into());
-            }
-        }
         "locate" => {
             use tauri_plugin_dialog::DialogExt;
             if let Some(path) = app
@@ -913,6 +1026,8 @@ pub fn cleaner_action(
                 if batch::skip(&h, &id) {
                     entry = cleaner::cancel_sort(&mut db, &id)?;
                 }
+            } else {
+                return Ok(json!({}));
             }
         }
         "undo" => {
@@ -1009,9 +1124,7 @@ pub fn cleaner_action(
             db.save(&entry)?;
             let request = cleaner::capture_id();
             let cancel = Arc::new(AtomicBool::new(false));
-            let chooser = profile(&app)
-                .map(|(bin, p)| Arc::new(Prepared::start(&bin, &p)))
-                .ok();
+            let chooser = Some(start_chooser(&app, &request));
             *active = Some(Active {
                 id: request.clone(),
                 target: None,
@@ -1020,6 +1133,7 @@ pub fn cleaner_action(
                 stage: "choosing".into(),
                 cancel: cancel.clone(),
                 chooser: chooser.clone(),
+                timings: FilingTimings::default(),
             });
             drop(active);
             let app = app.clone();
@@ -1153,13 +1267,6 @@ pub fn cards(
             continue;
         }
         let e = db.get(&card.file)?;
-        use std::os::unix::fs::MetadataExt;
-        let exists = std::fs::symlink_metadata(&e.path).is_ok_and(|meta| {
-            meta.is_file()
-                && !meta.file_type().is_symlink()
-                && meta.ino() == e.identity.object
-                && meta.dev() == e.identity.volume
-        });
         let name = e.path.file_name().unwrap_or_default().to_string_lossy();
         let ext = e
             .path
@@ -1167,7 +1274,7 @@ pub fn cards(
             .unwrap_or_default()
             .to_string_lossy()
             .to_uppercase();
-        items.push(json!({"id":card.id,"kind":"rich_file","entityId":card.entity,"threadId":card.thread,"turnId":card.turn,"visibility":"ceo","createdAt":card.at,"sequence":card.at,"text":name,"file":{"id":e.id,"library":true,"name":name,"ext":ext,"meta":e.folder,"folder":e.folder,"note":e.note,"exists":exists}}));
+        items.push(json!({"id":card.id,"kind":"rich_file","entityId":card.entity,"threadId":card.thread,"turnId":card.turn,"visibility":"ceo","createdAt":card.at,"sequence":card.at,"text":name,"file":{"id":e.id,"library":true,"name":name,"ext":ext,"meta":e.folder,"folder":e.folder,"note":e.note}}));
     }
     Ok(items)
 }
@@ -1193,6 +1300,45 @@ pub fn cleaner_open_main(app: AppHandle, surface: String) -> Result<(), String> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn richdoctor_collects_filing_milestones_and_preserves_unmeasured_spans() {
+        use richdoctor_core::{
+            collect::{collect, Category, Scope, Window},
+            evidence::Status,
+            scrub::Context,
+        };
+        use std::time::Duration;
+        let home = std::env::temp_dir().join(format!("richcleaner-timings-{}", cleaner::capture_id()));
+        let data = home.join("Library/Application Support/com.richos.app");
+        std::fs::create_dir_all(&data).unwrap();
+        let mut timings = FilingTimings::default();
+        let start = timings.checking;
+        timings.stage("listening", start + Duration::from_millis(150));
+        timings.stage("writing", start + Duration::from_millis(900));
+        timings.stage("saved", start + Duration::from_millis(1_100));
+        timings.stage("choosing", start + Duration::from_millis(1_110));
+        timings.stage("filing", start + Duration::from_millis(1_310));
+        let record = timings.record("fixture-op", "1.2.0", "filed", start + Duration::from_millis(1_550));
+        let at = 1_798_784_000_000;
+        std::fs::write(
+            data.join("dictation.log"),
+            format!("{} RichCleaner filing {record}\n", richdoctor_core::util::utc_stamp(at)),
+        ).unwrap();
+        let scope = Scope { home: home.clone(), window: Window::around(at), claude_bin: None, diagnostics: true };
+        let items = collect(Category::Richscribe, &scope, &Context::default(), 0);
+        std::fs::remove_dir_all(home).unwrap();
+        assert_eq!(items[0].status, Status::Collected);
+        let raw = items[0].text.split_once("RichCleaner filing ").unwrap().1;
+        let actual: Value = serde_json::from_str(raw).unwrap();
+        assert_eq!(actual, json!({
+            "id":"fixture-op", "build":"1.2.0", "outcome":"filed",
+            "checking_to_listening_ms":150, "writing_to_note_saved_ms":200,
+            "note_saved_to_inbox_ms":null, "choosing_to_filing_ms":200,
+            "filing_to_result_ms":240, "writing_to_result_ms":650
+        }));
+    }
+
     #[test]
     fn folders_are_browsable_categories_and_never_follow_linked_repositories() {
         let root =
@@ -1202,12 +1348,47 @@ mod tests {
         std::fs::create_dir_all(root.join(".hidden/Secret")).unwrap();
         std::os::unix::fs::symlink(root.join("Company"), root.join("Linked repository")).unwrap();
         std::fs::write(root.join("ordinary-file.txt"), "not a folder").unwrap();
-        let labels = folders(&root).unwrap();
-        assert!(labels.contains(&"Company/Board".into()));
-        assert!(labels.contains(&"Personal/Medical".into()));
-        assert!(!labels.iter().any(|label| label.contains("Secret")
+        let recent = [
+            root.join("Linked repository/Board/outside.txt"),
+            root.join("Personal/Medical/recent.txt"),
+            root.join("Company/Board/previous.txt"),
+            root.join("Personal/Medical/previous.txt"),
+            root.join("Vanished/file.txt"),
+        ];
+        let context = folders::scan(&root, &recent);
+        assert!(context.complete);
+        assert_eq!(&context.labels[..2], ["Personal/Medical", "Company/Board"]);
+        assert!(!context.labels.iter().any(|label| label.contains("Secret")
             || label.contains("Linked")
-            || label.contains("ordinary-file")));
+            || label.contains("ordinary-file")
+            || label.contains("Vanished")));
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn large_flat_root_retains_recent_folder_and_marks_context_incomplete() {
+        let root =
+            std::env::temp_dir().join(format!("richcleaner-folders-{}", cleaner::capture_id()));
+        std::fs::create_dir_all(root.join("Recent/Board")).unwrap();
+        for number in 0..1_001 {
+            std::fs::create_dir(root.join(format!("Category {number}"))).unwrap();
+        }
+        let context = folders::scan(&root, &[root.join("Recent/Board/file.txt")]);
+        assert_eq!(context.labels.first().unwrap(), "Recent/Board");
+        assert_eq!(context.labels.len(), 1_000);
+        assert!(!context.complete);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_symlink_in_a_filing_root_ancestor_cannot_expose_folder_labels() {
+        let fixture = std::env::temp_dir().join(format!("richcleaner-folders-{}", cleaner::capture_id()));
+        std::fs::create_dir_all(fixture.join("Outside/Library/Private")).unwrap();
+        std::os::unix::fs::symlink(fixture.join("Outside"), fixture.join("Redirected")).unwrap();
+        let root = fixture.join("Redirected/Library");
+        let context = folders::scan(&root, &[root.join("Private/report.pdf")]);
+        assert!(context.labels.is_empty());
+        assert!(!context.complete);
+        std::fs::remove_dir_all(fixture).unwrap();
     }
 }

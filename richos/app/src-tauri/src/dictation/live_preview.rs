@@ -1,19 +1,125 @@
 //! One bounded provisional decoder. No microphone, insertion capability, queue,
 //! transcript stitching, carried prompt or final-text authority.
 
-use super::scratch::Scratch;
-use richos_voice::{dictation::{judge_transcript, Recording, FASTER}, stt::Recognizer, voiced::VoiceEvidence};
+use super::{scratch::Scratch, timings::decoder_failure_reason};
+use richos_voice::{dictation::{judge_transcript, Recording, FASTER}, stt::Recognizer, vad::SAMPLE_RATE, voiced::VoiceEvidence};
 use std::{path::Path, sync::{atomic::{AtomicBool, Ordering}, Arc, Mutex}, time::{Duration, Instant}};
 
 pub enum Update {
-    Words { text: String, sampled_at: Instant, decode_ms: u64 },
-    Paused { reason: &'static str },
+    Words { text: String, sampled_at: Instant, decode_ms: u64, input_ms: u64 },
+    Missed { reason: &'static str, input_ms: u64 },
+    Paused { reason: &'static str, input_ms: Option<u64> },
     Unavailable,
-    Quiet,
+    Quiet { clear_words: bool },
+}
+
+impl Update {
+    pub(super) fn for_display(self, received_at: Instant) -> Self {
+        match self {
+            Self::Words { sampled_at, input_ms, .. }
+                if received_at.saturating_duration_since(sampled_at) > DISPLAY_MAX_AGE =>
+                Self::Missed { reason: "control_delivery_stale", input_ms },
+            update => update,
+        }
+    }
 }
 
 // One fixed recent-text allowance; no accumulating provisional transcript.
 const PREVIEW_CHARACTER_LIMIT: usize = 200;
+const DISPLAY_MAX_AGE: Duration = Duration::from_secs(3);
+const CAPTION_HOLD: Duration = Duration::from_secs(16);
+const FIRST_RESULT_MAX_AGE: Duration = Duration::from_secs(2);
+const FIRST_DECODER_LIMIT: Duration = Duration::from_millis(1800);
+const RESULT_HANDOFF_MARGIN: Duration = Duration::from_millis(150);
+const TICK_INTERVAL: Duration = Duration::from_secs(2);
+const RECOVERY_WINDOW_SAMPLES: usize = 8 * SAMPLE_RATE as usize;
+const RECOVERY_SPEECH_SAMPLES: usize = TICK_INTERVAL.as_secs() as usize * SAMPLE_RATE as usize;
+// A pair of fast eight-second results leaves room to try a window twice as long
+// inside the 2.8-second budget. A busy decoder keeps the shorter window.
+const RECOVERY_RESTORE_LIMIT: Duration = Duration::from_millis(1250);
+
+// A missed update does not invalidate the last caption. The existing 16-second
+// preview horizon also bounds how long old words can remain through repeated misses.
+pub(super) fn caption_expired(sampled_at: Instant, received_at: Instant) -> bool {
+    received_at.saturating_duration_since(sampled_at) >= CAPTION_HOLD
+}
+
+fn preview_limits(has_words: bool, elapsed: Duration) -> (Duration, Duration) {
+    let max_age = if has_words { DISPLAY_MAX_AGE - RESULT_HANDOFF_MARGIN } else { FIRST_RESULT_MAX_AGE };
+    let max_decode = if has_words { max_age - Duration::from_millis(50) } else { FIRST_DECODER_LIMIT };
+    (max_age, max_decode.saturating_sub(elapsed))
+}
+
+#[derive(Default)]
+enum PreviewWindow {
+    #[default]
+    Full,
+    Short,
+    ShortAfterFastResult,
+}
+
+#[derive(Default)]
+struct PreviewProgress {
+    has_words: bool,
+    window: PreviewWindow,
+    last_speech_end: usize,
+}
+
+impl PreviewProgress {
+    fn published(&mut self, elapsed: Duration) {
+        self.has_words = true;
+        use PreviewWindow::*;
+        self.window = match (&self.window, elapsed <= RECOVERY_RESTORE_LIMIT) {
+            (Full, _) | (ShortAfterFastResult, true) => Full,
+            (Short, true) => ShortAfterFastResult,
+            (_, false) => Short,
+        };
+    }
+
+    fn miss(&mut self, reason: &str) -> bool {
+        match reason {
+            // Even a full input window can produce no usable provisional
+            // words. Keep listening; a later window can contain clear speech.
+            "stale_result" | "decoder_deadline" | "transcript_rejected" => {},
+            _ => return false,
+        }
+        self.window = PreviewWindow::Short;
+        true
+    }
+
+    fn quiet(&mut self, full_window_start: usize) -> bool {
+        // The first decode after a quiet tick should spend its budget on the
+        // resumed speech. Restore longer context only after two fast results.
+        self.window = PreviewWindow::Short;
+        // Keep the displayed words until the original recent window would have
+        // lost its last speech. Quiet ticks need no decoder work.
+        self.last_speech_end <= full_window_start
+    }
+
+    fn window<'a>(&self, samples: &'a [f32], new_samples: usize) -> (&'a [f32], usize) {
+        if !matches!(self.window, PreviewWindow::Full) {
+            let start = samples.len().saturating_sub(RECOVERY_WINDOW_SAMPLES);
+            (&samples[start..], new_samples.min(RECOVERY_SPEECH_SAMPLES))
+        } else {
+            (samples, new_samples)
+        }
+    }
+}
+
+// A short overlap keeps enough audio to recognize speech across adjacent ticks.
+// Older words may provide decoder context, but cannot trigger a new decode.
+const SPEECH_CHECK_OVERLAP: usize = SAMPLE_RATE as usize / 4;
+
+fn new_speech_audio(samples: &[f32], new_samples: usize) -> &[f32] {
+    &samples[samples.len().saturating_sub(new_samples.saturating_add(SPEECH_CHECK_OVERLAP))..]
+}
+
+fn wait_for_snapshot(due: &mut Instant, now: Instant) -> Option<Duration> {
+    if now < *due { return Some(*due - now); }
+    // Set the next slot from this snapshot, with no old slot to catch up on.
+    *due = now + TICK_INTERVAL;
+    None
+}
 
 pub fn recent_text(text: &str) -> String {
     let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -24,7 +130,8 @@ pub fn recent_text(text: &str) -> String {
 
 /// Owned by the ordinary dictation's writing-worker lifecycle. `park_timeout`
 /// wakes immediately when that owner unparks it on Stop/Cancel/quit. The only
-/// blocking decode uses the existing kill/reap tether and a 1.8-second deadline.
+/// blocking decode uses the existing kill/reap tether. Later updates may use
+/// more of the freshness allowance after the first words have appeared.
 pub fn run(recording: Arc<Mutex<Option<Recording>>>, data_dir: &Path, stop: &AtomicBool,
            mut send: impl FnMut(Update)) {
     if stop.load(Ordering::Acquire) { return; }
@@ -35,54 +142,200 @@ pub fn run(recording: Arc<Mutex<Option<Recording>>>, data_dir: &Path, stop: &Ato
     };
     let mut due = started + Duration::from_secs(1);
     let mut last_samples = 0;
+    let mut progress = PreviewProgress::default();
     loop {
         if stop.load(Ordering::Acquire) { return; }
-        if let Some(wait) = due.checked_duration_since(Instant::now()) {
+        let sampled_at = Instant::now();
+        if let Some(wait) = wait_for_snapshot(&mut due, sampled_at) {
             std::thread::park_timeout(wait);
             continue;
         }
-        due += Duration::from_secs(2);
-        let sampled_at = Instant::now();
-        let samples = {
+        let (samples, new_samples, captured, full_window_start) = {
             // No wait for a busy capture callback, and no decoding/files/UI while
             // holding this lock. There is only the latest window, never backlog.
             let Ok(held) = recording.try_lock() else { continue };
             let Some(recording) = held.as_ref() else { return };
-            if recording.samples().len() == last_samples { continue; }
-            last_samples = recording.samples().len();
-            recording.preview_samples().to_vec()
+            let len = recording.samples().len();
+            let new_samples = len.saturating_sub(last_samples);
+            if new_samples == 0 { continue; }
+            last_samples = len;
+            let full_window = recording.preview_samples();
+            let (samples, speech_samples) = progress.window(full_window, new_samples);
+            (samples.to_vec(), speech_samples, len, len - full_window.len())
         };
-        if !VoiceEvidence::measure(&samples).carried_speech() { send(Update::Quiet); continue; }
-        if stop.load(Ordering::Acquire) { return; }
-        let result = Scratch::new(data_dir).map_err(|_| "scratch_unavailable").and_then(|scratch|
-            recognizer.transcribe_bounded_until(&samples, scratch.path(), Duration::from_millis(1800), stop)
-                .map_err(|error| match error {
-                    // Exact errors constructed by our bounded decoder, not a
-                    // guess from arbitrary decoder stderr or elapsed time.
-                    richos_voice::stt::SttError::Io(message) if message == "decoder deadline" => "decoder_deadline",
-                    richos_voice::stt::SttError::Io(message) if message == "decoder stopped by its owner" => "decoder_stopped",
-                    richos_voice::stt::SttError::Io(message) if message == "decoder output limit" => "decoder_output_limit",
-                    _ => "decoder_failed",
-                }));
-        if stop.load(Ordering::Acquire) { return; }
-        match result {
-            Ok((text, decode_ms)) if sampled_at.elapsed() <= Duration::from_secs(2) => {
-                match judge_transcript(&text) {
-                    Ok(text) => send(Update::Words { text: recent_text(&text), sampled_at, decode_ms }),
-                    Err(_) => { send(Update::Paused { reason: "transcript_rejected" }); return; }
-                }
-            }
-            Ok(_) => { send(Update::Paused { reason: "stale_result" }); return; }
-            Err(reason) => { send(Update::Paused { reason }); return; }
+        if !VoiceEvidence::measure(new_speech_audio(&samples, new_samples)).carried_speech() {
+            send(Update::Quiet { clear_words: progress.quiet(full_window_start) });
+            continue;
         }
-        // A slow startup/tick never causes a burst of catch-up decodes.
-        if due < Instant::now() { due = Instant::now() + Duration::from_secs(2); }
+        progress.last_speech_end = captured;
+        if stop.load(Ordering::Acquire) { return; }
+        let input_ms = samples.len() as u64 * 1000 / u64::from(SAMPLE_RATE);
+        let paused = |reason| Update::Paused { reason, input_ms: Some(input_ms) };
+        let result = Scratch::new(data_dir).map_err(|_| "scratch_unavailable").and_then(|scratch| {
+            let (max_age, budget) = preview_limits(progress.has_words, sampled_at.elapsed());
+            if budget.is_zero() { return Err("stale_result"); }
+            recognizer.transcribe_preview_until(&samples, scratch.path(), budget, stop)
+                .map(|result| (result, max_age))
+                .map_err(|error| decoder_failure_reason(&error))
+        });
+        if stop.load(Ordering::Acquire) { return; }
+        let result = result.and_then(|(decoded, max_age)| {
+            (sampled_at.elapsed() <= max_age).then_some(decoded).ok_or("stale_result")
+        }).and_then(|(text, decode_ms)| {
+            judge_transcript(&text).map(|text| (text, decode_ms)).map_err(|_| "transcript_rejected")
+        });
+        match result {
+            Ok((text, decode_ms)) => {
+                progress.published(sampled_at.elapsed());
+                send(Update::Words { text: recent_text(&text), sampled_at, decode_ms, input_ms });
+            }
+            Err(reason) if progress.miss(reason) => send(Update::Missed { reason, input_ms }),
+            Err(reason) => { send(paused(reason)); return; }
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn preview_budget_charges_preparation_and_leaves_time_for_display() {
+        assert_eq!(preview_limits(false, Duration::from_millis(100)),
+            (Duration::from_secs(2), Duration::from_millis(1700)));
+        assert_eq!(preview_limits(true, Duration::from_millis(100)),
+            (Duration::from_millis(2850), Duration::from_millis(2700)));
+        assert!(preview_limits(true, DISPLAY_MAX_AGE).1.is_zero());
+    }
+
+    #[test]
+    fn an_overrunning_preview_attempt_can_sample_fresh_audio_without_a_backlog() {
+        let first = Instant::now();
+        let mut due = first;
+        assert_eq!(wait_for_snapshot(&mut due, first), None);
+        assert_eq!(wait_for_snapshot(&mut due, first + Duration::from_millis(500)),
+            Some(Duration::from_millis(1500)), "a fast attempt must not cause another start");
+        let after_deadline = first + Duration::from_millis(2800);
+        assert_eq!(wait_for_snapshot(&mut due, after_deadline), None,
+            "the deadline used up the interval, so the next snapshot is due now");
+        assert_eq!(wait_for_snapshot(&mut due, after_deadline + Duration::from_millis(700)),
+            Some(Duration::from_millis(1300)), "there is no pending old snapshot to catch up on");
+    }
+
+    #[test]
+    fn established_preview_skips_consecutive_deadlines() {
+        let mut progress = PreviewProgress::default();
+        assert!(progress.miss("stale_result"));
+        progress.published(RECOVERY_RESTORE_LIMIT);
+        assert!(progress.miss("decoder_deadline"));
+        assert!(progress.miss("decoder_deadline"));
+        assert!(progress.miss("stale_result"));
+        assert!(!progress.miss("scratch_unavailable"));
+    }
+
+    #[test]
+    fn first_deadline_retries_until_preview_is_ready() {
+        let mut progress = PreviewProgress::default();
+        assert!(progress.miss("decoder_deadline"), "a late first update must not end preview");
+        assert!(!progress.has_words);
+        assert!(matches!(progress.window, PreviewWindow::Short));
+        assert!(progress.miss("decoder_deadline"));
+        assert_eq!(preview_limits(progress.has_words, Duration::ZERO).1, FIRST_DECODER_LIMIT);
+        progress.published(RECOVERY_RESTORE_LIMIT);
+        assert!(progress.has_words);
+    }
+
+    #[test]
+    fn preview_recovery_decodes_less_audio_and_requires_recent_speech() {
+        let mut progress = PreviewProgress::default();
+        let samples: Vec<_> = (0..2 * RECOVERY_WINDOW_SAMPLES).map(|i| i as f32).collect();
+        let new_samples = 2 * RECOVERY_SPEECH_SAMPLES;
+        let short = (&samples[RECOVERY_WINDOW_SAMPLES..], RECOVERY_SPEECH_SAMPLES);
+        assert_eq!(progress.window(&samples, new_samples), (samples.as_slice(), new_samples));
+        progress.published(RECOVERY_RESTORE_LIMIT);
+        assert!(progress.miss("decoder_deadline"));
+        assert_eq!(progress.window(&samples, new_samples), short);
+        progress.published(RECOVERY_RESTORE_LIMIT);
+        assert_eq!(progress.window(&samples, new_samples), short);
+        progress.published(Duration::from_secs(2));
+        progress.published(RECOVERY_RESTORE_LIMIT);
+        assert_eq!(progress.window(&samples, new_samples), short);
+        progress.published(RECOVERY_RESTORE_LIMIT);
+        assert_eq!(progress.window(&samples, new_samples), (samples.as_slice(), new_samples));
+    }
+
+    #[test]
+    fn the_first_quiet_tick_chooses_the_shorter_resume_window_and_keeps_the_caption() {
+        let mut progress = PreviewProgress::default();
+        let speech_end = 6 * SAMPLE_RATE as usize;
+        progress.last_speech_end = speech_end;
+        progress.published(RECOVERY_RESTORE_LIMIT);
+        let recent = vec![0.0; 2 * RECOVERY_WINDOW_SAMPLES];
+        assert_eq!(progress.window(&recent, RECOVERY_SPEECH_SAMPLES).0.len(), recent.len());
+        assert!(!progress.quiet(0), "a single quiet tick does not clear the existing caption");
+        assert_eq!(progress.window(&recent, RECOVERY_SPEECH_SAMPLES).0.len(), RECOVERY_WINDOW_SAMPLES);
+        assert!(!progress.quiet(speech_end - 1));
+        assert!(progress.quiet(speech_end));
+        let mut first = PreviewProgress::default();
+        first.quiet(0);
+        assert_eq!(first.window(&recent, RECOVERY_SPEECH_SAMPLES).0.len(), RECOVERY_WINDOW_SAMPLES);
+    }
+
+    #[test]
+    fn empty_result_in_any_window_does_not_end_preview() {
+        assert!(judge_transcript("").is_err());
+        let mut progress = PreviewProgress::default();
+        assert!(progress.miss("transcript_rejected"), "an empty first decode must keep listening");
+        assert!(!progress.has_words);
+        progress.published(RECOVERY_RESTORE_LIMIT);
+        progress.published(RECOVERY_RESTORE_LIMIT);
+        assert!(matches!(progress.window, PreviewWindow::Full));
+        assert!(progress.miss("transcript_rejected"), "a full window can also have no usable words");
+        progress.last_speech_end = 6 * SAMPLE_RATE as usize;
+        assert!(!progress.quiet(0));
+        assert!(progress.miss("transcript_rejected"));
+        progress.published(RECOVERY_RESTORE_LIMIT);
+        assert!(matches!(progress.window, PreviewWindow::ShortAfterFastResult));
+    }
+
+    #[test]
+    fn late_delivery_becomes_a_missed_update_with_the_input_duration() {
+        let sampled_at = Instant::now();
+        let words = || Update::Words { text: "recent words".into(), sampled_at, decode_ms: 900, input_ms: 8000 };
+        assert!(matches!(words().for_display(sampled_at + DISPLAY_MAX_AGE), Update::Words { .. }));
+        assert!(matches!(words().for_display(sampled_at + DISPLAY_MAX_AGE + Duration::from_millis(1)),
+            Update::Missed { reason: "control_delivery_stale", input_ms: 8000 }));
+    }
+
+    #[test]
+    fn last_caption_outlives_a_miss_but_not_the_recent_audio_horizon() {
+        let sampled_at = Instant::now();
+        assert!(!caption_expired(sampled_at, sampled_at + DISPLAY_MAX_AGE));
+        assert!(!caption_expired(sampled_at, sampled_at + Duration::from_secs(12)));
+        assert!(caption_expired(sampled_at, sampled_at + CAPTION_HOLD));
+    }
+
+    #[test]
+    fn old_speech_cannot_trigger_a_decode_during_a_pause() {
+        let mut samples = vec![0.0; SPEECH_CHECK_OVERLAP + 12_000];
+        let mut phase = 0.0;
+        for (i, sample) in samples[..8_000].iter_mut().enumerate() {
+            phase += std::f32::consts::TAU * (115.0 + i as f32 / 140.0) / SAMPLE_RATE as f32;
+            *sample = 0.1 * phase.sin();
+        }
+        assert!(VoiceEvidence::measure(&samples).carried_speech());
+        assert!(!VoiceEvidence::measure(new_speech_audio(&samples, 4_000)).carried_speech());
+        assert!(VoiceEvidence::measure(new_speech_audio(&samples, samples.len())).carried_speech());
+    }
+
+    #[test]
+    fn speech_at_a_tick_boundary_keeps_its_overlap() {
+        let samples = [0.0, 1.0, 2.0].repeat(SPEECH_CHECK_OVERLAP);
+        let new_samples = 32;
+        assert_eq!(new_speech_audio(&samples, new_samples),
+            &samples[samples.len() - SPEECH_CHECK_OVERLAP - new_samples..]);
+        assert_eq!(new_speech_audio(&samples, samples.len() * 2), &samples);
+    }
 
     #[test]
     fn preview_keeps_two_hundred_recent_characters_without_changing_final_text() {
@@ -147,12 +400,14 @@ mod tests {
             let (recording, flag, updates, data) = (recording.clone(), stop.clone(), updates.clone(), data.clone());
             std::thread::spawn(move || run(recording, &data, &flag, |update| {
                 let entry = match update {
-                    Update::Words { text, sampled_at, decode_ms } => serde_json::json!({
+                    Update::Words { text, sampled_at, decode_ms, input_ms } => serde_json::json!({
                         "kind":"words", "at_ms":began.elapsed().as_millis(),
                         "age_ms":sampled_at.elapsed().as_millis(), "decode_ms":decode_ms,
+                        "input_ms":input_ms,
                         "characters":text.chars().count(), "words":text.split_whitespace().count()}),
-                    Update::Quiet => serde_json::json!({"kind":"quiet","at_ms":began.elapsed().as_millis()}),
-                    Update::Paused { reason } => serde_json::json!({"kind":"paused","reason":reason,"at_ms":began.elapsed().as_millis()}),
+                    Update::Quiet { clear_words } => serde_json::json!({"kind":"quiet","clear_words":clear_words,"at_ms":began.elapsed().as_millis()}),
+                    Update::Missed { reason, input_ms } => serde_json::json!({"kind":"missed","reason":reason,"input_ms":input_ms,"at_ms":began.elapsed().as_millis()}),
+                    Update::Paused { reason, input_ms } => serde_json::json!({"kind":"paused","reason":reason,"input_ms":input_ms,"at_ms":began.elapsed().as_millis()}),
                     Update::Unavailable => serde_json::json!({"kind":"unavailable","at_ms":began.elapsed().as_millis()}),
                 };
                 updates.lock().unwrap().push(entry);
