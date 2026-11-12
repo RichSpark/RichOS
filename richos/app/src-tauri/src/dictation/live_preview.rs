@@ -20,6 +20,8 @@ const FIRST_RESULT_MAX_AGE: Duration = Duration::from_secs(2);
 const FIRST_DECODER_LIMIT: Duration = Duration::from_millis(1800);
 const RESULT_HANDOFF_MARGIN: Duration = Duration::from_millis(150);
 const TICK_INTERVAL: Duration = Duration::from_secs(2);
+const RECOVERY_WINDOW_SAMPLES: usize = 8 * SAMPLE_RATE as usize;
+const RECOVERY_SPEECH_SAMPLES: usize = TICK_INTERVAL.as_secs() as usize * SAMPLE_RATE as usize;
 
 fn preview_limits(has_words: bool, elapsed: Duration) -> (Duration, Duration) {
     let max_age = if has_words { DISPLAY_MAX_AGE - RESULT_HANDOFF_MARGIN } else { FIRST_RESULT_MAX_AGE };
@@ -43,6 +45,15 @@ impl PreviewProgress {
         if !self.has_words || self.missed_deadline { return false; }
         self.missed_deadline = true;
         true
+    }
+
+    fn window<'a>(&self, samples: &'a [f32], new_samples: usize) -> (&'a [f32], usize) {
+        if self.missed_deadline {
+            let start = samples.len().saturating_sub(RECOVERY_WINDOW_SAMPLES);
+            (&samples[start..], new_samples.min(RECOVERY_SPEECH_SAMPLES))
+        } else {
+            (samples, new_samples)
+        }
     }
 }
 
@@ -93,7 +104,8 @@ pub fn run(recording: Arc<Mutex<Option<Recording>>>, data_dir: &Path, stop: &Ato
             let new_samples = len.saturating_sub(last_samples);
             if new_samples == 0 { continue; }
             last_samples = len;
-            (recording.preview_samples().to_vec(), new_samples)
+            let (samples, speech_samples) = progress.window(recording.preview_samples(), new_samples);
+            (samples.to_vec(), speech_samples)
         };
         if !VoiceEvidence::measure(new_speech_audio(&samples, new_samples)).carried_speech() {
             send(Update::Quiet);
@@ -155,6 +167,20 @@ mod tests {
         assert!(!progress.skip_deadline());
         progress.published();
         assert!(progress.skip_deadline());
+    }
+
+    #[test]
+    fn preview_recovery_decodes_less_audio_and_requires_recent_speech() {
+        let mut progress = PreviewProgress::default();
+        let samples: Vec<_> = (0..2 * RECOVERY_WINDOW_SAMPLES).map(|i| i as f32).collect();
+        let new_samples = 2 * RECOVERY_SPEECH_SAMPLES;
+        assert_eq!(progress.window(&samples, new_samples), (samples.as_slice(), new_samples));
+        progress.published();
+        assert!(progress.skip_deadline());
+        assert_eq!(progress.window(&samples, new_samples),
+            (&samples[RECOVERY_WINDOW_SAMPLES..], RECOVERY_SPEECH_SAMPLES));
+        progress.published();
+        assert_eq!(progress.window(&samples, new_samples), (samples.as_slice(), new_samples));
     }
 
     #[test]
