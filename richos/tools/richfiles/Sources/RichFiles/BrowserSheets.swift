@@ -33,7 +33,7 @@ enum BrowserSheet: Identifiable {
     case trashFailures([FileReference])
     case operationIssues([String])
     case interruptedTransfer
-    case trash, transfers, searchOptions, batch([FileReference]), connect, workspaces, actionPalette, settings
+    case trash, searchOptions, batch([FileReference]), connect, workspaces, actionPalette, settings
 
     var id: String {
         switch self {
@@ -51,7 +51,6 @@ enum BrowserSheet: Identifiable {
         case .trashFailures: return "trashFailures"
         case .operationIssues: return "operationIssues"
         case .trash: return "trash"
-        case .transfers: return "transfers"
         case .interruptedTransfer: return "interrupted-transfer"
         case .searchOptions: return "searchOptions"
         case .batch: return "batch"
@@ -1233,87 +1232,96 @@ struct InterruptedTransferSheet: View {
 }
 
 @MainActor
-struct TransferSheet: View {
+struct TransferPanel: View {
     @ObservedObject var actions: BrowserActions
-    @Environment(\.dismiss) private var dismiss
+    let close: () -> Void
     @State private var replacement: BrowserTransferIssue?
     @State private var mergeIssue: BrowserTransferIssue?
     @State private var confirmingReplacement = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Transfers").font(.headline)
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("Transfers").font(.headline)
+                Spacer()
+                Button("Done", action: close)
+            }
             if let transfer = actions.transfer {
-                Text(transfer.destination.path).lineLimit(1).truncationMode(.middle).textSelection(.enabled)
-                ProgressView(value: Double(transfer.completed), total: Double(max(transfer.total, 1)))
-                Text("\(transfer.completed) of \(transfer.total) processed, \(transfer.succeeded) completed")
-                if let source = transfer.currentSource {
-                    Text("\(transfer.title) · \(source.lastPathComponent)").lineLimit(1)
-                    Text(source.deletingLastPathComponent().path).font(.caption).foregroundStyle(.secondary)
-                        .lineLimit(1).truncationMode(.middle).textSelection(.enabled)
-                }
-                if let progress = transfer.copyProgress {
-                    ProgressView(value: Double(progress.written), total: Double(progress.total))
-                    HStack(spacing: 8) {
-                        Text("\(formattedBytes(progress.written)) of \(formattedBytes(progress.total))")
-                        if let rate = progress.bytesPerSecond { Text("\(formattedBytes(rate))/s") }
-                        if let seconds = progress.secondsRemaining {
-                            Text("About \(formattedTransferTime(seconds)) left")
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 5) {
+                        Text(transfer.destination.path).lineLimit(1).truncationMode(.middle).textSelection(.enabled)
+                        ProgressView(value: Double(transfer.completed), total: Double(max(transfer.total, 1)))
+                        Text("\(transfer.completed) of \(transfer.total) processed, \(transfer.succeeded) completed")
+                        if let source = transfer.currentSource {
+                            Text("\(transfer.title) · \(source.lastPathComponent)").lineLimit(1)
+                            Text(source.deletingLastPathComponent().path).font(.caption).foregroundStyle(.secondary)
+                                .lineLimit(1).truncationMode(.middle).textSelection(.enabled)
                         }
-                    }.font(.caption).foregroundStyle(.secondary)
-                }
-                if transfer.verifyingCopy { ProgressView("Verifying the copy…").controlSize(.small) }
-                if actions.replacingFile {
-                    ProgressView("Replacing file…").controlSize(.small)
-                } else if !transfer.running && !actions.status.isEmpty {
-                    Text(actions.status).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
-                }
-                if transfer.cancelled { Text("Transfer cancelled.") }
-                List {
-                    ForEach(transfer.issues) { issue in
-                        VStack(alignment: .leading, spacing: 5) {
-                            Text(issue.name).font(.body.weight(.medium))
-                            Text(issue.message).font(.callout).foregroundStyle(.secondary)
-                            if let conflict = issue.conflict {
-                                HStack(alignment: .top, spacing: 16) {
-                                    conflictDetails("Incoming", conflict.incoming)
-                                    conflictDetails("Existing", conflict.existing)
+                        if let progress = transfer.copyProgress {
+                            ProgressView(value: Double(progress.written), total: Double(progress.total))
+                            HStack(spacing: 8) {
+                                Text("\(formattedBytes(progress.written)) of \(formattedBytes(progress.total))")
+                                if let rate = progress.bytesPerSecond { Text("\(formattedBytes(rate))/s") }
+                                if let seconds = progress.secondsRemaining {
+                                    Text("About \(formattedTransferTime(seconds)) left")
                                 }
-                                if conflict.merge != nil {
-                                    Button("Merge Folders…") { mergeIssue = issue }
-                                        .disabled(actions.busy).buttonStyle(.borderless)
-                                }
-                                if conflict.reviewed != nil {
-                                    Button("Replace File…") {
-                                        replacement = issue
-                                        confirmingReplacement = true
-                                    }.disabled(actions.busy).buttonStyle(.borderless)
-                                }
-                            }
+                            }.font(.caption).foregroundStyle(.secondary)
                         }
-                    }
-                    if !actions.queuedTransfers.isEmpty {
-                        Section("Waiting") {
-                            ForEach(actions.queuedTransfers) { item in
-                                HStack {
-                                    VStack(alignment: .leading, spacing: 3) {
-                                        Text(item.title)
-                                        Text(item.folder.path).font(.caption).foregroundStyle(.secondary)
-                                            .lineLimit(1).truncationMode(.head)
-                                        switch item.state {
-                                        case .preparing: Text("Checking files…").font(.caption)
-                                        case .unavailable(let problem): Text(problem).font(.caption)
-                                        case .ready: EmptyView()
-                                        }
+                        if transfer.verifyingCopy { ProgressView("Verifying the copy…").controlSize(.small) }
+                        if actions.replacingFile {
+                            ProgressView("Replacing file…").controlSize(.small)
+                        } else if !transfer.running && !actions.status.isEmpty {
+                            Text(actions.status).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                        }
+                        if transfer.cancelled { Text("Transfer cancelled.") }
+                        ForEach(transfer.issues) { issue in
+                            VStack(alignment: .leading, spacing: 5) {
+                                Text(issue.name).font(.body.weight(.medium))
+                                Text(issue.message).font(.callout).foregroundStyle(.secondary)
+                                if let conflict = issue.conflict {
+                                    HStack(alignment: .top, spacing: 16) {
+                                        conflictDetails("Incoming", conflict.incoming)
+                                        conflictDetails("Existing", conflict.existing)
                                     }
-                                    Spacer()
-                                    Button("Remove") { actions.removeQueuedTransfer(item.id) }
-                                        .buttonStyle(.borderless)
+                                    if conflict.merge != nil {
+                                        Button("Merge Folders…") { mergeIssue = issue }
+                                            .disabled(actions.busy).buttonStyle(.borderless)
+                                    }
+                                    if conflict.reviewed != nil {
+                                        Button("Replace File…") {
+                                            replacement = issue
+                                            confirmingReplacement = true
+                                        }.disabled(actions.busy).buttonStyle(.borderless)
+                                    }
+                                }
+                            }
+                        }
+                        if !actions.queuedTransfers.isEmpty {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("Waiting").font(.caption.weight(.semibold))
+                                ForEach(actions.queuedTransfers) { item in
+                                    HStack {
+                                        VStack(alignment: .leading, spacing: 3) {
+                                            Text(item.title)
+                                            Text(item.folder.path).font(.caption).foregroundStyle(.secondary)
+                                                .lineLimit(1).truncationMode(.head)
+                                            switch item.state {
+                                            case .preparing: Text("Checking files…").font(.caption)
+                                            case .unavailable(let problem): Text(problem).font(.caption)
+                                            case .ready: EmptyView()
+                                            }
+                                        }
+                                        Spacer()
+                                        Button("Remove") { actions.removeQueuedTransfer(item.id) }
+                                            .buttonStyle(.borderless)
+                                    }
                                 }
                             }
                         }
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
+                .frame(maxHeight: 142)
                 HStack {
                     if transfer.running || actions.replacingFile { Button("Cancel Transfer") { actions.cancelTransfer() } }
                     if actions.queuePaused && !actions.busy {
@@ -1321,34 +1329,33 @@ struct TransferSheet: View {
                     }
                     if actions.canRetryTransfer && !actions.busy {
                         Button("Retry") { actions.retryTransfer() }
-                        Button("Retry, Keep Both") { actions.retryTransfer(conflict: .keepBoth) }
+                        if transfer.issues.contains(where: { $0.kind == .skipped }) {
+                            Button("Retry, Keep Both") { actions.retryTransfer(conflict: .keepBoth) }
+                        }
                     }
-                    Spacer()
-                    Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
                 }
+            }
+        }
+        .padding(.horizontal, 9)
+        .padding(.vertical, 6)
+        .background(.bar)
+        .sheet(item: $mergeIssue) { issue in
+            if let merge = issue.conflict?.merge {
+                CompareFoldersSheet(first: merge.incoming.url, actions: actions, openFolder: { _ in }, mergeIssue: issue)
+            }
+        }
+        .confirmationDialog("Replace the existing file?", isPresented: $confirmingReplacement, presenting: replacement) { issue in
+            Button("Replace File", role: .destructive) { actions.replaceConflict(issue) }
+        } message: { issue in
+            if actions.transfer?.move == true, let pair = issue.conflict?.reviewed,
+               pair.incoming.reference.identity.device != pair.existing.reference.identity.device {
+                Text("RichFiles verifies the incoming copy before moving the original to Trash. The previous file also goes to Trash. Undo restores both locations.")
             } else {
-                Text("No transfers.").foregroundStyle(.secondary)
-                Spacer()
-                Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
+                Text(actions.transfer?.move == true
+                     ? "The incoming file moves here and the previous file goes to Trash. Undo restores both locations."
+                     : "The previous file goes to Trash. You can undo this replacement in RichFiles.")
             }
-        }.padding(16).frame(width: 560, height: 395)
-            .sheet(item: $mergeIssue) { issue in
-                if let merge = issue.conflict?.merge {
-                    CompareFoldersSheet(first: merge.incoming.url, actions: actions, openFolder: { _ in }, mergeIssue: issue)
-                }
-            }
-            .confirmationDialog("Replace the existing file?", isPresented: $confirmingReplacement, presenting: replacement) { issue in
-                Button("Replace File", role: .destructive) { actions.replaceConflict(issue) }
-            } message: { issue in
-                if actions.transfer?.move == true, let pair = issue.conflict?.reviewed,
-                   pair.incoming.reference.identity.device != pair.existing.reference.identity.device {
-                    Text("RichFiles verifies the incoming copy before moving the original to Trash. The previous file also goes to Trash. Undo restores both locations.")
-                } else {
-                    Text(actions.transfer?.move == true
-                         ? "The incoming file moves here and the previous file goes to Trash. Undo restores both locations."
-                         : "The previous file goes to Trash. You can undo this replacement in RichFiles.")
-                }
-            }
+        }
     }
 
     private func conflictDetails(_ label: String, _ entry: FileEntry) -> some View {

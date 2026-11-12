@@ -25,6 +25,7 @@ struct BrowserView: View {
     @State private var address = ""
     @State private var suggestions: [URL] = []
     @State private var sheet: BrowserSheet?
+    @State private var transfersVisible = false
     @State private var feedback = ""
     @State private var rangeAnchor: URL?
     @State private var selectionCursor: URL?
@@ -85,6 +86,10 @@ struct BrowserView: View {
                     Divider()
                     itemPane
                     Divider()
+                    if transfersVisible, actions.transfer != nil {
+                        TransferPanel(actions: actions) { transfersVisible = false }
+                        Divider()
+                    }
                     statusBar
                 }
                 .frame(minWidth: workspace.isSplit ? 355 : 430, maxWidth: .infinity, maxHeight: .infinity)
@@ -957,7 +962,7 @@ struct BrowserView: View {
                 let queued = actions.queuedTransfers.count
                 let title = transfer.running ? "Transfers \(transfer.completed)/\(transfer.total)" : "Transfers"
                 Button(queued > 0 ? title + " · \(queued) queued" : title) {
-                    sheet = .transfers
+                    transfersVisible.toggle()
                 }.buttonStyle(.borderless)
             }
             if actions.interruptedTransfer != nil {
@@ -1454,7 +1459,6 @@ struct BrowserView: View {
         case .trash: TrashSheet(actions: actions)
         case .trashFailures(let sources): TrashFailuresSheet(sources: sources, actions: actions)
         case .operationIssues(let issues): OperationIssuesSheet(issues: issues)
-        case .transfers: TransferSheet(actions: actions)
         case .interruptedTransfer:
             if let notice = actions.interruptedTransfer {
                 InterruptedTransferSheet(notice: notice, actions: actions, openFolder: model.openFolder)
