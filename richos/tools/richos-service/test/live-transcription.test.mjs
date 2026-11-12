@@ -24,7 +24,7 @@ test('live transcription checkpoints the flushed prefix and only decodes the tai
   header.writeUInt16LE(4, 32);
   header.writeUInt16LE(16, 34);
   header.write('data', 36);
-  const pcm = Buffer.alloc(130 * bytesPerSecond);
+  const pcm = Buffer.alloc(170 * bytesPerSecond);
   pcm.writeInt16LE(17, 24 * bytesPerSecond);
   pcm.writeInt16LE(-31, 24 * bytesPerSecond + 2);
   const flush = (seconds) => {
@@ -155,6 +155,38 @@ test('live transcription checkpoints the flushed prefix and only decodes the tai
     closed: true, decode: () => assert.fail('unbounded audio was decoded as a chunk'),
   }), /no quiet meeting boundary/);
 
+  const waiting = advance({ decode: () => assert.fail('continuous speech was cut during capture') });
+  assert.equal(waiting.cursor, 0);
+  assert.equal(waiting.scanFrom, 120 * rate);
+  pcm.fill(0, 122 * bytesPerSecond);
+  pcm.fill(Buffer.from([0, 0, 0, 8]), 130 * bytesPerSecond, 131 * bytesPerSecond);
+  flush(154);
+  const resumed = advance({
+    scanFrom: waiting.scanFrom,
+    decode: (_cache, wav) => {
+      assert.equal(wav.readUInt32LE(40) / bytesPerSecond, 24);
+      return { me: [], others: [segment('Later fact.', 7_920, 8_920)], toolchain };
+    },
+  });
+  assert.equal(resumed.longWindows, 1);
+  assert.equal(resumed.decoded, 1);
+  assert.equal(resumed.cursor, 146.08 * rate);
+  const caughtUp = advance({
+    closed: true,
+    recover: (_cache, from, to) => {
+      assert.deepEqual([from, to], [0, 122_080]);
+      return { me: [segment('Unbroken statement.', 100, 122_000)], others: [], toolchain };
+    },
+    decode: (_cache, wav) => {
+      assert.equal(wav.readUInt32LE(40) / bytesPerSecond, 7.92);
+      return { me: [], others: [], toolchain };
+    },
+  });
+  assert.equal(caughtUp.longWindows, 1);
+  assert.equal(caughtUp.reused, 1);
+  assert.deepEqual(caughtUp.asr.me, [segment('Unbroken statement.', 100, 122_000)]);
+  assert.deepEqual(caughtUp.asr.others, [segment('Later fact.', 130_000, 131_000)]);
+
   // A handoff may arrive before the worker checkpoints the sentence just spoken.
   pcm.fill(0);
   pcm.fill(Buffer.from([0, 0, 0, 8]), 16 * bytesPerSecond, 17 * bytesPerSecond);
@@ -205,6 +237,13 @@ test('live transcription checkpoints the flushed prefix and only decodes the tai
   assert.equal(recentLiveExcerpt(dir, options, startedAt - 1, () => assert.fail('future recording decoded')), null);
   fs.writeFileSync(record, JSON.stringify({ status: 'closed', capture, startedAt }));
   assert.equal(recentLiveExcerpt(dir, options, requestedAt, () => assert.fail('closed recording decoded')), null);
+
+  pcm.fill(0);
+  flush(24);
+  const silence = advanceLiveTranscription(dir, options, { closed: true, toolchain });
+  assert.equal(silence.decoded, 1);
+  assert.equal(silence.skippedSilentChannels, 2);
+  assert.deepEqual([silence.asr.me, silence.asr.others], [[], []]);
 });
 
 test('private session validation tolerates a live worker removing its staging', (t) => {
