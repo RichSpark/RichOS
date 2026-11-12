@@ -3059,11 +3059,17 @@ class Reaper(object):
                      % (family, key, (self.now - newest) // 3600))
             planned.append(path)
 
-        # Every profile no build holds, with its units measured once: rule 2 and rule 3 both
-        # decide from this one reading.
+        self.plan_cargo_units(bc, cargo_roots, planned, walls, idle_s, usual=True)
+
+    def plan_cargo_units(self, bc, cargo_roots, planned, walls, idle_s, usual):
+        """The cargo-units rows: rule 2 (`usual`, the scheduled sweep only) and rule 3, the
+        volume's floor (every sweep, the app's included). Every profile no build holds is
+        measured once and both rules decide from that one reading."""
         free_profiles = []
         for profile in bc.profile_dirs(cargo_roots, skip=planned):
             check_deadline()
+            if self.app_spent(getattr(self, "app_until", None)):
+                continue
             refused = walls.check(profile, False)
             if refused:
                 self.add(profile, "cargo-units", 0, INDETERMINATE, refused)
@@ -3081,6 +3087,8 @@ class Reaper(object):
         windows = self.build_cache_windows(bc, free_profiles, idle_s)
         for profile, us in free_profiles:
             window, why = windows.get(profile, (idle_s, ""))
+            if window >= idle_s and not usual:
+                continue
             idle = sorted(((k, u) for k, u in us.items() if self.now - u["newest"] >= window),
                           key=lambda kv: kv[0])
             if not idle:
@@ -3098,6 +3106,18 @@ class Reaper(object):
             e.unit_keys = [k for k, _u in idle]
             e.idle_seconds = window
             self.entries.append(e)
+
+    def cargo_floor_short(self, bc, cargo_roots):
+        """True when the volume holding any declared Cargo tree is below its free-space target:
+        one statvfs per tree, so the app's sweep walks the trees only when the drive is short."""
+        for root in cargo_roots:
+            t = bc.free_target(root, self.cfg.get("disk_floor_gb", 60),
+                               self.cfg.get("disk_primary_volume", ""),
+                               self.cfg.get("disk_scale_extra_volumes", True),
+                               self.cfg.get("build_cache_free_target_percent", 150))
+            if t is not None and t[2] < t[0]:
+                return True
+        return False
 
     def build_cache_windows(self, bc, free_profiles, idle_s):
         """{profile: (idle window in seconds, why)} for the profiles on a volume below its
@@ -3130,10 +3150,17 @@ class Reaper(object):
                 continue
             window = bc.pressure_window([(u["newest"], u["bytes"]) for _p, us in rows
                                          for u in us.values()], need, idle_s, min_s, self.now)
-            why = ("the volume has %s free, under its target of %s (floor %s)"
-                   % (human(free), human(target), human(floor)))
+            why = ("the volume has %s free, under its target of %s (floor %s); deleted oldest "
+                   "first until the volume is back on target" % (human(free), human(target), human(floor)))
             for profile, _us in rows:
                 out[profile] = (window, why)
+            # apply() re-reads the volume after these rows and goes on until it is back on target
+            # or nothing eligible is left: a unit's bytes are not what deleting it frees, because
+            # Cargo keeps a hard link to a binary outside the unit (review rv-20261112T102721Z).
+            if not hasattr(self, "cargo_floors"):
+                self.cargo_floors = {}
+            self.cargo_floors[dev] = {"profiles": [p for p, _us in rows], "target": target,
+                                      "min_s": min_s}
         return out
 
     def codex_app_root(self):
@@ -3908,6 +3935,17 @@ class Reaper(object):
         # sweep (scan_cargo_output); the project's own files are never touched.
         walls = Walls(claude_roots)
         self.scan_cargo_output(walls, sorted(r for r in self.app_repositories() if os.path.isdir(r)))
+        # THE SHARED CARGO CACHES' FLOOR (2026-11-12, lib/build_caches.py rule 3): the app's
+        # builds fill the declared Cargo trees too, so when the drive holding one is below its
+        # target the app's sweep takes the oldest units, exactly as the scheduled sweep does. Only
+        # that rule: a drive on target costs one statvfs per tree and nothing is walked.
+        cargo_roots = [r for r in self.cfg.get("cargo_target_roots", []) if os.path.isdir(r)]
+        if cargo_roots and not getattr(self, "skip_build_caches", False):
+            bc = build_caches()
+            if self.cargo_floor_short(bc, cargo_roots):
+                self.roots.extend(cargo_roots)
+                self.plan_cargo_units(bc, cargo_roots, [], Walls(cargo_roots),
+                                      self.cfg["build_cache_idle_hours"] * 3600, usual=False)
         self.entries.sort(key=Entry.key)
         return self.entries
 
@@ -4941,6 +4979,28 @@ class Reaper(object):
             freed += e.size
             lines.append("%s DELETED %s bytes=%d class=%s why=%s"
                          % (stamp, e.path, e.size, e.klass, e.why))
+        # THE FLOOR'S TOP-UP (lib/build_caches.py reclaim_to_target): a volume the plan found
+        # below its target is read again now, and its oldest units go until it is back on target
+        # or nothing eligible is left. The planned rows' byte counts are not what they freed.
+        for dev, group in sorted(getattr(self, "cargo_floors", {}).items()):
+            spent = (lambda: self.app_spent(self.app_apply_until)) \
+                if getattr(self, "app_apply_until", None) is not None else None
+            results, before, after = build_caches().reclaim_to_target(
+                group["profiles"], group["target"], group["min_s"], spent=spent)
+            for path, n, got, bad in results:
+                if n:
+                    deleted += 1
+                    freed += got
+                    lines.append("%s DELETED %s bytes=%d class=cargo-units units=%d why=the volume "
+                                 "was still under its target of %s after the planned rows, so its "
+                                 "oldest units went too" % (stamp, path, got, n, human(group["target"])))
+                for f in bad:
+                    failures.append(f)
+                    lines.append("%s FAILED %s class=cargo-units error=%s" % (stamp, path, f))
+            if before is not None:
+                lines.append("%s FLOOR volume of %s: free %s after the planned rows, %s now, "
+                             "target %s" % (stamp, group["profiles"][0], human(before),
+                                            human(after), human(group["target"])))
         # THE DOCKER ARM RUNS AFTER THE FILESYSTEM SWEEP, NEVER BEFORE. The
         # sweep's plan was measured before any deletion so that --dry-run and
         # --apply print byte-identical plans; asking a daemon to prune first

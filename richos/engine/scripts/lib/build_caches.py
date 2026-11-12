@@ -51,7 +51,11 @@ holds three days of that whatever the drive's size. So:
      SCRATCH_BUILD_CACHE_FREE_TARGET_PERCENT. The window never goes below
      SCRATCH_BUILD_CACHE_MIN_IDLE_HOURS, a profile a build holds is never counted or touched, and
      the deletion is the same as rule 2's (under Cargo's lock, re-measured). Oldest first means
-     the warm part of the shared target, which every build reads, goes last.
+     the warm part of the shared target, which every build reads, goes last. After the planned
+     rows the volume is READ AGAIN (reclaim_to_target) and the next oldest units go until it is
+     on target or nothing eligible is left: Cargo hard-links a binary outside its unit, so a
+     unit's byte count overstates what deleting it frees. The app's own sweep (--app) applies
+     this rule too, so every user's app keeps the drive on target, not only the scheduled job.
 
 No size cap: what stays is what is in use or was used recently, and the drive keeps its floor.
 """
@@ -531,6 +535,49 @@ def pressure_window(candidates, need_bytes, idle_seconds, min_idle_seconds, now)
         if freed >= need_bytes:
             return max(min_idle_seconds, age)
     return min_idle_seconds
+
+
+def reclaim_to_target(profiles, target, min_idle_seconds, spent=None, max_rounds=50):
+    """Rule 3's top-up, run after the planned rows: while the volume holding `profiles` is below
+    `target`, delete the oldest units of those profiles (never one read within min_idle_seconds,
+    never under a lock a build holds) and READ THE VOLUME AGAIN. A unit's bytes are not what its
+    deletion frees: Cargo keeps a hard link to a binary outside the unit, so the free space read
+    from the volume, not the byte count, decides when to stop. Stops on target, when nothing
+    eligible is left, when a round deletes nothing, or when `spent()` says the budget is gone.
+
+    Returns (results, free_before, free_after): results is [(profile, units, bytes, failures)]."""
+    profiles = [p for p in profiles if os.path.isdir(p)]
+    here = volume_space(profiles[0]) if profiles else None
+    if here is None:
+        return [], None, None
+    free_before = free = here[2]
+    results = []
+    for _round in range(max_rounds):
+        if free >= target or (spent is not None and spent()):
+            break
+        now = time.time()
+        inventory = [(p, units(p)) for p in profiles]
+        candidates = [(u["newest"], u["bytes"]) for _p, us in inventory for u in us.values()
+                      if now - u["newest"] >= min_idle_seconds]
+        if not candidates:
+            break
+        window = pressure_window(candidates, target - free, float("inf"), min_idle_seconds, now)
+        gone = 0
+        for p, us in inventory:
+            keys = sorted(k for k, u in us.items() if now - u["newest"] >= window)
+            if not keys:
+                continue
+            n, freed, failures, why_not = delete_units(p, keys, window, now=now)
+            if n or failures:
+                results.append((p, n, freed, failures))
+            gone += n
+        if not gone:
+            break
+        again = volume_space(profiles[0])
+        if again is None:
+            break
+        free = again[2]
+    return results, free_before, free
 
 
 # --- the lander's half -----------------------------------------------------------------------

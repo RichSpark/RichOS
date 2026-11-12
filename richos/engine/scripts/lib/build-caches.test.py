@@ -24,6 +24,11 @@ every "it kept X" test:
   B9m  a unit read within SCRATCH_BUILD_CACHE_MIN_IDLE_HOURS stays even when the volume is
        still short, and a profile a running build holds is neither counted nor touched.
   B9f  the floor is the disk watchdog's: scaled by capacity on a volume other than the primary.
+  B9h  a unit whose binary Cargo also hard-linked outside it frees almost nothing; the volume
+       is read again after the planned rows and the next oldest unit goes until it is on target
+       (review rv-20261112T102721Z-317c4e7a-1985 #2), never one read within the minimum.
+  B9a  the app's own sweep (--app, the only sweep a user's app runs) applies the floor to the
+       shared Cargo trees too (the same review, #1); on a volume at its target it walks nothing.
 
 Everything lives in a temporary directory; nothing outside it is read or written except
 `git`, run against checkouts created here.
@@ -333,7 +338,10 @@ class BuildCaches(unittest.TestCase):
         gib = 1024 ** 3
         self.cfg_extra = {"build_cache_free_target_percent": 100, "disk_floor_gb": 1}
         mod = reaper.build_caches()
-        return patch.object(mod, "volume_space", lambda _p: (1, 100 * gib, gib - short_bytes))
+        # The volume gains exactly what the deletions really release (blocks, each inode once).
+        start = self.blocks(self.cargo)
+        return patch.object(mod, "volume_space", lambda _p: (
+            1, 100 * gib, gib - short_bytes + (start - self.blocks(self.cargo))))
 
     def left(self, p):
         return sorted(n for n in os.listdir(os.path.join(p, "deps")))
@@ -380,6 +388,70 @@ class BuildCaches(unittest.TestCase):
             self.assertEqual(free, 20 * gib)
             self.assertEqual(bc.free_target("/external/cargo", 60, "/primary", False, 100)[1], 60 * gib)
             self.assertEqual(bc.free_target("/primary", 60, "/primary", True, 100)[1], 60 * gib)
+
+    def blocks(self, root):
+        """Bytes the files under root hold, each inode once: what deleting them really frees."""
+        seen = {}
+        for d, _dirs, files in os.walk(root):
+            for n in files:
+                st = os.lstat(os.path.join(d, n))
+                seen[(st.st_dev, st.st_ino)] = st.st_blocks * 512
+        return sum(seen.values())
+
+    def test_B9h_the_volume_is_read_again_and_a_hard_linked_unit_does_not_end_the_reclaim(self):
+        p, (h50, h30, h1) = self.recent_profile("shared-build-v1", (50, 30, 1))
+        # Cargo's top-level copy of the oldest unit's library: one inode, two names.
+        os.link(os.path.join(p, "deps", "libdep0-%s.rlib" % h50), os.path.join(p, "libdep0.rlib"))
+        oldest = bc.units(p)[("unit", h50)]["bytes"]
+        start = self.blocks(self.cargo)
+        gib = 1024 ** 3
+        self.cfg_extra = {"build_cache_free_target_percent": 100, "disk_floor_gb": 1}
+        # The volume's free space is what the deletions really released, nothing more.
+        space = lambda _p: (1, 100 * gib, gib - oldest + (start - self.blocks(self.cargo)))
+        with patch.object(reaper.build_caches(), "volume_space", space):
+            plan, r = self.plan()
+            self.assertEqual(plan[p].unit_keys, [("unit", h50)])
+            log = os.path.join(self.tmp, "log")
+            _d, _freed, failures = self.apply(r)
+        self.assertEqual(failures, [])
+        self.assertEqual(self.left(p), ["libdep2-%s.rlib" % h1])     # 30 h went too, 1 h stayed
+        self.assertTrue(os.path.exists(os.path.join(p, "libdep0.rlib")))
+        self.assertIn("FLOOR volume of", Path(log).read_text())
+
+    def test_B9a_the_apps_own_sweep_applies_the_floor_to_the_shared_cargo_trees(self):
+        p, (h50, h30, h3) = self.recent_profile("shared-build-v1", (50, 30, 3))
+        oldest = bc.units(p)[("unit", h50)]["bytes"]
+        data = os.path.join(self.tmp, "app-data")
+        os.makedirs(data)
+        for short, expect in ((oldest, [("unit", h50)]), (0, None)):
+            with self.subTest(short=short), self.under_target(short):
+                r = object.__new__(reaper.Reaper)
+                r.cfg = {"claude_roots": [], "build_cache_root": self.cache,
+                         "cargo_target_roots": [self.cargo], "build_cache_idle_hours": 72,
+                         "build_cache_min_idle_hours": 2, "disk_primary_volume": "",
+                         "disk_scale_extra_volumes": True}
+                r.cfg.update(self.cfg_extra)
+                r.entries, r.roots, r.now, r.floor = [], [], time.time(), 3600
+                r.ws = Mock()
+                r.app_sessions = Mock(return_value=set())
+                r.app_account_session_dirs = Mock(return_value=[])
+                r.app_repositories = Mock(return_value=[])
+                for name in ("scan_app_profiles", "scan_app_voice", "scan_app_dictation",
+                             "scan_app_mcp_logs", "scan_cargo_output"):
+                    setattr(r, name, Mock())
+                mod = reaper.build_caches()
+                walked = Mock(side_effect=mod.profile_dirs)
+                with patch.object(reaper, "Liveness"), \
+                        patch.object(mod, "profile_dirs", walked), \
+                        patch.object(reaper, "registered_workspaces", return_value=[]), \
+                        patch.object(reaper, "never_touch", return_value=[]):
+                    plan = {e.path: e for e in r.scan_app({"data": data})}
+                if expect is None:
+                    self.assertNotIn(p, plan)
+                    self.assertEqual(walked.call_count, 0)
+                else:
+                    self.assertEqual(plan[p].action, reaper.DELETE, plan[p].why)
+                    self.assertEqual(plan[p].unit_keys, expect)
 
     def test_installed_engine_has_no_git_but_registered_owners_remain_checked(self):
         library = Path(self.tmp) / 'installed-engine/scripts/lib'
