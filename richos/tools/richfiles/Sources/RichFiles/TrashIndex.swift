@@ -17,7 +17,7 @@ struct TrashIndex: Sendable {
     let entries: [TrashListEntry]
     let inaccessible: Int
 
-    static func read(known: [BrowserTrashItem]) throws -> Self {
+    static func read(known: [BrowserTrashItem], peer: [BrowserTrashItem]) throws -> Self {
         let manager = FileManager.default
         var locations = manager.urls(for: .trashDirectory, in: .userDomainMask)
         if let mounts = try? VolumeInfo.mounted() {
@@ -29,11 +29,14 @@ struct TrashIndex: Sendable {
                 }
             }
         }
-        var knownByPath: [String: BrowserTrashItem] = [:]
-        for item in known {
-            if let reference = item.reference, knownByPath[reference.url.path] == nil {
-                knownByPath[reference.url.path] = item
-            }
+        return try read(locations: locations, known: known, peer: peer)
+    }
+
+    static func read(locations: [URL], known: [BrowserTrashItem], peer: [BrowserTrashItem]) throws -> Self {
+        let manager = FileManager.default
+        var knownByPath: [String: [BrowserTrashItem]] = [:]
+        for item in known + peer {
+            if let reference = item.reference { knownByPath[reference.url.path, default: []].append(item) }
         }
         var completedFolders: Set<String> = []
         var scannedFolders: Set<String> = []
@@ -63,7 +66,8 @@ struct TrashIndex: Sendable {
             for url in items where url.lastPathComponent != ".DS_Store" {
                 try Task.checkCancellation()
                 guard let reference = try? FileReference(url: url) else { complete = false; continue }
-                let recorded = knownByPath[reference.url.path].flatMap { $0.reference == reference ? $0 : nil }
+                let recorded = knownByPath[reference.url.path]?.filter { $0.reference == reference }
+                    .max { $0.trashedAt < $1.trashedAt }
                 if let recorded { seen.insert(recorded.id) }
                 let date = recorded?.trashedAt ?? (try? url.resourceValues(forKeys: [.addedToDirectoryDateKey]).addedToDirectoryDate)
                 rows.append(TrashListEntry(reference: reference, known: recorded, dateAdded: date, canDelete: true))

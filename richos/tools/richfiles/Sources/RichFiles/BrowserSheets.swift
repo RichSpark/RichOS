@@ -1055,7 +1055,7 @@ struct TrashSheet: View {
                         }
                         HStack {
                             if let known = entry.known {
-                                Button("Restore") { actions.restore(known) }.disabled(!known.canRestore)
+                                Button("Restore") { actions.restore(entry) }.disabled(!known.canRestore)
                             }
                             Button("Restore To…") { chooseFolder(for: entry) }.disabled(entry.reference == nil)
                         }.disabled(actions.busy).buttonStyle(.borderless)
@@ -1109,8 +1109,11 @@ struct TrashSheet: View {
     private func readTrash() async {
         selected.removeAll()
         let receipts = actions.trashItems
+        let peerStore = actions.peerRecoveryURL
         do {
-            let current = try await readStorage { try TrashIndex.read(known: receipts) }
+            let current = try await readStorage {
+                try TrashIndex.read(known: receipts, peer: BrowserActions.readPeerTrash(from: peerStore))
+            }
             if !Task.isCancelled { selected.removeAll(); index = current; problem = "" }
         } catch {
             if !Task.isCancelled { problem = error.localizedDescription }

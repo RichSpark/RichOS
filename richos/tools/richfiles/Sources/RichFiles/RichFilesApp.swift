@@ -39,7 +39,8 @@ struct FolderWindowRequest: Codable, Hashable {
 public struct RichFilesScenes: Scene {
     private static let browserEvents: Set<String> = ["file://", "richfiles-workspace://"]
     private let delegate: FolderOpenDelegate
-    @StateObject private var actions = BrowserActions(recoveryURL: BrowserActions.recoveryLocation)
+    @StateObject private var actions = BrowserActions(recoveryURL: BrowserActions.recoveryLocation,
+                                                      peerRecoveryURL: RichFilesInstallation.dockedRecoveryStore)
 
     public init(delegate: FolderOpenDelegate) {
         self.delegate = delegate
@@ -133,7 +134,8 @@ public struct RichFilesPane: View {
         self.returnKeyboardFocus = returnKeyboardFocus
         self.dockTarget = dockTarget
         self.didUndock = didUndock
-        _actions = StateObject(wrappedValue: BrowserActions(recoveryURL: recoveryStore))
+        let peerStore = recoveryStore == RichFilesInstallation.dockedRecoveryStore ? BrowserActions.recoveryLocation : nil
+        _actions = StateObject(wrappedValue: BrowserActions(recoveryURL: recoveryStore, peerRecoveryURL: peerStore))
     }
 
     public var body: some View {

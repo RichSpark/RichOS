@@ -72,6 +72,46 @@ final class BrowserActionsTests: XCTestCase {
     }
 
     @MainActor
+    func testTrashUsesLatestMatchingOriginFromOtherHostWithoutWritingItsHistory() async throws {
+        try await withFixture { root, trash, board in
+            let folder = root.appendingPathComponent("New Origin", isDirectory: true)
+            let history = root.appendingPathComponent("History", isDirectory: true)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
+            try FileManager.default.createDirectory(at: history, withIntermediateDirectories: false,
+                                                    attributes: [.posixPermissions: 0o700])
+            let old = try write("retained bytes", named: "Receipt.png", in: root)
+            let original = try FileOperations.move(old, into: folder).moved
+            let archived = try FileOperations.move(original, into: trash).moved
+            let local = history.appendingPathComponent("Recovery.json")
+            let peer = history.appendingPathComponent("DockedRecovery.json")
+            func save(_ source: FileReference, time: TimeInterval, to url: URL) throws {
+                let receipt = TrashReceipt(original: source, trashedAt: Date(timeIntervalSince1970: time),
+                                           trashLocation: archived.url, trashed: archived)
+                let state = TrashFixture(trash: [.init(id: UUID(), receipt: receipt)])
+                try JSONEncoder().encode(state).write(to: url)
+            }
+            try save(old, time: 100, to: local)
+            try save(original, time: 200, to: peer)
+            let peerBefore = try Data(contentsOf: peer)
+            let actions = BrowserActions(pasteboard: board, recoveryURL: local, peerRecoveryURL: peer)
+            let peerItems = BrowserActions.readPeerTrash(from: actions.peerRecoveryURL)
+            let index = try TrashIndex.read(locations: [trash], known: actions.trashItems, peer: peerItems)
+            XCTAssertEqual(index.entries.count, 1)
+            let entry = try XCTUnwrap(index.entries.first)
+            XCTAssertEqual(entry.originalFolder, folder.path)
+            XCTAssertEqual(entry.known?.id, peerItems.first?.id)
+
+            try await perform(actions) { actions.restore(entry) }
+            XCTAssertEqual(try contents(original.url), "retained bytes")
+            XCTAssertFalse(FileManager.default.fileExists(atPath: old.url.path))
+            XCTAssertEqual(actions.undoName, "Restore")
+            XCTAssertEqual(try Data(contentsOf: peer), peerBefore)
+            let refreshed = try TrashIndex.read(locations: [trash], known: actions.trashItems, peer: peerItems)
+            XCTAssertTrue(refreshed.entries.isEmpty)
+        }
+    }
+
+    @MainActor
     func testInterruptedMoveRecoversConfirmedUndoOnceAndLeavesPendingSourceAlone() async throws {
         try await withFixture { root, destination, board in
             let store = root.appendingPathComponent("Recovery/Recovery.json")

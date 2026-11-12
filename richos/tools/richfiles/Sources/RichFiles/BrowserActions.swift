@@ -45,6 +45,7 @@ final class BrowserActions: ObservableObject {
 
     private let pasteboard: NSPasteboard
     private let recoveryURL: URL?
+    let peerRecoveryURL: URL?
     private var clipboard: ClipboardSelection?
     private var localDrag: BrowserDragSelection?
     private var transferTask: Task<Void, Never>?
@@ -63,9 +64,10 @@ final class BrowserActions: ObservableObject {
         let generation: Int
     }
 
-    init(pasteboard: NSPasteboard? = nil, recoveryURL: URL? = nil) {
+    init(pasteboard: NSPasteboard? = nil, recoveryURL: URL? = nil, peerRecoveryURL: URL? = nil) {
         self.pasteboard = pasteboard ?? .general
         self.recoveryURL = recoveryURL
+        self.peerRecoveryURL = peerRecoveryURL
         if let recoveryURL {
             do {
                 if let saved = try RecoveryState.load(from: recoveryURL) {
@@ -89,6 +91,11 @@ final class BrowserActions: ObservableObject {
                                      appropriateFor: nil, create: false)
             .appendingPathComponent("app.richos.richfiles", isDirectory: true)
             .appendingPathComponent("Recovery.json")
+    }
+
+    nonisolated static func readPeerTrash(from store: URL?) -> [BrowserTrashItem] {
+        guard let store else { return [] }
+        return (try? RecoveryState.load(from: store))?.trash ?? []
     }
 
     func refreshClipboard() {
@@ -595,8 +602,8 @@ final class BrowserActions: ObservableObject {
         }
     }
 
-    func restore(_ item: BrowserTrashItem, into alternateFolder: URL? = nil) {
-        guard trashItems.contains(where: { $0.id == item.id }) else { return }
+    func restore(_ entry: TrashListEntry, into alternateFolder: URL? = nil) {
+        guard let item = entry.known, item.canRestore, entry.reference == item.reference else { return }
         runMutation(title: "Restore") {
             let restored = try FileOperations.restore(item.receipt, into: alternateFolder)
             return MutationResult(
@@ -608,12 +615,11 @@ final class BrowserActions: ObservableObject {
 
     func restoreSelected(_ entries: [TrashListEntry]) {
         guard !entries.isEmpty else { return }
-        let knownIDs = Set(trashItems.map(\.id))
         runMutation(title: "Restore Selected") {
             var restored: [(BrowserTrashItem, FileReference)] = []
             var issues: [String] = []
             for entry in entries {
-                guard let item = entry.known, knownIDs.contains(item.id), item.canRestore else {
+                guard let item = entry.known, item.canRestore, entry.reference == item.reference else {
                     let nextStep = entry.reference == nil
                         ? "Check Finder’s Trash for this item."
                         : "Use Restore To… to choose a folder."
@@ -636,8 +642,8 @@ final class BrowserActions: ObservableObject {
     }
 
     func restoreFromTrash(_ entry: TrashListEntry, into folder: URL) {
-        if let known = entry.known {
-            restore(known, into: folder)
+        if entry.known != nil {
+            restore(entry, into: folder)
             return
         }
         guard let source = entry.reference else { return }
