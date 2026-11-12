@@ -27,6 +27,10 @@ function nativeHeader(rate, dataBytes = 0) {
   return header;
 }
 
+test('the engine archive verifier can import the live normalization worker', async () => {
+  await import('../lib/live-normalization-worker.js');
+});
+
 test('live normalization uses flushed native audio and refuses a changed recording', async (t) => {
   for (const changed of [false, true]) {
     await t.test(changed ? 'changed retained audio' : 'complete conversion', async (subtest) => {
