@@ -11,6 +11,7 @@ import io
 import os
 from pathlib import Path
 import shutil
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -110,6 +111,85 @@ class Notifications(unittest.TestCase):
         self.assertNotIn("caches", internal)
         self.assertIn("caches", outside)
         self.assertNotIn("target", outside)
+
+
+class ScanBoundary(unittest.TestCase):
+    """Review rv-20261112T221202Z-46ebe7a9-becb's fixture: an alert on either volume hands `du`
+    only RichOS's configured folders, never the home folder's projects, another app's backups
+    on the drive or the drive itself. A virtual filesystem; `du` is never run."""
+    HOME = "/Users/review-fixture"
+    PRIMARY = "/System/Volumes/Data"
+    EXTERNAL = "/Volumes/ReviewWorking"
+    CACHE = HOME + "/Library/Caches/RichOS"
+    PROJECTS = HOME + "/Projects"
+    EXT_CACHE = EXTERNAL + "/caches"
+    DIRECTORIES = {
+        HOME: [".claude", ".richos-nightly", "Library", "Documents", "Projects"],
+        HOME + "/.claude": [], HOME + "/.richos-nightly": [], HOME + "/Library": ["Caches"],
+        HOME + "/Library/Caches": ["RichOS"], HOME + "/Documents": [],
+        CACHE: ["compilation"], CACHE + "/compilation": [],
+        PROJECTS: ["client"], PROJECTS + "/client": [],
+        EXTERNAL: ["caches", "unrelated-backups"], EXT_CACHE: ["compilation"],
+        EXT_CACHE + "/compilation": [], EXTERNAL + "/unrelated-backups": [], PRIMARY: [],
+    }
+    ROOTS = [CACHE, HOME + "/.claude", HOME + "/.richos-nightly", EXT_CACHE]
+
+    def measured(self, low_volume, candidates):
+        measured = []
+
+        def process(argv, **kwargs):
+            self.assertEqual(argv[:2], ["du", "-sk"])
+            measured.append(argv[2])
+            return subprocess.CompletedProcess(argv, 0, stdout="10485760\t" + argv[2] + "\n")
+
+        def same_volume(path, mount):
+            on_external = path == self.EXTERNAL or path.startswith(self.EXTERNAL + "/")
+            return (self.EXTERNAL if on_external else self.PRIMARY) == mount
+
+        env = {"MODE": "check", "HOME": self.HOME, "TMPDIR": self.EXTERNAL + "/tmp",
+               "DISK_PRIMARY_VOLUME": self.PRIMARY, "DISK_SCALE_EXTRA_VOLUMES": "0",
+               "DISK_RECLAIM_ENABLE": "0"}
+        replacements = {
+            "collect_devices_for_scheduled_check": lambda: None,
+            "storage_candidates": lambda: (candidates, [self.EXTERNAL]),
+            "read_volume": lambda mount: (460 * wd.GB, (20 if mount == low_volume else 200) * wd.GB),
+            "read_state": lambda path: {},
+            "cleanup_health": lambda *args: [],
+            "richos_garbage_bytes": lambda: 0,
+            "notify_ceo": lambda *args: True,
+            "write_state": lambda *args: None,
+            "log": lambda *args: None,
+            "on_volume": same_volume,
+        }
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(patch.dict(os.environ, env, clear=True))
+            for key, value in replacements.items():
+                stack.enter_context(patch.object(wd, key, value))
+            stack.enter_context(patch.object(wd.os.path, "isdir", side_effect=lambda p: p in self.DIRECTORIES))
+            stack.enter_context(patch.object(wd.os.path, "islink", return_value=False))
+            stack.enter_context(patch.object(wd.os, "listdir", side_effect=lambda p: self.DIRECTORIES[p]))
+            stack.enter_context(patch.object(wd.subprocess, "run", side_effect=process))
+            stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
+            self.assertEqual(wd.main(), 1)
+        return measured
+
+    def outside(self, measured, candidates):
+        return [p for p in measured if not any(p == c or p.startswith(c + "/") for c in candidates)]
+
+    def test_an_internal_disk_alert_never_measures_the_home_folders_projects(self):
+        measured = self.measured(self.PRIMARY, self.ROOTS)
+        self.assertEqual(self.outside(measured, self.ROOTS), [], measured)
+        self.assertIn(self.CACHE, measured, "RichOS's own folders are still measured")
+
+    def test_an_external_drive_alert_measures_only_our_folders_on_it(self):
+        measured = self.measured(self.EXTERNAL, self.ROOTS)
+        self.assertEqual(self.outside(measured, self.ROOTS), [], measured)
+        self.assertIn(self.EXT_CACHE, measured)
+
+    def test_a_storage_setting_that_is_the_mount_never_sends_the_drive_to_du(self):
+        measured = self.measured(self.EXTERNAL, self.ROOTS + [self.EXTERNAL])
+        self.assertNotIn(self.EXTERNAL, measured)
+        self.assertNotIn(self.EXTERNAL + "/unrelated-backups", measured)
 
 
 if __name__ == "__main__":

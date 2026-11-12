@@ -206,9 +206,10 @@ def volume_consumers(mount, roots, min_bytes, limit=8, max_depth=6, budget_s=240
 
 
 def consumer_roots(candidates, mount):
-    """Where the consumer walk starts on a volume that is not the primary one: RichOS's own
-    folders (storage_candidates) that sit on it, never the volume itself. A configured root
-    that IS the mount is dropped; the folders the settings name below it are still walked."""
+    """Where the consumer walk and the totals start on a volume, the internal disk included:
+    RichOS's own folders (storage_candidates) that sit on it, never the volume itself and never
+    the home folder. A configured root that IS the mount is dropped; the folders the settings
+    name below it are still walked."""
     roots = []
     for path in candidates:
         path = expand(path)
@@ -1192,26 +1193,22 @@ def main():
     if disk_condition and mode in ("check", "status"):
         consumers = []
         low = [v for v in volumes if v["below_rich"] or v["drop_alert"]] or volumes
-        home = os.path.expanduser("~")
         min_b = int(env_num("DISK_CONSUMER_MIN_GB", 3) * GB)
         for v in low:
             mount = v["mount"]
-            # ONLY FOLDERS ON THIS VOLUME, found by walking it (volume_consumers), plus the
-            # declared candidates that sit on it. Another volume is walked from RichOS's own
-            # folders on it, never from its mount: a walk from /Volumes/E1TB measured every
-            # other user's and app's folder on the drive (2026-11-12, found by W27).
-            roots = (consumer_roots(candidates, mount) if mount != primary
-                     else [home, os.path.join(home, "Library/Developer/CoreSimulator"),
-                           os.path.join(home, "Library/Developer/Xcode")])
+            # ONLY FOLDERS ON THIS VOLUME, found by walking RichOS's own folders on it
+            # (consumer_roots), never the volume or the home folder: a walk from /Volumes/E1TB
+            # measured every other user's and app's folder on the drive (2026-11-12, W27), and a
+            # walk of the home folder measured the user's own projects.
+            roots = consumer_roots(candidates, mount)
             found = volume_consumers(mount, roots, min_b)
             for b, p in found:
                 consumers.append({"path": p, "bytes": b, "human": human(b), "mount": mount,
                                   "ours": is_ours(p.split("  (")[0])})
-            # The declared candidates on this volume too, except one whose subfolder the walk
-            # already named (a total would only repeat it).
+            # The same folders' totals too, except one whose subfolder the walk already named
+            # (a total would only repeat it).
             named = [p.split("  (")[0] for _b, p in found]
-            for b, p in top_consumers([c for c in candidates if os.path.isdir(expand(c))
-                                       and on_volume(expand(c), mount)]):
+            for b, p in top_consumers(roots):
                 if not any(n.startswith(p + os.sep) or n == p for n in named):
                     consumers.append({"path": p, "bytes": b, "human": human(b), "mount": mount,
                                       "ours": is_ours(p)})
