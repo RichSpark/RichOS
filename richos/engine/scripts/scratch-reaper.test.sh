@@ -3029,18 +3029,21 @@ else
 fi
 
 # ===========================================================================
-# S39 — NAMED-AGENT SCRATCH NO RUNNING AGENT CARRIES IS UNRESOLVED UNTIL IT IS GONE
+# S39 — NAMED-AGENT SCRATCH OF AN AGENT THAT IS NOT RUNNING GOES AFTER ITS RETENTION
 # ===========================================================================
-# Handover review rv-20261023T232303Z-ba744b07-d444 #2. Only a land's scoped sweep
-# collects <agent root>/<name>, and the scheduled sweep excluded that root, so a
-# stopped or shelved agent's scratch was neither collected nor reported: published
-# HEALTHY with the residue still there. It is reported now, never deleted here.
+# Handover review rv-20261023T232303Z-ba744b07-d444 #2: only a land's scoped sweep collected
+# <agent root>/<name>, so a stopped or shelved agent's scratch sat there published HEALTHY. It was
+# first reported as UNRESOLVED for ever, and then (2026-11-10, the CEO: none of our own leftovers
+# may end up "undecided") taken by the scheduled sweep once SCRATCH_NAMED_RETENTION_DAYS have
+# passed since the agent's end, unless it holds a repository or a process holds it open: those
+# stay undecided, for a person.
 world named
 start_claude; PID_N="$LAST_CLAUDE"
 register "$W_SESSIONS" "$PID_N" "$SID_LIVE"
 SF="$W_HOME/state/scratch-reaper-state.json"
 NAMED="$W_BULK/tmp/claude"
 sed -i.bak 's/^SCRATCH_AGE_FLOOR_MINUTES=.*/SCRATCH_AGE_FLOOR_MINUTES="60"/' "$W_CFG"
+printf 'SCRATCH_NAMED_RETENTION_DAYS="1"\n' >>"$W_CFG"
 # A producer that wrote its output and finished, never landed.
 python3 -B -c 'import pathlib,sys; p=pathlib.Path(sys.argv[1]); p.parent.mkdir(parents=True); p.write_text("disposable fixture output")' \
     "$NAMED/finished-agent/disposable-output.txt"
@@ -3051,11 +3054,11 @@ backdate "$NAMED/finished-agent"
 mkdir -p "$W_HOME/state/workspaces/agents"
 printf '{"key": "k-live", "name": "live-agent", "workspaces": []}\n' >"$W_HOME/state/workspaces/agents/k-live.json"
 OUT="$(RICHOS_WORKSPACES_DIR="$W_HOME/state/workspaces" run_scheduled --apply)"
-if state_is 'st.get("outcome") == "unresolved" and [(u.get("scope"), u.get("count")) for u in st.get("unresolved", []) if u.get("class") == "agent-named"] == [("'"$NAMED"'", 1)] and "finished-agent" in str(st["unresolved"])' \
-   && [ -f "$NAMED/finished-agent/disposable-output.txt" ]; then
-    ok "S39  a finished agent's named scratch is published UNRESOLVED for its root, and not deleted"
+if [ ! -e "$NAMED/finished-agent" ] \
+   && state_is 'not any(u.get("class") == "agent-named" for u in st.get("unresolved", []))'; then
+    ok "S39  a finished agent's named scratch past the retention is deleted, and nothing is left undecided"
 else
-    bad "S39  a finished agent's named scratch was not reported (or was deleted)"
+    bad "S39  a finished agent's named scratch past its retention was kept or reported"
     printf '%s\n' "$OUT" | sed 's/^/        /' | tail -8
     cat "$SF" 2>/dev/null | sed 's/^/        /' | head -20
 fi
@@ -3064,17 +3067,30 @@ if [ -f "$NAMED/live-agent/payload.txt" ] && [ -f "$NAMED/fresh-agent/out.txt" ]
 else
     bad "S39a a running agent's or a fresh named directory was deleted"
 fi
-rm -rf "$NAMED/finished-agent"
+# A finished agent's directory that holds a repository is never taken: it stays undecided.
+mkdir -p "$NAMED/repo-agent/.git"
+printf 'real work\n' >"$NAMED/repo-agent/notes.txt"
+backdate "$NAMED/repo-agent"
+RICHOS_WORKSPACES_DIR="$W_HOME/state/workspaces" run_scheduled --apply >/dev/null 2>&1
+if [ -f "$NAMED/repo-agent/notes.txt" ] \
+   && state_is '[(u.get("scope"), u.get("count")) for u in st.get("unresolved", []) if u.get("class") == "agent-named"] == [("'"$NAMED"'", 1)] and "repo-agent" in str(st["unresolved"])'; then
+    ok "S39b CONTROL: a finished agent's directory holding a repository is kept and published UNRESOLVED"
+else
+    bad "S39b a directory holding a repository was deleted or not reported"
+    cat "$SF" 2>/dev/null | sed 's/^/        /' | head -20
+fi
+rm -rf "$NAMED/repo-agent"
 RICHOS_WORKSPACES_DIR="$W_HOME/state/workspaces" run_scheduled --apply >/dev/null 2>&1
 if state_is 'not any(u.get("class") == "agent-named" for u in st.get("unresolved", []))'; then
-    ok "S39b CONTROL: once the leftover is gone, the named root clears"
+    ok "S39d CONTROL: once that directory is gone, the named root clears"
 else
-    bad "S39b the named root stayed unresolved after its leftover was removed"
+    bad "S39d the named root stayed unresolved after its directory was removed"
     cat "$SF" 2>/dev/null | sed 's/^/        /' | head -20
 fi
 # Mid-job review rv-20261024T003222Z-30e4f755-64ef #1: an orphaned writer keeps
 # appending to a STOPPED agent's log, so the newest mtime stays inside the floor.
-# The clock comes off the end the registry recorded, not the mtime.
+# The clock comes off the end the registry recorded, not the mtime: that agent ended 4 days
+# ago, past the 1-day retention, so its scratch goes.
 mkdir -p "$NAMED/stopped-agent"
 printf 'still being written by an orphaned worker\n' >"$NAMED/stopped-agent/worker.log"
 python3 - "$W_HOME/state/workspaces/agents/k-stopped.json" <<'PY'
@@ -3084,11 +3100,11 @@ json.dump({"key": "k-stopped", "name": "stopped-agent", "workspaces": [],
           open(sys.argv[1], "w"))
 PY
 RICHOS_WORKSPACES_DIR="$W_HOME/state/workspaces" run_scheduled --apply >/dev/null 2>&1
-if state_is '[(u.get("scope"), u.get("count")) for u in st.get("unresolved", []) if u.get("class") == "agent-named"] == [("'"$NAMED"'", 1)] and "stopped-agent" in str(st["unresolved"])' \
-   && [ -f "$NAMED/stopped-agent/worker.log" ]; then
-    ok "S39c a stopped agent's scratch an orphaned writer keeps fresh is still published UNRESOLVED"
+if [ ! -e "$NAMED/stopped-agent" ] \
+   && state_is 'not any(u.get("class") == "agent-named" for u in st.get("unresolved", []))'; then
+    ok "S39c a stopped agent's scratch an orphaned writer keeps fresh goes by its recorded end"
 else
-    bad "S39c a fresh write hid a stopped agent's scratch inside the age floor"
+    bad "S39c a fresh write hid a stopped agent's scratch past its retention"
     cat "$SF" 2>/dev/null | sed 's/^/        /' | head -20
 fi
 kill "$PID_N" >/dev/null 2>&1 || true

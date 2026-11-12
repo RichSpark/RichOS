@@ -256,7 +256,19 @@ scripts/operator-fences-mutation.test.sh	1407.7	darwin-local-2026-09-25-zach-opu
 # merge of that commit measured it at 9.0 s beside 62 other checks.
 scripts/hooks/contract-integrity.test.sh:SCR	4.8	darwin-local-2026-09-30-zach-opus-gate2
 
-# Behavioral half under ci-shard.sh after its land-lock home moved into the fixture
-# (693528de, "After: PASS 172.4s, ci-shard 1/1 unit(s) passed"); the mutation pass
-# runs only at the nightly's workspace-mutants gate and is not in this number.
-mega-lander/tests/app.test.sh	172.4	darwin-local-2026-09-30-zach-sonnet-landlock1
+# app.test.py IN EIGHT UNITS (2026-11-12). The behavioral half was 172.4 s at 693528de
+# (2026-09-30, about 30 cases). At 132 cases it ran 488-899 s in the saved proof runs since
+# 2026-10-31 and 1065 s (main, acf97568b) / 1156 s (cc/zach-opus-disk1c) run directly on a loaded
+# Mac; it was killed at ci-shard's 900 s deadline on three branches, and a quarter of it measured
+# 318-432 s. app.test.sh and app-2.test.sh to app-8.test.sh each run one eighth (app.test.py
+# _part). Measured together under ci-shard on that loaded Mac (load average 27):
+# "ci-shard: 8/8 unit(s) passed". The mutation pass (app.test.sh, the nightly's
+# workspace-mutants gate) is not in these numbers.
+mega-lander/tests/app.test.sh	202.2	darwin-local-2026-11-12-zach-opus-disk1c
+mega-lander/tests/app-2.test.sh	168.1	darwin-local-2026-11-12-zach-opus-disk1c
+mega-lander/tests/app-3.test.sh	109.7	darwin-local-2026-11-12-zach-opus-disk1c
+mega-lander/tests/app-4.test.sh	70.9	darwin-local-2026-11-12-zach-opus-disk1c
+mega-lander/tests/app-5.test.sh	95.1	darwin-local-2026-11-12-zach-opus-disk1c
+mega-lander/tests/app-6.test.sh	115.9	darwin-local-2026-11-12-zach-opus-disk1c
+mega-lander/tests/app-7.test.sh	118.6	darwin-local-2026-11-12-zach-opus-disk1c
+mega-lander/tests/app-8.test.sh	104.9	darwin-local-2026-11-12-zach-opus-disk1c

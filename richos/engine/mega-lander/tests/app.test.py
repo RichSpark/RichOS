@@ -3813,13 +3813,40 @@ def _resolve_names(names,loader):
     return out
 
 
+def _part(suite,spec):
+    """`--part K/N`: every Nth case of the whole suite, starting at the Kth, in the loader's order.
+    app.test.sh and app-2.test.sh to app-8.test.sh each run one eighth (2026-11-12): the whole suite
+    grew from about 30 cases to 132 and from 172 s to 500-1150 s (1700 s beside another run on a loaded
+    Mac), past the 900 s deadline ci-shard gives a unit and the merge gate's 600 s cap, and
+    ci-units.test.sh U14 holds every unit the gate starts under 300 s. A quarter measured 318-432 s on
+    that Mac, so eighths, with room for the suite to keep growing. Taking every Nth case rather than a
+    range spreads each family of slow land cases across the parts, and the N parts together are
+    exactly the suite: no case is in two, none is in none."""
+    k,n=(int(x) for x in spec.split("/"))
+    if not 1<=k<=n:
+        raise SystemExit("app.test.py: --part %s: K must be 1..N"%spec)
+    cases=[]
+    def flat(s):
+        for t in s:
+            flat(t) if isinstance(t,unittest.TestSuite) else cases.append(t)
+    flat(suite)
+    return unittest.TestSuite(cases[k-1::n])
+
+
 if __name__=="__main__":
     runner=unittest.TextTestRunner(stream=sys.stdout,verbosity=0,resultclass=_Result)
     loader=unittest.defaultTestLoader
-    names=_resolve_names([a for a in sys.argv[1:] if a],loader)
+    args=[a for a in sys.argv[1:] if a]
+    part=None
+    if args[:1]==["--part"] and len(args)>1:
+        part,args=args[1],args[2:]
+    names=_resolve_names(args,loader)
     suite=(loader.loadTestsFromNames(names,sys.modules[__name__]) if names
            else loader.loadTestsFromModule(sys.modules[__name__]))
+    # A named case (the mutation harness's focused run) is run wherever it falls, never filtered.
+    if part and not names:
+        suite=_part(suite,part)
     result=runner.run(suite)
-    print("=== desktop dispatch tests: %d run, %d failed ==="%(
-        result.testsRun,len(result.failures)+len(result.errors)))
+    print("=== desktop dispatch tests%s: %d run, %d failed ==="%(
+        " (part %s)"%part if part and not names else "",result.testsRun,len(result.failures)+len(result.errors)))
     sys.exit(0 if result.wasSuccessful() else 1)

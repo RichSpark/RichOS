@@ -25,11 +25,14 @@
     "DISK_CEO_NOTIFY_GB",
     "DISK_CEO_REPEAT_HOURS",
     "DISK_CEO_URGENT_GB",
+    "DISK_CONSUMER_MIN_GB",
     "DISK_DROP_ALERT_GB",
     "DISK_DROP_ALERT_GB_PER_HOUR",
     "DISK_DROP_MAX_GAP_INTERVALS",
     "DISK_DROP_MIN_GAP_SECONDS",
     "DISK_PRIMARY_VOLUME",
+    "DISK_RECLAIM_ENABLE",
+    "DISK_RECLAIM_MIN_GAP_MINUTES",
     "DISK_RICH_ALERT_GB",
     "DISK_SCALE_EXTRA_VOLUMES",
     "DISK_STATE_JSON",
@@ -62,7 +65,9 @@
     "RESOURCE_WAIT_MINUTES",
     "SCRATCH_AGE_FLOOR_MINUTES",
     "SCRATCH_APP_REGISTRY_RELPATH",
+    "SCRATCH_BUILD_CACHE_FREE_TARGET_PERCENT",
     "SCRATCH_BUILD_CACHE_IDLE_HOURS",
+    "SCRATCH_BUILD_CACHE_MIN_IDLE_HOURS",
     "SCRATCH_BUILD_CACHE_ORPHAN_HOURS",
     "SCRATCH_BULK_TMP_ROOTS",
     "SCRATCH_CAMPAIGN_PARENT",
@@ -72,12 +77,16 @@
     "SCRATCH_CODEX_HOME",
     "SCRATCH_CODEX_WORKTREE_ROOTS",
     "SCRATCH_DEFAULT_TTL_MINUTES",
+    "SCRATCH_DERIVED_DATA_IDLE_DAYS",
+    "SCRATCH_DEVICE_SUPPORT_KEEP",
     "SCRATCH_DOCKER_CONTAINER_ALERT_DAYS",
     "SCRATCH_DOCKER_KEEP_STORAGE",
     "SCRATCH_DOCKER_PRUNE",
     "SCRATCH_DOCKER_THROWAWAY_IMAGES",
     "SCRATCH_DOCKER_UNTIL",
     "SCRATCH_FAILURES_STATE",
+    "SCRATCH_FIXTURE_FILES",
+    "SCRATCH_FIXTURE_IDENTITIES",
     "SCRATCH_FIXTURE_REPO_LABELS",
     "SCRATCH_FOREIGN_PATTERNS",
     "SCRATCH_KEPT_DIR",
@@ -86,6 +95,7 @@
     "SCRATCH_LEGACY_GIT_IS_FIXTURE",
     "SCRATCH_LEGACY_TMP_PATTERNS",
     "SCRATCH_MIN_OWNER_PID",
+    "SCRATCH_NAMED_RETENTION_DAYS",
     "SCRATCH_NIGHTLY_DIR",
     "SCRATCH_NIGHTLY_KEEP",
     "SCRATCH_NOTICE_BYTES",
@@ -94,9 +104,12 @@
     "SCRATCH_REAPER_MINUTE",
     "SCRATCH_REAPER_STATE",
     "SCRATCH_REAPER_STATE_MAX_AGE_HOURS",
+    "SCRATCH_RETIRED_DIR",
+    "SCRATCH_RETIRED_RETENTION_DAYS",
     "SCRATCH_ROOT_NAME",
     "SCRATCH_SESSION_PROCESS_NAMES",
     "SCRATCH_SHARED_TMP_ROOTS",
+    "SCRATCH_SIM_IDLE_DAYS",
     "SCRATCH_SKIPPED_NOTICE_BYTES",
     "SCRATCH_SYSTEM_FLAGS",
     "SCRATCH_TMP_DENY_BY_DEFAULT",
@@ -1154,7 +1167,7 @@
     },
     "scripts/verification-inputs.test.py": {
       "source": "scripts/verification-inputs.test.py",
-      "sha256": "c40ffa00cd1d01e3bf8d53cbb85ef4e81a2b86f0cb8a76c221ba65173e6d7dcb",
+      "sha256": "6e3703b9488bd35ce6d827788b32b041165effff9db6eb5a2e79f9f72e0fd97e",
       "evidence": "Uses temporary files and Git repositories for parser/closure controls. Its real-file grammar case parses every assignment and checks all eight environment path forms. Helper-source hashing and hook JSON parsing are data reads; selected hooks/suites are never executed. The added real dependency/selection cases only read bound source and hook JSON as data and use synthetic config deltas; they never launch selected suites.",
       "keys": [],
       "edges": [
@@ -1311,7 +1324,7 @@
     },
     "scripts/lib/foreign_app_data.py#source-scan": {
       "source": "scripts/lib/foreign_app_data.py",
-      "sha256": "bfd0833d42e8bb4bcd7dfa16a984d3905575a75eba850aa65a080b80a4e05ac5",
+      "sha256": "3726b8f56d3cf78cca0351fd449fafbf2862975354509ffa1f713d43cd5c3939",
       "evidence": "The scan CLI reads source text and directory inventories, including every line of the real orchestration.config. Self-test uses literal source strings and path normalization. Other Bash guard operations are not called.",
       "keys": [],
       "edges": [],
@@ -2931,12 +2944,17 @@
     },
     "scripts/lib/scratch-reaper.py": {
       "source": "scripts/lib/scratch-reaper.py",
-      "sha256": "5fc89d35adc94131311f482abcc10b7fb15d4cc0895b6722bcf3fc9763c46eeb",
-      "evidence": "config_from_env uses finite literal need/number/opt/opt_number callers; process names, system flags and state paths are the other environment reads. The shell exports these values from its selected config. Reviewed local scan/apply closure imports only fixed workspace liveness, appinstances and testdevices/alert modules. Docker/ps/lsof are external executables, not engine readers. All imported settings readers honor the same SCRATCH_REAPER_CONFIG fixture path. Renewed 2026-10-01 (a land sweeps only the landed agent's scratch): --agent runs scan_agent instead of scan: it reads the ledger's new cwd field, the declared SCRATCH_AGENT_ROOTS and, by glob, the agent's own session scratchpad under SCRATCH_CLAUDE_ROOTS, and checks holders with the existing per-path lsof. In that mode apply() skips test devices and Docker and the state file is not written. No new execution edge. Renewed 2026-10-04 (what an automatic land kept): scan() adds scan_kept, which lists the declared SCRATCH_KEPT_DIR and deletes each child older than SCRATCH_KEPT_RETENTION_DAYS by its own mtime, through the same walls; it reads no other file. No new execution edge. Renewed 2026-10-08 (build caches on the external drive): scan() adds scan_build_caches, which reads the five declared SCRATCH_BUILD_CACHE_*/SCRATCH_CARGO_TARGET_ROOTS keys through config_from_env and plans through the fixed-path module lib/build_caches.py; apply() deletes cargo-units rows through that module under Cargo's lock. No other new reader. Renewed 2026-10-13: settings-based cache and Cargo root validation now runs within config_from_env's existing controlled Fatal refusal, before workspace discovery or any cleanup; no new reader, setting or execution edge. Renewed 2026-10-13: config_from_env now uses the already-declared build_caches.roots reader so scheduled cleanup includes a selected RICHOS_BUILD_CACHE; controlled storage refusal remains before discovery. No new edge or key. Renewed 2026-10-23: _ps_env appends /usr/sbin and /sbin to the child PATH when missing, so the launchd job (whose plist PATH lacks /usr/sbin) finds the same external lsof; no new reader, setting or execution edge. Renewed 2026-10-23 (cleanup PRD R1): the allocator arm reads the .git pointer files and worktrees/*/gitdir files inside an ended, ledger-recorded allocation to prove its repositories are wholly inside it; those are files under the candidate itself, not settings. No new reader, setting or execution edge. Renewed 2026-10-23 (cleanup PRD R1): the legacy, deny-by-default and standing-failure arms run the same containment read over a candidate's .git pointer files before narrowing wall 2. Files under the candidate itself; no new reader, setting or execution edge. Renewed 2026-10-23 (cleanup PRD coverage): config_from_env reads the new declared key SCRATCH_BULK_TMP_ROOTS (paths relative to RICHOS_BULK_ROOT, read through the existing machine_settings reader and validate refusal) and adds those producer temp roots to the shared temp roots; scan_scratch_root then also sweeps the allocator root under each. No new execution edge. Renewed 2026-10-23 (cleanup PRD R4): the full --apply publishes source/outcome/unresolved/roots only when SCRATCH_REAPER_SCHEDULED=1, which scratch-reaper.sh sets from launchd's XPC_SERVICE_NAME and clears otherwise; a refused scheduled run publishes its refusal; the deletion log keeps one rotated file. No new config key or execution edge. Renewed 2026-10-23 (cleanup PRD R1, review rv-20261023T212629Z-3dc330ca-a2b9): config_from_env reads the new declared key SCRATCH_FIXTURE_REPO_LABELS; the allocator arm narrows wall 2 only for those ledger labels, and the deny-by-default arm only for declared harness families inside the producer temp roots. No new reader or execution edge. Renewed 2026-10-23 (cleanup PRD A6): scan_codex_worktrees reads SCRATCH_CODEX_WORKTREE_ROOTS (absolute or relative to the bulk root) and SCRATCH_CODEX_HOME, adds those roots to the walls, and hands each checkout to codex_worktrees.py; apply() closes codex-worktree rows only through codex_worktrees.close(); --notice skips the arm. Renewed 2026-10-24 (review rv-20261023T232303Z-ba744b07-d444 #2): scan() adds scan_named_scratch, which lists the already-declared named-agent root (machine_settings.agent_root) and reads the agent registry through the fixed workspace liveness module it already loads (damaged_records, all_agents, finished_state); it plans KEEP or INDETERMINATE only, never DELETE; --notice skips it. No new config key, reader or execution edge. Renewed 2026-10-25 (CEO \u00a754 addendum 2, the app's own sweep): --app runs scan_app instead of scan: it lists <data>/engine-state/evidence/*/binding.json (the app's own record, under a folder given on the command line, not a setting) and the hosted sessions' directories under the declared SCRATCH_CLAUDE_ROOTS, decided by the existing liveness, per-path lsof and walls; in that mode apply() skips test devices and Docker, writes no state file and logs a planned path that vanished as GONE. No new config key or execution edge. Renewed 2026-10-25 (the app's own sweep, two more classes): scan_app also lists <data>/engine-profiles and reads each lease folder's .richos-owner.json (written by richos-core app_cleanup.rs; pid and start, compared through the existing workspaces process_start), reads every process's command line once with ps -axww (an external executable, like lsof), and lists ~/Library/Caches/claude-cli-nodejs/<slug of <data>/coordination>/mcp-logs-*, decided by the existing claude-orphan rule; --app-exiting <pid> names the quitting app. Files under the app's folder or Claude Code's cache, not settings. No new config key or execution edge. Renewed 2026-10-25 (review rv-20261025T000521Z-2fe81615-e0f2 #1): in --app, Liveness also reads <folder>/sessions for every added Claude account (<data>/claude-accounts/*/ and each folder <data>/claude-accounts.json names), and an ENDED app session is kept while any running process's command line (the ps -axww read above) carries its id. Files under the app's folder, not settings. No new config key or execution edge. Renewed 2026-10-25 (review rv-20261025T010610Z-2cc154e7-1d03 #2): --app-budget (default APP_BUDGET_SECONDS, 8 s, inside the app's 10 s bound) stops weighing new app candidates at half the budget and starting new deletions at all of it; the rest is counted as deferred= for the app's next sweep. Reads the clock only. No new config key, file read or execution edge. Renewed 2026-10-25 (review rv-20261025T021219Z-91f589b0-af71 #1): scan_app_profiles reads a folder's own .richos-owner.json before its base's (the app now writes one into both). A file under the app's folder, not a setting. Renewed 2026-10-25 (review rv-20261025T020709Z-8339d95d-d408 #1): scan_app adds scan_app_voice, which lists <data>/voice-scratch for utt-<pid>.wav and $TMPDIR (the same TMPDIR environment read --process-only already makes) for richos-speech-warm-<pid>-<n>, and decides each through the existing workspaces process_start, the per-path lsof and the walls; a folder of the app's that exists and cannot be listed is planned INDETERMINATE instead of skipped. No new config key or execution edge. Renewed 2026-10-25 (the app's cleanup reports a failure as one): scan_app_profiles lists <data>/engine-profiles through the same app_listing, so an unreadable profiles folder is planned INDETERMINATE instead of skipped. No new reader, setting or execution edge. Renewed 2026-10-25 (a killed dictation tool's scratch): scan_app adds scan_app_dictation, which lists <data>/dictation-scratch through the same app_listing and reads each folder's .richos-owner.json (written by the tool's dictation/scratch.rs through richos-core app_cleanup.rs), decided through the existing workspaces process_start, the per-path lsof, the age floor and the walls. Files under the app's folder, not settings. No new config key, reader or execution edge. Renewed 2026-10-25 (Codex's read of 0dac9ba80): only a missing owner record takes the age-floor fallback; a record that exists and cannot be read or parsed is planned INDETERMINATE. No new reader, setting or execution edge. Renewed 2026-10-25: a record holding JSON null is a record that is there, not a missing one, and is planned INDETERMINATE with the rest. No new reader, setting or execution edge. Renewed 2026-10-29: every sweep (not only --app) also reads the session registries of the app's added Claude accounts, <HOME>/<dirname of SCRATCH_APP_REGISTRY_RELPATH>/claude-accounts/*/sessions/*.json and the folders claude-accounts.json there names, through the existing app_account_session_dirs; read only, an existing config key, no new execution edge.",
+      "sha256": "9ee6a01e7b9c359a837f7a79591e1961b5e5de3935da380d3ab076abf30e676b",
+      "evidence": "config_from_env uses finite literal need/number/opt/opt_number callers; process names, system flags and state paths are the other environment reads. The shell exports these values from its selected config. Reviewed local scan/apply closure imports only fixed workspace liveness, appinstances and testdevices/alert modules. Docker/ps/lsof are external executables, not engine readers. All imported settings readers honor the same SCRATCH_REAPER_CONFIG fixture path. Renewed 2026-10-01 (a land sweeps only the landed agent's scratch): --agent runs scan_agent instead of scan: it reads the ledger's new cwd field, the declared SCRATCH_AGENT_ROOTS and, by glob, the agent's own session scratchpad under SCRATCH_CLAUDE_ROOTS, and checks holders with the existing per-path lsof. In that mode apply() skips test devices and Docker and the state file is not written. No new execution edge. Renewed 2026-10-04 (what an automatic land kept): scan() adds scan_kept, which lists the declared SCRATCH_KEPT_DIR and deletes each child older than SCRATCH_KEPT_RETENTION_DAYS by its own mtime, through the same walls; it reads no other file. No new execution edge. Renewed 2026-10-08 (build caches on the external drive): scan() adds scan_build_caches, which reads the five declared SCRATCH_BUILD_CACHE_*/SCRATCH_CARGO_TARGET_ROOTS keys through config_from_env and plans through the fixed-path module lib/build_caches.py; apply() deletes cargo-units rows through that module under Cargo's lock. No other new reader. Renewed 2026-10-13: settings-based cache and Cargo root validation now runs within config_from_env's existing controlled Fatal refusal, before workspace discovery or any cleanup; no new reader, setting or execution edge. Renewed 2026-10-13: config_from_env now uses the already-declared build_caches.roots reader so scheduled cleanup includes a selected RICHOS_BUILD_CACHE; controlled storage refusal remains before discovery. No new edge or key. Renewed 2026-10-23: _ps_env appends /usr/sbin and /sbin to the child PATH when missing, so the launchd job (whose plist PATH lacks /usr/sbin) finds the same external lsof; no new reader, setting or execution edge. Renewed 2026-10-23 (cleanup PRD R1): the allocator arm reads the .git pointer files and worktrees/*/gitdir files inside an ended, ledger-recorded allocation to prove its repositories are wholly inside it; those are files under the candidate itself, not settings. No new reader, setting or execution edge. Renewed 2026-10-23 (cleanup PRD R1): the legacy, deny-by-default and standing-failure arms run the same containment read over a candidate's .git pointer files before narrowing wall 2. Files under the candidate itself; no new reader, setting or execution edge. Renewed 2026-10-23 (cleanup PRD coverage): config_from_env reads the new declared key SCRATCH_BULK_TMP_ROOTS (paths relative to RICHOS_BULK_ROOT, read through the existing machine_settings reader and validate refusal) and adds those producer temp roots to the shared temp roots; scan_scratch_root then also sweeps the allocator root under each. No new execution edge. Renewed 2026-10-23 (cleanup PRD R4): the full --apply publishes source/outcome/unresolved/roots only when SCRATCH_REAPER_SCHEDULED=1, which scratch-reaper.sh sets from launchd's XPC_SERVICE_NAME and clears otherwise; a refused scheduled run publishes its refusal; the deletion log keeps one rotated file. No new config key or execution edge. Renewed 2026-10-23 (cleanup PRD R1, review rv-20261023T212629Z-3dc330ca-a2b9): config_from_env reads the new declared key SCRATCH_FIXTURE_REPO_LABELS; the allocator arm narrows wall 2 only for those ledger labels, and the deny-by-default arm only for declared harness families inside the producer temp roots. No new reader or execution edge. Renewed 2026-10-23 (cleanup PRD A6): scan_codex_worktrees reads SCRATCH_CODEX_WORKTREE_ROOTS (absolute or relative to the bulk root) and SCRATCH_CODEX_HOME, adds those roots to the walls, and hands each checkout to codex_worktrees.py; apply() closes codex-worktree rows only through codex_worktrees.close(); --notice skips the arm. Renewed 2026-10-24 (review rv-20261023T232303Z-ba744b07-d444 #2): scan() adds scan_named_scratch, which lists the already-declared named-agent root (machine_settings.agent_root) and reads the agent registry through the fixed workspace liveness module it already loads (damaged_records, all_agents, finished_state); it plans KEEP or INDETERMINATE only, never DELETE; --notice skips it. No new config key, reader or execution edge. Renewed 2026-10-25 (CEO \u00a754 addendum 2, the app's own sweep): --app runs scan_app instead of scan: it lists <data>/engine-state/evidence/*/binding.json (the app's own record, under a folder given on the command line, not a setting) and the hosted sessions' directories under the declared SCRATCH_CLAUDE_ROOTS, decided by the existing liveness, per-path lsof and walls; in that mode apply() skips test devices and Docker, writes no state file and logs a planned path that vanished as GONE. No new config key or execution edge. Renewed 2026-10-25 (the app's own sweep, two more classes): scan_app also lists <data>/engine-profiles and reads each lease folder's .richos-owner.json (written by richos-core app_cleanup.rs; pid and start, compared through the existing workspaces process_start), reads every process's command line once with ps -axww (an external executable, like lsof), and lists ~/Library/Caches/claude-cli-nodejs/<slug of <data>/coordination>/mcp-logs-*, decided by the existing claude-orphan rule; --app-exiting <pid> names the quitting app. Files under the app's folder or Claude Code's cache, not settings. No new config key or execution edge. Renewed 2026-10-25 (review rv-20261025T000521Z-2fe81615-e0f2 #1): in --app, Liveness also reads <folder>/sessions for every added Claude account (<data>/claude-accounts/*/ and each folder <data>/claude-accounts.json names), and an ENDED app session is kept while any running process's command line (the ps -axww read above) carries its id. Files under the app's folder, not settings. No new config key or execution edge. Renewed 2026-10-25 (review rv-20261025T010610Z-2cc154e7-1d03 #2): --app-budget (default APP_BUDGET_SECONDS, 8 s, inside the app's 10 s bound) stops weighing new app candidates at half the budget and starting new deletions at all of it; the rest is counted as deferred= for the app's next sweep. Reads the clock only. No new config key, file read or execution edge. Renewed 2026-10-25 (review rv-20261025T021219Z-91f589b0-af71 #1): scan_app_profiles reads a folder's own .richos-owner.json before its base's (the app now writes one into both). A file under the app's folder, not a setting. Renewed 2026-10-25 (review rv-20261025T020709Z-8339d95d-d408 #1): scan_app adds scan_app_voice, which lists <data>/voice-scratch for utt-<pid>.wav and $TMPDIR (the same TMPDIR environment read --process-only already makes) for richos-speech-warm-<pid>-<n>, and decides each through the existing workspaces process_start, the per-path lsof and the walls; a folder of the app's that exists and cannot be listed is planned INDETERMINATE instead of skipped. No new config key or execution edge. Renewed 2026-10-25 (the app's cleanup reports a failure as one): scan_app_profiles lists <data>/engine-profiles through the same app_listing, so an unreadable profiles folder is planned INDETERMINATE instead of skipped. No new reader, setting or execution edge. Renewed 2026-10-25 (a killed dictation tool's scratch): scan_app adds scan_app_dictation, which lists <data>/dictation-scratch through the same app_listing and reads each folder's .richos-owner.json (written by the tool's dictation/scratch.rs through richos-core app_cleanup.rs), decided through the existing workspaces process_start, the per-path lsof, the age floor and the walls. Files under the app's folder, not settings. No new config key, reader or execution edge. Renewed 2026-10-25 (Codex's read of 0dac9ba80): only a missing owner record takes the age-floor fallback; a record that exists and cannot be read or parsed is planned INDETERMINATE. No new reader, setting or execution edge. Renewed 2026-10-25: a record holding JSON null is a record that is there, not a missing one, and is planned INDETERMINATE with the rest. No new reader, setting or execution edge. Renewed 2026-10-29: every sweep (not only --app) also reads the session registries of the app's added Claude accounts, <HOME>/<dirname of SCRATCH_APP_REGISTRY_RELPATH>/claude-accounts/*/sessions/*.json and the folders claude-accounts.json there names, through the existing app_account_session_dirs; read only, an existing config key, no new execution edge. Renewed 2026-11-10 (internal-disk classes): scan_internal_disk reads five new declared keys (SCRATCH_DERIVED_DATA_IDLE_DAYS, SCRATCH_RETIRED_DIR, SCRATCH_RETIRED_RETENTION_DAYS, SCRATCH_SIM_IDLE_DAYS, SCRATCH_DEVICE_SUPPORT_KEEP), the --under-floor flag, flock observations of release.lock and Cargo's .cargo-lock files, simctl and ps as external executables, and the same workspace registry for checkouts; nothing else new. Renewed 2026-11-10 (our own leftovers are decided): work_proof reads each repository found in a candidate through the external git executable (status, remote, log, read-only, GIT_OPTIONAL_LOCKS=0); scan_named_scratch reads SCRATCH_NAMED_RETENTION_DAYS and the existing lsof holder check; scan_app also takes build output in the repositories the app's entity registry names. Also reads SCRATCH_FIXTURE_IDENTITIES (commit e-mail addresses of harness repositories).  Also reads SCRATCH_FIXTURE_FILES (harness file names allowed in a repository with no commit) and runs one whole-machine lsof (-F pn) and ps to check that no process uses Cargo output before it is deleted. Renewed 2026-11-12 (the volume's floor): scan_build_caches reads two new declared keys (SCRATCH_BUILD_CACHE_FREE_TARGET_PERCENT, SCRATCH_BUILD_CACHE_MIN_IDLE_HOURS) and the disk watchdog's declared DISK_RICH_ALERT_GB, DISK_PRIMARY_VOLUME and DISK_SCALE_EXTRA_VOLUMES, and reads free space with os.statvfs through lib/build_caches.py; apply() deletes cargo-units rows with the row's own idle window through the same module. No new execution edge. Renewed 2026-11-12 (review rv-20261112T102721Z-317c4e7a-1985): --app also plans the floor rule over the same declared Cargo roots when one of their volumes is below its target (one statvfs per root first), and apply() re-reads each short volume through build_caches.reclaim_to_target after the planned rows. No new key, reader or execution edge. Renewed 2026-11-12 (review rv-20261112T112825Z-7f381427-61d2): --floor-check reads the same config and statvfs of the declared Cargo roots, prints one line per short volume and exits; it loads no workspace record and plans nothing. No new key, reader or execution edge.",
       "keys": [
+        "DISK_PRIMARY_VOLUME",
+        "DISK_RICH_ALERT_GB",
+        "DISK_SCALE_EXTRA_VOLUMES",
         "SCRATCH_AGE_FLOOR_MINUTES",
         "SCRATCH_APP_REGISTRY_RELPATH",
+        "SCRATCH_BUILD_CACHE_FREE_TARGET_PERCENT",
         "SCRATCH_BUILD_CACHE_IDLE_HOURS",
+        "SCRATCH_BUILD_CACHE_MIN_IDLE_HOURS",
         "SCRATCH_BUILD_CACHE_ORPHAN_HOURS",
         "SCRATCH_BULK_TMP_ROOTS",
         "SCRATCH_CAMPAIGN_PARENT",
@@ -2946,12 +2964,16 @@
         "SCRATCH_CODEX_HOME",
         "SCRATCH_CODEX_WORKTREE_ROOTS",
         "SCRATCH_DEFAULT_TTL_MINUTES",
+        "SCRATCH_DERIVED_DATA_IDLE_DAYS",
+        "SCRATCH_DEVICE_SUPPORT_KEEP",
         "SCRATCH_DOCKER_CONTAINER_ALERT_DAYS",
         "SCRATCH_DOCKER_KEEP_STORAGE",
         "SCRATCH_DOCKER_PRUNE",
         "SCRATCH_DOCKER_THROWAWAY_IMAGES",
         "SCRATCH_DOCKER_UNTIL",
         "SCRATCH_FAILURES_STATE",
+        "SCRATCH_FIXTURE_FILES",
+        "SCRATCH_FIXTURE_IDENTITIES",
         "SCRATCH_FIXTURE_REPO_LABELS",
         "SCRATCH_FOREIGN_PATTERNS",
         "SCRATCH_KEPT_DIR",
@@ -2960,13 +2982,17 @@
         "SCRATCH_LEGACY_GIT_IS_FIXTURE",
         "SCRATCH_LEGACY_TMP_PATTERNS",
         "SCRATCH_MIN_OWNER_PID",
+        "SCRATCH_NAMED_RETENTION_DAYS",
         "SCRATCH_NIGHTLY_DIR",
         "SCRATCH_NIGHTLY_KEEP",
         "SCRATCH_NOTICE_BYTES",
         "SCRATCH_REAPER_STATE",
+        "SCRATCH_RETIRED_DIR",
+        "SCRATCH_RETIRED_RETENTION_DAYS",
         "SCRATCH_ROOT_NAME",
         "SCRATCH_SESSION_PROCESS_NAMES",
         "SCRATCH_SHARED_TMP_ROOTS",
+        "SCRATCH_SIM_IDLE_DAYS",
         "SCRATCH_SKIPPED_NOTICE_BYTES",
         "SCRATCH_SYSTEM_FLAGS",
         "SCRATCH_TMP_DENY_BY_DEFAULT",
@@ -3001,8 +3027,8 @@
     },
     "scripts/scratch-reaper.sh": {
       "source": "scripts/scratch-reaper.sh",
-      "sha256": "4d1d9755cb7b3a4d4bb7e400922ed3b683563e95a4239af142b3c6d4f10d7832",
-      "evidence": "Sources exactly SCRATCH_REAPER_CONFIG or the engine default, checks enable/schedule keys and exports the finite SCRATCH/APP families to the fixed Python reaper. Plist generation contains literal commands; it does not execute another engine entrypoint. Renewed 2026-10-25: --install sources the fixed sibling lib/launchd-install.sh to leave an unchanged loaded job alone; it adds no configuration read. Renewed 2026-10-25 again: when the job changed while a run is in progress, --install passes LAUNCHD_APPLY_WAIT_MAX_SECONDS and LAUNCHD_APPLY_WAIT_POLL_SECONDS to launchd_install_after_run, which starts the fixed sibling lib/launchd-install-after-run.sh.",
+      "sha256": "ef54a26244cca4bd425a3f4a9c23ceecfeb37a943530ab1fc506189715db7bc1",
+      "evidence": "Sources exactly SCRATCH_REAPER_CONFIG or the engine default, checks enable/schedule keys and exports the finite SCRATCH/APP families to the fixed Python reaper. Plist generation contains literal commands; it does not execute another engine entrypoint. Renewed 2026-10-25: --install sources the fixed sibling lib/launchd-install.sh to leave an unchanged loaded job alone; it adds no configuration read. Renewed 2026-10-25 again: when the job changed while a run is in progress, --install passes LAUNCHD_APPLY_WAIT_MAX_SECONDS and LAUNCHD_APPLY_WAIT_POLL_SECONDS to launchd_install_after_run, which starts the fixed sibling lib/launchd-install-after-run.sh. Renewed 2026-11-12: the DISK family is exported to the reaper too, so its Cargo arm reads the disk watchdog's declared floor; no new execution edge.",
       "keys": [
         "LAUNCHD_APPLY_WAIT_MAX_SECONDS",
         "LAUNCHD_APPLY_WAIT_POLL_SECONDS",
@@ -3069,7 +3095,7 @@
     },
     "scripts/scratch-reaper.test.sh": {
       "source": "scripts/scratch-reaper.test.sh",
-      "sha256": "63074109d11d69640585f056592b91d9a7f499b8c7f1d7d93b1a1398264c4056",
+      "sha256": "fa2ff7440757cba19eb13e4da6728cda09451d4d30c37218049f8f105220cf89",
       "evidence": "world creates literal configuration and every run supplies W_CFG through SCRATCH_REAPER_CONFIG, including the appinstances fallback. Inline mutations change only that fixture. Device/Docker/process adapters and test app binaries are generated locally. The final mutation harness copies the engine then re-enters this same literal-config test. Its lsof adapter is generated locally too: it runs the real lsof narrowed to the suite's own process tree and reads only the SRT_* environment the suite exports, never configuration. Renewed 2026-09-30 (P5-68): S17 and S17b rewrite the fixture W_CFG's SCRATCH_LEGACY_AGE_HOURS to the literal 2 and restore it afterwards.",
       "keys": [],
       "edges": [
@@ -4429,14 +4455,14 @@
     },
     "scripts/lib/foreign_app_data.py": {
       "source": "scripts/lib/foreign_app_data.py",
-      "sha256": "bfd0833d42e8bb4bcd7dfa16a984d3905575a75eba850aa65a080b80a4e05ac5",
+      "sha256": "3726b8f56d3cf78cca0351fd449fafbf2862975354509ffa1f713d43cd5c3939",
       "evidence": "Fixed path boundaries and regex classifiers over supplied strings and HOME. Source scan reads file contents as data; the watchdog only calls entering. No orchestration.config execution, subprocess or engine import. Renewed 2026-10-29: entering also refuses the user's protected folders (Desktop, Documents, Downloads, Movies, Music, Pictures, Library except RichOS's own folders one level inside a Library area), /, /Users and the per-user /private/var/folders T and C folders, and protects the account's home from the password database (pwd.getpwuid) as well as HOME. Still string classification over supplied paths; no walk, no orchestration value.",
       "keys": [],
       "edges": []
     },
     "scripts/lib/disk-watchdog.py#alert": {
       "source": "scripts/lib/disk-watchdog.py",
-      "sha256": "4c4753779594ef4154f2088e5108ae7abce9ea6b9c24cabfce10f7e39bf451d3",
+      "sha256": "bd90a29e21cb401c27532799f549942dd366c29f00ac122799b8aa59ff6d0d46",
       "evidence": "Reviewed alert path through main and env/env_num/expand/state_base/read_volume/measurable/read_state/human/_age_of/_short_age. Reads live statvfs, saved JSON states, plist presence and the listed literal config variables. Alert does not invoke scheduled device collection, status-only reaper, du/consumer walks, notifications or writes. Fixed foreign_app_data import only classifies candidate paths. Renewed 2026-10-23 (cleanup PRD R4/R5): cleanup health is read from the same SCRATCH_REAPER_STATE file and the reaper's plist presence under the same LaunchAgents directory; no new config key. Renewed 2026-10-25: cleanup_health also reads the launchd-pending-<label>.gave-up and .pid files in the state directory; for a recorded waiter pid it calls operator_fences.proc (libproc) and operator_fences.proc_argv (ps -o command=). No configuration key.",
       "keys": [
         "APP_INSTANCE_FAILURES_STATE",
@@ -4799,11 +4825,15 @@
     },
     "scripts/lib/disk-watchdog.py#check": {
       "source": "scripts/lib/disk-watchdog.py",
-      "sha256": "4c4753779594ef4154f2088e5108ae7abce9ea6b9c24cabfce10f7e39bf451d3",
-      "evidence": "Reviewed check entry, complete main and all reached helpers. Adds scheduled device collection (run as the testdevices.py collect --apply CLI in a child process killed at a hard limit; RICHOS_DEVICE_COLLECT_SECONDS is a test-only environment override, not a config key) and condition-triggered du measurements, notification and state/log writes to the alert readers. Status-only run_reaper is unreachable. Fixed device collector reads registry ownership through the existing workspace-barrier closure; candidate paths and notification text are data. Renewed 2026-10-23 (cleanup PRD R5): the scheduled check (DISK_WATCHDOG_SCHEDULED=1, set by disk-watchdog.sh from launchd's XPC_SERVICE_NAME) reads the escalation ledger through escalations.py and raises or acknowledges ONE cleanup escalation through escalate.sh, keeping its id in this job's own state file. Renewed 2026-10-23 (review rv-20261023T222724Z-e6524552-e592 #2): the cleanup action keeps the union of every failed root across ticks and into a replacement; no new input. Renewed 2026-10-29: attribution measures only RichOS's own folders (effective storage roots, <TMPDIR>/SCRATCH_ROOT_NAME, ~/.claude, ~/.richos-nightly, the app's and the engine's Application Support folders, SCRATCH_CLAUDE_ROOTS), all through one du_kb that refuses any path foreign_app_data.entering refuses. SCRATCH_ROOT_NAME and SCRATCH_CLAUDE_ROOTS were already read by richos_garbage_bytes; no new config key.",
+      "sha256": "bd90a29e21cb401c27532799f549942dd366c29f00ac122799b8aa59ff6d0d46",
+      "evidence": "Reviewed check entry, complete main and all reached helpers. Adds scheduled device collection (run as the testdevices.py collect --apply CLI in a child process killed at a hard limit; RICHOS_DEVICE_COLLECT_SECONDS is a test-only environment override, not a config key) and condition-triggered du measurements, notification and state/log writes to the alert readers. Status-only run_reaper is unreachable. Fixed device collector reads registry ownership through the existing workspace-barrier closure; candidate paths and notification text are data. Renewed 2026-10-23 (cleanup PRD R5): the scheduled check (DISK_WATCHDOG_SCHEDULED=1, set by disk-watchdog.sh from launchd's XPC_SERVICE_NAME) reads the escalation ledger through escalations.py and raises or acknowledges ONE cleanup escalation through escalate.sh, keeping its id in this job's own state file. Renewed 2026-10-23 (review rv-20261023T222724Z-e6524552-e592 #2): the cleanup action keeps the union of every failed root across ticks and into a replacement; no new input. Renewed 2026-10-29: attribution measures only RichOS's own folders (effective storage roots, <TMPDIR>/SCRATCH_ROOT_NAME, ~/.claude, ~/.richos-nightly, the app's and the engine's Application Support folders, SCRATCH_CLAUDE_ROOTS), all through one du_kb that refuses any path foreign_app_data.entering refuses. SCRATCH_ROOT_NAME and SCRATCH_CLAUDE_ROOTS were already read by richos_garbage_bytes; no new config key. Renewed 2026-11-10: a scheduled (or DISK_RECLAIM_FORCE) check under a floor runs scratch-reaper.sh --apply --under-floor as an external command (at most once per DISK_RECLAIM_MIN_GAP_MINUTES, bounded by DISK_RECLAIM_SECONDS), then walks the alerting volume with du (volume_consumers) through the same foreign-data guard; reads DISK_CONSUMER_MIN_GB, DISK_RECLAIM_ENABLE, SCRATCH_NIGHTLY_DIR.",
       "keys": [
-        "SCRATCH_ROOT_NAME",
-        "SCRATCH_CLAUDE_ROOTS"
+        "DISK_CONSUMER_MIN_GB",
+        "DISK_RECLAIM_ENABLE",
+        "DISK_RECLAIM_MIN_GAP_MINUTES",
+        "SCRATCH_CLAUDE_ROOTS",
+        "SCRATCH_NIGHTLY_DIR",
+        "SCRATCH_ROOT_NAME"
       ],
       "edges": [
         {
@@ -5095,7 +5125,7 @@
     },
     "scripts/lib/scratch-reaper.py#required-setting-names": {
       "source": "scripts/lib/scratch-reaper.py",
-      "sha256": "5fc89d35adc94131311f482abcc10b7fb15d4cc0895b6722bcf3fc9763c46eeb",
+      "sha256": "9ee6a01e7b9c359a837f7a79591e1961b5e5de3935da380d3ab076abf30e676b",
       "evidence": "SCR2 scans source text for literal need/number calls and the session process key. It never imports or executes this Python module; changes to this source invalidate the declaration of required names.",
       "keys": [],
       "edges": [
@@ -8488,9 +8518,13 @@
     },
     "scripts/lib/disk-watchdog.py#suite-fixtures": {
       "source": "scripts/lib/disk-watchdog.py",
-      "sha256": "4c4753779594ef4154f2088e5108ae7abce9ea6b9c24cabfce10f7e39bf451d3",
-      "evidence": "Adds json/status rendering and reviewed run_reaper to the existing check closure. Every status fixture sets SCRATCH_REAPER_CMD to a literal JSON stub or absent path, so no production reaper executes. Scheduled device collection and fixed foreign-data classifier remain bound. Real disk capacity/free space and time are runtime inputs.",
+      "sha256": "bd90a29e21cb401c27532799f549942dd366c29f00ac122799b8aa59ff6d0d46",
+      "evidence": "Adds json/status rendering and reviewed run_reaper to the existing check closure. Every status fixture sets SCRATCH_REAPER_CMD to a literal JSON stub or absent path, so no production reaper executes. Scheduled device collection and fixed foreign-data classifier remain bound. Real disk capacity/free space and time are runtime inputs. Renewed 2026-11-10: a scheduled (or DISK_RECLAIM_FORCE) check under a floor runs scratch-reaper.sh --apply --under-floor as an external command (at most once per DISK_RECLAIM_MIN_GAP_MINUTES, bounded by DISK_RECLAIM_SECONDS), then walks the alerting volume with du (volume_consumers) through the same foreign-data guard; reads DISK_CONSUMER_MIN_GB, DISK_RECLAIM_ENABLE, SCRATCH_NIGHTLY_DIR.",
       "keys": [
+        "DISK_CONSUMER_MIN_GB",
+        "DISK_RECLAIM_ENABLE",
+        "DISK_RECLAIM_MIN_GAP_MINUTES",
+        "SCRATCH_NIGHTLY_DIR",
         "SCRATCH_REAPER_CMD"
       ],
       "edges": [
@@ -14510,8 +14544,8 @@
     },
     "mega-lander/tests/app.test.py": {
       "source": "mega-lander/tests/app.test.py",
-      "sha256": "7402119dcf31a6be92a167c1adbd9a1f6114e80c2292b01ed11a3f5d38cb5140",
-      "evidence": "Full fixed unittest fixture, literal holder/probe subprocess programs and one literal spawn failure override. Private Git, ECS stores, registry, scope, land locks and explicit single-hook manifest bind the app/adapter entrypoint guarantees. No agent, model, arbitrary setup or MCP server is invoked. Renewed 2026-09-30 (zach-sonnet-landlock1): setUp also points CLAUDE_CONFIG_DIR inside the fixture, so an app-launched engine child keeps its land-lock home private. Renewed 2026-10-06 (proto-teammate shelf slice 2): setUp copies the always-active five (engine/agents/{dean,clark,reed,frank,pierce}.md) as data and writes one literal fictional teammate, mark.md, into the private roster; cases name a teammate in prepare and read the duty texts mega-lander/duties/*.md as data. Renewed 2026-10-06 (proto-teammate shelf slice 3): one case prepares Clark with role consult and no repository, starts and ends it through the existing fixture helpers with literal fictional messages, and reads the fixture's private ECS store for work units. Renewed 2026-10-06 (proto-teammate shelf slice 4): one case lists and shows the shipped shelf (team/shelf/*.md read as data), saves literal fictional definitions into the fixture's private <app data>/team/ and calls prepare once more against the private roster. Renewed 2026-10-09 (echo-opus-review4, second review slice 4): cases write the scope's user words (literal fictional text and its hash) and read the brief and <id>.words prepare writes; one case loads scripts/app-engine-hook.py and calls only its mid_job_notice, which loads scripts/lib/app_review.py over a literal private ledger; one case loads scripts/lib/review_watch.py and runs app_mode --tick (AppWorld over the fixture's private registry partition, with REVIEW_WATCH_SECOND_REVIEW a literal fake script that records its arguments and sleeps) and Watcher.stop_own on that fake's recorded pid. No model, Claude CLI or real review runs. Renewed 2026-10-09 (echo-opus-review4g, the real second review of 283b4379d, finding 2): the mid-job case passes a list's append as mid_job_notice's emit and reads the text from it; nothing else changes. Renewed 2026-10-09 (echo-opus-review4l, the real second review of 802194f0e, finding 1): the app-watcher case also gives app_mode a fixture path as accounts (never created) and checks the fake second-review's recorded --accounts argument; nothing new is read. Renewed 2026-10-11 (echo-opus-skills2, second review of 79ba6eb7e, finding 2): one more case reads mega-lander/duties/consult.md as data, as the consult case already does, and the module imports re; nothing new is read: no configuration key, environment variable, subprocess or outside file. Renewed 2026-10-11 (echo-opus-skills2, mid-job review of 7f6ea1dd8): that case asserts more words of the same consult.md text; nothing new is read. Renewed 2026-10-14 (echo-opus-hiresnag55b): one test also runs ecs/adapters/mcp.py serve in process (no server process) to prove a brief the limit accepts fits the transport's request line. Renewed 2026-10-15 (echo-opus-hire57): one case reads engine/agents/dean.md as data (setUp already copies it) and saves literal fictional definitions into the fixture's private <app data>/team/ through the team tool; nothing new is read: no configuration key, environment variable, subprocess or outside file. Renewed 2026-10-18 (retired execution after app update): retirement reads the canonical workspaces agents/done records through existing workspaces.py helpers under the fixture private RICHOS_WORKSPACES_DIR; active cleanup intent cannot retire a worker. The new fixture calls the same canonical land and session lifecycle APIs used by existing integration/restart cases, then verifies actual ECS completion. No configuration key, environment variable, subprocess type or outside fixture file is added. Renewed 2026-10-21 (zach-opus-landgate1, plan item 6): setUp names a committer in the fixture repository with `git config` (every land is now a merge commit); two cases write literal pre-merge-commit hooks into the private fixture repository, and one installs and switches on the fence there by running scripts/operator-fences.sh install and on against a literal private entity orchestration.config. Renewed 2026-10-21 (zach-opus-landgate1, review finding 1): one more case installs the fence with RICHOS_LAND_LOCKS_DIR at a second private directory of the fixture (another account's home) and lands under the fixture's own. Renewed 2026-10-21 (zach-opus-landgate1, review f79aeabf finding 1): setUp sets HOME and XDG_CONFIG_HOME to a private empty home; two cases write a literal ~/.gitconfig there (a global core.hooksPath, or an includeIf gitdir naming the fixture repository) selecting a literal refusing pre-merge-commit hook, and a literal identity file as the lease's GIT_CONFIG_GLOBAL. Renewed 2026-10-29 (live host resources): a fixture starts a normal worker through existing prepare/start helpers, verifies its resource read and rejects other scoped tools and an unregistered agent. Uses the existing fixture roots and imports; the pause-message closure is unchanged. Renewed 2026-10-29 (zach-opus-d459fd6091fe, P1-A): seven cases added and one rewritten (P1-A): they write the fixture scope's actions_allowed/closed fields, a canonical record's proof_report through W.Lock/save_agent in the fixture registry, and call dispatch_intent, prepare and the hook's handle() on fixture state only. Renewed 2026-10-31 (zach-opus-tok4b, second review of bb08b88e0): the worker-notice case loads scripts/lib/app-evidence.py by fixed path (edge added) and passes each fixture payload through capture into the fixture's private engine-state/evidence before worker_context, as scripts/app-engine-hook.py does. Renewed 2026-10-31 (echo-opus-w2, app-terminal differences finding 10): a docstring of the worker-notice case only. Nothing read changed. Renewed 2026-10-31 (zach-opus-look1): inspect without an id answers jobs, the status lines of workspaces.py status_lines for the conversation's jobs; one case also runs workspaces.sh status with the explicit fixture session over the same private registry and compares the two, and the other cases read full records by id. Renewed 2026-11-01: setUp explicitly sets CODEX_COORDINATION_ROOT to its private fixture, covering AppWorld dedicated channel discovery without consulting operator connections. Renewed 2026-11-03 (G2): receipt UTF-8 encoding and its consult boundary regression use the existing fixture closure; no new configuration, import or external dependency. Renewed 2026-11-03 (G2): Completion and replacement share the dispatchability predicate, retain same-session preparations across turns and require explicit settlement; regressions cover both paths and preserve refused-work cleanup. Existing fixture closure; no new configuration, import or external dependency. Renewed 2026-11-03 (G2): Create-only team saves atomically link a fully written same-folder file instead of replacing a racing save; a barrier fixture verifies one success, one refusal, intact text, cleanup and explicit replacement. Existing fixture closure; no new configuration, import or external dependency. Renewed 2026-11-03 (G2): Inspection compares refreshed receipt contents before saving, always retries projection and preserves changed canonical evidence; regressions count real saves/fsync and reconcile an interrupted outbox. Existing fixture closure; no new configuration, import or external dependency. Renewed 2026-11-03 (G2): Thread-seat reconciliation reads the app-data ledger beside engine-state; corrected production-layout fixtures cover missing/unreadable ledgers, retained live seats, released orphan seats and an ignored wrong-folder decoy. Existing fixture closure; no new configuration, import or external dependency.",
+      "sha256": "bbb059933a978f5b883b0fa3c32bbe421e4660bc3f936f0163b4f41cbab457ad",
+      "evidence": "Full fixed unittest fixture, literal holder/probe subprocess programs and one literal spawn failure override. Private Git, ECS stores, registry, scope, land locks and explicit single-hook manifest bind the app/adapter entrypoint guarantees. No agent, model, arbitrary setup or MCP server is invoked. Renewed 2026-09-30 (zach-sonnet-landlock1): setUp also points CLAUDE_CONFIG_DIR inside the fixture, so an app-launched engine child keeps its land-lock home private. Renewed 2026-10-06 (proto-teammate shelf slice 2): setUp copies the always-active five (engine/agents/{dean,clark,reed,frank,pierce}.md) as data and writes one literal fictional teammate, mark.md, into the private roster; cases name a teammate in prepare and read the duty texts mega-lander/duties/*.md as data. Renewed 2026-10-06 (proto-teammate shelf slice 3): one case prepares Clark with role consult and no repository, starts and ends it through the existing fixture helpers with literal fictional messages, and reads the fixture's private ECS store for work units. Renewed 2026-10-06 (proto-teammate shelf slice 4): one case lists and shows the shipped shelf (team/shelf/*.md read as data), saves literal fictional definitions into the fixture's private <app data>/team/ and calls prepare once more against the private roster. Renewed 2026-10-09 (echo-opus-review4, second review slice 4): cases write the scope's user words (literal fictional text and its hash) and read the brief and <id>.words prepare writes; one case loads scripts/app-engine-hook.py and calls only its mid_job_notice, which loads scripts/lib/app_review.py over a literal private ledger; one case loads scripts/lib/review_watch.py and runs app_mode --tick (AppWorld over the fixture's private registry partition, with REVIEW_WATCH_SECOND_REVIEW a literal fake script that records its arguments and sleeps) and Watcher.stop_own on that fake's recorded pid. No model, Claude CLI or real review runs. Renewed 2026-10-09 (echo-opus-review4g, the real second review of 283b4379d, finding 2): the mid-job case passes a list's append as mid_job_notice's emit and reads the text from it; nothing else changes. Renewed 2026-10-09 (echo-opus-review4l, the real second review of 802194f0e, finding 1): the app-watcher case also gives app_mode a fixture path as accounts (never created) and checks the fake second-review's recorded --accounts argument; nothing new is read. Renewed 2026-10-11 (echo-opus-skills2, second review of 79ba6eb7e, finding 2): one more case reads mega-lander/duties/consult.md as data, as the consult case already does, and the module imports re; nothing new is read: no configuration key, environment variable, subprocess or outside file. Renewed 2026-10-11 (echo-opus-skills2, mid-job review of 7f6ea1dd8): that case asserts more words of the same consult.md text; nothing new is read. Renewed 2026-10-14 (echo-opus-hiresnag55b): one test also runs ecs/adapters/mcp.py serve in process (no server process) to prove a brief the limit accepts fits the transport's request line. Renewed 2026-10-15 (echo-opus-hire57): one case reads engine/agents/dean.md as data (setUp already copies it) and saves literal fictional definitions into the fixture's private <app data>/team/ through the team tool; nothing new is read: no configuration key, environment variable, subprocess or outside file. Renewed 2026-10-18 (retired execution after app update): retirement reads the canonical workspaces agents/done records through existing workspaces.py helpers under the fixture private RICHOS_WORKSPACES_DIR; active cleanup intent cannot retire a worker. The new fixture calls the same canonical land and session lifecycle APIs used by existing integration/restart cases, then verifies actual ECS completion. No configuration key, environment variable, subprocess type or outside fixture file is added. Renewed 2026-10-21 (zach-opus-landgate1, plan item 6): setUp names a committer in the fixture repository with `git config` (every land is now a merge commit); two cases write literal pre-merge-commit hooks into the private fixture repository, and one installs and switches on the fence there by running scripts/operator-fences.sh install and on against a literal private entity orchestration.config. Renewed 2026-10-21 (zach-opus-landgate1, review finding 1): one more case installs the fence with RICHOS_LAND_LOCKS_DIR at a second private directory of the fixture (another account's home) and lands under the fixture's own. Renewed 2026-10-21 (zach-opus-landgate1, review f79aeabf finding 1): setUp sets HOME and XDG_CONFIG_HOME to a private empty home; two cases write a literal ~/.gitconfig there (a global core.hooksPath, or an includeIf gitdir naming the fixture repository) selecting a literal refusing pre-merge-commit hook, and a literal identity file as the lease's GIT_CONFIG_GLOBAL. Renewed 2026-10-29 (live host resources): a fixture starts a normal worker through existing prepare/start helpers, verifies its resource read and rejects other scoped tools and an unregistered agent. Uses the existing fixture roots and imports; the pause-message closure is unchanged. Renewed 2026-10-29 (zach-opus-d459fd6091fe, P1-A): seven cases added and one rewritten (P1-A): they write the fixture scope's actions_allowed/closed fields, a canonical record's proof_report through W.Lock/save_agent in the fixture registry, and call dispatch_intent, prepare and the hook's handle() on fixture state only. Renewed 2026-10-31 (zach-opus-tok4b, second review of bb08b88e0): the worker-notice case loads scripts/lib/app-evidence.py by fixed path (edge added) and passes each fixture payload through capture into the fixture's private engine-state/evidence before worker_context, as scripts/app-engine-hook.py does. Renewed 2026-10-31 (echo-opus-w2, app-terminal differences finding 10): a docstring of the worker-notice case only. Nothing read changed. Renewed 2026-10-31 (zach-opus-look1): inspect without an id answers jobs, the status lines of workspaces.py status_lines for the conversation's jobs; one case also runs workspaces.sh status with the explicit fixture session over the same private registry and compares the two, and the other cases read full records by id. Renewed 2026-11-01: setUp explicitly sets CODEX_COORDINATION_ROOT to its private fixture, covering AppWorld dedicated channel discovery without consulting operator connections. Renewed 2026-11-03 (G2): receipt UTF-8 encoding and its consult boundary regression use the existing fixture closure; no new configuration, import or external dependency. Renewed 2026-11-03 (G2): Completion and replacement share the dispatchability predicate, retain same-session preparations across turns and require explicit settlement; regressions cover both paths and preserve refused-work cleanup. Existing fixture closure; no new configuration, import or external dependency. Renewed 2026-11-03 (G2): Create-only team saves atomically link a fully written same-folder file instead of replacing a racing save; a barrier fixture verifies one success, one refusal, intact text, cleanup and explicit replacement. Existing fixture closure; no new configuration, import or external dependency. Renewed 2026-11-03 (G2): Inspection compares refreshed receipt contents before saving, always retries projection and preserves changed canonical evidence; regressions count real saves/fsync and reconcile an interrupted outbox. Existing fixture closure; no new configuration, import or external dependency. Renewed 2026-11-03 (G2): Thread-seat reconciliation reads the app-data ledger beside engine-state; corrected production-layout fixtures cover missing/unreadable ledgers, retained live seats, released orphan seats and an ignored wrong-folder decoy. Existing fixture closure; no new configuration, import or external dependency. Renewed 2026-11-12 (zach-opus-disk1c): the module's runner takes --part K/N (_part) and then runs every Nth case of the loader's order from the Kth; a named case is never filtered. app.test.sh and app-2.test.sh to app-8.test.sh pass 1/8 to 8/8. Nothing read changed: no configuration key, environment variable, subprocess or outside file.",
       "keys": [],
       "edges": [
         {
@@ -14658,8 +14692,8 @@
     },
     "mega-lander/tests/app.test.sh": {
       "source": "mega-lander/tests/app.test.sh",
-      "sha256": "96629274bf347aa2c4182dab7cfb9208bceecac870d74966f600a62924021a9f",
-      "evidence": "Runs exactly the bound full Python fixture and its mutation driver. Neither half is omitted from config qualification. Renewed 2026-09-30 (hunt part 4 finding 19): the mutation driver now runs only when RICHOS_MUTATION_PASSES=1 (the nightly's gates/workspace-mutants) and otherwise prints NOT RUN; its edge is kept because that run executes it. No configuration read is added. Renewed 2026-10-29 (zach-opus-d459fd6091fe, P1-A): a comment naming scripts/lib/scope_closure.py as driven by app.test.py; nothing run or read changed. Renewed 2026-10-31 (zach-opus-tok4b, app token burn finding 2): a comment naming scripts/lib/notice_once.py as driven by its fixture; nothing run or read changed.",
+      "sha256": "f30f72fb42e6a77e2c9f5a73661479c774f41c7721b2dcc938d3e16536c2b3bd",
+      "evidence": "Runs exactly the bound full Python fixture and its mutation driver. Neither half is omitted from config qualification. Renewed 2026-09-30 (hunt part 4 finding 19): the mutation driver now runs only when RICHOS_MUTATION_PASSES=1 (the nightly's gates/workspace-mutants) and otherwise prints NOT RUN; its edge is kept because that run executes it. No configuration read is added. Renewed 2026-10-29 (zach-opus-d459fd6091fe, P1-A): a comment naming scripts/lib/scope_closure.py as driven by app.test.py; nothing run or read changed. Renewed 2026-10-31 (zach-opus-tok4b, app token burn finding 2): a comment naming scripts/lib/notice_once.py as driven by its fixture; nothing run or read changed. Renewed 2026-11-12 (zach-opus-disk1c): runs part 1 of 8 of the Python fixture (--part 1/8, with any case names passed on, which the mutation driver's focused runs use and which are never filtered); app-2.test.sh to app-8.test.sh run the other seven parts. The mutation driver and its edge are unchanged; no configuration read is added.",
       "keys": [],
       "edges": [
         {
@@ -15425,7 +15459,7 @@
         {
           "root": "repository",
           "path": "richos/app/scripts/nightly-local.py",
-          "sha256": "8dc95f42643a7f6d94b9dd3c04c49fe68dbe1c63571e12ab049714f9a78dc1be",
+          "sha256": "0095820821844c3049ed2b6b786e824eebd37a3152782901fc2c176b97b928df",
           "evidence": "Launcher inventory hashes fixed source bytes as opaque identity data in cpu_guard policy fixtures. nightly-local.py is never imported or executed by this fixture path; no configuration keys or execution edges are read."
         },
         {
@@ -15551,7 +15585,7 @@
         {
           "root": "repository",
           "path": "richos/app/scripts/nightly-local.py",
-          "sha256": "8dc95f42643a7f6d94b9dd3c04c49fe68dbe1c63571e12ab049714f9a78dc1be",
+          "sha256": "0095820821844c3049ed2b6b786e824eebd37a3152782901fc2c176b97b928df",
           "evidence": "Launcher inventory hashes fixed source bytes as opaque identity data in cpu_guard policy fixtures. nightly-local.py is never imported or executed by this fixture path; no configuration keys or execution edges are read."
         },
         {
@@ -16425,7 +16459,7 @@
     },
     "mega-lander/tests/app.test.py#pause-message-case": {
       "source": "mega-lander/tests/app.test.py",
-      "sha256": "7402119dcf31a6be92a167c1adbd9a1f6114e80c2292b01ed11a3f5d38cb5140",
+      "sha256": "bbb059933a978f5b883b0fa3c32bbe421e4660bc3f936f0163b4f41cbab457ad",
       "evidence": "Added 2026-09-30 for workspaces.test.py's finding-20 case, which runs this suite with the one name test_pause_message_is_fixed. That selects only DesktopWork.test_pause_message_is_fixed_and_does_not_claim_delivery: setUp builds private Git repositories, a private orchestration.config, agent definitions copied from the engine as data, a private registry, scope, ECS store and land-locks directory, and loads app.py; the case renders pause messages and calls inspect over no receipts. Renewed 2026-09-30 (zach-sonnet-landlock1): setUp also points CLAUDE_CONFIG_DIR inside the fixture, so an app-launched engine child keeps its land-lock home private. Renewed 2026-10-06 (proto-teammate shelf slice 2): the agent definitions setUp copies are now the always-active five plus a literal fictional teammate; the case still never reaches prepare. Renewed 2026-10-06 (proto-teammate shelf slice 3): a consult case was added beside it; this case is unchanged. Renewed 2026-10-09 (echo-opus-review4g, the real second review of 283b4379d, finding 2): the mid-job case elsewhere in the file changed; this case is unchanged. Renewed 2026-10-11 (review rv-20261011T055437Z-206908c9-000f): the case also calls resume_message and asserts both tools say NOT HELD / NOT RELEASED for the unregistered fixture name, against the same private registry; nothing else in setUp changed. Renewed 2026-10-15 (echo-opus-hire57): a Dean name-rule case was added elsewhere in the file; this case is unchanged. Renewed 2026-10-18: retired-execution reconciliation and two desktop dispatch cases changed elsewhere in these files; this selected fixture closure and setUp are unchanged. Renewed 2026-10-21 (zach-opus-landgate1, plan item 6): setUp also runs `git config` for user.name and user.email in the private fixture repository; this case is otherwise unchanged. Renewed 2026-10-21 (zach-opus-landgate1, review finding 1): cases elsewhere in the file changed; this case is unchanged. Renewed 2026-10-21 (zach-opus-landgate1, review f79aeabf finding 1): setUp also sets HOME and XDG_CONFIG_HOME to a private empty home; this case is otherwise unchanged. Renewed 2026-10-29 (live host resources): a fixture starts a normal worker through existing prepare/start helpers, verifies its resource read and rejects other scoped tools and an unregistered agent. Uses the existing fixture roots and imports; the pause-message closure is unchanged. Renewed 2026-10-29 (zach-opus-d459fd6091fe, P1-A): cases elsewhere in the file changed; this case is unchanged. Renewed 2026-10-31 (echo-opus-w2, app-terminal differences finding 10): a docstring of the worker-notice case only. Nothing read changed. Renewed 2026-11-03 (G2): receipt UTF-8 encoding and its consult boundary regression use the existing fixture closure; no new configuration, import or external dependency. Renewed 2026-11-03 (G2): Completion and replacement share the dispatchability predicate, retain same-session preparations across turns and require explicit settlement; regressions cover both paths and preserve refused-work cleanup. Existing fixture closure; no new configuration, import or external dependency. Renewed 2026-11-03 (G2): Create-only team saves atomically link a fully written same-folder file instead of replacing a racing save; a barrier fixture verifies one success, one refusal, intact text, cleanup and explicit replacement. Existing fixture closure; no new configuration, import or external dependency. Renewed 2026-11-03 (G2): Inspection compares refreshed receipt contents before saving, always retries projection and preserves changed canonical evidence; regressions count real saves/fsync and reconcile an interrupted outbox. Existing fixture closure; no new configuration, import or external dependency. Renewed 2026-11-03 (G2): Thread-seat reconciliation reads the app-data ledger beside engine-state; corrected production-layout fixtures cover missing/unreadable ledgers, retained live seats, released orphan seats and an ignored wrong-folder decoy. Existing fixture closure; no new configuration, import or external dependency.",
       "keys": [],
       "edges": [
@@ -16745,8 +16779,8 @@
     },
     "scripts/lib/build_caches.py": {
       "source": "scripts/lib/build_caches.py",
-      "sha256": "4e1d4bcbd9e074886a33123930593bc2cfef3e6f33622c51cf3c5dcc3dceae3a",
-      "evidence": "Cleanup roots use the shared machine_settings reader for the general cache, effective Cargo cache and selected RICHOS_BUILD_CACHE. Landed checkout cleanup and scheduled cleanup use the same roots. Git discovery reads registered project checkouts; bounded scans, Cargo locks and the existing cleanup walls are unchanged. Overlapping roots deduplicate discovered paths. No new configuration key or execution edge.",
+      "sha256": "767b3746d1ed56b3864157a8b3ddebca1c12b0bec9169484efeb7f321cb6c94c",
+      "evidence": "Cleanup roots use the shared machine_settings reader for the general cache, effective Cargo cache and selected RICHOS_BUILD_CACHE. Landed checkout cleanup and scheduled cleanup use the same roots. Git discovery reads registered project checkouts; bounded scans, Cargo locks and the existing cleanup walls are unchanged. Overlapping roots deduplicate discovered paths. No new configuration key or execution edge. Renewed 2026-11-12 (rule 3, the volume's floor): volume_space reads os.statvfs and os.stat of a cache path and the declared primary volume; free_target and pressure_window are arithmetic over values the caller passes. No new configuration key read here or execution edge. Renewed 2026-11-12: reclaim_to_target repeats the existing units/delete_units reads and deletions under Cargo's lock and re-reads os.statvfs between rounds. No new key or execution edge.",
       "keys": [],
       "edges": [
         {
@@ -17676,6 +17710,83 @@
       ],
       "evidence": "G10 parser regressions. Imports fixed helpers and invokes embedded classifiers on literal payloads. Uses disposable Playwright source fixtures; never launches a browser or executes a command being classified.",
       "nonconfig_eval": "The eval strings are literal command-reader fixtures. The tests parse them as data and never execute eval or evaluate a configuration value."
+    },
+    "mega-lander/tests/app-2.test.sh": {
+      "source": "mega-lander/tests/app-2.test.sh",
+      "sha256": "af045aa53978c200b81c3e4853699b484d2f4bf3c42565dbb8cd31bd50ed234c",
+      "evidence": "Added 2026-11-12 (zach-opus-disk1c): part 2 of 8 of the bound full Python fixture app.test.py (--part 2/8, app.test.py _part: every eighth case of the loader's order from the second). The suite was the one unit app.test.sh until then, and it ran 500-1150 s against ci-shard's 900 s deadline. Runs exactly app.test.py with that literal argument; no mutation driver (app.test.sh keeps it), no configuration read, environment variable, subprocess or outside file of its own. Its closure is app.test.py's, as app.test.sh's is.",
+      "keys": [],
+      "edges": [
+        {
+          "to": "mega-lander/tests/app.test.py"
+        }
+      ]
+    },
+    "mega-lander/tests/app-3.test.sh": {
+      "source": "mega-lander/tests/app-3.test.sh",
+      "sha256": "2a74f1e5a218e140d4d0ba308696eb545d6d7363b03e7a4bb816287541f2ff6a",
+      "evidence": "Added 2026-11-12 (zach-opus-disk1c): part 3 of 8 of the bound full Python fixture app.test.py (--part 3/8, app.test.py _part: every eighth case of the loader's order from the third). The suite was the one unit app.test.sh until then, and it ran 500-1150 s against ci-shard's 900 s deadline. Runs exactly app.test.py with that literal argument; no mutation driver (app.test.sh keeps it), no configuration read, environment variable, subprocess or outside file of its own. Its closure is app.test.py's, as app.test.sh's is.",
+      "keys": [],
+      "edges": [
+        {
+          "to": "mega-lander/tests/app.test.py"
+        }
+      ]
+    },
+    "mega-lander/tests/app-4.test.sh": {
+      "source": "mega-lander/tests/app-4.test.sh",
+      "sha256": "bd01bf68b49285fac9317c6be7d270d411fcee08fb2650a9b1b998d91e998edb",
+      "evidence": "Added 2026-11-12 (zach-opus-disk1c): part 4 of 8 of the bound full Python fixture app.test.py (--part 4/8, app.test.py _part: every eighth case of the loader's order from the fourth). The suite was the one unit app.test.sh until then, and it ran 500-1150 s against ci-shard's 900 s deadline. Runs exactly app.test.py with that literal argument; no mutation driver (app.test.sh keeps it), no configuration read, environment variable, subprocess or outside file of its own. Its closure is app.test.py's, as app.test.sh's is.",
+      "keys": [],
+      "edges": [
+        {
+          "to": "mega-lander/tests/app.test.py"
+        }
+      ]
+    },
+    "mega-lander/tests/app-5.test.sh": {
+      "source": "mega-lander/tests/app-5.test.sh",
+      "sha256": "9099190907fec8c274b37609d2574bc2de82c987764516010cf7159f6ac53c54",
+      "evidence": "Added 2026-11-12 (zach-opus-disk1c): part 5 of 8 of the bound full Python fixture app.test.py (--part 5/8, app.test.py _part: every eighth case of the loader's order from the fifth). The suite was the one unit app.test.sh until then, and it ran 500-1150 s against ci-shard's 900 s deadline. Runs exactly app.test.py with that literal argument; no mutation driver (app.test.sh keeps it), no configuration read, environment variable, subprocess or outside file of its own. Its closure is app.test.py's, as app.test.sh's is.",
+      "keys": [],
+      "edges": [
+        {
+          "to": "mega-lander/tests/app.test.py"
+        }
+      ]
+    },
+    "mega-lander/tests/app-6.test.sh": {
+      "source": "mega-lander/tests/app-6.test.sh",
+      "sha256": "73ca6cd2a1e3fa0d9161d03af63ce76cf39738c37c7d73356509ef78e41b1523",
+      "evidence": "Added 2026-11-12 (zach-opus-disk1c): part 6 of 8 of the bound full Python fixture app.test.py (--part 6/8, app.test.py _part: every eighth case of the loader's order from the sixth). The suite was the one unit app.test.sh until then, and it ran 500-1150 s against ci-shard's 900 s deadline. Runs exactly app.test.py with that literal argument; no mutation driver (app.test.sh keeps it), no configuration read, environment variable, subprocess or outside file of its own. Its closure is app.test.py's, as app.test.sh's is.",
+      "keys": [],
+      "edges": [
+        {
+          "to": "mega-lander/tests/app.test.py"
+        }
+      ]
+    },
+    "mega-lander/tests/app-7.test.sh": {
+      "source": "mega-lander/tests/app-7.test.sh",
+      "sha256": "c70b432c8c49bc478d556382c2f84e01059daae7905cc18297713b08991d3fb4",
+      "evidence": "Added 2026-11-12 (zach-opus-disk1c): part 7 of 8 of the bound full Python fixture app.test.py (--part 7/8, app.test.py _part: every eighth case of the loader's order from the seventh). The suite was the one unit app.test.sh until then, and it ran 500-1150 s against ci-shard's 900 s deadline. Runs exactly app.test.py with that literal argument; no mutation driver (app.test.sh keeps it), no configuration read, environment variable, subprocess or outside file of its own. Its closure is app.test.py's, as app.test.sh's is.",
+      "keys": [],
+      "edges": [
+        {
+          "to": "mega-lander/tests/app.test.py"
+        }
+      ]
+    },
+    "mega-lander/tests/app-8.test.sh": {
+      "source": "mega-lander/tests/app-8.test.sh",
+      "sha256": "04c2c20ceece0e8990cd1aff55d36a6559975f5fbb7c13918e84897a0abeed23",
+      "evidence": "Added 2026-11-12 (zach-opus-disk1c): part 8 of 8 of the bound full Python fixture app.test.py (--part 8/8, app.test.py _part: every eighth case of the loader's order from the eighth). The suite was the one unit app.test.sh until then, and it ran 500-1150 s against ci-shard's 900 s deadline. Runs exactly app.test.py with that literal argument; no mutation driver (app.test.sh keeps it), no configuration read, environment variable, subprocess or outside file of its own. Its closure is app.test.py's, as app.test.sh's is.",
+      "keys": [],
+      "edges": [
+        {
+          "to": "mega-lander/tests/app.test.py"
+        }
+      ]
     }
   },
   "units": {
@@ -17842,6 +17953,13 @@
     "mega-lander/tests/create-teammate-worktree.test.sh": "mega-lander/tests/create-teammate-worktree.test.sh",
     "scripts/lib/app-evidence.test.sh": "scripts/lib/app-evidence.test.sh",
     "mega-lander/tests/app.test.sh": "mega-lander/tests/app.test.sh",
+    "mega-lander/tests/app-2.test.sh": "mega-lander/tests/app-2.test.sh",
+    "mega-lander/tests/app-3.test.sh": "mega-lander/tests/app-3.test.sh",
+    "mega-lander/tests/app-4.test.sh": "mega-lander/tests/app-4.test.sh",
+    "mega-lander/tests/app-5.test.sh": "mega-lander/tests/app-5.test.sh",
+    "mega-lander/tests/app-6.test.sh": "mega-lander/tests/app-6.test.sh",
+    "mega-lander/tests/app-7.test.sh": "mega-lander/tests/app-7.test.sh",
+    "mega-lander/tests/app-8.test.sh": "mega-lander/tests/app-8.test.sh",
     "scripts/lib/agent_hold.test.sh": "scripts/lib/agent_hold.test.sh",
     "scripts/lib/proc_tree_pause.test.sh": "scripts/lib/proc_tree_pause.test.sh",
     "gates/unmanaged-assignment/lib/harness.test.sh": "gates/unmanaged-assignment/lib/harness.test.sh",
@@ -18038,12 +18156,12 @@
         "scripts/lib/ci_pause.py": "f41e86ea2b1aaa036c92eb44ddcb2fe2a6880724162561a5e31b84d556758693",
         "scripts/hooks/notice-disk-alert.sh": "f93a1aab5a6b2b828e82569f609119db1f0f4ca080eb23ad99db303b89351df2",
         "scripts/disk-watchdog.sh": "65357c5f834a262f6278c863eae50b1f0152dcedc74f441f262859b3d7b86041",
-        "scripts/lib/disk-watchdog.py": "4c4753779594ef4154f2088e5108ae7abce9ea6b9c24cabfce10f7e39bf451d3",
-        "scripts/lib/foreign_app_data.py": "bfd0833d42e8bb4bcd7dfa16a984d3905575a75eba850aa65a080b80a4e05ac5",
+        "scripts/lib/disk-watchdog.py": "bd90a29e21cb401c27532799f549942dd366c29f00ac122799b8aa59ff6d0d46",
+        "scripts/lib/foreign_app_data.py": "3726b8f56d3cf78cca0351fd449fafbf2862975354509ffa1f713d43cd5c3939",
         "scripts/lib/stop-hook-notice.sh": "36f88235559f112e27880bc78d8609976cd1cd2d6c7fe96f9c0eec7040544a9d",
         "scripts/hooks/session-start-scratch.sh": "ec65aa22fcd926498c154a8a20f7477d4678c4c6aaf586eae341b576d6858598",
-        "scripts/scratch-reaper.sh": "4d1d9755cb7b3a4d4bb7e400922ed3b683563e95a4239af142b3c6d4f10d7832",
-        "scripts/lib/scratch-reaper.py": "5fc89d35adc94131311f482abcc10b7fb15d4cc0895b6722bcf3fc9763c46eeb",
+        "scripts/scratch-reaper.sh": "ef54a26244cca4bd425a3f4a9c23ceecfeb37a943530ab1fc506189715db7bc1",
+        "scripts/lib/scratch-reaper.py": "9ee6a01e7b9c359a837f7a79591e1961b5e5de3935da380d3ab076abf30e676b",
         "scripts/hooks/operator-claim.sh": "9e7feca8f62014f007f37cb96a4a8146358b42552b8964c22833585ad6442037",
         "scripts/lib/operator-mode.sh": "c9b25dd5eaef11ac02dc34ac11a6997404966ddb0dcd14cf019d83065b71ba6e",
         "scripts/lib/operator_leads.py": "773c451378ac985c2291bfeed7e17cef2ee8f31301de7706d43fc860b2938b10",
@@ -18115,12 +18233,12 @@
         "scripts/lib/ci_pause.py": "f41e86ea2b1aaa036c92eb44ddcb2fe2a6880724162561a5e31b84d556758693",
         "scripts/hooks/notice-disk-alert.sh": "f93a1aab5a6b2b828e82569f609119db1f0f4ca080eb23ad99db303b89351df2",
         "scripts/disk-watchdog.sh": "65357c5f834a262f6278c863eae50b1f0152dcedc74f441f262859b3d7b86041",
-        "scripts/lib/disk-watchdog.py": "4c4753779594ef4154f2088e5108ae7abce9ea6b9c24cabfce10f7e39bf451d3",
-        "scripts/lib/foreign_app_data.py": "bfd0833d42e8bb4bcd7dfa16a984d3905575a75eba850aa65a080b80a4e05ac5",
+        "scripts/lib/disk-watchdog.py": "bd90a29e21cb401c27532799f549942dd366c29f00ac122799b8aa59ff6d0d46",
+        "scripts/lib/foreign_app_data.py": "3726b8f56d3cf78cca0351fd449fafbf2862975354509ffa1f713d43cd5c3939",
         "scripts/lib/stop-hook-notice.sh": "36f88235559f112e27880bc78d8609976cd1cd2d6c7fe96f9c0eec7040544a9d",
         "scripts/hooks/session-start-scratch.sh": "ec65aa22fcd926498c154a8a20f7477d4678c4c6aaf586eae341b576d6858598",
-        "scripts/scratch-reaper.sh": "4d1d9755cb7b3a4d4bb7e400922ed3b683563e95a4239af142b3c6d4f10d7832",
-        "scripts/lib/scratch-reaper.py": "5fc89d35adc94131311f482abcc10b7fb15d4cc0895b6722bcf3fc9763c46eeb",
+        "scripts/scratch-reaper.sh": "ef54a26244cca4bd425a3f4a9c23ceecfeb37a943530ab1fc506189715db7bc1",
+        "scripts/lib/scratch-reaper.py": "9ee6a01e7b9c359a837f7a79591e1961b5e5de3935da380d3ab076abf30e676b",
         "scripts/hooks/operator-claim.sh": "9e7feca8f62014f007f37cb96a4a8146358b42552b8964c22833585ad6442037",
         "scripts/lib/operator-mode.sh": "c9b25dd5eaef11ac02dc34ac11a6997404966ddb0dcd14cf019d83065b71ba6e",
         "scripts/lib/operator_leads.py": "773c451378ac985c2291bfeed7e17cef2ee8f31301de7706d43fc860b2938b10",
@@ -18239,7 +18357,7 @@
         "scripts/lib/row-currency.py": "484404c6143d1a5b94182321e6fa0f6250b298b27a7d3b59ba26d5ed648db677",
         "scripts/lib/row-currency.sh": "39205edef34a6f81727dc8f3e628d50e57d7e1b82e981c0e43db295d57de5ba0",
         "scripts/lib/sandbox-completeness.sh": "2d141da4f87eb59130459ce74fa1c3067e43c4e7b39ad03cb43f17cfb7973131",
-        "scripts/lib/scratch-reaper.py": "5fc89d35adc94131311f482abcc10b7fb15d4cc0895b6722bcf3fc9763c46eeb",
+        "scripts/lib/scratch-reaper.py": "9ee6a01e7b9c359a837f7a79591e1961b5e5de3935da380d3ab076abf30e676b",
         "scripts/lib/scratch.sh": "a46b938e776a44638546063d63e1598383e2c4f55230e502f5efb79ef54db7c4",
         "scripts/lib/seat-jurisdiction.sh": "2cbc719b7290e25d2ac65636fab0650c9f68e2e01cb7c4f4515a6e6a266adcaf",
         "scripts/lib/stop-at-line.py": "b0bf8b23f7d96ccffde8ff1d8a6bd493d06e02f18d5f351f596983df900076f4",
@@ -18261,8 +18379,8 @@
         "scripts/operator-fences.sh": "b14c4294844b4bc9dade5e32d9642824a92b2c7690d01c2c8b6e914e893dae0c",
         "scripts/row-currency-lint.sh": "47b26a433c2a96e69844fdca03b263c37bd0f80bbbbeeacd87dd4117feef1167",
         "scripts/scratch-reaper.mutation.sh": "8ef0a08373e7aed2c4f3388e701a29346b51ad2862108b8170d35f4d9c0ef6e4",
-        "scripts/scratch-reaper.sh": "4d1d9755cb7b3a4d4bb7e400922ed3b683563e95a4239af142b3c6d4f10d7832",
-        "scripts/scratch-reaper.test.sh": "63074109d11d69640585f056592b91d9a7f499b8c7f1d7d93b1a1398264c4056",
+        "scripts/scratch-reaper.sh": "ef54a26244cca4bd425a3f4a9c23ceecfeb37a943530ab1fc506189715db7bc1",
+        "scripts/scratch-reaper.test.sh": "fa2ff7440757cba19eb13e4da6728cda09451d4d30c37218049f8f105220cf89",
         "scripts/scratch-sweep.sh": "575e99bf9f8dd9815340f2ca632757f2990df3374c82093ee637f1da3ad1d105",
         "scripts/unstarted-rows-lint.sh": "4b654eefa4fb775ba218fbee15595b415684c7a90e2168eedf864c07f142e58e",
         "scripts/hooks/dispatch-pretooluse.manifest": "0158184b5e40950c93a6af34d131c9f94021e880dd25976db237c1e2a0a2a960",
@@ -18340,8 +18458,8 @@
         "scripts/hooks/notice-claim-capability.sh": "ed7303933979425fee6517c40f00109554264c317a5734fff571d9379c43cfb6",
         "scripts/hooks/notice-disk-alert.sh": "f93a1aab5a6b2b828e82569f609119db1f0f4ca080eb23ad99db303b89351df2",
         "scripts/disk-watchdog.sh": "65357c5f834a262f6278c863eae50b1f0152dcedc74f441f262859b3d7b86041",
-        "scripts/lib/disk-watchdog.py": "4c4753779594ef4154f2088e5108ae7abce9ea6b9c24cabfce10f7e39bf451d3",
-        "scripts/lib/foreign_app_data.py": "bfd0833d42e8bb4bcd7dfa16a984d3905575a75eba850aa65a080b80a4e05ac5",
+        "scripts/lib/disk-watchdog.py": "bd90a29e21cb401c27532799f549942dd366c29f00ac122799b8aa59ff6d0d46",
+        "scripts/lib/foreign_app_data.py": "3726b8f56d3cf78cca0351fd449fafbf2862975354509ffa1f713d43cd5c3939",
         "scripts/hooks/notice-escalations.sh": "af7a832d84cbb43d22bb5ea1cd15bdf1948c0c01978777797a5d407d7872d4eb",
         "scripts/hooks/notice-hook-staleness.sh": "d217b974a1c751da477a6208853926b1ac4e37f623ea8182fa562b3459f49cfc",
         "scripts/hooks/notice-protected-ref-moves.sh": "a7d72e3c248439acf00ec585f442cd0d09385b691c041fcfb902578cebb4ac87",
@@ -18665,8 +18783,8 @@
         "scripts/hooks/notice-ceo-unasked.sh": "52d450ac27edd0f0273cec160f006046e0524fd8d0c81b4a3f3943360b444843",
         "scripts/hooks/notice-disk-alert.sh": "f93a1aab5a6b2b828e82569f609119db1f0f4ca080eb23ad99db303b89351df2",
         "scripts/disk-watchdog.sh": "65357c5f834a262f6278c863eae50b1f0152dcedc74f441f262859b3d7b86041",
-        "scripts/lib/disk-watchdog.py": "4c4753779594ef4154f2088e5108ae7abce9ea6b9c24cabfce10f7e39bf451d3",
-        "scripts/lib/foreign_app_data.py": "bfd0833d42e8bb4bcd7dfa16a984d3905575a75eba850aa65a080b80a4e05ac5",
+        "scripts/lib/disk-watchdog.py": "bd90a29e21cb401c27532799f549942dd366c29f00ac122799b8aa59ff6d0d46",
+        "scripts/lib/foreign_app_data.py": "3726b8f56d3cf78cca0351fd449fafbf2862975354509ffa1f713d43cd5c3939",
         "scripts/hooks/notice-escalations.sh": "af7a832d84cbb43d22bb5ea1cd15bdf1948c0c01978777797a5d407d7872d4eb",
         "scripts/lib/escalations.sh": "bda6b4af107d64144cac6fe9a5ac507b007c81ebac30b53bb59256b49f9ff1c5",
         "scripts/hooks/notice-hook-staleness.sh": "d217b974a1c751da477a6208853926b1ac4e37f623ea8182fa562b3459f49cfc",
@@ -19030,8 +19148,8 @@
         "scripts/hooks/notice-ceo-unasked.sh": "52d450ac27edd0f0273cec160f006046e0524fd8d0c81b4a3f3943360b444843",
         "scripts/hooks/notice-disk-alert.sh": "f93a1aab5a6b2b828e82569f609119db1f0f4ca080eb23ad99db303b89351df2",
         "scripts/disk-watchdog.sh": "65357c5f834a262f6278c863eae50b1f0152dcedc74f441f262859b3d7b86041",
-        "scripts/lib/disk-watchdog.py": "4c4753779594ef4154f2088e5108ae7abce9ea6b9c24cabfce10f7e39bf451d3",
-        "scripts/lib/foreign_app_data.py": "bfd0833d42e8bb4bcd7dfa16a984d3905575a75eba850aa65a080b80a4e05ac5",
+        "scripts/lib/disk-watchdog.py": "bd90a29e21cb401c27532799f549942dd366c29f00ac122799b8aa59ff6d0d46",
+        "scripts/lib/foreign_app_data.py": "3726b8f56d3cf78cca0351fd449fafbf2862975354509ffa1f713d43cd5c3939",
         "scripts/hooks/notice-escalations.sh": "af7a832d84cbb43d22bb5ea1cd15bdf1948c0c01978777797a5d407d7872d4eb",
         "scripts/hooks/notice-hook-staleness.sh": "d217b974a1c751da477a6208853926b1ac4e37f623ea8182fa562b3459f49cfc",
         "scripts/hooks/notice-inflight-acks.sh": "b17504876f715a764cb28b656e0d1a50fdf16a18567e4c10bc7384382b0c4f7d",
@@ -19230,7 +19348,7 @@
         "scripts/lib/resolve-main-checkout.sh": "7b365389e15be1f270adfbe361cff627a424f815d501d33d357054124ca286ca",
         "scripts/lib/resolve-model.sh": "99641cc02487da81c7fb6ecd216b10ddcaff5254c1c734b714aef8de8f81db03",
         "scripts/lib/resolve-roots.sh": "561e1a7b4bda39de4276822645a75f0235fa08234511a8d367e9cd2b2a5fa614",
-        "scripts/lib/scratch-reaper.py": "5fc89d35adc94131311f482abcc10b7fb15d4cc0895b6722bcf3fc9763c46eeb",
+        "scripts/lib/scratch-reaper.py": "9ee6a01e7b9c359a837f7a79591e1961b5e5de3935da380d3ab076abf30e676b",
         "scripts/lib/scratch.sh": "a46b938e776a44638546063d63e1598383e2c4f55230e502f5efb79ef54db7c4",
         "scripts/lib/stop-at-line.py": "b0bf8b23f7d96ccffde8ff1d8a6bd493d06e02f18d5f351f596983df900076f4",
         "scripts/lib/stop-hook-notice.sh": "36f88235559f112e27880bc78d8609976cd1cd2d6c7fe96f9c0eec7040544a9d",
@@ -19241,7 +19359,7 @@
         "scripts/lib/unevaluated-notice.sh": "321ce01b7cbb7efc2a96ef3a2355c6c1ede33bbe16678a5a02276cee9eeb5833",
         "scripts/lib/unlanded-branches.py": "2aa9d32b80809d78c10c9571a91c4bdbb58c7cf22197b6398fd1239b481b1810",
         "scripts/lib/worker_tokens.py": "72d6b409097a2f138a570d7e3f1563a8cff33752b7cc8685a124bde3de6b8645",
-        "scripts/scratch-reaper.sh": "4d1d9755cb7b3a4d4bb7e400922ed3b683563e95a4239af142b3c6d4f10d7832",
+        "scripts/scratch-reaper.sh": "ef54a26244cca4bd425a3f4a9c23ceecfeb37a943530ab1fc506189715db7bc1",
         "scripts/scratch-sweep.sh": "575e99bf9f8dd9815340f2ca632757f2990df3374c82093ee637f1da3ad1d105",
         "scripts/unlanded-branches-lint.sh": "c65f6be6da126b18127b28f36860c213c9649e843831ae4c0ee1f393cc52971f"
       },
@@ -19269,13 +19387,13 @@
         "scripts/lib/resolve-main-checkout.sh": "7b365389e15be1f270adfbe361cff627a424f815d501d33d357054124ca286ca",
         "scripts/lib/resolve-model.sh": "99641cc02487da81c7fb6ecd216b10ddcaff5254c1c734b714aef8de8f81db03",
         "scripts/lib/resolve-roots.sh": "561e1a7b4bda39de4276822645a75f0235fa08234511a8d367e9cd2b2a5fa614",
-        "scripts/lib/scratch-reaper.py": "5fc89d35adc94131311f482abcc10b7fb15d4cc0895b6722bcf3fc9763c46eeb",
+        "scripts/lib/scratch-reaper.py": "9ee6a01e7b9c359a837f7a79591e1961b5e5de3935da380d3ab076abf30e676b",
         "scripts/lib/stop-hook-notice.sh": "36f88235559f112e27880bc78d8609976cd1cd2d6c7fe96f9c0eec7040544a9d",
         "scripts/lib/teammate-name.sh": "fd4f49d710bb208948d60cb7c92ccfcfce1e9db209975c53234f161a330a34a2",
         "scripts/lib/testdevice_alerts.py": "021045e50d6d10417a2b5064c154e4ae1d407f69b7f48181bbcc1dffea5431c8",
         "scripts/lib/testdevices.py": "996d8a895941526d466b16e87ea84bc0087532b38e94c24aea36f176b5dc7775",
         "scripts/lib/unevaluated-notice.sh": "321ce01b7cbb7efc2a96ef3a2355c6c1ede33bbe16678a5a02276cee9eeb5833",
-        "scripts/scratch-reaper.sh": "4d1d9755cb7b3a4d4bb7e400922ed3b683563e95a4239af142b3c6d4f10d7832",
+        "scripts/scratch-reaper.sh": "ef54a26244cca4bd425a3f4a9c23ceecfeb37a943530ab1fc506189715db7bc1",
         "scripts/scratch-sweep.sh": "575e99bf9f8dd9815340f2ca632757f2990df3374c82093ee637f1da3ad1d105"
       },
       "evidence": "The manifest name appears only in suite/header and helper comments or printed remedies. Reviewed finite fixture execution calls fixed hook/CLI paths; no installer, platform dispatch or registered-hook discovery runs. Shared mutation transport may copy hooks/settings bytes but this execution closure never reads them. Existing configuration/call contracts bind the same transitive sources; actual config readers and ordinary source-path selection remain required."

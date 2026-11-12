@@ -18,6 +18,33 @@ every "it kept X" test:
   B7   the lander's half: a checkout's own folders are found from its path, a neighbor's
        are not, and discard() moves them out of place at once.
   B8   with a repository whose worktree list cannot be read, no orphan is deleted.
+  B9   THE FLOOR (2026-11-12): with every unit read within 72 h and the volume under its
+       target, units go oldest first until the shortfall is covered; the warm unit stays.
+  B9c  the same units on a volume at its target are all kept (control).
+  B9m  a unit read within SCRATCH_BUILD_CACHE_MIN_IDLE_HOURS stays even when the volume is
+       still short, and a profile a running build holds is neither counted nor touched.
+  B9f  the floor is the disk watchdog's: scaled by capacity on a volume other than the primary.
+  B9h  a unit whose binary Cargo also hard-linked outside it frees almost nothing; the volume
+       is read again after the planned rows and the next oldest unit goes until it is on target
+       (review rv-20261112T102721Z-317c4e7a-1985 #2), never one read within the minimum.
+  B9a  the app's own sweep (--app, the only sweep a user's app runs) applies the floor to the
+       shared Cargo trees too (the same review, #1); on a volume at its target it walks nothing.
+  B9s  the reviewer's three cases (review rv-20261112T122930Z-beaaa3c2-fb0a,
+       fixtures/floor_accounting.py), each on a volume one unit short: the app's sweep with the
+       oldest unit at 50 h and at 100 h (past the usual 72 h), and the scheduled sweep with a
+       hard-linked 100 h unit. Each ends on target, never by taking the unit read 1 h ago.
+  B9e  the reviewer's two edges (review rv-20261112T133007Z-45bf4e10-69b6, fixtures/floor_edges.py):
+       other cleanup in the same run already put the volume on target, so no floor unit goes;
+       and 64 hard-linked units take more than 50 rounds, and the re-read goes on to the target.
+  B9l  a build takes the oldest profile's lock after the plan (review
+       rv-20261112T143113Z-f972fff8-cdd8, fixtures/floor_review.py): the re-read leaves that
+       profile out and takes the next oldest unit elsewhere, and reaches the target.
+  B9h2 a build takes the LAST profile's lock between the look and the deletion (review
+       rv-20261112T153212Z-b15acdc1-9c1d, fixtures/floor_lock_handoff.py): the re-read stops
+       cleanly and returns what it did, so apply() still writes its log.
+  B9w  --floor-check, which the app's disk watcher asks every check, says exit 1 and names the
+       drive when a Cargo tree's volume is below its target, exit 0 and nothing when it is not
+       (review rv-20261112T112825Z-7f381427-61d2: the cache drive filled, the app's disk was fine).
 
 Everything lives in a temporary directory; nothing outside it is read or written except
 `git`, run against checkouts created here.
@@ -143,7 +170,12 @@ class BuildCaches(unittest.TestCase):
         r = object.__new__(reaper.Reaper)
         r.cfg = {"build_cache_root": self.cache, "cargo_target_roots": [self.cargo],
                  "checkout_parents": [self.parents], "age_floor_minutes": 60,
-                 "build_cache_orphan_hours": 6, "build_cache_idle_hours": 72}
+                 "build_cache_orphan_hours": 6, "build_cache_idle_hours": 72,
+                 # The floor (rule 3) is off unless a test sets it: the machine running this
+                 # suite has whatever free space it has.
+                 "build_cache_free_target_percent": 0, "build_cache_min_idle_hours": 2,
+                 "disk_floor_gb": 1, "disk_primary_volume": "", "disk_scale_extra_volumes": True}
+        r.cfg.update(getattr(self, "cfg_extra", {}))
         r.entries, r.roots, r.now, r.floor = [], [], time.time(), 3600
         r.skip_build_caches = False
         r.scan_build_caches(NoWalls())
@@ -301,6 +333,285 @@ class BuildCaches(unittest.TestCase):
         plan, _r = self.plan()
         for f in dead:
             self.assertEqual(plan[f].action, reaper.INDETERMINATE, (f, plan[f].why))
+
+    # -- rule 3: the volume's floor ---------------------------------------------------------
+    def recent_profile(self, name, ages_h):
+        """A profile whose units were all read within 72 h, one unit per age, oldest first."""
+        p = os.path.join(self.cargo, name, "debug")
+        hashes = []
+        for i, age_h in enumerate(ages_h):
+            h = "%016x" % (0xa0 + i)
+            for rel in (os.path.join(".fingerprint", "dep%d-%s" % (i, h), "lib-dep"),
+                        os.path.join("deps", "libdep%d-%s.rlib" % (i, h))):
+                write(os.path.join(p, rel), b"x" * 65536, age=age_h * 3600)
+            age_tree(os.path.join(p, ".fingerprint", "dep%d-%s" % (i, h)), age_h * 3600)
+            hashes.append(h)
+        write(os.path.join(p, ".cargo-lock"), b"")
+        return p, hashes
+
+    def under_target(self, short_bytes):
+        """The volume is `short_bytes` below its target: the floor is 1 GiB, the target 100% of it."""
+        gib = 1024 ** 3
+        self.cfg_extra = {"build_cache_free_target_percent": 100, "disk_floor_gb": 1}
+        mod = reaper.build_caches()
+        # The volume gains exactly what the deletions really release (blocks, each inode once).
+        start = self.blocks(self.cargo)
+        return patch.object(mod, "volume_space", new=lambda _p: (
+            1, 100 * gib, gib - short_bytes + (start - self.blocks(self.cargo))))
+
+    def left(self, p):
+        return sorted(n for n in os.listdir(os.path.join(p, "deps")))
+
+    def test_B9_under_the_floor_recent_units_go_oldest_first_and_the_warm_one_stays(self):
+        p, (h50, h30, h3) = self.recent_profile("shared-build-v1", (50, 30, 3))
+        oldest = bc.units(p)[("unit", h50)]["bytes"]
+        with self.under_target(oldest):
+            plan, r = self.plan()
+            self.assertEqual(plan[p].action, reaper.DELETE, plan[p].why)
+            self.assertEqual(plan[p].unit_keys, [("unit", h50)])
+            self.assertIn("under its target", plan[p].why)
+            _d, freed, failures = self.apply(r)
+        self.assertEqual(failures, [])
+        self.assertEqual(freed, oldest)
+        self.assertEqual(self.left(p), ["libdep1-%s.rlib" % h30, "libdep2-%s.rlib" % h3])
+
+    def test_B9c_the_same_units_on_a_volume_at_its_target_are_kept(self):
+        p, _h = self.recent_profile("shared-build-v1", (50, 30, 3))
+        with self.under_target(0):
+            plan, _r = self.plan()
+        self.assertNotIn(p, plan)
+        self.assertEqual(len(self.left(p)), 3)
+
+    def test_B9m_the_minimum_idle_and_a_held_profile_are_never_taken(self):
+        p, (h50, h30, h1) = self.recent_profile("shared-build-v1", (50, 30, 1))
+        busy, _hb = self.recent_profile("codex/shared-build-v1", (60,))
+        self.children.append(hold_lock(os.path.join(busy, ".cargo-lock")))
+        with self.under_target(1024 ** 3):              # far more than everything here
+            plan, r = self.plan()
+            self.assertEqual(plan[p].unit_keys, [("unit", h50), ("unit", h30)])
+            self.assertEqual(plan[busy].action, reaper.KEEP, plan[busy].why)
+            self.apply(r)
+        self.assertEqual(self.left(p), ["libdep2-%s.rlib" % h1])
+        self.assertEqual(len(self.left(busy)), 1)
+
+    def test_B9f_the_floor_is_scaled_like_the_disk_watchdog(self):
+        gib = 1024 ** 3
+        space = {"/primary": (1, 460 * gib, 100 * gib), "/external/cargo": (2, 954 * gib, 20 * gib)}
+        with patch.object(bc, "volume_space", lambda path: space[path]):
+            target, floor, free = bc.free_target("/external/cargo", 60, "/primary", True, 150)
+            self.assertEqual(floor, int(60 * gib * 954 / 460.0))      # about 124 GiB
+            self.assertEqual(target, int(floor * 1.5))
+            self.assertEqual(free, 20 * gib)
+            self.assertEqual(bc.free_target("/external/cargo", 60, "/primary", False, 100)[1], 60 * gib)
+            self.assertEqual(bc.free_target("/primary", 60, "/primary", True, 100)[1], 60 * gib)
+
+    def blocks(self, root):
+        """Bytes the files under root hold, each inode once: what deleting them really frees."""
+        seen = {}
+        for d, _dirs, files in os.walk(root):
+            for n in files:
+                st = os.lstat(os.path.join(d, n))
+                seen[(st.st_dev, st.st_ino)] = st.st_blocks * 512
+        return sum(seen.values())
+
+    def test_B9h_the_volume_is_read_again_and_a_hard_linked_unit_does_not_end_the_reclaim(self):
+        p, (h50, h30, h1) = self.recent_profile("shared-build-v1", (50, 30, 1))
+        # Cargo's top-level copy of the oldest unit's library: one inode, two names.
+        os.link(os.path.join(p, "deps", "libdep0-%s.rlib" % h50), os.path.join(p, "libdep0.rlib"))
+        oldest = bc.units(p)[("unit", h50)]["bytes"]
+        start = self.blocks(self.cargo)
+        gib = 1024 ** 3
+        self.cfg_extra = {"build_cache_free_target_percent": 100, "disk_floor_gb": 1}
+        # The volume's free space is what the deletions really released, nothing more.
+        space = lambda _p: (1, 100 * gib, gib - oldest + (start - self.blocks(self.cargo)))
+        with patch.object(reaper.build_caches(), "volume_space", space):
+            plan, r = self.plan()
+            self.assertEqual(plan[p].unit_keys, [("unit", h50)])
+            log = os.path.join(self.tmp, "log")
+            _d, _freed, failures = self.apply(r)
+        self.assertEqual(failures, [])
+        self.assertEqual(self.left(p), ["libdep2-%s.rlib" % h1])     # 30 h went too, 1 h stayed
+        self.assertTrue(os.path.exists(os.path.join(p, "libdep0.rlib")))
+        self.assertIn("FLOOR volume of", Path(log).read_text())
+
+    def test_B9a_the_apps_own_sweep_applies_the_floor_to_the_shared_cargo_trees(self):
+        p, (h50, h30, h3) = self.recent_profile("shared-build-v1", (50, 30, 3))
+        oldest = bc.units(p)[("unit", h50)]["bytes"]
+        data = os.path.join(self.tmp, "app-data")
+        os.makedirs(data)
+        for short, expect in ((oldest, [("unit", h50)]), (0, None)):
+            with self.subTest(short=short), self.under_target(short):
+                r = object.__new__(reaper.Reaper)
+                r.cfg = {"claude_roots": [], "build_cache_root": self.cache,
+                         "cargo_target_roots": [self.cargo], "build_cache_idle_hours": 72,
+                         "build_cache_min_idle_hours": 2, "disk_primary_volume": "",
+                         "disk_scale_extra_volumes": True}
+                r.cfg.update(self.cfg_extra)
+                r.entries, r.roots, r.now, r.floor = [], [], time.time(), 3600
+                r.ws = Mock()
+                r.app_sessions = Mock(return_value=set())
+                r.app_account_session_dirs = Mock(return_value=[])
+                r.app_repositories = Mock(return_value=[])
+                for name in ("scan_app_profiles", "scan_app_voice", "scan_app_dictation",
+                             "scan_app_mcp_logs", "scan_cargo_output"):
+                    setattr(r, name, Mock())
+                mod = reaper.build_caches()
+                walked = Mock(side_effect=mod.profile_dirs)
+                with patch.object(reaper, "Liveness"), \
+                        patch.object(mod, "profile_dirs", walked), \
+                        patch.object(reaper, "registered_workspaces", return_value=[]), \
+                        patch.object(reaper, "never_touch", return_value=[]):
+                    plan = {e.path: e for e in r.scan_app({"data": data})}
+                if expect is None:
+                    self.assertNotIn(p, plan)
+                    self.assertEqual(walked.call_count, 0)
+                else:
+                    self.assertEqual(plan[p].action, reaper.DELETE, plan[p].why)
+                    self.assertEqual(plan[p].unit_keys, expect)
+
+    def app_sweep(self):
+        """The app's own sweep (scan_app) with its other arms answering nothing, as in B9a."""
+        data = os.path.join(self.tmp, "app-data")
+        os.makedirs(data, exist_ok=True)
+        r = object.__new__(reaper.Reaper)
+        r.cfg = {"claude_roots": [], "build_cache_root": self.cache,
+                 "cargo_target_roots": [self.cargo], "build_cache_idle_hours": 72,
+                 "build_cache_min_idle_hours": 2, "disk_primary_volume": "",
+                 "disk_scale_extra_volumes": True}
+        r.cfg.update(self.cfg_extra)
+        r.entries, r.roots, r.now, r.floor = [], [], time.time(), 3600
+        r.ws = Mock()
+        r.app_sessions = Mock(return_value=set())
+        r.app_account_session_dirs = Mock(return_value=[])
+        r.app_repositories = Mock(return_value=[])
+        for name in ("scan_app_profiles", "scan_app_voice", "scan_app_dictation",
+                     "scan_app_mcp_logs", "scan_cargo_output"):
+            setattr(r, name, Mock())
+        with patch.object(reaper, "Liveness"), \
+                patch.object(reaper, "registered_workspaces", return_value=[]), \
+                patch.object(reaper, "never_touch", return_value=[]):
+            r.scan_app({"data": data})
+        return r
+
+    def test_B9s_the_reviewers_three_cases_each_end_on_target(self):
+        cases = (("the app's sweep, oldest unit 50 h", 50, True, False),
+                 ("the app's sweep, oldest unit 100 h", 100, True, False),
+                 ("the scheduled sweep, hard-linked oldest unit 100 h", 100, False, True))
+        for label, oldest_h, app, hardlink in cases:
+            with self.subTest(label):
+                shutil.rmtree(self.cargo, ignore_errors=True)
+                os.makedirs(self.cargo)
+                p, (old, _younger, warm) = self.recent_profile("shared-build-v1", (oldest_h, 30, 1))
+                if hardlink:
+                    os.link(os.path.join(p, "deps", "libdep0-%s.rlib" % old),
+                            os.path.join(p, "libdep0.rlib"))
+                short = bc.units(p)[("unit", old)]["bytes"]
+                with self.under_target(short) as space:
+                    r = self.app_sweep() if app else self.plan()[1]
+                    with contextlib.redirect_stdout(io.StringIO()):
+                        _d, _f, failures = self.apply(r)
+                    left = space(p)[2] - 1024 ** 3        # free minus target: >= 0 is on target
+                self.assertEqual(failures, [])
+                self.assertGreaterEqual(left, 0, "still %d bytes short of the target" % -left)
+                self.assertNotIn(("unit", old), bc.units(p))
+                self.assertIn(("unit", warm), bc.units(p))
+
+    def test_B9e_other_cleanup_on_the_volume_is_counted_before_any_floor_unit_goes(self):
+        p, (h3, h25, h1) = self.recent_profile("shared-build-v1", (3, 2.5, 1))
+        # On the same simulated volume (under_target counts the blocks under the Cargo root).
+        output = os.path.join(self.cargo, "connected-project", "target")
+        write(os.path.join(output, "unused"), b"x" * 1048576)
+        short = sum(u["bytes"] for k, u in bc.units(p).items() if k != ("unit", h1))
+        with self.under_target(short):
+            plan, r = self.plan()
+            self.assertEqual(plan[p].unit_keys, [("unit", h3), ("unit", h25)])
+            r.entries.append(reaper.Entry(output, "cargo-output", self.blocks(output), reaper.DELETE,
+                                          "unused Cargo output in a connected checkout"))
+            with contextlib.redirect_stdout(io.StringIO()):
+                _d, _f, failures = self.apply(r)
+        self.assertEqual(failures, [])
+        self.assertFalse(os.path.exists(output))
+        self.assertEqual(len(self.left(p)), 3, "the output's 1 MB covered the shortfall")
+
+    def test_B9e_the_re_read_goes_past_fifty_rounds_to_the_target(self):
+        # The reviewer's shape: 64 units whose library Cargo also linked at the top level (deleting
+        # one frees only its tiny fingerprint), one releasable 30 h unit, one warm 1 h unit.
+        p = os.path.join(self.cargo, "shared-build-v1", "debug")
+        keys = []
+        for i, age_h in enumerate([70 - i / 10.0 for i in range(64)] + [30, 1]):
+            h = "%016x" % (0x100 + i)
+            fp = os.path.join(p, ".fingerprint", "dep%d-%s" % (i, h), "lib-dep")
+            lib = os.path.join(p, "deps", "libdep%d-%s.rlib" % (i, h))
+            write(fp, b"f", age=age_h * 3600)
+            write(lib, b"x" * 262144, age=age_h * 3600)
+            age_tree(os.path.dirname(fp), age_h * 3600)
+            if i < 64:
+                os.link(lib, os.path.join(p, "libdep%d.rlib" % i))
+            keys.append(("unit", h))
+        write(os.path.join(p, ".cargo-lock"), b"")
+        with self.under_target(262144):
+            results, _before, after = reaper.build_caches().reclaim_to_target([p], 1024 ** 3, 2 * 3600)
+        self.assertGreaterEqual(after, 1024 ** 3, "still short after the re-read stopped")
+        self.assertGreater(sum(n for _p, n, _b, _f in results), 50, "it took more than 50 rounds")
+        self.assertIn(keys[65], bc.units(p))
+
+    def test_B9l_a_build_that_takes_a_lock_after_the_plan_does_not_end_the_reclaim(self):
+        oldest, (h50,) = self.recent_profile("a-shared", (50,))
+        available, (h30, h1) = self.recent_profile("b-codex", (30, 1))
+        short = bc.units(oldest)[("unit", h50)]["bytes"]
+        with self.under_target(short) as space:
+            _plan, r = self.plan()
+            self.children.append(hold_lock(os.path.join(oldest, ".cargo-lock")))
+            with contextlib.redirect_stdout(io.StringIO()):
+                _d, _f, failures = self.apply(r)
+            left = space(available)[2] - 1024 ** 3
+        self.assertEqual(failures, [])
+        self.assertGreaterEqual(left, 0, "still %d bytes short of the target" % -left)
+        self.assertIn(("unit", h50), bc.units(oldest), "the held profile was touched")
+        self.assertNotIn(("unit", h30), bc.units(available))
+        self.assertIn(("unit", h1), bc.units(available))
+
+    def test_B9h2_a_build_taking_the_last_profile_mid_round_stops_the_re_read_cleanly(self):
+        profile = "/fixture/cargo/shared-build-v1/debug"
+        now = 1000000.0
+        inventory = {("unit", "a" * 16): {"paths": [], "bytes": 65536, "newest": now - 50 * 3600}}
+
+        class LockHandoff(object):
+            acquisitions = 0
+
+            def __init__(self, path):
+                self.path = path + "/.cargo-lock"
+
+            def __enter__(self):
+                type(self).acquisitions += 1
+                self.held = type(self).acquisitions == 1     # free at the look, taken at deletion
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        with patch.object(bc.os.path, "isdir", return_value=True), \
+                patch.object(bc, "volume_space", return_value=(1, 10 ** 9, 0)), \
+                patch.object(bc.time, "time", return_value=now), \
+                patch.object(bc, "units", return_value=inventory), \
+                patch.object(bc, "CargoLock", LockHandoff):
+            results, before, after = bc.reclaim_to_target([profile], 65536, 2 * 3600)
+        self.assertEqual((results, before, after), ([], 0, 0))
+
+    def test_B9w_the_floor_check_names_a_short_cache_drive_and_scans_nothing(self):
+        cfg = {"cargo_target_roots": [self.cargo], "disk_primary_volume": "",
+               "disk_scale_extra_volumes": True, "disk_floor_gb": 1,
+               "build_cache_free_target_percent": 100}
+        gib = 1024 ** 3
+        mod = reaper.build_caches()
+        for free, code in ((gib - 1, 1), (gib, 0)):
+            with self.subTest(free=free), \
+                    patch.object(mod, "volume_space", lambda _p, f=free: (1, 100 * gib, f)), \
+                    patch.object(mod, "profile_dirs") as walked, \
+                    contextlib.redirect_stdout(io.StringIO()) as out:
+                self.assertEqual(reaper.floor_check(cfg), code)
+                walked.assert_not_called()
+            self.assertEqual(self.cargo in out.getvalue(), code == 1, out.getvalue())
 
     def test_installed_engine_has_no_git_but_registered_owners_remain_checked(self):
         library = Path(self.tmp) / 'installed-engine/scripts/lib'

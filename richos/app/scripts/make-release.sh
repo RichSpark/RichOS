@@ -627,7 +627,7 @@ $(printf '%s' "$dirty" | sed 's/^/    /')" 1
   # ---- the manifest, judged by the type that judges it on a customer's Mac -------------
   say ""
   say "checking the manifest with the updater's own RemoteRelease type..."
-  (cd "$src_tauri" && cargo run -q --example verify_update_manifest -- \
+  (cd "$src_tauri" && "$here/bin/cargo" run -q --example verify_update_manifest -- \
       "$OUT/$MANIFEST_ASSET" "$OUT/$UPDATE_ASSET" "$OUT/$UPDATE_ASSET.sig" "$UPDATE_URL") \
     || die "the manifest is not publishable — the reasons are above." 1
 
@@ -713,7 +713,7 @@ cmd_verify_release() {
   if [ "$fail" = 0 ]; then
     python3 -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1]))["version"] == sys.argv[2] else 1)' \
       "$tmp/$MANIFEST_ASSET" "$VERSION" || fail=1
-    (cd "$src_tauri" && cargo run --locked -q --example verify_update_manifest -- \
+    (cd "$src_tauri" && "$here/bin/cargo" run --locked -q --example verify_update_manifest -- \
       "$tmp/$MANIFEST_ASSET" "$tmp/$UPDATE_ASSET" "$tmp/$UPDATE_ASSET.sig" "$UPDATE_URL") || fail=1
   fi
   if [ "${1:-}" = "assets-only" ]; then
@@ -742,7 +742,7 @@ cmd_verify_release() {
   else
     say "  HTTP 200, $(/usr/bin/stat -f %z "$tmp/endpoint.json") bytes"
     if [ -f "$tmp/$UPDATE_ASSET" ] && [ -f "$tmp/$UPDATE_ASSET.sig" ]; then
-      (cd "$src_tauri" && cargo run -q --example verify_update_manifest -- \
+      (cd "$src_tauri" && "$here/bin/cargo" run -q --example verify_update_manifest -- \
           "$tmp/endpoint.json" "$tmp/$UPDATE_ASSET" "$tmp/$UPDATE_ASSET.sig" "$UPDATE_URL") \
         || fail=1
     fi
