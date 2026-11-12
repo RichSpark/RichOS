@@ -90,9 +90,10 @@ pub const MAX_PAGE_CHARS: usize = 60_000;
 pub const POLL: Duration = Duration::from_millis(1000);
 pub const MAX_POLLS: u32 = 20;
 /// How long a read waits, one [`POLL`] at a time, for the user to allow RichOS in macOS's
-/// Accessibility request before it reports the permission missing. The request appears on
-/// this Mac at the first read; a user who allows it within this minute gets the read done
-/// in the same call, with nothing to repeat.
+/// Accessibility request before it reports the permission missing. On a Mac that never answered
+/// it, the request appears at the first read (measured on a clean macOS guest, 2026-11-12); a
+/// user who allows it within this minute gets the read done in the same call, with nothing to
+/// repeat. After a Deny macOS shows nothing and the minute passes unanswered.
 pub const PERMISSION_POLLS: u32 = 60;
 /// How often, and how many times at most, a closed tab is looked for until it has left the tab
 /// bar: 2 s.
@@ -778,7 +779,8 @@ pub fn read_profile(host: &dyn BrowserHost, url: &str) -> Result<Value, String> 
 /// Accessibility request, so a second read (a retry, or another teammate of the same session)
 /// waits for the same request rather than raising it again.
 ///
-/// **Without the permission** the read shows macOS's request once, then waits up to
+/// **Without the permission** the read asks macOS once (macOS shows its request only on a Mac
+/// that never answered it), then waits up to
 /// [`PERMISSION_POLLS`] seconds for the user to allow RichOS: allowed, the read goes on and
 /// says so in its `note`; not allowed, it opens nothing and says the pages were NOT read, why,
 /// and the one thing that makes the same read work. Never a result that looks like a read.
@@ -796,8 +798,13 @@ pub fn read_profile_once_asked(host: &dyn BrowserHost, url: &str, asked: &std::c
             host.trusted()
         });
         if !allowed_now {
-            let request = if first { "macOS showed its request for it on this Mac just now" }
-                else { "macOS already showed its request for it on this Mac during an earlier read" };
+            // RichOS cannot tell whether macOS put its request up: macOS shows it only while this
+            // Mac has never answered it, and after a Deny it shows nothing (walk of 2026-11-12,
+            // a guest holding an earlier Deny: no request appeared). So this says what RichOS did,
+            // never that the user was shown something.
+            let request = if first { "RichOS asked macOS for it just now (macOS shows its request on this Mac only if \
+                it was never answered before)" }
+                else { "RichOS already asked macOS for it during an earlier read" };
             return Err(format!("The LinkedIn pages were NOT read: RichOS does not have the macOS Accessibility \
                 permission it reads the browser with. {request} and it was not allowed within {PERMISSION_POLLS} \
                 seconds. Once the user allows RichOS under System Settings, Privacy & Security, Accessibility, the \
@@ -1389,6 +1396,8 @@ mod tests {
         let err = read_profile(&fake, PROFILE).unwrap_err();
         assert!(err.contains("Accessibility") && err.contains("System Settings"), "{err}");
         assert!(err.contains("NOT read") && err.contains("just now"), "it must never read as a result: {err}");
+        // After an earlier Deny macOS shows nothing, so the answer never claims the user was shown a request.
+        assert!(!err.contains("macOS showed") && err.contains("RichOS asked macOS"), "{err}");
         assert_eq!(fake.asked.get(), 1);
         assert_eq!(fake.slept.get(), PERMISSION_POLLS, "it waited its minute for the user's answer");
         assert!(fake.opened.borrow().is_empty(), "a page was opened without the permission");
