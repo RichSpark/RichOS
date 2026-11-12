@@ -980,8 +980,13 @@ struct TrashSheet: View {
     @State private var index: TrashIndex?
     @State private var problem = ""
     @State private var refresh = UUID()
+    @State private var selected: Set<TrashListEntry.ID> = []
     @State private var reviewedDeletion: [TrashListEntry] = []
     @State private var confirmingEmpty = false
+
+    private var selectedEntries: [TrashListEntry] {
+        index?.entries.filter { selected.contains($0.id) } ?? []
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -994,7 +999,7 @@ struct TrashSheet: View {
                     Text(index.inaccessible == 0 ? "Trash is empty." : "No readable items.")
                         .foregroundStyle(.secondary)
                 }
-                List(index.entries) { entry in
+                List(index.entries, selection: $selected) { entry in
                     VStack(alignment: .leading, spacing: 4) {
                         Text(entry.name).font(.body.weight(.medium))
                         Text(entry.originalFolder ?? "Original folder unavailable").font(.caption).textSelection(.enabled)
@@ -1007,7 +1012,7 @@ struct TrashSheet: View {
                             }
                             Button("Restore To…") { chooseFolder(for: entry) }.disabled(entry.reference == nil)
                         }.disabled(actions.busy).buttonStyle(.borderless)
-                    }.padding(.vertical, 3)
+                    }.padding(.vertical, 3).tag(entry.id)
                 }
             } else if problem.isEmpty {
                 ProgressView("Reading Trash…")
@@ -1017,9 +1022,22 @@ struct TrashSheet: View {
                 Spacer()
             }
             if !actions.status.isEmpty { Text(actions.status).font(.callout).foregroundStyle(.secondary) }
+            if actions.issues.count > 1 {
+                DisclosureGroup("Restore and Trash issues (\(actions.issues.count))") {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 4) {
+                            ForEach(Array(actions.issues.enumerated()), id: \.offset) { _, issue in
+                                Text(issue).textSelection(.enabled)
+                            }
+                        }.frame(maxWidth: .infinity, alignment: .leading)
+                    }.frame(maxHeight: 80)
+                }.font(.caption).foregroundStyle(.secondary)
+            }
             HStack {
                 Button("Refresh") { refresh = UUID() }.disabled(actions.busy)
                 Button("Open in Finder") { openSystemTrash() }
+                Button("Restore Selected") { actions.restoreSelected(selectedEntries) }
+                    .disabled(actions.busy || !selectedEntries.contains { $0.known?.canRestore == true })
                 Spacer()
                 if let index, index.entries.contains(where: \.canDelete) {
                     Button(index.inaccessible == 0 ? "Empty Trash…" : "Delete Listed Items…") {
@@ -1042,10 +1060,11 @@ struct TrashSheet: View {
     }
 
     private func readTrash() async {
+        selected.removeAll()
         let receipts = actions.trashItems
         do {
             let current = try await readStorage { try TrashIndex.read(known: receipts) }
-            if !Task.isCancelled { index = current; problem = "" }
+            if !Task.isCancelled { selected.removeAll(); index = current; problem = "" }
         } catch {
             if !Task.isCancelled { problem = error.localizedDescription }
         }

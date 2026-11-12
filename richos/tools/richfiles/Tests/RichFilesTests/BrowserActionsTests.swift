@@ -1,9 +1,48 @@
 import AppKit
-import RichFilesCore
 import XCTest
 @testable import RichFiles
+@testable import RichFilesCore
 
 final class BrowserActionsTests: XCTestCase {
+    @MainActor
+    func testRestoreSelectedKeepsOccupiedNameAndGroupsSuccessfulRestores() async throws {
+        try await withFixture { root, trash, board in
+            let names = ["Alpha.png", "Beta.jpg", "Gamma.pdf"]
+            let records = try names.map { name in
+                let original = try write("original " + name, named: name, in: root)
+                let archived = try FileOperations.move(original, into: trash).moved
+                let receipt = TrashReceipt(original: original, trashedAt: Date(), trashLocation: archived.url, trashed: archived)
+                return TrashFixture.Item(id: UUID(), receipt: receipt)
+            }
+            let occupant = try write("late occupant", named: names[1], in: root)
+            let recovery = root.appendingPathComponent("Recovery", isDirectory: true)
+            try FileManager.default.createDirectory(at: recovery, withIntermediateDirectories: false,
+                                                    attributes: [.posixPermissions: 0o700])
+            let store = recovery.appendingPathComponent("Recovery.json")
+            try JSONEncoder().encode(TrashFixture(trash: records)).write(to: store)
+            let actions = BrowserActions(pasteboard: board, recoveryURL: store)
+            let selection = actions.trashItems.map { item in
+                TrashListEntry(reference: item.reference, known: item, dateAdded: item.trashedAt, canDelete: true)
+            }
+            XCTAssertEqual(selection.count, 3)
+
+            try await perform(actions) { actions.restoreSelected(selection) }
+            XCTAssertEqual(actions.undoName, "Restore Selected")
+            XCTAssertEqual(actions.trashItems.map(\.originalURL.lastPathComponent), [names[1]])
+            XCTAssertTrue(actions.status.contains("Restored 2 of 3 selected items."))
+            XCTAssertEqual(try contents(occupant.url), "late occupant")
+            XCTAssertEqual(try contents(trash.appendingPathComponent(names[1])), "original " + names[1])
+            for name in [names[0], names[2]] {
+                XCTAssertEqual(try contents(root.appendingPathComponent(name)), "original " + name)
+                XCTAssertFalse(FileManager.default.fileExists(atPath: trash.appendingPathComponent(name).path))
+            }
+            let saved = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: store)) as? [String: Any])
+            let groups = try XCTUnwrap(saved["undo"] as? [[String: Any]])
+            XCTAssertEqual(groups.count, 1)
+            XCTAssertEqual((groups.first?["steps"] as? [Any])?.count, 2)
+        }
+    }
+
     @MainActor
     func testRichFinderReceivesQueryTextWithoutTakingTheSystemClipboard() {
         let text = "builder's quote for the kitchen"
@@ -360,4 +399,16 @@ final class BrowserActionsTests: XCTestCase {
     }
 
     private struct ActionTimeout: Error {}
+
+    private struct TrashFixture: Encodable {
+        struct Item: Encodable {
+            let id: UUID
+            let receipt: TrashReceipt
+        }
+
+        let version = 1
+        let trash: [Item]
+        let undo: [String] = []
+        let redo: [String] = []
+    }
 }

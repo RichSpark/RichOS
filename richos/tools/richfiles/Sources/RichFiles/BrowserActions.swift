@@ -494,6 +494,35 @@ final class BrowserActions: ObservableObject {
         }
     }
 
+    func restoreSelected(_ entries: [TrashListEntry]) {
+        guard !entries.isEmpty else { return }
+        let knownIDs = Set(trashItems.map(\.id))
+        runMutation(title: "Restore Selected") {
+            var restored: [(BrowserTrashItem, FileReference)] = []
+            var issues: [String] = []
+            for entry in entries {
+                guard let item = entry.known, knownIDs.contains(item.id), item.canRestore else {
+                    let nextStep = entry.reference == nil
+                        ? "Check Finder’s Trash for this item."
+                        : "Use Restore To… to choose a folder."
+                    issues.append("\(entry.name): Original location unavailable. \(nextStep)")
+                    continue
+                }
+                do {
+                    restored.append((item, try FileOperations.restore(item.receipt)))
+                } catch {
+                    issues.append("\(entry.name): \(error.localizedDescription)")
+                }
+            }
+            return MutationResult(
+                message: "Restored \(restored.count) of \(entries.count) selected items.",
+                issues: issues, changed: !restored.isEmpty,
+                undo: restored.reversed().map { .trash($0.1) },
+                trashChanges: restored.map { .remove($0.0.id) }
+            )
+        }
+    }
+
     func restoreFromTrash(_ entry: TrashListEntry, into folder: URL) {
         if let known = entry.known {
             restore(known, into: folder)
