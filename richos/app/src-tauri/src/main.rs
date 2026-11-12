@@ -169,6 +169,7 @@ mod search_rerank;
 /// **A file Rich puts in front of the user** (§138, item 12): the cards' items, open and Show in
 /// Finder through `opener.rs`, and the watch that shows a file as soon as it is attached.
 mod rich_files_host;
+mod richfiles_pane;
 #[cfg(target_os = "macos")]
 mod cleaner_native;
 #[cfg(target_os = "macos")]
@@ -2568,6 +2569,7 @@ fn main() {
                 Ok(monitor) => Some(monitor),
                 Err(error) => { eprintln!("[richos] resources unavailable: {error}"); None }
             };
+            app.manage(richfiles_pane::PaneRequests::default());
             app.manage(ResourceMonitor(Mutex::new(resources)));
             let activation = activation::decide(&activation::gather(&data_dir, &app.config().identifier));
             eprintln!("[richos] {}", activation.log_message());
@@ -3899,6 +3901,8 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             system_resources,
+            richfiles_pane::richfiles_pane_available, richfiles_pane::richfiles_place_pane,
+            richfiles_pane::richfiles_request_pending, richfiles_pane::richfiles_accept_request,
             question_host::answer_question, question_host::question_shown, question_host::open_question_counts,
             claude_quota,
             claude_quota_activity,
@@ -4092,6 +4096,7 @@ fn main() {
             output_files::media_moment_playback,
             output_files::output_open,
             output_files::output_reveal,
+            richfiles_pane::output_reveal_in_richfiles,
             output_files::output_save_copy,
             // --- Rich's one offer of dictation (dictation plan slice 4) — appended ---
             dictation_offer,
@@ -4204,6 +4209,8 @@ fn main() {
             cleaner_host::cleaner_capture_control,
             #[cfg(target_os = "macos")]
             cleaner_host::cleaner_action,
+            #[cfg(target_os = "macos")]
+            cleaner_service::finder_take_service_query,
             rich_files_host::rich_file_open,
             rich_files_host::rich_file_reveal,
             // --- Terminal setup and your name in Git (round 41) — appended ---
@@ -4246,6 +4253,10 @@ fn main() {
         // launch is read as a crash-restart — an undercount by one, no splash once — which
         // is not worth refusing to close the app over.
         .run(|handle, event| {
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Opened { urls, .. } = &event {
+                richfiles_pane::opened(handle, urls);
+            }
             if matches!(&event, tauri::RunEvent::Exit) {richpass_host::shutdown(handle);}
             // =========================================================================
             // ROW 5 — "You close the window. The work keeps going. Quit ends it."

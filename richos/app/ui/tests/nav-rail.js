@@ -39,6 +39,7 @@
 
 const fs = require("fs");
 const path = require("path");
+const vm = require("node:vm");
 const {
   loadPlaywright, createRun, assert, assertEqual, UI_DIR, leaveHome, shellSettled, flushFrames,
   captureSettled, publishShot,
@@ -130,8 +131,95 @@ const boxOf = (page, sel) => page.evaluate((s) => {
 }, sel);
 const colorOf = (page, sel, prop) => page.evaluate(([s, p]) => getComputedStyle(document.querySelector(s))[p], [sel, prop || "color"]);
 
+async function verifyRichFilesColdDock(sourcePath) {
+  const trace = [];
+  const frames = [];
+  const page = { hidden: true };
+  const nodes = {
+    "nr-richfiles": { hidden: true },
+    "richfiles-page": page,
+    "richfiles-pane": { getBoundingClientRect: () => ({ left: 52, top: 40, right: 1000, bottom: 700, width: 948, height: 660 }) },
+    "richfiles-pane-error": { hidden: true },
+  };
+  let hooks;
+  let installListener;
+  let receiveEvent;
+  let pending = false;
+  const window = {
+    addEventListener() {},
+    RichNavRail: {
+      registerPage(_name, registeredHooks) { hooks = registeredHooks; },
+      showPage(name) { trace.push("show " + name); hooks.show(); },
+    },
+    RichBridge: {
+      async invoke(command, args) {
+        switch (command) {
+          case "richfiles_pane_available": return true;
+          case "richfiles_request_pending":
+            trace.push("poll pending=" + pending);
+            return pending;
+          case "richfiles_place_pane":
+            trace.push("place visible=" + args.bounds.visible);
+            return;
+          case "richfiles_accept_request":
+            trace.push("accept pending=" + pending);
+            pending = false;
+            return;
+          default: throw new Error("Unexpected command " + command);
+        }
+      },
+      listen(name, handler) {
+        trace.push("subscribe " + name);
+        return new Promise((resolve) => {
+          installListener = () => {
+            receiveEvent = handler;
+            trace.push("listener installed");
+            resolve(() => {});
+          };
+        });
+      },
+    },
+  };
+  class Observer {
+    observe() {}
+  }
+  vm.runInNewContext(fs.readFileSync(sourcePath, "utf8"), {
+    window, innerWidth: 1000, innerHeight: 700,
+    document: { getElementById: (id) => nodes[id], body: { classList: { add() {} } } },
+    ResizeObserver: Observer,
+    MutationObserver: Observer,
+    requestAnimationFrame(callback) { frames.push(callback); return frames.length; },
+  }, { filename: sourcePath });
+
+  // Drain queued promise callbacks with the subscription still unresolved.
+  await new Promise(setImmediate);
+  assertEqual(typeof installListener, "function", "the native listener is being installed");
+  pending = true;
+  trace.push("dock request arrived");
+  receiveEvent?.({ payload: null });
+  installListener();
+
+  await new Promise(setImmediate);
+  for (const frame of frames.splice(0)) frame();
+  await new Promise(setImmediate);
+  assertEqual(trace, [
+    "subscribe rich://richfiles-show",
+    "dock request arrived",
+    "listener installed",
+    "poll pending=true",
+    "show richfiles",
+    "place visible=true",
+    "accept pending=true",
+  ], "a dock request queued during listener installation opens the pane once");
+  assertEqual(page.hidden, false, "the RichFiles page is visible after the cold dock");
+  assertEqual(pending, false, "the queued dock request was consumed");
+  return "listener installed before polling, queued workspace accepted in the visible pane";
+}
+
 async function main() {
   const run = createRun("The navigation rail (round 58, version A): items, selection, the moved square and initials, contrast");
+  await run.check("RichFiles accepts a cold dock request queued while its listener starts", () =>
+    verifyRichFilesColdDock(path.join(UI_DIR, "richfiles-page.js")));
   const { webkit } = loadPlaywright();
   const browser = await webkit.launch();
   const report = [];
@@ -427,6 +515,58 @@ async function main() {
       assertEqual(seen, ["nr-chats", "nr-finder", "nr-cleaner", "nr-finder"], "the order focus takes");
       await page.evaluate(() => document.activeElement.blur());
       return seen.join(" → ");
+    });
+
+    await run.check(`RichFiles ${theme}  the heading and native placement error pass contrast`, async () => {
+      const richFiles = await context.newPage();
+      try {
+        const placementError = "RichFiles could not appear in this window.";
+        await richFiles.addInitScript((message) => {
+          Object.defineProperty(window, "RichBridge", {
+            configurable: true,
+            set(bridge) {
+              const invoke = bridge.invoke.bind(bridge);
+              bridge.invoke = async (command, args, options) => {
+                if (command === "richfiles_pane_available") return true;
+                if (command === "richfiles_request_pending") return false;
+                if (command === "richfiles_place_pane") {
+                  if (args.bounds.visible) throw message;
+                  return;
+                }
+                return invoke(command, args, options);
+              };
+              Object.defineProperty(window, "RichBridge", { value: bridge, writable: true, configurable: true });
+            },
+          });
+        }, placementError);
+        await richFiles.goto(APP);
+        await leaveHome(richFiles);
+        await shellSettled(richFiles);
+        await richFiles.locator("#nr-richfiles").click();
+        await richFiles.locator("#richfiles-title").waitFor({ state: "visible" });
+        await richFiles.locator("#richfiles-pane-error").waitFor({ state: "visible" });
+        await richFiles.mouse.move(700, 80);
+        await flushFrames(richFiles);
+        assertEqual((await railFacts(richFiles)).selected, ["richfiles"], "the rail selected the RichFiles page");
+        assertEqual(await richFiles.locator("#richfiles-title").innerText(), "RichFiles", "the actual heading is visible");
+        assertEqual(await richFiles.locator("#richfiles-pane-error").innerText(), placementError,
+          "the normal native placement error is visible");
+        assertEqual(await richFiles.evaluate(() => document.documentElement.dataset.theme), theme,
+          "the document is using the requested theme");
+        await richFiles.evaluate(C.pageScript());
+        const walk = await richFiles.evaluate((t) => window.__contrastProbe({ surface: "richfiles-page", theme: t }), theme);
+        for (const target of ["h1#richfiles-title", "p#richfiles-pane-error"]) {
+          assert(walk.measuredPaths.includes(target), "the contrast probe did not measure " + target);
+        }
+        const mine = (pairs) => Object.values(pairs).filter((pair) =>
+          /#richfiles-(page|title|pane-error)/.test(pair.selector || pair.path || ""));
+        assertEqual(mine(walk.failures), [], "the contrast walk found a failing pair on the RichFiles page");
+        assertEqual(mine(walk.unresolvable), [], "the contrast walk could not prove a pair on the RichFiles page");
+        assertEqual(mine(walk.exempt), [], "the RichFiles page needs no contrast exemptions");
+        return "the shipped RichFiles heading and placement error were both measured";
+      } finally {
+        await richFiles.close();
+      }
     });
 
     await run.check(`RichPass ${theme}  opens its page under the header, selected, its icon before its title; Chats and a chat in the sidebar leave it`, async () => {

@@ -1,0 +1,12 @@
+[package]
+name = "richfiles-archive"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+libc = "=0.2.189"
+flate2 = { version = "=1.1.10", default-features = false, features = ["rust_backend"] }
+serde_json = "=1.0.151"
+tempfile = "=3.27.0"
+zip = { version = "=9.2.0", default-features = false, features = ["deflate-flate2"] }

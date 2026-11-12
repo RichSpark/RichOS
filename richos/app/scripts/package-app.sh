@@ -1582,6 +1582,21 @@ for asset in model_qint8_arm64.onnx tinybert_qint8_arm64.onnx tokenizer.json RAN
   fi
 done
 
+# Build the standalone app and the SwiftUI pane from the same source. The
+# nested app also supplies the archive helper to the docked browser.
+package_richfiles() (
+  richfiles_stage="$(mktemp -d "${TMPDIR:?}/richfiles-package.XXXXXX")" || exit 1
+  trap 'rm -rf -- "$richfiles_stage"' EXIT
+  bash "$here/package-richfiles.sh" --embedded "$richfiles_stage/payload" &&
+    mkdir -p "$app_bundle/Contents/Applications" "$app_bundle/Contents/Frameworks" &&
+    ditto "$richfiles_stage/payload/RichFiles.app" "$app_bundle/Contents/Applications/RichFiles.app" &&
+    install -m 755 "$richfiles_stage/payload/libRichFilesRail.dylib" "$app_bundle/Contents/Frameworks/libRichFilesRail.dylib"
+)
+if ! package_richfiles; then
+  warn "The RichFiles app or its docked pane could not be packaged."
+  exit 5
+fi
+
 # ---------------------------------------------------------------------------
 # The remap above is the fix. THIS is the proof.
 # ---------------------------------------------------------------------------
@@ -1719,6 +1734,16 @@ for path in sorted(helpers):
     finally:
         path.chmod(mode)
 PYCLEANERSIGN
+
+richfiles_app="$app_bundle/Contents/Applications/RichFiles.app"
+richfiles_sign=(--sign - --timestamp=none)
+if [ "$sign_mode" = "developer-id" ]; then
+  richfiles_sign=(--sign "$wanted" --options runtime --timestamp)
+fi
+codesign --force "${richfiles_sign[@]}" "$app_bundle/Contents/Frameworks/libRichFilesRail.dylib" || exit 1
+codesign --force "${richfiles_sign[@]}" "$richfiles_app/Contents/MacOS/richfiles-archive" || exit 1
+codesign --force "${richfiles_sign[@]}" "$richfiles_app" || exit 1
+codesign --verify --deep --strict "$richfiles_app" || exit 1
 
 if [ "$sign_mode" = "adhoc" ]; then
   say ""

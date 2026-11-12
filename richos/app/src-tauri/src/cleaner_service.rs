@@ -1,4 +1,4 @@
-//! The native macOS Service receives file URLs from Finder. It never simulates Copy.
+//! The native macOS Services receive selections from other apps on a service pasteboard.
 use objc2::{
     msg_send,
     rc::Retained,
@@ -6,9 +6,11 @@ use objc2::{
     sel,
 };
 use richos_core::cleaner::MAX_BATCH_FILES;
-use std::{ffi::CStr, path::PathBuf, sync::OnceLock};
-use tauri::AppHandle;
+use std::{ffi::CStr, path::PathBuf, sync::{Mutex, OnceLock}};
+use tauri::{AppHandle, Emitter};
 static APP: OnceLock<AppHandle> = OnceLock::new();
+static SEARCH_QUERY: Mutex<Option<String>> = Mutex::new(None);
+const SEARCH_TEXT_TYPE: &str = "public.utf8-plain-text";
 
 unsafe fn text(value: &str) -> Option<Retained<AnyObject>> {
     let class = AnyClass::get(c"NSString")?;
@@ -83,16 +85,69 @@ extern "C-unwind" fn receive(
         crate::cleaner_host::service(app.clone(), paths)
     });
     if let Err(message) = result {
-        if !error.is_null() {
-            if let Some(value) = unsafe { text(&message) } {
-                unsafe {
-                    *error = Retained::autorelease_ptr(value);
-                }
-            }
-        }
+        respond_with_error(error, &message);
         eprintln!("[richos] RichCleaner Service: {message}");
     }
 }
+
+fn respond_with_error(error: *mut *mut AnyObject, message: &str) {
+    if !error.is_null() {
+        if let Some(value) = unsafe { text(message) } {
+            unsafe { *error = Retained::autorelease_ptr(value); }
+        }
+    }
+}
+
+fn selected_query(pasteboard: *mut AnyObject) -> Result<String, String> {
+    if pasteboard.is_null() {
+        return Err("No search text was provided".into());
+    }
+    let kind = unsafe { text(SEARCH_TEXT_TYPE) }.ok_or("The search text type is unavailable")?;
+    let value: *mut AnyObject = unsafe { msg_send![pasteboard, stringForType: &*kind] };
+    let query = unsafe { rust_string(value) }.ok_or("The search text is unavailable")?;
+    if query.len() > 4096 {
+        return Err("The search text is too long".into());
+    }
+    Ok(query.lines().map(str::trim).collect::<Vec<_>>().join(" ").trim().to_owned())
+}
+
+extern "C-unwind" fn receive_search(
+    _: *mut AnyObject,
+    _: Sel,
+    pasteboard: *mut AnyObject,
+    _user: *mut AnyObject,
+    error: *mut *mut AnyObject,
+) {
+    let result = objc2::rc::autoreleasepool(|_| -> Result<(), String> {
+        let query = selected_query(pasteboard)?;
+        let app = APP.get().ok_or("RichOS is starting. Try again when it is ready")?;
+        *SEARCH_QUERY.lock().map_err(|_| "RichFinder is unavailable")? = Some(query);
+        let app = app.clone();
+        // Window creation can send work back to the event loop, so leave this callback first.
+        std::thread::spawn(move || {
+            crate::reopen_window(&app);
+            if let Some(window) = crate::conversation_window(&app) {
+                if let Err(error) = window.emit("rich://finder-service", ()) {
+                    eprintln!("[richos] RichFinder Service notification failed: {error}");
+                }
+            }
+        });
+        Ok(())
+    });
+    if let Err(message) = result {
+        respond_with_error(error, &message);
+        eprintln!("[richos] RichFinder Service: {message}");
+    }
+}
+
+#[richos_command::command]
+pub fn finder_take_service_query(window: tauri::WebviewWindow) -> Result<Option<String>, String> {
+    if window.label() != "main" {
+        return Err("Open RichFinder in the main RichOS window".into());
+    }
+    Ok(SEARCH_QUERY.lock().map_err(|_| "RichFinder is unavailable")?.take())
+}
+
 pub fn register(app: &AppHandle) -> Result<(), String> {
     APP.set(app.clone())
         .map_err(|_| "RichCleaner Service is already registered")?;
@@ -112,6 +167,12 @@ pub fn register(app: &AppHandle) -> Result<(), String> {
                     *mut *mut AnyObject,
                 ),
         );
+        builder.add_method(
+            sel!(richFinderSearch:userData:error:),
+            receive_search as extern "C-unwind" fn(
+                *mut AnyObject, Sel, *mut AnyObject, *mut AnyObject, *mut *mut AnyObject,
+            ),
+        );
     }
     let class = builder.register();
     let provider: Retained<AnyObject> = unsafe { msg_send![class, new] };
@@ -128,6 +189,25 @@ pub fn register(app: &AppHandle) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_search_service_uses_only_bounded_text_from_its_pasteboard() {
+        objc2::rc::autoreleasepool(|_| unsafe {
+            let class = AnyClass::get(c"NSPasteboard").unwrap();
+            let board: *mut AnyObject = msg_send![class, pasteboardWithUniqueName];
+            let kind = text(SEARCH_TEXT_TYPE).unwrap();
+            assert!(selected_query(board).is_err());
+            let query = text("  holiday photos\nfrom last year  ").unwrap();
+            let written: bool = msg_send![board, setString: &*query, forType: &*kind];
+            assert!(written);
+            assert_eq!(selected_query(board).unwrap(), "holiday photos from last year");
+            let oversized = text(&"é".repeat(2049)).unwrap();
+            let written: bool = msg_send![board, setString: &*oversized, forType: &*kind];
+            assert!(written);
+            assert!(selected_query(board).unwrap_err().contains("too long"));
+            let _: () = msg_send![board, releaseGlobally];
+        });
+    }
     #[test]
     fn the_service_reads_each_supplied_path_and_refuses_empty_or_oversized_selections() {
         objc2::rc::autoreleasepool(|_| unsafe {

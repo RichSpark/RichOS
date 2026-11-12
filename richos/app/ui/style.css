@@ -14204,6 +14204,41 @@ body.page-open #scope-crumb,
 body.page-open #out-top {
   display: none !important;
 }
+body[data-page="richfiles"] #rail,
+body[data-page="richfiles"] #sidebar-resize {
+  display: none;
+}
+.richfiles-page {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+.richfiles-page[hidden] {
+  display: none;
+}
+.richfiles-page header {
+  align-items: center;
+  border-bottom: 1px solid var(--line-soft);
+  display: flex;
+  justify-content: space-between;
+  padding: 8px 16px;
+}
+.richfiles-page h1 {
+  color: var(--ink);
+  font-size: 1rem;
+  margin: 0;
+}
+#richfiles-pane {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+#richfiles-pane-error {
+  color: var(--ink);
+  margin: 12px 16px;
+}
 .page-crumb {
   font-weight: 600;
   color: var(--ink);

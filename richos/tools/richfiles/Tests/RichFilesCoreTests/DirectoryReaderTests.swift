@@ -1,0 +1,304 @@
+import Foundation
+import RichFilesCore
+import XCTest
+
+final class DirectoryReaderTests: XCTestCase {
+    private func fixture(_ use: (URL) throws -> Void) throws {
+        let temporary = try XCTUnwrap(ProcessInfo.processInfo.environment["TMPDIR"])
+        let root = URL(fileURLWithPath: temporary, isDirectory: true)
+            .appendingPathComponent("RichFilesBrowse-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try use(root)
+    }
+
+    private func write(_ path: String, in root: URL, text: String = "test") throws {
+        try Data(text.utf8).write(to: root.appendingPathComponent(path))
+    }
+
+    func testListedFileRefusesADifferentInodeWithMatchingMetadata() throws {
+        try fixture { root in
+            let original = root.appendingPathComponent("selected.txt")
+            let incoming = root.appendingPathComponent("incoming.txt")
+            let parked = root.appendingPathComponent("parked.txt")
+            let time = Date(timeIntervalSince1970: 1_700_000_000)
+            for (url, bytes) in [(original, "old"), (incoming, "new")] {
+                try Data(bytes.utf8).write(to: url)
+                try FileManager.default.setAttributes([.creationDate: time, .modificationDate: time],
+                                                      ofItemAtPath: url.path)
+            }
+
+            var listed: [FileEntry] = []
+            _ = try DirectoryReader.scan(root) { listed.append(contentsOf: $0) }
+            let row = try XCTUnwrap(listed.first { $0.name == original.lastPathComponent })
+            XCTAssertEqual(try row.operationReference().identity, row.identity)
+            try FileManager.default.moveItem(at: original, to: parked)
+            try FileManager.default.moveItem(at: incoming, to: original)
+
+            let replacement = try FileEntry(url: original)
+            XCTAssertEqual(replacement.created, row.created)
+            XCTAssertEqual(replacement.modified, row.modified)
+            XCTAssertEqual(replacement.size, row.size)
+            XCTAssertEqual(replacement.kind, row.kind)
+            XCTAssertNotEqual(replacement.identity, row.identity)
+            XCTAssertThrowsError(try row.operationReference()) {
+                guard case FileOperationError.sourceChanged = $0 else { return XCTFail("\($0)") }
+            }
+            XCTAssertEqual(try String(contentsOf: parked, encoding: .utf8), "old")
+            XCTAssertEqual(try String(contentsOf: original, encoding: .utf8), "new")
+        }
+    }
+
+    func testDiskUsageCountsNestedFilesAndHiddenItemsWithoutFollowingLinks() throws {
+        try fixture { root in
+            let folder = root.appendingPathComponent("Measure", isDirectory: true)
+            let nested = folder.appendingPathComponent("Example.app/Contents", isDirectory: true)
+            let outside = root.appendingPathComponent("Outside", isDirectory: true)
+            try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+            try write("code", in: nested, text: "twelve bytes")
+            try write(".hidden", in: folder, text: "hidden")
+            try write("other", in: outside, text: "outside the selected folder")
+            try FileManager.default.createSymbolicLink(at: folder.appendingPathComponent("Link"), withDestinationURL: outside)
+
+            let report = try StorageAnalysis.diskUsage(in: folder)
+            XCTAssertEqual(report.unavailable, 0)
+            XCTAssertEqual(report.otherVolumes, 0)
+            XCTAssertEqual(report.allocatedBytes, report.rows.reduce(0) { $0 + $1.allocatedBytes })
+            let sizes = Dictionary(uniqueKeysWithValues: report.rows.map { ($0.url.lastPathComponent, $0.logicalBytes) })
+            XCTAssertEqual(sizes, ["Example.app": 12, ".hidden": 6, "Link": 0])
+            XCTAssertThrowsError(try StorageAnalysis.diskUsage(in: folder, isCancelled: { true })) {
+                XCTAssertTrue($0 is CancellationError)
+            }
+        }
+    }
+
+    func testChecksumsAndDuplicatesCompareContentsAndIgnoreHardLinksAndSymlinks() throws {
+        try fixture { root in
+            try write("first.txt", in: root, text: "abc")
+            try write("second.txt", in: root, text: "abc")
+            try write("same-size.txt", in: root, text: "xyz")
+            let first = root.appendingPathComponent("first.txt")
+            try FileManager.default.linkItem(at: first, to: root.appendingPathComponent("hard-link.txt"))
+            try FileManager.default.createSymbolicLink(at: root.appendingPathComponent("symbolic.txt"),
+                                                       withDestinationURL: first)
+            let expected = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+            let reference = try FileReference(url: first)
+            XCTAssertEqual(try StorageAnalysis.checksum(of: reference), expected)
+
+            let report = try StorageAnalysis.duplicates(in: root)
+            XCTAssertEqual(report.unavailable, 0)
+            let group = try XCTUnwrap(report.groups.first)
+            XCTAssertEqual(report.groups.count, 1)
+            XCTAssertEqual(group.sha256, expected)
+            XCTAssertEqual(group.files.count, 2)
+            XCTAssertTrue(group.files.contains { $0.lastPathComponent == "second.txt" })
+            XCTAssertFalse(group.files.contains { ["same-size.txt", "symbolic.txt"].contains($0.lastPathComponent) })
+
+            _ = try FileOperations.rename(reference, to: "moved.txt")
+            try write("first.txt", in: root, text: "abc")
+            XCTAssertThrowsError(try StorageAnalysis.checksum(of: reference)) {
+                guard case FileOperationError.sourceChanged = $0 else { return XCTFail("\($0)") }
+            }
+        }
+    }
+
+    func testFolderComparisonCanDetectDifferentBytesWithTheSameSizeAndDate() throws {
+        try fixture { root in
+            let left = root.appendingPathComponent("First", isDirectory: true)
+            let right = root.appendingPathComponent("Second", isDirectory: true)
+            for side in [left, right] {
+                try FileManager.default.createDirectory(at: side, withIntermediateDirectories: true)
+                try write("equal.txt", in: side, text: "identical")
+            }
+            try write("same-metadata.txt", in: left, text: "abc")
+            try write("same-metadata.txt", in: right, text: "xyz")
+            let time = Date(timeIntervalSince1970: 1_600_000_000)
+            for side in [left, right] {
+                for name in ["same-metadata.txt", "equal.txt"] {
+                    try FileManager.default.setAttributes([.modificationDate: time],
+                                                          ofItemAtPath: side.appendingPathComponent(name).path)
+                }
+            }
+            try write("only-first.txt", in: left)
+            try write("only-second.txt", in: right)
+            try FileManager.default.createDirectory(at: left.appendingPathComponent("kind"),
+                                                    withIntermediateDirectories: false)
+            try write("kind", in: right)
+            let metadata = try StorageAnalysis.compareFolders(left, right, mode: .metadata)
+            let content = try StorageAnalysis.compareFolders(left, right, mode: .contents)
+            XCTAssertEqual(metadata.matchingItems, 2)
+            XCTAssertEqual(content.matchingItems, 1)
+            XCTAssertEqual(content.unavailable, 0)
+            XCTAssertEqual(Dictionary(uniqueKeysWithValues: content.differences.map { ($0.relativePath, $0.kind) }),
+                           ["only-first.txt": .leftOnly, "only-second.txt": .rightOnly,
+                            "kind": .differentType, "same-metadata.txt": .changed])
+        }
+    }
+
+    func testFolderSyncRechecksBothFoldersAndKeepsConflictsUnlessExplicitlyReviewed() throws {
+        try fixture { root in
+            let left = root.appendingPathComponent("First", isDirectory: true)
+            let right = root.appendingPathComponent("Second", isDirectory: true)
+            for path in [left.appendingPathComponent("Project/Subfolder"), right] {
+                try FileManager.default.createDirectory(at: path, withIntermediateDirectories: true)
+            }
+            try write("Project/Subfolder/Photo.png", in: left, text: "new contents")
+            try write("changed.txt", in: left, text: "first")
+            try write("changed.txt", in: right, text: "second")
+            try write("extra.txt", in: right, text: "keep")
+            try FileManager.default.createDirectory(at: left.appendingPathComponent("type-conflict"), withIntermediateDirectories: false)
+            try write("type-conflict/inside.txt", in: left)
+            try write("type-conflict", in: right, text: "existing file")
+            let defaultOptions = FolderSyncPlan.Options()
+            let initial = try FolderSyncPlan.preview(from: left, to: right, options: defaultOptions)
+            XCTAssertTrue(initial.canApply)
+            XCTAssertEqual(initial.changeCount, 3)
+            XCTAssertEqual(initial.rows.first(where: { $0.path == "type-conflict/inside.txt" })?.action, .conflict)
+
+            try write("late.txt", in: right)
+            XCTAssertThrowsError(try initial.apply())
+            XCTAssertFalse(FileManager.default.fileExists(atPath: right.appendingPathComponent("Project").path))
+
+            let fresh = try FolderSyncPlan.preview(from: left, to: right, options: defaultOptions)
+            let result = try fresh.apply()
+            XCTAssertNil(result.problem)
+            XCTAssertEqual(result.changes.count, 3)
+            XCTAssertEqual(try Data(contentsOf: right.appendingPathComponent("Project/Subfolder/Photo.png")),
+                           Data("new contents".utf8))
+            XCTAssertEqual(try Data(contentsOf: right.appendingPathComponent("changed.txt")), Data("second".utf8))
+            XCTAssertEqual(try Data(contentsOf: right.appendingPathComponent("extra.txt")), Data("keep".utf8))
+            XCTAssertEqual(try Data(contentsOf: right.appendingPathComponent("type-conflict")), Data("existing file".utf8))
+
+            let withChanges = try FolderSyncPlan.preview(
+                from: left, to: right, options: .init(replaceDifferentFiles: true, trashDestinationExtras: true)
+            )
+            let actions = Dictionary(uniqueKeysWithValues: withChanges.rows.map { ($0.path, $0.action) })
+            XCTAssertEqual(actions["changed.txt"], .replace)
+            XCTAssertEqual(actions["extra.txt"], .trash)
+            XCTAssertEqual(actions["type-conflict"], .conflict)
+            XCTAssertThrowsError(try FolderSyncPlan.preview(from: left, to: left, options: defaultOptions))
+        }
+    }
+
+    func testFolderMergeCopiesMissingItemsAndRejectsAReplacedFolder() throws {
+        try fixture { root in
+            let left = try FileOperations.createFolder(in: root, named: "Incoming")
+            let right = try FileOperations.createFolder(in: root, named: "Existing")
+            try write("shared.png", in: left.url, text: "incoming version")
+            try write("shared.png", in: right.url, text: "existing version")
+            try write("new.jpg", in: left.url, text: "new bytes")
+
+            let plan = try FolderSyncPlan.previewMerge(left, into: right)
+            XCTAssertEqual(plan.changeCount, 1)
+            XCTAssertEqual(try plan.apply().changes.count, 1)
+            XCTAssertEqual(try Data(contentsOf: right.url.appendingPathComponent("shared.png")), Data("existing version".utf8))
+            XCTAssertEqual(try Data(contentsOf: right.url.appendingPathComponent("new.jpg")), Data("new bytes".utf8))
+            XCTAssertEqual(try Data(contentsOf: left.url.appendingPathComponent("new.jpg")), Data("new bytes".utf8))
+
+            _ = try FileOperations.rename(right, to: "Parked")
+            let replacement = try FileOperations.createFolder(in: root, named: "Existing")
+            XCTAssertThrowsError(try FolderSyncPlan.previewMerge(left, into: right))
+            XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: replacement.url.path).isEmpty)
+        }
+    }
+
+    func testFolderAndRecursiveSearchKeepExplicitScope() throws {
+        try fixture { root in
+            let manager = FileManager.default
+            for path in ["sub", ".hidden", "Example.app/Contents"] {
+                try manager.createDirectory(at: root.appendingPathComponent(path), withIntermediateDirectories: true)
+            }
+            try write("file10.PNG", in: root)
+            try write("file2.png", in: root)
+            try write("sub/file1.png", in: root)
+            try write("sub/file20.png", in: root, text: "a different size")
+            try write(".hidden/file3.png", in: root)
+            try write("Example.app/Contents/file4.png", in: root)
+            try manager.createSymbolicLink(at: root.appendingPathComponent("loop"), withDestinationURL: root)
+
+            var entries: [FileEntry] = []
+            let list = try DirectoryReader.scan(root) { entries.append(contentsOf: $0) }
+            XCTAssertEqual(list.inaccessible, 0)
+            XCTAssertEqual(entries.sorted(by: FileSort().precedes).prefix(3).map(\.name),
+                           ["sub", "Example.app", "file2.png"])
+            XCTAssertEqual(entries.first { $0.name == "Example.app" }?.kind, .package)
+            XCTAssertEqual(entries.first { $0.name == "loop" }?.kind, .symbolicLink)
+            XCTAssertFalse(entries.contains { $0.name == "file1.png" || $0.name == ".hidden" })
+
+            entries.removeAll()
+            let query = FileQuery(name: .wildcard("file*.png"), extensions: [".PNG"], size: 4...4)
+            let search = try DirectoryReader.scan(root, scope: .descendants, query: query) {
+                entries.append(contentsOf: $0)
+            }
+            XCTAssertEqual(search.matched, 3)
+            XCTAssertEqual(search.inaccessible, 0)
+            XCTAssertEqual(entries.sorted(by: FileSort().precedes).map(\.name),
+                           ["file1.png", "file2.png", "file10.PNG"])
+            XCTAssertEqual(entries.first { $0.name == "file1.png" }?.url.deletingLastPathComponent().lastPathComponent,
+                           "sub")
+
+            entries.removeAll()
+            _ = try DirectoryReader.scan(root, scope: .descendants, showHidden: true, query: query) {
+                entries.append(contentsOf: $0)
+            }
+            XCTAssertTrue(entries.contains { $0.name == "file3.png" })
+            XCTAssertFalse(entries.contains { $0.name == "file4.png" })
+        }
+    }
+
+    func testListingPublishesBatchesAndCanBeCancelled() throws {
+        try fixture { root in
+            for index in 0..<270 {
+                try write("entry-\(index)", in: root)
+            }
+            var sizes: [Int] = []
+            let report = try DirectoryReader.scan(root) { sizes.append($0.count) }
+            XCTAssertEqual(sizes, [128, 128, 14])
+            XCTAssertEqual(report.matched, 270)
+            XCTAssertEqual(report.inaccessible, 0)
+
+            var calls = 0
+            XCTAssertThrowsError(try DirectoryReader.scan(root, isCancelled: { calls > 0 }) { _ in
+                calls += 1
+            }) { error in
+                XCTAssertTrue(error is CancellationError)
+            }
+            XCTAssertEqual(calls, 1)
+        }
+    }
+
+    func testWildcardMatchesOneCharacterInUnicodeNames() throws {
+        try fixture { root in
+            for name in ["café.txt", "caf🍵.txt", "cafes.txt", "cafe.md"] {
+                try write(name, in: root)
+            }
+            var entries: [FileEntry] = []
+            _ = try DirectoryReader.scan(root, query: FileQuery(name: .wildcard("*CAF?.TXT"))) {
+                entries.append(contentsOf: $0)
+            }
+            XCTAssertEqual(Set(entries.map(\.name)), ["café.txt", "caf🍵.txt"])
+        }
+    }
+
+    func testAddressAndPropertiesUseTheActualFile() throws {
+        try fixture { root in
+            let sub = root.appendingPathComponent("Research notes", isDirectory: true)
+            try FileManager.default.createDirectory(at: sub, withIntermediateDirectories: false)
+            try write("brief.txt", in: sub)
+            let file = sub.appendingPathComponent("brief.txt")
+            let folder = try DirectoryReader.address("Research notes", relativeTo: root)
+            XCTAssertEqual(folder.path, sub.resolvingSymlinksInPath().path)
+            XCTAssertThrowsError(try DirectoryReader.address("Research notes/brief.txt", relativeTo: root))
+            XCTAssertThrowsError(try DirectoryReader.directoryURL(XCTUnwrap(URL(string: "https://example.invalid/"))))
+            let properties = try FileProperties(url: file)
+            XCTAssertFalse(properties.needsDownload)
+            XCTAssertEqual(properties.entry.name, "brief.txt")
+            XCTAssertEqual(properties.entry.size, 4)
+            XCTAssertNotNil(properties.permissions)
+            let volume = try VolumeInfo(containing: file)
+            XCTAssertNotNil(volume.totalBytes)
+            XCTAssertEqual(volume.isReadOnly, false)
+        }
+    }
+}
