@@ -358,7 +358,7 @@ print(json.dumps({"type":"result","api_error_status":429,"is_error":True}), flus
 
     // The bound prevents a broken fixture hanging the suite. Correctness comes
     // from the written startup/input facts, never from how fast this Mac is.
-    fn until<T>(mut fact:impl FnMut()->Option<T>)->T {
+    pub(crate) fn until<T>(mut fact:impl FnMut()->Option<T>)->T {
         let guard=Instant::now()+Duration::from_secs(60);
         loop {
             if let Some(value)=fact() {return value}

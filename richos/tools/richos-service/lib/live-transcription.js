@@ -4,8 +4,8 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { resolveModel, whisperArgs } from './config.js';
-import { listAudioParts, normalizeSession } from './normalize.js';
-import { checkToolchain, transcribeChannel } from './transcribe.js';
+import { cutSpan, listAudioParts, normalizeSession } from './normalize.js';
+import { checkToolchain, transcribeChannel, transcribeSession } from './transcribe.js';
 import { privateDirectory, privateFile, withPrivateOutputs, writePrivateFile } from './private-files.js';
 
 const SOURCE = 'desktop-companion-macos';
@@ -92,16 +92,13 @@ function cutNear(fd, nominal, rate) {
   return best;
 }
 
-function nextQuietCut(fd, from, frames, rate, closed) {
+function scanForQuietCut(fd, nominal, available, rate) {
   const radius = CUT_SEARCH_SECONDS * rate;
-  const bound = from + MAX_WINDOW_SECONDS * rate;
-  const available = Math.min(frames, bound);
-  for (let nominal = from + CORE_SECONDS * rate; nominal + radius <= available; nominal += radius) {
+  for (; nominal + radius <= available; nominal += radius) {
     const cut = cutNear(fd, nominal, rate);
-    if (cut !== null) return cut;
+    if (cut !== null) return { cut, next: nominal };
   }
-  if (frames > bound) throw new Error('no quiet meeting boundary within two minutes');
-  return closed ? frames : null;
+  return { cut: null, next: nominal };
 }
 
 // Whisper can start its first segment at zero even when the channel was quiet
@@ -175,6 +172,21 @@ function decodeWindow(cache, wav, options, knownToolchain) {
   }
 }
 
+// The normalizer has already created the two 16 kHz files at close. Recover a
+// long uninterrupted stretch from those files without allocating its raw WAV.
+export function decodeLongWindow(cache, channels, fromMs, toMs, options) {
+  const work = fs.mkdtempSync(path.join(cache, 'decode-'));
+  try {
+    const span = { startMs: fromMs, endMs: toMs };
+    const clips = Object.fromEntries(['me', 'others'].map((speaker) => [
+      speaker, cutSpan(channels[speaker], span, path.join(work, `${speaker}-gap.wav`), { padSec: 0 }),
+    ]));
+    return transcribeSession(clips, { ...options, outDir: work, quiet: true });
+  } finally {
+    fs.rmSync(work, { recursive: true, force: true });
+  }
+}
+
 function validCheckpointRows(rows, fromMs, toMs) {
   const inWindow = (time) => Number.isFinite(time) && time >= fromMs && time <= toMs;
   return Array.isArray(rows) && rows.every((row) => row && typeof row.text === 'string'
@@ -207,7 +219,7 @@ function checkpointKey(wav, from, to, options, toolchain) {
  * Keep listening across a nominal boundary when speech is still in progress.
  */
 export function advanceLiveTranscription(dir, options, {
-  closed = false, cursor = 0, decode = decodeWindow,
+  closed = false, cursor = 0, scanFrom, decode = decodeWindow, recover,
   recorderIsRunning = () => true,
   toolchain = checkToolchain(resolveModel(options.model), options.model),
 } = {}) {
@@ -219,9 +231,29 @@ export function advanceLiveTranscription(dir, options, {
     let reused = 0;
     let decoded = 0;
     let skippedSilentChannels = 0;
+    let longWindows = 0;
     while (cursor < frames && recorderIsRunning()) {
-      const to = nextQuietCut(fd, cursor, frames, rate, closed);
+      const boundary = scanForQuietCut(fd, scanFrom ?? cursor + CORE_SECONDS * rate, frames, rate);
+      const to = boundary.cut ?? (closed ? frames : null);
+      scanFrom = boundary.next;
       if (to === null) break;
+      if (to - cursor > MAX_WINDOW_SECONDS * rate) {
+        // Resume after a genuinely quiet point. The closed pass alone recovers
+        // the uncheckpointed stretch, so live work never cuts through speech.
+        if (closed) {
+          if (!recover) throw new Error('no quiet meeting boundary within two minutes');
+          const segments = recover(cache, cursor * 1_000 / rate, to * 1_000 / rate, options);
+          if (segments.toolchain?.provenance !== toolchain.provenance) {
+            throw new Error('native decoder changed while recovering a long chunk');
+          }
+          output.me.push(...absoluteSegments(segments.me, cursor, to, rate, null));
+          output.others.push(...absoluteSegments(segments.others, cursor, to, rate, null));
+        }
+        longWindows += 1;
+        cursor = to;
+        scanFrom = undefined;
+        continue;
+      }
       const wav = readWindow(fd, header, cursor, to);
       const key = checkpointKey(wav, cursor, to, options, toolchain);
       const file = path.join(cache, `${cursor}.json`);
@@ -245,8 +277,9 @@ export function advanceLiveTranscription(dir, options, {
       output.me.push(...result.me);
       output.others.push(...result.others);
       cursor = to;
+      scanFrom = undefined;
     }
-    return { asr: output, cursor, reused, decoded, skippedSilentChannels };
+    return { asr: output, cursor, scanFrom, reused, decoded, skippedSilentChannels, longWindows };
   } finally {
     fs.closeSync(fd);
   }
@@ -290,7 +323,8 @@ function reuseExcerptCheckpoints(dir, options, fd, { header, frames, rate }, fro
   for (const start of starts.slice(startIndex)) {
     if (start < cursor) continue;
     if (start > cursor) break;
-    const to = nextQuietCut(fd, start, frames, rate, false);
+    const bound = Math.min(frames, start + MAX_WINDOW_SECONDS * rate + CUT_SEARCH_SECONDS * rate);
+    const { cut: to } = scanForQuietCut(fd, start + CORE_SECONDS * rate, bound, rate);
     if (to === null || to > through) break;
     const wav = readWindow(fd, header, start, to);
     const saved = readCheckpoint(path.join(cache, `${start}.json`), checkpointKey(wav, start, to, options, toolchain),
@@ -353,16 +387,19 @@ export function recentLiveExcerpt(dir, options, at, decode = decodeWindow, known
 
 export async function watchLiveTranscription(dir, options, recorderIsRunning, onChunk) {
   let cursor = 0;
+  let scanFrom;
   const toolchain = checkToolchain(resolveModel(options.model), options.model);
   while (recorderIsRunning()) {
     const record = JSON.parse(fs.readFileSync(privateFile(path.join(dir, 'session.json'), dir), 'utf8'));
     if (record.status !== 'open' || !supportsLiveTranscription(dir, record)) return;
     const start = performance.now();
-    const result = advanceLiveTranscription(dir, options, { cursor, toolchain, recorderIsRunning });
+    const result = advanceLiveTranscription(dir, options, { cursor, scanFrom, toolchain, recorderIsRunning });
     cursor = result.cursor;
-    if (result.decoded || result.reused) {
+    scanFrom = result.scanFrom;
+    if (result.decoded || result.reused || result.longWindows) {
       onChunk({
         decoded: result.decoded, reused: result.reused, skippedSilentChannels: result.skippedSilentChannels,
+        longWindows: result.longWindows,
         elapsedMs: Math.round(performance.now() - start),
       });
     }
