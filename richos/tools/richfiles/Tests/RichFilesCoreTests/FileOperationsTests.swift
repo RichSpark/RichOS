@@ -198,6 +198,34 @@ final class FileOperationsTests: XCTestCase {
         }
     }
 
+    func testDirectoryCopyCanStopInsideTheTreeAndPreservesLinks() throws {
+        try withFixture { root in
+            let source = try FileOperations.createFolder(in: root, named: "Source")
+            let child = try FileOperations.createFolder(in: source.url, named: "Child")
+            let image = try write("synthetic image", named: "Photo.PNG", in: child.url)
+            let outside = try write("outside", named: "Outside.txt", in: root)
+            let link = source.url.appendingPathComponent("Shortcut")
+            try FileManager.default.createSymbolicLink(at: link, withDestinationURL: outside.url)
+            let target = try FileOperations.createFolder(in: root, named: "Destination")
+
+            var checks = 0
+            XCTAssertThrowsError(try FileOperations.copy(source, into: target.url, isCancelled: {
+                checks += 1
+                return checks >= 5
+            })) { XCTAssertTrue($0 is CancellationError, "\($0)") }
+            XCTAssertEqual(checks, 5)
+            XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: target.url.path), [])
+            XCTAssertEqual(try contents(image), "synthetic image")
+            XCTAssertEqual(try contents(outside), "outside")
+
+            let copied = try FileOperations.copy(source, into: target.url).copied
+            XCTAssertEqual(try Data(contentsOf: copied.url.appendingPathComponent("Child/Photo.PNG")),
+                           Data("synthetic image".utf8))
+            XCTAssertEqual(try FileManager.default.destinationOfSymbolicLink(atPath: copied.url.appendingPathComponent("Shortcut").path),
+                           outside.url.path)
+        }
+    }
+
     func testStreamCopyReportsBytesAndStopsBetweenWrites() throws {
         try withFixture { root in
             let source = root.appendingPathComponent("Large.bin")

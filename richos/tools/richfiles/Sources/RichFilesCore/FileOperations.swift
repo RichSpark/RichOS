@@ -324,8 +324,7 @@ public enum FileOperations {
         isCancelled: () -> Bool = { false },
         onProgress: (Int64, Int64) -> Void = { _, _ in }
     ) throws -> CopyReceipt {
-        if isCancelled() { throw CancellationError() }
-        return try copy(source, into: OpenFolder(folder), named: name, conflictPolicy: conflictPolicy,
+        try copy(source, into: OpenFolder(folder), named: name, conflictPolicy: conflictPolicy,
                         isCancelled: isCancelled, onProgress: onProgress)
     }
 
@@ -469,11 +468,19 @@ public enum FileOperations {
                 )
             }
             try sourceFolder.verifyLocation()
-            if initial.st_mode & S_IFMT == S_IFREG {
+            let stagedURL = staging.childURL(source.name)
+            switch initial.st_mode & S_IFMT {
+            case S_IFREG:
                 try copyRegularFile(source, from: sourceFolder, into: staging, size: initial.st_size,
                                     isCancelled: isCancelled, onProgress: onProgress)
-            } else {
-                try manager.copyItem(at: source.url, to: staging.childURL(source.name))
+            case S_IFDIR:
+                let flags = copyfile_flags_t(COPYFILE_ALL | COPYFILE_RECURSIVE | COPYFILE_NOFOLLOW
+                                             | COPYFILE_EXCL | COPYFILE_DATA_SPARSE)
+                try copyUsingNative(to: stagedURL, sourceDevice: initial.st_dev, isCancelled: isCancelled) { state in
+                    copyfile(source.url.path, stagedURL.path, state, flags)
+                }
+            default:
+                try manager.copyItem(at: source.url, to: stagedURL)
             }
             let staged = try staging.reference(named: source.name)
             if isCancelled() { throw CancellationError() }
@@ -537,24 +544,33 @@ public enum FileOperations {
         _ input: Int32, _ output: Int32, to location: URL, size: Int64,
         isCancelled: () -> Bool, onProgress: (Int64, Int64) -> Void
     ) throws {
+        try copyUsingNative(to: location, size: size, isCancelled: isCancelled, onProgress: onProgress) {
+            fcopyfile(input, output, $0, copyfile_flags_t(COPYFILE_ALL | COPYFILE_DATA_SPARSE))
+        }
+    }
+
+    private static func copyUsingNative(
+        to location: URL, size: Int64? = nil, sourceDevice: Int32? = nil,
+        isCancelled: () -> Bool, onProgress: (Int64, Int64) -> Void = { _, _ in },
+        copy: (copyfile_state_t) -> Int32
+    ) throws {
         guard let state = copyfile_state_alloc() else {
             throw FileOperationError.system(operation: "Could not start the copy", location: location, code: ENOMEM)
         }
         defer { _ = copyfile_state_free(state) }
         try withoutActuallyEscaping(isCancelled) { cancel in
             try withoutActuallyEscaping(onProgress) { progress in
-                let context = CopyCallbacks(size: size, cancel: cancel, progress: progress)
+                let context = CopyCallbacks(size: size, sourceDevice: sourceDevice, cancel: cancel, progress: progress)
                 let pointer = Unmanaged.passUnretained(context).toOpaque()
                 let callback = unsafeBitCast(CopyCallbacks.status, to: UnsafeRawPointer.self)
                 guard copyfile_state_set(state, UInt32(COPYFILE_STATE_STATUS_CTX), pointer) == 0,
                       copyfile_state_set(state, UInt32(COPYFILE_STATE_STATUS_CB), callback) == 0 else {
                     throw FileOperationError.system(operation: "Could not start the copy", location: location, code: errno)
                 }
-                let result = withExtendedLifetime(context) {
-                    fcopyfile(input, output, state, copyfile_flags_t(COPYFILE_ALL | COPYFILE_DATA_SPARSE))
-                }
+                let result = withExtendedLifetime(context) { copy(state) }
                 let code = errno
                 if context.cancelled { throw CancellationError() }
+                if let rejected = context.rejected { throw FileOperationError.unsupportedCopySource(rejected) }
                 if result != 0 {
                     throw FileOperationError.system(operation: "Could not complete the copy", location: location, code: code)
                 }
@@ -715,28 +731,43 @@ public enum FileOperations {
 }
 
 private final class CopyCallbacks {
-    let size: Int64
+    let size: Int64?
+    let sourceDevice: Int32?
     let cancel: () -> Bool
     let progress: (Int64, Int64) -> Void
     var cancelled = false
+    var rejected: URL?
 
-    init(size: Int64, cancel: @escaping () -> Bool, progress: @escaping (Int64, Int64) -> Void) {
+    init(size: Int64?, sourceDevice: Int32?, cancel: @escaping () -> Bool,
+         progress: @escaping (Int64, Int64) -> Void) {
         self.size = size
+        self.sourceDevice = sourceDevice
         self.cancel = cancel
         self.progress = progress
     }
 
-    static let status: copyfile_callback_t = { what, stage, state, _, _, pointer in
+    static let status: copyfile_callback_t = { what, stage, state, source, _, pointer in
         guard let pointer else { return COPYFILE_QUIT }
         let context = Unmanaged<CopyCallbacks>.fromOpaque(pointer).takeUnretainedValue()
+        if context.cancelled || context.rejected != nil { return COPYFILE_QUIT }
         if context.cancel() {
             context.cancelled = true
             return COPYFILE_QUIT
         }
-        if what == COPYFILE_COPY_DATA && stage == COPYFILE_PROGRESS {
+        if let sourceDevice = context.sourceDevice, let source, stage == COPYFILE_START,
+           what == COPYFILE_RECURSE_FILE || what == COPYFILE_RECURSE_DIR {
+            var status = stat()
+            let read = lstat(source, &status)
+            let kind = status.st_mode & S_IFMT
+            if read != 0 || status.st_dev != sourceDevice || (kind != S_IFREG && kind != S_IFDIR && kind != S_IFLNK) {
+                context.rejected = URL(fileURLWithPath: String(cString: source))
+                return COPYFILE_QUIT
+            }
+        }
+        if let size = context.size, what == COPYFILE_COPY_DATA && stage == COPYFILE_PROGRESS {
             var written: off_t = 0
             if copyfile_state_get(state, UInt32(COPYFILE_STATE_COPIED), &written) == 0 {
-                context.progress(written, context.size)
+                context.progress(written, size)
             }
         }
         return COPYFILE_CONTINUE
