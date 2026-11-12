@@ -43,6 +43,16 @@
             <array><string>public.folder</string></array>
         </dict>
     </array>
+    <key>NSServices</key>
+    <array>
+        <dict>
+            <key>NSMenuItem</key><dict><key>default</key><string>Open RichFiles</string></dict>
+            <key>NSMessage</key><string>openRichFiles</string>
+            <key>NSPortName</key><string>RichFiles</string>
+            <key>NSRequiredContext</key><dict/>
+            <key>NSServiceCategory</key><string>General</string>
+        </dict>
+    </array>
     <key>NSDesktopFolderUsageDescription</key>
     <string>RichFiles needs access to show and manage files you choose on your Desktop.</string>
     <key>NSDocumentsFolderUsageDescription</key>

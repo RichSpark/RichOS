@@ -144,6 +144,19 @@ public final class FolderOpenDelegate: NSObject, NSApplicationDelegate, Observab
     private var openedHandoffs: Set<UUID> = []
     private var openedInitialBrowser = false
 
+    public func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApp.servicesProvider = self
+        NSUpdateDynamicServices()
+    }
+
+    @objc(openRichFiles:userData:error:)
+    public func openRichFiles(
+        _ pasteboard: NSPasteboard, userData: String?, error: AutoreleasingUnsafeMutablePointer<NSString?>?
+    ) {
+        NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL,
+                                           configuration: NSWorkspace.OpenConfiguration(), completionHandler: nil)
+    }
+
     public func application(_ application: NSApplication, open urls: [URL]) {
         pending.append(contentsOf: urls.filter(\.isFileURL))
         for url in urls {
@@ -292,6 +305,8 @@ struct RichFilesSettings: View {
                     Text("Mac (Command)").tag(false)
                 }
                 Text("Enter opens, F2 renames, Delete moves to Trash and Space previews.")
+                    .foregroundStyle(.secondary)
+                Text("For a shortcut that opens RichFiles from other apps, assign Open RichFiles in System Settings → Keyboard → Keyboard Shortcuts → Services.")
                     .foregroundStyle(.secondary)
             }
             Section("Custom Shortcuts") {
