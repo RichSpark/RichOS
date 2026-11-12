@@ -205,11 +205,32 @@ def volume_consumers(mount, roots, min_bytes, limit=8, max_depth=6, budget_s=240
     return found[:limit]
 
 
+def walk_roots(mount, primary):
+    """Where the walk of a volume in alert starts (the CEO, 2026-11-10: a disk alert measures the
+    full volume's biggest folders, so a new pile is found wherever it grows). Another volume is
+    walked from its mount. The internal disk is walked from the home folder, with the Simulator's
+    and Xcode's folders as roots of their own: the rest of its top level is the system's, and
+    every protected folder, or folder holding one, is walked around, never handed to `du`
+    (du_kb refuses it, so the walk never descends into it).
+
+    DISK_VOLUME_WALK_ROOT moves the start of another volume's walk to a folder on that volume.
+    It exists for disk-watchdog.test.sh, which points it at its sandbox: with the sandbox under
+    a TMPDIR on an external drive, the drive became a volume of the suite and its real mount was
+    walked (W27, 2026-11-12). A volume that folder is not on is then not walked at all."""
+    if mount == primary:
+        home = os.path.expanduser("~")
+        return [home, os.path.join(home, "Library/Developer/CoreSimulator"),
+                os.path.join(home, "Library/Developer/Xcode")]
+    start = expand(env("DISK_VOLUME_WALK_ROOT", ""))
+    if not start:
+        return [mount]
+    return [start] if os.path.isdir(start) and on_volume(start, mount) else []
+
+
 def consumer_roots(candidates, mount):
-    """Where the consumer walk and the totals start on a volume, the internal disk included:
-    RichOS's own folders (storage_candidates) that sit on it, never the volume itself and never
-    the home folder. A configured root that IS the mount is dropped; the folders the settings
-    name below it are still walked."""
+    """The configured folders whose totals are reported for a volume: RichOS's own folders
+    (storage_candidates) that sit on it. A configured folder that IS the mount is dropped, so the
+    whole drive is never one `du`; the walk from walk_roots() already covers it."""
     roots = []
     for path in candidates:
         path = expand(path)
@@ -1196,12 +1217,10 @@ def main():
         min_b = int(env_num("DISK_CONSUMER_MIN_GB", 3) * GB)
         for v in low:
             mount = v["mount"]
-            # ONLY FOLDERS ON THIS VOLUME, found by walking RichOS's own folders on it
-            # (consumer_roots), never the volume or the home folder: a walk from /Volumes/E1TB
-            # measured every other user's and app's folder on the drive (2026-11-12, W27), and a
-            # walk of the home folder measured the user's own projects.
+            # ONLY FOLDERS ON THIS VOLUME, found by walking the whole volume (walk_roots), so a
+            # new pile anywhere on it is named, plus RichOS's own configured folders on it.
             roots = consumer_roots(candidates, mount)
-            found = volume_consumers(mount, roots, min_b)
+            found = volume_consumers(mount, walk_roots(mount, primary), min_b)
             for b, p in found:
                 consumers.append({"path": p, "bytes": b, "human": human(b), "mount": mount,
                                   "ours": is_ours(p.split("  (")[0])})

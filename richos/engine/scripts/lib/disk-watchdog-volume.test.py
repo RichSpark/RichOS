@@ -61,9 +61,9 @@ class Consumers(unittest.TestCase):
         with patch.object(wd, "du_kb", return_value=None):
             self.assertEqual(wd.volume_consumers(self.tmp, [self.root], 1024), [])
 
-    def test_another_volume_is_walked_from_our_folders_never_its_mount(self):
-        """2026-11-12 (W27): the walk of an external drive started at /Volumes/E1TB and measured
-        every user's and app's folder on it. It starts at RichOS's own folders on that volume."""
+    def test_the_totals_come_from_our_folders_on_the_volume_never_its_mount(self):
+        """A configured folder equal to the mount would hand the whole drive to one `du`; the
+        totals are RichOS's own folders on the volume, and the walk covers the rest."""
         ours = os.path.join(self.tmp, "cache-root")
         os.makedirs(ours)
         missing = os.path.join(self.tmp, "not-there")
@@ -71,6 +71,26 @@ class Consumers(unittest.TestCase):
         self.assertEqual(roots, [ours, self.root])
         with patch.object(wd, "on_volume", return_value=False):
             self.assertEqual(wd.consumer_roots([ours], self.tmp), [])
+
+    def test_another_volume_is_walked_from_its_mount(self):
+        """The CEO, 2026-11-10: a disk alert measures the full volume, so a new pile is found."""
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("DISK_VOLUME_WALK_ROOT", None)
+            self.assertEqual(wd.walk_roots(self.tmp, "/System/Volumes/Data"), [self.tmp])
+
+    def test_the_internal_disk_is_walked_from_the_home_folder_simulator_and_xcode(self):
+        with patch.dict(os.environ, {"HOME": self.root}):
+            roots = wd.walk_roots("/System/Volumes/Data", "/System/Volumes/Data")
+        self.assertEqual(roots, [self.root, os.path.join(self.root, "Library/Developer/CoreSimulator"),
+                                 os.path.join(self.root, "Library/Developer/Xcode")])
+
+    def test_the_walk_root_setting_moves_another_volumes_walk_inside_it(self):
+        """The suite's seam (W27): its sandbox is where the walk starts; a volume the sandbox is
+        not on is not walked."""
+        with patch.dict(os.environ, {"DISK_VOLUME_WALK_ROOT": self.root}):
+            self.assertEqual(wd.walk_roots(self.tmp, "/System/Volumes/Data"), [self.root])
+            with patch.object(wd, "on_volume", return_value=False):
+                self.assertEqual(wd.walk_roots(self.tmp, "/System/Volumes/Data"), [])
 
     def test_our_cargo_output_counts_as_ours(self):
         self.assertTrue(wd.is_ours(self.deep))
@@ -114,9 +134,10 @@ class Notifications(unittest.TestCase):
 
 
 class ScanBoundary(unittest.TestCase):
-    """Review rv-20261112T221202Z-46ebe7a9-becb's fixture: an alert on either volume hands `du`
-    only RichOS's configured folders, never the home folder's projects, another app's backups
-    on the drive or the drive itself. A virtual filesystem; `du` is never run."""
+    """An alert walks the whole volume in alert and stays inside it (the CEO, 2026-11-10: a new
+    pile is found wherever it grows). The internal disk's walk names a pile in the home folder
+    and never hands `du` a protected folder or one holding it; an external drive's walk starts at
+    its mount and never leaves the drive. A virtual filesystem; `du` is never run."""
     HOME = "/Users/review-fixture"
     PRIMARY = "/System/Volumes/Data"
     EXTERNAL = "/Volumes/ReviewWorking"
@@ -133,9 +154,11 @@ class ScanBoundary(unittest.TestCase):
         EXT_CACHE + "/compilation": [], EXTERNAL + "/unrelated-backups": [], PRIMARY: [],
     }
     ROOTS = [CACHE, HOME + "/.claude", HOME + "/.richos-nightly", EXT_CACHE]
+    PROTECTED = [HOME, HOME + "/Library", HOME + "/Library/Caches", HOME + "/Documents"]
 
-    def measured(self, low_volume, candidates):
-        measured = []
+    def alert(self, low_volume, candidates, walk_root=""):
+        """(paths handed to du, folders the alert named) for an alert on `low_volume`."""
+        measured, saved = [], []
 
         def process(argv, **kwargs):
             self.assertEqual(argv[:2], ["du", "-sk"])
@@ -149,6 +172,8 @@ class ScanBoundary(unittest.TestCase):
         env = {"MODE": "check", "HOME": self.HOME, "TMPDIR": self.EXTERNAL + "/tmp",
                "DISK_PRIMARY_VOLUME": self.PRIMARY, "DISK_SCALE_EXTRA_VOLUMES": "0",
                "DISK_RECLAIM_ENABLE": "0"}
+        if walk_root:
+            env["DISK_VOLUME_WALK_ROOT"] = walk_root
         replacements = {
             "collect_devices_for_scheduled_check": lambda: None,
             "storage_candidates": lambda: (candidates, [self.EXTERNAL]),
@@ -157,7 +182,7 @@ class ScanBoundary(unittest.TestCase):
             "cleanup_health": lambda *args: [],
             "richos_garbage_bytes": lambda: 0,
             "notify_ceo": lambda *args: True,
-            "write_state": lambda *args: None,
+            "write_state": lambda path, payload: saved.append(payload),
             "log": lambda *args: None,
             "on_volume": same_volume,
         }
@@ -171,25 +196,31 @@ class ScanBoundary(unittest.TestCase):
             stack.enter_context(patch.object(wd.subprocess, "run", side_effect=process))
             stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
             self.assertEqual(wd.main(), 1)
-        return measured
+        named = [c["path"].split("  (")[0] for c in saved[-1]["top_consumers"]]
+        return measured, named
 
-    def outside(self, measured, candidates):
-        return [p for p in measured if not any(p == c or p.startswith(c + "/") for c in candidates)]
-
-    def test_an_internal_disk_alert_never_measures_the_home_folders_projects(self):
-        measured = self.measured(self.PRIMARY, self.ROOTS)
-        self.assertEqual(self.outside(measured, self.ROOTS), [], measured)
+    def test_an_internal_disk_alert_names_a_pile_in_the_home_folder(self):
+        measured, named = self.alert(self.PRIMARY, self.ROOTS)
+        self.assertIn(self.PROJECTS + "/client", named, "a pile outside RichOS's folders is found")
         self.assertIn(self.CACHE, measured, "RichOS's own folders are still measured")
+        self.assertEqual([p for p in measured if p in self.PROTECTED], [], measured)
+        self.assertEqual([p for p in measured if p.startswith(self.EXTERNAL)], [], measured)
 
-    def test_an_external_drive_alert_measures_only_our_folders_on_it(self):
-        measured = self.measured(self.EXTERNAL, self.ROOTS)
-        self.assertEqual(self.outside(measured, self.ROOTS), [], measured)
-        self.assertIn(self.EXT_CACHE, measured)
+    def test_an_external_drive_alert_walks_the_drive_from_its_mount_and_stays_on_it(self):
+        measured, named = self.alert(self.EXTERNAL, self.ROOTS)
+        self.assertIn(self.EXTERNAL + "/unrelated-backups", named, "a pile outside RichOS's folders is found")
+        self.assertEqual([p for p in measured if not p.startswith(self.EXTERNAL + "/")], [], measured)
 
     def test_a_storage_setting_that_is_the_mount_never_sends_the_drive_to_du(self):
-        measured = self.measured(self.EXTERNAL, self.ROOTS + [self.EXTERNAL])
+        measured, _named = self.alert(self.EXTERNAL, self.ROOTS + [self.EXTERNAL])
         self.assertNotIn(self.EXTERNAL, measured)
-        self.assertNotIn(self.EXTERNAL + "/unrelated-backups", measured)
+
+    def test_the_walk_root_setting_keeps_the_walk_inside_it(self):
+        """The suite's seam (W27): with the walk pointed at a folder on the drive, nothing above
+        or beside it is walked."""
+        measured, named = self.alert(self.EXTERNAL, [self.EXT_CACHE], walk_root=self.EXT_CACHE)
+        self.assertIn(self.EXT_CACHE + "/compilation", named)
+        self.assertEqual([p for p in measured if not p.startswith(self.EXT_CACHE)], [], measured)
 
 
 if __name__ == "__main__":
