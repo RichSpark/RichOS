@@ -425,6 +425,11 @@ struct BrowserView: View {
         }
         .background(Color(nsColor: .textBackgroundColor))
         .coordinateSpace(name: "richfiles-items")
+        .background(BrowserDragSurface { point in
+            guard let url = rowFrames.first(where: { $0.value.contains(point) })?.key,
+                  let entry = model.entries.first(where: { $0.url == url }) else { return nil }
+            return beginDrag(entry)
+        })
         .onPreferenceChange(RowFramesKey.self) { rowFrames = $0 }
         .simultaneousGesture(DragGesture(minimumDistance: 5, coordinateSpace: .named("richfiles-items"))
             .onChanged { change in
@@ -546,7 +551,9 @@ struct BrowserView: View {
     private var details: some View {
         Table(model.entries, selection: $model.selected) {
             TableColumn("Name") { entry in
-                nameLabel(entry).onDrag { beginDrag(entry) }
+                nameLabel(entry)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(dragFrame(for: entry.url))
             }.width(min: 150, ideal: 260)
             TableColumn("Size") { entry in Text(entry.size.map(formattedBytes) ?? "–") }
                 .width(min: 70, ideal: 82)
@@ -636,9 +643,7 @@ struct BrowserView: View {
         return content()
             .padding(.horizontal, 4)
             .background(selected ? Color.accentColor.opacity(0.25) : Color.clear, in: RoundedRectangle(cornerRadius: 4))
-            .background(GeometryReader { geometry in
-                Color.clear.preference(key: RowFramesKey.self, value: [entry.url: geometry.frame(in: .named("richfiles-items"))])
-            })
+            .background(dragFrame(for: entry.url))
             .contentShape(Rectangle())
             .gesture(TapGesture(count: 2).onEnded {
                 select(entry, modifiers: [])
@@ -646,7 +651,6 @@ struct BrowserView: View {
             }.exclusively(before: TapGesture().onEnded {
                 select(entry, modifiers: NSEvent.modifierFlags)
             }))
-            .onDrag { beginDrag(entry) }
             .contextMenu {
                 selectionMenu(selected ? model.selectedEntries : [entry])
             }
@@ -657,6 +661,13 @@ struct BrowserView: View {
             .accessibilityAction { select(entry, modifiers: []) }
             .accessibilityAction(named: "Open") { activate([entry]) }
             .id(entry.url)
+    }
+
+    private func dragFrame(for url: URL) -> some View {
+        GeometryReader { geometry in
+            Color.clear.preference(key: RowFramesKey.self,
+                                   value: [url: geometry.frame(in: .named("richfiles-items"))])
+        }
     }
 
     private func nameLabel(_ entry: FileEntry) -> some View {
@@ -1087,7 +1098,7 @@ struct BrowserView: View {
         feedback = urls.count == 1 ? "Path copied." : "Paths copied."
     }
 
-    private func beginDrag(_ entry: FileEntry) -> NSItemProvider {
+    private func beginDrag(_ entry: FileEntry) -> BrowserDragSurface.Payload? {
         let entries = model.selected.contains(entry.url) ? model.selectedEntries : [entry]
         let references = entries.compactMap { selectedReferences[$0.url] }
         let sources: [FileReference]
@@ -1098,15 +1109,11 @@ struct BrowserView: View {
         }
         guard sources.count == entries.count, let primary = sources.first(where: { $0.url.path == entry.url.path }) else {
             feedback = "The file selection changed. Select the items again."
-            return NSItemProvider()
-        }
-        let token = actions.beginDrag(primary: primary, sources: sources)
-        let provider = NSItemProvider(object: entry.url as NSURL)
-        provider.registerDataRepresentation(forTypeIdentifier: BrowserDragSelection.type, visibility: .ownProcess) { complete in
-            complete(Data(token.uuidString.utf8), nil)
             return nil
         }
-        return provider
+        let token = actions.beginDrag(primary: primary, sources: sources)
+        let urls = [primary.url] + sources.filter { $0 != primary }.map(\.url)
+        return BrowserDragSurface.Payload(token: token, urls: urls)
     }
 
     private func captureDropDestination() async {
@@ -1128,7 +1135,7 @@ struct BrowserView: View {
             return DropProposal(operation: .forbidden)
         }
         let operation: DropOperation
-        if info.hasItemsConforming(to: [BrowserDragSelection.type]), let drag = actions.currentDrag {
+        if let drag = actions.currentDrag, BrowserDragSurface.pasteboardToken == drag.token {
             operation = drag.moves(to: destination, option: NSEvent.modifierFlags.contains(.option)) ? .move : .copy
         } else {
             operation = .copy
@@ -1141,6 +1148,7 @@ struct BrowserView: View {
         dropOperation = nil
         guard let destination = currentDropDestination, !providers.isEmpty else { return false }
         let option = NSEvent.modifierFlags.contains(.option)
+        let local = BrowserDragSurface.pasteboardToken
         Task {
             do {
                 var urls: [URL] = []
@@ -1148,9 +1156,15 @@ struct BrowserView: View {
                     if let url = await Self.fileURL(from: provider) { urls.append(url) }
                 }
                 guard !urls.isEmpty else { feedback = "No local files in this drop."; return }
-                if let provider = providers.first(where: { $0.hasItemConformingToTypeIdentifier(BrowserDragSelection.type) }) {
-                    guard providers.count == 1, let token = await Self.dragToken(from: provider),
-                          let drag = actions.takeDrag(token, matching: urls[0]) else {
+                let provider = providers.first { $0.hasItemConformingToTypeIdentifier(BrowserDragSelection.type) }
+                let token: UUID?
+                if let local { token = local }
+                else if let provider { token = await Self.dragToken(from: provider) }
+                else { token = nil }
+                if let token {
+                    guard let primary = actions.currentDrag?.primary.url,
+                          urls.contains(where: { $0.path == primary.path }),
+                          let drag = actions.takeDrag(token, matching: primary) else {
                         feedback = "The drag selection expired. Select the items again."
                         return
                     }
