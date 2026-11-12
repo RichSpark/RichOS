@@ -956,6 +956,9 @@ struct BrowserView: View {
                     sheet = .transfers
                 }.buttonStyle(.borderless)
             }
+            if actions.interruptedTransfer != nil {
+                Button("Interrupted Transfer…") { sheet = .interruptedTransfer }.buttonStyle(.borderless)
+            }
             if !actions.untrashed.isEmpty {
                 Button("Review Trash Failures…") { sheet = .trashFailures(actions.untrashed) }.buttonStyle(.borderless)
             }
@@ -1414,6 +1417,10 @@ struct BrowserView: View {
         case .trash: TrashSheet(actions: actions)
         case .trashFailures(let sources): TrashFailuresSheet(sources: sources, actions: actions)
         case .transfers: TransferSheet(actions: actions)
+        case .interruptedTransfer:
+            if let notice = actions.interruptedTransfer {
+                InterruptedTransferSheet(notice: notice, actions: actions, openFolder: model.openFolder)
+            }
         case .settings:
             VStack(alignment: .trailing, spacing: 0) {
                 RichFilesSettings()

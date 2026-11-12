@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import XCTest
 @testable import RichFiles
 @testable import RichFilesCore
@@ -40,6 +41,56 @@ final class BrowserActionsTests: XCTestCase {
             let groups = try XCTUnwrap(saved["undo"] as? [[String: Any]])
             XCTAssertEqual(groups.count, 1)
             XCTAssertEqual((groups.first?["steps"] as? [Any])?.count, 2)
+        }
+    }
+
+    @MainActor
+    func testInterruptedMoveRecoversConfirmedUndoOnceAndLeavesPendingSourceAlone() async throws {
+        try await withFixture { root, destination, board in
+            let store = root.appendingPathComponent("Recovery/Recovery.json")
+            let journalURL = store.deletingLastPathComponent().appendingPathComponent(".Recovery.json.transfer-journal")
+            let first = try write("confirmed bytes", named: "First.txt", in: root)
+            let pending = try write("pending bytes", named: "Pending.txt", in: root)
+            do {
+                let journal = try TransferJournal(recoveryURL: store, id: UUID(), destination: destination, move: true, total: 2)
+                try journal.begin(first.url)
+                let moved = try FileOperations.move(first, into: destination)
+                try journal.finish(succeeded: true, move: .sameVolume(moved))
+                try journal.begin(pending.url)
+                XCTAssertNil(try TransferJournal.interrupted(at: store))
+            }
+            let interruptedFile = try FileHandle(forWritingTo: journalURL)
+            try interruptedFile.seekToEnd()
+            try interruptedFile.write(contentsOf: Data("{\"finished\":".utf8))
+            try interruptedFile.close()
+            let interruptedBytes = try Data(contentsOf: journalURL)
+            try Data("unreadable prior history".utf8).write(to: store)
+
+            let recovered = BrowserActions(pasteboard: board, recoveryURL: store)
+            try await waitForRecovery(recovered)
+            XCTAssertEqual(recovered.interruptedTransfer?.succeeded, 1)
+            XCTAssertEqual(recovered.interruptedTransfer?.pendingSource, pending.url)
+            XCTAssertEqual(recovered.interruptedTransfer?.incompleteTail, true)
+            XCTAssertEqual(recovered.interruptedTransfer?.recoverableMoves, 1)
+            XCTAssertEqual(recovered.undoName, "Move Before Interruption")
+            XCTAssertFalse(FileManager.default.fileExists(atPath: journalURL.path))
+            let preserved = try FileManager.default.contentsOfDirectory(
+                at: store.deletingLastPathComponent(), includingPropertiesForKeys: nil
+            ).filter { $0.lastPathComponent.hasPrefix("Recovery.json.unreadable-") }
+            XCTAssertEqual(try contents(XCTUnwrap(preserved.first)), "unreadable prior history")
+            XCTAssertEqual(try contents(pending.url), "pending bytes")
+            XCTAssertFalse(FileManager.default.fileExists(atPath: destination.appendingPathComponent(pending.url.lastPathComponent).path))
+
+            // Simulate an exit after the history was saved and before its journal was unlinked.
+            XCTAssertTrue(FileManager.default.createFile(atPath: journalURL.path, contents: interruptedBytes,
+                                                         attributes: [.posixPermissions: 0o600]))
+            let reopened = BrowserActions(pasteboard: board, recoveryURL: store)
+            try await waitForRecovery(reopened)
+            XCTAssertFalse(FileManager.default.fileExists(atPath: journalURL.path))
+            try await perform(reopened) { reopened.undo() }
+            XCTAssertNil(reopened.undoName)
+            XCTAssertEqual(try contents(first.url), "confirmed bytes")
+            XCTAssertEqual(try contents(pending.url), "pending bytes")
         }
     }
 
@@ -368,6 +419,15 @@ final class BrowserActionsTests: XCTestCase {
             try? FileManager.default.removeItem(at: root)
         }
         try await use(root, destination, board)
+    }
+
+    @MainActor
+    private func waitForRecovery(_ actions: BrowserActions) async throws {
+        let finished = expectation(description: "Interrupted transfer recovery finished")
+        let observation = actions.$busy.filter { !$0 }.prefix(1).sink { _ in finished.fulfill() }
+        defer { observation.cancel() }
+        await fulfillment(of: [finished], timeout: 10)
+        guard !actions.busy else { throw ActionTimeout() }
     }
 
     @MainActor

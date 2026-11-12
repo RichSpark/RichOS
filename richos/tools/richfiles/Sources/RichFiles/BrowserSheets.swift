@@ -31,6 +31,7 @@ enum BrowserSheet: Identifiable {
     case compare(URL)
     case fileShelf(BrowserTransferDestination)
     case trashFailures([FileReference])
+    case interruptedTransfer
     case trash, transfers, searchOptions, batch([FileReference]), connect, workspaces, actionPalette, settings
 
     var id: String {
@@ -49,6 +50,7 @@ enum BrowserSheet: Identifiable {
         case .trashFailures: return "trashFailures"
         case .trash: return "trash"
         case .transfers: return "transfers"
+        case .interruptedTransfer: return "interrupted-transfer"
         case .searchOptions: return "searchOptions"
         case .batch: return "batch"
         case .connect: return "connect"
@@ -1115,6 +1117,54 @@ struct TrashFailuresSheet: View {
                     dismiss()
                 }
             } message: { Text("These items will be removed from their current folders and cannot be recovered from Trash.") }
+    }
+}
+
+@MainActor
+struct InterruptedTransferSheet: View {
+    let notice: InterruptedTransferNotice
+    @ObservedObject var actions: BrowserActions
+    let openFolder: (URL) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(notice.move ? "Interrupted Move" : "Interrupted Copy").font(.headline)
+            Text("\(notice.succeeded) of \(notice.total) items completed before RichFiles closed.")
+            location("Destination folder", notice.destination)
+            if let pending = notice.pendingSource { location("Item to check", pending) }
+            if let failed = notice.lastFailedSource { location("Last reported issue", failed) }
+            if notice.incompleteTail { Text("The last recovery entry was incomplete.").font(.callout) }
+            if notice.recoverableMoves > 0 {
+                let label = notice.recoverableMoves == 1 ? "move" : "moves"
+                Text("Undo history includes \(notice.recoverableMoves) completed \(label).").font(.callout)
+            }
+            HStack {
+                Button("Open Destination") {
+                    openFolder(notice.destination)
+                    dismiss()
+                }
+                if let source = notice.pendingSource ?? notice.lastFailedSource {
+                    Button("Open Source Folder") {
+                        openFolder(source.deletingLastPathComponent())
+                        dismiss()
+                    }
+                }
+                Spacer()
+                Button("Clear Notice") {
+                    actions.acknowledgeInterruptedTransfer()
+                    if actions.interruptedTransfer == nil { dismiss() }
+                }.disabled(actions.busy)
+                Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
+            }
+        }.padding(16).frame(width: 565)
+    }
+
+    private func location(_ title: String, _ url: URL) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title).font(.caption.weight(.medium))
+            Text(url.path).font(.caption).lineLimit(2).truncationMode(.middle).textSelection(.enabled).help(url.path)
+        }
     }
 }
 

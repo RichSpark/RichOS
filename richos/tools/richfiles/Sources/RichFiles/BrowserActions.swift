@@ -1,6 +1,7 @@
 import AppKit
 import Combine
 import Darwin
+import OSLog
 import RichFilesCore
 
 struct BrowserTrashItem: Identifiable, Codable, Sendable {
@@ -21,11 +22,13 @@ struct BrowserTrashItem: Identifiable, Codable, Sendable {
 
 @MainActor
 final class BrowserActions: ObservableObject {
+    private static let recoveryLog = Logger(subsystem: "app.richos.richfiles", category: "transfer")
     @Published private(set) var status = ""
     @Published private(set) var issues: [String] = []
     @Published private(set) var busy = false
     @Published private(set) var transfer: BrowserTransfer?
     @Published private(set) var replacingFile = false
+    @Published private(set) var interruptedTransfer: InterruptedTransferNotice?
     @Published private(set) var canRetryTransfer = false
     @Published private(set) var queuedTransfers: [BrowserQueuedTransfer] = []
     @Published private(set) var queuePaused = false
@@ -47,6 +50,8 @@ final class BrowserActions: ObservableObject {
     private var preparingQueue: [UUID: Task<Void, Never>] = [:]
     private var settlingTransfer = false
     private var retryRequest: BrowserTransferRequest?
+    private var settledTransferID: UUID?
+    private var unreadableRecoveryStore = false
     private var undoHistory: [HistoryGroup] = []
     private var redoHistory: [HistoryGroup] = []
 
@@ -65,11 +70,15 @@ final class BrowserActions: ObservableObject {
                     trashItems = saved.trash
                     undoHistory = saved.undo
                     redoHistory = saved.redo
+                    interruptedTransfer = saved.interruptedTransfer
+                    settledTransferID = saved.settledTransferID
                     updateHistoryNames()
                 }
             } catch {
+                unreadableRecoveryStore = true
                 status = "Could not read saved recovery history."
             }
+            if TransferJournal.exists(at: recoveryURL) { readInterruptedTransfer(at: recoveryURL) }
         }
     }
 
@@ -84,6 +93,60 @@ final class BrowserActions: ObservableObject {
         if let clipboard, clipboard.generation != pasteboard.changeCount {
             self.clipboard = nil
             cutURLs.removeAll()
+        }
+    }
+
+    func acknowledgeInterruptedTransfer() {
+        guard !busy, let notice = interruptedTransfer else { return }
+        interruptedTransfer = nil
+        if !persistRecovery() { interruptedTransfer = notice }
+    }
+
+    private func readInterruptedTransfer(at url: URL) {
+        busy = true
+        status = "Checking transfer recovery…"
+        let read = Task.detached(priority: .utility) { Result { try TransferJournal.interrupted(at: url) } }
+        Task { [weak self] in
+            let result = await read.value
+            self?.finishInterruptedTransfer(result)
+        }
+    }
+
+    private func finishInterruptedTransfer(_ result: Result<InterruptedTransfer?, Error>) {
+        busy = false
+        status = ""
+        switch result {
+        case .failure:
+            Self.recoveryLog.warning("interrupted transfer record unreadable")
+            status = "Could not read the interrupted transfer record."
+        case .success(nil):
+            break
+        case .success(.some(let interrupted)):
+            if settledTransferID == interrupted.notice.id {
+                clearSettledTransfer { try interrupted.discard() }
+                return
+            }
+            interruptedTransfer = interrupted.notice
+            settledTransferID = interrupted.notice.id
+            let history = moveHistory(for: interrupted.moves)
+            applyTrashChanges(history.trash)
+            redoHistory.removeAll()
+            if !history.undo.isEmpty {
+                undoHistory.append(HistoryGroup(title: "Move Before Interruption", steps: history.undo))
+            }
+            updateHistoryNames()
+            status = "An interrupted transfer needs review."
+            Self.recoveryLog.info("interrupted transfer found id=\(interrupted.notice.id.uuidString, privacy: .public) processed=\(interrupted.notice.processed) confirmed=\(interrupted.notice.succeeded) undoable=\(history.undo.count) incomplete_tail=\(interrupted.notice.incompleteTail)")
+            if persistRecovery() { clearSettledTransfer { try interrupted.discard() } }
+        }
+    }
+
+    private func clearSettledTransfer(_ discard: () throws -> Void) {
+        do { try discard() }
+        catch {
+            let message = "Recovery history was saved. The transfer record could not be removed."
+            issues.append(message)
+            status += status.isEmpty ? message : " " + message
         }
     }
 
@@ -377,8 +440,9 @@ final class BrowserActions: ObservableObject {
         )
         transfer = progress
         status = progress.title + "…"
+        let recoveryURL = recoveryURL
         transferTask = Task.detached(priority: .userInitiated) {
-            let result = await BrowserTransferJob.perform(request, progress: progress) { progress in
+            let result = await BrowserTransferJob.perform(request, progress: progress, recoveryURL: recoveryURL) { progress in
                 await self.setTransfer(progress)
             }
             await self.finishTransfer(result, request: request)
@@ -414,23 +478,16 @@ final class BrowserActions: ObservableObject {
         let noMove = unchanged > 0 ? " \(itemCount(unchanged)) already in the destination." : ""
         let operation = request.move ? "Moved" : "Copied"
         let lead = result.progress.cancelled ? "Transfer cancelled. " : ""
-        var recovered: [TrashChange] = []
-        let undo = changed.reversed().map { move -> HistoryStep in
-            switch move {
-            case .sameVolume(let receipt): return .undoMove(receipt, canRedoRename: false)
-            case .crossVolume(let receipt):
-                let item = BrowserTrashItem(receipt: receipt.backup)
-                recovered.append(.add(item))
-                return .crossVolumeMove(receipt, item)
-            }
-        }
-        let backupNote = recovered.isEmpty ? "" : " The cross-volume originals are in Trash for undo."
-        finishMutation(MutationResult(
+        let history = moveHistory(for: changed)
+        let backupNote = history.trash.isEmpty ? "" : " The cross-volume originals are in Trash for undo."
+        if result.journal != nil { settledTransferID = result.progress.id }
+        let saved = finishMutation(MutationResult(
             message: lead + "\(operation) \(succeeded) of \(request.sources.count) items." + noMove + backupNote,
             issues: errors,
             changed: request.move ? !changed.isEmpty : succeeded > 0,
-            undo: undo, trashChanges: recovered
+            undo: history.undo, trashChanges: history.trash
         ), title: "Move")
+        if saved, let journal = result.journal { clearSettledTransfer { try journal.discard() } }
         queuePaused = !queuedTransfers.isEmpty && (result.progress.cancelled || !result.progress.issues.isEmpty)
         startNextQueuedTransfer()
     }
@@ -712,7 +769,8 @@ final class BrowserActions: ObservableObject {
         }
     }
 
-    private func finishMutation(_ mutation: MutationResult, title: String) {
+    @discardableResult
+    private func finishMutation(_ mutation: MutationResult, title: String) -> Bool {
         applyTrashChanges(mutation.trashChanges)
         if let untrashed = mutation.untrashed { self.untrashed = untrashed }
         if mutation.changed {
@@ -745,7 +803,7 @@ final class BrowserActions: ObservableObject {
         issues = mutation.issues
         status = mutation.message
         if let issue = mutation.issues.first { status += " " + issue }
-        notifyMutation()
+        return notifyMutation()
     }
 
     private func replay(undo: Bool) {
@@ -780,20 +838,33 @@ final class BrowserActions: ObservableObject {
         }
     }
 
-    private func notifyMutation() {
-        if let recoveryURL {
-            do {
-                try RecoveryState(trash: Array(trashItems.prefix(2_000)),
-                                  undo: Array(undoHistory.suffix(40)), redo: Array(redoHistory.suffix(40)))
-                    .save(to: recoveryURL)
-            } catch {
-                let message = "Could not save recovery history for the next launch."
-                issues.append(message)
-                status += " " + message
-            }
-        }
+    @discardableResult
+    private func notifyMutation() -> Bool {
+        let saved = persistRecovery()
         mutationRevision = UUID()
         didMutate?()
+        return saved
+    }
+
+    private func persistRecovery() -> Bool {
+        guard let recoveryURL else { return true }
+        do {
+            if unreadableRecoveryStore {
+                let unreadable = try FileReference(url: recoveryURL)
+                let name = recoveryURL.lastPathComponent + ".unreadable-" + UUID().uuidString
+                _ = try FileOperations.move(unreadable, into: recoveryURL.deletingLastPathComponent(), named: name)
+                unreadableRecoveryStore = false
+            }
+            try RecoveryState(trash: trashItems, undo: undoHistory, redo: redoHistory,
+                              interruptedTransfer: interruptedTransfer, settledTransferID: settledTransferID)
+                .save(to: recoveryURL)
+            return true
+        } catch {
+            let message = "Could not save recovery history for the next launch."
+            issues.append(message)
+            status += status.isEmpty ? message : " " + message
+            return false
+        }
     }
 
     private func applyTrashChanges(_ changes: [TrashChange]) {
@@ -814,6 +885,21 @@ final class BrowserActions: ObservableObject {
         var seen: Set<String> = []
         return sources.filter { seen.insert($0.url.path).inserted }
     }
+}
+
+private func moveHistory(for moves: [BrowserCompletedMove]) -> (undo: [HistoryStep], trash: [TrashChange]) {
+    var trash: [TrashChange] = []
+    let undo = moves.reversed().map { move -> HistoryStep in
+        switch move {
+        case .sameVolume(let receipt):
+            return .undoMove(receipt, canRedoRename: false)
+        case .crossVolume(let receipt):
+            let item = BrowserTrashItem(receipt: receipt.backup)
+            trash.append(.add(item))
+            return .crossVolumeMove(receipt, item)
+        }
+    }
+    return (undo, trash)
 }
 
 private func itemCount(_ count: Int) -> String { count == 1 ? "1 item" : "\(count) items" }
@@ -953,6 +1039,8 @@ private struct RecoveryState: Codable {
     let trash: [BrowserTrashItem]
     let undo: [HistoryGroup]
     let redo: [HistoryGroup]
+    let interruptedTransfer: InterruptedTransferNotice?
+    let settledTransferID: UUID?
 
     private static let maxBytes = 4 * 1024 * 1024
 
@@ -976,8 +1064,6 @@ private struct RecoveryState: Codable {
     }
 
     func save(to url: URL) throws {
-        let bytes = try JSONEncoder().encode(self)
-        guard bytes.count <= Self.maxBytes else { throw CocoaError(.fileWriteOutOfSpace) }
         let parent = url.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true,
                                                 attributes: [.posixPermissions: 0o700])
@@ -986,6 +1072,30 @@ private struct RecoveryState: Codable {
               info.st_uid == getuid(), info.st_mode & 0o077 == 0 else {
             throw CocoaError(.fileWriteNoPermission)
         }
-        try bytes.write(to: url, options: .atomic)
+        let encoder = JSONEncoder()
+        for budget in [512, 256, 128, 64, 32, 16, 8, 0] {
+            let recent = RecoveryState(trash: Array(trash.prefix(min(2_000, 4 * budget))),
+                                       undo: Self.recentGroups(undo, stepBudget: budget),
+                                       redo: Self.recentGroups(redo, stepBudget: budget),
+                                       interruptedTransfer: interruptedTransfer, settledTransferID: settledTransferID)
+            let bytes = try encoder.encode(recent)
+            if bytes.count <= Self.maxBytes {
+                try bytes.write(to: url, options: .atomic)
+                return
+            }
+        }
+        throw CocoaError(.fileWriteOutOfSpace)
+    }
+
+    private static func recentGroups(_ groups: [HistoryGroup], stepBudget: Int) -> [HistoryGroup] {
+        var remaining = stepBudget
+        var result: [HistoryGroup] = []
+        for group in groups.suffix(40).reversed() {
+            guard remaining > 0 else { break }
+            let steps = Array(group.steps.prefix(remaining))
+            result.append(HistoryGroup(title: group.title, steps: steps))
+            remaining -= steps.count
+        }
+        return result.reversed()
     }
 }

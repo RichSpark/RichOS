@@ -182,7 +182,7 @@ struct BrowserTransferDestination: Sendable {
     }
 }
 
-enum BrowserCompletedMove: Sendable {
+enum BrowserCompletedMove: Codable, Sendable {
     case sameVolume(MoveReceipt)
     case crossVolume(CrossVolumeMoveReceipt)
 
@@ -206,6 +206,7 @@ struct BrowserTransferResult: Sendable {
     var moves: [BrowserCompletedMove] = []
     var retry: [BrowserTransferSource] = []
     var destination: BrowserTransferDestination?
+    var journal: TransferJournal?
 }
 
 enum BrowserTransferJob {
@@ -214,6 +215,7 @@ enum BrowserTransferJob {
     static func perform(
         _ request: BrowserTransferRequest,
         progress: BrowserTransfer,
+        recoveryURL: URL?,
         publish: @escaping @Sendable (BrowserTransfer) async -> Void
     ) async -> BrowserTransferResult {
         var result = BrowserTransferResult(progress: progress)
@@ -229,6 +231,21 @@ enum BrowserTransferJob {
         do {
             destination = try request.destination ?? BrowserTransferDestination(folder: request.folder)
             try destination.verify()
+            if let recoveryURL {
+                do {
+                    result.journal = try TransferJournal(recoveryURL: recoveryURL, id: progress.id,
+                                                         destination: destination.url, move: request.move, total: progress.total)
+                } catch {
+                    logger.warning("recovery write refused id=\(progress.id.uuidString, privacy: .public) phase=begin")
+                    let message = (error as? CocoaError)?.code == .fileWriteFileExists
+                        ? "A previous transfer record is still open. Reopen RichFiles to check it before retrying."
+                        : "Could not save the transfer recovery record. No files were changed."
+                    result.progress.issues.append(BrowserTransferIssue(name: destination.url.lastPathComponent,
+                                                                        message: message, kind: .failed))
+                    result.progress.running = false
+                    return result
+                }
+            }
         } catch {
             result.progress.issues.append(BrowserTransferIssue(
                 name: request.folder.lastPathComponent, message: error.localizedDescription, kind: .failed
@@ -256,6 +273,17 @@ enum BrowserTransferJob {
                 break
             }
 
+            do {
+                try result.journal?.begin(input.url)
+            } catch {
+                logger.warning("recovery write refused id=\(progress.id.uuidString, privacy: .public) phase=item-start")
+                result.progress.issues.append(BrowserTransferIssue(name: name,
+                    message: "Could not record the next item. This item and the remaining items were left alone.", kind: .failed))
+                result.retry.append(contentsOf: request.sources[index...])
+                break
+            }
+            let previousSuccesses = result.progress.succeeded
+            let previousMoves = result.moves.count
             var retrySource: BrowserTransferSource?
             do {
                 try destination.verify()
@@ -332,6 +360,16 @@ enum BrowserTransferJob {
                 if let retrySource, isRetryable(error) { result.retry.append(retrySource) }
             }
             result.progress.completed += 1
+            do {
+                let move = result.moves.count > previousMoves ? result.moves.last : nil
+                try result.journal?.finish(succeeded: result.progress.succeeded > previousSuccesses, move: move)
+            } catch {
+                logger.warning("recovery write refused id=\(progress.id.uuidString, privacy: .public) phase=item-finish")
+                result.progress.issues.append(BrowserTransferIssue(name: name,
+                    message: "Could not finish the recovery record. The transfer stopped before the next item.", kind: .warning))
+                result.retry.append(contentsOf: request.sources.dropFirst(index + 1))
+                break
+            }
             result.progress.copyProgress = nil
             result.progress.verifyingCopy = false
             result.progress.revision += 1
