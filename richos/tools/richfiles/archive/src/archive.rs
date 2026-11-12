@@ -30,7 +30,7 @@ pub fn list(path: &Path) -> Result<Vec<Entry>> {
     Ok(snapshot.entries)
 }
 
-pub fn create(destination: &Path, name: &str, sources: &[PathBuf]) -> Result<PathBuf> {
+pub fn create(destination: &Destination, name: &str, sources: &[PathBuf]) -> Result<PathBuf> {
     validate_component(name)?;
     if !name.to_ascii_lowercase().ends_with(".zip") {
         return Err(invalid("Give the new archive a .zip extension."));
@@ -41,7 +41,6 @@ pub fn create(destination: &Path, name: &str, sources: &[PathBuf]) -> Result<Pat
     if sources.len() > MAX_ENTRIES {
         return Err(invalid("The selection contains too many ZIP entries."));
     }
-    let destination = Destination::open(destination)?;
     let stage = destination.stage()?;
     let stage_identity = fs::symlink_metadata(stage.path())?;
     let staged_name = "archive.zip";
@@ -76,14 +75,13 @@ pub fn create(destination: &Path, name: &str, sources: &[PathBuf]) -> Result<Pat
 
 pub fn extract(
     source: &Path,
-    destination: &Path,
+    destination: &Destination,
     name: &str,
     selected: &[usize],
 ) -> Result<PathBuf> {
     validate_component(name)?;
     let mut snapshot = ArchiveSnapshot::open(source)?;
     let indices = chosen_entries(&snapshot.entries, selected)?;
-    let destination = Destination::open(destination)?;
     let stage = destination.stage()?;
     let mut created_directories = HashSet::new();
 

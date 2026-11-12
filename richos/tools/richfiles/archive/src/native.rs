@@ -150,6 +150,28 @@ pub fn children(folder: &File, max_entries: usize) -> Result<Vec<OsString>> {
     Ok(names)
 }
 
+#[derive(Clone, Copy)]
+pub struct DestinationIdentity {
+    device: i32,
+    inode: u64,
+}
+
+impl DestinationIdentity {
+    pub fn parse(value: &str) -> Result<Self> {
+        let (device, inode) = value
+            .split_once(':')
+            .ok_or_else(|| invalid("The destination identity is invalid."))?;
+        Ok(Self {
+            device: device.parse()?,
+            inode: inode.parse()?,
+        })
+    }
+
+    fn matches(self, actual: &Metadata) -> bool {
+        actual.dev() == self.device as u64 && actual.ino() == self.inode
+    }
+}
+
 pub struct Destination {
     pub path: PathBuf,
     folder: File,
@@ -157,7 +179,7 @@ pub struct Destination {
 }
 
 impl Destination {
-    pub fn open(path: &Path) -> Result<Self> {
+    pub fn open(path: &Path, expected: Option<DestinationIdentity>) -> Result<Self> {
         if !path.is_absolute() {
             return Err(invalid("Choose an absolute destination folder."));
         }
@@ -169,6 +191,9 @@ impl Destination {
         }
         let folder = open_folder(&path)?;
         let identity = folder.metadata()?;
+        if expected.is_some_and(|expected| !expected.matches(&identity)) {
+            return Err(invalid("The destination folder changed. Choose it again."));
+        }
         Ok(Self {
             path,
             folder,

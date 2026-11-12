@@ -856,7 +856,10 @@ struct BrowserView: View {
             Button("Paste") { paste() }
                 .disabled(!actions.canScheduleTransfer || !writableFolder)
             Button("Create ZIP…") {
-                let destination = model.folder
+                guard let destination = currentDropDestination else {
+                    feedback = "The destination folder is unavailable. Refresh this folder and try again."
+                    return
+                }
                 withReferences(entries) { sheet = .createZip($0, destination) }
             }.disabled(actions.busy || !writableFolder)
             Button("Copy Path") { copyPaths(entries.map(\.url)) }

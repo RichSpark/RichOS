@@ -15,6 +15,7 @@ struct ArchiveCatalog: Sendable {
     let archive: FileReference
     let modified: Date?
     let size: Int64?
+    let extractionDestination: BrowserTransferDestination?
     let items: [ArchiveItem]
 
     func verify() throws {
@@ -58,15 +59,19 @@ enum ArchiveTools {
 
     static func list(_ entry: FileEntry) async throws -> ArchiveCatalog {
         let reference = try FileReference(url: entry.url)
-        let snapshot = ArchiveCatalog(archive: reference, modified: entry.modified, size: entry.size, items: [])
+        let destination = try? BrowserTransferDestination(folder: reference.url.deletingLastPathComponent())
+        let snapshot = ArchiveCatalog(archive: reference, modified: entry.modified, size: entry.size,
+                                      extractionDestination: destination, items: [])
         try snapshot.verify()
         let data = try await run(["list", entry.url.path])
         try snapshot.verify()
         return ArchiveCatalog(archive: reference, modified: entry.modified, size: entry.size,
-                          items: try JSONDecoder().decode([ArchiveItem].self, from: data))
+                              extractionDestination: destination,
+                              items: try JSONDecoder().decode([ArchiveItem].self, from: data))
     }
 
-    static func create(_ sources: [FileReference], in destination: URL, named name: String) async throws -> URL {
+    static func create(_ sources: [FileReference], in destination: BrowserTransferDestination,
+                       named name: String) async throws -> URL {
         try FileOperations.validateName(name)
         guard !sources.isEmpty else { throw CocoaError(.fileNoSuchFile) }
         for source in sources {
@@ -74,16 +79,18 @@ enum ArchiveTools {
                 throw FileOperationError.sourceChanged(source.url)
             }
         }
-        let data = try await run(["create", destination.path, name, "--"] + sources.map { $0.url.path })
+        let data = try await run(["create", destination.url.path, name, "--"] + sources.map { $0.url.path },
+                                 destination: destination)
         return try publishedURL(data)
     }
 
-    static func extract(_ catalog: ArchiveCatalog, indices: [Int]?, in destination: URL, named name: String) async throws -> URL {
+    static func extract(_ catalog: ArchiveCatalog, indices: [Int]?, in destination: BrowserTransferDestination,
+                        named name: String) async throws -> URL {
         try FileOperations.validateName(name)
         try catalog.verify()
-        var arguments = ["extract", catalog.archive.url.path, destination.path, name]
+        var arguments = ["extract", catalog.archive.url.path, destination.url.path, name]
         if let indices, !indices.isEmpty { arguments += ["--"] + indices.map(String.init) }
-        let data = try await run(arguments)
+        let data = try await run(arguments, destination: destination)
         return try publishedURL(data)
     }
 
@@ -93,14 +100,18 @@ enum ArchiveTools {
         return URL(fileURLWithPath: item.path)
     }
 
-    private static func run(_ arguments: [String]) async throws -> Data {
+    private static func run(_ arguments: [String], destination: BrowserTransferDestination? = nil) async throws -> Data {
         let local = Bundle.main.executableURL?.deletingLastPathComponent().appendingPathComponent("richfiles-archive")
         let embedded = RichFilesInstallation.embeddedApplication.appendingPathComponent("Contents/MacOS/richfiles-archive")
         guard let executable = [local, embedded].compactMap({ $0 }).first(where: {
             FileManager.default.isExecutableFile(atPath: $0.path)
         }) else { throw ArchiveToolError.helperUnavailable }
         let runner = ArchiveProcess()
-        let worker = Task.detached(priority: .userInitiated) { try runner.run(executable, arguments: arguments) }
+        let options = destination.map { ["--destination-identity", "\($0.device):\($0.inode)"] } ?? []
+        let worker = Task.detached(priority: .userInitiated) {
+            try destination?.verify()
+            return try runner.run(executable, arguments: options + arguments)
+        }
         return try await withTaskCancellationHandler {
             try await worker.value
         } onCancel: {
@@ -173,7 +184,7 @@ struct ArchiveBrowserSheet: View {
     let changed: () -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var selected: Set<Int> = []
-    @State private var destination: URL
+    @State private var destination: BrowserTransferDestination?
     @State private var name: String
     @State private var task: Task<Void, Never>?
     @State private var status = ""
@@ -181,7 +192,7 @@ struct ArchiveBrowserSheet: View {
     init(catalog: ArchiveCatalog, changed: @escaping () -> Void) {
         self.catalog = catalog
         self.changed = changed
-        _destination = State(initialValue: catalog.archive.url.deletingLastPathComponent())
+        _destination = State(initialValue: catalog.extractionDestination)
         _name = State(initialValue: ArchiveTools.extractionName(catalog.archive.url))
     }
 
@@ -196,7 +207,7 @@ struct ArchiveBrowserSheet: View {
                 }.tag(item.index)
             }
             HStack {
-                Text(destination.path).lineLimit(1).truncationMode(.middle)
+                Text(destination?.url.path ?? "Choose a destination folder.").lineLimit(1).truncationMode(.middle)
                 Spacer()
                 Button("Choose Destination…") { chooseDestination() }.disabled(task != nil)
             }
@@ -211,8 +222,10 @@ struct ArchiveBrowserSheet: View {
                 if task != nil { Button("Cancel Extraction") { task?.cancel() } }
                 Spacer()
                 Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
-                Button("Extract Selected") { extract(Array(selected.sorted())) }.disabled(task != nil || selected.isEmpty)
-                Button("Extract All") { extract(nil) }.disabled(task != nil || catalog.items.isEmpty)
+                Button("Extract Selected") { extract(Array(selected.sorted())) }
+                    .disabled(task != nil || selected.isEmpty || destination == nil)
+                Button("Extract All") { extract(nil) }
+                    .disabled(task != nil || catalog.items.isEmpty || destination == nil)
             }
         }.padding(15).frame(width: 640, height: 460)
             .onDisappear { task?.cancel() }
@@ -223,21 +236,28 @@ struct ArchiveBrowserSheet: View {
         picker.canChooseFiles = false
         picker.canChooseDirectories = true
         picker.allowsMultipleSelection = false
-        picker.directoryURL = destination
+        picker.directoryURL = destination?.url ?? catalog.archive.url.deletingLastPathComponent()
         picker.prompt = "Choose Folder"
         picker.begin { result in
-            if result == .OK, let url = picker.url { destination = url }
+            guard result == .OK, let url = picker.url else { return }
+            do {
+                destination = try BrowserTransferDestination(folder: url)
+                status = ""
+            } catch {
+                destination = nil
+                status = error.localizedDescription
+            }
         }
     }
 
     private func extract(_ indices: [Int]?) {
-        let folder = destination
+        guard let destination else { return }
         let folderName = name
         status = "Extracting into a new folder…"
         task = Task {
             defer { task = nil }
             do {
-                let result = try await ArchiveTools.extract(catalog, indices: indices, in: folder, named: folderName)
+                let result = try await ArchiveTools.extract(catalog, indices: indices, in: destination, named: folderName)
                 status = "Extracted to \(result.path)"
                 changed()
             } catch is CancellationError { status = "Extraction cancelled." }
@@ -248,7 +268,7 @@ struct ArchiveBrowserSheet: View {
 
 struct ZipCreateSheet: View {
     let sources: [FileReference]
-    let destination: URL
+    let destination: BrowserTransferDestination
     let changed: () -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var name = "Archive.zip"
@@ -258,7 +278,7 @@ struct ZipCreateSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Create ZIP").font(.headline)
-            Text("\(sources.count) selected in \(destination.path)").lineLimit(2)
+            Text("\(sources.count) selected in \(destination.url.path)").lineLimit(2)
             TextField("ZIP filename", text: $name)
                 .accessibilityLabel("ZIP filename").disabled(task != nil)
             if task != nil {

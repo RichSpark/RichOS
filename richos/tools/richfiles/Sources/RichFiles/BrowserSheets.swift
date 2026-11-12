@@ -24,7 +24,7 @@ enum BrowserSheet: Identifiable {
     case preview(FileEntry)
     case openWith(FileEntry, WorkspaceApplications)
     case archive(ArchiveCatalog)
-    case createZip([FileReference], URL)
+    case createZip([FileReference], BrowserTransferDestination)
     case diskUsage(URL)
     case checksum(FileReference)
     case duplicates(URL)

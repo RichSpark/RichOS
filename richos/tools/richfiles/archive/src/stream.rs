@@ -47,7 +47,7 @@ pub fn list(source: &Path) -> Result<Vec<Entry>> {
 
 pub fn extract(
     source: &Path,
-    destination: &Path,
+    destination: &Destination,
     name: &str,
     selected: &[usize],
 ) -> Result<PathBuf> {
@@ -55,7 +55,6 @@ pub fn extract(
     let source = Snapshot::open(source)?;
     let entries = source.catalog()?;
     let indices = chosen_entries(&entries, selected)?;
-    let destination = Destination::open(destination)?;
     let stage = destination.stage()?;
     let mut directories = HashSet::new();
     let mut reader = Reader::open(&source.handle)?;

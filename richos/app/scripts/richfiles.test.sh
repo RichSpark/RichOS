@@ -55,6 +55,33 @@ PY
 cmp "$scratch/source.txt" "$scratch/Extracted/source.txt"
 printf '%s\n' '  ok  packaged ZIP helper created, listed and extracted the fixture'
 
+# RichFiles sends the identity of the folder it showed before starting the helper.
+destination="$scratch/Chosen Destination"
+parked="$scratch/Original Destination"
+mkdir "$destination"
+destination_identity="$(/usr/bin/stat -f '%d:%i' "$destination")"
+mv "$destination" "$parked"
+mkdir "$destination"
+printf '%s\n' 'The destination folder changed. Choose it again.' > "$scratch/expected-archive-error"
+expect_archive_destination_changed() {
+  if "$helper" --destination-identity "$destination_identity" "$@" > "$scratch/archive-error" 2>&1; then
+    echo '  FAIL  packaged archive helper accepted a substitute destination' >&2
+    exit 1
+  fi
+  cmp "$scratch/expected-archive-error" "$scratch/archive-error"
+}
+expect_archive_destination_changed create "$destination" Pinned.zip -- "$scratch/source.txt"
+expect_archive_destination_changed extract "$scratch/fixture.zip" "$destination" Pinned -- 0
+test -z "$(ls -A "$destination")"
+test -z "$(ls -A "$parked")"
+rmdir "$destination"
+mv "$parked" "$destination"
+ln -s "$destination" "$scratch/Destination Alias"
+"$helper" --destination-identity "$destination_identity" create "$scratch/Destination Alias" Pinned.zip -- "$scratch/source.txt"
+"$helper" --destination-identity "$destination_identity" extract "$destination/Pinned.zip" "$destination" Pinned -- 0
+cmp "$scratch/source.txt" "$destination/Pinned/source.txt"
+printf '%s\n' '  ok  packaged archive helper refused both operations in a substitute folder and accepted the restored original'
+
 # Use the installed macOS archive writer only to generate independent fixtures.
 COPYFILE_DISABLE=1 /usr/bin/tar -czf "$scratch/fixture.tar.gz" -C "$scratch" source.txt
 COPYFILE_DISABLE=1 /usr/bin/tar --format=7zip -cf "$scratch/fixture.7z" -C "$scratch" source.txt

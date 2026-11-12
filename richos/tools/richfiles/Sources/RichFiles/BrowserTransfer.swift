@@ -154,6 +154,7 @@ struct BrowserDragSelection: Sendable {
 struct BrowserTransferDestination: Sendable {
     let url: URL
     let device: Int32
+    let inode: UInt64
     private let reference: FileReference?
     var identity: FileIdentity? { reference?.identity }
 
@@ -168,10 +169,12 @@ struct BrowserTransferDestination: Sendable {
                 throw FileOperationError.folderChanged(url)
             }
             device = status.st_dev
+            inode = status.st_ino
         } else {
             let captured = try FileReference(url: url)
             reference = captured
             device = captured.identity.device
+            inode = captured.identity.inode
         }
     }
 

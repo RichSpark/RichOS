@@ -11,6 +11,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde_json::{Value, json};
 
+use native::{Destination, DestinationIdentity};
+
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
 static STOP: AtomicBool = AtomicBool::new(false);
@@ -47,7 +49,12 @@ fn is_zip(source: &Path) -> bool {
         .is_some_and(|value| value.eq_ignore_ascii_case("zip"))
 }
 
-fn extract(source: &Path, destination: &Path, folder: &str, selected: &[usize]) -> Result<PathBuf> {
+fn extract(
+    source: &Path,
+    destination: &Destination,
+    folder: &str,
+    selected: &[usize],
+) -> Result<PathBuf> {
     if is_zip(source) {
         archive::extract(source, destination, folder, selected)
     } else {
@@ -56,8 +63,14 @@ fn extract(source: &Path, destination: &Path, folder: &str, selected: &[usize]) 
 }
 
 fn command(arguments: &[&OsStr]) -> Result<Value> {
+    let (arguments, expected) = match arguments {
+        [flag, identity, rest @ ..] if *flag == "--destination-identity" => {
+            (rest, Some(DestinationIdentity::parse(name(identity)?)?))
+        }
+        _ => (arguments, None),
+    };
     match arguments {
-        [mode, source] if *mode == "list" => {
+        [mode, source] if *mode == "list" && expected.is_none() => {
             let source = Path::new(source);
             let entries = if is_zip(source) {
                 archive::list(source)?
@@ -83,14 +96,14 @@ fn command(arguments: &[&OsStr]) -> Result<Value> {
         {
             let sources: Vec<PathBuf> = sources.iter().map(PathBuf::from).collect();
             published(archive::create(
-                Path::new(destination),
+                &Destination::open(Path::new(destination), expected)?,
                 name(archive_name)?,
                 &sources,
             )?)
         }
         [mode, source, destination, folder] if *mode == "extract" => published(extract(
             Path::new(source),
-            Path::new(destination),
+            &Destination::open(Path::new(destination), expected)?,
             name(folder)?,
             &[],
         )?),
@@ -107,7 +120,7 @@ fn command(arguments: &[&OsStr]) -> Result<Value> {
                 .collect::<Result<Vec<_>>>()?;
             published(extract(
                 Path::new(source),
-                Path::new(destination),
+                &Destination::open(Path::new(destination), expected)?,
                 name(folder)?,
                 &indices,
             )?)
