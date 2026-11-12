@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::fs::{self, File, Metadata, OpenOptions};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
@@ -114,21 +114,55 @@ pub struct Row {
 
 impl Row {
     pub fn item(&self) -> Value {
-        let (source, exists, youtube_id, media_type) = match &self.source {
+        let (source, exists, youtube_id, media_type, bytes, download_name) = match &self.source {
             Source::Local { path, version } => {
                 let media_type = if output::kind_of(&path.to_string_lossy()) == "mp4" { "video" } else { "audio" };
-                ("local", version.still_at(path), None, media_type)
+                ("local", version.still_at(path), None, media_type, Some(version.size()), Some(download_name(path)))
             }
-            Source::Youtube { video_id } => ("youtube", true, Some(video_id), "video"),
+            Source::Youtube { video_id } => ("youtube", true, Some(video_id), "video", None, None),
         };
         json!({
             "kind": rich_files::ITEM_KIND, "id": self.id, "entityId": self.entity_id,
             "threadId": self.thread_id, "turnId": self.turn_id, "visibility": "ceo",
             "createdAt": self.at, "sequence": self.at, "text": self.name,
             "file": {"id": self.id, "name": self.name, "source": source,
-                     "exists": exists, "moments": self.moments, "youtubeId": youtube_id, "mediaType": media_type}
+                     "exists": exists, "moments": self.moments, "youtubeId": youtube_id, "mediaType": media_type,
+                     "bytes": bytes, "downloadName": download_name}
         })
     }
+}
+
+fn download_name(path: &Path) -> String {
+    let extension = path.extension().and_then(|part| part.to_str()).unwrap_or_default().to_ascii_lowercase();
+    format!("recording.{extension}")
+}
+
+pub fn read_for_phone(root: &Path, entity: &str, thread: &str, id: &str) -> Result<(String, Vec<u8>), rich_files::Fetch> {
+    use rich_files::{Fetch, PHONE_LIMIT};
+    let row = locate(root, entity, thread, id).ok_or(Fetch::NotAttached)?;
+    let Source::Local { path, version } = row.source else { return Err(Fetch::NotAttached) };
+    if !version.still_at(&path) {
+        return Err(Fetch::Gone);
+    }
+    if version.size() > PHONE_LIMIT {
+        return Err(Fetch::TooLarge(version.size()));
+    }
+    let mut file = OpenOptions::new().read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
+        .open(&path).map_err(|error| match error.kind() {
+            std::io::ErrorKind::NotFound => Fetch::Gone,
+            _ => Fetch::Unreadable(error.to_string()),
+        })?;
+    let read_error = |error: std::io::Error| Fetch::Unreadable(error.to_string());
+    if !version.matches(&file.metadata().map_err(read_error)?) {
+        return Err(Fetch::Gone);
+    }
+    let mut body = Vec::new();
+    (&mut file).take(version.size() + 1).read_to_end(&mut body).map_err(read_error)?;
+    if body.len() as u64 != version.size() || !version.matches(&file.metadata().map_err(read_error)?) || !version.still_at(&path) {
+        return Err(Fetch::Gone);
+    }
+    Ok((download_name(&path), body))
 }
 
 #[derive(Deserialize)]

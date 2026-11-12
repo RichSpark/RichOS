@@ -143,13 +143,14 @@ pub fn row_from_item(item: &Value) -> Option<Value> {
             }))
         }
         k if k == "rich_message" || is_media_item(item) => {
-            let text = if k == "rich_message" { richos_core::meeting_notes::plain_brief_sources(&text) } else { media_moments_text(&item["file"], text)? };
-            Some(json!({
+            let media = is_media_item(item);
+            let text = if media { media_moments_text(&item["file"], text)? } else { richos_core::meeting_notes::plain_brief_sources(&text) };
+            let mut row = json!({
                 "id": id,
                 "thread_id": thread_id,
                 "cursor": 0,
                 "role": "rich",
-                "kind": "text",
+                "kind": if media { "media" } else { "text" },
                 "text": text,
                 "created_at": iso8601(created_at),
                 "client_id": Value::Null,
@@ -159,7 +160,9 @@ pub fn row_from_item(item: &Value) -> Option<Value> {
                 "from_microphone": false,
                 "state": "complete",
                 "complete": true,
-            }))
+            });
+            if media { row["file"] = item["file"].clone(); }
+            Some(row)
         },
         // A FILE RICH PUT IN FRONT OF THE USER (round 36 screen 3): a Rich row of kind `file`,
         // carrying the card's own description (`rich_files::file_value`): an id to ask the Mac

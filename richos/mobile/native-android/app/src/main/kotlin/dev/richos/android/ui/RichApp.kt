@@ -67,6 +67,7 @@ import dev.richos.android.ui.attach.DeniedCard
 import dev.richos.android.ui.attach.MacOffCard
 import dev.richos.android.ui.attach.PhotoViewer
 import dev.richos.android.ui.attach.RichFileViewer
+import dev.richos.android.ui.attach.RichMediaDock
 import dev.richos.android.ui.attach.RejectionCard
 import dev.richos.android.ui.attach.ShareSheetView
 import dev.richos.android.ui.attach.SystemPickerDrawing
@@ -456,6 +457,9 @@ private fun Conversation(model: ScreenModel, menuOpen: Boolean, onEvent: (UiEven
                         a.denied?.let { d -> Note("denied", up) { DeniedCard(d, onEvent) } }
                         if (a.macOffCard) Note("mac-off", up) { MacOffCard(onEvent) }
                     }
+                }
+                model.mediaViewer?.let { card ->
+                    key(card.file.id) { RichMediaDock(card, onEvent) }
                 }
                 Composer(
                     draft = model.app.draft,

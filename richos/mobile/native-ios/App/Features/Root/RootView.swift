@@ -232,6 +232,10 @@ struct ScreenView: View {
     /// are taller, and the compose row never scrolls away.
     private func bottomZone(height: CGFloat) -> some View {
         VStack(alignment: .leading, spacing: 12) {
+            if let media = model.mediaViewer {
+                RichMediaPlayer(viewer: media) { send(.closeRichFile(id: media.file.id)) }
+                    .id(media.file.id)
+            }
             if showsLatest || !model.thread.following, !model.thread.isEmpty, !model.attach.menuOpen {
                 LatestPill {
                     jumpToken += 1

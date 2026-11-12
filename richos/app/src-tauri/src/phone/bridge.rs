@@ -150,7 +150,13 @@ impl Bridge for PhoneBridge {
 
     fn files_available(&self) -> bool { true }
     fn rich_file(&self, thread: &str, id: &str) -> Result<(String, Vec<u8>), richos_core::rich_files::Fetch> {
-        let root = crate::rich_files_host::root(&self.app.state::<AppState>());
+        let state = self.app.state::<AppState>();
+        let root = crate::rich_files_host::root(&state);
+        if id.starts_with("mm_") {
+            let view = state.reader.snapshot();
+            let binding = view.ledger().thread_binding(thread).map_err(|_| richos_core::rich_files::Fetch::NotAttached)?;
+            return richos_core::media_moments::read_for_phone(&root, binding.entity_id().as_str(), thread, id);
+        }
         richos_core::rich_files::read_for_phone(&root, thread, id).map(|(row, body)| {
             let body = if row.name == richos_core::meeting_notes::BRIEF_FILE {
                 match String::from_utf8(body) {

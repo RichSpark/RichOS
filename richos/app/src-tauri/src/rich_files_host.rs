@@ -317,11 +317,16 @@ mod tests {
             let item = items.iter().find(|item| item["id"] == record["id"]).unwrap();
             let live = row_from_item(item).unwrap();
             let text = live["text"].as_str().unwrap();
-            assert_eq!(live["kind"], "text");
+            assert_eq!(live["kind"], "media");
+            assert_eq!(live["file"]["moments"]["points"][0]["startMs"], 53280);
             assert!(text.contains("0:53  Customer focus\nStart with the customer."));
             assert!(text.contains(expected), "{text}");
             assert!(!live.to_string().contains("private-source.wav"));
         }
+        let id = local["id"].as_str().unwrap();
+        let get = |thread: &str| media_moments::read_for_phone(&root, "alpha", thread, id);
+        assert_eq!(get(&thread).unwrap(), ("recording.wav".into(), b"recording".to_vec()));
+        assert_eq!(get(&other).unwrap_err(), richos_core::rich_files::Fetch::NotAttached);
         items.push(json!({"kind":"rich_message","id":"reply","threadId":thread,"turnId":"turn-1",
             "text":"Here is what changed.","createdAt":u64::MAX}));
         let rows = rows_from_payload(&snapshot);
@@ -336,6 +341,8 @@ mod tests {
             live["cursor"] = json!(i + 1);
             assert_eq!(*row, live);
         }
+        std::fs::write(&path, b"changed recording").unwrap();
+        assert_eq!(get(&thread).unwrap_err(), richos_core::rich_files::Fetch::Gone);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

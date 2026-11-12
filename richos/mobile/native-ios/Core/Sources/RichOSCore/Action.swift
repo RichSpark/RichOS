@@ -87,7 +87,7 @@ public enum Action: Equatable, Sendable {
     case hearReply(id: String)
     /// A file Rich attached (round 36 screen 3; Android's `file-open` and its siblings): tapped,
     /// its × while it comes over, how much has come, here and kept, refused, its viewer closed.
-    case openRichFile(id: String)
+    case openRichFile(id: String, momentMs: Int? = nil)
     case stopRichFile(id: String)
     case richFileProgress(id: String, received: Int64)
     case richFileArrived(id: String, path: String)

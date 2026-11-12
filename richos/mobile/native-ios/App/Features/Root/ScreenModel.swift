@@ -19,6 +19,7 @@ struct ScreenModel: Equatable, Sendable {
     var thread = Transcript()
     /// A file Rich attached, open in the phone's viewer (round 36 "Phone: opened"); nil otherwise.
     var fileViewer: FileViewer?
+    var mediaViewer: MediaViewer?
     /// The nameplate's second line: only for a persistent interruption (PRD §5 CEO experience gate).
     var connection: ConnectionLine?
     /// Cards above the composer, top to bottom.
@@ -361,6 +362,7 @@ extension ScreenModel {
         }
         }
         fileViewer = Self.fileViewer(s)
+        mediaViewer = Self.mediaViewer(s)
         thread.loadingOlder = s.history.loadingOlder
         thread.reachedBeginning = s.history.reachedBeginning
         thread.cached = s.history.showsOutOfReachLine(connectionNotice: s.connectionNotice)
@@ -516,7 +518,8 @@ extension ScreenModel {
         var out: [Row] = []
         out.reserveCapacity(rows.count)
         for row in rows {
-            if !row.richFiles.isEmpty, case .text(let text) = row.body, text.isEmpty,
+            if !row.richFiles.isEmpty, row.richFiles.allSatisfy({ $0.file.moments == nil }),
+               case .text(let text) = row.body, text.isEmpty,
                let last = out.last, last.author == .rich, case .text = last.body {
                 out[out.count - 1].richFiles += row.richFiles
             } else {
@@ -528,9 +531,24 @@ extension ScreenModel {
 
     /// The file whose viewer is open (round 36 "Phone: opened"): kept on this phone and tapped.
     static func fileViewer(_ s: AppState) -> FileViewer? {
-        guard let fetch = s.fileFetches.values.first(where: { $0.state == .kept && $0.open && $0.path != nil }),
+        guard let fetch = s.fileFetches.values.first(where: { $0.state == .kept && $0.open && $0.path != nil && $0.media == nil }),
               let path = fetch.path else { return nil }
         return FileViewer(id: fetch.id, url: URL(fileURLWithPath: path))
+    }
+
+    static func mediaViewer(_ s: AppState) -> MediaViewer? {
+        for message in s.messages.reversed() {
+            guard let file = message.richFile, file.exists, let fetch = s.fileFetches[file.id],
+                  fetch.state == .kept, fetch.open, let selection = fetch.media, let path = fetch.path else { continue }
+            return MediaViewer(file: file, selection: selection, url: URL(fileURLWithPath: path))
+        }
+        return nil
+    }
+
+    struct MediaViewer: Equatable, Sendable {
+        var file: RichFile
+        var selection: MediaSelection
+        var url: URL
     }
 
     struct FileViewer: Equatable, Sendable {

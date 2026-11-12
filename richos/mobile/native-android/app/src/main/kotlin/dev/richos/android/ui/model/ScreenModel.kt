@@ -346,7 +346,7 @@ data class ScreenModel(
         val out = ArrayList<Message>(rows.size)
         for (m in rows) {
             val prev = out.lastOrNull()
-            val fileOnly = m.files.isNotEmpty() && (m.body as? Body.Text)?.text?.isEmpty() == true
+            val fileOnly = m.files.isNotEmpty() && m.files.all { it.file.moments == null } && (m.body as? Body.Text)?.text?.isEmpty() == true
             if (fileOnly && prev != null && prev.speaker == Speaker.RICH && prev.body is Body.Text &&
                 !prev.replying && !prev.streaming && !prev.unfinished
             ) {
@@ -364,9 +364,16 @@ data class ScreenModel(
      */
     val fileViewer: Triple<RichFile, FileFetch, String>?
         get() {
-            val fetch = app.fileFetches.values.firstOrNull { it.state == FileFetchState.KEPT && it.open && it.path != null } ?: return null
+            val fetch = app.fileFetches.values.firstOrNull { it.state == FileFetchState.KEPT && it.open && it.path != null && it.media == null } ?: return null
             val row = app.messages.lastOrNull { it.file?.id == fetch.id } ?: return null
             return Triple(row.file!!, fetch, TimeLabels.row(row.createdAt, nowMs, zone))
+        }
+
+    val mediaViewer: RichFileCard?
+        get() = app.messages.asReversed().firstNotNullOfOrNull { row ->
+            val file = row.file?.takeIf { it.exists && it.moments != null } ?: return@firstNotNullOfOrNull null
+            val fetch = app.fileFetches[file.id]?.takeIf { it.state == FileFetchState.KEPT && it.open && it.media != null && it.path != null }
+            fetch?.let { RichFileCard(file, it) }
         }
 
     /** A voice message's length on the phone: the frame's pose, else the recording's own. */
@@ -396,7 +403,7 @@ data class ScreenModel(
     /** One of the Mac's rows as a bubble (contract §5.4: `role` ceo|rich, `kind` text|voice, `state`). */
     private fun bubble(row: Row, clientId: String? = null, echo: Echo? = null): Message {
         // A file Rich attached (round 36 screen 3): no words of its own, the card under his.
-        row.file?.takeIf { row.kind == "file" && row.role != "ceo" }?.let { file ->
+        row.file?.takeIf { (row.kind == "file" || (row.kind == "media" && it.moments != null)) && row.role != "ceo" }?.let { file ->
             return Message(
                 id = row.id,
                 speaker = Speaker.RICH,

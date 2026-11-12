@@ -45,7 +45,7 @@ sealed interface UiEvent {
     data class HearReply(val messageId: String) : UiEvent
     data class StopReply(val messageId: String) : UiEvent
     /** A file Rich attached (round 36 screen 3): tapped, its × while it comes over, its viewer closed. */
-    data class OpenRichFile(val fileId: String) : UiEvent
+    data class OpenRichFile(val fileId: String, val momentMs: Long? = null) : UiEvent
     data class StopRichFile(val fileId: String) : UiEvent
     data class CloseRichFile(val fileId: String) : UiEvent
     /** The reader reached the oldest loaded message; core loads the next chunk (no pagination). */
@@ -141,7 +141,7 @@ fun UiEvent.toAction(): Action? = when (this) {
     is UiEvent.HearReply -> Action.HearReply(messageId)
     is UiEvent.StopReply -> Action.StopReply(messageId)
     // A file Rich attached (core `RichFiles.kt`, `GET /api/messages?kind=file`).
-    is UiEvent.OpenRichFile -> Action.OpenRichFile(fileId)
+    is UiEvent.OpenRichFile -> Action.OpenRichFile(fileId, momentMs)
     is UiEvent.StopRichFile -> Action.StopRichFile(fileId)
     is UiEvent.CloseRichFile -> Action.RichFileViewed(fileId)
     UiEvent.NearOldest -> Action.LoadOlder

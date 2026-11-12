@@ -51,6 +51,24 @@ import Testing
         #expect(RichFileRule.progress(received: 62_000, total: 184_000) == "62 of 184 KB from your Mac")
     }
 
+    @Test func mediaTapsSelectOneKeptRecordingAndBackgroundClosesIt() throws {
+        let wire = #"{"id":"mm_1","thread_id":"thr_5c1e","cursor":2,"role":"rich","kind":"media","text":"Fallback","file":{"id":"mm_1","name":"Interview","downloadName":"recording.mp4","mediaType":"video","moments":{"durationMs":3000,"points":[{"startMs":1000,"label":"First","quote":"One."},{"startMs":2000,"label":"Second","quote":"Two."}]}}}"#
+        var s = try paired()
+        s.messages = [try CoreJSON.decode(StreamRow.self, from: Data(wire.utf8)).message]
+        let first = Reducer.reduce(s, .openRichFile(id: "mm_1", momentMs: 1000))
+        #expect(first.effects == [.findRichFile(id: "mm_1", name: "recording.mp4")])
+        let loading = Reducer.reduce(first.state, .richFileNotKept(id: "mm_1"))
+        #expect(loading.effects == [.fetchRichFile(id: "mm_1", threadID: "thr_5c1e", name: "recording.mp4", total: nil)])
+        let second = Reducer.reduce(loading.state, .openRichFile(id: "mm_1", momentMs: 2000))
+        #expect(second.effects.isEmpty)
+        let ready = Reducer.reduce(second.state, .richFileArrived(id: "mm_1", path: "/kept/recording.mp4")).state
+        #expect(ready.fileFetches["mm_1"]?.media == MediaSelection(startMs: 2000, tap: 2))
+        #expect(ready.fileFetches["mm_1"]?.open == true)
+        let hidden = Reducer.reduce(ready, .backgrounded(at: 1)).state
+        #expect(hidden.fileFetches["mm_1"]?.open == false)
+        #expect(MediaMoments.youtube("mk0qTPqaFcw", at: 53_280)?.absoluteString == "https://www.youtube.com/watch?v=mk0qTPqaFcw&t=53s")
+    }
+
     @Test func aTapAsksForTheFileAndTheArrivalOpensIt() throws {
         var s = try paired()
         var r = Reducer.reduce(s, .openRichFile(id: "rf_1"))

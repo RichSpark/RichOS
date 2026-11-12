@@ -134,7 +134,7 @@ public struct StreamRow: Codable, Equatable, Sendable {
                        sentAt: sentAt, durationMs: durationMs, clientID: clientID, cursor: cursor, attachments: attached?.files)
         message.question = question
         if role != "ceo", hasAudio { message.hasAudio = true }
-        if role != "ceo", kind == "file", let file {
+        if role != "ceo", let file, kind == "file" || (kind == "media" && file.moments != nil) {
             // A file Rich attached: no words of its own, the card under his (round 36 screen 3).
             message.text = ""
             message.richFile = file

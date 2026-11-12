@@ -187,6 +187,13 @@ public struct Fixture: Sendable {
 
     static let composer: [Fixture] = [
         Fixture(name: "comp-idle", state: paired()),
+        Fixture(name: "media-ledger", state: paired { state in
+            let row = #"{"id":"mm_ledger","thread_id":"general","cursor":90,"role":"rich","kind":"media","created_at":"2026-09-22T09:41:00.000Z","file":{"id":"mm_ledger","name":"Board interview","downloadName":"recording.m4a","mediaType":"audio","moments":{"durationMs":60000,"points":[{"startMs":13000,"label":"The decision","quote":"We chose the new plan."}]}}}"#
+            if let message = try? CoreJSON.decode(StreamRow.self, from: Data(row.utf8)).message {
+                state.messages.append(message)
+            }
+            state.linkOpen = false
+        }),
         Fixture(name: "comp-typing", state: paired { $0.draft = "Move the Friday review to 3 PM and let the Portland team know it’s optional." }),
         Fixture(name: "comp-keyboard", state: paired { $0.draft = "Move the Friday review to 3"; $0.composerFocused = true }),
         Fixture(name: "comp-disabled", state: paired { $0.connectionNotice = .incompatible }),

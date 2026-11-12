@@ -179,30 +179,52 @@ public enum ConversationReducer {
             s.playback = Playback(messageID: id, phase: .preparing)
             effects.append(.fetchReplyAudio(messageID: id))
         // A file Rich attached (round 36 screen 3; Android's `RichCore.openRichFile`, same rules).
-        case .openRichFile(let id):
+        case .openRichFile(let id, let momentMs):
             guard let file = s.messages.last(where: { $0.richFile?.id == id })?.richFile else { return }
-            if let fetch = s.fileFetches[id] {
-                if fetch.state == .coming || fetch.state == .finding { return }
-                if fetch.state == .kept { s.fileFetches[id]?.open = true; return }
+            var fetch = s.fileFetches[id]
+            if let momentMs {
+                guard file.exists, file.youtubeId == nil, file.moments?.points.contains(where: { $0.startMs == momentMs }) == true else { return }
+                for (other, previous) in s.fileFetches where other != id && previous.media != nil && previous.open {
+                    switch previous.state {
+                    case .coming: effects.append(.stopRichFile(id: other)); s.fileFetches[other] = nil
+                    case .waiting, .finding: s.fileFetches[other] = nil
+                    default: s.fileFetches[other]?.open = false
+                    }
+                }
+                if s.playback != nil { effects.append(.stopAudio); s.playback = nil }
+                if fetch == nil { fetch = FileFetch(id: id, state: .finding, total: file.bytes, open: true) }
+                let tap = (fetch?.media?.tap ?? 0) + 1
+                fetch?.media = MediaSelection(startMs: momentMs, tap: tap)
+                fetch?.open = true
+            } else if file.moments != nil {
+                return
             }
-            // The phone's own copy first: `fileFetches` does not survive a relaunch, and a copy that
-            // came over earlier opens with the Mac offline or the original deleted there.
-            s.fileFetches[id] = FileFetch(id: id, state: .finding, total: file.bytes, open: true)
-            effects.append(.findRichFile(id: id, name: file.name))
+            if var current = fetch {
+                if s.fileFetches[id] != nil, current.state == .coming || current.state == .finding || current.state == .kept {
+                    current.open = true
+                    s.fileFetches[id] = current
+                    return
+                }
+            }
+            var finding = FileFetch(id: id, state: .finding, total: file.bytes, open: true)
+            finding.media = fetch?.media
+            s.fileFetches[id] = finding
+            effects.append(.findRichFile(id: id, name: file.transferName))
         case .richFileNotKept(let id):
-            guard s.fileFetches[id]?.state == .finding,
+            guard var fetch = s.fileFetches[id], fetch.state == .finding,
                   let file = s.messages.last(where: { $0.richFile?.id == id })?.richFile else { return }
             guard file.exists else {
                 s.fileFetches[id] = FileFetch(id: id, state: .failed, reason: RichFileRule.gone)
                 return
             }
             guard s.linkOpen, let thread = s.mac?.threadID else {
-                // The Mac is out of reach: the clock, and the tap is asked again when the link opens.
-                s.fileFetches[id] = FileFetch(id: id, state: .waiting, total: file.bytes, open: true)
+                fetch.state = .waiting
+                s.fileFetches[id] = fetch
                 return
             }
-            s.fileFetches[id] = FileFetch(id: id, state: .coming, total: file.bytes, open: true)
-            effects.append(.fetchRichFile(id: id, threadID: thread, name: file.name, total: file.bytes))
+            fetch.state = .coming
+            s.fileFetches[id] = fetch
+            effects.append(.fetchRichFile(id: id, threadID: thread, name: file.transferName, total: file.bytes))
         case .stopRichFile(let id):
             guard let state = s.fileFetches[id]?.state, state == .coming || state == .waiting || state == .finding else { return }
             s.fileFetches[id] = nil
@@ -212,8 +234,11 @@ public enum ConversationReducer {
             s.fileFetches[id]?.received = received
         case .richFileArrived(let id, let path):
             // A × meanwhile wins: the tap it stopped leaves nothing behind.
-            guard let fetch = s.fileFetches[id] else { return }
-            s.fileFetches[id] = FileFetch(id: id, state: .kept, received: fetch.total ?? fetch.received, total: fetch.total, path: path, open: fetch.open)
+            guard var fetch = s.fileFetches[id] else { return }
+            fetch.state = .kept
+            fetch.received = fetch.total ?? fetch.received
+            fetch.path = path
+            s.fileFetches[id] = fetch
         case .richFileFailed(let id, let reason):
             guard s.fileFetches[id] != nil else { return }
             s.fileFetches[id] = FileFetch(id: id, state: .failed, reason: reason)
@@ -236,6 +261,11 @@ public enum ConversationReducer {
         case .backgrounded:
             if s.playback != nil { effects.append(.stopAudio) }
             s.playback = nil
+            for (id, fetch) in s.fileFetches where fetch.media != nil && fetch.open {
+                if fetch.state == .coming { effects.append(.stopRichFile(id: id)) }
+                if fetch.state == .kept { s.fileFetches[id]?.open = false }
+                else { s.fileFetches[id] = nil }
+            }
             s.history.loadingOlder = false
             // The stream carrying the reply closes with the app. The next one re-announces a reply
             // still being written and sends a finished one as history, never as "finished", so a

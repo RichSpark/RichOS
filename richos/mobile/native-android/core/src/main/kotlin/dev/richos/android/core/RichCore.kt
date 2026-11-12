@@ -133,7 +133,7 @@ class RichCore private constructor(
             emit()
         }
         is Action.HearReply -> hearReply(action.id)
-        is Action.OpenRichFile -> openRichFile(action.id)
+        is Action.OpenRichFile -> openRichFile(action.id, action.at)
         is Action.StopRichFile -> mutex.withLock {
             fetchJobs.remove(action.id)?.cancel()
             if (fetches[action.id]?.state == FileFetchState.COMING || fetches[action.id]?.state == FileFetchState.WAITING) fetches.remove(action.id)
@@ -342,6 +342,12 @@ class RichCore private constructor(
         macWaitJob?.cancel()
         ports.recorder.stopPlayback()
         return mutex.withLock {
+        for ((id, fetch) in fetches.toMap()) {
+            if (fetch.media == null || !fetch.open) continue
+            fetchJobs.remove(id)?.cancel()
+            if (fetch.state == FileFetchState.KEPT) fetches[id] = fetch.copy(open = false)
+            else fetches.remove(id)
+        }
         playingRecordingId = null
         endReply()
         // Lifecycle shutdown must take effect even when disk is full. An online flag is never a
@@ -784,13 +790,35 @@ class RichCore private constructor(
      * file the Mac says is gone, or too large, says the Mac's own sentence. × stops it, and nothing
      * half-written is kept.
      */
-    private suspend fun openRichFile(id: String): AppState {
+    private suspend fun openRichFile(id: String, momentMs: Long?): AppState {
         val ask = mutex.withLock {
             val row = fileRow(id)
             val file = row?.file ?: return@withLock null
-            if (fetches[id]?.state == FileFetchState.COMING) return@withLock null
-            ports.richFiles.kept(id, file.name)?.let { path ->
-                fetches[id] = FileFetch(id, FileFetchState.KEPT, file.bytes ?: 0, file.bytes, path = path, open = true)
+            val previous = fetches[id]
+            val selection = if (momentMs != null) {
+                if (!file.exists || file.youtubeId != null || file.moments?.points?.any { it.startMs == momentMs } != true) return@withLock null
+                for ((other, fetch) in fetches.toMap()) {
+                    if (other != id && fetch.media != null && fetch.open) {
+                        fetchJobs.remove(other)?.cancel()
+                        if (fetch.state == FileFetchState.KEPT) fetches[other] = fetch.copy(open = false)
+                        else fetches.remove(other)
+                    }
+                }
+                if (reply != null) { ports.recorder.stopPlayback(); endReply() }
+                MediaSelection(momentMs, (previous?.media?.tap ?: 0) + 1)
+            } else {
+                previous?.media
+            }
+            if (file.moments != null && selection == null) return@withLock null
+            if (previous?.state == FileFetchState.COMING) {
+                if (selection != previous.media) {
+                    fetches[id] = previous.copy(media = selection)
+                    emit()
+                }
+                return@withLock null
+            }
+            ports.richFiles.kept(id, file.transferName)?.let { path ->
+                fetches[id] = FileFetch(id, FileFetchState.KEPT, file.bytes ?: 0, file.bytes, path = path, open = true, media = selection)
                 emit()
                 return@withLock null
             }
@@ -801,11 +829,11 @@ class RichCore private constructor(
             }
             val p = session.pairing
             if (!session.paired || !session.online || p.apiBase == null || p.deviceId == null || p.challenge == null) {
-                fetches[id] = FileFetch(id, FileFetchState.WAITING, total = file.bytes, open = true)
+                fetches[id] = FileFetch(id, FileFetchState.WAITING, total = file.bytes, open = true, media = selection)
                 emit()
                 return@withLock null
             }
-            fetches[id] = FileFetch(id, FileFetchState.COMING, 0, file.bytes, open = true)
+            fetches[id] = FileFetch(id, FileFetchState.COMING, 0, file.bytes, open = true, media = selection)
             currentCoroutineContext()[Job]?.let { fetchJobs[id] = it }
             emit()
             Triple(p, row.threadId, file)
@@ -814,7 +842,7 @@ class RichCore private constructor(
         val path = RichFileRule.path(id, thread)
         var writer: RichFileWriter? = null
         val outcome: FileFetch = try {
-            writer = ports.richFiles.begin(id, file.name)
+            writer = ports.richFiles.begin(id, file.transferName)
                 ?: return finishFetch(id, FileFetch(id, FileFetchState.FAILED, reason = RichFileRule.FAILED))
             var received = 0L
             var shown = 0L
@@ -852,8 +880,8 @@ class RichCore private constructor(
     private suspend fun finishFetch(id: String, outcome: FileFetch): AppState = mutex.withLock {
         fetchJobs.remove(id)
         // A × meanwhile wins: the tap it stopped leaves nothing behind.
-        val open = fetches[id]?.open ?: return@withLock emit()
-        fetches[id] = outcome.copy(open = open && outcome.state == FileFetchState.KEPT)
+        val previous = fetches[id] ?: return@withLock emit()
+        fetches[id] = outcome.copy(open = previous.open && outcome.state == FileFetchState.KEPT, media = previous.media)
         emit()
     }
 

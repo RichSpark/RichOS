@@ -33,7 +33,7 @@ enum Intent: Equatable, Sendable {
     case hearReply(id: String)
     case stopReply
     /// A file Rich attached (round 36 screen 3): tapped, its × while it comes over, its viewer closed.
-    case openRichFile(id: String)
+    case openRichFile(id: String, momentMs: Int? = nil)
     case stopRichFile(id: String)
     case closeRichFile(id: String)
     case discard(id: String)
@@ -115,7 +115,7 @@ enum Intent: Equatable, Sendable {
         case .loadOlder: return .loadOlder
         case .hearReply(let id): return .hearReply(id: id)
         case .stopReply: return .stopPlayback
-        case .openRichFile(let id): return .openRichFile(id: id)
+        case .openRichFile(let id, let momentMs): return .openRichFile(id: id, momentMs: momentMs)
         case .stopRichFile(let id): return .stopRichFile(id: id)
         case .closeRichFile(let id): return .richFileViewed(id: id)
         case .discard(let id): return .discardMessage(id: id)

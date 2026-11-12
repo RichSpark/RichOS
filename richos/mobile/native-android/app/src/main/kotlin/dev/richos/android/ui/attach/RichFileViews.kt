@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.pdf.PdfRenderer
 import android.os.ParcelFileDescriptor
+import android.widget.VideoView
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
@@ -20,6 +21,8 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
@@ -28,6 +31,9 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -46,6 +52,11 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.paneTitle
@@ -56,6 +67,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import dev.richos.android.core.FileFetch
 import dev.richos.android.core.FileFetchState
+import dev.richos.android.core.MediaMoments
 import dev.richos.android.core.RichFile
 import dev.richos.android.core.RichFileRule
 import dev.richos.android.design.Rich
@@ -69,6 +81,7 @@ import dev.richos.android.ui.UiEvent
 import dev.richos.android.ui.model.RichFileCard
 import dev.richos.android.ui.model.Sizes
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import java.io.File
 
@@ -82,7 +95,170 @@ import java.io.File
 @Composable
 fun RichFileRows(cards: List<RichFileCard>, onEvent: (UiEvent) -> Unit, modifier: Modifier = Modifier) {
     Column(modifier.fillMaxWidth().padding(top = 10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        for (card in cards) RichFileRow(card, onEvent)
+        for (card in cards) {
+            val moments = card.file.moments
+            if (moments == null) RichFileRow(card, onEvent) else RichMediaCard(card, moments, onEvent)
+        }
+    }
+}
+
+@Composable
+private fun RichMediaCard(card: RichFileCard, moments: MediaMoments, onEvent: (UiEvent) -> Unit) {
+    val file = card.file
+    val fetch = card.fetch
+    val colors = Rich.colors
+    val type = Rich.type
+    val uri = LocalUriHandler.current
+    val shape = RoundedCornerShape(12.dp)
+    val status = when {
+        !file.exists -> "The recording was moved, deleted or changed."
+        fetch?.state == FileFetchState.COMING -> "Coming over from your Mac"
+        fetch?.state == FileFetchState.WAITING -> RichFileRule.WAITING_LINE
+        fetch?.state == FileFetchState.FAILED -> fetch.reason ?: RichFileRule.FAILED
+        else -> null
+    }
+    Column(
+        Modifier.fillMaxWidth().background(colors.ground, shape).border(1.dp, colors.lineFaint, shape).padding(10.dp),
+        verticalArrangement = Arrangement.spacedBy(7.dp),
+    ) {
+        BasicText(file.name, style = type.body.copy(color = colors.ink))
+        val kind = if (file.youtubeId != null) "YouTube" else if (file.mediaType == "video") "Video" else "Audio"
+        val location = if (file.youtubeId == null) " · on your Mac" else ""
+        BasicText("$kind · ${MediaMoments.time(moments.durationMs)}$location", style = type.read.copy(color = colors.inkSoft))
+        if (status != null) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (fetch?.state == FileFetchState.COMING) {
+                    Canvas(Modifier.size(22.dp)) {
+                        val stroke = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round)
+                        drawCircle(colors.lineFaint, style = stroke)
+                        drawArc(colors.signal, -90f, 360f * RichFileRule.fraction(fetch).toFloat(), false, style = stroke)
+                    }
+                }
+                BasicText(status, style = type.read.copy(color = colors.inkSoft))
+            }
+        }
+        Canvas(Modifier.fillMaxWidth().height(32.dp).graphicsLayer { alpha = if (file.exists) 1f else 0.45f }) {
+            val levels = moments.waveform.orEmpty().mapNotNull { it.digitToIntOrNull() }
+            if (levels.isEmpty()) {
+                drawLine(colors.inkSoft, Offset(0f, size.height / 2), Offset(size.width, size.height / 2), 2.dp.toPx())
+            } else {
+                val step = size.width / levels.size
+                levels.forEachIndexed { index, level ->
+                    val height = maxOf(2f, size.height * level / 10f)
+                    drawRect(colors.inkSoft, Offset(index * step, (size.height - height) / 2), Size(maxOf(1f, step - 1), height))
+                }
+            }
+            moments.points.forEach { point ->
+                val x = size.width * point.startMs / maxOf(1L, moments.durationMs)
+                drawLine(colors.signal, Offset(x, 3.dp.toPx()), Offset(x, size.height - 3.dp.toPx()), 3.dp.toPx(), StrokeCap.Round)
+            }
+        }
+        for (point in moments.points) {
+            val time = MediaMoments.time(point.startMs)
+            val url = file.youtubeId?.let { MediaMoments.youtube(it, point.startMs) }
+            val canOpen = file.exists && (file.youtubeId == null || url != null)
+            val tap = if (!canOpen) Modifier else Modifier.clickable(role = Role.Button, onClickLabel = "$time ${point.label}") {
+                if (url != null) uri.openUri(url) else onEvent(UiEvent.OpenRichFile(file.id, point.startMs))
+            }
+            Row(Modifier.fillMaxWidth().heightIn(min = 44.dp).then(tap)
+                .semantics { testTag = "media.${file.id}.${point.startMs}" }.padding(vertical = 2.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                BasicText(if (!canOpen) time else if (url == null) "▶ $time" else "↗ $time",
+                    Modifier.border(1.dp, if (canOpen) colors.signal else colors.ground, CircleShape).padding(horizontal = 6.dp, vertical = 3.dp),
+                    style = type.read.copy(color = colors.ink))
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    BasicText(point.label, style = type.body.copy(color = colors.ink))
+                    BasicText("“${point.quote}”", style = type.body.copy(color = colors.inkSoft))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun RichMediaDock(card: RichFileCard, onEvent: (UiEvent) -> Unit) {
+    val fetch = card.fetch ?: return
+    val path = fetch.path ?: return
+    val selection = fetch.media ?: return
+    val moments = card.file.moments ?: return
+    val context = LocalContext.current
+    val owner = LocalLifecycleOwner.current
+    val colors = Rich.colors
+    val type = Rich.type
+    val player = remember(path) { VideoView(context) }
+    var ready by remember(path) { mutableStateOf(false) }
+    var playing by remember(path) { mutableStateOf(false) }
+    var failed by remember(path) { mutableStateOf(false) }
+    var position by remember(path) { mutableLongStateOf(selection.startMs) }
+    var firstTap by remember(path) { mutableStateOf(true) }
+    val foreground = rememberUpdatedState(owner)
+    fun toggle() {
+        if (player.isPlaying || playing) {
+            player.pause()
+            position = player.currentPosition.toLong()
+            playing = false
+        } else if (owner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
+            player.start()
+            playing = true
+        }
+    }
+    DisposableEffect(player, owner) {
+        val lifecycle = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_PAUSE) { player.pause(); playing = false }
+        }
+        owner.lifecycle.addObserver(lifecycle)
+        player.setOnPreparedListener { ready = true }
+        player.setOnCompletionListener { playing = false; position = moments.durationMs }
+        player.setOnErrorListener { _, _, _ -> failed = true; playing = false; true }
+        player.setVideoPath(path)
+        onDispose {
+            owner.lifecycle.removeObserver(lifecycle)
+            player.stopPlayback()
+        }
+    }
+    LaunchedEffect(player, ready, selection) {
+        if (!ready || !foreground.value.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) return@LaunchedEffect
+        val active = moments.points.lastOrNull { it.startMs <= position }
+        if (!firstTap && active?.startMs == selection.startMs) {
+            toggle()
+        } else {
+            firstTap = false
+            player.seekTo(selection.startMs.coerceIn(0, Int.MAX_VALUE.toLong()).toInt())
+            position = selection.startMs
+            player.start()
+            playing = true
+        }
+    }
+    LaunchedEffect(player, playing) {
+        while (playing) {
+            delay(250)
+            if (player.isPlaying) position = player.currentPosition.toLong()
+        }
+    }
+    val shape = RoundedCornerShape(12.dp)
+    Column(Modifier.fillMaxWidth().background(colors.surface, shape).border(1.dp, colors.lineFaint, shape).padding(8.dp)) {
+        AndroidView(factory = { player }, modifier = if (card.file.mediaType == "video") Modifier.fillMaxWidth().height(110.dp)
+            else Modifier.size(1.dp).graphicsLayer { alpha = 0f })
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            BasicText(if (playing) "Ⅱ" else "▶", Modifier.heightIn(min = 44.dp)
+                .clickable(enabled = ready && !failed, role = Role.Button, onClickLabel = if (playing) "Pause recording" else "Play recording") { toggle() }
+                .padding(10.dp), style = type.body.copy(color = colors.ink))
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                val point = moments.points.lastOrNull { it.startMs <= position }
+                val label = if (failed) "This phone could not play the recording." else
+                    point?.let { MediaMoments.time(it.startMs) + " · " + it.label } ?: card.file.name
+                BasicText(label, style = type.body.copy(color = colors.ink), maxLines = 2)
+                Canvas(Modifier.fillMaxWidth().height(3.dp)) {
+                    drawLine(colors.lineFaint, Offset.Zero, Offset(size.width, 0f), 3.dp.toPx())
+                    val progress = (position.toFloat() / maxOf(1L, moments.durationMs)).coerceIn(0f, 1f)
+                    drawLine(colors.ink, Offset.Zero, Offset(size.width * progress, 0f), 3.dp.toPx())
+                }
+                BasicText(MediaMoments.time(position) + " / " + MediaMoments.time(moments.durationMs), style = type.read.copy(color = colors.inkSoft))
+            }
+            BasicText("×", Modifier.heightIn(min = 44.dp).clickable(role = Role.Button, onClickLabel = "Close recording") {
+                onEvent(UiEvent.CloseRichFile(card.file.id))
+            }.padding(10.dp), style = type.body.copy(color = colors.ink))
+        }
     }
 }
 

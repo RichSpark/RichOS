@@ -60,8 +60,8 @@ public enum ConnectionReducer {
             if let thread = s.mac?.threadID {
                 for (id, fetch) in s.fileFetches where fetch.state == .waiting {
                     guard let file = s.messages.last(where: { $0.richFile?.id == id })?.richFile else { continue }
-                    s.fileFetches[id] = FileFetch(id: id, state: .coming, total: file.bytes, open: fetch.open)
-                    effects.append(.fetchRichFile(id: id, threadID: thread, name: file.name, total: file.bytes))
+                    s.fileFetches[id]?.state = .coming
+                    effects.append(.fetchRichFile(id: id, threadID: thread, name: file.transferName, total: file.bytes))
                 }
             }
         case .connectionDiagnosed(let notice):

@@ -1,3 +1,5 @@
+import AVKit
+import Combine
 import QuickLook
 import RichOSCore
 import SwiftUI
@@ -13,7 +15,13 @@ struct RichFileList: View {
 
     var body: some View {
         VStack(spacing: 6) {
-            ForEach(files, id: \.file.id) { RichFileRowView(row: $0, send: send) }
+            ForEach(files, id: \.file.id) { row in
+                if let moments = row.file.moments {
+                    RichMediaCard(row: row, moments: moments, send: send)
+                } else {
+                    RichFileRowView(row: row, send: send)
+                }
+            }
         }
         .padding(.top, 4)
     }
@@ -81,6 +89,187 @@ private struct RichFileRowView: View {
             IconView(icon, size: 16, weight: 2.4).foregroundStyle(palette.ink)
         }
         .frame(width: 40, height: 40)
+    }
+}
+
+private struct RichMediaCard: View {
+    let row: ScreenModel.RichFileRow
+    let moments: MediaMoments
+    let send: (Intent) -> Void
+    @Environment(\.palette) private var palette
+
+    private var status: String? {
+        if !row.file.exists { return "The recording was moved, deleted or changed." }
+        switch row.fetch?.state {
+        case .coming?, .finding?: return "Coming over from your Mac"
+        case .waiting?: return RichFileRule.waitingLine
+        case .failed?: return row.fetch?.reason ?? RichFileRule.failed
+        default: return nil
+        }
+    }
+
+    var body: some View {
+        let file = row.file
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Image(systemName: file.youtubeId == nil ? "waveform" : "play.rectangle")
+                    .foregroundStyle(palette.ink)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(file.name).type(Typography.body.weight(600)).foregroundStyle(palette.ink)
+                    Text([file.youtubeId != nil ? "YouTube" : file.mediaType == "video" ? "Video" : "Audio",
+                          MediaMoments.time(moments.durationMs), file.youtubeId == nil ? "on your Mac" : nil]
+                        .compactMap { $0 }.joined(separator: " · "))
+                        .type(Typography.body).foregroundStyle(palette.inkSoft)
+                }
+            }
+            if let status {
+                HStack(spacing: 8) {
+                    if let fetch = row.fetch, fetch.state == .coming {
+                        ProgressView(value: RichFileRule.fraction(fetch))
+                            .progressViewStyle(.circular).tint(palette.signal)
+                            .frame(width: 24, height: 24).accessibilityHidden(true)
+                    }
+                    Text(status).type(Typography.body).foregroundStyle(palette.inkSoft)
+                }
+            }
+            Canvas { context, size in
+                let levels = moments.waveform?.compactMap(\.wholeNumberValue) ?? []
+                if levels.isEmpty {
+                    context.fill(Path(roundedRect: CGRect(x: 0, y: size.height / 2 - 1, width: size.width, height: 2), cornerRadius: 1), with: .color(palette.inkSoft))
+                } else {
+                    let step = size.width / CGFloat(levels.count)
+                    for (index, level) in levels.enumerated() {
+                        let height = max(2, size.height * CGFloat(level) / 10)
+                        let bar = CGRect(x: step * CGFloat(index), y: (size.height - height) / 2, width: max(1, step - 1), height: height)
+                        context.fill(Path(roundedRect: bar, cornerRadius: 1), with: .color(palette.inkSoft))
+                    }
+                }
+                for point in moments.points {
+                    let x = size.width * CGFloat(point.startMs) / CGFloat(max(1, moments.durationMs))
+                    context.fill(Path(roundedRect: CGRect(x: x - 2, y: 3, width: 4, height: size.height - 6), cornerRadius: 2), with: .color(palette.signal))
+                }
+            }
+            .frame(height: 32)
+            .opacity(file.exists ? 1 : 0.45)
+            .accessibilityHidden(true)
+            ForEach(moments.points, id: \.startMs) { point in
+                if !file.exists {
+                    line(point)
+                } else if let youtube = file.youtubeId, let url = MediaMoments.youtube(youtube, at: point.startMs) {
+                    Link(destination: url) { line(point) }.buttonStyle(.plain)
+                } else if file.youtubeId == nil {
+                    Button {
+                        send(.openRichFile(id: file.id, momentMs: point.startMs))
+                    } label: {
+                        line(point)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("media.\(file.id).\(point.startMs)")
+                }
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 12).fill(palette.ground))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(palette.lineFaint, lineWidth: 1))
+    }
+
+    private func line(_ point: MediaMoments.Point) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            HStack(spacing: 4) {
+                if row.file.exists {
+                    Image(systemName: row.file.youtubeId != nil ? "arrow.up.right" : "play.fill")
+                        .font(.system(size: 11, weight: .semibold)).accessibilityHidden(true)
+                }
+                Text(MediaMoments.time(point.startMs)).type(Typography.body.weight(600)).monospacedDigit()
+            }
+            .foregroundStyle(palette.ink)
+            .padding(.vertical, 3).padding(.horizontal, 6)
+            .background(Capsule().stroke(row.file.exists ? palette.signal : .clear, lineWidth: 1))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(point.label).type(Typography.body.weight(600)).foregroundStyle(palette.ink)
+                Text("“" + point.quote + "”").type(Typography.body).foregroundStyle(palette.inkSoft)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .frame(minHeight: 44, alignment: .topLeading)
+        .contentShape(Rectangle())
+    }
+}
+
+struct RichMediaPlayer: View {
+    let viewer: ScreenModel.MediaViewer
+    let close: () -> Void
+    @Environment(\.palette) private var palette
+    @Environment(\.scenePhase) private var phase
+    @State private var player = AVPlayer()
+    @State private var running = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if viewer.file.mediaType == "video" {
+                VideoPlayer(player: player).frame(height: 110)
+                    .accessibilityLabel(viewer.file.name)
+            }
+            HStack(spacing: 8) {
+                Button { toggle() } label: {
+                    Image(systemName: running ? "pause.fill" : "play.fill")
+                        .frame(width: 44, height: 44)
+                }
+                .accessibilityLabel(running ? "Pause recording" : "Play recording")
+                TimelineView(.animation(minimumInterval: 0.25, paused: !running)) { _ in
+                    let current = milliseconds
+                    let point = viewer.file.moments?.points.last { $0.startMs <= current }
+                    let duration = max(1, viewer.file.moments?.durationMs ?? 1)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(point.map { MediaMoments.time($0.startMs) + " · " + $0.label } ?? viewer.file.name)
+                            .type(Typography.body.weight(600)).lineLimit(1)
+                        ProgressView(value: min(1, Double(current) / Double(duration))).tint(palette.ink)
+                        Text(MediaMoments.time(current) + " / " + MediaMoments.time(duration))
+                            .type(Typography.body).foregroundStyle(palette.inkSoft).monospacedDigit()
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                Button(action: close) { Image(systemName: "xmark").frame(width: 44, height: 44) }
+                    .accessibilityLabel("Close recording")
+            }
+            .buttonStyle(.plain)
+        }
+        .foregroundStyle(palette.ink)
+        .padding(8)
+        .background(RoundedRectangle(cornerRadius: 12).fill(palette.surface))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(palette.lineFaint, lineWidth: 1))
+        .onAppear {
+            player.replaceCurrentItem(with: AVPlayerItem(url: viewer.url))
+            seek(viewer.selection.startMs)
+        }
+        .onChange(of: viewer.selection) { _, selection in
+            if viewer.file.moments?.points.last(where: { $0.startMs <= milliseconds })?.startMs == selection.startMs {
+                toggle()
+            } else {
+                seek(selection.startMs)
+            }
+        }
+        .onReceive(player.publisher(for: \.timeControlStatus)) { running = $0 != .paused }
+        .onChange(of: phase) { _, phase in if phase != .active { player.pause() } }
+        .onDisappear { player.pause(); player.replaceCurrentItem(with: nil) }
+    }
+
+    private var milliseconds: Int {
+        let seconds = player.currentTime().seconds
+        return seconds.isFinite ? max(0, Int(seconds * 1000)) : 0
+    }
+
+    private func seek(_ milliseconds: Int) {
+        let time = CMTime(value: Int64(milliseconds), timescale: 1000)
+        player.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero)
+        if phase == .active { player.play() }
+    }
+
+    private func toggle() {
+        if player.timeControlStatus == .paused, phase == .active { player.play() }
+        else { player.pause() }
     }
 }
 

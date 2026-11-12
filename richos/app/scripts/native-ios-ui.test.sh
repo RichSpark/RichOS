@@ -224,8 +224,9 @@ let expect: [String: (M) -> Bool] = [
     "upd-feature-off": { $0.connection?.kind == .voicePaused && !$0.composer.voiceAvailable },
     "launch-cached": { $0.thread.cached && $0.thread.rows.count == 10 },
     "ask-open": { if case .question(let q, nil, nil, false)? = $0.thread.rows.last?.body { return q.state == "open" && q.options.count == 2 } else { return false } },
+    "media-ledger": { $0.thread.rows.last?.richFiles.first?.file.moments?.points.first?.startMs == 13000 },
 ]
-check(Fixture.all.count == 63 + 6 + 2, "the core has all 63 in-app round-12 fixtures, pairing v2's 6 D05's Tailscale line and round-13's question (it has \(Fixture.all.count))")
+check(Fixture.all.count == 63 + 6 + 3, "the core has all 63 round-12 fixtures, pairing v2's 6, the Tailscale line, the question and Ledger (it has \(Fixture.all.count))")
 // D05: the Tailscale line names the fix, in the words Android shows, and nothing pulses beside it.
 do {
     let w = ConnectionWords.words(.tailscaleOff)

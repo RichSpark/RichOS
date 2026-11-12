@@ -13,6 +13,12 @@ public struct RichFile: Codable, Equatable, Sendable {
     public var bytes: Int64?
     /// `false` when the file was moved or deleted on the Mac.
     public var exists: Bool
+    public var moments: MediaMoments?
+    public var youtubeId: String?
+    public var mediaType: String?
+    public var downloadName: String?
+
+    public var transferName: String { downloadName ?? name }
 
     public init(id: String, name: String, ext: String = "FILE", type: String = "", meta: String = "", bytes: Int64? = nil, exists: Bool = true) {
         self.id = id; self.name = name; self.ext = ext; self.type = type; self.meta = meta; self.bytes = bytes; self.exists = exists
@@ -27,7 +33,40 @@ public struct RichFile: Codable, Equatable, Sendable {
         meta = try c.decodeIfPresent(String.self, forKey: .meta) ?? ""
         bytes = try c.decodeIfPresent(Int64.self, forKey: .bytes)
         exists = try c.decodeIfPresent(Bool.self, forKey: .exists) ?? true
+        moments = try c.decodeIfPresent(MediaMoments.self, forKey: .moments)
+        youtubeId = try c.decodeIfPresent(String.self, forKey: .youtubeId)
+        mediaType = try c.decodeIfPresent(String.self, forKey: .mediaType)
+        downloadName = try c.decodeIfPresent(String.self, forKey: .downloadName)
     }
+}
+
+public struct MediaMoments: Codable, Equatable, Sendable {
+    public struct Point: Codable, Equatable, Sendable {
+        public var startMs: Int
+        public var label: String
+        public var quote: String
+    }
+
+    public var durationMs: Int
+    public var points: [Point]
+    public var waveform: String?
+
+    public static func time(_ milliseconds: Int) -> String {
+        let seconds = max(0, milliseconds / 1000)
+        return seconds >= 3600
+            ? String(format: "%d:%02d:%02d", seconds / 3600, seconds / 60 % 60, seconds % 60)
+            : String(format: "%d:%02d", seconds / 60, seconds % 60)
+    }
+
+    public static func youtube(_ id: String, at milliseconds: Int) -> URL? {
+        guard id.utf8.count == 11, id.range(of: #"^[A-Za-z0-9_-]+$"#, options: .regularExpression) != nil else { return nil }
+        return URL(string: "https://www.youtube.com/watch?v=\(id)&t=\(max(0, milliseconds / 1000))s")
+    }
+}
+
+public struct MediaSelection: Codable, Equatable, Sendable {
+    public var startMs: Int
+    public var tap: Int
 }
 
 /// Where one of Rich's files stands on this phone. TRANSIENT: after a relaunch a tap looks on disk
@@ -54,6 +93,7 @@ public struct FileFetch: Codable, Equatable, Sendable {
     public var path: String?
     /// The person tapped it: the viewer opens as soon as it is here.
     public var open = false
+    public var media: MediaSelection?
 
     public init(id: String, state: State, received: Int64 = 0, total: Int64? = nil, reason: String? = nil, path: String? = nil, open: Bool = false) {
         self.id = id; self.state = state; self.received = received; self.total = total; self.reason = reason; self.path = path; self.open = open

@@ -147,7 +147,7 @@ extension Action: Codable {
         case "share-take": self = .takeShare(try need(w.intake, "intake"), at: w.at ?? now)
         case "notification-focused": self = .clearFocus
         case "reply-play": self = .hearReply(id: try need(w.id, "id"))
-        case "file-open": self = .openRichFile(id: try need(w.id, "id"))
+        case "file-open": self = .openRichFile(id: try need(w.id, "id"), momentMs: w.at.flatMap(Int.init(exactly:)))
         case "file-stop": self = .stopRichFile(id: try need(w.id, "id"))
         case "file-progress": self = .richFileProgress(id: try need(w.id, "id"), received: try need(w.received, "received"))
         case "file-arrived": self = .richFileArrived(id: try need(w.id, "id"), path: try need(w.path, "path"))
@@ -267,7 +267,7 @@ extension Action: Codable {
         case .takeShare(let intake, let at): w = Wire("share-take"); w.intake = intake; w.at = at
         case .clearFocus: w = Wire("notification-focused")
         case .hearReply(let id): w = Wire("reply-play"); w.id = id
-        case .openRichFile(let id): w = Wire("file-open"); w.id = id
+        case .openRichFile(let id, let momentMs): w = Wire("file-open"); w.id = id; w.at = momentMs.map(Int64.init)
         case .stopRichFile(let id): w = Wire("file-stop"); w.id = id
         case .richFileProgress(let id, let received): w = Wire("file-progress"); w.id = id; w.received = received
         case .richFileArrived(let id, let path): w = Wire("file-arrived"); w.id = id; w.path = path
