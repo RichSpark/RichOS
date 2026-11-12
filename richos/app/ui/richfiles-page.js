@@ -94,14 +94,17 @@
     schedule();
   }
 
-  bridge.invoke("richfiles_pane_available", {}).then((available) => {
+  bridge.invoke("richfiles_pane_available", {}).then(async (available) => {
     if (available !== true) return;
     rail.registerPage("richfiles", { show, hide });
     button.hidden = false;
     window.RichFilesPage = { available: true };
-    if (bridge.listen) bridge.listen("rich://richfiles-show", requestPane);
-    bridge.invoke("richfiles_request_pending", {}).then((pending) => {
-      if (pending === true) requestPane();
-    }).catch(() => {});
+    try {
+      await bridge.listen?.("rich://richfiles-show", requestPane);
+    } catch {
+      // The initial pending request can still be handled.
+    }
+    const pending = await bridge.invoke("richfiles_request_pending", {});
+    if (pending === true) requestPane();
   }).catch(() => {});
 })();
