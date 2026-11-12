@@ -3059,7 +3059,8 @@ class Reaper(object):
                      % (family, key, (self.now - newest) // 3600))
             planned.append(path)
 
-        self.plan_cargo_units(bc, cargo_roots, planned, walls, idle_s, usual=True)
+        if cargo_roots:
+            self.plan_cargo_units(bc, cargo_roots, planned, walls, idle_s, usual=True)
 
     def plan_cargo_units(self, bc, cargo_roots, planned, walls, idle_s, usual):
         """The cargo-units rows: rule 2 (`usual`, the scheduled sweep only) and rule 3, the
