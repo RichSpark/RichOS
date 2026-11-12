@@ -603,7 +603,7 @@ async function main() {
         }
       };
       const views = [bar("listening", { startedMs: Date.now() }),
-        bar("listening", {destination:"Mail",vocabulary:"Example Company",preview:"Please send the revised forecast."}),
+        bar("listening", {destination:"Mail",vocabulary:"Example Company",previewEnabled:true,preview:"Please send the revised forecast."}),
         bar("listening", {destination:"Mail",previewEnabled:true,previewPaused:true,blockedKeys:true,blockedBy:"1Password"}),
         ...[{state:"sent"},{state:"check",recoverable:true},{state:"not-added",copied:true,destinationChanged:true},
           {state:"not-added",copied:false,recoverable:true},{state:"not-added",copied:true,earlierDraft:true,replacedCopiedDraft:true},
@@ -614,6 +614,7 @@ async function main() {
         for (const [gname, ground] of [["over white", WHITE], ["over black", BLACK]]) {
           const page = await open(browser, BAR, theme);
           await say(page, "dictation-bar", Object.assign(v, { theme }));
+          if (v.preview) assertEqual(await text(page,".dhx-words"),v.preview,"the preview words are present for the contrast walk");
           const ind = v.view === "listening" ? BAR_INDICATORS
             : v.view === "problem" ? [["the problem ring", ".dh-orb", "borderTopColor", ".dh"]].concat(
               v.problem === "no-microphone" || v.problem === "no-accessibility" ? [["Fix it's fill", "#fixIt", "backgroundColor", ".dh"]] : [])
