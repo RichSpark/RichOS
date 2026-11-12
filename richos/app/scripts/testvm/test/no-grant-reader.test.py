@@ -29,6 +29,11 @@ class Summary(unittest.TestCase):
             '2026-11-12 05:36:38.223 RichOS (pid 1050) asked macOS for Accessibility',
             '2026-11-12 05:36:38.286 macOS request window 1b (universalAccessAuthWarn pid 707) brought forward again'])
 
+    def test_two_requests_from_one_process_minutes_apart_are_two(self):
+        log = '\n'.join([ASK.format(t='34:25.724', pid=649), ASK.format(t='34:25.737', pid=649),
+                         ASK.format(t='36:38.223', pid=649), ASK.format(t='36:38.250', pid=649)])
+        self.assertEqual(len(reader.summary(log)), 2)
+
     def test_a_log_without_a_request_says_nothing(self):
         self.assertEqual(reader.summary('2026-11-12 05:00:00.000 Df tccd[1:2] nothing here'), [])
 

@@ -132,10 +132,10 @@ class Actors(unittest.TestCase):
                               'ax': lambda s, mode, *args, app=None: clicks.append((mode, args, app)) or
                               ([{'meta': True}, {'title': 'Deny'}] if mode == 'tree' else [])})()
         watcher = walk.AccessibilityRequests(fake, deny=True)
-        for look in ('', '715', '715', '', '820', '820'):
+        for look in ('', '715', '715', '', '820', '820', '901', '901'):
             watcher.look(look.split())
-        self.assertEqual([e['pids'] for e in watcher.seen], [['715'], ['820']])
-        self.assertEqual([e['answered'] for e in watcher.seen], ['Deny', 'Deny'])
+        self.assertEqual([e['pids'] for e in watcher.seen], [['715'], ['820'], ['901']])  # 901 replaced 820 with no gap
+        self.assertEqual([e['answered'] for e in watcher.seen], ['Deny', 'Deny', 'Deny'])
         self.assertEqual(watcher.seen[0]['words'], ['Deny'])
         self.assertEqual([c for c in clicks if c[0] == 'click'][0][2], 'universalAccessAuthWarn')
 

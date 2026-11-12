@@ -413,7 +413,7 @@ class AccessibilityRequests(threading.Thread):
 
     def __init__(self, walk, deny):
         super().__init__(daemon=True)
-        self.walk, self.deny, self.seen, self.done, self.up = walk, deny, [], threading.Event(), False
+        self.walk, self.deny, self.seen, self.done, self.up = walk, deny, [], threading.Event(), set()
 
     def run(self):
         while not self.done.wait(3):
@@ -423,10 +423,13 @@ class AccessibilityRequests(threading.Thread):
                 continue
 
     def look(self, pids):
-        """One look's request windows (their owners' pids): a window after none is a new request."""
-        if pids and not self.up:
+        """One look's request windows (their owners' pids): a window after none, or one owned by a
+        process the last look did not show (a replacement request), is a new request. The same
+        window brought forward again by another reader cannot be seen this way; no-grant-reader.py's
+        TCC summary shows that one."""
+        if set(pids) - self.up:
             self.record(pids)
-        self.up = bool(pids)
+        self.up = set(pids)
 
     def record(self, pids):
         n = len(self.seen) + 1

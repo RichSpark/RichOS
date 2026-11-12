@@ -101,16 +101,27 @@ WINDOW = re.compile(r'^(\S+ [0-9:.]+) .*universalAccessAuthWarn\[(\d+):[^]]*\] \
                     r'(Window <NSWindow[^>]*> windowNumber=(\w+) ordered front|order window: (\w+) op: 1 )')
 
 
+def seconds(stamp):
+    """`2026-11-12 05:34:25.724` as seconds since that day began."""
+    h, m, s = stamp.split(' ')[1].split(':')
+    return int(h) * 3600 + int(m) * 60 + float(s)
+
+
 def summary(tcc_log):
-    """The lines of summary.txt from the guest's TCC log: RichOS's Accessibility requests, one per
-    process (tccd logs each request twice), and each time macOS's request window was put up or
+    """The lines of summary.txt from the guest's TCC log: each of RichOS's Accessibility requests
+    (tccd logs each one twice, folded into one), and each time macOS's request window was put up or
     brought forward, with its window number (the same number again is the same window, re-raised)."""
-    out, asked, shown = [], set(), set()
+    out, last_ask, shown = [], {}, set()
     for line in tcc_log.splitlines():
         m = REQUEST.match(line)
-        if m and m.group(2) not in asked:
-            asked.add(m.group(2))
-            out.append('%s RichOS (pid %s) asked macOS for Accessibility' % (m.group(1), m.group(2)))
+        if m:
+            # tccd logs one request as two lines about 13 ms apart; a request from the same process
+            # more than a second later is a request of its own.
+            at = seconds(m.group(1))
+            previous = last_ask.get(m.group(2))
+            last_ask[m.group(2)] = at
+            if previous is None or at - previous > 1:
+                out.append('%s RichOS (pid %s) asked macOS for Accessibility' % (m.group(1), m.group(2)))
         m = WINDOW.match(line)
         if m:
             number = m.group(4) or m.group(5)
