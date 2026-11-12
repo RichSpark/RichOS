@@ -624,10 +624,26 @@ mod tests {
         assert!(s.log().contains(&format!("DELETED {}", crashed.display())), "{}", s.log());
 
         s.end(process);
-        let quit = s.sweeper().run(Moment::Quit).expect("the quit sweep ran");
+        let quit = quit_once_no_other_sweep_runs(&s.sweeper()).expect("the quit sweep ran");
         assert!(!running.exists(), "a session that ended is gone at quit: {quit:?}");
         assert!(!mine.exists() && !mine_standing.exists(), "the quitting app's own profile is gone at quit: {quit:?}");
         assert!(open.exists() && foreign.exists(), "{quit:?}");
+    }
+
+    /// A quit is skipped while another sweep in this process runs, and in the test binary that is
+    /// another test's sweep running in parallel (the proof run of 2026-11-12 caught it: "the quit
+    /// sweep ran: another sweep was still running"). So wait for that one to end, bounded.
+    fn quit_once_no_other_sweep_runs(sweeper: &Sweeper) -> Result<Outcome, String> {
+        let deadline = Instant::now() + Duration::from_secs(120);
+        loop {
+            let quit = sweeper.run(Moment::Quit);
+            match &quit {
+                Err(e) if e.contains("this one is skipped") && Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(50))
+                }
+                _ => return quit,
+            }
+        }
     }
 
     /// A quit never waits behind a long low-disk sweep; the other moments wait only their own bound.
