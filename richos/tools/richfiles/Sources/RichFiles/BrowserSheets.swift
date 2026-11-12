@@ -23,6 +23,7 @@ enum BrowserSheet: Identifiable {
     case duplicates(URL)
     case compare(URL)
     case fileShelf(BrowserTransferDestination)
+    case trashFailures([FileReference])
     case trash, transfers, searchOptions, batch([FileReference]), connect, workspaces, actionPalette
 
     var id: String {
@@ -38,6 +39,7 @@ enum BrowserSheet: Identifiable {
         case .duplicates: return "duplicates"
         case .compare: return "compare"
         case .fileShelf: return "fileShelf"
+        case .trashFailures: return "trashFailures"
         case .trash: return "trash"
         case .transfers: return "transfers"
         case .searchOptions: return "searchOptions"
@@ -923,42 +925,125 @@ struct OpenWithSheet: View {
 struct TrashSheet: View {
     @ObservedObject var actions: BrowserActions
     @Environment(\.dismiss) private var dismiss
+    @State private var index: TrashIndex?
+    @State private var problem = ""
+    @State private var refresh = UUID()
+    @State private var reviewedDeletion: [TrashListEntry] = []
+    @State private var confirmingEmpty = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Trash").font(.headline)
-            if actions.trashItems.isEmpty {
-                Text("Items moved to Trash by RichFiles appear here.")
-                    .foregroundStyle(.secondary)
-            }
-            List(actions.trashItems) { item in
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(item.originalURL.lastPathComponent).font(.body.weight(.medium))
-                    Text(item.originalURL.deletingLastPathComponent().path).font(.caption).textSelection(.enabled)
-                    Text(formattedDate(item.trashedAt)).font(.caption).foregroundStyle(.secondary)
-                    HStack {
-                        Button("Restore") { actions.restore(item) }
-                        Button("Restore To…") { chooseFolder(for: item) }
-                    }.disabled(actions.busy || !item.canRestore)
-                }.padding(.vertical, 3)
+            if let index {
+                if index.inaccessible > 0 {
+                    Text("Some Trash locations could not be read.").font(.caption).foregroundStyle(.secondary)
+                }
+                if index.entries.isEmpty {
+                    Text(index.inaccessible == 0 ? "Trash is empty." : "No readable items.")
+                        .foregroundStyle(.secondary)
+                }
+                List(index.entries) { entry in
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(entry.name).font(.body.weight(.medium))
+                        Text(entry.originalFolder ?? "Original folder unavailable").font(.caption).textSelection(.enabled)
+                        if let date = entry.dateAdded {
+                            Text(formattedDate(date)).font(.caption).foregroundStyle(.secondary)
+                        }
+                        HStack {
+                            if let known = entry.known {
+                                Button("Restore") { actions.restore(known) }.disabled(!known.canRestore)
+                            }
+                            Button("Restore To…") { chooseFolder(for: entry) }.disabled(entry.reference == nil)
+                        }.disabled(actions.busy).buttonStyle(.borderless)
+                    }.padding(.vertical, 3)
+                }
+            } else if problem.isEmpty {
+                ProgressView("Reading Trash…")
+                Spacer()
+            } else {
+                Text(problem).foregroundStyle(.secondary)
+                Spacer()
             }
             if !actions.status.isEmpty { Text(actions.status).font(.callout).foregroundStyle(.secondary) }
             HStack {
+                Button("Refresh") { refresh = UUID() }.disabled(actions.busy)
+                Button("Open in Finder") { openSystemTrash() }
                 Spacer()
+                if let index, index.entries.contains(where: \.canDelete) {
+                    Button(index.inaccessible == 0 ? "Empty Trash…" : "Delete Listed Items…") {
+                        reviewedDeletion = index.entries.filter(\.canDelete)
+                        confirmingEmpty = true
+                    }.disabled(actions.busy)
+                }
                 Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
             }
-        }.padding(14).frame(width: 560, height: 400)
+        }.padding(14).frame(width: 610, height: 425)
+            .task(id: refresh) { await readTrash() }
+            .onChange(of: actions.mutationRevision) { _ in refresh = UUID() }
+            .alert("Permanently delete \(reviewedDeletion.count) Trash items?", isPresented: $confirmingEmpty) {
+                Button("Cancel", role: .cancel) { reviewedDeletion = [] }
+                Button("Delete Permanently", role: .destructive) {
+                    actions.deletePermanently(reviewedDeletion.compactMap(\.reference), trash: reviewedDeletion.compactMap(\.known))
+                    reviewedDeletion = []
+                }
+            } message: { Text("These items cannot be recovered from Trash.") }
     }
 
-    private func chooseFolder(for item: BrowserTrashItem) {
+    private func readTrash() async {
+        let receipts = actions.trashItems
+        do {
+            let current = try await readStorage { try TrashIndex.read(known: receipts) }
+            if !Task.isCancelled { index = current; problem = "" }
+        } catch {
+            if !Task.isCancelled { problem = error.localizedDescription }
+        }
+    }
+
+    private func chooseFolder(for item: TrashListEntry) {
         let panel = NSOpenPanel()
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false
         panel.prompt = "Restore Here"
         panel.begin { result in
-            if result == .OK, let folder = panel.url { actions.restore(item, into: folder) }
+            if result == .OK, let folder = panel.url { actions.restoreFromTrash(item, into: folder) }
         }
+    }
+
+    private func openSystemTrash() {
+        guard let folder = FileManager.default.urls(for: .trashDirectory, in: .userDomainMask).first,
+              let finder = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.finder") else { return }
+        NSWorkspace.shared.open([folder], withApplicationAt: finder,
+                                configuration: NSWorkspace.OpenConfiguration(), completionHandler: nil)
+    }
+}
+
+@MainActor
+struct TrashFailuresSheet: View {
+    let sources: [FileReference]
+    @ObservedObject var actions: BrowserActions
+    @Environment(\.dismiss) private var dismiss
+    @State private var confirming = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Could Not Move to Trash").font(.headline)
+            List(sources, id: \.url) { item in
+                Text(item.url.path).lineLimit(1).truncationMode(.head).textSelection(.enabled)
+            }
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button("Delete Permanently…") { confirming = true }.disabled(actions.busy)
+            }
+        }.padding(14).frame(width: 560, height: 330)
+            .alert("Permanently delete \(sources.count) items?", isPresented: $confirming) {
+                Button("Cancel", role: .cancel) {}
+                Button("Delete Permanently", role: .destructive) {
+                    actions.deletePermanently(sources, afterTrashFailure: true)
+                    dismiss()
+                }
+            } message: { Text("These items will be removed from their current folders and cannot be recovered from Trash.") }
     }
 }
 

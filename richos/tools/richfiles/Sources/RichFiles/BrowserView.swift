@@ -813,6 +813,9 @@ struct BrowserView: View {
                     sheet = .transfers
                 }.buttonStyle(.borderless)
             }
+            if !actions.untrashed.isEmpty {
+                Button("Review Trash Failures…") { sheet = .trashFailures(actions.untrashed) }.buttonStyle(.borderless)
+            }
             if model.busy && model.searchActive { Button("Stop Search") { model.stopSearch() }.buttonStyle(.borderless) }
             let itemCount = "\(model.entries.count) \(model.searchActive ? "results" : "items")"
             if !model.status.isEmpty && model.status != itemCount {
@@ -1204,6 +1207,7 @@ struct BrowserView: View {
         case .compare(let folder): CompareFoldersSheet(first: folder, actions: actions, openFolder: model.openFolder)
         case .checksum(let reference): ChecksumSheet(file: reference)
         case .trash: TrashSheet(actions: actions)
+        case .trashFailures(let sources): TrashFailuresSheet(sources: sources, actions: actions)
         case .transfers: TransferSheet(actions: actions)
         case .searchOptions: SearchOptionsSheet(model: model)
         case .batch(let references): BatchRenameSheet(sources: references, folder: model.folder, actions: actions)

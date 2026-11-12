@@ -15,7 +15,8 @@ struct BrowserTrashItem: Identifiable, Codable, Sendable {
     var originalURL: URL { receipt.original.url }
     var trashedAt: Date { receipt.trashedAt }
     var trashURL: URL? { receipt.trashLocation }
-    var canRestore: Bool { receipt.trashed != nil }
+    var reference: FileReference? { receipt.trashed }
+    var canRestore: Bool { reference != nil }
 }
 
 @MainActor
@@ -30,6 +31,7 @@ final class BrowserActions: ObservableObject {
     @Published private(set) var shelf: [FileReference] = []
     @Published private(set) var cutURLs: Set<URL> = []
     @Published private(set) var trashItems: [BrowserTrashItem] = []
+    @Published private(set) var untrashed: [FileReference] = []
     @Published private(set) var undoName: String?
     @Published private(set) var redoName: String?
     @Published private(set) var lastCreatedURL: URL?
@@ -438,6 +440,7 @@ final class BrowserActions: ObservableObject {
         runMutation(title: "Move to Trash") {
             var items: [BrowserTrashItem] = []
             var issues: [String] = []
+            var failures: [FileReference] = []
             for source in sources {
                 do {
                     let item = BrowserTrashItem(receipt: try FileOperations.trash(source))
@@ -446,6 +449,7 @@ final class BrowserActions: ObservableObject {
                         issues.append("\(source.url.lastPathComponent): Use Finder to restore this item from Trash.")
                     }
                 } catch {
+                    failures.append(source)
                     issues.append("\(source.url.lastPathComponent): \(error.localizedDescription)")
                 }
             }
@@ -453,7 +457,7 @@ final class BrowserActions: ObservableObject {
                 message: "Moved \(items.count) of \(sources.count) items to Trash.",
                 issues: issues, changed: !items.isEmpty,
                 undo: items.reversed().filter(\.canRestore).map(HistoryStep.restore),
-                trashChanges: items.map(TrashChange.add)
+                trashChanges: items.map(TrashChange.add), untrashed: failures
             )
         }
     }
@@ -466,6 +470,44 @@ final class BrowserActions: ObservableObject {
                 message: "Restored \(restored.url.lastPathComponent).", changed: true,
                 undo: [.trash(restored)], trashChanges: [.remove(item.id)]
             )
+        }
+    }
+
+    func restoreFromTrash(_ entry: TrashListEntry, into folder: URL) {
+        if let known = entry.known {
+            restore(known, into: folder)
+            return
+        }
+        guard let source = entry.reference else { return }
+        runMutation(title: "Restore") {
+            let moved = try FileOperations.move(source, into: folder)
+            return MutationResult(message: "Restored \(moved.moved.url.lastPathComponent).", changed: true,
+                                  undo: [.undoMove(moved, canRedoRename: false)])
+        }
+    }
+
+    func deletePermanently(_ confirmed: [FileReference], trash: [BrowserTrashItem] = [], afterTrashFailure: Bool = false) {
+        let sources = unique(confirmed)
+        let previousFailures = untrashed
+        guard !sources.isEmpty else { return }
+        runMutation(title: "Delete Permanently") {
+            var removed: [FileReference] = []
+            var changes: [TrashChange] = []
+            var issues: [String] = []
+            for source in sources {
+                do {
+                    let remaining = try FileOperations.deletePermanently(source)
+                    removed.append(source)
+                    for item in trash where item.reference == source { changes.append(.remove(item.id)) }
+                    if let remaining { issues.append("Temporary cleanup failed at \(remaining.path).") }
+                } catch {
+                    issues.append("\(source.url.lastPathComponent): \(error.localizedDescription)")
+                }
+            }
+            let deleted = Dictionary(uniqueKeysWithValues: removed.map { ($0.url.path, $0) })
+            let remaining = afterTrashFailure ? previousFailures.filter { deleted[$0.url.path] != $0 } : nil
+            return MutationResult(message: "Permanently deleted \(removed.count) of \(sources.count) items.",
+                                  issues: issues, changed: !removed.isEmpty, trashChanges: changes, untrashed: remaining)
         }
     }
 
@@ -559,6 +601,7 @@ final class BrowserActions: ObservableObject {
 
     private func finishMutation(_ mutation: MutationResult, title: String) {
         applyTrashChanges(mutation.trashChanges)
+        if let untrashed = mutation.untrashed { self.untrashed = untrashed }
         if mutation.changed {
             redoHistory.removeAll()
             let restoredIDs = Set(mutation.trashChanges.compactMap { change -> UUID? in
@@ -665,6 +708,7 @@ private struct MutationResult: Sendable {
     var undo: [HistoryStep] = []
     var trashChanges: [TrashChange] = []
     var createdURL: URL?
+    var untrashed: [FileReference]?
 }
 
 private enum TrashChange: Sendable {

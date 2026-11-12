@@ -24,6 +24,22 @@ final class FileOperationsTests: XCTestCase {
         }
     }
 
+    func testPermanentDeletionRejectsReplacedSelection() throws {
+        try withFixture { root in
+            let original = try write("original", named: "item.png", in: root)
+            let parked = try FileOperations.rename(original, to: "parked.png").moved
+            let replacement = try write("replacement", named: "item.png", in: root)
+
+            XCTAssertThrowsError(try FileOperations.deletePermanently(original))
+            XCTAssertEqual(try contents(parked), "original")
+            XCTAssertEqual(try contents(replacement), "replacement")
+
+            XCTAssertNil(try FileOperations.deletePermanently(replacement))
+            XCTAssertFalse(FileManager.default.fileExists(atPath: replacement.url.path))
+            XCTAssertEqual(try contents(parked), "original")
+        }
+    }
+
     func testMoveAndUndoPreserveIdentityAndRefuseOccupiedNames() throws {
         try withFixture { root in
             let source = try write("original", named: "plan.txt", in: root)

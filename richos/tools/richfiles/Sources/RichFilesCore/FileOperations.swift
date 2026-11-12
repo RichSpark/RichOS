@@ -186,6 +186,7 @@ public enum FileOperationError: LocalizedError {
     case destinationInsideSource
     case unsupportedCopySource(URL)
     case trashLocationUnknown
+    case permanentDeleteNeedsReview(original: URL, staging: URL)
     case replacementRequiresFiles
     case replacementNeedsReview(URL)
     case system(operation: String, location: URL, code: Int32)
@@ -216,6 +217,8 @@ public enum FileOperationError: LocalizedError {
             return "Choose a destination outside the source folder."
         case .unsupportedCopySource(let url):
             return "This type of item cannot be copied from \(url.path)."
+        case .permanentDeleteNeedsReview(let original, let staging):
+            return "Deletion could not be confirmed for \(original.path). Check the temporary location at \(staging.path)."
         case .trashLocationUnknown:
             return "The system did not provide a verifiable location in Trash."
         case .replacementRequiresFiles:
@@ -733,6 +736,40 @@ public enum FileOperations {
             throw FileOperationError.folderNotEmpty(source.url)
         }
         return try trash(source, expected: FileVersion(before))
+    }
+
+    /// Permanently remove the exact item confirmed by the user. An exclusive
+    /// rename isolates it before removal so a late replacement at the old path survives.
+    public static func deletePermanently(_ source: FileReference) throws -> URL? {
+        let parent = try OpenFolder(source.parent)
+        try parent.verifyLocation()
+        _ = try parent.verifiedStatus(of: source)
+        let manager = FileManager.default
+        let location = try manager.url(for: .itemReplacementDirectory, in: .userDomainMask,
+                                       appropriateFor: parent.url, create: true)
+        let staging = try OpenFolder(location)
+        let moved: FileReference
+        do {
+            try staging.verifyLocation()
+            guard fchmod(staging.descriptor, 0o700) == 0 else {
+                throw FileOperationError.system(operation: "Could not secure the temporary folder", location: staging.url, code: errno)
+            }
+            moved = try relocate(source, into: staging, named: source.name).moved
+        } catch FileOperationError.moveNeedsReview {
+            throw FileOperationError.permanentDeleteNeedsReview(original: source.url, staging: staging.url)
+        } catch {
+            try? removeStagingFolder(staging)
+            throw error
+        }
+        do {
+            try staging.verifyLocation()
+            _ = try staging.verifiedStatus(of: moved)
+            try manager.removeItem(at: moved.url)
+        } catch {
+            throw FileOperationError.permanentDeleteNeedsReview(original: source.url, staging: staging.url)
+        }
+        do { try removeStagingFolder(staging); return nil }
+        catch { return staging.url }
     }
 
     /// Restores to the original folder identity, or to an alternate folder explicitly supplied
