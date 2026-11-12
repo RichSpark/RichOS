@@ -73,6 +73,9 @@ impl PreviewProgress {
         match reason {
             "stale_result" => {},
             "decoder_deadline" if self.has_words => {},
+            // A short recovery window can contain too little new speech to
+            // yield useful words, especially on the first tick after a pause.
+            "transcript_rejected" if self.has_words && !matches!(self.window, PreviewWindow::Full) => {},
             _ => return false,
         }
         self.window = PreviewWindow::Short;
@@ -167,16 +170,13 @@ pub fn run(recording: Arc<Mutex<Option<Recording>>>, data_dir: &Path, stop: &Ato
         if stop.load(Ordering::Acquire) { return; }
         let result = result.and_then(|(decoded, max_age)| {
             (sampled_at.elapsed() <= max_age).then_some(decoded).ok_or("stale_result")
+        }).and_then(|(text, decode_ms)| {
+            judge_transcript(&text).map(|text| (text, decode_ms)).map_err(|_| "transcript_rejected")
         });
         match result {
             Ok((text, decode_ms)) => {
-                match judge_transcript(&text) {
-                    Ok(text) => {
-                        progress.published(sampled_at.elapsed());
-                        send(Update::Words { text: recent_text(&text), sampled_at, decode_ms, input_ms });
-                    }
-                    Err(_) => { send(paused("transcript_rejected")); return; }
-                }
+                progress.published(sampled_at.elapsed());
+                send(Update::Words { text: recent_text(&text), sampled_at, decode_ms, input_ms });
             }
             Err(reason) if progress.miss(reason) => send(Update::Missed { reason, input_ms }),
             Err(reason) => { send(paused(reason)); return; }
@@ -245,6 +245,20 @@ mod tests {
         assert!(!progress.quiet(before_expiry, before_expiry - full_window));
         assert!(matches!(progress.window, PreviewWindow::Short));
         assert!(progress.quiet(speech_end + full_window, speech_end));
+    }
+
+    #[test]
+    fn empty_result_during_pause_recovery_does_not_end_preview() {
+        assert!(judge_transcript("").is_err());
+        let mut progress = PreviewProgress::default();
+        assert!(!progress.miss("transcript_rejected"));
+        progress.published(RECOVERY_RESTORE_LIMIT);
+        assert!(!progress.miss("transcript_rejected"));
+        progress.last_speech_end = 6 * SAMPLE_RATE as usize;
+        assert!(!progress.quiet(progress.last_speech_end + RECOVERY_WINDOW_SAMPLES, 0));
+        assert!(progress.miss("transcript_rejected"));
+        progress.published(RECOVERY_RESTORE_LIMIT);
+        assert!(matches!(progress.window, PreviewWindow::ShortAfterFastResult));
     }
 
     #[test]
