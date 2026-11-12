@@ -141,11 +141,12 @@ final class BrowserModelTests: XCTestCase {
         try await waitForListing(model, at: alpha)
         model.selected = [selected]
         model.scrollAnchor = selected
-        model.recordListViewport(firstInAlpha, in: alpha, tab: model.currentTabID)
+        model.recordViewport(firstInAlpha, in: alpha, tab: model.currentTabID, mode: .list)
         model.openFolder(beta)
         try await waitForListing(model, at: beta)
-        model.recordListViewport(firstInBeta, in: beta, tab: model.currentTabID)
-        model.recordListViewport(firstInAlpha, in: alpha, tab: model.currentTabID)
+        model.recordViewport(firstInBeta, in: beta, tab: model.currentTabID, mode: .list)
+        model.recordViewport(firstInAlpha, in: alpha, tab: model.currentTabID, mode: .list)
+        model.recordViewport(firstInAlpha, in: beta, tab: model.currentTabID, mode: .gallery)
 
         model.goBack()
         try await waitForListing(model, at: alpha)
@@ -154,6 +155,12 @@ final class BrowserModelTests: XCTestCase {
         model.goForward()
         try await waitForListing(model, at: beta)
         XCTAssertTrue(model.selected.isEmpty)
+        XCTAssertEqual(model.scrollAnchor, firstInBeta)
+
+        model.scrollAnchor = nil
+        model.recordViewport(firstInBeta, in: beta, tab: model.currentTabID, mode: .list)
+        model.refresh()
+        try await waitForListing(model, at: beta)
         XCTAssertEqual(model.scrollAnchor, firstInBeta)
     }
 

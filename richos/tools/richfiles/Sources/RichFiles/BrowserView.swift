@@ -32,6 +32,7 @@ struct BrowserView: View {
     @State private var prefixTime: TimeInterval = 0
     @State private var listRows = 12
     @State private var iconColumns = 4
+    @State private var detailsViewport = DetailsViewport()
     @State private var dropOperation: DropOperation?
     @State private var dropDestination: BrowserTransferDestination?
     @State private var destinationRefresh = UUID()
@@ -518,27 +519,30 @@ struct BrowserView: View {
                                 emptyItems
                             } else {
                                 ScrollViewReader { items in
-                                    ScrollView {
-                                        LazyVStack(alignment: .leading, spacing: 1) {
-                                            ForEach(model.entries) { entry in
-                                                selectable(entry) {
-                                                    VStack(alignment: .leading, spacing: 1) {
-                                                        HStack {
-                                                            nameLabel(entry)
-                                                            Spacer(minLength: 4)
-                                                            if entry.kind == .directory {
-                                                                Image(systemName: "chevron.right").font(.caption)
-                                                                    .foregroundStyle(.secondary)
+                                    GeometryReader { viewport in
+                                        ScrollView {
+                                            LazyVStack(alignment: .leading, spacing: 1) {
+                                                ForEach(model.entries) { entry in
+                                                    selectable(entry) {
+                                                        VStack(alignment: .leading, spacing: 1) {
+                                                            HStack {
+                                                                nameLabel(entry)
+                                                                Spacer(minLength: 4)
+                                                                if entry.kind == .directory {
+                                                                    Image(systemName: "chevron.right").font(.caption)
+                                                                        .foregroundStyle(.secondary)
+                                                                }
                                                             }
-                                                        }
-                                                        if model.searchActive { resultLocation(entry) }
-                                                    }.frame(minHeight: 23)
+                                                            if model.searchActive { resultLocation(entry) }
+                                                        }.frame(minHeight: 23)
+                                                    }
                                                 }
-                                            }
-                                        }.padding(4)
-                                    }.onAppear { restoreScroll(items) }
+                                            }.padding(4)
+                                        }
+                                        .onPreferenceChange(RowFramesKey.self, perform: viewportObserver(viewport, mode: .columns))
+                                    }.onAppear { restoreScroll(items, anchor: .top) }
                                         .onChange(of: selectionCursor) { if let url = $0 { items.scrollTo(url) } }
-                                        .onChange(of: model.busy) { if !$0 { restoreScroll(items) } }
+                                        .onChange(of: model.busy) { if !$0 { restoreScroll(items, anchor: .top) } }
                                 }
                             }
                         }
@@ -574,23 +578,26 @@ struct BrowserView: View {
                 .accessibilityLabel("Gallery preview")
             Divider()
             ScrollViewReader { scroll in
-                ScrollView(.horizontal) {
-                    LazyHStack(alignment: .top, spacing: 4) {
-                        ForEach(model.entries) { entry in
-                            selectable(entry) {
-                                VStack(spacing: 4) {
-                                    FileThumbnail(entry: entry, side: 62)
-                                    Text(entry.name).font(.caption).lineLimit(1).truncationMode(.middle)
-                                    if model.searchActive { resultLocation(entry) }
-                                }.frame(width: 106).padding(3)
+                GeometryReader { viewport in
+                    ScrollView(.horizontal) {
+                        LazyHStack(alignment: .top, spacing: 4) {
+                            ForEach(model.entries) { entry in
+                                selectable(entry) {
+                                    VStack(spacing: 4) {
+                                        FileThumbnail(entry: entry, side: 62)
+                                        Text(entry.name).font(.caption).lineLimit(1).truncationMode(.middle)
+                                        if model.searchActive { resultLocation(entry) }
+                                    }.frame(width: 106).padding(3)
+                                }
                             }
-                        }
-                    }.padding(6)
+                        }.padding(6)
+                    }
+                    .onPreferenceChange(RowFramesKey.self, perform: viewportObserver(viewport, mode: .gallery))
                 }.frame(height: model.searchActive ? 126 : 109)
                     .accessibilityLabel("Gallery thumbnails")
-                    .onAppear { restoreScroll(scroll) }
+                    .onAppear { restoreScroll(scroll, anchor: .leading) }
                     .onChange(of: selectionCursor) { if let url = $0 { scroll.scrollTo(url) } }
-                    .onChange(of: model.busy) { if !$0 { restoreScroll(scroll) } }
+                    .onChange(of: model.busy) { if !$0 { restoreScroll(scroll, anchor: .leading) } }
             }
         }.accessibilityIdentifier("file-gallery")
     }
@@ -616,6 +623,10 @@ struct BrowserView: View {
             }
         }
         .accessibilityIdentifier("file-details")
+        .onAppear { detailsViewport.show(model.scrollAnchor, alignToTop: true) }
+        .onDisappear { detailsViewport.detach() }
+        .onChange(of: model.busy) { if !$0 { detailsViewport.show(model.scrollAnchor, alignToTop: true) } }
+        .onChange(of: selectionCursor) { if let item = $0 { detailsViewport.show(item, alignToTop: false) } }
         .contextMenu(forSelectionType: URL.self) { ids in
             selectionMenu(model.entries.filter { ids.contains($0.url) })
         } primaryAction: { ids in
@@ -643,6 +654,7 @@ struct BrowserView: View {
             nameLabel(entry)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(dragFrame(for: entry.url))
+                .background(DetailsCellMarker(viewport: detailsViewport, model: model))
         }.width(min: 150, ideal: 260)
     }
 
@@ -674,8 +686,6 @@ struct BrowserView: View {
             let rows = max(1, Int((geometry.size.height - 10) / rowHeight))
             let entries = model.entries
             let columns = (entries.count + rows - 1) / rows
-            let folder = model.folder
-            let tab = model.currentTabID
             ScrollViewReader { scroll in
                 ScrollView(.horizontal) {
                     LazyHStack(alignment: .top, spacing: 8) {
@@ -709,17 +719,7 @@ struct BrowserView: View {
                 .onChange(of: model.busy) { busy in
                     if !busy { scrollList(to: model.scrollAnchor, rows: rows, using: scroll, anchor: .leading) }
                 }
-                .onPreferenceChange(RowFramesKey.self) { frames in
-                    let viewport = CGRect(origin: .zero, size: geometry.size)
-                    let first = frames.lazy.filter { item in
-                        let intersection = item.value.intersection(viewport)
-                        return intersection.width > 0 && intersection.height > 0
-                    }.min { left, right in
-                        if left.value.minX == right.value.minX { return left.value.minY < right.value.minY }
-                        return left.value.minX < right.value.minX
-                    }
-                    if let first { model.recordListViewport(first.key, in: folder, tab: tab) }
-                }
+                .onPreferenceChange(RowFramesKey.self, perform: viewportObserver(geometry, mode: .list))
             }
         }
         .accessibilityIdentifier("file-list")
@@ -749,10 +749,11 @@ struct BrowserView: View {
                         }
                     }.padding(7)
                 }
-                .onAppear { iconColumns = columns; restoreScroll(scroll) }
+                .onAppear { iconColumns = columns; restoreScroll(scroll, anchor: .top) }
                 .onChange(of: columns) { iconColumns = $0 }
                 .onChange(of: selectionCursor) { value in if let value { scroll.scrollTo(value) } }
-                .onChange(of: model.busy) { busy in if !busy { restoreScroll(scroll) } }
+                .onChange(of: model.busy) { busy in if !busy { restoreScroll(scroll, anchor: .top) } }
+                .onPreferenceChange(RowFramesKey.self, perform: viewportObserver(geometry, mode: .icons))
             }
         }
         .accessibilityIdentifier("file-thumbnails")
@@ -1109,8 +1110,29 @@ struct BrowserView: View {
         return false
     }
 
-    private func restoreScroll(_ scroll: ScrollViewProxy) {
-        if let anchor = model.scrollAnchor { scroll.scrollTo(anchor) }
+    private func viewportObserver(_ geometry: GeometryProxy, mode: BrowserViewMode) -> ([URL: CGRect]) -> Void {
+        let folder = model.folder
+        let tab = model.currentTabID
+        let horizontal = mode == .list || mode == .gallery
+        return { frames in
+            let viewport = geometry.frame(in: .named("richfiles-items"))
+            let first = frames.lazy.filter { item in
+                let intersection = item.value.intersection(viewport)
+                return intersection.width > 0 && intersection.height > 0
+            }.min { left, right in
+                let lhs = left.value
+                let rhs = right.value
+                if horizontal {
+                    return lhs.minX == rhs.minX ? lhs.minY < rhs.minY : lhs.minX < rhs.minX
+                }
+                return lhs.minY == rhs.minY ? lhs.minX < rhs.minX : lhs.minY < rhs.minY
+            }
+            if let first { model.recordViewport(first.key, in: folder, tab: tab, mode: mode) }
+        }
+    }
+
+    private func restoreScroll(_ scroll: ScrollViewProxy, anchor: UnitPoint) {
+        if let item = model.scrollAnchor { scroll.scrollTo(item, anchor: anchor) }
     }
 
     private func editAddress() {

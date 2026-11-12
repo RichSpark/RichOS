@@ -130,7 +130,7 @@ final class BrowserModel: ObservableObject {
     @Published var viewMode: BrowserViewMode {
         didSet {
             guard oldValue != viewMode else { return }
-            visibleListItem = nil
+            firstVisibleItem = nil
             if !restoringView { changeView { $0.mode = viewMode } }
         }
     }
@@ -208,7 +208,7 @@ final class BrowserModel: ObservableObject {
     private var restoringView = false
     private var settingSelection = false
     private var selectionToRestore: Set<URL> = []
-    private var visibleListItem: URL?
+    private var firstVisibleItem: URL?
     private var scanTask: Task<Void, Never>?
     private var scanID: UUID?
     private var navigationTask: Task<Void, Never>?
@@ -275,9 +275,9 @@ final class BrowserModel: ObservableObject {
         reloadPreservingSelection()
     }
 
-    func recordListViewport(_ firstItem: URL, in folder: URL, tab: UUID) {
-        guard !busy, viewMode == .list, self.folder == folder, currentTabID == tab else { return }
-        visibleListItem = firstItem
+    func recordViewport(_ firstItem: URL, in folder: URL, tab: UUID, mode: BrowserViewMode) {
+        guard !busy, viewMode == mode, self.folder == folder, currentTabID == tab else { return }
+        firstVisibleItem = firstItem
     }
 
     func goUp() {
@@ -644,8 +644,7 @@ final class BrowserModel: ObservableObject {
     }
 
     private func captureVisit() -> Visit {
-        let anchor = viewMode == .list ? visibleListItem ?? scrollAnchor : scrollAnchor
-        return Visit(folder: folder, selection: selected.union(selectionToRestore), anchor: anchor,
+        Visit(folder: folder, selection: selected.union(selectionToRestore), anchor: firstVisibleItem ?? scrollAnchor,
               search: captureSearch())
     }
 
@@ -686,12 +685,13 @@ final class BrowserModel: ObservableObject {
     }
 
     private func reloadPreservingSelection() {
+        if let firstVisibleItem { scrollAnchor = firstVisibleItem }
         load(restoring: selected.union(selectionToRestore))
     }
 
     private func load(restoring selection: Set<URL> = []) {
         scanTask?.cancel()
-        visibleListItem = nil
+        firstVisibleItem = nil
         let id = UUID()
         scanID = id
         scanReport = nil
