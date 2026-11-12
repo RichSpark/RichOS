@@ -34,6 +34,22 @@ class Summary(unittest.TestCase):
                          ASK.format(t='36:38.223', pid=649), ASK.format(t='36:38.250', pid=649)])
         self.assertEqual(len(reader.summary(log)), 2)
 
+    def verdict_of(self, calls, done=True):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d)
+            (out / 'calls.txt').write_text(calls)
+            if done:
+                (out / 'done.txt').write_text('done\n')
+            return reader.verdict(out, say=lambda *a: None)
+
+    def test_the_run_passes_only_when_every_read_was_answered(self):
+        answer = '  answered at 2026-11-12T05:35:28Z: {"jsonrpc":"2.0","id":%d,"result":{"isError":true}}\n'
+        self.assertEqual(self.verdict_of(''.join(answer % n for n in (1, 2, 3))), 0)
+        self.assertEqual(self.verdict_of(answer % 1 + answer % 2 + '  NO ANSWER within 90 s\n'), 1)
+        self.assertEqual(self.verdict_of(''.join(answer % n for n in (1, 2, 3)), done=False), 1)
+        self.assertEqual(self.verdict_of(''), 1)
+
     def test_a_log_without_a_request_says_nothing(self):
         self.assertEqual(reader.summary('2026-11-12 05:00:00.000 Df tccd[1:2] nothing here'), [])
 

@@ -30,7 +30,8 @@ guest's ssh session CGWindowList shows none of the GUI session's windows (both r
 user who ignores it. A Deny press is conversation-walk.py's guest
 (it needs Accessibility for the harness, which this guest by design does not have).
 
-DIR gets facts.txt, calls.txt (each call's time and the answer's first characters),
+DIR gets facts.txt, calls.txt (each call's time and the answer's first characters, or NO
+ANSWER; any unanswered read, or a guest script that did not finish, fails the run),
 reader.*.out/.err (the JSON-RPC streams), tcc.log, summary.txt and drive.log. The guest is stopped and deleted
 however the run ends, under a held test-VM slot (slots.py), for this run only.
 
@@ -84,7 +85,11 @@ call() {  # $1 process, $2 id
     grep -q "\"id\":$2[,}]" reader.$1.out 2>/dev/null && break
     sleep 1
   done
-  echo "  answered at $(date -u +%FT%TZ): $(grep "\"id\":$2[,}]" reader.$1.out 2>/dev/null | cut -c1-600)" >> calls.txt
+  if grep -q "\"id\":$2[,}]" reader.$1.out 2>/dev/null; then
+    echo "  answered at $(date -u +%FT%TZ): $(grep "\"id\":$2[,}]" reader.$1.out | cut -c1-600)" >> calls.txt
+  else
+    echo "  NO ANSWER within 90 s" >> calls.txt
+  fi
 }
 stop() { kill "$(cat hold.$1)" 2>/dev/null; sleep 3; }
 start a; call a 1; call a 2; stop a
@@ -221,7 +226,22 @@ def main():
                 except subprocess.TimeoutExpired:
                     run.kill()
                 say('delete', tart('delete', vm).returncode)
-    return 0 if (a.out / 'done.txt').exists() else 1
+    return verdict(a.out, say)
+
+
+CALLS = 3
+
+
+def verdict(out, say=print):
+    """0 only when the guest script finished and each of the CALLS reads got a JSON-RPC answer
+    (review rv-20261112T075914Z-88095257-b25f: a reader that never answers was a passing run)."""
+    calls = (out / 'calls.txt').read_text(errors='replace') if (out / 'calls.txt').exists() else ''
+    answered = len(re.findall(r'^  answered at \S+: \{.*"jsonrpc"', calls, re.M))
+    if not (out / 'done.txt').exists() or answered != CALLS:
+        say('measurement FAILED: %d of %d reads answered%s' % (
+            answered, CALLS, '' if (out / 'done.txt').exists() else ', and the guest script did not finish'))
+        return 1
+    return 0
 
 
 if __name__ == '__main__':
