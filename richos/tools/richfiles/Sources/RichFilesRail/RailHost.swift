@@ -137,14 +137,11 @@ private final class RailHost {
     }
 
     private func openStandalone(folder: URL) {
-        let application = RichFilesInstallation.embeddedApplication
-        let configuration = NSWorkspace.OpenConfiguration()
-        NSWorkspace.shared.open([folder], withApplicationAt: application, configuration: configuration) { _, error in
-            if let error {
-                Task { @MainActor in
-                    let alert = NSAlert(error: error)
-                    if let window = self.hosting?.window { alert.beginSheetModal(for: window) }
-                }
+        Task {
+            do {
+                try await RichFilesInstallation.openStandaloneWindow(at: folder)
+            } catch {
+                if let window = hosting?.window { NSAlert(error: error).beginSheetModal(for: window, completionHandler: nil) }
             }
         }
     }

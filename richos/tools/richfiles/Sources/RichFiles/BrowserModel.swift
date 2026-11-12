@@ -313,6 +313,11 @@ final class BrowserModel: ObservableObject {
         return data
     }
 
+    static func sessionData(for folder: URL) throws -> Data {
+        guard isSessionURL(folder) else { throw WorkspaceHandoff.HandoffError.invalid }
+        return try JSONEncoder().encode(Session(activeTab: 0, tabs: [TabState(visit: Visit(folder: folder))]))
+    }
+
     func namedWorkspaces() -> [NamedWorkspace] {
         defaults.dictionaryRepresentation().compactMap { key, value in
             guard key.hasPrefix(Self.workspaceKeyPrefix), let data = value as? Data,

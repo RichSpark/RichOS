@@ -23,6 +23,11 @@ public enum RichFilesInstallation {
     @MainActor public static var dockedRecoveryStore: URL? {
         BrowserActions.recoveryLocation?.deletingLastPathComponent().appendingPathComponent("DockedRecovery.json")
     }
+
+    @MainActor public static func openStandaloneWindow(at folder: URL) async throws {
+        let session = try BrowserModel.sessionData(for: folder)
+        try await WorkspaceHandoff.send(session, to: .standalone, application: embeddedApplication)
+    }
 }
 
 struct FolderWindowRequest: Codable, Hashable {
@@ -32,7 +37,7 @@ struct FolderWindowRequest: Codable, Hashable {
 
 @MainActor
 public struct RichFilesScenes: Scene {
-    private static let fileEvents: Set<String> = ["file://"]
+    private static let browserEvents: Set<String> = ["file://", "richfiles-workspace://"]
     private let delegate: FolderOpenDelegate
     @StateObject private var actions = BrowserActions(recoveryURL: BrowserActions.recoveryLocation)
 
@@ -48,7 +53,7 @@ public struct RichFilesScenes: Scene {
                         launchHandoffID: Self.requestedHandoff, hostSwitch: Self.dockSwitch)
                 .frame(minWidth: 720, minHeight: 420)
                 .defaultAppStorage(RichFilesInstallation.preferences)
-                .handlesExternalEvents(preferring: Self.fileEvents, allowing: Self.fileEvents)
+                .handlesExternalEvents(preferring: Self.browserEvents, allowing: Self.browserEvents)
         }
         .defaultSize(width: 1120, height: 700)
         .commands {
@@ -60,7 +65,7 @@ public struct RichFilesScenes: Scene {
                               actions: actions, openRequests: delegate, hostSwitch: Self.dockSwitch)
                 .frame(minWidth: 720, minHeight: 420)
                 .defaultAppStorage(RichFilesInstallation.preferences)
-                .handlesExternalEvents(preferring: Self.fileEvents, allowing: Self.fileEvents)
+                .handlesExternalEvents(preferring: Self.browserEvents, allowing: Self.browserEvents)
         }
         .defaultSize(width: 1120, height: 700)
 
@@ -70,7 +75,7 @@ public struct RichFilesScenes: Scene {
                               handoffID: ticket, hostSwitch: Self.dockSwitch)
                 .frame(minWidth: 720, minHeight: 420)
                 .defaultAppStorage(RichFilesInstallation.preferences)
-                .handlesExternalEvents(preferring: Self.fileEvents, allowing: Self.fileEvents)
+                .handlesExternalEvents(preferring: Self.browserEvents, allowing: Self.browserEvents)
         }
         .defaultSize(width: 1120, height: 700)
 
