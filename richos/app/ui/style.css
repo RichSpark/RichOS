@@ -14079,7 +14079,7 @@ body[data-page="richfiles"] #sidebar-resize {
 }
 .richfiles-page h1 {
   color: var(--ink);
-  font-size: 16px;
+  font-size: 1rem;
   margin: 0;
 }
 #richfiles-pane {
