@@ -1,3 +1,4 @@
+import AppKit
 import Combine
 import Foundation
 import RichFilesCore
@@ -206,6 +207,7 @@ final class BrowserModel: ObservableObject {
     private var navigationTask: Task<Void, Never>?
     private var navigationID: UUID?
     private var volumeTask: Task<Void, Never>?
+    private var volumeChanges: AnyCancellable?
     private let defaults: UserDefaults
 
     init(start: URL, defaults: UserDefaults = RichFilesInstallation.preferences) {
@@ -231,6 +233,11 @@ final class BrowserModel: ObservableObject {
             BrowserPlace(title: "Documents", symbol: "doc", url: home.appendingPathComponent("Documents", isDirectory: true)),
             BrowserPlace(title: "Downloads", symbol: "arrow.down.circle", url: home.appendingPathComponent("Downloads", isDirectory: true))
         ]
+        let notifications = NSWorkspace.shared.notificationCenter
+        volumeChanges = notifications.publisher(for: NSWorkspace.didMountNotification)
+            .merge(with: notifications.publisher(for: NSWorkspace.didUnmountNotification))
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.refreshVolumes() }
         load()
         refreshVolumes()
     }
