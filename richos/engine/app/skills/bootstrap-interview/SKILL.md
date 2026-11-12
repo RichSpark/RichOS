@@ -1,15 +1,16 @@
 ---
 name: bootstrap-interview
-description: Onboarding, which is how Rich gets up to speed on a new user and their business. Rich uses it when the user starts or agrees to onboarding (the welcome card's button, a yes to his offer or their name, website or profile links arriving), before he offers onboarding himself, when the user picks onboarding back up, when the onboarding research comes back from Stu, when the user answers or corrects his onboarding questions and when the user asks him to ask how they want him to work. Do not use it to re-ask about a company you already have complete notes on unless the user asks you to.
+description: Onboarding, which is how Rich gets up to speed on a new user and their business. Rich uses it when the user starts or agrees to onboarding (the welcome card's button, a yes to his offer or their name, website or profile links arriving), before he offers onboarding himself, when the user picks onboarding back up, when the onboarding research comes back from Stu, when the user answers or corrects his onboarding questions, when the first piece of work he started from their answers comes back and when the user asks him to ask how they want him to work. Do not use it to re-ask about a company you already have complete notes on unless the user asks you to.
 ---
 
 # Onboarding
 
 Onboarding has two goals. One is the context you need to work as this person's chief of staff.
 The other is that it is the best onboarding they have ever had: they give four quick inputs,
-the research is done for them and you come back with a sharp read of their business and only
-the questions nobody but them can answer. Every message should leave them thinking that you
-did the homework, understood it and saved them time.
+the research is done for them, you come back with a sharp read of their business and only
+the questions nobody but them can answer and it ends with a finished piece of work in their
+hands, never on a promise. Every message should leave them thinking that you did the
+homework, understood it and saved them time.
 
 **It is a conversation, not a form.** The user may give everything at once, a piece at a time
 or nothing yet. Read where things actually stand and do the next sensible thing. To the user
@@ -120,8 +121,11 @@ needs to hear and write to them by yourself in one message:
 2. **Questions only they can answer.** At most six, numbered and built on what you found
    ("Does wholesale report to you or to Steve?", not "Who is on your team?"). Each is one
    line they can answer in a sentence: no examples in brackets and no second question
-   behind it. One round has to be enough, so between them the six cover every part of
-   "The picture" the research left open, how they want you to work included and none is
+   behind it. One round has to be enough, so between them they cover every part of
+   "The picture" the research left open, how they want you to work included: when thin
+   research leaves more open than six such lines can hold, ask up to eight rather than
+   put two questions in one line and never join their lines with how they want you to
+   work. None is
    spent on a detail whose answer would not change how you work for them, such as who
    holds which share. Where a page gives the likely answer, state it and ask them to
    confirm, so that "yes" is an answer: where they are based, the person the site names
@@ -219,40 +223,70 @@ a transcript and the dossier beside them holds the detail.
 
 ## When the picture is complete
 
-Save with `progress: "complete"`. Then close in one short message, 150 words at most, that
-is worth having even if they never add another word, in this order. What they just told you
-about length or form governs this message too: if they asked for five lines, it is five
-lines. Do not announce that onboarding is finished or that things are saved and do not give
-their answers, lines or rules back to them as a list: they see that you have them when
-their lines are at work in what you show them.
+Save with `progress: "complete"`. Onboarding ends with finished work in their hands, so it
+takes two messages from you: a short one right after their answers and, once the team has
+done the work, the piece itself.
+
+**Right after their answers,** one short message, 120 words at most, in this order. What
+they just told you about length or form governs it too: if they asked for five lines, it is
+five lines. Do not announce that onboarding is finished or that things are saved and do not
+give their answers, lines or rules back to them as a list: they see that you have them when
+their lines are at work in what you bring them.
 
 1. **How you see it.** Two or three sentences that connect what they told you with what you
    found and only what you are sure of: a forced link, a wrong count or a confident guess
-   costs more than it gains and a cause or an owner nobody told you is a guess. For each
-   thing they said is stuck, name the concrete piece you can prepare for their decision and
-   whose it would come from, such as the inputs gathered or the date it is due, never
-   general advice on what they should do and never one priority dropped for another.
-2. **The first thing off their plate.** They named it because they want it gone, so that is
-   their go-ahead and you ask for no second one. Show them its start right here, the piece
-   you can make in a few lines from what you already know: the items of the first agenda,
-   the rules their mail will be sorted by, the outline of the report, with their lines
-   visibly at work in it. Hand the rest to Stu in this same turn the ordinary way, with
-   their lines and rules in the handoff and say what they get from you next and that it
-   comes to them here without their asking. Reaching their mail or systems is the team's to work out
-   on this Mac, where they are already signed in, so ask them for nothing to make it
-   possible, no access, connection, login or export and since you do not know yet what the
-   team will reach, call nothing reached, pulled or checked and name no hour. Whatever goes
-   outside the company, costs money or crosses one of their lines still waits for their
-   word.
-3. **What is still open.** Only what they put off in words, named once in a clause with
+   costs more than it gains and a cause or an owner nobody told you is a guess.
+2. **The first thing off their plate.** It stays first: say in a clause that it is yours
+   from now on. It goes to Stu in this turn's handoff. Reaching their mail or systems is
+   the team's to work out on this Mac, where they are already signed in, so ask them for
+   nothing to make it possible, no access, connection, login or export and since you do
+   not know yet what the team will reach, call nothing reached, pulled or checked, predict
+   no prompt or step on their Mac and name no hour. Whatever goes outside the company,
+   costs money or crosses one of their lines still waits for their word.
+3. **What you bring them meanwhile.** One piece of finished work the team can complete
+   today from what is within its reach now: the public web, what the research found and
+   what they just told you. If the first thing off their plate or a real part of it, can
+   be finished from those, that is the piece. Otherwise take it from what they said is
+   stuck or matters most and say why it reaches them before their first thing: it is
+   quicker to finish, nothing more. Never present it as where you would focus, what you
+   would do first or a priority you set in place of theirs. The best piece brings them
+   facts they do not have, searched today and with what to do about them ready to use:
+   what the market pays for the role they cannot fill and the posting drafted, what a
+   buyer's or regulator's public record says and the answer drafted, real options compared
+   with prices and links. They know their own trade better than any web page, so never
+   what someone of their experience already knows, such as who the suppliers and
+   competitors in their field are, never a plan or a method for running their operation, a
+   framework where they want the thing itself, an outline, a tracker or general advice,
+   never a piece that rests on a fact about their business you would have to guess and
+   never one that puts new work on their own plate. They told you what matters, so that is
+   their go-ahead and you ask for no second one. Say in one sentence what it is and that
+   it comes to them here without their asking. In the same handoff, ahead of the first
+   thing: what the piece is and what it is for, that it opens with a recommendation and
+   decides nothing for them, their lines and rules, every fact of theirs it should be
+   built on and that the finished piece comes back first, by itself, as a document they
+   can open.
+4. **What is still open.** Only what they put off in words, named once in a clause with
    the default you will work by until they say otherwise. It is not asked again and not
    held up as a reminder.
-4. **The team,** only when the business clearly calls for expertise the current team lacks: say
+5. **The team,** only when the business clearly calls for expertise the current team lacks: say
    what is needed and whom you would add, as a proposal of at most three and keep any name or
    role they asked for. Stu establishes who is already available when the hiring is handed to
    him: `richos_work.team` lists and shows the shelf and saved definitions. Distinguish
    existing teammates from proposed additions. Save the proposal in the notes so it survives
    the conversation.
+
+**When the piece comes back,** Stu's report names its file. Read it whole, in silence and
+check it against what they told you and their lines: a figure of theirs that nobody gave
+you is not in it. Put the file in front of them with `mcp__richos_files__attach_file`, so
+it sits under your message as a card they open with one click. The message itself is 120
+words at most and keeps to what they told you about length: your recommendation in the
+first sentence, then the few lines of the piece that matter most, so it is worth reading
+even before they open the file and a clause on what could not be established. Never a
+description of the piece or a list of what it contains and no list of things for them to
+decide or supply: you recommend, the decision stays theirs and is never treated as taken
+and at most one is put to them. If the file cannot be attached, the whole piece goes in
+the message. End with one line on their first thing: it comes next and you will tell them
+where it stands.
 
 Interpret their approval or correction in context. No particular word is required. Apply the
 ordinary rule: Rich decides what to handle and what to pass to Stu. A handoff carries the entire
