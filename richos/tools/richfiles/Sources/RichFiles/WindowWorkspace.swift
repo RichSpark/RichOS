@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 
 enum BrowserPaneSide: String, Codable {
@@ -115,6 +116,7 @@ struct WindowBrowserView: View {
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage("richfiles.restoreSession") private var restoreSession = false
     @AppStorage("richfiles.lastBrowserSession.v1") private var lastBrowserSession = Data()
+    @AppStorage("richfiles.primaryWindowFrame") private var primaryWindowFrame = ""
     @SceneStorage("richfiles.browserSession.v1") private var savedSession: Data?
     @State private var appeared = false
     @State private var nativeWindowNumber: Int?
@@ -128,6 +130,7 @@ struct WindowBrowserView: View {
     private let acceptsKeyboard: () -> Bool
     private let returnKeyboardFocus: @MainActor @Sendable () -> Void
     private let supportsSessionRestore: Bool
+    private let remembersWindowFrame: Bool
     private let handoffID: String?
     private let launchHandoffID: String?
     private let dockTarget: RichFilesDockTarget?
@@ -141,7 +144,8 @@ struct WindowBrowserView: View {
 
     init(start: URL, actions: BrowserActions, openRequests: FolderOpenDelegate,
          openWindow: ((URL) -> Void)? = nil, acceptsKeyboard: @escaping () -> Bool = { true },
-         supportsSessionRestore: Bool = false, returnKeyboardFocus: @escaping @MainActor @Sendable () -> Void = {},
+         supportsSessionRestore: Bool = false, remembersWindowFrame: Bool = false,
+         returnKeyboardFocus: @escaping @MainActor @Sendable () -> Void = {},
          handoffID: String? = nil, launchHandoffID: String? = nil,
          dockTarget: RichFilesDockTarget? = nil, hostSwitch: HostSwitch? = nil) {
         _workspace = StateObject(wrappedValue: WindowWorkspace(start: start))
@@ -152,6 +156,7 @@ struct WindowBrowserView: View {
         self.acceptsKeyboard = acceptsKeyboard
         self.returnKeyboardFocus = returnKeyboardFocus
         self.supportsSessionRestore = supportsSessionRestore
+        self.remembersWindowFrame = remembersWindowFrame
         self.handoffID = handoffID
         self.launchHandoffID = launchHandoffID
         self.dockTarget = dockTarget
@@ -171,10 +176,7 @@ struct WindowBrowserView: View {
         }
         .background {
             if hostOpenWindow == nil {
-                BrowserWindowReference { number in
-                    nativeWindowNumber = number
-                    receiveFolderOpen()
-                }
+                BrowserWindowReference(report: attachWindow)
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { notice in
@@ -182,6 +184,11 @@ struct WindowBrowserView: View {
                 receiveFolderOpen()
             }
         }
+        .onReceive(Publishers.Merge3(
+            NotificationCenter.default.publisher(for: NSWindow.didMoveNotification),
+            NotificationCenter.default.publisher(for: NSWindow.didResizeNotification),
+            NotificationCenter.default.publisher(for: NSWindow.willCloseNotification)
+        ), perform: saveWindowFrame)
         .disabled(switching)
         .focusedSceneValue(\.browserCommand) { command in
             if !switching { workspace.perform(command) }
@@ -238,6 +245,30 @@ struct WindowBrowserView: View {
         if rememberWindow || !restoreSession { lastBrowserSession = savedSession ?? Data() }
     }
 
+    private func attachWindow(_ window: NSWindow?) {
+        if nativeWindowNumber != window?.windowNumber {
+            nativeWindowNumber = window?.windowNumber
+            if remembersWindowFrame, let window, openRequests.claimPrimaryPlacement(for: window),
+               !primaryWindowFrame.isEmpty {
+                window.setFrame(from: primaryWindowFrame)
+                if !NSScreen.screens.contains(where: { $0.visibleFrame.intersects(window.frame) }) {
+                    window.center()
+                }
+            }
+        }
+        receiveFolderOpen()
+    }
+
+    private func saveWindowFrame(_ notice: Notification) {
+        guard remembersWindowFrame, let window = notice.object as? NSWindow,
+              window.windowNumber == nativeWindowNumber, openRequests.savesPrimaryPlacement(for: window) else { return }
+        if !window.isMiniaturized, !window.styleMask.contains(.fullScreen) {
+            let frame = window.frameDescriptor
+            if frame != primaryWindowFrame { primaryWindowFrame = frame }
+        }
+        if notice.name == NSWindow.willCloseNotification { openRequests.releasePrimaryPlacement(for: window) }
+    }
+
     private func switchHost() {
         guard let hostSwitch, !switching else { return }
         let sourceWindow = NSApp.keyWindow
@@ -283,16 +314,16 @@ struct WindowBrowserView: View {
 }
 
 private struct BrowserWindowReference: NSViewRepresentable {
-    let report: (Int?) -> Void
+    let report: (NSWindow?) -> Void
 
     func makeNSView(context: Context) -> Reporter { Reporter(report: report) }
 
     func updateNSView(_ view: Reporter, context: Context) { view.report = report }
 
     final class Reporter: NSView {
-        var report: (Int?) -> Void
+        var report: (NSWindow?) -> Void
 
-        init(report: @escaping (Int?) -> Void) {
+        init(report: @escaping (NSWindow?) -> Void) {
             self.report = report
             super.init(frame: .zero)
         }
@@ -305,7 +336,7 @@ private struct BrowserWindowReference: NSViewRepresentable {
             super.viewDidMoveToWindow()
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
-                self.report(self.window?.windowNumber)
+                self.report(self.window)
             }
         }
     }

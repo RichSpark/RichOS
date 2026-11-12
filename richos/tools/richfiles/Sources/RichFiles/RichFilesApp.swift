@@ -50,6 +50,7 @@ public struct RichFilesScenes: Scene {
             WindowBrowserView(start: Self.requestedFolder ?? FileManager.default.homeDirectoryForCurrentUser,
                         actions: actions, openRequests: delegate,
                         supportsSessionRestore: Self.requestedFolder == nil,
+                        remembersWindowFrame: true,
                         launchHandoffID: Self.requestedHandoff, hostSwitch: Self.dockSwitch)
                 .frame(minWidth: 720, minHeight: 420)
                 .defaultAppStorage(RichFilesInstallation.preferences)
@@ -152,6 +153,20 @@ public final class FolderOpenDelegate: NSObject, NSApplicationDelegate, Observab
     private var handoffs: [UUID] = []
     private var openedHandoffs: Set<UUID> = []
     private var openedInitialBrowser = false
+    private weak var primaryPlacementWindow: NSWindow?
+
+    func claimPrimaryPlacement(for window: NSWindow) -> Bool {
+        if primaryPlacementWindow == nil { primaryPlacementWindow = window }
+        return primaryPlacementWindow === window
+    }
+
+    func savesPrimaryPlacement(for window: NSWindow) -> Bool {
+        primaryPlacementWindow === window
+    }
+
+    func releasePrimaryPlacement(for window: NSWindow) {
+        if primaryPlacementWindow === window { primaryPlacementWindow = nil }
+    }
 
     public func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.servicesProvider = self
