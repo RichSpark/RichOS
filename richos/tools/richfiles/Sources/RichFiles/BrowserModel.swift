@@ -145,7 +145,8 @@ final class BrowserModel: ObservableObject {
     let places: [BrowserPlace]
 
     var selectedEntries: [FileEntry] {
-        entries.filter { selected.contains($0.id) }
+        guard !selected.isEmpty else { return [] }
+        return entries.filter { selected.contains($0.id) }
     }
 
     var breadcrumbs: [URL] {

@@ -88,8 +88,10 @@ public struct FileQuery: Codable, Sendable {
         case nil:
             break
         }
-        let ext = entry.url.pathExtension.lowercased().precomposedStringWithCanonicalMapping
-        if !extensions.isEmpty && !extensions.contains(ext) { return false }
+        if !extensions.isEmpty {
+            let ext = entry.url.pathExtension.lowercased().precomposedStringWithCanonicalMapping
+            if !extensions.contains(ext) { return false }
+        }
         if let size, entry.size.map(size.contains) != true { return false }
         if let modified, entry.modified.map(modified.contains) != true { return false }
         return true
