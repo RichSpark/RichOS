@@ -34,7 +34,6 @@ final class BrowserActions: ObservableObject {
     @Published private(set) var untrashed: [FileReference] = []
     @Published private(set) var undoName: String?
     @Published private(set) var redoName: String?
-    @Published private(set) var lastCreatedURL: URL?
     @Published private(set) var mutationRevision = UUID()
 
     var didMutate: (() -> Void)?
@@ -410,14 +409,16 @@ final class BrowserActions: ObservableObject {
         return board.changeCount
     }
 
-    func create(in folder: URL, named name: String, directory: Bool) {
-        runMutation(title: directory ? "New Folder" : "New File") {
-            let newItem = directory
-                ? try FileOperations.createFolder(in: folder, named: name)
-                : try FileOperations.createEmptyFile(in: folder, named: name)
+    func create(in folder: URL, named name: String, directory: Bool, expectedFolder: FileIdentity?,
+                useAvailableName: Bool = false, onCreated: ((FileReference) -> Void)? = nil) {
+        runMutation(title: directory ? "New Folder" : "New File", onSuccess: { mutation in
+            if let item = mutation.createdItem { onCreated?(item) }
+        }) {
+            let newItem = try FileOperations.createItem(in: folder, named: name, directory: directory,
+                                                        expectedFolder: expectedFolder, useAvailableName: useAvailableName)
             return MutationResult(
                 message: "Created \(newItem.url.lastPathComponent).", changed: true,
-                createdURL: newItem.url
+                createdItem: newItem
             )
         }
     }
@@ -429,8 +430,7 @@ final class BrowserActions: ObservableObject {
                 named: name, isCancelled: { Task.isCancelled }
             )
             let warnings = copy.remainingStagingFolder.map { ["Temporary cleanup failed at \($0.path)."] } ?? []
-            return MutationResult(message: "Created \(copy.copied.url.lastPathComponent).", issues: warnings,
-                                  changed: true, createdURL: copy.copied.url)
+            return MutationResult(message: "Created \(copy.copied.url.lastPathComponent).", issues: warnings, changed: true)
         }
     }
 
@@ -438,8 +438,7 @@ final class BrowserActions: ObservableObject {
         runMutation(title: "Save Image Copy") {
             let copy = try action.apply(to: source, in: folder)
             let warnings = copy.remainingStagingFolder.map { ["Temporary cleanup failed at \($0.path)."] } ?? []
-            return MutationResult(message: "Saved \(copy.copied.url.lastPathComponent).", issues: warnings,
-                                  changed: true, createdURL: copy.copied.url)
+            return MutationResult(message: "Saved \(copy.copied.url.lastPathComponent).", issues: warnings, changed: true)
         }
     }
 
@@ -659,7 +658,6 @@ final class BrowserActions: ObservableObject {
             }
             updateHistoryNames()
         }
-        lastCreatedURL = mutation.createdURL
         issues = mutation.issues
         status = mutation.message
         if let issue = mutation.issues.first { status += " " + issue }
@@ -741,7 +739,7 @@ private struct MutationResult: Sendable {
     var changed = false
     var undo: [HistoryStep] = []
     var trashChanges: [TrashChange] = []
-    var createdURL: URL?
+    var createdItem: FileReference?
     var untrashed: [FileReference]?
     var completed = true
 }

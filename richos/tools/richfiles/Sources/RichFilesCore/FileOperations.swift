@@ -249,7 +249,11 @@ public enum FileOperations {
 
     public static func createEmptyFile(in folder: URL, named name: String) throws -> FileReference {
         try validateName(name)
-        let parent = try OpenFolder(folder)
+        return try createEmptyFile(in: OpenFolder(folder), named: name)
+    }
+
+    private static func createEmptyFile(in parent: OpenFolder, named name: String) throws -> FileReference {
+        try parent.verifyLocation()
         let descriptor = openat(parent.descriptor, name, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0o666)
         guard descriptor >= 0 else {
             throw destinationError("Could not create the file", parent.childURL(name), errno)
@@ -257,6 +261,31 @@ public enum FileOperations {
         defer { _ = close(descriptor) }
         let status = try fileStatus(descriptor, parent.childURL(name))
         return FileReference(folder: parent, name: name, status: status)
+    }
+
+    public static func createItem(
+        in folder: URL, named name: String, directory: Bool, expectedFolder: FileIdentity?,
+        useAvailableName: Bool
+    ) throws -> FileReference {
+        try validateName(name)
+        let parent = try OpenFolder(folder)
+        if let expectedFolder { try parent.requireIdentity(expectedFolder) }
+        func create(_ candidate: String) throws -> FileReference {
+            if directory { return try createFolder(in: parent, named: candidate) }
+            return try createEmptyFile(in: parent, named: candidate)
+        }
+        do { return try create(name) }
+        catch FileOperationError.destinationExists where useAvailableName {}
+
+        let target = parent.childURL(name)
+        let ext = directory ? "" : target.pathExtension
+        let stem = ext.isEmpty ? name : target.deletingPathExtension().lastPathComponent
+        let suffix = ext.isEmpty ? "" : "." + ext
+        for index in 2...9_999 {
+            do { return try create("\(stem) (\(index))" + suffix) }
+            catch FileOperationError.destinationExists { continue }
+        }
+        throw FileOperationError.system(operation: "Could not choose an unused name", location: target, code: EEXIST)
     }
 
     public static func createFolder(in folder: URL, named name: String) throws -> FileReference {

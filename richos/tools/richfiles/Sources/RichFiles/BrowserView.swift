@@ -1148,9 +1148,28 @@ struct BrowserView: View {
     }
 
     private func newItem(directory: Bool, extension ext: String?) {
-        guard !actions.busy else { return }
+        guard !actions.busy, let destination = currentDropDestination else {
+            feedback = "The destination folder is unavailable."
+            return
+        }
         let name = directory ? "New Folder" : "New File" + (ext.map { "." + $0 } ?? "")
-        sheet = .name(NameRequest(source: nil, folder: model.folder, directory: directory, name: name))
+        let folder = model.folder
+        let tab = model.currentTabID
+        guard model.currentVolume?.supportsExclusiveRename == true else {
+            sheet = .name(NameRequest(source: nil, folder: destination.url, directory: directory, name: name,
+                                      expectedFolder: destination.identity))
+            return
+        }
+        actions.create(in: destination.url, named: name, directory: directory,
+                       expectedFolder: destination.identity, useAvailableName: true) { item in
+            guard model.folder == folder, model.currentTabID == tab, workspace.active == side, sheet == nil else { return }
+            model.selected = [item.url]
+            model.scrollAnchor = item.url
+            rangeAnchor = item.url
+            selectionCursor = item.url
+            sheet = .name(NameRequest(source: item, folder: folder, directory: directory,
+                                      name: item.url.lastPathComponent))
+        }
     }
 
     private func chooseTemplate() {
@@ -1340,7 +1359,10 @@ struct BrowserView: View {
             NameSheet(request: request) { name in
                 if let source = request.source { actions.rename(source, to: name) }
                 else if let template = request.template { actions.create(from: template, named: name) }
-                else { actions.create(in: request.folder, named: name, directory: request.directory) }
+                else {
+                    actions.create(in: request.folder, named: name, directory: request.directory,
+                                   expectedFolder: request.expectedFolder)
+                }
                 sheet = nil
             }
         case .properties(let entry): PropertiesSheet(entry: entry)

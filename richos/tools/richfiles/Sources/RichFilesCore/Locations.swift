@@ -9,10 +9,12 @@ public struct VolumeInfo: Sendable, Identifiable {
     public let isReadOnly: Bool?
     public let isLocal: Bool?
     public let isEjectable: Bool?
+    public let supportsExclusiveRename: Bool?
 
     private static let keys: Set<URLResourceKey> = [
         .volumeURLKey, .volumeLocalizedNameKey, .volumeAvailableCapacityKey,
-        .volumeTotalCapacityKey, .volumeIsReadOnlyKey, .volumeIsLocalKey, .volumeIsEjectableKey
+        .volumeTotalCapacityKey, .volumeIsReadOnlyKey, .volumeIsLocalKey, .volumeIsEjectableKey,
+        .volumeSupportsExclusiveRenamingKey
     ]
 
     public init(containing location: URL) throws {
@@ -26,6 +28,7 @@ public struct VolumeInfo: Sendable, Identifiable {
         isReadOnly = values.volumeIsReadOnly
         isLocal = values.volumeIsLocal
         isEjectable = values.volumeIsEjectable
+        supportsExclusiveRename = values.volumeSupportsExclusiveRenaming
     }
 
     /// Resolve each volume independently so a disconnected share cannot hide the other drives.

@@ -24,6 +24,32 @@ final class FileOperationsTests: XCTestCase {
         }
     }
 
+    func testNewItemChoosesAnUnusedNameInTheOriginalFolder() throws {
+        try withFixture { root in
+            let folder = try FileOperations.createFolder(in: root, named: "Target")
+            let existing = try write("keep me", named: "New File.txt", in: folder.url)
+            assertCollision(try FileOperations.createItem(in: folder.url, named: "New File.txt", directory: false,
+                                                          expectedFolder: folder.identity, useAvailableName: false))
+            let created = try FileOperations.createItem(in: folder.url, named: "New File.txt", directory: false,
+                                                        expectedFolder: folder.identity, useAvailableName: true)
+            XCTAssertEqual(created.url.lastPathComponent, "New File (2).txt")
+            XCTAssertEqual(try Data(contentsOf: created.url), Data())
+            XCTAssertEqual(try contents(existing), "keep me")
+
+            _ = try FileOperations.rename(folder, to: "Moved Target")
+            let replacement = try FileOperations.createFolder(in: root, named: "Target")
+            XCTAssertThrowsError(try FileOperations.createItem(
+                in: replacement.url, named: "New Folder", directory: true,
+                expectedFolder: folder.identity, useAvailableName: true
+            )) {
+                guard case FileOperationError.folderChanged = $0 else {
+                    return XCTFail("Expected the changed folder to be refused, got \($0)")
+                }
+            }
+            XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: replacement.url.path).isEmpty)
+        }
+    }
+
     func testMoveReplacementUndoAndRedoPreserveBothFiles() throws {
         try withFixture { root in
             let target = try FileOperations.createFolder(in: root, named: "Target")

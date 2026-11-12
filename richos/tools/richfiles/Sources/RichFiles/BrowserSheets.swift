@@ -15,6 +15,7 @@ struct NameRequest {
     let directory: Bool
     let name: String
     var template: Template? = nil
+    var expectedFolder: FileIdentity? = nil
 }
 
 enum BrowserSheet: Identifiable {
