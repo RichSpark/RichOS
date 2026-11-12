@@ -119,6 +119,45 @@ final class BrowserModelTests: XCTestCase {
     }
 
     @MainActor
+    func testBackAndForwardKeepTheListViewportIndependentOfSelection() async throws {
+        let temporary = try XCTUnwrap(ProcessInfo.processInfo.environment["TMPDIR"])
+        let root = URL(fileURLWithPath: temporary, isDirectory: true)
+            .resolvingSymlinksInPath().appendingPathComponent("RichFilesViewport-\(UUID().uuidString)", isDirectory: true)
+        let alpha = root.appendingPathComponent("Alpha", isDirectory: true)
+        let beta = root.appendingPathComponent("Beta", isDirectory: true)
+        for folder in [alpha, beta] {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        }
+        defer { try? FileManager.default.removeItem(at: root) }
+        let selected = alpha.appendingPathComponent("Selected.txt")
+        let firstInAlpha = alpha.appendingPathComponent("Alpha viewport.txt")
+        let firstInBeta = beta.appendingPathComponent("Beta viewport.txt")
+        for file in [selected, firstInAlpha, firstInBeta] { try Data().write(to: file) }
+
+        let domain = "app.richos.richfiles.tests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: domain))
+        defer { defaults.removePersistentDomain(forName: domain) }
+        let model = BrowserModel(start: alpha, defaults: defaults)
+        try await waitForListing(model, at: alpha)
+        model.selected = [selected]
+        model.scrollAnchor = selected
+        model.recordListViewport(firstInAlpha, in: alpha, tab: model.currentTabID)
+        model.openFolder(beta)
+        try await waitForListing(model, at: beta)
+        model.recordListViewport(firstInBeta, in: beta, tab: model.currentTabID)
+        model.recordListViewport(firstInAlpha, in: alpha, tab: model.currentTabID)
+
+        model.goBack()
+        try await waitForListing(model, at: alpha)
+        XCTAssertEqual(model.selected, [selected])
+        XCTAssertEqual(model.scrollAnchor, firstInAlpha)
+        model.goForward()
+        try await waitForListing(model, at: beta)
+        XCTAssertTrue(model.selected.isEmpty)
+        XCTAssertEqual(model.scrollAnchor, firstInBeta)
+    }
+
+    @MainActor
     func testMultipleListingBatchesKeepEveryFileInNaturalOrder() async throws {
         let temporary = try XCTUnwrap(ProcessInfo.processInfo.environment["TMPDIR"])
         let root = URL(fileURLWithPath: temporary, isDirectory: true)

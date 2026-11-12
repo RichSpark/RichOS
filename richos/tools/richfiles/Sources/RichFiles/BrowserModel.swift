@@ -128,7 +128,11 @@ final class BrowserModel: ObservableObject {
         }
     }
     @Published var viewMode: BrowserViewMode {
-        didSet { if !restoringView && oldValue != viewMode { changeView { $0.mode = viewMode } } }
+        didSet {
+            guard oldValue != viewMode else { return }
+            visibleListItem = nil
+            if !restoringView { changeView { $0.mode = viewMode } }
+        }
     }
     @Published var iconSize: Double {
         didSet { if !restoringView && oldValue != iconSize { changeView { $0.iconSize = iconSize } } }
@@ -203,6 +207,7 @@ final class BrowserModel: ObservableObject {
     private var restoringView = false
     private var settingSelection = false
     private var selectionToRestore: Set<URL> = []
+    private var visibleListItem: URL?
     private var scanTask: Task<Void, Never>?
     private var scanID: UUID?
     private var navigationTask: Task<Void, Never>?
@@ -267,6 +272,11 @@ final class BrowserModel: ObservableObject {
 
     func refresh() {
         reloadPreservingSelection()
+    }
+
+    func recordListViewport(_ firstItem: URL, in folder: URL, tab: UUID) {
+        guard !busy, viewMode == .list, self.folder == folder, currentTabID == tab else { return }
+        visibleListItem = firstItem
     }
 
     func goUp() {
@@ -614,7 +624,8 @@ final class BrowserModel: ObservableObject {
     }
 
     private func captureVisit() -> Visit {
-        Visit(folder: folder, selection: selected.union(selectionToRestore), anchor: scrollAnchor, search: SearchState(
+        let anchor = viewMode == .list ? visibleListItem ?? scrollAnchor : scrollAnchor
+        return Visit(folder: folder, selection: selected.union(selectionToRestore), anchor: anchor, search: SearchState(
             text: searchText, extensions: searchExtensions, minimumBytes: searchMinimumBytes,
             maximumBytes: searchMaximumBytes, modified: searchModified, recursive: searchRecursively,
             contentMode: searchContent, query: query, content: contentQuery
@@ -655,6 +666,7 @@ final class BrowserModel: ObservableObject {
 
     private func load(restoring selection: Set<URL> = []) {
         scanTask?.cancel()
+        visibleListItem = nil
         let id = UUID()
         scanID = id
         scanReport = nil

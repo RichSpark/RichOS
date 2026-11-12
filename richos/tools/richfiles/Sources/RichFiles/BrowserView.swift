@@ -671,6 +671,8 @@ struct BrowserView: View {
             let rows = max(1, Int((geometry.size.height - 10) / rowHeight))
             let entries = model.entries
             let columns = (entries.count + rows - 1) / rows
+            let folder = model.folder
+            let tab = model.currentTabID
             ScrollViewReader { scroll in
                 ScrollView(.horizontal) {
                     LazyHStack(alignment: .top, spacing: 8) {
@@ -692,14 +694,28 @@ struct BrowserView: View {
                         }
                     }.padding(5)
                 }
-                .onAppear { listRows = rows; scrollList(to: model.scrollAnchor, rows: rows, using: scroll) }
+                .onAppear {
+                    listRows = rows
+                    scrollList(to: model.scrollAnchor, rows: rows, using: scroll, anchor: .leading)
+                }
                 .onChange(of: rows) {
                     listRows = $0
-                    scrollList(to: model.scrollAnchor, rows: $0, using: scroll)
+                    scrollList(to: model.scrollAnchor, rows: $0, using: scroll, anchor: .leading)
                 }
                 .onChange(of: selectionCursor) { scrollList(to: $0, rows: rows, using: scroll) }
                 .onChange(of: model.busy) { busy in
-                    if !busy { scrollList(to: model.scrollAnchor, rows: rows, using: scroll) }
+                    if !busy { scrollList(to: model.scrollAnchor, rows: rows, using: scroll, anchor: .leading) }
+                }
+                .onPreferenceChange(RowFramesKey.self) { frames in
+                    let viewport = CGRect(origin: .zero, size: geometry.size)
+                    let first = frames.lazy.filter { item in
+                        let intersection = item.value.intersection(viewport)
+                        return intersection.width > 0 && intersection.height > 0
+                    }.min { left, right in
+                        if left.value.minX == right.value.minX { return left.value.minY < right.value.minY }
+                        return left.value.minX < right.value.minX
+                    }
+                    if let first { model.recordListViewport(first.key, in: folder, tab: tab) }
                 }
             }
         }
@@ -707,9 +723,9 @@ struct BrowserView: View {
         .accessibilityLabel("List view, filenames and extensions")
     }
 
-    private func scrollList(to url: URL?, rows: Int, using scroll: ScrollViewProxy) {
+    private func scrollList(to url: URL?, rows: Int, using scroll: ScrollViewProxy, anchor: UnitPoint? = nil) {
         guard let url, let index = model.entries.firstIndex(where: { $0.url == url }) else { return }
-        scroll.scrollTo(index / rows)
+        scroll.scrollTo(index / rows, anchor: anchor)
     }
 
     private var thumbnailGrid: some View {
