@@ -39,6 +39,9 @@ every "it kept X" test:
   B9l  a build takes the oldest profile's lock after the plan (review
        rv-20261112T143113Z-f972fff8-cdd8, fixtures/floor_review.py): the re-read leaves that
        profile out and takes the next oldest unit elsewhere, and reaches the target.
+  B9h2 a build takes the LAST profile's lock between the look and the deletion (review
+       rv-20261112T153212Z-b15acdc1-9c1d, fixtures/floor_lock_handoff.py): the re-read stops
+       cleanly and returns what it did, so apply() still writes its log.
   B9w  --floor-check, which the app's disk watcher asks every check, says exit 1 and names the
        drive when a Cargo tree's volume is below its target, exit 0 and nothing when it is not
        (review rv-20261112T112825Z-7f381427-61d2: the cache drive filled, the app's disk was fine).
@@ -567,6 +570,33 @@ class BuildCaches(unittest.TestCase):
         self.assertIn(("unit", h50), bc.units(oldest), "the held profile was touched")
         self.assertNotIn(("unit", h30), bc.units(available))
         self.assertIn(("unit", h1), bc.units(available))
+
+    def test_B9h2_a_build_taking_the_last_profile_mid_round_stops_the_re_read_cleanly(self):
+        profile = "/fixture/cargo/shared-build-v1/debug"
+        now = 1000000.0
+        inventory = {("unit", "a" * 16): {"paths": [], "bytes": 65536, "newest": now - 50 * 3600}}
+
+        class LockHandoff(object):
+            acquisitions = 0
+
+            def __init__(self, path):
+                self.path = path + "/.cargo-lock"
+
+            def __enter__(self):
+                type(self).acquisitions += 1
+                self.held = type(self).acquisitions == 1     # free at the look, taken at deletion
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        with patch.object(bc.os.path, "isdir", return_value=True), \
+                patch.object(bc, "volume_space", return_value=(1, 10 ** 9, 0)), \
+                patch.object(bc.time, "time", return_value=now), \
+                patch.object(bc, "units", return_value=inventory), \
+                patch.object(bc, "CargoLock", LockHandoff):
+            results, before, after = bc.reclaim_to_target([profile], 65536, 2 * 3600)
+        self.assertEqual((results, before, after), ([], 0, 0))
 
     def test_B9w_the_floor_check_names_a_short_cache_drive_and_scans_nothing(self):
         cfg = {"cargo_target_roots": [self.cargo], "disk_primary_volume": "",

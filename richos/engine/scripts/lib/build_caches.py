@@ -549,7 +549,11 @@ def reclaim_to_target(profiles, target, min_idle_seconds, spent=None, max_rounds
 
     Returns (results, free_before, free_after): results is [(profile, units, bytes, failures)]."""
     profiles = [p for p in profiles if os.path.isdir(p)]
-    here = volume_space(profiles[0]) if profiles else None
+    # The volume is read through this one path for the whole run: a profile a build takes is
+    # dropped from `profiles`, and the last one going must end the run cleanly, not raise
+    # (review rv-20261112T153212Z-b15acdc1-9c1d).
+    anchor = profiles[0] if profiles else None
+    here = volume_space(anchor) if anchor else None
     if here is None:
         return [], None, None
     free_before = free = here[2]
@@ -557,7 +561,7 @@ def reclaim_to_target(profiles, target, min_idle_seconds, spent=None, max_rounds
     rounds = 0
     while max_rounds is None or rounds < max_rounds:
         rounds += 1
-        if free >= target or (spent is not None and spent()):
+        if free >= target or not profiles or (spent is not None and spent()):
             break
         now = time.time()
         # ONLY PROFILES NO BUILD HOLDS RIGHT NOW count toward this round's window: a build that
@@ -590,7 +594,7 @@ def reclaim_to_target(profiles, target, min_idle_seconds, spent=None, max_rounds
             gone += n
         if not gone and not refused:
             break
-        again = volume_space(profiles[0])
+        again = volume_space(anchor)
         if again is None:
             break
         free = again[2]

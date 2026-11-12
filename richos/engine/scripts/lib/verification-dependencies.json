@@ -16856,7 +16856,7 @@
     },
     "scripts/lib/build_caches.py": {
       "source": "scripts/lib/build_caches.py",
-      "sha256": "19178ffd2d859697f50b0d238621988756fe8003dff5e0d527d107f4ff063e51",
+      "sha256": "767b3746d1ed56b3864157a8b3ddebca1c12b0bec9169484efeb7f321cb6c94c",
       "evidence": "Cleanup roots use the shared machine_settings reader for the general cache, effective Cargo cache and selected RICHOS_BUILD_CACHE. Landed checkout cleanup and scheduled cleanup use the same roots. Git discovery reads registered project checkouts; bounded scans, Cargo locks and the existing cleanup walls are unchanged. Overlapping roots deduplicate discovered paths. No new configuration key or execution edge. Renewed 2026-11-12 (rule 3, the volume's floor): volume_space reads os.statvfs and os.stat of a cache path and the declared primary volume; free_target and pressure_window are arithmetic over values the caller passes. No new configuration key read here or execution edge. Renewed 2026-11-12: reclaim_to_target repeats the existing units/delete_units reads and deletions under Cargo's lock and re-reads os.statvfs between rounds. No new key or execution edge.",
       "keys": [],
       "edges": [
