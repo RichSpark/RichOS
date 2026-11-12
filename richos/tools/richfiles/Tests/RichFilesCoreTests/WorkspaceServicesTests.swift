@@ -47,6 +47,11 @@ final class WorkspaceServicesTests: XCTestCase {
 
         let png = folder.appendingPathComponent("fixture.png")
         try writePNG(to: png)
+        XCTAssertFalse(try WorkspaceServices.previewRequiresDownload(for: png))
+        XCTAssertThrowsError(try WorkspaceServices.previewRequiresDownload(for: folder.appendingPathComponent("missing.png")))
+        let link = folder.appendingPathComponent("Link.png")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: png)
+        XCTAssertThrowsError(try WorkspaceServices.previewRequiresDownload(for: link))
         let thumbnail = try await WorkspaceServices.thumbnail(for: png, size: CGSize(width: 32, height: 32))
         XCTAssertGreaterThan(thumbnail.width, 0)
         XCTAssertGreaterThan(thumbnail.height, 0)

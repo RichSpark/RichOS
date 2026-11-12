@@ -739,22 +739,29 @@ struct FileThumbnail: View {
     let entry: FileEntry
     let side: Double
     @State private var thumbnail: CGImage?
+    @State private var downloadRequired = false
 
     var body: some View {
         Group {
             if let thumbnail {
                 Image(decorative: thumbnail, scale: 1).resizable().scaledToFit()
             } else {
-                Image(systemName: fileSymbol(entry)).font(.system(size: max(20, side * 0.45)))
+                Image(systemName: downloadRequired ? "icloud.and.arrow.down" : fileSymbol(entry))
+                    .font(.system(size: max(20, side * 0.45)))
                     .foregroundStyle(entry.kind == .directory ? Color.accentColor : .secondary)
             }
         }.frame(width: side, height: side)
             .accessibilityHidden(true)
             .task(id: "\(entry.url.absoluteString):\(entry.modified?.timeIntervalSince1970 ?? 0):\(side)") {
                 thumbnail = nil
+                downloadRequired = false
                 guard entry.kind == .regularFile, !entry.needsDownload else { return }
-                let image = try? await WorkspaceServices.thumbnail(for: entry.url, size: CGSize(width: side, height: side), scale: 2)
-                if !Task.isCancelled { thumbnail = image }
+                do {
+                    let image = try await WorkspaceServices.thumbnail(for: entry.url, size: CGSize(width: side, height: side), scale: 2)
+                    if !Task.isCancelled { thumbnail = image }
+                } catch ThumbnailError.downloadRequired {
+                    if !Task.isCancelled { downloadRequired = true }
+                } catch {}
             }
     }
 }
@@ -764,12 +771,40 @@ struct NativePreview: View {
 
     var body: some View {
         if entry.needsDownload {
-            Label("Download this file before previewing it.", systemImage: "icloud.and.arrow.down")
-                .foregroundStyle(.secondary)
+            downloadRequiredLabel
         } else if entry.kind == .regularFile {
-            QuickLookView(url: entry.url)
+            CheckedQuickLook(file: entry.url).id(entry.url)
         } else {
             FileThumbnail(entry: entry, side: 110)
+        }
+    }
+}
+
+private var downloadRequiredLabel: some View {
+    Label("Download this file before previewing it.", systemImage: "icloud.and.arrow.down")
+        .foregroundStyle(.secondary)
+}
+
+private struct CheckedQuickLook: View {
+    let file: URL
+    private enum Availability { case checking, local, downloadRequired, unavailable }
+    @State private var availability = Availability.checking
+
+    var body: some View {
+        Group {
+            switch availability {
+            case .checking: ProgressView().accessibilityLabel("Checking preview")
+            case .local: QuickLookView(url: file)
+            case .downloadRequired: downloadRequiredLabel
+            case .unavailable: Text("Preview unavailable.").foregroundStyle(.secondary)
+            }
+        }.task {
+            do {
+                let requiresDownload = try await readStorage { try WorkspaceServices.previewRequiresDownload(for: file) }
+                if !Task.isCancelled { availability = requiresDownload ? .downloadRequired : .local }
+            } catch {
+                if !Task.isCancelled { availability = .unavailable }
+            }
         }
     }
 }

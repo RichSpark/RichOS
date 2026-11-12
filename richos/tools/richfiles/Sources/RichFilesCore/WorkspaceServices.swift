@@ -1,4 +1,5 @@
 import AppKit
+import Darwin
 import QuickLookThumbnailing
 
 public struct WorkspaceApplication: Identifiable, Sendable {
@@ -76,9 +77,7 @@ public enum WorkspaceServices {
               (size.width * scale).isFinite, (size.height * scale).isFinite else {
             throw ThumbnailError.invalidSize
         }
-        // Quick Look may otherwise materialize a known iCloud placeholder just by browsing.
-        let values = try file.resourceValues(forKeys: [.isUbiquitousItemKey, .ubiquitousItemDownloadingStatusKey])
-        if values.isUbiquitousItem == true && values.ubiquitousItemDownloadingStatus == .notDownloaded {
+        if try previewRequiresDownload(for: file) {
             throw ThumbnailError.downloadRequired
         }
 
@@ -102,5 +101,22 @@ public enum WorkspaceServices {
             try Task.checkCancellation()
             throw error
         }
+    }
+
+    /// Inspect metadata on a storage worker before handing a file to Quick Look.
+    public static func previewRequiresDownload(for file: URL) throws -> Bool {
+        try requireLocalFileURL(file)
+        let previous = try TextContentReader.disableDatalessMaterialization()
+        defer { TextContentReader.restoreDatalessMaterialization(previous) }
+        var info = stat()
+        guard lstat(file.path, &info) == 0 else {
+            let code = errno
+            if code == EDEADLK { return true }
+            throw POSIXError(POSIXErrorCode(rawValue: code) ?? .EIO)
+        }
+        if info.st_flags & UInt32(SF_DATALESS) != 0 { return true }
+        guard info.st_mode & S_IFMT == S_IFREG else { throw CocoaError(.fileReadUnknown) }
+        let values = try file.resourceValues(forKeys: [.isUbiquitousItemKey, .ubiquitousItemDownloadingStatusKey])
+        return values.isUbiquitousItem == true && values.ubiquitousItemDownloadingStatus == .notDownloaded
     }
 }
