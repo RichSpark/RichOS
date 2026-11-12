@@ -254,12 +254,23 @@
     ask.type = "button";
     ask.addEventListener("click", () => opts?.sendText?.("Please find the moments in " + file.name + " again."));
     gone.append(node("p", null, MEDIA_GONE), ask);
+    const scope = node("div", "tl-media-status");
+    scope.hidden = true;
+    const scopeText = node("p", null, "Reopen this conversation to play the recording.");
+    scopeText.setAttribute("role", "status");
+    scope.appendChild(scopeText);
+    if (opts?.reopenThread) {
+      const reopen = node("button", "desk-btn tl-media-reopen", "Reopen conversation");
+      reopen.type = "button";
+      reopen.addEventListener("click", () => opts.reopenThread(item.threadId));
+      scope.appendChild(reopen);
+    }
     const actions = [];
     const seek = (startMs, from, toggle) => {
       status.textContent = "";
-      if (!window.RichOutput?.openMoment(item.threadId, { id: file.id, name: file.name, startMs, durationMs, points, toggle }, from)) {
-        status.textContent = "Reopen this conversation to play the recording.";
-      }
+      scope.hidden = Boolean(window.RichOutput?.openMoment(
+        item.threadId, { id: file.id, name: file.name, startMs, durationMs, points, toggle }, from
+      ));
     };
     const scrub = node("input", "tl-media-scrub");
     scrub.type = "range";
@@ -354,6 +365,7 @@
         missing = true;
         setMissing();
       }
+      if (active?.outOfScope) scope.hidden = false;
       const time = missing ? null : active?.time;
       current.textContent = time == null ? "" : mediaClock(time) + " / " + mediaClock(durationMs);
       playhead.hidden = time == null;
@@ -367,7 +379,7 @@
         bucket = nextBucket;
       }
       for (const { button, pin, mark, point } of actions) {
-        const selected = !missing && active?.active === point.startMs;
+        const selected = time != null && active?.active === point.startMs;
         const playing = selected && active.playing;
         button.classList.toggle("is-active", selected);
         pin.classList.toggle("is-active", selected);
@@ -380,7 +392,7 @@
     mediaViews.set(el, paint);
     setMissing();
     paint(window.RichOutput?.mediaSnapshot());
-    el.append(head, gone, track, list, status);
+    el.append(head, gone, track, list, scope, status);
     return el;
   }
 

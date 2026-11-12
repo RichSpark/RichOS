@@ -494,6 +494,66 @@ async function main() {
     }
   });
 
+  await run.check("a recording scope refusal reopens the conversation that owns the card", async () => {
+    const p = await openApp(browser, { prepare: mediaMomentsFixture });
+    try {
+      await p.evaluate(() => {
+        const invoke = RichBridge.invoke.bind(RichBridge);
+        window.mediaScopeSwitches = [];
+        window.mediaScopePreviews = 0;
+        window.mediaScopeRefused = true;
+        RichBridge.invoke = (name, args, ...options) => {
+          if (name === "switch_thread") window.mediaScopeSwitches.push(args.threadId);
+          if (name === "output_preview" && args.outputId === "mm_0000000000000001") {
+            window.mediaScopePreviews++;
+            if (window.mediaScopeRefused) {
+              return Promise.resolve({
+                view: "none", why: "outOfScope", reason: "This conversation does not have those moments.",
+              });
+            }
+          }
+          return invoke(name, args, ...options);
+        };
+      });
+      const card = p.locator('.tl-media[data-file-id="mm_0000000000000001"]');
+      const timestamp = card.getByRole("button", { name: /^0?0:53 Customer focus$/ });
+      const reopen = card.getByRole("button", { name: "Reopen conversation", exact: true });
+      await timestamp.click();
+      await p.locator("#op-viewer").getByText("This conversation does not have those moments.").waitFor();
+      await card.getByText("Reopen this conversation to play the recording.").waitFor();
+      assertEqual(await card.getAttribute("data-s"), "ready", "scope refusal does not mark the recording missing");
+      assertEqual(await card.getByRole("button", { name: "Ask Rich again" }).count(), 0);
+      assertEqual(await timestamp.getAttribute("aria-current"), null, "refused playback leaves no active timestamp");
+      await timestamp.click();
+      await reopen.waitFor();
+      await reopen.click();
+      await p.waitForFunction(() => window.mediaScopeSwitches.length === 1 &&
+        document.getElementById("composer-row").dataset.mode !== "opening");
+      await reopen.waitFor({ state: "hidden" });
+
+      await p.evaluate(() => {
+        window.mediaScopeRefused = false;
+        RichOutput.setThread("hiring");
+      });
+      await timestamp.click();
+      await reopen.waitFor();
+      assertEqual(await p.evaluate(() => window.mediaScopePreviews), 1, "the wrong thread issues no preview request");
+      await reopen.click();
+      await p.waitForFunction(() => window.mediaScopeSwitches.length === 2 &&
+        document.getElementById("composer-row").dataset.mode !== "opening");
+      await reopen.waitFor({ state: "hidden" });
+      assertEqual(await p.evaluate(() => window.mediaScopeSwitches), ["acme", "acme"], "both paths reopen the card's thread");
+      await timestamp.click();
+      await p.waitForFunction(() => {
+        const audio = document.querySelector("#op-viewer audio");
+        return audio && !audio.paused && !audio.seeking && audio.currentTime >= 53.28;
+      });
+      assertEqual(p.__errors, [], "the page reported errors");
+    } finally {
+      await p.context().close();
+    }
+  });
+
   for (const theme of ["dark", "light"]) {
     await run.check(theme + " — the card's text and edges clear WCAG AA", async () => {
       const p = await openApp(browser, { theme });
