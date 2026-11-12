@@ -32,7 +32,8 @@ FEATURES = {
                  'AccessibilityLayoutTests/testTheMicrophone',
                  'AccessibilityLayoutTests/testSystemAccessibilityAudit'),
     'Conversation': ('ScreenshotTests/', 'QuestionTests/', 'InteractionTests/testCompose',
-                     'InteractionTests/testReading', 'InteractionTests/testScrolling', 'AccessibilityLayoutTests/'),
+                     'InteractionTests/testReading', 'InteractionTests/testScrolling',
+                     'InteractionTests/testLedgerTimestampStartsThePhoneFileFlow', 'AccessibilityLayoutTests/'),
     'Attachments': ('ScreenshotTests/testConversation', 'ScreenshotTests/testComposer',
                     'InteractionTests/testCompose', 'AccessibilityLayoutTests/testSystemAccessibilityAudit'),
 }
@@ -40,7 +41,7 @@ FEATURES = {
 
 # Adding a source file or test case requires a new scope review. Until then,
 # the selector falls back to full coverage rather than guessing its dependencies.
-REVIEWED_CASES = '45c7fb8a9cb07eb9e820aaf008823efb6acd178dd0441115f6d4064a08a0c0d2'
+REVIEWED_CASES = '6c20f8167d447dbf01447379aad68ddca8d656dcd477f05bd629ce10a3004691'
 REVIEWED_FEATURE_FILES = {
     'App/Features/Attachments/AttachmentModel.swift',
     'App/Features/Attachments/AttachmentViews.swift',
