@@ -95,16 +95,15 @@ function displayedStart(segment) {
 export const PARAGRAPH_SOFT_WORDS = 80;
 
 /**
- * Group merged segments into PARAGRAPHS that end only at a sentence end (or a change of speaker).
+ * Group segments at sentence ends, speaker changes and long gaps in speech.
  *
  * A whisper segment is a stretch of audio between two timestamps the model chose, not a unit of
  * language: on the CEO's 66-minute import (2026-10-04) 664 of 1,052 segments (63.1%) ended without
  * a sentence end, and rendering one paragraph per segment broke sentences in two across lines.
  *
- * Two rules, and both break only where a sentence ends: a new paragraph starts after a segment that
- * ends a sentence (as before), and a paragraph that has reached PARAGRAPH_SOFT_WORDS closes at its
- * next sentence end even mid-segment — joining alone produced two-minute walls of text on that file.
- * A paragraph keeps the time of its first word; nothing is re-ordered and no text is changed.
+ * Join adjacent unfinished sentences. Close a long paragraph at its next sentence end even
+ * mid-segment. A gap as long as a dead interval starts a fresh passage so a late remark can be
+ * cited at the time it was spoken. A paragraph keeps the time of its first word.
  *
  * @param {{startMs:number, endMs?:number, label:string, text:string, wordTimesMs?:number[]}[]} segments
  * @returns {{startMs:number, endMs?:number, label:string, text:string}[]}
@@ -117,8 +116,10 @@ export function paragraphs(segments) {
     // The main pass's own per-word times, used only when they still line up one-to-one.
     const times = Array.isArray(seg.wordTimesMs) && seg.wordTimesMs.length === words.length ? seg.wordTimesMs : null;
     let last = out[out.length - 1];
-    if (!last || last.label !== seg.label || SENTENCE_END.test(last.text)) {
-      last = { startMs: displayedStart(seg), endMs: seg.endMs, label: seg.label, text: '', words: 0 };
+    const start = displayedStart(seg);
+    const afterGap = Number.isFinite(last?.endMs) && start - last.endMs >= DEAD_INTERVAL_MS;
+    if (!last || last.label !== seg.label || SENTENCE_END.test(last.text) || afterGap) {
+      last = { startMs: start, endMs: seg.endMs, label: seg.label, text: '', words: 0 };
       out.push(last);
     }
     words.forEach((w, k) => {
