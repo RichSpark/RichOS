@@ -173,9 +173,12 @@ public enum DirectoryReader {
         var options: FileManager.DirectoryEnumerationOptions = [.skipsPackageDescendants]
         if scope == .folder { options.insert(.skipsSubdirectoryDescendants) }
         if !showHidden { options.insert(.skipsHiddenFiles) }
+        // Flat browsing reads each entry's metadata when creating the row.
+        // Avoid asking Foundation to prefetch the same keys during enumeration.
+        let prefetch = scope == .folder ? [] : Array(FileEntry.resourceKeys)
         guard let enumerator = FileManager.default.enumerator(
             at: folder,
-            includingPropertiesForKeys: Array(FileEntry.resourceKeys),
+            includingPropertiesForKeys: prefetch,
             options: options,
             errorHandler: { url, error in
                 if url.path == folder.path {
