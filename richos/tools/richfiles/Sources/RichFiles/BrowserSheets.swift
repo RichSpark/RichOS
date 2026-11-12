@@ -743,20 +743,22 @@ struct FileThumbnail: View {
     @State private var downloadRequired = false
 
     var body: some View {
+        let version = "\(entry.modified?.timeIntervalSince1970 ?? 0):\(entry.size ?? -1):\(entry.needsDownload)"
         Group {
             if let thumbnail {
                 Image(decorative: thumbnail, scale: 1).resizable().scaledToFit()
             } else {
-                Image(systemName: downloadRequired ? "icloud.and.arrow.down" : fileSymbol(entry))
+                let symbol = entry.needsDownload || downloadRequired ? "icloud.and.arrow.down" : fileSymbol(entry)
+                Image(systemName: symbol)
                     .font(.system(size: max(20, side * 0.45)))
                     .foregroundStyle(entry.kind == .directory ? Color.accentColor : .secondary)
             }
         }.frame(width: side, height: side)
             .accessibilityHidden(true)
-            .task(id: "\(entry.url.absoluteString):\(entry.modified?.timeIntervalSince1970 ?? 0):\(side)") {
+            .task(id: "\(entry.url.absoluteString):\(version):\(side)") {
                 thumbnail = nil
                 downloadRequired = false
-                guard entry.kind == .regularFile, !entry.needsDownload else { return }
+                guard entry.kind == .regularFile, entry.size != 0, !entry.needsDownload else { return }
                 do {
                     let image = try await WorkspaceServices.thumbnail(for: entry.url, size: CGSize(width: side, height: side), scale: 2)
                     if !Task.isCancelled { thumbnail = image }
