@@ -54,8 +54,29 @@ public struct FolderSyncPlan: Sendable {
     public static func preview(
         from first: URL, to second: URL, options: Options, isCancelled: () -> Bool = { false }
     ) throws -> Self {
+        try preview(from: first, to: second, options: options, expected: nil, isCancelled: isCancelled)
+    }
+
+    public static func previewMerge(
+        _ incoming: FileReference, into existing: FileReference, isCancelled: () -> Bool = { false }
+    ) throws -> Self {
+        try preview(from: incoming.url, to: existing.url, options: .init(),
+                    expected: (incoming, existing), isCancelled: isCancelled)
+    }
+
+    private static func preview(
+        from first: URL, to second: URL, options: Options, expected: (FileReference, FileReference)?,
+        isCancelled: () -> Bool
+    ) throws -> Self {
         let left = try FolderInventorySnapshot(first, includePackages: false, isCancelled: isCancelled)
         let right = try FolderInventorySnapshot(second, includePackages: false, isCancelled: isCancelled)
+        if let (incoming, existing) = expected {
+            for (inventory, folder) in [(left, incoming), (right, existing)] {
+                guard inventory.identity == folder.identity, try FileReference(url: folder.url) == folder else {
+                    throw FileOperationError.folderChanged(folder.url)
+                }
+            }
+        }
         guard left.identity != right.identity,
               !containsFolder(left.folder, right.folder), !containsFolder(right.folder, left.folder) else {
             throw SyncError.overlap

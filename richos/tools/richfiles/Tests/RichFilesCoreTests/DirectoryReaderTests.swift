@@ -148,6 +148,28 @@ final class DirectoryReaderTests: XCTestCase {
         }
     }
 
+    func testFolderMergeCopiesMissingItemsAndRejectsAReplacedFolder() throws {
+        try fixture { root in
+            let left = try FileOperations.createFolder(in: root, named: "Incoming")
+            let right = try FileOperations.createFolder(in: root, named: "Existing")
+            try write("shared.png", in: left.url, text: "incoming version")
+            try write("shared.png", in: right.url, text: "existing version")
+            try write("new.jpg", in: left.url, text: "new bytes")
+
+            let plan = try FolderSyncPlan.previewMerge(left, into: right)
+            XCTAssertEqual(plan.changeCount, 1)
+            XCTAssertEqual(try plan.apply().changes.count, 1)
+            XCTAssertEqual(try Data(contentsOf: right.url.appendingPathComponent("shared.png")), Data("existing version".utf8))
+            XCTAssertEqual(try Data(contentsOf: right.url.appendingPathComponent("new.jpg")), Data("new bytes".utf8))
+            XCTAssertEqual(try Data(contentsOf: left.url.appendingPathComponent("new.jpg")), Data("new bytes".utf8))
+
+            _ = try FileOperations.rename(right, to: "Parked")
+            let replacement = try FileOperations.createFolder(in: root, named: "Existing")
+            XCTAssertThrowsError(try FolderSyncPlan.previewMerge(left, into: right))
+            XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: replacement.url.path).isEmpty)
+        }
+    }
+
     func testFolderAndRecursiveSearchKeepExplicitScope() throws {
         try fixture { root in
             let manager = FileManager.default

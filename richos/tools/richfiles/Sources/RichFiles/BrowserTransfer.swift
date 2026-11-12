@@ -26,6 +26,12 @@ struct BrowserFileConflict: Sendable {
     let incoming: FileEntry
     let existing: FileEntry
     let reviewed: Replacement?
+    let merge: Merge?
+
+    struct Merge: Sendable {
+        let incoming: FileReference
+        let existing: FileReference
+    }
 
     struct Replacement: Sendable {
         let incoming: ReviewedFile
@@ -352,7 +358,13 @@ enum BrowserTransferJob {
         } else {
             reviewed = nil
         }
-        return BrowserFileConflict(incoming: first, existing: second, reviewed: reviewed)
+        let merge: BrowserFileConflict.Merge?
+        if allowReplace, first.kind == .directory, second.kind == .directory, incoming.identity != occupant.identity {
+            merge = .init(incoming: incoming, existing: occupant)
+        } else {
+            merge = nil
+        }
+        return BrowserFileConflict(incoming: first, existing: second, reviewed: reviewed, merge: merge)
     }
 
     private static func isRetryable(_ error: Error) -> Bool {

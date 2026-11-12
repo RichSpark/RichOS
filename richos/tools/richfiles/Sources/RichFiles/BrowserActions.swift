@@ -276,7 +276,7 @@ final class BrowserActions: ObservableObject {
     func replaceConflict(_ issue: BrowserTransferIssue) {
         guard let current = transfer, !current.running, current.issues.contains(where: { $0.id == issue.id }),
               let reviewed = issue.conflict?.reviewed, let destination = retryRequest?.destination else { return }
-        runMutation(title: "Replace", onSuccess: { [weak self] in
+        runMutation(title: "Replace", onSuccess: { [weak self] _ in
             self?.resolveConflict(issue, transferID: current.id, source: reviewed.incoming.reference.url)
         }) {
             try destination.verify()
@@ -539,8 +539,19 @@ final class BrowserActions: ObservableObject {
         }
     }
 
-    func applySync(_ plan: FolderSyncPlan) -> Task<Void, Never>? {
-        runMutation(title: "Folder Sync") {
+    func applySync(_ plan: FolderSyncPlan, resolving mergeIssue: BrowserTransferIssue? = nil) -> Task<Void, Never>? {
+        let activeTransfer = transfer?.id
+        if let mergeIssue {
+            guard let transfer, !transfer.running, transfer.issues.contains(where: { $0.id == mergeIssue.id }) else {
+                return nil
+            }
+        }
+        let operation = mergeIssue == nil ? "Sync" : "Merge"
+        return runMutation(title: "Folder " + operation, onSuccess: { [weak self] mutation in
+            guard let issue = mergeIssue, let activeTransfer, let source = issue.conflict?.merge?.incoming.url,
+                  mutation.completed else { return }
+            self?.resolveConflict(issue, transferID: activeTransfer, source: source)
+        }) {
             let result = try plan.apply(isCancelled: { Task.isCancelled })
             var undo: [HistoryStep] = []
             var changes: [TrashChange] = []
@@ -564,10 +575,11 @@ final class BrowserActions: ObservableObject {
                     else { issues.append("Moved to Trash. Open macOS Trash to find \(item.originalURL.path).") }
                 }
             }
-            let heading = result.cancelled ? "Sync stopped." : result.problem != nil ? "Sync paused on an issue." : "Sync finished."
-            return MutationResult(message: heading + " Applied \(result.changes.count) of \(plan.changeCount) changes.",
+            let complete = !result.cancelled && result.problem == nil && result.changes.count == plan.changeCount
+            let outcome = result.cancelled ? "stopped" : complete ? "finished" : "paused on an issue"
+            return MutationResult(message: "\(operation) \(outcome). Applied \(result.changes.count) of \(plan.changeCount) changes.",
                                   issues: issues, changed: !result.changes.isEmpty,
-                                  undo: Array(undo.reversed()), trashChanges: changes)
+                                  undo: Array(undo.reversed()), trashChanges: changes, completed: complete)
         }
     }
 
@@ -576,7 +588,7 @@ final class BrowserActions: ObservableObject {
 
     @discardableResult
     private func runMutation(
-        title: String, onSuccess: (() -> Void)? = nil, _ operation: @escaping @Sendable () throws -> MutationResult
+        title: String, onSuccess: ((MutationResult) -> Void)? = nil, _ operation: @escaping @Sendable () throws -> MutationResult
     ) -> Task<Void, Never>? {
         guard !busy else { return nil }
         busy = true
@@ -588,7 +600,7 @@ final class BrowserActions: ObservableObject {
             busy = false
             switch result {
             case .success(let mutation):
-                onSuccess?()
+                onSuccess?(mutation)
                 finishMutation(mutation, title: title)
             case .failure(let error):
                 status = error.localizedDescription
@@ -709,6 +721,7 @@ private struct MutationResult: Sendable {
     var trashChanges: [TrashChange] = []
     var createdURL: URL?
     var untrashed: [FileReference]?
+    var completed = true
 }
 
 private enum TrashChange: Sendable {

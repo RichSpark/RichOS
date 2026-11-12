@@ -166,6 +166,7 @@ struct CompareFoldersSheet: View {
     let first: URL
     @ObservedObject var actions: BrowserActions
     let openFolder: (URL) -> Void
+    let mergeIssue: BrowserTransferIssue?
     @Environment(\.dismiss) private var dismiss
     @State private var second: URL?
     @State private var mode = FolderComparisonMode.metadata
@@ -186,30 +187,49 @@ struct CompareFoldersSheet: View {
         let sync: FolderSyncPlan.Options?
     }
 
+    init(first: URL, actions: BrowserActions, openFolder: @escaping (URL) -> Void,
+         mergeIssue: BrowserTransferIssue? = nil) {
+        self.first = first
+        self.actions = actions
+        self.openFolder = openFolder
+        self.mergeIssue = mergeIssue
+        if let existing = mergeIssue?.conflict?.merge?.existing.url {
+            _second = State(initialValue: existing)
+            _request = State(initialValue: Request(folder: existing, mode: .contents, sync: .init()))
+        }
+    }
+
+    private var merging: Bool { mergeIssue != nil }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Compare Folders").font(.headline)
+            Text(merging ? "Merge Folders" : "Compare Folders").font(.headline)
             LabeledContent("First Folder", value: first.path)
                 .lineLimit(1).truncationMode(.middle)
             HStack {
                 LabeledContent("Second Folder", value: second?.path ?? "Choose a folder")
                     .lineLimit(1).truncationMode(.middle)
-                Button("Choose…") { chooseFolder() }.disabled(applying != nil)
+                if !merging { Button("Choose…") { chooseFolder() }.disabled(applying != nil) }
             }
-            HStack {
-                Picker("Compare by", selection: $mode) {
-                    ForEach(FolderComparisonMode.allCases) { Text($0.rawValue).tag($0) }
-                }
-                Button("Compare") { preview(sync: nil) }.disabled(!canPreview)
-            }.disabled(applying != nil)
-            DisclosureGroup("Sync First Folder to Second", isExpanded: $showSyncOptions) {
+            if merging {
+                Text("Copy missing items into the second folder. Existing files and the first folder stay in place.")
+                    .font(.callout).foregroundStyle(.secondary)
+            } else {
                 HStack {
-                    Toggle("Replace differing files", isOn: $syncOptions.replaceDifferentFiles)
-                    Toggle("Trash destination extras", isOn: $syncOptions.trashDestinationExtras)
-                    Spacer()
-                    Button("Preview Sync") { preview(sync: syncOptions) }.disabled(!canPreview)
-                }.padding(.vertical, 3)
-            }.disabled(applying != nil)
+                    Picker("Compare by", selection: $mode) {
+                        ForEach(FolderComparisonMode.allCases) { Text($0.rawValue).tag($0) }
+                    }
+                    Button("Compare") { preview(sync: nil) }.disabled(!canPreview)
+                }.disabled(applying != nil)
+                DisclosureGroup("Sync First Folder to Second", isExpanded: $showSyncOptions) {
+                    HStack {
+                        Toggle("Replace differing files", isOn: $syncOptions.replaceDifferentFiles)
+                        Toggle("Trash destination extras", isOn: $syncOptions.trashDestinationExtras)
+                        Spacer()
+                        Button("Preview Sync") { preview(sync: syncOptions) }.disabled(!canPreview)
+                    }.padding(.vertical, 3)
+                }.disabled(applying != nil)
+            }
             if let plan {
                 Text("\(plan.changeCount) proposed changes in the second folder")
                 List(plan.rows) { row in
@@ -218,7 +238,7 @@ struct CompareFoldersSheet: View {
                         Text(row.action.rawValue).font(.caption).foregroundStyle(.secondary)
                         if !row.detail.isEmpty { Text(row.detail).font(.caption).foregroundStyle(.secondary) }
                     }
-                }.accessibilityLabel("Reviewed sync changes")
+                }.accessibilityLabel(merging ? "Reviewed merge changes" : "Reviewed sync changes")
                 if plan.unavailable > 0 || plan.otherVolumes > 0 {
                     Text("\(plan.unavailable) unavailable. \(plan.otherVolumes) other mounts skipped. Choose folders with full coverage to apply.")
                         .font(.caption).foregroundStyle(.secondary)
@@ -246,13 +266,13 @@ struct CompareFoldersSheet: View {
                 } else if !problem.isEmpty {
                     Text(problem).foregroundStyle(.secondary)
                 } else if let request {
-                    ProgressView(request.sync == nil ? "Comparing…" : "Reviewing sync…")
+                    ProgressView(merging ? "Reviewing merge…" : request.sync == nil ? "Comparing…" : "Reviewing sync…")
                 }
                 Spacer()
             }
             HStack {
                 if let applying {
-                    ProgressView().controlSize(.small).accessibilityLabel("Applying folder sync")
+                    ProgressView().controlSize(.small).accessibilityLabel(merging ? "Merging folders" : "Applying folder sync")
                     Button("Stop") { applying.cancel() }
                 } else if request != nil && report == nil && plan == nil && problem.isEmpty {
                     Button("Stop") { request = nil }
@@ -264,11 +284,12 @@ struct CompareFoldersSheet: View {
                 Button("Done") { dismiss() }.keyboardShortcut(.cancelAction).disabled(applying != nil)
             }
         }.padding(16).frame(width: 715, height: 515)
-            .alert("Apply the reviewed sync?", isPresented: $confirmSync) {
+            .alert(merging ? "Merge the reviewed items?" : "Apply the reviewed sync?", isPresented: $confirmSync) {
                 Button("Cancel", role: .cancel) {}
-                Button("Apply Sync") { applySync() }
+                Button(merging ? "Merge Folders" : "Apply Sync") { applySync() }
             } message: {
-                Text("Apply the listed changes to the second folder. Replaced or removed items go to Trash.")
+                Text(merging ? "Copy the listed missing items into the second folder."
+                     : "Apply the listed changes to the second folder. Replaced or removed items go to Trash.")
             }
             .onChange(of: mode) { _ in reset() }
             .onChange(of: syncOptions) { _ in reset() }
@@ -277,7 +298,13 @@ struct CompareFoldersSheet: View {
                 guard let requested = request else { return }
                 let root = first
                 do {
-                    if let options = requested.sync {
+                    if let merge = mergeIssue?.conflict?.merge {
+                        let result = try await readStorage {
+                            try FolderSyncPlan.previewMerge(merge.incoming, into: merge.existing,
+                                                            isCancelled: { Task.isCancelled })
+                        }
+                        if !Task.isCancelled { plan = result }
+                    } else if let options = requested.sync {
                         let result = try await readStorage {
                             try FolderSyncPlan.preview(from: root, to: requested.folder, options: options,
                                                        isCancelled: { Task.isCancelled })
@@ -313,7 +340,7 @@ struct CompareFoldersSheet: View {
     }
 
     private func applySync() {
-        guard let plan, let task = actions.applySync(plan) else { return }
+        guard let plan, let task = actions.applySync(plan, resolving: mergeIssue) else { return }
         applying = task
         Task {
             await task.value
@@ -1052,6 +1079,7 @@ struct TransferSheet: View {
     @ObservedObject var actions: BrowserActions
     @Environment(\.dismiss) private var dismiss
     @State private var replacement: BrowserTransferIssue?
+    @State private var mergeIssue: BrowserTransferIssue?
     @State private var confirmingReplacement = false
 
     var body: some View {
@@ -1087,6 +1115,10 @@ struct TransferSheet: View {
                                 HStack(alignment: .top, spacing: 16) {
                                     conflictDetails("Incoming", conflict.incoming)
                                     conflictDetails("Existing", conflict.existing)
+                                }
+                                if conflict.merge != nil {
+                                    Button("Merge Folders…") { mergeIssue = issue }
+                                        .disabled(actions.busy).buttonStyle(.borderless)
                                 }
                                 if conflict.reviewed != nil {
                                     Button("Replace File…") {
@@ -1137,6 +1169,11 @@ struct TransferSheet: View {
                 Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
             }
         }.padding(16).frame(width: 560, height: 395)
+            .sheet(item: $mergeIssue) { issue in
+                if let merge = issue.conflict?.merge {
+                    CompareFoldersSheet(first: merge.incoming.url, actions: actions, openFolder: { _ in }, mergeIssue: issue)
+                }
+            }
             .confirmationDialog("Replace the existing file?", isPresented: $confirmingReplacement, presenting: replacement) { issue in
                 Button("Replace File", role: .destructive) { actions.replaceConflict(issue) }
             } message: { _ in
