@@ -1955,6 +1955,14 @@ t "run-walk --wait reaches the guest-slot admission; the default still refuses a
   PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/run-walk-wait.test.py" >"$TMP/run-walk-wait.log" 2>&1; ok $? "$(cat "$TMP/run-walk-wait.log")"
 t_done
 
+t "conversation walk: steps, turn matching, app notices never hold a step, actor verdicts scoped to the walk, Accessibility requests counted"
+  PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/conversation-walk.test.py" >"$TMP/conversation-walk.log" 2>&1; ok $? "$(cat "$TMP/conversation-walk.log")"
+t_done
+
+t "no-grant reader: RichOS's Accessibility requests and macOS's request window, one line each, from the TCC log"
+  PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/no-grant-reader.test.py" >"$TMP/no-grant-reader.log" 2>&1; ok $? "$(cat "$TMP/no-grant-reader.log")"
+t_done
+
 t "slots: two runs at once, a third waits; a slot is held only for its run and a guest never outlives it"
   PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/slots.test.py" >"$TMP/slots.log" 2>&1; ok $? "$(cat "$TMP/slots.log")"
 t_done
