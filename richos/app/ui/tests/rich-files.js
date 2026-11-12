@@ -408,6 +408,38 @@ async function main() {
     }
   });
 
+  await run.check("a changed recording offers Ask Rich again beside the refused moments", async () => {
+    const p = await openApp(browser, { prepare: mediaMomentsFixture });
+    try {
+      await p.evaluate(() => {
+        const invoke = RichBridge.invoke.bind(RichBridge);
+        window.mediaRequests = [];
+        RichBridge.invoke = (name, args, ...options) => {
+          if (name === "output_preview" && args.outputId === "mm_0000000000000001") {
+            return Promise.resolve({
+              view: "none", why: "refused", reason: "The recording changed. Ask Rich to find the moments again.",
+            });
+          }
+          if (name === "send_message") window.mediaRequests.push(args);
+          return invoke(name, args, ...options);
+        };
+      });
+      await p.getByRole("button", { name: /^0?0:53 Customer focus$/ }).click();
+      await p.locator("#op-viewer").getByText("The recording changed. Ask Rich to find the moments again.").waitFor();
+      const card = p.locator('.tl-media[data-file-id="mm_0000000000000001"][data-s="missing"]');
+      await card.getByText("The recording was moved, deleted or changed. Ask Rich to find the moments again.").waitFor();
+      assert(await card.getByRole("button", { name: /^0?0:53 Customer focus$/ }).isDisabled(), "stale timestamp is disabled");
+      await card.getByRole("button", { name: "Ask Rich again", exact: true }).click();
+      await p.waitForFunction(() => window.mediaRequests.length === 1);
+      const request = await p.evaluate(() => window.mediaRequests[0]);
+      assertEqual(request.text, "Please find the moments in Founder interview.wav again.");
+      assertEqual(request.pressed, true, "the generated request is attributed to the button");
+      assertEqual(p.__errors, [], "the page reported errors");
+    } finally {
+      await p.context().close();
+    }
+  });
+
   for (const theme of ["dark", "light"]) {
     await run.check(theme + " — the card's text and edges clear WCAG AA", async () => {
       const p = await openApp(browser, { theme });
