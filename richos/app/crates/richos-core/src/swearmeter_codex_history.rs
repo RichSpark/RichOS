@@ -111,7 +111,7 @@ fn parse(mut reader: impl BufRead) -> io::Result<(Vec<Submission>, bool)> {
     let mut line = Vec::new();
     let mut complete = true;
     let mut session_seen = false;
-    let mut items = Vec::new();
+    let mut items: Vec<(u8, Option<String>, Submission)> = Vec::new();
     loop {
         line.clear();
         if read_record(&mut reader, &mut line)? == 0 {
@@ -196,17 +196,51 @@ fn parse(mut reader: impl BufRead) -> io::Result<(Vec<Submission>, bool)> {
             complete = false;
             continue;
         };
-        items.push((priority, Submission::new(at, &text)));
+        let turn = payload["internal_chat_message_metadata_passthrough"]["turn_id"]
+            .as_str()
+            .or_else(|| payload["turn_id"].as_str())
+            .map(str::to_owned);
+        items.push((priority, turn, Submission::new(at, &text)));
     }
-    // Each format stores several renderings of one input. Use the structured source
-    // where present, retaining legacy response items in older sessions.
-    let priority = items.iter().map(|(priority, _)| *priority).max();
-    Ok((
-        items
+    // Prefer richer renderings of the same submission. A newer format elsewhere
+    // in a resumed session must never discard older independent messages.
+    items.sort_by_key(|(priority, _, row)| (std::cmp::Reverse(*priority), row.at));
+    let mut accepted: Vec<(u8, Option<String>, Submission, u8)> = Vec::new();
+    let mut by_text = HashMap::<[u8; 32], Vec<usize>>::new();
+    let mut by_turn = HashMap::<String, Vec<usize>>::new();
+    for (priority, turn, row) in items {
+        let mask = 1 << priority;
+        let same_turn = turn.as_ref().and_then(|turn| by_turn.get(turn));
+        let same_text = by_text.get(&row.text_digest);
+        let duplicate = same_turn
             .into_iter()
-            .filter(|(p, _)| Some(*p) == priority)
-            .map(|(_, row)| row)
-            .collect(),
+            .flatten()
+            .chain(same_text.into_iter().flatten())
+            .copied()
+            .filter(|&index| {
+                let (prior_priority, prior_turn, prior, formats) = &accepted[index];
+                if *prior_priority == priority || *formats & mask != 0 {
+                    return false;
+                }
+                match (prior_turn, &turn) {
+                    (Some(a), Some(b)) => a == b,
+                    _ => prior.text_digest == row.text_digest && prior.at.abs_diff(row.at) < 250,
+                }
+            })
+            .min_by_key(|&index| accepted[index].2.at.abs_diff(row.at));
+        if let Some(index) = duplicate {
+            accepted[index].3 |= mask;
+            continue;
+        }
+        let index = accepted.len();
+        by_text.entry(row.text_digest).or_default().push(index);
+        if let Some(turn) = &turn {
+            by_turn.entry(turn.clone()).or_default().push(index);
+        }
+        accepted.push((priority, turn, row, mask));
+    }
+    Ok((
+        accepted.into_iter().map(|(_, _, row, _)| row).collect(),
         complete && session_seen,
     ))
 }
@@ -233,6 +267,29 @@ mod tests {
         assert!(complete);
         assert_eq!(items.len(), 2);
         assert_eq!(items.iter().map(|item| item.count).sum::<u64>(), 2);
+    }
+
+    #[test]
+    fn a_new_archive_format_does_not_erase_older_submissions() {
+        let raw = r#"{"type":"session_meta","payload":{"source":"vscode"}}
+{"timestamp":"2026-02-04T21:13:20.618Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"shit"}]}}
+{"timestamp":"2026-02-04T21:13:20.620Z","type":"event_msg","payload":{"type":"user_message","message":"shit"}}
+{"timestamp":"2026-02-05T21:13:20.620Z","type":"event_msg","payload":{"type":"user_message","message":"shit"}}
+{"timestamp":"2026-02-06T21:13:20.618Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"all good"}],"internal_chat_message_metadata_passthrough":{"content_item_kinds":["user.text"]}}}"#;
+        let (items, complete) = parse(raw.as_bytes()).unwrap();
+        assert!(complete);
+        assert_eq!(items.len(), 3);
+        assert_eq!(items.iter().map(|item| item.count).sum::<u64>(), 2);
+        let cutoff =
+            crate::swearmeter_provider_history::parse_timestamp("2026-02-05T00:00:00Z").unwrap();
+        assert_eq!(
+            items
+                .iter()
+                .filter(|row| row.at <= cutoff)
+                .map(|row| row.count)
+                .sum::<u64>(),
+            1
+        );
     }
 
     #[test]

@@ -17,8 +17,8 @@ pub struct History {
 
 #[derive(Clone, Eq, Hash, PartialEq)]
 pub(crate) struct Submission {
-    at: u64,
-    text_digest: [u8; 32],
+    pub(crate) at: u64,
+    pub(crate) text_digest: [u8; 32],
     pub(crate) count: u64,
     pub(crate) session: Option<String>,
     pub(crate) incomplete_paste: bool,
