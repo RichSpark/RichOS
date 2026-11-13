@@ -165,6 +165,7 @@ fn parse(mut reader: impl BufRead) -> io::Result<(Vec<Submission>, bool)> {
                 .enumerate()
                 .filter(|(i, part)| {
                     part["type"] == "input_text"
+                        && !image_wrapper(content, *i)
                         && kinds
                             .filter(|kinds| kinds.len() == content.len())
                             .is_none_or(|kinds| user_kind(&kinds[*i]))
@@ -245,6 +246,28 @@ fn parse(mut reader: impl BufRead) -> io::Result<(Vec<Submission>, bool)> {
     ))
 }
 
+// Old response items bracket an actual image with generated text components.
+// Drop only that structure and retain ordinary user text quoting either tag.
+fn image_wrapper(content: &[Value], index: usize) -> bool {
+    let text_at = |i: usize, marker: &str| {
+        content.get(i).is_some_and(|part| {
+            part["type"] == "input_text"
+                && part["text"]
+                    .as_str()
+                    .is_some_and(|text| text.trim() == marker)
+        })
+    };
+    let image_at = |i: usize| {
+        content
+            .get(i)
+            .is_some_and(|part| part["type"] == "input_image")
+    };
+    if text_at(index, "<image>") {
+        return image_at(index + 1) && text_at(index + 2, "</image>");
+    }
+    index >= 2 && text_at(index, "</image>") && image_at(index - 1) && text_at(index - 2, "<image>")
+}
+
 fn user_kind(kind: &Value) -> bool {
     matches!(
         kind.as_str(),
@@ -290,6 +313,21 @@ mod tests {
                 .sum::<u64>(),
             1
         );
+    }
+
+    #[test]
+    fn generated_image_markers_do_not_create_a_second_submission() {
+        let raw = r#"{"type":"session_meta","payload":{"source":"cli"}}
+{"timestamp":"2026-11-13T12:00:00.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"shit"},{"type":"input_text","text":"<image>"},{"type":"input_image","image_url":"data:image/png;base64,AA=="},{"type":"input_text","text":"</image>"}]}}
+{"timestamp":"2026-11-13T12:00:00.002Z","type":"event_msg","payload":{"type":"user_message","message":"shit"}}
+{"timestamp":"2026-11-13T12:00:01.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"shit"},{"type":"input_text","text":"<image>"}]}}"#;
+        let (items, complete) = parse(raw.as_bytes()).unwrap();
+        assert!(complete);
+        assert_eq!(items.len(), 2);
+        assert_eq!(items.iter().map(|item| item.count).sum::<u64>(), 2);
+        assert!(items
+            .iter()
+            .any(|item| item.text_digest == Submission::new(0, "shit\n<image>").text_digest));
     }
 
     #[test]
