@@ -2423,6 +2423,80 @@ class Point13_Retry(Base):
         self.assertIsNone(ws.load_agent(ws.named_key(self.sid, "zach-opus-rt"))["deletion"])
 
 
+class Point13_StaleRefLock(Base):
+    """13. A deletion blocked by a dead git process's lock file clears it; a held or recent one is left."""
+
+    def _lock(self, branch, age):
+        run("git", "-C", self.other, "branch", branch)
+        lock = os.path.join(self.other, ".git", "refs", "heads", branch + ".lock")
+        os.makedirs(os.path.dirname(lock), exist_ok=True)
+        open(lock, "w").close()
+        old = time.time() - age
+        os.utime(lock, (old, old))
+        return lock
+
+    def test_point_13_an_empty_unheld_old_ref_lock_is_removed_and_the_deletion_succeeds(self):
+        recent = self._lock("cc/zach-opus-lk1", 5)
+        self.assertFalse(ws.delete_branch(self.other, "cc/zach-opus-lk1")[0])   # CONTROL: recent is never touched
+        self.assertTrue(os.path.exists(recent))
+        os.utime(recent, (time.time() - 3600, time.time() - 3600))
+        holder = subprocess.Popen(["sleep", "30"], stdin=open(recent, "rb"))
+        try:
+            self.assertFalse(ws.delete_branch(self.other, "cc/zach-opus-lk1")[0])  # CONTROL: held is never touched
+            self.assertTrue(os.path.exists(recent))
+        finally:
+            holder.kill()
+            holder.wait()
+        self.assertEqual(ws.delete_branch(self.other, "cc/zach-opus-lk1"), (True, ""))
+        self.assertFalse(os.path.exists(recent))
+        self.assertNotIn("cc/zach-opus-lk1", branches(self.other))
+
+    def test_point_13_the_failing_deletion_notice_reaches_the_lead_and_a_later_session(self):
+        aid, npath = self.spawn("zach-opus-lt")
+        self.commit(npath)
+        self.finish(aid)
+        self.merge(self.entity, "worktree-agent-" + aid)
+        parent = os.path.dirname(npath)
+        os.chmod(parent, 0o555)
+        try:
+            self.assertEqual(self.names(), [])
+            for _ in range(ws.RETRY_TELL_CEO_AFTER):
+                ws.retry_due()
+            ok, msg, lead = ws.gate_stop({"session_id": self.sid}, self.entity)
+            self.assertIn("TELL THE CEO", msg)
+            self.assertIn("TELL THE CEO", lead)                  # the model sees it, not only the screen
+            self.assertIn("zach-opus-lt", lead)
+            ctx, _n = ws.lifecycle({"hook_event_name": "SessionStart", "session_id": "a-later-session",
+                                    "cwd": self.entity, "source": "resume"}, self.entity)
+            self.assertIn("TELL THE CEO", ctx)                   # a later session hears it at start
+            again, _n = ws.lifecycle({"hook_event_name": "SessionStart", "session_id": self.sid,
+                                      "cwd": self.entity, "source": "compact"}, self.entity)
+            self.assertNotIn("TELL THE CEO", again)              # this session was told at its Stop
+        finally:
+            os.chmod(parent, 0o755)
+
+    def test_point_13_an_unchanged_failing_deletion_is_told_to_the_lead_once_per_session(self):
+        rec = {"name": "zach-sonnet-rp", "deletion": {"attempts": 17, "first_failed_at": 1794534840,
+               "next_at": ws.now() + 3600, "last_error": "git branch -D x failed: cannot lock ref"}}
+        other = {"name": "zach-sonnet-rq", "deletion": dict(rec["deletion"], last_error="other error")}
+        sid2 = "later-session"
+        state = {"records": [rec]}
+        with patch.object(ws, "keeps_failing", side_effect=lambda: state["records"]), \
+                patch.object(ws, "retry_due"), patch.object(ws, "pending", return_value=[]), \
+                patch.object(ws, "fallback_notice", return_value=""):
+            first = ws.gate_stop({"session_id": self.sid}, self.entity)[2]
+            self.assertIn("TELL THE CEO", first)
+            rec["deletion"]["attempts"] = 18                       # another retry, same failure
+            self.assertEqual(ws.gate_stop({"session_id": self.sid, "stop_hook_active": True}, self.entity)[2], "")
+            self.assertIn("TELL THE CEO", ws.gate_stop({"session_id": sid2}, self.entity)[2])  # a later session
+            for source in ("compact", "resume"):                   # the same session id, same failure
+                ctx, _n = ws.lifecycle({"hook_event_name": "SessionStart", "session_id": self.sid,
+                                        "cwd": self.entity, "source": source}, self.entity)
+                self.assertNotIn("TELL THE CEO", ctx)
+            state["records"] = [rec, other]                        # the failure changed
+            self.assertIn("zach-sonnet-rq", ws.gate_stop({"session_id": self.sid}, self.entity)[2])
+
+
 class Point14_IntegrationBranch(Base):
     """14. Landed doesn't always mean landed on main."""
 

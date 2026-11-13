@@ -8556,9 +8556,52 @@ def delete_branch(repo, b, deadline=None):
     if holders:
         return False, "branch %s is still checked out at %s" % (b, holders[0])
     rc, _o, err = git(main, "branch", "-D", b, timeout=_bounded(deadline, 60))
+    if rc != 0 and _clear_stale_git_lock(main, err):
+        rc, _o, err = git(main, "branch", "-D", b, timeout=_bounded(deadline, 60))
     if rc != 0 or branch_tip(main, b):
         return False, "git branch -D %s failed: %s" % (b, err.strip()[:300])
     return True, ""
+
+
+STALE_LOCK_AGE = 300.0
+
+
+def _clear_stale_git_lock(main, err):
+    """True when the git lock file `err` names was removed. A lock left by a git
+    process that died mid-land blocked one branch deletion for 17 attempts over
+    10 hours (2026-11-13). Only a lock that is inside this repository's git
+    directory, EMPTY, older than STALE_LOCK_AGE seconds and held open by no
+    process is removed; anything held, recent or unreadable is left alone."""
+    m = re.search(r"'([^']+\.lock)': File exists", err or "")
+    if not m:
+        return False
+    lock = realpath(m.group(1))
+    rc, out, _e = git(main, "rev-parse", "--git-common-dir")
+    if rc != 0 or not out.strip():
+        return False
+    gitdir = realpath(os.path.join(main, out.strip()))
+    if not lock.startswith(gitdir + os.sep) or not lock.endswith(".lock"):
+        return False
+    try:
+        st = os.stat(lock)
+    except OSError:
+        return False
+    if st.st_size != 0 or time.time() - st.st_mtime < STALE_LOCK_AGE:
+        return False
+    if not shutil.which("lsof"):
+        return False                   # cannot show nobody holds it
+    try:
+        r = subprocess.run(["lsof", "-t", "-w", "--", lock], capture_output=True, text=True, timeout=20)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    if r.returncode not in (0, 1) or r.stdout.strip():
+        return False                   # held, or lsof failed: not provably free
+    try:
+        os.unlink(lock)
+    except OSError:
+        return False
+    event("stale-git-lock-removed", lock=lock, age=int(time.time() - st.st_mtime))
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -9346,10 +9389,38 @@ def gate_stop(payload, entity):
     deadline = _gate_deadline(GATE_STOP_BUDGET)
     retry_due(deadline=deadline)
     items = pending(sid, entity, scan=True, deadline=deadline, report={})
-    person = ["TELL THE CEO: deleting %s has failed %d times since %s: %s" % (
+    person = failing_deletion_lines()
+    # The same line also goes to the LEAD: the person's channel (systemMessage) is never read by
+    # the model, and it is the lead who tells the CEO. Before this a deletion failed 17 times
+    # over 10 hours and no session ever saw the line (2026-11-13).
+    # Told to the lead once per session per failure state: a model-channel line continues the
+    # lead's turn, so an unchanged stuck deletion must not wake it again on every Stop.
+    lead = "\n".join(_new_deletion_lines(sid, person) + [fallback_notice(sid, items) or ""]).strip()
+    return True, "\n".join(person), lead
+
+
+def _new_deletion_lines(sid, lines, record=True):
+    """The failing-deletion lines not yet told in this session. The failure state is which
+    deletions fail and with what error (not the attempt count, which moves every retry);
+    when that changes the lines are new again."""
+    if not lines:
+        return []
+    state = sorted([r.get("name"), r["deletion"].get("last_error")] for r in keeps_failing())
+    key = hashlib.sha1(json.dumps(state).encode("utf-8")).hexdigest()
+    with Lock():
+        rec = load_session(sid) or {}
+        if rec.get("deletion_notice") == key:
+            return []
+        if record:
+            rec["deletion_notice"] = key
+            write_json(session_path(sid), rec)
+    return lines
+
+
+def failing_deletion_lines():
+    return ["TELL THE CEO: deleting %s has failed %d times since %s: %s" % (
         r.get("name"), r["deletion"].get("attempts"), iso(r["deletion"].get("first_failed_at")),
         r["deletion"].get("last_error")) for r in keeps_failing()]
-    return True, "\n".join(person), fallback_notice(sid, items)
 
 
 # ---------------------------------------------------------------------------
@@ -9437,6 +9508,11 @@ def lifecycle(payload, entity):
                 pass
         elif bad:
             ctx = bad
+        # A later session is the first to hear what an ended one could not; a compaction or resume
+        # that keeps the session id does not hear an unchanged failure again.
+        stuck = _new_deletion_lines(sid, failing_deletion_lines())
+        if stuck:
+            ctx = "\n".join(stuck + ([ctx] if ctx else []))
     elif ev == "SessionEnd":
         record_session_end(sid, str(payload.get("reason") or "SessionEnd"))
         release_session_holds(sid)
