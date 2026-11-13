@@ -98,6 +98,10 @@ pub mod provision;
 // module docs for the two locations and `build.rs` for why a missing fixture must report
 // `ignored` and never `ok`.
 pub mod private_fixtures;
+// Where the speech is in a finished dictation (Silero, in process) and the pieces it is decoded
+// in: one stretch of talking per decode window, every cut in a pause. Pure over probabilities,
+// so each rule is decided in a unit test without a model or a decoder.
+pub mod speech;
 pub mod state;
 // Which whisper binary, which ggml backends and which weights are about to hear the CEO. Pure
 // except for four I/O functions, and native-dependency-free — it hashes with `sha2` rather than
