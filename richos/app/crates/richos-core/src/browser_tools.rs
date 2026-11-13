@@ -509,16 +509,43 @@ fn punycode(label: &str) -> Option<String> {
     Some(output)
 }
 
-/// The address with its host in ASCII: a host with letters outside ASCII (`www.münchen.de`,
-/// `例え.jp`) in the `xn--` form browsers use for it, so the page that opens is the page asked
-/// for. An address whose host is ASCII already is returned as it is.
+/// What follows the host as browsers spell it: a letter outside ASCII as its UTF-8 bytes,
+/// percent-encoded (`/wiki/München` is `/wiki/M%C3%BCnchen`), and an escape's two hex digits in
+/// capitals. Nothing else is touched: `%2F` stays an escaped slash and case stays as written.
+fn spelled(tail: &str) -> String {
+    let mut out = String::with_capacity(tail.len());
+    let bytes = tail.as_bytes();
+    let mut chars = tail.char_indices();
+    while let Some((at, c)) = chars.next() {
+        if !c.is_ascii() {
+            let mut utf8 = [0u8; 4];
+            for byte in c.encode_utf8(&mut utf8).bytes() {
+                out.push_str(&format!("%{byte:02X}"));
+            }
+        } else if c == '%' && bytes.get(at + 1).is_some_and(u8::is_ascii_hexdigit) && bytes.get(at + 2).is_some_and(u8::is_ascii_hexdigit) {
+            out.push('%');
+            out.push((bytes[at + 1] as char).to_ascii_uppercase());
+            out.push((bytes[at + 2] as char).to_ascii_uppercase());
+            chars.next();
+            chars.next();
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// The address as browsers spell it, so the page that opens is the page asked for and the tab
+/// showing it is recognized: a host with letters outside ASCII (`www.münchen.de`, `例え.jp`)
+/// in its `xn--` form, and what follows the host as [`spelled`]. An address that is ASCII
+/// already changes only in the case of its escapes.
 fn ascii_address(url: &str) -> Option<String> {
     use unicode_normalization::UnicodeNormalization;
     let start = url.find("://")? + 3;
     let end = url[start..].find(['/', '?', '#']).map_or(url.len(), |e| start + e);
     let authority = &url[start..end];
     if authority.is_ascii() {
-        return Some(url.to_string());
+        return Some(format!("{}{}", &url[..end], spelled(&url[end..])));
     }
     let (host, port) = match authority.rsplit_once(':') {
         Some((host, port)) if !port.is_empty() && port.chars().all(|c| c.is_ascii_digit()) => (host, Some(port)),
@@ -530,7 +557,7 @@ fn ascii_address(url: &str) -> Option<String> {
         labels.push(if label.is_ascii() { label } else { format!("xn--{}", punycode(&label)?) });
     }
     let port = port.map(|p| format!(":{p}")).unwrap_or_default();
-    Some(format!("{}{}{port}{}", &url[..start], labels.join("."), &url[end..]))
+    Some(format!("{}{}{port}{}", &url[..start], labels.join("."), spelled(&url[end..])))
 }
 
 /// The address the model gave, accepted when it is a web address (`http` or `https`, a host, no
@@ -548,10 +575,12 @@ pub fn check_url(url: &str) -> Result<String, String> {
 /// Which page an address names on any site: the host without `www.`, `m.` or its port, then
 /// the path, the query and an application route (`#/orders`, `#!/x`) exactly as written, case
 /// and all, since `?month=november` is another page than `?month=october`. A trailing slash is
-/// dropped, `http` and `https` are the same page, and any other fragment is dropped.
+/// dropped, `http` and `https` are the same page, and any other fragment is dropped. Both
+/// spellings of one address ([`ascii_address`]) are the same page: a browser reports
+/// `/wiki/M%C3%BCnchen` for the `/wiki/München` it was asked for.
 fn address_key(url: &str) -> Option<String> {
-    let host = shared::parse(url)?.host;
-    let url = url.trim();
+    let url = ascii_address(url.trim())?;
+    let host = shared::parse(&url)?.host;
     let rest = &url[url.find("://")? + 3..];
     let tail = &rest[rest.find(['/', '?', '#']).unwrap_or(rest.len())..];
     let (before_fragment, fragment) = tail.split_once('#').unwrap_or((tail, ""));
@@ -1682,7 +1711,14 @@ mod tests {
         assert_eq!(check_url("https://www.münchen.de/rathaus?x=1").unwrap(), "https://www.xn--mnchen-3ya.de/rathaus?x=1");
         assert_eq!(check_url("https://例え.jp/").unwrap(), "https://xn--r8jz45g.jp/");
         assert_eq!(check_url("https://Bücher.example:8443/a").unwrap(), "https://xn--bcher-kva.example:8443/a");
-        assert_eq!(check_url("https://shop.example/straße").unwrap(), "https://shop.example/straße", "only the host changes");
+        // What follows the host is spelled as browsers spell it, so the tab that shows it is known.
+        assert_eq!(check_url("https://de.wikipedia.org/wiki/München?x=ä#Süd").unwrap(),
+            "https://de.wikipedia.org/wiki/M%C3%BCnchen?x=%C3%A4#S%C3%BCd");
+        assert_eq!(check_url("https://shop.example/a%2fb%zz").unwrap(), "https://shop.example/a%2Fb%zz");
+        assert!(same_address("https://de.wikipedia.org/wiki/München", "https://de.wikipedia.org/wiki/M%C3%BCnchen"));
+        assert!(same_address("https://www.münchen.de/a%c3%bc", "https://xn--mnchen-3ya.de/a%C3%BC/"));
+        assert!(!same_address("https://shop.example/a%2Fb", "https://shop.example/a/b"), "an escaped slash is not a slash");
+        assert!(!same_address("https://shop.example/Orders", "https://shop.example/orders"), "case is the page's own");
         assert!(session.call(&fake, OPEN, &json!({"url": ADMIN, "follow": ["x"]})).unwrap_err().contains("arguments"));
         assert!(session.call(&fake, "read_profile", &json!({})).unwrap_err().contains("Unknown"));
     }
