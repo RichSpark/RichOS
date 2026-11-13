@@ -54,6 +54,16 @@
 //! never read. The tab is closed again by `close_page`, by the next `open_page`, when the
 //! session ends and after [`IDLE`] without a call; a tab the reader did not open is left alone.
 //!
+//! ## What was measured
+//!
+//! `docs/verification/browser-reader-real-pages-2026-11-13/`: ten real pages (a long article,
+//! two accordions, a tab list, a table, a page that loads more as it scrolls, a web app, a
+//! sign-in redirect, a page only a signed-in browser is shown, a link that opens a new tab)
+//! read and answered in Safari, Chrome, Firefox and Brave in a test guest
+//! (`scripts/testvm/browser-reader-walk.py`), and one conversation through the real app in
+//! which Reed opened a closed panel for the user's question. The same record lists what is
+//! not measured: no real signed-in account, no browser beyond those four.
+//!
 //! ## The split
 //!
 //! As [`crate::linkedin_tools`]: everything decided is here, tested against a fake; the
@@ -121,6 +131,11 @@ pub trait AxNode: Clone {
     /// `AXExpanded`, when the element says.
     fn expanded(&self) -> Option<bool>;
     fn children(&self) -> Vec<Self>;
+    /// All the text under this element as the browser itself reads it out, spacing and line
+    /// breaks included (`AXStringForTextMarkerRange` over the element), when it gives one.
+    fn whole_text(&self) -> Option<String> {
+        None
+    }
 }
 
 /// One thing a page shows, in page order.
@@ -257,6 +272,43 @@ fn controls_under<N: AxNode>(node: &N) -> Vec<(N, Item)> {
     out
 }
 
+/// The spacing between pieces of text, put back where the browser left it out.
+///
+/// Measured in the guest walk of 2026-11-13: Chrome, Brave and Firefox give the spacing between
+/// two pieces as a piece of its own; Safari leaves it out (a code sample's `"accordion"` and
+/// `id` came back with nothing between them, and none of its line breaks). Safari does give the
+/// page's whole text, spacing included, the way VoiceOver reads it, so each piece is found
+/// there in order and whatever lies between two neighboring pieces, when it is only spacing,
+/// goes back between them. A piece that is not found is left as it is.
+fn restore_spacing(items: Vec<Item>, whole: &str) -> Vec<Item> {
+    let mut out = Vec::with_capacity(items.len());
+    let mut cursor = 0;
+    // Where the piece before this one ended in `whole`, when it was found and nothing but text
+    // lies between the two.
+    let mut before: Option<usize> = None;
+    for item in items {
+        match &item {
+            Item::Text(piece) => match whole[cursor..].find(piece.as_str()) {
+                Some(found) => {
+                    let at = cursor + found;
+                    if let Some(end) = before {
+                        let gap = &whole[end..at];
+                        if !gap.is_empty() && gap.chars().all(char::is_whitespace) {
+                            out.push(Item::Text(gap.to_string()));
+                        }
+                    }
+                    cursor = at + piece.len();
+                    before = Some(cursor);
+                }
+                None => before = None,
+            },
+            _ => before = None,
+        }
+        out.push(item);
+    }
+    out
+}
+
 /// **A page in page order**: everything it shows, each thing where it sits.
 ///
 /// Words (`AXStaticText`), headings, links, buttons, a page's own tabs and menus (controls,
@@ -305,8 +357,13 @@ pub fn walk<N: AxNode>(area: &N) -> Walked<N> {
         }
         let role = el.role();
         if role == "AXStaticText" {
-            if let Some(v) = el.value_text().filter(|v| !blank(v)) {
-                out.push(Item::Text(v), &place, Some(&el));
+            match el.value_text() {
+                // The spacing between two pieces (a space between two links, a line break and
+                // an indent inside a code sample) is the page's text too. It opens no part of
+                // the page and is never what a scroll goes to.
+                Some(v) if blank(&v) && !v.is_empty() => out.walked.items.push(Item::Text(v)),
+                Some(v) if !v.is_empty() => out.push(Item::Text(v), &place, Some(&el)),
+                _ => {}
             }
             continue;
         }
@@ -390,6 +447,14 @@ pub fn walk<N: AxNode>(area: &N) -> Walked<N> {
             }
         }
     }
+    // No piece of spacing anywhere: a browser that leaves them out. Its own reading of the text
+    // says where they belong.
+    let texts = out.walked.items.iter().filter(|i| matches!(i, Item::Text(_))).count();
+    if texts > 1 && !out.walked.items.iter().any(|i| matches!(i, Item::Text(t) if blank(t))) {
+        if let Some(whole) = area.whole_text() {
+            out.walked.items = restore_spacing(std::mem::take(&mut out.walked.items), &whole);
+        }
+    }
     out.walked
 }
 
@@ -441,14 +506,97 @@ pub trait PageHost: BrowserHost {
     fn show_tab(&self, app: &BrowserApp, tab: u64) -> bool;
 }
 
-/// The address the model gave, accepted when it is a web address (`http` or `https`, a host, no
-/// user name in it). Anything else (a file, a script, a bare word) opens nothing.
-pub fn check_url(url: &str) -> Result<String, String> {
-    let url = url.trim();
-    if url.is_empty() || url.len() > MAX_URL_CHARS || url.chars().any(char::is_whitespace) || shared::parse(url).is_none() {
-        return Err("Give the full address of one web page, starting with https:// (or http://). Nothing was opened.".into());
+/// One label of a host name in Punycode (RFC 3492), the form every browser shows and sends for
+/// a name with letters outside ASCII: `münchen` is `mnchen-3ya`.
+fn punycode(label: &str) -> Option<String> {
+    const BASE: u32 = 36;
+    const TMIN: u32 = 1;
+    const TMAX: u32 = 26;
+    fn digit(d: u32) -> char {
+        if d < 26 { (b'a' + d as u8) as char } else { (b'0' + (d - 26) as u8) as char }
     }
-    Ok(url.to_string())
+    fn adapt(delta: u32, points: u32, first: bool) -> u32 {
+        let mut delta = if first { delta / 700 } else { delta / 2 };
+        delta += delta / points;
+        let mut k = 0;
+        while delta > ((BASE - TMIN) * TMAX) / 2 {
+            delta /= BASE - TMIN;
+            k += BASE;
+        }
+        k + ((BASE - TMIN + 1) * delta) / (delta + 38)
+    }
+    let input: Vec<u32> = label.chars().map(|c| c as u32).collect();
+    let mut output: String = label.chars().filter(char::is_ascii).collect();
+    let basic = output.len() as u32;
+    if basic > 0 {
+        output.push('-');
+    }
+    let (mut n, mut delta, mut bias, mut done) = (128u32, 0u32, 72u32, basic);
+    while (done as usize) < input.len() {
+        let next = *input.iter().filter(|c| **c >= n).min()?;
+        delta = delta.checked_add((next - n).checked_mul(done + 1)?)?;
+        n = next;
+        for &c in &input {
+            if c < n {
+                delta = delta.checked_add(1)?;
+            }
+            if c == n {
+                let (mut q, mut k) = (delta, BASE);
+                loop {
+                    let t = if k <= bias { TMIN } else if k >= bias + TMAX { TMAX } else { k - bias };
+                    if q < t {
+                        break;
+                    }
+                    output.push(digit(t + (q - t) % (BASE - t)));
+                    q = (q - t) / (BASE - t);
+                    k += BASE;
+                }
+                output.push(digit(q));
+                bias = adapt(delta, done + 1, done == basic);
+                delta = 0;
+                done += 1;
+            }
+        }
+        delta += 1;
+        n += 1;
+    }
+    Some(output)
+}
+
+/// The address with its host in ASCII: a host with letters outside ASCII (`www.münchen.de`,
+/// `例え.jp`) in the `xn--` form browsers use for it, so the page that opens is the page asked
+/// for. An address whose host is ASCII already is returned as it is.
+fn ascii_address(url: &str) -> Option<String> {
+    use unicode_normalization::UnicodeNormalization;
+    let start = url.find("://")? + 3;
+    let end = url[start..].find(['/', '?', '#']).map_or(url.len(), |e| start + e);
+    let authority = &url[start..end];
+    if authority.is_ascii() {
+        return Some(url.to_string());
+    }
+    let (host, port) = match authority.rsplit_once(':') {
+        Some((host, port)) if !port.is_empty() && port.chars().all(|c| c.is_ascii_digit()) => (host, Some(port)),
+        _ => (authority, None),
+    };
+    let mut labels = Vec::new();
+    for label in host.split(['.', '。', '．', '｡']) {
+        let label: String = label.nfkc().collect::<String>().to_lowercase();
+        labels.push(if label.is_ascii() { label } else { format!("xn--{}", punycode(&label)?) });
+    }
+    let port = port.map(|p| format!(":{p}")).unwrap_or_default();
+    Some(format!("{}{}{port}{}", &url[..start], labels.join("."), &url[end..]))
+}
+
+/// The address the model gave, accepted when it is a web address (`http` or `https`, a host, no
+/// user name in it), with its host as browsers write it ([`ascii_address`]). Anything else (a
+/// file, a script, a bare word) opens nothing.
+pub fn check_url(url: &str) -> Result<String, String> {
+    let refuse = || "Give the full address of one web page, starting with https:// (or http://). Nothing was opened.".to_string();
+    let url = url.trim();
+    if url.is_empty() || url.len() > MAX_URL_CHARS || url.chars().any(char::is_whitespace) {
+        return Err(refuse());
+    }
+    ascii_address(url).filter(|u| shared::parse(u).is_some()).ok_or_else(refuse)
 }
 
 /// Which page an address names on any site: the host without `www.`, `m.` or its port, then
@@ -598,51 +746,108 @@ fn shown_address(page: &str, link: &str) -> Option<String> {
     Some(if short.chars().count() > 300 { format!("{}…", short.chars().take(300).collect::<String>()) } else { short })
 }
 
+/// One block of the page being written: its text so far, and whether it ends with a control
+/// or a value (what follows then starts after a space).
+#[derive(Default)]
+struct Line {
+    text: String,
+    after_token: bool,
+}
+
+impl Line {
+    /// A piece of the page's own text, exactly as the browser gives it. Browsers give each
+    /// styled run as its own piece (measured on real pages, 2026-11-13: a highlighted code
+    /// sample is one piece per token), so pieces are joined as they are: `<` and `div` make
+    /// `<div`. One case gets a space the page did not write: two pieces that meet letter to
+    /// letter ("Star" and "122k", set apart on screen by the page's styling, not by a space).
+    fn text(&mut self, piece: &str) {
+        let starts = piece.chars().next();
+        let letters = self.text.chars().last().is_some_and(char::is_alphanumeric) && starts.is_some_and(char::is_alphanumeric);
+        let after = self.after_token && starts.is_some_and(|c| !c.is_whitespace() && !".,;:!?)]".contains(c));
+        if letters || after {
+            self.text.push(' ');
+        }
+        self.text.push_str(piece);
+        self.after_token = false;
+    }
+
+    /// A control or a value, set off from the text around it by a space.
+    fn token(&mut self, token: &str) {
+        if self.text.chars().last().is_some_and(|c| !c.is_whitespace()) {
+            self.text.push(' ');
+        }
+        self.text.push_str(token);
+        self.after_token = true;
+    }
+
+    /// The block ends: its lines go to `lines`. Text with line breaks of its own (a code
+    /// sample, an address) keeps them and its indentation; any other block is one line with
+    /// its spacing collapsed.
+    fn flush(&mut self, lines: &mut Vec<String>) {
+        if self.text.contains('\n') {
+            let mut block: Vec<&str> = self.text.split('\n').map(str::trim_end).collect();
+            while block.first().is_some_and(|l| l.is_empty()) {
+                block.remove(0);
+            }
+            while block.last().is_some_and(|l| l.is_empty()) {
+                block.pop();
+            }
+            let mut was_empty = false;
+            for line in block {
+                if !(line.is_empty() && was_empty) {
+                    lines.push(line.to_string());
+                }
+                was_empty = line.is_empty();
+            }
+        } else {
+            let line = clean(&self.text);
+            let line = line.trim_end_matches(" |").trim_start_matches("| ");
+            if !line.is_empty() && line != "|" {
+                lines.push(line.to_string());
+            }
+        }
+        self.text.clear();
+        self.after_token = false;
+    }
+}
+
 /// The page as text: one line per block, headings marked `#`, each control where it sits as
 /// `[number kind "name" state → address]`, each value as `(kind "name": value)`. The controls
 /// are numbered from `first`. With it, every control as the text shows it, in number order.
 pub fn render(page_url: &str, items: &[Item], first: usize) -> (String, Vec<String>) {
     let mut lines: Vec<String> = Vec::new();
     let mut names: Vec<String> = Vec::new();
-    let mut current = String::new();
-    fn flush(current: &mut String, lines: &mut Vec<String>) {
-        let line = clean(current);
-        let line = line.trim_end_matches(" |").trim_start_matches("| ");
-        if !line.is_empty() && line != "|" {
-            lines.push(line.to_string());
-        }
-        current.clear();
-    }
+    let mut current = Line::default();
     for item in items {
         match item {
             Item::Region(region) => {
-                flush(&mut current, &mut lines);
+                current.flush(&mut lines);
                 lines.push(format!("--- {} ---", region_name(region)));
             }
             Item::Heading(level, text) => {
-                flush(&mut current, &mut lines);
-                current.push_str(&format!("{} {}", "#".repeat((*level).max(1) as usize), clean(text)));
+                current.flush(&mut lines);
+                current.text(&format!("{} {}", "#".repeat((*level).max(1) as usize), clean(text)));
             }
-            Item::Text(text) => {
-                current.push(' ');
-                current.push_str(text);
-            }
+            Item::Text(text) => current.text(text),
             Item::Control { kind, name, url, state } => {
                 let said = format!("{kind} \"{}\"", clean(name));
                 let state = state.map(|s| format!(" {s}")).unwrap_or_default();
                 let to = url.as_deref().and_then(|u| shown_address(page_url, u)).map(|u| format!(" → {u}")).unwrap_or_default();
-                current.push_str(&format!(" [{} {said}{state}{to}]", first + names.len()));
+                current.token(&format!("[{} {said}{state}{to}]", first + names.len()));
                 names.push(said);
             }
             Item::Value { kind, name, value } => {
                 let name = if name.is_empty() { String::new() } else { format!(" \"{}\"", clean(name)) };
-                current.push_str(&format!(" ({kind}{name}: {})", clean(value)));
+                current.token(&format!("({kind}{name}: {})", clean(value)));
             }
-            Item::Break => flush(&mut current, &mut lines),
-            Item::Cell => current.push_str(" | "),
+            Item::Break => current.flush(&mut lines),
+            Item::Cell => {
+                current.text.push_str(" | ");
+                current.after_token = false;
+            }
         }
     }
-    flush(&mut current, &mut lines);
+    current.flush(&mut lines);
     (lines.join("\n"), names)
 }
 
@@ -736,7 +941,11 @@ fn close_and_wait(host: &dyn PageHost, app: &BrowserApp, id: u64) -> bool {
 }
 
 fn has_content(snapshot: &Snapshot) -> bool {
-    snapshot.items.iter().any(|i| !matches!(i, Item::Region(_) | Item::Break | Item::Cell))
+    snapshot.items.iter().any(|i| match i {
+        Item::Region(_) | Item::Break | Item::Cell => false,
+        Item::Text(text) => !blank(text),
+        _ => true,
+    })
 }
 
 impl Held {
@@ -1193,8 +1402,11 @@ mod tests {
                 .with(MAIL, vec![vec![h("Inbox"), t("Private mail: payroll attached")]])
                 .with(NEWS, vec![vec![h("News"), t("Today's headlines")]])
         }
+        /// A page's states, each a list of items as the walk gives them: a heading ends its line.
         fn with(mut self, url: &str, states: Vec<Vec<Item>>) -> Self {
-            self.pages.insert(url.into(), states);
+            let lines = |items: Vec<Item>| items.into_iter()
+                .flat_map(|i| if matches!(i, Item::Heading(..)) { vec![i, Item::Break] } else { vec![i] }).collect();
+            self.pages.insert(url.into(), states.into_iter().map(lines).collect());
             self
         }
         fn redirect(mut self, from: &str, to: &str) -> Self {
@@ -1360,7 +1572,7 @@ mod tests {
         let fake = store(safari());
         let mut session = Session::default();
         let out = session.open(&fake, ADMIN).unwrap();
-        assert_eq!(page(&out), "## Store admin Orders this week: 214\n[1 button \"Shipping\" collapsed] [2 button \"Show more\"] \
+        assert_eq!(page(&out), "## Store admin\nOrders this week: 214\n[1 button \"Shipping\" collapsed] [2 button \"Show more\"] \
             [3 link \"Orders\" → /admin/orders] [4 link \"Help\" → https://help.example/orders]");
         assert_eq!(out["browser"], "Safari");
         assert_eq!(out["address"], ADMIN);
@@ -1584,6 +1796,11 @@ mod tests {
             assert!(session.open(&fake, bad).unwrap_err().contains("Nothing was opened"), "{bad}");
         }
         assert!(fake.opened.borrow().is_empty());
+        // A host with letters outside ASCII is opened in the form browsers use for it.
+        assert_eq!(check_url("https://www.münchen.de/rathaus?x=1").unwrap(), "https://www.xn--mnchen-3ya.de/rathaus?x=1");
+        assert_eq!(check_url("https://例え.jp/").unwrap(), "https://xn--r8jz45g.jp/");
+        assert_eq!(check_url("https://Bücher.example:8443/a").unwrap(), "https://xn--bcher-kva.example:8443/a");
+        assert_eq!(check_url("https://shop.example/straße").unwrap(), "https://shop.example/straße", "only the host changes");
         assert!(session.call(&fake, OPEN, &json!({"url": ADMIN, "follow": ["x"]})).unwrap_err().contains("arguments"));
         assert!(session.call(&fake, "read_profile", &json!({})).unwrap_err().contains("Unknown"));
     }
@@ -1647,6 +1864,8 @@ mod tests {
         url: Option<&'static str>,
         expanded: Option<bool>,
         kids: Vec<Node>,
+        /// The browser's own reading of all the text under the element, when it gives one.
+        whole: Option<&'static str>,
     }
 
     impl AxNode for Node {
@@ -1659,6 +1878,7 @@ mod tests {
         fn url(&self) -> Option<String> { self.url.map(Into::into) }
         fn expanded(&self) -> Option<bool> { self.expanded }
         fn children(&self) -> Vec<Self> { self.kids.clone() }
+        fn whole_text(&self) -> Option<String> { self.whole.map(Into::into) }
     }
 
     fn el(role: &'static str, kids: Vec<Node>) -> Node {
@@ -1722,6 +1942,46 @@ mod tests {
         assert_eq!(walked.controls[3].role, "AXButton");
         assert_eq!(walked.last.map(|n| n.value), Some(Some("72%")), "the last thing shown is what a scroll goes to");
         assert!(!walked.cut);
+    }
+
+    /// Real pages give each styled run as its own piece, and a code sample one piece per token
+    /// with its line breaks and indents as pieces of spacing (Bootstrap's accordion page in
+    /// Safari, Chrome and Firefox, guest walk of 2026-11-13).
+    #[test]
+    fn a_code_sample_keeps_its_lines_and_indentation_and_pieces_are_joined_as_the_page_wrote_them() {
+        let sample = |last: &'static str| el("AXWebArea", vec![
+            el("AXGroup", vec![text("for row in rows:\n    process(row)\n"), text(last)]),
+            el("AXGroup", vec![text("<"), text("div"), text(" "), text("class"), text("="), text("\"accordion\""), text(">"),
+                text("\n  "), text("<"), text("h2"), text(">")]),
+            el("AXGroup", vec![text("Star"), text("122k"), text(" "), text("stars"), text("."), text(" "),
+                Node { url: Some("https://shop.example/more"), ..el("AXLink", vec![text("More")]) }, text(", then "), text("“"), text("done"), text("”")]),
+        ]);
+        let (inside, _) = render("https://shop.example/", &walk(&sample("    save()")).items, 1);
+        assert_eq!(inside, "for row in rows:\n    process(row)\n    save()\n\
+            <div class=\"accordion\">\n  <h2>\n\
+            Star 122k stars. [1 link \"More\" → /more], then “done”");
+        let (after, _) = render("https://shop.example/", &walk(&sample("save()")).items, 1);
+        assert!(after.starts_with("for row in rows:\n    process(row)\nsave()\n"), "{after}");
+        assert_ne!(inside, after, "two different programs read the same");
+    }
+
+    /// Safari gives no piece for the spacing between two pieces (the same page, guest walk of
+    /// 2026-11-13: `"accordion"id=` and no line break), and gives the page's whole text.
+    #[test]
+    fn a_browser_that_leaves_spacing_out_gets_it_back_from_its_own_reading_of_the_text() {
+        let pieces = vec![
+            el("AXGroup", vec![text("<"), text("div"), text("class"), text("="), text("\"accordion\""), text("id"), text("="),
+                text("\"x\""), text(">"), text("<"), text("h2"), text(">")]),
+            el("AXGroup", vec![text("Note:"), text("ships"), Node { url: Some("https://shop.example/more"), ..el("AXLink", vec![text("worldwide")]) },
+                text("today"), text("(not in the reading)")]),
+        ];
+        let safari = Node { whole: Some("<div class=\"accordion\" id=\"x\">\n  <h2>\nNote: ships worldwide today"), ..el("AXWebArea", pieces.clone()) };
+        let (page, _) = render("https://shop.example/", &walk(&safari).items, 1);
+        assert_eq!(page, "<div class=\"accordion\" id=\"x\">\n  <h2>\n\
+            Note: ships [1 link \"worldwide\" → /more] today(not in the reading)");
+        // Without that reading the pieces are joined as they came, letters kept apart.
+        let (plain, _) = render("https://shop.example/", &walk(&el("AXWebArea", pieces)).items, 1);
+        assert_eq!(plain, "<div class=\"accordion\"id=\"x\"><h2>\nNote:ships [1 link \"worldwide\" → /more] today(not in the reading)");
     }
 
     fn frames(lines: &[Value]) -> Receiver<(Vec<u8>, bool)> {
