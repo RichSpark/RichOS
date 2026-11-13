@@ -97,7 +97,7 @@
 #   SP1-SP4 stop-probe: an interrupt that also ends the worker and a stop_task that ends only
 #           the foreground command are each reported as measured, exit 0; a lead that never
 #           starts the command and a missing binary are refused, exit 2, against a scripted claude
-#   SW1-SW4 speech-wav: two lines become one WAV with each line's times; an existing
+#   SW1-SW5 speech-wav: two lines become one WAV with each line's times; a voice name with spaces is accepted; an existing
 #           output, an unknown voice and an empty line are each refused
 #   X1      the committed fixtures still match their generator
 #
@@ -1788,6 +1788,14 @@ if command -v say >/dev/null 2>&1 && command -v ffmpeg >/dev/null 2>&1; then
   printf '[{"voice":"NoSuchVoiceQA","text":"hello"}]' > "$TMP/sw-badvoice.json"
   run python3 "$QA/speech-wav.py" "$TMP/sw-badvoice.json" "$TMP/sw-bad.wav"
   expect "SW3 a voice say does not list is refused, exit 1" 1 "is not a voice"
+  SPACED="$(say -v '?' | sed -n 's/^\(.*([^#]*)\)  *[a-z][a-z]*_[A-Za-z0-9]*  *#.*/\1/p' | head -1 | sed 's/ *$//')"
+  if [ -n "$SPACED" ]; then
+    python3 -c 'import json,sys; print(json.dumps([{"voice": sys.argv[1], "text": "hello"}]))' "$SPACED" > "$TMP/sw-spaced.json"
+    run python3 "$QA/speech-wav.py" "$TMP/sw-spaced.json" "$TMP/sw-spaced.wav" --rate 16000
+    expect "SW5 a voice whose name holds spaces ($SPACED) is accepted and rendered" 0 '"seconds"'
+  else
+    skip "SW5 a voice whose name holds spaces is accepted" "say lists no such voice here"
+  fi
 else
   skip "SW1-SW3 speech-wav renders and refuses" "say or ffmpeg is not on PATH here"
 fi

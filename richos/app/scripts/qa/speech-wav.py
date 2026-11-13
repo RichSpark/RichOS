@@ -21,6 +21,7 @@ land. Exit 1 with a sentence when the script is not a usable list, a voice is un
 """
 import argparse
 import json
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -65,7 +66,9 @@ def main():
     if not say or not ffmpeg:
         refuse('needs both `say` (macOS) and ffmpeg on PATH; found say=%s ffmpeg=%s' % (say, ffmpeg))
     known = subprocess.run([say, '-v', '?'], capture_output=True, text=True).stdout
-    voices = {row.split()[0] for row in known.splitlines() if row.strip()}
+    # A row is the name, the locale and "# sample"; a name can hold spaces ("Eddy (English (US))").
+    voices = {m.group(1).strip() for m in (re.match(r'^(.*?)\s+[a-z]{2,3}_[A-Za-z0-9]+\s+#', row)
+                                           for row in known.splitlines()) if m}
     for n, line in enumerate(lines, 1):
         if line['voice'] not in voices:
             refuse('line %d: "%s" is not a voice `say -v ?` lists' % (n, line['voice']))
