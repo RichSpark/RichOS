@@ -154,8 +154,11 @@ pub fn stretches(probabilities: &[f32], samples: usize) -> Vec<Range<usize>> {
             }
         }
     }
+    // Still talking when the recording ended: the stretch runs to the end. A dip that never
+    // became a pause does not end it (Silero's own rule), or pressing Finish would cut off
+    // quiet last words that came after one low frame.
     if let Some(from) = start {
-        keep(from, quiet_since.unwrap_or(probabilities.len()), &mut out);
+        keep(from, probabilities.len(), &mut out);
     }
     out
 }
@@ -294,6 +297,16 @@ mod tests {
         assert!((a - 1.0).abs() < 0.04 && (b - 5.16).abs() < 0.04, "the dip of 0.16 s is inside the first stretch: {a} {b}");
         let (c, d) = secs(&found[1]);
         assert!((c - 7.22).abs() < 0.07 && (d - n as f32 / SECOND as f32).abs() < 0.001, "the last stretch runs to the end: {c} {d}");
+        // Review of 2026-11-13: talking, ONE low frame, then quiet talking between the two
+        // thresholds until Finish, 2.048 s in all. The stretch runs to the end of the recording.
+        let (mut p, n) = timeline(&[(0.992, 0.9), (1.056, 0.2)]);
+        p[31] = 0.05;
+        assert_eq!(n, 32_768);
+        assert_eq!(stretches(&p, n).as_slice(), std::slice::from_ref(&(0..n)), "nothing after the dip is dropped");
+        assert_eq!(pieces(&stretches(&p, n), &p, n).as_slice(), std::slice::from_ref(&(0..n)));
+        // The same with a real pause before Finish still ends at the pause.
+        let (p, n) = timeline(&[(0.992, 0.9), (1.056, 0.05)]);
+        assert_eq!(stretches(&p, n).as_slice(), std::slice::from_ref(&(0..31 * FRAME_SAMPLES)));
         // Between the two thresholds nothing starts and nothing ends.
         let (p, n) = timeline(&[(1.0, 0.2), (1.0, 0.9), (2.0, 0.2), (1.0, 0.9)]);
         assert_eq!(stretches(&p, n).len(), 1);
