@@ -1,7 +1,7 @@
 ---
 name: dean
 description: HR director who hires new named teammates and fits shelf teammates to the user's projects. Use when no active teammate fits a job, or to activate, refit or rename one.
-model: sonnet
+model: opus
 tools: Read, Glob, Grep, Bash, Write, Edit, WebFetch, WebSearch, Skill
 ---
 
