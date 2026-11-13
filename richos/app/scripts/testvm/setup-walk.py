@@ -112,7 +112,7 @@ R19_STEPS = ['r19-grants', 'r19-sheet', 'r19-offer', 'r19-set-up', 'r19-key-chan
 QA = HERE.parent / 'qa'
 # What OCR must read in each state: fragments of his two lines short enough to sit on one line
 # of the sheet (setup.rs MEDIA_TOOLS_WHY, setup_view.rs SETUP_DOWNLOAD_LINE).
-R19_STATE1_OCR = ('Wispr Flow', 'voice and video tools')
+R19_STATE1_OCR = ('Wispr Flow', 'video tools')
 # Measured on the guest (walk of 76167734c): the sheet breaks his download line after "local voice",
 # so "local voice AI" is never one OCR line; "Sit tight" and "Wispr Flow" each are.
 R19_STATE2_OCR = ('Sit tight', 'Wispr Flow')
@@ -149,7 +149,7 @@ VOICE = 'ggml-small.en.bin'
 TRANSCRIPTION = 'ggml-large-v3-turbo-q5_0.bin'
 MODELS = (VOICE, TRANSCRIPTION)
 # The setup step's name on screen, in every build: "my video tools" and, once dictation is there,
-# "my voice and video tools" (setup.rs MEDIA_TOOLS_NAME; the sheet capitalizes it).
+# "my voice & video tools" (setup.rs MEDIA_TOOLS_NAME; the sheet capitalizes it).
 TOOLS_ON_SHEET = 'video tools'
 # The first-setup moments a user acts in; each must come while the download is still running.
 USER_MOMENTS = ('company name typed', 'folder given', '"Add this company" pressed', 'first conversation created')
@@ -223,7 +223,7 @@ def voice_ready(lines):
 def tools_outcome(text):
     """How the video tools' download ended, from the app's own lines (setup_view.rs): 'done',
     'failed' or None while it runs. Either source: the background download, or a setup press."""
-    if re.search(r'^\[richos\] (?:setup|video tools in the background) \d+/\d+ done: My (?:voice and )?video tools are installed\.$', text, re.M):
+    if re.search(r'^\[richos\] (?:setup|video tools in the background) \d+/\d+ done: My (?:voice (?:and|&) )?video tools are installed\.$', text, re.M):
         return 'done'
     if re.search(r'^\[richos\] (?:setup|video tools in the background) \d+/\d+ FAILED', text, re.M):
         return 'failed'

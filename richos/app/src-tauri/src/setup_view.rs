@@ -1366,6 +1366,6 @@ mod tests {
         // Not downloading (the launch's download failed): offered alone, under his name.
         let alone = ask_for_gated(&lease_ready, false, true);
         assert_eq!(alone.items.len(), 1);
-        assert_eq!(alone.items[0].name, "my voice and video tools");
+        assert_eq!(alone.items[0].name, "my voice & video tools");
     }
 }

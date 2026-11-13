@@ -32,6 +32,7 @@ class ToolsOutcome(unittest.TestCase):
         for source in ('video tools in the background', 'setup'):
             self.assertEqual(walk.tools_outcome(f'[richos] {source} 1/1 done: My video tools are installed.\n'), 'done')
             self.assertEqual(walk.tools_outcome(f'[richos] {source} 1/1 done: My voice and video tools are installed.\n'), 'done')
+            self.assertEqual(walk.tools_outcome(f'[richos] {source} 1/1 done: My voice & video tools are installed.\n'), 'done')
         self.assertEqual(walk.tools_outcome('[richos] video tools in the background 1/1 FAILED — no internet\n'), 'failed')
 
     def test_the_pins_file_is_found(self):

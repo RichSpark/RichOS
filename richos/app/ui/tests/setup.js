@@ -88,15 +88,15 @@ const sheetText = (page) =>
   );
 
 // ---------------------------------------------------------------------------------------
-// HIS TWO SENTENCES AND THE COUNTER: THE FLOOR'S ONE DECLARED EXEMPTION (dictation plan
-// revision 2, slice 4). Once dictation is there, the sheet carries the CEO's own setup line for
-// the voice and video tools ("private/local", "$140+/year") and his download line
-// ("$140+/year"), and the voice row counts "490 MB of 1.06 GB". Each would trip case 2's floor
-// (a slash, a dollar sign, a version-shaped number), and each is meant to be read. So exactly
-// those three are removed before the floor is checked:
-//   - his two sentences, compared against the RUST CONSTANTS they are rendered from
-//     (`setup.rs` MEDIA_TOOLS_WHY, `setup_view.rs` SETUP_DOWNLOAD_LINE), so a changed word is
-//     not exempt; and each constant is asserted to be his text, word for word;
+// HIS SENTENCES AND THE COUNTER: THE FLOOR'S ONE DECLARED EXEMPTION (dictation plan
+// revision 2, slice 4). Once dictation is there, the sheet carries the CEO's account sentence
+// ("Ultra"), his download line ("$140+/year"), and the voice row counts "490 MB of 1.06 GB". Each
+// would trip case 2's floor (a slash, a dollar sign, a version-shaped number), and each is meant to
+// be read. So exactly those are removed before the floor is checked:
+//   - his sentences, compared against the RUST CONSTANTS they are rendered from
+//     (`setup_view.rs` SETUP_ACCOUNT_NOTE and SETUP_DOWNLOAD_LINE), so a changed word is not
+//     exempt; and each constant is asserted to be his text, word for word. (His round 70 line
+//     for the voice & video tools, `setup.rs` MEDIA_TOOLS_WHY, holds the floor and needs none.);
 //   - the counter element's own text (`[data-counter]`), and only when it is a counter.
 // Every other word on the sheet keeps the full floor; case 2b proves a path on another line
 // still fails.
@@ -116,9 +116,12 @@ const HIS_ACCOUNT_NOTE = rustConst("src-tauri/src/setup_view.rs", "SETUP_ACCOUNT
 /// His account sentence (2026-10-08), word for word. It carries "an Ultra subscription" and "the Ultra tier".
 const ROUND_ACCOUNT_NOTE =
   "You need your own Anthropic account and an Ultra subscription there. You can sign in through your browser after setup; I never see your password. If you don't already have that subscription, sign up there first and pick the Ultra tier.";
-/// His setup sentence (2026-10-08) and round 19's download line, as he approved them.
+/// His setup sentences (round 70, 2026-11-13) and round 19's download line, as he approved them.
 const HIS_SETUP_SENTENCE =
-  "My voice and video tools: the tools I use to watch and download videos for you. Plus, it gives you a free & private/local replacement for Wispr Flow. So, it saves you $140+/year👍 and allows you to talk instead of typing anywhere on this computer.";
+  "My voice & video tools: they let me hear and talk. And also enable me to watch and download videos and podcasts for you.";
+const HIS_CLAUDE_SENTENCE = "Claude Code: it powers my thinking. (auto-installs if not already here)";
+const HIS_ENGINE_SENTENCE =
+  "The RichOS engine: the heart of RichOS. Includes my instructions and my specialist teammates (all of which you can tweak and expand).";
 const ROUND_19_DOWNLOAD_LINE =
   "Sit tight, we need to download about 1 GB of local voice AI so that you can just talk to Rich instead of typing. This will save you $140+/year👍 because you won't need Wispr Flow with this setup.";
 const COUNTER_WORDS = /^(\d+ MB of (\d+\.\d\d GB|\d+ MB)|Checking…)$/;
@@ -144,7 +147,7 @@ async function sheetTextExempt(page) {
   }));
   let rest = text;
   const removed = [];
-  for (const s of [HIS_ACCOUNT_NOTE, HIS_TOOLS_LINE, HIS_DOWNLOAD_LINE]) {
+  for (const s of [HIS_ACCOUNT_NOTE, HIS_DOWNLOAD_LINE]) {
     if (rest.includes(s)) {
       rest = rest.split(s).join(" ");
       removed.push(s);
@@ -1689,14 +1692,14 @@ async function main() {
 
   await run.check("2a his two sentences and the counter are the floor's only exemption", async () => {
     // EACH EXEMPT STRING IS HIS, WORD FOR WORD: the constants the sheet renders from.
-    assertEqual(HIS_TOOLS_LINE, HIS_SETUP_SENTENCE.slice("My voice and video tools: ".length), "MEDIA_TOOLS_WHY is not his line");
+    assertEqual(HIS_TOOLS_LINE, HIS_SETUP_SENTENCE.slice("My voice & video tools: ".length), "MEDIA_TOOLS_WHY is not his line");
     assertEqual(HIS_DOWNLOAD_LINE, ROUND_19_DOWNLOAD_LINE, "SETUP_DOWNLOAD_LINE is not round 19's line");
     assertEqual(HIS_ACCOUNT_NOTE, ROUND_ACCOUNT_NOTE, "SETUP_ACCOUNT_NOTE is not his account sentence");
     const page = await openApp(browser, R19);
     await page.waitForSelector("#setup-sheet:not([hidden])");
     // State 1: his item line is on the sheet, and is the only thing exempt.
     const ask = await sheetTextExempt(page);
-    assertEqual(ask.removed.join(" | "), HIS_ACCOUNT_NOTE + " | " + HIS_TOOLS_LINE, "state 1 exempts his account sentence and his item line, nothing else");
+    assertEqual(ask.removed.join(" | "), HIS_ACCOUNT_NOTE, "state 1 exempts his account sentence, nothing else");
     assertEqual(floorViolations(ask.rest).join(", "), "", "outside his line the floor holds: " + ask.rest);
     // State 2: his download line and the counter, and nothing else.
     await page.click("#setup-go");
@@ -1726,10 +1729,10 @@ async function main() {
     assertEqual(pathed.removed.includes(HIS_ACCOUNT_NOTE), false, "an altered account sentence was exempted");
     assert(floorViolations(pathed.rest).includes("a path"), "a path on the account line passed the floor");
     assert(floorViolations(pathed.rest).includes("a home-relative path"), "a home path on the account line passed the floor");
-    // His line with one word changed is not his line: the dollar sign and the slash fail.
+    // An item line is never exempt: a dollar sign put into it fails.
     await page.evaluate(() => {
       const why = document.querySelector('#setup-items li[data-component="media-tools"] .setup-item-why');
-      why.textContent = why.textContent.replace("free", "cheap");
+      why.textContent = why.textContent + " It saves you $140+/year.";
     });
     const changed = await sheetTextExempt(page);
     assertEqual(changed.removed.length, 0, "a changed line was exempted");
@@ -1755,8 +1758,8 @@ async function main() {
     );
     assertEqual(items.map((i) => i[0]).join(","), "claude-code,engine,media-tools", "three items, the video tools listed while they download");
     assertEqual(items[2][1], HIS_SETUP_SENTENCE, "the voice and video tools' item is his sentence, word for word");
-    assertEqual(items[0][1], "Claude Code: the program I think with. It comes from Anthropic and installs itself; I only ask it to.", "Claude Code's item");
-    assertEqual(items[1][1], "The RichOS engine: the part of me that knows how I work: my instructions and my team.", "the engine's item");
+    assertEqual(items[0][1], HIS_CLAUDE_SENTENCE, "Claude Code's item");
+    assertEqual(items[1][1], HIS_ENGINE_SENTENCE, "the engine's item");
     assert(await page.isHidden("#setup-note"), "round 19 draws no note under the title");
     assert(await page.isVisible("#setup-go") && await page.isVisible("#setup-later"), "Set it up and Not now");
     assert(await page.isHidden("#setup-progress"), "no progress line in state 1");
@@ -1798,7 +1801,7 @@ async function main() {
     assertEqual((await page.textContent("#setup-title")).trim(), "Setting things up", "the drawn title");
     let r = await rows();
     assertEqual(r.map((x) => x.c).join(","), "claude-code,engine,media-tools", "a row per item");
-    assert(/Claude Code/.test(r[0].text) && /The RichOS engine/.test(r[1].text) && /My voice and video tools/.test(r[2].text), "the drawn names: " + JSON.stringify(r));
+    assert(/Claude Code/.test(r[0].text) && /The RichOS engine/.test(r[1].text) && /My voice & video tools/.test(r[2].text), "the drawn names: " + JSON.stringify(r));
     // The mock's first step event: Claude Code is installing, the engine waits.
     await page.waitForFunction(() => /Installing/.test(document.querySelector('#setup-steps [data-component="claude-code"]').innerText));
     r = await rows();
@@ -1830,7 +1833,7 @@ async function main() {
     assert(page.__errors.length === 0, "the shell logged errors: " + page.__errors.join(" | "));
     bump(12);
     await page.close();
-    return "rows Claude Code / The RichOS engine / My voice and video tools; 490 then 700 MB of 1.06 GB on a moving bar; his line only for both models; Checking…";
+    return "rows Claude Code / The RichOS engine / My voice & video tools; 490 then 700 MB of 1.06 GB on a moving bar; his line only for both models; Checking…";
   });
 
   await run.check("25  round 19, state 3: Start while the voice row counts, then \"You're all set.\"", async () => {

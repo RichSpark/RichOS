@@ -1957,13 +1957,19 @@
       "the program I think with. It comes from Anthropic and installs itself; I only ask it to.",
     engine: "the part of me that knows how I work: my instructions and my team.",
   };
+  // Once dictation is there, Claude Code's and the engine's lines are the CEO's round 70 wording
+  // (`setup.rs` CLAUDE_CODE_WHY and ENGINE_WHY).
+  const SETUP_WHY_R70 = {
+    "claude-code": "it powers my thinking. (auto-installs if not already here)",
+    engine: "the heart of RichOS. Includes my instructions and my specialist teammates (all of which you can tweak and expand).",
+  };
   const SETUP_NAME = { "claude-code": "Claude Code", engine: "the RichOS engine" };
   // The video tools' copy, verbatim from `setup.rs` (`MEDIA_TOOLS_NAME`, `MEDIA_TOOLS_WHY` once
   // dictation is there; the media-tools plan's line before), and his download line from
   // `setup_view.rs` (`SETUP_DOWNLOAD_LINE`). `setup.js` case 23 holds the mock to the Rust.
-  const SETUP_TOOLS_NAME = { on: "my voice and video tools", off: "my video tools" };
+  const SETUP_TOOLS_NAME = { on: "my voice & video tools", off: "my video tools" };
   const SETUP_TOOLS_WHY = {
-    on: "the tools I use to watch and download videos for you. Plus, it gives you a free & private/local replacement for Wispr Flow. So, it saves you $140+/year\u{1F44D} and allows you to talk instead of typing anywhere on this computer.",
+    on: "they let me hear and talk. And also enable me to watch and download videos and podcasts for you.",
     off: "the tools I use to watch, hear and download videos for you, which I keep up to date myself.",
   };
   const SETUP_DOWNLOAD_LINE =
@@ -2014,7 +2020,7 @@
       const k = setupDictationOn ? "on" : "off";
       return { component: c, name: SETUP_TOOLS_NAME[k], why: SETUP_TOOLS_WHY[k] };
     }
-    return { component: c, name: SETUP_NAME[c], why: SETUP_WHY[c] };
+    return { component: c, name: SETUP_NAME[c], why: (setupDictationOn ? SETUP_WHY_R70 : SETUP_WHY)[c] };
   }
 
   function setupStatusOf() {
