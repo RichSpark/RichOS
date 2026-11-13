@@ -116,7 +116,9 @@ const setupRichLineEl = el("setup-rich-line");
 const setupRichTextEl = el("setup-rich-text");
 const setupRichAvatarEl = el("setup-rich-avatar");
 const setupStepsEl = el("setup-steps");
+const setupSuiteEl = el("setup-suite");
 const setupStartEl = el("setup-start");
+const voiceHintEl = el("voice-hint");
 const threadMenuEl = el("thread-menu");
 const messagesEl = el("messages");
 const conversationEl = el("conversation");
@@ -1571,6 +1573,10 @@ async function openThread(threadId, opts) {
   // threads can move between companies — a notice left over from the last one would be a
   // claim about a company it was not derived for.
   await renderFirstRunNotice();
+  // Round 70: the tools note, if Rich is reading up here and it was never made, and the line
+  // above the message box, if he came back here with his questions.
+  maybeOfferTools(false);
+  paintVoiceHint();
   // **WHAT LANDED WHILE HE WAS NOT LOOKING** (background-work spec §3.4 and §0 row 6).
   //
   // This is the durable half of the return path, and it is the half that works when the
@@ -2209,8 +2215,8 @@ function flushRender() {
       renderFirstRun();
     }
   }
-  // Rich's one offer of dictation, a local note after whatever the conversation shows.
-  if (mainView === "conversation") renderDictationOffer();
+  // Round 70's note on the five tools, a local note after the turn it followed.
+  if (mainView === "conversation") renderToolsNote();
 
   if (focusId) {
     const again = messagesEl.querySelector('[id="' + focusId.replace(/(["\\])/g, "\\$1") + '"]');
@@ -2372,164 +2378,124 @@ function renderFirstRun() {
 }
 
 // ---------------------------------------------------------------------------------------
-// RICH OFFERS DICTATION, ONCE (round 19, state 4; dictation plan revision 2, section 2 row 4)
+// THE FIVE TOOLS, INTRODUCED WHILE RICH READS UP (round 70, richos-hq
+// design/mockups/rounds/round-70, steps 7, 8 and 10; the CEO, 2026-11-13)
 //
-// A LOCAL NOTE in the conversation, drawn here: not a model turn, never written to the ledger.
-// Shown once, after Start on the setup sheet, and only once voice is ready, because its first
-// sentence says so. `offered: true` goes into `<data dir>/dictation.json` the moment it is shown
-// (`dictation_offer_shown`), so a relaunch never shows it again. Off entirely until dictation is
-// there (`dictation_offer`'s `ready`, `richos_core::dictation_ready`).
-//
-// **Turn on RichScribe** hands over to the RichScribe sheet's own turn-on (slice 2 registers
-// `window.RichDictation.turnOn`, which opens the sheet and runs the permission flow and answers
-// `{on}`). When it is on, the dictation text LEAVES this conversation and only "Voice is ready."
-// stays: once dictation is set up (the sheet closed on it, after he picked his key there), the
-// app opens a conversation titled "RichScribe feature" under the company, with Rich's message
-// naming the key he picked (the CEO, 2026-10-13, onboarding5.png; `dictation_feature_thread`).
-// When it did not end up on, the note says the drawn "It's in Settings, under RichScribe." **Not
-// now** says the drawn "Okay. It's in Settings, under RichScribe, whenever you want it."
+// A LOCAL NOTE in the conversation, drawn here: not a model turn, never written to the ledger, as
+// Rich's one offer of dictation was before it (round 19, state 4). That offer sat under his
+// greeting on the first screen beside the welcome card, two offers at once, each with its own Not
+// now; it is gone, and the first screen makes one offer. This note comes instead, once per install:
+//   - after Rich says he is reading up: the onboarding of the company on screen has his first
+//     checkpoint saved (`onboarding_view` says `partial`) and no turn is running. It sits after
+//     the turn it followed, so his later messages come below it;
+//   - after Not now to onboarding: under the receipt and his greeting, so a user who skips
+//     onboarding still learns what came with Rich.
+// `offered` in `<data dir>/dictation.json` is recorded the moment it is drawn
+// (`dictation_offer_shown`, the record the dictation offer used), so a relaunch never shows it
+// again and an install that already had that offer is not offered again. Off entirely until
+// dictation is there (`dictation_offer`'s `ready`). The card is `suite-tools.js`'s; RichScribe is
+// turned on in the card itself (`window.RichDictation.card`, dictation.js).
 // ---------------------------------------------------------------------------------------
 
-const DICTATION_OFFER_VOICE = "Voice is ready. Press the round button beside the message box and just talk to me.";
-// The CEO's copy, 2026-10-13 (richos-hq docs/ceo-input/2026-10-13_1, turn-on-dictation-paragraph.png),
-// word for word after the sentence above. "[F1]" in it is the key cap, drawn with the key he has now.
-const DICTATION_OFFER_WHAT = "If you turn on RichScribe, I will automatically give you a free & private/local replacement for Wispr Flow. (saves you $140+/year)";
-const DICTATION_OFFER_HOW_BEFORE = "So, instead of typing you'll be able to do this: Just click into any other app (Mail, Slack, Chrome/Safari, anything), press ";
-const DICTATION_OFFER_HOW_AFTER = " (or another key you'll pick as the trigger) and say what you want written. Your words will appear where your cursor is.😊";
-const DICTATION_OFFER_NOT_NOW = "Okay. It's in Settings, under RichScribe, whenever you want it.";
-const DICTATION_OFFER_LATER = "It's in Settings, under RichScribe.";
 /// The conversation dictation opens once set up (`dictation_offer.rs` FEATURE_TITLE).
 const DICTATION_FEATURE_TITLE = "RichScribe feature";
 /// The same conversation as an install made it before the feature was named RichScribe (the CEO,
 /// 2026-10-19): its stored title is matched, never drawn by this code.
 const DICTATION_FEATURE_TITLE_BEFORE = "Dictation feature"; // richscribe-exempt: a stored conversation title, matched only
 
-/// The note's state: null (not shown), or `{phase, key}` with phase "open", "no", "on" or
-/// "later", and the key's name ("F1").
-let dictationOffer = null;
-/// Set by Start; the offer waits for voice to be ready.
-let dictationOfferWanted = false;
-/// Set the first time he presses the round button (`#talk-toggle`): he has learned it, so the
-/// note's "Voice is ready. Press the round button..." sentence is gone from then on (the CEO,
-/// 2026-10-19). The note itself is drawn once per install (`offered` is stored by the backend),
-/// so after a relaunch it is not drawn at all and there is nothing further to remember.
-let voiceButtonUsed = false;
+/// The note: null (not made), or `{thread, afterTurn, declined, node}`. `thread` is null for a
+/// note made on the first screen, before his first conversation (Not now comes there), until his
+/// first message there makes one;
+/// `afterTurn` is the turn it followed, null for a note made before any turn. `node` is built once
+/// and kept, so what he opened in the card stays open while the conversation is drawn again.
+let toolsNote = null;
+let toolsNoteAsking = false;
+/// Set once the backend has said the note can never come in this install (made already, or
+/// dictation is not there), so a turn that ends asks nothing more.
+let toolsNoteSettled = false;
 
-/// Show the offer if Start asked for it, voice is ready and it was never made.
-async function maybeOfferDictation() {
-  if (!dictationOfferWanted || dictationOffer || !voiceAvailable) return;
-  dictationOfferWanted = false;
-  const view = await invokeQuiet("dictation_offer");
-  if (!view || !view.ready || view.offered) return;
-  // `thread`: the note belongs to the conversation it is first drawn in, never to every one he
-  // opens (null until a conversation is open; see renderDictationOffer).
-  dictationOffer = { phase: "open", key: "F" + (Number(view.key) || 1), thread: activeThreadId };
-  invokeQuiet("dictation_offer_shown");
-  followBottom = true;
-  scheduleRender();
-}
-
-async function answerDictationOffer(yes) {
-  if (!dictationOffer || dictationOffer.phase !== "open") return;
-  if (!yes) {
-    dictationOffer.phase = "no";
-  } else {
-    const dictation = window.RichDictation;
-    let answer = null;
-    if (dictation && typeof dictation.turnOn === "function") {
-      try { answer = await dictation.turnOn(); } catch (_) { answer = null; }
+/// Offer the note if it is due and was never made. `declined`: after Not now to onboarding.
+async function maybeOfferTools(declined) {
+  if (toolsNote || toolsNoteSettled || toolsNoteAsking || mainView !== "conversation") return;
+  const thread = activeThreadId;
+  toolsNoteAsking = true;
+  try {
+    if (!declined) {
+      if (!thread || anyLiveTurn()) return;
+      const view = await invokeQuiet("onboarding_view");
+      const entityId = activeContext && activeContext.entity_id;
+      if (!view || view.state !== "partial" || (view.entityId && entityId && view.entityId !== entityId)) return;
     }
-    dictationOffer.phase = answer && answer.on ? "on" : "later";
+    const offer = await invokeQuiet("dictation_offer");
+    if (offer && (!offer.ready || offer.offered)) toolsNoteSettled = true;
+    if (!offer || !offer.ready || offer.offered || toolsNote || thread !== activeThreadId) return;
+    if (!declined && anyLiveTurn()) return;
+    const order = timelineModel.turnOrder;
+    toolsNote = {
+      thread,
+      entity: draftEntityId || (activeContext && activeContext.entity_id) || null,
+      afterTurn: !declined && order.length ? order[order.length - 1] : null,
+      declined: !!declined,
+      node: null,
+    };
+    invokeQuiet("dictation_offer_shown");
+  } finally {
+    toolsNoteAsking = false;
   }
+  if (!declined) followBottom = true;
   scheduleRender();
-  inputEl.focus();
 }
 
-/// The note, appended after whatever the conversation shows (`flushRender` rebuilds the list).
-function renderDictationOffer() {
-  if (!dictationOffer) return;
-  // Made before any conversation was open (Start comes before his first company on a fresh
-  // install): it belongs to the first one he is in when it is drawn.
-  if (!dictationOffer.thread) dictationOffer.thread = activeThreadId;
-  if (dictationOffer.thread !== activeThreadId) return;
-  const art = document.createElement("article");
-  art.className = "tl-rich dictation-offer";
-  art.id = "dictation-offer";
-  const sr = document.createElement("span");
-  sr.className = "sr-only";
-  sr.textContent = "Rich said";
-  art.appendChild(sr);
-  const meta = document.createElement("div");
-  meta.className = "tl-rich-meta";
-  const avatar = document.createElement("img");
-  avatar.className = "tl-avatar";
-  avatar.src = "assets/rich-hand.png";
-  avatar.alt = "";
-  meta.appendChild(avatar);
-  const who = document.createElement("span");
-  who.className = "tl-who";
-  who.textContent = "Rich";
-  meta.appendChild(who);
-  art.appendChild(meta);
-  const first = document.createElement("p");
-  first.className = "tl-prose";
-  first.textContent = DICTATION_OFFER_VOICE;
-  const second = document.createElement("p");
-  second.className = "tl-prose";
-  second.textContent = DICTATION_OFFER_WHAT;
-  const third = document.createElement("p");
-  third.className = "tl-prose";
-  const key = document.createElement("kbd");
-  key.className = "dictation-offer-key";
-  key.textContent = dictationOffer.key;
-  third.append(DICTATION_OFFER_HOW_BEFORE, key, DICTATION_OFFER_HOW_AFTER);
-  // On: the dictation text has moved to its own conversation ("RichScribe feature"), so this one
-  // keeps only the sentence about voice, and once he has used the round button not even that.
-  if (dictationOffer.phase === "on") {
-    if (voiceButtonUsed) return;
-    art.append(first);
-    messagesEl.appendChild(art);
-    return;
-  }
-  if (!voiceButtonUsed) art.append(first);
-  art.append(second, third);
-  if (dictationOffer.phase === "open") {
-    const acts = document.createElement("div");
-    acts.className = "dictation-offer-actions";
-    const yes = document.createElement("button");
-    yes.type = "button";
-    yes.id = "dictation-offer-yes";
-    yes.className = "desk-btn desk-btn--confirm";
-    yes.textContent = "Turn on RichScribe";
-    yes.addEventListener("click", () => answerDictationOffer(true));
-    const no = document.createElement("button");
-    no.type = "button";
-    no.id = "dictation-offer-no";
-    no.className = "desk-btn";
-    no.textContent = "Not now";
-    no.addEventListener("click", () => answerDictationOffer(false));
-    acts.append(yes, no);
-    art.append(acts);
-  } else {
-    const after = document.createElement("p");
-    after.className = "tl-prose dictation-offer-after";
-    after.id = "dictation-offer-after";
-    after.textContent = dictationOffer.phase === "no" ? DICTATION_OFFER_NOT_NOW : DICTATION_OFFER_LATER;
-    art.append(after);
-  }
-  messagesEl.appendChild(art);
+/// The note, placed after the turn it followed (`flushRender` rebuilds the list around it).
+function renderToolsNote() {
+  if (!toolsNote || !window.RichSuiteTools) return;
+  // Made before any conversation (Not now on the first screen): it is drawn on that screen, and
+  // the conversation his first message there makes takes it (`send`), never one he opens.
+  if ((toolsNote.thread || null) !== (activeThreadId || null)) return;
+  if (!toolsNote.thread && toolsNote.entity && toolsNote.entity !== (draftEntityId || (activeContext && activeContext.entity_id))) return;
+  if (!toolsNote.node) toolsNote.node = window.RichSuiteTools.note(toolsNote.declined, !sessionAvatarShown);
+  const node = toolsNote.node;
+  const after = toolsNote.afterTurn
+    ? messagesEl.querySelector('.tl-turn[data-turn-id="' + CSS.escape(toolsNote.afterTurn) + '"]')
+    : null;
+  const first = toolsNote.afterTurn ? null : messagesEl.querySelector(".tl-turn");
+  if (after) after.after(node);
+  else if (first) first.before(node);
+  else messagesEl.appendChild(node);
 }
 
-/// **DICTATION WAS JUST SET UP** (`dictation.js` says so when the sheet closes on a turn-on that
-/// worked, after he picked his key there): the app opens the "RichScribe feature" conversation
-/// under his company, once, with Rich's message naming the key he picked, and the rail shows it.
+/// ROUND 70, STEP 8: "Or just say it: press F5 and talk." above the message box, when Rich has
+/// come back by himself (the last turn on screen is his, with no message of the user's, and it is
+/// done) in a conversation whose company's onboarding is still open, and RichScribe works.
+let voiceHintWanted = false;
+let voiceHintRead = 0;
+async function paintVoiceHint() {
+  if (!window.RichSuiteTools) return;
+  const ticket = ++voiceHintRead;
+  let want = false;
+  if (mainView === "conversation" && activeThreadId && !anyLiveTurn()) {
+    const order = timelineModel.turnOrder;
+    const last = order.length ? order[order.length - 1] : null;
+    const items = [...timelineModel.items.values()].filter((i) => i.turnId === last);
+    if (last && items.some((i) => i.kind === "rich_message") && !items.some((i) => i.kind === "user_message")) {
+      const view = await invokeQuiet("onboarding_view");
+      if (ticket !== voiceHintRead) return;
+      const entityId = activeContext && activeContext.entity_id;
+      want = !!view && view.state === "partial" && !(view.entityId && entityId && view.entityId !== entityId);
+    }
+  }
+  if (ticket !== voiceHintRead) return;
+  voiceHintWanted = want;
+  window.RichSuiteTools.paintHint(voiceHintEl, want);
+}
+window.addEventListener("richos:dictation-state", () => {
+  if (window.RichSuiteTools) window.RichSuiteTools.paintHint(voiceHintEl, voiceHintWanted);
+});
+
+/// **DICTATION WAS JUST SET UP** (`dictation.js` says so when a turn-on that worked settles, after
+/// he picked his key): the app opens the "RichScribe feature" conversation under his company,
+/// once, with Rich's message naming the key he picked, and the rail shows it.
 window.addEventListener("richos:dictation-set-up", async () => {
-  // Set up later (after "Not now", or from Settings after a refused permission): the dictation
-  // text leaves the onboarding conversation all the same (second review rv-20261013T173014Z).
-  if (dictationOffer && dictationOffer.phase !== "on") {
-    dictationOffer.phase = "on";
-    scheduleRender();
-  }
   await createDictationFeature();
 });
 
@@ -2912,6 +2878,9 @@ async function send(explicitText, opts) {
     if (preserveDraft && keptDraft) drafts.set(newId, keptDraft);
     pendingSends.get(optimisticId).threadId = newId;
     draftEntityId = null;
+    // Round 70: the tools note made on this screen goes with his first message into the
+    // conversation it makes, and into no other.
+    if (toolsNote && !toolsNote.thread) toolsNote.thread = newId;
     await refreshNavigation();
     // AND HIS SENTENCE TRAVELS WITH THE OPEN. See `openThread`'s own note at the line that
     // reads `opts.pendingUser` — the model this bubble lives in is about to be thrown away,
@@ -4418,6 +4387,9 @@ Bridge.listen("rich://turn-status", ({ payload }) => {
     timelineModel.announcedWorking.add(payload.turnId);
     announce("Rich started working");
   }
+  // Round 70: the line above the message box follows the last turn (Rich came back with his
+  // questions, or the user answered).
+  paintVoiceHint();
   if (payload.status === "completed" || payload.status === "failed" || payload.status === "stopped") {
     // THE BOUNDARY, AS THE MODEL SEES IT. A notice held mid-turn (background-work spec §3.5)
     // was only ever flushed from `rich://turn-completed`, and the spine emits that BEFORE this
@@ -4429,6 +4401,8 @@ Bridge.listen("rich://turn-status", ({ payload }) => {
     // Flushed here, where the turn is over by the model's own account; `flushWorkNotices`
     // re-checks the calm itself, so another live turn still holds it.
     flushWorkNotices();
+    // Round 70: a turn that ended may be Rich saying he is reading up (the tools note).
+    maybeOfferTools(false);
     // §6.4: "Collapse the working transcript after a short settling transition."
     // 180ms — inside §17.4's allowed 150–220ms band — and skipped entirely under reduced
     // motion, where the collapse is immediate rather than transitioned.
@@ -4653,9 +4627,12 @@ Bridge.listen("rich://turn-error", ({ payload }) => {
 // (`raise_proactive_message`, spine.rs `raise_proactive`). A proactive turn is written
 // atomically and is the ONE phase that is real — `phase: "proactive"` — so a reload is all
 // this needs; `timeline.js` renders the "reached out" treatment from the phase itself.
-Bridge.listen("rich://proactive-message", ({ payload }) => {
+Bridge.listen("rich://proactive-message", async ({ payload }) => {
   if (payload.threadId !== activeThreadId) return;
-  loadTimeline();
+  await loadTimeline();
+  // Round 70: Rich coming back by himself with his onboarding questions brings the line above
+  // the message box.
+  paintVoiceHint();
 });
 Bridge.listen("rich://mock-proactive", ({ payload }) => {
   if (payload.threadId !== activeThreadId) return;
@@ -5288,8 +5265,6 @@ async function refreshVoiceReadiness() {
   const note = (r && typeof r.reason === "string") ? r.reason : "";
   voiceUnavailableEl.textContent = refused ? note : "";
   voiceUnavailableEl.hidden = !(refused && note);
-  // Rich's offer of dictation waits for exactly this: voice ready, after Start.
-  if (voiceAvailable) maybeOfferDictation();
 }
 
 /// Which of the four model rows is on screen, if any. Exactly one, or none.
@@ -5442,10 +5417,6 @@ async function exitVoiceMode() {
 }
 
 talkToggleBtn.addEventListener("click", () => {
-  if (!voiceButtonUsed) {
-    voiceButtonUsed = true;
-    if (dictationOffer) scheduleRender();
-  }
   if (voiceMode) exitVoiceMode();
   else enterVoiceMode();
 });
@@ -6930,6 +6901,26 @@ function renderSetupSteps() {
   }
   setupRows.forEach((row, i) => paintSetupStep(setupStepsEl.children[i], row));
   renderSetupRichLine();
+  paintSetupSuite();
+}
+
+/// ROUND 70: THE FIVE TOOLS ARRIVE WHILE THINGS INSTALL. RichFinder, RichCleaner and RichFiles turn
+/// Ready when the engine is in (every row but the voice & video tools' is done); RichScribe and
+/// RichBrief when the voice & video tools are in too. A row that is not on the sheet is already in.
+function paintSetupSuite() {
+  if (!setupRows || !window.RichSuiteTools) return;
+  const engine = setupRows.filter((r) => r.component !== "media-tools").every((r) => r.state === "done");
+  const voice = setupRows.filter((r) => r.component === "media-tools").every((r) => r.state === "done");
+  window.RichSuiteTools.arrive(setupSuiteEl.firstElementChild, engine, voice);
+}
+
+/// The strip under the items (round 70), on round 19's sheet only: the first sheet's, where
+/// pointing at a tool says what it does, or the arriving one while things install.
+function drawSetupSuite(r19, arriving) {
+  const suite = r19 && window.RichSuiteTools;
+  setupPanelEl.classList.toggle("has-suite", !!suite);
+  setupSuiteEl.replaceChildren(...(suite ? [window.RichSuiteTools.strip(arriving)] : []));
+  setupSuiteEl.hidden = !suite;
 }
 
 /// One row, changed only where it differs from what is drawn.
@@ -6996,6 +6987,7 @@ function beginSetupRows(ask) {
   setupItemsEl.hidden = true;
   setupNoteEl.hidden = true;
   setupProgressEl.hidden = true;
+  drawSetupSuite(true, true);
   renderSetupSteps();
 }
 
@@ -7092,8 +7084,18 @@ let memoryQuestionDeferred = false;
 
 async function refreshSetup() {
   setupState = await invokeQuiet("setup_status");
+  paintScribeTools();
   if (setupState?.status?.claude?.present) providerAuth = await invokeQuiet("provider_auth_status");
   return setupState;
+}
+
+/// ROUND 70: RichScribe's item in the rail waits for the voice & video tools it runs on, and
+/// arrives when they are in (`nav-rail.js` `setScribeTools`). Withheld only while setup's own
+/// answer says they are missing and their download has not said done.
+function paintScribeTools() {
+  const tools = setupState && setupState.status && setupState.status.media_tools;
+  const missing = !!(tools && tools.present === false) && videoToolsHeard !== "done";
+  if (window.RichNavRail && window.RichNavRail.setScribeTools) window.RichNavRail.setScribeTools(!missing);
 }
 
 /// Ask, or explain, or say nothing at all. Returns true when the sheet opened, so `init` can
@@ -7150,6 +7152,7 @@ function openSetupSheet(ask, opts) {
   setupStartEl.hidden = true;
   releaseSetupHeight();
   renderSetupSteps();
+  drawSetupSuite(r19 && ask.items.length > 0, false);
   setupRichLineEl.hidden = true;
   // THE TITLE COUNTS WHAT IS MISSING, in words, because "1 item" is a package manager's
   // sentence and this is a conversation.
@@ -7283,6 +7286,7 @@ async function runSetup() {
   }
   setupRunning = false;
   setupState = next;
+  paintScribeTools();
   // THE ENGINE BRINGS THE DECODER (`whisper-cli` is in its runtime), so voice is asked again now:
   // with the models already downloaded in the background, voice switches on without a relaunch.
   refreshVoiceReadiness();
@@ -7397,14 +7401,9 @@ setupGoEl.addEventListener("click", runSetup);
 setupLaterEl.addEventListener("click", closeSetupSheet);
 setupCloseEl.addEventListener("click", closeSetupSheet);
 // START (round 19, state 3): the sheet's way out once Claude Code and the engine are in. It
-// closes the sheet exactly as Close did, and Rich's one offer of dictation comes after it
-// (state 4) once voice is ready.
-setupStartEl.addEventListener("click", () => {
-  closeSetupSheet();
-  if (!setupSheetEl.hidden) return;
-  dictationOfferWanted = true;
-  maybeOfferDictation();
-});
+// closes the sheet exactly as Close did. The first screen after it makes one offer, the welcome
+// card (round 70); the tools come when Rich reads up, or after Not now (`maybeOfferTools`).
+setupStartEl.addEventListener("click", closeSetupSheet);
 // THE BACKDROP DOES NOT DISMISS THIS ONE, and it is the only overlay in the window that
 // refuses to. Every other sheet here closes on a click outside it, which is the right
 // default for a search box or a picker: nothing is lost by closing one.
@@ -7451,6 +7450,7 @@ Bridge.listen("richos://setup", (payload) => {
   if (p.component === "media-tools") {
     videoToolsLine = p.state === "started" ? p.what : null;
     videoToolsHeard = p.state;
+    if (p.state === "done") paintScribeTools();
     if (p.state === "started" && typeof p.received === "number" && typeof p.of === "number") {
       videoToolsCount = { received: p.received, of: p.of, counter: p.counter || "", both: !!p.both_models };
     } else if (p.state !== "started") {
@@ -7815,6 +7815,8 @@ async function declineFirstRunInterview() {
     el("first-run-consequence").hidden = true;
     el("first-run-actions").hidden = true;
     inputEl.focus();
+    // Round 70, step 10: Not now still gets the tools, under the receipt and the greeting.
+    maybeOfferTools(true);
   } catch (e) {
     if (action.context !== firstRunContext()) return;
     err.textContent = String(e);

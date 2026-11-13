@@ -40,6 +40,9 @@
     <link rel="stylesheet" href="instructions-update.css" />
     <!-- Terminal setup and your name in Git: the two Settings rows, their sheets and the card (round 41). -->
     <link rel="stylesheet" href="terminal-and-git.css" />
+    <!-- The five tools that come with Rich (round 70): the setup sheet's strip, the tools card and
+         the line above the message box. -->
+    <link rel="stylesheet" href="suite-tools.css" />
     <!-- THE MARK'S GOLD, PER THEME.
 
          The wordmark below is two-tone by the approved treatment (round-8.1/v0 for dark,
@@ -711,6 +714,10 @@
                silence. -->
           <p id="voice-unavailable" class="composer-voice-note" hidden role="status"></p>
           <p id="attach-note" class="attach-note" hidden role="status"></p>
+          <!-- ROUND 70: when Rich comes back with his onboarding questions and RichScribe is on,
+               "Or just say it: press F5 and talk." and Talk now, which starts RichScribe's bar
+               with the cursor in the box. Empty until `suite-tools.js` paints it. -->
+          <p id="voice-hint" class="voice-hint" hidden></p>
           <div id="composer-row">
             <form id="composer" autocomplete="off">
               <!-- N1 (dev-walk audit, 2026-09-17): the border, radius and fill moved to this
@@ -1271,6 +1278,11 @@
           <!-- THE STEPS AS THEY RUN, round 19 state 2: Installed, Installing…, Waiting, and the
                voice and video tools' counter on a moving bar. -->
           <ol id="setup-steps" class="setup-steps" hidden></ol>
+          <!-- THE FIVE TOOLS THAT COME WITH RICH, round 70: "Five tools come with me, free." On
+               the first sheet, pointing at one says what it does; while things install, each
+               turns Ready when the piece it runs on is in. Filled by `suite-tools.js` when round
+               19's sheet opens, empty and hidden otherwise. -->
+          <div id="setup-suite" hidden></div>
           <p id="setup-account" class="setup-account" role="status"></p>
           <!-- PROGRESS, live. `role="status"` so it is announced rather than silently
                replaced; a download that takes minutes with a still window is the state this
@@ -1652,6 +1664,10 @@
          its arrow keys. Before main.js, which hands it your name; every surface it opens is
          looked up when an item is pressed, so it needs nothing loaded before it. -->
     <script src="nav-rail.js"></script>
+    <!-- The five tools that come with Rich (round 70). Before main.js, which draws the strip on
+         the setup sheet and the tools card from it; RichScribe's own state is read from
+         dictation.js when a card paints, so it needs nothing loaded before it. -->
+    <script src="suite-tools.js"></script>
     <script src="main.js"></script>
     <script src="swearmeter.js"></script>
     <!-- The live Mac resources square (round 47), on the navigation rail since round 58. After

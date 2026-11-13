@@ -97,6 +97,8 @@ const sheetText = (page) =>
 //     (`setup_view.rs` SETUP_ACCOUNT_NOTE and SETUP_DOWNLOAD_LINE), so a changed word is not
 //     exempt; and each constant is asserted to be his text, word for word. (His round 70 line
 //     for the voice & video tools, `setup.rs` MEDIA_TOOLS_WHY, holds the floor and needs none.);
+//   - round 70's line under the strip of five tools (his words, one at a time, RichScribe's when
+//     the sheet opens), compared against `suite-tools.js`'s own five lines;
 //   - the counter element's own text (`[data-counter]`), and only when it is a counter.
 // Every other word on the sheet keeps the full floor; case 2b proves a path on another line
 // still fails.
@@ -111,6 +113,15 @@ function rustConst(file, name) {
     .replace(/\\(["\\])/g, "$1");
 }
 const HIS_TOOLS_LINE = rustConst("crates/richos-core/src/setup.rs", "MEDIA_TOOLS_WHY");
+/// Round 70's five lines under the setup sheet's strip, the CEO's words (2026-11-13), as
+/// `suite-tools.js` carries them: one at a time on the sheet, RichScribe's when it opens.
+/// RichScribe's ("private/local", "$140+/year") and RichBrief's ("$160+/year") would trip the floor.
+const SUITE_LINES = (() => {
+  const src = fs.readFileSync(path.join(UI_DIR, "suite-tools.js"), "utf8");
+  const lines = [...src.matchAll(/^\s+line: "((?:[^"\\]|\\.)*)",$/gm)].map((m) => m[1].replace(/\\(["\\])/g, "$1"));
+  if (lines.length !== 5) throw new Error("suite-tools.js carries " + lines.length + " strip lines, not five");
+  return lines;
+})();
 const HIS_DOWNLOAD_LINE = rustConst("src-tauri/src/setup_view.rs", "SETUP_DOWNLOAD_LINE");
 const HIS_ACCOUNT_NOTE = rustConst("src-tauri/src/setup_view.rs", "SETUP_ACCOUNT_NOTE");
 /// His account sentence (2026-10-08), word for word. It carries "an Ultra subscription" and "the Ultra tier".
@@ -147,7 +158,7 @@ async function sheetTextExempt(page) {
   }));
   let rest = text;
   const removed = [];
-  for (const s of [HIS_ACCOUNT_NOTE, HIS_DOWNLOAD_LINE]) {
+  for (const s of [HIS_ACCOUNT_NOTE, HIS_DOWNLOAD_LINE, ...SUITE_LINES]) {
     if (rest.includes(s)) {
       rest = rest.split(s).join(" ");
       removed.push(s);
@@ -1699,7 +1710,8 @@ async function main() {
     await page.waitForSelector("#setup-sheet:not([hidden])");
     // State 1: his item line is on the sheet, and is the only thing exempt.
     const ask = await sheetTextExempt(page);
-    assertEqual(ask.removed.join(" | "), HIS_ACCOUNT_NOTE, "state 1 exempts his account sentence, nothing else");
+    assertEqual(ask.removed.join(" | "), HIS_ACCOUNT_NOTE + " | " + SUITE_LINES[0], "state 1 exempts his account sentence and RichScribe's strip line, nothing else");
+    assertEqual(SUITE_LINES[0], "Talk instead of typing, anywhere on this Mac. A free & private/local replacement for Wispr Flow. It saves you $140+/year👍", "RichScribe's strip line is not his");
     assertEqual(floorViolations(ask.rest).join(", "), "", "outside his line the floor holds: " + ask.rest);
     // State 2: his download line and the counter, and nothing else.
     await page.click("#setup-go");
@@ -1733,6 +1745,11 @@ async function main() {
     await page.evaluate(() => {
       const why = document.querySelector('#setup-items li[data-component="media-tools"] .setup-item-why');
       why.textContent = why.textContent + " It saves you $140+/year.";
+    });
+    // And the strip's line with one word changed is not his line: its dollar sign fails.
+    await page.evaluate(() => {
+      const line = document.querySelector("#setup-suite .suite-line");
+      line.lastChild.textContent = line.lastChild.textContent.replace("free", "cheap");
     });
     const changed = await sheetTextExempt(page);
     assertEqual(changed.removed.length, 0, "a changed line was exempted");
@@ -1870,202 +1887,267 @@ async function main() {
     return "Start at y=" + top0 + " while counting, \"You're all set.\" with \"Voice is ready.\" when the download finished, Start at y=" + top1 + "; Escape presses it";
   });
 
-  await run.check("26  round 19, state 4: Rich offers dictation once, after Start, and each answer says the drawn line", async () => {
-    // Everything installed during the press (the models were already there), voice ready.
-    const finish = async (preset, answer, before) => {
-      const page = await openApp(browser, { ...R19, videoTools: "present", ...preset });
-      await page.waitForSelector("#setup-sheet:not([hidden])");
-      if (before) await page.evaluate(before);
-      await page.click("#setup-go");
-      await page.waitForSelector("#setup-start:not([hidden])");
-      assertEqual((await page.textContent("#setup-title")).trim(), "You're all set.", "all set when the models were already there");
-      await page.click("#setup-start");
-      await page.waitForSelector("#setup-sheet", { state: "hidden" });
-      return page;
-    };
-    const page = await finish({});
-    await page.waitForSelector("#dictation-offer");
-    const said = await page.evaluate(() => [...document.querySelectorAll("#dictation-offer .tl-prose")].map((p) => p.innerText.replace(/\s+/g, " ").trim()));
-    assertEqual(said[0], "Voice is ready. Press the round button beside the message box and just talk to me.", "the drawn first paragraph");
-    // The CEO's copy, 2026-10-13 (turn-on-dictation-paragraph.png), word for word; [F1] is the key.
-    assertEqual(said[1], "If you turn on RichScribe, I will automatically give you a free & private/local replacement for Wispr Flow. (saves you $140+/year)", "his first new paragraph");
-    assertEqual(said[2], "So, instead of typing you'll be able to do this: Just click into any other app (Mail, Slack, Chrome/Safari, anything), press F1 (or another key you'll pick as the trigger) and say what you want written. Your words will appear where your cursor is.😊", "his second new paragraph, the key filled in");
-    assertEqual(said.length, 3, "his two paragraphs replace the old one");
-    // NO BLANK LINE UNDER "Rich" (seen on the guest, 2026-10-08): the first sentence sits where
-    // the greeting's does, right under the name.
-    assertEqual(
-      await page.evaluate(() => getComputedStyle(document.querySelector("#dictation-offer .tl-prose")).marginTop),
-      "0px",
-      "the offer's first sentence starts a line below Rich's name"
-    );
-    assertEqual((await page.textContent("#dictation-offer-yes")).trim(), "Turn on RichScribe", "the first button");
-    assertEqual((await page.textContent("#dictation-offer-no")).trim(), "Not now", "the second button");
-    assertEqual((await page.evaluate(() => window.__RICHOS_MOCK__.dictationOfferCalls())).join(","), "dictation_offer,dictation_offer_shown", "asked once and recorded as shown");
-    await page.click("#dictation-offer-no");
-    await page.waitForSelector("#dictation-offer-after");
-    assertEqual((await page.textContent("#dictation-offer-after")).trim(), "Okay. It's in Settings, under RichScribe, whenever you want it.", "Not now's line");
-    assert(await page.isHidden("#dictation-offer-yes"), "answered, the buttons go");
+  // =======================================================================================
+  // ROUND 70 (richos-hq design/mockups/rounds/round-70; `suite-tools.js`): the five tools that
+  // come with Rich, on a first install. Every word is the round's, the CEO's of 2026-11-13.
+  // =======================================================================================
+
+  /// Round 70's five, in order, with the CEO's line for each (build/mockup.js TOOLS[id].line).
+  const SUITE = [
+    ["RichScribe", "Talk instead of typing, anywhere on this Mac. A free & private/local replacement for Wispr Flow. It saves you $140+/year👍"],
+    ["RichBrief", "Automatic meeting notes whenever you want. A free & private Granola Business replacement that saves you $160+/year👍"],
+    ["RichFinder", "Instantly find everything. Even if you don't remember anything. Just describe what you want and RichFinder will find it!"],
+    ["RichCleaner", "Never organize another screenshot or file again. Just click it, hit your RichScribe key, say a few words and you're done!"],
+    ["RichFiles", "The best free & open-source file manager for Mac. You'll never want to use Apple's Finder for the rest of your LIFE!"],
+  ];
+  const suiteLine = (page) => page.evaluate(() => document.querySelector("#setup-suite .suite-line").innerText.replace(/\s+/g, " ").trim());
+  const suiteStates = (page) => page.evaluate(() =>
+    [...document.querySelectorAll("#setup-suite .suite-ico")].map((b) => b.querySelector(".suite-ico-state").textContent).join(","));
+  /// Setup finished with everything in, Start pressed: the first screen.
+  const startedApp = async (preset) => {
+    const page = await openApp(browser, { ...R19, videoTools: "present", onboarding: "not-yet", ...preset });
+    await page.waitForSelector("#setup-sheet:not([hidden])");
+    await page.click("#setup-go");
+    await page.waitForSelector("#setup-start:not([hidden])");
+    await page.click("#setup-start");
+    await page.waitForSelector("#setup-sheet", { state: "hidden" });
+    return page;
+  };
+
+  await run.check("26a round 70: the setup sheet names the five tools, and pointing at one says what it does", async () => {
+    const page = await openApp(browser, R19);
+    await page.waitForSelector("#setup-sheet:not([hidden])");
+    assertEqual((await page.textContent("#setup-suite .suite-strip-head")).trim(), "Five tools come with me, free.", "the strip's heading");
+    const names = await page.evaluate(() => [...document.querySelectorAll("#setup-suite .suite-ico .suite-ico-name")].map((n) => n.textContent));
+    assertEqual(names.join(","), SUITE.map((s) => s[0]).join(","), "the five, in the round's order, RichFiles in and RichPass out");
+    // RichScribe is chosen when the sheet opens, with the Wispr Flow sentence.
+    assertEqual(await suiteLine(page), "RichScribe. " + SUITE[0][1], "RichScribe chosen at open");
+    // Pointing at each, and Tab to it, says what it does.
+    for (let i = 1; i < SUITE.length; i++) {
+      await page.hover(`#setup-suite .suite-ico[data-tool="${["scribe", "brief", "finder", "cleaner", "files"][i]}"]`);
+      assertEqual(await suiteLine(page), SUITE[i][0] + ". " + SUITE[i][1], "pointing at " + SUITE[i][0]);
+    }
+    await page.focus('#setup-suite .suite-ico[data-tool="brief"]');
+    assertEqual(await suiteLine(page), "RichBrief. " + SUITE[1][1], "Tab to RichBrief");
+    assertEqual(await page.getAttribute('#setup-suite .suite-ico[data-tool="brief"]', "aria-pressed"), "true", "the chosen one says so");
+    // The strip sits between the items and the account sentence, inside the sheet.
+    const order = await page.evaluate(() => {
+      const y = (id) => document.getElementById(id).getBoundingClientRect().top;
+      return [y("setup-items") < y("setup-suite"), y("setup-suite") < y("setup-account")];
+    });
+    assertEqual(order.join(","), "true,true", "items, then the strip, then the account sentence");
+    // GATE OFF: the sheet as it was, no strip.
+    const off = await openApp(browser, { ...R19, dictation: false });
+    await off.waitForSelector("#setup-sheet:not([hidden])");
+    assert(await off.isHidden("#setup-suite"), "gate off draws the strip");
+    assert(page.__errors.length === 0 && off.__errors.length === 0, "the shell logged errors");
+    bump(12);
     await page.close();
+    await off.close();
+    return "five icons in order; RichScribe's line at open; each line on point and on Tab; nothing with the gate off";
+  });
 
-    // Turn on dictation, handed to the Dictation sheet's own turn-on (slice 2, `dictation.js`):
-    // on when both permissions are allowed, not on when macOS refused the microphone.
-    const on = await finish({ dictationView: { mic: "allowed", ax: "allowed" } });
-    await on.waitForSelector("#dictation-offer-yes");
-    await on.click("#dictation-offer-yes");
-    // ONCE IT IS SET UP, ITS TEXT MOVES TO ITS OWN CONVERSATION (the CEO, 2026-10-13,
-    // onboarding5.png): this conversation keeps only "Voice is ready.", and he picks his key in
-    // the sheet before closing it (onboarding3.png: he picked F2, the app said F1).
-    await on.waitForSelector("#dictation-sheet:not([hidden])");
-    await on.waitForFunction(() => !document.getElementById("dictation-offer-yes"));
+  await run.check("26b round 70: the tools arrive while things install, and RichScribe arrives in the rail", async () => {
+    const page = await openApp(browser, R19);
+    await page.waitForSelector("#setup-sheet:not([hidden])");
+    // RichScribe's rail item waits for the voice & video tools it runs on.
+    await page.waitForFunction(() => window.__calls.some((c) => c.cmd === "dictation_status"));
+    await settledFrames(page);
+    assert(await page.isHidden("#nr-scribe"), "RichScribe is in the rail before its tools are in");
+    await page.evaluate((line) => window.__RICHOS_MOCK__.setupEmit(line), toolsLine(300_000_000, 1_061_655_396, true, "300 MB of 1.06 GB"));
+    await page.click("#setup-go");
+    await page.waitForSelector("#setup-suite .suite-strip--arrive");
+    // Claude Code and the engine are in: RichFinder, RichCleaner and RichFiles turn Ready.
+    await page.waitForSelector("#setup-start:not([hidden])");
+    assertEqual(await suiteStates(page), "Waiting,Waiting,Ready,Ready,Ready", "the engine's three are Ready while the voice tools count");
+    // The voice & video tools are in: RichScribe and RichBrief turn Ready, and RichScribe's item
+    // arrives in the rail.
+    await page.evaluate(() => window.__RICHOS_MOCK__.setupEmit({ state: "done", component: "media-tools", what: "My voice & video tools are installed.", index: 1, total: 1 }));
+    assertEqual(await suiteStates(page), "Ready,Ready,Ready,Ready,Ready", "all five Ready");
+    await page.waitForSelector("#nr-scribe", { state: "visible" });
+    assertEqual((await page.textContent("#setup-title")).trim(), "You're all set.", "all set");
+    assert(page.__errors.length === 0, "the shell logged errors: " + page.__errors.join(" | "));
+    bump(5);
+    await page.close();
+    return "Waiting x5 at the press; RichFinder, RichCleaner, RichFiles Ready with the engine; RichScribe, RichBrief Ready and RichScribe in the rail with the voice tools";
+  });
+
+  await run.check("26c round 70: the first screen makes one offer, and the tools come when Rich reads up", async () => {
+    const page = await startedApp({});
+    await page.waitForSelector("#first-run-start", { state: "visible" });
+    await settledFrames(page);
+    assertEqual(await page.locator(".suite-note, #dictation-offer").count(), 0, "a second offer under the greeting");
+    assertEqual((await page.evaluate(() => window.__RICHOS_MOCK__.dictationOfferCalls())).length, 0, "asked about an offer on the first screen");
+    // He starts onboarding and sends his four inputs; Rich saves his first checkpoint as he
+    // reads up (onboarding is partial) and his turn ends: the note and its card come after it.
+    await page.click("#first-run-start");
+    await page.waitForSelector(".nav-thread-row.is-active");
+    // Rich's opening turn ends with onboarding not started yet: no note.
+    await page.waitForFunction(() => document.querySelectorAll("#messages .tl-turn").length >= 1 && document.getElementById("stop").hidden);
+    await settledFrames(page);
+    assertEqual(await page.locator(".suite-note").count(), 0, "a note before Rich reads up");
+    await page.fill("#input", "Dana Whitfield, she/her. northwind-traders.example");
+    await page.evaluate(() => window.__RICHOS_MOCK__.onboardingSet("partial"));
+    await page.press("#input", "Enter");
+    await page.waitForSelector(".suite-note .suite-card");
     assertEqual(
-      await on.evaluate(() => [...document.querySelectorAll("#dictation-offer .tl-prose")].map((p) => p.innerText.trim())),
-      ["Voice is ready. Press the round button beside the message box and just talk to me."],
-      "the dictation text left the onboarding conversation"
+      (await page.textContent(".suite-note .tl-prose")).trim(),
+      "One more thing: five tools came with me. Three are already working, but RichScribe (which also powers RichCleaner) wants your OK.",
+      "Rich's note, the CEO's words"
     );
-    await on.click('.dict-key[data-k="2"]');
-    await on.waitForFunction(() => window.__RICHOS_MOCK__.dictationCalls().some((c) => c.cmd === "dictation_set_key" && c.key === 2));
-    await on.click("#dict-close");
-    const feature = on.locator(".nav-thread", { hasText: "RichScribe feature" });
+    // It sits after the turn it followed.
+    const after = await page.evaluate(() => {
+      const note = document.querySelector(".suite-note");
+      const prev = note.previousElementSibling;
+      return !!prev && prev.classList.contains("tl-turn") && !note.nextElementSibling;
+    });
+    assert(after, "the note is not right after the last turn");
+    assertEqual((await page.textContent("#suite-turn-on")).trim(), "Turn on RichScribe", "RichScribe leads with its button");
+    const tiles = await page.evaluate(() => [...document.querySelectorAll(".suite-tile .suite-tile-name")].map((n) => n.innerText.replace(/\s+/g, " ").trim()));
+    assertEqual(tiles.join(" | "), "RichBrief | RichFinder ⌘K | RichCleaner | RichFiles", "Already working: four, one line each");
+    assertEqual((await page.evaluate(() => window.__RICHOS_MOCK__.dictationOfferCalls())).join(","), "dictation_offer,dictation_offer_shown", "asked once and recorded as shown");
+    // Pointing at a tile shows where it lives: its rail item lights and is named.
+    await page.hover('.suite-tile[data-tool="finder"]');
+    assertEqual((await page.textContent(".suite-where")).trim(), "RichFinder lives here · ⌘K", "RichFinder's label");
+    assert(await page.evaluate(() => document.getElementById("nr-finder").classList.contains("suite-here")), "RichFinder's rail item is not lit");
+    // RichBrief has no rail item: its prompt instead.
+    await page.hover('.suite-tile[data-tool="brief"]');
+    assertEqual(await page.locator(".suite-where").count(), 0, "a rail label for RichBrief");
+    assert((await page.textContent(".suite-brief")).includes("Call detected in Zoom."), "RichBrief's prompt preview");
+    await page.mouse.move(5, 890);
+    await page.waitForSelector(".suite-brief", { state: "detached" });
+    // ONCE: another turn that ends does not make a second note.
+    await page.fill("#input", "Thanks.");
+    await page.press("#input", "Enter");
+    await page.waitForFunction(() => document.querySelectorAll("#messages .tl-turn").length >= 3);
+    await settledFrames(page);
+    assertEqual(await page.locator(".suite-note").count(), 1, "one note");
+    assert(page.__errors.length === 0, "the shell logged errors: " + page.__errors.join(" | "));
+    bump(12);
+    await page.close();
+    return "nothing but the welcome card on the first screen; the note and card after the reading-up turn; where each tool lives; once";
+  });
+
+  await run.check("26d round 70: RichScribe is turned on in the card, and the bar is started where the cursor is", async () => {
+    const page = await startedApp({ dictationKey: 1, dictationView: { owner: "self" } });
+    await page.waitForSelector("#first-run-later", { state: "visible" });
+    await page.click("#first-run-later");
+    await page.waitForSelector("#suite-turn-on");
+    await page.click("#suite-turn-on");
+    await page.waitForSelector(".suite-turn.is-open");
+    assertEqual(await page.locator(".suite-key").count(), 12, "F1 to F12");
+    assertEqual(await page.getAttribute("#suite-key-1", "aria-checked"), "true", "the key in the settings is the one chosen");
+    await page.click("#suite-key-5");
+    await page.waitForFunction(() => window.__RICHOS_MOCK__.dictationCalls().some((c) => c.cmd === "dictation_set_key" && c.key === 5));
+    await page.waitForFunction(() => document.getElementById("suite-key-5").getAttribute("aria-checked") === "true");
+    // The microphone: the switch goes on and macOS asks; allowed, the row says so.
+    await page.click("#suite-allow-microphone");
+    await page.waitForFunction(() => window.__RICHOS_MOCK__.dictationCalls().some((c) => c.cmd === "dictation_ask_microphone"));
+    await page.evaluate(() => window.__RICHOS_MOCK__.dictationSet({ mic: "allowed" }));
+    await page.waitForFunction(() => /Allowed/.test(document.querySelector('.suite-perm[data-perm="microphone"]').innerText));
+    // Accessibility: macOS's prompt, then allowed in System Settings; the tool makes its key tap.
+    await page.click("#suite-allow-accessibility");
+    await page.waitForFunction(() => window.__RICHOS_MOCK__.dictationCalls().some((c) => c.cmd === "dictation_ask_accessibility"));
+    await page.evaluate(() => window.__RICHOS_MOCK__.dictationSet({ ax: "allowed" }));
+    await page.waitForSelector('.suite-card[data-phase="on"]');
+    assertEqual(
+      (await page.textContent(".suite-ready p")).replace(/\s+/g, " ").trim(),
+      "RichScribe is on. Click into any app, press F5 and talk. Your voice is transcribed on this Mac.",
+      "the drawn line with the key he picked"
+    );
+    assert((await page.textContent(".suite-on")).includes("On"), "the On mark in place of the button");
+    const set = await page.evaluate(() => window.__RICHOS_MOCK__.dictationCalls().map((c) => c.cmd));
+    assert(set.includes("dictation_set_on"), "the card turned the switch on: " + set.join(","));
+    // Try it here: the cursor goes into the message box, and the bar starts there.
+    await page.click("#suite-try");
+    await page.waitForFunction(() => window.__RICHOS_MOCK__.dictationCalls().some((c) => c.cmd === "dictation_listen"));
+    const listen = await page.evaluate(() => window.__RICHOS_MOCK__.dictationCalls().find((c) => c.cmd === "dictation_listen"));
+    assertEqual(listen.focused, "input", "the bar was started with the cursor in the message box");
+    // SET UP, SAID ONCE, AS FROM THE SHEET (the CEO, 2026-10-13, onboarding5.png): the "RichScribe
+    // feature" conversation under his company, Rich's message naming the key he picked.
+    const feature = page.locator(".nav-thread", { hasText: "RichScribe feature" });
     await feature.waitFor();
-    assertEqual(await on.locator(".nav-thread", { hasText: "RichScribe feature" }).count(), 1, "one conversation, under his company");
+    assertEqual(await feature.count(), 1, "one conversation, under his company");
     await feature.click();
-    await on.waitForFunction(() => /Good news!/.test(document.getElementById("messages").innerText));
+    await page.waitForFunction(() => /Good news!/.test(document.getElementById("messages").innerText));
     assertEqual(
-      // Rich's prose is one Markdown body; his four paragraphs are its four paragraphs.
-      await on.evaluate(() => [...document.querySelectorAll("#messages .tl-prose .tl-md-p")].map((p) => p.innerText.replace(/\s+/g, " ").trim())),
+      await page.evaluate(() => [...document.querySelectorAll("#messages .tl-prose .tl-md-p")].map((p) => p.innerText.replace(/\s+/g, " ").trim())),
       [
         "Good news! RichScribe is set up and enabled.",
         "So, in any other app on this Mac (Mail, Slack Chrome/Safari etc.) you can now do this:",
-        "Click into where you want your words to appear, tap F2, say what you want written, then tap it again. See how your words appear where your cursor is.",
+        "Click into where you want your words to appear, tap F5, say what you want written, then tap it again. See how your words appear where your cursor is.",
         "If you have any questions about this, we can discuss it here.",
       ],
-      "his text, word for word, with the key he picked, and nothing else in that conversation"
+      "his text, word for word, with the key he picked in the card"
     );
-    // HE PICKS ANOTHER KEY LATER (second review rv-20261013T183104Z, finding 2; the CEO: "make
-    // sure the correct key is actually within that message"): the message names the new key,
-    // and it is still the one message there.
-    await on.evaluate(() => window.RichDictation.open());
-    await on.waitForSelector("#dictation-sheet:not([hidden])");
-    await on.click('.dict-key[data-k="3"]');
-    await on.click("#dict-close");
-    await on.waitForFunction(() => /tap F3,/.test(document.getElementById("messages").innerText));
-    assertEqual(
-      await on.evaluate(() => [...document.querySelectorAll("#messages .tl-prose .tl-md-p")].map((p) => p.innerText.replace(/\s+/g, " ").trim())),
-      [
-        "Good news! RichScribe is set up and enabled.",
-        "So, in any other app on this Mac (Mail, Slack Chrome/Safari etc.) you can now do this:",
-        "Click into where you want your words to appear, tap F3, say what you want written, then tap it again. See how your words appear where your cursor is.",
-        "If you have any questions about this, we can discuss it here.",
-      ],
-      "the key changed to F3: the one message names F3"
-    );
-    await on.close();
-    const later = await finish({ dictationKey: 5, dictationView: { mic: "denied" } });
-    await later.waitForSelector("#dictation-offer-yes");
-    assert((await later.textContent("#dictation-offer")).includes("press F5 (or another key"), "the chosen key is named");
-    await later.click("#dictation-offer-yes");
-    await later.waitForSelector("#dictation-offer-after");
-    assertEqual((await later.textContent("#dictation-offer-after")).trim(), "It's in Settings, under RichScribe.", "not on");
-    await later.close();
+    assertEqual(await page.locator(".suite-note").count(), 0, "the tools note followed him into the RichScribe feature conversation");
+    assert(page.__errors.length === 0, "the shell logged errors: " + page.__errors.join(" | "));
+    bump(8);
+    await page.close();
+    return "Turn on opens the key and both permissions; F5 set; each Allow asks macOS; On with F5; Try it here starts the bar in the message box";
+  });
 
-    // SET UP LATER, FROM SETTINGS (second review rv-20261013T173014Z, finding 2): "Not now" first,
-    // then dictation turned on in its sheet with F2. The dictation text still leaves the
-    // onboarding conversation, and "Dictation feature" names F2.
-    const later2 = await finish({ dictationView: { mic: "allowed", ax: "allowed" } });
-    await later2.waitForSelector("#dictation-offer-no");
-    await later2.click("#dictation-offer-no");
-    await later2.waitForSelector("#dictation-offer-after");
-    await later2.evaluate(() => window.RichDictation.open());
-    await later2.waitForSelector("#dictation-sheet:not([hidden])");
-    await later2.click("#dict-switch");
-    await later2.waitForFunction(() => /^On\. Tap/.test((document.getElementById("dict-state") || {}).textContent || ""));
-    await later2.click('.dict-key[data-k="2"]');
-    await later2.waitForFunction(() => window.__RICHOS_MOCK__.dictationCalls().some((c) => c.cmd === "dictation_set_key" && c.key === 2));
-    await later2.click("#dict-close");
-    await later2.locator(".nav-thread", { hasText: "RichScribe feature" }).waitFor();
-    await later2.waitForFunction(() => document.querySelectorAll("#dictation-offer .tl-prose").length === 1);
+  await run.check("26e round 70: Not now still gets the tools, and the line above the message box when Rich comes back", async () => {
+    const page = await startedApp({ dictationView: { on: true, mic: "allowed", ax: "allowed", owner: "self", keyTap: true } });
+    await page.waitForSelector("#first-run-later", { state: "visible" });
+    await page.click("#first-run-later");
+    await page.waitForSelector(".suite-note");
+    assertEqual((await page.textContent("#first-run-headline")).trim(), "Left with you. Ask me any time and we'll go through it.", "the app's own receipt");
     assertEqual(
-      await later2.evaluate(() => [...document.querySelectorAll("#dictation-offer .tl-prose")].map((p) => p.innerText.trim())),
-      ["Voice is ready. Press the round button beside the message box and just talk to me."],
-      "set up later: the dictation text left the onboarding conversation too"
+      (await page.textContent(".suite-note .tl-prose")).trim(),
+      "One more thing, then I'm out of your way: five tools came with me. Three are already working, but RichScribe (which also powers RichCleaner) wants your OK.",
+      "the declined note, the CEO's words"
     );
-    await later2.close();
-
-    // A FRESH INSTALL: Start comes before his first company, so no conversation is open when
-    // the offer is made; it is drawn in the first one, once he has added the company (walked on
-    // the guest 2026-10-13: tying the note to the open conversation hid it when none was open).
-    const fresh = await finish({ chosenEntity: null, memory: "none" });
-    await fresh.waitForSelector("#memory-setup:not([hidden])");
-    await fresh.click("#memory-setup-later");
-    await fresh.waitForSelector("#entity-picker:not([hidden])");
-    await fresh.evaluate(() => {
-      const b = [...document.querySelectorAll("#entity-picker button")].find((x) => /add/i.test(x.textContent));
-      b.click();
+    // RichScribe on already: the card says On, not Turn on.
+    await page.waitForSelector('.suite-card[data-phase="on"]');
+    assert(await page.isHidden("#voice-hint"), "the line above the message box with nothing asked");
+    // Rich comes back by himself with his questions while onboarding is open: the line.
+    await page.fill("#input", "Thanks, I'll have a look.");
+    await page.press("#input", "Enter");
+    await page.waitForSelector(".nav-thread-row.is-active .nav-thread[data-thread-id]");
+    // The note went with his first message into the conversation it made, above it.
+    await page.waitForSelector(".suite-note + .tl-turn");
+    await page.evaluate(() => {
+      const thread = document.querySelector(".nav-thread-row.is-active .nav-thread").dataset.threadId;
+      window.__RICHOS_MOCK__.onboardingSet("partial");
+      window.__RICHOS_MOCK__.simulateAccountNote("research", "Here's my read. Six questions only you can answer.", thread);
     });
-    await fresh.fill("#entity-add-name", "Brightwave LABS");
-    await fresh.click("#entity-add-go");
-    await fresh.waitForSelector("#dictation-offer-yes");
-    await fresh.close();
-
-    // THE ROUND BUTTON LEARNED (the CEO, 2026-10-19): once he has pressed it, "Voice is ready.
-    // Press the round button..." is gone from the conversation; the dictation paragraphs stay
-    // while the offer is open, and when dictation is on the whole note goes.
-    const used = await finish({});
-    await used.waitForSelector("#dictation-offer");
-    await used.click("#talk-toggle");
-    await used.waitForFunction(() => ![...document.querySelectorAll("#dictation-offer .tl-prose")].some((p) => /round button/.test(p.innerText)));
-    assertEqual(await used.evaluate(() => document.body.innerText.includes("Press the round button")), false, "the voice line is gone after the first press");
-    assertEqual(await used.locator("#dictation-offer .tl-prose").count(), 2, "the dictation paragraphs stay");
-    await used.close();
-    const usedOn = await finish({ dictationView: { mic: "allowed", ax: "allowed" } });
-    await usedOn.waitForSelector("#dictation-offer-yes");
-    await usedOn.click("#talk-toggle");
-    await usedOn.click("#dictation-offer-yes");
-    await usedOn.waitForSelector("#dictation-sheet:not([hidden])");
-    await usedOn.waitForFunction(() => !document.getElementById("dictation-offer"));
-    await usedOn.close();
-
-    // NEVER AGAIN: the offer was made in an earlier run (a relaunch reads `offered`).
-    const again = await finish({ dictationOffered: true });
+    await page.waitForSelector("#voice-hint:not([hidden])");
+    assertEqual((await page.textContent("#voice-hint")).replace(/\s+/g, " ").trim(), "Or just say it: press F1 and talk. Talk now", "the drawn line with his key");
+    await page.click("#voice-hint-talk");
+    await page.waitForFunction(() => window.__RICHOS_MOCK__.dictationCalls().some((c) => c.cmd === "dictation_listen" && c.focused === "input"));
+    // He answers: the line goes.
+    await page.fill("#input", "Wholesale is mine until we hire.");
+    await page.press("#input", "Enter");
+    await page.waitForSelector("#voice-hint", { state: "hidden" });
+    // RichScribe off: no line, whatever Rich asks.
+    await page.evaluate(() => window.__RICHOS_MOCK__.dictationSet({ on: false }));
+    assert(page.__errors.length === 0, "the shell logged errors: " + page.__errors.join(" | "));
+    // NEVER AGAIN: an install that was offered before (a relaunch reads `offered`).
+    const again = await startedApp({ dictationOffered: true });
+    await again.waitForSelector("#first-run-later", { state: "visible" });
+    await again.click("#first-run-later");
     await again.waitForFunction(() => window.__RICHOS_MOCK__.dictationOfferCalls().length > 0);
-    // The answer was in hand when the call returned; two frames are its render, if it had one.
     await settledFrames(again);
-    assertEqual(await again.locator("#dictation-offer").count(), 0, "the offer came back after it was made");
-    assertEqual((await again.evaluate(() => window.__RICHOS_MOCK__.dictationOfferCalls())).join(","), "dictation_offer", "asked, and not shown");
-    await again.close();
-
-    // ONLY ONCE VOICE IS READY: with the model still missing there is no offer, and it comes
-    // when the model arrives.
-    const waits = await finish({ voice: "model-missing" });
-    // The fact the offer waits on: voice was asked again after the press, and said not ready.
-    await waits.waitForFunction(() => {
-      const cmds = window.__calls.map((c) => c.cmd);
-      return cmds.lastIndexOf("voice_readiness") > cmds.indexOf("run_setup");
-    });
-    await settledFrames(waits);
-    assertEqual(await waits.locator("#dictation-offer").count(), 0, "offered before voice is ready");
-    assertEqual((await waits.evaluate(() => window.__RICHOS_MOCK__.dictationOfferCalls())).length, 0, "asked before voice is ready");
-    await waits.evaluate(() => window.__RICHOS_MOCK__.voiceModelEmit({ phase: "installed", modelId: "small.en", received: 1, total: 1 }));
-    await waits.waitForSelector("#dictation-offer");
-    await waits.close();
-
-    // GATE OFF: no Start, no offer, and the window never asks.
-    const off = await openApp(browser, { setup: "missing-both", memory: "ready" });
+    assertEqual(await again.locator(".suite-note").count(), 0, "the note came back after it was made");
+    // GATE OFF: no note and the window never asks.
+    const off = await openApp(browser, { setup: "missing-both", memory: "ready", onboarding: "not-yet" });
     await off.waitForSelector("#setup-sheet:not([hidden])");
     await off.click("#setup-go");
     await off.waitForSelector("#setup-close:not([hidden])");
-    assert(await off.isHidden("#setup-start"), "gate off draws Start");
     await off.click("#setup-close");
-    await off.waitForSelector("#setup-sheet", { state: "hidden" });
+    await off.waitForSelector("#first-run-later", { state: "visible" });
+    await off.click("#first-run-later");
+    await off.waitForSelector("#first-run[data-state=\"declined\"]");
     await settledFrames(off);
-    assertEqual(await off.locator("#dictation-offer").count(), 0, "gate off offers dictation");
-    assertEqual((await off.evaluate(() => window.__RICHOS_MOCK__.dictationOfferCalls())).length, 0, "gate off asked about the offer");
-    assert(off.__errors.length === 0, "the shell logged errors: " + off.__errors.join(" | "));
+    assertEqual(await off.locator(".suite-note").count(), 0, "gate off offers the tools");
+    assert(off.__errors.length === 0 && again.__errors.length === 0, "the shell logged errors");
+    bump(9);
+    await page.close();
+    await again.close();
     await off.close();
-    bump(16);
-    return "both paragraphs and buttons as drawn; Not now, on and not-on lines; once only; after voice is ready; nothing with the gate off";
+    return "receipt then the declined note; On when RichScribe is on; the line when Rich comes back, Talk now in the box, gone once he answers; once; gate off";
   });
-
   await run.check("27  round 19: a step that failed stops saying it is installing", async () => {
     // FOUND ON THE GUEST, 2026-10-08: the engine's download was refused (a 404), the failure's
     // sentence came up, and the engine's row kept "Installing…" with its spinner turning.

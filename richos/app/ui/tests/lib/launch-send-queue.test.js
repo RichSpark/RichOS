@@ -85,6 +85,9 @@ function makeShell() {
     const refreshActiveContext = noop, refreshTechy = noop, updateJumpButton = noop;
     const resetWaitBandForThread = noop, pollWorkerStatus = noop;
     const renderFirstRunNotice = noop, drainWorkNotices = noop;
+    // Round 70's tools note and the line above the message box (main.js); not this test's subject.
+    const maybeOfferTools = noop, paintVoiceHint = noop;
+    let toolsNote = null;
     const reviveLiveTurns = noop;
     const setMainView = view => { mainView = view; };
     const showConversationView = () => {mainView = 'conversation'; openingThread = null;};
