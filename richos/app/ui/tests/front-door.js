@@ -206,7 +206,7 @@ async function main() {
     );
     assertEqual(
       await page.getAttribute("#home-enter", "aria-keyshortcuts"),
-      "Enter",
+      "Enter Space",
       "the door no longer says the key works, so the word under it became a claim nothing backs"
     );
     assertEqual(
@@ -216,7 +216,7 @@ async function main() {
     );
     bump(4);
     await page.close();
-    return "one door, named, carrying aria-keyshortcuts=Enter, with the caption as decoration";
+    return "one door, named, carrying aria-keyshortcuts=Enter Space, with the caption as decoration";
   });
 
   // =======================================================================================

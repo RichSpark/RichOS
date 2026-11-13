@@ -1584,9 +1584,7 @@ function autoIngestDueInMs() { return Math.max(0, (lastIngest + nextIngestGap) -
 // overlaps a rectangle the picture then rubs out, and a test carrying its own copy of that
 // geometry would be a test of the copy. `labelBlockers` is the whole no-caption list, the
 // banner included.
-// ROUND 71: the one line added to the app's engine. A company button turns the picture to that
-// company's territory, with the engine's own `clickDomain` (what a click on a territory name does).
-window.__loro = { focusDomain: (d) => (d < 0 ? releaseAll() : clickDomain(d)), N, L, S, V, snapshot, pause, resume, nodeScreen, setCount, coreTint: CORE_TINT, coreScreen: () => toScreen(CORE.x, CORE.y, 0), get ghostLevel() { return ghostNow; }, get COUNT() { return COUNT; }, get stats() { return STATS; }, gate, arrival, nodes, domains, D, get running() { return running; }, quietRect, quietAt,
+window.__loro = { N, L, S, V, snapshot, pause, resume, nodeScreen, setCount, coreTint: CORE_TINT, coreScreen: () => toScreen(CORE.x, CORE.y, 0), get ghostLevel() { return ghostNow; }, get COUNT() { return COUNT; }, get stats() { return STATS; }, gate, arrival, nodes, domains, D, get running() { return running; }, quietRect, quietAt,
   get eraseRects() { const out = []; for (let g = 0; g < QUIET_N; g++) { const o = g * 4; if (quietRects[o + 2] < 0) continue; out.push({ x0: quietRects[o], y0: quietRects[o + 1], x1: quietRects[o + 2], y1: quietRects[o + 3] }); } return out; },
   get labelBlockers() { return blockRects.map(([x0, y0, x1, y1]) => ({ x0, y0, x1, y1 })); },
   get domLabelRects() { return domLabelRects; }, get nodeLabelRects() { return nodeLabelRects; }, landed, get pos() { return pos; }, get hover() { return hover; }, get selected() { return selected; }, get cam() { return cam; }, fade, lit, glow, releaseAll, ingest: () => ingest(performance.now()), get autoIngestDueInMs() { return autoIngestDueInMs(); }, get blooming() { return blooming; }, get motionFrames() { return motionFrames; }, get frames() { return frames; }, pushWave, get activeList() { return activeList; } };

@@ -473,6 +473,9 @@ window.RichHome = (function () {
     state.dataSource = state.dataIsCustomers ? "customer" : meta && meta.synthetic === true ? "synthetic" : "unknown";
     // With his team on the screen nothing on it is a demonstration (see `showTeam`).
     box.hidden = state.dataIsCustomers || !!state.team;
+    // NO "LEARNED FROM" LINE OVER HIS REPOSITORIES (round 72): the engine names a teammate at random
+    // for each source, which over his own documents would be a made-up event.
+    root.classList.toggle("home-from-repos", !!meta && meta.source === "repositories");
     state.noteShown = !box.hidden;
 
     reserveNoteInset();
@@ -987,6 +990,9 @@ window.RichHome = (function () {
     // not on where focus sits, so no Enter reaches the door of a screen nobody can see.
     if (document.body.classList.contains("spend-open")) return;
     var t = e.target;
+    // SPACE IS TYPED; ENTER IS NOT. A space in any field that takes text is that field's, wherever
+    // the field is, and a held Space (which repeats after the door has opened) opens nothing.
+    if (space && (e.repeat || (t && t.closest && t.closest("input, textarea, select, [contenteditable]:not([contenteditable='false'])")))) return;
     if (t && t.closest) {
       if (t.closest(".home-prefs")) return;
       // Enter in Bust a bug's panel sends the answer to Rich; it never goes through the door.

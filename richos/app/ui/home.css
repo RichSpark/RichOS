@@ -1570,3 +1570,7 @@ body.home-open {
   background: rgba(194, 163, 92, 0.7);
 }
 .popover-hint.swearmeter-result { color: var(--t1); }
+
+/* ROUND 72: over a picture read from his repositories the "learned from" line is not shown. The
+   engine names a teammate at random for each source, which over his own data is a made-up event. */
+#home.home-from-repos #home-ticker { display: none; }

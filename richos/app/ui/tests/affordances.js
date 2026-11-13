@@ -3029,7 +3029,7 @@ async function main() {
     assertEqual(tree.capRole, null, "the caption claims a role — then it is a second control with the door's own name");
     assertEqual(tree.capTabIndex, null, "the caption is a tab stop — then it is a second control in the tab order");
     assertEqual(tree.capText, "Enter", "the word is no longer on screen, which is the ruling's own wording");
-    assertEqual(tree.doorKeys, "Enter", "the door no longer carries the shortcut, so the hidden word's fact left the tree with it");
+    assertEqual(tree.doorKeys, "Enter Space", "the door no longer carries the shortcut, so the hidden word's fact left the tree with it");
     assertEqual(tree.doorRole, "BUTTON", "the door is not a button");
 
     assertEqual(pageErrors, [], "the opening screen threw during the walk");
