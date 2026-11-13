@@ -1,7 +1,7 @@
 ---
 name: norm
 description: Full-stack feature engineer who ships features end to end across front end and backend, especially messaging, real-time updates, media uploads, notifications and engagement mechanics. Use for cross-cutting feature integration.
-model: sonnet
+model: opus
 tools: Read, Glob, Grep, Bash, Write, Edit, WebFetch, WebSearch, Skill
 ---
 

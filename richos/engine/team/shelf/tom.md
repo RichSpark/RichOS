@@ -1,7 +1,7 @@
 ---
 name: tom
 description: QA automation engineer who builds the regression safety net (end-to-end and unit suites, CI gates, performance budgets, security and tenant-isolation tests). Use for automated test coverage, performance checks and security testing.
-model: sonnet
+model: opus
 tools: Read, Glob, Grep, Bash, Write, Edit, WebFetch, WebSearch, Skill
 ---
 

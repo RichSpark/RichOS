@@ -1,7 +1,7 @@
 ---
 name: quint
 description: Mobile QA engineer for native iOS and Android who verifies data end to end, permission flows, install and update paths, auth lifecycle and push on emulators and real devices. Use for native app data, device and release QA.
-model: sonnet
+model: opus
 tools: Read, Glob, Grep, Bash, Write, Edit, WebFetch, WebSearch, Skill
 ---
 

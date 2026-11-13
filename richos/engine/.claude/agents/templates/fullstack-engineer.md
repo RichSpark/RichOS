@@ -4,7 +4,7 @@
 # intentionally does NOT match this filename.
 name: TODO-fullstack-slug
 description: TODO — full-stack engineer who owns end-to-end features spanning backend and frontend (a named set of product domains). Use for cross-layer feature and bug work in the owned domains.
-model: sonnet
+model: opus
 tools: Read, Edit, Write, Bash, Grep, Glob, WebFetch, WebSearch, TaskUpdate, TaskGet, TaskList, Skill
 ---
 

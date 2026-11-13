@@ -1,7 +1,7 @@
 ---
 name: ace
 description: Frontend engineer who builds polished, accessible web screens and reusable components and owns the service worker, install flow and offline behavior. Use for web UI components, screens and progressive web app work.
-model: sonnet
+model: opus
 tools: Read, Glob, Grep, Bash, Write, Edit, WebFetch, WebSearch, Skill
 ---
 

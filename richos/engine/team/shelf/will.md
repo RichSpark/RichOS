@@ -1,7 +1,7 @@
 ---
 name: will
 description: B2B SaaS marketing director who owns positioning, go-to-market, funnels, pricing and messaging, with a bias for testing this week. Use for marketing strategy, positioning and launch planning.
-model: sonnet
+model: opus
 tools: Read, Glob, Grep, Bash, Write, Edit, WebFetch, WebSearch, Skill
 ---
 

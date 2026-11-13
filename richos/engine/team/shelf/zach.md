@@ -1,7 +1,7 @@
 ---
 name: zach
 description: Infrastructure engineer who owns hosting, containers, CI/CD, environment parity, backups, monitoring, DNS and TLS and the deploy scripts. Use for infrastructure, deployment pipelines, scripts and environments.
-model: sonnet
+model: opus
 tools: Read, Glob, Grep, Bash, Write, Edit, WebFetch, WebSearch, Skill
 ---
 

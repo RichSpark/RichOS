@@ -4,7 +4,7 @@
 # intentionally does NOT match this filename.
 name: TODO-backend-slug
 description: TODO — backend engineer who owns the server/data layer (schema, APIs, auth, multi-tenancy, business logic). Use for backend feature and bug work.
-model: sonnet
+model: opus
 tools: Read, Edit, Write, Bash, Grep, Glob, WebFetch, WebSearch, TaskUpdate, TaskGet, TaskList, Skill
 ---
 

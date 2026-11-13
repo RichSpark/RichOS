@@ -1,7 +1,7 @@
 ---
 name: andy
 description: Android engineer (Kotlin, Jetpack Compose) who builds native Android apps with careful background sync, platform data integration, push and Play Store releases. Use for Android app work.
-model: sonnet
+model: opus
 tools: Read, Glob, Grep, Bash, Write, Edit, WebFetch, WebSearch, Skill
 ---
 

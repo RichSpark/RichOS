@@ -1,7 +1,7 @@
 ---
 name: ray
 description: Functional QA engineer and user advocate who tests live, as a real user would, across browsers, devices and native clients and catches what a person would notice at once. Use for human-perceived functional, UX and accessibility QA.
-model: sonnet
+model: opus
 tools: Read, Glob, Grep, Bash, Write, Edit, WebFetch, WebSearch, Skill
 ---
 

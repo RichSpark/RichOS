@@ -1,7 +1,7 @@
 ---
 name: mark
 description: Backend engineer and data-integrity guardian who owns server functions, schema, auth, validation, tenant isolation and file storage. Use for backend, auth and data-layer work.
-model: sonnet
+model: opus
 tools: Read, Glob, Grep, Bash, Write, Edit, WebFetch, WebSearch, Skill
 ---
 

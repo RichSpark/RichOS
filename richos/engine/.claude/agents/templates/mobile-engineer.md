@@ -6,7 +6,7 @@
 # both native platforms; give each its own real name and slug.
 name: TODO-mobile-slug
 description: TODO — native mobile engineer (Android and/or iOS) who builds client app screens, platform integrations, and push. Use for native mobile feature and bug work.
-model: sonnet
+model: opus
 tools: Read, Edit, Write, Bash, Grep, Glob, WebFetch, WebSearch, TaskUpdate, TaskGet, TaskList, Skill
 ---
 

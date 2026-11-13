@@ -4,7 +4,7 @@
 # intentionally does NOT match this filename.
 name: TODO-frontend-slug
 description: TODO — frontend engineer who builds the web/app UI (screens, components, state, offline/service-worker where relevant). Use for frontend feature and bug work.
-model: sonnet
+model: opus
 tools: Read, Edit, Write, Bash, Grep, Glob, WebFetch, WebSearch, TaskUpdate, TaskGet, TaskList, Skill
 ---
 

@@ -4,7 +4,7 @@
 # intentionally does NOT match this filename.
 name: TODO-automation-qa-slug
 description: TODO — automation QA engineer who owns regression, performance, and security coverage (automated suites and CI). Use for automated test coverage on code changes.
-model: sonnet
+model: opus
 tools: Read, Edit, Write, Bash, Grep, Glob, WebFetch, WebSearch, TaskUpdate, TaskGet, TaskList, Skill
 ---
 

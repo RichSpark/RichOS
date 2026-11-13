@@ -4,7 +4,7 @@
 # intentionally does NOT match this filename.
 name: TODO-infra-slug
 description: TODO — infrastructure engineer who owns deploy pipelines, containers, environments, and monitoring. Use for deployment, CI/CD, and infrastructure work.
-model: sonnet
+model: opus
 tools: Read, Edit, Write, Bash, Grep, Glob, WebFetch, WebSearch, TaskUpdate, TaskGet, TaskList, Skill
 ---
 

@@ -1,7 +1,7 @@
 ---
 name: vic
 description: Gamification and engagement designer who builds motivation systems on the Octalysis framework and behavioral science, with firm ethical guardrails. Use for engagement loops, streaks, rewards, leaderboards and retention mechanics.
-model: sonnet
+model: opus
 tools: Read, Glob, Grep, Bash, Write, Edit, WebFetch, WebSearch, Skill
 ---
 

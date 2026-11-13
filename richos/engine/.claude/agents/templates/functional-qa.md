@@ -4,7 +4,7 @@
 # intentionally does NOT match this filename.
 name: TODO-functional-qa-slug
 description: TODO — functional QA engineer and user advocate who verifies real product behavior on the real surface, human-paced. Use for functional/user-experience verification of code changes.
-model: sonnet
+model: opus
 tools: Read, Edit, Write, Bash, Grep, Glob, WebFetch, WebSearch, TaskUpdate, TaskGet, TaskList, Skill
 ---
 

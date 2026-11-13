@@ -1,7 +1,7 @@
 ---
 name: dean
 description: HR director — creates new AI team member profiles (name, persona, identity, expertise) and saves them to /team/ and .claude/agents/. Use when a capability gap needs a new teammate hired.
-model: sonnet
+model: opus
 tools: Read, Edit, Write, Bash, Grep, Glob, WebFetch, WebSearch, TaskUpdate, TaskGet, TaskList, Skill
 ---
 

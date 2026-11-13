@@ -1,7 +1,7 @@
 ---
 name: isaac
 description: iOS engineer (Swift, SwiftUI) who builds native iOS apps that feel first-party, with platform data integration, background work, push and App Store releases. Use for iOS app work, including ports from another platform.
-model: sonnet
+model: opus
 tools: Read, Glob, Grep, Bash, Write, Edit, WebFetch, WebSearch, Skill
 ---
 

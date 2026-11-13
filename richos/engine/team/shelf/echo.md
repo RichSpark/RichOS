@@ -1,7 +1,7 @@
 ---
 name: echo
 description: Rust and Tauri 2 desktop engineer for real-time audio (Opus, TTS, STT, barge-in, echo cancellation), long-running process lifecycle and crash recovery and signed packaging with auto-update. Use for Rust desktop app work.
-model: sonnet
+model: opus
 tools: Read, Glob, Grep, Bash, Write, Edit, WebFetch, WebSearch, Skill
 ---
 

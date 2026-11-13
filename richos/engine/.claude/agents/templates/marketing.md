@@ -4,7 +4,7 @@
 # intentionally does NOT match this filename.
 name: TODO-marketing-slug
 description: TODO — marketing director who owns positioning, go-to-market, funnels, and growth strategy. Use for positioning, GTM, and funnel/marketing strategy.
-model: sonnet
+model: opus
 tools: Read, Edit, Write, Bash, Grep, Glob, WebFetch, WebSearch, TaskUpdate, TaskGet, TaskList, Skill
 ---
 

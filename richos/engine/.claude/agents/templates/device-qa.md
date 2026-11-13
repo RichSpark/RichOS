@@ -5,7 +5,7 @@
 # apps with a device/emulator install pipeline.
 name: TODO-device-qa-slug
 description: TODO — device QA engineer who owns native install/data/sync/push/device-behavior verification on real devices or emulators. Use for native device-level QA of client apps.
-model: sonnet
+model: opus
 tools: Read, Edit, Write, Bash, Grep, Glob, WebFetch, WebSearch, TaskUpdate, TaskGet, TaskList, Skill
 ---
 
