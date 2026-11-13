@@ -13,15 +13,42 @@
   }
   function words() {
     if (!result || !result.available) return "SwearMeter unavailable";
+    if (result.history_loading) return "SwearMeter is preparing your history";
+    if (result.periods) return "All history: " + result.count.toLocaleString() + " · Last 30 days: " + result.periods.last_30_days.toLocaleString();
     return "SwearMeter: " + result.count.toLocaleString();
   }
   function coverage() {
     if (!result || !result.available) return "The recorded result could not be read. Retry in settings.";
     const lines = [];
+    if (result.provider_history_incomplete) lines.push("Partial history: some provider records could not be verified.");
+    if (result.ambiguous_matches) lines.push(result.ambiguous_matches.toLocaleString() + " possible duplicate matches withheld.");
+    if (result.periods?.undated) lines.push(result.periods.undated.toLocaleString() + " undated matches are included in All history only.");
     if (result.unknown_card_inputs) lines.push("Partial history: some older card answers could not be attributed (" + result.unknown_card_inputs.toLocaleString() + " records).");
     if (result.unknown_message_inputs) lines.push("Partial history: some message text could not be attributed (" + result.unknown_message_inputs.toLocaleString() + " inputs).");
     if (result.incomplete_history) lines.push("Partial history: some recorded inputs could not be read or recovered.");
     return lines.join(" ");
+  }
+  function paintMonths(container) {
+    const rows = show && result?.available && !result.history_loading ? result.periods?.months : null;
+    let panel = container.querySelector(".swearmeter-months");
+    if (!rows?.length) { panel?.remove(); return; }
+    if (!panel) {
+      panel = document.createElement("details");
+      panel.className = "swearmeter-months";
+      const title = document.createElement("summary");
+      title.textContent = "By month";
+      panel.appendChild(title);
+      panel.appendChild(document.createElement("ul"));
+      container.appendChild(panel);
+    }
+    const format = new Intl.DateTimeFormat(undefined, { month: "long", year: "numeric", timeZone: "UTC" });
+    const list = panel.querySelector("ul");
+    list.replaceChildren(...rows.map(row => {
+      const label = format.format(new Date(Date.UTC(Math.floor(row.month / 100), row.month % 100 - 1, 1)));
+      const item = document.createElement("li");
+      item.textContent = label + ": " + (row.count === 0 && coverage() ? "No verified matches" : row.count.toLocaleString());
+      return item;
+    }));
   }
   function paintHome() {
     const signals = document.getElementById("home-signals");
@@ -38,8 +65,9 @@
       signals.appendChild(node);
     }
     node.hidden = !show;
-    node.textContent = "";
     if (show) {
+      const monthPanel = node.querySelector(".swearmeter-months");
+      for (const child of [...node.children]) if (child !== monthPanel) child.remove();
       const title = document.createElement("div");
       title.className = "swearmeter-number";
       title.textContent = words();
@@ -48,8 +76,12 @@
       detail.textContent = coverage();
       const scope = document.createElement("p");
       scope.className = "swearmeter-detail";
-      scope.textContent = "Words matched in your recorded RichOS messages and card answers. English dictionary on this installation.";
-      node.append(title, detail, scope);
+      scope.textContent = result?.periods ? "Words matched in available RichOS, Claude Code and Codex history. English dictionary."
+        : "Words matched in your recorded RichOS messages and card answers. English dictionary on this installation.";
+      node.insertBefore(title, monthPanel);
+      node.insertBefore(detail, monthPanel);
+      node.insertBefore(scope, monthPanel);
+      paintMonths(node);
     }
   }
   function paint() {
@@ -59,6 +91,7 @@
     if (row) {
       row.hidden = !show;
       row.textContent = show ? words() + (coverage() ? ". " + coverage() : "") : "";
+      paintMonths(row.parentElement);
     }
     const retry = document.getElementById("set-swearmeter-retry");
     if (retry) {
