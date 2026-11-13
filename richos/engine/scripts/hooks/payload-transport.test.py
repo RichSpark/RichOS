@@ -108,7 +108,9 @@ class PayloadTransport(unittest.TestCase):
         self.pair('guard-worktree-removal.sh', 'git worktree remove /tmp/example-worker', 2)
         self.pair('guard-worktree-removal.sh', 'git worktree list', 0)
 
-    def test_unnotified_live_worktree_blocks_push(self):
+    def test_push_past_unnotified_live_worktree_is_allowed_and_registered(self):
+        # Since 2026-10-06 (16b080627) a push needs no in-flight notice. The land is
+        # still recognized: the guard registers the repository for the Stop hook.
         worker = self.root / 'wt/norm-sonnet-feature1'
         worker.parent.mkdir()
         self.git('worktree', 'add', '-qb', 'worktree-norm', str(worker))
@@ -116,16 +118,23 @@ class PayloadTransport(unittest.TestCase):
         self.commit(cwd=worker)
         (self.repo / 'src/base').write_text('main moved\n')
         self.commit()
-        self.pair('guard-inflight-notify.sh', 'git push origin main', 2, 'norm-sonnet-feature1')
-        self.pair('guard-inflight-notify.sh', 'git status', 0)
+        registered = self.root / 'teams/session-deadbeef/inflight-repos.txt'
+        for prefix in ('', PADDING):
+            with self.subTest(long=bool(prefix)):
+                self.hook('guard-inflight-notify.sh', prefix + 'git status', 0)
+                self.assertFalse(registered.exists(), 'a read was treated as a land')
+                self.hook('guard-inflight-notify.sh', prefix + 'git push origin main', 0)
+                self.assertEqual(registered.read_text().splitlines(), [str(self.repo)])
+                registered.unlink()
 
     def test_classifier_execution_failure_is_not_permission(self):
         fakebin = self.root / 'bin'
         fakebin.mkdir()
         wrapper = fakebin / 'python3'
         wrapper.write_text('#!' + sys.executable + '\nimport os,sys\n'
-                           'if len(sys.argv)>2 and sys.argv[1]=="-c" and '
-                           '"d = json.loads(sys.stdin.read()" in sys.argv[2]:\n'
+                           'args=[a for a in sys.argv[1:] if a!="-B"]\n'
+                           'if len(args)>1 and args[0]=="-c" and '
+                           '"d = json.loads(sys.stdin.read()" in args[1]:\n'
                            ' raise SystemExit(91)\n'
                            'os.execv(' + repr(sys.executable) + ', [' + repr(sys.executable) + '] + sys.argv[1:])\n')
         wrapper.chmod(0o755)

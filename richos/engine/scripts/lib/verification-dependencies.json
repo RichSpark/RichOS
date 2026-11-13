@@ -12361,7 +12361,7 @@
     },
     "scripts/hooks/payload-transport.test.py": {
       "source": "scripts/hooks/payload-transport.test.py",
-      "sha256": "1f470f98b21c753ce91cc13000f9ccb9d47302f8eaa524f86384ee43a355847c",
+      "sha256": "e122b1da8a915b3d6980c2716e699118bb327a835747e8a6f7498c0b119beb8e",
       "evidence": "Reviewed all fixed hook invocations. Each child gets a cleared environment, private HOME and explicit private RICHOS_ENTITY_ROOT/CLAUDE_PROJECT_DIR. Only private repositories, declarations and worktrees are targeted. PROTECTED_PATHS is literal src in that fixture; inflight timeout reads the fixture root. Payload command strings are classified, never executed. The fault injector delegates unchanged Python except its fixed classifier failure.",
       "keys": [],
       "edges": [
