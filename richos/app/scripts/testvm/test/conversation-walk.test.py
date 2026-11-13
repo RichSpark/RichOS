@@ -159,5 +159,21 @@ class Actors(unittest.TestCase):
             self.assertTrue(walk.actors(a, later - 120000))
 
 
+class StepShot(unittest.TestCase):
+    """--shot-each-step: a frame named for the step, and a frame that fails is named, never raised."""
+
+    def test_a_frame_is_named_for_its_step(self):
+        taken = []
+        fake = type('W', (), {'shot': lambda s, name: taken.append(name)})()
+        self.assertEqual(walk.ConversationWalk.step_shot(fake, 3), 'step-3.png')
+        self.assertEqual(taken, ['step-3.png'])
+
+    def test_a_failed_frame_is_reported_not_raised(self):
+        def shot(s, name):
+            raise walk.StepFailed('shot.sh: black frame')
+        fake = type('W', (), {'shot': shot})()
+        self.assertEqual(walk.ConversationWalk.step_shot(fake, 2), 'failed: shot.sh: black frame')
+
+
 if __name__ == '__main__':
     unittest.main()
