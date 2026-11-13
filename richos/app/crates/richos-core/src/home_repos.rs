@@ -443,6 +443,18 @@ fn seed_of(cluster: &str) -> u32 {
     u64::from_str_radix(cluster.trim_start_matches("cl-"), 16).map(|h| h as u32).unwrap_or(0)
 }
 
+/// An object's own placement key: a one-way hash of what it is (its company, its repository's folder
+/// name and its path, ruling number or day), so the same object has the same key on every build
+/// whatever was added around it. `field-prep.js` places each object from a stream seeded with it.
+fn key_of(company: &str, repo: &str, what: &str) -> u32 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in company.bytes().chain(std::iter::once(0u8)).chain(repo.bytes()).chain(std::iter::once(0u8)).chain(what.bytes()) {
+        h ^= u64::from(byte);
+        h = h.wrapping_mul(0x0100_0000_01b3);
+    }
+    (h ^ (h >> 32)) as u32
+}
+
 fn round3(x: f64) -> f64 {
     (x * 1000.0).round() / 1000.0
 }
@@ -455,6 +467,7 @@ struct Node {
     ntype: &'static str,
     company: usize,
     cluster: String,
+    key: u32,
     created: i64,
     recency: f64,
     significance: f64,
@@ -514,10 +527,10 @@ pub fn build_repo_field(companies: &[CompanyRead], unread: &[(String, String)], 
         nodes[b].degree += 1;
         true
     };
-    let add_node = |nodes: &mut Vec<Node>, company: usize, ntype: &'static str, cluster: String, created: i64, last: i64, commits: u32, recent: f64| -> usize {
+    let add_node = |nodes: &mut Vec<Node>, company: usize, ntype: &'static str, cluster: String, key: u32, created: i64, last: i64, commits: u32, recent: f64| -> usize {
         let recency = if last <= today { round3(1.0 - (today - last) as f64 / horizon.max(1) as f64) } else { 1.0 };
         let significance = round3(((commits as f64).ln_1p() / 40f64.ln_1p()).min(1.0));
-        nodes.push(Node { ntype, company, cluster, created: dnum(created), recency, significance, activity: round3(recent), degree: 0 });
+        nodes.push(Node { ntype, company, cluster, key, created: dnum(created), recency, significance, activity: round3(recent), degree: 0 });
         nodes.len() - 1
     };
 
@@ -569,7 +582,7 @@ pub fn build_repo_field(companies: &[CompanyRead], unread: &[(String, String)], 
         }
         // `Counter.most_common(6)`: by count, ties in first-seen order
         let mut ranked = keyed.clone();
-        ranked.sort_by(|a, b| b.1.cmp(&a.1));
+        ranked.sort_by_key(|k| std::cmp::Reverse(k.1));
         let keep: Vec<String> = ranked.into_iter().take(6).map(|(k, _)| k).collect();
         let cluster_of = |k: &str| -> String { stable_id("cl-", &c.id, if keep.iter().any(|x| x == k) { k } else { "\u{0}everything-else" }) };
         let doc_cluster: HashMap<(usize, String), String> = docs.iter().zip(keys.iter()).map(|((ri, d), k)| ((*ri, d.path.clone()), cluster_of(k))).collect();
@@ -577,10 +590,11 @@ pub fn build_repo_field(companies: &[CompanyRead], unread: &[(String, String)], 
 
         // ---- documents ----
         let mut sorted: Vec<(usize, &FileRec)> = docs.clone();
-        sorted.sort_by(|a, b| (a.0, &a.1.path).cmp(&(b.0, &b.1.path)));
+        sorted.sort_by_key(|d| (d.0, &d.1.path));
         for (ri, d) in &sorted {
             let recent = if today - d.last <= 30 { (d.commits as f64 / 12.0).min(1.0) } else { 0.0 };
-            let i = add_node(&mut nodes, ci, classify(&d.path), doc_cluster[&(*ri, d.path.clone())].clone(), d.first, d.last, d.commits, recent);
+            let key = key_of(&c.id, &c.repos[*ri].name, &d.path);
+            let i = add_node(&mut nodes, ci, classify(&d.path), doc_cluster[&(*ri, d.path.clone())].clone(), key, d.first, d.last, d.commits, recent);
             doc_node.insert((ci, *ri, d.path.clone()), i);
         }
         let node_of = |ri: usize, d: &FileRec| doc_node[&(ci, ri, d.path.clone())];
@@ -614,7 +628,7 @@ pub fn build_repo_field(companies: &[CompanyRead], unread: &[(String, String)], 
             let a = anchor[&(*ri, dpath.clone())];
             let an = node_of(*ri, a);
             let mut rest: Vec<&FileRec> = members.iter().filter(|m| m.path != a.path).copied().collect();
-            rest.sort_by(|x, y| (x.first, &x.path).cmp(&(y.first, &y.path)));
+            rest.sort_by_key(|m| (m.first, &m.path));
             if rest.len() > 48 {
                 for run in rest.chunks(40) {
                     let mut lead = run[0];
@@ -678,7 +692,8 @@ pub fn build_repo_field(companies: &[CompanyRead], unread: &[(String, String)], 
                 };
                 let weight = 6 + (body.chars().count() / 600).min(30) as u32;
                 let cl = nodes[dn].cluster.clone();
-                let i = add_node(&mut nodes, ci, "decision", cl, when, when, weight, 0.0);
+                let key = key_of(&c.id, &c.repos[*ri].name, &format!("{}\u{0}ruling {num}", d.path));
+                let i = add_node(&mut nodes, ci, "decision", cl, key, when, when, weight, 0.0);
                 ruling_node.insert((ci, *ri, d.path.clone(), *num), i);
                 add_link(&mut nodes, &mut links, i, dn, "membership");
                 n_rulings += 1;
@@ -701,10 +716,11 @@ pub fn build_repo_field(companies: &[CompanyRead], unread: &[(String, String)], 
                     None => root_hub.map(|h| nodes[h].cluster.clone()).unwrap_or_else(|| else_cluster.clone()),
                 };
                 let recent = if today - day <= 30 { (n as f64 / 60.0).min(1.0) } else { 0.0 };
-                let i = add_node(&mut nodes, ci, "memory", cl, day, day, n, recent);
+                let key = key_of(&c.id, &r.name, &format!("\u{0}day {day}"));
+                let i = add_node(&mut nodes, ci, "memory", cl, key, day, day, n, recent);
                 session_node.insert((ci, ri, day), i);
                 let mut made_sorted = made.clone();
-                made_sorted.sort_by(|a, b| b.commits.cmp(&a.commits));
+                made_sorted.sort_by_key(|m| std::cmp::Reverse(m.commits));
                 for m in made_sorted.iter().take(8) {
                     add_link(&mut nodes, &mut links, i, node_of(ri, m), "membership");
                 }
@@ -870,7 +886,7 @@ pub fn build_repo_field(companies: &[CompanyRead], unread: &[(String, String)], 
             }
             // in the order of their stable ids, not their sizes: a folder that grows past another does
             // not swap the two clusters' strands
-            cl.sort_by(|a, b| a.0.cmp(&b.0));
+            cl.sort();
             let clusters: Vec<Value> = cl.iter().enumerate().map(|(i, (k, v))| json!({ "id": k, "label": format!("Group {}", i + 1), "nodeCount": v })).collect();
             json!({ "id": companies[ci].id, "label": companies[ci].label, "nodeCount": sizes[ci], "clusters": clusters })
         })
@@ -886,8 +902,9 @@ pub fn build_repo_field(companies: &[CompanyRead], unread: &[(String, String)], 
         .enumerate()
         .map(|(i, n)| json!({ "id": format!("n{:05}", i), "type": n.ntype, "domain": companies[n.company].id, "cluster": n.cluster,
             "createdDay": n.created, "recency": n.recency, "significance": n.significance, "activity": n.activity, "degree": n.degree,
-            // each cluster is placed from its own stream (`field-prep.js`), so a commit moves only its own folder
-            "layoutSeed": seed_of(&n.cluster) }))
+            // each object is placed from its own stream (`field-prep.js` `placeKeyed`), so new work
+            // moves nothing that was already drawn
+            "layoutSeed": seed_of(&n.cluster), "layoutKey": n.key }))
         .collect();
     let link_values: Vec<Value> = links
         .iter()
@@ -1231,9 +1248,10 @@ mod tests {
         assert_eq!(field["meta"]["horizonDays"].as_i64(), Some(day("2026-11-13") - day("2026-10-01")));
     }
 
-    /// Sage 2026-11-13, fact 1: new work in one folder must not rearrange the picture. Every object
-    /// carries its cluster's placement seed, the same for the same folder on every build, and a company
-    /// drawn before keeps its place in the order when another overtakes it.
+    /// Sage 2026-11-13, fact 1: new work must not rearrange the picture. Every object carries its
+    /// cluster's placement seed and a placement key of its own, the same on every build whatever was
+    /// added around it, and a company drawn before keeps its place in the order when another
+    /// overtakes it.
     #[test]
     fn placement_seeds_and_company_order_survive_new_work() {
         let rec = |p: &str| FileRec { path: p.into(), first: day("2026-10-01"), last: day("2026-10-01"), commits: 1 };
@@ -1246,6 +1264,14 @@ mod tests {
         assert_eq!(order_of(&after), order_of(&before));
         assert_eq!((seed(&after, "small"), seed(&after, "big")), (seed(&before, "small"), seed(&before, "big")));
         assert_ne!(seed(&before, "small"), seed(&before, "big"));
+        // an object's key is its own: the documents drawn before keep theirs when 18 more are added,
+        // although every ordinal id after them changed
+        let keys = |f: &Value| -> Vec<u64> { f["nodes"].as_array().unwrap().iter().filter(|n| n["domain"] == "big").map(|n| n["layoutKey"].as_u64().unwrap()).collect() };
+        assert_eq!(keys(&after), keys(&before));
+        let mut distinct = keys(&before);
+        distinct.sort_unstable();
+        distinct.dedup();
+        assert_eq!(distinct.len(), keys(&before).len(), "two objects share a placement key");
         // a company connected later joins at the end
         let more = build_repo_field(&[company("small", 20), company("big", 9), company("new", 50)], &[], day("2026-11-13"), &order_of(&after));
         assert_eq!(order_of(&more).last().map(String::as_str), Some("new"));

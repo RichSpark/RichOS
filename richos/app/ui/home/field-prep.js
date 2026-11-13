@@ -238,10 +238,9 @@ function prepare(loro, REF, opts) {
   const tmp = new Float32Array(4);
   const byCluster = clusterList.map(() => []);
   for (let i = 0; i < N; i++) byCluster[nodeCluster[i]].push(i);
-  // APP: `pr` is the stream placement draws from. It is `rnd` for every dataset whose objects carry no
-  // `layoutSeed` (the demonstration, byte for byte as approved). Objects read from his repositories
-  // (`home_repos.rs`) carry their cluster's seed, and each cluster is placed from its own stream, so a
-  // commit that adds objects to one folder does not move every object drawn after it.
+  // APP: `pr` is the stream placement draws from. It is `rnd` for every object that carries no
+  // `layoutKey` (the demonstration, byte for byte as approved, and a picture compiled from loro).
+  // An object read from his repositories carries one and draws from a stream of its own (`placeKeyed`).
   let pr = rnd;
   const pickStrand = (ss) => { // weighted by length
     let total = 0; for (const s of ss) total += s.len;
@@ -267,6 +266,53 @@ function prepare(loro, REF, opts) {
   // objects land exactly where they do in the demonstration and a group does not move when another
   // is added.
   const hosted = (i) => nodes[i].hosted === true;
+  // APP: AN OBJECT READ FROM HIS REPOSITORIES STANDS WHERE ITS OWN KEY PUTS IT (`home_repos.rs`:
+  // `layoutKey`, a hash of what the object is; `layoutSeed`, a hash of its folder group). The loop
+  // below draws every object of the picture from one stream, hubs first, so one added object moves
+  // every object drawn after it, and a team that commits all day would see the whole picture
+  // rearranged at each launch. Here nothing depends on the order or the number of the others:
+  //   * an object's strand is the one of its group's strands that its own key scores best (a
+  //     weighted rendezvous hash: longer strands win in proportion to their length). When a folder
+  //     grows, its neighbors gain or lose a strand at their edge, and only the objects that stood
+  //     on a strand that left, or whose key prefers one that came, move;
+  //   * an object that hangs off a bigger one in the same group chooses among the strands of that
+  //     one's bundle (the strands either side of the strand the bigger one's key scores best), so
+  //     the threads still run along the strand bundle;
+  //   * its place along the strand and beside it come from a stream seeded with its key.
+  const placeKeyed = (c, ids) => {
+    const ss = clusterList[c].strands;
+    const mix = (x) => { x = Math.imul(x ^ (x >>> 16), 0x85ebca6b); x = Math.imul(x ^ (x >>> 13), 0xc2b2ae35); return (x ^ (x >>> 16)) >>> 0; };
+    const pick = (key, from, to) => {
+      let best = ss[from], bs = Infinity;
+      for (let k = from; k <= to; k++) {
+        const sc = -Math.log((mix(key ^ Math.imul(ss[k].i + 1, 0x9e3779b1)) + 0.5) / 4294967296) / ss[k].len;
+        if (sc < bs) { bs = sc; best = ss[k]; }
+      }
+      return best;
+    };
+    const posOf = new Map(); ss.forEach((st, k) => posOf.set(st.i, k));
+    const keyOf = (i) => (nodes[i].layoutKey ^ nodes[i].layoutSeed) >>> 0;
+    const ownStrand = new Map();
+    const own = (i) => { let st = ownStrand.get(i); if (!st) { st = pick(keyOf(i), 0, ss.length - 1); ownStrand.set(i, st); } return st; };
+    // half a bundle: a hub's share of the group's strands in the loop below, either side of its own
+    const nh = Math.max(1, Math.min(ids.length, Math.round(ids.length * 0.07), Math.floor(ss.length / 2)));
+    const half = Math.max(1, Math.round(ss.length / nh / 2));
+    for (const i of ids) {
+      pr = mulberry32(keyOf(i));
+      let best = -1, bd = nodes[i].degree;
+      for (const j of adjTmp.get(i) || []) {
+        if (nodeCluster[j] !== c || hosted(j)) continue;
+        const dj = nodes[j].degree;
+        if (dj > bd || (best >= 0 && dj === bd && nodes[j].layoutKey < nodes[best].layoutKey)) { bd = dj; best = j; }
+      }
+      if (best >= 0) {
+        const at = posOf.get(own(best).i);
+        place(i, pick(keyOf(i), Math.max(0, at - half), Math.min(ss.length - 1, at + half)), 0.06 + Math.pow(pr(), 0.8) * 0.92);
+      } else if (nodes[i].degree >= 3) place(i, own(i), 0.16 + pr() * 0.3);   // a hub of its own
+      else place(i, own(i), 0.06 + Math.pow(pr(), 0.8) * 0.92);
+    }
+    pr = rnd;
+  };
   for (let c = 0; c < clusterList.length; c++) {
     const ids = byCluster[c].filter((i) => !hosted(i)).sort((a, b) => nodes[b].degree - nodes[a].degree);
     // APP: a cluster the dataset declared and put nothing in. `nh` floors at 1, so `hubs` would
@@ -275,8 +321,7 @@ function prepare(loro, REF, opts) {
     // (`a_domains_node_count_is_its_own_nodes` asserts the clusters add up), so this is inert on
     // both datasets that exist — and it is one line against a crash on a third.
     if (!ids.length) continue;
-    const seed = nodes[ids[0]].layoutSeed;
-    pr = seed === undefined || nodes[ids[0]].hosted ? rnd : mulberry32(seed >>> 0);
+    if (nodes[ids[0]].layoutKey !== undefined) { placeKeyed(c, ids); continue; }
     const ss = clusterList[c].strands;
     const nh = Math.max(1, Math.min(ids.length, Math.round(ids.length * 0.07), Math.floor(ss.length / 2)));
     const hubs = ids.slice(0, nh);
@@ -304,7 +349,6 @@ function prepare(loro, REF, opts) {
       place(i, s, 0.06 + Math.pow(pr(), 0.8) * 0.92);
     }
   }
-  pr = rnd;
   {
     // each of HIS source groups is one hub and its leaves, all on the hub's own strand: a small, tight
     // group standing in the example, which is what a young loro is
