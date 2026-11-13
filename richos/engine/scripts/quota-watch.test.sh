@@ -516,6 +516,14 @@ for line in sys.stdin:
         body = {"rate_limits_available": True, "rate_limits": {
             "seven_day": {"utilization": json.loads(used_override or read("used", "49")), "resets_at": reset.isoformat()}}}
         sub = "success"
+    elif mode == "null-five-hour":
+        # Real get_usage answer, captured 2026-11-13: five_hour is present and null.
+        reset = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=3)
+        body = {"rate_limits_available": True, "rate_limits": {
+            "five_hour": None, "seven_day_opus": None,
+            "seven_day": {"utilization": 80, "resets_at": reset.isoformat(), "limit_dollars": None},
+            "model_scoped": [{"display_name": "Fable", "utilization": 41, "resets_at": reset.isoformat()}]}}
+        sub = "success"
     else:
         used = used_override or read("used", "50")
         used = json.loads(used)
@@ -608,6 +616,10 @@ check "G12  get_usage with only the week: a complete reading (exit 0, no fallbac
     "$([ "$RCW" -eq 0 ] && printf '%s' "$OUTW" | grep -q 'no five-hour window: this account has no five-hour limit.*via get_usage.*seven_day: 49%' \
        && ! printf '%s' "$OUTW" | grep -q 'status-line\|UNKNOWN\|cannot read' \
        && [ "$RC99" -eq 1 ] && printf '%s' "$OUT99" | grep -q 'AT OR ABOVE'; echo $?)" "49: rc=$RCW $OUTW // 99: rc=$RC99 $OUT99"
+fake null-five-hour; gonce
+check "G12c  get_usage with \"five_hour\": null (the real answer, 2026-11-13): a complete reading, exit 0, no fallback, never 'cannot read'" \
+    "$([ "$RC" -eq 0 ] && printf '%s' "$OUT" | grep -q 'no five-hour window.*via get_usage' \
+       && ! printf '%s' "$OUT" | grep -q 'status-line\|UNKNOWN\|cannot read'; echo $?)" "rc=$RC out=$OUT"
 python3 - "$QUOTA_PAYLOAD" <<'PY'
 import json, os, sys, time
 now = int(time.time())

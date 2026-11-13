@@ -644,7 +644,10 @@ def read_get_usage(now, deadline_s=None):
         return r
     r["windows"] = quota_weekly.windows(body.get("rate_limits", {}), _parse_reset)
     limits = body.get("rate_limits") if isinstance(body.get("rate_limits"), dict) else {}
-    if body.get("rate_limits_available") is True and "five_hour" not in limits and r["windows"]:
+    # "five_hour": null is how Claude Code answers for an account with no five-hour limit
+    # (captured 2026-11-13 00:4xZ: five_hour null beside a live seven_day); same as absent.
+    if (body.get("rate_limits_available") is True and limits.get("five_hour") is None
+            and r["windows"]):
         return no_five_hour(r, now)
     five = limits.get("five_hour")
     used = five.get("utilization") if isinstance(five, dict) else None
