@@ -62,15 +62,33 @@ struct BrowserPalette {
     let danger: Color
     let attention: Color
     let hover: Color
+    let hint: Color
+
+    /// The four opaque grounds text sits on: the bars, the file pane, the sidebar and a sheet.
+    static func grounds(_ scheme: ColorScheme) -> (chrome: UInt32, pane: UInt32, sidebar: UInt32, floating: UInt32) {
+        scheme == .dark ? (0x0c1322, 0x0a1120, 0x0a101b, 0x182440) : (0xeae6dd, 0xfdfcf8, 0xefebe0, 0xfdfcf8)
+    }
+
+    /// HINT TEXT A USER IS MEANT TO READ: the search box's prompt and a sheet's footnote. It is
+    /// opaque, so its contrast is one fixed number on each ground, computed in
+    /// `BrowserAppearanceTests` (lowest 5.83:1 light on the chrome, 6.29:1 dark on a sheet). The
+    /// system placeholder and secondary-label colors it replaces measured 1.80:1 light and
+    /// 2.19:1 dark (the search prompt) and 3.51:1 light (the Disk Usage footnote) in a
+    /// walk of the packaged app, below the 4.5:1 floor for text meant to be read.
+    static func hintValue(_ scheme: ColorScheme) -> UInt32 {
+        scheme == .dark ? 0xa0a6b1 : 0x53575e
+    }
 
     init(_ scheme: ColorScheme) {
         let dark = scheme == .dark
-        chrome = Self.rgb(dark ? 0x0c1322 : 0xeae6dd)
-        pane = Self.rgb(dark ? 0x0a1120 : 0xfdfcf8)
-        sidebar = Self.rgb(dark ? 0x0a101b : 0xefebe0)
-        floating = Self.rgb(dark ? 0x182440 : 0xfdfcf8)
+        let grounds = Self.grounds(scheme)
+        chrome = Self.rgb(grounds.chrome)
+        pane = Self.rgb(grounds.pane)
+        sidebar = Self.rgb(grounds.sidebar)
+        floating = Self.rgb(grounds.floating)
         ink = Self.rgb(dark ? 0xdfe4ee : 0x0c1322)
         muted = ink.opacity(dark ? 0.64 : 0.68)
+        hint = Self.rgb(Self.hintValue(scheme))
         line = Self.rgb(dark ? 0x4c6087 : 0x3c465f).opacity(dark ? 0.26 : 0.24)
         controlLine = Self.rgb(dark ? 0x6b7ea8 : 0x767c8d)
         signal = Self.rgb(dark ? 0xc2a35c : 0x715715)

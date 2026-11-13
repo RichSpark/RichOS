@@ -179,6 +179,7 @@ struct CompareFoldersSheet: View {
     let openFolder: (URL) -> Void
     let mergeIssue: BrowserTransferIssue?
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.colorScheme) private var scheme
     @State private var second: URL?
     @State private var mode = FolderComparisonMode.metadata
     @State private var request: Request?
@@ -268,7 +269,7 @@ struct CompareFoldersSheet: View {
                 }
                 if report.unavailable > 0 || report.otherVolumes > 0 {
                     Text("\(report.unavailable) items unavailable. \(report.otherVolumes) other mounts skipped.")
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(.caption).foregroundStyle(BrowserPalette(scheme).hint)
                 }
             } else {
                 if applied {
@@ -444,6 +445,7 @@ struct DuplicateSheet: View {
     let folder: URL
     let openFolder: (URL) -> Void
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.colorScheme) private var scheme
     @State private var report: DuplicateFileReport?
     @State private var problem = ""
 
@@ -474,7 +476,7 @@ struct DuplicateSheet: View {
                 }
                 if report.unavailable > 0 || report.otherVolumes > 0 {
                     Text("\(report.unavailable) items unavailable. \(report.otherVolumes) other mounts skipped.")
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(.caption).foregroundStyle(BrowserPalette(scheme).hint)
                 }
             } else if !problem.isEmpty {
                 Text(problem).foregroundStyle(.secondary)
@@ -506,6 +508,7 @@ struct DiskUsageSheet: View {
     let root: URL
     let openFolder: (URL) -> Void
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.colorScheme) private var scheme
     @State private var folder: URL
     @State private var report: DiskUsageReport?
     @State private var problem = ""
@@ -538,10 +541,10 @@ struct DiskUsageSheet: View {
                 }.accessibilityLabel("Items sorted by allocated size")
                 if report.unavailable > 0 || report.otherVolumes > 0 {
                     Text("\(report.unavailable) items unavailable. \(report.otherVolumes) other mounts skipped.")
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(.caption).foregroundStyle(BrowserPalette(scheme).hint)
                 }
                 Text("Files that share disk blocks may count toward more than one folder.")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.caption).foregroundStyle(BrowserPalette(scheme).hint)
             } else if !problem.isEmpty {
                 Text(problem).foregroundStyle(.secondary)
                 Spacer()
