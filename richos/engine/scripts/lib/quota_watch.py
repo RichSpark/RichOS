@@ -531,6 +531,19 @@ def _parse_reset(v):
     return None
 
 
+def _key_shape(value, depth=0):
+    """The key structure of an answer with every value dropped (types only for leaves), so an
+    unreadable answer can be diagnosed from the log without storing usage figures."""
+    if isinstance(value, dict):
+        if depth >= 3:
+            return "{...}"
+        return "{" + ", ".join("%s: %s" % (str(k)[:40], _key_shape(v, depth + 1))
+                               for k, v in list(value.items())[:40]) + "}"
+    if isinstance(value, list):
+        return "[%s]" % (_key_shape(value[0], depth + 1) if value else "")
+    return "null" if value is None else type(value).__name__
+
+
 def read_get_usage(now, deadline_s=None):
     """One reading from Claude Code's get_usage control request. Never raises.
     The same shape as read_reading(), with source 'get_usage' and age 0."""
@@ -646,15 +659,18 @@ def read_get_usage(now, deadline_s=None):
     limits = body.get("rate_limits") if isinstance(body.get("rate_limits"), dict) else {}
     # "five_hour": null is how Claude Code answers for an account with no five-hour limit
     # (captured 2026-11-13 00:4xZ: five_hour null beside a live seven_day); same as absent.
-    if (body.get("rate_limits_available") is True and limits.get("five_hour") is None
-            and r["windows"]):
+    five0 = limits.get("five_hour")
+    if isinstance(five0, dict) and five0.get("utilization") is None and five0.get("resets_at") is None:
+        five0 = None  # an empty or all-null five_hour carries no window either
+    if body.get("rate_limits_available") is True and five0 is None and r["windows"]:
         return no_five_hour(r, now)
     five = limits.get("five_hour")
     used = five.get("utilization") if isinstance(five, dict) else None
     resets = _parse_reset(five.get("resets_at")) if isinstance(five, dict) else None
     if (body.get("rate_limits_available") is not True or isinstance(used, bool)
             or not isinstance(used, (int, float)) or not (0 <= used <= 100) or resets is None):
-        r["state"], r["why"] = "failed", "get_usage answered in a shape this watcher cannot read"
+        r["state"], r["why"] = "failed", ("get_usage answered in a shape this watcher cannot read (keys: %s)"
+                                          % _key_shape(body))
         return r
     r["state"], r["used"], r["resets_at"] = "ok", used, resets
     r["ended"] = resets <= now

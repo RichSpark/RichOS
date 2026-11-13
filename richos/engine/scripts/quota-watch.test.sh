@@ -516,6 +516,15 @@ for line in sys.stdin:
         body = {"rate_limits_available": True, "rate_limits": {
             "seven_day": {"utilization": json.loads(used_override or read("used", "49")), "resets_at": reset.isoformat()}}}
         sub = "success"
+    elif mode in ("empty-five-hour", "null-keys-five-hour"):
+        reset = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=3)
+        body = {"rate_limits_available": True, "rate_limits": {
+            "five_hour": {} if mode == "empty-five-hour" else {"utilization": None, "resets_at": None},
+            "seven_day": {"utilization": 80, "resets_at": reset.isoformat()}}}
+        sub = "success"
+    elif mode == "odd-five-hour":
+        body = {"rate_limits_available": True, "rate_limits": {"five_hour": {"utilization": "high", "resets_at": 5}}}
+        sub = "success"
     elif mode == "null-five-hour":
         # Real get_usage answer, captured 2026-11-13: five_hour is present and null.
         reset = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=3)
@@ -620,6 +629,15 @@ fake null-five-hour; gonce
 check "G12c  get_usage with \"five_hour\": null (the real answer, 2026-11-13): a complete reading, exit 0, no fallback, never 'cannot read'" \
     "$([ "$RC" -eq 0 ] && printf '%s' "$OUT" | grep -q 'no five-hour window.*via get_usage' \
        && ! printf '%s' "$OUT" | grep -q 'status-line\|UNKNOWN\|cannot read'; echo $?)" "rc=$RC out=$OUT"
+for M in empty-five-hour null-keys-five-hour; do
+    fake "$M"; gonce
+    check "G12d  get_usage with five_hour as $M: a complete reading, exit 0, no fallback" \
+        "$([ "$RC" -eq 0 ] && printf '%s' "$OUT" | grep -q 'no five-hour window.*via get_usage' \
+           && ! printf '%s' "$OUT" | grep -q 'status-line\|UNKNOWN\|cannot read'; echo $?)" "rc=$RC out=$OUT"
+done
+fake odd-five-hour; gonce
+check "G12e  a still-unreadable answer says its key structure (no values) in the reason" \
+    "$(printf '%s' "$OUT" | grep -q 'cannot read (keys: {rate_limits_available: bool, rate_limits: {five_hour: {utilization: str, resets_at: int}}})'; echo $?)" "rc=$RC out=$OUT"
 python3 - "$QUOTA_PAYLOAD" <<'PY'
 import json, os, sys, time
 now = int(time.time())
