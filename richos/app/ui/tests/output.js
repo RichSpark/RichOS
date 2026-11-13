@@ -394,11 +394,26 @@ async function main() {
     assertEqual(await sourcePage.locator("#fixture-before-output").innerText(), "Approve the pilot. Source 02:04");
     assertEqual(await note.getByRole("button").allTextContents(), ["Source 02:04", "Source 02:05"]);
     assertEqual(await note.locator("code").count(), 0, "unwitnessed transcript is a readable source time");
+    assert(!(await panelState(sourcePage)).open, "the first Source press must come from a closed panel");
     await note.getByRole("button", { name: "Source 02:04" }).click();
     const passage = sourcePage.locator('#op-viewer [data-source-passage="123"]');
     await passage.waitFor();
     assert((await passage.innerText()).includes("Approve the pilot."));
     assertEqual((await panelState(sourcePage)).title, "transcript.md");
+    // THE PASSAGE IS IN VIEW ONCE THE PANEL HAS OPENED (a walk of the packaged app found the
+    // transcript left at its top or its end). The panel grows from no width to its own over `op-open`; a landing measured inside
+    // that growth left the transcript at its top or its end. Read after the opening has finished
+    // and two frames have painted, the cited line sits inside the panel's visible area.
+    const landed = await sourcePage.evaluate(async () => {
+      const panel = document.getElementById("outpanel");
+      await Promise.all(panel.getAnimations().map((a) => a.finished.catch(() => null)));
+      await new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)));
+      const body = document.getElementById("op-body").getBoundingClientRect();
+      const line = document.querySelector('#op-viewer [data-source-passage="123"]').getBoundingClientRect();
+      return { body: [Math.round(body.top), Math.round(body.bottom)], line: [Math.round(line.top), Math.round(line.bottom)] };
+    });
+    assert(landed.line[0] >= landed.body[0] && landed.line[1] <= landed.body[1],
+      "the cited line is not in view after the panel opened: line " + landed.line.join("–") + " px, panel body " + landed.body.join("–") + " px");
     await note.getByRole("button", { name: "Source 02:05" }).click();
     await sourcePage.getByText("This source passage could not be located.").waitFor();
     assertEqual(await passage.count(), 0, "stale line did not select another passage");
