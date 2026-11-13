@@ -180,12 +180,18 @@ class ScanBoundary(unittest.TestCase):
     # two 80 GiB piles outside the home folder, and the folders a walk must go around.
     SIM_IMAGES = "/Library/Developer/CoreSimulator/Images"
     ARCHIVES = "/Users/Shared/build-archives"
+    ASSET = "/System/Library/AssetsV2/com_apple_MobileAsset_MacSoftwareUpdate"
+    PILES = [SIM_IMAGES, ARCHIVES, ASSET, PROJECTS + "/client"]
     DIRECTORIES.update({
         "/": ["Library", "System", "Users", "Volumes", "private"],
         "/Library": ["Developer"], "/Library/Developer": ["CoreSimulator"],
         "/Library/Developer/CoreSimulator": ["Images"], SIM_IMAGES: [],
         "/Users": ["Shared", "review-fixture"], "/Users/Shared": ["build-archives"], ARCHIVES: [],
-        "/System": ["Library", "Volumes"], "/System/Library": [], "/Volumes": ["ReviewWorking"],
+        "/System": ["Library", "Volumes"], "/Volumes": ["ReviewWorking"],
+        # Downloaded system assets and updates: data-volume storage reached only through /System
+        # (/usr/share/firmlinks; review rv-20261113T023512Z-4df85b00-cebf).
+        "/System/Library": ["AssetsV2"], "/System/Library/AssetsV2": [ASSET.rsplit("/", 1)[1]],
+        ASSET: [],
         # The data volume under its other name, which may report the same device as / (review
         # rv-20261113T013445Z-be30576f-2682): a walk or a du through it reaches every home folder.
         "/System/Volumes": ["Data", "Preboot"], "/System/Volumes/Preboot": [],
@@ -207,7 +213,11 @@ class ScanBoundary(unittest.TestCase):
         def process(argv, **kwargs):
             self.assertEqual(argv[:2], ["du", "-skx"])
             measured.append(argv[2])
-            return subprocess.CompletedProcess(argv, 0, stdout="10485760\t" + argv[2] + "\n")
+            # A pile, and every folder above one, is 100 GiB; anything else is 10 GiB, so the
+            # piles lead the alert's list.
+            kb = 104857600 if any(pile == argv[2] or pile.startswith(argv[2] + "/")
+                                  for pile in self.PILES) else 10485760
+            return subprocess.CompletedProcess(argv, 0, stdout="%d\t%s\n" % (kb, argv[2]))
 
         def same_volume(path, mount):
             on_external = path == self.EXTERNAL or path.startswith(self.EXTERNAL + "/")
@@ -254,16 +264,20 @@ class ScanBoundary(unittest.TestCase):
         """The reviewer's two piles: simulator images under /Library and build archives in
         /Users/Shared are named. /, /Users, the home folder and /private are listed, never
         measured whole; the per-user temporary folders are never entered; another volume and
-        /System, which holds the data volume under another name and can report the same device,
-        is never measured or entered."""
+        /System is listed, never measured, so the downloaded system assets under
+        /System/Library/AssetsV2 are named; /System/Volumes, which holds the data volume under
+        another name and can report the same device, is never measured or entered."""
         measured, named = self.alert(self.PRIMARY, self.ROOTS)
         self.assertIn(self.SIM_IMAGES, named)
         self.assertIn(self.ARCHIVES, named)
         self.assertIn("/private/var/vm", measured, "a holder's other children are still measured")
         self.assertEqual([p for p in measured if p in self.HOLDERS + self.PROTECTED], [], measured)
         self.assertEqual([p for p in measured if p.startswith("/private/var/folders")], [], measured)
-        self.assertEqual([p for p in measured if p.startswith(("/Volumes/", "/System"))], [], measured)
-        self.assertEqual([p for p in named if p.startswith("/System")], [], named)
+        self.assertIn(self.ASSET, named, "/System's data branches are walked")
+        self.assertEqual([p for p in measured if p.startswith(("/Volumes/", "/System/Volumes"))], [],
+                         measured)
+        self.assertNotIn("/System", measured)
+        self.assertEqual([p for p in named if p.startswith("/System/Volumes")], [], named)
         self.assertEqual(measured.count(self.PROJECTS), 1, "the home folder is walked once")
 
     def test_an_external_drive_alert_walks_the_drive_from_its_mount_and_stays_on_it(self):

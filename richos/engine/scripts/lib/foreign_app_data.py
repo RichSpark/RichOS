@@ -179,12 +179,14 @@ def entering(path, home=None):
 def listable_holder(path, home=None):
     """True when `path` is refused only because it HOLDS protected data deeper down, and listing
     its entries to walk around that data enters nothing: /, a folder above a home folder, the home
-    folder itself, /private and /private/var. The disk watchdog lists such a folder and measures
-    its other children (/Users/Shared, /private/var/vm), never the folder whole. Never a
-    protected folder itself, and never the per-user Darwin folders (/private/var/folders and
-    below), whose entries are every app's temporary files and caches."""
+    folder itself, /private, /private/var and /System. The disk watchdog lists such a folder and
+    measures its other children (/Users/Shared, /private/var/vm, /System/Library with the
+    downloaded system assets in AssetsV2), never the folder whole. Never a protected folder
+    itself, never /System/Volumes (the data volume under another name), and never the per-user
+    Darwin folders (/private/var/folders and below), whose entries are every app's temporary
+    files and caches."""
     p = _norm(path)
-    if p in (os.sep, "/private", "/private/var"):
+    if p in (os.sep, "/private", "/private/var", "/System"):
         return True
     return any(p == h or h.startswith(p + os.sep) for h in _homes(home))
 
