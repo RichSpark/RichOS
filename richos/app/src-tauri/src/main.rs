@@ -3801,6 +3801,7 @@ fn main() {
             app.manage(phone_runtime);
             richpass_host::start(app.handle().clone());
             question_host::start(app.handle().clone());
+            swearmeter_host::start(app.handle().clone());
             rich_files_host::start(app.handle().clone());
             #[cfg(target_os = "macos")]
             {app.manage(Arc::new(writing_host::Host::default()));cleaner_host::start(app.handle())?;cleaner_service::register(app.handle())?;}

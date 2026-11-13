@@ -183,6 +183,10 @@ pub fn count_ranges(text: &str, ranges: &[(usize, usize)]) -> Option<u64> {
 pub struct Snapshot {
     pub detector_version: u32,
     pub count: u64,
+    pub periods: crate::swearmeter_periods::Periods,
+    pub history_loading: bool,
+    pub provider_history_incomplete: bool,
+    pub ambiguous_matches: u64,
     pub unknown_card_inputs: u64,
     pub unknown_message_inputs: u64,
     pub incomplete_history: bool,

@@ -57,7 +57,7 @@ impl Checkpoint {
         let (checksum, payload) = bytes.split_at_checked(32)?;
         if Sha256::digest(payload).as_slice() != checksum { return None; }
         let cache: Self = serde_json::from_slice(payload).ok()?;
-        if cache.projection_schema != 1 || cache.version != DETECTOR_VERSION || cache.reader_schema != crate::skip::WRITER_SCHEMA_VERSION || !cache.ledger.valid()
+        if cache.projection_schema != 2 || cache.version != DETECTOR_VERSION || cache.reader_schema != crate::skip::WRITER_SCHEMA_VERSION || !cache.ledger.valid()
             || SourceStamp::at(ledger).ok()? != Some(cache.ledger_source.clone())
             || SourceStamp::at(cards).ok()? != cache.cards.source { return None; }
         Some(cache)
@@ -67,7 +67,7 @@ impl Checkpoint {
     /// No fsync is needed: this file is disposable and a crash repairs it from sources.
     pub fn save(path: &Path, ledger_path: &Path, cards_path: &Path, ledger: &Ledger, cards: CachedCards) -> io::Result<()> {
         let source = ledger.swearmeter_source_stamp().cloned().ok_or_else(|| io::Error::other("ledger snapshot has no stable source generation"))?;
-        let cache = Self { projection_schema: 1, version: DETECTOR_VERSION, reader_schema: crate::skip::WRITER_SCHEMA_VERSION, ledger_source: source.clone(), ledger: ledger.freeze_swearmeter(), cards };
+        let cache = Self { projection_schema: 2, version: DETECTOR_VERSION, reader_schema: crate::skip::WRITER_SCHEMA_VERSION, ledger_source: source.clone(), ledger: ledger.freeze_swearmeter(), cards };
         if !cache.ledger.valid() { return Err(io::Error::other("numeric checkpoint did not reconcile")); }
         let payload = serde_json::to_vec(&cache)?;
         let matches = || SourceStamp::at(ledger_path).ok() == Some(Some(source.clone()))

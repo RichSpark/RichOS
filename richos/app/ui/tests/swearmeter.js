@@ -76,6 +76,29 @@ async function main() {
     assertEqual([reveal.thread, reveal.settingsOpen], ["general", "true"], "conversation and settings stay open");
     return JSON.stringify(reveal);
   });
+  await run.check("all history, rolling 30 days and monthly counts use the maintained result", async () => {
+    const view = await openApp(context);
+    try {
+      await view.evaluate(() => {
+        deliverSwearMeter({ ...fixture.result, count: 73, history_loading: true, revision: 2,
+          periods: { last_30_days: 73, months: [], undated: 0 } });
+      });
+      assert((await rowText(view)).includes("preparing your history"), "startup does not label a ledger subtotal as all history");
+      await view.evaluate(() => {
+        deliverSwearMeter({ ...fixture.result, count: 25, revision: 3, provider_history_incomplete: true,
+          ambiguous_matches: 2, periods: { last_30_days: 8, months: [{ month: 202611, count: 8 }, { month: 202610, count: 0 }, { month: 202609, count: 17 }], undated: 0 } });
+      });
+      const counts = await rowText(view);
+      assert(counts.includes("All history: 25") && counts.includes("Last 30 days: 8"), "shows both counts");
+      assert(counts.includes("2 possible duplicate matches withheld"), "coverage qualification follows counts");
+      await view.click("#set-swearmeter-block .swearmeter-months summary");
+      assertEqual(await view.locator("#set-swearmeter-block .swearmeter-months li").allTextContents(),
+        ["November 2026: 8", "October 2026: No verified matches", "September 2026: 17"], "month counts and qualified zero");
+      await view.click("#set-swearmeter");
+      assertEqual(await view.locator("#set-swearmeter-block .swearmeter-months").count(), 0, "display off hides monthly history");
+      await view.click("#set-swearmeter");
+    } finally { await view.close(); }
+  });
   await run.check("2 hidden updates keep counting; stale notifications cannot overwrite newer results", async () => {
     await page.click("#set-swearmeter");
     await page.evaluate(() => {

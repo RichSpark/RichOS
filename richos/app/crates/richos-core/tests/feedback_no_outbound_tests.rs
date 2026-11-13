@@ -151,6 +151,11 @@ fn the_crate_depends_on_nothing_that_could_open_a_connection() {
     // `unicode-normalization` does Unicode-normalized name matching. It is a pure-Rust text
     // library over `&str`/`char` data tables, with no socket, HTTP client or TLS dependency.
     //
+    // `zstd` decodes local Codex archives. Its runtime dependency chain is `zstd-safe`
+    // and `zstd-sys`, the bindings to the bundled compression library. The decoder takes
+    // bytes from a caller-supplied reader and brings no networking or TLS dependency.
+    // The feedback path does not call it.
+    //
     // AND THE THING THAT MAKES THIS SAFE IS WHERE THE NETWORK ACTUALLY IS. `setup.rs`
     // downloads, and it does so through `/usr/bin/curl` — a subprocess, spawned only by
     // `CurlFetcher`, which the feedback channel neither constructs nor can reach. The
@@ -172,7 +177,7 @@ fn the_crate_depends_on_nothing_that_could_open_a_connection() {
         }
     }
     let expected: BTreeSet<&str> =
-        ["serde", "serde_json", "uuid", "thiserror", "sha2", "time", "unicode-normalization"].into_iter().collect();
+        ["serde", "serde_json", "uuid", "thiserror", "sha2", "time", "unicode-normalization", "zstd"].into_iter().collect();
     assert_eq!(
         found, expected,
         "richos-core's dependency set changed. That is not automatically wrong — but the \

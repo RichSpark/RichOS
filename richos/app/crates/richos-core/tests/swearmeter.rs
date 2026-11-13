@@ -160,15 +160,16 @@ fn queued_words_count_before_delivery_and_never_double_during_the_drain() {
     spine.set_turn_control(control.clone());
     let reader = spine.reader();
     control.submit_from_desk(&thread, Some(entity), "shit").unwrap();
-    let (view, pending, unknown, complete) = control.swearmeter_inputs(&reader);
+    let (view, pending, unknown, complete, pending_dates) = control.swearmeter_inputs(&reader);
     assert_eq!((view.ledger().swearmeter().count(), pending, unknown, complete), (0, 1, 0, true));
     drop(view);
     let reopened = TurnControl::open(f.root.join("intake")).unwrap();
     assert_eq!(reopened.swearmeter_inputs(&reader).1, 1);
     drop(reopened);
     spine.poll_intake().unwrap();
-    let (view, pending, unknown, complete) = control.swearmeter_inputs(&reader);
+    let (view, pending, unknown, complete, _) = control.swearmeter_inputs(&reader);
     assert_eq!((view.ledger().swearmeter().count(), pending, unknown, complete), (1, 0, 0, true));
+    assert_eq!(view.ledger().swearmeter().dates(), &pending_dates);
     drop(view);
     // The same phone client key may be retried before or after the original drains.
     control.submit_from_channel_as(&thread, None, "damn", "phone", Some("retry")).unwrap();
@@ -176,7 +177,7 @@ fn queued_words_count_before_delivery_and_never_double_during_the_drain() {
     assert_eq!(control.swearmeter_inputs(&reader).1, 1);
     spine.poll_intake().unwrap();
     control.submit_from_channel_as(&thread, None, "damn", "phone", Some("retry")).unwrap();
-    let (view, pending, _, _) = control.swearmeter_inputs(&reader);
+    let (view, pending, _, _, _) = control.swearmeter_inputs(&reader);
     assert_eq!(view.ledger().swearmeter().count() + pending, 2);
 }
 
@@ -447,8 +448,8 @@ fn source_rebuild_retains_identities_for_callbacks_waiting_after_the_save() {
     let mut counts = swearmeter_questions::lock(&f.cards);
     assert_eq!(counts.count, 1);
     // The real callback's record operation arrives after source recovery.
-    counts.record("fixture:thread:saved-before-rebuild", Some(AnswerOrigin::Direct), "shit");
+    counts.record("fixture:thread:saved-before-rebuild", Some(AnswerOrigin::Direct), "shit", Some(1));
     assert_eq!(counts.count, 1);
-    counts.record("fixture:thread:next-real-input", Some(AnswerOrigin::Direct), "shit");
+    counts.record("fixture:thread:next-real-input", Some(AnswerOrigin::Direct), "shit", Some(2));
     assert_eq!(counts.count, 2);
 }
