@@ -1544,9 +1544,11 @@ async function main() {
     // (speckle-app.js says why); it declares no font-size at all today, and the walk below
     // reads it like every other file, so a size added to it is held to the same floor. The
     // list is compared by NAME, so a swap of one file for another cannot pass as "still five".
+    // `suite-tools.css` (round 70, the five tools on a first install) sizes every line in `rem`,
+    // so it needs no px declaration; the walk below holds it to the same floor as the rest.
     assertEqual(
       SOURCES.styleSources(),
-      ["fonts/fonts.css", "style.css", "cleaner.css", "search-folder-settings.css", "speckle.css", "splash.css", "home.css", "instructions-update.css", "terminal-and-git.css", "dictation-overlay.css", "meeting-panel.css"],
+      ["fonts/fonts.css", "style.css", "cleaner.css", "search-folder-settings.css", "speckle.css", "splash.css", "home.css", "instructions-update.css", "terminal-and-git.css", "suite-tools.css", "dictation-overlay.css", "meeting-panel.css"],
       "the shipped windows have a different set of stylesheets from the declared list"
     );
     // THE TWO DERIVATIONS ARE JOINED, the way `lib/harness.js` joins its two PNG decoders: a
