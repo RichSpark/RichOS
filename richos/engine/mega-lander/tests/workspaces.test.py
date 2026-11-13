@@ -2423,6 +2423,56 @@ class Point13_Retry(Base):
         self.assertIsNone(ws.load_agent(ws.named_key(self.sid, "zach-opus-rt"))["deletion"])
 
 
+class Point13_StaleRefLock(Base):
+    """13. A deletion blocked by a dead git process's lock file clears it; a held or recent one is left."""
+
+    def _lock(self, branch, age):
+        run("git", "-C", self.other, "branch", branch)
+        lock = os.path.join(self.other, ".git", "refs", "heads", branch + ".lock")
+        os.makedirs(os.path.dirname(lock), exist_ok=True)
+        open(lock, "w").close()
+        old = time.time() - age
+        os.utime(lock, (old, old))
+        return lock
+
+    def test_point_13_an_empty_unheld_old_ref_lock_is_removed_and_the_deletion_succeeds(self):
+        recent = self._lock("cc/zach-opus-lk1", 5)
+        self.assertFalse(ws.delete_branch(self.other, "cc/zach-opus-lk1")[0])   # CONTROL: recent is never touched
+        self.assertTrue(os.path.exists(recent))
+        os.utime(recent, (time.time() - 3600, time.time() - 3600))
+        holder = subprocess.Popen(["sleep", "30"], stdin=open(recent, "rb"))
+        try:
+            self.assertFalse(ws.delete_branch(self.other, "cc/zach-opus-lk1")[0])  # CONTROL: held is never touched
+            self.assertTrue(os.path.exists(recent))
+        finally:
+            holder.kill()
+            holder.wait()
+        self.assertEqual(ws.delete_branch(self.other, "cc/zach-opus-lk1"), (True, ""))
+        self.assertFalse(os.path.exists(recent))
+        self.assertNotIn("cc/zach-opus-lk1", branches(self.other))
+
+    def test_point_13_the_failing_deletion_notice_reaches_the_lead_and_a_later_session(self):
+        aid, npath = self.spawn("zach-opus-lt")
+        self.commit(npath)
+        self.finish(aid)
+        self.merge(self.entity, "worktree-agent-" + aid)
+        parent = os.path.dirname(npath)
+        os.chmod(parent, 0o555)
+        try:
+            self.assertEqual(self.names(), [])
+            for _ in range(ws.RETRY_TELL_CEO_AFTER):
+                ws.retry_due()
+            ok, msg, lead = ws.gate_stop({"session_id": self.sid}, self.entity)
+            self.assertIn("TELL THE CEO", msg)
+            self.assertIn("TELL THE CEO", lead)                  # the model sees it, not only the screen
+            self.assertIn("zach-opus-lt", lead)
+            ctx, _n = ws.lifecycle({"hook_event_name": "SessionStart", "session_id": self.sid,
+                                    "cwd": self.entity, "source": "resume"}, self.entity)
+            self.assertIn("TELL THE CEO", ctx)                   # a later session hears it at start
+        finally:
+            os.chmod(parent, 0o755)
+
+
 class Point14_IntegrationBranch(Base):
     """14. Landed doesn't always mean landed on main."""
 
