@@ -125,9 +125,9 @@ impl Projection {
     }
 
     #[cfg(test)]
-    pub(crate) fn observe(&mut self, event: &Event) { self.observe_in(event, &[]); }
+    pub(crate) fn observe(&mut self, event: &Event) { self.observe_in(event, &[], None); }
 
-    pub(crate) fn observe_in(&mut self, event: &Event, turns: &[Turn]) {
+    pub(crate) fn observe_in(&mut self, event: &Event, turns: &[Turn], data_dir: Option<&std::path::Path>) {
         match event {
             Event::PromptReceived { turn_id, text, source, intake_id, pressed, authored_bytes, authored_ranges, thread_id, client_id, at, .. } => {
                 self.revision += 1;
@@ -150,7 +150,7 @@ impl Projection {
                     else if let Some(ranges) = authored_ranges { swearmeter::count_ranges(text, ranges) }
                     else { match authored_bytes {
                         Some(bytes) => text.get(..*bytes).map(swearmeter::count),
-                        None if ambiguous_legacy_attachment(text) => None,
+                        None if ambiguous_legacy_attachment(text) => data_dir.and_then(|dir| recovered_prefix(text, dir)).map(swearmeter::count),
                         None => Some(swearmeter::count(text)),
                     }};
                 let unknown = eligible && authored.is_none();
@@ -202,6 +202,33 @@ impl Projection {
         if legacy { self.composites.insert(parent.clone()); }
         self.aliases.insert(child, parent);
     }
+}
+
+// Older app versions appended this exact descriptor after the entered text.
+// Require both the full generated format and a matching RichOS-owned attachment.
+// Merely quoting a heading is not sufficient evidence of a boundary.
+fn recovered_prefix<'a>(text: &'a str, data_dir: &std::path::Path) -> Option<&'a str> {
+    let (prefix, descriptor) = text.split_once("\n\nAttached on this Mac (")?;
+    if ambiguous_legacy_attachment(prefix) { return None; }
+    let (heading, files) = descriptor.split_once('\n')?;
+    let expected = heading.strip_suffix(", saved by RichOS):")?;
+    let (count, label) = expected.split_once(' ')?;
+    let count = count.parse::<usize>().ok()?;
+    if count == 0 || label != if count == 1 { "file" } else { "files" } || files.lines().count() != count { return None; }
+    let root = data_dir.join("attachments").canonicalize().ok()?;
+    for line in files.lines() {
+        let (file, description) = line.strip_prefix("- ")?.rsplit_once(" (")?;
+        let (media, bytes) = description.strip_suffix(" bytes)")?.rsplit_once(", ")?;
+        if !media.contains('/') { return None; }
+        let bytes = bytes.parse::<u64>().ok()?;
+        let path = std::path::Path::new(file);
+        if !path.is_absolute() || !path.starts_with(data_dir.join("attachments")) { return None; }
+        let path = path.canonicalize().ok()?;
+        if !path.starts_with(&root) || root != data_dir.canonicalize().ok()?.join("attachments") { return None; }
+        let metadata = path.metadata().ok()?;
+        if !metadata.is_file() || metadata.len() != bytes { return None; }
+    }
+    Some(prefix)
 }
 
 // Older records did not retain the producer's text boundary. An exact attachment

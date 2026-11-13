@@ -1106,7 +1106,7 @@ impl Ledger {
 
     fn fold(&mut self, event: Event) {
         self.swearmeter_events += 1;
-        self.swearmeter.observe_in(&event, &self.turns);
+        self.swearmeter.observe_in(&event, &self.turns, self.path.parent());
         self.apply(event);
     }
 

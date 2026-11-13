@@ -1,6 +1,5 @@
 //! Numeric projection of the user's Claude Code input recall. Session transcripts are
 //! a separate representation and can expire before this history does.
-use crate::swearmeter;
 use serde::Deserialize;
 use std::{
     collections::{HashMap, HashSet},
@@ -43,15 +42,23 @@ struct Paste {
 /// `None` means the recall file is absent. A read failure means it is unavailable.
 /// The caller supplies the Claude Code configuration directory for the current user.
 pub fn read(root: &Path) -> io::Result<Option<Summary>> {
+    read_submissions(root).map(|value| value.map(|(summary, _)| summary))
+}
+
+pub(crate) fn read_submissions(
+    root: &Path,
+) -> io::Result<Option<(Summary, Vec<crate::swearmeter_provider_history::Submission>)>> {
     let file = match open_regular(&root.join("history.jsonl")) {
         Ok(file) => file,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error),
     };
-    summarize(BufReader::new(file), root).map(Some)
+    let mut rows = Vec::new();
+    let summary = summarize(BufReader::new(file), root, |row| rows.push(row))?;
+    Ok(Some((summary, rows)))
 }
 
-fn open_regular(path: &Path) -> io::Result<File> {
+pub(crate) fn open_regular(path: &Path) -> io::Result<File> {
     let mut options = File::options();
     options.read(true);
     #[cfg(unix)]
@@ -69,24 +76,36 @@ fn open_regular(path: &Path) -> io::Result<File> {
     Ok(file)
 }
 
-fn summarize(mut reader: impl BufRead, root: &Path) -> io::Result<Summary> {
+pub(crate) fn read_record(reader: &mut impl BufRead, line: &mut Vec<u8>) -> io::Result<usize> {
+    let bytes = reader
+        .by_ref()
+        .take(MAX_RECORD_BYTES as u64 + 1)
+        .read_until(b'\n', line)?;
+    if bytes > MAX_RECORD_BYTES {
+        if !line.ends_with(b"\n") {
+            reader.skip_until(b'\n')?;
+        }
+        line.clear();
+    }
+    Ok(bytes)
+}
+
+fn summarize(
+    mut reader: impl BufRead,
+    root: &Path,
+    mut emit: impl FnMut(crate::swearmeter_provider_history::Submission),
+) -> io::Result<Summary> {
     use sha2::{Digest, Sha256};
     let mut summary = Summary::default();
     let mut identities = HashSet::new();
     let mut line = Vec::new();
     loop {
         line.clear();
-        let bytes = reader
-            .by_ref()
-            .take(MAX_RECORD_BYTES as u64 + 1)
-            .read_until(b'\n', &mut line)?;
+        let bytes = read_record(&mut reader, &mut line)?;
         if bytes == 0 {
             return Ok(summary);
         }
-        if bytes > MAX_RECORD_BYTES {
-            if !line.ends_with(b"\n") {
-                reader.skip_until(b'\n')?;
-            }
+        if line.is_empty() {
             summary.unreadable_records += 1;
             continue;
         }
@@ -115,7 +134,7 @@ fn summarize(mut reader: impl BufRead, root: &Path) -> io::Result<Summary> {
         }
         let (expanded, incomplete) = authored_text(text, &entry.pasted_contents, root);
         let key = (
-            entry.session_id,
+            entry.session_id.clone(),
             entry.timestamp,
             Sha256::digest(expanded.as_bytes()),
         );
@@ -123,7 +142,11 @@ fn summarize(mut reader: impl BufRead, root: &Path) -> io::Result<Summary> {
             continue;
         }
         summary.submissions += 1;
-        summary.matches += swearmeter::count(&expanded);
+        let mut row =
+            crate::swearmeter_provider_history::Submission::new(entry.timestamp, &expanded);
+        row.session = Some(entry.session_id);
+        summary.matches += row.count;
+        emit(row);
         summary.incomplete_submissions += u64::from(incomplete);
         summary.first_ms = Some(
             summary
@@ -232,7 +255,7 @@ mod tests {
 {"display":"/rename fuck","timestamp":3,"sessionId":"a"}
 {"display":"! echo shit","timestamp":4,"sessionId":"a"}
 {"display":"Wow hell!","timestamp":5,"sessionId":"a"}"#;
-        let actual = summarize(rows.as_bytes(), Path::new("unused")).unwrap();
+        let actual = summarize(rows.as_bytes(), Path::new("unused"), |_| {}).unwrap();
         assert_eq!(
             actual,
             Summary {
@@ -250,7 +273,7 @@ mod tests {
         let rows = r#"{"display":"[Image #2] [Pasted text #1 +3 lines] fu[Pasted text #3]ck [Pasted text #bogus]","timestamp":1,"sessionId":"a","pastedContents":{"1":{"type":"text","content":"shit fuck-shit"},"3":{"type":"text","contentHash":"../shit"}}}
 bogus
 {"display":"hell","timestamp":2,"sessionId":"a"}"#;
-        let actual = summarize(rows.as_bytes(), Path::new("unused")).unwrap();
+        let actual = summarize(rows.as_bytes(), Path::new("unused"), |_| {}).unwrap();
         assert_eq!(
             actual,
             Summary {
