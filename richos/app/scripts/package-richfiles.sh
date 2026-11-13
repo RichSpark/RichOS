@@ -31,11 +31,27 @@ swift_args=(--package-path "$package" --scratch-path "$build")
 if [ "$embedded" -eq 1 ]; then
   configuration=release
   swift_args+=(-Xswiftc -file-prefix-map -Xswiftc "$root=/build/richos")
+  # The linker otherwise records every object file's absolute scratch path as a debug map.
+  swift_args+=(-Xlinker -S)
 fi
+# SwiftPM also links an absolute rpath to the toolchain's back-deployment libraries,
+# which names the build machine's Xcode and does not exist on any other Mac.
+drop_build_machine_rpaths() {
+  local binary="$1" rpath
+  while IFS= read -r rpath; do
+    case "$rpath" in
+      @*|/usr/lib/*|/System/*) ;;
+      *) install_name_tool -delete_rpath "$rpath" "$binary" ;;
+    esac
+  done < <(otool -l "$binary" | awk '$1 == "cmd" { in_rpath = ($2 == "LC_RPATH") }
+    in_rpath && $1 == "path" { sub(/^ *path /, ""); sub(/ \(offset [0-9]+\)$/, ""); print }')
+  codesign --force --sign - "$binary"
+}
 python3 "$machine_lib/native-work.py" -- swift build "${swift_args[@]}" -c "$configuration" --product RichFiles
 if [ "$embedded" -eq 1 ]; then
   python3 "$machine_lib/native-work.py" -- swift build "${swift_args[@]}" -c "$configuration" --product RichFilesRail
   install -m 755 "$build/$configuration/libRichFilesRail.dylib" "$output/libRichFilesRail.dylib"
+  drop_build_machine_rpaths "$output/libRichFilesRail.dylib"
 fi
 # shellcheck source=lib/gui-launch.sh
 . "$root/richos/app/scripts/lib/gui-launch.sh"
@@ -54,6 +70,9 @@ for font in Inter-Variable.ttf Newsreader-Regular.ttf LICENSE-Inter.txt LICENSE-
   install -m 644 "$fonts/$font" "$app/Contents/Resources/$font"
 done
 install -m 755 "$build/$configuration/RichFiles" "$app/Contents/MacOS/RichFiles"
+if [ "$embedded" -eq 1 ]; then
+  drop_build_machine_rpaths "$app/Contents/MacOS/RichFiles"
+fi
 install -m 755 "$archive_executable" "$app/Contents/MacOS/richfiles-archive"
 install -m 644 "$package/Info.plist" "$app/Contents/Info.plist"
 install -m 644 "$package/Resources/RichFiles.icns" "$app/Contents/Resources/RichFiles.icns"
