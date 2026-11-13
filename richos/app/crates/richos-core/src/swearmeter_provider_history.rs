@@ -46,6 +46,7 @@ pub fn read_through(claude: Option<&Path>, codex: Option<&Path>, through: u64) -
 #[derive(Default)]
 pub struct Reader {
     transcripts: HashMap<PathBuf, Transcript>,
+    rollouts: crate::swearmeter_codex_history::Rollouts,
 }
 
 struct Transcript {
@@ -81,18 +82,15 @@ impl Reader {
             let rows = claude_rows.get_or_insert_with(Vec::new);
             result.incomplete |= !self.read_claude_transcripts(root, rows, through);
         }
-        let codex_rows = codex.and_then(|root| match read_codex(root) {
-            Ok(Some((rows, incomplete))) => {
-                result.incomplete |= incomplete;
-                Some(rows)
+        let mut codex_rows = HashSet::new();
+        if let Some(root) = codex {
+            let mut indexed = HashSet::new();
+            match read_codex(root, &mut codex_rows, &mut indexed) {
+                Ok(complete) => result.incomplete |= !complete,
+                Err(_) => result.incomplete = true,
             }
-            Ok(None) => None,
-            Err(_) => {
-                result.incomplete = true;
-                None
-            }
-        });
-        let codex_rows = codex_rows.unwrap_or_default();
+            result.incomplete |= !self.rollouts.read(root, &indexed, &mut codex_rows);
+        }
         let mut codex_times = HashMap::<[u8; 32], Vec<u64>>::new();
         for row in codex_rows.into_iter().filter(|row| row.at <= through) {
             if row.count > 0 {
@@ -333,7 +331,11 @@ fn parse_transcript(
 }
 
 #[cfg(target_os = "macos")]
-fn read_codex(root: &Path) -> io::Result<Option<(HashSet<Submission>, bool)>> {
+fn read_codex(
+    root: &Path,
+    rows: &mut HashSet<Submission>,
+    indexed: &mut HashSet<String>,
+) -> io::Result<bool> {
     use rusqlite::{Connection, OpenFlags};
     use serde::Deserialize;
     use std::time::Duration;
@@ -354,12 +356,7 @@ fn read_codex(root: &Path) -> io::Result<Option<(HashSet<Submission>, bool)>> {
     match path.symlink_metadata() {
         Ok(meta) if meta.is_file() => {}
         Ok(_) => return Err(io::Error::other("Codex history is not a regular file")),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            if root.join("sessions").is_dir() || root.join("archived_sessions").is_dir() {
-                return Err(io::Error::other("Codex history has no local message index"));
-            }
-            return Ok(None);
-        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(true),
         Err(error) => return Err(error),
     }
     let db = Connection::open_with_flags(
@@ -372,16 +369,18 @@ fn read_codex(root: &Path) -> io::Result<Option<(HashSet<Submission>, bool)>> {
     // This projection contains submitted user items and omits generated prompt wrappers.
     // Forks can carry copies at the original timestamp, even with a synthesized item ID.
     let mut query = db
-        .prepare("SELECT created_at_ms, item_json FROM thread_items WHERE item_type='userMessage'")
+        .prepare("SELECT created_at_ms, item_json, thread_id FROM thread_items WHERE item_type='userMessage'")
         .map_err(io::Error::other)?;
     let mut items = query.query([]).map_err(io::Error::other)?;
-    let mut rows = HashSet::new();
     let mut incomplete = false;
     while let Some(row) = items.next().map_err(io::Error::other)? {
         let (Ok(at), Ok(raw)) = (row.get::<_, u64>(0), row.get_ref(1)) else {
             incomplete = true;
             continue;
         };
+        if let Ok(thread) = row.get::<_, String>(2) {
+            indexed.insert(thread);
+        }
         let Some(message) = raw
             .as_str()
             .ok()
@@ -401,20 +400,25 @@ fn read_codex(root: &Path) -> io::Result<Option<(HashSet<Submission>, bool)>> {
             rows.insert(Submission::new(at, &text));
         }
     }
-    Ok(Some((rows, incomplete)))
+    Ok(!incomplete)
 }
 
 #[cfg(not(target_os = "macos"))]
-fn read_codex(root: &Path) -> io::Result<Option<(HashSet<Submission>, bool)>> {
-    if root.join("thread_history_1.sqlite").try_exists()? || root.join("sessions").try_exists()? {
-        return Err(io::Error::other(
-            "Codex history reader is unavailable on this platform",
-        ));
-    }
-    Ok(None)
+fn read_codex(
+    root: &Path,
+    _rows: &mut HashSet<Submission>,
+    _indexed: &mut HashSet<String>,
+) -> io::Result<bool> {
+    Ok(!root.join("thread_history_1.sqlite").try_exists()?)
 }
 
-fn is_user_text(text: &str) -> bool {
+pub(crate) fn parse_timestamp(stamp: &str) -> Option<u64> {
+    let date =
+        time::OffsetDateTime::parse(stamp, &time::format_description::well_known::Rfc3339).ok()?;
+    u64::try_from(date.unix_timestamp_nanos() / 1_000_000).ok()
+}
+
+pub(crate) fn is_user_text(text: &str) -> bool {
     let text = text.trim_start();
     if text.starts_with("# AGENTS.md instructions") {
         return false;
@@ -516,7 +520,7 @@ mod tests {
         let path = fixture.0.join("thread_history_1.sqlite");
         let db = rusqlite::Connection::open(&path).unwrap();
         db.execute_batch(
-            "CREATE TABLE thread_items(created_at_ms INTEGER, item_type TEXT, item_json TEXT);",
+            "CREATE TABLE thread_items(created_at_ms INTEGER, item_type TEXT, item_json TEXT, thread_id TEXT);",
         )
         .unwrap();
         let message = json!({"content":[{"type":"text","text":"fuck-shit"}]}).to_string();
@@ -531,7 +535,7 @@ mod tests {
             (2000, "userMessage", &generated),
         ] {
             db.execute(
-                "INSERT INTO thread_items VALUES(?1,?2,?3)",
+                "INSERT INTO thread_items VALUES(?1,?2,?3,'fixture')",
                 rusqlite::params![at, kind, raw],
             )
             .unwrap();

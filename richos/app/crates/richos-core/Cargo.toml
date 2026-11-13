@@ -21,6 +21,8 @@ sha2 = "0.10"
 # name. Pure Rust, no native dependency. Chosen over a decomposition table kept by hand, which
 # would be a second copy of Unicode's data that nobody updates.
 unicode-normalization = "0.1"
+# Codex archives use zstd. This version is already in the application workspace lockfile.
+zstd = { version = "=0.13.3", default-features = false }
 # RichCleaner's Mac catalog uses system SQLite and FTS5, with no bundled runtime or ORM.
 [target.'cfg(target_os = "macos")'.dependencies]
 rusqlite = { version = "=0.32.1", default-features = false }

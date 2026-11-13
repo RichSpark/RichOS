@@ -15,12 +15,12 @@ Identity is the lockfile, not a date. Regenerate after any dependency change and
 
 | Lockfile | Workspace | sha256 |
 |---|---|---|
-| `richos/app/Cargo.lock` | `richos/app` | `ae393c555d1039561390bd2599352b24a14d274bcae193d3a5bd94f86e284e42` |
-| `richos/app/crates/richdoctor-core/Cargo.lock` | `richos/app/crates/richdoctor-core` | `72b633d50bb18b606c5fe3c215ee973cd6d464e12486d14d346a3be892819c31` |
-| `richos/app/crates/richdoctor/Cargo.lock` | `richos/app/crates/richdoctor` | `a1511f3204af37de056f1071db2ba3aa3b8782c2f1e994f1b3b8afead2ad2c50` |
+| `richos/app/Cargo.lock` | `richos/app` | `89d2bd11a016b2da337c8b93deb2d4fe8b6b602835ae91c7904a19c38db323fe` |
+| `richos/app/crates/richdoctor-core/Cargo.lock` | `richos/app/crates/richdoctor-core` | `2233c72f61d844a726c68ed8163da042e23b616a58f60e71346df2f2f72c77d9` |
+| `richos/app/crates/richdoctor/Cargo.lock` | `richos/app/crates/richdoctor` | `748854c296a12f319beadeea6e6596a3e0b2ea596c24ff4ae328d9e051575c67` |
 | `richos/app/crates/richos-devtools/Cargo.lock` | `richos/app/crates/richos-devtools` | `6c65c04d1dd1fd3a1241bd481140e306e211ad1f05676536d292854f63b5a3ab` |
 | `richos/app/crates/richos-user-update/Cargo.lock` | `richos/app/crates/richos-user-update` | `46985b0c2a0962ab8a06f36939b83c4695d46259b2245c821c7f94c6f751f1af` |
-| `richos/app/src-tauri/Cargo.lock` | `richos/app/src-tauri` | `c3298ae013fb71b326c8786f695e1ae80c932a784244d5483d8cce2cd5aba069` |
+| `richos/app/src-tauri/Cargo.lock` | `richos/app/src-tauri` | `eed878ea8b5745e155e2117f424fdbecc34f9800412b8ccc2a8e23a2c8734441` |
 | `richos/mobile/conformance/verifier/Cargo.lock` | `richos/mobile/conformance/verifier` | `8036e74423f9ef07b0d595dca1b305e4319f85a9ba03b56ffc54c1433034f2f6` |
 | `richos/tools/native-claude-stdio/Cargo.lock` | `richos/tools/native-claude-stdio` | `3f99c5fc84319ab96697e7c2086644362f6d472ebd7825425753e52e0a43380e` |
 | `richos/tools/richfiles/archive/Cargo.lock` | `richos/tools/richfiles/archive` | `9abfc715f8ad400827fb993025c80d012dee7b71fe06792ffd09feb95c82c36f` |
@@ -178,7 +178,7 @@ It is also worth stating what carries the offer-versus-obligation distinction: m
 | `cargo_toml` | 0.22.3 | `Apache-2.0 OR MIT` | build only | `richos/app/crates/richdoctor`, `richos/app/src-tauri` |
 | `castaway` | 0.2.4 | `MIT` | yes | `richos/app`, `richos/app/src-tauri` |
 | `cc` | 1.4.4 | `MIT OR Apache-2.0` | build only | `richos/app/crates/richdoctor`, `richos/app/src-tauri`, `richos/mobile/conformance/verifier` |
-| `cc` | 1.8.0 | `MIT OR Apache-2.0` | build only | `richos/app` |
+| `cc` | 1.8.0 | `MIT OR Apache-2.0` | build only | `richos/app`, `richos/app/crates/richdoctor-core` |
 | `cedarwood` | 0.4.6 | `BSD-2-Clause` | yes | `richos/app`, `richos/app/src-tauri` |
 | `cesu8` | 1.1.0 | `Apache-2.0/MIT` | no (other targets or tests only) | `richos/app`, `richos/app/crates/richdoctor`, `richos/app/src-tauri` |
 | `cfb` | 0.7.3 | `MIT` | yes | `richos/app/crates/richdoctor`, `richos/app/src-tauri` |
@@ -292,7 +292,7 @@ It is also worth stating what carries the offer-versus-obligation distinction: m
 | `field-offset` | 0.3.6 | `MIT OR Apache-2.0` | no (other targets or tests only) | `richos/app/crates/richdoctor`, `richos/app/src-tauri` |
 | `filetime` | 0.2.29 | `MIT/Apache-2.0` | yes | `richos/app`, `richos/app/crates/richdoctor`, `richos/app/crates/richdoctor-core`, `richos/app/crates/richos-user-update`, `richos/app/src-tauri` |
 | `find-msvc-tools` | 0.1.11 | `MIT OR Apache-2.0` | build only | `richos/app/crates/richdoctor`, `richos/app/src-tauri`, `richos/mobile/conformance/verifier` |
-| `find-msvc-tools` | 0.1.14 | `MIT OR Apache-2.0` | build only | `richos/app` |
+| `find-msvc-tools` | 0.1.14 | `MIT OR Apache-2.0` | build only | `richos/app`, `richos/app/crates/richdoctor-core` |
 | `fixedbitset` | 0.4.2 | `MIT/Apache-2.0` | yes | `richos/app`, `richos/app/src-tauri` |
 | `fixedbitset` | 0.5.7 | `MIT OR Apache-2.0` | build only | `richos/app`, `richos/app/src-tauri` |
 | `flate2` | 1.1.10 | `MIT OR Apache-2.0` | yes | `richos/app`, `richos/app/crates/richdoctor`, `richos/app/crates/richdoctor-core`, `richos/app/crates/richos-user-update`, `richos/app/src-tauri`, `richos/tools/richfiles/archive` |
@@ -431,7 +431,7 @@ It is also worth stating what carries the offer-versus-obligation distinction: m
 | `jni-sys` | 0.3.1 | `MIT OR Apache-2.0` | no (other targets or tests only) | `richos/app`, `richos/app/crates/richdoctor`, `richos/app/src-tauri` |
 | `jni-sys` | 0.4.1 | `MIT OR Apache-2.0` | no (other targets or tests only) | `richos/app`, `richos/app/crates/richdoctor`, `richos/app/src-tauri` |
 | `jni-sys-macros` | 0.4.1 | `MIT OR Apache-2.0` | no (other targets or tests only) | `richos/app`, `richos/app/crates/richdoctor`, `richos/app/src-tauri` |
-| `jobserver` | 0.1.35 | `MIT OR Apache-2.0` | build only | `richos/app`, `richos/app/src-tauri` |
+| `jobserver` | 0.1.35 | `MIT OR Apache-2.0` | build only | `richos/app`, `richos/app/crates/richdoctor`, `richos/app/crates/richdoctor-core`, `richos/app/src-tauri` |
 | `js-sys` | 0.3.104 | `MIT OR Apache-2.0` | no (other targets or tests only) | `richos/app`, `richos/app/crates/richdoctor`, `richos/app/crates/richdoctor-core`, `richos/app/src-tauri`, `richos/tools/richfiles/archive` |
 | `json-patch` | 3.0.1 | `MIT/Apache-2.0` | yes | `richos/app/crates/richdoctor`, `richos/app/src-tauri` |
 | `jsonptr` | 0.6.3 | `MIT OR Apache-2.0` | yes | `richos/app/crates/richdoctor`, `richos/app/src-tauri` |
@@ -691,7 +691,7 @@ It is also worth stating what carries the offer-versus-obligation distinction: m
 | `servo_arc` | 0.4.3 | `MIT OR Apache-2.0` | yes | `richos/app/crates/richdoctor`, `richos/app/src-tauri` |
 | `sha2` | 0.10.9 | `MIT OR Apache-2.0` | yes | `richos/app`, `richos/app/crates/richdoctor`, `richos/app/crates/richdoctor-core`, `richos/app/crates/richos-devtools`, `richos/app/crates/richos-user-update`, `richos/app/src-tauri` |
 | `sha2` | 0.11.1 | `MIT OR Apache-2.0` | yes | `richos/app`, `richos/app/src-tauri` |
-| `shlex` | 2.0.1 | `MIT OR Apache-2.0` | build only | `richos/app`, `richos/app/crates/richdoctor`, `richos/app/src-tauri`, `richos/mobile/conformance/verifier` |
+| `shlex` | 2.0.1 | `MIT OR Apache-2.0` | build only | `richos/app`, `richos/app/crates/richdoctor`, `richos/app/crates/richdoctor-core`, `richos/app/src-tauri`, `richos/mobile/conformance/verifier` |
 | `sif-itree` | 0.4.1 | `MIT OR Apache-2.0` | yes | `richos/app`, `richos/app/src-tauri` |
 | `signal-hook-registry` | 1.4.8 | `MIT OR Apache-2.0` | yes | `richos/app`, `richos/app/src-tauri` |
 | `simd-adler32` | 0.3.10 | `MIT` | yes | `richos/app`, `richos/app/crates/richdoctor`, `richos/app/crates/richdoctor-core`, `richos/app/crates/richos-user-update`, `richos/app/src-tauri`, `richos/tools/richfiles/archive` |
@@ -944,9 +944,9 @@ It is also worth stating what carries the offer-versus-obligation distinction: m
 | `zlib-rs` | 0.6.7 | `Zlib` | yes | `richos/app/crates/richdoctor`, `richos/app/crates/richos-user-update`, `richos/app/src-tauri` |
 | `zlib-rs` | 0.6.8 | `Zlib` | yes | `richos/app`, `richos/app/crates/richdoctor-core` |
 | `zmij` | 1.0.23 | `MIT` | yes | `richos/app`, `richos/app/crates/richdoctor`, `richos/app/crates/richdoctor-core`, `richos/app/crates/richos-devtools`, `richos/app/crates/richos-user-update`, `richos/app/src-tauri`, `richos/mobile/conformance/verifier`, `richos/tools/native-claude-stdio`, `richos/tools/richfiles/archive` |
-| `zstd` | 0.13.3 | `MIT` | yes | `richos/app`, `richos/app/src-tauri` |
-| `zstd-safe` | 7.3.0 | `BSD-3-Clause` | yes | `richos/app`, `richos/app/src-tauri` |
-| `zstd-sys` | 2.1.1+zstd.1.5.7 | `BSD-3-Clause` | yes | `richos/app`, `richos/app/src-tauri` |
+| `zstd` | 0.13.3 | `MIT` | yes | `richos/app`, `richos/app/crates/richdoctor`, `richos/app/crates/richdoctor-core`, `richos/app/src-tauri` |
+| `zstd-safe` | 7.3.0 | `BSD-3-Clause` | yes | `richos/app`, `richos/app/crates/richdoctor`, `richos/app/crates/richdoctor-core`, `richos/app/src-tauri` |
+| `zstd-sys` | 2.1.1+zstd.1.5.7 | `BSD-3-Clause` | yes | `richos/app`, `richos/app/crates/richdoctor`, `richos/app/crates/richdoctor-core`, `richos/app/src-tauri` |
 | `zvariant` | 5.15.0 | `MIT` | no (other targets or tests only) | `richos/app`, `richos/app/src-tauri` |
 | `zvariant_derive` | 5.15.0 | `MIT` | no (other targets or tests only) | `richos/app`, `richos/app/src-tauri` |
 | `zvariant_utils` | 4.2.0 | `MIT` | no (other targets or tests only) | `richos/app`, `richos/app/src-tauri` |

@@ -149,6 +149,7 @@ pub mod spoken;
 pub mod swearmeter;
 pub mod swearmeter_checkpoint;
 pub mod swearmeter_claude_history;
+mod swearmeter_codex_history;
 pub mod swearmeter_ledger;
 pub mod swearmeter_periods;
 pub mod swearmeter_provider_history;
