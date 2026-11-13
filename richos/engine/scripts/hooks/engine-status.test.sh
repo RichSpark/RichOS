@@ -858,10 +858,10 @@ expect_fraction "1a  baseline: banner reports ${EXPECT_N}/${EXPECT_N}, matching 
 # as its own is shared, and on 2026-10-01 two teammates' end-of-task cleanups
 # (rm -rf / rm -f <session>/scratchpad/*) destroyed the lead's briefs and a live
 # teammate's files. The lead's calls pass. Suite: guard-shared-scratchpad.test.sh.
-# guard-unguarded-rm.sh, ADDED 2026-10-02 — BLOCKING, a module of the Bash chain's manifest. It refuses
-# an rm or rmdir (or find -delete) whose path starts with an unguarded variable, or names a critical
-# path, which is Claude Code's own circuit breaker: it asked the CEO a Yes/No even with bypass
-# permissions on. The refusal carries the exact rewrite. Suite: guard-unguarded-rm.test.sh.
+# guard-unguarded-rm.sh, REMOVED 2026-11-13 — it refused one shape of command Claude Code asks the
+# CEO about even in bypass mode, and missed the rest. The engine mod hooks/answer-permission-prompt.ts
+# answers every such ask No, with Claude Code's reason, whatever the command. Suite:
+# answer-permission-prompt.test.sh.
 # guard-host-sleep.sh, ADDED 2026-10-29 — BLOCKING, a module of the Bash chain's manifest. It refuses
 # every caffeinate, every pmset write and the other sleep-assertion changes on the host (§65; an agent
 # held caffeinate -i -w for seven minutes on 2026-10-29), and says what to do instead. Suite:
@@ -936,7 +936,6 @@ guard-resource-waits.sh
 guard-failure-type-answer.sh
 guard-foreign-app-data.sh
 guard-shared-scratchpad.sh
-guard-unguarded-rm.sh
 guard-host-sleep.sh
 guard-headed-browser.sh
 guard-toolchain.sh
