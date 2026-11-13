@@ -176,6 +176,8 @@ pub enum AnswerOrigin { Direct, Conversation, #[serde(other)] Unknown }
 struct Operation {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     origin: Option<AnswerOrigin>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    submitted_at: Option<u64>,
     request: String,
     result: AnswerResult,
 }
@@ -523,11 +525,11 @@ impl Store {
         let key = format!("{entity}:{thread}:{}", request.client_id);
         let saved_key = key.clone();
         let submitted_text = request.text.clone();
-        let (result, retained, saved_origin) = self.transaction(true, |d| {
+        let (result, submitted_at) = self.transaction(true, |d| {
             if d.deleted.contains(&thread.to_string()) {
                 return Ok((AnswerResult {
                     outcome: "conversation_deleted".into(), question: None,
-                }, false, None));
+                }, None));
             }
             if let Some(op) = d.operations.get(&key) {
                 if op.request != fingerprint {
@@ -543,7 +545,7 @@ impl Store {
                             && q.thread_id == thread
                     })
                     .cloned();
-                return Ok((result, false, op.origin));
+                return Ok((result, None));
             }
             let q = d
                 .questions
@@ -570,12 +572,13 @@ impl Store {
             {
                 return Err("Choose an option or enter an allowed answer.".into());
             }
+            let submitted_at = now();
             let incoming = Answer {
                 option_ids: choices,
                 text,
                 method: method.into(),
                 surface: surface.into(),
-                at: now(),
+                at: submitted_at,
             };
             let same = q
                 .answer
@@ -647,16 +650,15 @@ impl Store {
                 key,
                 Operation {
                     origin: Some(origin),
+                    submitted_at: Some(submitted_at),
                     request: fingerprint,
                     result: result.clone(),
                 },
             );
-            Ok((result, true, Some(origin)))
+            Ok((result, Some(submitted_at)))
         })?;
-        if retained {
-            if let Some(projection) = &self.swearmeter {
-                crate::swearmeter_questions::lock(projection).record(&saved_key, saved_origin, &submitted_text);
-            }
+        if let (Some(submitted_at), Some(projection)) = (submitted_at, &self.swearmeter) {
+            crate::swearmeter_questions::lock(projection).record(&saved_key, Some(origin), &submitted_text, Some(submitted_at));
         }
         Ok(result)
     }

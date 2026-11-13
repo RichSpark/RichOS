@@ -289,15 +289,15 @@ impl IntakeHealth {
 }
 
 #[derive(Clone)]
-struct PendingWordCount { count: u64, unknown: bool, client: Option<(String, String)> }
+struct PendingWordCount { count: u64, unknown: bool, client: Option<(String, String)>, at: u64 }
 impl PendingWordCount {
     fn from_record(record: &IntakeRecord) -> Option<(u64, Self)> {
-        let (id, text, bytes, ranges, client) = match record {
-            IntakeRecord::Desk { id, text, authored_bytes, authored_ranges, .. } => (*id, text, *authored_bytes, authored_ranges.as_deref(), None),
-            IntakeRecord::Channel { id, text, authored_bytes, authored_ranges, source, thread_id, client_id, .. }
+        let (id, text, bytes, ranges, client, at) = match record {
+            IntakeRecord::Desk { id, text, authored_bytes, authored_ranges, at, .. } => (*id, text, *authored_bytes, authored_ranges.as_deref(), None, *at),
+            IntakeRecord::Channel { id, text, authored_bytes, authored_ranges, source, thread_id, client_id, at, .. }
                 if source.is_none_or(|s| matches!(s, crate::ledger::Source::Text | crate::ledger::Source::Jam)) =>
-                (*id, text, *authored_bytes, authored_ranges.as_deref(), client_id.as_ref().map(|c| (thread_id.clone(), c.clone()))),
-            IntakeRecord::Steer { id, text, .. } => (*id, text, Some(text.len()), None, None),
+                (*id, text, *authored_bytes, authored_ranges.as_deref(), client_id.as_ref().map(|c| (thread_id.clone(), c.clone())), *at),
+            IntakeRecord::Steer { id, text, at, .. } => (*id, text, Some(text.len()), None, None, *at),
             _ => return None,
         };
         let count = if let Some(ranges) = ranges { crate::swearmeter::count_ranges(text, ranges) }
@@ -306,7 +306,7 @@ impl PendingWordCount {
                 None if crate::swearmeter_ledger::ambiguous_legacy_attachment(text) => None,
                 None => Some(crate::swearmeter::count(text)),
             }};
-        Some((id, Self { count: count.unwrap_or(0), unknown: count.is_none(), client }))
+        Some((id, Self { count: count.unwrap_or(0), unknown: count.is_none(), client, at }))
     }
 }
 
@@ -1400,12 +1400,17 @@ impl TurnControl {
     /// Numeric pending-input overlay. Hold intake while taking the published ledger
     /// snapshot so an acknowledgment cannot create a gap between the two sources.
     /// Only the short pending queue is visited. Stored message history is never scanned.
-    pub fn swearmeter_inputs(&self, reader: &crate::read_view::SpineReader) -> (std::sync::Arc<crate::read_view::ReadView>, u64, u64, bool) {
+    pub(crate) fn swearmeter_submitted_at(&self, id: u64) -> Option<u64> {
+        self.inner.intake.lock().ok()?.as_ref()?.swearmeter.get(&id).map(|pending| pending.at)
+    }
+
+    pub fn swearmeter_inputs(&self, reader: &crate::read_view::SpineReader) -> (std::sync::Arc<crate::read_view::ReadView>, u64, u64, bool, crate::swearmeter_periods::Dates) {
         let guard = self.inner.intake.lock().unwrap();
         let view = reader.snapshot();
         let projection = view.ledger().swearmeter();
         let mut count = 0;
         let mut unknown = 0;
+        let mut dates = crate::swearmeter_periods::Dates::default();
         let mut clients = std::collections::HashSet::new();
         if let Some(log) = guard.as_ref() {
             for (id, pending) in &log.swearmeter {
@@ -1414,11 +1419,12 @@ impl TurnControl {
                     if projection.has_client(thread, client) || !clients.insert((thread, client)) { continue; }
                 }
                 count += pending.count;
+                dates.add(Some(pending.at), pending.count);
                 unknown += u64::from(pending.unknown);
             }
         }
         let complete = guard.as_ref().is_some_and(|log| log.health().is_clean());
-        (view, count, unknown, complete)
+        (view, count, unknown, complete, dates)
     }
 
     /// Undrained intake records, oldest first.
