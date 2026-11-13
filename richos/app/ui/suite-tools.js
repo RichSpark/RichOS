@@ -212,6 +212,15 @@
 
   // ---- the tools card ----------------------------------------------------------------------
   const dictation = () => (window.RichDictation && window.RichDictation.card) || null;
+  /// Whether this Mac can turn speech into words yet (`main.js` says so from `voice_readiness`):
+  /// RichScribe is shown as working only once its speech model is in, never before.
+  let voiceReady = false;
+  function setVoiceReady(ready) {
+    if (voiceReady === !!ready) return;
+    voiceReady = !!ready;
+    window.dispatchEvent(new CustomEvent("richos:dictation-state"));
+  }
+  const works = (s) => !!(s && s.works && voiceReady);
 
   /// Puts the cursor in the message box and starts RichScribe's bar there, so what is said lands
   /// in the box. When the bar cannot be started from here, the key still works, and he is told so.
@@ -341,8 +350,8 @@
     function paint() {
       const d = dictation();
       const s = d ? d.status() : null;
-      const works = !!(s && s.works);
-      const phase = works ? "on" : open ? "choosing" : "off";
+      const working = works(s);
+      const phase = working ? "on" : open ? "choosing" : "off";
       if (c.dataset.phase !== phase) {
         c.dataset.phase = phase;
         acts.replaceChildren();
@@ -365,6 +374,12 @@
           on.addEventListener("click", () => {
             open = true;
             paint();
+            const d = dictation();
+            const now = d && d.status();
+            // Nothing left to ask (both granted already, say after it was switched off in
+            // Settings): the press turns it on, and the card shows Allowed twice and "Starting
+            // RichScribe…" until it works.
+            if (now && now.mic === "allowed" && now.ax === "allowed") d.start();
             const k = keys.querySelector('[aria-checked="true"]') || keys.firstChild;
             if (k) k.focus({ preventScroll: true });
           });
@@ -377,7 +392,7 @@
       keys.querySelectorAll(".suite-key").forEach((b) => b.setAttribute("aria-checked", String(Number(b.dataset.k) === key)));
       permState(perms[0], s ? s.mic : "unknown");
       permState(perms[1], s ? s.ax : "unknown");
-      starting.hidden = !(s && s.mic === "allowed" && s.ax === "allowed" && !works);
+      starting.hidden = !(s && s.mic === "allowed" && s.ax === "allowed" && !working);
       readyKey.textContent = "F" + key;
     }
     window.addEventListener("richos:dictation-state", paint);
@@ -408,7 +423,7 @@
     if (!box) return;
     const d = dictation();
     const s = d ? d.status() : null;
-    const on = !!(show && s && s.works);
+    const on = !!show && works(s);
     box.hidden = !on;
     if (!on) return;
     const key = "F" + s.key;
@@ -421,5 +436,5 @@
     box.replaceChildren(HINT_BEFORE, kcap(key), HINT_AFTER, " ", talk);
   }
 
-  window.RichSuiteTools = { TOOLS, ORDER, strip, arrive, note, paintHint, whereOff, talkHere };
+  window.RichSuiteTools = { TOOLS, ORDER, strip, arrive, note, paintHint, whereOff, talkHere, setVoiceReady };
 })();

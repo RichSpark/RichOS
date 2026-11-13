@@ -818,6 +818,14 @@
     }
     paint();
   }
+  /// Turn on with nothing left to ask (both permissions granted already, say after RichScribe was
+  /// switched off in Settings): the switch goes on, and it is set up as the sheet's turn-on is.
+  async function cardStart() {
+    if (!(await cardSwitchOn())) return;
+    await read();
+    if (view && view.mic === "allowed" && view.ax === "allowed") becameReady();
+    else paint();
+  }
   async function cardOpenSettings(pane) {
     if (pane === "accessibility") axWait = { blurred: false };
     else micWait = { blurred: false };
@@ -835,6 +843,7 @@
       } : null,
       setKey: (n) => pickKey(n, true),
       allow: cardAllow,
+      start: cardStart,
       openSettings: cardOpenSettings,
       /** Starts a dictation where the cursor is, as a tap of the key would. `true` when the tool was told. */
       listen: async () => (await call("dictation_listen")) === true,

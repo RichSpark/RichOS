@@ -2414,9 +2414,19 @@ let toolsNoteAsking = false;
 /// dictation is not there), so a turn that ends asks nothing more.
 let toolsNoteSettled = false;
 
+/// Set when the note was due (after Not now) while this Mac could not yet turn speech into words:
+/// it comes once voice is ready (`refreshVoiceReadiness`), if the receipt is still on screen.
+let toolsNoteWaitsForVoice = false;
+
 /// Offer the note if it is due and was never made. `declined`: after Not now to onboarding.
+/// Only once voice is ready, as the dictation offer before it: the card says RichScribe can be
+/// turned on, and Start lets a first install through while the speech model still downloads.
 async function maybeOfferTools(declined) {
   if (toolsNote || toolsNoteSettled || toolsNoteAsking || mainView !== "conversation") return;
+  if (!voiceAvailable) {
+    if (declined) toolsNoteWaitsForVoice = true;
+    return;
+  }
   const thread = activeThreadId;
   toolsNoteAsking = true;
   try {
@@ -5265,6 +5275,15 @@ async function refreshVoiceReadiness() {
   const note = (r && typeof r.reason === "string") ? r.reason : "";
   voiceUnavailableEl.textContent = refused ? note : "";
   voiceUnavailableEl.hidden = !(refused && note);
+  // Round 70: RichScribe is shown as working only once speech can be turned into words, and the
+  // tools note that waited for that comes now.
+  if (window.RichSuiteTools) window.RichSuiteTools.setVoiceReady(voiceAvailable);
+  if (voiceAvailable) {
+    const box = el("first-run");
+    const declinedOnScreen = toolsNoteWaitsForVoice && box && !box.hidden && box.dataset.state === "declined";
+    toolsNoteWaitsForVoice = false;
+    maybeOfferTools(declinedOnScreen);
+  }
 }
 
 /// Which of the four model rows is on screen, if any. Exactly one, or none.

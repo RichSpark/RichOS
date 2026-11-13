@@ -2148,6 +2148,35 @@ async function main() {
     await off.close();
     return "receipt then the declined note; On when RichScribe is on; the line when Rich comes back, Talk now in the box, gone once he answers; once; gate off";
   });
+  await run.check("26f round 70: Turn on works with both permissions granted, and nothing says working before the speech model", async () => {
+    // BOTH GRANTED, SWITCHED OFF (set up before, then off in Settings): Turn on turns it on.
+    // Before the fix it only opened the card's turn-on, which had no Allow left to press.
+    const granted = await startedApp({ dictationView: { on: false, mic: "allowed", ax: "allowed", owner: "self", keyTap: true } });
+    await granted.waitForSelector("#first-run-later", { state: "visible" });
+    await granted.click("#first-run-later");
+    await granted.waitForSelector("#suite-turn-on");
+    await granted.click("#suite-turn-on");
+    await granted.waitForFunction(() => window.__RICHOS_MOCK__.dictationCalls().some((c) => c.cmd === "dictation_set_on"));
+    await granted.waitForSelector('.suite-card[data-phase="on"]');
+    assert(granted.__errors.length === 0, "the shell logged errors: " + granted.__errors.join(" | "));
+    await granted.close();
+    // THE SPEECH MODEL STILL DOWNLOADING (Start lets a first install through while it does): no
+    // note and no "working" yet; when it is in, the note comes, under the receipt still on screen.
+    const waits = await startedApp({ voice: "model-missing", dictationView: { on: true, mic: "allowed", ax: "allowed", owner: "self", keyTap: true } });
+    await waits.waitForSelector("#first-run-later", { state: "visible" });
+    await waits.click("#first-run-later");
+    await waits.waitForSelector('#first-run[data-state="declined"]');
+    await settledFrames(waits);
+    assertEqual(await waits.locator(".suite-note").count(), 0, "the tools note before the speech model is in");
+    assertEqual((await waits.evaluate(() => window.__RICHOS_MOCK__.dictationOfferCalls())).length, 0, "asked about the note before voice was ready");
+    await waits.evaluate(() => window.__RICHOS_MOCK__.voiceModelEmit({ phase: "installed", modelId: "small.en", received: 1, total: 1 }));
+    await waits.waitForSelector('.suite-card[data-phase="on"]');
+    assert(waits.__errors.length === 0, "the shell logged errors: " + waits.__errors.join(" | "));
+    await waits.close();
+    bump(4);
+    return "Turn on with both granted calls dictation_set_on and shows On; no note and no On until the speech model is in, then both";
+  });
+
   await run.check("27  round 19: a step that failed stops saying it is installing", async () => {
     // FOUND ON THE GUEST, 2026-10-08: the engine's download was refused (a 404), the failure's
     // sentence came up, and the engine's row kept "Installing…" with its spinner turning.
