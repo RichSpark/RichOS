@@ -1861,10 +1861,10 @@ impl Ledger {
     /// Preserve desktop capture/button provenance and the shared input order in one write.
     pub(crate) fn record_prompt_received_desktop(&mut self, binding: &ThreadBinding, text: &str,
         source: Source, intake_id: Option<u64>, rich_audible: Option<bool>,
-        provenance: (bool, Option<&str>, crate::swearmeter::Authorship),
+        provenance: (bool, Option<&str>, crate::swearmeter::Authorship, Option<u64>),
     ) -> Result<String, LedgerError> {
         self.record_prompt_received_inner(binding, text, source, intake_id, rich_audible,
-            provenance.1, None, false, provenance.0, provenance.2)
+            provenance.1, None, false, provenance.0, provenance.2, provenance.3)
     }
 
     /// **The same record, with the mouth his words came through** (operator back-end spec r3
@@ -1903,7 +1903,7 @@ impl Ledger {
         client_id: Option<&str>,
         voice_note: bool,
     ) -> Result<String, LedgerError> {
-        self.record_prompt_received_inner(binding, text, source, Some(intake_id), None, channel, client_id, voice_note, false, crate::swearmeter::Authorship::all(text))
+        self.record_prompt_received_inner(binding, text, source, Some(intake_id), None, channel, client_id, voice_note, false, crate::swearmeter::Authorship::all(text), None)
     }
 
     /// Preserve the producer's user-text boundary in the same durable prompt write.
@@ -1913,15 +1913,15 @@ impl Ledger {
         channel: Option<&str>, client_id: Option<&str>, capture: (bool, Option<usize>),
     ) -> Result<String, LedgerError> {
         self.record_prompt_received_from_client_provenance(binding, text, source, intake_id, channel, client_id,
-            (capture.0, crate::swearmeter::Authorship::prefix(capture.1)))
+            (capture.0, crate::swearmeter::Authorship::prefix(capture.1), None))
     }
 
     #[allow(clippy::too_many_arguments)]
     pub fn record_prompt_received_from_client_provenance(&mut self, binding: &ThreadBinding, text: &str,
         source: Source, intake_id: u64, channel: Option<&str>, client_id: Option<&str>,
-        capture: (bool, crate::swearmeter::Authorship)) -> Result<String, LedgerError> {
+        capture: (bool, crate::swearmeter::Authorship, Option<u64>)) -> Result<String, LedgerError> {
         self.record_prompt_received_inner(binding, text, source, Some(intake_id), None,
-            channel, client_id, capture.0, false, capture.1)
+            channel, client_id, capture.0, false, capture.1, capture.2)
     }
 
     /// **Words the app sends Rich because he pressed a button** ("Start the questions"),
@@ -1932,7 +1932,7 @@ impl Ledger {
         text: &str,
         source: Source,
     ) -> Result<String, LedgerError> {
-        self.record_prompt_received_inner(binding, text, source, None, None, None, None, false, true, crate::swearmeter::Authorship::prefix(Some(0)))
+        self.record_prompt_received_inner(binding, text, source, None, None, None, None, false, true, crate::swearmeter::Authorship::prefix(Some(0)), None)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1946,7 +1946,7 @@ impl Ledger {
         channel: Option<&str>,
         client_id: Option<&str>,
     ) -> Result<String, LedgerError> {
-        self.record_prompt_received_inner(binding, text, source, intake_id, rich_audible, channel, client_id, false, false, crate::swearmeter::Authorship::all(text))
+        self.record_prompt_received_inner(binding, text, source, intake_id, rich_audible, channel, client_id, false, false, crate::swearmeter::Authorship::all(text), None)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1962,6 +1962,7 @@ impl Ledger {
         voice_note: bool,
         pressed: bool,
         authorship: crate::swearmeter::Authorship,
+        submitted_at: Option<u64>,
     ) -> Result<String, LedgerError> {
         self.verify_binding(binding)?;
         let turn_id = new_id("turn");
@@ -1971,7 +1972,7 @@ impl Ledger {
                 thread_id: binding.thread_id().to_string(),
                 text: text.to_string(),
                 source,
-                at: now_millis(),
+                at: submitted_at.unwrap_or_else(now_millis),
                 entity_id: Some(binding.entity_id().clone()),
                 binding_revision: binding.binding_revision(),
                 intake_id,

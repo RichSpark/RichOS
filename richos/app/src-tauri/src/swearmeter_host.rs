@@ -1,6 +1,6 @@
 //! Local numeric state beside the turn mutex. Visibility never gates accounting.
 use richos_core::{read_view::{SpineReader, SpineView}, steering::TurnControl,
-    swearmeter::{Snapshot, DETECTOR_VERSION, EVENT_SWEARMETER}, swearmeter_questions::{self, Projection}};
+    swearmeter::{Snapshot, DETECTOR_VERSION, EVENT_SWEARMETER}, swearmeter_periods::{Dates, local_month}, swearmeter_questions::{self, Projection}};
 use std::sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}};
 use tauri::{AppHandle, Emitter, State};
 
@@ -24,12 +24,13 @@ impl Service {
         // Serialize reads before observing either source, including a concurrent event
         // and initial bridge read. An older observation can never gain a newer revision.
         let mut last = self.last.lock().unwrap_or_else(|poison| poison.into_inner());
-        let (view, pending, pending_unknown, intake_complete) = self.control.swearmeter_inputs(&self.reader);
+        let (view, pending, pending_unknown, intake_complete, pending_dates) = self.control.swearmeter_inputs(&self.reader);
         let messages = view.ledger().swearmeter();
         let cards = swearmeter_questions::lock(&self.cards);
         let mut next = Snapshot {
             detector_version: DETECTOR_VERSION,
             count: messages.count() + pending + cards.count,
+            periods: Dates::report(&[messages.dates(), &pending_dates, &cards.dates], richos_core::util::now_millis(), local_month),
             unknown_card_inputs: cards.unknown_inputs,
             unknown_message_inputs: messages.unknown_inputs() + pending_unknown,
             incomplete_history: !view.ledger().history_health().is_clean() || !intake_complete

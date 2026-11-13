@@ -150,6 +150,7 @@ pub mod swearmeter;
 pub mod swearmeter_checkpoint;
 pub mod swearmeter_claude_history;
 pub mod swearmeter_ledger;
+pub mod swearmeter_periods;
 pub mod swearmeter_questions;
 pub mod staging;
 pub mod steering;
