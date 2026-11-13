@@ -4,13 +4,14 @@
 # prompt No in a bypass-permissions session (hooks/answer-permission-prompt.ts).
 #
 #   R1  the engine plugin registers the mod: hooks/hooks.json `modules` names it
-#   R2  `claude plugin validate` reads the mod and finds its four hooks (the two classic events
+#   R2  `claude plugin validate` reads the mod and finds its five hooks (the three classic events
 #       that carry the permission mode, tool.check and classic.PermissionRequest)
 #   T   `claude plugin test` runs hooks/answer-permission-prompt.test.ts against Claude Code's own
 #       test host: in bypass, an ask from Claude Code's check, a person-only one included, is
 #       answered No at the check with Claude Code's reason and nothing runs; an ask raised after
-#       the check is answered No too; other modes, a switch out of bypass, questions to the user
-#       and another plugin's query are left alone
+#       the check is answered No too, as is one after a plan approved with bypass permissions;
+#       other modes, a switch out of bypass, questions to the user and another plugin's query are
+#       left alone
 #
 # The mod is staged alone in a temporary plugin folder, so the test host never writes its type
 # files into the engine and never loads the engine's command hooks. Claude Code runs with HOME and
@@ -50,8 +51,8 @@ printf '%s\n' '{ "modules": ["./answer-permission-prompt.ts"] }' > "$STAGE/hooks
 cp "$MOD" "$SUITE" "$STAGE/hooks/"
 
 out="$(claude_isolated plugin validate "$STAGE" 2>&1)"; rc=$?
-if [ "$rc" = 0 ] && printf '%s' "$out" | grep -q 'hooks: classic.SessionStart, classic.UserPromptSubmit, tool.check, classic.PermissionRequest'; then
-    ok "R2 claude plugin validate: all four hooks read"
+if [ "$rc" = 0 ] && printf '%s' "$out" | grep -q 'hooks: classic.SessionStart, classic.UserPromptSubmit, classic.PostToolUse, tool.check, classic.PermissionRequest'; then
+    ok "R2 claude plugin validate: all five hooks read"
 else
     bad "R2 claude plugin validate (rc=$rc)" "$out"
 fi

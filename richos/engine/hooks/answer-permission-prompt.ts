@@ -28,8 +28,10 @@
 // can_use_tool" instead of Claude Code's reason.
 //
 // tool.check carries no permission mode, so the mode is read from the classic events that do
-// (SessionStart, UserPromptSubmit, PermissionRequest): a switch out of bypass takes effect at
-// the next prompt.
+// (SessionStart, UserPromptSubmit, PostToolUse, PermissionRequest): a switch of mode takes effect
+// after the next tool call or prompt. PostToolUse is the one a plan approval reaches: approving
+// ExitPlanMode with bypass permissions resumes the same turn, with no new prompt (review
+// rv-20261113T131228Z-92a13da1-850a).
 //
 // Left alone on purpose:
 //   - sessions in any other permission mode: that user chose to be asked;
@@ -59,6 +61,7 @@ const answers = (tool: string) => mode === BYPASS && !QUESTION_TOOLS.has(tool)
 export const register: Register = on => {
   on('classic.SessionStart', ($, e, next) => { mode = e.permission_mode ?? mode; return next(e) })
   on('classic.UserPromptSubmit', ($, e, next) => { mode = e.permission_mode ?? mode; return next(e) })
+  on('classic.PostToolUse', ($, e, next) => { mode = e.permission_mode ?? mode; return next(e) })
 
   on('tool.check', async ($, e, next) => {
     const decided = await next(e)

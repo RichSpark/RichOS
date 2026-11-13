@@ -20,6 +20,7 @@ const request = (permission_mode: string, tool_name: string, tool_input: unknown
 const lifecycle = (on: any) => {
   on('classic.SessionStart', () => ({}))
   on('classic.UserPromptSubmit', () => ({}))
+  on('classic.PostToolUse', () => ({}))
 }
 
 // Claude Code beneath the mod: its decision is `ask` with `reason`, a person who would answer Yes,
@@ -90,6 +91,20 @@ test('a switch out of bypass at the next prompt: the check\'s ask goes to the us
   await $.classic.UserPromptSubmit({ prompt: 'again', permission_mode: 'default' })
   await $.tool.call({ tool: 'Bash', command: RM })
   expect(seen.asked).toBe(1)  // the ask reached the person Claude Code would show it to
+})
+
+test('a plan approved with bypass permissions: the next ask in the same turn is answered No', async ($, on) => {
+  // Approving ExitPlanMode with bypass permissions resumes the same turn, with no new prompt; the
+  // mode reaches the mod on that tool's PostToolUse (review rv-20261113T131228Z-92a13da1-850a).
+  const seen = claudeCode(on, SEND_REASON)
+  await $.classic.UserPromptSubmit({ prompt: 'plan it', permission_mode: 'plan' })
+  await $.classic.PostToolUse({ tool_name: 'ExitPlanMode', tool_input: {}, tool_response: {},
+                                tool_use_id: 'toolu_plan', permission_mode: 'bypassPermissions' })
+
+  const result = await $.tool.call({ tool: 'mcp__connector__send_file', ...SEND })
+
+  expect(result.isError).toBe(true)
+  expect(seen).toEqual({ ran: 0, asked: 0 })
 })
 
 test('a question to the user is not a permission check and is left alone', async ($, on) => {
