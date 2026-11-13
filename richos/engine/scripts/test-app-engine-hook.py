@@ -119,6 +119,19 @@ class DesktopHooks(unittest.TestCase):
         self.assertEqual(stu.returncode, 2, stu.stderr + stu.stdout)
         self.assertIn("teammate's tool", stu.stderr)
         self.assertIn("Nothing was opened", stu.stderr)
+        self.assertIn("LinkedIn reader", stu.stderr)
+        self.assertIn(reader, stu.stderr)
+        # The reader for any website is a teammate's tool in the same way, every tool of it.
+        for name in ["open_page", "press", "close_page"]:
+            tool = "mcp__richos_browser__" + name
+            binding.write_text('{"role": "rich"}')
+            self.assertEqual(self.hook("PreToolUse", tool_name=tool, tool_use_id="page-" + name, tool_input={}).returncode, 0)
+            binding.write_text('{"role": "stu"}')
+            stu = self.hook("PreToolUse", tool_name=tool, tool_use_id="page-" + name, tool_input={})
+            self.assertEqual(stu.returncode, 2, stu.stderr + stu.stdout)
+            self.assertIn("browser reader is a teammate's tool", stu.stderr)
+            self.assertIn(tool, stu.stderr)
+            self.assertIn("Nothing was opened", stu.stderr)
         # Stu's other tools are not touched by it.
         self.assertEqual(self.hook("PreToolUse", tool_name="Read", tool_use_id="read-2",
                                    tool_input={"file_path": str(self.scope)}).returncode, 0)
@@ -314,7 +327,7 @@ class DesktopHooks(unittest.TestCase):
             given[Path(command[-1]).name] = timeout
         real_load = hook.load
         work = types.SimpleNamespace(
-            LINKEDIN_READER="mcp__richos_linkedin__read_profile",  # app.py's constant the hook reads
+            browser_reader=lambda tool: None,  # app.py's function the hook reads
             validate_shell_target=lambda payload: None, worker_context=lambda active, payload: None,
             dispatch_intent=lambda *args, **kwargs: None,
             W=types.SimpleNamespace(_recovery_adapter=lambda: (
@@ -356,7 +369,7 @@ class DesktopHooks(unittest.TestCase):
         spec = importlib.util.spec_from_file_location(name, ENGINE / "scripts/app-engine-hook.py")
         hook = importlib.util.module_from_spec(spec); spec.loader.exec_module(hook)
         work = types.SimpleNamespace(
-            LINKEDIN_READER="mcp__richos_linkedin__read_profile",  # app.py's constant the hook reads
+            browser_reader=lambda tool: None,  # app.py's function the hook reads
             validate_shell_target=lambda payload: None, worker_context=lambda active, payload: None,
             dispatch_intent=lambda *args, **kwargs: None,
             W=types.SimpleNamespace(fallback_notice=lambda *args: "", _recovery_adapter=lambda: (

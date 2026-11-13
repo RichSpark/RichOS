@@ -151,6 +151,19 @@ class DesktopWork(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,"identity has not joined"):
             self.app.worker_context(self.scope,{**event,"agent_id":"unregistered"})
 
+    def test_a_worker_reads_any_website_with_its_own_tools_and_gains_no_scoped_tool(self):
+        first=self.call("prepare",self.args)
+        self.start_fixture_worker(first,"page-reader")
+        event={"session_id":self.session,"agent_id":"page-reader","tool_name":"mcp__richos_browser__open_page",
+               "tool_input":{"url":"https://shop.example/admin"}}
+        for name in ["open_page","press","scroll_down","next_part","close_page"]:
+            self.assertIsNone(self.app.worker_context(self.scope,{**event,"tool_name":"mcp__richos_browser__"+name}))
+        for name in ["mcp__richos_onboarding__save_company_notes","mcp__richos_status__send"]:
+            with self.assertRaisesRegex(ValueError,"not worker tools"):
+                self.app.worker_context(self.scope,{**event,"tool_name":name})
+        with self.assertRaisesRegex(ValueError,"identity has not joined"):
+            self.app.worker_context(self.scope,{**event,"agent_id":"unregistered"})
+
     def test_stop_blocks_prepared_dispatch_and_worker_tools_without_blocking_other_obligations(self):
         first=self.call("prepare",self.args)
         self.start_fixture_worker(first,"stopped-worker")
