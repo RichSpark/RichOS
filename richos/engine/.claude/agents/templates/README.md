@@ -25,9 +25,7 @@ register any template as an agent type.
 
 ## Model tiering
 
-Keep `opus` for the judgment-critical roles (architect, CTO, adversarial visual
-QA, and the UX-quality-gatekeeper variant of the designer). Everything else
-defaults to `sonnet`. The tier is set per template — never inherit it from the lead.
+Every template defaults to `opus` (CEO 2026-11-13). The tier is set per template — never inherit it from the lead.
 
 ## Template inventory (16 templates ← 20 source personas)
 
@@ -39,20 +37,20 @@ these 16 templates:
 |---|---|---|
 | `architect.md` | software architect | opus |
 | `cto.md` | CTO / sprint-planning lead | opus |
-| `backend-engineer.md` | backend engineer | sonnet |
-| `frontend-engineer.md` | frontend engineer (+ hands-on front-end designer variant) | sonnet |
-| `fullstack-engineer.md` | full-stack / feature-domain engineer | sonnet |
-| `infra-engineer.md` | infrastructure / deploy engineer | sonnet |
-| `mobile-engineer.md` | native mobile engineer — instantiate once per platform (Android, iOS) | sonnet |
-| `automation-qa.md` | automation QA (regression/perf/security) | sonnet |
-| `functional-qa.md` | functional QA / user advocate | sonnet |
+| `backend-engineer.md` | backend engineer | opus |
+| `frontend-engineer.md` | frontend engineer (+ hands-on front-end designer variant) | opus |
+| `fullstack-engineer.md` | full-stack / feature-domain engineer | opus |
+| `infra-engineer.md` | infrastructure / deploy engineer | opus |
+| `mobile-engineer.md` | native mobile engineer — instantiate once per platform (Android, iOS) | opus |
+| `automation-qa.md` | automation QA (regression/perf/security) | opus |
+| `functional-qa.md` | functional QA / user advocate | opus |
 | `adversarial-visual-qa.md` | adversarial visual QA (2nd non-collusive key) | opus |
-| `device-qa.md` | native device QA (install/data/sync/push) | sonnet |
-| `designer-ux-gatekeeper.md` | UX-quality gatekeeper (opus) + hands-on front-end designer (sonnet) | opus/sonnet |
-| `copywriter.md` | conversion copywriter | sonnet |
-| `marketing.md` | marketing director | sonnet |
-| `domain-advisor.md` | target-customer voice — instantiate one per persona in your panel | sonnet |
-| `domain-expert.md` | specialist domain expert (e.g. gamification/engagement) | sonnet (opus if critical) |
+| `device-qa.md` | native device QA (install/data/sync/push) | opus |
+| `designer-ux-gatekeeper.md` | UX-quality gatekeeper + hands-on front-end designer | opus |
+| `copywriter.md` | conversion copywriter | opus |
+| `marketing.md` | marketing director | opus |
+| `domain-advisor.md` | target-customer voice — instantiate one per persona in your panel | opus |
+| `domain-expert.md` | specialist domain expert (e.g. gamification/engagement) | opus |
 
 Collapses made: the two native-mobile personas (Android + iOS) share one
 `mobile-engineer.md` (instantiate per platform); the three target-customer voices

@@ -7,11 +7,11 @@
 # adopter needs (or both, as separate named agents):
 #   (a) UX-QUALITY GATEKEEPER — the signoff authority (opus). Owns the UX bar and
 #       writes design signoffs; does NOT implement UI.
-#   (b) HANDS-ON FRONT-END DESIGNER — builds UI in the design system (sonnet).
+#   (b) HANDS-ON FRONT-END DESIGNER — builds UI in the design system.
 #       Pair with the frontend-engineer template.
 name: TODO-designer-slug
 description: TODO — principal product designer and UX quality gatekeeper who owns the product UX bar and writes design signoffs. Use for UX audits and design signoff.
-model: opus   # gatekeeper variant is judgment-critical — keep opus. Drop to sonnet for a hands-on front-end designer.
+model: opus
 tools: Read, Edit, Write, Bash, Grep, Glob, WebFetch, WebSearch, TaskUpdate, TaskGet, TaskList, Skill
 ---
 
@@ -54,7 +54,7 @@ If video is relevant, use the available `watch-video` skill; if audio is relevan
 - **Target surfaces & access:** the real surfaces to audit and how to reach each (staging, emulator/simulator, device).
 - **Signoff path & format:** where signoff files land and the audit output structure.
 - **Design system:** the adopter's component system and any brand/white-label rules.
-- **Variant note:** for a hands-on front-end designer instead, drop model to sonnet, emphasize building UI in the design system, and reduce the gatekeeper/signoff authority.
+- **Variant note:** for a hands-on front-end designer instead, emphasize building UI in the design system, and reduce the gatekeeper/signoff authority.
 
 <!-- Dean: research the adopter's product and design references (ask Clark if needed);
      keep the live-verification and signoff-is-a-decision doctrine intact. -->
