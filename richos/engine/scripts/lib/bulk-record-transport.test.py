@@ -26,7 +26,7 @@ class BulkRecords(unittest.TestCase):
         self.git('config', 'user.email', 'fixture@example.invalid')
         self.git('config', 'core.hooksPath', str(self.root / 'no-hooks'))
         (self.repo / '.ceo-todos').write_text('TODO_RECORD="wiki/open-items.md"\nTODO_VIEW="CEO-TODOs.md"\nROOT_README="README.md"\nCEO_SECTIONS="1"\nPREPARER_SECTION="3"\nARTIFACT_ROOTS="self=."\n')
-        (self.repo / '.row-currency').write_text('ROW_SECTIONS="3"\nROW_STATUS_TOKENS="OPEN BUILT BOUNDED CLOSED"\nROW_TERMINAL_TOKENS="CLOSED"\n')
+        (self.repo / '.row-currency').write_text('ROW_SECTIONS="3"\nROW_STATUS_TOKENS="OPEN BUILT BOUNDED BLOCKED-ON-RICH CLOSED"\nROW_TERMINAL_TOKENS="CLOSED"\n')
         (self.repo / 'orchestration.config').write_text('CEO_TODOS_REPOS="."\n')
         (self.repo / 'README.md').write_text('# Fixture\n')
         (self.repo / 'CEO-TODOs.md').write_text('# View\n')
