@@ -30,6 +30,12 @@ is how a branch's instruction files (rich.md, the bootstrap-interview skill) rea
   #    http://127.0.0.1:18766/in/SLUG/ (SLUG is linkedin-standin.py's --slug; the walk prints it).
   #    Add `--site SITE` after conversation-walk.py. Without it, nothing LinkedIn is set up.
 
+  #    With --action NAME=TOOL[~TEXT] and --expect NAME=ROLE (native-transcript.py --actors's own
+  #    arguments, repeatable), the walk also says WHO performed each declared action from the
+  #    pulled transcripts, into OUT_DIR/actors.json, and fails when an expectation fails. The
+  #    onboarding reads: --action linkedin=mcp__richos_linkedin__read_profile
+  #    --action website=WebFetch~<company host> --expect linkedin=specialist --expect website=specialist
+
   # 3. Read what Rich did, with the committed readers, unchanged:
   richos/app/scripts/qa/native-transcript.py OUT_DIR/native-projects --text
   richos/app/scripts/qa/ledger-timeline.py OUT_DIR/ledger.jsonl --turns
@@ -61,11 +67,14 @@ WHAT IT DOES, in the guest, never on the host's screen (CEO ruling 65):
                ledger.jsonl       the app's conversation-ledger.jsonl
                companies/         the guest's ~/myrichos/companies (the company notes)
                app.log, final.png, turns.json (one record per step, with Rich's reply text)
+               actors.json        with --action: native-transcript.py --actors --json over
+                                  native-projects (who performed each action, and the verdicts)
 
 OUTPUT: one line per step on stdout: `<n> say|press|wait_for_rich "<what>": reply yes|NO|none (<state>), <s> s,
 <chars> chars`, then the exit code: 0 only when every step passed.
 """
 import argparse
+import datetime
 import importlib.util
 import json
 from pathlib import Path
@@ -73,6 +82,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import threading
 import time
 
 HERE = Path(__file__).resolve().parent
@@ -143,8 +153,24 @@ def find_turn(rows, kind, text, after_ms):
             continue
         if kind == 'say' and t['prompt'].strip() != text.strip():
             continue
+        # Rich's own turn is started by a delivered prompt (Stu's report). An app notice the
+        # ledger files under its own turn id (a ProactiveMessage, such as the weekly quota
+        # digest) has no prompt and never closes: waiting on it failed the 2026-11-10 walk.
+        if kind == 'wait_for_rich' and not t['prompt'].strip():
+            continue
         return tid
     return None
+
+
+def notice_turns(rows):
+    """Turn ids that are only an app notice: a ProactiveMessage and no delivered prompt."""
+    notices, prompted = set(), set()
+    for r in rows:
+        if r.get('event') == 'ProactiveMessage':
+            notices.add(r.get('turn_id'))
+        elif r.get('event') == 'PromptReceived':
+            prompted.add(r.get('turn_id'))
+    return notices - prompted
 
 
 def turn_record(rows, tid):
@@ -195,6 +221,7 @@ class ConversationWalk(adopt_walk.Walk):
         self.company = self.home + '/' + a.company
         self.steps = steps_of(a.conversation)
         self.records = []
+        self.began_ms = None
 
     def ledger_rows(self):
         text = adopt_walk.guest(self.vm, 'cat ' + shlex.quote(self.data + '/conversation-ledger.jsonl') + ' 2>/dev/null || true', 60)
@@ -238,7 +265,16 @@ class ConversationWalk(adopt_walk.Walk):
             li.default(profile_walk.SAFARI)
         except profile_walk.StepFailed as exc:
             raise StepFailed('the stand-in site: %s' % str(exc)[:500])
-        self.grant_accessibility()
+        if getattr(self.a, "no_accessibility", False):
+            # The guest image carries a com.richos.app row with auth_value 0. macOS still put its
+            # request up with it (walk of 2026-11-12, final.png), but tccutil forgets it anyway so
+            # the run does not depend on what the image holds: never asked, as on a new Mac.
+            before = self.accessibility_rows() or 'none'
+            reset = adopt_walk.guest(self.vm, 'sudo -n tccutil reset Accessibility com.richos.app 2>&1 || true', 60).strip()
+            print("Accessibility: not granted to RichOS (--no-accessibility); its rows before: %s; %s; after: %s"
+                  % (before, reset, self.accessibility_rows() or 'none'), flush=True)
+        else:
+            self.grant_accessibility()
         adopt_walk.guest(self.vm, 'open -g -b %s %s/sign-in' % (profile_walk.SAFARI, li.base), 60)
         time.sleep(4)
         self.allow_local_network()
@@ -256,6 +292,14 @@ class ConversationWalk(adopt_walk.Walk):
         shim.ax_clients = lambda: app_walk.Walk.ax_clients(shim)
         app_walk.Walk.tcc(shim)
 
+    def accessibility_rows(self):
+        """com.richos.app's Accessibility rows in the guest's system TCC database, by
+        linkedin-app-walk.py's own query helper; '' when there are none."""
+        app_walk = load('linkedin_app_walk', HERE / 'linkedin-app-walk.py')
+        query = app_walk.sql(app_walk.SYS_DB, "select client, auth_value from access where "
+                             "service = 'kTCCServiceAccessibility' and client = 'com.richos.app'", True)
+        return adopt_walk.guest(self.vm, query + ' 2>&1 || true', 60).strip()
+
     def allow_local_network(self):
         """macOS asks 'Allow "Python" to find devices on local networks?' once the stand-in's server
         is used, a sheet that takes the keyboard from the composer (walk-62ef6dacabd8: the next
@@ -272,10 +316,14 @@ class ConversationWalk(adopt_walk.Walk):
         print('no local-network sheet to allow: %s' % (r.stderr or r.stdout).strip()[-200:], file=sys.stderr)
 
     def wait_idle(self, seconds):
-        """Until no turn on the ledger is open: the previous reply has finished."""
+        """Until no turn on the ledger is open: the previous reply has finished. An app notice
+        (a ProactiveMessage under its own turn id, never closed) is not a turn anyone is waiting
+        on: counting it blocked every later step (review rv-20261110T222955Z-e9dfb1b6-c63e #2)."""
         end = time.monotonic() + seconds
         while True:
-            open_turns = [tid for tid, t in turn_states(self.ledger_rows()).items() if t['open']]
+            rows = self.ledger_rows()
+            notices = notice_turns(rows)
+            open_turns = [tid for tid, t in turn_states(rows).items() if t['open'] and tid not in notices]
             if not open_turns:
                 return
             if time.monotonic() >= end:
@@ -331,10 +379,14 @@ class ConversationWalk(adopt_walk.Walk):
         for remote, local in ((self.home + '/.claude/projects', native),
                               (self.data + '/conversation-ledger.jsonl', self.out / 'ledger.jsonl'),
                               (self.payload + '/app.log', self.out / 'app.log'),
-                              (self.home + '/myrichos/companies', self.out / 'companies')):
-            if remote.endswith('/myrichos/companies') and \
-                    adopt_walk.guest(self.vm, 'test -d %s && echo yes || echo no' % shlex.quote(remote), 60).strip() != 'yes':
-                continue  # Rich saved no company notes: nothing to pull, nothing to say
+                              (self.home + '/myrichos/companies', self.out / 'companies'),
+                              # The user's own details (person.rs) and the app's company list
+                              # (a company Rich added with add_company is in it).
+                              (self.home + '/myrichos/person.md', self.out / 'person.md'),
+                              (self.data + '/entities.json', self.out / 'entities.json')):
+            if (remote.endswith('/myrichos/companies') or remote.endswith('/person.md')) and \
+                    adopt_walk.guest(self.vm, 'test -e %s && echo yes || echo no' % shlex.quote(remote), 60).strip() != 'yes':
+                continue  # Rich saved nothing there: nothing to pull, nothing to say
             r = subprocess.run([str(HERE / 'guest.sh'), self.vm, '--pull', remote, str(local)],
                                capture_output=True, text=True, timeout=300)
             if r.returncode:
@@ -343,6 +395,103 @@ class ConversationWalk(adopt_walk.Walk):
             self.shot('final.png')
         except (StepFailed, subprocess.TimeoutExpired) as exc:
             print('final screenshot failed: %s' % str(exc)[-200:], file=sys.stderr)
+
+
+def iso_utc(ms):
+    """Guest milliseconds as the transcript's own stamp: 2026-11-10T10:00:00.123Z."""
+    return datetime.datetime.fromtimestamp(ms / 1000, datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
+
+
+class AccessibilityRequests(threading.Thread):
+    """With --no-accessibility: each time macOS's Accessibility request for RichOS comes up (the
+    window of `universalAccessAuthWarn`), its guest time, a screenshot and its words, kept as
+    accessibility-requests.json; with --deny-accessibility it is answered Deny, as a user who
+    refuses would. A request is counted when its window appears after a look without it, so a
+    second request after a refusal, or a second process asking, is a second entry: the record
+    of whether the user was asked again. Looks every 3 s from the guest's ssh session."""
+    OWNER = 'universalAccessAuthWarn'
+    # Not the window list: CGWindowList read from the guest's ssh session lists none of the GUI
+    # session's windows, so a watcher built on it counted 0 while the request sat on screen (both
+    # no-grant walks of 2026-11-12, their final.png). Accessibility from the ssh session does see
+    # it, as ax.py sees SecurityAgent's window.
+    PIDS = 'pgrep -x universalAccessAuthWarn || true'
+
+    def __init__(self, walk, deny):
+        super().__init__(daemon=True)
+        self.walk, self.deny, self.seen, self.done, self.up = walk, deny, [], threading.Event(), set()
+
+    def run(self):
+        while not self.done.wait(3):
+            try:
+                pids = adopt_walk.guest(self.walk.vm, self.PIDS, 30).split()
+                self.look(pids if pids and self.showing() else [])
+            except (StepFailed, RuntimeError, subprocess.TimeoutExpired):
+                continue
+
+    def showing(self):
+        """Whether macOS's request window is up: its Deny button, found through Accessibility."""
+        try:
+            return self.walk.present('Deny', app=self.OWNER)
+        except (StepFailed, subprocess.TimeoutExpired):
+            return False
+
+    def look(self, pids):
+        """One look's request windows (their owners' pids): a window after none, or one owned by a
+        process the last look did not show (a replacement request), is a new request. The same
+        window brought forward again by another reader cannot be seen this way; no-grant-reader.py's
+        TCC summary shows that one."""
+        if set(pids) - self.up:
+            self.record(pids)
+        self.up = set(pids)
+
+    def record(self, pids):
+        n = len(self.seen) + 1
+        entry = {'n': n, 'at_ms': self.walk.clock(), 'pids': pids, 'shot': 'accessibility-request-%d.png' % n}
+        try:
+            self.walk.shot(entry['shot'])
+        except (StepFailed, subprocess.TimeoutExpired) as exc:
+            entry['shot'] = 'failed: %s' % str(exc)[-200:]
+        try:
+            entry['words'] = [node.get('title') or node.get('value') or node.get('desc')
+                              for node in self.walk.ax('tree', app=self.OWNER) if isinstance(node, dict) and not node.get('meta')]
+        except (StepFailed, subprocess.TimeoutExpired, ValueError) as exc:
+            entry['words'] = 'unread: %s' % str(exc)[-200:]
+        if self.deny:
+            try:
+                self.walk.ax('click', '--title', 'Deny', '--role', 'AXButton', '--first', app=self.OWNER)
+                entry['answered'] = 'Deny'
+            except (StepFailed, subprocess.TimeoutExpired) as exc:
+                entry['answered'] = 'Deny failed: %s' % str(exc)[-200:]
+        self.seen.append(entry)
+        print('Accessibility request %d at guest %s: %s' % (n, iso_utc(entry['at_ms']), entry.get('answered', 'left up')), flush=True)
+
+    def finish(self, out):
+        self.done.set()
+        self.join(timeout=60)
+        (out / 'accessibility-requests.json').write_text(json.dumps(self.seen, indent=2) + '\n')
+        print('Accessibility requests while RichOS had no permission: %d' % len(self.seen), flush=True)
+
+
+def actors(a, since_ms=None):
+    """Who performed each declared action, from the pulled transcripts, by the committed reader.
+    Saved as actors.json; its PASS/FAIL lines are printed. True when every expectation passed.
+    SINCE_MS (the guest clock just before the walk's first step) keeps only calls this walk's conversation made:
+    an earlier read in the pulled history never answers for it."""
+    args = [sys.executable, str(HERE.parent / 'qa' / 'native-transcript.py'), str(a.out / 'native-projects'), '--actors', '--json']
+    if since_ms is not None:
+        args += ['--since', iso_utc(since_ms)]
+    for spec in a.action:
+        args += ['--action', spec]
+    for spec in a.expect:
+        args += ['--expect', spec]
+    r = subprocess.run(args, capture_output=True, text=True, timeout=300)
+    if r.returncode not in (0, 1) or not r.stdout.strip():
+        print('actors: the transcript reader could not judge (%d): %s' % (r.returncode, (r.stderr or r.stdout).strip()[-300:]), flush=True)
+        return False
+    (a.out / 'actors.json').write_text(r.stdout)
+    for name, v in json.loads(r.stdout)['verdicts'].items():
+        print('actor %s: %s (%s)' % (name, v['verdict'], v['why']), flush=True)
+    return r.returncode == 0
 
 
 def main():
@@ -355,7 +504,18 @@ def main():
     p.add_argument('--press-grace', type=float, default=20, help='seconds a press waits for a turn to start (default 20)')
     p.add_argument('--site', type=Path, help='the stand-in LinkedIn site linkedin-standin.py built: served in the guest, the '
                    "default browser (Safari) signed in to it before the conversation, so Rich's LinkedIn tool can read it")
+    p.add_argument('--no-accessibility', action='store_true', help='with --site: leave RichOS without the macOS '
+                   'Accessibility permission, as on a Mac where it was never asked (the first-run case): any '
+                   'earlier decision is reset with tccutil, its rows before and after are printed; every '
+                   'Accessibility request macOS puts '
+                   'up during the walk is kept (accessibility-requests.json, a screenshot each)')
+    p.add_argument('--deny-accessibility', action='store_true', help='with --no-accessibility: answer each '
+                   'request Deny, as a user who refuses it')
     p.add_argument('--check', nargs='+', type=Path, metavar='FILE', help='check conversation files without a guest')
+    p.add_argument('--action', action='append', default=[], help='NAME=TOOL[~TEXT]: an action whose actor is reported '
+                   '(native-transcript.py --actors)')
+    p.add_argument('--expect', action='append', default=[], help='NAME=ROLE[|ROLE]: who may perform it; a failed '
+                   'expectation fails the walk')
     a = p.parse_args()
     if a.check:
         found = [sentence for f in a.check for sentence in plan_problems(f)]
@@ -369,7 +529,13 @@ def main():
     walk = ConversationWalk(a)
     if not a.site and any(PROFILE_PLACEHOLDER in st['text'] for st in walk.steps if st['kind'] == 'say'):
         p.error('%s is in a message but there is no --site to name it' % PROFILE_PLACEHOLDER)
+    if a.deny_accessibility and not a.no_accessibility:
+        p.error('--deny-accessibility answers the request --no-accessibility leaves RichOS to raise')
     ok = True
+    requests = None
+    if a.no_accessibility:
+        requests = AccessibilityRequests(walk, a.deny_accessibility)  # from the first look: one at launch counts
+        requests.start()
     try:
         walk.setup()
         if a.site:
@@ -378,6 +544,7 @@ def main():
             for step in walk.steps:
                 if step['kind'] == 'say':
                     step['text'] = step['text'].replace(PROFILE_PLACEHOLDER, profile)
+        walk.began_ms = walk.clock()  # the actor verdicts cover this conversation from here on
         for n, step in enumerate(walk.steps, 1):
             try:
                 record = walk.run_step(n, step)
@@ -399,7 +566,11 @@ def main():
         ok = False
     finally:
         (a.out / 'turns.json').write_text(json.dumps(walk.records, indent=2) + '\n')
+        if requests:
+            requests.finish(a.out)
         walk.pull()
+    if a.action and not actors(a, walk.began_ms):
+        ok = False
     print('exit %d' % (0 if ok else 1), flush=True)
     return 0 if ok else 1
 

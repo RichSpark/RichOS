@@ -1198,7 +1198,7 @@ module.exports = [
   },
   // A PRESSED BUTTON'S SEND THAT WAS REFUSED (product hunt 2026-10-15, finding 14). The only
   // caller that passes `send(…, { pressed })` is `startFirstRunInterview` (main.js), with the
-  // label of `#first-run-start` ("Start the questions" / "Resume the questions"), so each
+  // label of `#first-run-start` ("Start onboarding" / "Resume onboarding"), so each
   // sentence below is completed with that label. His words never go in the box: `send`
   // returns false and the caller re-renders the first-run offer (`renderFirstRunNotice`),
   // which sits inside `#conversation`, so the button the sentence names is back in the same
@@ -3724,7 +3724,7 @@ module.exports = [
   // `PARTY` regex gained `Whoever set RichOS up` on the same day for that reason — it already
   // carried both cases of "operator" and only one of this phrase.
   {
-    s: "I don't know your business yet.",
+    s: "Let's get me up to speed.",
     c: "ACTIONABLE",
     control: "#first-run-start",
     fixture: "first-run-offer",
@@ -3734,20 +3734,17 @@ module.exports = [
   },
   {
     s:
-      "There's nothing on file about what this company does, who it's for or how you want to " +
-      "work. I can ask you about it (about twenty minutes) and write your answers down, so I " +
-      'use them from then on. You can stop partway and "not sure yet" is a real answer to any ' +
-      "of it.",
+      "Give me a few quick details and I'll find out what I can about you and your business. " +
+      "Then I'll come back with the questions only you can answer. You can stop and pick it up later.",
     c: "ACTIONABLE",
     control: "#first-run-start",
     fixture: "first-run-offer",
     why:
-      "The offer itself. It names the cost in his own units, the one promise the chain can " +
-      "keep, and that stopping partway is honest — and it renders with the control that " +
-      "starts it.",
+      "The offer itself. It says what he gives, what Rich does with it and that stopping " +
+      "partway is fine — and it renders with the control that starts it.",
   },
   {
-    s: "\"Not now\" means I'll stop offering. You can start it any time by asking.",
+    s: "I'll stop offering onboarding. You can ask to start any time.",
     c: "ACTIONABLE",
     control: "#first-run-later",
     fixture: "first-run-offer",
@@ -3757,12 +3754,7 @@ module.exports = [
       "and the control it describes is the one it names.",
   },
   {
-    s: "Start the questions",
-    c: "CONTROL",
-    why: "The label of `#first-run-start`.",
-  },
-  {
-    s: "Let's do the twenty minutes of questions about my business.",
+    s: "Let's do the onboarding.",
     c: "CONTROL",
     why:
       "TWO THINGS AT ONCE, so both are said here rather than forced into one bucket. It is " +
@@ -3820,10 +3812,9 @@ module.exports = [
   { s: "Waiting for Rich to accept it", c: "INFORMATIONAL", why: "The local request has no authoritative queued event yet." },
   { s: "Your message is recorded.", c: "INFORMATIONAL", why: "The queued event follows the durable acceptance." },
   { s: "Rich is picking this back up.", c: "INFORMATIONAL", why: "A one-time announcement of an authoritative recovery transition." },
-  { s: "Resume the questions", c: "CONTROL", why: "The existing Start control continues an incomplete interview." },
-  { s: "Let's pick up the questions about my business where we stopped.", c: "CONTROL", why: "The explicit Resume acceptance sent through the ordinary message path." },
-  { s: "Your business notes are started.", c: "ACTIONABLE", control: "#first-run-start", fixture: "first-run-partial", why: "Saved partial answers have a Resume control in the same panel." },
-  { s: "Your saved answers are kept. We can pick up the remaining questions where we stopped. Press Resume the questions when you're ready.", c: "ACTIONABLE", control: "#first-run-start", fixture: "first-run-partial", why: "Explains that resuming keeps existing answers and names the control beside it." },
+  { s: "Let's pick up onboarding where we stopped.", c: "CONTROL", why: "The explicit Resume acceptance sent through the ordinary message path." },
+  { s: "Your onboarding is started.", c: "ACTIONABLE", control: "#first-run-start", fixture: "first-run-partial", why: "Saved partial answers have a Resume control in the same panel." },
+  { s: "What you've shared is kept, so we can pick up where we stopped.", c: "ACTIONABLE", control: "#first-run-start", fixture: "first-run-partial", why: "Explains that resuming keeps what he already shared, beside the Resume control." },
 
   { s: "Missing onboarding scope", c: "NOT-RENDERED", why: "The standalone onboarding MCP process reports this on stderr when launched without its required scope argument. It is not displayed in the app." },
   { s: "Missing status scope", c: "NOT-RENDERED", why: "The same shape one file down: the standalone status MCP process (`--status-mcp`, the front desk's read) reports this on stderr when launched without its required scope argument. A child of the running app, so `activation.rs`'s parent-pid condition is false by construction and no alert is armed. It is not displayed in the app." },

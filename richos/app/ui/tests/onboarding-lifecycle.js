@@ -26,10 +26,21 @@ async function main() {
       await page.click("#first-run-start");
       // A duplicate queued UI activation cannot create a second acceptance.
       await page.dispatchEvent("#first-run-start", "click");
-      assertEqual(await page.evaluate(() => window.__sent), ["Let's do the twenty minutes of questions about my business."]);
+      assertEqual(await page.evaluate(() => window.__sent), ["Let's do the onboarding."]);
       assertEqual(await page.inputValue("#input"), "My unsent notes about the board meeting");
       await page.evaluate(() => window.__RICHOS_FIRST_RUN__());
       assert(await page.isHidden("#first-run"), "a refresh cannot reopen the offer during the accepted action");
+      await page.close();
+    });
+
+    await run.check("a company Rich added during his turn redraws the company list when the app adopts it", async () => {
+      const page = await openApp(browser, { onboarding: "partial" });
+      await page.waitForSelector("#first-run:not([hidden])");
+      await page.evaluate(() => { window.__calls = []; });
+      await page.evaluate(() => window.__emit("rich://companies-changed", null));
+      const cmds = await page.evaluate(() => window.__calls.map((c) => c.cmd));
+      assert(cmds.includes("entity_choice") && cmds.includes("navigation_tree"),
+        "the company setting and the rail are read again: " + JSON.stringify(cmds));
       await page.close();
     });
 
@@ -37,12 +48,12 @@ async function main() {
       for (const theme of ["light", "dark"]) {
         const page = await openApp(browser, { onboarding: "partial" }, theme);
         await page.waitForSelector('#first-run[data-state="partial"]:not([hidden])');
-        assert((await noticeText(page)).includes("Your saved answers are kept."));
-        assertEqual((await page.locator("#first-run-start").textContent()).trim(), "Resume the questions");
+        assert((await noticeText(page)).includes("What you've shared is kept"));
+        assertEqual((await page.locator("#first-run-start").textContent()).trim(), "Resume onboarding");
         await page.click("#first-run-start");
         await page.waitForFunction(() => window.__calls.some(c => c.cmd === "send_message"));
         assertEqual(await page.evaluate(() => window.__calls.find(c => c.cmd === "send_message").args.text),
-          "Let's pick up the questions about my business where we stopped.");
+          "Let's pick up onboarding where we stopped.");
         await page.close();
       }
     });

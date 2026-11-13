@@ -439,6 +439,49 @@ impl EntityRegistry {
         registry
     }
 
+    /// Derive a valid, unused entity id from the name a person gave (moved from the app's
+    /// `register_entity` so the onboarding tool's `add_company` uses the same derivation):
+    /// the name in [`EntityId`]'s character class, lowercased, every run of anything else
+    /// collapsed to one `-`, bounded at [`ENTITY_ID_MAX_LEN`], a collision resolved by suffix.
+    pub fn id_for_name(&self, name: &str) -> Result<EntityId, String> {
+        let mut slug = String::new();
+        for c in name.trim().to_lowercase().chars() {
+            if c.is_ascii_lowercase() || c.is_ascii_digit() {
+                slug.push(c);
+            } else if !slug.ends_with('-') {
+                slug.push('-');
+            }
+        }
+        let base: String = slug.trim_matches('-').chars().take(ENTITY_ID_MAX_LEN).collect();
+        let base = base.trim_end_matches('-').to_string();
+        if base.is_empty() {
+            return Err(
+                "That name doesn't have any letters or numbers in it, so I can't make a file-safe \
+                 label out of it. Try a name with a word in it."
+                    .to_string(),
+            );
+        }
+        for n in 1..=99u32 {
+            let candidate = if n == 1 {
+                base.clone()
+            } else {
+                // Keep the WHOLE thing inside the bound, suffix included.
+                let suffix = format!("-{n}");
+                let keep = ENTITY_ID_MAX_LEN.saturating_sub(suffix.len());
+                format!("{}{suffix}", base.chars().take(keep).collect::<String>().trim_end_matches('-'))
+            };
+            if let Ok(id) = EntityId::parse(&candidate) {
+                if !self.contains(&id) {
+                    return Ok(id);
+                }
+            }
+        }
+        Err(format!(
+            "I already have a lot of companies with names like \"{name}\" and I couldn't make a \
+             distinct label for another one. Try a name that's a bit more specific."
+        ))
+    }
+
     pub fn entities(&self) -> &[Entity] {
         &self.entities
     }

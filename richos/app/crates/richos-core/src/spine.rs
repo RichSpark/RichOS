@@ -1484,9 +1484,19 @@ impl Spine {
             crate::onboarding::priming_block(binding.entity_id(), layer.as_ref(), &self.onboarding_record(binding));
         match self.registry.get(binding.entity_id()) {
             Some(entity)=>Some(serde_json::json!({"entity_id":binding.entity_id(),"company_name":entity.display_name,
-                "setup":onboarding.and_then(|text|serde_json::from_str::<serde_json::Value>(&text).ok())}).to_string()),
+                "setup":onboarding.and_then(|text|serde_json::from_str::<serde_json::Value>(&text).ok()),
+                "other_companies":self.other_companies(binding),
+                "person":self.central_root.as_ref().map(|root|crate::person::priming(root))}).to_string()),
             None=>onboarding,
         }
+    }
+
+    /// The user's other companies for the priming turn ([`crate::onboarding::other_companies`]).
+    fn other_companies(&self, binding: &ThreadBinding) -> Vec<serde_json::Value> {
+        let Some(root) = self.central_root.as_ref() else { return Vec::new() };
+        let record = self.onboarding_record.as_ref().map(|p| crate::onboarding::OnboardingRecord::load(p)).unwrap_or_default();
+        let companies: Vec<_> = self.registry.entities().iter().map(|e| (e.id.clone(), e.display_name.clone())).collect();
+        crate::onboarding::other_companies(root, &companies, binding.entity_id(), &record)
     }
 
     /// One line per company for the boot log — what this launch will actually do about

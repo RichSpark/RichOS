@@ -51,6 +51,21 @@ class Turns(unittest.TestCase):
         self.assertIsNone(walk.find_turn(ROWS, 'say', 'Alex', 100))  # the same words sent earlier
         self.assertIsNone(walk.find_turn(ROWS, 'say', 'Bob', 50))
 
+    def test_waiting_for_rich_skips_an_app_notice_that_has_no_prompt(self):
+        rows = ROWS + [row('ProactiveMessage', 'n1', 300, text='Your account has used 90% of this week.'),
+                       row('PromptReceived', 't2', 400, text='{"from":"stu","text":"done"}'),
+                       row('AssistantDelta', 't2', 450, text='Here is what we learned.'), row('TurnCompleted', 't2', 500)]
+        self.assertEqual(walk.find_turn(rows, 'wait_for_rich', '900', 250), 't2')
+
+    def test_an_app_notice_does_not_hold_the_next_step_but_an_open_reply_still_does(self):
+        notice = ROWS + [row('ProactiveMessage', 'n1', 300, text='Your account has used 90% of this week.')]
+        instance = object.__new__(walk.ConversationWalk)
+        instance.ledger_rows = lambda: notice
+        instance.wait_idle(0)  # returns: the only open turn is the notice
+        instance.ledger_rows = lambda: notice + [row('PromptReceived', 't2', 400, text='next')]
+        with self.assertRaises(walk.StepFailed):
+            instance.wait_idle(0)
+
     def test_a_press_takes_the_first_turn_that_started_after_it(self):
         self.assertEqual(walk.find_turn(ROWS, 'press', 'Start the questions', 50), 't1')
 
@@ -76,6 +91,72 @@ class Verdict(unittest.TestCase):
     def test_an_interrupted_or_empty_turn_fails(self):
         self.assertIn('interrupted', walk.verdict(self.say, dict(turn='t', state='interrupted', reply='x', waited_s=5)))
         self.assertIn('no text', walk.verdict(self.say, dict(turn='t', state='completed', reply=' ', waited_s=5)))
+
+
+class Actors(unittest.TestCase):
+    """The walk's actor step runs the committed reader over what it pulled and keeps its record."""
+    def walk_out(self, d, helper_reads):
+        out = Path(d)
+        native = out / 'native-projects' / 'p'
+        (native / 's1' / 'subagents').mkdir(parents=True)
+        use = lambda cid, name, inp: {'timestamp': '2026-11-10T10:00:00Z', 'agentSetting': 'rich-skills:stu',
+            'message': {'role': 'assistant', 'content': [{'type': 'tool_use', 'id': cid, 'name': name, 'input': inp}]}}
+        res = lambda cid: {'timestamp': '2026-11-10T10:00:05Z', 'message': {'role': 'user', 'content': [
+            {'type': 'tool_result', 'tool_use_id': cid, 'content': 'text'}]}}
+        li = ('l1', 'mcp__richos_linkedin__read_profile', {'url': 'https://www.linkedin.com/in/ada/'})
+        lead = [use('a1', 'Agent', {'subagent_type': 'richos-app-engine:reed'}), res('a1')]
+        helper = [use(*li), res('l1')] if helper_reads else []
+        if not helper_reads:
+            lead += [use(*li), res('l1')]
+        (native / 's1.jsonl').write_text(''.join(json.dumps(r) + '\n' for r in lead))
+        (native / 's1' / 'subagents' / 'agent-x.jsonl').write_text(''.join(json.dumps(r) + '\n' for r in helper))
+        (native / 's1' / 'subagents' / 'agent-x.meta.json').write_text(json.dumps({'agentType': 'richos-app-engine:reed', 'toolUseId': 'a1'}))
+        return type('A', (), {'out': out, 'action': ['linkedin=mcp__richos_linkedin__read_profile'],
+                              'expect': ['linkedin=specialist']})()
+
+    def test_a_specialists_read_passes_and_is_kept_beside_the_walk(self):
+        with tempfile.TemporaryDirectory() as d:
+            a = self.walk_out(d, helper_reads=True)
+            self.assertTrue(walk.actors(a))
+            record = json.loads((a.out / 'actors.json').read_text())
+            self.assertEqual(record['verdicts']['linkedin']['verdict'], 'PASS')
+            self.assertEqual(record['records'][0]['actor'], 'reed')
+
+    def test_stu_reading_it_himself_fails_the_walk(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.assertFalse(walk.actors(self.walk_out(d, helper_reads=False)))
+
+    def test_each_new_accessibility_request_is_counted_and_denied_once(self):
+        clicks = []
+        fake = type('W', (), {'vm': 'g', 'clock': lambda s: 1794304800000.0, 'shot': lambda s, name: None,
+                              'ax': lambda s, mode, *args, app=None: clicks.append((mode, args, app)) or
+                              ([{'meta': True}, {'title': 'Deny'}] if mode == 'tree' else [])})()
+        watcher = walk.AccessibilityRequests(fake, deny=True)
+        for look in ('', '715', '715', '', '820', '820', '901', '901'):
+            watcher.look(look.split())
+        self.assertEqual([e['pids'] for e in watcher.seen], [['715'], ['820'], ['901']])  # 901 replaced 820 with no gap
+        self.assertEqual([e['answered'] for e in watcher.seen], ['Deny', 'Deny', 'Deny'])
+        self.assertEqual(watcher.seen[0]['words'], ['Deny'])
+        self.assertEqual([c for c in clicks if c[0] == 'click'][0][2], 'universalAccessAuthWarn')
+
+    def test_the_request_is_up_only_when_accessibility_finds_its_deny_button(self):
+        def present(found):
+            def answer(s, title, app=None):
+                if found is None:
+                    raise walk.StepFailed('ax: no such process')
+                return found and title == 'Deny' and app == 'universalAccessAuthWarn'
+            return answer
+        for found, up in ((True, True), (False, False), (None, False)):
+            fake = type('W', (), {'present': present(found)})()
+            self.assertEqual(walk.AccessibilityRequests(fake, deny=False).showing(), up, found)
+
+    def test_a_read_before_the_walks_first_step_does_not_count(self):
+        with tempfile.TemporaryDirectory() as d:
+            a = self.walk_out(d, helper_reads=True)  # the read is at 10:00:00Z
+            later = 1794304800000 + 60000  # 2026-11-10T10:01:00Z, guest ms
+            self.assertEqual(walk.iso_utc(later), '2026-11-10T10:01:00.000Z')
+            self.assertFalse(walk.actors(a, later))
+            self.assertTrue(walk.actors(a, later - 120000))
 
 
 if __name__ == '__main__':

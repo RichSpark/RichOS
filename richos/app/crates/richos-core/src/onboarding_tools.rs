@@ -13,8 +13,12 @@ use std::path::{Path, PathBuf};
 pub const SERVER_NAME: &str = "richos_onboarding";
 pub const SAVE_TOOL_NAME: &str = "save_company_notes";
 pub const DECLINE_TOOL_NAME: &str = "decline_onboarding";
+pub const ADD_COMPANY_TOOL_NAME: &str = "add_company";
+pub const SAVE_PERSON_TOOL_NAME: &str = "save_person";
 pub const QUALIFIED_SAVE_TOOL: &str = "mcp__richos_onboarding__save_company_notes";
 pub const QUALIFIED_DECLINE_TOOL: &str = "mcp__richos_onboarding__decline_onboarding";
+pub const QUALIFIED_ADD_COMPANY_TOOL: &str = "mcp__richos_onboarding__add_company";
+pub const QUALIFIED_SAVE_PERSON_TOOL: &str = "mcp__richos_onboarding__save_person";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OnboardingToolsVerdict {
@@ -68,7 +72,7 @@ pub fn handled_in_turn(records: Vec<crate::machinery::MachineryRecord>, turn_id:
                         None
                     }
                 });
-            if ![Some(QUALIFIED_SAVE_TOOL), Some(QUALIFIED_DECLINE_TOOL), Some(crate::your_instructions::QUALIFIED_TOOL)].contains(&name) {
+            if ![Some(QUALIFIED_SAVE_TOOL), Some(QUALIFIED_DECLINE_TOOL), Some(QUALIFIED_ADD_COMPANY_TOOL), Some(QUALIFIED_SAVE_PERSON_TOOL), Some(crate::your_instructions::QUALIFIED_TOOL)].contains(&name) {
                 return None;
             }
             Some((r.session_id.as_str(), r.tool_call_id.as_deref()?))
@@ -173,6 +177,16 @@ struct SaveArguments {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct DeclineArguments {}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AddCompanyArguments {
+    name: String,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SavePersonArguments {
+    details: String,
+}
 
 pub fn tools() -> Value {
     json!({"tools":[
@@ -187,8 +201,55 @@ pub fn tools() -> Value {
          "description":"Record an explicit Not now answer to the company interview or resume offer. Only call when the CEO declines that specific offer in the current conversation. Never infer an interview decline from unrelated chat. Existing notes are preserved and other companies are unaffected.",
          "inputSchema":{"type":"object","properties":{},"additionalProperties":false},
          "annotations":{"readOnlyHint":false,"destructiveHint":false,"idempotentHint":true,"openWorldHint":false}},
+        {"name":ADD_COMPANY_TOOL_NAME,
+         "description":"Add a company to the user's list of companies in RichOS, by the name the user agreed to. Call it only when the user has said yes to adding that company. The current conversation stays where it is; the company appears in the user's list as soon as this reply finishes, where the user can open it and its onboarding can start. A company already on the list is not added twice.",
+         "inputSchema":{"type":"object","properties":{
+             "name":{"type":"string","minLength":1,"maxLength":120,"description":"The company's name as the user knows it."}
+         },"required":["name"],"additionalProperties":false},
+         "annotations":{"readOnlyHint":false,"destructiveHint":false,"idempotentHint":true,"openWorldHint":false}},
+        {"name":SAVE_PERSON_TOOL_NAME,
+         "description":"Save the user's own details, the ones that hold across all their companies: their name, how to refer to them and their public profile links. Every conversation in every company of theirs sees these details, so a later company never asks for them again. Never company facts, people, priorities or answers: those belong in that company's notes. Replaces the saved details whole.",
+         "inputSchema":{"type":"object","properties":{
+             "details":{"type":"string","minLength":1,"maxLength":2000,"description":"All of the user's own details, a few short lines."}
+         },"required":["details"],"additionalProperties":false},
+         "annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":true,"openWorldHint":false}},
         crate::your_instructions::tool()
     ]})
+}
+
+/// ADD A COMPANY FROM RICH'S TURN. Before this, a user who said yes to adding a company was told
+/// it was theirs to add (Tuner's round of 2026-11-12). The app's own `register_entity` needs the
+/// spine, which the turn holds, so this writes the app's registry file directly, the same file
+/// and the same id derivation ([`EntityRegistry::id_for_name`]), and reads it back. The app adopts
+/// it when the turn ends and redraws the company list (`main.rs`,
+/// `adopt_companies_added_during_the_turn`). The registry lives beside the onboarding record in
+/// the app's data directory (`main.rs`: both from `data_dir`). No folder is set: a company with no
+/// folder is legal, and its notes live in the central folder like any other company's.
+fn add_company(record_path: &Path, name: &str) -> Result<Value, String> {
+    use crate::entity::{entity_registry_path, Entity, EntityRegistry};
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("Give the company's name. Nothing was added.".into());
+    }
+    let dir = record_path.parent().ok_or("The app has not supplied a valid company scope. Nothing was added.")?;
+    let path = entity_registry_path(dir);
+    let load = EntityRegistry::load(&path);
+    if load.is_unreadable() {
+        return Err("The app's list of companies could not be read, so nothing was added. The user can add the company from New chat or company.".into());
+    }
+    let mut registry = load.registry;
+    if let Some(existing) = registry.entities().iter().find(|e| e.display_name.trim().eq_ignore_ascii_case(name)) {
+        return Ok(json!({"status":"already_listed","entity_id":existing.id,"company_name":existing.display_name}));
+    }
+    let id = registry.id_for_name(name)?;
+    let entity = Entity::try_new(id.as_str(), name, Vec::new()).map_err(|e| format!("That company could not be added: {e}. Nothing was added."))?;
+    registry.register(entity).map_err(|e| format!("That company could not be added: {e}. Nothing was added."))?;
+    registry.save(&path).map_err(|e| format!("The list of companies could not be written ({e}). Nothing was added."))?;
+    if !EntityRegistry::load(&path).registry.contains(&id) {
+        return Err("The company was written but did not read back. Treat it as not added.".into());
+    }
+    Ok(json!({"status":"added","entity_id":id,"company_name":name,
+        "appears":"in the user's list of companies as soon as this reply finishes"}))
 }
 
 /// Application validation is shared by the protocol adapter and tests. Tool arguments cannot
@@ -226,6 +287,24 @@ pub fn call_in(scope_path: &Path, cards: Option<&Path>, name: &str, arguments: V
                 "path":crate::your_instructions::path(&scope.central_root),
                 "shown": if card.is_some() { "The user sees these rules as a card under your reply, with a button that opens their instructions." } else { "Saved. No card could be shown in this conversation." },
                 "appliesFrom":"the user's next new conversation"}))
+        }
+        SAVE_PERSON_TOOL_NAME => {
+            let args: SavePersonArguments = serde_json::from_value(arguments).map_err(|_| {
+                "Use only details: the user's own details. Nothing was saved.".to_string()
+            })?;
+            let (scope, _) = read_scope(scope_path)?;
+            require_action_grant(&scope)?;
+            let bytes = crate::person::save(&scope.central_root, &args.details)?;
+            Ok(json!({"status":"saved","bytes":bytes,"path":crate::person::path(&scope.central_root),
+                "seenBy":"every conversation in each of the user's companies"}))
+        }
+        ADD_COMPANY_TOOL_NAME => {
+            let args: AddCompanyArguments = serde_json::from_value(arguments).map_err(|_| {
+                "Use only name: the company's name. Nothing was added.".to_string()
+            })?;
+            let (scope, _) = read_scope(scope_path)?;
+            require_action_grant(&scope)?;
+            add_company(&scope.record_path, &args.name)
         }
         SAVE_TOOL_NAME => {
             let args: SaveArguments = serde_json::from_value(arguments).map_err(|_| {
