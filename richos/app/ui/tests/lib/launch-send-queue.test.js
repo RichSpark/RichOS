@@ -87,7 +87,7 @@ function makeShell() {
     const renderFirstRunNotice = noop, drainWorkNotices = noop;
     // Round 70's tools note and the line above the message box (main.js); not this test's subject.
     const maybeOfferTools = noop, paintVoiceHint = noop;
-    let toolsNote = null;
+    let toolsNote = null, toolsNoteWaitsForVoice = null;
     const reviveLiveTurns = noop;
     const setMainView = view => { mainView = view; };
     const showConversationView = () => {mainView = 'conversation'; openingThread = null;};

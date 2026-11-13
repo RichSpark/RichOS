@@ -2173,8 +2173,29 @@ async function main() {
     await waits.waitForSelector('.suite-card[data-phase="on"]');
     assert(waits.__errors.length === 0, "the shell logged errors: " + waits.__errors.join(" | "));
     await waits.close();
-    bump(4);
-    return "Turn on with both granted calls dictation_set_on and shows On; no note and no On until the speech model is in, then both";
+    // AND HE SENDS A MESSAGE BEFORE IT IS IN (review rv-20261113T145128Z-f79025c3-cb74): the
+    // receipt goes with the first screen, and the note still comes, in the conversation his
+    // message made, above it.
+    const sent = await startedApp({ voice: "model-missing", dictationView: { on: true, mic: "allowed", ax: "allowed", owner: "self", keyTap: true } });
+    await sent.waitForSelector("#first-run-later", { state: "visible" });
+    await sent.click("#first-run-later");
+    await sent.waitForSelector('#first-run[data-state="declined"]');
+    await sent.fill("#input", "Thanks, I'll have a look.");
+    await sent.press("#input", "Enter");
+    await sent.waitForSelector(".nav-thread-row.is-active .nav-thread[data-thread-id]");
+    await settledFrames(sent);
+    assertEqual(await sent.locator(".suite-note").count(), 0, "the tools note before the speech model is in");
+    await sent.evaluate(() => window.__RICHOS_MOCK__.voiceModelEmit({ phase: "installed", modelId: "small.en", received: 1, total: 1 }));
+    await sent.waitForSelector(".suite-note + .tl-turn");
+    assertEqual(
+      (await sent.textContent(".suite-note .tl-prose")).trim().startsWith("One more thing, then I'm out of your way"),
+      true,
+      "the declined note"
+    );
+    assert(sent.__errors.length === 0, "the shell logged errors: " + sent.__errors.join(" | "));
+    await sent.close();
+    bump(6);
+    return "Turn on with both granted calls dictation_set_on and shows On; no note and no On until the speech model is in, then both, also after his first message";
   });
 
   await run.check("27  round 19: a step that failed stops saying it is installing", async () => {

@@ -2414,20 +2414,26 @@ let toolsNoteAsking = false;
 /// dictation is not there), so a turn that ends asks nothing more.
 let toolsNoteSettled = false;
 
-/// Set when the note was due (after Not now) while this Mac could not yet turn speech into words:
-/// it comes once voice is ready (`refreshVoiceReadiness`), if the receipt is still on screen.
-let toolsNoteWaitsForVoice = false;
+/// The note after Not now, due while this Mac could not yet turn speech into words:
+/// `{thread, entity}`, where it belongs (the first screen of `entity` while `thread` is null; the
+/// conversation his first message there made once it is set, by `send`). It is made once voice is
+/// ready (`refreshVoiceReadiness`), wherever he is by then, and drawn where it belongs.
+let toolsNoteWaitsForVoice = null;
 
-/// Offer the note if it is due and was never made. `declined`: after Not now to onboarding.
+/// Offer the note if it is due and was never made. `declined`: after Not now to onboarding;
+/// `pending`: that note, made now for where it belongs (`toolsNoteWaitsForVoice`).
 /// Only once voice is ready, as the dictation offer before it: the card says RichScribe can be
 /// turned on, and Start lets a first install through while the speech model still downloads.
-async function maybeOfferTools(declined) {
-  if (toolsNote || toolsNoteSettled || toolsNoteAsking || mainView !== "conversation") return;
+async function maybeOfferTools(declined, pending) {
+  if (toolsNote || toolsNoteSettled || toolsNoteAsking) return;
+  if (!pending && mainView !== "conversation") return;
+  const here = { thread: activeThreadId || null, entity: draftEntityId || (activeContext && activeContext.entity_id) || null };
   if (!voiceAvailable) {
-    if (declined) toolsNoteWaitsForVoice = true;
+    if (declined && !toolsNoteWaitsForVoice) toolsNoteWaitsForVoice = pending || here;
     return;
   }
-  const thread = activeThreadId;
+  const where = pending || here;
+  const thread = where.thread;
   toolsNoteAsking = true;
   try {
     if (!declined) {
@@ -2438,12 +2444,13 @@ async function maybeOfferTools(declined) {
     }
     const offer = await invokeQuiet("dictation_offer");
     if (offer && (!offer.ready || offer.offered)) toolsNoteSettled = true;
-    if (!offer || !offer.ready || offer.offered || toolsNote || thread !== activeThreadId) return;
+    if (!offer || !offer.ready || offer.offered || toolsNote) return;
+    if (!pending && thread !== (activeThreadId || null)) return;
     if (!declined && anyLiveTurn()) return;
     const order = timelineModel.turnOrder;
     toolsNote = {
       thread,
-      entity: draftEntityId || (activeContext && activeContext.entity_id) || null,
+      entity: where.entity,
       afterTurn: !declined && order.length ? order[order.length - 1] : null,
       declined: !!declined,
       node: null,
@@ -2891,6 +2898,7 @@ async function send(explicitText, opts) {
     // Round 70: the tools note made on this screen goes with his first message into the
     // conversation it makes, and into no other.
     if (toolsNote && !toolsNote.thread) toolsNote.thread = newId;
+    if (toolsNoteWaitsForVoice && !toolsNoteWaitsForVoice.thread) toolsNoteWaitsForVoice.thread = newId;
     await refreshNavigation();
     // AND HIS SENTENCE TRAVELS WITH THE OPEN. See `openThread`'s own note at the line that
     // reads `opts.pendingUser` — the model this bubble lives in is about to be thrown away,
@@ -5279,10 +5287,10 @@ async function refreshVoiceReadiness() {
   // tools note that waited for that comes now.
   if (window.RichSuiteTools) window.RichSuiteTools.setVoiceReady(voiceAvailable);
   if (voiceAvailable) {
-    const box = el("first-run");
-    const declinedOnScreen = toolsNoteWaitsForVoice && box && !box.hidden && box.dataset.state === "declined";
-    toolsNoteWaitsForVoice = false;
-    maybeOfferTools(declinedOnScreen);
+    const pending = toolsNoteWaitsForVoice;
+    toolsNoteWaitsForVoice = null;
+    if (pending) maybeOfferTools(true, pending);
+    else maybeOfferTools(false);
   }
 }
 
