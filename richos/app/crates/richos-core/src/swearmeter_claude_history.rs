@@ -145,6 +145,7 @@ fn summarize(
         let mut row =
             crate::swearmeter_provider_history::Submission::new(entry.timestamp, &expanded);
         row.session = Some(entry.session_id);
+        row.incomplete_paste = incomplete;
         summary.matches += row.count;
         emit(row);
         summary.incomplete_submissions += u64::from(incomplete);

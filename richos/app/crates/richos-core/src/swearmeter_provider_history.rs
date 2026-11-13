@@ -21,6 +21,7 @@ pub(crate) struct Submission {
     text_digest: [u8; 32],
     pub(crate) count: u64,
     pub(crate) session: Option<String>,
+    pub(crate) incomplete_paste: bool,
 }
 
 impl Submission {
@@ -31,6 +32,7 @@ impl Submission {
             text_digest: Sha256::digest(text.as_bytes()).into(),
             count: swearmeter::count(text),
             session: None,
+            incomplete_paste: false,
         }
     }
 }
@@ -67,8 +69,7 @@ impl Reader {
             claude.and_then(
                 |root| match swearmeter_claude_history::read_submissions(root) {
                     Ok(Some((summary, rows))) => {
-                        result.incomplete |=
-                            summary.unreadable_records != 0 || summary.incomplete_submissions != 0;
+                        result.incomplete |= summary.unreadable_records != 0;
                         Some(rows)
                     }
                     Ok(None) => None,
@@ -102,16 +103,11 @@ impl Reader {
         // Time and text do not prove a shared submission across two independent apps.
         // Use the lower subtotal and disclose the withheld matches. A shared ID is
         // needed before either representation can be declared the original.
-        for row in claude_rows
-            .into_iter()
-            .flatten()
-            .filter(|row| row.at <= through)
-        {
-            if row.count != 0
-                && codex_times
-                    .get(&row.text_digest)
-                    .is_some_and(|times| times.iter().any(|at| at.abs_diff(row.at) < 120_000))
-            {
+        let mut claude_rows = claude_rows.unwrap_or_default();
+        claude_rows.sort_unstable_by_key(|row| row.at);
+        for row in claude_rows.into_iter().filter(|row| row.at <= through) {
+            result.incomplete |= row.incomplete_paste;
+            if row.count != 0 && consume_overlap(&mut codex_times, &row) {
                 result.ambiguous_matches += row.count;
                 result.incomplete = true;
                 continue;
@@ -137,10 +133,17 @@ impl Reader {
         let mut directories = vec![projects];
         let mut seen = HashSet::new();
         let mut visited = HashSet::new();
-        let mut recall = HashMap::<&str, Vec<(&Submission, bool)>>::new();
-        for row in submissions.iter().filter(|row| row.at <= through) {
+        let mut recall = HashMap::<String, Vec<(usize, bool)>>::new();
+        for (index, row) in submissions
+            .iter()
+            .enumerate()
+            .filter(|(_, row)| row.at <= through)
+        {
             if let Some(session) = row.session.as_deref() {
-                recall.entry(session).or_default().push((row, false));
+                recall
+                    .entry(session.to_owned())
+                    .or_default()
+                    .push((index, false));
             }
         }
         let mut additional = Vec::new();
@@ -199,19 +202,34 @@ impl Reader {
                         if let Some(candidates) = recall.get_mut(session) {
                             if let Some((_, matched)) = candidates
                                 .iter_mut()
-                                .filter(|(prior, matched)| {
+                                .filter(|(index, matched)| {
+                                    let prior = &submissions[*index];
                                     !*matched
                                         && prior.at.abs_diff(at) < 120_000
                                         && prior.text_digest == row.text_digest
                                 })
-                                .min_by_key(|(prior, _)| prior.at.abs_diff(at))
+                                .min_by_key(|(index, _)| submissions[*index].at.abs_diff(at))
                             {
                                 *matched = true;
                                 continue;
                             }
+                            let mut nearby = candidates.iter_mut().filter(|(index, matched)| {
+                                !*matched && submissions[*index].at.abs_diff(at) <= 2_000
+                            });
+                            if let Some((index, matched)) = nearby.next() {
+                                if nearby.next().is_none() && submissions[*index].incomplete_paste {
+                                    let prior = &mut submissions[*index];
+                                    prior.count = row.count;
+                                    prior.text_digest = row.text_digest;
+                                    prior.incomplete_paste = false;
+                                    *matched = true;
+                                    continue;
+                                }
+                            }
                             // The recall file can differ from the provider frame (attachments,
                             // slash-command expansion). A nearby row is not a second submission.
-                            if candidates.iter().any(|(prior, _)| {
+                            if candidates.iter().any(|(index, _)| {
+                                let prior = &submissions[*index];
                                 prior.at.abs_diff(at) < 120_000
                                     && prior.text_digest != row.text_digest
                             }) {
@@ -228,6 +246,23 @@ impl Reader {
         submissions.extend(additional);
         complete
     }
+}
+
+fn consume_overlap(index: &mut HashMap<[u8; 32], Vec<u64>>, row: &Submission) -> bool {
+    let Some(times) = index.get_mut(&row.text_digest) else {
+        return false;
+    };
+    let nearest = times
+        .iter()
+        .enumerate()
+        .filter(|(_, at)| at.abs_diff(row.at) < 120_000)
+        .min_by_key(|(_, at)| at.abs_diff(row.at))
+        .map(|(index, _)| index);
+    let Some(nearest) = nearest else {
+        return false;
+    };
+    times.swap_remove(nearest);
+    true
 }
 
 fn parse_transcript(
@@ -471,6 +506,30 @@ mod tests {
                 eprintln!("SwearMeter fixture cleanup: {error}");
             }
         }
+    }
+
+    #[test]
+    fn one_possible_provider_copy_cannot_hide_two_submissions() {
+        let mut index = HashMap::new();
+        let first = Submission::new(1000, "shit");
+        let second = Submission::new(2000, "shit");
+        index.insert(first.text_digest, vec![3000]);
+        assert!(consume_overlap(&mut index, &first));
+        assert!(!consume_overlap(&mut index, &second));
+    }
+
+    #[test]
+    fn a_matching_transcript_recovers_expired_paste_without_counting_both_copies() {
+        let fixture = Fixture::new();
+        let at = 1_700_000_000_000u64;
+        fs::write(fixture.0.join("history.jsonl"), json!({"display":"damn [Pasted text #1]",
+            "timestamp":at,"sessionId":"live","pastedContents":{"1":{"type":"text","contentHash":"0123456789abcdef"}}}).to_string()).unwrap();
+        fs::write(fixture.0.join("projects/sample/live.jsonl"), json!({"type":"user","origin":{"kind":"human"},
+            "promptSource":"typed","sessionId":"live","uuid":"accepted","timestamp":"2023-11-14T22:13:20Z",
+            "message":{"content":"damn fuck-shit"}}).to_string()).unwrap();
+        let result = read_through(Some(&fixture.0), None, at);
+        assert_eq!(result.count, 2);
+        assert!(!result.incomplete);
     }
 
     #[test]

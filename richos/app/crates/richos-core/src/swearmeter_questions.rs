@@ -90,15 +90,29 @@ impl<'de> serde::Deserialize<'de> for OperationInputs {
                     request: String,
                     #[serde(default)] origin: Option<AnswerOrigin>,
                     #[serde(default)] submitted_at: Option<u64>,
-                    #[serde(rename = "result")] _result: serde::de::IgnoredAny,
+                    #[serde(default)] result: serde_json::Value,
                 }
+                #[derive(serde::Deserialize)]
+                struct SavedResult { outcome: String, question: Option<SavedQuestion> }
+                #[derive(serde::Deserialize)]
+                struct SavedQuestion { id: String, answer: Option<crate::questions::Answer> }
                 let mut inputs = OperationInputs::default();
                 while let Some((key, operation)) = map.next_entry::<String, Input>()? {
                     if !inputs.projection.seen.insert(key) { inputs.projection.available = false; }
                     match serde_json::from_str::<crate::questions::AnswerRequest>(&operation.request) {
                         Ok(request) => {
+                            let at = operation.submitted_at.or_else(|| {
+                                let saved = serde_json::from_value::<SavedResult>(operation.result).ok()?;
+                                if saved.outcome != "accepted" { return None; }
+                                let question = saved.question?;
+                                if question.id != request.question_id { return None; }
+                                let answer = question.answer?;
+                                let mut options = request.option_ids.clone();
+                                options.sort();
+                                (answer.text == request.text.trim() && answer.option_ids == options).then_some(answer.at)
+                            });
                             inputs.represented.insert(request.question_id);
-                            inputs.projection.fold_text(operation.origin, &request.text, operation.submitted_at);
+                            inputs.projection.fold_text(operation.origin, &request.text, at);
                         }
                         Err(_) => inputs.projection.available = false,
                     }
@@ -113,6 +127,21 @@ impl<'de> serde::Deserialize<'de> for OperationInputs {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn accepted_old_operation_recovers_its_own_answer_date() {
+        let request = serde_json::json!({"question_id":"q1","client_id":"req","text":"shit"}).to_string();
+        let operation = |outcome| serde_json::json!({"origin":"direct", "request":request,
+            "result":{"outcome":outcome,"question":{"id":"q1","answer":{
+                "option_ids":[],"text":"shit","method":"typed","surface":"mac","at":1000}}}});
+        let input: OperationInputs = serde_json::from_value(serde_json::json!({
+            "accepted":operation("accepted"), "unchanged":operation("already_answered")})).unwrap();
+        let periods = Dates::report(&[&input.projection.dates], 2000, |_| Some(202611));
+        assert_eq!(input.projection.count, 2);
+        assert_eq!(periods.last_30_days, 1);
+        assert_eq!(periods.months[0].count, 1);
+        assert_eq!(periods.undated, 1);
+    }
 
     #[test]
     fn retry_cannot_change_the_original_identity_or_origin() {
