@@ -117,7 +117,10 @@
 #   W27  NOTHING IN THIS SUITE WALKS THE REAL MACHINE. Every world's `du` is a recorder
 #        that reaches the real one only for a path inside this suite's sandbox, every
 #        run gets the fixture home and a sandbox TMPDIR, and W27 fails on any `du` the
-#        program tried outside the sandbox.
+#        program tried outside the sandbox. An alert walks the whole volume from its
+#        mount, so every run also points DISK_VOLUME_WALK_ROOT at a folder inside the
+#        sandbox: with the sandbox under a TMPDIR on an external drive (2026-11-12), that
+#        drive was a volume of the suite and the walk started at its real mount.
 #
 # Exit 0 = every case passed; exit 1 = at least one failed.
 
@@ -144,7 +147,12 @@ echo "=== disk-watchdog tests ==="
 # macOS protects, so a regression is a recorded path here and never a prompt there.
 FIX_HOME="$SANDBOX/home"
 FIX_TMP="$SANDBOX/tmp"
-mkdir -p "$FIX_TMP" \
+# THE VOLUME THE SUITE'S RUNS WALK (W27). An alert walks the whole volume (the internal
+# disk from /, another volume from its mount); DISK_VOLUME_WALK_ROOT replaces that walk's
+# roots with this folder inside the sandbox, which holds neither the fixture home nor the
+# fixture TMPDIR (which W26 forbids measuring).
+FIX_VOLUME="$SANDBOX/volume"
+mkdir -p "$FIX_TMP" "$FIX_VOLUME/pile" \
     "$FIX_HOME/Library/Caches/com.apple.Music" "$FIX_HOME/Library/Developer/Xcode" \
     "$FIX_HOME/Library/Caches/RichOS" \
     "$FIX_HOME/Library/Application Support/com.richos.app/engine-state" \
@@ -271,6 +279,7 @@ run_wd() {                 # <mode-flags...>
     CARGO_TARGET_DIR="$W_DIR/cargo" \
     HOME="${WD_HOME:-$FIX_HOME}" \
     TMPDIR="${WD_TMPDIR:-$FIX_TMP}" \
+    DISK_VOLUME_WALK_ROOT="$FIX_VOLUME" \
     PATH="$W_BIN:$PATH" \
     DISK_WATCHDOG_CONFIG="$W_CFG" \
     DISK_WATCHDOG_LOG="$W_LOG" \
@@ -298,7 +307,7 @@ run_wd_scheduled() {
         RICHOS_NATIVE_IOS_CACHE="${W_IOS_ROOT:-$W_DIR/ios}" \
         RICHOS_CARGO_CACHE_ROOT="${W_CARGO_ROOT:-$W_DIR/cargo}" \
         CARGO_TARGET_DIR="$W_DIR/cargo" \
-        HOME="$FIX_HOME" TMPDIR="$FIX_TMP" \
+        HOME="$FIX_HOME" TMPDIR="$FIX_TMP" DISK_VOLUME_WALK_ROOT="$FIX_VOLUME" \
         PATH="$W_BIN:$PATH" \
         RICHOS_LAUNCH_AGENTS_DIR="$W_LA" \
         MODE=check STATE="$W_STATE" LOG="$W_LOG" \
@@ -1998,6 +2007,13 @@ if [ -s "$DU_ALL" ] && [ ! -s "$DU_OUTSIDE" ]; then
 else
     bad "W27  the program asked du for paths outside this suite's sandbox (refused by the recorder)"
     sort -u "$DU_OUTSIDE" | sed 's/^/        /' | head -10
+fi
+# THE WALK UNDER TEST RAN, from the suite's own walk root, on whichever volume holds the
+# sandbox: the internal disk, or another volume when TMPDIR is under /Volumes (the merge gate).
+if grep -qx "$FIX_VOLUME/pile" "$DU_ALL"; then
+    ok "W27a POSITIVE PROBE: the full-volume walk ran, from the suite's own walk root"
+else
+    bad "W27a the volume walk never ran: the walk root seam measured nothing"
 fi
 
 echo "  $PASS passed, $FAIL failed"

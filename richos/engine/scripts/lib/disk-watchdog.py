@@ -137,8 +137,196 @@ def top_consumers(candidates, limit=3):
     return out[:limit]
 
 
+def on_volume(path, mount):
+    """True when `path` is on the same device as `mount`. A folder the disk in alert does not
+    hold is never named as a consumer of it (2026-11-10: the internal disk's alert listed
+    a folder of the external drive, 363 GB, first)."""
+    try:
+        return os.stat(path).st_dev == os.stat(mount).st_dev
+    except OSError:
+        return False
+
+
+def volume_consumers(mount, roots, min_bytes, limit=8, max_depth=6, budget_s=480):
+    """The biggest folders ON THIS VOLUME, found by walking the disk from `roots`, not from a
+    declared list of places (2026-11-10, the CEO: a cleanup that works from a fixed list lets
+    every new pile grow until he notices).
+
+    Each root is listed one level at a time; a child at least `min_bytes` big is descended into
+    and, when none of its own children is that big, is named itself with its path from the root
+    (`~/.richos-nightly/source/richos/app/target`, never only `~/.richos-nightly`). Never
+    another app's data (du_kb refuses it), never a symlink, never another device. A folder that
+    is refused only because it HOLDS protected data deeper down (/, /Users, the home folder,
+    /private, /private/var, /System: foreign_app_data.listable_holder) is listed and walked
+    around, never measured whole, so /Users/Shared and /private/var/vm are still found. A root
+    walked earlier is skipped by a later one under any spelling (the home folder, walked first,
+    inside the data volume's walk, where it is /System/Volumes/Data/Users/<name>).
+    Only called when a volume is under its floor, and bounded by `budget_s`.
+    """
+    deadline = time.time() + budget_s
+    found = []
+    walked = set()
+
+    def listing(path):
+        try:
+            names = sorted(os.listdir(path))
+        except OSError:
+            return []
+        out = []
+        for name in names:
+            child = os.path.join(path, name)
+            if os.path.islink(child) or not os.path.isdir(child) or not on_volume(child, mount):
+                continue
+            if foreign_app_data.normalized(child) in walked:
+                continue
+            out.append(child)
+        return out
+
+    def walk(path, depth):
+        """[(bytes, folder)] for the big folders found BELOW `path`, each counted once."""
+        big, out = [], []
+        for child in listing(path):
+            if time.time() > deadline:
+                break
+            if foreign_app_data.entering(child):
+                if depth < max_depth and foreign_app_data.listable_holder(child):
+                    out.extend(walk(child, depth + 1))
+                continue
+            kb = du_kb(child)
+            if kb is not None and kb * 1024 >= min_bytes:
+                big.append((kb * 1024, child))
+        for size, child in big:
+            sub = []
+            if depth < max_depth and time.time() <= deadline:
+                sub = walk(child, depth + 1)
+            if not sub:
+                out.append((size, child))
+            else:
+                covered = sum(b for b, _p in sub)
+                out.extend(sub)
+                if size - covered >= min_bytes:
+                    out.append((size - covered, child + "  (files directly in it)"))
+        return out
+
+    for root in roots:
+        root = expand(root)
+        if root and os.path.isdir(root) and on_volume(root, mount):
+            found.extend(walk(root, 0))
+            walked.add(foreign_app_data.normalized(root))
+    found = sorted(set(found), reverse=True)
+    return found[:limit]
+
+
+def walk_roots(mount, primary):
+    """Where the walk of a volume in alert starts: its mount, so the full volume's biggest
+    folders are found wherever a new pile grows (the CEO, 2026-11-10). On the internal disk that
+    is the data volume's own mount (/System/Volumes/Data), the volume that fills up: every
+    folder anything can write is there once, with no alias (Users, Library, System/Library/
+    AssetsV2, MobileSoftwareUpdate); the sealed system volume cannot grow and is not walked. The
+    home folder and the Simulator's and Xcode's folders are walked first, so the time budget
+    reaches them and ~/Library's own tool folders are found though ~/Library itself is never
+    entered. Every protected folder, or folder holding one, is walked around under either
+    spelling, never handed to `du` (volume_consumers, du_kb, foreign_app_data).
+
+    DISK_VOLUME_WALK_ROOT replaces every root of a volume's walk with one folder on that volume.
+    It exists for the test suites (disk-watchdog.test.sh, notice-disk-alert.test.sh), which point
+    it at their sandbox: with the sandbox under a TMPDIR on an external drive, the drive became a
+    volume of the suite and its real mount was walked (W27, 2026-11-12). A volume that folder is
+    not on is not walked at all."""
+    start = expand(env("DISK_VOLUME_WALK_ROOT", ""))
+    if start:
+        return [start] if os.path.isdir(start) and on_volume(start, mount) else []
+    if mount != primary:
+        return [mount]
+    home = os.path.expanduser("~")
+    return [home, os.path.join(home, "Library/Developer/CoreSimulator"),
+            os.path.join(home, "Library/Developer/Xcode"), mount]
+
+
+def consumer_roots(candidates, mount):
+    """The configured folders whose totals are reported for a volume: RichOS's own folders
+    (storage_candidates) that sit on it. A configured folder that IS the mount is dropped, so the
+    whole drive is never one `du`; the walk from walk_roots() already covers it."""
+    roots = []
+    for path in candidates:
+        path = expand(path)
+        if (path and os.path.isdir(path) and on_volume(path, mount)
+                and os.path.realpath(path) != os.path.realpath(mount)):
+            roots.append(path)
+    return roots
+
+
+def reclaim_under_floor(reaper_cmd, prev, now, volumes):
+    """THE SCHEDULED CLEANUP, RUN WHEN A VOLUME IS UNDER ITS FLOOR (2026-11-10).
+
+    The CEO, after the internal disk fell to 45 GB with the 6-hourly cleanup running fine:
+    "HOW MANY MORE TIMES WILL I HAVE TO PLAY THE JANITOR". That cleanup worked from a fixed
+    list of places, so a pile outside the list grew until a person noticed. So the watchdog
+    that already reads the disk calls the cleanup itself, with `--apply --under-floor`, the
+    moment a volume is below its floor: no new daemon, the same launchd job, the same walls
+    and the same record (the reaper's own log). At most once per DISK_RECLAIM_MIN_GAP_MINUTES,
+    and never from a read-only mode. Returns the record kept in the state file, or {}.
+    """
+    if env("DISK_RECLAIM_ENABLE", "1") == "0" or not reaper_cmd or not os.path.isfile(reaper_cmd):
+        return {}
+    last = prev.get("reclaim") if isinstance(prev.get("reclaim"), dict) else {}
+    gap = env_num("DISK_RECLAIM_MIN_GAP_MINUTES", 60) * 60
+    if last.get("epoch") and now - last["epoch"] < gap:
+        return dict(last, skipped="ran %d min ago" % ((now - last["epoch"]) // 60))
+    before = {v["mount"]: v["free_bytes"] for v in volumes}
+    limit = env_num("DISK_RECLAIM_SECONDS", 1700)
+    try:
+        r = subprocess.run(["bash", reaper_cmd, "--apply", "--under-floor"], capture_output=True,
+                           text=True, timeout=limit, stdin=subprocess.DEVNULL)
+        code, tail = r.returncode, (r.stdout or "").strip().splitlines()[-1:] or [""]
+    except subprocess.TimeoutExpired:
+        code, tail = 124, ["stopped after %g s" % limit]
+    except OSError as exc:
+        code, tail = 127, [str(exc)]
+    return {"epoch": now, "exit": code, "verdict": tail[0][:300], "free_before": before}
+
+
+def marked_cache(path):
+    """True when `path` or a folder above it carries CACHEDIR.TAG, the mark Cargo writes at the
+    top of its target folder: the walk names target/debug/deps, and that subfolder is ours too
+    (review rv-20261112T231306Z-0b3e30af-4a55). The climb stops at a mount and at any folder
+    macOS protects or that holds one (the home folder, ~/Library, /), never looking inside it."""
+    cur = os.path.realpath(path)
+    while True:
+        if foreign_app_data.entering(cur):
+            return False
+        if os.path.isfile(os.path.join(cur, "CACHEDIR.TAG")):
+            return True
+        parent = os.path.dirname(cur)
+        if parent == cur or os.path.ismount(cur):
+            return False
+        cur = parent
+
+
+def is_ours(path):
+    """True for a folder RichOS's own builds and tools make: Cargo output, anything under the
+    nightly's folder or the cleanup's own state. Our build output counts as ours (2026-11-10: the
+    alert called a disk full of our own Cargo output "other")."""
+    path = expand(path)
+    if marked_cache(path):
+        return True
+    for root in (env("SCRATCH_NIGHTLY_DIR", "~/.richos-nightly"),
+                 os.path.join(state_base(), "workspace-retirement")):
+        # Compared in one spelling: the data volume's walk names /System/Volumes/Data/Users/...
+        root = foreign_app_data.normalized(expand(root))
+        here = foreign_app_data.normalized(path)
+        if here == root or here.startswith(root + os.sep):
+            return True
+    return False
+
+
 def du_kb(path):
-    """`du -sk path` in kilobytes, or None. THE ONLY PLACE THIS PROGRAM RUNS `du`.
+    """`du -skx path` in kilobytes, or None. THE ONLY PLACE THIS PROGRAM RUNS `du`.
+
+    -x keeps each measurement on the volume it starts on: the internal disk's walk measures
+    /Volumes and /Library/Developer/CoreSimulator, where other drives, network shares and
+    simulator images are mounted, and following them would measure another volume (and ask
+    for access to a removable or network volume).
 
     It refuses, here and not only in the callers, any path that is or holds data macOS
     protects (lib/foreign_app_data.py): 2026-10-29, `du -sk ~/Library/Caches` reached
@@ -146,7 +334,7 @@ def du_kb(path):
     if foreign_app_data.entering(path):
         return None
     try:
-        r = subprocess.run(["du", "-sk", path], capture_output=True, text=True, timeout=120)
+        r = subprocess.run(["du", "-skx", path], capture_output=True, text=True, timeout=120)
     except (OSError, subprocess.TimeoutExpired):
         return None
     first = (r.stdout or "").split("\n")[0].split("\t")
@@ -720,36 +908,54 @@ def main():
         return 2
     p_cap, _p_free = pv
 
-    volumes = []
-    for mount in [primary] + extras:
-        v = read_volume(mount)
-        if v is None:
-            continue                # not mounted: skipped, never zero
-        cap, free = v
-        if mount == primary or not scale:
-            t_rich, t_ceo, t_urgent = rich_gb, ceo_gb, urgent_gb
-        else:
-            # SCALED BY CAPACITY. 25 GB free on a 954 GB disk is a much more
-            # urgent situation than 25 GB on a 460 GB one, so the FRACTION is
-            # what carries over, not the absolute number. The arithmetic is
-            # written out in orchestration.config.
-            factor = (cap / float(p_cap)) if p_cap else 1.0
-            t_rich, t_ceo, t_urgent = (rich_gb * factor, ceo_gb * factor,
-                                       urgent_gb * factor)
-        volumes.append({
-            "mount": mount,
-            "capacity_bytes": cap,
-            "free_bytes": free,
-            "free_gb": round(free / float(GB), 1),
-            "capacity_gb": round(cap / float(GB), 1),
-            "percent_free": round(100.0 * free / cap, 1) if cap else 0.0,
-            "rich_alert_gb": round(t_rich, 1),
-            "ceo_notify_gb": round(t_ceo, 1),
-            "ceo_urgent_gb": round(t_urgent, 1),
-            "below_rich": free < t_rich * GB,
-            "below_ceo": free < t_ceo * GB,
-            "below_urgent": free < t_urgent * GB,
-        })
+    def read_volumes():
+      volumes = []
+      for mount in [primary] + extras:
+          v = read_volume(mount)
+          if v is None:
+              continue                # not mounted: skipped, never zero
+          cap, free = v
+          if mount == primary or not scale:
+              t_rich, t_ceo, t_urgent = rich_gb, ceo_gb, urgent_gb
+          else:
+              # SCALED BY CAPACITY. 25 GB free on a 954 GB disk is a much more
+              # urgent situation than 25 GB on a 460 GB one, so the FRACTION is
+              # what carries over, not the absolute number. The arithmetic is
+              # written out in orchestration.config.
+              factor = (cap / float(p_cap)) if p_cap else 1.0
+              t_rich, t_ceo, t_urgent = (rich_gb * factor, ceo_gb * factor,
+                                         urgent_gb * factor)
+          volumes.append({
+              "mount": mount,
+              "capacity_bytes": cap,
+              "free_bytes": free,
+              "free_gb": round(free / float(GB), 1),
+              "capacity_gb": round(cap / float(GB), 1),
+              "percent_free": round(100.0 * free / cap, 1) if cap else 0.0,
+              "rich_alert_gb": round(t_rich, 1),
+              "ceo_notify_gb": round(t_ceo, 1),
+              "ceo_urgent_gb": round(t_urgent, 1),
+              "below_rich": free < t_rich * GB,
+              "below_ceo": free < t_ceo * GB,
+              "below_urgent": free < t_urgent * GB,
+          })
+      return volumes
+
+    volumes = read_volumes()
+
+    # --- under a floor, the cleanup runs by itself (reclaim_under_floor) ---------
+    reclaim = {}
+    if mode == "check" and any(v["below_rich"] for v in volumes) and (
+            os.environ.get("DISK_WATCHDOG_SCHEDULED") == "1" or env("DISK_RECLAIM_FORCE") == "1"):
+        reclaim = reclaim_under_floor(env("SCRATCH_REAPER_CMD", os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scratch-reaper.sh")),
+            prev, now, volumes)
+        if reclaim.get("epoch") == now:
+            volumes = read_volumes()
+            for v in volumes:
+                v["reclaimed_bytes"] = max(0, v["free_bytes"] - reclaim["free_before"].get(v["mount"], v["free_bytes"]))
+    elif isinstance(prev.get("reclaim"), dict):
+        reclaim = prev["reclaim"]
 
     # --- the drop, per volume, against the previous reading -----------------
     # A RATE, NOT A DIFFERENCE, AND THE DIVISOR IS D7.
@@ -1046,9 +1252,30 @@ def main():
     # behind still alarms under its own heading above.
     shortfall = max((v["rich_alert_gb"] * GB - v["free_bytes"] for v in volumes), default=0)
     if disk_condition and mode in ("check", "status"):
-        consumers = [{"path": p, "bytes": b, "human": human(b)}
-                     for b, p in top_consumers(candidates)]
+        consumers = []
+        low = [v for v in volumes if v["below_rich"] or v["drop_alert"]] or volumes
+        min_b = int(env_num("DISK_CONSUMER_MIN_GB", 3) * GB)
+        for v in low:
+            mount = v["mount"]
+            # ONLY FOLDERS ON THIS VOLUME, found by walking the whole volume (walk_roots), so a
+            # new pile anywhere on it is named, plus RichOS's own configured folders on it.
+            roots = consumer_roots(candidates, mount)
+            found = volume_consumers(mount, walk_roots(mount, primary), min_b)
+            for b, p in found:
+                consumers.append({"path": p, "bytes": b, "human": human(b), "mount": mount,
+                                  "ours": is_ours(p.split("  (")[0])})
+            # The same folders' totals too, except one whose subfolder the walk already named
+            # (a total would only repeat it).
+            named = [p.split("  (")[0] for _b, p in found]
+            for b, p in top_consumers(roots):
+                if not any(n.startswith(p + os.sep) or n == p for n in named):
+                    consumers.append({"path": p, "bytes": b, "human": human(b), "mount": mount,
+                                      "ours": is_ours(p)})
         garbage = richos_garbage_bytes()
+        # Our own build output counts as ours: what this run's cleanup freed, and any of the
+        # folders named above that RichOS's own builds and tools made.
+        garbage += sum(c["bytes"] for c in consumers if c.get("ours"))
+        garbage += sum(v.get("reclaimed_bytes", 0) for v in volumes)
         # "RichOS garbage (DEFECT)" when our own scratch is a material part of
         # what is missing. The comparison is against the SHORTFALL rather than
         # against the disk: 5 GB of our scratch on a disk 200 GB short is not
@@ -1076,8 +1303,10 @@ def main():
                 last = notified.get(key) or 0
                 if now - last < repeat_h * 3600:
                     continue
+                # ONLY THIS VOLUME'S FOLDERS: another disk's folder never explains this one.
+                mine = [c for c in consumers if c.get("mount") == v["mount"]]
                 top = ", ".join("%s %s" % (c["human"], os.path.basename(c["path"]) or c["path"])
-                                for c in consumers[:3]) or "not measured"
+                                for c in mine[:3]) or "not measured"
                 title = ("RichOS: disk space CRITICAL" if level == "urgent"
                          else "RichOS: disk space low")
                 msg = ("%s free on %s (%.0f%%). Top: %s. %s"
@@ -1200,11 +1429,22 @@ def main():
                                                     str(row.get("why", "?"))[:90]))
                 lines.append("      first seen %s, %s attempt(s)"
                              % (row.get("first", "?"), row.get("attempts", "?")))
-        if consumers:
+        if reclaim.get("epoch"):
             lines.append("")
-            lines.append("  BIGGEST MEASURED CONSUMERS:")
-            for c in consumers:
-                lines.append("    %-10s %s" % (c["human"], c["path"]))
+            lines.append("  THE SCHEDULED CLEANUP ALREADY RAN BY ITSELF (%s, exit %s):"
+                         % (time.strftime("%H:%MZ", time.gmtime(reclaim["epoch"])), reclaim.get("exit")))
+            lines.append("    %s" % (reclaim.get("verdict") or "no verdict line"))
+        if consumers:
+            # Per volume, and only folders ON that volume. What is listed here is what the
+            # cleanup could NOT decide or has not yet removed: Rich decides these, never the CEO.
+            for mount in dict.fromkeys(c.get("mount", "") for c in consumers):
+                lines.append("")
+                lines.append("  NOT DECIDED BY THE CLEANUP, BIGGEST FIRST%s (Rich decides; the CEO is not asked):"
+                             % (" on " + mount if mount else ""))
+                for c in consumers:
+                    if c.get("mount", "") == mount:
+                        lines.append("    %-10s %s%s" % (c["human"], c["path"],
+                                                         "   [ours]" if c.get("ours") else ""))
         if classification:
             lines.append("")
             lines.append("  CLASSIFICATION: %s" % classification)
@@ -1353,6 +1593,7 @@ def main():
         "classification": classification,
         "richos_garbage_bytes": garbage,
         "top_consumers": consumers,
+        "reclaim": reclaim,
         "consumers_refused": consumers_refused,
         "sweep_failures": n_fail,
         "test_instance_failures": n_inst,

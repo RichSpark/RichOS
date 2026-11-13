@@ -236,7 +236,7 @@ else
 fi
 # THE CONTROL: the same flag DOES stand down a scheduled reading, so D7 is
 # measuring the alert path specifically and not a flag that does nothing at all.
-OUT="$(DISK_WATCHDOG_CONFIG="$CFG" DISK_WATCHDOG_LOG="$LOG" \
+OUT="$(DISK_WATCHDOG_CONFIG="$CFG" DISK_WATCHDOG_LOG="$LOG" DISK_VOLUME_WALK_ROOT="$SANDBOX" \
        RICHOS_LAUNCH_AGENTS_DIR="$LA" bash "$SCRIPTS/disk-watchdog.sh" --check 2>&1)"
 if printf '%s' "$OUT" | grep -q 'STOOD DOWN'; then
     ok "D7b CONTROL: the same flag DOES stand down the scheduled reading"
@@ -249,7 +249,9 @@ fi
 # D8 — the hook never moves the drop baseline
 # ---------------------------------------------------------------------------
 write_cfg 999999
-DISK_WATCHDOG_CONFIG="$CFG" DISK_WATCHDOG_LOG="$LOG" \
+# The forced alert walks the whole volume; DISK_VOLUME_WALK_ROOT keeps that walk inside this
+# sandbox, never the real disk (disk-watchdog.py walk_roots).
+DISK_WATCHDOG_CONFIG="$CFG" DISK_WATCHDOG_LOG="$LOG" DISK_VOLUME_WALK_ROOT="$SANDBOX" \
     RICHOS_LAUNCH_AGENTS_DIR="$LA" bash "$SCRIPTS/disk-watchdog.sh" --check >/dev/null 2>&1
 SUM_BEFORE="$(python3 -c "
 import hashlib,sys

@@ -12,10 +12,13 @@
 # drives scripts/lib/scope_closure.py through read_scope and scripts/app-engine-hook.py's turn gate.
 # A worker's assignment notice is said once per context (app token burn finding 2, 2026-10-31):
 # app.test.py drives scripts/lib/notice_once.py through worker_context.
+# ONE EIGHTH OF app.test.py (2026-11-12): this unit runs part 1 of 8; app-2.test.sh to app-8.test.sh
+# run the other seven (app.test.py _part says why and how). A named case, which is how the mutation
+# harness below runs it, is run whichever part it falls in.
 set -euo pipefail
 export PYTHONDONTWRITEBYTECODE=1
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-python3 -B -W ignore "$HERE/app.test.py" "$@" || exit 1
+python3 -B -W ignore "$HERE/app.test.py" --part 1/8 "$@" || exit 1
 # ONLY BEFORE NIGHTLIES (hunt part 4 finding 19, 2026-09-30; the fourteen-point suite's
 # ruling of 2026-09-23 applied to this one): the nightly's gates/workspace-mutants runs this
 # unit with RICHOS_MUTATION_PASSES=1. Anywhere else the pass says NOT RUN and why.

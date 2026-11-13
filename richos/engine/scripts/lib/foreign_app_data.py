@@ -77,6 +77,10 @@ PROTECTED_RELATIVE = (
 PROTECTED_USER_DIRS = ("Desktop", "Documents", "Downloads", "Movies", "Music", "Pictures",
                        "Library")
 OWN_NAMES = ("RichOS", "com.richos.", "group.com.richos.")
+# Developer tooling's own folders under ~/Library/Developer: simulator devices and Xcode's build
+# and device-support data. They are not another app's sandboxed data (that is Containers and
+# Group Containers), and they are what the disk cleanup measures and clears (2026-11-10).
+DEVELOPER_TOOL_DIRS = ("CoreSimulator", "Xcode")
 
 # The per-user Darwin folders under /private/var/folders/<xx>/<id>/: T is every app's
 # temporary folder (their TemporaryItems are sandbox-protected; measured 2026-10-29,
@@ -119,12 +123,20 @@ def _norm(path):
     return p
 
 
+def normalized(path):
+    """One spelling for a path on the internal disk: resolved, with the data volume's mount
+    (/System/Volumes/Data) taken off, so /System/Volumes/Data/Users/x and /Users/x compare equal."""
+    return _norm(path)
+
+
 def _own(p, h):
     """True when `p` is at or below a RichOS folder one level inside a Library area."""
     lib = os.path.join(h, "Library") + os.sep
     if not p.startswith(lib):
         return False
     parts = p[len(lib):].split(os.sep)
+    if parts[0] == "Developer" and len(parts) >= 2 and parts[1] in DEVELOPER_TOOL_DIRS:
+        return True
     return len(parts) >= 2 and parts[1].startswith(OWN_NAMES)
 
 
@@ -145,6 +157,11 @@ def entering(path, home=None):
     p = _norm(path)
     if p == os.sep:
         return "%s holds every user's data, so walking it walks other apps' data" % path
+    # /System and /System/Volumes hold the data volume itself (/System/Volumes/Data, every home
+    # folder under another name), and on this OS they can report the same device as it, so a
+    # device check does not keep a walk out (review rv-20261113T013445Z-be30576f-2682).
+    if _DATA_VOLUME.startswith(p + os.sep):
+        return "%s holds %s, every user's data under another name" % (path, _DATA_VOLUME)
     if _DARWIN_USER.match(p) or _DARWIN_CACHE.match(p):
         return ("%s is or holds the per-user folders where macOS keeps other apps' "
                 "temporary files and caches" % path)
@@ -163,6 +180,21 @@ def entering(path, home=None):
         if p == h or h.startswith(p + os.sep):
             return "%s holds %s, so walking it walks the user's protected data" % (path, h)
     return None
+
+
+def listable_holder(path, home=None):
+    """True when `path` is refused only because it HOLDS protected data deeper down, and listing
+    its entries to walk around that data enters nothing: /, a folder above a home folder, the home
+    folder itself, /private, /private/var and /System. The disk watchdog lists such a folder and
+    measures its other children (/Users/Shared, /private/var/vm, /System/Library with the
+    downloaded system assets in AssetsV2), never the folder whole. Never a protected folder
+    itself, never /System/Volumes (the data volume under another name), and never the per-user
+    Darwin folders (/private/var/folders and below), whose entries are every app's temporary
+    files and caches."""
+    p = _norm(path)
+    if p in (os.sep, "/private", "/private/var", "/System"):
+        return True
+    return any(p == h or h.startswith(p + os.sep) for h in _homes(home))
 
 
 # ---------------------------------------------------------------------------

@@ -300,6 +300,53 @@ class AppSweep(unittest.TestCase):
     # base, so the copy then read as "no owner record" and waited for the 60-minute floor. The
     # app now writes the record into both folders (engine_profile.rs), and each is decided on
     # its own.
+    # --- cargo-output: build output in a project the user connected (2026-11-10) ---------------
+    # The app's workers build in the user's repositories, and Cargo's `target` folder grows there
+    # until the disk is full. The app's sweep takes that folder, proven unused, and nothing else
+    # in the project.
+    def connected_project(self, old=True):
+        project = self.root / "project"
+        (project / "src").mkdir(parents=True)
+        (project / "src/main.rs").write_text("fn main() {}\n")
+        target = project / "target"
+        (target / "debug").mkdir(parents=True)
+        (target / "CACHEDIR.TAG").write_text("Signature: 8a477f597d28d172789f06886806bc55\n")
+        (target / "debug/app.rlib").write_text("x" * 4096)
+        if old:
+            then = time.time() - 2 * 86400
+            for root, _dirs, files in os.walk(target):
+                for name in files + ["."]:
+                    os.utime(os.path.join(root, name), (then, then))
+        registry = self.home / "Library/Application Support/com.richos.app/entities.json"
+        registry.parent.mkdir(parents=True, exist_ok=True)
+        registry.write_text(json.dumps({"entities": [{"roots": [str(project)]}]}))
+        return project
+
+    def test_build_output_in_a_connected_project_goes_and_the_project_stays(self):
+        project = self.connected_project()
+        rc, out, err = self.sweep()
+        self.assertIn(rc, (0, 3), out + err)
+        self.assertFalse((project / "target").exists(), out)
+        self.assertTrue((project / "src/main.rs").exists(), "the project's own files are never touched")
+        self.assertIn("class=cargo-output", self.log())
+
+    def test_build_output_a_build_changed_just_now_is_kept(self):
+        project = self.connected_project(old=False)
+        rc, out, err = self.sweep()
+        self.assertIn(rc, (0, 3), out + err)
+        self.assertTrue((project / "target/debug/app.rlib").exists(), out)
+
+    def test_build_output_under_a_cargo_lock_is_kept(self):
+        import fcntl
+        project = self.connected_project()
+        lock = project / "target/debug/.cargo-lock"
+        lock.write_text("")
+        with open(lock, "rb") as held:
+            fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            rc, out, err = self.sweep()
+        self.assertIn(rc, (0, 3), out + err)
+        self.assertTrue((project / "target/debug/app.rlib").exists(), out)
+
     def test_a_standing_copy_whose_base_is_gone_goes_on_its_own_owner_record(self):
         pid, start = self.ended_app()
         base, standing = self.profile((pid, start))
