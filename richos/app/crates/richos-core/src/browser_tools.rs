@@ -316,8 +316,14 @@ pub fn walk<N: AxNode>(area: &N) -> Walked<N> {
         }
         let role = el.role();
         if role == "AXStaticText" {
-            if let Some(v) = el.value_text().filter(|v| !blank(v)) {
-                out.push(Item::Text(v), &place, Some(&el));
+            match el.value_text() {
+                // A piece that is only spacing (the line break and indent between two lines of
+                // a code sample) is the page's text too. It is no content of its own: it opens
+                // no part of the page and is never what a scroll goes to.
+                Some(v) if v.is_empty() => {}
+                Some(v) if blank(&v) => out.walked.items.push(Item::Text(v)),
+                Some(v) => out.push(Item::Text(v), &place, Some(&el)),
+                None => {}
             }
             continue;
         }
@@ -721,51 +727,126 @@ fn shown_address(page: &str, link: &str) -> Option<String> {
     Some(if short.chars().count() > 300 { format!("{}…", short.chars().take(300).collect::<String>()) } else { short })
 }
 
+/// One block of the page being written.
+#[derive(Default)]
+struct Line {
+    text: String,
+    /// It ends with a control or a value, which the reader wrote.
+    after_token: bool,
+    /// It is a table row.
+    cells: bool,
+}
+
+impl Line {
+    /// A piece of the page's own text, as the browser gives it.
+    ///
+    /// **Two pieces are never joined into one word.** A browser gives each styled run as its
+    /// own piece, and where neither piece carries spacing at the place they meet, the reader
+    /// puts one space. Measured on real pages in four browsers (guest walks of 2026-11-13,
+    /// `docs/verification/browser-reader-real-pages-2026-11-13/`): Chrome and Brave give the
+    /// space between two runs as a piece of its own, Safari and Firefox leave it out, so
+    /// joining pieces as they come read `class="accordion"id="accordionExample"` and `•In` in
+    /// those two. The price is a space the page did not write inside a token its styling
+    /// splits (`< div class = "accordion" >`, `3 rd`); a missing space between two words
+    /// would cost the reader a name or a figure.
+    fn text(&mut self, piece: &str) {
+        let Some(starts) = piece.chars().next() else { return };
+        let ends = self.text.chars().last();
+        let apart = if self.after_token {
+            // After a control or a value: closing punctuation sits against the bracket.
+            !starts.is_whitespace() && !".,;:!?)]".contains(starts)
+        } else {
+            ends.is_some_and(|c| !c.is_whitespace()) && !starts.is_whitespace()
+        };
+        if apart {
+            self.text.push(' ');
+        }
+        self.text.push_str(piece);
+        self.after_token = false;
+    }
+
+    /// A control or a value, set off from the text before it by a space.
+    fn token(&mut self, token: &str) {
+        if self.text.chars().last().is_some_and(|c| !c.is_whitespace()) {
+            self.text.push(' ');
+        }
+        self.text.push_str(token);
+        self.after_token = true;
+    }
+
+    /// The block ends and its lines go to `lines`. The line breaks a browser gives inside a
+    /// block and each line's indentation are kept (a browser gives them only for text the page
+    /// shows as written: a code sample, an address); spacing at the end of a line, one space
+    /// alone before the block's first word, empty lines at the block's ends and a second empty
+    /// line in a row are dropped. A table row is one
+    /// line, its cells set apart by `|`.
+    fn flush(&mut self, lines: &mut Vec<String>) {
+        if self.cells {
+            let line = clean(&self.text);
+            let line = line.trim_end_matches(" |").trim_start_matches("| ");
+            if !line.is_empty() && line != "|" {
+                lines.push(line.to_string());
+            }
+        } else {
+            let block: Vec<&str> = self.text.split('\n').map(str::trim_end).collect();
+            let first = block.iter().position(|l| !l.is_empty()).unwrap_or(block.len());
+            let last = block.iter().rposition(|l| !l.is_empty()).map_or(first, |i| i + 1);
+            let mut was_empty = false;
+            for (at, line) in block[first..last].iter().enumerate() {
+                // One space before a block's first word is the spacing after the piece before
+                // it (a link, a styled word), not an indent.
+                let line = match line.strip_prefix(' ') {
+                    Some(rest) if at == 0 && !rest.starts_with([' ', '\t']) => rest,
+                    _ => line,
+                };
+                if !(line.is_empty() && was_empty) {
+                    lines.push(line.to_string());
+                }
+                was_empty = line.is_empty();
+            }
+        }
+        *self = Line::default();
+    }
+}
+
 /// The page as text: one line per block, headings marked `#`, each control where it sits as
 /// `[number kind "name" state → address]`, each value as `(kind "name": value)`. The controls
 /// are numbered from `first`. With it, every control as the text shows it, in number order.
 pub fn render(page_url: &str, items: &[Item], first: usize) -> (String, Vec<String>) {
     let mut lines: Vec<String> = Vec::new();
     let mut names: Vec<String> = Vec::new();
-    let mut current = String::new();
-    fn flush(current: &mut String, lines: &mut Vec<String>) {
-        let line = clean(current);
-        let line = line.trim_end_matches(" |").trim_start_matches("| ");
-        if !line.is_empty() && line != "|" {
-            lines.push(line.to_string());
-        }
-        current.clear();
-    }
+    let mut current = Line::default();
     for item in items {
         match item {
             Item::Region(region) => {
-                flush(&mut current, &mut lines);
+                current.flush(&mut lines);
                 lines.push(format!("--- {} ---", region_name(region)));
             }
             Item::Heading(level, text) => {
-                flush(&mut current, &mut lines);
-                current.push_str(&format!("{} {}", "#".repeat((*level).max(1) as usize), clean(text)));
+                current.flush(&mut lines);
+                current.text(&format!("{} {}", "#".repeat((*level).max(1) as usize), clean(text)));
             }
-            Item::Text(text) => {
-                current.push(' ');
-                current.push_str(text);
-            }
+            Item::Text(text) => current.text(text),
             Item::Control { kind, name, url, state } => {
                 let said = format!("{kind} \"{}\"", clean(name));
                 let state = state.map(|s| format!(" {s}")).unwrap_or_default();
                 let to = url.as_deref().and_then(|u| shown_address(page_url, u)).map(|u| format!(" → {u}")).unwrap_or_default();
-                current.push_str(&format!(" [{} {said}{state}{to}]", first + names.len()));
+                current.token(&format!("[{} {said}{state}{to}]", first + names.len()));
                 names.push(said);
             }
             Item::Value { kind, name, value } => {
                 let name = if name.is_empty() { String::new() } else { format!(" \"{}\"", clean(name)) };
-                current.push_str(&format!(" ({kind}{name}: {})", clean(value)));
+                current.token(&format!("({kind}{name}: {})", clean(value)));
             }
-            Item::Break => flush(&mut current, &mut lines),
-            Item::Cell => current.push_str(" | "),
+            Item::Break => current.flush(&mut lines),
+            Item::Cell => {
+                current.text.push_str(" | ");
+                current.after_token = false;
+                current.cells = true;
+            }
         }
     }
-    flush(&mut current, &mut lines);
+    current.flush(&mut lines);
     (lines.join("\n"), names)
 }
 
@@ -859,7 +940,11 @@ fn close_and_wait(host: &dyn PageHost, app: &BrowserApp, id: u64) -> bool {
 }
 
 fn has_content(snapshot: &Snapshot) -> bool {
-    snapshot.items.iter().any(|i| !matches!(i, Item::Region(_) | Item::Break | Item::Cell))
+    snapshot.items.iter().any(|i| match i {
+        Item::Region(_) | Item::Break | Item::Cell => false,
+        Item::Text(text) => !blank(text),
+        _ => true,
+    })
 }
 
 impl Held {
@@ -1857,6 +1942,37 @@ mod tests {
         assert_eq!(walked.controls[3].role, "AXButton");
         assert_eq!(walked.last.map(|n| n.value), Some(Some("72%")), "the last thing shown is what a scroll goes to");
         assert!(!walked.cut);
+    }
+
+    /// What real pages gave in the guest walks of 2026-11-13: a code sample as one piece per
+    /// token, with its line breaks and indents as pieces of spacing in Chrome and Brave and
+    /// without them in Safari and Firefox; a plain sample as one piece with its own line breaks.
+    #[test]
+    fn line_breaks_and_indentation_are_kept_and_two_pieces_are_never_joined_into_one_word() {
+        let sample = |last: &'static str| el("AXWebArea", vec![
+            el("AXGroup", vec![text("for row in rows:\n    process(row)\n"), text(last)]),
+            // Chrome and Brave: the spacing between two runs is a piece of its own.
+            el("AXGroup", vec![text("<div"), text(" "), text("class="), text("\"accordion\""), text(">"), text("\n  "), text("<h2"),
+                text(">"), text("\n\n\n    Item #1\n  ")]),
+            // Safari and Firefox: it is left out.
+            el("AXGroup", vec![text("\"accordion\""), text("id="), text("•"), text("In"), text("Posts"), text("1,204")]),
+            // A line that is a block of its own keeps its indent too; one space alone is no indent.
+            el("AXGroup", vec![el("AXGroup", vec![text("    save()")]), el("AXGroup", vec![text("  ")]), el("AXGroup", vec![text(" is the design")])]),
+            el("AXGroup", vec![text("See "), Node { url: Some("https://shop.example/more"), ..el("AXLink", vec![text("More")]) },
+                text(", then "), Node { title: Some("Size"), value: Some("M"), ..el("AXTextField", vec![]) }, text("each")]),
+        ]);
+        let (inside, _) = render("https://shop.example/", &walk(&sample("    save()")).items, 1);
+        assert_eq!(inside, "for row in rows:\n    process(row)\n    save()\n\
+            <div class= \"accordion\" >\n  <h2 >\n\n    Item #1\n\
+            \"accordion\" id= • In Posts 1,204\n    save()\nis the design\n\
+            See [1 link \"More\" → /more], then (field \"Size\": M) each");
+        let (after, _) = render("https://shop.example/", &walk(&sample("save()")).items, 1);
+        assert!(after.starts_with("for row in rows:\n    process(row)\nsave()\n"), "{after}");
+        // Spacing alone is no content: a page of it has not loaded, and a scroll never goes to it.
+        let empty = walk(&el("AXWebArea", vec![el("AXGroup", vec![text(" \n ")])]));
+        assert!(empty.last.is_none());
+        assert!(!has_content(&Snapshot { items: empty.items.clone(), ..Snapshot::default() }));
+        assert_eq!(render("https://shop.example/", &empty.items, 1).0, "");
     }
 
     fn frames(lines: &[Value]) -> Receiver<(Vec<u8>, bool)> {
