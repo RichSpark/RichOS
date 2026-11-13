@@ -183,6 +183,13 @@
           </button>
         </div>
         <div class="nr-group nr-bottom">
+          <!-- ROUND 73: SwearMeter, above Bust a bug, only while SwearMeter is on in Settings
+               (`swearmeter.js` shows it and runs its card). Hover or click opens the card, as the
+               Mac resources square does; it has no tooltip because the card is its name. -->
+          <button type="button" class="nr-item" id="nr-swear" aria-label="SwearMeter" aria-haspopup="dialog" aria-expanded="false" aria-controls="swear-card" hidden>
+            <!-- An outlined speech bubble holding "#!" (the CEO, 2026-11-13: "that works fine"). -->
+            <svg viewBox="0 0 20 20" class="nr-glyph" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path stroke-width="1.5" d="M4.6 2.6h10.8a2.6 2.6 0 0 1 2.6 2.6v6.6a2.6 2.6 0 0 1-2.6 2.6H9.3l-4 3.4v-3.4h-.7A2.6 2.6 0 0 1 2 11.8V5.2a2.6 2.6 0 0 1 2.6-2.6z"/><path stroke-width="1.3" d="M6.9 5.6l-.6 5.8M9.7 5.6l-.6 5.8M5.2 7.4h5.6M4.9 9.6h5.6"/><path stroke-width="1.6" d="M14 5.6v3.7"/><circle cx="14" cy="11.4" r=".95" fill="currentColor" stroke="none"/></svg>
+          </button>
           <button type="button" class="nr-item" id="nr-bug" data-item="bug" data-tip="Bust a bug" aria-label="Bust a bug">
             <svg viewBox="0 0 20 20" class="nr-glyph" aria-hidden="true" focusable="false"><defs><mask id="nr-mask-bug" maskUnits="userSpaceOnUse" x="0" y="0" width="20" height="20"><rect width="20" height="20" fill="#fff"/><path d="M10 9.6v8" stroke="#000" stroke-width="1.3"/></mask></defs><g fill="currentColor"><path d="M6.7 6.3a3.3 3.3 0 0 1 6.6 0Z"/><path mask="url(#nr-mask-bug)" d="M10 7.3c-2.85 0-4.65 1.85-4.65 4.55v1.5c0 2.8 2.05 4.85 4.65 4.85s4.65-2.05 4.65-4.85v-1.5c0-2.7-1.8-4.55-4.65-4.55Z"/></g><g stroke="currentColor" stroke-width="1.6" stroke-linecap="round" fill="none"><path d="M5.3 9.7 2.9 8.3M5.3 12.6H2.1M5.6 15.3l-2.3 1.9M14.7 9.7l2.4-1.4M14.7 12.6h3.2M14.4 15.3l2.3 1.9M8 3.5 6.8 2.3M12 3.5l1.2-1.2"/></g></svg>
           </button>

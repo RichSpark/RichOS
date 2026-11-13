@@ -378,7 +378,7 @@ function drawCoreGL(t) {
 let setCommonU = null;
 
 // ---- link fibres: SEG+1 points per link, indexed lines ----
-const SEG = 10, LP = SEG + 1, LV = L * LP;
+const SEG = 16, LP = SEG + 1, LV = L * LP; // ROUND 72: 16 pieces per link (the app has 10), so a tightly bent link reads as a curve
 const lpts = new Float32Array(LV * 2), lz = new Float32Array(LV), lcol = new Uint8Array(LV * 4);
 const lidx = new Uint32Array(L * SEG * 2);
 for (let k = 0; k < L; k++) for (let s = 0; s < SEG; s++) { lidx[(k * SEG + s) * 2] = k * LP + s; lidx[(k * SEG + s) * 2 + 1] = k * LP + s + 1; }
@@ -459,7 +459,7 @@ function buildSourceColors(dimAll) {
     const a = srcAlpha[si] * V.riverGain * g * (dimAll ? 0.45 : 1) * (inDom.length && domHover >= 0 ? (D.srcDomain[si] === domHover ? 1.4 : 0.5) : 1);
     if (a <= 0) { for (let p = 0; p < n; p++) { const q = (base + p) * 4; scol[q] = scol[q + 1] = scol[q + 2] = scol[q + 3] = 0; } continue; }
     for (let p = 0; p < n; p++) {
-      const u = p / (n - 1);                                   // 0 = brain end
+      const u = st.U[p];                                       // 0 = brain end. ROUND 72: the point's own place on the strand (was p / (n - 1))
       const t = clamp(u * 3, 0, 2.999), kk = Math.floor(t), f = t - kk;
       const c0 = st.cols[kk], c1 = st.cols[kk + 1];
       // the strand's own colour toward the river, its domain's colour toward the brain
@@ -1584,7 +1584,9 @@ function autoIngestDueInMs() { return Math.max(0, (lastIngest + nextIngestGap) -
 // overlaps a rectangle the picture then rubs out, and a test carrying its own copy of that
 // geometry would be a test of the copy. `labelBlockers` is the whole no-caption list, the
 // banner included.
-window.__loro = { N, L, S, V, snapshot, pause, resume, nodeScreen, setCount, coreTint: CORE_TINT, coreScreen: () => toScreen(CORE.x, CORE.y, 0), get ghostLevel() { return ghostNow; }, get COUNT() { return COUNT; }, get stats() { return STATS; }, gate, arrival, nodes, domains, D, get running() { return running; }, quietRect, quietAt,
+// ROUND 71: the one line added to the app's engine. A company button turns the picture to that
+// company's territory, with the engine's own `clickDomain` (what a click on a territory name does).
+window.__loro = { focusDomain: (d) => (d < 0 ? releaseAll() : clickDomain(d)), N, L, S, V, snapshot, pause, resume, nodeScreen, setCount, coreTint: CORE_TINT, coreScreen: () => toScreen(CORE.x, CORE.y, 0), get ghostLevel() { return ghostNow; }, get COUNT() { return COUNT; }, get stats() { return STATS; }, gate, arrival, nodes, domains, D, get running() { return running; }, quietRect, quietAt,
   get eraseRects() { const out = []; for (let g = 0; g < QUIET_N; g++) { const o = g * 4; if (quietRects[o + 2] < 0) continue; out.push({ x0: quietRects[o], y0: quietRects[o + 1], x1: quietRects[o + 2], y1: quietRects[o + 3] }); } return out; },
   get labelBlockers() { return blockRects.map(([x0, y0, x1, y1]) => ({ x0, y0, x1, y1 })); },
   get domLabelRects() { return domLabelRects; }, get nodeLabelRects() { return nodeLabelRects; }, landed, get pos() { return pos; }, get hover() { return hover; }, get selected() { return selected; }, get cam() { return cam; }, fade, lit, glow, releaseAll, ingest: () => ingest(performance.now()), get autoIngestDueInMs() { return autoIngestDueInMs(); }, get blooming() { return blooming; }, get motionFrames() { return motionFrames; }, get frames() { return frames; }, pushWave, get activeList() { return activeList; } };

@@ -802,7 +802,7 @@ window.RichHome = (function () {
       id: "home-enter",
       type: "button",
       // The caption's claim, said to assistive technology too.
-      "aria-keyshortcuts": "Enter",
+      "aria-keyshortcuts": "Enter Space",
     });
     b.appendChild(elem("span", "dot", { "aria-hidden": "true" }));
     var label = elem("span", "home-enter-label");
@@ -977,7 +977,11 @@ window.RichHome = (function () {
     if (!state.open || !e) return;
     if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey) return;
     if (e.key === "Escape") return onHomeEscape(e);
-    if (e.key !== "Enter" || e.shiftKey) return;
+    // Enter OR Space opens Talk to Rich (CEO 2026-11-13: "it's either hitting the enter key OR
+    // hitting the space bar"). Space goes through every refusal below exactly as Enter does; on a
+    // control that answers keys itself (the door included) it is that control's, as Enter is.
+    var space = e.key === " " || e.key === "Spacebar";
+    if ((e.key !== "Enter" && !space) || e.shiftKey) return;
     // The Token spend screen (round 22.1, `spend.js`) covers this one whole while it is open: Enter
     // there is its own (Back, Refresh, a period), never the door's. Keyed on the screen being up,
     // not on where focus sits, so no Enter reaches the door of a screen nobody can see.
@@ -991,7 +995,7 @@ window.RichHome = (function () {
       if (t.closest("#home button, #home a[href], #home input, #home textarea, #home select, #home [tabindex]")) return;
     }
     e.preventDefault();
-    hide("enter-key");
+    hide(space ? "space-key" : "enter-key");
   }
 
   // -----------------------------------------------------------------------------------------
@@ -1637,6 +1641,20 @@ window.RichHome = (function () {
       onFieldCount(api.COUNT, api.stats);
     };
     var rest = typeof window.prepare === "function" ? [FIELD[FIELD.length - 1]] : FIELD_GHOST_REST;
+    // FROM `GHOST_SPAN` OF HIS OBJECTS THE PICTURE IS HIS ALONE (round 73, CEO 2026-11-13: the home
+    // screen shows his data as round 72 does). The example's light is exactly zero there, so it is
+    // not loaded: hosted in the example's clusters, his companies never had a territory of their own;
+    // drawn alone, each company is one. His records move once, the launch they cross the span.
+    if (count >= GHOST_SPAN) {
+      window.MATURE_LORO = records;
+      var alone = Promise.resolve();
+      rest.forEach(function (src) {
+        alone = alone.then(function () {
+          return loadScript(src);
+        });
+      });
+      return alone;
+    }
     var chain = (window.RichFieldGhost ? Promise.resolve() : loadScript("home/field-ghost.js"))
       .then(function () {
         return loadScript(FIELD[0]);
@@ -1759,9 +1777,8 @@ window.RichHome = (function () {
         if (state.team) {
           // HIS RECORDS IN FRONT OF THE EXAMPLE (round 11.4 v2): the demonstration's dataset is
           // loaded as the ghost, his is merged into it, and the engine is told how many of the
-          // objects are his. From `GHOST_SPAN` of them the example's light is exactly zero, but it is
-          // still the dataset he is laid out in: switching to a picture of his alone at that count
-          // moved every record he has (the arrival gate keeps each one where it is at every count).
+          // objects are his. From `GHOST_SPAN` of them the example's light is exactly zero and his
+          // dataset is drawn alone, every company on a territory of its own (`loadGhost`).
           // Zero of his is the same screen with nothing in front.
           return loadGhost(mine ? dataset : null).then(function () {
             return true;
@@ -1806,7 +1823,9 @@ window.RichHome = (function () {
         }
         // The signal block is only now carrying its five lines, so the left column has a real
         // bottom edge for the first time and the door can sit on it rather than on the
-        // fallback.
+        // fallback. The engine wrote those lines over the block, so the SwearMeter signal (round
+        // 73, the last one, while SwearMeter is on) is put back under them first.
+        if (window.RichSwearMeter) window.RichSwearMeter.paintHome();
         reserveDoorTop();
         // THE DATASET IS ONLY NOW ON THE PAGE. Until this line `window.MATURE_LORO` did not
         // exist, so the banner has been up on the honest default ("nobody has said it is

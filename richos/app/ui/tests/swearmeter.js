@@ -102,17 +102,20 @@ async function main() {
   await run.check("2 hidden updates keep counting; stale notifications cannot overwrite newer results", async () => {
     await page.click("#set-swearmeter");
     await page.evaluate(() => {
-      deliverSwearMeter({ ...fixture.result, count: 23, revision: 3 });
-      deliverSwearMeter({ ...fixture.result, count: 18, revision: 2 });
+      const periods = n => ({ last_30_days: n, months: [], undated: 0 });
+      deliverSwearMeter({ ...fixture.result, count: 230, periods: periods(23), revision: 3 });
+      deliverSwearMeter({ ...fixture.result, count: 180, periods: periods(18), revision: 2 });
     });
     assertEqual(await rowText(page), "", "hidden updated count remains undisplayed");
     await page.click("#set-swearmeter");
-    assertEqual(await rowText(page), "SwearMeter: 23", "reveal latest maintained result");
+    assertEqual(await rowText(page), "All history: 230 · Last 30 days: 23", "reveal latest maintained result");
+    // Round 73: the home signal is the 30-day number in the column's own two lines.
     const home = await page.evaluate(() => {
       const node = document.getElementById("home-swearmeter");
-      return { text: node.textContent, last: node === document.getElementById("home-signals").lastElementChild };
+      return { n: node.querySelector(".n").textContent, l: node.querySelector(".l").textContent,
+        last: node === document.getElementById("home-signals").lastElementChild };
     });
-    assert(home.text.includes("SwearMeter: 23") && home.text.includes("English dictionary"), "home shows same scope and value");
+    assertEqual([home.n, home.l], ["23swear words", "in the last 30 days"], "home shows the same 30-day value");
     assert(home.last, "SwearMeter must sit after positive signals");
   });
   await run.check("3 partial zero remains qualified and unavailable never looks like zero", async () => {
@@ -122,9 +125,11 @@ async function main() {
     assert(await resultVisible(page), "the revealed partial subtotal and qualification are visible above the foot band");
     const partial = await rowText(page);
     assert(partial.includes("SwearMeter: 0") && partial.includes("Partial history") && partial.includes("2 records"), "qualified zero");
-    assert((await page.locator("#home-swearmeter").textContent()).includes("Partial history"), "home carries coverage too");
+    // A count with no 30-day period is not ready for the home signal (round 73): no signal there.
+    assertEqual(await page.locator("#home-swearmeter").count(), 0, "home shows no signal for a count that is not ready");
     await page.evaluate(() => deliverSwearMeter({ ...fixture.result, available: false, count: 0, revision: 5 }));
     assert((await rowText(page)).startsWith("SwearMeter unavailable"), "no false zero");
+    assertEqual(await page.locator("#home-swearmeter").count(), 0, "unavailable never looks like zero on the home screen");
     await page.click("#set-swearmeter-retry");
     assertEqual(await rowText(page), "SwearMeter: 25", "explicit recovery");
   });
@@ -180,18 +185,22 @@ async function main() {
     await page.setViewportSize({ width: 1440, height: 1000 });
   });
   await run.check("8 home places the maintained result below the positive statistics", async () => {
+    await page.evaluate(() => deliverSwearMeter({ ...fixture.result, count: 7467, unknown_card_inputs: 3, revision: 42,
+      periods: { last_30_days: 1234, months: [], undated: 0 } }));
     await page.evaluate(() => { RichSettings.close(); RichHome.show(); });
     await page.waitForSelector("#home-swearmeter", { state: "visible" });
     await page.waitForFunction(() => !document.getElementById("home").classList.contains("home-leaving") && getComputedStyle(document.getElementById("home")).opacity === "1");
     const layout = await page.evaluate(() => {
       const meter = document.getElementById("home-swearmeter");
       const previous = meter.previousElementSibling;
-      return { y: meter.getBoundingClientRect().top, previousBottom: previous?.getBoundingClientRect().bottom,
-        text: meter.textContent, width: meter.clientWidth, scroll: meter.scrollWidth };
+      return { y: meter.getBoundingClientRect().top, bottom: meter.getBoundingClientRect().bottom,
+        previousBottom: previous?.getBoundingClientRect().bottom, door: document.getElementById("home-switch").getBoundingClientRect().top,
+        n: meter.querySelector(".n").textContent, l: meter.querySelector(".l").textContent, width: meter.clientWidth, scroll: meter.scrollWidth };
     });
     assert(layout.previousBottom <= layout.y, "result follows positive statistics vertically");
-    assert(layout.text.includes("1,234") && layout.text.includes("Partial history"), "home shows current qualified result");
-    assert(layout.scroll <= layout.width + 1, "home explanation wraps");
+    assert(layout.bottom <= layout.door, "the signal sits above Talk to Rich");
+    assertEqual([layout.n, layout.l], ["1,234swear words", "in the last 30 days"], "home shows the current 30-day result");
+    assert(layout.scroll <= layout.width + 1, "the signal fits the column");
   });
   await run.check("9 a late saved preference is restored after an early failed switch write", async () => {
     await page.close();

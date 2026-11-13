@@ -38,6 +38,76 @@ function angleOf(x, y) { let a = Math.atan2(-(y - CORE.y), x - CORE.x) * 180 / M
 function regionOf(x, y) { if (y > 690 || (y > 600 && x > 620 && x < 720)) return 'stem'; const a = angleOf(x, y); return a < -44 ? 'stem' : a < 66 ? 'occipital' : a < 126 ? 'parietal' : a < 204 ? 'frontal' : 'temporal'; }
 
 // ---------- strands ----------
+// ROUND 72: NO SHARP ANGLES. A strand is 28 traced points (plus 6 where it is carried off the
+// picture) and was drawn as the straight lines between them, so every place the tracing turned hard
+// showed as a corner: a stair step, a zigzag, a spike, the bend where the river's extension starts.
+// Two steps, both keeping the strand's two ends where they are:
+//   1. relax - a point whose turn is sharper than SHARP_FROM degrees is pulled toward the middle of
+//      its two neighbors, fully from SHARP_FULL degrees on, until no turn is sharper than SHARP_STOP
+//      (or RELAX_MAX passes). A point on a gentle bend is not moved at all, so the picture's sweeps
+//      and curls stay where the tracing put them.
+//   2. curve - a centripetal Catmull-Rom spline through the relaxed points, SUB pieces per span,
+//      then only the points the curve needs are kept: one wherever the line has turned KEEP_DEG
+//      since the last kept point, so a straight run costs two points and a curl gets them all.
+//      Each kept point carries `U`, its place along the TRACED strand (0 at the core end, 1 at the
+//      far end, by traced point as before), so the colors along a strand do not shift.
+const SHARP_FROM = 10, SHARP_FULL = 28, SHARP_STOP = 16, RELAX_MAX = 80, SUB = 6, KEEP_DEG = 2.5;
+// The river's extension leaves the strand in the strand's own direction and eases into its flatter
+// run (the app's constant 0.6, reached at the far end) instead of turning to it at the first point.
+function extEase(u) { return 1 - 0.4 * (1 - (1 - u) * (1 - u)); }
+function turnDeg(a, b, c) {
+  const ux = b[0] - a[0], uy = b[1] - a[1], vx = c[0] - b[0], vy = c[1] - b[1];
+  const lu = Math.hypot(ux, uy), lv = Math.hypot(vx, vy);
+  if (lu < 1e-6 || lv < 1e-6) return 180;
+  return Math.acos(clamp((ux * vx + uy * vy) / (lu * lv), -1, 1)) * 180 / Math.PI;
+}
+// Points that sit on top of each other become one point: the tracing has a few, relaxing a spike
+// makes more, and a spline through them would knot. The two ends always stay.
+function onePointEach(p) {
+  const near = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]) < 0.5, out = [p[0]];
+  for (let k = 1; k < p.length - 1; k++) if (!near(p[k], out[out.length - 1])) out.push(p[k]);
+  const end = p[p.length - 1]; if (out.length > 1 && near(end, out[out.length - 1])) out.pop();
+  out.push(end); return out;
+}
+function smoothStrand(pts) {
+  const n0 = pts.length;
+  // `u` is each point's place among the traced ones; it travels with the point from here on
+  let p = onePointEach(pts.map((q, k) => { const c = [q[0], q[1]]; c.u = k / Math.max(1, n0 - 1); return c; }));
+  for (let pass = 0; pass < RELAX_MAX && p.length > 2; pass++) {
+    let worst = 0; const q = p.map(v => { const c = [v[0], v[1]]; c.u = v.u; return c; });
+    for (let k = 1; k < p.length - 1; k++) {
+      const t = turnDeg(p[k - 1], p[k], p[k + 1]); if (t > worst) worst = t;
+      let w = clamp((t - SHARP_FROM) / (SHARP_FULL - SHARP_FROM), 0, 1); w = w * w * (3 - 2 * w);
+      if (w > 0) { q[k][0] += ((p[k - 1][0] + p[k + 1][0]) / 2 - p[k][0]) * 0.5 * w; q[k][1] += ((p[k - 1][1] + p[k + 1][1]) / 2 - p[k][1]) * 0.5 * w; }
+    }
+    if (worst <= SHARP_STOP) break;
+    p = onePointEach(q);
+  }
+  const n = p.length, us = p.map(q => q.u); if (n < 3) return { pts: p, U: us };
+  // centripetal Catmull-Rom (Barry-Goldman): no overshoot and no loop where spans differ in length
+  const out = [], knot = (a, b) => Math.sqrt(Math.hypot(b[0] - a[0], b[1] - a[1])) || 1e-3;
+  const mix = (a, b, ta, tb, t) => { const f = (t - ta) / (tb - ta); return [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f]; };
+  for (let k = 0; k < n - 1; k++) {
+    const p1 = p[k], p2 = p[k + 1];
+    const p0 = k > 0 ? p[k - 1] : [2 * p1[0] - p2[0], 2 * p1[1] - p2[1]];
+    const p3 = k < n - 2 ? p[k + 2] : [2 * p2[0] - p1[0], 2 * p2[1] - p1[1]];
+    const t0 = 0, t1 = t0 + knot(p0, p1), t2 = t1 + knot(p1, p2), t3 = t2 + knot(p2, p3);
+    for (let j = 0; j < SUB; j++) {
+      const t = t1 + (t2 - t1) * j / SUB;
+      const a1 = mix(p0, p1, t0, t1, t), a2 = mix(p1, p2, t1, t2, t), a3 = mix(p2, p3, t2, t3, t);
+      const b1 = mix(a1, a2, t0, t2, t), b2 = mix(a2, a3, t1, t3, t);
+      const c = mix(b1, b2, t1, t2, t); c.u = us[k] + (us[k + 1] - us[k]) * j / SUB; out.push(c);
+    }
+  }
+  const end = [p[n - 1][0], p[n - 1][1]]; end.u = 1; out.push(end);
+  const kept = [out[0]]; let turned = 0;
+  for (let k = 1; k < out.length - 1; k++) {
+    turned += turnDeg(out[k - 1], out[k], out[k + 1]);
+    if (turned >= KEEP_DEG) { kept.push(out[k]); turned = 0; }
+  }
+  kept.push(end);
+  return { pts: kept, U: kept.map(c => c.u) };
+}
 function decodeStrands(REF) {
   const NP = REF.nPts, XY = new Uint16Array(b64(REF.strands).buffer), SC = b64(REF.strandColors);
   const strands = [];
@@ -48,14 +118,16 @@ function decodeStrands(REF) {
     if (d1 < d0) { pts.reverse(); cols.reverse(); }               // u = 0 is the core end
     // the river runs off the picture: extend the strands that leave at the bottom corners (as v4 does)
     const e = pts[NP - 1], e2 = pts[NP - 4];
-    if (e[1] > 550 && (e[0] < 35 || e[0] > 965)) { let dx = e[0] - e2[0], dy = e[1] - e2[1]; const n = Math.hypot(dx, dy) || 1; dx /= n; dy /= n; const tx = e[0] < 500 ? -500 : 1500; const len = Math.abs(tx - e[0]) / Math.max(0.2, Math.abs(dx)); for (let k = 1; k <= 6; k++) { const u = k / 6; pts.push([e[0] + dx * len * u, e[1] + dy * len * u * 0.6 + 20 * u * u]); } }
+    if (e[1] > 550 && (e[0] < 35 || e[0] > 965)) { let dx = e[0] - e2[0], dy = e[1] - e2[1]; const n = Math.hypot(dx, dy) || 1; dx /= n; dy /= n; const tx = e[0] < 500 ? -500 : 1500; const len = Math.abs(tx - e[0]) / Math.max(0.2, Math.abs(dx)); for (let k = 1; k <= 6; k++) { const u = k / 6; pts.push([e[0] + dx * len * u, e[1] + dy * len * u * extEase(u) + 20 * u * u]); } }
     const s0 = pts[0];
-    if (s0[1] > 550 && (s0[0] < 35 || s0[0] > 965)) { let dx = s0[0] - pts[3][0], dy = s0[1] - pts[3][1]; const n = Math.hypot(dx, dy) || 1; dx /= n; dy /= n; const tx = s0[0] < 500 ? -500 : 1500; const len = Math.abs(tx - s0[0]) / Math.max(0.2, Math.abs(dx)); const ext = []; for (let k = 6; k >= 1; k--) { const u = k / 6; ext.push([s0[0] + dx * len * u, s0[1] + dy * len * u * 0.6 + 20 * u * u]); } pts = ext.concat(pts); }
+    if (s0[1] > 550 && (s0[0] < 35 || s0[0] > 965)) { let dx = s0[0] - pts[3][0], dy = s0[1] - pts[3][1]; const n = Math.hypot(dx, dy) || 1; dx /= n; dy /= n; const tx = s0[0] < 500 ? -500 : 1500; const len = Math.abs(tx - s0[0]) / Math.max(0.2, Math.abs(dx)); const ext = []; for (let k = 6; k >= 1; k--) { const u = k / 6; ext.push([s0[0] + dx * len * u, s0[1] + dy * len * u * extEase(u) + 20 * u * u]); } pts = ext.concat(pts); }
+    const sm = smoothStrand(pts); pts = sm.pts;                    // ROUND 72: no sharp angles
     const n = pts.length, P = new Float32Array(n * 2), cum = new Float32Array(n);
     for (let k = 0; k < n; k++) { P[k * 2] = pts[k][0]; P[k * 2 + 1] = pts[k][1]; if (k) cum[k] = cum[k - 1] + Math.hypot(pts[k][0] - pts[k - 1][0], pts[k][1] - pts[k - 1][1]); }
-    const mid = pts[Math.floor(n / 2)];
+    let mk = 0; for (let k = 1; k < n; k++) if (Math.abs(sm.U[k] - 0.5) < Math.abs(sm.U[mk] - 0.5)) mk = k; // ROUND 72: the traced middle, as before
+    const mid = pts[mk];
     const lum = (SC[i * 12] + SC[i * 12 + 1] + SC[i * 12 + 2] + SC[i * 12 + 3] + SC[i * 12 + 4] + SC[i * 12 + 5]) / (6 * 255);
-    strands.push({ i, P, n, cum, len: cum[n - 1], cols, region: regionOf(mid[0], mid[1]), angle: angleOf(mid[0], mid[1]), d0: Math.hypot(pts[0][0] - CORE.x, pts[0][1] - CORE.y), lum, mid });
+    strands.push({ i, P, n, U: Float32Array.from(sm.U), cum, len: cum[n - 1], cols, region: regionOf(mid[0], mid[1]), angle: angleOf(mid[0], mid[1]), d0: Math.hypot(pts[0][0] - CORE.x, pts[0][1] - CORE.y), lum, mid });
   }
   return strands;
 }
@@ -166,9 +238,14 @@ function prepare(loro, REF, opts) {
   const tmp = new Float32Array(4);
   const byCluster = clusterList.map(() => []);
   for (let i = 0; i < N; i++) byCluster[nodeCluster[i]].push(i);
+  // APP: `pr` is the stream placement draws from. It is `rnd` for every dataset whose objects carry no
+  // `layoutSeed` (the demonstration, byte for byte as approved). Objects read from his repositories
+  // (`home_repos.rs`) carry their cluster's seed, and each cluster is placed from its own stream, so a
+  // commit that adds objects to one folder does not move every object drawn after it.
+  let pr = rnd;
   const pickStrand = (ss) => { // weighted by length
     let total = 0; for (const s of ss) total += s.len;
-    let r = rnd() * total; for (const s of ss) { r -= s.len; if (r <= 0) return s; } return ss[ss.length - 1];
+    let r = pr() * total; for (const s of ss) { r -= s.len; if (r <= 0) return s; } return ss[ss.length - 1];
   };
   // adjacency first: a leaf is placed on the strands of the hub it hangs off, so the membership fibres
   // run along the strand bundle instead of across it — that is where the picture's bundles and gaps come from
@@ -176,12 +253,12 @@ function prepare(loro, REF, opts) {
   for (let k = 0; k < L; k++) { const l = links[k], s = index.get(l.s), t = index.get(l.t); (adjTmp.get(s) || adjTmp.set(s, []).get(s)).push(t); (adjTmp.get(t) || adjTmp.set(t, []).get(t)).push(s); }
   const hubGroup = new Int32Array(N).fill(-1);
   const place = (i, s, u) => {
-    nStrand[i] = s.i; nU[i] = u; nPerp[i] = (rnd() + rnd() + rnd() - 1.5) * 2.0;
+    nStrand[i] = s.i; nU[i] = u; nPerp[i] = (pr() + pr() + pr() - 1.5) * 2.0;
     strandAt(s, u, tmp);
     home[i * 2] = tmp[0] - tmp[3] * nPerp[i]; home[i * 2 + 1] = tmp[1] + tmp[2] * nPerp[i];
     tan[i * 2] = tmp[2]; tan[i * 2 + 1] = tmp[3];
     strandColor(s, u, col, i * 3);
-    z[i] = (rnd() * 2 - 1) * 0.7 + (s.lum - 0.5);
+    z[i] = (pr() * 2 - 1) * 0.7 + (s.lum - 0.5);
   };
   // APP: A HOSTED NODE is one of HIS objects standing inside one of the example's clusters
   // (`field-ghost.js`: `hosted: true`, `host`). Its `cluster` is its own source group, which is what
@@ -198,6 +275,8 @@ function prepare(loro, REF, opts) {
     // (`a_domains_node_count_is_its_own_nodes` asserts the clusters add up), so this is inert on
     // both datasets that exist — and it is one line against a crash on a third.
     if (!ids.length) continue;
+    const seed = nodes[ids[0]].layoutSeed;
+    pr = seed === undefined || nodes[ids[0]].hosted ? rnd : mulberry32(seed >>> 0);
     const ss = clusterList[c].strands;
     const nh = Math.max(1, Math.min(ids.length, Math.round(ids.length * 0.07), Math.floor(ss.length / 2)));
     const hubs = ids.slice(0, nh);
@@ -214,17 +293,18 @@ function prepare(loro, REF, opts) {
     hubs.forEach((h, hi) => {
       const g = groups[hi]; let s = g[0]; for (const x of g) if (x.len > s.len) s = x;
       hubGroup[h] = hi;
-      place(h, s, 0.16 + rnd() * 0.3);
+      place(h, s, 0.16 + pr() * 0.3);
     });
     for (let r = nh; r < ids.length; r++) {
       const i = ids[r];
       let best = -1, bd = -1;
       for (const j of adjTmp.get(i) || []) { if (hubGroup[j] >= 0 && nodeCluster[j] === c && nodes[j].degree > bd) { bd = nodes[j].degree; best = j; } }
-      const g = best >= 0 ? groups[hubGroup[best]] : groups[Math.floor(rnd() * groups.length)];
+      const g = best >= 0 ? groups[hubGroup[best]] : groups[Math.floor(pr() * groups.length)];
       const s = pickStrand(g);
-      place(i, s, 0.06 + Math.pow(rnd(), 0.8) * 0.92);
+      place(i, s, 0.06 + Math.pow(pr(), 0.8) * 0.92);
     }
   }
+  pr = rnd;
   {
     // each of HIS source groups is one hub and its leaves, all on the hub's own strand: a small, tight
     // group standing in the example, which is what a young loro is
