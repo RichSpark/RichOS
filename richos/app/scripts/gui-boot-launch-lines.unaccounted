@@ -22,6 +22,7 @@
 [richos] Haiku's conversation title was not saved ({})
 [richos] a spoken answer went to the bug report, not to the conversation
 [richos] claude accounts: the adding could not be recorded ({})
+[richos] companies: adopting {} added during the turn
 [richos] company registry: added {} ("{}"), {} root(s) -> {}
 [richos] conversation preparation finished in {} ms{}
 [richos] corpus company {}: not created — {}
