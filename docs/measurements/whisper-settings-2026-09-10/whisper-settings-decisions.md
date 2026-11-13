@@ -324,3 +324,36 @@ run-on windows and proportional to the defect on one with them.
 | Flag | Scope | Decision |
 |---|---|---|
 | `-bs 3` | RichScribe provisional Faster-model results | A matched 16-second English passage had identical text with three- and five-wide search during concurrent RichBrief decoding. Three-wide search spent less time on batched token decoding. The final dictation and meeting settings are specified separately above. |
+
+## 11. RichScribe: a finished dictation is decoded in pieces (2026-11-12)
+
+**The defect** (CEO, 2026-11-12): RichScribe pasted an unspoken "Thank you." after the last
+sentence and lost words that were said. Section 7's path handed the whole recording to one
+decoder run with `-nt`, which steps through it in fixed 30-second windows. Measured on 97
+dictations ([`../richscribe-2026-11-12/`](../richscribe-2026-11-12/README.md)):
+38 of them lost three or more words in a row on `large-v3-turbo-q5_0` and
+23 on `small.en` and 11 ended in words nobody said.
+
+**No flag changed.** A finished dictation is now cut into pieces that each fit one window
+(`app/crates/richos-voice/src/speech.rs`: Silero VAD finds the speech, every cut falls in a
+pause where there is one) and every piece is decoded with section 7's flags, all in one run:
+
+```
+-m <model> -f <piece 0> -f <piece 1> ... -l en -t 4 -fa -np -nt -mc 0
+```
+
+With that, 0 dictations on `large-v3-turbo-q5_0` and 1 on `small.en` lose three or more words
+in a row and none ends in unspoken words.
+
+**Every decode-level lever, measured on the same dictations and not taken:**
+
+| Lever | Result | Verdict |
+|---|---|---|
+| `--vad` with section 3's tuned sub-flags and no `-nt` (the decoder's own seeking) | Words as good as the pieces (15 of 10,987 deleted on `large-v3-turbo-q5_0`, none lost three in a row). 27 of 63 human dictations came back with no punctuation at all, against 3 of 63 as shipped | Rejected. The built-in detector splices speech together with digital silence between the parts and the turbo model answers spliced audio in lower case. |
+| `--vad` at the vendor's sub-defaults, no `-nt` | On `small.en`, 2 of the 83 dictations that ran lost three or more words in a row; the first sentence of two real desk captures was dropped | Rejected: clips speech, as section 3 measured. |
+| `--vad` with `-vp 30` | The first word of a real desk capture was cut off on both models | Rejected: deletes speech. |
+| No `-nt` alone | Of the 36 dictations that ran on `large-v3-turbo-q5_0`, 18 started in lower case and 8 had no punctuation at all; silence still reaches the decoder | Rejected. |
+| `--prompt` naming the style, with `--carry-initial-prompt` at `-mc 16` | Punctuation returns; one 62-second dictation lost 26 words in a row and one of 185 seconds lost 22 | Rejected: deletes speech, the same collapse to one 30-second segment section 9 found. |
+| The same prompt given once, `-mc 16` | The same 22 words lost | Rejected: deletes speech. |
+
+**Cost.** The speech detector takes 0.1 to 1.0 s on dictations of 14 to 191 seconds and the decoder no longer decodes silence. End to end the new path measured within the run-to-run spread of the shipped one (`../richscribe-2026-11-12/README.md`, "Time").

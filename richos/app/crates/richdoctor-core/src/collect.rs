@@ -764,7 +764,10 @@ fn richscribe(scope: &Scope, ctx: &Context, budget: &mut u64) -> Item {
     let lines: Vec<(Option<u64>, String)> = reads.iter().flat_map(|r| r.text.lines())
         .filter(|l| !l.trim().is_empty())
         .map(|l| (l.split_whitespace().next().and_then(crate::util::parse_utc_stamp), l.chars().take(1024).collect())).collect();
-    let (picked, coverage) = pick(&lines, |x| x.0, &scope.window, 20);
+    // Dictation timestamps have second precision. Include the containing
+    // second when a more precise incident start falls within it.
+    let window = Window { start: scope.window.start / 1000 * 1000, ..scope.window };
+    let (picked, coverage) = pick(&lines, |x| x.0, &window, 20);
     let picked: Vec<(Option<u64>, String)> = picked.into_iter().rev().take(200).rev().collect();
     let mut item = Item::new(Category::Richscribe, source).expect("random source");
     item.input_bytes = bytes;
@@ -1034,6 +1037,25 @@ mod tests {
         assert_eq!(parsed["detail"]["max_sampled_window_ms"], 1720);
         assert!(item.text.contains("preview_stopped"));
         assert!(item.text.contains("420"));
+    }
+
+    #[test]
+    fn richscribe_keeps_the_incident_start_second_in_a_fractional_window() {
+        let h = home();
+        let log = h.0.join("Library/Application Support/com.richos.app/dictation.log");
+        let line = |at, stage| format!("{} dictation timing {{\"stage\":\"{stage}\"}}\n", crate::util::utc_stamp(at));
+        write(&log, &[
+            line(T - 1000, "unrelated_before"),
+            line(T, "capture_ready"),
+            line(T + 1000, "delivery_completed"),
+            line(T + 2000, "unrelated_after"),
+        ].concat());
+        let window = Window { start: T + 108, end: T + 1999, known: true };
+        let item = &collect(Category::Richscribe, &scope(&h.0, window), &Context::default(), 0)[0];
+        assert_eq!(item.coverage, Coverage::InWindow);
+        assert!(item.text.contains("capture_ready"), "{}", item.text);
+        assert!(item.text.contains("delivery_completed"), "{}", item.text);
+        assert!(!item.text.contains("unrelated_"), "{}", item.text);
     }
 
     #[test]

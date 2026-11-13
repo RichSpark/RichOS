@@ -562,6 +562,17 @@ endorses RichOS. Kyutai's terms forbid cloning a voice without consent; the
 Peter Yearsley recording is a public-domain LibriVox reading released as CC0,
 and it is one of Kyutai's own Pocket TTS preset voices.
 
+## RichScribe: the speech detector in front of the recognizer
+
+A finished RichScribe dictation is cut into pieces at its pauses before it is
+recognized, so that silence never reaches the recognizer. The speech detector
+that finds the pauses is compiled into the application and runs on the
+ONNX Runtime listed under Rich's voice above.
+
+| Work | Upstream | Revision / version | License | How it reaches the user |
+|---|---|---|---|---|
+| Silero VAD model (`richos/app/crates/richos-voice/third_party/silero-vad/silero_vad.onnx`) | Silero Team, <https://github.com/snakers4/silero-vad>, `src/silero_vad/data/silero_vad.onnx` | 5.1.2, tag `v5.1.2`; sha256 `2623a2953f6ff3d2c1e61740c6cdb7168133479b267dfef114a4a3cc5bdd788f` | MIT; `LICENSE` in that directory | compiled in, unmodified |
+
 ## Copywriting regression test fixture
 
 `richos/engine/scripts/hooks/fixtures/third_party/copywriting/natural-transitions.md`
