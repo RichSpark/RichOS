@@ -319,10 +319,9 @@ def main():
     args = parser.parse_args()
     try:
         if args.check:
-            raw = sys.stdin.read(262145)
-            if len(raw) > 262144:
-                raise ValueError("oversized hook payload")
-            value = json.loads(raw)
+            # No size limit on the payload: a long ordinary message is not a pause, and a
+            # pause's own text is bounded where it is validated (validate_text).
+            value = json.loads(sys.stdin.read())
             if not isinstance(value, dict):
                 raise ValueError("invalid hook payload")
             validate_payload(value)
