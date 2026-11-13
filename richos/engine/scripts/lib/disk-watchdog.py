@@ -147,7 +147,7 @@ def on_volume(path, mount):
         return False
 
 
-def volume_consumers(mount, roots, min_bytes, limit=8, max_depth=6, budget_s=240):
+def volume_consumers(mount, roots, min_bytes, limit=8, max_depth=6, budget_s=480):
     """The biggest folders ON THIS VOLUME, found by walking the disk from `roots`, not from a
     declared list of places (2026-11-10, the CEO: a cleanup that works from a fixed list lets
     every new pile grow until he notices).
@@ -155,11 +155,16 @@ def volume_consumers(mount, roots, min_bytes, limit=8, max_depth=6, budget_s=240
     Each root is listed one level at a time; a child at least `min_bytes` big is descended into
     and, when none of its own children is that big, is named itself with its path from the root
     (`~/.richos-nightly/source/richos/app/target`, never only `~/.richos-nightly`). Never
-    another app's data (du_kb refuses it), never a symlink, never another device. Only called
-    when a volume is under its floor, and bounded by `budget_s`.
+    another app's data (du_kb refuses it), never a symlink, never another device. A folder that
+    is refused only because it HOLDS protected data deeper down (/, /Users, the home folder,
+    /private, /private/var: foreign_app_data.listable_holder) is listed and walked around,
+    never measured whole, so /Users/Shared and /private/var/vm are still found. A root walked
+    earlier is skipped by a later one (the home folder, walked first, inside the walk from /).
+    Only called when a volume is under its floor, and bounded by `budget_s`.
     """
     deadline = time.time() + budget_s
     found = []
+    walked = set()
 
     def listing(path):
         try:
@@ -171,19 +176,24 @@ def volume_consumers(mount, roots, min_bytes, limit=8, max_depth=6, budget_s=240
             child = os.path.join(path, name)
             if os.path.islink(child) or not os.path.isdir(child) or not on_volume(child, mount):
                 continue
+            if os.path.realpath(child) in walked:
+                continue
             out.append(child)
         return out
 
     def walk(path, depth):
         """[(bytes, folder)] for the big folders found BELOW `path`, each counted once."""
-        big = []
+        big, out = [], []
         for child in listing(path):
             if time.time() > deadline:
                 break
+            if foreign_app_data.entering(child):
+                if depth < max_depth and foreign_app_data.listable_holder(child):
+                    out.extend(walk(child, depth + 1))
+                continue
             kb = du_kb(child)
             if kb is not None and kb * 1024 >= min_bytes:
                 big.append((kb * 1024, child))
-        out = []
         for size, child in big:
             sub = []
             if depth < max_depth and time.time() <= deadline:
@@ -201,30 +211,35 @@ def volume_consumers(mount, roots, min_bytes, limit=8, max_depth=6, budget_s=240
         root = expand(root)
         if root and os.path.isdir(root) and on_volume(root, mount):
             found.extend(walk(root, 0))
+            walked.add(os.path.realpath(root))
     found = sorted(set(found), reverse=True)
     return found[:limit]
 
 
 def walk_roots(mount, primary):
-    """Where the walk of a volume in alert starts (the CEO, 2026-11-10: a disk alert measures the
-    full volume's biggest folders, so a new pile is found wherever it grows). Another volume is
-    walked from its mount. The internal disk is walked from the home folder, with the Simulator's
-    and Xcode's folders as roots of their own: the rest of its top level is the system's, and
-    every protected folder, or folder holding one, is walked around, never handed to `du`
-    (du_kb refuses it, so the walk never descends into it).
+    """Where the walk of a volume in alert starts: its mount, so the full volume's biggest
+    folders are found wherever a new pile grows (the CEO, 2026-11-10). The internal disk's data
+    volume is walked from /, where its folders appear under their usual names (/Users,
+    /Library, /Applications, /opt, /private) through the system's firmlinks, after the home
+    folder and the Simulator's and Xcode's folders, walked first so the time budget reaches
+    them and so ~/Library's own tool folders are found though ~/Library itself is never entered.
+    Every protected folder, or folder holding one, is walked around, never handed to `du`
+    (volume_consumers, du_kb).
 
-    DISK_VOLUME_WALK_ROOT moves the start of another volume's walk to a folder on that volume.
-    It exists for disk-watchdog.test.sh, which points it at its sandbox: with the sandbox under
-    a TMPDIR on an external drive, the drive became a volume of the suite and its real mount was
-    walked (W27, 2026-11-12). A volume that folder is not on is then not walked at all."""
-    if mount == primary:
-        home = os.path.expanduser("~")
-        return [home, os.path.join(home, "Library/Developer/CoreSimulator"),
-                os.path.join(home, "Library/Developer/Xcode")]
+    DISK_VOLUME_WALK_ROOT replaces every root of a volume's walk with one folder on that volume.
+    It exists for the test suites (disk-watchdog.test.sh, notice-disk-alert.test.sh), which point
+    it at their sandbox: with the sandbox under a TMPDIR on an external drive, the drive became a
+    volume of the suite and its real mount was walked (W27, 2026-11-12). A volume that folder is
+    not on is not walked at all."""
     start = expand(env("DISK_VOLUME_WALK_ROOT", ""))
-    if not start:
+    if start:
+        return [start] if os.path.isdir(start) and on_volume(start, mount) else []
+    if mount != primary:
         return [mount]
-    return [start] if os.path.isdir(start) and on_volume(start, mount) else []
+    home = os.path.expanduser("~")
+    top = os.sep if os.path.realpath(mount) == "/System/Volumes/Data" else mount
+    return [home, os.path.join(home, "Library/Developer/CoreSimulator"),
+            os.path.join(home, "Library/Developer/Xcode"), top]
 
 
 def consumer_roots(candidates, mount):
@@ -303,7 +318,12 @@ def is_ours(path):
 
 
 def du_kb(path):
-    """`du -sk path` in kilobytes, or None. THE ONLY PLACE THIS PROGRAM RUNS `du`.
+    """`du -skx path` in kilobytes, or None. THE ONLY PLACE THIS PROGRAM RUNS `du`.
+
+    -x keeps each measurement on the volume it starts on: the internal disk's walk measures
+    /Volumes and /Library/Developer/CoreSimulator, where other drives, network shares and
+    simulator images are mounted, and following them would measure another volume (and ask
+    for access to a removable or network volume).
 
     It refuses, here and not only in the callers, any path that is or holds data macOS
     protects (lib/foreign_app_data.py): 2026-10-29, `du -sk ~/Library/Caches` reached
@@ -311,7 +331,7 @@ def du_kb(path):
     if foreign_app_data.entering(path):
         return None
     try:
-        r = subprocess.run(["du", "-sk", path], capture_output=True, text=True, timeout=120)
+        r = subprocess.run(["du", "-skx", path], capture_output=True, text=True, timeout=120)
     except (OSError, subprocess.TimeoutExpired):
         return None
     first = (r.stdout or "").split("\n")[0].split("\t")

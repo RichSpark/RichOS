@@ -78,11 +78,14 @@ class Consumers(unittest.TestCase):
             os.environ.pop("DISK_VOLUME_WALK_ROOT", None)
             self.assertEqual(wd.walk_roots(self.tmp, "/System/Volumes/Data"), [self.tmp])
 
-    def test_the_internal_disk_is_walked_from_the_home_folder_simulator_and_xcode(self):
+    def test_the_internal_disk_is_walked_from_slash_after_the_home_folder_simulator_and_xcode(self):
+        """Review rv-20261113T003405Z-8c629588-8555: the whole internal volume, not only the home
+        folder; the data volume's folders are walked under their usual names from /."""
         with patch.dict(os.environ, {"HOME": self.root}):
+            os.environ.pop("DISK_VOLUME_WALK_ROOT", None)
             roots = wd.walk_roots("/System/Volumes/Data", "/System/Volumes/Data")
         self.assertEqual(roots, [self.root, os.path.join(self.root, "Library/Developer/CoreSimulator"),
-                                 os.path.join(self.root, "Library/Developer/Xcode")])
+                                 os.path.join(self.root, "Library/Developer/Xcode"), "/"])
 
     def test_the_walk_root_setting_moves_another_volumes_walk_inside_it(self):
         """The suite's seam (W27): its sandbox is where the walk starts; a volume the sandbox is
@@ -91,6 +94,12 @@ class Consumers(unittest.TestCase):
             self.assertEqual(wd.walk_roots(self.tmp, "/System/Volumes/Data"), [self.root])
             with patch.object(wd, "on_volume", return_value=False):
                 self.assertEqual(wd.walk_roots(self.tmp, "/System/Volumes/Data"), [])
+        # The internal disk too: the seam replaces / and the home folder, so a suite run with the
+        # real home folder never walks the real disk.
+        with patch.dict(os.environ, {"DISK_VOLUME_WALK_ROOT": self.root, "HOME": self.tmp}):
+            with patch.object(wd, "on_volume", return_value=True):
+                roots = wd.walk_roots("/System/Volumes/Data", "/System/Volumes/Data")
+        self.assertEqual(roots, [self.root])
 
     def test_a_subfolder_of_a_marked_cargo_target_is_ours(self):
         """Review rv-20261112T231306Z-0b3e30af-4a55: the walk names target/debug/deps, and the
@@ -167,19 +176,38 @@ class ScanBoundary(unittest.TestCase):
     }
     ROOTS = [CACHE, HOME + "/.claude", HOME + "/.richos-nightly", EXT_CACHE]
     PROTECTED = [HOME, HOME + "/Library", HOME + "/Library/Caches", HOME + "/Documents"]
+    # The rest of the internal volume, as / shows it (review rv-20261113T003405Z-8c629588-8555):
+    # two 80 GiB piles outside the home folder, and the folders a walk must go around.
+    SIM_IMAGES = "/Library/Developer/CoreSimulator/Images"
+    ARCHIVES = "/Users/Shared/build-archives"
+    DIRECTORIES.update({
+        "/": ["Library", "System", "Users", "Volumes", "private"],
+        "/Library": ["Developer"], "/Library/Developer": ["CoreSimulator"],
+        "/Library/Developer/CoreSimulator": ["Images"], SIM_IMAGES: [],
+        "/Users": ["Shared", "review-fixture"], "/Users/Shared": ["build-archives"], ARCHIVES: [],
+        "/System": ["Library"], "/System/Library": [], "/Volumes": ["ReviewWorking"],
+        "/private": ["tmp", "var"], "/private/tmp": [], "/private/var": ["folders", "vm"],
+        "/private/var/vm": [], "/private/var/folders": ["xx"], "/private/var/folders/xx": ["id"],
+        "/private/var/folders/xx/id": ["T"], "/private/var/folders/xx/id/T": ["com.example.other"],
+        "/private/var/folders/xx/id/T/com.example.other": [],
+    })
+    HOLDERS = ["/", "/Users", "/private", "/private/var", "/private/var/folders",
+               "/private/var/folders/xx", "/private/var/folders/xx/id", "/private/var/folders/xx/id/T",
+               "/private/var/folders/xx/id/T/com.example.other", "/System", "/System/Library"]
 
     def alert(self, low_volume, candidates, walk_root=""):
         """(paths handed to du, folders the alert named) for an alert on `low_volume`."""
         measured, saved = [], []
 
         def process(argv, **kwargs):
-            self.assertEqual(argv[:2], ["du", "-sk"])
+            self.assertEqual(argv[:2], ["du", "-skx"])
             measured.append(argv[2])
             return subprocess.CompletedProcess(argv, 0, stdout="10485760\t" + argv[2] + "\n")
 
         def same_volume(path, mount):
             on_external = path == self.EXTERNAL or path.startswith(self.EXTERNAL + "/")
-            return (self.EXTERNAL if on_external else self.PRIMARY) == mount
+            on_system = path == "/System" or path.startswith("/System/")
+            return (self.EXTERNAL if on_external else "sealed" if on_system else self.PRIMARY) == mount
 
         env = {"MODE": "check", "HOME": self.HOME, "TMPDIR": self.EXTERNAL + "/tmp",
                "DISK_PRIMARY_VOLUME": self.PRIMARY, "DISK_SCALE_EXTRA_VOLUMES": "0",
@@ -217,6 +245,20 @@ class ScanBoundary(unittest.TestCase):
         self.assertIn(self.CACHE, measured, "RichOS's own folders are still measured")
         self.assertEqual([p for p in measured if p in self.PROTECTED], [], measured)
         self.assertEqual([p for p in measured if p.startswith(self.EXTERNAL)], [], measured)
+
+    def test_an_internal_disk_alert_walks_the_whole_volume_around_protected_folders(self):
+        """The reviewer's two piles: simulator images under /Library and build archives in
+        /Users/Shared are named. /, /Users, the home folder and /private are listed, never
+        measured whole; the per-user temporary folders are never entered; another volume and
+        the sealed system volume are never measured."""
+        measured, named = self.alert(self.PRIMARY, self.ROOTS)
+        self.assertIn(self.SIM_IMAGES, named)
+        self.assertIn(self.ARCHIVES, named)
+        self.assertIn("/private/var/vm", measured, "a holder's other children are still measured")
+        self.assertEqual([p for p in measured if p in self.HOLDERS + self.PROTECTED], [], measured)
+        self.assertEqual([p for p in measured if p.startswith("/private/var/folders")], [], measured)
+        self.assertEqual([p for p in measured if p.startswith(("/Volumes/", "/System"))], [], measured)
+        self.assertEqual(measured.count(self.PROJECTS), 1, "the home folder is walked once")
 
     def test_an_external_drive_alert_walks_the_drive_from_its_mount_and_stays_on_it(self):
         measured, named = self.alert(self.EXTERNAL, self.ROOTS)

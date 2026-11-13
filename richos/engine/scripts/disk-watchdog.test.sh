@@ -147,9 +147,10 @@ echo "=== disk-watchdog tests ==="
 # macOS protects, so a regression is a recorded path here and never a prompt there.
 FIX_HOME="$SANDBOX/home"
 FIX_TMP="$SANDBOX/tmp"
-# THE VOLUME THE SUITE'S RUNS WALK (W27). An alert walks another volume from its mount;
-# DISK_VOLUME_WALK_ROOT starts that walk here instead, a folder inside the sandbox that
-# holds neither the fixture home nor the fixture TMPDIR (which W26 forbids measuring).
+# THE VOLUME THE SUITE'S RUNS WALK (W27). An alert walks the whole volume (the internal
+# disk from /, another volume from its mount); DISK_VOLUME_WALK_ROOT replaces that walk's
+# roots with this folder inside the sandbox, which holds neither the fixture home nor the
+# fixture TMPDIR (which W26 forbids measuring).
 FIX_VOLUME="$SANDBOX/volume"
 mkdir -p "$FIX_TMP" "$FIX_VOLUME/pile" \
     "$FIX_HOME/Library/Caches/com.apple.Music" "$FIX_HOME/Library/Developer/Xcode" \
@@ -2007,16 +2008,13 @@ else
     bad "W27  the program asked du for paths outside this suite's sandbox (refused by the recorder)"
     sort -u "$DU_OUTSIDE" | sed 's/^/        /' | head -10
 fi
-# THE WALK UNDER TEST RAN. With the sandbox on another volume (a TMPDIR under /Volumes, as
-# in the merge gate) that volume's alerts walked it, from the suite's own walk root.
-case "$SANDBOX" in
-    /Volumes/*)
-        if grep -qx "$FIX_VOLUME/pile" "$DU_ALL"; then
-            ok "W27a POSITIVE PROBE: the other volume's full walk ran, from the suite's own walk root"
-        else
-            bad "W27a the other volume was never walked: the walk root seam measured nothing"
-        fi ;;
-esac
+# THE WALK UNDER TEST RAN, from the suite's own walk root, on whichever volume holds the
+# sandbox: the internal disk, or another volume when TMPDIR is under /Volumes (the merge gate).
+if grep -qx "$FIX_VOLUME/pile" "$DU_ALL"; then
+    ok "W27a POSITIVE PROBE: the full-volume walk ran, from the suite's own walk root"
+else
+    bad "W27a the volume walk never ran: the walk root seam measured nothing"
+fi
 
 echo "  $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ] || exit 1
