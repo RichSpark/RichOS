@@ -12335,7 +12335,7 @@
     },
     "scripts/lib/bulk-record-transport.test.py": {
       "source": "scripts/lib/bulk-record-transport.test.py",
-      "sha256": "ed9b43163d565bb846bd24d2a4030e6228355484b8aad221441be37786e434c3",
+      "sha256": "ea276b34a6cf7cd80ab1c7e9290ea5d20c9873d7de23929f57bff58d8dfb57d5",
       "evidence": "All three cases supply private Git records, explicit CA_REPOS or ur_resolve(root) and a cleared child environment. ca_items_json never calls ca_resolve; the fault injector only wraps fixed Python encoding. Only the fixture entity declaration and record paths can be read.",
       "keys": [],
       "edges": [
