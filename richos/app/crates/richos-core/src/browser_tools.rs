@@ -61,6 +61,17 @@
 //! element at a time ([`AxNode`]) and keeps the elements of the last reading so a press lands
 //! on exactly the element the teammate was shown.
 //!
+//! ## What was measured
+//!
+//! `docs/verification/browser-reader-real-pages-2026-11-13/`: ten real pages (a long article,
+//! two accordions, a tab list, a table, a page that loads more as it scrolls, a web app, a
+//! sign-in redirect, a page only a signed-in browser is shown, a link that opens a new tab)
+//! read and answered in Safari, Chrome, Firefox and Brave in a test guest
+//! (`scripts/testvm/browser-reader-walk.py`), and one conversation through the real app in
+//! which Reed opened a closed panel for the user's question. The same record lists what is
+//! not measured: no real signed-in account, no browser beyond those four, and that a code
+//! sample's line breaks are not kept.
+//!
 //! ## Who calls it
 //!
 //! As the LinkedIn reader ("Who calls it" there): the named specialists whose definitions list
@@ -441,14 +452,97 @@ pub trait PageHost: BrowserHost {
     fn show_tab(&self, app: &BrowserApp, tab: u64) -> bool;
 }
 
-/// The address the model gave, accepted when it is a web address (`http` or `https`, a host, no
-/// user name in it). Anything else (a file, a script, a bare word) opens nothing.
-pub fn check_url(url: &str) -> Result<String, String> {
-    let url = url.trim();
-    if url.is_empty() || url.len() > MAX_URL_CHARS || url.chars().any(char::is_whitespace) || shared::parse(url).is_none() {
-        return Err("Give the full address of one web page, starting with https:// (or http://). Nothing was opened.".into());
+/// One label of a host name in Punycode (RFC 3492), the form every browser shows and sends for
+/// a name with letters outside ASCII: `münchen` is `mnchen-3ya`.
+fn punycode(label: &str) -> Option<String> {
+    const BASE: u32 = 36;
+    const TMIN: u32 = 1;
+    const TMAX: u32 = 26;
+    fn digit(d: u32) -> char {
+        if d < 26 { (b'a' + d as u8) as char } else { (b'0' + (d - 26) as u8) as char }
     }
-    Ok(url.to_string())
+    fn adapt(delta: u32, points: u32, first: bool) -> u32 {
+        let mut delta = if first { delta / 700 } else { delta / 2 };
+        delta += delta / points;
+        let mut k = 0;
+        while delta > ((BASE - TMIN) * TMAX) / 2 {
+            delta /= BASE - TMIN;
+            k += BASE;
+        }
+        k + ((BASE - TMIN + 1) * delta) / (delta + 38)
+    }
+    let input: Vec<u32> = label.chars().map(|c| c as u32).collect();
+    let mut output: String = label.chars().filter(char::is_ascii).collect();
+    let basic = output.len() as u32;
+    if basic > 0 {
+        output.push('-');
+    }
+    let (mut n, mut delta, mut bias, mut done) = (128u32, 0u32, 72u32, basic);
+    while (done as usize) < input.len() {
+        let next = *input.iter().filter(|c| **c >= n).min()?;
+        delta = delta.checked_add((next - n).checked_mul(done + 1)?)?;
+        n = next;
+        for &c in &input {
+            if c < n {
+                delta = delta.checked_add(1)?;
+            }
+            if c == n {
+                let (mut q, mut k) = (delta, BASE);
+                loop {
+                    let t = if k <= bias { TMIN } else if k >= bias + TMAX { TMAX } else { k - bias };
+                    if q < t {
+                        break;
+                    }
+                    output.push(digit(t + (q - t) % (BASE - t)));
+                    q = (q - t) / (BASE - t);
+                    k += BASE;
+                }
+                output.push(digit(q));
+                bias = adapt(delta, done + 1, done == basic);
+                delta = 0;
+                done += 1;
+            }
+        }
+        delta += 1;
+        n += 1;
+    }
+    Some(output)
+}
+
+/// The address with its host in ASCII: a host with letters outside ASCII (`www.münchen.de`,
+/// `例え.jp`) in the `xn--` form browsers use for it, so the page that opens is the page asked
+/// for. An address whose host is ASCII already is returned as it is.
+fn ascii_address(url: &str) -> Option<String> {
+    use unicode_normalization::UnicodeNormalization;
+    let start = url.find("://")? + 3;
+    let end = url[start..].find(['/', '?', '#']).map_or(url.len(), |e| start + e);
+    let authority = &url[start..end];
+    if authority.is_ascii() {
+        return Some(url.to_string());
+    }
+    let (host, port) = match authority.rsplit_once(':') {
+        Some((host, port)) if !port.is_empty() && port.chars().all(|c| c.is_ascii_digit()) => (host, Some(port)),
+        _ => (authority, None),
+    };
+    let mut labels = Vec::new();
+    for label in host.split(['.', '。', '．', '｡']) {
+        let label: String = label.nfkc().collect::<String>().to_lowercase();
+        labels.push(if label.is_ascii() { label } else { format!("xn--{}", punycode(&label)?) });
+    }
+    let port = port.map(|p| format!(":{p}")).unwrap_or_default();
+    Some(format!("{}{}{port}{}", &url[..start], labels.join("."), &url[end..]))
+}
+
+/// The address the model gave, accepted when it is a web address (`http` or `https`, a host, no
+/// user name in it), with its host as browsers write it ([`ascii_address`]). Anything else (a
+/// file, a script, a bare word) opens nothing.
+pub fn check_url(url: &str) -> Result<String, String> {
+    let refuse = || "Give the full address of one web page, starting with https:// (or http://). Nothing was opened.".to_string();
+    let url = url.trim();
+    if url.is_empty() || url.len() > MAX_URL_CHARS || url.chars().any(char::is_whitespace) {
+        return Err(refuse());
+    }
+    ascii_address(url).filter(|u| shared::parse(u).is_some()).ok_or_else(refuse)
 }
 
 /// Which page an address names on any site: the host without `www.`, `m.` or its port, then
@@ -1584,6 +1678,11 @@ mod tests {
             assert!(session.open(&fake, bad).unwrap_err().contains("Nothing was opened"), "{bad}");
         }
         assert!(fake.opened.borrow().is_empty());
+        // A host with letters outside ASCII is opened in the form browsers use for it.
+        assert_eq!(check_url("https://www.münchen.de/rathaus?x=1").unwrap(), "https://www.xn--mnchen-3ya.de/rathaus?x=1");
+        assert_eq!(check_url("https://例え.jp/").unwrap(), "https://xn--r8jz45g.jp/");
+        assert_eq!(check_url("https://Bücher.example:8443/a").unwrap(), "https://xn--bcher-kva.example:8443/a");
+        assert_eq!(check_url("https://shop.example/straße").unwrap(), "https://shop.example/straße", "only the host changes");
         assert!(session.call(&fake, OPEN, &json!({"url": ADMIN, "follow": ["x"]})).unwrap_err().contains("arguments"));
         assert!(session.call(&fake, "read_profile", &json!({})).unwrap_err().contains("Unknown"));
     }

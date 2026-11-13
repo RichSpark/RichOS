@@ -130,10 +130,10 @@ impl AxNode for Ax {
         let value = attribute(&self.el, "AXExpanded")?;
         let open = value.downcast::<CFBoolean>().map(bool::from)
             .or_else(|| value.downcast::<CFNumber>().and_then(|n| n.to_i64()).map(|n| n != 0))?;
-        // Safari answers "not expanded" for every link and button when asked (measured on real
-        // pages in the guest walk of 2026-11-13: all 2,685 controls of nine pages read
-        // "collapsed"), so a closed state counts only for an element that lists the attribute
-        // as one of its own.
+        // Safari, Chrome and Brave answer "not expanded" for an ordinary link or button when
+        // asked (measured on real pages in the guest walk of 2026-11-13: 2,957 of the 3,116
+        // controls numbered in Safari's run read "collapsed"), so a closed state counts only
+        // for an element that lists the attribute as one of its own.
         (open || lists(&self.el, "AXExpanded")).then_some(open)
     }
     fn children(&self) -> Vec<Self> {
