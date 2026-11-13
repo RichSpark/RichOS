@@ -18,6 +18,19 @@ from verification_inputs import Unsupported
 
 
 class Planner(unittest.TestCase):
+    def test_a_plugin_manifest_naming_mods_is_read_and_a_mods_change_is_the_named_fallback(self):
+        # 2026-11-13: hooks/hooks.json gained `modules` (the permission-prompt mod); the reader
+        # refused the whole document as an unknown structure, so every hooks.json change fell back.
+        from verification_inputs import hook_entries, hooks_change
+        hooks = {"Stop": [{"hooks": [{"type": "command", "command": "bash ${CLAUDE_PLUGIN_ROOT}/a.sh"}]}]}
+        plain = json.dumps({"hooks": hooks})
+        with_mod = json.dumps({"modules": ["./mod.ts"], "hooks": hooks})
+        self.assertEqual(hook_entries(with_mod), hook_entries(plain))
+        self.assertIsNone(hooks_change(with_mod, with_mod)["fallback"])
+        self.assertEqual(hooks_change(plain, with_mod)["fallback"], "the plugin's mods (modules) changed")
+        with self.assertRaises(Unsupported):
+            hook_entries(json.dumps({"modules": [1], "hooks": hooks}))
+
     def test_a_newly_registered_hook_script_a_suite_names_is_not_called_unnamed(self):
         # 2026-10-01: hooks() visits every script hooks.json registers, so a branch that changed
         # hooks.json AND the script it registers had the script's reasons on record before the

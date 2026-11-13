@@ -74,6 +74,30 @@ fn app_profile_keeps_app_scope_on_every_tool_and_reuses_terminal_bash_hooks() {
     assert_eq!(profile.coordination, next.coordination);
 }
 
+/// **Every lease loads the engine's mods as the terminal does**, the permission-prompt mod among
+/// them: the generated manifest names the engine's `modules`, each copied beside it unchanged, so
+/// an ask Claude Code still raises in bypass mode is answered No with its own reason before it
+/// reaches the app (`hooks/answer-permission-prompt.ts`). The quota gate's rewrite keeps them.
+#[test]
+fn every_lease_loads_the_engines_mods_and_the_quota_gate_keeps_them() {
+    let f = Scratch::new();
+    let profile = prepare_fixture(&engine(), &f.0, f.runtime()).unwrap();
+    let terminal: serde_json::Value = serde_json::from_slice(&std::fs::read(engine().join("hooks/hooks.json")).unwrap()).unwrap();
+    let modules = terminal["modules"].as_array().unwrap().clone();
+    assert!(modules.iter().any(|m| m == "./answer-permission-prompt.ts"), "{modules:?}");
+    let read = || -> serde_json::Value {
+        serde_json::from_slice(&std::fs::read(profile.plugin.join("hooks/hooks.json")).unwrap()).unwrap()
+    };
+    assert_eq!(read()["modules"].as_array().unwrap(), &modules);
+    for module in &modules {
+        let name = module.as_str().unwrap().trim_start_matches("./");
+        assert_eq!(std::fs::read(profile.plugin.join("hooks").join(name)).unwrap(),
+                   std::fs::read(engine().join("hooks").join(name)).unwrap(), "{name}");
+    }
+    profile.install_quota_gate(Path::new("/Applications/RichOS Test.app/Contents/MacOS/richos")).unwrap();
+    assert_eq!(read()["modules"].as_array().unwrap(), &modules);
+}
+
 #[test]
 fn desktop_quota_wrapper_preserves_the_canonical_hook_and_its_full_tool_reach() {
     let f = Scratch::new();
@@ -1570,9 +1594,8 @@ fn with_apples_git_the_lease_includes_the_file_its_osxkeychain_default_comes_fro
 fn every_lease_runs_the_engines_checks_at_the_write_and_never_the_terminal_claim() {
     // The checks at the write the terminal runs and every user needs, named here on their own
     // so this states what the lease must carry rather than echoing what it does carry.
-    const APP_BASH_RULES: [&str; 7] = ["guard-publication-commits.sh", "guard-named-persons-commands.sh",
-        "guard-public-record-repo.sh", "guard-unguarded-rm.sh", "guard-host-sleep.sh", "guard-headed-browser.sh",
-        "guard-toolchain.sh"];
+    const APP_BASH_RULES: [&str; 6] = ["guard-publication-commits.sh", "guard-named-persons-commands.sh",
+        "guard-public-record-repo.sh", "guard-host-sleep.sh", "guard-headed-browser.sh", "guard-toolchain.sh"];
     const APP_WRITE_RULES: [&str; 3] = ["scan-secrets.sh", "guard-publication-writes.sh", "guard-named-persons-writes.sh"];
     let f = Scratch::new();
     let folder = f.0.join("central");

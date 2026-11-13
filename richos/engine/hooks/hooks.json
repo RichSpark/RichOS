@@ -1,5 +1,6 @@
 {
   "description": "The RichOS engine's orchestration guards, registered exactly as the engine registers them for a session seated in its own repo \u2014 same events, same matchers, same order, same timeouts \u2014 but invoked through ${CLAUDE_PLUGIN_ROOT} so they run from wherever the engine actually lives.",
+  "modules": ["./answer-permission-prompt.ts"],
   "hooks": {
     "SessionStart": [
       {

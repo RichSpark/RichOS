@@ -228,8 +228,11 @@ def hook_entries(text, settings=False):
                               parse_constant=invalid_constant)
     except (TypeError, ValueError) as exc:
         raise Unsupported("hooks JSON is invalid: " + str(exc)) from None
-    if (not isinstance(document, dict) or (not settings and set(document) - {"description", "hooks"})
-            or not isinstance(document.get("hooks"), dict)):
+    # A plugin's hooks.json may also name its mods (`modules`, a list of file names beside it).
+    modules = document.get("modules", []) if isinstance(document, dict) else []
+    if (not isinstance(document, dict) or (not settings and set(document) - {"description", "hooks", "modules"})
+            or not isinstance(document.get("hooks"), dict)
+            or not isinstance(modules, list) or not all(isinstance(module, str) for module in modules)):
         raise Unsupported("unknown hooks document structure")
     entries = {}
     for event, groups in document["hooks"].items():
@@ -261,6 +264,9 @@ def hooks_change(before, after):
         old, new = hook_entries(before), hook_entries(after)
     except Unsupported as exc:
         result["fallback"] = str(exc)
+        return result
+    if json.loads(before).get("modules") != json.loads(after).get("modules"):
+        result["fallback"] = "the plugin's mods (modules) changed"
         return result
     changed = {key for key in old.keys() | new.keys() if old.get(key) != new.get(key)}
     result["commands"] = sorted({version[key]["command"] for key in changed

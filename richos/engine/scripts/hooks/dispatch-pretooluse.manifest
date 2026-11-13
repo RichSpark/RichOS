@@ -44,7 +44,6 @@ Bash|guard-host-display-power.sh
 Bash|guard-public-record-repo.sh
 Bash|guard-land-lease-commands.sh
 Bash|guard-foreign-app-data.sh
-Bash|guard-unguarded-rm.sh
 Bash|guard-host-sleep.sh
 Bash|guard-headed-browser.sh
 Bash|guard-toolchain.sh

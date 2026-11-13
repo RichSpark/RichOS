@@ -468,8 +468,6 @@ run_layer_R() {
     #   guard-shared-scratchpad — a teammate's delete inside the lead session's
     #     shared scratchpad. Its subject is the COMMAND's text, the payload's cwd and
     #     agent_id, and the Claude scratch roots; no repository decides it.
-    #   guard-unguarded-rm — the Bash rule that refuses an rm Claude Code would prompt the CEO
-    #     about. Its subject is the COMMAND's text and the payload's cwd, not a repository.
     #   guard-host-sleep — the Bash rule that refuses caffeinate and sleep-setting changes on
     #     the host. Its subject is the COMMAND's text alone; no repository decides it.
     #   guard-headed-browser — the Bash and mcp__* rule that keeps browser automation on the
@@ -488,7 +486,7 @@ run_layer_R() {
     notice-inflight-sends session-start-ci-surface session-start-scratch session-start-quota session-start-stall shell-evidence strip-ack-lines \
     task-completed-handoff teammate-idle-handoff \
     worker-created-handoff worker-started-handoff worker-updated-handoff worker-ended-handoff \
-    guard-ci-red-lands guard-land-lease-commands guard-foreign-app-data guard-shared-scratchpad guard-unguarded-rm guard-host-sleep guard-headed-browser guard-toolchain \
+    guard-ci-red-lands guard-land-lease-commands guard-foreign-app-data guard-shared-scratchpad guard-host-sleep guard-headed-browser guard-toolchain \
     deliver-review-verdict \
     guard-no-shell-c"
 
@@ -1270,7 +1268,6 @@ guard-ci-red-lands.sh|PreToolUse
 guard-land-lease-commands.sh|PreToolUse
 guard-foreign-app-data.sh|PreToolUse
 guard-shared-scratchpad.sh|PreToolUse
-guard-unguarded-rm.sh|PreToolUse
 guard-host-sleep.sh|PreToolUse
 guard-headed-browser.sh|PreToolUse
 guard-headed-browser.sh|PreToolUse
