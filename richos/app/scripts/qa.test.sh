@@ -97,11 +97,13 @@
 #   SP1-SP4 stop-probe: an interrupt that also ends the worker and a stop_task that ends only
 #           the foreground command are each reported as measured, exit 0; a lead that never
 #           starts the command and a missing binary are refused, exit 2, against a scripted claude
+#   SW1-SW7 speech-wav: two lines become one WAV with each line's times; a voice name with spaces is accepted; a pause filled with room noise; an existing
+#           output, an unknown voice and an empty line are each refused
 #   X1      the committed fixtures still match their generator
 #
 # run-tests: no-host-screen: its only capture/keystroke references are the strings it asserts those two tools REFUSE to act on, and its frames are committed PNG fixtures
 # run-tests: inputs richos/app/scripts/qa.test.sh richos/app/scripts/qa richos/mobile/conformance/vectors/fingerprint.json richos/mobile/native-ios/UITests/PhysicalDeviceTests.swift
-# run-tests: covers richos/app/scripts/qa/usage-shape.sh richos/app/scripts/qa/lease-retention-probe.py richos/app/scripts/qa/stop-probe.py richos/app/scripts/qa/pair-words.py richos/app/scripts/qa/contrast.py richos/app/scripts/qa/frame.py richos/app/scripts/qa/lib/qaimg.py richos/app/scripts/qa/lib/qaocr.py richos/app/scripts/qa/ocr-find.py richos/app/scripts/qa/ocr-find.sh richos/app/scripts/qa/ocr-gate.sh richos/app/scripts/qa/ocr-read.py richos/app/scripts/qa/ocr-watch.sh richos/app/scripts/qa/redact.py richos/app/scripts/qa/timeline.py richos/app/scripts/qa/timeline-bounds.test.py richos/app/scripts/qa/wait-for.sh richos/app/scripts/qa/phone-client.mjs richos/app/scripts/qa/flake-rate.sh richos/app/scripts/qa/phone-android.py richos/app/scripts/qa/lab-ledger.py richos/app/scripts/qa/lab-pause.py richos/app/scripts/qa/step-mark.py richos/app/scripts/qa/ledger-timeline.py richos/app/scripts/qa/native-transcript.py richos/app/scripts/qa/hidden-send-try.py richos/app/scripts/qa/tunnel-requests.py richos/app/scripts/qa/fixtures/make-fixtures.py richos/app/scripts/qa/phone-ios.py richos/app/scripts/qa/stall-run.py richos/app/scripts/qa/under-load.py richos/app/scripts/qa/busy-sample.py richos/app/scripts/qa/lib/busy-sample/sitecustomize.py richos/app/scripts/qa/slow-shutdown.py richos/app/scripts/qa/ocr-cache.test.py richos/app/scripts/qa/child-lifetime.test.py richos/app/scripts/qa/trust-reading.test.py richos/app/scripts/qa/crash-reading.test.py richos/app/scripts/qa/device-launch.test.py richos/app/scripts/qa/lab-pause.test.py richos/app/scripts/qa/tunnel-requests.test.py richos/app/scripts/qa/wait-turn.py richos/app/scripts/qa/wait-turn.test.py richos/app/scripts/qa/rich-reply-probe.py richos/app/scripts/qa/rich-reply-probe.test.py richos/app/scripts/qa/routing-probe.py richos/app/scripts/qa/routing-probe.test.py richos/app/scripts/qa/phone-ios-run.test.py richos/mobile/native-ios/UITests/PhysicalDeviceTests.swift
+# run-tests: covers richos/app/scripts/qa/usage-shape.sh richos/app/scripts/qa/lease-retention-probe.py richos/app/scripts/qa/stop-probe.py richos/app/scripts/qa/pair-words.py richos/app/scripts/qa/contrast.py richos/app/scripts/qa/frame.py richos/app/scripts/qa/lib/qaimg.py richos/app/scripts/qa/lib/qaocr.py richos/app/scripts/qa/ocr-find.py richos/app/scripts/qa/ocr-find.sh richos/app/scripts/qa/ocr-gate.sh richos/app/scripts/qa/ocr-read.py richos/app/scripts/qa/ocr-watch.sh richos/app/scripts/qa/redact.py richos/app/scripts/qa/timeline.py richos/app/scripts/qa/timeline-bounds.test.py richos/app/scripts/qa/wait-for.sh richos/app/scripts/qa/phone-client.mjs richos/app/scripts/qa/flake-rate.sh richos/app/scripts/qa/phone-android.py richos/app/scripts/qa/lab-ledger.py richos/app/scripts/qa/lab-pause.py richos/app/scripts/qa/step-mark.py richos/app/scripts/qa/ledger-timeline.py richos/app/scripts/qa/native-transcript.py richos/app/scripts/qa/hidden-send-try.py richos/app/scripts/qa/tunnel-requests.py richos/app/scripts/qa/fixtures/make-fixtures.py richos/app/scripts/qa/phone-ios.py richos/app/scripts/qa/stall-run.py richos/app/scripts/qa/under-load.py richos/app/scripts/qa/busy-sample.py richos/app/scripts/qa/lib/busy-sample/sitecustomize.py richos/app/scripts/qa/slow-shutdown.py richos/app/scripts/qa/ocr-cache.test.py richos/app/scripts/qa/child-lifetime.test.py richos/app/scripts/qa/trust-reading.test.py richos/app/scripts/qa/crash-reading.test.py richos/app/scripts/qa/device-launch.test.py richos/app/scripts/qa/lab-pause.test.py richos/app/scripts/qa/tunnel-requests.test.py richos/app/scripts/qa/wait-turn.py richos/app/scripts/qa/wait-turn.test.py richos/app/scripts/qa/rich-reply-probe.py richos/app/scripts/qa/rich-reply-probe.test.py richos/app/scripts/qa/routing-probe.py richos/app/scripts/qa/routing-probe.test.py richos/app/scripts/qa/phone-ios-run.test.py richos/app/scripts/qa/speech-wav.py richos/mobile/native-ios/UITests/PhysicalDeviceTests.swift
 set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -150,7 +152,7 @@ python3 -c 'import PIL' >/dev/null 2>&1 && HAVE_PIL=1
 echo ""
 echo "=== H. every tool answers for itself ==="
 for t in contrast.py frame.py redact.py timeline.py ocr-gate.sh ocr-find.sh \
-         ocr-watch.sh wait-for.sh phone-client.mjs flake-rate.sh phone-android.py lab-ledger.py lab-pause.py step-mark.py ledger-timeline.py wait-turn.py rich-reply-probe.py routing-probe.py native-transcript.py hidden-send-try.py phone-ios.py pair-words.py usage-shape.sh lease-retention-probe.py stop-probe.py fixtures/make-fixtures.py; do
+         ocr-watch.sh wait-for.sh phone-client.mjs flake-rate.sh phone-android.py lab-ledger.py lab-pause.py step-mark.py ledger-timeline.py wait-turn.py rich-reply-probe.py routing-probe.py native-transcript.py hidden-send-try.py phone-ios.py pair-words.py usage-shape.sh lease-retention-probe.py stop-probe.py speech-wav.py fixtures/make-fixtures.py; do
   if [ ! -x "$QA/$t" ]; then
     bad "H $t is executable" "not present or not executable at $QA/$t"
     continue
@@ -1770,6 +1772,45 @@ FAKE_STOP_MODE=never run "$SP" --mode stop_task --out "$TMP/sp-never" --claude "
 expect "SP3 a lead that never starts the foreground call measured nothing, exit 2" 2 "the foreground call never started"
 run "$SP" --mode none --out "$TMP/sp-none" --claude "$TMP/no-such-claude"
 expect "SP4 no claude binary is refused, exit 2" 2 "is not an executable claude"
+
+echo ""
+echo "=== SW. speech-wav: a spoken fixture as one WAV, with each line's times ==="
+printf '[{"voice":"Samantha","text":"We decided to raise prices.","pause":0.5},{"text":"Sam sends the list on Friday."}]' > "$TMP/sw-script.json"
+if command -v say >/dev/null 2>&1 && command -v ffmpeg >/dev/null 2>&1; then
+  run python3 "$QA/speech-wav.py" "$TMP/sw-script.json" "$TMP/sw.wav" --rate 16000
+  if [ "$CODE" = 0 ] && python3 -c 'import json,sys,wave; d=json.loads(sys.argv[1]); w=wave.open(sys.argv[2]); l=d["lines"]; assert len(l)==2 and l[0]["start"]==0 and l[1]["start"]>=l[0]["end"]+0.5 and w.getframerate()==16000 and w.getnchannels()==1 and abs(w.getnframes()/16000-d["seconds"])<0.05' "$OUT" "$TMP/sw.wav" 2>/dev/null; then
+    ok "SW1 two lines become one 16 kHz mono WAV, the second starting after the first and its pause"
+  else
+    bad "SW1 two lines become one WAV with their times" "exit $CODE: $(printf '%s' "$OUT" | tr '\n' ' ' | cut -c1-240)"
+  fi
+  run python3 "$QA/speech-wav.py" "$TMP/sw-script.json" "$TMP/sw.wav"
+  expect "SW2 an existing output is never overwritten, exit 1" 1 "is never overwritten"
+  printf '[{"voice":"NoSuchVoiceQA","text":"hello"}]' > "$TMP/sw-badvoice.json"
+  run python3 "$QA/speech-wav.py" "$TMP/sw-badvoice.json" "$TMP/sw-bad.wav"
+  expect "SW3 a voice say does not list is refused, exit 1" 1 "is not a voice"
+  SPACED="$(say -v '?' | sed -n 's/^\(.*([^#]*)\)  *[a-z][a-z]*_[A-Za-z0-9]*  *#.*/\1/p' | head -1 | sed 's/ *$//')"
+  if [ -n "$SPACED" ]; then
+    python3 -c 'import json,sys; print(json.dumps([{"voice": sys.argv[1], "text": "hello"}]))' "$SPACED" > "$TMP/sw-spaced.json"
+    run python3 "$QA/speech-wav.py" "$TMP/sw-spaced.json" "$TMP/sw-spaced.wav" --rate 16000
+    expect "SW5 a voice whose name holds spaces ($SPACED) is accepted and rendered" 0 '"seconds"'
+  else
+    skip "SW5 a voice whose name holds spaces is accepted" "say lists no such voice here"
+  fi
+  printf '[{"text":"one","pause":2.0}]' > "$TMP/sw-noise.json"
+  run python3 "$QA/speech-wav.py" "$TMP/sw-noise.json" "$TMP/sw-noise.wav" --rate 16000 --room-noise -50
+  if [ "$CODE" = 0 ] && python3 -c 'import math,struct,sys,wave; w=wave.open(sys.argv[1]); n=w.getnframes(); d=struct.unpack("<%dh"%n, w.readframes(n)); tail=d[-16000:]; rms=math.sqrt(sum(x*x for x in tail)/len(tail)); db=20*math.log10(rms/32767); assert any(tail) and abs(db+50)<2, db' "$TMP/sw-noise.wav" 2>/dev/null; then
+    ok "SW6 --room-noise -50 fills the pause with noise at about -50 dBFS, never exact zeros"
+  else
+    bad "SW6 --room-noise fills the pause with noise at its level" "exit $CODE: $(printf '%s' "$OUT" | tr '\n' ' ' | cut -c1-200)"
+  fi
+else
+  skip "SW1-SW3 speech-wav renders and refuses" "say or ffmpeg is not on PATH here"
+fi
+printf '[{"text":""}]' > "$TMP/sw-empty.json"
+run python3 "$QA/speech-wav.py" "$TMP/sw-empty.json" "$TMP/sw-empty.wav"
+expect "SW4 a line with no text is refused before anything is rendered, exit 1" 1 'needs a non-empty "text"'
+run python3 "$QA/speech-wav.py" "$TMP/sw-script.json" "$TMP/sw-loud.wav" --room-noise -10
+expect "SW7 room noise louder than -20 dBFS is refused, exit 1" 1 "must be between -90 and -20 dBFS"
 
 echo ""
 echo "=== X. the fixtures are still the fixtures ==="

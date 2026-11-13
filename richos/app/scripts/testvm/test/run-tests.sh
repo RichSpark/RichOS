@@ -1959,6 +1959,10 @@ t "conversation walk: steps, turn matching, app notices never hold a step, actor
   PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/conversation-walk.test.py" >"$TMP/conversation-walk.log" 2>&1; ok $? "$(cat "$TMP/conversation-walk.log")"
 t_done
 
+t "release lines walk: a dictation judged against the words said (a run of 3 missing, words added at the end), argument refusals"
+  PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/release-lines-walk.test.py" >"$TMP/release-lines-walk.log" 2>&1; ok $? "$(cat "$TMP/release-lines-walk.log")"
+t_done
+
 t "no-grant reader: RichOS's Accessibility requests and macOS's request window, one line each, from the TCC log"
   PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/no-grant-reader.test.py" >"$TMP/no-grant-reader.log" 2>&1; ok $? "$(cat "$TMP/no-grant-reader.log")"
 t_done
