@@ -104,3 +104,25 @@ PYTHON
   cmp "$scratch/source.txt" "$scratch/$archive-extracted/source.txt"
 done
 printf '%s\n' '  ok  packaged helper listed and extracted TAR.GZ and 7z'
+
+# The release payload package-app.sh embeds must not carry the build machine's paths:
+# make-release.sh refuses to sign a bundle that does. Swift's linker records each
+# object file's absolute path as a debug map and SwiftPM adds an absolute rpath to
+# the toolchain, so this scans the built bytes rather than trusting the flags.
+TMPDIR="$scratch" bash "$root/richos/app/scripts/package-richfiles.sh" --embedded "$scratch/embedded"
+python3 - "$HOME" "$scratch/embedded/RichFiles.app/Contents/MacOS/RichFiles" "$scratch/embedded/libRichFilesRail.dylib" <<'PYTHON'
+import sys
+home = sys.argv[1].rstrip('/').encode()
+markers = [b'/Volumes/', b'/Users/'] + ([home] if home else [])
+failed = False
+for path in sys.argv[2:]:
+    with open(path, 'rb') as handle:
+        data = handle.read()
+    counts = {marker.decode(): data.count(marker) for marker in markers}
+    print('  ', path.rsplit('/', 1)[-1], ' '.join(f'{marker}={count}' for marker, count in counts.items()))
+    failed = failed or any(counts.values())
+if failed:
+    print('  FAIL  the release RichFiles payload carries a build-machine path', file=sys.stderr)
+    sys.exit(1)
+PYTHON
+printf '%s\n' '  ok  release RichFiles and libRichFilesRail.dylib carry no build-machine path'
