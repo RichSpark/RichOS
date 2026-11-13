@@ -91,6 +91,8 @@ class Driver(unittest.TestCase):
         self.assertIn('is not in the page', walk.judge({'expect': ['Payroll']}, opened, '')[0])
         self.assertIn('not at an address', walk.judge({'address': '/login'}, opened, '')[0])
         self.assertIn('do not say', walk.judge({'notes': ['rather than']}, pressed, before)[0])
+        self.assertIn('notes say "is long"', walk.judge({'quiet': ['is long']}, opened, '')[0])
+        self.assertEqual(walk.judge({'quiet': ['rather than']}, opened, ''), [])
         self.assertEqual(walk.judge({}, missing, before), [missing['failed']])
 
     def test_a_refusal_of_the_tool_is_a_failed_step_never_a_pass(self):
@@ -137,6 +139,10 @@ class Pages(unittest.TestCase):
             self.assertEqual(page['steps'][0]['do'], 'open', page['name'])
             for step in page['steps']:
                 self.assertTrue(any(k in step for k in ('expect', 'gains', 'address', 'notes')), (page['name'], step))
+        self.assertTrue(walk.STATE_PAGE['expect'])
+        for name in walk.BROWSERS:
+            self.assertIn('read-' + name, walk.STEPS)
+            self.assertIn('states-' + name, walk.STEPS)
         for step in walk.STEPS:
             self.assertTrue(hasattr(walk.Walk, step.replace('-', '_')), step)
 
