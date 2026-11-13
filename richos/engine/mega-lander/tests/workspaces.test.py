@@ -2466,9 +2466,12 @@ class Point13_StaleRefLock(Base):
             self.assertIn("TELL THE CEO", msg)
             self.assertIn("TELL THE CEO", lead)                  # the model sees it, not only the screen
             self.assertIn("zach-opus-lt", lead)
-            ctx, _n = ws.lifecycle({"hook_event_name": "SessionStart", "session_id": self.sid,
+            ctx, _n = ws.lifecycle({"hook_event_name": "SessionStart", "session_id": "a-later-session",
                                     "cwd": self.entity, "source": "resume"}, self.entity)
             self.assertIn("TELL THE CEO", ctx)                   # a later session hears it at start
+            again, _n = ws.lifecycle({"hook_event_name": "SessionStart", "session_id": self.sid,
+                                      "cwd": self.entity, "source": "compact"}, self.entity)
+            self.assertNotIn("TELL THE CEO", again)              # this session was told at its Stop
         finally:
             os.chmod(parent, 0o755)
 
@@ -2486,6 +2489,10 @@ class Point13_StaleRefLock(Base):
             rec["deletion"]["attempts"] = 18                       # another retry, same failure
             self.assertEqual(ws.gate_stop({"session_id": self.sid, "stop_hook_active": True}, self.entity)[2], "")
             self.assertIn("TELL THE CEO", ws.gate_stop({"session_id": sid2}, self.entity)[2])  # a later session
+            for source in ("compact", "resume"):                   # the same session id, same failure
+                ctx, _n = ws.lifecycle({"hook_event_name": "SessionStart", "session_id": self.sid,
+                                        "cwd": self.entity, "source": source}, self.entity)
+                self.assertNotIn("TELL THE CEO", ctx)
             state["records"] = [rec, other]                        # the failure changed
             self.assertIn("zach-sonnet-rq", ws.gate_stop({"session_id": self.sid}, self.entity)[2])
 

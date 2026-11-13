@@ -9508,9 +9508,10 @@ def lifecycle(payload, entity):
                 pass
         elif bad:
             ctx = bad
-        stuck = failing_deletion_lines()      # a later session is the first to hear what an ended one could not
+        # A later session is the first to hear what an ended one could not; a compaction or resume
+        # that keeps the session id does not hear an unchanged failure again.
+        stuck = _new_deletion_lines(sid, failing_deletion_lines())
         if stuck:
-            _new_deletion_lines(sid, stuck)   # told here, so this session's Stop does not repeat it
             ctx = "\n".join(stuck + ([ctx] if ctx else []))
     elif ev == "SessionEnd":
         record_session_end(sid, str(payload.get("reason") or "SessionEnd"))
