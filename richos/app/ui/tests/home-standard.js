@@ -38,7 +38,10 @@ function swearResult(last30) {
 
 /// Opens the app with `fixture` answering some bridge commands before the page's own scripts run:
 ///   swear: { show, last30 } -> get_swearmeter
-///   lanes: [[id, label, objects], ...] -> home_field_data, one company per lane
+///   lanes: [[id, label, objects | [group sizes]], ...] -> home_field_data, one company per lane
+///   source: "repositories" -> the dataset says it was read from the connected repositories
+///   seeds: true -> every object carries its placement seed and key, as `home_repos.rs` writes them
+///   delayMs -> home_field_data answers that late (the screen waits 8 s)
 ///   team: [{ name, role }] -> the preset's homeTeam
 async function openApp(browser, fixture) {
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
@@ -53,15 +56,23 @@ async function openApp(browser, fixture) {
     if (f.team) window.__RICHOS_MOCK_PRESET__ = { homeTeam: f.team };
     function field(lanes) {
       const nodes = [], links = [], sources = [], domains = [];
-      for (const [lane, label, objects] of lanes) {
+      for (const [lane, label, size] of lanes) {
+        // `size` is a number of objects (in groups of 8) or the size of each group
+        const sizes = Array.isArray(size) ? size : null;
+        const objects = sizes ? sizes.reduce((x, y) => x + y, 0) : size;
         const clusters = [];
-        const groups = Math.max(1, Math.round(objects / 8));
+        const groups = sizes ? sizes.length : Math.max(1, Math.round(objects / 8));
         let made = 0;
         for (let g = 0; g < groups; g++) {
           const gid = lane + "-grp-" + g, first = nodes.length;
-          const n = g === groups - 1 ? objects - made : Math.min(8, objects - made);
+          const n = sizes ? sizes[g] : g === groups - 1 ? objects - made : Math.min(8, objects - made);
+          // what `home_repos.rs` gives every object: `layoutSeed`, a hash of its group, and
+          // `layoutKey`, a hash of what the object is
+          const hash = (text) => { let h = 2166136261; for (const ch of text) h = Math.imul(h ^ ch.charCodeAt(0), 16777619) >>> 0; return h; };
+          const seed = hash(gid);
           for (let i = 0; i < n; i++) {
-            nodes.push({ id: lane + "-obj-" + nodes.length, type: i === 0 ? "decision" : "memory", domain: lane, cluster: gid,
+            nodes.push({ id: sizes ? gid + "-" + i : lane + "-obj-" + nodes.length, type: i === 0 ? "decision" : "memory", domain: lane, cluster: gid,
+              ...(f.seeds ? { layoutSeed: seed, layoutKey: hash(gid + "-" + i) } : {}),
               degree: i === 0 ? n - 1 : 1, significance: 0.8, activity: 0, recency: 0, createdDay: 0 });
             if (i > 0) links.push({ s: nodes[first].id, t: nodes[nodes.length - 1].id, class: "membership", cross: false });
           }
@@ -73,7 +84,7 @@ async function openApp(browser, fixture) {
         }
         domains.push({ id: lane, label, nodeCount: objects, clusters });
       }
-      return { available: true, field: { meta: { name: "fixture", synthetic: false, horizonDays: 40000,
+      return { available: true, field: { meta: { name: "fixture", synthetic: false, ...(f.source ? { source: f.source } : {}), horizonDays: 40000,
         counts: { records: nodes.length, objects: nodes.length, links: links.length, sources: sources.length, domains: domains.length } },
         bragSignals: {}, specialists: [], domains, nodes, links, sources } };
     }
@@ -85,9 +96,16 @@ async function openApp(browser, fixture) {
         real = v;
         const invoke = v.invoke.bind(v);
         v.invoke = async function (cmd, args) {
-          if (cmd === "get_swearmeter" && f.swear) return { show: f.swear.show, result: f.swearResult };
+          if (cmd === "get_swearmeter" && f.swear) {
+            // a macrotask after the answer: `swearmeter.js` has painted with it by then
+            setTimeout(() => { window.__swearAnswered = true; }, 0);
+            return { show: f.swear.show, result: f.swearResult };
+          }
           if (cmd === "set_swearmeter_visible" && f.swear) { f.swear.show = args.show === true; return null; }
-          if (cmd === "home_field_data" && f.lanes) return field(f.lanes);
+          if (cmd === "home_field_data" && f.lanes) {
+            if (f.delayMs) await new Promise((done) => setTimeout(done, f.delayMs));
+            return field(f.lanes);
+          }
           return invoke(cmd, args);
         };
       },
@@ -97,6 +115,13 @@ async function openApp(browser, fixture) {
   await page.waitForFunction("typeof window.RichHome === 'object' && typeof window.RichTimeline === 'object'", null, { timeout: 60000 });
   await page.evaluate(() => window.RichSplash && window.RichSplash.yieldNow("acceptance-suite"));
   return page;
+}
+
+/// The card closes 160 ms after the pointer leaves (`swearmeter.js`). A timer set in the page after
+/// the pointer has left, and longer than that one, runs after it on the page's own clock, whatever
+/// the host is doing: what the card is then is what leaving made it.
+async function afterHoverClose(page) {
+  await page.evaluate(() => new Promise((done) => setTimeout(done, 200)));
 }
 
 async function withField(page) {
@@ -120,8 +145,8 @@ async function main() {
         if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
       }, focus);
       await page.evaluate(() => { window.RichHome.state.lastLeaveReason = null; });
+      // `onHomeKey` answers the key in the keydown itself (`hide` sets the state synchronously)
       await page.keyboard.press(key);
-      await page.waitForTimeout(50);
       return page.evaluate(() => ({ open: window.RichHome.isOpen(), why: window.RichHome.state.lastLeaveReason }));
     };
     const enter = await press("Enter", "none");
@@ -141,6 +166,22 @@ async function main() {
     const panel = await page.evaluate(() => ({ open: window.RichHome.isOpen(), why: window.RichHome.state.lastLeaveReason }));
     await page.evaluate(() => window.RichHome.closeSettings());
     assertEqual([panel.open, panel.why], [true, null], "Space inside the company-buttons panel left the home screen");
+    // Space is typed, Enter is not: a space in a text field anywhere is that field's, and a held
+    // Space (a repeat) opens nothing.
+    const typed = await page.evaluate(() => {
+      const field = document.createElement("textarea");
+      field.id = "suite-field";
+      document.body.appendChild(field);
+      window.RichHome.state.lastLeaveReason = null;
+      const fire = (target, init) => target.dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true, cancelable: true, ...init }));
+      fire(field, {});
+      const inField = window.RichHome.isOpen();
+      fire(document.body, { repeat: true });
+      const held = window.RichHome.isOpen();
+      field.remove();
+      return { inField, held };
+    });
+    assertEqual([typed.inField, typed.held], [true, true], "a typed space in a text field, or a held Space, opened Talk to Rich");
     const keys = await page.evaluate(() => document.getElementById("home-enter").getAttribute("aria-keyshortcuts"));
     assertEqual(keys, "Enter Space", "the button does not announce both keys");
     assertEqual(page.__errors, [], "renderer errors");
@@ -175,6 +216,18 @@ async function main() {
     const singular = await one.evaluate(() => document.querySelector("#home-swearmeter small").textContent);
     assertEqual(singular, "swear word", "1 is not singular");
     await one.close();
+    // SwearMeter on is enough: the signal is there in a column with no other signal, which round
+    // 73's mockup left out and the CEO's brief does not.
+    const bare = await openApp(browser, { swear: { show: true, last30: 12 } });
+    await bare.waitForSelector("#home-swearmeter");
+    const alone = await bare.evaluate(() => {
+      const signals = document.getElementById("home-signals");
+      for (const c of [...signals.children]) if (c.id !== "home-swearmeter") c.remove();
+      window.RichSwearMeter.paintHome();
+      return { there: !!document.getElementById("home-swearmeter"), others: signals.children.length - 1 };
+    });
+    await bare.close();
+    assertEqual([alone.there, alone.others], [true, 0], "SwearMeter is on and the column shows no SwearMeter signal when it has no other signal");
     const off = await openApp(browser, { swear: { show: false, last30: 1299 } });
     await withField(off);
     await off.waitForFunction(() => document.querySelectorAll("#home-signals .sig").length > 0);
@@ -212,7 +265,7 @@ async function main() {
     // a click pins it: leaving does not close it, Escape does
     await page.click("#nr-swear");
     await page.mouse.move(900, 450);
-    await page.waitForTimeout(400);
+    await afterHoverClose(page);
     const pinned = await page.evaluate(() => document.getElementById("swear-card").classList.contains("is-open"));
     assertEqual(pinned, true, "a click on the button did not pin the card");
     await page.keyboard.press("Escape");
@@ -220,13 +273,13 @@ async function main() {
     // pinned again, a click elsewhere closes it
     await page.click("#nr-swear");
     await page.mouse.move(900, 450);
-    await page.waitForTimeout(400);
+    await afterHoverClose(page);
     await page.mouse.click(900, 450);
     await page.waitForFunction(() => !document.getElementById("swear-card").classList.contains("is-open"));
     assertEqual(page.__errors, [], "renderer errors");
     await page.close();
     const off = await openApp(browser, { swear: { show: false, last30: 1299 } });
-    await off.waitForTimeout(500);
+    await off.waitForFunction(() => window.__swearAnswered === true);
     const hidden = await off.evaluate(() => document.getElementById("nr-swear").hidden);
     await off.close();
     assertEqual(hidden, true, "the SwearMeter button shows while SwearMeter is off");
@@ -286,6 +339,88 @@ async function main() {
     assert(r.a > 0 && r.b > 0 && r.shared === 0, `the two companies do not stand on territories of their own (${r.a} and ${r.b} strands, ${r.shared} shared)`);
     assertEqual(r.labels, ["Northwind Traders", "Kestrel Labs"], "the drawn territories are not his two companies");
     return `2,600 objects in two companies: no example objects, none hosted; ${r.a} and ${r.b} strands, none shared`;
+  });
+
+  // ---------------------------------------------------------------------------------------
+  // Sage 2026-11-13, fact 2: the answer is waited on for 8 seconds, and a first read of several
+  // repositories comes later than that, so the late path is the normal one.
+  await run.check("his objects arrive after the 8-second wait: from 2,500 they are still drawn alone, each company a territory", async () => {
+    const team = [{ name: "Beth", role: "Bookkeeper" }];
+    const page = await openApp(browser, { team, delayMs: 9500, lanes: [["northwind", "Northwind Traders", 1800], ["kestrel", "Kestrel Labs", 800]] });
+    await withField(page);
+    const early = await page.evaluate(() => window.RichHome.state.fieldOffer.state);
+    assertEqual(early, "timed-out", "the screen waited for the answer");
+    const came = await page
+      .waitForFunction(() => window.__loro && window.__loro.nodes.length === 2600 && window.__loro.blooming === false, null, { timeout: 60000 })
+      .then(() => true, () => false);
+    const r = await page.evaluate(() => {
+      const lo = window.__loro;
+      return { nodes: lo.nodes.length, ghosts: lo.nodes.filter((n) => n.ghost).length, hosted: lo.nodes.filter((n) => n.hosted).length,
+        labels: lo.domains.filter((d) => d.nodeCount > 0).map((d) => d.label) };
+    });
+    assertEqual(page.__errors, [], "renderer errors");
+    await page.close();
+    assert(came, `the late answer was drawn back inside the example: ${r.nodes} objects, ${r.ghosts} of the example's, ${r.hosted} of his hosted in its clusters`);
+    assertEqual([r.ghosts, r.hosted, r.labels], [0, 0, ["Northwind Traders", "Kestrel Labs"]], "the late picture is not his two companies alone");
+    return `timed out at 8 s; the late 2,600 objects are drawn alone: ${r.labels.join(", ")}`;
+  });
+
+  // ---------------------------------------------------------------------------------------
+  // Sage 2026-11-13, fact 1: every object was placed from one shared random stream, so one added
+  // object moved every object drawn after it, at every launch after a commit.
+  await run.check("new work in one folder does not rearrange the picture", async () => {
+    const team = [{ name: "Beth", role: "Bookkeeper" }];
+    const placed = async (first) => {
+      const page = await openApp(browser, { team, seeds: true, source: "repositories",
+        lanes: [["northwind", "Northwind Traders", [first, 400, 400, 400]], ["kestrel", "Kestrel Labs", [350, 350, 300]]] });
+      await withField(page);
+      const at = await page.evaluate(() => {
+        const lo = window.__loro, D = lo.D, out = {};
+        // where the object stands in the picture's own 1,000-unit square, before any light is put on it
+        lo.nodes.forEach((n, i) => { const t = [0, 0, 0, 0]; D.strandAt(D.strands[D.nStrand[i]], D.nU[i], t); out[n.id] = [t[0], t[1]]; });
+        return out;
+      });
+      assertEqual(page.__errors, [], "renderer errors");
+      await page.close();
+      return at;
+    };
+    // a day's work: 6 objects more in the first folder of the first company
+    const before = await placed(600), after = await placed(606);
+    // The picture is 1,000 units across. A folder's strands are its share of the company's arc, so
+    // when one grows the others slide by a strand: a few units. Dealt again, an object lands
+    // anywhere in its folder's territory, hundreds of units away.
+    const NUDGE = 25;
+    let stayed = 0, moved = 0, compared = 0;
+    for (const id in before) {
+      if (!after[id]) continue;
+      compared++;
+      const d = Math.hypot(before[id][0] - after[id][0], before[id][1] - after[id][1]);
+      if (d <= NUDGE) stayed++;
+      else moved++;
+    }
+    assertEqual(compared, 2800, "not every object drawn before is drawn after");
+    assert(moved <= 0.02 * compared, `${moved} of ${compared} objects moved more than ${NUDGE} units (the picture is 1,000 across) when 6 were added to one folder`);
+    return `6 objects added to one folder: ${stayed} of ${compared} objects stay within ${NUDGE} units of where they stood, ${moved} moved farther`;
+  });
+
+  // ---------------------------------------------------------------------------------------
+  // Sage 2026-11-13, fact 5 (round 72 hides it): the engine names a teammate at random for each
+  // source, which over his own documents is a made-up event.
+  await run.check("over a picture read from the repositories there is no 'learned from' line", async () => {
+    const team = [{ name: "Beth", role: "Bookkeeper" }];
+    const lanes = [["northwind", "Northwind Traders", 1800], ["kestrel", "Kestrel Labs", 800]];
+    const shown = async (fixture) => {
+      const page = await openApp(browser, fixture);
+      await withField(page);
+      const display = await page.evaluate(() => getComputedStyle(document.getElementById("home-ticker")).display);
+      await page.close();
+      return display;
+    };
+    const repos = await shown({ team, lanes, source: "repositories" });
+    const example = await shown({});
+    assertEqual(repos, "none", "the 'learned from' line can show over his repositories");
+    assert(example !== "none", "the first-run example lost its 'learned from' line");
+    return `repositories: display ${repos}; the first-run example: display ${example}`;
   });
 
   await browser.close();
