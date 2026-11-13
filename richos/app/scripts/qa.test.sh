@@ -97,7 +97,7 @@
 #   SP1-SP4 stop-probe: an interrupt that also ends the worker and a stop_task that ends only
 #           the foreground command are each reported as measured, exit 0; a lead that never
 #           starts the command and a missing binary are refused, exit 2, against a scripted claude
-#   SW1-SW5 speech-wav: two lines become one WAV with each line's times; a voice name with spaces is accepted; an existing
+#   SW1-SW7 speech-wav: two lines become one WAV with each line's times; a voice name with spaces is accepted; a pause filled with room noise; an existing
 #           output, an unknown voice and an empty line are each refused
 #   X1      the committed fixtures still match their generator
 #
@@ -1796,12 +1796,21 @@ if command -v say >/dev/null 2>&1 && command -v ffmpeg >/dev/null 2>&1; then
   else
     skip "SW5 a voice whose name holds spaces is accepted" "say lists no such voice here"
   fi
+  printf '[{"text":"one","pause":2.0}]' > "$TMP/sw-noise.json"
+  run python3 "$QA/speech-wav.py" "$TMP/sw-noise.json" "$TMP/sw-noise.wav" --rate 16000 --room-noise -50
+  if [ "$CODE" = 0 ] && python3 -c 'import math,struct,sys,wave; w=wave.open(sys.argv[1]); n=w.getnframes(); d=struct.unpack("<%dh"%n, w.readframes(n)); tail=d[-16000:]; rms=math.sqrt(sum(x*x for x in tail)/len(tail)); db=20*math.log10(rms/32767); assert any(tail) and abs(db+50)<2, db' "$TMP/sw-noise.wav" 2>/dev/null; then
+    ok "SW6 --room-noise -50 fills the pause with noise at about -50 dBFS, never exact zeros"
+  else
+    bad "SW6 --room-noise fills the pause with noise at its level" "exit $CODE: $(printf '%s' "$OUT" | tr '\n' ' ' | cut -c1-200)"
+  fi
 else
   skip "SW1-SW3 speech-wav renders and refuses" "say or ffmpeg is not on PATH here"
 fi
 printf '[{"text":""}]' > "$TMP/sw-empty.json"
 run python3 "$QA/speech-wav.py" "$TMP/sw-empty.json" "$TMP/sw-empty.wav"
 expect "SW4 a line with no text is refused before anything is rendered, exit 1" 1 'needs a non-empty "text"'
+run python3 "$QA/speech-wav.py" "$TMP/sw-script.json" "$TMP/sw-loud.wav" --room-noise -10
+expect "SW7 room noise louder than -20 dBFS is refused, exit 1" 1 "must be between -90 and -20 dBFS"
 
 echo ""
 echo "=== X. the fixtures are still the fixtures ==="

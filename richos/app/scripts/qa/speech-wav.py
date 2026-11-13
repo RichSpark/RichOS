@@ -13,6 +13,11 @@ SCRIPT.json is a JSON list of lines, spoken in order:
 at --rate (48000 is what `mac-audio-lab play` puts into BlackHole; 16000 is what a speech model
 reads) and joined with the pauses into OUT.wav.
 
+A pause is digital silence unless --room-noise DBFS is given: then it is quiet white noise at that
+level (for example -55), as a real microphone in a room delivers. A dictation's capture treats a
+stretch of exact zeros as a microphone that delivered nothing and ends listening there, so a pause
+in a dictation fixture needs the noise (nightly 97 walk: listening ended 3 s into a 12 s pause).
+
 It prints one JSON object: the file, its duration in seconds and, for each line, the second it
 starts and ends at and its text. A walk uses those times to say what had been said by the moment
 it asked about it (a question about "the last minute of the call") and where a source link should
@@ -21,11 +26,13 @@ land. Exit 1 with a sentence when the script is not a usable list, a voice is un
 """
 import argparse
 import json
+import random
 import re
 from pathlib import Path
 import shutil
 import subprocess
 import sys
+import struct
 import tempfile
 import wave
 
@@ -58,8 +65,20 @@ def main():
     p.add_argument('script', type=Path)
     p.add_argument('out', type=Path)
     p.add_argument('--rate', type=int, default=48000, help='sample rate of OUT.wav (default 48000)')
+    p.add_argument('--room-noise', type=float, metavar='DBFS', help='fill each pause with white noise at this RMS level '
+                   '(-90 to -20 dBFS) instead of digital silence')
     a = p.parse_args()
     lines = load(a.script)
+    if a.room_noise is not None and not -90 <= a.room_noise <= -20:
+        refuse('--room-noise must be between -90 and -20 dBFS; %g is not' % a.room_noise)
+    noise = random.Random(97)  # the same noise every run, so a fixture is reproducible
+
+    def pause_bytes(seconds):
+        count = int(round(seconds * a.rate))
+        if a.room_noise is None:
+            return b'\x00\x00' * count
+        sigma = 32767 * 10 ** (a.room_noise / 20)
+        return struct.pack('<%dh' % count, *(max(-32768, min(32767, int(round(noise.gauss(0, sigma))))) for _ in range(count)))
     if a.out.exists():
         refuse('%s exists already; it is never overwritten' % a.out)
     say, ffmpeg = shutil.which('say'), shutil.which('ffmpeg')
@@ -88,7 +107,7 @@ def main():
             seconds = len(data) / 2 / a.rate
             timeline.append({'n': n, 'start': round(clock, 2), 'end': round(clock + seconds, 2), 'voice': line['voice'],
                              'text': line['text']})
-            frames.append(data + b'\x00\x00' * int(round(line['pause'] * a.rate)))
+            frames.append(data + pause_bytes(line['pause']))
             clock += seconds + line['pause']
     a.out.parent.mkdir(parents=True, exist_ok=True)
     with wave.open(str(a.out), 'wb') as w:
