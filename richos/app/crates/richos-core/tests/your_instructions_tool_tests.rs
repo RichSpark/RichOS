@@ -59,7 +59,7 @@ impl Drop for Fixture {
 fn the_server_lists_the_tool_beside_the_company_notes_tools() {
     let names: Vec<String> = onboarding_tools::tools()["tools"].as_array().unwrap().iter()
         .map(|t| t["name"].as_str().unwrap().to_string()).collect();
-    assert_eq!(names, ["save_company_notes", "decline_onboarding", "save_your_instructions"]);
+    assert_eq!(names, ["save_company_notes", "decline_onboarding", "add_company", "save_person", "save_your_instructions"]);
     assert_eq!(your_instructions::QUALIFIED_TOOL, format!("mcp__{}__{}", onboarding_tools::SERVER_NAME, TOOL));
 }
 
