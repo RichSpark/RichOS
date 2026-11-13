@@ -63,14 +63,17 @@
 //!
 //! ## What was measured
 //!
-//! `docs/verification/browser-reader-real-pages-2026-11-13/`: ten real pages (a long article,
-//! two accordions, a tab list, a table, a page that loads more as it scrolls, a web app, a
-//! sign-in redirect, a page only a signed-in browser is shown, a link that opens a new tab)
-//! read and answered in Safari, Chrome, Firefox and Brave in a test guest
-//! (`scripts/testvm/browser-reader-walk.py`), and one conversation through the real app in
-//! which Reed opened a closed panel for the user's question. The same record lists what is
-//! not measured: no real signed-in account, no browser beyond those four, and that a code
-//! sample's line breaks are not kept.
+//! `docs/verification/browser-reader-real-pages-2026-11-13/`, in a test guest
+//! (`scripts/testvm/browser-reader-walk.py`): eleven real pages (a long article, two accordions,
+//! a code sample, a tab list, a table, a page that loads more as it scrolls, a web app, a
+//! sign-in redirect, a very long page in another language at an address with a letter outside
+//! ASCII, a page only a signed-in browser is shown, a link that opens a new tab) read and
+//! answered in Safari, Chrome, Firefox, Brave and Edge; one real page read with each browser
+//! in the states a desktop leaves it in (every window minimized, the app hidden, no window
+//! open, not running); and one conversation through the real app in which Reed opened a closed
+//! panel for the user's question. What each walk found is why the code is what it is, and is
+//! said where the code answers it. The same record lists what is not measured: no real
+//! signed-in account, no browser beyond those five, nobody at the Mac while a page is read.
 //!
 //! ## Who calls it
 //!
@@ -102,12 +105,18 @@ pub const PART_CHARS: usize = 60_000;
 /// Below this many characters a page is said to be thin: a page drawn as a picture, an empty
 /// one, one still loading or a sign-in wall.
 pub const THIN_CHARS: usize = 200;
+/// Reads, a second apart, a page with less than [`THIN_CHARS`] on it must stay the same for
+/// before it is taken as the page.
+pub const THIN_READS: u32 = 5;
 /// Reads of the tabs after an open, [`shared::CLOSE_POLL`] apart, until the reader's tab can be
 /// told: 20 s.
 pub const OWN_WAITS: u32 = 80;
 /// Reads of the tabs after an open before a tab the browser added without selecting it is
 /// selected by the reader: 1 s.
 pub const SHOW_WAITS: u32 = 4;
+/// The read of the tabs after an open at which the browser's switch is set again while no tab
+/// can be told: after 10 s.
+pub const SWITCH_AGAIN: u32 = 40;
 /// How long the server keeps a page open without a call before it closes the tab itself.
 pub const IDLE: Duration = Duration::from_secs(600);
 /// Elements walked per page at most, and how deep: room for the largest pages, and a bound
@@ -456,6 +465,9 @@ pub trait PageHost: BrowserHost {
     /// Select the tab [`BrowserHost::tabs`] numbers `tab` in its window (a press on its tab
     /// button). Whether the browser accepted it.
     fn show_tab(&self, app: &BrowserApp, tab: u64) -> bool;
+    /// When the running browser has no window on screen (the app is hidden, or every window
+    /// is minimized): show the app and bring one window back. Whether anything was changed.
+    fn reveal(&self, app: &BrowserApp) -> bool;
 }
 
 /// One label of a host name in Punycode (RFC 3492), the form every browser shows and sends for
@@ -626,6 +638,13 @@ pub fn same_address(a: &str, b: &str) -> bool {
 ///
 /// Only a selected tab counts (a browser exposes only the selected tab's address) and only once
 /// it shows an address.
+///
+/// **A tab that "did not exist before" is believed only while every tab that did still does.**
+/// A window is one tab while it shows no tab bar and several once it does (Safari with one tab,
+/// then two; a window that was minimized or hidden, then is shown: guest walk of 2026-11-13),
+/// so the user's own tab can come back under a number never seen before. When a tab from
+/// `before` is gone, a tab with a new number is the reader's only when it is on the requested
+/// page, or once the open has had its time and it is the one tab that changed.
 pub fn owned_tab<'a>(before: &[Tab], now: &'a [Tab], url: &str, unchanged_ok: bool) -> Option<u64> {
     let one = |found: Vec<&Tab>| match found.as_slice() {
         [tab] => Some(tab.id),
@@ -642,8 +661,13 @@ pub fn owned_tab<'a>(before: &[Tab], now: &'a [Tab], url: &str, unchanged_ok: bo
     let site_of = |u: &str| shared::parse(u).map(|a| shared::site(&a.host).to_string());
     let requested_site = site_of(url);
     let changed = |t: &Tab| before.iter().find(|b| b.id == t.id).is_none_or(|b| b.url != t.url);
+    let renumbered = before.iter().any(|b| !now.iter().any(|t| t.id == b.id));
+    // A tab under a new number that shows what a tab showed before is that tab, unchanged.
+    let changed = |t: &Tab| changed(t) && !(renumbered && before.iter().any(|b| !blank(&b.url) && b.url == t.url));
     let is_new = |t: &Tab| !before.iter().any(|b| b.id == t.id);
-    let moved: Vec<&Tab> = shown.iter().copied().filter(|t| is_new(t) || (changed(t) && site_of(&t.url) == requested_site)).collect();
+    let moved: Vec<&Tab> = shown.iter().copied().filter(|t| {
+        if is_new(t) && renumbered { same_address(url, &t.url) } else { is_new(t) || (changed(t) && site_of(&t.url) == requested_site) }
+    }).collect();
     match moved.len() {
         1 => Some(moved[0].id),
         0 if unchanged_ok => {
@@ -916,6 +940,19 @@ fn switch_on(host: &dyn PageHost, app: &BrowserApp, switched: &mut Option<Option
     }
 }
 
+/// Set the browser's switch again, once the reader has set it. Measured in the guest walks of
+/// 2026-11-13: Chrome, Brave and Firefox, started by the reader's own open, were set once
+/// while they were starting and showed no page for the tab in 60 seconds; the next open set it
+/// again and read the page in 5; set again after 10 seconds, Firefox was read on the first
+/// open, in 15. It is set again once ([`SWITCH_AGAIN`]), never in a loop: set once a second,
+/// Chrome showed no page at all on pages it otherwise shows in 2 seconds, as if every setting
+/// started its page tree over.
+fn switch_again(host: &dyn PageHost, app: &BrowserApp, switched: Option<Option<bool>>) {
+    if switched.is_some() {
+        host.set_tree_switch(app, true);
+    }
+}
+
 /// Put the browser's switch back the way it was, when the reader set it and it said it was off.
 fn switch_back(host: &dyn PageHost, app: &BrowserApp, switched: Option<Option<bool>>) {
     if switched == Some(Some(false)) {
@@ -947,6 +984,17 @@ fn has_content(snapshot: &Snapshot) -> bool {
     })
 }
 
+/// Whether a page shows less than [`THIN_CHARS`] of words: it may still be on its way.
+fn thin(snapshot: &Snapshot) -> bool {
+    let shown: usize = snapshot.items.iter().map(|i| match i {
+        Item::Text(t) | Item::Heading(_, t) => t.trim().chars().count(),
+        Item::Control { name, .. } => name.chars().count(),
+        Item::Value { name, value, .. } => name.chars().count() + value.chars().count(),
+        Item::Region(_) | Item::Break | Item::Cell => 0,
+    }).sum();
+    shown < THIN_CHARS
+}
+
 impl Held {
     /// Whether the held tab is still the one to read, as a refusal when it is not.
     fn still_showing(&self, host: &dyn PageHost) -> Result<(), String> {
@@ -963,11 +1011,14 @@ impl Held {
     }
 
     /// Wait until the held tab shows a page that is the same on two reads a second apart, and
-    /// return the last read. A tab a press opened (`before`: the tabs before the press) becomes
-    /// the tab read.
+    /// return the last read. A page with almost nothing on it must stay the same for
+    /// [`THIN_READS`] reads: measured in the guest walk of 2026-11-13, a page still on its way
+    /// (Brave, just started) read the same one link twice, a second apart. A tab a press opened
+    /// (`before`: the tabs before the press) becomes the tab read.
     fn settle(&mut self, host: &dyn PageHost, before: Option<&[Tab]>) -> Result<Snapshot, String> {
         let mut previous: Option<Snapshot> = None;
-        for _ in 0..shared::MAX_POLLS {
+        let mut same = 0;
+        for poll in 0..shared::MAX_POLLS {
             host.sleep(shared::POLL);
             // A browser that was not running had no switch to set before the open.
             switch_on(host, &self.app, &mut self.switched);
@@ -976,11 +1027,28 @@ impl Held {
                     self.ours.push(opened);
                     self.tab = opened;
                     previous = None;
+                    same = 0;
                 }
             }
             match (host.snapshot(&self.app, self.tab), previous.take()) {
-                (Some(now), Some(was)) if now == was && has_content(&now) => return Ok(now),
-                (now, _) => previous = now,
+                // A reading that had to stop partway is the page as far as it can be read:
+                // reading it again takes as long and stops somewhere else.
+                (Some(now), _) if now.cut && has_content(&now) => return Ok(now),
+                (Some(now), Some(was)) if now == was && has_content(&now) => {
+                    same += 1;
+                    if same + 1 >= if thin(&now) { THIN_READS } else { 2 } {
+                        return Ok(now);
+                    }
+                    previous = Some(now);
+                }
+                (now, _) => {
+                    same = 0;
+                    previous = now;
+                }
+            }
+            // Ten seconds without anything on the page: the switch may not have been taken.
+            if poll == 9 && !previous.as_ref().is_some_and(has_content) {
+                switch_again(host, &self.app, self.switched);
             }
         }
         // Still changing, or still empty, at the last read: what it showed then is the page.
@@ -1047,6 +1115,15 @@ impl Session {
         // Chromium shows its tab bar to Accessibility once the switch is on: set before the tabs
         // are read, so the reading after the open is of the same tree.
         switch_on(host, &app, &mut switched);
+        // A browser shows a page to Accessibility only in a window that is on screen. Measured in
+        // the guest walk of 2026-11-13: Safari and Chrome, hidden or minimized, bring a window
+        // back by themselves when asked to open a link; Firefox does not, and was asked twice
+        // and read nothing. So a browser with no window on screen gets one back before its
+        // tabs are counted, the way the others do it.
+        let revealed = host.reveal(&app);
+        if revealed {
+            host.sleep(shared::POLL);
+        }
         let Some(before) = host.tabs(&app) else {
             switch_back(host, &app, switched);
             return Err(format!("{} was asked for {url}, but its windows cannot be read, so RichOS cannot tell which \
@@ -1058,8 +1135,10 @@ impl Session {
         }
         let mut owned = None;
         let mut shown = false;
+        let mut last = 0;
         for poll in 0..OWN_WAITS {
             let now = host.tabs(&app).unwrap_or_default();
+            last = now.len();
             // A browser that added the tab without selecting it has had a second to select it.
             if !shown && poll >= SHOW_WAITS {
                 if let Some(id) = unselected_new_tab(&before, &now) {
@@ -1068,13 +1147,19 @@ impl Session {
                 }
             }
             if let Some(id) = owned_tab(&before, &now, &url, poll >= shared::OPEN_WAITS) {
-                // Beyond doubt the reader's own, so closed at the end: it did not exist before,
-                // the browser was already running, and the open added exactly one tab.
-                let closable = !before.is_empty() && now.len() == before.len() + 1 && !before.iter().any(|b| b.id == id);
+                // Beyond doubt the reader's own, so closed at the end: it did not exist before
+                // and the open added exactly one tab; or the browser showed no tab at all
+                // before (it had no window, or was not running) and shows this one tab now.
+                let fresh = !before.iter().any(|b| b.id == id);
+                let closable = fresh && now.len() == before.len() + 1;
                 owned = Some((id, closable));
                 break;
             }
             host.sleep(shared::CLOSE_POLL);
+            // A browser that has just started may not have taken the switch.
+            if poll == SWITCH_AGAIN {
+                switch_again(host, &app, switched);
+            }
             switch_on(host, &app, &mut switched);
         }
         let Some((tab, closable)) = owned else {
@@ -1082,11 +1167,15 @@ impl Session {
             return Err(format!("{} was asked to open {url}, but RichOS could not tell which tab shows it (the browser \
                 may have just started and restored its earlier windows, or sent the page somewhere else at that \
                 moment), so nothing was read: another tab could be private. Opening the page again usually works now \
-                that the browser is running.", app.name));
+                that the browser is running. (It showed {} tabs before the open and {last} after.)", app.name, before.len()));
         };
         self.held = Some(Held { app, tab, ours: if closable { vec![tab] } else { Vec::new() }, switched, asked: url.clone(),
             seen: Snapshot::default(), first: 0, names: Vec::new(), parts: vec![String::new()], part: 0 });
         let mut notes = Vec::new();
+        if revealed {
+            notes.push(format!("{} had no window on screen (it was hidden or its windows were minimized), so RichOS \
+                brought one back to read the page. It is left showing.", self.held.as_ref().expect("held").app.name));
+        }
         if allowed_now {
             notes.push("The user allowed RichOS's macOS Accessibility permission during this read.".to_string());
         }
@@ -1179,7 +1268,9 @@ impl Session {
         let closed = held.ours.iter().rev().filter(|id| close_and_wait(host, &held.app, **id)).count();
         switch_back(host, &held.app, held.switched);
         Some(if held.ours.is_empty() {
-            format!("The page was showing in a tab of {} that RichOS did not open, so it is left as it is.", held.app.name)
+            format!("RichOS could not be sure that the tab showing the page in {} was one it opened itself (the browser \
+                showed the page in a tab that was already there or its tabs could not be counted), so the tab is left \
+                as it is.", held.app.name)
         } else if closed == held.ours.len() {
             format!("The tab RichOS opened in {} is closed.", held.app.name)
         } else {
@@ -1363,6 +1454,15 @@ mod tests {
         scrolled: Cell<u32>,
         /// The user selects their mail tab once this many waits have passed.
         user_returns_at: Option<u32>,
+        /// The browser has no window on screen: it shows no tab and no page until it is revealed.
+        off_screen: Cell<bool>,
+        revealed: Cell<u32>,
+        /// A tab an open added shows no address until this many waits have passed.
+        loads_at: u32,
+        /// Every reading stops partway.
+        cut: bool,
+        /// The showing page moves to its next state once this many waits have passed.
+        grows_at: Option<u32>,
     }
 
     fn safari() -> BrowserApp {
@@ -1397,7 +1497,8 @@ mod tests {
                 next: Cell::new(100), tabbed: true, reuse: false, opens_unselected: false, shown: RefCell::default(),
                 running: Cell::new(true), scroll_ok: true, kept: Cell::new(0),
                 opened: RefCell::default(), pressed: RefCell::default(), closed: RefCell::default(), switches: RefCell::default(),
-                slept: Cell::new(0), asked: Cell::new(0), scrolled: Cell::new(0), user_returns_at: None }
+                slept: Cell::new(0), asked: Cell::new(0), scrolled: Cell::new(0), user_returns_at: None,
+                off_screen: Cell::new(false), revealed: Cell::new(0), loads_at: 0, cut: false, grows_at: None }
                 .with(MAIL, vec![vec![h("Inbox"), t("Private mail: payroll attached")]])
                 .with(NEWS, vec![vec![h("News"), t("Today's headlines")]])
         }
@@ -1460,14 +1561,15 @@ mod tests {
         fn addresses(&self, _: &BrowserApp) -> Vec<String> { Vec::new() }
         fn press(&self, _: &BrowserApp, _: &str, _: &[usize]) -> usize { 0 }
         fn tabs(&self, _: &BrowserApp) -> Option<Vec<Tab>> {
-            if !self.running.get() {
+            if !self.running.get() || self.off_screen.get() {
                 return Some(Vec::new());
             }
             if !self.tabbed {
                 return Some(vec![Tab { id: 1, selected: true, url: self.showing().map(|t| t.url).unwrap_or_default() }]);
             }
+            let loaded = |t: &FakeTab| t.id <= 100 || self.slept.get() >= self.loads_at;
             Some(self.tabs.borrow().iter()
-                .map(|t| Tab { id: t.id, selected: t.selected, url: if t.selected { t.url.clone() } else { String::new() } }).collect())
+                .map(|t| Tab { id: t.id, selected: t.selected, url: if t.selected && loaded(t) { t.url.clone() } else { String::new() } }).collect())
         }
         fn close_tab(&self, _: &BrowserApp, id: u64) -> bool {
             self.closed.borrow_mut().push(id);
@@ -1490,12 +1592,15 @@ mod tests {
             if self.user_returns_at == Some(self.slept.get()) {
                 self.select(1);
             }
+            if self.grows_at == Some(self.slept.get()) {
+                self.tabs.borrow_mut().iter_mut().filter(|t| t.selected).for_each(|t| t.state += 1);
+            }
         }
     }
 
     impl PageHost for Fake {
         fn view(&self, _: &BrowserApp, tab: u64) -> Option<View> {
-            let showing = self.showing()?;
+            let showing = self.showing().filter(|_| !self.off_screen.get())?;
             if self.tabbed {
                 (showing.id == tab).then_some(View { url: showing.url, tabbed: true })
             } else {
@@ -1506,7 +1611,7 @@ mod tests {
             let view = self.view(app, tab)?;
             let items = self.items(&self.showing()?);
             self.kept.set(items.iter().filter(|i| matches!(i, Item::Control { .. })).count());
-            Some(Snapshot { view, title: "A page".into(), items, cut: false })
+            Some(Snapshot { view, title: "A page".into(), items, cut: self.cut })
         }
         fn press_item(&self, index: usize) -> Pressed {
             let showing = self.showing().expect("a showing tab");
@@ -1539,6 +1644,10 @@ mod tests {
             self.shown.borrow_mut().push(tab);
             self.select(tab);
             true
+        }
+        fn reveal(&self, _: &BrowserApp) -> bool {
+            self.revealed.set(self.revealed.get() + 1);
+            self.off_screen.replace(false)
         }
     }
 
@@ -1650,7 +1759,7 @@ mod tests {
         let out = session.open(&fake, ADMIN).unwrap();
         assert!(page(&out).contains("Orders this week: 214"));
         let said = session.close(&fake).unwrap();
-        assert!(said.contains("did not open") && said.contains("left as it is"), "{said}");
+        assert!(said.contains("could not be sure") && said.contains("left as it is"), "{said}");
         assert!(fake.closed.borrow().is_empty());
     }
 
@@ -1670,6 +1779,71 @@ mod tests {
         let fake = store(safari());
         Session::default().open(&fake, ADMIN).unwrap();
         assert!(fake.shown.borrow().is_empty());
+    }
+
+    /// Measured in the guest walk of 2026-11-13: Firefox, hidden or minimized, was asked twice
+    /// and read nothing; Safari, minimized, was read and its tab left open, its tabs counted
+    /// while they could not be seen.
+    #[test]
+    fn a_browser_with_no_window_on_screen_gets_one_back_before_its_tabs_are_counted() {
+        let fake = store(BrowserApp { bundle_id: "org.mozilla.firefox".into(), name: "Firefox".into() });
+        fake.off_screen.set(true);
+        let mut session = Session::default();
+        let out = session.open(&fake, ADMIN).unwrap();
+        assert!(page(&out).contains("Orders this week: 214"), "{}", page(&out));
+        assert!(notes(&out).contains("had no window on screen") && notes(&out).contains("brought one back"), "{}", notes(&out));
+        assert!(session.close(&fake).unwrap().contains("is closed"));
+        assert_eq!(fake.closed.borrow().as_slice(), &[101], "its own tab, told from the user's two");
+        // A browser with a window on screen is asked, changes nothing, and nothing is said.
+        let fake = store(safari());
+        let out = Session::default().open(&fake, ADMIN).unwrap();
+        assert_eq!(fake.revealed.get(), 1);
+        assert!(!notes(&out).contains("on screen"), "{}", notes(&out));
+    }
+
+    /// Measured in the guest walks of 2026-11-13: a browser the reader's own open started took
+    /// the switch only when it was set again.
+    #[test]
+    fn a_browser_that_shows_no_tab_for_ten_seconds_gets_its_switch_set_again_once() {
+        let mut fake = store(chrome());
+        fake.loads_at = OWN_WAITS - 10;
+        let mut session = Session::default();
+        assert!(page(&session.open(&fake, ADMIN).unwrap()).contains("Orders this week: 214"));
+        assert_eq!(fake.switches.borrow().as_slice(), &[true, true], "set, and set again once");
+        // One that never shows a tab is given up, and what was seen is said.
+        let mut fake = store(chrome());
+        fake.loads_at = u32::MAX;
+        let err = Session::default().open(&fake, ADMIN).unwrap_err();
+        assert!(err.contains("could not tell which tab") && err.contains("2 tabs before the open and 3 after") && !err.contains("payroll"), "{err}");
+        assert_eq!(fake.switches.borrow().as_slice(), &[true, true, false], "set again once, and put back");
+    }
+
+    /// A reading that had to stop partway is returned at once, and said: read again, it would
+    /// stop somewhere else and never be the same twice.
+    #[test]
+    fn a_reading_that_stopped_partway_is_returned_at_once_and_said() {
+        let mut fake = store(safari());
+        fake.cut = true;
+        let out = Session::default().open(&fake, ADMIN).unwrap();
+        assert!(page(&out).contains("Orders this week: 214") && notes(&out).contains("reading stopped partway"), "{out}");
+        assert!(fake.slept.get() <= 2, "{}", fake.slept.get());
+    }
+
+    /// Measured in the guest walk of 2026-11-13: Brave, just started, showed one link of a page
+    /// still on its way, the same on two reads a second apart, and that was taken as the page.
+    #[test]
+    fn a_page_with_almost_nothing_on_it_is_given_time_to_arrive() {
+        let slow = "https://shop.example/slow";
+        let mut fake = store(chrome()).with(slow, vec![vec![link("Skip to content", "https://shop.example/slow#main")],
+            vec![h("Orders"), t("All 214 orders of this week, loaded.")]]);
+        fake.grows_at = Some(3);
+        let out = Session::default().open(&fake, slow).unwrap();
+        assert!(page(&out).contains("All 214 orders"), "{}", page(&out));
+        // One that stays nearly empty is returned as it is, and said to be thin.
+        let fake = store(chrome()).with(slow, vec![vec![link("Skip to content", "https://shop.example/slow#main")]]);
+        let out = Session::default().open(&fake, slow).unwrap();
+        assert!(page(&out).contains("Skip to content") && notes(&out).contains("exposed only"), "{out}");
+        assert!(fake.slept.get() >= THIN_READS && fake.slept.get() < THIN_READS + 4, "{}", fake.slept.get());
     }
 
     #[test]
@@ -1843,6 +2017,18 @@ mod tests {
         let at = vec![tab(1, false, ""), tab(2, true, report)];
         assert_eq!(owned_tab(&at, &at, report, true), Some(2));
         assert_eq!(owned_tab(&before, &before, report, true), None);
+        // A window that was one tab (no tab bar) shows its tabs now: the user's own tab has a
+        // number never seen before. It is not the reader's, whatever site it is on; the tab on
+        // the requested page is, and after the open has had its time the one tab that changed.
+        let one_window = vec![tab(1, true, "https://shop.example/admin/payroll")];
+        let users_tab_back = [tab(7, true, "https://shop.example/admin/payroll")];
+        assert_eq!(owned_tab(&one_window, &users_tab_back, report, false), None);
+        assert_eq!(owned_tab(&one_window, &users_tab_back, report, true), None, "however long it is waited for");
+        let both = [tab(7, false, ""), tab(9, true, report)];
+        assert_eq!(owned_tab(&one_window, &both, report, false), Some(9));
+        let sent_on = [tab(7, false, ""), tab(9, true, "https://sso.example/login")];
+        assert_eq!(owned_tab(&one_window, &sent_on, report, false), None);
+        assert_eq!(owned_tab(&one_window, &sent_on, report, true), Some(9));
         // Two new selected tabs (the user opened one too): the one on the requested page.
         let two = [tab(1, false, ""), tab(2, true, NEWS), tab(8, true, MAIL), tab(9, true, report)];
         assert_eq!(owned_tab(&before, &two, report, false), Some(9));

@@ -269,8 +269,23 @@ fn pid_of(bundle_id: &str) -> Option<i32> {
     })
 }
 
+/// Whether the element is a panel the browser lays over a window: a dialog or a sheet. Never
+/// the window's tab bar and never its page.
+///
+/// Measured in the guest walks of 2026-11-13 (Chrome 157, Brave): on a page in another
+/// language than the browser's, Chrome shows "Translate this page?" as a window of its own
+/// (`AXWindow`, subrole `AXUnknown`) and again inside the browser window (an `AXGroup` with the
+/// subrole `AXApplicationAlertDialog`), each holding an `AXTabGroup` of two `AXTabButton`s,
+/// "German" and "English". Counted as tabs, they made every such page unreadable: no tab could
+/// be told to be the reader's.
+fn is_overlay(element: &Element, role: &str) -> bool {
+    role == "AXSheet" || (role == "AXGroup" && matches!(text(element, "AXSubrole").as_deref(),
+        Some("AXApplicationAlertDialog" | "AXApplicationDialog" | "AXDialog" | "AXSystemDialog")))
+}
+
 /// The window's tab buttons: `AXRadioButton`s with the subrole `AXTabButton`, or inside an
-/// `AXTabGroup`, never inside a web page (a page's own tab list is the page's). Measured in the
+/// `AXTabGroup`, never inside a web page (a page's own tab list is the page's) and never inside
+/// a panel laid over the window ([`is_overlay`]). Measured in the
 /// guest (walk-59ad5d5270c7, Safari): the tab bar is an `AXGroup` ("Tab bar, 13 tabs"), each tab
 /// an `AXRadioButton`/`AXTabButton` holding one `AXButton` (its close button, "Close") and an
 /// image, while Safari's `AXTabGroup` holds the page.
@@ -290,6 +305,7 @@ pub(crate) fn tab_buttons(window: &Element) -> Vec<Element> {
                 out.push(el);
                 continue;
             }
+            _ if is_overlay(&el, &role) => continue,
             _ => {}
         }
         if depth < 30 {
@@ -302,23 +318,32 @@ pub(crate) fn tab_buttons(window: &Element) -> Vec<Element> {
     out
 }
 
-/// The page a window shows: its first `AXWebArea` (a frame inside it is not walked).
+/// The page a window shows: its first `AXWebArea` at a web address, or else its first
+/// `AXWebArea` (a page still on its way, a start page). A frame inside a page is not walked, and
+/// neither is a panel laid over the window ([`is_overlay`]): a browser's own panels can be web
+/// pages too, at an address of the browser's own.
 pub(crate) fn window_area(window: &Element) -> Option<Element> {
     let mut stack: Vec<(Element, usize)> = children(window).into_iter().map(|c| (c, 1)).collect();
     let mut nodes = 0;
+    let mut first = None;
     while let Some((el, depth)) = stack.pop() {
         nodes += 1;
         if nodes > MAX_CHROME_NODES {
             break;
         }
-        if text(&el, "AXRole").as_deref() == Some("AXWebArea") {
-            return Some(el);
+        let role = text(&el, "AXRole").unwrap_or_default();
+        if role == "AXWebArea" {
+            if text(&el, "AXURL").is_some_and(|url| url.starts_with("http")) {
+                return Some(el);
+            }
+            first.get_or_insert(el);
+            continue;
         }
-        if depth < 30 {
+        if depth < 30 && !is_overlay(&el, &role) {
             stack.extend(children(&el).into_iter().map(|c| (c, depth + 1)));
         }
     }
-    None
+    first
 }
 
 /// The address of the page a window shows.
@@ -326,11 +351,15 @@ fn window_url(window: &Element) -> String {
     window_area(window).and_then(|area| text(&area, "AXURL")).unwrap_or_default()
 }
 
-/// The app's windows, or `None` when they cannot be read.
+/// The app's browser windows, or `None` when they cannot be read: its standard windows
+/// (`AXStandardWindow`), never a bubble or a dialog the browser shows as a window of its own
+/// ([`is_overlay`]'s measurement). An app that lists no standard window at all is taken as it is.
 pub(crate) fn windows_of(app: &Element) -> Option<Vec<Element>> {
     let windows = attribute(app, "AXWindows")?.downcast::<CFArray<*const c_void>>()?;
     // SAFETY: each item is a live element the array holds; the get rule retains it.
-    Some(windows.iter().filter(|w| !w.is_null()).map(|w| unsafe { CFType::wrap_under_get_rule(*w) }).collect())
+    let all: Vec<Element> = windows.iter().filter(|w| !w.is_null()).map(|w| unsafe { CFType::wrap_under_get_rule(*w) }).collect();
+    let standard: Vec<Element> = all.iter().filter(|w| text(w, "AXSubrole").as_deref() == Some("AXStandardWindow")).cloned().collect();
+    Some(if standard.is_empty() { all } else { standard })
 }
 
 pub(crate) fn is_selected(tab: &Element) -> bool {

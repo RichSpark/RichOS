@@ -14,7 +14,9 @@
 //!     shown, or is refused when that element has left the page;
 //!   - a scroll: `AXScrollToVisible` on the last element of the page;
 //!   - showing a tab: `AXPress` on its tab button, for a browser that adds the reader's tab
-//!     without selecting it (Firefox, measured in the guest walk of 2026-11-13).
+//!     without selecting it (Firefox, measured in the guest walk of 2026-11-13);
+//!   - a window on screen: `AXHidden` and `AXMinimized` set to false, for a browser that is
+//!     hidden or has every window minimized (Firefox then shows no page, same walk).
 //!
 //! A browser that stops answering must not hang the tool: each Accessibility message waits 3 s
 //! at most (`linkedin_host::app_element`) and one reading takes [`READING_BUDGET`] at most,
@@ -37,6 +39,19 @@ use std::time::{Duration, Instant};
 extern "C" {
     fn AXUIElementPerformAction(element: *const c_void, action: *const c_void) -> i32;
     fn AXUIElementCopyAttributeNames(element: *const c_void, names: *mut *const c_void) -> i32;
+    fn AXUIElementSetAttributeValue(element: *const c_void, attribute: *const c_void, value: *const c_void) -> i32;
+}
+
+/// Whether the element's boolean attribute is true.
+fn is_true(element: &Element, name: &'static str) -> bool {
+    attribute(element, name).and_then(|v| v.downcast::<CFBoolean>()).map(bool::from).unwrap_or(false)
+}
+
+/// Set the element's boolean attribute to false. Whether the app accepted it.
+fn set_false(element: &Element, name: &'static str) -> bool {
+    let name = CFString::from_static_string(name);
+    // SAFETY: a live element, a CFString name and a CFBoolean.
+    unsafe { AXUIElementSetAttributeValue(element.as_CFTypeRef(), name.as_CFTypeRef(), CFBoolean::false_value().as_CFTypeRef()) == 0 }
 }
 
 /// Whether the element itself lists the attribute among the ones it has.
@@ -208,6 +223,20 @@ impl PageHost for MacBrowser {
         kept.last.as_ref().is_some_and(|last| perform(last, "AXScrollToVisible") == 0)
     }
 
+    fn reveal(&self, app: &BrowserApp) -> bool {
+        let Some(element) = app_element(app) else { return false };
+        let mut changed = false;
+        if is_true(&element, "AXHidden") {
+            changed |= set_false(&element, "AXHidden");
+        }
+        // One window is enough, the first the app lists: the others stay as the user left them.
+        let windows = windows_of(&element).unwrap_or_default();
+        if !windows.is_empty() && windows.iter().all(|w| is_true(w, "AXMinimized")) {
+            changed |= set_false(&windows[0], "AXMinimized");
+        }
+        changed
+    }
+
     fn show_tab(&self, _: &BrowserApp, tab: u64) -> bool {
         // Only a tab button is pressed: a window standing for its one tab is already showing it.
         self.element_of(tab).filter(|el| text(el, "AXRole").as_deref() == Some("AXRadioButton"))
@@ -230,5 +259,6 @@ mod tests {
         assert_eq!(host.press_item(0), Pressed::Gone);
         assert!(!host.scroll_to_end());
         assert!(!host.show_tab(&absent, 0), "a tab never read is never pressed");
+        assert!(!host.reveal(&absent), "nothing is shown of a browser that is not running");
     }
 }
