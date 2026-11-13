@@ -249,12 +249,20 @@ fn parse(mut reader: impl BufRead) -> io::Result<(Vec<Submission>, bool)> {
 // Old response items bracket an actual image with generated text components.
 // Drop only that structure and retain ordinary user text quoting either tag.
 fn image_wrapper(content: &[Value], index: usize) -> bool {
-    let text_at = |i: usize, marker: &str| {
-        content.get(i).is_some_and(|part| {
-            part["type"] == "input_text"
-                && part["text"]
-                    .as_str()
-                    .is_some_and(|text| text.trim() == marker)
+    let text_at = |i: usize| {
+        content
+            .get(i)
+            .filter(|part| part["type"] == "input_text")
+            .and_then(|part| part["text"].as_str())
+            .map(str::trim)
+    };
+    let opening_at = |i: usize| {
+        text_at(i).is_some_and(|text| {
+            text == "<image>"
+                || text
+                    .strip_prefix("<image name=[Image #")
+                    .and_then(|label| label.strip_suffix("]>"))
+                    .is_some_and(|number| number.parse::<u32>().is_ok_and(|number| number > 0))
         })
     };
     let image_at = |i: usize| {
@@ -262,10 +270,10 @@ fn image_wrapper(content: &[Value], index: usize) -> bool {
             .get(i)
             .is_some_and(|part| part["type"] == "input_image")
     };
-    if text_at(index, "<image>") {
-        return image_at(index + 1) && text_at(index + 2, "</image>");
+    if opening_at(index) {
+        return image_at(index + 1) && text_at(index + 2) == Some("</image>");
     }
-    index >= 2 && text_at(index, "</image>") && image_at(index - 1) && text_at(index - 2, "<image>")
+    index >= 2 && text_at(index) == Some("</image>") && image_at(index - 1) && opening_at(index - 2)
 }
 
 fn user_kind(kind: &Value) -> bool {
@@ -321,13 +329,17 @@ mod tests {
 {"timestamp":"2026-11-13T12:00:00.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"shit"},{"type":"input_text","text":"<image>"},{"type":"input_image","image_url":"data:image/png;base64,AA=="},{"type":"input_text","text":"</image>"}]}}
 {"timestamp":"2026-11-13T12:00:00.002Z","type":"event_msg","payload":{"type":"user_message","message":"shit"}}
 {"timestamp":"2026-11-13T12:00:01.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"shit"},{"type":"input_text","text":"<image>"}]}}"#;
-        let (items, complete) = parse(raw.as_bytes()).unwrap();
-        assert!(complete);
-        assert_eq!(items.len(), 2);
-        assert_eq!(items.iter().map(|item| item.count).sum::<u64>(), 2);
-        assert!(items
-            .iter()
-            .any(|item| item.text_digest == Submission::new(0, "shit\n<image>").text_digest));
+        for marker in ["<image>", "<image name=[Image #1]>"] {
+            let input = raw.replace("<image>", marker);
+            let (items, complete) = parse(input.as_bytes()).unwrap();
+            assert!(complete);
+            assert_eq!(items.len(), 2, "generated marker {marker}");
+            assert_eq!(items.iter().map(|item| item.count).sum::<u64>(), 2);
+            let authored = Submission::new(0, &format!("shit\n{marker}"));
+            assert!(items
+                .iter()
+                .any(|item| item.text_digest == authored.text_digest));
+        }
     }
 
     #[test]
