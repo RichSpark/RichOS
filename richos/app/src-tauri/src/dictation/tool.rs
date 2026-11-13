@@ -968,6 +968,7 @@ impl Tool {
                     }
                 }
                 Control::Tap(TapEvent::Toggle) | Control::App(AppMessage::Finish) => self.toggle(matches!(control, Control::App(_))),
+                Control::App(AppMessage::Listen) => self.listen_from_app(),
                 Control::Tap(TapEvent::WritingEscape)=>{
                     if self.instruction_recording() {self.cancel_recording();}
                     self.cancel_assistance();self.close_menu();self.publish();
@@ -1460,6 +1461,25 @@ impl Tool {
             ));
             later(&self.tx, bar::FLIGHT_FOR, Control::FlightDone(self.flights));
         }
+    }
+
+    /// **The window asks for a dictation where the cursor is** (`AppMessage::Listen`, round 70's
+    /// Try it here and Talk now): the start of a tap of the key, from idle only. Anything already
+    /// under way (a dictation, a key being captured, writing assistance, RichCleaner's filing) is
+    /// left alone, and the state is published so the window reads what is true.
+    fn listen_from_app(&mut self) {
+        let busy = self.ending
+            || !self.settings.on
+            || self.capture.is_some()
+            || self.assistance.is_some()
+            || self.cleaner_pending.is_some()
+            || self.cleaner_target.is_some()
+            || matches!(self.session.phase(), Phase::Listening { .. } | Phase::Writing);
+        if !busy && self.session.tap(now_ms()) == TapAction::StartListening {
+            self.listen();
+            return;
+        }
+        self.publish();
     }
 
     fn toggle(&mut self, from_app: bool) {

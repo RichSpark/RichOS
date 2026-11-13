@@ -4171,6 +4171,7 @@ fn main() {
             dictation_take_sheet_request,
             #[cfg(target_os = "macos")]
             dictation_app::dictation_capture_key,
+            dictation_app::dictation_listen,
             // --- Bust a bug (round 21, CEO §115) — appended ---
             bug_report::bug_report_context,
             bug_report::bug_report_private_in,

@@ -3900,6 +3900,11 @@
         case "dictation_capture_key":
           dictationCalls.push({ cmd, on: !!args.on });
           return !!args.on && dictationView.keyTap;
+        // Round 70's Try it here and Talk now (`dictation_app.rs` dictation_listen): told when a
+        // tool holds the key; what the tool then does is driven through `dictationSet`.
+        case "dictation_listen":
+          dictationCalls.push({ cmd, focused: document.activeElement && document.activeElement.id });
+          return dictationView.owner !== "none";
         case "dictation_offer_shown":
           dictationOfferCalls.push("dictation_offer_shown");
           dictationOffered = true;

@@ -768,6 +768,13 @@ impl Host {
         }
     }
 
+    /// **A dictation where the cursor is, started from the window** (round 70's Try it here and
+    /// Talk now). `true` when the tool was told; whether it listens is the tool's to say, on its
+    /// state, which the window reads as it reads a tap of the key.
+    pub fn listen(&self) -> bool {
+        self.link.tell(&AppMessage::Listen)
+    }
+
     /// **Key capture over the socket.** `true` when the tool's key tap will answer with the next
     /// F-key; `false` when there is no tap (the window's own keys answer then).
     pub fn capture(&self, on: bool) -> bool {
@@ -1088,6 +1095,14 @@ pub fn dictation_open_settings(pane: String) -> Result<(), String> {
     } else {
         Err(format!("System Settings did not open ({status})"))
     }
+}
+
+/// **Start listening where the cursor is**, as a tap of the key would: round 70's Try it here (the
+/// tools card) and Talk now (the line above the message box), each after the window has put the
+/// cursor in the message box. `true` when the tool was told.
+#[richos_command::command]
+pub fn dictation_listen(app: tauri::AppHandle) -> Result<bool, String> {
+    Ok(host(&app)?.listen())
 }
 
 /// **Press a different key**: `on` asks the tool's key tap for the next F-key (answered on
