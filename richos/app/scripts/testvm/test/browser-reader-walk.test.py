@@ -100,6 +100,37 @@ class Driver(unittest.TestCase):
         self.assertIn('the tool refused', walk.judge({}, row, '')[0])
 
 
+class LocalSite(unittest.TestCase):
+    """browser-page-guest.py's pages for the reader's walks, served here and fetched as a browser would."""
+    def test_the_store_shows_only_to_a_signed_in_browser_and_its_closed_panel_is_not_in_the_page(self):
+        import http.server
+        import threading
+        import urllib.request
+        spec = importlib.util.spec_from_file_location('browser_page_guest', TESTVM / 'browser-page-guest.py')
+        site = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(site)
+        server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), site.Site)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            base = 'http://127.0.0.1:%d' % server.server_address[1]
+            # load-bound: only against a hang, on a loopback fetch from a server in this process; the verdict is the page's text.
+            get = lambda path, cookie=None: urllib.request.urlopen(urllib.request.Request(
+                base + path, headers={'Cookie': cookie} if cookie else {}), timeout=60).read().decode()
+            out = get('/store')
+            self.assertIn(site.STORE_SIGNED_OUT, out)
+            self.assertNotIn(site.STORE_ORDERS, out)
+            signed = get('/store', site.COOKIE)
+            self.assertIn(site.STORE_ORDERS, signed)
+            self.assertIn('aria-expanded="false"', signed)
+            # The panel's sentence is only in the script that a press runs, never in the page's text.
+            self.assertNotIn('>' + site.STORE_HIDDEN, signed)
+            self.assertIn('<div id="p" hidden></div>', signed)
+            self.assertIn('target="_blank">Profile in a new tab', get('/links'))
+        finally:
+            server.shutdown()
+            server.server_close()
+
+
 class Pages(unittest.TestCase):
     def test_every_page_has_a_question_and_every_step_of_the_walk_is_a_method(self):
         for page in walk.PAGES:

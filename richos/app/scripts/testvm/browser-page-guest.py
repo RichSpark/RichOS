@@ -15,7 +15,10 @@ signed-in"; the user is signed in to every social profile in their default brows
                                       holding that cookie than to a plain fetch (the LinkedIn
                                       shape: signed out, you get a sign-in wall);
                            /links     one link to /profile that opens in a new tab, for
-                                      browser-reader-walk.py.
+                                      browser-reader-walk.py;
+                           /store     a store admin only a signed-in browser is shown, whose
+                                      "Shipping" panel is closed until its button is pressed, for
+                                      conversation-walk.py --reader-site.
                            Its pid is written to D/server.pid; it serves until killed.
 
   measure --bundle B --url-contains U --expect F [--manual] [--enhanced]
@@ -85,6 +88,20 @@ def article_html():
     return '\n'.join(parts)
 
 
+STORE_SIGNED_OUT = 'Sign in to see this store.'
+STORE_ORDERS = 'Orders this week: 214'
+STORE_HIDDEN = 'Ships from Rotterdam within two days.'
+# The closed panel's text is not in the page until the button is pressed: no reader gets it
+# without choosing to open "Shipping".
+STORE = ('<!doctype html><html><head><meta charset=utf-8><title>Store admin</title></head><body><main>'
+         '<h1>Store admin</h1><p>%s</p>'
+         '<h2><button type="button" id="b" aria-expanded="false" aria-controls="p">Shipping</button></h2>'
+         '<div id="p" hidden></div></main>'
+         '<script>document.getElementById("b").addEventListener("click",function(){var p=document.getElementById("p");'
+         'p.textContent=%s;p.hidden=false;this.setAttribute("aria-expanded","true");});</script></body></html>'
+         ) % (STORE_ORDERS, json.dumps(STORE_HIDDEN))
+
+
 class Site(http.server.BaseHTTPRequestHandler):
     def send(self, body, extra=()):
         data = body.encode()
@@ -108,6 +125,10 @@ class Site(http.server.BaseHTTPRequestHandler):
             signed = COOKIE in (self.headers.get('Cookie') or '')
             body = SIGNED_IN if signed else SIGNED_OUT
             return self.send('<!doctype html><title>Profile</title><h1>Profile</h1><p>%s</p>' % body)
+        if path == '/store':
+            if COOKIE not in (self.headers.get('Cookie') or ''):
+                return self.send('<!doctype html><title>Sign in</title><h1>Sign in</h1><p>%s</p>' % STORE_SIGNED_OUT)
+            return self.send(STORE)
         if path == '/links':
             return self.send('<!doctype html><title>Links</title><h1>Links</h1>'
                              '<p><a href="/profile" target="_blank">Profile in a new tab</a></p>')

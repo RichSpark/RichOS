@@ -30,6 +30,12 @@ is how a branch's instruction files (rich.md, the bootstrap-interview skill) rea
   #    http://127.0.0.1:18766/in/SLUG/ (SLUG is linkedin-standin.py's --slug; the walk prints it).
   #    Add `--site SITE` after conversation-walk.py. Without it, nothing LinkedIn is set up.
 
+  #    With --reader-site, the local site of browser-page-guest.py is served in the guest at
+  #    http://127.0.0.1:18765 (its /store is a store admin only a signed-in browser is shown, with a
+  #    "Shipping" panel that is closed until its button is pressed), the guest's default browser
+  #    (Safari) is signed in to it and RichOS is given Accessibility as with --site, so the team's
+  #    browser reader (richos_browser) can read it. A message may say {reader_site} for that address.
+
   #    With --action NAME=TOOL[~TEXT] and --expect NAME=ROLE (native-transcript.py --actors's own
   #    arguments, repeatable), the walk also says WHO performed each declared action from the
   #    pulled transcripts, into OUT_DIR/actors.json, and fails when an expectation fails. The
@@ -92,6 +98,7 @@ RETURN_KEY = '36'
 CLOSED = ('TurnCompleted', 'TurnInterrupted', 'TurnStopped', 'TurnFailed')
 ITEM_KEYS = {'say': {'say'}, 'press': {'press', 'expect_reply'}, 'wait_for_rich': {'wait_for_rich'}}
 PROFILE_PLACEHOLDER = '{linkedin_profile}'
+READER_PLACEHOLDER = '{reader_site}'
 
 
 def load(name, path):
@@ -279,6 +286,27 @@ class ConversationWalk(adopt_walk.Walk):
         time.sleep(4)
         self.allow_local_network()
         return li.profile
+
+    def prepare_reader_site(self):
+        """--reader-site: browser-page-guest.py's local site served in the guest by
+        browser-page-walk.py's own `site` step (loaded, never copied), Safari the default browser
+        and signed in to it (its /sign-in), RichOS given Accessibility. Returns the site's address."""
+        page_walk = load('browser_page_walk', HERE / 'browser-page-walk.py')
+        profile_walk = load('linkedin_profile_walk', HERE / 'linkedin-profile-walk.py')
+        site = page_walk.Walk(argparse.Namespace(vm=self.vm, out=self.out))
+        try:
+            site.site()
+        except page_walk.StepFailed as exc:
+            raise StepFailed('the local site: %s' % str(exc)[:500])
+        row = json.loads(adopt_walk.guest(self.vm, 'python3 %s default-browser --bundle %s || true'
+                                          % (shlex.quote(site.helper), profile_walk.SAFARI), 90).splitlines()[-1])
+        if row.get('after') != profile_walk.SAFARI.lower():
+            raise StepFailed('Safari could not be made the default browser in the guest: %s' % row)
+        self.grant_accessibility()
+        adopt_walk.guest(self.vm, 'open -g -b %s %s/sign-in' % (profile_walk.SAFARI, site.base), 60)
+        time.sleep(4)
+        self.allow_local_network()
+        return site.base
 
     def grant_accessibility(self):
         """Accessibility for com.richos.app in the guest's TCC database, by linkedin-app-walk.py's
@@ -504,6 +532,8 @@ def main():
     p.add_argument('--press-grace', type=float, default=20, help='seconds a press waits for a turn to start (default 20)')
     p.add_argument('--site', type=Path, help='the stand-in LinkedIn site linkedin-standin.py built: served in the guest, the '
                    "default browser (Safari) signed in to it before the conversation, so Rich's LinkedIn tool can read it")
+    p.add_argument('--reader-site', action='store_true', help="browser-page-guest.py's local site served in the guest, "
+                   "Safari signed in to it, so the team's browser reader can read it ({reader_site} in a message)")
     p.add_argument('--no-accessibility', action='store_true', help='with --site: leave RichOS without the macOS '
                    'Accessibility permission, as on a Mac where it was never asked (the first-run case): any '
                    'earlier decision is reset with tccutil, its rows before and after are printed; every '
@@ -529,6 +559,8 @@ def main():
     walk = ConversationWalk(a)
     if not a.site and any(PROFILE_PLACEHOLDER in st['text'] for st in walk.steps if st['kind'] == 'say'):
         p.error('%s is in a message but there is no --site to name it' % PROFILE_PLACEHOLDER)
+    if not a.reader_site and any(READER_PLACEHOLDER in st['text'] for st in walk.steps if st['kind'] == 'say'):
+        p.error('%s is in a message but there is no --reader-site to name it' % READER_PLACEHOLDER)
     if a.deny_accessibility and not a.no_accessibility:
         p.error('--deny-accessibility answers the request --no-accessibility leaves RichOS to raise')
     ok = True
@@ -544,6 +576,12 @@ def main():
             for step in walk.steps:
                 if step['kind'] == 'say':
                     step['text'] = step['text'].replace(PROFILE_PLACEHOLDER, profile)
+        if a.reader_site:
+            base = walk.prepare_reader_site()
+            print('local signed-in site: %s' % base, flush=True)
+            for step in walk.steps:
+                if step['kind'] == 'say':
+                    step['text'] = step['text'].replace(READER_PLACEHOLDER, base)
         walk.began_ms = walk.clock()  # the actor verdicts cover this conversation from here on
         for n, step in enumerate(walk.steps, 1):
             try:
