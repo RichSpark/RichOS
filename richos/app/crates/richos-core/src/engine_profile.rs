@@ -27,11 +27,10 @@ pub const GUARD_AUDIENCE_DECLARATION: &str = "spawn-guard-audience.declaration";
 /// does nothing for a user who has declared nothing. The rest of the manifest polices the
 /// terminal operator's own sessions (his claim, his worktrees and lands, his record) and is
 /// left out; the claim hooks above all, which must never run in a user's app.
-const APP_BASH_RULES: [&str; 7] = [
+const APP_BASH_RULES: [&str; 6] = [
     "guard-publication-commits.sh",   // private material in a commit to a public repository
     "guard-named-persons-commands.sh", // a listed person's name in a commit message, branch or PR
     "guard-public-record-repo.sh",    // a plan or research record added to a public repository
-    "guard-unguarded-rm.sh",          // Claude Code's own rm prompt, which bypass mode still asks
     "guard-host-sleep.sh",            // caffeinate or a sleep-setting change on the user's Mac
     "guard-headed-browser.sh",        // a visible browser window opened by automation
     "guard-toolchain.sh",             // an Apple developer-tools stub with no toolchain (install dialog)
@@ -45,6 +44,22 @@ const APP_WRITE_RULES: [&str; 3] = [
     "guard-publication-writes.sh",    // private material written into a public repository
     "guard-named-persons-writes.sh",  // a listed person's name in a written file or its path
 ];
+
+/// **The engine's mods** (its `hooks/hooks.json` `modules`), as the terminal's plugin names
+/// them: plain file names beside that manifest, refused otherwise so a copy never leaves the
+/// engine's `hooks` folder.
+fn engine_modules(engine: &Path) -> Result<Vec<String>, RuntimeError> {
+    let text = std::fs::read_to_string(engine.join("hooks/hooks.json"))
+        .map_err(|e| RuntimeError(format!("the engine's hooks/hooks.json could not be read: {e}")))?;
+    let manifest: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|e| RuntimeError(format!("the engine's hooks/hooks.json is not JSON: {e}")))?;
+    let modules = manifest.get("modules").and_then(|m| m.as_array()).cloned().unwrap_or_default();
+    modules.iter().map(|module| match module.as_str() {
+        Some(path) if path.strip_prefix("./").is_some_and(|name|
+            !matches!(name, "" | "." | "..") && !name.contains('/') && !name.contains('\\')) => Ok(path.to_string()),
+        _ => Err(RuntimeError(format!("the engine's hooks/hooks.json names a mod outside its folder: {module}"))),
+    }).collect()
+}
 
 /// **The file Claude Code runs ahead of every Bash command of a lease** (its `CLAUDE_ENV_FILE`,
 /// read by Claude Code 2.1.314 for Bash commands only, never for hooks): it sets the agent's
@@ -716,7 +731,18 @@ impl EngineProfile {
                 {"type":"command", "command":app_rules(&engine, "Write", &APP_WRITE_RULES), "timeout":40},
                 {"type":"command", "command":format!("/bin/bash {}", quote(&engine.join("scripts/hooks/dialect-guard.sh"))), "timeout":20}
             ]}));
-        write(&plugin.join("hooks/hooks.json"), &json!({"hooks":hooks}).to_string())?;
+        // The engine's mods, as the terminal loads them (its `hooks/hooks.json` `modules`): each
+        // file copied beside this manifest, which names it relative to itself. One of them answers
+        // No, with Claude Code's reason, to every permission ask Claude Code still raises in
+        // bypass mode, before the ask reaches the app (`hooks/answer-permission-prompt.ts`).
+        let modules = engine_modules(&engine)?;
+        for module in &modules {
+            let name = module.trim_start_matches("./");
+            let source = std::fs::read_to_string(engine.join("hooks").join(name))
+                .map_err(|e| RuntimeError(format!("the engine mod {name} could not be read: {e}")))?;
+            write(&plugin.join("hooks").join(name), &source)?;
+        }
+        write(&plugin.join("hooks/hooks.json"), &json!({"modules":modules, "hooks":hooks}).to_string())?;
         // Spawn preflight runs the canonical guards directly. The real provider
         // additionally enters the desktop scope/evidence gate at dispatch time.
         // WHICH guards is [`user_work_guards`]'s answer, read from the engine's
