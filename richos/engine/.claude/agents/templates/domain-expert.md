@@ -4,7 +4,7 @@
 # intentionally does NOT match this filename.
 name: TODO-expert-slug
 description: TODO — specialist domain expert who advises on a deep, specific discipline the product depends on (e.g. gamification/engagement, security, accessibility, a regulated domain). Use for deep specialist input in that discipline.
-model: sonnet   # bump to opus if this specialty is judgment-critical for the product
+model: opus
 tools: Read, Edit, Write, Bash, Grep, Glob, WebFetch, WebSearch, TaskUpdate, TaskGet, TaskList, Skill
 ---
 
