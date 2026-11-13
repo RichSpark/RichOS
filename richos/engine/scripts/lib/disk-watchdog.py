@@ -157,9 +157,10 @@ def volume_consumers(mount, roots, min_bytes, limit=8, max_depth=6, budget_s=480
     (`~/.richos-nightly/source/richos/app/target`, never only `~/.richos-nightly`). Never
     another app's data (du_kb refuses it), never a symlink, never another device. A folder that
     is refused only because it HOLDS protected data deeper down (/, /Users, the home folder,
-    /private, /private/var: foreign_app_data.listable_holder) is listed and walked around,
-    never measured whole, so /Users/Shared and /private/var/vm are still found. A root walked
-    earlier is skipped by a later one (the home folder, walked first, inside the walk from /).
+    /private, /private/var, /System: foreign_app_data.listable_holder) is listed and walked
+    around, never measured whole, so /Users/Shared and /private/var/vm are still found. A root
+    walked earlier is skipped by a later one under any spelling (the home folder, walked first,
+    inside the data volume's walk, where it is /System/Volumes/Data/Users/<name>).
     Only called when a volume is under its floor, and bounded by `budget_s`.
     """
     deadline = time.time() + budget_s
@@ -176,7 +177,7 @@ def volume_consumers(mount, roots, min_bytes, limit=8, max_depth=6, budget_s=480
             child = os.path.join(path, name)
             if os.path.islink(child) or not os.path.isdir(child) or not on_volume(child, mount):
                 continue
-            if os.path.realpath(child) in walked:
+            if foreign_app_data.normalized(child) in walked:
                 continue
             out.append(child)
         return out
@@ -211,20 +212,21 @@ def volume_consumers(mount, roots, min_bytes, limit=8, max_depth=6, budget_s=480
         root = expand(root)
         if root and os.path.isdir(root) and on_volume(root, mount):
             found.extend(walk(root, 0))
-            walked.add(os.path.realpath(root))
+            walked.add(foreign_app_data.normalized(root))
     found = sorted(set(found), reverse=True)
     return found[:limit]
 
 
 def walk_roots(mount, primary):
     """Where the walk of a volume in alert starts: its mount, so the full volume's biggest
-    folders are found wherever a new pile grows (the CEO, 2026-11-10). The internal disk's data
-    volume is walked from /, where its folders appear under their usual names (/Users,
-    /Library, /Applications, /opt, /private) through the system's firmlinks, after the home
-    folder and the Simulator's and Xcode's folders, walked first so the time budget reaches
-    them and so ~/Library's own tool folders are found though ~/Library itself is never entered.
-    Every protected folder, or folder holding one, is walked around, never handed to `du`
-    (volume_consumers, du_kb).
+    folders are found wherever a new pile grows (the CEO, 2026-11-10). On the internal disk that
+    is the data volume's own mount (/System/Volumes/Data), the volume that fills up: every
+    folder anything can write is there once, with no alias (Users, Library, System/Library/
+    AssetsV2, MobileSoftwareUpdate); the sealed system volume cannot grow and is not walked. The
+    home folder and the Simulator's and Xcode's folders are walked first, so the time budget
+    reaches them and ~/Library's own tool folders are found though ~/Library itself is never
+    entered. Every protected folder, or folder holding one, is walked around under either
+    spelling, never handed to `du` (volume_consumers, du_kb, foreign_app_data).
 
     DISK_VOLUME_WALK_ROOT replaces every root of a volume's walk with one folder on that volume.
     It exists for the test suites (disk-watchdog.test.sh, notice-disk-alert.test.sh), which point
@@ -237,9 +239,8 @@ def walk_roots(mount, primary):
     if mount != primary:
         return [mount]
     home = os.path.expanduser("~")
-    top = os.sep if os.path.realpath(mount) == "/System/Volumes/Data" else mount
     return [home, os.path.join(home, "Library/Developer/CoreSimulator"),
-            os.path.join(home, "Library/Developer/Xcode"), top]
+            os.path.join(home, "Library/Developer/Xcode"), mount]
 
 
 def consumer_roots(candidates, mount):
@@ -311,8 +312,10 @@ def is_ours(path):
         return True
     for root in (env("SCRATCH_NIGHTLY_DIR", "~/.richos-nightly"),
                  os.path.join(state_base(), "workspace-retirement")):
-        root = os.path.realpath(expand(root))
-        if os.path.realpath(path) == root or os.path.realpath(path).startswith(root + os.sep):
+        # Compared in one spelling: the data volume's walk names /System/Volumes/Data/Users/...
+        root = foreign_app_data.normalized(expand(root))
+        here = foreign_app_data.normalized(path)
+        if here == root or here.startswith(root + os.sep):
             return True
     return False
 

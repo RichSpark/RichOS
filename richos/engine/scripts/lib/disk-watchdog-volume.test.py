@@ -78,14 +78,15 @@ class Consumers(unittest.TestCase):
             os.environ.pop("DISK_VOLUME_WALK_ROOT", None)
             self.assertEqual(wd.walk_roots(self.tmp, "/System/Volumes/Data"), [self.tmp])
 
-    def test_the_internal_disk_is_walked_from_slash_after_the_home_folder_simulator_and_xcode(self):
-        """Review rv-20261113T003405Z-8c629588-8555: the whole internal volume, not only the home
-        folder; the data volume's folders are walked under their usual names from /."""
+    def test_the_internal_disk_is_walked_from_its_mount_after_the_home_folder_simulator_and_xcode(self):
+        """Reviews rv-20261113T003405Z-8c629588-8555 and rv-20261113T033548Z-1a23a3b7-d89c: the whole
+        internal data volume from its own mount, not only the home folder and not from /."""
         with patch.dict(os.environ, {"HOME": self.root}):
             os.environ.pop("DISK_VOLUME_WALK_ROOT", None)
             roots = wd.walk_roots("/System/Volumes/Data", "/System/Volumes/Data")
         self.assertEqual(roots, [self.root, os.path.join(self.root, "Library/Developer/CoreSimulator"),
-                                 os.path.join(self.root, "Library/Developer/Xcode"), "/"])
+                                 os.path.join(self.root, "Library/Developer/Xcode"),
+                                 "/System/Volumes/Data"])
 
     def test_the_walk_root_setting_moves_another_volumes_walk_inside_it(self):
         """The suite's seam (W27): its sandbox is where the walk starts; a volume the sandbox is
@@ -176,35 +177,41 @@ class ScanBoundary(unittest.TestCase):
     }
     ROOTS = [CACHE, HOME + "/.claude", HOME + "/.richos-nightly", EXT_CACHE]
     PROTECTED = [HOME, HOME + "/Library", HOME + "/Library/Caches", HOME + "/Documents"]
-    # The rest of the internal volume, as / shows it (review rv-20261113T003405Z-8c629588-8555):
-    # two 80 GiB piles outside the home folder, and the folders a walk must go around.
-    SIM_IMAGES = "/Library/Developer/CoreSimulator/Images"
-    ARCHIVES = "/Users/Shared/build-archives"
-    ASSET = "/System/Library/AssetsV2/com_apple_MobileAsset_MacSoftwareUpdate"
-    PILES = [SIM_IMAGES, ARCHIVES, ASSET, PROJECTS + "/client"]
+    # The rest of the internal volume, walked from the data volume's own mount (reviews
+    # rv-20261113T003405Z-8c629588-8555, rv-20261113T023512Z-4df85b00-cebf and
+    # rv-20261113T033548Z-1a23a3b7-d89c): piles outside the home folder, one reachable only from
+    # the mount, and the folders a walk must go around.
+    SIM_IMAGES = PRIMARY + "/Library/Developer/CoreSimulator/Images"
+    ARCHIVES = PRIMARY + "/Users/Shared/build-archives"
+    ASSET = PRIMARY + "/System/Library/AssetsV2/com_apple_MobileAsset_MacSoftwareUpdate"
+    UPDATE = PRIMARY + "/MobileSoftwareUpdate/macOSUpdate"
+    PILES = [SIM_IMAGES, ARCHIVES, ASSET, UPDATE, PROJECTS + "/client"]
     DIRECTORIES.update({
-        "/": ["Library", "System", "Users", "Volumes", "private"],
-        "/Library": ["Developer"], "/Library/Developer": ["CoreSimulator"],
-        "/Library/Developer/CoreSimulator": ["Images"], SIM_IMAGES: [],
-        "/Users": ["Shared", "review-fixture"], "/Users/Shared": ["build-archives"], ARCHIVES: [],
-        "/System": ["Library", "Volumes"], "/Volumes": ["ReviewWorking"],
-        # Downloaded system assets and updates: data-volume storage reached only through /System
-        # (/usr/share/firmlinks; review rv-20261113T023512Z-4df85b00-cebf).
-        "/System/Library": ["AssetsV2"], "/System/Library/AssetsV2": [ASSET.rsplit("/", 1)[1]],
-        ASSET: [],
-        # The data volume under its other name, which may report the same device as / (review
-        # rv-20261113T013445Z-be30576f-2682): a walk or a du through it reaches every home folder.
-        "/System/Volumes": ["Data", "Preboot"], "/System/Volumes/Preboot": [],
-        "/System/Volumes/Data": ["Users"], "/System/Volumes/Data/Users": ["review-fixture"],
-        "/private": ["tmp", "var"], "/private/tmp": [], "/private/var": ["folders", "vm"],
-        "/private/var/vm": [], "/private/var/folders": ["xx"], "/private/var/folders/xx": ["id"],
-        "/private/var/folders/xx/id": ["T"], "/private/var/folders/xx/id/T": ["com.example.other"],
-        "/private/var/folders/xx/id/T/com.example.other": [],
+        PRIMARY: ["Library", "MobileSoftwareUpdate", "System", "Users", "Volumes", "private"],
+        PRIMARY + "/Library": ["Developer"], PRIMARY + "/Library/Developer": ["CoreSimulator"],
+        PRIMARY + "/Library/Developer/CoreSimulator": ["Images"], SIM_IMAGES: [],
+        PRIMARY + "/MobileSoftwareUpdate": ["macOSUpdate"], UPDATE: [],
+        PRIMARY + "/Users": ["Shared", "review-fixture"],
+        PRIMARY + "/Users/Shared": ["build-archives"], ARCHIVES: [],
+        # The home folder under the mount's spelling: walked already, so never walked again.
+        PRIMARY + HOME: [".claude", "Library", "Projects"], PRIMARY + HOME + "/.claude": [],
+        PRIMARY + HOME + "/Library": ["Caches"], PRIMARY + HOME + "/Projects": ["client"],
+        PRIMARY + HOME + "/Projects/client": [],
+        PRIMARY + "/System": ["Library"], PRIMARY + "/System/Library": ["AssetsV2"],
+        PRIMARY + "/System/Library/AssetsV2": [ASSET.rsplit("/", 1)[1]], ASSET: [],
+        PRIMARY + "/Volumes": ["ReviewWorking"],
+        PRIMARY + "/private": ["tmp", "var"], PRIMARY + "/private/tmp": [],
+        PRIMARY + "/private/var": ["folders", "vm"], PRIMARY + "/private/var/vm": [],
+        PRIMARY + "/private/var/folders": ["xx"], PRIMARY + "/private/var/folders/xx": ["id"],
+        PRIMARY + "/private/var/folders/xx/id": ["T"],
+        PRIMARY + "/private/var/folders/xx/id/T": ["com.example.other"],
+        PRIMARY + "/private/var/folders/xx/id/T/com.example.other": [],
     })
-    HOLDERS = ["/", "/Users", "/private", "/private/var", "/private/var/folders",
-               "/private/var/folders/xx", "/private/var/folders/xx/id", "/private/var/folders/xx/id/T",
-               "/private/var/folders/xx/id/T/com.example.other", "/System", "/System/Volumes",
-               "/System/Volumes/Data"]
+    HOLDERS = list(map(PRIMARY.__add__, ("", "/Users", "/private", "/private/var", "/private/var/folders",
+                                     "/private/var/folders/xx", "/private/var/folders/xx/id",
+                                     "/private/var/folders/xx/id/T",
+                                     "/private/var/folders/xx/id/T/com.example.other", "/System",
+                                     HOME, HOME + "/Library")))
 
     def alert(self, low_volume, candidates, walk_root=""):
         """(paths handed to du, folders the alert named) for an alert on `low_volume`."""
@@ -260,24 +267,21 @@ class ScanBoundary(unittest.TestCase):
         self.assertEqual([p for p in measured if p in self.PROTECTED], [], measured)
         self.assertEqual([p for p in measured if p.startswith(self.EXTERNAL)], [], measured)
 
-    def test_an_internal_disk_alert_walks_the_whole_volume_around_protected_folders(self):
-        """The reviewer's two piles: simulator images under /Library and build archives in
-        /Users/Shared are named. /, /Users, the home folder and /private are listed, never
-        measured whole; the per-user temporary folders are never entered; another volume and
-        /System is listed, never measured, so the downloaded system assets under
-        /System/Library/AssetsV2 are named; /System/Volumes, which holds the data volume under
-        another name and can report the same device, is never measured or entered."""
+    def test_an_internal_disk_alert_walks_the_whole_data_volume_around_protected_folders(self):
+        """The reviewers' piles are named: simulator images under Library, build archives in
+        Users/Shared, downloaded system assets under System/Library/AssetsV2 and a software update
+        reachable only from the mount. The mount, Users, the home folder, private and System are
+        listed, never measured whole; the per-user temporary folders are never entered; the home
+        folder is walked once though the mount shows it again; another volume is never measured."""
         measured, named = self.alert(self.PRIMARY, self.ROOTS)
-        self.assertIn(self.SIM_IMAGES, named)
-        self.assertIn(self.ARCHIVES, named)
-        self.assertIn("/private/var/vm", measured, "a holder's other children are still measured")
+        for pile in (self.SIM_IMAGES, self.ARCHIVES, self.ASSET, self.UPDATE):
+            self.assertIn(pile, named)
+        self.assertIn(self.PRIMARY + "/private/var/vm", measured, "a holder's other children are measured")
         self.assertEqual([p for p in measured if p in self.HOLDERS + self.PROTECTED], [], measured)
-        self.assertEqual([p for p in measured if p.startswith("/private/var/folders")], [], measured)
-        self.assertIn(self.ASSET, named, "/System's data branches are walked")
-        self.assertEqual([p for p in measured if p.startswith(("/Volumes/", "/System/Volumes"))], [],
-                         measured)
-        self.assertNotIn("/System", measured)
-        self.assertEqual([p for p in named if p.startswith("/System/Volumes")], [], named)
+        self.assertEqual([p for p in measured if "/private/var/folders" in p], [], measured)
+        self.assertEqual([p for p in measured if p.startswith(("/Volumes/", self.PRIMARY + "/Volumes/"))],
+                         [], measured)
+        self.assertEqual([p for p in measured if p.startswith(self.PRIMARY + self.HOME)], [], measured)
         self.assertEqual(measured.count(self.PROJECTS), 1, "the home folder is walked once")
 
     def test_an_external_drive_alert_walks_the_drive_from_its_mount_and_stays_on_it(self):

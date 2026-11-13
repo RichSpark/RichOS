@@ -123,6 +123,12 @@ def _norm(path):
     return p
 
 
+def normalized(path):
+    """One spelling for a path on the internal disk: resolved, with the data volume's mount
+    (/System/Volumes/Data) taken off, so /System/Volumes/Data/Users/x and /Users/x compare equal."""
+    return _norm(path)
+
+
 def _own(p, h):
     """True when `p` is at or below a RichOS folder one level inside a Library area."""
     lib = os.path.join(h, "Library") + os.sep
