@@ -185,7 +185,11 @@ class ScanBoundary(unittest.TestCase):
         "/Library": ["Developer"], "/Library/Developer": ["CoreSimulator"],
         "/Library/Developer/CoreSimulator": ["Images"], SIM_IMAGES: [],
         "/Users": ["Shared", "review-fixture"], "/Users/Shared": ["build-archives"], ARCHIVES: [],
-        "/System": ["Library"], "/System/Library": [], "/Volumes": ["ReviewWorking"],
+        "/System": ["Library", "Volumes"], "/System/Library": [], "/Volumes": ["ReviewWorking"],
+        # The data volume under its other name, which may report the same device as / (review
+        # rv-20261113T013445Z-be30576f-2682): a walk or a du through it reaches every home folder.
+        "/System/Volumes": ["Data", "Preboot"], "/System/Volumes/Preboot": [],
+        "/System/Volumes/Data": ["Users"], "/System/Volumes/Data/Users": ["review-fixture"],
         "/private": ["tmp", "var"], "/private/tmp": [], "/private/var": ["folders", "vm"],
         "/private/var/vm": [], "/private/var/folders": ["xx"], "/private/var/folders/xx": ["id"],
         "/private/var/folders/xx/id": ["T"], "/private/var/folders/xx/id/T": ["com.example.other"],
@@ -193,7 +197,8 @@ class ScanBoundary(unittest.TestCase):
     })
     HOLDERS = ["/", "/Users", "/private", "/private/var", "/private/var/folders",
                "/private/var/folders/xx", "/private/var/folders/xx/id", "/private/var/folders/xx/id/T",
-               "/private/var/folders/xx/id/T/com.example.other", "/System", "/System/Library"]
+               "/private/var/folders/xx/id/T/com.example.other", "/System", "/System/Volumes",
+               "/System/Volumes/Data"]
 
     def alert(self, low_volume, candidates, walk_root=""):
         """(paths handed to du, folders the alert named) for an alert on `low_volume`."""
@@ -206,8 +211,7 @@ class ScanBoundary(unittest.TestCase):
 
         def same_volume(path, mount):
             on_external = path == self.EXTERNAL or path.startswith(self.EXTERNAL + "/")
-            on_system = path == "/System" or path.startswith("/System/")
-            return (self.EXTERNAL if on_external else "sealed" if on_system else self.PRIMARY) == mount
+            return (self.EXTERNAL if on_external else self.PRIMARY) == mount
 
         env = {"MODE": "check", "HOME": self.HOME, "TMPDIR": self.EXTERNAL + "/tmp",
                "DISK_PRIMARY_VOLUME": self.PRIMARY, "DISK_SCALE_EXTRA_VOLUMES": "0",
@@ -250,7 +254,8 @@ class ScanBoundary(unittest.TestCase):
         """The reviewer's two piles: simulator images under /Library and build archives in
         /Users/Shared are named. /, /Users, the home folder and /private are listed, never
         measured whole; the per-user temporary folders are never entered; another volume and
-        the sealed system volume are never measured."""
+        /System, which holds the data volume under another name and can report the same device,
+        is never measured or entered."""
         measured, named = self.alert(self.PRIMARY, self.ROOTS)
         self.assertIn(self.SIM_IMAGES, named)
         self.assertIn(self.ARCHIVES, named)
@@ -258,6 +263,7 @@ class ScanBoundary(unittest.TestCase):
         self.assertEqual([p for p in measured if p in self.HOLDERS + self.PROTECTED], [], measured)
         self.assertEqual([p for p in measured if p.startswith("/private/var/folders")], [], measured)
         self.assertEqual([p for p in measured if p.startswith(("/Volumes/", "/System"))], [], measured)
+        self.assertEqual([p for p in named if p.startswith("/System")], [], named)
         self.assertEqual(measured.count(self.PROJECTS), 1, "the home folder is walked once")
 
     def test_an_external_drive_alert_walks_the_drive_from_its_mount_and_stays_on_it(self):

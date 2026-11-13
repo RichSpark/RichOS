@@ -151,6 +151,11 @@ def entering(path, home=None):
     p = _norm(path)
     if p == os.sep:
         return "%s holds every user's data, so walking it walks other apps' data" % path
+    # /System and /System/Volumes hold the data volume itself (/System/Volumes/Data, every home
+    # folder under another name), and on this OS they can report the same device as it, so a
+    # device check does not keep a walk out (review rv-20261113T013445Z-be30576f-2682).
+    if _DATA_VOLUME.startswith(p + os.sep):
+        return "%s holds %s, every user's data under another name" % (path, _DATA_VOLUME)
     if _DARWIN_USER.match(p) or _DARWIN_CACHE.match(p):
         return ("%s is or holds the per-user folders where macOS keeps other apps' "
                 "temporary files and caches" % path)
