@@ -38,6 +38,12 @@ pub enum AppMessage {
     PermissionsChanged,
     /// The talk button was pressed during a dictation: write it as if the key had been tapped.
     Finish,
+    /// **Start listening where the cursor is, as a tap of the key would** (round 70: the tools
+    /// card's Try it here and Talk now above the message box, each after putting the cursor in the
+    /// message box). Only from idle with dictation on: a tool that is listening, writing,
+    /// capturing a key, assisting or filing for RichCleaner does nothing. A tool built before it
+    /// skips the line, as it skips any type it does not know.
+    Listen,
     /// "Press a different key" (plan section 2 row 11): the next F-key pressed is reported as
     /// `key` instead of acting, so an Apple top-row key is captured as the key it is.
     CaptureNextKey,
@@ -542,6 +548,10 @@ mod tests {
         app.write_all(b"{\"type\":\"from-a-newer-app\"}\n").unwrap();
         send(&mut app, &AppMessage::Finish).unwrap();
         assert_eq!(rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap(), AppMessage::Finish);
+        // Round 70's Try it here and Talk now.
+        assert_eq!(serde_json::to_string(&AppMessage::Listen).unwrap(), r#"{"type":"listen"}"#);
+        send(&mut app, &AppMessage::Listen).unwrap();
+        assert_eq!(rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap(), AppMessage::Listen);
         hub.broadcast(&ToolMessage::WillListen { seq: 1 });
         let raw = lines.next().unwrap().unwrap();
         assert_eq!(raw, r#"{"type":"will-listen","seq":1}"#);

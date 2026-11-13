@@ -479,6 +479,8 @@
     paintRow();
     paintSheet();
     paintRail();
+    // Round 70's tools card and the line above the message box paint from the same facts.
+    window.dispatchEvent(new CustomEvent("richos:dictation-state"));
   }
   /// The navigation rail's RichScribe item (round 58): shown where RichScribe is in this build,
   /// with its gold dot while RichScribe is on and waits on a Mac permission.
@@ -624,7 +626,7 @@
   });
 
   // ---- choosing the key -------------------------------------------------------------------
-  async function pickKey(n) {
+  async function pickKey(n, fromCard) {
     const wasCapturing = !!capture;
     capture = null;
     if (wasCapturing) call("dictation_capture_key", { on: false });
@@ -633,6 +635,8 @@
     paint();
     // The "RichScribe feature" message names the key; a new key replaces it (main.js listens).
     if (v) window.dispatchEvent(new CustomEvent("richos:dictation-key-changed"));
+    // The tools card shows the key it picked in place, so neither the sheet's focus nor its toast.
+    if (fromCard) return;
     const strip = (col && col.querySelector(`[data-act="key"][data-k="${n}"]`)) || $("dict-capture");
     if (strip) strip.focus();
     if (window.RichSettings && window.RichSettings.toast) window.RichSettings.toast(`RichScribe now starts and stops with F${n}.`);
@@ -753,7 +757,97 @@
     queueMicrotask(() => { const btn = document.getElementById("set-btn"); if (btn) btn.focus(); });
   }
 
+  // ---- round 70's tools card: turning RichScribe on in the conversation ----------------------
+  // The card asks the same three things as this sheet, with its words: the key, then each of the
+  // two things macOS asks, each when he presses its Allow (richos-hq design/mockups/rounds/round-70,
+  // step 7). It drives the same switch, prompts and watch as the sheet, so the two never disagree,
+  // and a turn-on that ends ready is announced as set up exactly as the sheet's is.
+  // The permissions the card's presses are asking macOS for, while they ask. One per permission,
+  // so a press of one never waits on, or is swallowed by, the other's.
+  const cardAsking = new Set();
+  function cardPerm(pane) {
+    if (!view) return "unknown";
+    const value = pane === "microphone" ? view.mic : view.ax;
+    if (value === "allowed") return "allowed";
+    if (cardAsking.has(pane) || value === "asking" || (pane === "microphone" ? micWait : axWait)) return "asking";
+    return value;
+  }
+  /// The switch on, once: the card's first Allow is the turn-on.
+  async function cardSwitchOn() {
+    if (!view) await read();
+    if (!view || !view.ready) return false;
+    if (!view.on) {
+      setUpPending = true;
+      const v = await call("dictation_set_on", { on: true });
+      if (v) view = v;
+      paint();
+    }
+    return !!(view && view.on);
+  }
+  async function cardAllow(pane) {
+    if (cardAsking.has(pane)) return;
+    cardAsking.add(pane);
+    try {
+      if (!(await cardSwitchOn())) return;
+      paint();
+      if (pane === "microphone" && view.mic !== "allowed") {
+        const v = await call("dictation_ask_microphone");
+        if (v) view = v;
+        paint();
+        // macOS answers on its own; read it once a second until it has.
+        for (let i = 0; view && view.on && view.mic === "asking" && i < 600; i++) { await sleep(1000); await read(); }
+      } else if (pane === "accessibility" && view.ax !== "allowed") {
+        const prompted = await call("dictation_ask_accessibility");
+        if (prompted === true) {
+          // The watch reads once a second and finishes setting it up when it is allowed.
+          axWait = { blurred: false };
+          return;
+        }
+        await read();
+      }
+    } finally {
+      cardAsking.delete(pane);
+      if (axWait) { paint(); watch(); }
+    }
+    if (axWait) return;
+    if (view && view.mic === "allowed" && view.ax === "allowed") {
+      // `read` nudges the tool to make its key tap once Accessibility is allowed.
+      await read();
+      becameReady();
+      return;
+    }
+    paint();
+  }
+  /// Turn on with nothing left to ask (both permissions granted already, say after RichScribe was
+  /// switched off in Settings): the switch goes on, and it is set up as the sheet's turn-on is.
+  async function cardStart() {
+    if (!(await cardSwitchOn())) return;
+    await read();
+    if (view && view.mic === "allowed" && view.ax === "allowed") becameReady();
+    else paint();
+  }
+  async function cardOpenSettings(pane) {
+    if (pane === "accessibility") axWait = { blurred: false };
+    else micWait = { blurred: false };
+    setUpPending = true;
+    paint();
+    watch();
+    await call("dictation_open_settings", { pane });
+  }
+
   window.RichDictation = {
+    /** Round 70's tools card (suite-tools.js). `status()` is null until the first read. */
+    card: {
+      status: () => view && view.ready ? {
+        on: !!view.on, key: view.key, mic: cardPerm("microphone"), ax: cardPerm("accessibility"), works: works(),
+      } : null,
+      setKey: (n) => pickKey(n, true),
+      allow: cardAllow,
+      start: cardStart,
+      openSettings: cardOpenSettings,
+      /** Starts a dictation where the cursor is, as a tap of the key would. `true` when the tool was told. */
+      listen: async () => (await call("dictation_listen")) === true,
+    },
     open,
     /** Rich's offer (main.js): open the sheet and turn dictation on, in the drawn order.
      *  Answers `{on}` once the flow has settled: `true` when dictation is on and both

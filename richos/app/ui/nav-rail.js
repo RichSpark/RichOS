@@ -288,10 +288,28 @@
   // ---- RichScribe's presence and its dot -------------------------------------------------------
   // `dictation.js` says whether RichScribe is in this build and whether it waits on a Mac
   // permission; an item that opens nothing is never shown.
+  /// ROUND 70: RichScribe's item arrives in the rail when the voice & video tools it runs on are in,
+  /// on a first install at the moment the setup sheet's strip says RichScribe is Ready. `main.js`
+  /// says so from setup's own answer; until it has, nothing is withheld.
+  let scribeToolsIn = true;
+  let scribeState = null;
+  function setScribeTools(present) {
+    const was = scribeToolsIn;
+    scribeToolsIn = !!present;
+    if (was === scribeToolsIn) return;
+    setScribe(scribeState);
+    const b = item("scribe");
+    if (b && scribeToolsIn && !b.hidden) {
+      b.classList.remove("suite-new");
+      void b.offsetWidth;
+      b.classList.add("suite-new");
+    }
+  }
   function setScribe(state) {
+    scribeState = state;
     const b = item("scribe");
     if (!b) return;
-    const available = !!(state && state.available);
+    const available = !!(state && state.available) && scribeToolsIn;
     const needs = available && !!state.needsPermission;
     b.hidden = !available;
     b.querySelector(".nr-dot").hidden = !needs;
@@ -318,6 +336,7 @@
   window.RichNavRail = {
     paint: schedule,
     setScribe,
+    setScribeTools,
     setIdentity,
     showPage,
     get page() {

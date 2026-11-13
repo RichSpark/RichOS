@@ -1,0 +1,178 @@
+/* THE FIVE TOOLS THAT COME WITH RICH (round 70, richos-hq design/mockups/rounds/round-70; the
+   strip on the setup sheet, the tools card in the conversation and the line above the message
+   box; `suite-tools.js`). Every color is one of the app's own tokens; nothing readable is under
+   16px. The round measured every line and indicator it draws against the color behind it in both
+   themes (its audit-contrast.json, built from these same tokens): text 4.5:1 (3:1 at 24px and
+   up), indicators 3:1, no exemption claimed. `tests/contrast.js` measures them here too.
+   The 14px ticks inside the round gold marks are glyphs, measured as indicators, as the app's own
+   installed mark is. */
+
+:root { --suite-out: cubic-bezier(0.22, 1, 0.36, 1); }
+
+/* ---------------------------------------------------------------- the strip on the setup sheet */
+.overlay-panel--setup.has-suite { width: min(660px, 92vw); }
+.overlay-panel--setup.has-suite .setup-items--r19 { margin-bottom: 16px; }
+
+.suite-strip {
+  margin: 0 0 16px;
+  padding: 14px 16px;
+  border: 1px solid var(--line-control);
+  border-radius: 12px;
+  background: var(--surface-raised);
+}
+.suite-strip[hidden] { display: none; }
+.suite-strip-head { margin: 0 0 12px; font-size: 1.0625rem; font-weight: 600; color: var(--ink); }
+.suite-icons { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 4px; }
+.suite-ico {
+  position: relative; display: flex; flex-direction: column; align-items: center; gap: 7px;
+  padding: 8px 2px; border: 1px solid transparent; border-radius: 10px;
+  background: transparent; color: var(--ink); font: inherit; font-size: 1rem; cursor: pointer;
+  transition: background-color .16s, border-color .16s;
+}
+.suite-ico img {
+  width: 56px; height: 56px; display: block; border-radius: 13px;
+  transition: transform .35s var(--suite-out), filter .4s, opacity .4s;
+}
+.suite-ico:hover img, .suite-ico.is-on img { transform: translateY(-3px) scale(1.06); }
+.suite-ico.is-on { background: var(--tint-soft); border-color: var(--line-control); }
+.suite-ico:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+.suite-ico-name { font-weight: 600; white-space: nowrap; }
+.suite-line { margin: 12px 2px 0; min-height: 3.1em; font-size: 1.0625rem; line-height: 1.45; color: var(--ink); }
+.suite-line b { font-weight: 600; }
+
+/* The same five while things install: each arrives when the piece it runs on is in. */
+.suite-strip--arrive .suite-ico { cursor: default; }
+.suite-strip--arrive .suite-ico:hover img { transform: none; }
+.suite-strip--arrive .suite-ico img { filter: grayscale(1); opacity: .34; transform: scale(.9); }
+.suite-strip--arrive .suite-ico.is-in img { filter: none; opacity: 1; transform: none; animation: suite-pop .6s var(--suite-out); }
+.suite-ico-state { font-size: 1rem; color: var(--ink-soft); }
+.suite-ico.is-in .suite-ico-state { color: var(--gold-text); font-weight: 600; }
+.suite-ico-tick {
+  position: absolute; top: 4px; left: calc(50% + 16px); width: 20px; height: 20px; border-radius: 50%;
+  display: grid; place-items: center; background: var(--gold); color: var(--on-gold);
+  font-size: .875rem; font-weight: 700; line-height: 1; box-shadow: 0 0 0 2px var(--surface-raised);
+  transform: scale(0); transition: transform .4s var(--suite-out) .12s;
+}
+.suite-ico.is-in .suite-ico-tick { transform: scale(1); }
+@keyframes suite-pop { 0% { transform: scale(.82); } 55% { transform: scale(1.1); } 100% { transform: none; } }
+
+/* RichScribe's item arrives in the rail when the voice & video tools are in. */
+#nav-rail .nr-item.suite-new { animation: suite-pop .7s var(--suite-out); }
+
+/* ---------------------------------------------------------------- the tools card */
+.suite-note .tl-prose { margin-bottom: 12px; }
+.suite-card {
+  border: 1px solid var(--line-control); border-radius: 12px; background: var(--surface);
+  color: var(--ink); font: 400 1rem/1.45 var(--font); overflow: hidden;
+  animation: suite-in .55s var(--suite-out) backwards;
+}
+.suite-card.is-settled { animation: none; }
+@keyframes suite-in { from { opacity: 0; transform: translateY(8px) scale(.985); } to { opacity: 1; transform: none; } }
+
+.suite-lead { display: grid; grid-template-columns: 64px minmax(0, 1fr) auto; gap: 16px; align-items: start; padding: 18px 18px 16px; }
+.suite-lead > img { width: 64px; height: 64px; border-radius: 15px; display: block; }
+.suite-lead-name { margin: 0 0 2px; font-family: var(--font-serif); font-size: 1.5rem; line-height: 1.2; font-weight: 400; color: var(--ink); }
+.suite-lead-what { margin: 0; font-size: 1.0625rem; line-height: 1.5; color: var(--ink); }
+.suite-lead-acts { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; padding-top: 2px; }
+.suite-on {
+  display: inline-flex; align-items: center; gap: 8px; height: var(--control-h, 36px); padding: 0 12px;
+  border-radius: 8px; border: 1px solid var(--gold); color: var(--gold-text); font-weight: 600; white-space: nowrap;
+}
+.suite-on i { width: 18px; height: 18px; border-radius: 50%; background: var(--gold); color: var(--on-gold); display: grid; place-items: center; font-style: normal; font-size: .875rem; font-weight: 700; }
+
+/* RichScribe's turn-on, in the card: the key, then the two things macOS asks. */
+.suite-turn { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .45s var(--suite-out); }
+.suite-turn.is-open { grid-template-rows: 1fr; }
+.suite-turn > div { overflow: hidden; }
+.suite-turn-in { margin: 0 18px 16px 98px; padding: 14px 0 0; border-top: 1px solid var(--line-strong); }
+.suite-turn-q { margin: 0 0 8px; font-weight: 600; font-size: 1rem; }
+.suite-keys { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 6px; }
+.suite-key {
+  min-width: 44px; height: 36px; padding: 0 8px; border-radius: 7px; border: 1px solid var(--line-control);
+  border-bottom-width: 2px; background: var(--surface-raised); color: var(--ink); font: 600 1rem var(--font); cursor: pointer;
+}
+.suite-key:hover { border-color: var(--gold); }
+.suite-key[aria-checked="true"] { background: var(--gold); border-color: var(--gold); color: var(--on-gold); }
+.suite-key:focus-visible, .suite-tile:focus-visible, .suite-try:focus-visible, .suite-hint-talk:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+.suite-turn-hint { margin: 0 0 12px; color: var(--ink-soft); font-size: 1rem; }
+.suite-starting { margin: 10px 0 0; }
+.suite-starting[hidden] { display: none; }
+.suite-perm { display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 8px 0; border-top: 1px solid var(--line-soft); }
+.suite-perm-mark { width: 22px; height: 22px; border-radius: 50%; border: 2px solid var(--line-control); box-sizing: border-box; display: grid; place-items: center; font-size: .875rem; font-weight: 700; color: var(--on-gold); }
+.suite-perm.is-ok .suite-perm-mark { background: var(--gold); border-color: var(--gold); }
+.suite-perm-name { font-weight: 600; }
+.suite-perm-why { color: var(--ink-soft); }
+.suite-perm-state { display: inline-flex; align-items: center; gap: 10px; justify-content: flex-end; }
+.suite-perm-ok { color: var(--gold-text); font-weight: 600; }
+.suite-perm-wait, .suite-perm-no { color: var(--ink); }
+
+.suite-ready { display: none; margin: 0 18px 16px 98px; padding: 12px 0 0; border-top: 1px solid var(--line-strong); align-items: center; gap: 12px; flex-wrap: wrap; }
+.suite-card[data-phase="on"] .suite-ready { display: flex; }
+.suite-ready p { margin: 0; flex: 1 1 260px; font-size: 1.0625rem; }
+.suite-kcap {
+  display: inline-block; min-width: 2.1em; text-align: center; font-size: 1rem; font-weight: 600; line-height: 1.35;
+  padding: 0 .375rem; border-radius: 6px; border: 1px solid var(--line-control); border-bottom-width: 2px;
+  background: var(--surface-raised); color: var(--ink); vertical-align: 1px; font-family: var(--font);
+}
+
+.suite-rest { padding: 14px 18px 16px; border-top: 1px solid var(--line-strong); background: var(--surface-raised); }
+.suite-rest-head { margin: 0 0 10px; font-weight: 600; font-size: 1rem; color: var(--ink); }
+.suite-tiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.suite-tile {
+  display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 12px; align-items: start; text-align: left;
+  padding: 10px 12px 11px 10px; border-radius: 10px; border: 1px solid var(--line-control); background: var(--surface);
+  color: var(--ink); font: inherit; cursor: pointer; transition: border-color .16s, transform .3s var(--suite-out);
+}
+.suite-tile:hover, .suite-tile.is-shown { border-color: var(--gold); transform: translateY(-1px); }
+.suite-tile img { width: 44px; height: 44px; border-radius: 10px; display: block; }
+.suite-tile-name { display: flex; align-items: baseline; gap: 8px; font-weight: 600; font-size: 1.0625rem; }
+.suite-tile-what { display: block; color: var(--ink-soft); font-size: 1rem; line-height: 1.4; margin-top: 1px; }
+.suite-rest-foot { margin: 12px 0 0; color: var(--ink-soft); font-size: 1rem; }
+
+/* Where a tool lives: its item in the navigation rail answers while its tile is pointed at. */
+/* As the rail's own selected item draws it (style.css `.nr-item.is-sel`): the glyph in --nr-sel and
+   the soft fill on ::before, so nothing on the item itself fades through a theme switch. */
+#nav-rail .nr-item.suite-here { color: var(--nr-sel); }
+#nav-rail .nr-item.suite-here::before { background: var(--nr-sel-soft); }
+#nav-rail .nr-item.suite-here::after {
+  content: ""; position: absolute; inset: -3px; border-radius: 12px; border: 2px solid var(--nr-sel);
+  animation: suite-ring 1.1s var(--suite-out) infinite;
+}
+@keyframes suite-ring { from { opacity: .9; transform: scale(.9); } to { opacity: 0; transform: scale(1.35); } }
+.suite-where {
+  position: fixed; z-index: 70; padding: 5px 10px; border-radius: 8px; white-space: nowrap;
+  background: var(--surface-raised); border: 1px solid var(--line-control); color: var(--ink);
+  font: 600 1rem var(--font); box-shadow: 0 10px 24px var(--shadow-weak); pointer-events: none;
+  transform: translateY(-50%); animation: suite-in .3s var(--suite-out) backwards;
+}
+
+/* RichBrief has no place in the rail: its prompt, as meeting-panel.js draws it, shown as a preview. */
+.suite-brief {
+  position: fixed; z-index: 70; top: 72px; right: 24px; width: 318px; padding: 13px 14px 14px; border-radius: 14px;
+  background: var(--hud-bg); outline: 1px solid var(--hud-line); color: var(--ink); font: 400 1rem/1.4 var(--font);
+  box-shadow: 0 30px 60px -24px rgba(0, 0, 0, .6), 0 10px 24px -12px rgba(0, 0, 0, .45);
+  animation: suite-in .4s var(--suite-out) backwards; pointer-events: none;
+}
+.suite-brief-head { display: flex; align-items: center; gap: 8px; color: var(--ink-soft); margin-bottom: 6px; }
+.suite-brief-head img { width: 18px; height: 18px; border-radius: 4px; }
+.suite-brief-title { font-weight: 600; font-size: 1.0625rem; margin: 0 0 10px; }
+.suite-brief-acts { display: flex; gap: 8px; }
+.suite-brief-acts span { height: 34px; padding: 0 12px; border-radius: 8px; display: inline-flex; align-items: center; font-weight: 600; border: 1px solid var(--line-control); }
+.suite-brief-acts span:first-child { background: var(--gold); border-color: var(--gold); color: var(--on-gold); }
+.suite-brief-life { height: 2px; margin-top: 12px; border-radius: 1px; background: linear-gradient(90deg, transparent, var(--gold), transparent); background-size: 50% 100%; background-repeat: no-repeat; animation: suite-sweep 1.8s linear infinite; }
+@keyframes suite-sweep { from { background-position: -60% 0; } to { background-position: 160% 0; } }
+
+/* ---------------------------------------------------------------- the line above the message box */
+.voice-hint {
+  display: flex; align-items: center; gap: 8px; margin: 0 0 8px 2px; color: var(--ink); font-size: 1rem;
+  animation: suite-in .5s var(--suite-out) backwards;
+}
+.voice-hint[hidden] { display: none; }
+.suite-hint-talk { font: inherit; color: var(--accent-text); background: none; border: 0; padding: 0; cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .suite-card, .suite-where, .suite-brief, .voice-hint, #nav-rail .nr-item.suite-new { animation: none; }
+  .suite-ico img, .suite-turn, .suite-tile { transition: none; }
+  .suite-strip--arrive .suite-ico.is-in img { animation: none; }
+  #nav-rail .nr-item.suite-here::after, .suite-brief-life { animation: none; }
+}

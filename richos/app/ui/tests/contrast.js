@@ -1183,18 +1183,64 @@ const SURFACES = [
     },
     preset: { setup: "missing-both", dictation: true, memory: "ready" },
   },
+  // ROUND 70: THE FIVE TOOLS (`suite-tools.js`). The setup sheet's strip is painted by the three
+  // states above (state 1 with RichScribe's line; state 2 with three Ready and two Waiting; state
+  // 3 with all five Ready). These two paint the tools card under Rich's note: its turn-on open
+  // (the function keys, the chosen one gold, the microphone Allowed and Accessibility's Allow) with
+  // RichCleaner's rail item lit and named; and RichScribe on (the On badge, the key cap and Try it here) with
+  // RichBrief's prompt preview and the line above the message box.
   {
-    name: "dictation-offer",
-    what: "round 19, state 4: Rich's one offer of dictation in the conversation, its key and both buttons",
+    name: "suite-card-choosing",
+    what: "round 70: the tools card after Not now, its turn-on open, RichCleaner's place in the rail named",
     drive: async (p) => {
       await p.waitForSelector("#setup-sheet:not([hidden])");
       await p.click("#setup-go");
       await p.waitForSelector("#setup-start:not([hidden])");
       await p.click("#setup-start");
-      await p.waitForSelector("#dictation-offer-yes");
+      await p.waitForSelector("#first-run-later", { state: "visible" });
+      await p.click("#first-run-later");
+      await p.waitForSelector("#suite-turn-on");
+      await p.click("#suite-turn-on");
+      await p.waitForSelector(".suite-turn.is-open");
+      // RichCleaner's, not RichFinder's: a pointed-at tile lifts by a pixel, and RichFinder's tile
+      // carries the ⌘K cap, which is measured here and on no other surface.
+      await p.hover('.suite-tile[data-tool="cleaner"]');
+      await p.waitForSelector(".suite-where");
       await pageSettled(p);
     },
-    preset: { setup: "missing-both", dictation: true, memory: "ready" },
+    // The microphone already allowed, so both kinds of permission row are painted: Allowed and Allow.
+    preset: { setup: "missing-both", dictation: true, memory: "ready", onboarding: "not-yet", dictationKey: 5, dictationView: { mic: "allowed" } },
+  },
+  {
+    name: "suite-card-on",
+    what: "round 70: the tools card with RichScribe on, RichBrief's prompt preview, and the line above the message box",
+    drive: async (p) => {
+      await p.waitForSelector("#setup-sheet:not([hidden])");
+      await p.click("#setup-go");
+      await p.waitForSelector("#setup-start:not([hidden])");
+      await p.click("#setup-start");
+      await p.waitForSelector("#first-run-later", { state: "visible" });
+      await p.click("#first-run-later");
+      await p.waitForSelector('.suite-card[data-phase="on"]');
+      // A conversation of his, then Rich comes back in it by himself while onboarding is open:
+      // the line above the message box.
+      await p.fill("#input", "Thanks, I'll have a look.");
+      await p.press("#input", "Enter");
+      await p.waitForSelector(".nav-thread-row.is-active .nav-thread[data-thread-id]");
+      await p.evaluate(() => {
+        const thread = document.querySelector(".nav-thread-row.is-active .nav-thread").dataset.threadId;
+        window.__RICHOS_MOCK__.onboardingSet("partial");
+        window.__RICHOS_MOCK__.simulateAccountNote("research", "Here's my read. Six questions only you can answer.", thread);
+      });
+      await p.waitForSelector("#voice-hint:not([hidden])");
+      await p.hover('.suite-tile[data-tool="brief"]');
+      await p.waitForSelector(".suite-brief");
+      await pageSettled(p);
+    },
+    preset: {
+      setup: "missing-both", dictation: true, memory: "ready", onboarding: "not-yet", dictationKey: 5,
+      dictationView: { on: true, mic: "allowed", ax: "allowed", owner: "self", keyTap: true },
+    },
   },
   // THE UPDATE ROW, IN THREE STATES, because one state cannot paint the colours the others
   // do (RICH-TODOs row 12, `app/ui/updates.js`). It lives in the UNIVERSAL settings menu —

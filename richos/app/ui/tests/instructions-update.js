@@ -274,7 +274,7 @@ async function main() {
       body: { appendChild() {} }, addEventListener() {},
     };
     const context = { window: { RichBridge: bridge }, document, Bridge: bridge, setTimeout, clearTimeout, console,
-      addEventListener() {}, setupDictation: () => false, refreshVoiceReadiness() {},
+      addEventListener() {}, setupDictation: () => false, refreshVoiceReadiness() {}, paintScribeTools() {},
       invokeQuiet: (...args) => bridge.invoke(...args), paintSetupOutcome() {}, renderProviderAuth() {},
       setupRows: null, setupState: {}, setupRunning: false, videoToolsHeard: null, videoToolsLine: "",
       setupDoneWaitsForVideoTools: false };

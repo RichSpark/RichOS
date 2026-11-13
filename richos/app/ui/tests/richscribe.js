@@ -174,7 +174,8 @@ async function main() {
       ["dictation-menu.js", NEW_NAME + " settings"],
       ["dictation-menu.html", 'aria-label="' + NEW_NAME + '"'],
       ["dictation-bar.js", NEW_NAME + " is off."],
-      ["main.js", "Turn on " + NEW_NAME],
+      // Round 70: the tools card's button (it was the retired dictation offer's, in main.js).
+      ["suite-tools.js", "Turn on " + NEW_NAME],
       ["../src-tauri/src/dictation/menubar.rs", '.tooltip("' + NEW_NAME + '")'],
       ["../src-tauri/src/dictation/keytap.rs", NEW_NAME + " listens for its key"],
       ["../src-tauri/src/dictation_offer.rs", '"' + NEW_NAME + ' feature"'],

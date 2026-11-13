@@ -214,10 +214,15 @@
       "checkedOverShell": 22,
       "consideredOverShell": 28
     },
-    "dictation-offer": {
-      "//": "round 19, state 4: Rich's one offer of dictation in the conversation, its key cap and both buttons. First run's measurement, 2026-10-08.",
-      "checkedOverShell": 16,
-      "consideredOverShell": 44
+    "suite-card-choosing": {
+      "//": "round 70: the tools card after Not now to onboarding, its turn-on open (the function keys, the microphone Allowed, Accessibility's Allow) and RichCleaner's place in the rail named. It replaces round 19's dictation offer, which round 70 retired. First run's measurement, 2026-11-13.",
+      "checkedOverShell": 80,
+      "consideredOverShell": 152
+    },
+    "suite-card-on": {
+      "//": "round 70: the tools card with RichScribe on (the On badge, the key cap, Try it here), RichBrief's prompt preview and the line above the message box. First run's measurement, 2026-11-13.",
+      "checkedOverShell": 120,
+      "consideredOverShell": 202
     },
     "voice-model-offer": {
       "//": "the offer row: the sentence, the attention dot and the download control. ADDED 2026-09-17 with the speech-model provisioning work; walked with NO audio device open, which is why this panel is measurable where the listening row is not. RE-DERIVED 2026-10-05 (Output panel S4): the two Output buttons added 4 MEASURED nodes to the bare shell (98 -> 102 of 678), and this floor's `checked` margin over the shell was under the three-node tolerance, so 9z reported that a driver which never reached this state would pass. The floor is that run's measurement, which restores a margin over the bare shell; nothing this surface renders changed.",

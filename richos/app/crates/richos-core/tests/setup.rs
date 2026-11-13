@@ -354,23 +354,30 @@ fn the_video_tools_consent_line_is_the_plans() {
     );
 }
 
-/// **ONCE DICTATION IS THERE, THE STEP IS HIS, WORD FOR WORD** (round 19, the CEO, 2026-10-08):
-/// *"My voice and video tools: the tools I use to watch and download videos for you. Plus, it
-/// gives you a free & private/local replacement for Wispr Flow. So, it saves you $140+/year👍 and
-/// allows you to talk instead of typing anywhere on this computer."* The sheet renders the name,
-/// capitalized, then the line, so the two together are his sentence.
+/// **ONCE DICTATION IS THERE, EVERY STEP IS HIS, WORD FOR WORD** (the CEO's wording for round 70's
+/// setup sheet, 2026-11-13). The sheet renders each name, capitalized, then its line, so the two
+/// together are his sentence. Until dictation is there the sheet keeps the copy it had.
 #[test]
-fn the_voice_and_video_tools_step_is_his_sentence_word_for_word() {
-    let his = "My voice and video tools: the tools I use to watch and download videos for you. Plus, it gives you a free & private/local replacement for Wispr Flow. So, it saves you $140+/year👍 and allows you to talk instead of typing anywhere on this computer.";
-    assert_eq!(Component::MediaTools.display_name_for(true), "my voice and video tools");
+fn the_setup_steps_are_his_sentences_word_for_word() {
+    let his = [
+        (Component::ClaudeCode, "Claude Code: it powers my thinking. (auto-installs if not already here)"),
+        (Component::Engine, "The RichOS engine: the heart of RichOS. Includes my instructions and my specialist teammates (all of which you can tweak and expand)."),
+        (Component::MediaTools, "My voice & video tools: they let me hear and talk. And also enable me to watch and download videos and podcasts for you."),
+    ];
+    for (c, sentence) in his {
+        let name = c.display_name_for(true);
+        let rendered = format!("{}{}: {}", name[..1].to_uppercase(), &name[1..], c.why_for(true));
+        assert_eq!(rendered, sentence);
+    }
+    assert_eq!(Component::MediaTools.display_name_for(true), richos_core::setup::MEDIA_TOOLS_NAME);
     assert_eq!(Component::MediaTools.why_for(true), richos_core::setup::MEDIA_TOOLS_WHY);
-    let name = Component::MediaTools.display_name_for(true);
-    let rendered = format!("{}{}: {}", name[..1].to_uppercase(), &name[1..], Component::MediaTools.why_for(true));
-    assert_eq!(rendered, his);
-    // The other two steps keep their copy either way.
+    assert_eq!(Component::ClaudeCode.why_for(true), richos_core::setup::CLAUDE_CODE_WHY);
+    assert_eq!(Component::Engine.why_for(true), richos_core::setup::ENGINE_WHY);
+    // Claude Code and the engine keep their names either way, and their old lines without dictation.
+    assert_eq!(Component::ClaudeCode.why_for(false), "the program I think with. It comes from Anthropic and installs itself; I only ask it to.");
+    assert_eq!(Component::Engine.why_for(false), "the part of me that knows how I work: my instructions and my team.");
     for c in [Component::ClaudeCode, Component::Engine] {
         assert_eq!(c.display_name_for(true), c.display_name_for(false));
-        assert_eq!(c.why_for(true), c.why_for(false));
     }
 }
 

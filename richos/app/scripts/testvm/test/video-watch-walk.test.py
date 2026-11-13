@@ -39,6 +39,8 @@ class SetupWalkNames(unittest.TestCase):
         # The step's name once dictation is there (setup.rs MEDIA_TOOLS_NAME).
         done = '[richos] video tools in the background 1/1 done: My voice and video tools are installed.\n'
         self.assertEqual(walk.setup_walk.tools_outcome(done), 'done')
+        done = '[richos] video tools in the background 1/1 done: My voice & video tools are installed.\n'
+        self.assertEqual(walk.setup_walk.tools_outcome(done), 'done')
 
 
 class Glued(unittest.TestCase):
