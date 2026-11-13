@@ -2822,7 +2822,7 @@ rm -rf "$ROOT"
 # would sit neither landed nor discarded and unseen (point 5, as amended 2026-10-24: the
 # turn end is allowed and the work is told). Only the canary sees it.
 ROOT="$(make_sandbox)"
-q_mutate_registry "$ROOT" '    return True, "\n".join(person), fallback_notice(sid, items)' '    return True, "\n".join(person), ""'
+q_mutate_registry "$ROOT" '    return True, "\n".join(person), lead' '    return True, "\n".join(person), ""'
 set +e; PROBE_OUT="$(run_probe_in "$ROOT")"; rc=$?; set -e
 emit_case "45.gate-tells-the-lead-nothing-fails-layerQ-canary" 2 "$rc"
 if printf '%s' "$PROBE_OUT" | grep -F >/dev/null 'point 5: finished work neither landed nor discarded was not told'; then
