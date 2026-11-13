@@ -9393,8 +9393,28 @@ def gate_stop(payload, entity):
     # The same line also goes to the LEAD: the person's channel (systemMessage) is never read by
     # the model, and it is the lead who tells the CEO. Before this a deletion failed 17 times
     # over 10 hours and no session ever saw the line (2026-11-13).
-    lead = "\n".join(person + [fallback_notice(sid, items) or ""]).strip()
+    # Told to the lead once per session per failure state: a model-channel line continues the
+    # lead's turn, so an unchanged stuck deletion must not wake it again on every Stop.
+    lead = "\n".join(_new_deletion_lines(sid, person) + [fallback_notice(sid, items) or ""]).strip()
     return True, "\n".join(person), lead
+
+
+def _new_deletion_lines(sid, lines, record=True):
+    """The failing-deletion lines not yet told in this session. The failure state is which
+    deletions fail and with what error (not the attempt count, which moves every retry);
+    when that changes the lines are new again."""
+    if not lines:
+        return []
+    state = sorted([r.get("name"), r["deletion"].get("last_error")] for r in keeps_failing())
+    key = hashlib.sha1(json.dumps(state).encode("utf-8")).hexdigest()
+    with Lock():
+        rec = load_session(sid) or {}
+        if rec.get("deletion_notice") == key:
+            return []
+        if record:
+            rec["deletion_notice"] = key
+            write_json(session_path(sid), rec)
+    return lines
 
 
 def failing_deletion_lines():
@@ -9490,6 +9510,7 @@ def lifecycle(payload, entity):
             ctx = bad
         stuck = failing_deletion_lines()      # a later session is the first to hear what an ended one could not
         if stuck:
+            _new_deletion_lines(sid, stuck)   # told here, so this session's Stop does not repeat it
             ctx = "\n".join(stuck + ([ctx] if ctx else []))
     elif ev == "SessionEnd":
         record_session_end(sid, str(payload.get("reason") or "SessionEnd"))

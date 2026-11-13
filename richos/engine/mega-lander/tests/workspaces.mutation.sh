@@ -121,8 +121,8 @@ mutant p05-unrelated-spawn-scans-pending "test_point_05_unrelated_spawn_does_not
     "unrelated spawns would depend on scanning and auto-landing the integration backlog."
 
 mutant r2-finished-work-not-told "test_r2_a_turn_ends_with_finished_work_pending_and_the_lead_is_told_once" "$W" \
-    '    lead = "\n".join(person + [fallback_notice(sid, items) or ""]).strip()' \
-    '    lead = "\n".join(person).strip()' \
+    '    lead = "\n".join(_new_deletion_lines(sid, person) + [fallback_notice(sid, items) or ""]).strip()' \
+    '    lead = "\n".join(_new_deletion_lines(sid, person)).strip()' \
     "with no watcher running, a turn could end with finished work pending and the lead would never hear of it (orchestration reliability R2/R5; point 5's original purpose)."
 mutant r6-fallback-said-every-turn "test_r2_a_turn_ends_with_finished_work_pending_and_the_lead_is_told_once" "$W" \
     '        if rec.get("fallback_notice") == key:' \

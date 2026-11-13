@@ -2472,6 +2472,23 @@ class Point13_StaleRefLock(Base):
         finally:
             os.chmod(parent, 0o755)
 
+    def test_point_13_an_unchanged_failing_deletion_is_told_to_the_lead_once_per_session(self):
+        rec = {"name": "zach-sonnet-rp", "deletion": {"attempts": 17, "first_failed_at": 1794534840,
+               "next_at": ws.now() + 3600, "last_error": "git branch -D x failed: cannot lock ref"}}
+        other = {"name": "zach-sonnet-rq", "deletion": dict(rec["deletion"], last_error="other error")}
+        sid2 = "later-session"
+        state = {"records": [rec]}
+        with patch.object(ws, "keeps_failing", side_effect=lambda: state["records"]), \
+                patch.object(ws, "retry_due"), patch.object(ws, "pending", return_value=[]), \
+                patch.object(ws, "fallback_notice", return_value=""):
+            first = ws.gate_stop({"session_id": self.sid}, self.entity)[2]
+            self.assertIn("TELL THE CEO", first)
+            rec["deletion"]["attempts"] = 18                       # another retry, same failure
+            self.assertEqual(ws.gate_stop({"session_id": self.sid, "stop_hook_active": True}, self.entity)[2], "")
+            self.assertIn("TELL THE CEO", ws.gate_stop({"session_id": sid2}, self.entity)[2])  # a later session
+            state["records"] = [rec, other]                        # the failure changed
+            self.assertIn("zach-sonnet-rq", ws.gate_stop({"session_id": self.sid}, self.entity)[2])
+
 
 class Point14_IntegrationBranch(Base):
     """14. Landed doesn't always mean landed on main."""
