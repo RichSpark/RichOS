@@ -13,7 +13,9 @@ signed-in"; the user is signed in to every social profile in their default brows
                            /sign-in   sets the cookie a "signed-in browser" holds;
                            /profile   a profile that shows a different sentence to a browser
                                       holding that cookie than to a plain fetch (the LinkedIn
-                                      shape: signed out, you get a sign-in wall).
+                                      shape: signed out, you get a sign-in wall);
+                           /links     one link to /profile that opens in a new tab, for
+                                      browser-reader-walk.py.
                            Its pid is written to D/server.pid; it serves until killed.
 
   measure --bundle B --url-contains U --expect F [--manual] [--enhanced]
@@ -106,6 +108,9 @@ class Site(http.server.BaseHTTPRequestHandler):
             signed = COOKIE in (self.headers.get('Cookie') or '')
             body = SIGNED_IN if signed else SIGNED_OUT
             return self.send('<!doctype html><title>Profile</title><h1>Profile</h1><p>%s</p>' % body)
+        if path == '/links':
+            return self.send('<!doctype html><title>Links</title><h1>Links</h1>'
+                             '<p><a href="/profile" target="_blank">Profile in a new tab</a></p>')
         self.send_response(404)
         self.end_headers()
 
