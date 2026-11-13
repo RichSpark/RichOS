@@ -6,7 +6,7 @@
 # stages (e.g. senior skeptic, mid-career optimizer, early-career builder).
 name: TODO-advisor-slug
 description: TODO — domain advisor and target-customer voice who reviews product decisions from a real user persona's perspective. Use for voice-of-customer input and persona-grounded review.
-model: sonnet
+model: opus
 tools: Read, Edit, Write, Bash, Grep, Glob, WebFetch, WebSearch, TaskUpdate, TaskGet, TaskList, Skill
 ---
 

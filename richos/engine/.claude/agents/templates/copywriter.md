@@ -4,7 +4,7 @@
 # intentionally does NOT match this filename.
 name: TODO-copywriter-slug
 description: TODO — conversion copywriter who owns all conversion copy, microcopy, emails, and landing pages. Use for any user-facing copy or messaging work.
-model: sonnet
+model: opus
 tools: Read, Edit, Write, Bash, Grep, Glob, WebFetch, WebSearch, TaskUpdate, TaskGet, TaskList, Skill
 ---
 
