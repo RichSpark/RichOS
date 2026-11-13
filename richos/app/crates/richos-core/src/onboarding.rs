@@ -167,6 +167,23 @@ pub fn priming_block(entity:&EntityId,layer:Option<&CompanyLayer>,record:&Onboar
         "company_notes":layer.render_for_priming(entity).and_then(|text|serde_json::from_str::<serde_json::Value>(&text).ok())}).to_string())
 }
 
+/// THE USER'S OTHER COMPANIES, as host observations: each one's id, name, notes path and
+/// onboarding state, and never its notes. Without these Rich listed the user's folders before he
+/// could greet a returning user, and his note to himself about that look reached the screen ("Need
+/// to check other companies' folders silently.", 1 to 4 of 5 runs of each second-company case,
+/// Tuner's round of 2026-11-12). Now a first company sees an empty list and needs no look, and a
+/// later one gets the exact file a returning user's details are in. The notes themselves stay out:
+/// a thread never receives another company's material (`company_layer_tests`,
+/// `a_thread_never_receives_another_companys_file`). What carries over is the skill's call.
+pub fn other_companies(central_root:&Path,companies:&[(EntityId,String)],current:&EntityId,record:&OnboardingRecord)->Vec<serde_json::Value> {
+    companies.iter().filter(|(id,_)|id!=current).map(|(id,name)| {
+        let layer=CompanyLayer::read(central_root,id);
+        let path=match &layer {CompanyLayer::NoHome {dir}=>dir.join(crate::company::COMPANY_FILENAME),_=>layer.path().to_path_buf()};
+        serde_json::json!({"entity_id":id,"company_name":name,"company_notes_path":path,
+            "onboarding":state(Some(&layer),&record.for_entity(id))})
+    }).collect()
+}
+
 pub fn company_name_block(entity:&EntityId,name:&str)->String {
     serde_json::json!({"entity_id":entity,"company_name":name}).to_string()
 }
@@ -234,6 +251,23 @@ mod tests {
     fn nothing_configured_is_not_the_same_as_nobody_interviewed() {
         assert_eq!(state(None, &OnboardingRecord::default()), OnboardingState::NoCentralFolder);
         assert_eq!(priming_block(&entity(), None, &OnboardingRecord::default()), None);
+    }
+
+    #[test]
+    fn the_users_other_companies_are_named_without_their_notes_and_the_current_one_is_not_listed() {
+        let central = tmp("others");
+        write_company(&central, "<!-- richos-interview:partial -->\n# Harborline\n## Them\n- Dana Whitfield, she/her\n");
+        let second = EntityId::parse("whitfield-olive-oil-co").unwrap();
+        let companies = vec![(entity(), "Harborline".to_string()), (second.clone(), "Whitfield Olive Oil Co".to_string())];
+        let from_second = other_companies(&central, &companies, &second, &OnboardingRecord::default());
+        assert_eq!(from_second.len(), 1, "{from_second:?}");
+        assert_eq!(from_second[0]["company_name"], "Harborline");
+        assert_eq!(from_second[0]["onboarding"], "partial");
+        assert!(from_second[0]["company_notes_path"].as_str().unwrap().ends_with("harborline/company.md"), "{from_second:?}");
+        assert!(!serde_json::to_string(&from_second).unwrap().contains("Dana Whitfield"), "never another company's notes");
+        let from_first = other_companies(&central, &companies, &entity(), &OnboardingRecord::default());
+        assert_eq!((from_first[0]["company_name"].as_str(), from_first[0]["onboarding"].as_str()), (Some("Whitfield Olive Oil Co"), Some("not_yet")));
+        assert!(other_companies(&central, &companies[..1], &entity(), &OnboardingRecord::default()).is_empty());
     }
 
     #[test]

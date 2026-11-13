@@ -213,6 +213,35 @@ fn an_over_budget_company_file_reaches_the_model_as_nothing_rather_than_as_half_
     let _ = std::fs::remove_file(&path);
 }
 
+/// A SECOND COMPANY NEEDS NO READ OF ANOTHER COMPANY'S NOTES. Its priming turn carries the user's
+/// own details (`person.rs`, every company's thread may read them) and the names, states and paths
+/// of the user's other companies, and never another company's notes, as
+/// `a_thread_never_receives_another_companys_file` requires. Before this Rich listed the user's
+/// folders first and his note to himself about it reached the screen (Tuner's round of 2026-11-12,
+/// C22/C24/C25); the person-level record is the lead's answer to esc-20261112T092920Z-d4db39b0.
+#[test]
+fn a_second_company_gets_the_person_and_its_siblings_names_never_their_notes() {
+    let (path, ledger) = tmp_ledger("othercompanies");
+    let central = tmp_central("othercompanies");
+    let second = EntityId::parse("whitfield-olive-oil-co").unwrap();
+    write_company(&central, &femcboost(), "<!-- richos-interview:partial -->\n# Femcboost\n## Them\n- FIRST-COMPANY-NOTES-MARKER\n");
+    richos_core::person::save(&central, "Dana Whitfield, she/her\nLinkedIn: https://www.linkedin.com/in/dana/").unwrap();
+    let mut spine = support::spine(ledger);
+    spine.set_central_root(central.clone());
+    spine.set_entity_registry(richos_core::entity::EntityRegistry::from_existing_ids(&[femcboost(), second.clone()]));
+    spine.ensure_active_thread_in(&second).unwrap();
+
+    let primed = primings(&mut spine);
+    let fact: serde_json::Value = serde_json::from_str(&primed[0]).unwrap();
+    assert!(fact["person"]["text"].as_str().unwrap_or_default().starts_with("Dana Whitfield, she/her"), "{fact}");
+    let others = fact["other_companies"].as_array().unwrap_or_else(|| panic!("no other_companies: {fact}"));
+    assert_eq!(others.len(), 1, "{fact}");
+    assert_eq!((others[0]["entity_id"].as_str(), others[0]["onboarding"].as_str()), (Some("femcboost"), Some("partial")), "{fact}");
+    assert!(!primed[0].contains("FIRST-COMPANY-NOTES-MARKER"), "another company's notes never reach this thread: {}", primed[0]);
+    assert_eq!(fact["setup"]["onboarding"], "not_yet", "the new company's own state is unchanged");
+    std::fs::remove_file(&path).ok();
+}
+
 /// Setting the central folder after a lease has already been primed must re-prime it.
 ///
 /// Without this, an install that learns where its central folder is at boot — which is the

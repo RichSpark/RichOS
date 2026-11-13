@@ -139,6 +139,18 @@ class DesktopWork(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,"identity has not joined"):
             self.app.worker_context(self.scope,{**event,"agent_id":"unregistered"})
 
+    def test_a_worker_reads_linkedin_with_its_own_tool_and_gains_no_scoped_tool(self):
+        first=self.call("prepare",self.args)
+        self.start_fixture_worker(first,"reader-worker")
+        event={"session_id":self.session,"agent_id":"reader-worker","tool_name":"mcp__richos_linkedin__read_profile",
+               "tool_input":{"url":"https://www.linkedin.com/in/ada-walker/"}}
+        self.assertIsNone(self.app.worker_context(self.scope,event))
+        for name in ["mcp__richos_onboarding__save_company_notes","mcp__richos_status__send"]:
+            with self.assertRaisesRegex(ValueError,"not worker tools"):
+                self.app.worker_context(self.scope,{**event,"tool_name":name})
+        with self.assertRaisesRegex(ValueError,"identity has not joined"):
+            self.app.worker_context(self.scope,{**event,"agent_id":"unregistered"})
+
     def test_stop_blocks_prepared_dispatch_and_worker_tools_without_blocking_other_obligations(self):
         first=self.call("prepare",self.args)
         self.start_fixture_worker(first,"stopped-worker")

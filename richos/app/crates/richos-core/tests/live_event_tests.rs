@@ -1344,7 +1344,8 @@ fn a_pressed_button_s_words_reach_rich_and_are_never_shown_as_his() {
     // Product hunt 2026-10-15, finding 14: pressing "Start the questions" posted "Let's do the
     // twenty minutes of questions about my business." as his own message, though he never typed
     // it. Rich still receives the sentence; no surface (the live row, the timeline the window
-    // and the phone read, the message list) shows it in his name.
+    // and the phone read, the message list) shows it in his name. The words are today's
+    // "Start onboarding" press (`main.js` FIRST_RUN_ACCEPT_MESSAGE).
     let (path, ledger) = tmp_ledger("pressed");
     let mut spine = support::spine(ledger);
     let thread = spine.create_thread("Onboarding", &femcboost()).unwrap();
@@ -1354,7 +1355,7 @@ fn a_pressed_button_s_words_reach_rich_and_are_never_shown_as_his() {
     )));
     let live = RecordingLive::default();
     spine.set_live_observer(Box::new(live.clone()));
-    let words = "Let's do the twenty minutes of questions about my business.";
+    let words = "Let's do the onboarding.";
     let turn_id = spine.submit_pressed_prompt_to(&thread, words).unwrap();
 
     assert_eq!(spine.ledger().turn(&turn_id).unwrap().user_text, words, "Rich received the sentence");

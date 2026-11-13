@@ -82,6 +82,48 @@ impl Drop for Fixture {
     }
 }
 
+/// A user who said yes to adding a company gets it added from Rich's turn, in the app's own
+/// registry file beside the onboarding record, once, and never outside a visible turn's grant.
+#[test]
+fn add_company_writes_the_apps_registry_once_and_only_under_the_turns_grant() {
+    let f = Fixture::new();
+    let registry = richos_core::entity::entity_registry_path(f.record.parent().unwrap());
+    fs::create_dir_all(registry.parent().unwrap()).unwrap();
+    EntityRegistry::new(vec![Entity::new("alpha", "Alpha", &["/fixture/alpha"]).unwrap()]).unwrap().save(&registry).unwrap();
+    let add = |name: &str| onboarding_tools::call(&f.scope, onboarding_tools::ADD_COMPANY_TOOL_NAME, json!({"name":name}));
+
+    let added = add("Whitfield Olive Oil Co").unwrap();
+    assert_eq!((added["status"].as_str(), added["entity_id"].as_str()), (Some("added"), Some("whitfield-olive-oil-co")), "{added}");
+    let back = EntityRegistry::load(&registry).registry;
+    assert_eq!(back.entities().iter().map(|e| e.display_name.as_str()).collect::<Vec<_>>(), ["Alpha", "Whitfield Olive Oil Co"]);
+    assert_eq!(add(" whitfield olive oil co ").unwrap()["status"], "already_listed");
+    assert_eq!(EntityRegistry::load(&registry).registry.entities().len(), 2, "not added twice");
+
+    assert!(add("").is_err());
+    assert!(onboarding_tools::call(&f.scope, onboarding_tools::ADD_COMPANY_TOOL_NAME, json!({"name":"X","folder":"/tmp"})).is_err(),
+        "the model names a company, never a folder or a path");
+    onboarding_tools::set_actions_allowed(&f.scope, false).unwrap();
+    let refused = add("Gamma Farms").unwrap_err();
+    assert!(refused.contains("Nothing was changed"), "{refused}");
+    assert_eq!(EntityRegistry::load(&registry).registry.entities().len(), 2);
+    assert!(onboarding_tools::tools()["tools"].as_array().unwrap().iter().any(|t| t["name"] == "add_company"));
+}
+
+/// The user's own details are saved once, for every company, under the visible turn's grant.
+#[test]
+fn save_person_keeps_the_users_own_details_beside_their_instructions_under_the_turns_grant() {
+    let f = Fixture::new();
+    let save = |details: &str| onboarding_tools::call(&f.scope, onboarding_tools::SAVE_PERSON_TOOL_NAME, json!({"details":details}));
+    let saved = save("Dana Whitfield, she/her\nLinkedIn: https://www.linkedin.com/in/dana/").unwrap();
+    assert_eq!(saved["status"], "saved", "{saved}");
+    assert_eq!(richos_core::person::read(&f.central).unwrap().lines().next(), Some("Dana Whitfield, she/her"));
+    assert!(onboarding_tools::call(&f.scope, onboarding_tools::SAVE_PERSON_TOOL_NAME, json!({"details":"x","entity":"beta"})).is_err(),
+        "the model gives details, never a company or a path");
+    onboarding_tools::set_actions_allowed(&f.scope, false).unwrap();
+    assert!(save("Someone else").unwrap_err().contains("Nothing was changed"));
+    assert!(richos_core::person::read(&f.central).unwrap().starts_with("Dana Whitfield"));
+}
+
 #[test]
 fn successful_tool_save_is_verified_and_returns_after_a_new_spine_starts() {
     let f = Fixture::new();
@@ -356,8 +398,9 @@ fn mcp_stdio_handshake_save_and_errors_share_the_real_persistence_path() {
     assert_eq!(out.len(), 6);
     assert_eq!(out[0]["error"]["code"], -32002);
     assert_eq!(out[1]["result"]["protocolVersion"], "2025-03-26");
-    // The company notes' two tools, and the user's instructions (`your_instructions.rs`).
-    assert_eq!(out[2]["result"]["tools"].as_array().unwrap().len(), 3);
+    // The company notes' two tools, adding a company, the user's own details (`person.rs`) and
+    // the user's instructions (`your_instructions.rs`).
+    assert_eq!(out[2]["result"]["tools"].as_array().unwrap().len(), 5);
     assert_eq!(out[3]["result"]["isError"], false);
     assert_eq!(out[4]["error"]["code"], -32601);
     assert_eq!(out[5]["result"]["isError"], true);

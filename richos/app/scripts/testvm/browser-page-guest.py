@@ -170,10 +170,13 @@ def serve_site(a):
                 return self.send(standin_page(parts[3], '<h2>%s</h2><p>Stand-in %s page.</p>' % (parts[3], parts[3])))
             if len(parts) == 3 and parts[0] == 'company' and parts[2] == 'about':
                 key = parts[1]
-                if key in about:
-                    return self.redirect('/company/%s/about/' % about[key]['vanity'])
+                # The vanity page first: a KEY that is its own VANITY (a profile linking the
+                # company by name, not by its numeric id) redirected to itself forever, and
+                # Safari showed its error page (walk 2 of 2026-11-12, both company pages).
                 if key in vanity:
                     return self.file(vanity[key])
+                if key in about:
+                    return self.redirect('/company/%s/about/' % about[key]['vanity'])
                 return self.send(standin_about(key, expect['companies'].get(key, 'RX-UNKNOWN')))
             self.send_response(404)
             self.send_header('Content-Length', '0')
