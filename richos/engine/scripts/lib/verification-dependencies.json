@@ -664,8 +664,8 @@
     },
     "scripts/lib/verification_inputs.py#config": {
       "source": "scripts/lib/verification_inputs.py",
-      "sha256": "9de2c79483d0ccca373b1489668b6e9f75fb1bf3876f406f5d9b5f4cc7c19544",
-      "evidence": "The config parser accepts assignment text as data, preserving key references and rejecting unsupported executable syntax. No selected hook or suite is invoked.",
+      "sha256": "14c6ca462664436c053c34954d859c71c4f75dd8d45d7c11068b3562c9d00c0d",
+      "evidence": "The config parser accepts assignment text as data, preserving key references and rejecting unsupported executable syntax. No selected hook or suite is invoked. Renewed 2026-11-13 (zach-opus-permhook3): hook_entries accepts a plugin manifest modules key (a list of file names) and hooks_change reports a modules change as a named fallback; no file, key or process is read beyond the hooks text.",
       "keys": [],
       "edges": [],
       "region": [
@@ -1148,8 +1148,8 @@
     },
     "scripts/lib/verification_inputs.py": {
       "source": "scripts/lib/verification_inputs.py",
-      "sha256": "9de2c79483d0ccca373b1489668b6e9f75fb1bf3876f406f5d9b5f4cc7c19544",
-      "evidence": "Parser and dependency APIs read supplied text/paths. Snapshot executes only Git reads. It never executes a sourced configuration or a selected hook command.",
+      "sha256": "14c6ca462664436c053c34954d859c71c4f75dd8d45d7c11068b3562c9d00c0d",
+      "evidence": "Parser and dependency APIs read supplied text/paths. Snapshot executes only Git reads. It never executes a sourced configuration or a selected hook command. Renewed 2026-11-13 (zach-opus-permhook3): hook_entries accepts a plugin manifest modules key (a list of file names) and hooks_change reports a modules change as a named fallback; no file, key or process is read beyond the hooks text.",
       "keys": [],
       "edges": []
     },
@@ -1180,7 +1180,7 @@
     },
     "scripts/affected-units.test.py": {
       "source": "scripts/affected-units.test.py",
-      "sha256": "22658fe8db428e123ba9306a53daa8cb2841c9371ad8a7f716832cc86fc174ce",
+      "sha256": "3c20b418d9d91eaf2f1b8f0de1b01874536097b93439fe521350d33c2a694c0f",
       "evidence": "All config reads use newly written fixture files or literal before/after text. The real-file planning case reads only hooks.json and source-bound registration declarations. Nested CLI invocations use a newly created Git repository, and selected commands are never executed. The added real dependency/selection cases only read bound source and hook JSON as data and use synthetic config deltas; they never launch selected suites. Renewed 2026-09-28: the pinned-reader case reads the real declaration and every suite's text as data and adds one synthetic node in memory; nothing is executed. Renewed 2026-10-01: the removal case runs the selector on a newly created Git repository with an inert owner suite, and the two-roads case reads hooks.json as data; nothing is executed. Renewed 2026-10-05: pin-renewal controls use private reader/map/Git fixtures and invoke only read-only selection/validation; they never execute planned suites.",
       "keys": [],
       "edges": [
