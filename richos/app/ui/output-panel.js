@@ -1977,6 +1977,10 @@
     }
     items.push({ sep: true });
     items.push({ id: "reveal", icon: "folder", label: "Show in Finder", disabled: b.reveal, act: () => reveal(f) });
+    if (window.RichFilesPage?.available) {
+      items.push({ id: "reveal-richfiles", icon: "folder", label: "Show in RichFiles", disabled: b.reveal,
+        act: () => perform("output_reveal_in_richfiles", { outputId: f.id }) });
+    }
     items.push({ id: "save", icon: "save", label: "Save a copy…", disabled: b.save, act: () => saveCopy(f) });
     items.push({ id: "copy", icon: "copy", label: "Copy path", disabled: b.copy, act: () => copyPath(f) });
     const extra = typeof hooks.menuItems === "function" ? hooks.menuItems(f, d) || [] : [];
@@ -1993,6 +1997,10 @@
     });
     items.push({ sep: true });
     items.push({ id: "reveal", icon: "folder", label: "Show in Finder", disabled: b.reveal, act: () => reveal(f) });
+    if (window.RichFilesPage?.available) {
+      items.push({ id: "reveal-richfiles", icon: "folder", label: "Show in RichFiles", disabled: b.reveal,
+        act: () => perform("output_reveal_in_richfiles", { outputId: f.id }) });
+    }
     items.push({ id: "save", icon: "save", label: "Save a copy…", disabled: b.save, act: () => saveCopy(f) });
     return items;
   }

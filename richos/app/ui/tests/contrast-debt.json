@@ -14,6 +14,10 @@
   ],
   "unwalkedPanels": [
     {
+      "id": "richfiles-page",
+      "why": "The RichFiles page is covered by the two-theme RichFiles check in tests/nav-rail.js. It opens the shipped page from the navigation rail, makes native placement return the standard error and requires window.__contrastProbe to measure the heading and error without a failing or unprovable pair. The file browser itself uses AppKit and is outside WebKit's DOM contrast walk."
+    },
+    {
       "id": "richpass-page",
       "why": "The RichPass page (round 58), COVERED SOMEWHERE ELSE: it is shown only after the navigation rail's RichPass item is pressed, which no surface driver here does. tests/nav-rail.js check 12 opens it in both themes and runs this same walk (window.__contrastProbe) over it, failing on any failing or unprovable pair under #richpass-page, and holds every text on it to 16px or more."
     },

@@ -1204,6 +1204,14 @@ async function main() {
     await openRowMenu("brief.md");
     await pick("Show in Finder");
     await say("Finder opens acme/counter/ with brief.md selected.");
+    await ap.evaluate(() => { window.RichFilesPage = { available: true }; });
+    try {
+      await openRowMenu("brief.md");
+      await pick("Show in RichFiles");
+      await say("Showing brief.md in RichFiles.");
+    } finally {
+      await ap.evaluate(() => { delete window.RichFilesPage; });
+    }
     await openRowMenu("brief.md");
     await pick("Save a copy…");
     await say("Saved a copy of brief.md to you/Desktop/.");

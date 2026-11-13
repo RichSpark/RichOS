@@ -11446,7 +11446,20 @@ async function hydrateRunningTurn() {
   }
 }
 
-init();
+const initialized = init();
+
+if (IS_MAC && !Bridge.isMock) {
+  async function consumeFinderServiceQuery() {
+    await initialized;
+    const query = await invokeQuiet("finder_take_service_query");
+    if (typeof query !== "string") return;
+    openSearch();
+    searchInputEl.value = query;
+    searchInputEl.dispatchEvent(new Event("input"));
+  }
+  void Promise.resolve(Bridge.listen("rich://finder-service", consumeFinderServiceQuery))
+    .then(consumeFinderServiceQuery).catch(() => {});
+}
 
 // Feature windows return to the existing Settings and report surfaces.
 Bridge.listen("rich://cleaner-download", ({ payload }) => window.RichFiles.downloading(payload.id));
