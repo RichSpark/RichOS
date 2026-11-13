@@ -7303,7 +7303,7 @@
     },
     "hooks/hooks.json#stop-visibility-inventory": {
       "source": "hooks/hooks.json",
-      "sha256": "8f44c62f42ad1aa29a447977bf8c5103c96014007f6d57bcf37a89c0cde3f440",
+      "sha256": "1900262012a6a6466d162075f65b80d561112021b85ccc7c0ce687fca222db41",
       "evidence": "Binds the dynamically enumerated Stop script inventory for config selection. A new or changed manifest needs requalification before these fixture closures can exclude a config change. Renewed 2026-09-28 (stall watcher): one SessionStart row added (session-start-stall.sh); no PreToolUse or Stop row changed.",
       "keys": [],
       "edges": []
@@ -10688,7 +10688,7 @@
     },
     "hooks/hooks.json#pre-stop-fixtures": {
       "source": "hooks/hooks.json",
-      "sha256": "8f44c62f42ad1aa29a447977bf8c5103c96014007f6d57bcf37a89c0cde3f440",
+      "sha256": "1900262012a6a6466d162075f65b80d561112021b85ccc7c0ce687fca222db41",
       "evidence": "Binds the dynamically enumerated PreToolUse/Stop inventory and matcher selection. New inventory bytes require requalification before excluding a config edit. Renewed 2026-09-28 (stall watcher): one SessionStart row added (session-start-stall.sh); no PreToolUse or Stop row changed.",
       "keys": [],
       "edges": []
@@ -18384,7 +18384,7 @@
         "scripts/scratch-sweep.sh": "575e99bf9f8dd9815340f2ca632757f2990df3374c82093ee637f1da3ad1d105",
         "scripts/unstarted-rows-lint.sh": "4b654eefa4fb775ba218fbee15595b415684c7a90e2168eedf864c07f142e58e",
         "scripts/hooks/dispatch-pretooluse.manifest": "0158184b5e40950c93a6af34d131c9f94021e880dd25976db237c1e2a0a2a960",
-        "hooks/hooks.json": "8f44c62f42ad1aa29a447977bf8c5103c96014007f6d57bcf37a89c0cde3f440",
+        "hooks/hooks.json": "1900262012a6a6466d162075f65b80d561112021b85ccc7c0ce687fca222db41",
         "scripts/hooks/commit-ceo-inputs.sh": "332b5ec9ce51872486cca4c5aa7dc5e74b6608cd06ebf4c95b830cf9ebd7288a",
         "scripts/hooks/commit-ceo-inputs.py": "fb7e04f153db1562f41dc22803ba8d3e8d6f83501ce773033390df0bf2b3e231",
         "scripts/hooks/guard-publication-writes.sh": "b9a13097f1023f8e1e5ebd2a78ee804c73bc6b1953db37727c3ecddcde7de67e",
@@ -19050,7 +19050,7 @@
       "sources": {
         "scripts/hooks/unevaluated-payload.test.sh": "e296558a8c59d1638445ea475642ceea8c4ba273c80a8b193ee2d7681f6613e8",
         "scripts/lib/registered-hooks.sh": "bdf6a8b80c62eca6b7a174ab03276ad7b1a1dc89ec51d79ac2208b4ac19208c0",
-        "hooks/hooks.json": "8f44c62f42ad1aa29a447977bf8c5103c96014007f6d57bcf37a89c0cde3f440",
+        "hooks/hooks.json": "1900262012a6a6466d162075f65b80d561112021b85ccc7c0ce687fca222db41",
         "scripts/hooks/dispatch-pretooluse.sh": "a8040d635cb70a1ac4d29c140ea398684e6e8f78b6738ac3acc35063d970b602",
         "scripts/hooks/guard-agent-state-claims.sh": "2d07a3110b962c142d97522a9fee1fed62d4dfcedbb7c03c5d2661ffc0a98581",
         "scripts/lib/resolve-roots.sh": "561e1a7b4bda39de4276822645a75f0235fa08234511a8d367e9cd2b2a5fa614",

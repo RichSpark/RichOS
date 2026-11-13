@@ -6,33 +6,44 @@
 // in it): "Why am I seeing this". A rule refusing that command's shape was rejected the same
 // morning: "how many of the possible variations will that patch stop? One?"
 //
-// So this acts on the prompt, never on the command text. Claude Code raises
-// `classic.PermissionRequest` whenever it is about to ask the user, whatever the tool and
-// whatever its reason. In a session whose user chose bypassPermissions, the user has already
-// said "do not ask me", so every prompt that still comes is answered No here: nothing runs,
-// nothing is shown, and the agent is told why and to do the same thing a simpler way.
+// So this acts on the prompt, never on the command text. In a session whose user chose
+// bypassPermissions, the user has already said "do not ask me", so every ask Claude Code still
+// raises is answered No here, before any dialog exists: nothing runs, nothing is shown, and the
+// agent reads Claude Code's own reason and is told to do the same thing a simpler way.
 //
-// Why a mod and not a settings hook on the same event: a command hook on PermissionRequest is
-// started after Claude Code has drawn the dialog, which then stays on screen for the hook's run
-// (measured 120 to 140 ms, even for a 20 ms bash hook). The mod's in-process answer comes before
-// anything is drawn, and `tool.check` hands it Claude Code's own reason, which a command hook
-// never receives. Measured on Claude Code 2.1.323:
+// Where it answers:
+//   - `tool.check`, the permission decision itself. Every ask a tool call can raise comes out of
+//     it, including the person-only safety asks (a connector sending files, for one) that
+//     Claude Code never shows to a PermissionRequest hook; a deny there is a tightening, which
+//     a hook may always make, and a deny never reaches the dialog.
+//   - `classic.PermissionRequest`, for an ask raised after that decision.
+// A settings-file command hook on PermissionRequest is not enough: it starts after the dialog is
+// drawn, which stays on screen for the hook's run (measured 120 to 140 ms), and it never sees the
+// person-only asks. Measured on Claude Code 2.1.323:
 // docs/verification/permission-prompt-mod-2026-11-13.md.
+//
+// The RichOS app runs Claude Code headless in bypass mode and loads this mod too (engine_profile.rs
+// copies the engine's `modules` into each lease's plugin): no prompt is ever drawn there, and without
+// the mod the agent read only the app's "richos does not implement control request subtype:
+// can_use_tool" instead of Claude Code's reason.
+//
+// tool.check carries no permission mode, so the mode is read from the classic events that do
+// (SessionStart, UserPromptSubmit, PermissionRequest): a switch out of bypass takes effect at
+// the next prompt.
 //
 // Left alone on purpose:
 //   - sessions in any other permission mode: that user chose to be asked;
 //   - AskUserQuestion and ExitPlanMode: they are how an agent asks the user a question, not a
-//     permission check, and Claude Code routes them through the same event.
-// If this hook fails, its `.catch` answers No as well. Suite: answer-permission-prompt.test.ts,
+//     permission check;
+//   - a `$.tool.check` query from another plugin: nothing is being run.
+// If a hook fails, its `.catch` answers No as well. Suite: answer-permission-prompt.test.ts,
 // run by scripts/hooks/answer-permission-prompt.test.sh.
 import type { Register } from 'claude-code'
 
+const BYPASS = 'bypassPermissions'
 const QUESTION_TOOLS = new Set(['AskUserQuestion', 'ExitPlanMode'])
 
-// Claude Code's own reason for each call it is about to ask about, from `tool.check`, read once by
-// the PermissionRequest answer that follows it. A few entries at most; the oldest go first.
-const reasons = new Map<string, string>()
-const keyOf = (tool: string, input: unknown) => `${tool}\u0000${JSON.stringify(input)}`
+let mode: string | undefined
 
 export const message = (tool: string, reason?: string) =>
   `Claude Code stopped this ${tool} call to ask the user for permission, which it does for a few ` +
@@ -43,25 +54,28 @@ export const message = (tool: string, reason?: string) =>
   `there, and literal paths (or every variable guarded as "\${VAR:?}") for rm. Do not repeat the ` +
   `same call; it would be stopped again.`
 
+const answers = (tool: string) => mode === BYPASS && !QUESTION_TOOLS.has(tool)
+
 export const register: Register = on => {
+  on('classic.SessionStart', ($, e, next) => { mode = e.permission_mode ?? mode; return next(e) })
+  on('classic.UserPromptSubmit', ($, e, next) => { mode = e.permission_mode ?? mode; return next(e) })
+
   on('tool.check', async ($, e, next) => {
     const decided = await next(e)
-    if (decided.decision === 'ask' && decided.reason) {
-      reasons.set(keyOf(e.tool, e.input), decided.reason)
-      while (reasons.size > 32) reasons.delete(reasons.keys().next().value as string)
-    }
-    return decided
+    if (decided.decision !== 'ask' || e.tool_use_id === undefined || !answers(e.tool)) return decided
+    return { decision: 'deny', reason: message(e.tool, decided.reason) }
+  }).catch(async ($, e, next) => {
+    const decided = await next(e)
+    return decided.decision === 'ask' && e.tool_use_id !== undefined && answers(e.tool)
+      ? { decision: 'deny', reason: message(e.tool) }
+      : decided
   })
 
   on('classic.PermissionRequest', async ($, e, next) => {
-    if (e.permission_mode !== 'bypassPermissions' || QUESTION_TOOLS.has(e.tool_name)) return next(e)
-    const key = keyOf(e.tool_name, e.tool_input)
-    const reason = reasons.get(key)
-    reasons.delete(key)
-    return { decision: { behavior: 'deny', message: message(e.tool_name, reason) } }
+    mode = e.permission_mode ?? mode
+    if (!answers(e.tool_name)) return next(e)
+    return { decision: { behavior: 'deny', message: message(e.tool_name) } }
   }).catch(($, e, next) =>
-    e.permission_mode === 'bypassPermissions' && !QUESTION_TOOLS.has(e.tool_name)
-      ? { decision: { behavior: 'deny', message: message(e.tool_name) } }
-      : next(e),
+    answers(e.tool_name) ? { decision: { behavior: 'deny', message: message(e.tool_name) } } : next(e),
   )
 }
