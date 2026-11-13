@@ -1,7 +1,7 @@
 //! Local numeric state beside the turn mutex. Visibility never gates accounting.
 use richos_core::{read_view::{SpineReader, SpineView}, steering::TurnControl,
     swearmeter::{Snapshot, DETECTOR_VERSION, EVENT_SWEARMETER}, swearmeter_periods::{Dates, local_month},
-    swearmeter_provider_history::{self, History}, swearmeter_questions::{self, Projection}};
+    swearmeter_provider_history::{History, Reader}, swearmeter_questions::{self, Projection}};
 use std::{path::{Path, PathBuf}, sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}}};
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -105,6 +105,8 @@ pub fn start(app: AppHandle) {
         }).ok();
         let mut watched = std::collections::HashSet::new();
         let mut generation = None;
+        let mut reader = Reader::default();
+        let mut next_transcript_check = Instant::now();
         loop {
             let mut watch_incomplete = watcher.is_none();
             if let Some(watcher) = watcher.as_mut() {
@@ -116,9 +118,9 @@ pub fn start(app: AppHandle) {
             }
             let service = &handle.state::<crate::AppState>().swearmeter;
             let current = history_generation(claude.as_deref(), codex.as_deref()).into_iter().collect::<std::io::Result<Vec<_>>>().ok();
-            if current.is_none() || generation.as_ref() != Some(&current) {
+            if current.is_none() || generation.as_ref() != Some(&current) || Instant::now() >= next_transcript_check {
                 let started = Instant::now();
-                let mut history = swearmeter_provider_history::read(claude.as_deref(), codex.as_deref());
+                let mut history = reader.read_through(claude.as_deref(), codex.as_deref(), richos_core::util::now_millis());
                 history.incomplete |= watch_incomplete || home.is_none();
                 let mut previous = service.history.lock().unwrap_or_else(|poison| poison.into_inner());
                 if previous.as_ref().is_none_or(|prior| prior.count != history.count || prior.incomplete != history.incomplete
@@ -128,6 +130,7 @@ pub fn start(app: AppHandle) {
                 }
                 *previous = Some(history);
                 generation = Some(current);
+                next_transcript_check = Instant::now() + Duration::from_secs(60);
             }
             service.publish_current();
             // Source changes are coalesced and never hold up a submission or a window.
