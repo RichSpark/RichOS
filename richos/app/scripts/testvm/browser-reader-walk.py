@@ -96,9 +96,7 @@ PAGES = [
          'absent': ['"Open In CodePen" collapsed']},
         {'do': 'press', 'name': '^Billing Address', 'gains': ['Zip Code']}]},
     {'name': 'accordion (Bootstrap): a closed panel opened', 'steps': [
-        # Its code sample is read as the page wrote it: token joined to token, each line and its indent kept.
-        {'do': 'open', 'url': 'https://getbootstrap.com/docs/5.3/components/accordion/',
-         'expect': ['Accordion Item #2', '\n  <div class="accordion-item">\n    <h2 class="accordion-header">']},
+        {'do': 'open', 'url': 'https://getbootstrap.com/docs/5.3/components/accordion/', 'expect': ['Accordion Item #2']},
         {'do': 'press', 'name': '^Accordion Item #2$', 'gains': ['second item’s accordion body']}]},
     {'name': 'tab list (W3C pattern): another tab shown', 'steps': [
         {'do': 'open', 'url': 'https://www.w3.org/WAI/ARIA/apg/patterns/tabs/examples/tabs-automatic/',

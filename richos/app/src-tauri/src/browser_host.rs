@@ -12,9 +12,6 @@
 //!     element of every numbered control and the last element kept until the next reading;
 //!   - a press: `AXPress` on the kept element, so it lands on exactly what the teammate was
 //!     shown, or is refused when that element has left the page;
-//!   - the page's whole text as the browser itself reads it out
-//!     (`AXStringForTextMarkerRange`), which the core asks for only when a browser leaves the
-//!     spacing between pieces of text out (Safari);
 //!   - a scroll: `AXScrollToVisible` on the last element of the page;
 //!   - showing a tab: `AXPress` on its tab button, for a browser that adds the reader's tab
 //!     without selecting it (Firefox, measured in the guest walk of 2026-11-13).
@@ -40,25 +37,6 @@ use std::time::{Duration, Instant};
 extern "C" {
     fn AXUIElementPerformAction(element: *const c_void, action: *const c_void) -> i32;
     fn AXUIElementCopyAttributeNames(element: *const c_void, names: *mut *const c_void) -> i32;
-    fn AXUIElementCopyParameterizedAttributeValue(element: *const c_void, attribute: *const c_void, parameter: *const c_void,
-        value: *mut *const c_void) -> i32;
-}
-
-/// A parameterized attribute's value (`AXStringForTextMarkerRange` and the like), when the
-/// element has it.
-fn parameterized(element: &Element, name: &'static str, parameter: &Element) -> Option<Element> {
-    let name = CFString::from_static_string(name);
-    let mut value: *const c_void = std::ptr::null();
-    // SAFETY: a live element, a CFString attribute name, a live parameter and an out-parameter;
-    // a value returned is +1 (the Copy rule) and wrapped under the create rule exactly once.
-    let error = unsafe {
-        AXUIElementCopyParameterizedAttributeValue(element.as_CFTypeRef(), name.as_CFTypeRef(), parameter.as_CFTypeRef(), &mut value)
-    };
-    if value.is_null() {
-        return None;
-    }
-    let value = unsafe { Element::wrap_under_create_rule(value) };
-    (error == 0).then_some(value)
 }
 
 /// Whether the element itself lists the attribute among the ones it has.
@@ -152,10 +130,10 @@ impl AxNode for Ax {
         let value = attribute(&self.el, "AXExpanded")?;
         let open = value.downcast::<CFBoolean>().map(bool::from)
             .or_else(|| value.downcast::<CFNumber>().and_then(|n| n.to_i64()).map(|n| n != 0))?;
-        // Safari, Chrome and Brave answer "not expanded" for an ordinary link or button when
-        // asked (measured on real pages in the guest walk of 2026-11-13: 2,957 of the 3,116
-        // controls numbered in Safari's run read "collapsed"), so a closed state counts only
-        // for an element that lists the attribute as one of its own.
+        // Safari answers "not expanded" for every link and button when asked (measured on real
+        // pages in the guest walk of 2026-11-13: all 2,685 controls of nine pages read
+        // "collapsed"), so a closed state counts only for an element that lists the attribute
+        // as one of its own.
         (open || lists(&self.el, "AXExpanded")).then_some(open)
     }
     fn children(&self) -> Vec<Self> {
@@ -163,15 +141,6 @@ impl AxNode for Ax {
             return Vec::new();
         }
         children(&self.el).into_iter().map(|el| Ax { el, clock: self.clock.clone() }).collect()
-    }
-    fn whole_text(&self) -> Option<String> {
-        if self.clock.over() {
-            return None;
-        }
-        // The way VoiceOver reads a page: the text-marker range covering the element, then the
-        // string for that range (measured in Safari, `browser-page-guest.py` `marker_text`).
-        let range = parameterized(&self.el, "AXTextMarkerRangeForUIElement", &self.el)?;
-        parameterized(&self.el, "AXStringForTextMarkerRange", &range)?.downcast::<CFString>().map(|s| s.to_string())
     }
 }
 
