@@ -147,12 +147,30 @@ impl Drop for Directory {
     }
 }
 
+/// The root as Directory::open can walk it. macOS's own top-level links (/var, /tmp and /etc
+/// point into /private) are root-owned on the read-only system volume, so nothing can swap
+/// them; a root reached through one opens at its /private spelling. Every other symlink in the
+/// root's path is still refused, and links inside the root are still never followed.
+fn system_spelling(root: &Path) -> PathBuf {
+    for link in ["var", "tmp", "etc"] {
+        let top = Path::new("/").join(link);
+        let Ok(rest) = root.strip_prefix(&top) else {
+            continue;
+        };
+        let private = Path::new("private").join(link);
+        if std::fs::read_link(&top).is_ok_and(|target| target == private) {
+            return Path::new("/").join(private).join(rest);
+        }
+    }
+    root.to_path_buf()
+}
+
 pub(super) fn scan(root: &Path, recent: &[PathBuf]) -> FolderContext {
     let mut context = FolderContext {
         labels: Vec::new(),
         complete: true,
     };
-    let Ok(mut directory) = Directory::open(root) else {
+    let Ok(mut directory) = Directory::open(&system_spelling(root)) else {
         context.complete = false;
         return context;
     };
@@ -240,5 +258,23 @@ mod tests {
         assert_eq!(below_cap.labels, ["Archive", "Projects", "Projects/Notes"]);
         assert!(!at_cap.complete);
         assert_eq!(at_cap.labels, below_cap.labels);
+    }
+
+    #[test]
+    fn a_root_under_the_systems_own_links_opens_and_a_user_link_is_still_refused() {
+        let fixture = Path::new("/tmp").join(format!(
+            "richcleaner-system-link-{}",
+            richos_core::cleaner::capture_id()
+        ));
+        std::fs::create_dir_all(fixture.join("Filing/Projects")).unwrap();
+        std::os::unix::fs::symlink(fixture.join("Filing"), fixture.join("Linked")).unwrap();
+        let through_tmp = scan(&fixture.join("Filing"), &[]);
+        let through_user_link = scan(&fixture.join("Linked"), &[]);
+        std::fs::remove_dir_all(&fixture).unwrap();
+
+        assert!(through_tmp.complete);
+        assert_eq!(through_tmp.labels, ["Projects"]);
+        assert!(through_user_link.labels.is_empty());
+        assert!(!through_user_link.complete);
     }
 }
