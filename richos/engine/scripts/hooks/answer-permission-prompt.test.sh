@@ -13,7 +13,8 @@
 #       and another plugin's query are left alone
 #
 # The mod is staged alone in a temporary plugin folder, so the test host never writes its type
-# files into the engine and never loads the engine's command hooks.
+# files into the engine and never loads the engine's command hooks. Claude Code runs with HOME and
+# CLAUDE_CONFIG_DIR inside that folder too, so it never writes the operator's ~/.claude.
 #
 # Usage: scripts/hooks/answer-permission-prompt.test.sh
 
@@ -41,13 +42,14 @@ fi
 
 STAGE="$(mktemp -d "${TMPDIR:-/tmp}/answer-permission-prompt.XXXXXX")"
 trap 'rm -rf "$STAGE"' EXIT
-mkdir -p "$STAGE/.claude-plugin" "$STAGE/hooks"
+mkdir -p "$STAGE/.claude-plugin" "$STAGE/hooks" "$STAGE/home/.claude"
+claude_isolated() { HOME="$STAGE/home" CLAUDE_CONFIG_DIR="$STAGE/home/.claude" "$CLAUDE_BIN" "$@"; }
 printf '%s\n' '{ "name": "richos-engine", "version": "0.0.0", "description": "the engine mod, staged for its test" }' \
     > "$STAGE/.claude-plugin/plugin.json"
 printf '%s\n' '{ "modules": ["./answer-permission-prompt.ts"] }' > "$STAGE/hooks/hooks.json"
 cp "$MOD" "$SUITE" "$STAGE/hooks/"
 
-out="$("$CLAUDE_BIN" plugin validate "$STAGE" 2>&1)"; rc=$?
+out="$(claude_isolated plugin validate "$STAGE" 2>&1)"; rc=$?
 if [ "$rc" = 0 ] && printf '%s' "$out" | grep -q 'hooks: classic.SessionStart, classic.UserPromptSubmit, tool.check, classic.PermissionRequest'; then
     ok "R2 claude plugin validate: all four hooks read"
 else
@@ -55,7 +57,7 @@ else
 fi
 
 echo "=== answer-permission-prompt: behavior (claude plugin test) ==="
-out="$(cd "$STAGE" && "$CLAUDE_BIN" plugin test "$STAGE" 2>&1)"; rc=$?
+out="$(cd "$STAGE" && claude_isolated plugin test "$STAGE" 2>&1)"; rc=$?
 if [ "$rc" = 0 ]; then
     ok "T  claude plugin test: every case of answer-permission-prompt.test.ts passed"
 else
