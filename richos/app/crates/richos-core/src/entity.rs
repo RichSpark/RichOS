@@ -287,6 +287,29 @@ pub struct EntityRegistry {
     entities: Vec<Entity>,
 }
 
+/// Why [`EntityRegistry::id_for_name`] gives no id for a name. The window shows the sentence
+/// under the company field (`register_entity`), so it is written in a function named
+/// `ceo_message`: the affordance inventory (`ui/tests/lib/state-strings.js`) reads the
+/// CEO-facing sentences of `crates/` from exactly those.
+enum NameRefused {
+    NoLettersOrDigits,
+    NoDistinctLabel(String),
+}
+
+impl NameRefused {
+    fn ceo_message(&self) -> String {
+        match self {
+            NameRefused::NoLettersOrDigits => "That name doesn't have any letters or numbers in it, \
+                so I can't make a file-safe label out of it. Try a name with a word in it."
+                .to_string(),
+            NameRefused::NoDistinctLabel(name) => format!(
+                "I already have a lot of companies with names like \"{name}\" and I couldn't make \
+                 a distinct label for another one. Try a name that's a bit more specific."
+            ),
+        }
+    }
+}
+
 impl EntityRegistry {
     pub fn new(entities: Vec<Entity>) -> Result<Self, EntityError> {
         for (i, e) in entities.iter().enumerate() {
@@ -455,11 +478,7 @@ impl EntityRegistry {
         let base: String = slug.trim_matches('-').chars().take(ENTITY_ID_MAX_LEN).collect();
         let base = base.trim_end_matches('-').to_string();
         if base.is_empty() {
-            return Err(
-                "That name doesn't have any letters or numbers in it, so I can't make a file-safe \
-                 label out of it. Try a name with a word in it."
-                    .to_string(),
-            );
+            return Err(NameRefused::NoLettersOrDigits.ceo_message());
         }
         for n in 1..=99u32 {
             let candidate = if n == 1 {
@@ -476,10 +495,7 @@ impl EntityRegistry {
                 }
             }
         }
-        Err(format!(
-            "I already have a lot of companies with names like \"{name}\" and I couldn't make a \
-             distinct label for another one. Try a name that's a bit more specific."
-        ))
+        Err(NameRefused::NoDistinctLabel(name.to_string()).ceo_message())
     }
 
     pub fn entities(&self) -> &[Entity] {
