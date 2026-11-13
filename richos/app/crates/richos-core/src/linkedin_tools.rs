@@ -256,9 +256,9 @@ pub fn tool_tab(before: &[Tab], after: &[Tab]) -> Option<u64> {
 
 /// An address split into the parts that decide which page it is.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct Address {
+pub(crate) struct Address {
     https: bool,
-    host: String,
+    pub(crate) host: String,
     path: String,
 }
 
@@ -276,7 +276,7 @@ impl Address {
 /// `http(s)://host[:port]/path?query#fragment`, or `None` for anything that is not a web
 /// address. The port stays in `host`; the path is percent-decoded, lowercased (LinkedIn's
 /// addresses are not case sensitive) and without a trailing slash.
-fn parse(url: &str) -> Option<Address> {
+pub(crate) fn parse(url: &str) -> Option<Address> {
     let url = url.trim();
     let lower = url.to_ascii_lowercase();
     let (https, rest) = if lower.starts_with("https://") {
@@ -321,7 +321,7 @@ fn percent_decode(s: &str) -> String {
 /// country (`uk.linkedin.com/in/…`, `de.linkedin.com/in/…`, LinkedIn's help "Find your
 /// LinkedIn public profile URL") and LinkedIn shows it at `www.linkedin.com`, the host its
 /// company and "Show all" links use (review rv-20261110T145902Z-456e9251-a616, finding 2).
-fn site(host: &str) -> &str {
+pub(crate) fn site(host: &str) -> &str {
     let host = host.rsplit_once(':').filter(|(_, p)| p.chars().all(|c| c.is_ascii_digit())).map_or(host, |(h, _)| h);
     if host.ends_with(".linkedin.com") {
         return "linkedin.com";
@@ -785,29 +785,7 @@ pub fn read_profile(host: &dyn BrowserHost, url: &str) -> Result<Value, String> 
 /// and the one thing that makes the same read work. Never a result that looks like a read.
 pub fn read_profile_once_asked(host: &dyn BrowserHost, url: &str, asked: &std::cell::Cell<bool>) -> Result<Value, String> {
     let url = check_profile_url(url)?;
-    let mut allowed_now = false;
-    if !host.trusted() {
-        let first = !asked.get();
-        if first {
-            host.ask_for_permission();
-            asked.set(true);
-        }
-        allowed_now = (0..PERMISSION_POLLS).any(|_| {
-            host.sleep(POLL);
-            host.trusted()
-        });
-        if !allowed_now {
-            // AXIsProcessTrustedWithOptions answers false whether or not macOS put its request
-            // up, so RichOS cannot know that the user was shown anything. This says what RichOS
-            // did, never what the user saw.
-            let request = if first { "RichOS asked macOS for it just now" }
-                else { "RichOS already asked macOS for it during an earlier read" };
-            return Err(format!("The LinkedIn pages were NOT read: RichOS does not have the macOS Accessibility \
-                permission it reads the browser with. {request} and it was not allowed within {PERMISSION_POLLS} \
-                seconds. Once the user allows RichOS under System Settings, Privacy & Security, Accessibility, the \
-                same read works. Nothing was opened."));
-        }
-    }
+    let allowed_now = wait_for_permission(host, asked, "The LinkedIn pages were")?;
     let Some(app) = host.default_browser() else {
         return Err("RichOS could not find the default web browser on this Mac. Nothing was opened.".into());
     };
@@ -824,6 +802,37 @@ pub fn read_profile_once_asked(host: &dyn BrowserHost, url: &str, asked: &std::c
         }
     }
     result
+}
+
+/// The permission both browser readers need (this one and `browser_tools.rs`): `Ok(false)` when
+/// RichOS already has it, `Ok(true)` when the user allowed it while this call waited, and
+/// otherwise the sentence that says nothing was read and why. `not_read` starts that sentence
+/// ("The LinkedIn pages were").
+pub(crate) fn wait_for_permission(host: &dyn BrowserHost, asked: &std::cell::Cell<bool>, not_read: &str) -> Result<bool, String> {
+    if host.trusted() {
+        return Ok(false);
+    }
+    let first = !asked.get();
+    if first {
+        host.ask_for_permission();
+        asked.set(true);
+    }
+    let allowed_now = (0..PERMISSION_POLLS).any(|_| {
+        host.sleep(POLL);
+        host.trusted()
+    });
+    if allowed_now {
+        return Ok(true);
+    }
+    // AXIsProcessTrustedWithOptions answers false whether or not macOS put its request up, so
+    // RichOS cannot know that the user was shown anything. This says what RichOS did, never what
+    // the user saw.
+    let request = if first { "RichOS asked macOS for it just now" }
+        else { "RichOS already asked macOS for it during an earlier read" };
+    Err(format!("{not_read} NOT read: RichOS does not have the macOS Accessibility \
+        permission it reads the browser with. {request} and it was not allowed within {PERMISSION_POLLS} \
+        seconds. Once the user allows RichOS under System Settings, Privacy & Security, Accessibility, the \
+        same read works. Nothing was opened."))
 }
 
 fn visit_profile(visit: &mut Visit, requested: &str) -> Result<Value, String> {
@@ -915,6 +924,32 @@ pub fn run_stdio(host: &dyn BrowserHost) -> io::Result<()> {
     serve(host, io::stdin().lock(), io::stdout().lock())
 }
 
+/// One frame of the stdio framing both browser readers' servers use: a line, and whether it was
+/// longer than a frame may be (then it is drained through its newline and its bytes dropped).
+/// `None` at the end of the input.
+pub(crate) fn read_frame(reader: &mut impl BufRead) -> io::Result<Option<(Vec<u8>, bool)>> {
+    let mut frame = Vec::new();
+    let mut oversized = false;
+    loop {
+        let buf = reader.fill_buf()?;
+        if buf.is_empty() {
+            break;
+        }
+        let n = buf.iter().position(|b| *b == b'\n').map_or(buf.len(), |i| i + 1);
+        let end = buf[n - 1] == b'\n';
+        if frame.len() + n <= MAX_FRAME_BYTES && !oversized {
+            frame.extend_from_slice(&buf[..n]);
+        } else {
+            oversized = true;
+        }
+        reader.consume(n);
+        if end {
+            break;
+        }
+    }
+    Ok((!frame.is_empty() || oversized).then_some((frame, oversized)))
+}
+
 /// JSON-RPC over stdio, one frame per line, the framing `status_tools::serve` uses: an
 /// oversized message is drained through its newline and refused.
 pub fn serve(host: &dyn BrowserHost, mut reader: impl BufRead, mut writer: impl Write) -> io::Result<()> {
@@ -922,29 +957,7 @@ pub fn serve(host: &dyn BrowserHost, mut reader: impl BufRead, mut writer: impl 
     // One server per session (every teammate of the session reads through it): macOS's
     // request is raised at most once in its life.
     let asked = std::cell::Cell::new(false);
-    loop {
-        let mut frame = Vec::new();
-        let mut oversized = false;
-        loop {
-            let buf = reader.fill_buf()?;
-            if buf.is_empty() {
-                break;
-            }
-            let n = buf.iter().position(|b| *b == b'\n').map_or(buf.len(), |i| i + 1);
-            let end = buf[n - 1] == b'\n';
-            if frame.len() + n <= MAX_FRAME_BYTES && !oversized {
-                frame.extend_from_slice(&buf[..n]);
-            } else {
-                oversized = true;
-            }
-            reader.consume(n);
-            if end {
-                break;
-            }
-        }
-        if frame.is_empty() && !oversized {
-            break;
-        }
+    while let Some((frame, oversized)) = read_frame(&mut reader)? {
         let reply = match serde_json::from_slice::<Value>(&frame) {
             Ok(r) if !oversized => {
                 let Some(id) = r.get("id") else { continue };
