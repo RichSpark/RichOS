@@ -165,8 +165,31 @@ pub fn company_folders(registry: &EntityRegistry) -> Vec<CompanyFolders> {
         .collect()
 }
 
-fn git(root: &Path, args: &[&str]) -> Option<String> {
-    let out = Command::new("git").arg("-c").arg("core.quotePath=false").arg("-C").arg(root).args(args).output().ok()?;
+/// THE GIT THAT READS THE REPOSITORIES IS THE ONE RICHOS DELIVERS, never whatever `git` the app's
+/// own PATH finds (review rv-20261114T020828Z-93484130-3ed1). An app started from Finder has no
+/// runtime folder on its PATH, and on a Mac without the developer tools `/usr/bin/git` is Apple's
+/// stand-in, which opens an installation dialog and reads nothing: a regular user would connect
+/// their repositories and get an empty picture. `connect_repository` already runs this one.
+#[derive(Debug, Clone)]
+pub struct GitRuntime {
+    /// The verified executable (`EngineRuntime::git`).
+    pub bin: PathBuf,
+    /// The PATH it runs with (`EngineRuntime::path`).
+    pub path: String,
+}
+
+impl From<&crate::runtime::EngineRuntime> for GitRuntime {
+    fn from(runtime: &crate::runtime::EngineRuntime) -> Self {
+        GitRuntime { bin: runtime.git.clone(), path: runtime.path() }
+    }
+}
+
+fn git(with: &GitRuntime, root: &Path, args: &[&str]) -> Option<String> {
+    // Read only, and nothing of the user's or the machine's Git setup decides what is read.
+    let out = Command::new(&with.bin).args(["-c", "core.quotePath=false", "-c", "core.fsmonitor=false", "-C"]).arg(root).args(args)
+        .env("PATH", &with.path).env("GIT_CONFIG_NOSYSTEM", "1").env("GIT_CONFIG_GLOBAL", "/dev/null").env("GIT_OPTIONAL_LOCKS", "0")
+        .env_remove("GIT_DIR").env_remove("GIT_WORK_TREE").env_remove("GIT_INDEX_FILE")
+        .output().ok()?;
     if !out.status.success() {
         return None;
     }
@@ -174,8 +197,8 @@ fn git(root: &Path, args: &[&str]) -> Option<String> {
 }
 
 /// The commit a repository is at, or `None` for a folder that is not a repository (or has no commit).
-pub fn repo_head(root: &Path) -> Option<String> {
-    git(root, &["rev-parse", "HEAD"]).map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+pub fn repo_head(root: &Path, with: &GitRuntime) -> Option<String> {
+    git(with, root, &["rev-parse", "HEAD"]).map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
 }
 
 fn ext_of(path: &str) -> String {
@@ -188,11 +211,11 @@ fn ext_of(path: &str) -> String {
 
 /// Read one repository: its tracked files, one pass over its history, and its documents' text.
 /// `None` when the folder is not a repository `git` can read.
-pub fn read_repo(root: &Path) -> Option<RepoRead> {
-    let listed = git(root, &["ls-files"])?;
+pub fn read_repo(root: &Path, with: &GitRuntime) -> Option<RepoRead> {
+    let listed = git(with, root, &["ls-files"])?;
     let tracked: Vec<String> = listed.lines().filter(|f| !f.is_empty() && !SKIP_PARTS.iter().any(|s| f.contains(s))).map(str::to_string).collect();
     let tracked_set: BTreeSet<&str> = tracked.iter().map(String::as_str).collect();
-    let log = git(root, &["log", "--no-renames", "--name-only", "--format=@%ad", "--date=short"]).unwrap_or_default();
+    let log = git(with, root, &["log", "--no-renames", "--name-only", "--format=@%ad", "--date=short"]).unwrap_or_default();
     let mut stat: HashMap<String, (i64, i64, u32)> = HashMap::new(); // last, first, commits (log is newest first)
     let mut sessions: BTreeMap<i64, u32> = BTreeMap::new();
     let mut commits = 0u32;
@@ -214,7 +237,7 @@ pub fn read_repo(root: &Path) -> Option<RepoRead> {
             stat.entry(line.to_string()).and_modify(|s| { s.1 = d; s.2 += 1; }).or_insert((d, d, 1));
         }
     }
-    let head = git(root, &["log", "-1", "--format=%ad", "--date=short"]).and_then(|s| parse_day(s.trim())).unwrap_or_else(today);
+    let head = git(with, root, &["log", "-1", "--format=%ad", "--date=short"]).and_then(|s| parse_day(s.trim())).unwrap_or_else(today);
     let mut repo = RepoRead {
         name: root.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
         sessions,
@@ -1032,7 +1055,7 @@ pub fn build_repo_field_with(companies: &[CompanyRead], unread: &[(String, Strin
 
 /// Read every company's folders. A folder that does not exist, or that `git` cannot read as a
 /// repository, is skipped and reported as `(company id, reason)`.
-pub fn read_companies(companies: &[CompanyFolders]) -> (Vec<CompanyRead>, Vec<(String, String)>) {
+pub fn read_companies(companies: &[CompanyFolders], with: &GitRuntime) -> (Vec<CompanyRead>, Vec<(String, String)>) {
     let mut out = Vec::new();
     let mut unread = Vec::new();
     for c in companies {
@@ -1042,7 +1065,7 @@ pub fn read_companies(companies: &[CompanyFolders]) -> (Vec<CompanyRead>, Vec<(S
                 unread.push((c.id.clone(), "missing".to_string()));
                 continue;
             }
-            match read_repo(f) {
+            match read_repo(f, with) {
                 Some(r) => repos.push(r),
                 None => unread.push((c.id.clone(), "not a repository".to_string())),
             }
@@ -1054,12 +1077,12 @@ pub fn read_companies(companies: &[CompanyFolders]) -> (Vec<CompanyRead>, Vec<(S
 
 /// What the kept picture was built from: the day (dates are relative to it), every company and
 /// folder, and each folder's commit. Nothing committed and the same day is the same picture.
-pub fn identity(companies: &[CompanyFolders], today: i64) -> String {
+pub fn identity(companies: &[CompanyFolders], today: i64, with: &GitRuntime) -> String {
     let mut s = format!("v1|{today}");
     for c in companies {
         s.push_str(&format!("|{}={}", c.id, c.label));
         for f in &c.folders {
-            let head = if f.is_dir() { repo_head(f).unwrap_or_default() } else { "missing".into() };
+            let head = if f.is_dir() { repo_head(f, with).unwrap_or_default() } else { "missing".into() };
             s.push_str(&format!(";{}@{}", f.display(), head));
         }
     }
@@ -1081,8 +1104,8 @@ fn order_of(field: &Value) -> Vec<String> {
 }
 
 /// Read, build and keep. `None` when no folder is a readable repository.
-fn build_and_keep(path: &Path, companies: &[CompanyFolders], today: i64, id: String, previous: &[String], mut groups: Groups) -> Option<Value> {
-    let (read, unread) = read_companies(companies);
+fn build_and_keep(path: &Path, companies: &[CompanyFolders], today: i64, id: String, previous: &[String], mut groups: Groups, with: &GitRuntime) -> Option<Value> {
+    let (read, unread) = read_companies(companies, with);
     if read.iter().all(|c| c.repos.is_empty()) {
         return None;
     }
@@ -1116,25 +1139,25 @@ pub enum FieldFrom {
 /// document on every launch would be the slow path every time). No kept picture: read now. `None`
 /// when no folder of any company is a readable repository, which leaves the home screen on its loro
 /// path.
-pub fn field_kept_or_built(path: &Path, companies: &[CompanyFolders], today: i64) -> Option<(Value, FieldFrom)> {
+pub fn field_kept_or_built(path: &Path, companies: &[CompanyFolders], today: i64, with: &GitRuntime) -> Option<(Value, FieldFrom)> {
     if !companies.iter().any(|c| c.folders.iter().any(|f| f.is_dir())) {
         return None;
     }
-    let id = identity(companies, today);
+    let id = identity(companies, today, with);
     if let Some(kept) = std::fs::read(path).ok().and_then(|b| serde_json::from_slice::<Kept>(&b).ok()) {
         if kept.identity == id {
             return Some((kept.field, FieldFrom::Kept));
         }
         if !REFRESHING.swap(true, std::sync::atomic::Ordering::SeqCst) {
-            let (path, companies, previous, groups) = (path.to_path_buf(), companies.to_vec(), order_of(&kept.field), kept.groups.clone());
+            let (path, companies, previous, groups, with) = (path.to_path_buf(), companies.to_vec(), order_of(&kept.field), kept.groups.clone(), with.clone());
             std::thread::spawn(move || {
-                let _ = build_and_keep(&path, &companies, today, id, &previous, groups);
+                let _ = build_and_keep(&path, &companies, today, id, &previous, groups, &with);
                 REFRESHING.store(false, std::sync::atomic::Ordering::SeqCst);
             });
         }
         return Some((kept.field, FieldFrom::KeptRefreshing));
     }
-    build_and_keep(path, companies, today, id, &[], Groups::default()).map(|f| (f, FieldFrom::Built))
+    build_and_keep(path, companies, today, id, &[], Groups::default(), with).map(|f| (f, FieldFrom::Built))
 }
 
 /// Wait for a refresh started by [`field_kept_or_built`] to finish. Tests only.
@@ -1179,6 +1202,32 @@ mod tests {
         EntityRegistry::new(rows.iter().map(|(id, name, roots)| Entity::try_new(id, name, roots.iter().map(|p| p.to_path_buf()).collect()).unwrap()).collect()).unwrap()
     }
 
+    /// The tests' Git: the first `git` on this machine's PATH, named by its full path the way the
+    /// app names the delivered one, and run with a PATH that holds no Git at all.
+    fn test_git() -> GitRuntime {
+        let bin = std::env::var_os("PATH").map(|p| std::env::split_paths(&p).map(|d| d.join("git")).find(|g| g.is_file()).expect("no git on PATH to run the tests with")).unwrap();
+        GitRuntime { bin, path: "/nonexistent".into() }
+    }
+
+    /// The two tests that read behind a kept picture share one flag (`REFRESHING`), so they take turns.
+    static BEHIND: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Review rv-20261114T020828Z-93484130-3ed1: the reader ran whatever `git` the app's PATH found.
+    /// It runs the executable it is given: a repository is read with no Git on PATH at all, and
+    /// nothing is read when the given one is not there (PATH is not searched instead).
+    #[test]
+    fn the_repositories_are_read_with_the_git_that_is_given_never_one_from_path() {
+        let r = tmp("git");
+        commit(&r, "2026-10-01", &[("README.md", "# R\n")]);
+        let given = test_git();
+        assert_eq!(given.path, "/nonexistent");
+        assert!(read_repo(&r, &given).is_some(), "the given Git did not read the repository");
+        let missing = GitRuntime { bin: r.join("no-such-git"), path: std::env::var("PATH").unwrap_or_default() };
+        assert!(read_repo(&r, &missing).is_none(), "a Git that is not there read a repository: PATH was searched");
+        assert!(repo_head(&r, &missing).is_none());
+        std::fs::remove_dir_all(r).ok();
+    }
+
     fn domain<'a>(field: &'a Value, id: &str) -> Option<&'a Value> {
         field["domains"].as_array().unwrap().iter().find(|d| d["id"] == id)
     }
@@ -1191,6 +1240,7 @@ mod tests {
     /// connected company's repository is now read, and each company is a domain of the picture.
     #[test]
     fn every_connected_companys_repository_is_read_into_the_picture() {
+        let _turn = BEHIND.lock().unwrap_or_else(|e| e.into_inner());
         let a = tmp("c1a");
         let b = tmp("c1b");
         commit(&a, "2026-10-01", &[("README.md", "# A\n\nSee docs/plan.md.\n"), ("docs/plan.md", "# Plan\n")]);
@@ -1198,7 +1248,7 @@ mod tests {
         commit(&b, "2026-10-05", &[("README.md", "# B\n"), ("src/main.rs", "fn main() {}\n")]);
         let reg = registry(&[("alpha", "Alpha Co", &[a.as_path()]), ("beta", "Beta Co", &[b.as_path()])]);
         let path = tmp("c1k").join("home-field-repos.json");
-        let (field, from) = field_kept_or_built(&path, &company_folders(&reg), day("2026-11-13")).expect("two readable repositories drew nothing");
+        let (field, from) = field_kept_or_built(&path, &company_folders(&reg), day("2026-11-13"), &test_git()).expect("two readable repositories drew nothing");
         assert_eq!(from, FieldFrom::Built);
         let alpha = domain(&field, "alpha").expect("Alpha is not on the picture");
         let beta = domain(&field, "beta").expect("Beta is not on the picture");
@@ -1209,14 +1259,14 @@ mod tests {
         // Beta's source file is on the river
         assert!(field["sources"].as_array().unwrap().iter().any(|s| s["domain"] == "beta" && s["kind"] == "a source file"));
         // kept: a second ask with nothing committed answers from the file
-        let again = field_kept_or_built(&path, &company_folders(&reg), day("2026-11-13")).unwrap();
+        let again = field_kept_or_built(&path, &company_folders(&reg), day("2026-11-13"), &test_git()).unwrap();
         assert_eq!(again, (field.clone(), FieldFrom::Kept));
         // a new commit: the kept picture answers at once, the new one is read behind it for the next ask
         commit(&b, "2026-10-06", &[("docs/more.md", "# More\n")]);
-        let stale = field_kept_or_built(&path, &company_folders(&reg), day("2026-11-13")).unwrap();
+        let stale = field_kept_or_built(&path, &company_folders(&reg), day("2026-11-13"), &test_git()).unwrap();
         assert_eq!(stale, (field.clone(), FieldFrom::KeptRefreshing));
         wait_for_refresh();
-        let (after, from) = field_kept_or_built(&path, &company_folders(&reg), day("2026-11-13")).unwrap();
+        let (after, from) = field_kept_or_built(&path, &company_folders(&reg), day("2026-11-13"), &test_git()).unwrap();
         assert_eq!((domain(&after, "beta").unwrap()["nodeCount"].as_u64(), from), (Some(4), FieldFrom::Kept));
         // the companies keep the order they were first drawn in
         assert_eq!(order_of(&after), order_of(&field));
@@ -1233,7 +1283,7 @@ mod tests {
         let register = "# Decisions\n\n## 1. One\nDecided 2026-10-03.\n\n## 2. Two\nText.\n\n## §3: Three\nText.\n";
         commit(&r, "2026-10-01", &[("notes.md", "n"), ("docs/plans/x.md", "x"), ("app/src/README.md", "r"), ("wiki/ceo-decisions.md", register), ("src/lib.rs", "")]);
         let reg = registry(&[("acme", "Acme", &[r.as_path()])]);
-        let (read, unread) = read_companies(&company_folders(&reg));
+        let (read, unread) = read_companies(&company_folders(&reg), &test_git());
         assert!(unread.is_empty());
         let field = build_repo_field(&read, &unread, day("2026-11-13"), &[]);
         // 4 documents + 3 rulings + 1 working day
@@ -1252,7 +1302,7 @@ mod tests {
         let refs: Vec<(&str, &str)> = files.iter().map(|(p, b)| (p.as_str(), b.as_str())).collect();
         commit(&r, "2026-09-01", &refs);
         let reg = registry(&[("acme", "Acme", &[r.as_path()])]);
-        let (read, unread) = read_companies(&company_folders(&reg));
+        let (read, unread) = read_companies(&company_folders(&reg), &test_git());
         let field = build_repo_field(&read, &unread, day("2026-11-13"), &[]);
         let docs = field["sources"].as_array().unwrap().iter().filter(|s| s["kind"] == "document").count();
         assert_eq!(docs, 150, "a document was dropped");
@@ -1270,13 +1320,13 @@ mod tests {
         let _ = std::fs::remove_dir_all(&gone);
         let reg = registry(&[("present", "Present", &[ok.as_path()]), ("moved", "Moved", &[gone.as_path()])]);
         let path = tmp("c5k").join("home-field-repos.json");
-        let (field, _) = field_kept_or_built(&path, &company_folders(&reg), day("2026-11-13")).expect("one missing folder lost the whole picture");
+        let (field, _) = field_kept_or_built(&path, &company_folders(&reg), day("2026-11-13"), &test_git()).expect("one missing folder lost the whole picture");
         assert!(domain(&field, "present").is_some());
         assert_eq!(field["meta"]["unreadFolders"], json!([{ "company": "moved", "reason": "missing" }]));
         assert!(!serde_json::to_string(&field).unwrap().contains(&gone.display().to_string()), "the folder's path left the boundary");
         // and no readable repository at all is the loro path, not an empty picture
         let reg2 = registry(&[("moved", "Moved", &[gone.as_path()])]);
-        assert!(field_kept_or_built(&path, &company_folders(&reg2), day("2026-11-13")).is_none());
+        assert!(field_kept_or_built(&path, &company_folders(&reg2), day("2026-11-13"), &test_git()).is_none());
         for d in [ok, path.parent().unwrap().to_path_buf()] {
             let _ = std::fs::remove_dir_all(d);
         }
@@ -1288,7 +1338,7 @@ mod tests {
         let r = tmp("priv");
         commit(&r, "2026-10-01", &[("secret-plans/merger-with-globex.md", "# Merger with Globex\nconfidential\n"), ("README.md", "see secret-plans/merger-with-globex.md")]);
         let reg = registry(&[("acme", "Acme", &[r.as_path()])]);
-        let (read, unread) = read_companies(&company_folders(&reg));
+        let (read, unread) = read_companies(&company_folders(&reg), &test_git());
         let out = serde_json::to_string(&build_repo_field(&read, &unread, day("2026-11-13"), &[])).unwrap();
         for word in ["secret", "merger", "globex", "Merger", "confidential", "README", "home-repos-priv"] {
             assert!(!out.contains(word), "{word} left the builder");
@@ -1391,6 +1441,7 @@ mod tests {
     /// build behind a later launch.
     #[test]
     fn the_kept_picture_keeps_its_groups_across_builds() {
+        let _turn = BEHIND.lock().unwrap_or_else(|e| e.into_inner());
         let r = tmp("grp");
         let mut files: Vec<(String, String)> = Vec::new();
         for (f, n) in [10, 9, 8, 7, 6, 5, 4].iter().enumerate() {
@@ -1403,11 +1454,11 @@ mod tests {
         let reg = registry(&[("acme", "Acme", &[r.as_path()])]);
         let path = tmp("grpk").join("home-field-repos.json");
         let clusters = |f: &Value| -> HashMap<u64, String> { f["nodes"].as_array().unwrap().iter().map(|n| (n["layoutKey"].as_u64().unwrap(), n["cluster"].as_str().unwrap().to_string())).collect() };
-        let (first, _) = field_kept_or_built(&path, &company_folders(&reg), day("2026-11-13")).unwrap();
+        let (first, _) = field_kept_or_built(&path, &company_folders(&reg), day("2026-11-13"), &test_git()).unwrap();
         commit(&r, "2026-10-01", &[("area6/n1.md", "n"), ("area6/n2.md", "n"), ("area6/n3.md", "n")]);
-        assert!(field_kept_or_built(&path, &company_folders(&reg), day("2026-11-13")).is_some());
+        assert!(field_kept_or_built(&path, &company_folders(&reg), day("2026-11-13"), &test_git()).is_some());
         wait_for_refresh();
-        let (second, from) = field_kept_or_built(&path, &company_folders(&reg), day("2026-11-13")).unwrap();
+        let (second, from) = field_kept_or_built(&path, &company_folders(&reg), day("2026-11-13"), &test_git()).unwrap();
         assert_eq!(from, FieldFrom::Kept);
         let (before, after) = (clusters(&first), clusters(&second));
         assert_eq!(before.iter().filter(|(key, cluster)| after.get(*key) != Some(*cluster)).count(), 0);
