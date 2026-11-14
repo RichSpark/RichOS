@@ -4,32 +4,35 @@ changes, measured in the guest and never on the host's screen (CEO ruling 65).
 
 Run by run-walk.py, which holds one guest slot for this run only, boots the guest and removes the clone:
 
-  run-walk.py --bundle ZIP --home EMPTY_DIR --engine ENGINE --report REPORT --wait 600 -- \\
+  run-walk.py --no-audio --bundle ZIP --home EMPTY_DIR --engine ENGINE --report REPORT --wait 600 -- \\
       home-fps-walk.py --out DIR [--alder 1800] [--brightwater 900] [--span 3] [--samples 3]
 
-run-walk.py passes the owned VM name as the first argument.
+run-walk.py passes the owned VM name as the first argument. It refuses a guest booted with a sound
+device: without --no-audio the guest's sound reaches this Mac's speakers (CEO ruling 53), and nothing
+here needs sound.
 
 WHY (round 75, richos-hq a4c16a665): in headless WebKit the loro picture ran at 17 to 26 frames a
 second for the rest of a visit after any change of the memory count; the pass that colors every
 thread, inside the engine's very long frame function, was sometimes left unoptimized. This walk asks
 the same question of the app's own window.
 
-HOW IT COUNTS: frame-rate.swift, compiled on the host and copied into the guest, streams the app's window with ScreenCaptureKit
-and counts the frames whose content changed (`.complete`). The picture moves on every frame it draws
-(twinkle, packets, drift), so that count is the frames the window presented. Nothing is injected into
-the app. Each measurement is --samples spans of --span seconds, the first 4 s after the moment named.
+HOW IT COUNTS: frame-rate.swift, compiled on the host and copied into the guest, streams the app's window with
+ScreenCaptureKit and counts the PICTURE's frames: complete frames whose middle-of-the-picture region
+changed, so the home screen's own CSS animations (the bokeh's drift, the Talk to Rich dot) are not
+counted as the picture. The window's rate is kept beside it. Nothing is injected into the app. Each measurement is --samples spans of --span seconds, the first 4 s after the moment named.
 
 THE STEPS, in order:
   example     a fresh user's home screen: the example, the count never changes; measured, then
               again --later seconds after that
-  companies   two fictional companies' repositories and a team (home-standard-walk.py's step), and the
-              app relaunched as a returning user's starts: the example comes up first
+  companies   two fictional companies' repositories and a team (home-standard-walk.py's), the app
+              relaunched as a returning user's starts and the home screen put up at once and read
   during      the example while the repositories are read (the count has not changed yet)
-  change      his records arrive while the screen is up (the count changes in the running app: the
-              left column comes to read "N memories"); measured once the reading has finished, then
-              again --later seconds after that
+  change      his records arrive while the screen is up: a look at the home screen without his count,
+              then one with it, the same app process throughout, or the step fails (a count already
+              on the screen at the first look is not a change); measured after it, then
+              again --later seconds after that, --long samples in a row
   relaunch    the app relaunched: the same records drawn at launch, the count never changes in the
-              visit; the control for `change`
+              visit; the control for `change` (measured the same way)
 
 Evidence: --out/report.json (every sample, every step's result) and a frame of the screen per
 measurement. Exit 0 when every step ran; the rates are the result, not a pass mark. It quits nothing
@@ -39,6 +42,7 @@ import argparse
 import importlib.util
 import json
 import os
+import re
 from pathlib import Path
 import shlex
 import subprocess
@@ -49,6 +53,7 @@ sys.dont_write_bytecode = True
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from relaunch import guest, relaunch  # noqa: E402
+import reserve  # noqa: E402  (the admission's own CPU sampler)
 
 _spec = importlib.util.spec_from_file_location('home_standard_walk', HERE / 'home-standard-walk.py')
 standard = importlib.util.module_from_spec(_spec)
@@ -60,9 +65,9 @@ SETTLE = 4  # seconds after the moment named before the first sample
 
 
 class Walk(standard.Walk):
-    def __init__(self, vm, out, alder, brightwater, span, samples, later):
+    def __init__(self, vm, out, alder, brightwater, span, samples, later, long):
         super().__init__(vm, out, alder, brightwater)
-        self.span, self.samples, self.later = span, samples, later
+        self.span, self.samples, self.later, self.long = span, samples, later, long
         self.meter = self.payload + '/frame-rate'
 
     def pid(self):
@@ -84,35 +89,76 @@ class Walk(standard.Walk):
             raise StepFailed('could not copy frame-rate into the guest: ' + text[-300:])
         binary.unlink()
 
-    def measure(self, name):
-        """--samples spans of --span seconds of the app's window, and one frame of the screen."""
+    def webcontent_cpu_s(self):
+        """Seconds of CPU the guest's web content processes have used so far (the picture's JavaScript
+        and its drawing run there), summed over all of them; None when ps names none."""
+        rows = guest(self.vm, 'ps -A -o time=,comm= | grep WebKit.WebContent || true')
+        total, seen = 0.0, False
+        for line in rows.splitlines():
+            clock = line.split()[0] if line.split() else ''
+            try:
+                parts = [float(p) for p in clock.split(':')]
+            except ValueError:
+                continue
+            seconds = 0.0
+            for p in parts:
+                seconds = seconds * 60 + p
+            total, seen = total + seconds, True
+        return total if seen else None
+
+    def measure(self, name, samples=None):
+        """`samples` (default --samples) spans of --span seconds of the app's window, and one frame of the
+        screen. Beside the rates: the host's total CPU while they were taken, and the web content
+        processes' CPU per presented frame. A frame function left unoptimized costs more CPU per frame
+        whatever the host is doing; a busy host leaves it as it was and costs frames instead."""
+        samples = samples or self.samples
         time.sleep(SETTLE)
         pid = self.pid()
-        wait = int(self.span * self.samples + 60)
-        r = subprocess.run([str(HERE / 'guest.sh'), self.vm, shlex.quote(self.meter) + ' %s %s %d' % (pid, self.span, self.samples)],
+        wait = int(self.span * samples + 60)
+        cpu_before = self.webcontent_cpu_s()
+        r = subprocess.run([str(HERE / 'guest.sh'), self.vm, shlex.quote(self.meter) + ' %s %s %d' % (pid, self.span, samples)],
                            capture_output=True, text=True, timeout=wait)
+        cpu_after = self.webcontent_cpu_s()
         if r.returncode:
             raise StepFailed('the frame rate could not be measured (exit %d): ' % r.returncode + (r.stderr + r.stdout)[-1200:])
         row = json.loads(r.stdout.strip().splitlines()[-1])
-        row['fps'] = [s['fps'] for s in row['samples']]
+        row['fps'] = [s['fps'] for s in row['samples']]  # the picture's own frames (frame-rate.swift)
+        row['window_fps'] = [s['window_fps'] for s in row['samples']]
+        frames = sum(s['complete'] for s in row['samples'])
+        if cpu_before is not None and cpu_after is not None and frames:
+            row['webcontent_cpu_ms_per_frame'] = round((cpu_after - cpu_before) * 1000 / frames, 1)
         row['at'] = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
-        # the guests share this Mac's GPU and cores: a second guest running beside this one is part of
-        # the conditions a rate was measured under, so it is written down with it
+        # the guests share this Mac's GPU and cores: a second guest running beside this one, and how
+        # busy the Mac was, are part of the conditions a rate was measured under
         runs = Path(os.environ.get('TESTVM_ROOT', str(Path.home() / '.richos-testvm'))) / 'run'
         row['other_guests'] = sorted(p.name for p in runs.iterdir() if p.is_dir() and p.name != self.vm)
         row['host_load'] = [round(x, 1) for x in os.getloadavg()]
+        try:
+            row['host_cpu_busy_percent'] = round(reserve.cpu_busy_percent(), 1)
+        except (BlockingIOError, OSError) as exc:
+            row['host_cpu_busy_percent'] = 'unavailable: ' + str(exc)
         row['frame'] = self.shot('fps-' + name)
-        print('  %s: %s frames a second (other guests: %s)' % (name, ', '.join('%g' % f for f in row['fps']), ', '.join(row['other_guests']) or 'none'), flush=True)
+        print('  %s: picture %s frames a second (window %s); %s ms of web content CPU a frame; host CPU %s%% busy (other guests: %s)' % (
+            name, ', '.join('%g' % f for f in row['fps']), ', '.join('%g' % f for f in row['window_fps']), row.get('webcontent_cpu_ms_per_frame', '?'),
+            row['host_cpu_busy_percent'], ', '.join(row['other_guests']) or 'none'), flush=True)
         return row
 
     def memories(self):
-        """The left column's "N memories", read from the accessibility tree, or None."""
+        """The number in the left column's "N memories" (the style sheet draws it in capitals, and the
+        accessibility tree gives it as drawn), or None while the column names no memories."""
         node = self.node('--id', 'home-brand-line')
-        text = (node or {}).get('value') or (node or {}).get('title') or ''
-        if 'memories' not in text:
+        text = ((node or {}).get('value') or (node or {}).get('title') or '')
+        if 'memories' not in text.lower():
             found = self.text(' memories')
             text = (found or {}).get('value') or (found or {}).get('title') or ''
-        return text if 'memories' in text else None
+        m = re.search(r'([0-9][0-9,]*)\s+memories', text, re.I)
+        return int(m.group(1).replace(',', '')) if m else None
+
+    def reading(self):
+        """One look at the home screen: when, the app's pid, whether the home screen is up, and the
+        column's count of memories."""
+        return {'t': round(time.monotonic() - self.relaunched, 1), 'pid': self.pid(),
+                'home': bool(self.node('--id', 'home-enter')), 'memories': self.memories()}
 
     def to_home(self):
         """home-standard-walk.py's, with the sheets declined on every try: a first-run sheet that comes
@@ -136,34 +182,66 @@ class Walk(standard.Walk):
         return {'measured': first, 'measured_later': self.measure('example-later')}
 
     def companies(self):
+        """home-standard-walk.py's two companies and team, and the app relaunched as a returning user's
+        starts; the home screen is put up at once and read, so that his records are seen to ARRIVE in the
+        running app."""
         began = time.monotonic()
-        result = super().companies()
-        result['relaunched_after_s'] = round(time.monotonic() - began, 1)
+        repos = self.home + '/Companies'
+        for script in ('home-standard-repos.sh', 'seed-team.sh'):
+            code, text = standard.run([HERE / 'guest.sh', self.vm, '--push', HERE / script, self.payload + '/'], 120)
+            if code:
+                raise StepFailed('could not copy ' + script + ' into the guest: ' + text[-300:])
+        made = guest(self.vm, 'sh ' + shlex.quote(self.payload + '/home-standard-repos.sh') + ' ' + shlex.quote(repos)
+                     + ' %d %d' % (self.alder, self.brightwater), 600)
+        registry = {'version': 1, 'entities': [
+            {'id': 'alder', 'display_name': 'Alder Works', 'roots': [repos + '/alder']},
+            {'id': 'brightwater', 'display_name': 'Brightwater Labs', 'roots': [repos + '/brightwater']},
+        ]}
+        data = self.home + '/' + standard.DATA
+        guest(self.vm, 'mkdir -p ' + shlex.quote(data) + ' && printf %s ' + shlex.quote(json.dumps(registry)) + ' > ' + shlex.quote(data + '/entities.json'))
+        team = guest(self.vm, 'sh ' + shlex.quote(self.payload + '/seed-team.sh') + ' ' + shlex.quote(data) + ' 3')
+        result = {'repositories': made.splitlines(), 'teammates': team.strip()}
+        relaunch(self.vm)
         self.relaunched = time.monotonic()
+        self.to_home()
+        self.timeline = [self.reading()]
+        result['written_after_s'] = round(self.relaunched - began, 1)
+        result['first_reading'] = self.timeline[0]
         return result
 
     def during(self):
-        if self.kept():
-            return {'skipped': 'the repositories were already read before the example could be measured'}
-        return {'memories_column': self.memories(), 'measured': self.measure('during')}
+        """The example on the screen before his records arrive, if they have not yet."""
+        if self.timeline[-1]['memories']:
+            return {'skipped': 'his records were already on the screen at the first look', 'reading': self.timeline[-1]}
+        row = self.measure('during', 3)
+        self.timeline.append(self.reading())
+        return {'measured': row, 'reading_after': self.timeline[-1]}
 
     def change(self):
+        """His records arrive while the screen is up: a look without his count, then one with it, the same
+        app process throughout. Only then are the rates measured as after a change."""
         path = self.until(self.kept, 600, 'the repositories were not read and kept')
-        read_s = round(time.monotonic() - self.relaunched, 1)
         code, text = standard.run([HERE / 'guest.sh', self.vm, '--pull', path, self.out / 'home-field-repos.json'], 300)
         if code:
             raise StepFailed('could not pull the kept picture: ' + text[-300:])
-        counts = json.loads((self.out / 'home-field-repos.json').read_text())['field']['meta']['counts']
+        objects = json.loads((self.out / 'home-field-repos.json').read_text())['field']['meta']['counts']['objects']
         (self.out / 'home-field-repos.json').unlink()
-        memories = '{:,} memories'.format(counts['objects'])
-        self.until(lambda: self.text(memories), 300, 'the left column never said "' + memories + '"')
-        drawn_s = round(time.monotonic() - self.relaunched, 1)
+        end = time.monotonic() + 300
+        while time.monotonic() < end and self.timeline[-1]['memories'] != objects:
+            time.sleep(1)
+            self.timeline.append(self.reading())
+        before = [r for r in self.timeline if r['home'] and r['memories'] != objects]
+        after = [r for r in self.timeline if r['home'] and r['memories'] == objects]
+        pids = {r['pid'] for r in self.timeline}
+        if not before or not after or len(pids) != 1 or before[0]['t'] > after[0]['t']:
+            raise StepFailed('no change of the count was seen in this visit (a look at the home screen without '
+                             '%d memories, then one with them, one app process): %s' % (objects, json.dumps(self.timeline)))
         time.sleep(8)  # the picture draws his records in
         first = self.measure('change')
         time.sleep(self.later)
-        second = self.measure('change-later')
-        return {'objects': counts['objects'], 'kept_after_s': read_s, 'column_after_s': drawn_s, 'column': memories,
-                'measured': first, 'measured_later': second, 'later_s': self.later}
+        second = self.measure('change-later', self.long)
+        return {'objects': objects, 'seen_without_s': before[-1]['t'], 'seen_with_s': after[0]['t'],
+                'timeline': self.timeline, 'measured': first, 'measured_later': second, 'later_s': self.later}
 
     def relaunch(self):
         relaunch(self.vm)
@@ -173,7 +251,7 @@ class Walk(standard.Walk):
         time.sleep(8)
         first = self.measure('relaunch')
         time.sleep(self.later)
-        second = self.measure('relaunch-later')
+        second = self.measure('relaunch-later', self.long)
         return {'memories_column_at_launch': column, 'measured': first, 'measured_later': second}
 
 
@@ -186,14 +264,24 @@ def main():
     p.add_argument('--span', type=float, default=3, help='seconds per sample')
     p.add_argument('--samples', type=int, default=3, help='samples per measurement')
     p.add_argument('--later', type=float, default=30, help='seconds between a measurement and its repeat')
+    p.add_argument('--long', type=int, default=15, help='samples in the repeat after the change and after the relaunch, '
+                   'long enough to tell a slowdown that stays from one that passes')
     p.add_argument('--steps', default=','.join(STEPS))
     a = p.parse_args()
     steps = [s for s in a.steps.split(',') if s]
     unknown = [s for s in steps if s not in STEPS]
     if unknown:
         p.error('unknown step(s): ' + ', '.join(unknown))
+    state = Path(os.environ.get('TESTVM_ROOT', str(Path.home() / '.richos-testvm'))) / 'run' / a.vm
+    try:
+        audio = (state / 'audio').read_text().strip()
+    except OSError:
+        audio = 'unknown'
+    if audio != 'off':
+        p.error('the guest was booted with its sound device (%s), which plays on this Mac\'s speakers: '
+                'run it with run-walk.py --no-audio' % audio)
     a.out.mkdir(parents=True, exist_ok=True)
-    walk = Walk(a.vm, a.out, a.alder, a.brightwater, a.span, a.samples, a.later)
+    walk = Walk(a.vm, a.out, a.alder, a.brightwater, a.span, a.samples, a.later, a.long)
     walk.relaunched = time.monotonic()
     report = {'vm': a.vm, 'span_s': a.span, 'samples': a.samples, 'steps': {}}
     failed = False
