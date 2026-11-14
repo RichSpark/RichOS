@@ -20,9 +20,11 @@ WHAT IT DOES, in the guest, never on the host's screen (CEO ruling 65):
           relaunched, as the launch after a first hire is: the example in full draining to its
           outline (frames handover-1 to handover-3, two seconds apart) and the sentence "That was
           the example…" with his first lights (frame home-first-hire)
-  grow    for each size: the repository is written again at that size, the app is relaunched, and
-          once the left column says how many memories that is and the stage's moment has played
-          out (20 s), the frame home-<size> is taken. Each records what the screen says: the
+  grow    for each size: the repository is written again at that size and the app is relaunched
+          until the left column says that many memories (a changed repository is read behind the
+          kept picture; the home screen asks again while it is up and draws the new lights
+          arriving); once the stage's moment has played out (20 s), the frame home-<size> is
+          taken. Each records what the screen says: the
           brand line, the distance line, and the stage's name where one was crossed.
 
 A repository is drawn as a few more objects than it has documents (its README, its decision
@@ -59,6 +61,37 @@ class Walk(standard.Walk):
         super().__init__(vm, out, 0, 0)
         self.sizes = sizes
         self.repos = self.home + '/Companies'
+
+    def window(self):
+        """Is any of the app's window on the screen: the home screen's door or the app's rail?"""
+        return self.node('--id', 'home-enter') or self.node('--id', 'nr-home')
+
+    def launch(self, what):
+        """Relaunch and bring the home screen up. A relaunch can leave the app running with no
+        window (seen at the sizes on 2026-11-14, three launches in a row once); the app is then
+        opened again as a click on its Dock icon opens it, which gives it its window on the
+        conversation, and the home screen is reached from there. Records which way it came up."""
+        how = []
+        for attempt in (1, 2, 3):
+            relaunch(self.vm)
+            try:
+                self.until(self.window, 40, 'no window')
+                how.append('window')
+            except StepFailed:
+                app = guest(self.vm, 'find ' + shlex.quote(self.payload) + ' -maxdepth 1 -name "*.app" -type d -print').splitlines()[0]
+                guest(self.vm, 'open ' + shlex.quote(app))
+                how.append('reopened')
+                try:
+                    self.until(self.window, 40, 'no window')
+                except StepFailed:
+                    continue
+            try:
+                self.to_home()
+                return how
+            except StepFailed:
+                continue
+        log = guest(self.vm, 'tail -n 15 ' + shlex.quote(self.payload + '/app.log') + ' 2>/dev/null || true')
+        raise StepFailed('the home screen did not come up ' + what + ' in three launches (' + ', '.join(how) + '). app.log: ' + log[-900:])
 
     def said(self, element_id):
         """What the element with this id reads, or None."""
@@ -100,8 +133,7 @@ class Walk(standard.Walk):
         registry = {'version': 1, 'entities': [{'id': 'alder', 'display_name': 'Alder Works', 'roots': [self.repos + '/alder']}]}
         guest(self.vm, 'mkdir -p ' + shlex.quote(data) + ' && printf %s ' + shlex.quote(json.dumps(registry)) + ' > ' + shlex.quote(data + '/entities.json'))
         team = guest(self.vm, 'sh ' + shlex.quote(self.payload + '/seed-team.sh') + ' ' + shlex.quote(data) + ' 3')
-        relaunch(self.vm)
-        self.until(lambda: self.node('--id', 'home-enter'), 60, 'the home screen did not come up after the hire')
+        launches = self.launch('after the hire')
         frames = []
         for n in (1, 2, 3):
             frames.append(self.shot('handover-%d' % n))
@@ -109,7 +141,7 @@ class Walk(standard.Walk):
         sentence = self.until(lambda: self.text('That was the example.'), 60, 'the handover\'s sentence never came')
         time.sleep(6)  # the rest of his lights arrive behind the first
         frame = self.shot('home-first-hire')
-        return {'repository': made, 'teammates': team.strip(), 'handover_frames': frames, 'sentence': self.rect(sentence),
+        return {'repository': made, 'launches': launches, 'teammates': team.strip(), 'handover_frames': frames, 'sentence': self.rect(sentence),
                 'frame': frame, 'frame_reads_sentence': self.reads(frame, 'That was the example'),
                 'legend_example': bool(self.text('Example, not yours')), 'memories': self.memories(), 'distance': self.said('home-distance')}
 
@@ -117,16 +149,30 @@ class Walk(standard.Walk):
         rows = []
         for size in self.sizes:
             made = self.write_repository(size)
-            relaunch(self.vm)
-            self.until(lambda: self.node('--id', 'home-enter'), 60, 'the home screen did not come up at %d' % size)
+            # A repository that changed is read again BEHIND the kept picture and drawn at the next
+            # launch (`home_repos.rs`, `field_kept_or_built`), so the first launch after the write
+            # still shows the old count and starts the read; a later one draws the new picture.
+            # The home screen also asks again while it is up (`home.js`, `refreshRecords`: 3 s, 8 s
+            # and 20 s after an answer with nothing new), so a launch whose first answer is the
+            # kept picture still draws the new lights arriving on that visit.
             want = self.documents(size)
-            count = self.until(lambda: (self.memories() or 0) >= want and self.memories(), 300, 'the left column never reached %d memories' % want)
+            launches, count = [], None
+            for _ in range(4):
+                launches += self.launch('at %d' % size)
+                try:
+                    count = self.until(lambda: (self.memories() or 0) >= want and self.memories(), 50, 'not yet')
+                    break
+                except StepFailed:
+                    continue
+            if count is None:
+                log = guest(self.vm, 'tail -n 25 ' + shlex.quote(self.payload + '/app.log') + ' 2>/dev/null || true')
+                raise StepFailed('the left column never reached %d memories (%s). app.log: %s' % (want, ', '.join(launches), log[-900:]))
             # the sentence of the stage just crossed, while it is up (its first words: the same in every build)
             crossed = next((words for words in ('The lights are joined', 'The first territory is in its own color',
                                                 'The river is running', 'Every territory is in color') if self.text(words)), None)
             time.sleep(20)  # a crossing and its look ahead have played out; the lights have arrived
             frame = self.shot('home-%d' % size)
-            rows.append({'asked': size, 'repository': made, 'memories': self.memories() or count, 'distance': self.said('home-distance'),
+            rows.append({'asked': size, 'launches': launches, 'repository': made, 'memories': self.memories() or count, 'distance': self.said('home-distance'),
                          'crossed': crossed, 'caption': self.said('home-caption'), 'watch_it_grow': bool(self.node('--id', 'home-grow')),
                          'see_it_finished': bool(self.node('--id', 'home-finished')), 'frame': frame})
         return rows
