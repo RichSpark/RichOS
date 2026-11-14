@@ -124,6 +124,7 @@ class Walk(standard.Walk):
         row = json.loads(r.stdout.strip().splitlines()[-1])
         row['fps'] = [s['fps'] for s in row['samples']]  # the picture's own frames (frame-rate.swift)
         row['window_fps'] = [s['window_fps'] for s in row['samples']]
+        row['any_change_fps'] = [round(s['any_change'] / s['seconds'], 1) for s in row['samples'] if 'any_change' in s]
         frames = sum(s['complete'] for s in row['samples'])
         if cpu_before is not None and cpu_after is not None and frames:
             row['webcontent_cpu_ms_per_frame'] = round((cpu_after - cpu_before) * 1000 / frames, 1)
@@ -138,8 +139,9 @@ class Walk(standard.Walk):
         except (BlockingIOError, OSError) as exc:
             row['host_cpu_busy_percent'] = 'unavailable: ' + str(exc)
         row['frame'] = self.shot('fps-' + name)
-        print('  %s: picture %s frames a second (window %s); %s ms of web content CPU a frame; host CPU %s%% busy (other guests: %s)' % (
-            name, ', '.join('%g' % f for f in row['fps']), ', '.join('%g' % f for f in row['window_fps']), row.get('webcontent_cpu_ms_per_frame', '?'),
+        print('  %s: picture %s frames a second (window %s; region changed at all %s); %s ms of web content CPU a frame; host CPU %s%% busy (other guests: %s)' % (
+            name, ', '.join('%g' % f for f in row['fps']), ', '.join('%g' % f for f in row['window_fps']),
+            ', '.join('%g' % f for f in row['any_change_fps']), row.get('webcontent_cpu_ms_per_frame', '?'),
             row['host_cpu_busy_percent'], ', '.join(row['other_guests']) or 'none'), flush=True)
         return row
 
@@ -203,10 +205,19 @@ class Walk(standard.Walk):
         result = {'repositories': made.splitlines(), 'teammates': team.strip()}
         relaunch(self.vm)
         self.relaunched = time.monotonic()
-        self.to_home()
-        self.timeline = [self.reading()]
+        # looked at from the first second: an app that opens on the home screen shows the example before
+        # his records arrive, and a look that waits for anything else first can miss that moment
+        self.timeline = []
+        while time.monotonic() - self.relaunched < 20:
+            self.timeline.append(self.reading())
+            if self.timeline[-1]['memories']:
+                break
+            time.sleep(1)
+        if not self.timeline[-1]['home']:
+            self.to_home()
+            self.timeline.append(self.reading())
         result['written_after_s'] = round(self.relaunched - began, 1)
-        result['first_reading'] = self.timeline[0]
+        result['readings'] = list(self.timeline)
         return result
 
     def during(self):

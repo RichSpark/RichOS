@@ -11,7 +11,10 @@
 // MIN_CHANGED_SHARE of its pixels changed by DELTA or more is a picture frame. The picture changes
 // every frame it draws (the nodes twinkle, the packets travel, the idle tilt drifts), while the
 // bokeh's drift (10 points in 38 s, a thousandth of a capture pixel a frame) and the dot change none
-// of those pixels. Both rates are printed: the window's and the picture's. The display's refresh
+// of those pixels. Both rates are printed: the window's and the picture's, with, per sample, how many
+// complete frames changed the region at all (`any_change`) and a histogram of how many region pixels
+// each complete frame moved by DELTA or more (0, 1-7, 8-63, 64-511, 512-4095, 4096+), so the line
+// between a picture frame and an unrelated one can be read off the data. The display's refresh
 // (60 in the guest, provision-guest.sh pins it) caps both. Nothing is injected into the app.
 //
 // Usage: frame-rate <pid> <seconds per sample> <samples> [<pause seconds between samples>
@@ -56,7 +59,9 @@ final class Counter: NSObject, SCStreamOutput {
     let lock = NSLock()
     var complete = 0
     var picture = 0
+    var faint = 0
     var idle = 0
+    var moved: [Int] = [0, 0, 0, 0, 0, 0]   // complete frames by pixels moved: 0, 1-7, 8-63, 64-511, 512-4095, 4096+
     var previous: [UInt8] = []
     func stream(_ stream: SCStream, didOutputSampleBuffer buffer: CMSampleBuffer, of type: SCStreamOutputType) {
         guard type == .screen,
@@ -64,17 +69,22 @@ final class Counter: NSObject, SCStreamOutput {
               let raw = attachments.first?[.status] as? Int, let status = SCFrameStatus(rawValue: raw) else { return }
         if status == .idle { lock.lock(); idle += 1; lock.unlock(); return }
         guard status == .complete, let image = CMSampleBufferGetImageBuffer(buffer) else { return }
-        let changed = regionChanged(image)
+        let (strong, weak) = regionChanged(image)
         lock.lock()
         complete += 1
-        if changed { picture += 1 }
+        if Double(strong) >= MIN_CHANGED_SHARE * Double(regionPixels) { picture += 1 }
+        if weak > 0 { faint += 1 }
+        let bucket = strong == 0 ? 0 : strong < 8 ? 1 : strong < 64 ? 2 : strong < 512 ? 3 : strong < 4096 ? 4 : 5
+        moved[bucket] += 1
         lock.unlock()
     }
-    /// Whether the picture's region differs from the last complete frame's (32-bit BGRA pixels).
-    func regionChanged(_ image: CVPixelBuffer) -> Bool {
+    var regionPixels = 1
+    /// How many of the region's pixels moved since the last complete frame: by DELTA or more, and by
+    /// at least one level (32-bit BGRA pixels).
+    func regionChanged(_ image: CVPixelBuffer) -> (Int, Int) {
         CVPixelBufferLockBaseAddress(image, .readOnly)
         defer { CVPixelBufferUnlockBaseAddress(image, .readOnly) }
-        guard let base = CVPixelBufferGetBaseAddress(image) else { return false }
+        guard let base = CVPixelBufferGetBaseAddress(image) else { return (0, 0) }
         let w = CVPixelBufferGetWidth(image), h = CVPixelBufferGetHeight(image), stride = CVPixelBufferGetBytesPerRow(image)
         let x0 = Int(Double(w) * region[0]), y0 = Int(Double(h) * region[1])
         let x1 = min(w, x0 + Int(Double(w) * region[2])), y1 = min(h, y0 + Int(Double(h) * region[3]))
@@ -90,20 +100,22 @@ final class Counter: NSObject, SCStreamOutput {
             }
         }
         defer { previous = now }
-        guard previous.count == now.count else { return false }
-        var moved = 0
+        regionPixels = max(1, now.count / 3)
+        guard previous.count == now.count else { return (0, 0) }
+        var strong = 0, weak = 0
         var j = 0
         while j < now.count {
-            if abs(Int(now[j]) - Int(previous[j])) >= DELTA || abs(Int(now[j + 1]) - Int(previous[j + 1])) >= DELTA
-                || abs(Int(now[j + 2]) - Int(previous[j + 2])) >= DELTA { moved += 1 }
+            let d = max(abs(Int(now[j]) - Int(previous[j])), abs(Int(now[j + 1]) - Int(previous[j + 1])), abs(Int(now[j + 2]) - Int(previous[j + 2])))
+            if d >= DELTA { strong += 1 }
+            if d >= 1 { weak += 1 }
             j += 3
         }
-        return Double(moved) >= MIN_CHANGED_SHARE * Double(now.count / 3)
+        return (strong, weak)
     }
-    func take() -> (Int, Int, Int) {
+    func take() -> (Int, Int, Int, Int, [Int]) {
         lock.lock(); defer { lock.unlock() }
-        let out = (complete, picture, idle)
-        complete = 0; picture = 0; idle = 0
+        let out = (complete, picture, faint, idle, moved)
+        complete = 0; picture = 0; faint = 0; idle = 0; moved = [0, 0, 0, 0, 0, 0]
         return out
     }
 }
@@ -141,9 +153,10 @@ Task {
         _ = counter.take()
         let began = Date()
         try? await Task.sleep(nanoseconds: UInt64(span * 1e9))
-        let (complete, picture, idle) = counter.take()
+        let (complete, picture, faint, idle, moved) = counter.take()
         let seconds = Date().timeIntervalSince(began)
-        rows.append(["complete": complete, "picture": picture, "idle": idle, "seconds": (seconds * 1000).rounded() / 1000,
+        rows.append(["complete": complete, "picture": picture, "any_change": faint, "moved_histogram": moved, "idle": idle,
+                     "seconds": (seconds * 1000).rounded() / 1000,
                      "window_fps": (Double(complete) / seconds * 10).rounded() / 10,
                      "fps": (Double(picture) / seconds * 10).rounded() / 10])
     }
