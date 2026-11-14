@@ -31,8 +31,9 @@ THE STEPS, in order:
               then one with it, the same app process throughout, or the step fails (a count already
               on the screen at the first look is not a change); measured after it, then
               again --later seconds after that, --long samples in a row
-  relaunch    the app relaunched: the same records drawn at launch, the count never changes in the
-              visit; the control for `change` (measured the same way)
+  relaunch    the app relaunched: the same records drawn at launch, his count on the home screen at the
+              first look and still at the end, one app process, or the step fails; the control for
+              `change` (measured the same way)
 
 Evidence: --out/report.json (every sample, every step's result) and a frame of the screen per
 measurement. Exit 0 when every step ran; the rates are the result, not a pass mark. It quits nothing
@@ -248,6 +249,7 @@ class Walk(standard.Walk):
         if not before or not after or len(pids) != 1 or before[0]['t'] > after[0]['t']:
             raise StepFailed('no change of the count was seen in this visit (a look at the home screen without '
                              '%d memories, then one with them, one app process): %s' % (objects, json.dumps(self.timeline)))
+        self.objects = objects
         time.sleep(8)  # the picture draws his records in
         first = self.measure('change')
         time.sleep(self.later)
@@ -256,16 +258,32 @@ class Walk(standard.Walk):
                 'timeline': self.timeline, 'measured': first, 'measured_later': second, 'later_s': self.later}
 
     def relaunch(self):
+        """The control: the same records drawn at launch. His count must be on the home screen at the first
+        look that finds the home screen, the same app process to the end, or this is not a visit without
+        a change and the step fails."""
+        objects = self.objects
         relaunch(self.vm)
-        time.sleep(8)
-        self.to_home()
-        column = self.memories()
+        self.relaunched = time.monotonic()
+        readings = []
+        while time.monotonic() - self.relaunched < 90:
+            readings.append(self.reading())
+            if readings[-1]['home']:
+                break
+            time.sleep(1)
+        if not readings[-1]['home']:
+            self.to_home()
+            readings.append(self.reading())
+        if readings[-1]['memories'] != objects:
+            raise StepFailed('not a visit without a change: the first look at the home screen did not show %d memories: %s'
+                             % (objects, json.dumps(readings)))
         time.sleep(8)
         first = self.measure('relaunch')
         time.sleep(self.later)
         second = self.measure('relaunch-later', self.long)
-        return {'memories_column_at_launch': column, 'measured': first, 'measured_later': second}
-
+        readings.append(self.reading())
+        if readings[-1]['memories'] != objects or len({r['pid'] for r in readings}) != 1:
+            raise StepFailed('the count or the app process changed during the control visit: ' + json.dumps(readings))
+        return {'objects': objects, 'readings': readings, 'measured': first, 'measured_later': second}
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
