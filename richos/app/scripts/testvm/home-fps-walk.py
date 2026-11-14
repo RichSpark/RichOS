@@ -109,7 +109,7 @@ class Walk(standard.Walk):
     def measure(self, name, samples=None):
         """`samples` (default --samples) spans of --span seconds of the app's window, and one frame of the
         screen. Beside the rates: the host's total CPU while they were taken, and the web content
-        processes' CPU per presented frame. A frame function left unoptimized costs more CPU per frame
+        processes' CPU per picture frame. A frame function left unoptimized costs more CPU per frame
         whatever the host is doing; a busy host leaves it as it was and costs frames instead."""
         samples = samples or self.samples
         time.sleep(SETTLE)
@@ -125,9 +125,11 @@ class Walk(standard.Walk):
         row['fps'] = [s['fps'] for s in row['samples']]  # the picture's own frames (frame-rate.swift)
         row['window_fps'] = [s['window_fps'] for s in row['samples']]
         row['any_change_fps'] = [round(s['any_change'] / s['seconds'], 1) for s in row['samples'] if 'any_change' in s]
-        frames = sum(s['complete'] for s in row['samples'])
+        # the CPU is divided by the PICTURE's frames: the window's other frames (its CSS animations) are
+        # composited without the page drawing anything, so they are not the picture's cost
+        frames = sum(s['picture'] for s in row['samples'])
         if cpu_before is not None and cpu_after is not None and frames:
-            row['webcontent_cpu_ms_per_frame'] = round((cpu_after - cpu_before) * 1000 / frames, 1)
+            row['webcontent_cpu_ms_per_picture_frame'] = round((cpu_after - cpu_before) * 1000 / frames, 1)
         row['at'] = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
         # the guests share this Mac's GPU and cores: a second guest running beside this one, and how
         # busy the Mac was, are part of the conditions a rate was measured under
@@ -139,28 +141,27 @@ class Walk(standard.Walk):
         except (BlockingIOError, OSError) as exc:
             row['host_cpu_busy_percent'] = 'unavailable: ' + str(exc)
         row['frame'] = self.shot('fps-' + name)
-        print('  %s: picture %s frames a second (window %s; region changed at all %s); %s ms of web content CPU a frame; host CPU %s%% busy (other guests: %s)' % (
+        print('  %s: picture %s frames a second (window %s; region changed at all %s); %s ms of web content CPU a picture frame; host CPU %s%% busy (other guests: %s)' % (
             name, ', '.join('%g' % f for f in row['fps']), ', '.join('%g' % f for f in row['window_fps']),
-            ', '.join('%g' % f for f in row['any_change_fps']), row.get('webcontent_cpu_ms_per_frame', '?'),
+            ', '.join('%g' % f for f in row['any_change_fps']), row.get('webcontent_cpu_ms_per_picture_frame', '?'),
             row['host_cpu_busy_percent'], ', '.join(row['other_guests']) or 'none'), flush=True)
         return row
 
     def memories(self):
-        """The number in the left column's "N memories" (the style sheet draws it in capitals, and the
-        accessibility tree gives it as drawn), or None while the column names no memories."""
-        node = self.node('--id', 'home-brand-line')
-        text = ((node or {}).get('value') or (node or {}).get('title') or '')
-        if 'memories' not in text.lower():
-            found = self.text(' memories')
-            text = (found or {}).get('value') or (found or {}).get('title') or ''
+        """The number in the left column's "N MEMORIES" (the style sheet draws it in capitals and the
+        accessibility tree gives it as drawn), or None while the column names no memories. One look:
+        under load one accessibility call takes seconds, and a slow look misses the moment."""
+        found = self.node('--value', 'MEMORIES', '--contains') or self.node('--title', 'MEMORIES', '--contains')
+        text = (found or {}).get('value') or (found or {}).get('title') or ''
         m = re.search(r'([0-9][0-9,]*)\s+memories', text, re.I)
         return int(m.group(1).replace(',', '')) if m else None
 
     def reading(self):
         """One look at the home screen: when, the app's pid, whether the home screen is up, and the
         column's count of memories."""
-        return {'t': round(time.monotonic() - self.relaunched, 1), 'pid': self.pid(),
-                'home': bool(self.node('--id', 'home-enter')), 'memories': self.memories()}
+        home = bool(self.node('--id', 'home-enter'))
+        return {'t': round(time.monotonic() - self.relaunched, 1), 'pid': self.pid(), 'home': home,
+                'memories': self.memories() if home else None}
 
     def to_home(self):
         """home-standard-walk.py's, with the sheets declined on every try: a first-run sheet that comes
@@ -208,7 +209,7 @@ class Walk(standard.Walk):
         # looked at from the first second: an app that opens on the home screen shows the example before
         # his records arrive, and a look that waits for anything else first can miss that moment
         self.timeline = []
-        while time.monotonic() - self.relaunched < 20:
+        while time.monotonic() - self.relaunched < 90:
             self.timeline.append(self.reading())
             if self.timeline[-1]['memories']:
                 break
