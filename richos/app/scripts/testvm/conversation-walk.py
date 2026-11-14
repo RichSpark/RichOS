@@ -67,6 +67,7 @@ WHAT IT DOES, in the guest, never on the host's screen (CEO ruling 65):
                ledger.jsonl       the app's conversation-ledger.jsonl
                companies/         the guest's ~/myrichos/companies (the company notes)
                app.log, final.png, turns.json (one record per step, with Rich's reply text)
+               step-<n>.png       with --shot-each-step: the screen after each step's reply
                actors.json        with --action: native-transcript.py --actors --json over
                                   native-projects (who performed each action, and the verdicts)
 
@@ -371,6 +372,17 @@ class ConversationWalk(adopt_walk.Walk):
         record.update(n=n, kind=step['kind'], text=step['text'], sent_at_ms=sent)
         return record
 
+    def step_shot(self, n):
+        """--shot-each-step: the screen once step n's reply has finished, as step-<n>.png. What sits
+        on screen between turns (a card under Rich's note, the line above the message box) is
+        never in the ledger. Best effort: a failed frame is named in the record, never a failed step."""
+        name = 'step-%d.png' % n
+        try:
+            self.shot(name)
+            return name
+        except (StepFailed, subprocess.TimeoutExpired) as exc:
+            return 'failed: %s' % str(exc)[-200:]
+
     def pull(self):
         """Everything the run left, pulled even when a step failed. Each is best effort and says
         so on stderr, so a missing piece is never mistaken for an empty one."""
@@ -511,6 +523,8 @@ def main():
                    'up during the walk is kept (accessibility-requests.json, a screenshot each)')
     p.add_argument('--deny-accessibility', action='store_true', help='with --no-accessibility: answer each '
                    'request Deny, as a user who refuses it')
+    p.add_argument('--shot-each-step', action='store_true', help='a frame of the screen after each step\'s reply, '
+                   'step-<n>.png in --out (what shows between turns is not in the ledger)')
     p.add_argument('--check', nargs='+', type=Path, metavar='FILE', help='check conversation files without a guest')
     p.add_argument('--action', action='append', default=[], help='NAME=TOOL[~TEXT]: an action whose actor is reported '
                    '(native-transcript.py --actors)')
@@ -556,6 +570,8 @@ def main():
                 ok = False
                 break
             record['failure'] = verdict(step, record)
+            if a.shot_each_step:
+                record['shot'] = walk.step_shot(n)
             walk.records.append(record)
             print(line(n, step, record) + ('' if not record['failure'] else ' - FAILED: ' + record['failure']), flush=True)
             if record['failure']:
