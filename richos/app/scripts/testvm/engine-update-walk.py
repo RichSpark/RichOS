@@ -29,8 +29,8 @@ STEPS, in the guest, never on the host's screen (CEO ruling §65):
              From launch until the install is done and 15 s past it, the setup sheet's title
              ("There's a bit of setting up to do first.") is never on screen, read by the
              accessibility tree every second and by OCR on a frame every few seconds. 15 s after
-             going in, while the install still runs, a message is sent with real keys and must
-             be answered (TurnCompleted with Rich's text) BEFORE the install ends: he never waits
+             going in, while the install still runs, a message is sent with real keys and ONE
+             Return, never sent again, and must be answered (TurnCompleted with Rich's text) BEFORE the install ends: he never waits
              on it. After the install the window must ask voice again (a new `[richos] voice:`
              line within 15 s), so Talk to Rich works with no relaunch. The stamp then carries
              --next-sha256 (photographed)
@@ -124,26 +124,20 @@ class EngineUpdateWalk(new_user.NewUserWalk):
         return {'app': app[0], 'pid': self.next_pid, 'log': self.next_log}
 
     def send(self, words, name, seconds):
-        """new-user-walk.py's send (real keys, Return), and the Send button pressed once when the
-        Return was not taken: walk5 (2026-11-14) left the words in the composer for 250 s after
-        the Return, with the app answering nothing because nothing had been sent."""
+        """new-user-walk.py's send: typed with real keys and sent with ONE Return, as a person
+        does, and never sent again. Walk5, walk7, walk10 and walk11 (2026-11-14) put the message
+        on screen and sent nothing: the window held it until its launch had landed, and the
+        landing waited on a voice calibration that ran past the install (ui/main.js init). A Send
+        press or a second typing here only hid that; a Return the app does not take now fails
+        the walk, with the screen and the log at 10 s as its evidence."""
         self.type_into(words, '--role', 'AXTextArea', '--title', 'Message to Rich')
         new_user.command([HERE / 'ax.sh', self.vm, '--key', new_user.RETURN_KEY])
         end = time.monotonic() + 10
         while time.monotonic() < end and not self.received(words):
             time.sleep(1)
         if not self.received(words):
-            self.ax('click', '--id', 'send', '--first')
-            end = time.monotonic() + 10
-            while time.monotonic() < end and not self.received(words):
-                time.sleep(1)
-        if not self.received(words):
-            # Still not taken: the screen and the app's log as they are now, then the words typed
-            # and sent once more, as a person would.
             self.frame(name + '-not-taken')
             (self.out / (name + '-not-taken.log')).write_text(self.read_log(self.next_log))
-            self.type_into(words, '--role', 'AXTextArea', '--title', 'Message to Rich')
-            new_user.command([HERE / 'ax.sh', self.vm, '--key', new_user.RETURN_KEY])
         end = time.monotonic() + seconds
         outcome = None
         while time.monotonic() < end:
@@ -207,7 +201,8 @@ class EngineUpdateWalk(new_user.NewUserWalk):
                 outcome, _ = self.send(REPLY_WORDS, 'reply-during-update', self.a.turn_within)
                 after = self.read_log(self.next_log)
                 reply = {'sent_at_s': round(sent - began, 1), 'seconds': round(time.monotonic() - sent, 1),
-                         'outcome': outcome, 'install_done_when_answered': DONE in after}
+                         'received': self.received(REPLY_WORDS), 'outcome': outcome,
+                         'install_done_when_answered': DONE in after}
                 (self.out / 'next.log').write_text(after)
                 if not outcome or outcome.get('state') != 'completed' or not outcome.get('rich_wrote'):
                     raise StepFailed('the message sent during the install was not answered: ' + json.dumps(reply))
