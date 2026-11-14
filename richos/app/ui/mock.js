@@ -1714,6 +1714,7 @@
 
   // WHO IS WORKING AT THIS MOMENT (`main.rs::home_working`, CEO 2026-11-02). None by default;
   // `preset.homeWorking` (`[{ name, role }]`) is teammates running before the home screen asks.
+  const homeStageNotices = [];
   let homeWorking = Array.isArray(preset.homeWorking) ? preset.homeWorking.map((t) => ({ ...t })) : [];
 
   function homeFieldAnswer() {
@@ -1733,6 +1734,17 @@
     // rather than fixtured because a 2,000-node fixture in a shipped file would be a second
     // baked dataset, and this repository already has one too many opinions about that.
     const groups = Math.max(1, Math.round(objects / 8));
+    // DATES AND LANES, for the stages (round 75, `home-growth.js`). `days: D` spreads the groups
+    // over D days in the order they were made, the newest `daysAgo` days back (default 0), and says
+    // so in `meta.dates` as `home_field.rs` does; without it every object's day is 0 and the
+    // dataset carries no dates, as before. `lanes: K` deals the groups to K companies, the first
+    // getting every second group, so one is the largest; the default is the one lane.
+    const days = Number(homeField.days || 0);
+    const lanes = Math.max(1, Number(homeField.lanes || 1));
+    const laneIds = ["northwind", "alder", "brightwater", "calloway"].slice(0, lanes);
+    const laneLabels = { northwind: "Northwind Traders", alder: "Alder Supply", brightwater: "Brightwater", calloway: "Calloway" };
+    const laneOf = (g) => (lanes === 1 || g % 2 === 0 ? laneIds[0] : laneIds[1 + (((g - 1) / 2) | 0) % (lanes - 1)]);
+    const dayOf = (g) => (days ? Math.min(days - 1, Math.floor((g * days) / groups)) : 0);
     const nodes = [];
     const links = [];
     const sources = [];
@@ -1745,13 +1757,13 @@
           id: "obj-" + String(nodes.length + 1).padStart(5, "0"),
           type: i === 0 ? "decision" : "memory",
           loroKind: i === 0 ? "decision" : "passage",
-          domain: "northwind",
+          domain: laneOf(g),
           cluster: gid,
           degree: i === 0 ? n - 1 : 1,
           significance: 0.8,
           activity: 0,
           recency: 0,
-          createdDay: 0,
+          createdDay: dayOf(g),
         });
       }
       if (n <= 0) continue;
@@ -1761,7 +1773,7 @@
       sources.push({
         id: "src-" + String(g + 1).padStart(5, "0"),
         kind: "document",
-        domain: "northwind",
+        domain: laneOf(g),
         day: 40000,
         ingestedDay: 40000,
         primaryNodeId: nodes[first].id,
@@ -1780,7 +1792,8 @@
           corpusLayout: "corpus",
           fingerprint: "sha256:0000000000000000000000000000000000000000000000000000000000000000",
           horizonDays: 40000,
-          counts: { records: records, objects: nodes.length, links: links.length, sources: sources.length, domains: 1 },
+          ...(days ? { dates: { today: days - 1 + Number(homeField.daysAgo || 0), undated: Number(homeField.undated || 0) } } : {}),
+          counts: { records: records, objects: nodes.length, links: links.length, sources: sources.length, domains: lanes },
           query: { topics: ["northwind"], company: "all" },
           absent: [],
         },
@@ -1797,7 +1810,12 @@
           commitmentsTracked: 0,
         },
         specialists: [],
-        domains: [{ id: "northwind", label: "Northwind Traders", nodeCount: nodes.length, clusters: sources.map((s, i) => ({ id: "grp-" + String(i + 1).padStart(5, "0"), label: "Group " + (i + 1), nodeCount: s.derivedCount })) }],
+        domains: laneIds.map((id) => ({
+          id: id,
+          label: laneLabels[id],
+          nodeCount: nodes.filter((n) => n.domain === id).length,
+          clusters: sources.map((s, i) => ({ id: "grp-" + String(i + 1).padStart(5, "0"), label: "Group " + (i + 1), nodeCount: s.derivedCount, lane: s.domain })).filter((c) => c.lane === id).map((c) => ({ id: c.id, label: c.label, nodeCount: c.nodeCount })),
+        })),
         nodes: nodes,
         links: links,
         tasks: [],
@@ -3770,6 +3788,10 @@
           return homeFieldAnswer();
         case "home_team":
           return homeTeam.map((t) => ({ ...t }));
+        case "home_stage_reached":
+          // What the home screen told Rich's side (`main.rs::home_stage_reached`), kept for the suites.
+          homeStageNotices.push({ stage: args.stage, name: args.name, count: args.count });
+          return null;
         case "home_working":
           return homeWorking.map((t) => ({ ...t }));
         // WHAT DID NOT LOAD OUT OF THE LEDGER (`Ledger::history_health`). The default is a
@@ -5862,6 +5884,10 @@
     /// Teammates start or finish: what `home_working` answers from now on (CEO 2026-11-02).
     ///
     ///     __RICHOS_MOCK__.homeWorkingSet([{ name: "Will", role: "Marketing Director" }]);
+    /// The stages the home screen reported reached, in order (`home_stage_reached`).
+    get homeStageNotices() {
+      return homeStageNotices.map((n) => ({ ...n }));
+    },
     homeWorkingSet(working) {
       homeWorking = Array.isArray(working) ? working.map((t) => ({ ...t })) : [];
       return homeWorking.map((t) => ({ ...t }));

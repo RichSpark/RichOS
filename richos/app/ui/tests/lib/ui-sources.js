@@ -118,6 +118,7 @@ const ROLES = {
   "git-name.js": { role: "ui", why: "your name in Git: the card asked once in the conversation, the Settings row and its sheet" },
   "oxford-comma.js": { role: "ui", why: "the Oxford comma filter (CEO 2026-10-19): what Claude writes, drawn with the comma before and/or/nor deleted while the setting is off; it has no user-visible strings" },
   "home.js": { role: "ui", why: "the home screen the CEO lands on" },
+  "home-growth.js": { role: "ui", why: "the home screen's stages (round 75): the distance line and its card, See it finished, Watch it grow, the handover, a stage crossed, the lights arriving when he comes home and the weekly line" },
   "updates.js": { role: "ui", why: "the update surface — CEO ruling §26" },
   "quota.js": { role: "ui", why: "Claude Code quota and weekly reset controls in Technical Settings" },
   "resources.js": { role: "ui", why: "the live Mac resources square on the navigation rail (round 47, moved there by round 58), its card and its Ink/Readout view menu" },
