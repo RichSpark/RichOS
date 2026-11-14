@@ -128,6 +128,8 @@ module.exports = [
   {"s": "possible duplicate matches withheld.", "c": "FRAGMENT", "why": "Completes the numerical disclosure about ambiguous provider copies."},
   {"s": "undated matches are included in All history only.", "c": "FRAGMENT", "why": "Completes the numerical disclosure for matches with no recoverable submission date."},
   {"s": "· Last 30 days:", "c": "FRAGMENT", "why": "Separates the all-history subtotal from the rolling numeric result."},
+  {"s": "page took over {v} ms", "c": "NOT-RENDERED", "why": "A fragment of the launch timing line (launch_timing.rs), written to the app's log once per launch for the nightly launch-speed gate. It never reaches the window."},
+  {"s": "page took over: not reported (the ceiling ended the wait)", "c": "NOT-RENDERED", "why": "A fragment of the launch timing line (launch_timing.rs), written to the app's log when the page never reported its splash. It never reaches the window."},
   {"s": "Card history reader stopped unexpectedly", "c": "NOT-RENDERED", "why": "Startup reader failure is printed to the boot log. The display receives the numeric unavailable state, not this internal error sentence."},
   {"s": "Counts matching words locally in your submitted text, voice transcripts and typed card answers, including quoted text. Counting continues while hidden.", "c": "INFORMATIONAL", "why": "Explains the local counting scope and always-on behavior beside the display-only switch. It requests no action."},
   {"s": "Partial history: some message text could not be attributed (", "c": "FRAGMENT", "why": "The maintained subtotal qualifier is completed by the number of unknown inputs. Missing historical authorship cannot be repaired by a display switch."},
