@@ -188,8 +188,20 @@ fn release_files_before_exec(command: &mut std::process::Command) {
 /// Not implemented off macOS, where `probe` and `exchange` refuse and nothing is published.
 #[cfg(not(target_os = "macos"))]
 fn release_files_before_exec(_command: &mut std::process::Command) {}
+/// Lower-case hex, as `format!("{:x}", …)` wrote it under `sha2` 0.10. `sha2` 0.11's digest is a
+/// `hybrid-array`, which implements no hex formatting, and every receipt an installed version
+/// wrote has to keep verifying, so the spelling is pinned here and by a test on a fixed input
+/// (`digests_are_spelled_as_sha2_0_10_spelled_them`).
+///
+/// WHY 0.11 (launch-speed audit 2026-11-14, piece 1; Sage's review finding 7): it uses the
+/// processor's SHA instructions on Apple chips with run-time detection, no feature switch and no
+/// C compiler. Measured on the release Mac, the same 321 MB bundle read and hashed the way
+/// `tree_hash` does: 0.65 to 1.20 s on 0.10.9, 0.18 to 0.19 s on 0.11.1.
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
 fn digest(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    hex(&Sha256::digest(bytes))
 }
 #[cfg(test)]
 thread_local! { static SYNC_TRACE: std::cell::RefCell<Vec<PathBuf>> = const { std::cell::RefCell::new(Vec::new()) }; }
@@ -995,7 +1007,7 @@ fn tree_hash(root: &Path) -> io::Result<String> {
     }
     let mut h = Sha256::new();
     visit(root, root, &mut h)?;
-    Ok(format!("{:x}", h.finalize()))
+    Ok(hex(&h.finalize()))
 }
 fn matches(app: &Path, p: &Published) -> io::Result<bool> {
     match metadata(app) {
@@ -1010,6 +1022,270 @@ fn matches(app: &Path, p: &Published) -> io::Result<bool> {
     }
     Ok(tree_hash(app)? == p.tree_sha256)
 }
+
+// =========================================================================================
+// THE LAUNCH-TIME QUICK CHECK OF THE PUBLISHED BUNDLE
+// =========================================================================================
+//
+// Launch-speed audit 2026-11-14, piece 1, with Sage's review of it. Every launch of an updated
+// user ran `tree_hash` over all of `~/Applications/RichOS.app` (321 MB, 1,891 files) before
+// anything appeared, and an update hand-over ran it twice. What that full read catches is
+// damage and half-finished changes, not a hostile writer: the receipt it compares with sits
+// beside the bundle, owned by the same user (this file's header says so).
+//
+// So a launch now compares what the filesystem says about every entry, without reading a byte,
+// with what it said right after the last full check passed. A stamp is the entry's size, both
+// of its times (the status-changed time cannot be set from userland, so a rewrite that put the
+// modified time back is still seen), its file number and device, its mode, owner and link count
+// (finding 1). Any difference, and a saved file that is missing, unreadable or for another
+// release, runs today's full check, and a pass saves fresh stamps. A difference never refuses by
+// itself (finding 2). What a stamp cannot see -- damage to a file's bytes that changes nothing
+// else about the file -- is what `recheck_preferred` looks for, late and in the background
+// (finding 6).
+
+/// The saved stamps, in a file of their own beside `published.json` and NEVER in it: `Published`
+/// is `deny_unknown_fields` in every copy already installed, and an old copy that met a field it
+/// does not know would quietly run itself instead of the update (finding 3). Old copies ignore
+/// this name: `collect_retired` looks only at names of 64 hex characters.
+const STAMPS: &str = "launch-stamps.json";
+const STAMPS_SCHEMA: u32 = 1;
+/// A real bundle's file is about 270 KB (2,255 entries at about 120 bytes); this bounds a read.
+const STAMPS_MAX_BYTES: u64 = 16 * 1024 * 1024;
+
+/// One bundle entry as `lstat` reports it, relative path first. A tuple so the saved file stays
+/// small: path, kind (`d`, `f` or `l`), mode, owner, links, size, modified s/ns, status-changed
+/// s/ns, file number, device.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+struct EntryStamp(
+    String,
+    char,
+    u32,
+    u32,
+    u64,
+    u64,
+    i64,
+    i64,
+    i64,
+    i64,
+    u64,
+    u64,
+);
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BundleStamps {
+    schema: u32,
+    /// The release these stamps belong to, so a rollback or a later update never reads stamps
+    /// meant for another one.
+    archive_sha256: String,
+    tree_sha256: String,
+    entries: Vec<EntryStamp>,
+}
+
+/// Every entry under `app`, in `tree_hash`'s order, without reading a byte. The bundle's own top
+/// folder is left out: its status-changed time moves after an activation while nothing in it
+/// changes (Sage's review, finding 2, measured on the release Mac). `None` when a name is not
+/// UTF-8, which only means no quick check is possible for this bundle.
+fn stamp_tree(app: &Path) -> io::Result<Option<Vec<EntryStamp>>> {
+    fn visit(root: &Path, path: &Path, out: &mut Vec<EntryStamp>) -> io::Result<bool> {
+        let mut entries = fs::read_dir(path)?.collect::<Result<Vec<_>, _>>()?;
+        entries.sort_by_key(|e| e.file_name());
+        for entry in entries {
+            let p = entry.path();
+            let m = metadata(&p)?;
+            let Some(rel) = p.strip_prefix(root).ok().and_then(Path::to_str) else {
+                return Ok(false);
+            };
+            let kind = if m.is_dir() {
+                'd'
+            } else if m.is_file() {
+                'f'
+            } else if m.file_type().is_symlink() {
+                'l'
+            } else {
+                return Err(refuse("unsupported bundle object"));
+            };
+            out.push(EntryStamp(
+                rel.to_owned(),
+                kind,
+                m.mode(),
+                m.uid(),
+                m.nlink(),
+                m.len(),
+                m.mtime(),
+                m.mtime_nsec(),
+                m.ctime(),
+                m.ctime_nsec(),
+                m.ino(),
+                m.dev(),
+            ));
+            if kind == 'd' && !visit(root, &p, out)? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+    let mut out = Vec::new();
+    Ok(visit(app, app, &mut out)?.then_some(out))
+}
+
+/// What `tree_hash` enforces besides the bytes, answered from the stamps alone (finding 1):
+/// owned by this user, no group or other write bit on anything but a link, and one hard link per
+/// file. An access-list grant or a re-pointed link changes the status-changed time, so it never
+/// reaches this test: the stamps differ and the full check runs.
+fn stamps_admissible(entries: &[EntryStamp]) -> bool {
+    let me = uid();
+    entries
+        .iter()
+        .all(|e| e.3 == me && (e.1 == 'l' || e.2 & 0o022 == 0) && (e.1 != 'f' || e.4 == 1))
+}
+
+fn read_stamps(root: &Path) -> io::Result<BundleStamps> {
+    let mut f = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(root.join(STAMPS))?;
+    let m = f.metadata()?;
+    if !m.is_file()
+        || m.uid() != uid()
+        || m.nlink() != 1
+        || m.mode() & 0o077 != 0
+        || m.len() > STAMPS_MAX_BYTES
+    {
+        return Err(refuse("invalid saved launch stamps"));
+    }
+    let mut bytes = Vec::new();
+    f.read_to_end(&mut bytes)?;
+    serde_json::from_slice(&bytes).map_err(|e| refuse(e.to_string()))
+}
+
+fn remove_stamps(root: &Path) -> io::Result<()> {
+    match fs::remove_file(root.join(STAMPS)) {
+        Err(e) if e.kind() != io::ErrorKind::NotFound => Err(e),
+        _ => Ok(()),
+    }
+}
+
+/// Which check a launch ran on the published bundle, why, and what it cost: the launch line says
+/// it (audit piece 4, Sage's finding 4 on it), so a launch that fell back to the full check can
+/// be read afterwards instead of timed by hand.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BundleCheck {
+    pub quick: bool,
+    /// Why the full check ran; `None` for a quick check.
+    pub why_full: Option<&'static str>,
+    pub millis: u64,
+}
+impl BundleCheck {
+    /// `quick, 6 ms` or `full (a stamp differed), 190 ms`.
+    pub fn describe(&self) -> String {
+        match self.why_full {
+            None => format!("quick, {} ms", self.millis),
+            Some(why) => format!("full ({why}), {} ms", self.millis),
+        }
+    }
+}
+thread_local! {
+    /// Set by `with_preferred` on the thread that called it, so two threads (or two tests)
+    /// checking at once never read each other's answer.
+    static LAST_CHECK: std::cell::RefCell<Option<BundleCheck>> = const { std::cell::RefCell::new(None) };
+}
+/// The check the last `with_preferred` on this thread ran, if it reached one.
+pub fn last_bundle_check() -> Option<BundleCheck> {
+    LAST_CHECK.with(|last| last.borrow().clone())
+}
+
+/// The quick check, or the reason it cannot answer. `Ok(())` means every entry carries exactly
+/// the stamp it had when the full check last passed for THIS release.
+fn quick_matches(root: &Path, app: &Path, p: &Published) -> Result<(), &'static str> {
+    let saved = match read_stamps(root) {
+        Ok(saved) => saved,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Err("no saved stamps"),
+        Err(_) => return Err("saved stamps unreadable"),
+    };
+    if saved.schema != STAMPS_SCHEMA
+        || saved.archive_sha256 != p.archive_sha256
+        || saved.tree_sha256 != p.tree_sha256
+    {
+        return Err("saved stamps are for another release");
+    }
+    match stamp_tree(app) {
+        Ok(Some(now)) if now == saved.entries && stamps_admissible(&now) => Ok(()),
+        Ok(Some(_)) => Err("a stamp differed"),
+        _ => Err("the bundle could not be stamped"),
+    }
+}
+
+/// The full check, with stamps taken before AND after it: they are saved only when the two
+/// agree, so a write that lands during the read is never recorded as checked.
+fn full_match_and_stamp(root: &Path, app: &Path, p: &Published) -> io::Result<bool> {
+    let before = stamp_tree(app).ok().flatten();
+    if !matches(app, p)? {
+        return Ok(false);
+    }
+    if let Some(before) = before.filter(|b| stamps_admissible(b)) {
+        if stamp_tree(app).ok().flatten().as_ref() == Some(&before) {
+            let stamps = BundleStamps {
+                schema: STAMPS_SCHEMA,
+                archive_sha256: p.archive_sha256.clone(),
+                tree_sha256: p.tree_sha256.clone(),
+                entries: before,
+            };
+            // A stamps file that cannot be written costs the next launch a full check, never a
+            // failed start, so the error is dropped on purpose.
+            write_document(root, STAMPS, &stamps).ok();
+        }
+    }
+    Ok(true)
+}
+
+/// What the late background check of the published bundle found.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BundleRecheck {
+    /// Nothing is published, or the running executable is not the published copy (only the
+    /// copy that is running is held still by this process's session lease).
+    NotPreferred,
+    /// Every byte read and the tree's digest is the receipt's.
+    Confirmed,
+    /// The bytes no longer match. The saved stamps are gone, so the next launch runs the full
+    /// check in the foreground and refuses exactly as before this change.
+    Mismatch,
+}
+
+/// THE FULL CHECK, LATE AND IN THE BACKGROUND (Sage's finding 6). A quick check that passed has
+/// not read the bytes; this does, from the copy that is running, with a defined ending: on a
+/// mismatch it drops the saved stamps and says so, and the NEXT launch runs the full check in
+/// the foreground and refuses as it always has. It never stops the running app.
+///
+/// It must not hold the update record's lock for the length of the read, or a second launch and
+/// the updater's own staging would wait behind it: the lock is taken only to read the receipt
+/// and, on a mismatch, to drop the stamps. The session lease the running app holds is what keeps
+/// another launch from exchanging the bundle mid-read (`update_startup.rs`), which is why only
+/// the running copy is checked. Never call it from the old copy that hands over: `exec` ends its
+/// threads.
+pub fn recheck_preferred(home: &Path, running: &Path) -> io::Result<BundleRecheck> {
+    let root = root(home)?;
+    let p = {
+        let _lock = Lock::acquire(&root)?;
+        match read_json(&root.join("published.json")) {
+            Ok(p) => p,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(BundleRecheck::NotPreferred),
+            Err(e) => return Err(e),
+        }
+    };
+    let preferred = p.executable(home);
+    if running.canonicalize()? != preferred.canonicalize()? {
+        return Ok(BundleRecheck::NotPreferred);
+    }
+    let app = home.join("Applications").join(APP);
+    if matches(&app, &p).unwrap_or(false) {
+        return Ok(BundleRecheck::Confirmed);
+    }
+    let _lock = Lock::acquire(&root)?;
+    remove_stamps(&root)?;
+    Ok(BundleRecheck::Mismatch)
+}
+
 #[cfg(target_os = "macos")]
 fn exchange(a: &Path, b: &Path) -> io::Result<()> {
     use std::{ffi::CString, os::unix::ffi::OsStrExt};
@@ -1946,8 +2222,9 @@ fn install_verified(home: &Path, bytes: &[u8], version: &str) -> io::Result<Publ
     activate_prepared(&mut lease, "0.0.0")?;
     Ok(p)
 }
-/// Validate the recorded preferred user app, including its complete tree, before a
-/// startup redirect or relaunch. Returns None when no user update has been installed.
+/// Validate the recorded preferred user app before a startup redirect or relaunch: its
+/// identity, and its complete tree by the quick check or, when that has any doubt, the full one
+/// (see THE LAUNCH-TIME QUICK CHECK). Returns None when no user update has been installed.
 /// This read does not complete a prepared update or replace a running app.
 pub fn preferred(home: &Path) -> io::Result<Option<Published>> {
     with_preferred(home, |p| Ok(p.clone()))
@@ -1958,6 +2235,7 @@ pub fn with_preferred<T>(
     home: &Path,
     action: impl FnOnce(&Published) -> io::Result<T>,
 ) -> io::Result<Option<T>> {
+    LAST_CHECK.with(|last| *last.borrow_mut() = None);
     let root = root(home)?;
     let _lock = Lock::acquire_startup(&root)?;
     let p = match read_json(&root.join("published.json")) {
@@ -1966,11 +2244,25 @@ pub fn with_preferred<T>(
         Err(e) => return Err(e),
     };
     let app = home.join("Applications").join(APP);
-    if bundle_identity(&app, Some(&p.version))? != p.executable_name || !matches(&app, &p)? {
+    let started = std::time::Instant::now();
+    if bundle_identity(&app, Some(&p.version))? != p.executable_name {
         return Err(refuse(
             "preferred application does not match publication receipt",
         ));
     }
+    // The quick check first; any doubt runs the full check, which refuses as it always did.
+    let why_full = quick_matches(&root, &app, &p).err();
+    if why_full.is_some() && !full_match_and_stamp(&root, &app, &p)? {
+        return Err(refuse(
+            "preferred application does not match publication receipt",
+        ));
+    }
+    let check = BundleCheck {
+        quick: why_full.is_none(),
+        why_full,
+        millis: started.elapsed().as_millis() as u64,
+    };
+    LAST_CHECK.with(|last| *last.borrow_mut() = Some(check));
     Ok(Some(action(&p)?))
 }
 
@@ -3654,5 +3946,153 @@ released lease, so the next session refused to activate over a session that had 
         assert!(record.check(&tx, &payload).is_err());
         let legacy = serde_json::json!({"transaction_dev":metadata(&tx).unwrap().dev(),"transaction_ino":metadata(&tx).unwrap().ino(),"payload_dev":metadata(&payload).unwrap().dev(),"payload_ino":metadata(&payload).unwrap().ino()});
         assert!(serde_json::from_value::<Retirement>(legacy).is_err());
+    }
+
+    // ---- launch-speed audit 2026-11-14, piece 1: the quick check and the faster hash ----
+
+    /// Receipts written by every installed version must keep verifying, so the 0.11 hash is
+    /// spelled exactly as 0.10's `format!("{:x}", …)` spelled it. The tree digest below was
+    /// derived independently (Python's hashlib over the same framing `tree_hash` feeds:
+    /// name length, name, mode, kind, size, bytes), not copied from this code's output.
+    #[test]
+    fn digests_are_spelled_as_sha2_0_10_spelled_them() {
+        assert_eq!(
+            digest(b"abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        let t = home();
+        let root = canonical(&t);
+        ensure_dir(&root.join("a"), 0o755).unwrap();
+        for (name, body, mode) in [("a/x", &b"hello"[..], 0o644), ("b", &b"world!"[..], 0o755)] {
+            fs::write(root.join(name), body).unwrap();
+            fs::set_permissions(root.join(name), fs::Permissions::from_mode(mode)).unwrap();
+        }
+        assert_eq!(
+            tree_hash(&root).unwrap(),
+            "6e96a12b30eb6d6763477bfec950ae61bc1d0a701a9421d529986c7a80ca58fa"
+        );
+    }
+
+    fn updater_root(h: &Path) -> PathBuf {
+        h.join("Applications/.richos-updater")
+    }
+
+    /// The second launch of an updated copy reads no bytes: it compares stamps. The first one,
+    /// with nothing saved, runs the full check and saves them. `published.json` keeps exactly
+    /// its four fields, because an installed old copy refuses any fifth (Sage's finding 3).
+    #[test]
+    fn a_launch_after_a_passed_full_check_takes_the_quick_check() {
+        let t = home();
+        let h = canonical(&t);
+        let p = install_verified(&h, &archive("2.0.0", |_| {}), "2.0.0").unwrap();
+        assert_eq!(preferred(&h).unwrap().unwrap().tree_sha256, p.tree_sha256);
+        let first = last_bundle_check().unwrap();
+        assert!(!first.quick);
+        assert_eq!(first.why_full, Some("no saved stamps"));
+        assert_eq!(preferred(&h).unwrap().unwrap().tree_sha256, p.tree_sha256);
+        let second = last_bundle_check().unwrap();
+        assert!(second.quick, "the second launch read the bundle again: {second:?}");
+        assert!(second.describe().starts_with("quick, "));
+        let raw: serde_json::Value =
+            serde_json::from_slice(&fs::read(updater_root(&h).join("published.json")).unwrap())
+                .unwrap();
+        let mut keys: Vec<_> = raw.as_object().unwrap().keys().cloned().collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            ["archive_sha256", "executable_name", "tree_sha256", "version"]
+        );
+    }
+
+    /// A rewrite that keeps the size and puts the modified time back still moves the
+    /// status-changed time, so the quick check passes it to the full check, which refuses as
+    /// it always did (Sage's finding 1).
+    #[test]
+    fn a_rewrite_that_puts_the_date_back_meets_the_full_check() {
+        let t = home();
+        let h = canonical(&t);
+        let p = install_verified(&h, &archive("2.0.0", |_| {}), "2.0.0").unwrap();
+        preferred(&h).unwrap().unwrap();
+        let file = fixture_version(p.executable(&h));
+        let modified = fs::metadata(&file).unwrap().modified().unwrap();
+        fs::write(&file, b"9.9.9").unwrap();
+        OpenOptions::new()
+            .write(true)
+            .open(&file)
+            .unwrap()
+            .set_modified(modified)
+            .unwrap();
+        assert_eq!(fs::metadata(&file).unwrap().modified().unwrap(), modified);
+        assert!(preferred(&h).is_err(), "changed bytes were accepted");
+        // And a write bit granted to the group is refused the same way.
+        fs::write(&file, b"2.0.0").unwrap();
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o664)).unwrap();
+        assert!(preferred(&h).is_err(), "a group write bit was accepted");
+    }
+
+    /// A saved stamps file that is broken, for another release or missing never refuses a
+    /// start: it runs today's full check, and a pass writes good stamps again (finding 2).
+    #[test]
+    fn broken_foreign_or_missing_stamps_run_the_full_check_and_never_refuse() {
+        let t = home();
+        let h = canonical(&t);
+        install_verified(&h, &archive("2.0.0", |_| {}), "2.0.0").unwrap();
+        preferred(&h).unwrap().unwrap();
+        let stamps = updater_root(&h).join(STAMPS);
+        let good = fs::read(&stamps).unwrap();
+
+        fs::write(&stamps, b"not json at all").unwrap();
+        preferred(&h).unwrap().unwrap();
+        assert_eq!(last_bundle_check().unwrap().why_full, Some("saved stamps unreadable"));
+        preferred(&h).unwrap().unwrap();
+        assert!(last_bundle_check().unwrap().quick, "a pass did not save good stamps");
+
+        let mut foreign: serde_json::Value = serde_json::from_slice(&good).unwrap();
+        foreign["tree_sha256"] = serde_json::Value::String("0".repeat(64));
+        fs::write(&stamps, serde_json::to_vec(&foreign).unwrap()).unwrap();
+        preferred(&h).unwrap().unwrap();
+        assert_eq!(
+            last_bundle_check().unwrap().why_full,
+            Some("saved stamps are for another release")
+        );
+
+        fs::remove_file(&stamps).unwrap();
+        preferred(&h).unwrap().unwrap();
+        assert_eq!(last_bundle_check().unwrap().why_full, Some("no saved stamps"));
+    }
+
+    /// What a stamp cannot see -- bytes changed with nothing else about the file -- is found by
+    /// the late full check, which drops the stamps so the NEXT launch refuses in the foreground
+    /// (finding 6). Such damage cannot be made from userland (the status-changed time moves), so
+    /// the saved stamps are brought up to the damaged file, which is exactly what it looks like.
+    #[test]
+    fn the_late_full_check_drops_the_stamps_and_the_next_launch_refuses() {
+        let t = home();
+        let h = canonical(&t);
+        let p = install_verified(&h, &archive("2.0.0", |_| {}), "2.0.0").unwrap();
+        preferred(&h).unwrap().unwrap();
+        let exe = p.executable(&h);
+        assert_eq!(recheck_preferred(&h, &exe).unwrap(), BundleRecheck::Confirmed);
+        assert_eq!(
+            recheck_preferred(&h, Path::new("/bin/ls")).unwrap(),
+            BundleRecheck::NotPreferred,
+            "a copy that is not running is held still by nothing and is never read"
+        );
+
+        fs::write(fixture_version(exe.clone()), b"9.9.9").unwrap();
+        let app = h.join("Applications").join(APP);
+        let stamps = BundleStamps {
+            schema: STAMPS_SCHEMA,
+            archive_sha256: p.archive_sha256.clone(),
+            tree_sha256: p.tree_sha256.clone(),
+            entries: stamp_tree(&app).unwrap().unwrap(),
+        };
+        write_document(&updater_root(&h), STAMPS, &stamps).unwrap();
+        preferred(&h).unwrap().unwrap();
+        assert!(last_bundle_check().unwrap().quick, "the stamps should have matched");
+
+        assert_eq!(recheck_preferred(&h, &exe).unwrap(), BundleRecheck::Mismatch);
+        assert!(!updater_root(&h).join(STAMPS).exists(), "the stamps were not dropped");
+        assert!(preferred(&h).is_err(), "the next launch did not refuse");
     }
 }
