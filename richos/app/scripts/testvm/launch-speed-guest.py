@@ -244,7 +244,13 @@ def main():
     for n, step in enumerate(plan, 1):
         if step.get('before'):
             subprocess.run(['/bin/sh', '-c', step['before']], capture_output=True, timeout=600)
-        results.append(launch(n, step, a.out))
+        try:
+            results.append(launch(n, step, a.out))
+        except Exception as error:  # one launch that could not run is a missing result, never every result
+            results.append({'n': n, 'label': step['label'], 'app': step['app'], 't_open': None, 'pid': None,
+                            'quit': 'not launched: %s' % error, 'all_gone': True, 'events': [], 'lines': [],
+                            'expect_splash': step.get('expect_splash'), 'quit_lines': []})
+            print('launch %d %s could not run: %s' % (n, step['label'], error), flush=True)
         if step.get('after'):
             subprocess.run(['/bin/sh', '-c', step['after']], capture_output=True, timeout=600)
         time.sleep(step.get('pause', 2.0))

@@ -521,15 +521,22 @@ def main():
     # then the launch. Start 1 to start 2 does this today (#1, then #2), and start 2 to start 3 again
     # (#2, then #1): each of --runs fresh homes is started three times, the last two judged.
     if not a.only_checks:
-        switch_plan = []
-        for i in range(a.runs):
-            home = payload + '/home-switch-%02d' % i
-            g('rm -rf ' + shlex.quote(home) + ' && cp -cRp ' + shlex.quote(fixture) + ' ' + shlex.quote(home)
-              + ' && rm -f ' + shlex.quote(home + '/' + launches_json))
-            switch_plan += [richos('rule-switch:prep', home, fresh),
-                            richos('rule-switch:judged', home, fresh, expect_splash=expect(2)),
-                            richos('rule-switch:judged', home, fresh, expect_splash=expect(3))]
-        said.append(run_plan('switch', switch_plan))
+        try:
+            switch_plan = []
+            for i in range(a.runs):
+                home = payload + '/home-switch-%02d' % i
+                g('rm -rf ' + shlex.quote(home) + ' && cp -cRp ' + shlex.quote(fixture) + ' ' + shlex.quote(home)
+                  + ' && rm -f ' + shlex.quote(home + '/' + launches_json))
+                # Each home is removed after its third start: a first start fills a home with what the
+                # app sets up (measured 2026-11-14: twenty kept homes filled the guest's disk, "No space
+                # left on device", and the walk ended without a verdict).
+                switch_plan += [richos('rule-switch:prep', home, fresh),
+                                richos('rule-switch:judged', home, fresh, expect_splash=expect(2)),
+                                richos('rule-switch:judged', home, fresh, expect_splash=expect(3),
+                                       after='rm -rf ' + shlex.quote(home))]
+            said.append(run_plan('switch', switch_plan))
+        except Exception as error:  # a route that cannot be set up is missing evidence, never the end of the walk
+            facts.setdefault("route_errors", {})['rule-switch'] = str(error)[:500]
     if a.checks or a.only_checks:
         ledger = homes['checks'] + '/Library/Application Support/com.richos.app/conversation-ledger.jsonl'
         said.append(run_plan('checks', [
@@ -543,61 +550,64 @@ def main():
             richos('checks:quit-during-startup', homes['checks'], fresh, purge=True, quit_at=0.0),
             richos('checks:after', homes['checks'], fresh)]))
     if a.previous_app and not a.only_checks:
-        user_app = homes['updated'] + '/Applications/RichOS.app'
-        g('mkdir -p ' + shlex.quote(homes['updated'] + '/Applications') + ' && ditto ' + shlex.quote(staged[0])
-          + ' ' + shlex.quote(user_app), 600)
-        # The receipt an update leaves, derived as the updater derives it, inside the guest.
-        tree = g('python3 -c ' + shlex.quote(
-            'import importlib.util as u; s=u.spec_from_file_location("w", %r); m=u.module_from_spec(s); '
-            's.loader.exec_module(m); print(m.receipt_tree_sha256(%r))' % (work + '/launch-speed-walk.py', user_app)),
-            900)
-        receipt = json.dumps({'version': version, 'archive_sha256': hashlib.sha256(a.candidate.name.encode()).hexdigest(),
-                              'tree_sha256': tree, 'executable_name': 'richos-tauri'})
-        root = homes['updated'] + '/Applications/.richos-updater'
-        g('mkdir -p ' + shlex.quote(root) + ' && chmod 700 ' + shlex.quote(root) + ' && umask 077 && printf %s '
-          + shlex.quote(receipt) + ' > ' + shlex.quote(root + '/published.json'))
-        install(a.previous_app)
-        owns = [INSTALLED, user_app]
-        said.append(run_plan('updated', [richos('updated:first', homes['updated'], owns, frame_at=1.0)]
-                             + [richos('updated-from-applications:judged', homes['updated'], owns,
-                                       expect_splash=expect(prior + 2 + i)) for i in range(a.runs)]))
-        # THE PLAN'S ROUTE 3: the first launch after an update put in place at quit. The older copy is
-        # in this home's ~/Applications as an update leaves it, the candidate is prepared as its
-        # update, the older copy is started and quit (its helper puts the candidate in place as it
-        # closes), and the candidate's launch is judged. Each round puts the older copy and the
-        # prepared candidate back (APFS clones, so no copy is paid for).
-        after = payload + '/home-after-update'
-        g('rm -rf ' + shlex.quote(after) + ' && cp -cRp ' + shlex.quote(fixture) + ' ' + shlex.quote(after)
-          + ' && mkdir -p ' + shlex.quote(after + '/Applications'))
-        tree_of = lambda app: g('python3 -c ' + shlex.quote(
-            'import importlib.util as u; s=u.spec_from_file_location("w", %r); m=u.module_from_spec(s); '
-            's.loader.exec_module(m); print(m.receipt_tree_sha256(%r))' % (work + '/launch-speed-walk.py', app)), 900)
-        older_receipt = json.dumps({'version': facts['older'], 'archive_sha256': hashlib.sha256(b'older').hexdigest(),
-                                    'tree_sha256': tree_of(a.previous_app), 'executable_name': 'richos-tauri'})
-        new_sha = hashlib.sha256(a.candidate.name.encode() + b'-after-update').hexdigest()
-        prepared = json.dumps({'version': version, 'archive_sha256': new_sha, 'tree_sha256': tree_of(staged[0]),
-                               'executable_name': 'richos-tauri'})
-        home_app = after + '/Applications/RichOS.app'
-        root = after + '/Applications/.richos-updater'
-        q = shlex.quote
-        older_in_place = ('rm -rf %s %s && cp -cR %s %s && mkdir -m 700 %s && (umask 077 && printf %%s %s > %s/published.json)'
-                          % (q(home_app), q(root), q(a.previous_app), q(home_app), q(root), q(older_receipt), q(root)))
-        stage_update = ('mkdir -m 700 %s/%s && cp -cR %s %s/%s/incoming.app && (umask 077 && printf %%s %s > %s/prepared.json)'
-                        % (q(root), new_sha, q(staged[0]), q(root), new_sha, q(prepared), q(root)))
-        # The helper the quit left behind has put the update in place: no prepared receipt, and the
-        # candidate's version in ~/Applications (30 s at most; the judged launch says what it found).
-        helper_done = ('for i in $(seq 300); do [ ! -e %s/prepared.json ] && /usr/libexec/PlistBuddy -c '
-                       '"Print :CFBundleShortVersionString" %s/Contents/Info.plist | grep -qx %s && break; sleep 0.1; done'
-                       % (q(root), q(home_app), q(version)))
+        try:
+            user_app = homes['updated'] + '/Applications/RichOS.app'
+            g('mkdir -p ' + shlex.quote(homes['updated'] + '/Applications') + ' && ditto ' + shlex.quote(staged[0])
+              + ' ' + shlex.quote(user_app), 600)
+            # The receipt an update leaves, derived as the updater derives it, inside the guest.
+            tree = g('python3 -c ' + shlex.quote(
+                'import importlib.util as u; s=u.spec_from_file_location("w", %r); m=u.module_from_spec(s); '
+                's.loader.exec_module(m); print(m.receipt_tree_sha256(%r))' % (work + '/launch-speed-walk.py', user_app)),
+                900)
+            receipt = json.dumps({'version': version, 'archive_sha256': hashlib.sha256(a.candidate.name.encode()).hexdigest(),
+                                  'tree_sha256': tree, 'executable_name': 'richos-tauri'})
+            root = homes['updated'] + '/Applications/.richos-updater'
+            g('mkdir -p ' + shlex.quote(root) + ' && chmod 700 ' + shlex.quote(root) + ' && umask 077 && printf %s '
+              + shlex.quote(receipt) + ' > ' + shlex.quote(root + '/published.json'))
+            install(a.previous_app)
+            owns = [INSTALLED, user_app]
+            said.append(run_plan('updated', [richos('updated:first', homes['updated'], owns, frame_at=1.0)]
+                                 + [richos('updated-from-applications:judged', homes['updated'], owns,
+                                           expect_splash=expect(prior + 2 + i)) for i in range(a.runs)]))
+            # THE PLAN'S ROUTE 3: the first launch after an update put in place at quit. The older copy is
+            # in this home's ~/Applications as an update leaves it, the candidate is prepared as its
+            # update, the older copy is started and quit (its helper puts the candidate in place as it
+            # closes), and the candidate's launch is judged. Each round puts the older copy and the
+            # prepared candidate back (APFS clones, so no copy is paid for).
+            after = payload + '/home-after-update'
+            g('rm -rf ' + shlex.quote(after) + ' && cp -cRp ' + shlex.quote(fixture) + ' ' + shlex.quote(after)
+              + ' && mkdir -p ' + shlex.quote(after + '/Applications'))
+            tree_of = lambda app: g('python3 -c ' + shlex.quote(
+                'import importlib.util as u; s=u.spec_from_file_location("w", %r); m=u.module_from_spec(s); '
+                's.loader.exec_module(m); print(m.receipt_tree_sha256(%r))' % (work + '/launch-speed-walk.py', app)), 900)
+            older_receipt = json.dumps({'version': facts['older'], 'archive_sha256': hashlib.sha256(b'older').hexdigest(),
+                                        'tree_sha256': tree_of(a.previous_app), 'executable_name': 'richos-tauri'})
+            new_sha = hashlib.sha256(a.candidate.name.encode() + b'-after-update').hexdigest()
+            prepared = json.dumps({'version': version, 'archive_sha256': new_sha, 'tree_sha256': tree_of(staged[0]),
+                                   'executable_name': 'richos-tauri'})
+            home_app = after + '/Applications/RichOS.app'
+            root = after + '/Applications/.richos-updater'
+            q = shlex.quote
+            older_in_place = ('rm -rf %s %s && cp -cR %s %s && mkdir -m 700 %s && (umask 077 && printf %%s %s > %s/published.json)'
+                              % (q(home_app), q(root), q(a.previous_app), q(home_app), q(root), q(older_receipt), q(root)))
+            stage_update = ('mkdir -m 700 %s/%s && cp -cR %s %s/%s/incoming.app && (umask 077 && printf %%s %s > %s/prepared.json)'
+                            % (q(root), new_sha, q(staged[0]), q(root), new_sha, q(prepared), q(root)))
+            # The helper the quit left behind has put the update in place: no prepared receipt, and the
+            # candidate's version in ~/Applications (30 s at most; the judged launch says what it found).
+            helper_done = ('for i in $(seq 300); do [ ! -e %s/prepared.json ] && /usr/libexec/PlistBuddy -c '
+                           '"Print :CFBundleShortVersionString" %s/Contents/Info.plist | grep -qx %s && break; sleep 0.1; done'
+                           % (q(root), q(home_app), q(version)))
 
-        def at_home(label, **extra):
-            return dict(richos(label, after, [home_app], **extra), app=home_app)
-        # Two starts of the older copy first, so the saved pick and its opening exist.
-        plan3 = [at_home('after-update:warm', before=older_in_place), at_home('after-update:warm')]
-        for i in range(a.runs):
-            plan3 += [at_home('after-update:prep', before=older_in_place + ' && ' + stage_update),
-                      at_home('after-update:judged', before=helper_done, expect_splash=expect(prior + 4 + 2 * i))]
-        said.append(run_plan('after', plan3))
+            def at_home(label, **extra):
+                return dict(richos(label, after, [home_app], **extra), app=home_app)
+            # Two starts of the older copy first, so the saved pick and its opening exist.
+            plan3 = [at_home('after-update:warm', before=older_in_place), at_home('after-update:warm')]
+            for i in range(a.runs):
+                plan3 += [at_home('after-update:prep', before=older_in_place + ' && ' + stage_update),
+                          at_home('after-update:judged', before=helper_done, expect_splash=expect(prior + 4 + 2 * i))]
+            said.append(run_plan('after', plan3))
+        except Exception as error:  # a route that cannot be set up is missing evidence, never the end of the walk
+            facts.setdefault("route_errors", {})['updated and after-update'] = str(error)[:500]
 
     # The guest's own system log for the walk, on the guest's clock.
     predicate = 'process == "richos-tauri" OR process == "Dictionary"'
