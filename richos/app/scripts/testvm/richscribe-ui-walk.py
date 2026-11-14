@@ -364,7 +364,7 @@ def main():
             if not result or not result.get('w'):
                 raise StepFailed('settings has no count line after switching on: ' + repr(geometry))
             seen_settings = self.reads_in('swear-1-on.png', result, 'SwearMeter', 'swear-1-result-crop')
-            seen_home = self.reads_in('swear-1-on.png', geometry['home-swearmeter'], 'SwearMeter', 'swear-1-home-crop')
+            seen_home = self.reads_in('swear-1-on.png', geometry['home-swearmeter'], 'swear', 'swear-1-home-crop')  # round 73: "N swear words", "in the last 30 days"
             retention_seen = bool(geometry['retention-hint']) and self.reads_in('swear-1-on.png', geometry['retention-hint'], 'Using', 'swear-1-retention-crop')
             problems = []
             if not seen_home:
