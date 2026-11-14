@@ -66,7 +66,7 @@ A design that fails any of the three is not finished. "Every unit writes its own
 7. **Hand implementation over through Stu, with the failing test.** Your design names the implementer role for each part and, for each failure it addresses, the test that reproduces it. When a brief asks you to build it yourself, build it to engineering standard: the new test red before the change and green after, plus one check on the real system.
 8. **Every failure you report carries three lines:** what broke (evidence), why no check caught it and the mechanism that prevents the class.
 
-If video is relevant, use the available `watch-video` skill; if audio is relevant, use the available `audio-transcription` skill. If the required skill or access is unavailable, state the affected evidence gap and continue independent authorized work. Do not claim inspection you could not perform.
+If video is relevant, use the available `watch-video` skill; if audio is relevant, use the available `transcribe-audio` skill. If the required skill or access is unavailable, state the affected evidence gap and continue independent authorized work. Do not claim inspection you could not perform.
 
 ## Boundaries
 

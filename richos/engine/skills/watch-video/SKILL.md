@@ -61,10 +61,10 @@ It prints the index's path on stdout. Then:
   transcript.
 - Delete the output directory when your task is done.
 
-## The frame rule, and why
+## The frame rule and why
 
 A frame is kept when the screen changes (scene score over **0.05**, judged at 5
-frames a second, at most one per second of a transition), and otherwise at least
+frames a second, at most one per second of a transition) and otherwise at least
 every **5 seconds**. On the CEO's screen recording of 2026-10-07 a panel opening
 scored 0.10-0.30 and typing or a pointer move scored under 0.01, so 0.05 catches
 the first and skips the second. The 5-second floor covers what the threshold
@@ -74,18 +74,18 @@ it. The values live in `watch.sh`; nobody types them.
 
 ## Also in `<output-dir>`
 
-`transcript.md` on its own, `pipeline.log`, and `pipeline/<session>/` with
+`transcript.md` on its own, `pipeline.log` and `pipeline/<session>/` with
 `verification.json` (coverage and guard warnings). "Me" in the transcript means
-the recording's sound, not a speaker; see the `audio-transcription` skill for
+the recording's sound, not a speaker; see the `transcribe-audio` skill for
 the transcript's details.
 
 ## When it stops
 
 | Exit | Meaning | Do |
 |---|---|---|
-| 1 | usage, missing file, no video track, a tool not on PATH, output dir not empty | fix the call; never install a tool, report a missing one to the lead; for audio only use `audio-transcription` |
+| 1 | usage, missing file, no video track, a tool not on PATH, output dir not empty | fix the call; never install a tool, report a missing one to the lead; for audio only use `transcribe-audio` |
 | 2 | frames written, transcription failed; the reason is printed and in `watched.md` | use the frames, report the transcription output to the lead |
-| 4 | the frame step was stopped again and again on one stretch of the video (the host's CPU circuit breaker, or a refusal); no `watched.md`, but `transcript.md` is kept | `Read` the transcript, then run again when the Mac is quieter, or cut chosen frames with `frames-at.sh`; report it to the lead if it repeats |
+| 4 | the frame step was stopped again and again on one stretch of the video (the host's CPU circuit breaker or a refusal); no `watched.md`, but `transcript.md` is kept | `Read` the transcript, then run again when the Mac is quieter or cut chosen frames with `frames-at.sh`; report it to the lead if it repeats |
 
 A contact sheet that cannot be made (with `--sheet`) is not an exit either: the run still exits 0
 with every frame and the index; `watched.md` says "Contact sheet missing: N of M could not be
@@ -101,4 +101,4 @@ prints `redoing this 300s stretch` for each. A stretch's first frame is always k
 (`start of a 300s stretch` in the index). On a 41-minute video the run takes longer than a
 plain ffmpeg would; that is the price of finishing.
 
-Audio only (no picture to see): use the `audio-transcription` skill.
+Audio only (no picture to see): use the `transcribe-audio` skill.

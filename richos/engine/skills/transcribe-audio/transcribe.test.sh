@@ -14,7 +14,7 @@ FAIL=0
 ok() { printf '  ok    %s\n' "$1"; }
 bad() { printf '  FAIL  %s\n' "$1"; FAIL=$((FAIL + 1)); }
 
-echo "=== audio-transcription: transcribe.sh ==="
+echo "=== transcribe-audio: transcribe.sh ==="
 [ -x "$SCRIPT" ] || { bad "transcribe.sh exists and is executable at $SCRIPT"; echo "1 failure"; exit 1; }
 command -v say >/dev/null 2>&1 || { bad "macOS say is available to make the speech fixture"; exit 1; }
 

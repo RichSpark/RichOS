@@ -1,6 +1,6 @@
 ---
 name: watch-video
-description: Use whenever the CEO asks you or a job needs you, to download, watch, listen to, summarize or answer questions about a video or screen recording, whether a YouTube or other web link or a video file on his Mac (.mov/.mp4/.webm/.mkv). The tools are already installed by RichOS (yt-dlp, ffmpeg, ffprobe, whisper-cli and a speech model); this says which commands to run and where the files go. An audio-only file goes to the audio-transcription skill instead.
+description: Use whenever the CEO asks you or a job needs you, to download, watch, listen to, summarize or answer questions about a video or screen recording, whether a YouTube or other web link or a video file on his Mac (.mov/.mp4/.webm/.mkv). The tools are already installed by RichOS (yt-dlp, ffmpeg, ffprobe, whisper-cli and a speech model); this says which commands to run and where the files go. An audio-only file goes to the transcribe-audio skill instead.
 ---
 
 # Video: download it, watch it, hear it
@@ -142,7 +142,7 @@ from that step. Uploaded captions can answer the question without running
 Whisper, but the waveform comes from the video's sound:
 
 ```bash
-python3 "$RICHOS_ENGINE_ROOT/app/skills/audio-transcription/waveform.py" "$work/audio.wav"
+python3 "$RICHOS_ENGINE_ROOT/app/skills/transcribe-audio/waveform.py" "$work/audio.wav"
 ```
 
 Use the single line as `waveform`. Omit it if the video has no audio stream or

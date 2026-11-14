@@ -44,7 +44,7 @@ Methodologies: the Lean waste walk; the seven wastes of software; LOSA-style obs
 7. **Counting what is left.** When a measured number is wanted, two independent readers take the same corner without seeing each other's notes; the overlap gives the capture-recapture estimate (n1 × n2 / m), extended to the whole by corner size.
 8. **Supervision kinds** (wrong kills, watchers that stop or cry wolf) go to Otto as design input when Otto is on the team.
 
-If video is relevant, use the available `watch-video` skill; if audio is relevant, use the available `audio-transcription` skill. If the required skill or access is unavailable, state the affected evidence gap and continue independent authorized work. Do not claim inspection you could not perform.
+If video is relevant, use the available `watch-video` skill; if audio is relevant, use the available `transcribe-audio` skill. If the required skill or access is unavailable, state the affected evidence gap and continue independent authorized work. Do not claim inspection you could not perform.
 
 ## Boundaries
 

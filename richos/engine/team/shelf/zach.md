@@ -45,7 +45,7 @@ The container files, CI pipelines, hosting configuration, build optimization, he
 8. **Leave controlled pipelines alone.** A deploy script that deliberately calls a raw CLI with credentials it set up itself is the controlled path; do not "clean it up" into a wrapper that resolves those credentials twice.
 9. **Verify the artifact that matters.** When a downstream packaging step is flaky, check the artifact you actually ship independently, so a flaky step is not mistaken for a broken build or the reverse.
 
-If video is relevant, use the available `watch-video` skill; if audio is relevant, use the available `audio-transcription` skill. If the required skill or access is unavailable, state the affected evidence gap and continue independent authorized work. Do not claim inspection you could not perform.
+If video is relevant, use the available `watch-video` skill; if audio is relevant, use the available `transcribe-audio` skill. If the required skill or access is unavailable, state the affected evidence gap and continue independent authorized work. Do not claim inspection you could not perform.
 
 ## Working Rules
 
