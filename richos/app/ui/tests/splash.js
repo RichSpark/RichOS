@@ -4043,13 +4043,6 @@ async function main() {
           await opening.evaluate((ms) => window.RichSplash.holdAt(ms), frozen.moment);
           const heldPng = await opening.screenshot();
           const held = decode(heldPng);
-          // A look at the pictures themselves, on request, outside the tree.
-          if (process.env.RICHOS_SPLASH_OPENING_DUMP) {
-            const tag = entry.id.replace(/\W+/g, "-") + "-" + viewport.width + "x" + viewport.height + "-" + m;
-            fs.mkdirSync(process.env.RICHOS_SPLASH_OPENING_DUMP, { recursive: true });
-            fs.writeFileSync(path.join(process.env.RICHOS_SPLASH_OPENING_DUMP, tag + "-running.png"), runningPng);
-            fs.writeFileSync(path.join(process.env.RICHOS_SPLASH_OPENING_DUMP, tag + "-held.png"), heldPng);
-          }
           // The opening's frame: the first picture, with the changing part at this moment over it.
           const dpr = running.width / viewport.width;
           const [rx, ry, rw, rh] = region.map((v) => Math.round(v * dpr));
