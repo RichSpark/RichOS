@@ -714,6 +714,49 @@ def project(scope, path, record):
     save(path, record)
 
 
+@contextlib.contextmanager
+def numbering_lock(scope):
+    """One lock per company for choosing a teammate's number (`prepare`)."""
+    folder_ = state() / "numbering"
+    folder_.mkdir(mode=0o700, exist_ok=True)
+    company = hashlib.sha256(json.dumps(scope["binding"]["entity_id"]).encode()).hexdigest()
+    fd = os.open(folder_ / (company + ".lock"), os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        yield
+
+
+def company_conversations(scope):
+    """The receipt folders of this company's OTHER conversations: each one whose receipts are
+    bound to this company. A folder whose receipts cannot be read names nobody."""
+    own, entity, out = folder(scope), scope["binding"]["entity_id"], []
+    for path in sorted((state() / "work-receipts").iterdir()):
+        if path == own or path.is_symlink() or not path.is_dir():
+            continue
+        try:
+            if any(r["binding"]["entity_id"] == entity for _p, r in receipts(path)):
+                out.append(path)
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+    return out
+
+
+def next_name(name, taken, registries=()):
+    """NAME numbered by spawn.py's own rule (`--next-name`): the running teammates of this
+    conversation's registry and of REGISTRIES, and TAKEN, the receipts not yet started."""
+    command = [sys.executable, str(ENGINE / "scripts/lib/spawn.py"), name, "--next-name"]
+    for other in taken:
+        command += ["--taken", other]
+    for registry in registries:
+        command += ["--registry", str(registry)]
+    # A read that creates nothing, so not `run()`, which is the bound of the spawn itself.
+    done = subprocess.run(command, capture_output=True, text=True, timeout=RUN_TIMEOUT,
+                          cwd=os.environ["RICHOS_ENTITY_ROOT"])
+    if done.returncode or not done.stdout.strip():
+        raise ValueError("the teammate's name could not be numbered: %s" % (done.stderr.strip() or done.returncode))
+    return done.stdout.strip()
+
+
 def build_spawn_command(repo_dests, name, teammate, model, brief_path, title, integration=None, base=None):
     """The exact `spawn.py` invocation for one named teammate (proto-teammate shelf plan §3,
     richos-hq `docs/plans/2026-10-06-proto-teammate-shelf.md`): its own definition,
@@ -1381,7 +1424,19 @@ def prepare(scope_path, scope, args):
                                      "prepared in turn %s) has the same assignment, role and brief. Dispatch or "
                                      "inspect that receipt, or settle it, before preparing it again"
                                      % (old["name"], old.get("request_id"), old["status"], old["binding"].get("turn_id")))
-        name = f"{teammate}-{model}-{identity[:12]}"
+        # THE CEO'S NUMBERING (2026-10-21): a second active teammate of one first name is
+        # mark2-..., a third mark3-...; the lowest free number, none for the first, across
+        # every conversation of this company. The terminal's own rule picks it (spawn.py
+        # --next-name) from the running teammates in each conversation's registry, with the
+        # receipts not yet started added. It is held under the company's numbering lock until
+        # this receipt is saved, so two of one kind prepared at once, in one conversation or
+        # two, differ.
+        lock_stack.enter_context(numbering_lock(scope))
+        others = company_conversations(scope)
+        name = next_name(f"{teammate}-{model}-{identity[:12]}",
+                         [old["name"] for f in [root, *others] for _p, old in receipts(f)
+                          if not old.get("settled") and old["status"] in ("preparing","prepared","dispatching")],
+                         [state() / "workspaces" / f.name for f in others])
         record = {"schema":1,"id":identity,"request_id":request_id,"binding":scope["binding"],
             "recovery_acceptance": hashlib.sha256(json.dumps({k:item.get(k) for k in
                 ("item_id", "title", "details", "beneficiary")}, sort_keys=True).encode()).hexdigest(),
