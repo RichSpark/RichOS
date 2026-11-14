@@ -276,6 +276,16 @@ async function main() {
     await afterHoverClose(page);
     await page.mouse.click(900, 450);
     await page.waitForFunction(() => !document.getElementById("swear-card").classList.contains("is-open"));
+    // pinned from the keyboard, then Home: no pointer press follows to unpin it, and the home screen
+    // has no rail, so the card is put away and is not painted over Home
+    // (review rv-20261114T004049Z-3a3331d3-4a8e)
+    await page.focus("#nr-swear");
+    await page.keyboard.press("Enter");
+    await page.waitForFunction(() => document.getElementById("swear-card").classList.contains("is-open") && document.getElementById("nr-swear").getAttribute("aria-expanded") === "true");
+    await page.evaluate(() => window.RichHome.show("suite"));
+    await page.waitForFunction(() => !document.getElementById("swear-card").classList.contains("is-open"));
+    const overHome = await page.evaluate(() => getComputedStyle(document.getElementById("swear-card")).display);
+    assertEqual(overHome, "none", "the SwearMeter card can be painted over the home screen");
     assertEqual(page.__errors, [], "renderer errors");
     await page.close();
     const off = await openApp(browser, { swear: { show: false, last30: 1299 } });
@@ -314,7 +324,7 @@ async function main() {
   // ---------------------------------------------------------------------------------------
   await run.check("a user with a team: from 2,500 objects every company has a territory of its own", async () => {
     const team = [{ name: "Beth", role: "Bookkeeper" }];
-    const page = await openApp(browser, { team, lanes: [["northwind", "Northwind Traders", 1800], ["kestrel", "Kestrel Labs", 800]] });
+    const page = await openApp(browser, { team, source: "repositories", seeds: true, lanes: [["northwind", "Northwind Traders", 1800], ["kestrel", "Kestrel Labs", 800]] });
     await withField(page);
     const r = await page.evaluate(() => {
       const lo = window.__loro, D = lo.D;
@@ -346,7 +356,7 @@ async function main() {
   // repositories comes later than that, so the late path is the normal one.
   await run.check("his objects arrive after the 8-second wait: from 2,500 they are still drawn alone, each company a territory", async () => {
     const team = [{ name: "Beth", role: "Bookkeeper" }];
-    const page = await openApp(browser, { team, delayMs: 9500, lanes: [["northwind", "Northwind Traders", 1800], ["kestrel", "Kestrel Labs", 800]] });
+    const page = await openApp(browser, { team, source: "repositories", seeds: true, delayMs: 9500, lanes: [["northwind", "Northwind Traders", 1800], ["kestrel", "Kestrel Labs", 800]] });
     await withField(page);
     const early = await page.evaluate(() => window.RichHome.state.fieldOffer.state);
     assertEqual(early, "timed-out", "the screen waited for the answer");

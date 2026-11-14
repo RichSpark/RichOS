@@ -1647,11 +1647,14 @@ window.RichHome = (function () {
       onFieldCount(api.COUNT, api.stats);
     };
     var rest = typeof window.prepare === "function" ? [FIELD[FIELD.length - 1]] : FIELD_GHOST_REST;
-    // FROM `GHOST_SPAN` OF HIS OBJECTS THE PICTURE IS HIS ALONE (round 73, CEO 2026-11-13: the home
-    // screen shows his data as round 72 does). The example's light is exactly zero there, so it is
-    // not loaded: hosted in the example's clusters, his companies never had a territory of their own;
-    // drawn alone, each company is one. His records move once, the launch they cross the span.
-    if (count >= GHOST_SPAN) {
+    // FROM `GHOST_SPAN` OF HIS OBJECTS, READ FROM HIS REPOSITORIES, THE PICTURE IS HIS ALONE (round 73,
+    // CEO 2026-11-13: the home screen shows his data as round 72 does). The example's light is exactly
+    // zero there, so it is not loaded: hosted in the example's clusters, his companies never had a
+    // territory of their own; drawn alone, each company is one. They move once, the launch they cross
+    // the span, and never again: each carries its own placement key (`field-prep.js` `placeKeyed`).
+    // Records compiled from loro carry none, and alone they would be dealt again at every launch
+    // with a new record, so they stay in the example's layout as before (`tests/home-ghost.js`).
+    if (count >= GHOST_SPAN && records.meta && records.meta.source === "repositories") {
       window.MATURE_LORO = records;
       var alone = Promise.resolve();
       rest.forEach(function (src) {
@@ -1783,8 +1786,9 @@ window.RichHome = (function () {
         if (state.team) {
           // HIS RECORDS IN FRONT OF THE EXAMPLE (round 11.4 v2): the demonstration's dataset is
           // loaded as the ghost, his is merged into it, and the engine is told how many of the
-          // objects are his. From `GHOST_SPAN` of them the example's light is exactly zero and his
-          // dataset is drawn alone, every company on a territory of its own (`loadGhost`).
+          // objects are his. From `GHOST_SPAN` of them the example's light is exactly zero, and a
+          // dataset read from his repositories is drawn alone, every company on a territory of its
+          // own (`loadGhost`).
           // Zero of his is the same screen with nothing in front.
           return loadGhost(mine ? dataset : null).then(function () {
             return true;

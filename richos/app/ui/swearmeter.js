@@ -187,7 +187,11 @@
   }
   function sync() {
     if (!railBtn) return;
-    const open = show && !railBtn.hidden && (pinned || hovering || railBtn.matches(":focus-visible"));
+    // The home screen has no rail: a card pinned from the keyboard (no pointer press follows to
+    // unpin it) is put away when Home opens, and does not come back with the app.
+    const home = document.body.classList.contains("home-open");
+    if (home) { pinned = false; hovering = false; }
+    const open = !home && show && !railBtn.hidden && (pinned || hovering || railBtn.matches(":focus-visible"));
     if (open && !card) buildCard();
     if (!card) return;
     if (open && !wasOpen) {
@@ -235,6 +239,7 @@
       if (pinned && !railBtn.contains(e.target) && !(card && card.contains(e.target))) { pinned = false; sync(); }
     });
     window.addEventListener("resize", () => { if (card && card.classList.contains("is-open")) place(); });
+    new MutationObserver(() => { if (document.body.classList.contains("home-open")) sync(); }).observe(document.body, { attributes: true, attributeFilter: ["class"] });
   }
 
   function paint() {
