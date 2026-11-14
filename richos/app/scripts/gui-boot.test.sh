@@ -497,6 +497,15 @@ declare_rules() {
   # tell a choice from the failure the declared no-`$HOME` case below is about.
   routine '^\[richos\] Codex watch: watching [1-9][0-9]* channel\(s\) \(process [1-9][0-9]*\)$' \
     'the Codex watcher is running on the configured channels, and its pid; the could-not-start, engine-not-verified and no-channel forms stay unaccounted'
+  # THE SWEARMETER HISTORY READER (swearmeter_host.rs, 0234a504a): its background reader prints
+  # one line when it first reads the local Claude and Codex histories, and again whenever the
+  # count it read changes. It landed with no rule here, and the first B2 run against it was a
+  # nightly's VM proof, which failed on `read (0 ms)` (the fixture has no history to read).
+  # ONLY THE `read` FORM. `partial` is a history with records the reader could not read, or a
+  # source it could not watch, and "historical sources unavailable" is a reader that did not
+  # start: both stay UNACCOUNTED, so a boot that prints either is seen rather than filed.
+  routine '^\[richos\] SwearMeter historical sources: read \([0-9]+ ms\)$' \
+    'the SwearMeter history reader read every local history source, and how long it took; the partial and unavailable forms stay unaccounted'
 
   # -- the declared gaps ------------------------------------------------------------------
   gap 'RICHOS_SERVICE_BIN' \
