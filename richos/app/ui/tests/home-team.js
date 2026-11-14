@@ -140,6 +140,11 @@ async function main() {
       synthetic: window.MATURE_LORO.meta.synthetic,
       rows: Array.from(document.querySelectorAll("#home-working li")).map((li) => li.textContent.replace(/\s+/g, " ").trim()),
     }));
+    // The column's numbers are written by the engine's ready hook, a `setTimeout(0)` after `__loro`
+    // exists, so they are waited for; read at once they were missing in 1 run of 3 on main and on the
+    // branch alike (2026-11-14). The deadline only catches a hang, as the waits around it do; a wrong
+    // or missing number still fails the assertion below.
+    await page.waitForFunction(() => document.querySelectorAll("#home-signals .sig").length >= 3, null, { timeout: 90000 }).catch(() => {});
     seen.signals = await signalsOf(page);
     assertEqual(seen.synthetic, false, "the picture is not his loro");
     assertEqual(seen.rows, TEAM.map((t) => t.name + " " + t.role), "the picture's engine replaced his team");

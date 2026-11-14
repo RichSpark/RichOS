@@ -1,0 +1,78 @@
+slot held: /Users/alex/.richos-testvm/guest-2.lock (waited 0s; admission checks 1.5s; user CPU 39.5%, system 9.3%, idle 51.2%; memory pressure normal, free 86%, swap used 181 MB, swap-out 0.0 MB/s)
+[testvm] 11:47:46Z cloning richos-base -> walk-94b6d1471f03 (copy-on-write)
+[testvm] 11:47:46Z booting walk-94b6d1471f03 headless...
+[testvm] 11:47:46Z waiting for walk-94b6d1471f03 to report an IP...
+[testvm] 11:47:55Z walk-94b6d1471f03 is up at 192.168.64.4
+[testvm] 11:47:59Z screen-capture consent renewed: /usr/libexec/sshd-keygen-wrapper until 2026-12-14T11:47:59Z
+[testvm] 11:48:01Z host claude: 2.1.325  (/Users/alex/.local/share/claude/versions/2.1.325)
+[testvm] 11:48:10Z the guest's claude is not the host's (2.1.277 vs 2.1.325) — copying the host's in
+[testvm] 11:48:12Z copied in 2s
+claude: host 2.1.325 guest 2.1.325
+[testvm] 11:48:13Z copying the bundle in...
+[testvm] 11:48:14Z copying the fixture home in...
+[testvm] 11:48:15Z keychain: preparing an empty, unlocked login keychain at /Users/admin/testvm/walk-94b6d1471f03/home/Library/Keychains/login.keychain-db
+{"ax_phase": "guest"}
+{"ax_guest_seconds": 0.2333}
+{"ax_phase": "guest"}
+{"ax_guest_seconds": 0.024}
+{"ax_phase": "guest"}
+{"ax_guest_seconds": 0.0129}
+{"ax_phase": "guest"}
+{"ax_guest_seconds": 0.09}
+{"ax_phase": "guest"}
+{"ax_guest_seconds": 0.0114}
+{"ax_phase": "guest"}
+{"ax_guest_seconds": 0.0211}
+gui-settings=no-timeout
+keychain=/Users/admin/testvm/walk-94b6d1471f03/home/Library/Keychains/login.keychain-db
+{"ax_phase": "guest"}
+{"ax_guest_seconds": 0.0103}
+gui-settings=no-timeout
+{"ax_phase": "guest"}
+{"ax_guest_seconds": 0.0367}
+{"ax_phase": "guest"}
+{"ax_guest_seconds": 0.041}
+{"ax_phase": "guest"}
+{"ax_guest_seconds": 0.0087}
+default=/Users/admin/testvm/walk-94b6d1471f03/home/Library/Keychains/login.keychain-db
+gui-session=usable
+ssh-session=UNUSABLE (security:SecKeychainSearchCopyNext:Thespecifieditemcouldnotbefoundinthekeychain.)
+note: gui-session is the verdict — it is the session 'open -n -a' launches the app into.
+      ssh-session is informational; a different securityd session, frequently UNUSABLE by design.
+[testvm] 11:48:19Z the guest's login is the app's account in use, Home (this Mac's keychain item 'Claude Code-credentials')
+[testvm] 11:48:19Z writing the access snapshot into the guest's credential file (no refresh token; may expire during the run)
+[testvm] 11:48:19Z copying a Claude access snapshot into walk-94b6d1471f03 (no refresh token; stdin only)
+[testvm] 11:48:19Z login stored: credential file yes (360 bytes, matching the access snapshot), keychain item yes
+[testvm] 11:48:19Z the guest's access token expires 18:48Z (no refresh token; keep renews it from this Mac)
+claude login: guest logged in
+[testvm] 11:48:19Z copying the engine payload in...
+[testvm] 11:48:22Z engine payload verified in the guest (scripts/hooks + VERSION present)
+[testvm] 11:48:22Z launching the app in the guest's GUI session...
+[testvm] 11:48:32Z ready in 47s
+vm=walk-94b6d1471f03 ip=192.168.64.4 pid=1058 ssh=admin@192.168.64.4 windows=1 elapsed=47s
+tailnet=not-joined
+claude: host 2.1.325 guest 2.1.325
+claude login: guest logged in
+shot:  /Users/alex/ab/richos-wt/echo2-opus-trials2/richos/app/scripts/testvm/shot.sh walk-94b6d1471f03 <out.png> [--ocr]
+tree:  /Users/alex/ab/richos-wt/echo2-opus-trials2/richos/app/scripts/testvm/ax.sh walk-94b6d1471f03 tree            # the screen as text, with real geometry
+click: /Users/alex/ab/richos-wt/echo2-opus-trials2/richos/app/scripts/testvm/ax.sh walk-94b6d1471f03 click --title '<button>'
+guest: /Users/alex/ab/richos-wt/echo2-opus-trials2/richos/app/scripts/testvm/guest.sh walk-94b6d1471f03 '<shell command>'   # --pull/--push to move a file
+ax:    /Users/alex/ab/richos-wt/echo2-opus-trials2/richos/app/scripts/testvm/ax.sh walk-94b6d1471f03 '<applescript>'
+stop:  /Users/alex/ab/richos-wt/echo2-opus-trials2/richos/app/scripts/testvm/stop.sh walk-94b6d1471f03      # ALWAYS, before you report (CEO §54)
+{
+ "vm": "walk-94b6d1471f03",
+ "app": "/Users/admin/testvm/walk-94b6d1471f03/RichOS.app",
+ "guest_os": "15.7.7",
+ "guest_cpu": "4 cpus, 5368709120 bytes",
+ "display": "",
+ "load_before": "{ 41.04 12.71 4.79 }",
+ "guest_run": "t2: pid 1345 quit on TERM, all gone True, 66 log lines; \nt1-01: pid 1840 quit on TERM, all gone True, 57 log lines; DONE 199 frames 840x525\nt1-02: pid 2010 quit on TERM, all gone True, 56 log lines; DONE 246 frames 840x525\nt1-03: pid 2187 quit on TERM, all gone True, 55 log lines; DONE 234 frames 840x525\nt1-04: pid 2371 quit on TERM, all gone True, 56 log lines; DONE 229 frames 840x525\nt1-05: pid 2545 quit on TERM, all gone True, 56 log lines; DONE 238 frames 840x525\nt1-06: pid 2725 quit on TERM, all gone True, 52 log lines; DONE 228 frames 840x525\nt1-07: pid 2901 quit on TERM, all gone True, 53 log lines; DONE 246 frames 840x525\nt1-08: pid 3093 quit on TERM, all gone True, 53 log lines; DONE 239 frames 840x525\nt1-09: pid 3271 quit on TERM, all gone True, 53 log lines; DONE 239 frames 840x525\nt1-10: pid 3444 quit on TERM, all gone True, 52 log lines; DONE 231 frames 840x525\nt1nopush-01: pid 3613 quit on TERM, all gone True, 53 log lines; DONE 237 frames 840x525\nt1nopush-02: pid 3789 quit on TERM, all gone True, 53 log lines; DONE 243 frames 840x525\nt3png-01: pid 3963 quit on TERM, all gone True, 54 log lines; DONE 252 frames 840x525\nt3png-02: pid 4141 quit on TERM, all gone True, 55 log lines; DONE 233 frames 840x525\nt3jpg-01: pid 4310 quit on TERM, all gone True, 55 log lines; DONE 266 frames 840x525\nt3jpg-02: pid 4487 quit on TERM, all gone True, 55 log lines; DONE 244 frames 840x525\ndictionary-01: pid 4664 quit on TERM, all gone True, 0 log lines; DONE 131 frames 840x525\ndictionary-02: pid 4838 quit on TERM, all gone True, 0 log lines; DONE 121 frames 840x525\ndictionary-03: pid 5007 quit on TERM, all gone True, 0 log lines; DONE 120 frames 840x525\ndictionary-04: pid 5177 quit on TERM, all gone True, 0 log lines; DONE 112 frames 840x525\ndictionary-05: pid 5346 quit on TERM, all gone True, 0 log lines; DONE 113 frames 840x525\ndictionary-06: pid 5520 quit on TERM, all gone True, 0 log lines; DONE 113 frames 840x525\ndictionary-07: pid 5704 quit on TERM, all gone True, 0 log lines; DONE 118 frames 840x525\ndictionary-08: pid 5886 quit on TERM, all gone True, 0 log lines; DONE 118 frames 840x525\ndictionary-09: pid 6064 quit on TERM, all gone True, 0 log lines; DONE 121 frames 840x525\ndictionary-10: pid 6241 quit on TERM, all gone True, 0 log lines; DONE 120 frames 840x525\nlaunches 27, not gone 0",
+ "load_after": "{ 4.54 9.06 5.26 }",
+ "left_running": ""
+}
+[testvm] 11:53:41Z recorded app pid 1058 has exited; no process selected by name
+[testvm] 11:53:42Z stopping VM walk-94b6d1471f03...
+[testvm] 11:53:42Z ending the login keeper (pid 36329)
+[testvm] 11:53:43Z deleting ephemeral clone walk-94b6d1471f03...
+[testvm] 11:53:44Z clean: app quit, VM stopped, clone deleted, state removed.
+slot released: guest-2.lock after 360s

@@ -165,6 +165,7 @@ chrome-align.js         @shell @home richos/app/ui/settings-button.js richos/app
 front-door.js           @shell @home
 home-fit.js             @shell @home
 home-team.js            @shell @home richos/app/ui/mock.js richos/app/ui/home/field-data.js richos/app/ui/splash.js richos/app/ui/theme-boot.js
+home-frame-pass.js      richos/app/ui/home/field-engine.js
 home-ghost.js           @shell @home richos/app/ui/mock.js richos/app/ui/home/field-data.js richos/app/ui/splash.js richos/app/ui/theme-boot.js
 home-standard.js        @shell @home richos/app/ui/mock.js richos/app/ui/home/field-data.js richos/app/ui/splash.js richos/app/ui/theme-boot.js richos/app/ui/settings-button.js
 home.js               @shell @home richos/app/ui/mock.js richos/app/ui/home/field-data.js richos/app/ui/splash.js richos/app/ui/settings-button.js richos/app/ui/theme-boot.js richos/app/ui/tests/fixtures/slow-round-trips-preload.js
