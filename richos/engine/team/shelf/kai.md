@@ -58,7 +58,7 @@ Battery is part of every mobile verdict. A change that would give the OS reason 
 - **Use the committed QA toolkit.** Read the project's QA helpers before writing one; a missing helper is added to the toolkit and committed, so every run's numbers (a contrast ratio, a timing) are computed the same way and stay comparable. Your method section names each tool you used.
 - **Your machine's own speakers cannot stand in for a person.** Sound played through the machine's speaker reaches its microphone on the same path as the app's own voice output, so an echo canceller cannot tell it from echo. An interruption, barge-in or talk-over test uses a recorded voice mixed onto the microphone track at a stated level, a human at the microphone or a separate sound source near it. At most one live playback per measurement, never a loop.
 
-If video is relevant, use the available `watch-video` skill; if audio is relevant, use the available `audio-transcription` skill. If the required skill or access is unavailable, state the affected evidence gap and continue independent authorized work. Do not claim inspection you could not perform.
+If video is relevant, use the available `watch-video` skill; if audio is relevant, use the available `transcribe-audio` skill. If the required skill or access is unavailable, state the affected evidence gap and continue independent authorized work. Do not claim inspection you could not perform.
 
 ## Contrast — WCAG AA in Both Themes
 

@@ -54,7 +54,7 @@ Brand positioning and messaging framework; go-to-market plan (channels, timeline
 - Bias toward "let's test it this week" over "let's research it for another month"
 - Never claim what the product does not do; verify a feature before it goes into copy
 
-If video is relevant, use the available `watch-video` skill; if audio is relevant, use the available `audio-transcription` skill. If the required skill or access is unavailable, state the affected evidence gap and continue independent authorized work. Do not claim inspection you could not perform.
+If video is relevant, use the available `watch-video` skill; if audio is relevant, use the available `transcribe-audio` skill. If the required skill or access is unavailable, state the affected evidence gap and continue independent authorized work. Do not claim inspection you could not perform.
 
 ## Contrast — WCAG AA in Both Themes
 

@@ -1,5 +1,5 @@
 ---
-name: audio-transcription
+name: transcribe-audio
 description: Use whenever a job involves transcribing, listening to or getting the words out of an audio file (a voice memo, a call, a podcast, an mp3/m4a/wav/aiff/ogg file the CEO sent or attached). The tools are already installed by RichOS (ffmpeg, whisper-cli and a speech model); this says which commands to run. A video or screen recording you also need to SEE goes to the watch-video skill instead.
 ---
 
@@ -59,7 +59,7 @@ use its original absolute path in `mcp__richos_files__show_media_moments` with
 `source: {"kind":"local","path":"…"}`. Supply `durationMs` and each point's
 `startMs` in milliseconds. Keep the quotation short and true to the source.
 
-For the waveform, run `python3 "$RICHOS_ENGINE_ROOT/app/skills/audio-transcription/waveform.py" "$work/audio.wav"`
+For the waveform, run `python3 "$RICHOS_ENGINE_ROOT/app/skills/transcribe-audio/waveform.py" "$work/audio.wav"`
 and pass the single line it prints as `waveform`. If it fails, omit the waveform.
 Use the original file as the playable source. The working WAV is only for
 analysis and is deleted along with the transcript when the job is done.

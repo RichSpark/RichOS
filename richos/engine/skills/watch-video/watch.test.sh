@@ -328,7 +328,7 @@ fi
 EC="$SANDBOX/engine-copy"
 mkdir -p "$EC/skills" "$EC/scripts/lib"
 cp -R "$HERE" "$EC/skills/watch-video"
-[ -d "$ENGINE/skills/audio-transcription" ] && cp -R "$ENGINE/skills/audio-transcription" "$EC/skills/audio-transcription"
+[ -d "$ENGINE/skills/transcribe-audio" ] && cp -R "$ENGINE/skills/transcribe-audio" "$EC/skills/transcribe-audio"
 cp "$ENGINE/scripts/lib/cpu_policy.py" "$EC/scripts/lib/cpu_policy.py"
 cat > "$EC/scripts/lib/cpu_guard.py" <<'STUB'
 import os

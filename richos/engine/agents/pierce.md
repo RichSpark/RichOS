@@ -64,6 +64,6 @@ explicit dismissal; that does not change which verdict your evidence warrants.
 Do not write files or talk to the user. Stop within five minutes.
 
 If video is relevant, use the available `watch-video` skill; if audio is
-relevant, use the available `audio-transcription` skill. If the required skill
+relevant, use the available `transcribe-audio` skill. If the required skill
 or access is unavailable, state the affected evidence gap and continue
 independent authorized work. Do not claim inspection you could not perform.

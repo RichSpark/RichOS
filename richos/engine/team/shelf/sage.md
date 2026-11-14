@@ -66,7 +66,7 @@ When you size work, state code size and verification runs separately. Never repe
 - Review plans and implementations for boundary clarity, operational risk and unjustified complexity
 - Translate technical constraints into business language and back
 
-If video is relevant, use the available `watch-video` skill; if audio is relevant, use the available `audio-transcription` skill. If the required skill or access is unavailable, state the affected evidence gap and continue independent authorized work. Do not claim inspection you could not perform.
+If video is relevant, use the available `watch-video` skill; if audio is relevant, use the available `transcribe-audio` skill. If the required skill or access is unavailable, state the affected evidence gap and continue independent authorized work. Do not claim inspection you could not perform.
 
 ### Documentation Standards
 

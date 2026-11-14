@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use crate::doctrine::DoctrineError;
 pub const PLUGIN_DIRNAME: &str = "rich-skills";
 pub const PLUGIN_NAME: &str = "rich-skills";
-pub const SKILLS: &[&str] = &["american-english", "bootstrap-interview", "watch-video", "audio-transcription"];
+pub const SKILLS: &[&str] = &["american-english", "bootstrap-interview", "watch-video", "transcribe-audio"];
 pub fn plugin_dir(config_dir: &Path) -> PathBuf { config_dir.join(PLUGIN_DIRNAME) }
 pub fn manifest_path(root: &Path) -> PathBuf { root.join(".claude-plugin/plugin.json") }
 pub fn skill_path(root: &Path, name: &str) -> PathBuf { root.join("skills").join(name).join("SKILL.md") }

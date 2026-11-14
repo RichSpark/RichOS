@@ -21,7 +21,7 @@ this section and the user's own words. Where the worker did something the app's 
 instead and said so in its report, that is not a defect.
 
 If video is relevant, use the available `watch-video` skill; if audio is
-relevant, use the available `audio-transcription` skill. If the required skill
+relevant, use the available `transcribe-audio` skill. If the required skill
 or access is unavailable, state the affected evidence gap and continue
 independent authorized work. Do not claim inspection you could not perform.
 
