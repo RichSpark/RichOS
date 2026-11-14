@@ -26,6 +26,18 @@ class Stamp(unittest.TestCase):
         self.assertEqual(walk.stamp_digest('sha256 %s\n' % DIGEST[:12]), '')
 
 
+class VoiceAskedAgain(unittest.TestCase):
+    def test_only_asks_after_the_swap_count(self):
+        log = '\n'.join([
+            '[richos] voice: not ready on this machine (toolchain-missing) — x',
+            walk.SWAPPED + '1.2.0 at /x — sha256 y, 1 bytes',
+            '[richos] engine update: ' + 'this build\'s engine is installed and in use, in 1 ms, with no setup sheet',
+            '[richos] voice: ready on this machine (ready) — y',
+        ])
+        self.assertEqual(walk.voice_asked_after_swap(log), 1)
+        self.assertEqual(walk.voice_asked_after_swap(log.split('\n' + walk.SWAPPED)[0]), 0)
+
+
 class TheAppsOwnWords(unittest.TestCase):
     """The walk waits on the app's operator lines; a reworded line would leave it waiting on
     nothing, so each one it reads must still be in the app's source."""

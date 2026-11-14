@@ -73,6 +73,15 @@ REPLY_WORDS = 'Reply with one word: received.'
 SWAPPED = '[richos] setup: engine '
 
 
+def voice_asked_after_swap(text):
+    """How many times the window asked voice after the `[richos] setup: engine` line
+    setup_view::swap_in_engine prints (the done line comes later, so counting from it misses
+    the ask, walk4)."""
+    lines = text.splitlines()
+    swapped = next((i for i, l in enumerate(lines) if l.startswith(SWAPPED)), None)
+    return len(voice_lines('\n'.join(lines[swapped + 1:]))) if swapped is not None else 0
+
+
 def stamp_digest(text):
     """The `sha256` line of an INSTALLED-FROM stamp, lowercase, or ''."""
     m = re.search(r'^sha256\s+([0-9a-fA-F]{64})\s*$', text, re.M)
@@ -212,7 +221,10 @@ class EngineUpdateWalk(new_user.NewUserWalk):
                 seen.append({'at_s': round(time.monotonic() - began, 1), 'by': where})
                 self.frame('sheet-came-up')
                 break
-            if done_at is not None and reply is not None and time.monotonic() - done_at >= 15:
+            # 15 s past the install for the sheet, and up to 60 s for the window's voice ask: the
+            # readiness it asks for times decodes, 13.8 s an utterance in the guest (walk9).
+            settled = time.monotonic() - done_at if done_at is not None else 0
+            if reply is not None and settled >= 15 and (voice_asked_after_swap(text) or settled >= 60):
                 break
             time.sleep(1)
         (self.out / 'next.log').write_text(text)
@@ -232,9 +244,7 @@ class EngineUpdateWalk(new_user.NewUserWalk):
         # Counted from the swap, where the app tells the window (setup_view::swap_in_engine prints
         # the `setup: engine` line, then the window is told): the done line comes after the rest
         # of the wiring, so counting from it missed the ask (walk4, 2026-11-14).
-        lines = text.splitlines()
-        swapped = next((i for i, l in enumerate(lines) if l.startswith(SWAPPED)), None)
-        asked = len(voice_lines('\n'.join(lines[swapped + 1:]))) if swapped is not None else 0
+        asked = voice_asked_after_swap(text)
         if asked < 1:
             raise StepFailed("the window did not ask voice again after this build's engine came into use")
         final = self.frame('after-update')
