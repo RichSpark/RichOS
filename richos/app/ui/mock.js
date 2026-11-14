@@ -3654,13 +3654,13 @@
         // is the state the acceptance suite has to be able to reach without arranging
         // anything.
         case "get_swearmeter":
-          return { show: mockConfig.show_swearmeter, result: { detector_version: 1, count: 0, unknown_card_inputs: 0, unknown_message_inputs: 0, incomplete_history: false, available: true, revision: 1 } };
+          return { show: mockConfig.show_swearmeter, result: { detector_version: 1, count: 0, unknown_card_inputs: 0, unknown_message_inputs: 0, incomplete_history: false, available: true, revision: 1, periods: { last_30_days: 0, months: [], undated: 0 } } };
         case "set_swearmeter_visible":
           mockConfig.show_swearmeter = args.show === true;
           persistMockConfig();
           return null;
         case "retry_swearmeter":
-          return { detector_version: 1, count: 0, unknown_card_inputs: 0, unknown_message_inputs: 0, incomplete_history: false, available: true, revision: 1 };
+          return { detector_version: 1, count: 0, unknown_card_inputs: 0, unknown_message_inputs: 0, incomplete_history: false, available: true, revision: 1, periods: { last_30_days: 0, months: [], undated: 0 } };
         case "get_appearance":
           return { theme: mockConfig.theme, font_scale: mockConfig.font_scale, oxford_comma: mockConfig.oxford_comma };
         case "set_oxford_comma":

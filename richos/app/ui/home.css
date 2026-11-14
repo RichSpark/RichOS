@@ -1553,9 +1553,24 @@ body.home-open {
   color: #c2a35c;
 }
 
-#home-swearmeter { max-width: var(--home-col, 230px); }
-#home-swearmeter[hidden], #set-swearmeter-result[hidden], #set-swearmeter-retry[hidden] { display: none; }
-#home-swearmeter .swearmeter-number { font: 20px/1.2 var(--serif); color: var(--t1); }
-#home-swearmeter .swearmeter-detail { margin: 0; font: 12px/1.4 var(--sans); color: var(--t2); }
-#home-swearmeter .swearmeter-detail:empty { display: none; }
+/* ROUND 73: the SwearMeter signal is an ordinary `.sig` (the number, "swear words" beside it in
+   the column's small serif, "in the last 30 days" as its caps line), so it takes every rule the
+   other signals have and needs none of its own. The app's five rules for the old text block
+   (`.swearmeter-number`, `.swearmeter-detail`) are gone with that block. */
+#set-swearmeter-result[hidden], #set-swearmeter-retry[hidden] { display: none; }
+/* The one thing of its own (the CEO, 2026-11-13: "a bit of a separator between the previous
+   (positive) signal and the SwearMeter stat"): a short gold hairline with room above and below,
+   so the count reads as a different kind of number. The Talk to Rich border's gold,
+   rgba(194, 163, 92, 0.7), 4.26:1 on the ground. */
+#home-swearmeter::before {
+  content: "";
+  width: 44px;
+  height: 1px;
+  margin: 7px 0 18px;
+  background: rgba(194, 163, 92, 0.7);
+}
 .popover-hint.swearmeter-result { color: var(--t1); }
+
+/* ROUND 72: over a picture read from his repositories the "learned from" line is not shown. The
+   engine names a teammate at random for each source, which over his own data is a made-up event. */
+#home.home-from-repos #home-ticker { display: none; }

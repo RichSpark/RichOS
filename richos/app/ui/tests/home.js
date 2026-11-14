@@ -2467,7 +2467,7 @@ async function main() {
     assertEqual(r.capPx, 14, "the caption is not the mockup's 14px");
     assertEqual(r.capColor, "rgb(166, 179, 203)", "the caption is not the mockup's #A6B3CB");
     assertEqual(r.gap, "15px", "the block's gap is not the mockup's 15px");
-    assertEqual(r.keys, "Enter", "the caption's claim is not in the accessibility tree");
+    assertEqual(r.keys, "Enter Space", "the caption's claim (and Space, CEO 2026-11-13) is not in the accessibility tree");
 
     // THE LEFT COLUMN, under the last signal. Not centered, not at the foot of the screen.
     assertEqual(r.lastSignal, "of your attention saved", "the last signal is not the line he named");

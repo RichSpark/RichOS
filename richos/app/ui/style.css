@@ -14490,9 +14490,232 @@ body[data-page="richfiles"] #sidebar-resize {
    sheet (160) and Token spend (200), below Settings (300). THE FIRST-RUN QUESTION BOUNDARY: while a
    first-run question is up (QUESTION_SELECTOR in main.js) it owns the window, the rail is inert, and
    none of these may be painted over it, so they are not shown at all. */
-:root:has(.overlay[aria-modal="true"][data-dismiss^="control:"]:not([hidden])) :is(#nr-tip, .res-card, .res-menu),
+:root:has(.overlay[aria-modal="true"][data-dismiss^="control:"]:not([hidden])) :is(#nr-tip, .res-card, .res-menu, .swear-card),
 /* Home (150) has no rail: a card pinned from the keyboard (Space on the square, then Up to Home and Enter
    raises no pointer press to unpin it) must not stay painted over it (review rv-20261106T215921Z-fae9a28f-30ee). */
-body.home-open :is(#nr-tip, .res-card, .res-menu) {
+body.home-open :is(#nr-tip, .res-card, .res-menu, .swear-card) {
   display: none !important;
+}
+
+/* =============================================================================================
+   ROUND 73: SWEARMETER ON THE NAVIGATION RAIL.
+   The button (`#nr-swear`, above Bust a bug, only while SwearMeter is on) and its card: the Mac
+   resources card's paint, place and motion (`.res-card`), a little wider for a month row.
+   Measured in both themes by round 73's `build/walk.js`; the ratios are in its README.
+   The foot (coverage and scope notes) is 14px, DECLARED in the skippable tier, as the resources
+   card's foot is.
+   ============================================================================================= */
+#nr-swear[aria-expanded="true"] {
+  color: var(--nr-ink-hover);
+}
+#nr-swear[aria-expanded="true"]::before {
+  background: var(--tint-soft);
+}
+.swear-card {
+  --swear-bar: var(--gold);
+  position: fixed;
+  z-index: 210;
+  width: 348px;
+  box-sizing: border-box;
+  padding: 15px 18px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--line-control);
+  background: var(--res-card-bg);
+  color: var(--ink);
+  font: 400 1rem/1.4 var(--font);
+  box-shadow: 0 18px 40px -16px var(--shadow-strong), 0 2px 6px -2px var(--shadow-weak);
+  opacity: 0;
+  visibility: hidden;
+  transform: translateX(-6px) scale(0.985);
+  transform-origin: 0 calc(100% - var(--swear-arrow, 18px));
+  pointer-events: none;
+  transition: opacity 140ms ease, transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1), visibility 0s linear 180ms;
+}
+.swear-card.is-open {
+  opacity: 1;
+  visibility: visible;
+  transform: none;
+  pointer-events: auto;
+  transition: opacity 140ms ease, transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1), visibility 0s;
+}
+.swear-card::after {
+  content: "";
+  position: absolute;
+  left: -7px;
+  bottom: var(--swear-arrow, 18px);
+  width: 12px;
+  height: 12px;
+  background: inherit;
+  border-left: 1px solid var(--line-control);
+  border-bottom: 1px solid var(--line-control);
+  transform: rotate(45deg);
+  border-bottom-left-radius: 3px;
+}
+.swear-card [hidden] {
+  display: none;
+}
+.swear-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.swear-title {
+  font-weight: 600;
+}
+.swear-range,
+.swear-state {
+  color: var(--ink-soft);
+}
+.swear-state {
+  margin: 0 0 4px;
+}
+.swear-hero {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin: 0 0 13px;
+}
+.swear-big {
+  font: 400 3.5rem/0.95 var(--font-serif);
+  font-variant-numeric: lining-nums tabular-nums;
+  letter-spacing: -0.01em;
+}
+.swear-unit {
+  font-size: 1.125rem;
+  color: var(--ink-soft);
+}
+.swear-totals {
+  margin: 0;
+  padding: 9px 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  display: grid;
+  grid-template-columns: 1fr auto;
+  column-gap: 12px;
+  row-gap: 3px;
+}
+.swear-totals dt {
+  color: var(--ink-soft);
+}
+.swear-totals dd {
+  margin: 0;
+  text-align: right;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.swear-sub {
+  margin: 11px 0 5px;
+  font-weight: 600;
+}
+.swear-months {
+  list-style: none;
+  margin: 0 -6px 0 0;
+  padding: 0 6px 0 0;
+  display: grid;
+  grid-template-columns: max-content 1fr max-content;
+  column-gap: 12px;
+  /* A long history scrolls inside the card; the card never leaves the window. */
+  max-height: calc(100vh - 24rem);
+  overflow-y: auto;
+}
+.swear-months li {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: subgrid;
+  align-items: center;
+  min-height: 1.875rem;
+}
+.swear-months li.is-new {
+  animation: swear-in 280ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  animation-delay: calc(var(--i, 0) * 45ms);
+}
+.swear-m i {
+  margin-left: 7px;
+  font-style: normal;
+  color: var(--ink-soft);
+}
+.swear-bar {
+  height: 10px;
+}
+.swear-bar i {
+  display: block;
+  height: 100%;
+  width: var(--w, 0%);
+  min-width: 0;
+  border-radius: 5px;
+  background: var(--swear-bar);
+  transform-origin: 0 50%;
+  animation: swear-grow 560ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  animation-delay: calc(60ms + var(--i, 0) * 45ms);
+}
+.swear-months li.is-still .swear-bar i {
+  animation: none;
+}
+.swear-months b {
+  font-weight: 500;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+@keyframes swear-grow {
+  from { transform: scaleX(0); }
+  to { transform: none; }
+}
+@keyframes swear-in {
+  from { opacity: 0; transform: translateY(-6px); }
+  to { opacity: 1; transform: none; }
+}
+.swear-more {
+  margin-top: 9px;
+  width: 100%;
+  height: 2.375rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 1px solid var(--line-control);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink);
+  font: 500 1rem/1 var(--font);
+  cursor: pointer;
+  transition: background-color 0.16s, border-color 0.16s;
+}
+.swear-more:hover {
+  background: var(--tint-soft);
+  border-color: var(--ink-soft);
+}
+.swear-more:focus-visible {
+  outline: 2px solid var(--gold);
+  outline-offset: 2px;
+}
+.swear-more svg {
+  width: 12px;
+  height: 12px;
+  transition: transform 0.2s;
+}
+.swear-more.is-less svg {
+  transform: rotate(180deg);
+}
+.swear-foot {
+  margin: 11px 0 0;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+  font-size: 0.875rem;
+  line-height: 1.4;
+  color: var(--ink-faint);
+}
+.swear-foot:empty {
+  display: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .swear-card,
+  .swear-card.is-open {
+    transition: none;
+    transform: none;
+  }
+  .swear-bar i,
+  .swear-months li.is-new {
+    animation: none;
+  }
 }

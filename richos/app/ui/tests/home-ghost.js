@@ -321,7 +321,13 @@ async function main() {
   // the screen having waited, and the example's light follows his count as if they had been there.
   // --------------------------------------------------------------------------------------
   await run.check("his records come back after the ceiling: they are drawn when ready, in front of the example", async () => {
-    const page = await openApp(browser, { homeTeam: TEAM, homeWorking: [TEAM[0]], homeField: { objects: 300, records: 900 }, homeFieldDelayMs: 9500 });
+    // THE ANSWER COMES AT 12 s, NOT 9.5 s. The screen is read for the first time when `openApp`
+    // returns, 700 ms after the picture has drawn itself in, and that has to be before the answer.
+    // Measured from `startField` on 2026-11-14 (three launches each): the picture is drawn in at
+    // 8,711 to 8,723 ms on main and at 8,799 to 8,810 ms with round 73's picture, so the first read
+    // is at about 9,417 ms and 9,503 ms. An answer at 9,500 ms left main 83 ms and round 73 none:
+    // the check then failed with a count of 300, or with no picture at the moment of the swap.
+    const page = await openApp(browser, { homeTeam: TEAM, homeWorking: [TEAM[0]], homeField: { objects: 300, records: 900 }, homeFieldDelayMs: 12000 });
     const early = await factsOf(page);
     assertEqual(early.count, 0, "the screen waited for the compile (or counted records nobody had read)");
     const came = await page

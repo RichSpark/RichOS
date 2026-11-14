@@ -86,6 +86,7 @@ pub mod github_home;
 /// Host context blocks given to a lease once, then only as the lines that changed.
 pub mod given_context;
 pub mod home_field;
+pub mod home_repos;
 pub mod journal;
 pub mod heard;
 /// Why a turn ended without finishing — the sibling of [`upstream`] for the local half.

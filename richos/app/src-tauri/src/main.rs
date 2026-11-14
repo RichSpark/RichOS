@@ -10252,6 +10252,28 @@ fn home_field_data(state: State<AppState>) -> serde_json::Value {
         serde_json::json!({ "available": false, "reason": reason.into() })
     }
 
+    // EVERY CONNECTED COMPANY'S OWN REPOSITORIES FIRST (round 73, CEO 2026-11-13: the home screen
+    // shows his data for every connected company as round 72 does; `richos_core::home_repos`). The
+    // loro path below is for a user with no readable repository, unchanged.
+    let registry = state.reader.snapshot().entity_registry().clone();
+    let folders = richos_core::home_repos::company_folders(&registry);
+    let kept_repos = state.data_dir.join("home-field-repos.json");
+    // Read with the Git RichOS delivers, as `connect_repository` runs it: a Mac need not have one of
+    // its own, and Apple's stand-in opens an installation dialog. No verified runtime: the loro path.
+    let delivered_git = { let engine = state.engine_dir.lock().unwrap().clone(); richos_core::runtime::verify_engine(&engine).ok().map(|runtime| richos_core::home_repos::GitRuntime::from(&runtime)) };
+    if let Some((field, from)) = delivered_git.and_then(|git| richos_core::home_repos::field_kept_or_built(&kept_repos, &folders, richos_core::home_repos::today(), &git)) {
+        eprintln!(
+            "[richos] home field: {} object(s) in {} companies from their repositories ({:?}), {} link(s), {} source(s); unread folders: {}",
+            field["meta"]["counts"]["objects"],
+            field["meta"]["counts"]["domains"],
+            from,
+            field["meta"]["counts"]["links"],
+            field["meta"]["counts"]["sources"],
+            field["meta"]["unreadFolders"],
+        );
+        return serde_json::json!({ "available": true, "field": field });
+    }
+
     // The clone releases the lock immediately, the same shape `desk()` uses: a compile that
     // takes three seconds must not hold a lock `provision_memory` needs.
     let Some(install) = state.loro_install.lock().unwrap().clone() else {
@@ -10271,7 +10293,6 @@ fn home_field_data(state: State<AppState>) -> serde_json::Value {
             other => format!("company memory is {other}"),
         });
     };
-    let registry = state.reader.snapshot().entity_registry().clone();
 
     let census = match home_field::probe_census(install.tools(), install.root()) {
         Ok(c) => c,

@@ -587,9 +587,12 @@ async function openSwearMeterFailure(browser, mode) {
     incomplete_history:false, available:false, revision:90,
   }));
   await page.waitForSelector("#set-swearmeter-retry", {state:"visible"});
-  if (mode === "home") {
-    await page.evaluate(() => { RichSettings.close(); RichHome.show(); });
-    await page.waitForSelector("#home-swearmeter", {state:"visible"});
+  if (mode === "card") {
+    // Round 73: an unavailable count puts no signal on the home screen; the rail's SwearMeter
+    // card says so, and its foot points to Settings.
+    await page.evaluate(() => { RichSettings.close(); });
+    await page.click("#nr-swear");
+    await page.waitForSelector("#swear-card.is-open", {state:"visible"});
   } else {
     await page.evaluate(() => { window.__overrides.retry_swearmeter = {reject:true,value:"Saved card inputs are still unavailable"}; });
     await page.click("#set-swearmeter-retry");
@@ -602,7 +605,7 @@ async function openSwearMeterFailure(browser, mode) {
 const FIXTURES = {
   "swearmeter-preference-refused": browser => openSwearMeterFailure(browser, "preference"),
   "swearmeter-retry-refused": browser => openSwearMeterFailure(browser, "retry"),
-  "swearmeter-home-unavailable": browser => openSwearMeterFailure(browser, "home"),
+  "swearmeter-card-unavailable": browser => openSwearMeterFailure(browser, "card"),
   async "resources-keyboard"(browser) {
     const page = await openApp(browser);
     await page.keyboard.press("Tab");
@@ -1528,7 +1531,7 @@ const FIXTURES = {
 /// names is present and usable on the screen the sentence appears on. Said here rather than
 /// left as an unexplained asymmetry.
 const TEXT_RENDERING_FIXTURES = new Set([
-  "swearmeter-preference-refused", "swearmeter-retry-refused", "swearmeter-home-unavailable",
+  "swearmeter-preference-refused", "swearmeter-retry-refused", "swearmeter-card-unavailable",
   "resources-keyboard",
   "question-edit", "question-saved", "question-retry", "question-deleted", "question-storage",
   "connect-setup", "connect-setup-unreadable", "connect-helper-missing", "connect-history-full",
@@ -3026,7 +3029,7 @@ async function main() {
     assertEqual(tree.capRole, null, "the caption claims a role — then it is a second control with the door's own name");
     assertEqual(tree.capTabIndex, null, "the caption is a tab stop — then it is a second control in the tab order");
     assertEqual(tree.capText, "Enter", "the word is no longer on screen, which is the ruling's own wording");
-    assertEqual(tree.doorKeys, "Enter", "the door no longer carries the shortcut, so the hidden word's fact left the tree with it");
+    assertEqual(tree.doorKeys, "Enter Space", "the door no longer carries the shortcut, so the hidden word's fact left the tree with it");
     assertEqual(tree.doorRole, "BUTTON", "the door is not a button");
 
     assertEqual(pageErrors, [], "the opening screen threw during the walk");
