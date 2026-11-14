@@ -720,7 +720,12 @@ def next_name(name, taken):
     command = [sys.executable, str(ENGINE / "scripts/lib/spawn.py"), name, "--next-name"]
     for other in taken:
         command += ["--taken", other]
-    return run(command, cwd=os.environ["RICHOS_ENTITY_ROOT"]).strip()
+    # A read that creates nothing, so not `run()`, which is the bound of the spawn itself.
+    done = subprocess.run(command, capture_output=True, text=True, timeout=RUN_TIMEOUT,
+                          cwd=os.environ["RICHOS_ENTITY_ROOT"])
+    if done.returncode or not done.stdout.strip():
+        raise ValueError("the teammate's name could not be numbered: %s" % (done.stderr.strip() or done.returncode))
+    return done.stdout.strip()
 
 
 def build_spawn_command(repo_dests, name, teammate, model, brief_path, title, integration=None, base=None):
