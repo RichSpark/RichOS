@@ -99,9 +99,13 @@ class Tools(unittest.TestCase):
         (opening / 'opening.json').write_text(json.dumps({'frames': 30, 'fps': 30.0, 'region': [0, 0, 100, 80], 'page': [100, 80]}))
         t1 = write_launch(out, 't1-01', [(50, frame()), (200, frame(0, window=40)), (2300, frame())], trial_lines(2250))
         slot = 1000 / 30
+        # A white window before the picture (six white cells read as 31): never the splash.
+        write_launch(out, 't1-02', [(50, frame()), (200, frame(31, window=40)), (400, frame(0, window=40)), (2300, frame())],
+                     trial_lines(2250))
+        t1b = json.loads((out / 't1-02' / 'launch.json').read_text())
         t3 = write_launch(out, 't3png-01', [(50, frame())] + [(300 + k * slot, frame(k, window=40)) for k in range(3)]
                           + [(2300, frame())], trial_lines(2250))
-        (out / 'results.json').write_text(json.dumps([t1, t3]))
+        (out / 'results.json').write_text(json.dumps([t1, t1b, t3]))
         return out
 
     def test_the_analysis_reads_the_recording(self):
@@ -117,6 +121,9 @@ class Tools(unittest.TestCase):
         self.assertEqual(t1['picture_on_glass_before_busy_end_ms'], 2050.0)
         self.assertEqual(t1['request_to_pushed_stamp_ms'], 120.0)
         self.assertEqual(t1['process_start_to_pushed_ms'], 115.0)
+        white = summary['launches']['t1'][1]
+        self.assertEqual(white['request_to_picture_on_glass_ms'], 400.0, 'a white window is not the picture')
+        self.assertEqual(white['request_to_window_on_glass_ms'], 200.0)
         t3 = summary['launches']['t3png'][0]
         self.assertEqual(t3['pictures_seen'], 3)
         self.assertEqual(t3['pictures_missing'], '3-29')
@@ -124,7 +131,13 @@ class Tools(unittest.TestCase):
         self.assertEqual(analyze.ranges([1, 3, 4, 15]), '1, 3-4, 15')
         self.assertEqual(analyze.ranges([]), 'none')
         self.assertEqual(t3['worst_lateness_ms'], 0.0)
-        self.assertEqual(summary['t1_stats']['request_to_picture_on_glass_ms']['p95_nearest_rank'], 200.0)
+        self.assertEqual(summary['t1_stats']['request_to_picture_on_glass_ms']['p95_nearest_rank'], 400.0)
+
+    def test_cleanup_captures_grandchildren(self):
+        guest = load('splash-trials-guest.py')
+        rows = [(100, 1, 'app'), (101, 100, 'child'), (102, 101, 'grandchild'), (103, 102, 'great'), (200, 1, 'other')]
+        self.assertEqual(sorted(guest.descendants(100, rows)), [101, 102, 103])
+        self.assertEqual(guest.descendants(200, rows), [])
 
     def test_a_recorded_instant_becomes_a_picture(self):
         out = self.recording()

@@ -155,9 +155,11 @@ class Frames:
         return diff / total if total else 0
 
 
-def stamp_reader(frames, content, stamp_at):
+def stamp_reader(frames, content, stamp_at, valid):
     """Returns read(i) -> index shown by the stamp in frame i, or None when no stamp is there.
-    The stamp is six 24-point cells; the recorder's frames are half the display's points."""
+    The stamp is six 24-point cells; the recorder's frames are half the display's points. Only an
+    index in `valid` counts: six white cells (31) or any number the launch cannot show is not a
+    picture, so a blank white window is never read as the splash on the glass."""
     s = 0.5
     cells = [(int((content[0] + stamp_at[0] + 12 + 24 * c) * s), int((content[1] + stamp_at[1] + 12) * s)) for c in range(6)]
 
@@ -173,7 +175,8 @@ def stamp_reader(frames, content, stamp_at):
                 bits.append(0)
             else:
                 return None
-        return int(''.join(str(b) for b in bits), 2)
+        n = int(''.join(str(b) for b in bits), 2)
+        return n if n in valid else None
     return read
 
 
@@ -262,7 +265,9 @@ def main():
         # The picture sits where the page draws, under the title bar (from walk 2 on; walk 1 put it
         # at the top of the content view).
         inset = content[3] - page[1] if page else 0
-        read = stamp_reader(frames, [content[0], content[1] + inset], [region[0] + 8, region[1] + 8])
+        # Trial 1 shows the opening's first picture only (index 0); trial 3 the opening's 30.
+        valid = set(range(meta.get('frames', 30))) if kind.startswith('t3') else {0}
+        read = stamp_reader(frames, [content[0], content[1] + inset], [region[0] + 8, region[1] + 8], valid)
         row['load_before'] = launch.get('load_before')
         shown = [(i, read(i)) for i in range(start, frames.n)]
         on = [(i, v) for i, v in shown if v is not None]

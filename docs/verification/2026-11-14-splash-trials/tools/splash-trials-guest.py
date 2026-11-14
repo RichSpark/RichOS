@@ -10,7 +10,8 @@ Every launch goes through LaunchServices (`open -n -a`, the route a Dock click t
 request instant on the guest's clock. Launches that are timed are recorded by screen-frames
 (ScreenCaptureKit, each new frame stamped with the instant macOS displayed it). Every instance is
 quit by the pid captured when it appeared (new, parent 1, the app's own executable), TERM then
-KILL after 8 s, and checked gone, children included.
+KILL after 8 s, and checked gone with every process descended from it (captured before the quit,
+so a grandchild that outlives its parent is still checked).
 """
 import argparse
 import json
@@ -75,6 +76,19 @@ def follow(path, stop, lines):
         time.sleep(0.002)
 
 
+def descendants(pid, rows=None):
+    """Every process descended from `pid` (children, grandchildren, ...), from one ps snapshot."""
+    rows = ps_rows() if rows is None else rows
+    found, frontier = [], [pid]
+    while frontier:
+        parent = frontier.pop()
+        for row in rows:
+            if row[1] == parent and row[0] not in found:
+                found.append(row[0])
+                frontier.append(row[0])
+    return found
+
+
 def rss_kb(pid):
     out = subprocess.run(['ps', '-o', 'rss=', '-p', str(pid)], capture_output=True, text=True).stdout.strip()
     return int(out) if out.isdigit() else None
@@ -133,7 +147,7 @@ class Launch:
             rest = ''
         stop.set()
         t.join()
-        children = [r[0] for r in ps_rows() if pid is not None and r[1] == pid]
+        children = descendants(pid) if pid is not None else []
         how = quit_pid(pid) if pid is not None else 'no pid found'
         time.sleep(0.5)
         for c in children:
