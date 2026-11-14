@@ -136,6 +136,8 @@
     $("avg").textContent = n === 0 ? "0" : n < 15 ? "Under 1" : fmt(Math.round(n / 30));
     $("all").textContent = fmt(result.count);
     const rows = monthRows(), now = new Date(), thisYear = now.getFullYear(), thisMonth = thisYear * 100 + now.getMonth() + 1;
+    // A user with no counted month yet (seen on the real app, 2026-11-14): no "By month" over nothing.
+    card.querySelector(".swear-sub").hidden = rows.length === 0;
     const max = Math.max(1, ...rows.map((r) => r.count));
     $("months").replaceChildren(...rows.slice(0, shown).map((r, i) => {
       const fresh = revealFrom !== undefined && i >= revealFrom;
