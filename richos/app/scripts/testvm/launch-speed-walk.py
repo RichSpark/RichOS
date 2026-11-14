@@ -26,10 +26,6 @@ through LaunchServices), as a regular launch (an unattended one builds its windo
                   times (its very first launch is reported, not judged);
   cold            the first launch after the guest starts, with the disk cache flushed by
                   `sudo purge`, because staging the bundle had just read every file;
-  updated-from-applications
-                  with --previous-app, the CEO's own situation: an older copy in /Applications (the
-                  Dock's target) handing over to the candidate in ~/Applications with the receipt an
-                  update leaves, --runs times (its first launch is reported, not judged);
   after-update    with --previous-app, the plan's route 3: the older copy installed in
                   ~/Applications as an update leaves it, the candidate prepared as its update (the
                   receipts the updater writes, derived as it derives them), the older copy launched
@@ -323,7 +319,7 @@ def guest_limit(rows, label='dictionary:calibration'):
 
 
 # The guest's plans, in the order they run (each its own probe and folder).
-PLANS = ('dictionary', 'fresh', 'switch', 'checks', 'updated', 'after')
+PLANS = ('dictionary', 'fresh', 'switch', 'checks', 'after')
 
 
 def bmp_pixels(jpg):
@@ -465,7 +461,7 @@ def main():
     # One home per route, copied from the fixture run.sh staged: no route sees another's saved
     # state. The engine is the payload's, as every walk has it.
     fixture = payload + '/home'
-    homes = {route: payload + '/home-' + route for route in ('fresh', 'updated', 'checks')}
+    homes = {route: payload + '/home-' + route for route in ('fresh', 'checks')}
     for home in homes.values():
         g('rm -rf ' + shlex.quote(home) + ' && cp -Rp ' + shlex.quote(fixture) + ' ' + shlex.quote(home))
 
@@ -566,24 +562,9 @@ def main():
             richos('checks:after', homes['checks'], fresh)]))
     if a.previous_app and not a.only_checks:
         try:
-            user_app = homes['updated'] + '/Applications/RichOS.app'
-            g('mkdir -p ' + shlex.quote(homes['updated'] + '/Applications') + ' && ditto ' + shlex.quote(staged[0])
-              + ' ' + shlex.quote(user_app), 600)
-            # The receipt an update leaves, derived as the updater derives it, inside the guest.
-            tree = g('python3 -c ' + shlex.quote(
-                'import importlib.util as u; s=u.spec_from_file_location("w", %r); m=u.module_from_spec(s); '
-                's.loader.exec_module(m); print(m.receipt_tree_sha256(%r))' % (work + '/launch-speed-walk.py', user_app)),
-                900)
-            receipt = json.dumps({'version': version, 'archive_sha256': hashlib.sha256(a.candidate.name.encode()).hexdigest(),
-                                  'tree_sha256': tree, 'executable_name': 'richos-tauri'})
-            root = homes['updated'] + '/Applications/.richos-updater'
-            g('mkdir -p ' + shlex.quote(root) + ' && chmod 700 ' + shlex.quote(root) + ' && umask 077 && printf %s '
-              + shlex.quote(receipt) + ' > ' + shlex.quote(root + '/published.json'))
-            install(a.previous_app)
-            owns = [INSTALLED, user_app]
-            said.append(run_plan('updated', [richos('updated:first', homes['updated'], owns, frame_at=1.0)]
-                                 + [richos('updated-from-applications:judged', homes['updated'], owns,
-                                           expect_splash=expect(prior + 2 + i)) for i in range(a.runs)]))
+            # (No route of an older copy in /Applications handing over to an update in ~/Applications:
+            # the update replaces the copy the user opens, so no real user has two copies; the lead,
+            # 2026-11-14: "it was a leftover from the CEO's own testing".)
             # THE PLAN'S ROUTE 3: the first launch after an update put in place at quit. The older copy is
             # in this home's ~/Applications as an update leaves it, the candidate is prepared as its
             # update, the older copy is started and quit (its helper puts the candidate in place as it
@@ -622,7 +603,7 @@ def main():
                           at_home('after-update:judged', before=helper_done, expect_splash=expect(prior + 4 + 2 * i))]
             said.append(run_plan('after', plan3))
         except Exception as error:  # a route that cannot be set up is missing evidence, never the end of the walk
-            facts.setdefault("route_errors", {})['updated and after-update'] = str(error)[:500]
+            facts.setdefault("route_errors", {})['after-update'] = str(error)[:500]
 
     # The guest's own system log for the walk, on the guest's clock.
     predicate = 'process == "richos-tauri" OR process == "Dictionary"'
@@ -646,7 +627,6 @@ def main():
             rows += [measure(r, events) for r in ran if not r['label'].startswith('checks')]
     planned = {"ordinary": a.runs, "cold": a.runs, "rule-switch": 2 * a.runs}
     if a.previous_app:
-        planned["updated-from-applications"] = a.runs
         # An older copy from before the saved pick existed saves nothing at its quit, so the first
         # start after it hands over has no opening to play: that route is then reported, and says
         # why, rather than judged (the plan's section 9, "the first start after an update is picked

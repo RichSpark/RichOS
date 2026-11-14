@@ -323,21 +323,22 @@ NEW_USER_WALK_BUDGET = NEW_USER_WALK_WAIT + 2400
 # SCREEN IN WELL UNDER 500 MS AFTER BUTTON CLICK", and Dictionary's measured Dock launch on his Mac,
 # at most 380 ms, as the benchmark). Every candidate that takes the new-user walk is also timed, in
 # its own guest, from the launch request to its splash playing (testvm/launch-speed-walk.py, the
-# five routes of Sage's plan 2026-11-14 "the splash the rules picked is playing within 380 ms of the
-# click", section 6: a returning user's launch, the first launch after the guest starts, the first
-# launch after an update put in place at quit, the CEO's own route of an older published copy in
-# /Applications handing over, and a quit at which the rules pick another splash; 20 launches a
-# route, 40 for the last so that every splash today's rule picks is timed), and it is refused when
-# the p95 of every judged launch is over 380 ms (the CEO: "380 ms as the maximum allowed p95 time"),
-# scaled once by how much slower Dictionary launches in that guest than on his Mac, compared like for
-# like by medians, the ratio and its inputs recorded beside the limit (the CEO: "if the VM is slower,
-# then the measurements need to be adjusted accordingly"); the nightly states the p95 and every
-# route's and every splash's own numbers either way. A refusal, or a walk that could not run, is
-# taken once more before the candidate is refused (verification-retries.md).
+# routes of Sage's plan 2026-11-14 "the splash the rules picked is playing within 380 ms of the
+# click", section 6: a returning user's launch, the first launch after the guest starts (each after
+# its own purge, judged against Dictionary after the same purge), the first launch after an update
+# put in place at quit, and a quit at which the rules pick another splash; 20 launches a route, 40
+# for the last so that every splash today's rule picks is timed; no route of an older copy in
+# /Applications handing over, which no real user has), and it is refused when the p95 of any judged
+# route is over 380 ms (the CEO: "380 ms as the maximum allowed p95 time"), scaled by how much slower
+# Dictionary launches in that guest than on his Mac, compared like for like by medians, the ratio and
+# its inputs recorded beside the limit (the CEO: "if the VM is slower, then the measurements need to
+# be adjusted accordingly"); the nightly states the p95 and every route's and every splash's own
+# numbers either way. A refusal, or a walk that could not run, is taken once more before the
+# candidate is refused (verification-retries.md).
 LAUNCH_SPEED_PHASE = "launch-speed"
 LAUNCH_SPEED_WAIT = 3600
-# About 176 launches (10 Dictionary, 1 + 20 cold + 20 ordinary + 2, 60 for the rule switch, 21 handing
-# over, 42 after an update; measured in this branch's walk of 2026-11-14, see docs/verification/
+# About 165 launches (20 Dictionary, 1 + 20 cold + 20 ordinary + 2, 60 for the rule switch, 42 after
+# an update; measured in this branch's walks of 2026-11-14, see docs/verification/
 # 2026-11-14-splash-opening/); the budget is the slot wait plus 90 minutes.
 LAUNCH_SPEED_BUDGET = LAUNCH_SPEED_WAIT + 5400
 
