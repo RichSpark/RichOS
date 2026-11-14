@@ -234,7 +234,31 @@ def mid_job_notice(work, active, payload, root, emit):
     return True
 
 
-def held_work_context(work, root, payload):
+def home_stage_notice(root, payload):
+    """A STAGE OF THE HOME PICTURE WAS REACHED (CEO 2026-11-14: "a hook that automatically
+    notifies Rich when a milestone is reached"). The app writes <state>/home-stage-notice.json
+    when the user's loro crosses a stage (main.rs home_stage_reached: stage, name, count); the
+    conversation lease's next turn opens with that fact, once, and the file is gone. What Rich
+    does with it is his instruction file's, never this notice's: it states the fact only."""
+    if lease_role(root, payload) not in (None, "rich"):
+        return ""
+    path = root / "home-stage-notice.json"
+    try:
+        notice = json.loads(path.read_text())
+        stage, name, count = int(notice["stage"]), str(notice["name"]), int(notice["count"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return ""
+    try:
+        path.unlink()
+    except OSError:
+        return ""  # a notice that cannot be taken is not said at every turn
+    if not 1 <= stage <= 6 or not name.strip() or count < 0:
+        return ""
+    return (f"HOME PICTURE STAGE REACHED: the user's loro picture on the home screen reached "
+            f"stage {stage} of 6, \"{name.strip()[:60]}\", at {count:,} memories.")
+
+
+def held_work_context(work, root, payload, also=""):
     """THE FALLBACK FOR DUE WORK in the app (orchestration reliability R5, richos-hq docs/
     prds/2026-10-23-orchestration-reliability.md): while no healthy stall watcher evaluates
     this conversation, Rich's turn opens with the due work (workspaces.fallback_notice, the
@@ -248,6 +272,7 @@ def held_work_context(work, root, payload):
         text = work.W.fallback_notice(session)
     except Exception as error:  # noqa: BLE001 -- an unread list is said, never silence
         text = f"DUE WORK NOT READ this turn ({type(error).__name__}: {str(error)[:160]})"
+    text = "\n\n".join(part for part in (text, also) if part)
     if text:
         print(json.dumps({"hookSpecificOutput": {"hookEventName": "UserPromptSubmit",
                                                  "additionalContext": text}}))
@@ -308,7 +333,7 @@ def handle(payload):
     ws = [sys.executable, str(ENGINE / "mega-lander/workspaces.py"), "--entity", str(coordination)]
     work = load("richos_desktop_work", ENGINE / "mega-lander/app.py")
     if event == "UserPromptSubmit":
-        held_work_context(work, root, payload)
+        held_work_context(work, root, payload, also=home_stage_notice(root, payload))
     if event == "PreToolUse":
         refuse_the_leads_own_read(work, root, payload)
         run(["/bin/bash", str(ENGINE / "scripts/hooks/guard-sealed-worktree.sh")], payload)
