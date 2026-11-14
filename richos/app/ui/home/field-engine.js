@@ -1144,6 +1144,43 @@ function drawBokeh() {
 }
 resize();
 
+// ---- the threads' colors, a function of its own ----
+// The pass that colors every thread (and the ribbons drawn from them) is NOT written inside `frame`,
+// and must not be moved back. `frame` is very long, and WebKit sometimes left this pass unoptimized
+// inside it for the rest of a visit after the memory count changed: 43 ms a frame against under 3,
+// which is 17 to 26 frames a second against 60 (round 75, richos-hq a4c16a665, measured with a timer
+// at each section of the frame). As a function of its own it is compiled by itself.
+// `tests/home-frame-pass.js` holds it here.
+function colorThreads(hoverActive, domActive) {
+  // ---- link colours ----
+  for (let k = 0; k < L; k++) {
+    const s = D.ls[k], tt = D.lt[k], o = k * LP * 4;
+    const fs = fade[s] * nAlpha[s] * gate[s], ft = fade[tt] * nAlpha[tt] * gate[tt];
+    let a = Math.min(fs, ft) * D.lalpha[k] * (D.lclass[k] === 0 ? V.hairGain : 1);
+    const ll = linkLit[k], fl = linkFlash[k];
+    let wr = 0, wg = 0, wb = 0, wm = 0; // white admixture for lit / flashing fibres
+    if (ll > 0) { a = Math.max(a, 0.9 * ll * Math.max(fs, ft)); wm = 0.55 * ll; }
+    if (fl > 0.01) { a = Math.max(a, 0.85 * fl); wm = Math.max(wm, 0.5 * fl); linkFlash[k] *= 0.95; } else if (fl) linkFlash[k] = 0;
+    if (domActive && !hoverActive && D.nodeDomain[s] === domHover && D.nodeDomain[tt] === domHover) a *= 1.5;
+    a *= V.fibreGain;
+    const c0 = s * 3, c1 = tt * 3;
+    for (let p = 0; p <= SEG; p++) {
+      const u = p / SEG;
+      let r = D.col[c0] + (D.col[c1] - D.col[c0]) * u, g = D.col[c0 + 1] + (D.col[c1 + 1] - D.col[c0 + 1]) * u, b = D.col[c0 + 2] + (D.col[c1 + 2] - D.col[c0 + 2]) * u;
+      if (wm) { r += (1 - r) * wm; g += (1 - g) * wm; b += (1 - b) * wm; }
+      if (GHOST) { const m = clamp((1 - Math.min(gate[s], gate[tt])) / 0.6, 0, 1); if (m > 0.015) { r += (GC[0] - r) * m; g += (GC[1] - g) * m; b += (GC[2] - b) * m; } }
+      const q = o + p * 4, aa = Math.min(1, a) * 255;
+      lcol[q] = r * aa; lcol[q + 1] = g * aa; lcol[q + 2] = b * aa; lcol[q + 3] = aa;
+    }
+  }
+  if (RL) {
+    for (let r = 0; r < RL; r++) {
+      const k = ribbonLinks[r], base = r * RVP, o = k * LP * 4;
+      for (let v = 0; v < RVP; v++) { const p = clamp(Math.floor((v - 1) / 2), 0, SEG); const q = (base + v) * 4, oq = o + p * 4; rcol[q] = lcol[oq] * 0.85; rcol[q + 1] = lcol[oq + 1] * 0.85; rcol[q + 2] = lcol[oq + 2] * 0.85; rcol[q + 3] = Math.max(1, Math.min(255, lcol[oq + 3] * 0.85)); }
+    }
+  }
+}
+
 // ---------------- frame ----------------
 const domCentroid = new Float32Array(domains.length * 4);
 let frames = 0, lastNow = performance.now();
@@ -1221,33 +1258,7 @@ function frame() {
     const a = f * (D.isLight[i] ? 0.9 : 0.42 + 0.3 * Math.min(1, D.degree[i] / 10) + 0.28 * l) * tw * V.nodeGain;
     nodeCol[q] = r * a; nodeCol[q + 1] = gg * a; nodeCol[q + 2] = b * a; nodeCol[q + 3] = a;
   }
-  // ---- link colours ----
-  for (let k = 0; k < L; k++) {
-    const s = D.ls[k], tt = D.lt[k], o = k * LP * 4;
-    const fs = fade[s] * nAlpha[s] * gate[s], ft = fade[tt] * nAlpha[tt] * gate[tt];
-    let a = Math.min(fs, ft) * D.lalpha[k] * (D.lclass[k] === 0 ? V.hairGain : 1);
-    const ll = linkLit[k], fl = linkFlash[k];
-    let wr = 0, wg = 0, wb = 0, wm = 0; // white admixture for lit / flashing fibres
-    if (ll > 0) { a = Math.max(a, 0.9 * ll * Math.max(fs, ft)); wm = 0.55 * ll; }
-    if (fl > 0.01) { a = Math.max(a, 0.85 * fl); wm = Math.max(wm, 0.5 * fl); linkFlash[k] *= 0.95; } else if (fl) linkFlash[k] = 0;
-    if (domActive && !hoverActive && D.nodeDomain[s] === domHover && D.nodeDomain[tt] === domHover) a *= 1.5;
-    a *= V.fibreGain;
-    const c0 = s * 3, c1 = tt * 3;
-    for (let p = 0; p <= SEG; p++) {
-      const u = p / SEG;
-      let r = D.col[c0] + (D.col[c1] - D.col[c0]) * u, g = D.col[c0 + 1] + (D.col[c1 + 1] - D.col[c0 + 1]) * u, b = D.col[c0 + 2] + (D.col[c1 + 2] - D.col[c0 + 2]) * u;
-      if (wm) { r += (1 - r) * wm; g += (1 - g) * wm; b += (1 - b) * wm; }
-      if (GHOST) { const m = clamp((1 - Math.min(gate[s], gate[tt])) / 0.6, 0, 1); if (m > 0.015) { r += (GC[0] - r) * m; g += (GC[1] - g) * m; b += (GC[2] - b) * m; } }
-      const q = o + p * 4, aa = Math.min(1, a) * 255;
-      lcol[q] = r * aa; lcol[q + 1] = g * aa; lcol[q + 2] = b * aa; lcol[q + 3] = aa;
-    }
-  }
-  if (RL) {
-    for (let r = 0; r < RL; r++) {
-      const k = ribbonLinks[r], base = r * RVP, o = k * LP * 4;
-      for (let v = 0; v < RVP; v++) { const p = clamp(Math.floor((v - 1) / 2), 0, SEG); const q = (base + v) * 4, oq = o + p * 4; rcol[q] = lcol[oq] * 0.85; rcol[q + 1] = lcol[oq + 1] * 0.85; rcol[q + 2] = lcol[oq + 2] * 0.85; rcol[q + 3] = Math.max(1, Math.min(255, lcol[oq + 3] * 0.85)); }
-    }
-  }
+  colorThreads(hoverActive, domActive);
   if (geomDirty) { buildLinks(); buildRibbons(); geomDirty = false; }
   if (srcColDirty) buildSourceColors(hoverActive);
   // ---- packets ----
