@@ -28,8 +28,12 @@ STEPS, in the guest, never on the host's screen (CEO ruling §65):
              the walk presses the home screen's "Talk to Rich" (home-enter) as soon as it is up.
              From launch until the install is done and 15 s past it, the setup sheet's title
              ("There's a bit of setting up to do first.") is never on screen, read by the
-             accessibility tree every second and by OCR on a frame every few seconds; the stamp
-             then carries --next-sha256 (photographed)
+             accessibility tree every second and by OCR on a frame every few seconds. 15 s after
+             going in, while the install still runs, a message is sent with real keys and must
+             be answered (TurnCompleted with Rich's text) BEFORE the install ends: he never waits
+             on it. After the install the window must ask voice again (a new `[richos] voice:`
+             line within 15 s), so Talk to Rich works with no relaunch. The stamp then carries
+             --next-sha256 (photographed)
 
 A CONTROL: run against a build without the 2026-11-14 change (same pin, same command), the walk
 fails at `after` with "the setup sheet came up", which is the CEO's screenshot.
@@ -56,6 +60,7 @@ _spec = importlib.util.spec_from_file_location('new_user_walk', HERE / 'new-user
 new_user = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(new_user)
 StepFailed = new_user.StepFailed
+voice_lines = new_user.setup_walk.voice_lines
 
 STEPS = ['setup', 'update', 'after', 'quit']
 SHEET_TITLE = "There's a bit of setting up to do first."
@@ -64,6 +69,7 @@ SHEET_OCR = 'setting up to do first'
 STARTED = '[richos] engine update: the installed engine is an earlier build'
 DONE = "[richos] engine update: this build's engine is installed and in use"
 FAILED = '[richos] engine update FAILED'
+REPLY_WORDS = 'Reply with one word: received.'
 
 
 def stamp_digest(text):
@@ -126,7 +132,7 @@ class EngineUpdateWalk(new_user.NewUserWalk):
         # A branch bundle reports the commit it was built from (branch-bundle.sh RICHOS_SOURCE_SHA).
         if not built or not (built.startswith(self.a.expect_sha) or self.a.expect_sha.startswith(built)):
             raise StepFailed('the next app was built from %r, not %s' % (built, self.a.expect_sha))
-        seen, done_at, n, entered = [], None, 0, None
+        seen, done_at, n, entered, reply, voice_at_done = [], None, 0, None, None, None
         began = time.monotonic()
         end = began + self.a.within
         while time.monotonic() < end:
@@ -136,6 +142,7 @@ class EngineUpdateWalk(new_user.NewUserWalk):
                                  + next(l for l in text.splitlines() if l.startswith(FAILED)))
             if done_at is None and DONE in text:
                 done_at = time.monotonic()
+                voice_at_done = len(voice_lines(text))
             # A RELAUNCH OPENS ON THE HOME SCREEN, and the start's questions, the setup sheet
             # among them, wait for him to go in (ui/main.js askStartupQuestionsOffHome). So the
             # walk goes in as he does, by "Talk to Rich", the moment the home screen is up:
@@ -145,6 +152,23 @@ class EngineUpdateWalk(new_user.NewUserWalk):
                 self.frame('home-before-entering')
                 self.ax('click', '--id', 'home-enter', '--first')
                 entered = round(time.monotonic() - began, 1)
+            # HE NEVER WAITS ON THE INSTALL: a message sent while it runs is answered while it
+            # still runs, by the engine the earlier build installed. Sent 15 s after going in, so
+            # a sheet that comes up on going in (a build without this change: 12.6 s) is seen
+            # first.
+            elif entered is not None and reply is None and time.monotonic() - began >= entered + 15:
+                if DONE in text:
+                    raise StepFailed('the install finished before the walk could send a message during it')
+                sent = time.monotonic()
+                outcome, _ = self.send(REPLY_WORDS, 'reply-during-update', self.a.turn_within)
+                after = self.read_log(self.next_log)
+                reply = {'sent_at_s': round(sent - began, 1), 'seconds': round(time.monotonic() - sent, 1),
+                         'outcome': outcome, 'install_done_when_answered': DONE in after}
+                if not outcome or outcome.get('state') != 'completed' or not outcome.get('rich_wrote'):
+                    raise StepFailed('the message sent during the install was not answered: ' + json.dumps(reply))
+                if reply['install_done_when_answered']:
+                    raise StepFailed('the message was answered only after the install ended: ' + json.dumps(reply))
+                continue
             n += 1
             # A frame every fourth read (OCR costs seconds); the tree every read.
             where = self.sheet_seen('after-%02d' % n if n % 4 == 1 else None)
@@ -152,7 +176,7 @@ class EngineUpdateWalk(new_user.NewUserWalk):
                 seen.append({'at_s': round(time.monotonic() - began, 1), 'by': where})
                 self.frame('sheet-came-up')
                 break
-            if done_at is not None and entered is not None and time.monotonic() - done_at >= 15:
+            if done_at is not None and reply is not None and time.monotonic() - done_at >= 15:
                 break
             time.sleep(1)
         (self.out / 'next.log').write_text(text)
@@ -167,10 +191,17 @@ class EngineUpdateWalk(new_user.NewUserWalk):
         digest = self.installed_digest()
         if digest != self.a.next_sha256:
             raise StepFailed('after the update the stamp carries %r, not %s' % (digest, self.a.next_sha256))
+        # VOICE IS ASKED AGAIN once the new engine is in use, with no relaunch: the window's ask
+        # prints a `[richos] voice:` line every time (main.rs voice_readiness).
+        asked = len(voice_lines(text)) - voice_at_done
+        if asked < 1:
+            raise StepFailed('the window did not ask voice again after the install (no new voice line in 15 s)')
         final = self.frame('after-update')
         line = next(l for l in text.splitlines() if l.startswith(DONE))
         return {'built_from': built, 'installed_sha256': digest, 'done': line,
                 'went_in_at_s': entered, 'install_done_at_s': round(done_at - began, 1),
+                'reply_during_update': reply, 'voice_asked_after_install': asked,
+                'talk_toggle_on_screen': self.by_id('talk-toggle') is not None,
                 'sheet_reads': n, 'frames': (n + 3) // 4, 'company_on_screen': new_user.COMPANY in final}
 
     def quit(self):
@@ -190,6 +221,7 @@ def main():
     p.add_argument('--from-sha256', required=True, help="the FROM build's engine pin digest")
     p.add_argument('--next-sha256', required=True, help="the next build's engine pin digest")
     p.add_argument('--within', type=float, default=1200, help='seconds for first setup, and for the update')
+    p.add_argument('--turn-within', type=float, default=240, help='seconds for the message sent during the install')
     a = p.parse_args()
     a.from_sha256, a.next_sha256 = a.from_sha256.lower(), a.next_sha256.lower()
     if a.from_sha256 == a.next_sha256:
