@@ -606,6 +606,35 @@ pub fn date_field(field: &mut Value, ledger: &mut FirstSeen, today: i64, corpus_
     changed
 }
 
+/// Give every node of a field read from repositories the order it was first seen in
+/// (`arrivalOrder`), by its `layoutKey`, and write down the ones not seen before. Their days are
+/// real (first commits) and are not touched. Objects seen for the first time together are
+/// numbered by their day, so the first picture fills in as the work was done; whatever comes later
+/// is numbered after everything already seen, so it never takes the place of a light already on
+/// the screen. Returns whether the ledger changed.
+pub fn order_field(field: &mut Value, ledger: &mut FirstSeen) -> bool {
+    let Some(nodes) = field["nodes"].as_array_mut() else { return false };
+    let mut fresh: Vec<(i64, usize, String)> = nodes
+        .iter()
+        .enumerate()
+        .filter_map(|(i, n)| {
+            let key = seen_key(n["layoutKey"].as_str()?);
+            (!ledger.order.contains_key(&key)).then(|| (n["createdDay"].as_i64().unwrap_or(0), i, key))
+        })
+        .collect();
+    fresh.sort();
+    let changed = !fresh.is_empty();
+    for (_, _, key) in fresh {
+        ledger.next += 1;
+        ledger.order.insert(key, ledger.next);
+    }
+    for n in nodes {
+        let order = n["layoutKey"].as_str().and_then(|k| ledger.order.get(&seen_key(k))).copied().unwrap_or(0);
+        n["arrivalOrder"] = json!(order);
+    }
+    changed
+}
+
 const STAMP_FILE_LIMIT: usize = 200_000;
 
 /// A hash of every file under the corpus: relative path, size and modification time, in path order.
@@ -1057,6 +1086,23 @@ mod tests {
         date_field(&mut field, &mut old, 20_000, Some(20_000));
         assert_eq!(field["nodes"][1]["arrivalOrder"], 0);
         assert_eq!(field["nodes"][0]["arrivalOrder"], 1);
+    }
+
+    #[test]
+    fn repository_objects_are_numbered_by_day_at_first_and_after_everything_seen_later() {
+        let node = |key: &str, day: i64| json!({ "layoutKey": key, "createdDay": day });
+        let mut ledger = FirstSeen::default();
+        let mut first = json!({ "nodes": [node("late", 9), node("early", 1), node("mid", 5)] });
+        assert!(order_field(&mut first, &mut ledger));
+        let orders = |f: &Value| f["nodes"].as_array().unwrap().iter().map(|n| n["arrivalOrder"].as_u64().unwrap()).collect::<Vec<_>>();
+        assert_eq!(orders(&first), vec![3, 1, 2], "the first picture is numbered by day");
+        // a document committed on an old day is read later: it comes after everything already seen
+        let mut second = json!({ "nodes": [node("old-but-new", 0), node("late", 9), node("early", 1), node("mid", 5)] });
+        assert!(order_field(&mut second, &mut ledger));
+        assert_eq!(orders(&second), vec![4, 3, 1, 2]);
+        assert_eq!(second["nodes"][0]["createdDay"], 0, "a repository object's day is its own");
+        // nothing new: nothing to write
+        assert!(!order_field(&mut second, &mut ledger));
     }
 
     #[test]

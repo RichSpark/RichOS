@@ -10264,7 +10264,16 @@ fn home_field_data(state: State<AppState>) -> serde_json::Value {
     // `verify_engine` (`home_repos::home_git` says why: two Finder `.DS_Store` files cost the CEO his
     // picture on 2026-11-14).
     let home_git = { let engine = state.engine_dir.lock().unwrap().clone(); richos_core::home_repos::home_git(&engine) };
-    if let Some((field, from)) = home_git.and_then(|git| richos_core::home_repos::field_kept_or_built(&kept_repos, &folders, richos_core::home_repos::today(), &git)) {
+    if let Some((mut field, from)) = home_git.and_then(|git| richos_core::home_repos::field_kept_or_built(&kept_repos, &folders, richos_core::home_repos::today(), &git)) {
+        // THE ORDER EACH OBJECT WAS FIRST SEEN IN (round 75): new work arrives after the lights
+        // already on the screen, whatever day its documents were first committed.
+        let order_path = state.data_dir.join("home-field-repos-order.json");
+        let mut order = home_field::read_first_seen(&order_path);
+        if home_field::order_field(&mut field, &mut order) {
+            if let Err(e) = home_field::write_first_seen(&order_path, &order) {
+                eprintln!("[richos] home field: could not keep the order objects were first seen in ({e})");
+            }
+        }
         eprintln!(
             "[richos] home field: {} object(s) in {} companies from their repositories ({:?}), {} link(s), {} source(s); unread folders: {}",
             field["meta"]["counts"]["objects"],

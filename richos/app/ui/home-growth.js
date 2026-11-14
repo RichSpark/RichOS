@@ -162,7 +162,7 @@ window.RichHomeGrowth = (function () {
 
     // the engine's own arrival order, for the first hundred
     var order = nodes.slice().sort(function (a, b) {
-      return (a.createdDay || 0) - (b.createdDay || 0) || (a.arrivalOrder || 0) - (b.arrivalOrder || 0) || (b.significance || 0) - (a.significance || 0) || (b.degree || 0) - (a.degree || 0);
+      return (a.arrivalOrder || 0) - (b.arrivalOrder || 0) || (a.createdDay || 0) - (b.createdDay || 0) || (b.significance || 0) - (a.significance || 0) || (b.degree || 0) - (a.degree || 0);
     });
     var tally = {};
     firstLane = null;
@@ -198,7 +198,8 @@ window.RichHomeGrowth = (function () {
     } else if (storeOk && typeof st.stage === "number" && stage > st.stage && stage >= 2) {
       scene = "crossed";
       startStage = st.stage;
-      startCount = Math.max(0, N - 5);
+      // from what he last saw, so every light since arrives; the last five where that is not known
+      startCount = st.look && typeof st.look.count === "number" && st.look.count >= 0 && st.look.count < N ? st.look.count : Math.max(0, N - 5);
       levels = levelsAt(startStage);
     } else if (storeOk && st.look && typeof st.look.count === "number" && N > st.look.count) {
       scene = "home";

@@ -1676,8 +1676,9 @@ window.RichHome = (function () {
         var field = answer && answer.available === true && answer.field;
         var now = field && Array.isArray(field.nodes) ? field.nodes.length : 0;
         var drawn = state.ghost ? state.ghost.total : null;
-        if (!state.open || drawn === null) return false;
-        if (now > drawn) {
+        if (!state.open) return false;
+        // (`drawn` is not known for the first instant after a picture comes up; asked again then)
+        if (drawn !== null && now > drawn) {
           // NOT UNDER "WATCH IT GROW": a picture drawn again would cut the film short. The new
           // records wait for its last frame (asked about once a second) and arrive after it.
           if (window.RichHomeGrowth && window.RichHomeGrowth.replaying) {
@@ -1927,6 +1928,10 @@ window.RichHome = (function () {
         refreshNote();
         // His records came after the ceiling while the example was still being drawn.
         if (state.lateRecords) drawLateRecords();
+        // The answer this launch drew may be the kept picture, with the repositories being read
+        // again behind it: asked again as on every later visit, so work done since the last
+        // launch arrives on this one (round 75, 3.4).
+        else if (state.team) refreshRecords();
         // If the CEO already left for the app UI while this was loading, the picture must not
         // start burning frames behind an opaque surface.
         if (!state.open && window.__loro && window.__loro.pause) window.__loro.pause();

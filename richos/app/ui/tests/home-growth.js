@@ -466,18 +466,18 @@ async function main() {
   });
 
   await run.check("a crossing passed by more than a few memories still switches its piece on while he watches", async () => {
-    // 295 when he last looked, 320 now: the picture starts past the threshold (at 315), and the
-    // river must still be off until its moment
+    // 295 when he last looked, 320 now: the picture starts from the 295 he saw, all 25 new lights
+    // arrive, and the river is off until its moment
     const page = await openApp(browser, { homeTeam: TEAM, homeField: field(320) }, seenAt(295, 3));
     await page.waitForFunction("!!window.RichHomeGrowth.state().active && !!window.__loro && !!window.__loro.growth", null, { timeout: 60000 });
     const before = await page.evaluate(() => ({ count: window.VARIANT.count, river: window.__loro.growth.XT.river, x: window.__loro.growth.X.river }));
-    assertEqual(before, { count: 315, river: 0, x: 0 }, "the river is switched on before the crossing's moment");
+    assertEqual(before, { count: 295, river: 0, x: 0 }, "the picture does not start from what he last saw with the river off");
     await arrived(page);
     await page.waitForFunction(() => document.getElementById("home-moment").classList.contains("on"), null, { timeout: 60000 });
     assertEqual(await text(page, "#home-moment .title"), "The River", "the stage's name");
     await page.waitForFunction(() => window.__loro.growth.X.river > 0.9, null, { timeout: 60000 });
     await page.close();
-    return "starts at 315 with the river off; The River switches it on";
+    return "starts at the 295 he last saw with the river off; The River switches it on";
   });
 
   await run.check("the offer under a crossing starts the replay", async () => {
@@ -567,6 +567,20 @@ async function main() {
     assertEqual(page.__errors, [], "the page reported errors");
     await page.close();
     return `"7 new since this morning", the count seen at ${seen.join(", ")}; then "10 new since this morning" after coming back; ${contrast}`;
+  });
+
+  await run.check("the first launch also waits for the read behind the answer: work since the last launch arrives on this one", async () => {
+    // the backend answers with the kept picture (179) and the new one (186) a moment later
+    const page = await openApp(browser, { homeTeam: TEAM, homeField: field(179, { rising: true }) }, seenAt(179, 3));
+    await page.evaluate((f) => {
+      const mock = window.__RICHOS_MOCK__;
+      setTimeout(() => mock.homeFieldSet(f), 1500);
+    }, field(186, { rising: true }));
+    await page.waitForFunction(() => window.RichHomeGrowth.state().n === 186 && window.RichHomeGrowth.state().arrived, null, { timeout: 60000 });
+    assertEqual(await text(page, "#home-caption"), "7 new since this morning", "the caption");
+    await countIs(page, 186);
+    await page.close();
+    return "179 drawn, then 186 on the same launch: \"7 new since this morning\"";
   });
 
   await run.check("a cold open under 400 draws his lights in the order he earned them, and from 400 they are simply there", async () => {

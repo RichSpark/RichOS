@@ -132,12 +132,13 @@ const nAlpha = new Float32Array(N);               // bloom fade-in
    approved frame unaltered.
 
    Arrival order is the dataset's own createdDay, so the first records are the seeds the later ones
-   hang off - the same order a real loro would fill in. Within a day it is the dataset's
-   arrivalOrder where it carries one (`home_field.rs`, the order objects were first seen), so a
-   record that arrives later the same day never takes the place of one already on the screen. ============================================ */
+   hang off - the same order a real loro would fill in. Where the dataset carries arrivalOrder
+   (`home_field.rs`: the order objects were first seen in, by day within the first sighting) that
+   comes first, so a record that arrives later never takes the place of one already on the
+   screen, whatever its day or its significance. ============================================ */
 const gate = new Float32Array(N).fill(1), gateT = new Float32Array(N).fill(1), gateFrom = new Float32Array(N).fill(1), gateDelay = new Float32Array(N);
 const arrival = Array.from({ length: N }, (_, i) => i)
-  .sort((a, b) => (nodes[a].ghost ? 1 : 0) - (nodes[b].ghost ? 1 : 0) || D.createdDay[a] - D.createdDay[b] || (nodes[a].arrivalOrder || 0) - (nodes[b].arrivalOrder || 0) || nodes[b].significance - nodes[a].significance || D.degree[b] - D.degree[a]);
+  .sort((a, b) => (nodes[a].ghost ? 1 : 0) - (nodes[b].ghost ? 1 : 0) || (nodes[a].arrivalOrder || 0) - (nodes[b].arrivalOrder || 0) || D.createdDay[a] - D.createdDay[b] || nodes[b].significance - nodes[a].significance || D.degree[b] - D.degree[a]);
 const arrivalRank = new Int32Array(N); arrival.forEach((i, r) => { arrivalRank[i] = r; });
 const srcVisible = new Int32Array(S); let srcVisibleN = S;
 let COUNT = N, gateClock = 0, gateBusy = false;
