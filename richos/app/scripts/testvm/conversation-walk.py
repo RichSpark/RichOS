@@ -57,7 +57,13 @@ WHAT IT DOES, in the guest, never on the host's screen (CEO ruling 65):
   setup      first setup as adopt-walk.py does it: the first-run sheets declined ("Not now"), the
              company question answered (--company, a folder that is a repository), and the app's
              first conversation created. The first-run card is left on screen, unpressed: pressing
-             it, or not, is the conversation's business
+             it, or not, is the conversation's business. With --memory the memory question is
+             answered "Set it up" instead, as a user who keeps his memory on this Mac does
+  loro       with --memory: the user's loro memory count, read by loro's own census in the guest
+             (the engine's `loro-context.mjs corpus` on ~/RichOS/corpus), once after setup and
+             once after the last step (waiting up to --loro-settle seconds for it to change, since
+             the app copies onboarding's saved files at the end of a turn). Both, and the records
+             the corpus holds, go to --out/loro.json and one line on stdout
   turns      the conversation file, one step at a time. A message is typed with the accessibility
              paste that focuses and verifies the composer and sent with the Return key; a reply is
              read off the app's own ledger (PromptReceived, AssistantDelta, TurnCompleted)
@@ -238,7 +244,10 @@ class ConversationWalk(adopt_walk.Walk):
         """adopt-walk.py's first run, up to the app's first conversation, and no further: its
         Not now on the business-questions card is left out, because that card is the thing a
         conversation may press."""
-        self.decline_first_run_sheets()
+        if self.a.memory:
+            self.accept_memory_then_decline()
+        else:
+            self.decline_first_run_sheets()
         adopt_walk.guest(self.vm, 'mkdir -p {c} && cd {c} && if [ ! -d .git ]; then printf "notes\\n" > README.md '
                                   '&& git init -q && git add README.md && git -c user.name=QA -c user.email=qa@example.invalid '
                                   'commit -q -m init; fi'.format(c=shlex.quote(self.company)))
@@ -253,6 +262,44 @@ class ConversationWalk(adopt_walk.Walk):
                 return {'thread': created[0].get('thread_id'), 'title': created[0].get('title')}
             time.sleep(1)
         raise StepFailed('no conversation was created after the company was added')
+
+    def accept_memory_then_decline(self, tries=4, seconds=60):
+        """--memory: the first-run sheets as decline_first_run_sheets presses them, except the memory
+        question, which gets its own "Set it up" (by its DOM id, `memory-setup-go`: the setup
+        sheet's button carries the same words)."""
+        presses, answered = 0, False
+        end = time.monotonic() + seconds
+        while presses < tries and time.monotonic() < end:
+            if self.present('Add this company'):
+                break
+            if not answered and self.ax('find', '--id', 'memory-setup-go', '--first'):
+                self.ax('click', '--id', 'memory-setup-go', '--first')
+                answered, presses = True, presses + 1
+                time.sleep(5)
+            elif self.present('Not now'):
+                self.press('Not now')
+                presses += 1
+                time.sleep(3)
+            else:
+                time.sleep(1)
+        print('memory question: %s' % ('answered Set it up' if answered else 'NOT seen'), flush=True)
+        if not answered:
+            raise StepFailed('--memory: the memory question never came up, so there is no loro to count')
+
+    def loro_census(self):
+        """The user's loro memory count, from loro's own census of ~/RichOS/corpus with the engine the
+        app runs (run.sh puts it at <payload>/engine), and the record files with their supersededBy
+        line. {'corpus': False} when there is no corpus."""
+        corpus = self.home + '/RichOS/corpus'
+        engine = self.payload + '/engine'
+        script = ('C=%s; E=%s; if [ ! -d "$C" ]; then echo \'{"corpus": false}\'; exit 0; fi; '
+                  '"$E/runtime/bin/node" "$E/loro/bin/loro-context.mjs" corpus --corpus "$C" --format json'
+                  % (shlex.quote(corpus), shlex.quote(engine)))
+        census = json.loads(adopt_walk.guest(self.vm, script, 120))
+        files = adopt_walk.guest(self.vm, 'cd %s 2>/dev/null && for f in $(find . -path "*/records/*.md" | sort); do '
+                                 'printf "%%s %%s\\n" "$f" "$(grep -m1 "^supersededBy:" "$f" || echo "supersededBy: (none)")"; done || true'
+                                 % shlex.quote(corpus), 120)
+        return {'census': census, 'records': [line for line in files.splitlines() if line.strip()]}
 
     def prepare_site(self):
         """--site: the guest's default browser signed in to the stand-in LinkedIn, by
@@ -525,6 +572,9 @@ def main():
                    'request Deny, as a user who refuses it')
     p.add_argument('--shot-each-step', action='store_true', help='a frame of the screen after each step\'s reply, '
                    'step-<n>.png in --out (what shows between turns is not in the ledger)')
+    p.add_argument('--memory', action='store_true', help='answer the memory question "Set it up" and count the user\'s '
+                   'loro before and after the conversation (loro.json)')
+    p.add_argument('--loro-settle', type=float, default=90, help='with --memory: seconds the after-count may take to change')
     p.add_argument('--check', nargs='+', type=Path, metavar='FILE', help='check conversation files without a guest')
     p.add_argument('--action', action='append', default=[], help='NAME=TOOL[~TEXT]: an action whose actor is reported '
                    '(native-transcript.py --actors)')
@@ -558,6 +608,10 @@ def main():
             for step in walk.steps:
                 if step['kind'] == 'say':
                     step['text'] = step['text'].replace(PROFILE_PLACEHOLDER, profile)
+        loro = None
+        if a.memory:
+            loro = {'before': walk.loro_census()}
+            print('loro before the conversation: %s memories' % loro['before']['census'].get('counts', {}).get('total'), flush=True)
         walk.began_ms = walk.clock()  # the actor verdicts cover this conversation from here on
         for n, step in enumerate(walk.steps, 1):
             try:
@@ -577,6 +631,17 @@ def main():
             if record['failure']:
                 ok = False
                 break
+        if loro is not None:
+            before = loro['before']['census'].get('counts', {}).get('total')
+            end = time.monotonic() + a.loro_settle
+            while True:
+                loro['after'] = walk.loro_census()
+                after = loro['after']['census'].get('counts', {}).get('total')
+                if after != before or time.monotonic() >= end:
+                    break
+                time.sleep(10)
+            (a.out / 'loro.json').write_text(json.dumps(loro, indent=2) + '\n')
+            print('loro after the conversation: %s memories (before: %s)' % (after, before), flush=True)
     except (StepFailed, RuntimeError, subprocess.TimeoutExpired) as exc:
         print('setup FAILED: %s' % str(exc)[:600], flush=True)
         ok = False
