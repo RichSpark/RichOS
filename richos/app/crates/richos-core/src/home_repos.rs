@@ -184,7 +184,7 @@ pub fn company_folders(registry: &EntityRegistry) -> Vec<CompanyFolders> {
 /// their repositories and get an empty picture. `connect_repository` already runs this one.
 #[derive(Debug, Clone)]
 pub struct GitRuntime {
-    /// The verified executable (`EngineRuntime::git`).
+    /// The executable (`EngineRuntime::git`, or what [`home_git`] found).
     pub bin: PathBuf,
     /// The PATH it runs with (`EngineRuntime::path`).
     pub path: String,
@@ -194,6 +194,49 @@ impl From<&crate::runtime::EngineRuntime> for GitRuntime {
     fn from(runtime: &crate::runtime::EngineRuntime) -> Self {
         GitRuntime { bin: runtime.git.clone(), path: runtime.path() }
     }
+}
+
+/// Real Git executables a Mac may hold of its own, never `/usr/bin/git` (Apple's stand-in on a Mac
+/// without the developer tools, which opens an installation dialog): Homebrew's two places, the
+/// command line tools and Xcode.
+pub const SYSTEM_GITS: &[&str] = &[
+    "/opt/homebrew/bin/git",
+    "/usr/local/bin/git",
+    "/Library/Developer/CommandLineTools/usr/bin/git",
+    "/Applications/Xcode.app/Contents/Developer/usr/bin/git",
+];
+
+fn executable(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+}
+
+/// **THE GIT THE HOME PICTURE READS WITH, WHATEVER STATE THE ENGINE IS IN** (CEO 2026-11-14: "It's
+/// about every user's install"). The engine's delivered `runtime/bin/git` when it is there, else a
+/// real Git of the Mac's own ([`SYSTEM_GITS`]); `None` only when there is neither.
+///
+/// It no longer waits on `runtime::verify_engine`. That is the check that decides whether an engine
+/// may run Rich's turns, and it refuses the whole delivery for one unexpected file, such as the
+/// `.DS_Store` files Finder writes into a folder that is opened (`runtime/.DS_Store`,
+/// `runtime/node/.DS_Store`). While it refused, the home screen took the loro path and drew a few
+/// ranked memories in front of the dimmed example instead of the companies' repositories; an engine
+/// not yet installed, or being replaced, did the same. Reading committed files needs a Git, not a
+/// verified engine.
+pub fn home_git(engine: &Path) -> Option<GitRuntime> {
+    home_git_from(engine, SYSTEM_GITS)
+}
+
+/// [`home_git`] with the Mac's own candidates given: the seam the tests use.
+pub fn home_git_from(engine: &Path, system: &[&str]) -> Option<GitRuntime> {
+    let runtime_bin = engine.join("runtime").join("bin");
+    let delivered = runtime_bin.join("git");
+    if executable(&delivered) {
+        return Some(GitRuntime { bin: delivered, path: crate::runtime::search_path(&runtime_bin, None) });
+    }
+    system.iter().map(PathBuf::from).find(|g| executable(g)).map(|bin| {
+        let dir = bin.parent().map(Path::to_path_buf).unwrap_or_default();
+        GitRuntime { path: crate::runtime::search_path(&dir, None), bin }
+    })
 }
 
 fn git(with: &GitRuntime, root: &Path, args: &[&str]) -> Option<String> {
@@ -1534,5 +1577,175 @@ mod tests {
         assert_eq!(parse_day("1970-01-02"), Some(1));
         assert_eq!(classify("wiki/ceo-decisions.md"), "decision");
         assert_eq!(classify("docs/plans/x.md"), "initiative");
+    }
+
+    // -------------------------------------------------------------------------------------------
+    // EVERY USER'S INSTALL (CEO 2026-11-14: "It's not just about *my* install. It's about **every
+    // user's** install."). His home screen drew loro memories in front of the dimmed example: the
+    // repositories were never read, because the Git to read them with was handed over only when the
+    // whole engine passed `runtime::verify_engine`, and his did not (two `.DS_Store` files Finder
+    // wrote into its runtime folder). Each shape below is read with the Git the app picks for such an
+    // engine, so on main (`verify_engine(..).ok().map(GitRuntime::from)`) every one of them is the
+    // loro path and fails.
+    // -------------------------------------------------------------------------------------------
+
+    /// An engine Finder has touched: a delivered `runtime/bin/git` that works, and the two
+    /// `.DS_Store` files Finder writes into a folder somebody opened.
+    fn engine_with_finder_files(name: &str) -> PathBuf {
+        let engine = tmp(name);
+        let bin = engine.join("runtime").join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::create_dir_all(engine.join("runtime").join("node")).unwrap();
+        std::os::unix::fs::symlink(test_git().bin, bin.join("git")).unwrap();
+        std::fs::write(engine.join("runtime").join(".DS_Store"), b"\0\0\0\x01Bud1").unwrap();
+        std::fs::write(engine.join("runtime").join("node").join(".DS_Store"), b"\0\0\0\x01Bud1").unwrap();
+        engine
+    }
+
+    /// The Git the app reads with for that engine (`main.rs::home_field_data` calls [`home_git`]).
+    fn git_for(engine: &Path) -> GitRuntime {
+        home_git(engine).expect("no Git to read the repositories with: the home screen falls back to the loro path")
+    }
+
+    fn connected(rows: &[(&str, &str, &[&Path], &[&Path])]) -> EntityRegistry {
+        let mut reg = registry(&rows.iter().map(|(id, name, roots, _)| (*id, *name, *roots)).collect::<Vec<_>>());
+        for (id, _, _, repos) in rows {
+            for r in *repos {
+                reg.connect_repository(&crate::entity::EntityId::parse(id).unwrap(), r.to_path_buf()).unwrap();
+            }
+        }
+        reg
+    }
+
+    fn per_company<'a>(field: &'a Value, id: &str) -> &'a Value {
+        field["meta"]["counts"]["perCompany"].as_array().unwrap().iter().find(|c| c["id"] == id).unwrap_or_else(|| panic!("{id} is not in the picture"))
+    }
+
+    #[test]
+    fn an_engine_finder_has_touched_still_reads_the_repositories() {
+        let engine = engine_with_finder_files("ds-engine");
+        assert!(crate::runtime::verify_engine(&engine).is_err(), "the fixture is meant to be an engine verify_engine refuses");
+        let git = git_for(&engine);
+        assert_eq!(git.bin, engine.join("runtime/bin/git"), "not the engine's own Git");
+        assert!(git.path.starts_with(&engine.join("runtime/bin").display().to_string()));
+        let r = tmp("ds-repo");
+        commit(&r, "2026-10-01", &[("README.md", "# R\n")]);
+        assert!(read_repo(&r, &git).is_some());
+        for d in [engine, r] {
+            std::fs::remove_dir_all(d).ok();
+        }
+    }
+
+    #[test]
+    fn with_no_engine_git_a_real_git_of_the_macs_own_reads_and_never_apples_stand_in() {
+        let none = std::env::temp_dir().join(format!("home-repos-no-engine-{}", std::process::id()));
+        std::fs::remove_dir_all(&none).ok();
+        let real = test_git().bin;
+        let real = real.to_str().unwrap();
+        let git = home_git_from(&none, &["/nonexistent/git", real]).expect("a Git of the Mac's own was not used");
+        assert_eq!(git.bin, PathBuf::from(real));
+        assert!(home_git_from(&none, &["/nonexistent/git"]).is_none(), "a Git was made up");
+        assert!(!SYSTEM_GITS.contains(&"/usr/bin/git"), "Apple's stand-in opens an installation dialog on a Mac without the developer tools");
+        let r = tmp("own-git");
+        commit(&r, "2026-10-01", &[("README.md", "# R\n")]);
+        assert!(read_repo(&r, &git).is_some());
+        std::fs::remove_dir_all(r).ok();
+    }
+
+    /// Shape 1: companies, none with a connected repository. Each company's saved folder is still
+    /// its own repository, read as such; folders that are no repository at all keep the loro path.
+    #[test]
+    fn shape_none_connected() {
+        let _turn = BEHIND.lock().unwrap_or_else(|e| e.into_inner());
+        let engine = engine_with_finder_files("s1-engine");
+        let (a, b, c) = (tmp("s1a"), tmp("s1b"), tmp("s1c"));
+        commit(&a, "2026-10-01", &[("README.md", "# A\n"), ("docs/plans/p.md", "p")]);
+        commit(&b, "2026-10-02", &[("README.md", "# B\n")]);
+        commit(&c, "2026-10-03", &[("notes.md", "n"), ("src/main.rs", "fn main() {}\n")]);
+        let reg = connected(&[("alpha", "Alpha", &[a.as_path()], &[]), ("beta", "Beta", &[b.as_path()], &[]), ("gamma", "Gamma", &[c.as_path()], &[])]);
+        assert!(reg.entities().iter().all(|e| e.connected_repositories.is_empty()));
+        let kept = tmp("s1k").join("home-field-repos.json");
+        let (field, from) = field_kept_or_built(&kept, &company_folders(&reg), day("2026-11-14"), &git_for(&engine)).expect("three companies' repositories were not read");
+        assert_eq!(from, FieldFrom::Built);
+        assert_eq!(field["meta"]["source"], "repositories");
+        assert_eq!(field["domains"].as_array().unwrap().len(), 3);
+        // folders that hold no repository: nothing to read, the loro path as before
+        let (p, q) = (tmp("s1p"), tmp("s1q"));
+        let plain = connected(&[("plain", "Plain", &[p.as_path()], &[]), ("other", "Other", &[q.as_path()], &[])]);
+        let kept2 = tmp("s1k2").join("home-field-repos.json");
+        assert!(field_kept_or_built(&kept2, &company_folders(&plain), day("2026-11-14"), &git_for(&engine)).is_none());
+        for d in [engine, a, b, c, p, q, kept.parent().unwrap().to_path_buf(), kept2.parent().unwrap().to_path_buf()] {
+            std::fs::remove_dir_all(d).ok();
+        }
+    }
+
+    /// Shape 2, his: six companies; one with two connected repositories, one of which holds a decision
+    /// register of more than 150 rulings; four whose saved folder is a repository and nothing is
+    /// connected; one whose folder moved away.
+    #[test]
+    fn shape_his_six_companies_one_with_two_connected_repositories() {
+        let _turn = BEHIND.lock().unwrap_or_else(|e| e.into_inner());
+        let engine = engine_with_finder_files("s2-engine");
+        let dirs: Vec<PathBuf> = ["s2-f", "s2-d", "s2-p", "s2-app", "s2-hq", "s2-g"].iter().map(|n| tmp(n)).collect();
+        let (f, d, p, app, hq, g) = (&dirs[0], &dirs[1], &dirs[2], &dirs[3], &dirs[4], &dirs[5]);
+        commit(f, "2026-09-01", &[("README.md", "# F\n"), ("docs/plans/a.md", "a"), ("src/lib.rs", "")]);
+        commit(d, "2026-09-10", &[("README.md", "# D\n"), ("wiki/w.md", "w")]);
+        commit(p, "2026-09-20", &[("README.md", "# P\n")]);
+        commit(app, "2026-10-01", &[("README.md", "# App\n"), ("app/src/main.rs", "fn main() {}\n")]);
+        let mut register = String::from("# CEO decisions\n\n");
+        for n in 1..=159 {
+            register.push_str(&format!("## {n}. Ruling {n}\n\nDecided 2026-10-{:02}.\n\n", n % 28 + 1));
+        }
+        commit(hq, "2026-10-02", &[("wiki/ceo-decisions.md", &register), ("wiki/how-it-works.md", "See §12 and §150.\n")]);
+        commit(hq, "2026-10-03", &[("docs/plans/plan.md", "Per §3.\n")]);
+        commit(g, "2026-10-05", &[("README.md", "# G\n")]);
+        let moved = std::env::temp_dir().join(format!("home-repos-s2-moved-{}", std::process::id()));
+        std::fs::remove_dir_all(&moved).ok();
+        let reg = connected(&[
+            ("femco", "Femco", &[f.as_path()], &[]),
+            ("deep", "Deep", &[d.as_path()], &[]),
+            ("prosp", "Prosp", &[p.as_path()], &[]),
+            ("rich", "Rich Co", &[app.as_path(), hq.as_path()], &[app.as_path(), hq.as_path()]),
+            ("gpt", "Gpt", &[g.as_path()], &[]),
+            ("webinar", "Webinar", &[moved.as_path()], &[]),
+        ]);
+        assert_eq!(reg.entities().iter().filter(|e| !e.connected_repositories.is_empty()).count(), 1, "the fixture is his shape");
+        let kept = tmp("s2k").join("home-field-repos.json");
+        let (field, _) = field_kept_or_built(&kept, &company_folders(&reg), day("2026-11-14"), &git_for(&engine)).expect("his six companies were not read: the loro path");
+        assert_eq!(field["meta"]["source"], "repositories");
+        assert_eq!(field["meta"]["synthetic"], false);
+        assert_eq!(field["meta"]["counts"]["perCompany"].as_array().unwrap().len(), 6);
+        assert_eq!(per_company(&field, "rich")["repositories"].as_u64(), Some(2), "both connected repositories are read, each once");
+        assert_eq!(per_company(&field, "rich")["rulings"].as_u64(), Some(159), "every ruling of the register is an object");
+        for id in ["femco", "deep", "prosp", "gpt"] {
+            assert_eq!(per_company(&field, id)["repositories"].as_u64(), Some(1), "{id}'s saved folder was not read");
+            assert!(domain(&field, id).is_some(), "{id} has no territory");
+        }
+        assert_eq!(field["meta"]["unreadFolders"], json!([{ "company": "webinar", "reason": "missing" }]));
+        assert!(std::fs::metadata(&kept).is_ok(), "the picture was not kept for the next launch");
+        for x in dirs.iter().cloned().chain([engine, kept.parent().unwrap().to_path_buf()]) {
+            std::fs::remove_dir_all(x).ok();
+        }
+    }
+
+    /// Shape 3: every company with its repositories connected.
+    #[test]
+    fn shape_all_connected() {
+        let _turn = BEHIND.lock().unwrap_or_else(|e| e.into_inner());
+        let engine = engine_with_finder_files("s3-engine");
+        let (a, b) = (tmp("s3a"), tmp("s3b"));
+        commit(&a, "2026-10-01", &[("README.md", "# A\n"), ("docs/x.md", "x")]);
+        commit(&b, "2026-10-02", &[("README.md", "# B\n")]);
+        let reg = connected(&[("alpha", "Alpha", &[a.as_path()], &[a.as_path()]), ("beta", "Beta", &[b.as_path()], &[b.as_path()])]);
+        let kept = tmp("s3k").join("home-field-repos.json");
+        let (field, _) = field_kept_or_built(&kept, &company_folders(&reg), day("2026-11-14"), &git_for(&engine)).expect("connected repositories were not read");
+        assert_eq!(field["meta"]["source"], "repositories");
+        for id in ["alpha", "beta"] {
+            assert_eq!(per_company(&field, id)["repositories"].as_u64(), Some(1), "{id}'s repository was read twice or not at all");
+        }
+        assert_eq!(field["domains"].as_array().unwrap().len(), 2);
+        for d in [engine, a, b, kept.parent().unwrap().to_path_buf()] {
+            std::fs::remove_dir_all(d).ok();
+        }
     }
 }
