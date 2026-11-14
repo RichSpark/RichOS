@@ -6399,29 +6399,6 @@ fn dictation_feature_thread(state: State<AppState>, create: bool) -> Result<Opti
 
 
 
-/// **THE CEO PRESSES "Set it up".** Install what is missing, reporting each step on
-/// `richos://setup`, and re-point this session at what was installed.
-///
-/// Three properties it has and must keep:
-///
-///   1. **A failed step stops the run.** Installing an engine for a Claude that is not there
-///      produces a machine that reports two successes and works for nothing.
-///   2. **The final status is RE-READ FROM DISK**, not assembled from "every step returned
-///      Ok". The same rule `install_claude_code` applies to Anthropic's own exit code.
-///   3. **No relaunch.** A successful engine install rewrites `AppState::engine_dir`, which is
-///      the same `Arc` the lease factory reads. The next accepted request connects with
-///      visible progress and Stop. `provision_memory` set that standard on 2026-09-01 after a
-///      customer's first five minutes were spent with a corpus he had just created and a desk
-///      that would not open until he quit.
-///
-/// `(async)` keeps installation downloads off the UI thread. Setup does not acquire the
-/// running spine or start an untracked model handshake. The idle spine stays locked through replacement.
-#[richos_command::command]
-fn run_setup(app: tauri::AppHandle, state: State<AppState>) -> Result<serde_json::Value, String> {
-    let spine = state.spine.try_lock().map_err(|_| "Rich is working. Stop or finish the current turn before changing the engine.".to_string())?;
-    replace_engine(&app, &state, spine, |selected, engine_dir| setup_view::run(&app, Some(selected), engine_dir))
-}
-
 /// **AFTER AN UPDATE, THE APP INSTALLS ITS OWN BUILD'S ENGINE BY ITSELF** (the CEO, 2026-11-14:
 /// *"Is it normal and expected that I always get to see the setup screen ... after updating to a
 /// new version?"*). Started by the boot when `SetupStatus::engine_update` says the engine is
@@ -6461,6 +6438,29 @@ fn update_engine_by_itself(app: AppHandle) {
         setup_view::end_engine_update();
         eprintln!("[richos] engine update: could not start ({e}); the setup sheet offers the engine instead");
     }
+}
+
+/// **THE CEO PRESSES "Set it up".** Install what is missing, reporting each step on
+/// `richos://setup`, and re-point this session at what was installed.
+///
+/// Three properties it has and must keep:
+///
+///   1. **A failed step stops the run.** Installing an engine for a Claude that is not there
+///      produces a machine that reports two successes and works for nothing.
+///   2. **The final status is RE-READ FROM DISK**, not assembled from "every step returned
+///      Ok". The same rule `install_claude_code` applies to Anthropic's own exit code.
+///   3. **No relaunch.** A successful engine install rewrites `AppState::engine_dir`, which is
+///      the same `Arc` the lease factory reads. The next accepted request connects with
+///      visible progress and Stop. `provision_memory` set that standard on 2026-09-01 after a
+///      customer's first five minutes were spent with a corpus he had just created and a desk
+///      that would not open until he quit.
+///
+/// `(async)` keeps installation downloads off the UI thread. Setup does not acquire the
+/// running spine or start an untracked model handshake. The idle spine stays locked through replacement.
+#[richos_command::command]
+fn run_setup(app: tauri::AppHandle, state: State<AppState>) -> Result<serde_json::Value, String> {
+    let spine = state.spine.try_lock().map_err(|_| "Rich is working. Stop or finish the current turn before changing the engine.".to_string())?;
+    replace_engine(&app, &state, spine, |selected, engine_dir| setup_view::run(&app, Some(selected), engine_dir))
 }
 
 /// **The engine changes under a held spine**: install (`install`, given the selected engine and
@@ -7599,8 +7599,8 @@ mod repair_priming_tests {
         let body = run_setup_body();
 
         let release = concat!("drop(", "spine)");
-        let ready = concat!("ready_the_front_desk_after_a_", "repair(&app");
-        let spare = concat!("ready_a_spare_front_", "desk(&app");
+        let ready = concat!("ready_the_front_desk_after_a_", "repair(app");
+        let spare = concat!("ready_a_spare_front_", "desk(app");
 
         let release_at = body.find(release).expect(
             "run_setup must let go of the spine explicitly — the guard lives to the end of the \
@@ -7633,7 +7633,7 @@ mod repair_priming_tests {
         let repaired = body
             .find(concat!("if ", "repaired {"))
             .expect("the readying must be conditional on the install having succeeded");
-        let ready_at = body.find(concat!("ready_the_front_desk_after_a_", "repair(&app")).unwrap();
+        let ready_at = body.find(concat!("ready_the_front_desk_after_a_", "repair(app")).unwrap();
         assert!(
             repaired < ready_at,
             "a failed install leaves the machine it found; priming against an engine that is \
