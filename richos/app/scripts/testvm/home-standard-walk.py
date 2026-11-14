@@ -284,8 +284,18 @@ class Walk:
 
     def fresh(self):
         """A fresh user's home screen: nothing written yet, no company and no team."""
-        self.to_home()
-        sentence = self.until(lambda: self.text('could look like'), 60, 'the first-run example and its sentence are not on the home screen')
+        # the very first launch opens on the memory question ("Where should I keep what you tell me?"),
+        # which a press of Not now does not put away in the guest; the next launch of the same fresh
+        # install, nothing written, opens on the home screen as a new user's does
+        relaunch(self.vm)
+        time.sleep(8)
+
+        def home_with_sentence():
+            # a new user's first-run sheets can come up after the home screen did: put them away and
+            # come back to the home screen until it is up with the example's sentence
+            self.to_home()
+            return self.text('could look like')
+        sentence = self.until(home_with_sentence, 90, 'the first-run example and its sentence are not on the home screen')
         time.sleep(12)  # the picture draws itself in
         frame = self.shot('home-fresh')
         if self.text('Example, not yours'):
@@ -570,7 +580,7 @@ def main():
         print(step, 'PASS' if report['steps'][step]['pass'] else 'FAIL: ' + report['steps'][step]['why'][:400], flush=True)
         # identity, the history and the companies are every later step's premise; a screen step
         # failing leaves the others worth reading
-        if failed and step in ('identity', 'history', 'companies', 'picture'):
+        if not report['steps'][step]['pass'] and step in ('identity', 'history', 'companies', 'picture'):
             break
     (a.out / 'report.json').write_text(json.dumps(report, indent=2) + '\n')
     return 1 if failed else 0
