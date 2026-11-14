@@ -130,6 +130,7 @@ window.RichHomeGrowth = (function () {
   var newCount = 0; // with "home": how many arrived since he last looked
   var lookedAt = 0;
   var startStage = 0;
+  var loadedAt = 0; // when this dataset was read: its `today` is that day's
 
   function levelsAt(stage) {
     return { threads: stage >= 2 ? 1 : 0, river: stage >= 4 ? 1 : 0, core: stage >= 5 ? 1 : 0, color: stage >= 3 ? 1 : 0, done: stage >= 6 ? 1 : 0 };
@@ -202,6 +203,13 @@ window.RichHomeGrowth = (function () {
     } else if (N <= COLD_OPEN_MAX) {
       startCount = 0; // a cold open: his lights arrive in the order he earned them
     }
+    // A moment that switches a piece on while he watches holds the levels from the first frame:
+    // the count may already be past the threshold when the picture comes up (295 to 320).
+    if (scene === "crossed" || scene === "handover") {
+      hold = true;
+      shownStage = startStage;
+    }
+    loadedAt = Date.now();
     v.growth = { levels: levels, lanes: lanesAt(startStage) };
     v.count = startCount;
   }
@@ -402,7 +410,11 @@ window.RichHomeGrowth = (function () {
   /// or a week the dataset cannot date. Last week is the seven days before this week's Monday.
   function weeklyLine(now) {
     if (!lo || !dates || !N) return "";
-    var monday = dates.today - ((new Date(now).getDay() + 6) % 7);
+    // the dataset's today is the day it was read; the app may have stayed open since
+    var a = new Date(loadedAt);
+    var b = new Date(now);
+    var since = Math.round((new Date(b.getFullYear(), b.getMonth(), b.getDate()) - new Date(a.getFullYear(), a.getMonth(), a.getDate())) / 86400000);
+    var monday = dates.today + Math.max(0, since) - ((b.getDay() + 6) % 7);
     var from = monday - 7;
     // objects first seen on the day dates began (`createdDay` 0) may be older than that day
     if (dates.undated > 0 && from <= 0) return "";
@@ -724,13 +736,8 @@ window.RichHomeGrowth = (function () {
     arrived = true;
     var now = Date.now();
     var st = load();
-    // 4.3: the first visit of a week carries last week's line; it is gone on the next visit
-    var week = weekOf(now);
-    if (storeOk && st.week !== week) {
-      var line = scene === "handover" ? "" : weeklyLine(now);
-      if (line) caption(line);
-      save({ week: week });
-    }
+    if (scene !== "handover") weekly(now);
+    else if (storeOk) save({ week: weekOf(now) });
     // he has looked: what is up now is what "new since" is counted from next time
     // (a crossing's stage is kept when its sentence shows, `playCrossed`)
     var seen = { look: { count: N, at: now } };
@@ -757,6 +764,22 @@ window.RichHomeGrowth = (function () {
       .catch(function () {
         /* a notice that could not be written costs Rich's mention, never the screen */
       });
+  }
+
+  /// 4.3: the first visit of a week carries last week's line; it is gone on the next visit.
+  function weekly(now) {
+    if (!storeOk) return;
+    var week = weekOf(now);
+    if (load().week === week) return;
+    var line = weeklyLine(now);
+    if (line) caption(line);
+    save({ week: week });
+  }
+  /// The home screen came back with its picture already up (`home.js`, `show`): a visit like any
+  /// other, also for an app left running from one week into the next.
+  function visited() {
+    if (!active || !arrived || !lo || window.__loro !== lo || replaying) return;
+    weekly(Date.now());
   }
 
   /// The engine is up (`home.js`, `onLoroReady`).
@@ -804,7 +827,7 @@ window.RichHomeGrowth = (function () {
     if (handoverOn) endHandover();
     if (replaying) endReplay(true);
     if (finishedOn) endFinished();
-    if (hold && lo && lo.growth) {
+    if (hold && arrived && lo && lo.growth) {
       // a crossing in flight: the stage is where it was going
       clearTimers();
       hold = false;
@@ -851,6 +874,7 @@ window.RichHomeGrowth = (function () {
     onCount: onCount,
     ready: ready,
     left: left,
+    visited: visited,
     exampleSeen: exampleSeen,
     get exampleUp() {
       return exampleUp;

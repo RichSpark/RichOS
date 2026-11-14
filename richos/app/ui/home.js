@@ -1652,6 +1652,11 @@ window.RichHome = (function () {
     });
   }
 
+  /// How long after an answer that showed nothing new `refreshRecords` asks again: 3 s, 8 s and
+  /// 20 s after the one before (31 s in all; reading two repositories of 2,700 documents took
+  /// under 10 s in the guest).
+  var RECORDS_ASK_AGAIN_MS = [3000, 8000, 20000];
+
   /// HIS RECORDS AS THEY ARE NOW, every time the screen comes back: `home_field_data` is asked once
   /// more, and a picture that has grown since it was drawn is drawn again with the new lights
   /// arriving (`home-growth.js`). Nothing waits on the answer, and one that is not bigger changes
@@ -1661,14 +1666,27 @@ window.RichHome = (function () {
     if (!state.team || state.field !== "live" || !fieldDataIsCustomers() || state.enteringGhost) return Promise.resolve(false);
     if (!bridge || typeof bridge.invoke !== "function" || state.refreshingRecords) return Promise.resolve(false);
     state.refreshingRecords = true;
-    return Promise.resolve(bridge.invoke("home_field_data"))
-      .then(function (answer) {
+    // ASKED AGAIN UNTIL THE READ BEHIND THE ANSWER HAS FINISHED. For connected repositories the
+    // backend answers with the kept picture at once and reads the repositories again behind it
+    // (`home_repos.rs`, `field_kept_or_built`), so the first answer after new work is the old
+    // count. The later asks (`RECORDS_ASK_AGAIN_MS` after the one before) pick the new picture up
+    // on this same visit; they stop when it has grown or the screen has been left.
+    var ask = function (round) {
+      return Promise.resolve(bridge.invoke("home_field_data")).then(function (answer) {
         var field = answer && answer.available === true && answer.field;
         var now = field && Array.isArray(field.nodes) ? field.nodes.length : 0;
         var drawn = state.ghost ? state.ghost.total : null;
-        if (!now || drawn === null || now <= drawn || !state.open) return false;
-        return rebuildGhost(field);
-      })
+        if (!state.open || drawn === null) return false;
+        if (now > drawn) return rebuildGhost(field);
+        if (round >= RECORDS_ASK_AGAIN_MS.length) return false;
+        return new Promise(function (resolve) {
+          setTimeout(resolve, RECORDS_ASK_AGAIN_MS[round]);
+        }).then(function () {
+          return state.open ? ask(round + 1) : false;
+        });
+      });
+    };
+    return ask(0)
       .catch(function () {
         return false;
       })
@@ -2076,6 +2094,8 @@ window.RichHome = (function () {
     // ...but his team is re-read: a hire since the screen was last shown belongs on it. And so are
     // his records: what Rich learned while he was away arrives while he watches (round 75, 3.4).
     if (started) refreshTeam().then(refreshRecords);
+    // ...and a visit is a visit: the first one of a week carries last week's line (round 75, 4.3).
+    if (window.RichHomeGrowth) window.RichHomeGrowth.visited();
 
     // ...and fade in on the next frame, so the transition has a start state to run from.
     requestAnimationFrame(function () {

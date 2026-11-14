@@ -1760,7 +1760,10 @@
           domain: laneOf(g),
           cluster: gid,
           degree: i === 0 ? n - 1 : 1,
-          significance: 0.8,
+          // `rising: true`: later objects are the more significant ones and each carries the order
+          // it was first seen in, as `home_field.rs` gives it (the order must win within a day).
+          significance: homeField.rising ? 0.5 + (0.4 * nodes.length) / Math.max(1, objects) : 0.8,
+          ...(homeField.rising ? { arrivalOrder: nodes.length + 1 } : {}),
           activity: 0,
           recency: 0,
           createdDay: dayOf(g),

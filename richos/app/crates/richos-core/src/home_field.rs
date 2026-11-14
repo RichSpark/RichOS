@@ -498,6 +498,14 @@ pub struct FirstSeen {
     pub undated: u64,
     #[serde(default)]
     pub seen: BTreeMap<String, i64>,
+    /// The order objects were first seen in, counted from 1: two objects first seen on the same
+    /// day keep the order they came in, so a later one never takes an earlier one's place among
+    /// the lights already on the screen. An object from a ledger written before this was kept has
+    /// no entry and counts as 0 (it was there first).
+    #[serde(default)]
+    pub order: BTreeMap<String, u64>,
+    #[serde(default)]
+    pub next: u64,
 }
 
 /// The ledger at `path`; a missing or unreadable file is an empty one (it begins today).
@@ -579,6 +587,8 @@ pub fn date_field(field: &mut Value, ledger: &mut FirstSeen, today: i64, corpus_
     for key in &keys {
         if !ledger.seen.contains_key(key) {
             ledger.seen.insert(key.clone(), today);
+            ledger.next += 1;
+            ledger.order.insert(key.clone(), ledger.next);
             changed = true;
         }
     }
@@ -587,6 +597,9 @@ pub fn date_field(field: &mut Value, ledger: &mut FirstSeen, today: i64, corpus_
         for n in nodes {
             let day = n["seen"].as_str().and_then(|k| ledger.seen.get(k)).copied().unwrap_or(today);
             n["createdDay"] = json!((day - began).clamp(0, HORIZON_DAYS - 15));
+            // `field-engine.js` orders arrivals by day and then by this.
+            let order = n["seen"].as_str().and_then(|k| ledger.order.get(k)).copied().unwrap_or(0);
+            n["arrivalOrder"] = json!(order);
         }
     }
     field["meta"]["dates"] = json!({ "today": (today - began).max(0), "undated": ledger.undated, "from": "first-seen" });
@@ -1027,6 +1040,23 @@ mod tests {
         assert_eq!(again["meta"]["dates"]["today"], 30);
         // nothing is drawn as new (`field-prep.js`: createdDay >= horizonDays - 14)
         assert!(again["nodes"].as_array().unwrap().iter().all(|n| n["createdDay"].as_i64().unwrap() < HORIZON_DAYS - 14));
+    }
+
+    #[test]
+    fn objects_first_seen_on_the_same_day_keep_the_order_they_came_in() {
+        let mut ledger = FirstSeen::default();
+        date_field(&mut dated_fixture(&["a", "b"]), &mut ledger, 20_000, Some(20_000));
+        // later the same day one more is compiled, and the compile lists it first
+        let mut later = dated_fixture(&["c", "a", "b"]);
+        date_field(&mut later, &mut ledger, 20_000, Some(20_000));
+        let rows: Vec<(i64, u64)> = later["nodes"].as_array().unwrap().iter().map(|n| (n["createdDay"].as_i64().unwrap(), n["arrivalOrder"].as_u64().unwrap())).collect();
+        assert_eq!(rows, vec![(0, 3), (0, 1), (0, 2)], "the same day, and the newcomer is last");
+        // a ledger from before the order was kept: its objects were there first
+        let mut old = FirstSeen { began: Some(20_000), seen: [(seen_key("a"), 20_000)].into_iter().collect(), ..FirstSeen::default() };
+        let mut field = dated_fixture(&["z", "a"]);
+        date_field(&mut field, &mut old, 20_000, Some(20_000));
+        assert_eq!(field["nodes"][1]["arrivalOrder"], 0);
+        assert_eq!(field["nodes"][0]["arrivalOrder"], 1);
     }
 
     #[test]

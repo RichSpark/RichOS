@@ -447,6 +447,21 @@ async function main() {
     return `"The River": the river from 0 to 1, then "Next: Full Color, at 1,000 memories" with the core at ${peek.core}; gone on the next visit; ${contrast}`;
   });
 
+  await run.check("a crossing passed by more than a few memories still switches its piece on while he watches", async () => {
+    // 295 when he last looked, 320 now: the picture starts past the threshold (at 315), and the
+    // river must still be off until its moment
+    const page = await openApp(browser, { homeTeam: TEAM, homeField: field(320) }, seenAt(295, 3));
+    await page.waitForFunction("!!window.RichHomeGrowth.state().active && !!window.__loro && !!window.__loro.growth", null, { timeout: 60000 });
+    const before = await page.evaluate(() => ({ count: window.VARIANT.count, river: window.__loro.growth.XT.river, x: window.__loro.growth.X.river }));
+    assertEqual(before, { count: 315, river: 0, x: 0 }, "the river is switched on before the crossing's moment");
+    await arrived(page);
+    await page.waitForFunction(() => document.getElementById("home-moment").classList.contains("on"), null, { timeout: 60000 });
+    assertEqual(await text(page, "#home-moment .title"), "The River", "the stage's name");
+    await page.waitForFunction(() => window.__loro.growth.X.river > 0.9, null, { timeout: 60000 });
+    await page.close();
+    return "starts at 315 with the river off; The River switches it on";
+  });
+
   await run.check("the offer under a crossing starts the replay", async () => {
     const page = await openApp(browser, { homeTeam: TEAM, homeField: field(30) }, seenAt(26, 1));
     await arrived(page);
@@ -465,10 +480,19 @@ async function main() {
 
   // ---- 3.4 -------------------------------------------------------------------------------------
   await run.check("coming home: the lights that are new since he last looked arrive while he watches, and the caption says how many", async () => {
-    const page = await openApp(browser, { homeTeam: TEAM, homeField: field(186) }, seenAt(179, 3));
+    // (`rising`: the newest objects are the most significant ones, and the last ten share a day;
+    // the ones he had seen must still be the ones on the screen when the picture comes up)
+    const page = await openApp(browser, { homeTeam: TEAM, homeField: field(186, { rising: true }) }, seenAt(179, 3));
     await arrived(page);
     const g0 = await growth(page);
     assertEqual([g0.scene, g0.count], ["home", 179], "the picture did not start from what he last saw");
+    const firstSeen = await page.evaluate(() => {
+      const lo = window.__loro;
+      let newest = 0;
+      for (let r = 0; r < lo.COUNT; r++) newest = Math.max(newest, lo.nodes[lo.arrival[r]].arrivalOrder);
+      return newest;
+    });
+    assertEqual(firstSeen, 179, "a light he had not seen yet is on the screen before the new ones arrive");
     await page.evaluate(() => {
       window.__counts = new Set();
       window.__countsTimer = setInterval(() => window.__counts.add(window.__loro.COUNT), 30);
@@ -497,6 +521,18 @@ async function main() {
     assertEqual(await text(page, "#home-caption"), "10 new since this morning", "the caption after coming back");
     await countIs(page, 196);
     assertEqual(await text(page, "#home-brand-line"), "loro · 196 memories", "the brand line after coming back");
+    // the read behind the answer: the backend answers with the kept picture first and the new one
+    // a moment later (`home_repos.rs`); the same visit picks it up
+    await page.evaluate((f) => {
+      window.RichHome.hide("enter-app");
+      const mock = window.__RICHOS_MOCK__;
+      setTimeout(() => mock.homeFieldSet(f), 4500);
+    }, field(204));
+    await page.waitForFunction(() => document.getElementById("home").hidden === true, null, { timeout: 60000 });
+    await page.evaluate(() => window.RichHome.show("wordmark"));
+    await page.waitForFunction(() => window.RichHomeGrowth.state().n === 204 && window.RichHomeGrowth.state().arrived, null, { timeout: 60000 });
+    await countIs(page, 204);
+    assertEqual(await text(page, "#home-caption"), "8 new since this morning", "the caption once the read behind the answer finished");
     // the words for when he last looked
     const words = await page.evaluate(() => {
       const f = window.RichHomeGrowth.sinceWords;
@@ -547,6 +583,19 @@ async function main() {
     await arrived(page);
     assertEqual(await text(page, "#home-caption"), "", "the weekly line is up on a second visit in the same week");
     await page.close();
+    // an app left running into the next week: coming back to the home screen is a visit too
+    const open = await openApp(browser, { homeTeam: TEAM, homeField: field(320) }, { stage: 4, look: { count: 320, at: NOW.getTime() }, week: WEEK });
+    await arrived(open);
+    await countIs(open, 320);
+    assertEqual(await text(open, "#home-caption"), "", "a line in a week whose line he has seen");
+    await open.evaluate(() => window.RichHome.hide("enter-app"));
+    await open.waitForFunction(() => document.getElementById("home").hidden === true, null, { timeout: 60000 });
+    await open.clock.setFixedTime(new Date(2026, 10, 25, 9, 0, 0)); // the Wednesday after
+    await open.evaluate(() => window.RichHome.show("wordmark"));
+    // last week is now days 64 to 70 of the dataset: its last group of eight, one decision
+    assertEqual(await text(open, "#home-caption"), "Last week: 8 memories, 1 decision.", "the weekly line on a visit in a new week, the app never relaunched");
+    assertEqual((await stored(open)).week, WEEK + 7, "the new week was not kept");
+    await open.close();
     // a week with nothing is never mentioned, and neither is a week the app cannot date
     const quiet = await openApp(browser, { homeTeam: TEAM, homeField: field(320, { daysAgo: 30 }) }, { stage: 4, look: { count: 320, at: NOW.getTime() }, week: WEEK - 7 });
     await arrived(quiet);
