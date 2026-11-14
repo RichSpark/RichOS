@@ -4298,6 +4298,7 @@ fn main() {
             // — appended ---
             home_team,
             home_working,
+            home_stage_reached,
             // --- a job's result said on its own (2026-10-15) — appended ---
             // --- the Oxford comma in what Claude writes (CEO 2026-10-19) — appended ---
             set_oxford_comma,
@@ -10436,7 +10437,16 @@ fn home_field_data(state: State<AppState>) -> serde_json::Value {
     let onboarding = richos_core::company::install_central_root()
         .map(|central| richos_core::onboarding_loro::sources(&central, &registry))
         .unwrap_or_default();
-    if let Some((field, from)) = home_git.and_then(|git| richos_core::home_repos::field_kept_or_built_with(&kept_repos, &folders, richos_core::home_repos::today(), &git, &onboarding)) {
+    if let Some((mut field, from)) = home_git.and_then(|git| richos_core::home_repos::field_kept_or_built_with(&kept_repos, &folders, richos_core::home_repos::today(), &git, &onboarding)) {
+        // THE ORDER EACH OBJECT WAS FIRST SEEN IN (round 75): new work arrives after the lights
+        // already on the screen, whatever day its documents were first committed.
+        let order_path = state.data_dir.join("home-field-repos-order.json");
+        let mut order = home_field::read_first_seen(&order_path);
+        if home_field::order_field(&mut field, &mut order) {
+            if let Err(e) = home_field::write_first_seen(&order_path, &order) {
+                eprintln!("[richos] home field: could not keep the order objects were first seen in ({e})");
+            }
+        }
         eprintln!(
             "[richos] home field: {} object(s) in {} companies from their repositories ({:?}), {} link(s), {} source(s); unread folders: {}",
             field["meta"]["counts"]["objects"],
@@ -10497,7 +10507,17 @@ fn home_field_data(state: State<AppState>) -> serde_json::Value {
         }
     };
 
-    let field = home_field::build_field(&census, &items, &registry);
+    let mut field = home_field::build_field(&census, &items, &registry);
+    // THE DAY EACH OBJECT WAS FIRST SEEN (round 75, `home_field::FirstSeen`): the order his lights
+    // arrive in, the day count and last week's line come from it. A ledger that cannot be written
+    // costs the dates of this launch's new objects, never the picture.
+    let seen_path = state.data_dir.join("home-field-first-seen.json");
+    let mut first_seen = home_field::read_first_seen(&seen_path);
+    if home_field::date_field(&mut field, &mut first_seen, richos_core::home_repos::today(), home_field::oldest_file_day(install.root().path())) {
+        if let Err(e) = home_field::write_first_seen(&seen_path, &first_seen) {
+            eprintln!("[richos] home field: could not keep the first-seen days ({e})");
+        }
+    }
     eprintln!(
         "[richos] home field: {} object(s) of {} record(s) at {}, {} link(s), {} source(s), \
          {} question(s) asked. Whether that replaces the demonstration is home.js's \
@@ -10520,6 +10540,29 @@ fn home_field_data(state: State<AppState>) -> serde_json::Value {
 #[richos_command::command]
 fn home_team(state: State<'_, AppState>) -> Result<Vec<richos_core::engine_profile::Teammate>, String> {
     richos_core::engine_profile::user_teammates(&state.data_dir).map_err(|e| e.0)
+}
+
+/// **THE USER'S LORO CROSSED A STAGE OF THE HOME PICTURE: RICH IS TOLD** (CEO 2026-11-14: "there
+/// should be a hook that automatically notifies Rich when a milestone is reached. And THEN his
+/// instruction file would contain a line for what to do/say"). The home screen calls this the
+/// moment it sees the crossing (`home-growth.js`); the fact is written to
+/// `<data>/engine-state/home-stage-notice.json`, and the engine's app hook opens Rich's next turn
+/// with it, once (`engine/scripts/app-engine-hook.py`, `home_stage_notice`). No words for Rich are
+/// here or there: the stage's number, its name and the count. A later crossing replaces an
+/// earlier one that was never taken.
+#[richos_command::command]
+fn home_stage_reached(state: State<'_, AppState>, stage: u8, name: String, count: u64) -> Result<(), String> {
+    let name = name.trim();
+    if !(1..=6).contains(&stage) || name.is_empty() || name.chars().count() > 60 {
+        return Err("not a stage of the home picture".to_string());
+    }
+    let dir = state.data_dir.join("engine-state");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let path = dir.join("home-stage-notice.json");
+    let tmp = dir.join("home-stage-notice.json.tmp");
+    let body = serde_json::json!({ "stage": stage, "name": name, "count": count });
+    std::fs::write(&tmp, serde_json::to_vec(&body).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp, &path).map_err(|e| e.to_string())
 }
 
 /// **Who is working at this moment, for the home screen's "Working now"** (CEO 2026-11-02:

@@ -336,6 +336,9 @@ window.RichHome = (function () {
     // reading order rather than paint order.
     r.appendChild(buildNote());
     r.appendChild(buildGhostChrome());
+    // The stages (round 75): the distance line and its card, the two presses on the legend, the
+    // sentence under the core, the caption and the replay's counter (`home-growth.js`).
+    if (window.RichHomeGrowth) window.RichHomeGrowth.build(r);
 
     var live = elem("aside", null, { id: "home-live" });
     var cap = elem("div", "cap");
@@ -472,7 +475,9 @@ window.RichHome = (function () {
     state.dataIsCustomers = fieldDataIsCustomers();
     state.dataSource = state.dataIsCustomers ? "customer" : meta && meta.synthetic === true ? "synthetic" : "unknown";
     // With his team on the screen nothing on it is a demonstration (see `showTeam`).
-    box.hidden = state.dataIsCustomers || !!state.team;
+    // ...except while "See it finished" has the example lit (round 75, 2.3): the sentence and the
+    // word "Example" are on the screen for exactly that long.
+    box.hidden = (state.dataIsCustomers || !!state.team) && !(window.RichHomeGrowth && window.RichHomeGrowth.exampleUp);
     // NO "LEARNED FROM" LINE OVER HIS REPOSITORIES (round 72): the engine names a teammate at random
     // for each source, which over his own documents would be a made-up event.
     root.classList.toggle("home-from-repos", !!meta && meta.source === "repositories");
@@ -507,7 +512,14 @@ window.RichHome = (function () {
     var next = "0px";
     if (h > 0) {
       var base = 32 + (parseFloat(getComputedStyle(root).getPropertyValue("--home-top-inset")) || 0);
-      next = Math.max(0, Math.round(line.getBoundingClientRect().bottom + 26 - base)) + "px";
+      // ...or the bottom edge of what stands under the sentence (round 75: the invitation on a
+      // first run, the line that runs out while "See it finished" has the example lit).
+      var bottom = line.getBoundingClientRect().bottom;
+      for (var under = line.nextElementSibling; under; under = under.nextElementSibling) {
+        var ub = under.getBoundingClientRect();
+        if (ub.height > 0 && ub.bottom > bottom) bottom = ub.bottom;
+      }
+      next = Math.max(0, Math.round(bottom + 26 - base)) + "px";
     }
 
     // IT ONLY SPEAKS WHEN SOMETHING MOVED, and that is not an optimization — it is the
@@ -1423,8 +1435,10 @@ window.RichHome = (function () {
     });
     if (window.RichSwearMeter) window.RichSwearMeter.paintHome();
     reserveDoorTop();
-    // The picture hushes itself around these blocks; their size just changed.
-    if (state.field === "live") {
+    // The picture hushes itself around these blocks; their size just changed. ("Watch it grow"
+    // changes the count on every frame: the screen is re-measured when a row appears, not for
+    // every new number.)
+    if (state.field === "live" && !(window.RichHomeGrowth && window.RichHomeGrowth.sameRows(rows.length))) {
       try {
         window.dispatchEvent(new Event("resize"));
       } catch (e) {
@@ -1459,25 +1473,32 @@ window.RichHome = (function () {
     if (bokeh) bokeh.style.opacity = String(0.3 + 0.55 * Math.min(1, Math.pow(count / 700, 0.6)));
 
     var legend = root.querySelector("#home-legend");
-    var showing = level > 0.004;
+    // ...and only while the example is in the picture at all: from 2,500 of his repository objects
+    // it is not loaded, and "Watch it grow" counts that picture up from nothing.
+    var ghostMeta = window.MATURE_LORO && window.MATURE_LORO.meta && window.MATURE_LORO.meta.ghost;
+    var showing = level > 0.004 && !!ghostMeta;
     legend.classList.toggle("on", showing);
-    state.ghost = { count: count, level: level, legend: showing };
+    // `total`: how many of his are in the picture, arrived or not (`refreshRecords`).
+    state.ghost = { count: count, level: level, legend: showing, total: lo.N - (ghostMeta ? ghostMeta.objects : 0) };
 
     var note = root.querySelector("#home-ghost-note");
     var lead = note.querySelector(".lead");
     var sub = note.querySelector(".sub");
     // "Yours is empty" is a claim about his records, made only when the backend said so (see `known`).
     var known = !state.fieldOffer || state.fieldOffer.known !== false;
-    if (count === 0 && !known) {
+    // (How many are HIS, arrived or not: a cold open, the handover and "Watch it grow" count his
+    // lights up from none, and "Yours is empty" would be false for every frame of that.)
+    var his = state.ghost.total;
+    if (his === 0 && !known) {
       note.classList.add("hidden");
-    } else if (count === 0) {
+    } else if (his === 0) {
       note.classList.remove("hidden");
       lead.textContent = "None of this light is yours yet.";
       sub.textContent = "Behind is an example loro after a year of work, dimmed so it cannot be taken for your own. Yours is empty. The first thing Rich learns from you lights up inside it, in gold.";
       note.style.width = "660px";
-    } else if (count < 5) {
+    } else if (his < 5) {
       note.classList.remove("hidden");
-      lead.textContent = count === 1 ? "One of these lights is yours." : count + " of these lights are yours.";
+      lead.textContent = his === 1 ? "One of these lights is yours." : his + " of these lights are yours.";
       sub.textContent = "The cold shape is still the example. Only the gold is you.";
       note.style.width = "520px";
     } else {
@@ -1501,6 +1522,7 @@ window.RichHome = (function () {
     }
 
     renderTeamColumn();
+    if (window.RichHomeGrowth) window.RichHomeGrowth.onCount(count, stats, lo);
   }
 
   /// The line under the core hangs 218px below it (`v2/v2.js`).
@@ -1651,6 +1673,62 @@ window.RichHome = (function () {
     });
   }
 
+  /// How long after an answer that showed nothing new `refreshRecords` asks again: 3 s, 8 s and
+  /// 20 s after the one before (31 s in all; reading two repositories of 2,700 documents took
+  /// under 10 s in the guest).
+  var RECORDS_ASK_AGAIN_MS = [3000, 8000, 20000];
+
+  /// HIS RECORDS AS THEY ARE NOW, every time the screen comes back: `home_field_data` is asked once
+  /// more, and a picture that has grown since it was drawn is drawn again with the new lights
+  /// arriving (`home-growth.js`). Nothing waits on the answer, and one that is not bigger changes
+  /// nothing.
+  function refreshRecords() {
+    var bridge = window.RichBridge;
+    if (!state.team || state.field !== "live" || !fieldDataIsCustomers() || state.enteringGhost) return Promise.resolve(false);
+    if (!bridge || typeof bridge.invoke !== "function" || state.refreshingRecords) return Promise.resolve(false);
+    state.refreshingRecords = true;
+    // ASKED AGAIN UNTIL THE READ BEHIND THE ANSWER HAS FINISHED. For connected repositories the
+    // backend answers with the kept picture at once and reads the repositories again behind it
+    // (`home_repos.rs`, `field_kept_or_built`), so the first answer after new work is the old
+    // count. The later asks (`RECORDS_ASK_AGAIN_MS` after the one before) pick the new picture up
+    // on this same visit; they stop when it has grown or the screen has been left.
+    var ask = function (round) {
+      return Promise.resolve(bridge.invoke("home_field_data")).then(function (answer) {
+        var field = answer && answer.available === true && answer.field;
+        var now = field && Array.isArray(field.nodes) ? field.nodes.length : 0;
+        var drawn = state.ghost ? state.ghost.total : null;
+        if (!state.open) return false;
+        // (`drawn` is not known for the first instant after a picture comes up; asked again then)
+        if (drawn !== null && now > drawn) {
+          // NOT UNDER "WATCH IT GROW": a picture drawn again would cut the film short. The new
+          // records wait for its last frame (asked about once a second) and arrive after it.
+          if (window.RichHomeGrowth && window.RichHomeGrowth.replaying) {
+            return new Promise(function (resolve) {
+              setTimeout(resolve, 1000);
+            }).then(function () {
+              return state.open ? ask(round) : false;
+            });
+          }
+          return rebuildGhost(field);
+        }
+        if (round >= RECORDS_ASK_AGAIN_MS.length) return false;
+        return new Promise(function (resolve) {
+          setTimeout(resolve, RECORDS_ASK_AGAIN_MS[round]);
+        }).then(function () {
+          return state.open ? ask(round + 1) : false;
+        });
+      });
+    };
+    return ask(0)
+      .catch(function () {
+        return false;
+      })
+      .then(function (done) {
+        state.refreshingRecords = false;
+        return done;
+      });
+  }
+
   /// THE GHOST'S SCRIPTS, in order: the example's dataset, his records merged into it (or `null`), and
   /// the engine that reads the merged one. The first time on a page that is everything; later (a
   /// rebuild: his records arrived after the screen was drawn, or he hired his first teammate with the
@@ -1661,11 +1739,14 @@ window.RichHome = (function () {
     var variant = {};
     for (var k in VARIANT_GHOST) if (Object.prototype.hasOwnProperty.call(VARIANT_GHOST, k)) variant[k] = VARIANT_GHOST[k];
     variant.count = count;
+    // The stages (round 75): which pieces are on at this count, and where a moment starts.
+    if (window.RichHomeGrowth) window.RichHomeGrowth.variant(variant, count ? records : null);
     window.VARIANT = variant;
     // THE GHOST'S COUNT HOOKS, in place before the engine runs (it calls both).
     window.onLoroCount = onFieldCount;
     window.onLoroReady = function (api) {
       onFieldCount(api.COUNT, api.stats);
+      if (window.RichHomeGrowth) window.RichHomeGrowth.ready(api);
     };
     var rest = typeof window.prepare === "function" ? [FIELD[FIELD.length - 1]] : FIELD_GHOST_REST;
     // FROM `GHOST_SPAN` OF HIS OBJECTS, READ FROM HIS REPOSITORIES, THE PICTURE IS HIS ALONE (round 73,
@@ -1858,6 +1939,9 @@ window.RichHome = (function () {
         // 73, the last one, while SwearMeter is on) is put back under them first.
         if (window.RichSwearMeter) window.RichSwearMeter.paintHome();
         reserveDoorTop();
+        // The first-run example has been on this screen: his first hire is handed over from it
+        // (round 75, 2.2), once.
+        if (!state.team && !fieldDataIsCustomers() && window.RichHomeGrowth) window.RichHomeGrowth.exampleSeen();
         // THE DATASET IS ONLY NOW ON THE PAGE. Until this line `window.MATURE_LORO` did not
         // exist, so the banner has been up on the honest default ("nobody has said it is
         // his"). Re-derive from what actually loaded: if it ever says it is his, this is where
@@ -1865,6 +1949,10 @@ window.RichHome = (function () {
         refreshNote();
         // His records came after the ceiling while the example was still being drawn.
         if (state.lateRecords) drawLateRecords();
+        // The answer this launch drew may be the kept picture, with the repositories being read
+        // again behind it: asked again as on every later visit, so work done since the last
+        // launch arrives on this one (round 75, 3.4).
+        else if (state.team) refreshRecords();
         // If the CEO already left for the app UI while this was loading, the picture must not
         // start burning frames behind an opaque surface.
         if (!state.open && window.__loro && window.__loro.pause) window.__loro.pause();
@@ -1967,6 +2055,9 @@ window.RichHome = (function () {
     // expected dark, got light.
     if (window.RichTheme && !splashStillUp()) window.RichTheme.forceDark(false);
 
+    // A replay, the lit example, a sentence under the core: each is for the visit it began in.
+    if (window.RichHomeGrowth) window.RichHomeGrowth.left();
+
     if (appEl) appEl.removeAttribute("inert");
     document.body.classList.remove("home-open");
     document.removeEventListener("focusin", onFocusIn, true);
@@ -2037,8 +2128,11 @@ window.RichHome = (function () {
     var started = fieldStarted;
     if (window.__loro && window.__loro.resume) window.__loro.resume();
     else startField();
-    // ...but his team is re-read: a hire since the screen was last shown belongs on it.
-    if (started) refreshTeam();
+    // ...but his team is re-read: a hire since the screen was last shown belongs on it. And so are
+    // his records: what Rich learned while he was away arrives while he watches (round 75, 3.4).
+    if (started) refreshTeam().then(refreshRecords);
+    // ...and a visit is a visit: the first one of a week carries last week's line (round 75, 4.3).
+    if (window.RichHomeGrowth) window.RichHomeGrowth.visited();
 
     // ...and fade in on the next frame, so the transition has a start state to run from.
     requestAnimationFrame(function () {

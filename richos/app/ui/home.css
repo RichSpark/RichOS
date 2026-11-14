@@ -1574,3 +1574,347 @@ body.home-open {
 /* ROUND 72: over a picture read from his repositories the "learned from" line is not shown. The
    engine names a teammate at random for each source, which over his own data is a made-up event. */
 #home.home-from-repos #home-ticker { display: none; }
+
+/* =============================================================================================
+   THE STAGES (round 75, CEO 2026-11-14; `home-growth.js`): the invitation, "See it finished", the
+   distance line and its card, the two presses, the sentence under the core, the caption and the
+   replay's counter. The numbers in the comments are the design's sections. The home screen is
+   always dark, so one theme; the ratios are measured in `tests/home-growth.js`.
+   ============================================================================================= */
+
+/* 2.1: the invitation under the first-run banner (first launch only) */
+.grow-invite {
+  display: block;
+  margin: 4px 0 0;
+  font-style: italic;
+  color: var(--t1);
+}
+#home.grow-on .grow-invite { display: none; }
+
+/* 2.3: "Example", on the app's own banner, for as long as the example is lit */
+.grow-example-word,
+.grow-example-bar { display: none; }
+#home.grow-finished .grow-example-word {
+  display: block;
+  margin: 0 0 6px;
+  font-family: var(--caps);
+  font-size: 18px;
+  font-weight: 500;
+  letter-spacing: 0.26em;
+  text-transform: uppercase;
+  color: var(--gold);
+}
+#home.grow-finished .grow-example-bar {
+  display: block;
+  height: 2px;
+  margin-top: 12px;
+  background: var(--gold);
+  transform-origin: right center;
+}
+.grow-example-bar.run { animation: grow-drain 10s linear forwards; }
+@keyframes grow-drain {
+  from { transform: scaleX(1); }
+  to { transform: scaleX(0); }
+}
+
+/* 3.3: the distance line, under the brand line */
+#home.grow-on #home-signals { top: calc(168px + 40px + var(--home-top-inset)); }
+.grow-distance {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  margin: 10px 0 0 -11px;
+  padding: 5px 11px 6px;
+  border: 1px solid transparent;
+  border-radius: 17px;
+  background: none;
+  font-family: var(--serif);
+  font-size: 18px;
+  line-height: 1.2;
+  letter-spacing: 0.005em;
+  color: var(--t2);
+  pointer-events: auto;
+  cursor: pointer;
+  transition: border-color 0.2s ease, color 0.2s ease;
+}
+.grow-distance[hidden] { display: none; }
+.grow-distance b {
+  font-weight: 500;
+  color: var(--t1);
+  font-variant-numeric: lining-nums tabular-nums;
+}
+.grow-distance .chev {
+  margin-left: 3px;
+  color: var(--gold);
+  font-size: 20px;
+  line-height: 1;
+}
+.grow-distance:hover,
+.grow-distance[aria-expanded="true"] {
+  border-color: rgba(194, 163, 92, 0.75);
+  color: var(--t1);
+}
+.grow-distance:focus-visible {
+  outline: 2px solid var(--gold);
+  outline-offset: 2px;
+}
+
+/* the card behind it */
+.grow-card {
+  position: absolute;
+  left: 23px;
+  top: 220px;
+  width: 520px;
+  z-index: 12;
+  padding: 22px 26px 22px;
+  border-radius: 16px;
+  border: 1px solid #5d7098;
+  background: rgba(12, 19, 34, 0.975);
+  box-shadow: 0 22px 70px rgba(0, 0, 0, 0.6);
+}
+.grow-card[hidden] { display: none; }
+.grow-card h2 {
+  margin: 0 0 12px;
+  font-family: var(--serif);
+  font-weight: 400;
+  font-size: 24px;
+  line-height: 1.25;
+  color: var(--t1);
+}
+.grow-card ol {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.grow-card li {
+  display: flex;
+  align-items: baseline;
+  gap: 13px;
+  padding: 6px 0;
+}
+.grow-card .mark {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  border: 1.5px solid #8091b3;
+  transform: translateY(-1px);
+}
+.grow-card li.reached .mark {
+  border-color: #f2e2bc;
+  background: #f2e2bc;
+  box-shadow: 0 0 10px 2px rgba(242, 226, 188, 0.55);
+}
+.grow-card li.next .mark { border-color: var(--gold); }
+.grow-card .tx {
+  font-family: var(--serif);
+  font-size: 17px;
+  line-height: 1.4;
+  color: var(--t2);
+}
+.grow-card .tx b {
+  font-weight: 500;
+  color: var(--t1);
+}
+.grow-card li.ahead .tx,
+.grow-card li.ahead .tx b { color: var(--t3); }
+.grow-card li.next .tx b { color: var(--gold); }
+.grow-card .grows {
+  margin: 14px 0 0;
+  padding-top: 14px;
+  border-top: 1px solid rgba(93, 112, 152, 0.6);
+  font-family: var(--serif);
+  font-size: 16px;
+  line-height: 1.55;
+  color: var(--t2);
+}
+
+/* 2.3 and 3.5: the two presses */
+.grow-press {
+  flex: none;
+  margin-left: 12px;
+  padding: 6px 14px 7px;
+  border-radius: 16px;
+  border: 1px solid rgba(194, 163, 92, 0.75);
+  background: rgba(12, 19, 34, 0.9);
+  color: var(--t1);
+  font-family: var(--sans);
+  font-size: 16px;
+  font-weight: 400;
+  line-height: 1.15;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  pointer-events: auto;
+  cursor: pointer;
+  transition: background 0.2s ease, border-color 0.2s ease;
+}
+.grow-press:hover { background: #30302e; border-color: var(--gold); } /* the gold at a fifth over the ground, solid, so the label never stands on the picture */
+.grow-press:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+.grow-press:disabled { opacity: 0.45; cursor: default; }
+.grow-press[hidden] { display: none; }
+#home-legend .row { min-height: 31px; }
+.grow-solo {
+  position: absolute;
+  left: 34px;
+  bottom: 34px;
+  z-index: 5;
+  margin: 0;
+  box-shadow: 0 0 14px 6px rgba(12, 19, 34, 0.8), 0 0 34px 18px rgba(12, 19, 34, 0.5);
+  display: none;
+}
+.grow-solo.on { display: block; }
+
+/* 2.2 and 3.6: the sentence under the core */
+#home.grow-moment-on #home-ghost-note { display: none; }
+.grow-moment {
+  position: absolute;
+  left: 50%;
+  top: 60%;
+  transform: translate(-50%, 0);
+  width: 720px;
+  max-width: calc(100vw - 80px);
+  box-sizing: border-box;
+  padding: 14px 30px 16px;
+  border-radius: 18px;
+  text-align: center;
+  z-index: 6;
+  background: rgba(12, 19, 34, 0.9);
+  box-shadow: 0 0 14px 6px rgba(12, 19, 34, 0.8), 0 0 34px 18px rgba(12, 19, 34, 0.5);
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.9s ease, visibility 0s linear 0.9s;
+}
+.grow-moment.on {
+  opacity: 1;
+  visibility: visible;
+  transition: opacity 0.9s ease;
+}
+.grow-moment p { margin: 0; }
+.grow-moment .title {
+  font-family: var(--caps);
+  font-size: 16px;
+  font-weight: 500;
+  letter-spacing: 0.26em;
+  text-transform: uppercase;
+  color: var(--gold);
+}
+.grow-moment .title:empty { display: none; }
+.grow-moment .line {
+  margin-top: 8px;
+  font-family: var(--serif);
+  font-size: 26px;
+  line-height: 1.4;
+  letter-spacing: 0.004em;
+  color: var(--t1);
+}
+.grow-moment .title:empty + .line { margin-top: 0; }
+.grow-moment .offer { margin: 12px 0 0; }
+.grow-moment .next {
+  font-family: var(--serif);
+  font-style: italic;
+  font-size: 17px;
+  line-height: 1.4;
+  color: var(--t2);
+}
+.grow-moment .next:empty { display: none; }
+.grow-moment .next:not(:empty) { margin-top: 10px; }
+#home.grow-replaying .grow-moment { opacity: 0; visibility: hidden; }
+
+/* 3.4 and 4.3: the caption, where "Newest" stands */
+#home.grow-caption-on #home-arrived,
+#home.grow-replaying #home-arrived { display: none; }
+.grow-caption {
+  position: absolute;
+  right: 22px;
+  bottom: 22px;
+  max-width: 520px;
+  padding: 12px;
+  border-radius: 10px;
+  background: rgba(12, 19, 34, 0.9);
+  box-shadow: 0 0 14px 6px rgba(12, 19, 34, 0.8), 0 0 34px 18px rgba(12, 19, 34, 0.5);
+  z-index: 5;
+  text-align: right;
+  pointer-events: none;
+  user-select: none;
+  font-family: var(--serif);
+  font-size: 17px;
+  line-height: 1.4;
+  color: var(--t1);
+  opacity: 0;
+  transition: opacity 0.6s ease;
+}
+.grow-caption.on { opacity: 1; }
+
+/* 3.5: the replay's counter and its last frame */
+.grow-replay {
+  position: absolute;
+  left: 50%;
+  bottom: 112px; /* clear of the legend's two lines, which stay up: a recording keeps "Example, not yours" */
+  transform: translate(-50%, 0);
+  min-width: 300px;
+  padding: 14px 30px 16px;
+  border-radius: 18px;
+  text-align: center;
+  white-space: nowrap;
+  z-index: 6;
+  background: rgba(12, 19, 34, 0.9);
+  box-shadow: 0 0 14px 6px rgba(12, 19, 34, 0.8), 0 0 34px 18px rgba(12, 19, 34, 0.5);
+  pointer-events: none;
+  user-select: none;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.5s ease, visibility 0s linear 0.5s;
+}
+.grow-replay.on {
+  opacity: 1;
+  visibility: visible;
+  transition: opacity 0.5s ease;
+}
+.grow-replay .stage {
+  min-height: 20px;
+  font-family: var(--caps);
+  font-size: 16px;
+  font-weight: 500;
+  letter-spacing: 0.26em;
+  text-transform: uppercase;
+  color: var(--gold);
+}
+.grow-replay .line {
+  margin-top: 4px;
+  font-family: var(--serif);
+  font-size: 24px;
+  line-height: 1.3;
+  color: var(--t1);
+  font-variant-numeric: lining-nums tabular-nums;
+  transition: font-size 0.5s ease;
+}
+.grow-replay.last .stage { display: none; }
+.grow-replay.last .line { margin-top: 0; font-size: 34px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .grow-example-bar.run { animation: none; }
+}
+
+/* The legend's plate is feathered on every side: with his river running behind it, its straight
+   edges read as a box cut out of the picture. The text and the two presses stand on the full
+   plate (0.9 of the ground, as in the app); only the margin around them falls away. */
+#home.grow-on #home-legend {
+  padding-right: 20px;
+  background: none;
+  box-shadow: none;
+}
+#home.grow-on #home-legend::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  inset: -34px -96px -30px -30px;
+  background: rgba(12, 19, 34, 0.9);
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 30px, #000 calc(100% - 96px), transparent),
+    linear-gradient(to bottom, transparent, #000 34px, #000 calc(100% - 30px), transparent);
+  mask-image: linear-gradient(to right, transparent, #000 30px, #000 calc(100% - 96px), transparent),
+    linear-gradient(to bottom, transparent, #000 34px, #000 calc(100% - 30px), transparent);
+  -webkit-mask-composite: source-in;
+  mask-composite: intersect;
+  pointer-events: none;
+}
