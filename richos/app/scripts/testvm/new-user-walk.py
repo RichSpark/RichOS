@@ -212,11 +212,15 @@ def update_row(text):
     across Settings' columns, so "Keep the stored output" / "O For two weeks" from the first column
     came next and the row itself was 29 lines further down.
     A headline wrapped onto more lines ("... is up to" / "date.", nightly 71's walk of 2026-10-23)
-    is one headline: a line starting in lower case continues the sentence above it."""
+    is one headline: a line starting in lower case continues the sentence above it.
+    The heading stands alone on its line, or ends a line after the other columns' text: a guest
+    walk of 2026-11-14 read "O For three months How much should Rich interrupt you? Updates", the
+    heading being in Settings' last column, with the row plainly on the frame below."""
     lines = [l.strip() for l in (text or '').splitlines() if l.strip()]
-    if 'Updates' not in lines:
+    heading = next((i for i, l in enumerate(lines) if re.search(r'(?:^|\s)Updates$', l)), None)
+    if heading is None:
         return None, None
-    rest = lines[lines.index('Updates') + 1:]
+    rest = lines[heading + 1:]
     for i, line in enumerate(rest):
         if UPDATE_HEADLINE.match(line):
             row = rest[i:]
