@@ -2,7 +2,7 @@
 #
 # branch-bundle.sh — a walkable RichOS.app zip of THIS checkout, for run-walk.py --bundle.
 #
-#   testvm/branch-bundle.sh --out <zip> --engine-version V --engine-url URL --engine-sha256 SHA [--richfiles]
+#   testvm/branch-bundle.sh --out <zip> --engine-version V --engine-url URL --engine-sha256 SHA [--richfiles] [--companion]
 #
 # WHY. A fix is proved on the real app in a guest before it is handed over, and a walk needs a
 # bundle. A release zip is not this branch, and a debug executable copied into a release
@@ -24,11 +24,16 @@
 # app runs this branch's RichFiles. Without it the page says "This build does not contain
 # RichFiles." (richfiles_pane.rs).
 #
+# --companion also puts the meeting-notes capture companion (prepare-companion.py --binary, the
+# cached build) at Contents/MacOS/richos-companion, ad-hoc signed as package-app.sh signs it, so a
+# meeting walk (Take Notes, the notes and their Source links) runs. Without it the app runs with no
+# meeting notes (meetings.rs looks for that file).
+#
 # Unsigned (ad-hoc), never for anyone's own Mac: the guest is the only place it runs.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_DIR="$(cd "$HERE/../.." && pwd)"
-OUT=""; ENGINE_VERSION=""; ENGINE_URL=""; ENGINE_SHA256=""; RICHFILES=0
+OUT=""; ENGINE_VERSION=""; ENGINE_URL=""; ENGINE_SHA256=""; RICHFILES=0; COMPANION=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --out) OUT="$2"; shift 2 ;;
@@ -36,7 +41,8 @@ while [ $# -gt 0 ]; do
     --engine-url) ENGINE_URL="$2"; shift 2 ;;
     --engine-sha256) ENGINE_SHA256="$2"; shift 2 ;;
     --richfiles) RICHFILES=1; shift ;;
-    -h|--help) sed -n '2,28p' "$0"; exit 0 ;;
+    --companion) COMPANION=1; shift ;;
+    -h|--help) sed -n '2,34p' "$0"; exit 0 ;;
     *) echo "branch-bundle.sh: unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -70,8 +76,13 @@ if [ "$RICHFILES" -eq 1 ]; then
   ditto "$STAGE/richfiles/RichFiles.app" "$STAGE/RichOS.app/Contents/Applications/RichFiles.app"
   install -m 755 "$STAGE/richfiles/libRichFilesRail.dylib" "$STAGE/RichOS.app/Contents/Frameworks/libRichFilesRail.dylib"
 fi
+if [ "$COMPANION" -eq 1 ]; then
+  COMPANION_BIN="$(python3 "$APP_DIR/scripts/prepare-companion.py" --binary)"
+  install -m 755 "$COMPANION_BIN" "$STAGE/RichOS.app/Contents/MacOS/richos-companion"
+  codesign --force --sign - --timestamp=none "$STAGE/RichOS.app/Contents/MacOS/richos-companion"
+fi
 codesign --force -s - "$STAGE/RichOS.app" >/dev/null 2>&1
 mkdir -p "$(dirname "$OUT")"
 rm -f "$OUT"
 ( cd "$STAGE" && ditto -c -k --keepParent RichOS.app "$OUT" )
-echo "bundle=$OUT commit=$SHA identity=$IDENTIFIER $VERSION engine=$ENGINE_VERSION richfiles=$RICHFILES"
+echo "bundle=$OUT commit=$SHA identity=$IDENTIFIER $VERSION engine=$ENGINE_VERSION richfiles=$RICHFILES companion=$COMPANION"
