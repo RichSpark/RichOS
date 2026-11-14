@@ -1709,6 +1709,10 @@ fn send_message(
     } else {
         None
     };
+    // AFTER AN UPDATE, A SEND MADE WHILE THE APP INSTALLS ITS OWN BUILD'S ENGINE WAITS FOR IT,
+    // rather than being refused below with a sentence that sends him to the setup sheet
+    // (`update_engine_by_itself`). Returns at once when no update runs; never under the spine.
+    setup_view::wait_for_engine_update();
     // `take_the_spine` is what writes the wait down now, for THIS site and for every other
     // one — see the block above it. The measurement did not move; it stopped being unique
     // to this line, which is what let six seconds go unattributed on candidate .12.
@@ -3430,8 +3434,20 @@ fn main() {
             // the condition is visible before a customer discovers it as a broken app. On the
             // CEO's own machine it says nothing is missing and costs two `stat` calls.
             // ==============================================================================
-            {
+            let engine_update_now = {
                 let s = setup_view::detect(boot_engine.as_deref());
+                // AFTER AN UPDATE THE APP INSTALLS ITS OWN BUILD'S ENGINE BY ITSELF (the CEO,
+                // 2026-11-14). The flag is set HERE, before `AppState` exists and so before the
+                // window can read the setup status: the sheet never asks for this engine. The
+                // install starts once `AppState` is managed (`update_engine_by_itself`, below).
+                // Not under the updater selftest, which runs headless, as the video tools.
+                let engine_update_now = s.engine_update && updates::selftest_mode().is_none();
+                if engine_update_now {
+                    setup_view::begin_engine_update();
+                    eprintln!(
+                        "[richos] engine update: the installed engine is an earlier build's, so this build installs its own by itself, with no setup sheet."
+                    );
+                }
                 if s.complete() {
                     eprintln!("[richos] first-run setup: nothing missing.");
                 } else {
@@ -3481,7 +3497,8 @@ fn main() {
                         setup_view::start_video_tools_download(app.handle());
                     }
                 }
-            }
+                engine_update_now
+            };
 
             // Left-navigation view state — same app data dir, same durability posture as
             // the ledger and config, and never fatal: a corrupt file degrades to defaults
@@ -3807,9 +3824,17 @@ fn main() {
             {app.manage(Arc::new(writing_host::Host::default()));cleaner_host::start(app.handle())?;cleaner_service::register(app.handle())?;}
             git_name_host::start(app.handle().clone());
             peer_messages::start(app.handle().clone())?;
-            // Readiness starts before the window's setup/navigation reads, with the
-            // selected thread's immutable company scope. Reader snapshots stay available.
-            ready_selected_front_desk(app.handle());
+            // After an update, this build's own engine, installed by the app itself (the flag
+            // was set at the first-run setup block above, before the window could ask). It
+            // readies his desk itself once the engine is in (`replace_engine`); readying it now
+            // would be a spawn into the earlier build's engine, which the pin refuses.
+            if engine_update_now {
+                update_engine_by_itself(app.handle().clone());
+            } else {
+                // Readiness starts before the window's setup/navigation reads, with the
+                // selected thread's immutable company scope. Reader snapshots stay available.
+                ready_selected_front_desk(app.handle());
+            }
             spawn_idle_session_retirement(app.handle().clone());
             // The composer's attachments, in the SAME app-data directory the phone's
             // attachment desk writes to (`phone/attachments.rs`). No I/O until a file arrives.
@@ -5058,6 +5083,8 @@ fn start_voice_capture(app: AppHandle, thread_id: Option<String>) -> Result<serd
                 return;
             }
             let state = submit_app.state::<AppState>();
+            // The spoken half of `send_message`'s wait for the app's own engine update.
+            setup_view::wait_for_engine_update();
             let Some(spine) = take_the_spine_or_give_up(&state.spine) else { return };
             // HIS WHOLE THOUGHT IS ONE REQUEST, even after a wait here: earlier work held the
             // spine, he went on talking meanwhile, and his next turn already carries these words.
@@ -6391,8 +6418,62 @@ fn dictation_feature_thread(state: State<AppState>, create: bool) -> Result<Opti
 /// running spine or start an untracked model handshake. The idle spine stays locked through replacement.
 #[richos_command::command]
 fn run_setup(app: tauri::AppHandle, state: State<AppState>) -> Result<serde_json::Value, String> {
+    let spine = state.spine.try_lock().map_err(|_| "Rich is working. Stop or finish the current turn before changing the engine.".to_string())?;
+    replace_engine(&app, &state, spine, |selected, engine_dir| setup_view::run(&app, Some(selected), engine_dir))
+}
+
+/// **AFTER AN UPDATE, THE APP INSTALLS ITS OWN BUILD'S ENGINE BY ITSELF** (the CEO, 2026-11-14:
+/// *"Is it normal and expected that I always get to see the setup screen ... after updating to a
+/// new version?"*). Started by the boot when `SetupStatus::engine_update` says the engine is
+/// missing only because an earlier build set it up; `setup_view::begin_engine_update` was set
+/// before the window could ask, so the sheet does not ask for the engine and a send waits.
+///
+/// The download and the swap run with NO lock held, so the window, his threads and his typing
+/// are never held up by them. Only then is the spine taken, waiting its turn like any other
+/// command, for exactly what a press of "Set it up" does after its install
+/// ([`replace_engine`]): the idle lease retired, memory wired to the new engine and his desk made
+/// ready. A failure leaves the previous engine where it was (`install_engine` swaps only a
+/// verified one) and clears the flag, and the sheet offers the engine as on a first install.
+fn update_engine_by_itself(app: AppHandle) {
+    let spawned = std::thread::Builder::new().name("engine-update".into()).spawn(move || {
+        let started = std::time::Instant::now();
+        let state = app.state::<AppState>();
+        let paths = richos_core::setup::SetupPaths::from_process();
+        let outcome = setup_view::install_pinned_engine(&paths, &state.engine_dir)
+            .map_err(|e| e.to_string())
+            .and_then(|_| {
+                let spine = take_the_spine(&state.spine);
+                replace_engine(&app, &state, spine, |selected, _| Ok(setup_view::detect(Some(selected))))
+            });
+        setup_view::end_engine_update();
+        match outcome {
+            Ok(_) => eprintln!(
+                "[richos] engine update: this build's engine is installed and in use, in {} ms, with no setup sheet",
+                started.elapsed().as_millis()
+            ),
+            Err(e) => eprintln!(
+                "[richos] engine update FAILED after {} ms — {e}; the setup sheet offers the engine instead",
+                started.elapsed().as_millis()
+            ),
+        }
+    });
+    if let Err(e) = spawned {
+        setup_view::end_engine_update();
+        eprintln!("[richos] engine update: could not start ({e}); the setup sheet offers the engine instead");
+    }
+}
+
+/// **The engine changes under a held spine**: install (`install`, given the selected engine and
+/// the lease factory's cell), then re-point everything that holds the engine and make his desk
+/// ready. One body for a press of "Set it up" ([`run_setup`]) and the app's own install after an
+/// update ([`update_engine_by_itself`]), so the two cannot leave the app differently wired.
+fn replace_engine<S: std::ops::DerefMut<Target = Spine>>(
+    app: &AppHandle,
+    state: &AppState,
+    mut spine: S,
+    install: impl FnOnce(&Path, &Arc<Mutex<PathBuf>>) -> Result<richos_core::setup::SetupStatus, String>,
+) -> Result<serde_json::Value, String> {
     let selected = state.engine_dir.lock().unwrap().clone();
-    let mut spine = state.spine.try_lock().map_err(|_| "Rich is working. Stop or finish the current turn before changing the engine.".to_string())?;
     let registry = spine.entity_registry().clone();
     let workers:Vec<_>=state.control.lease_sessions().iter().map(|session|
         richos_core::app_workers::status(&state.data_dir.join("engine-state"),Some(session))).collect();
@@ -6406,7 +6487,7 @@ fn run_setup(app: tauri::AppHandle, state: State<AppState>) -> Result<serde_json
     // Keep the idle spine and writer locked throughout replacement. New requests
     // cannot start against a changing engine and cached child hooks are retired first.
     spine.retire_idle_lease()?;
-    let installed = setup_view::run(&app, Some(&selected), &state.engine_dir);
+    let installed = install(&selected, &state.engine_dir);
     *state.claude_bin.lock().map_err(|_| "The connection settings could not be updated. Please reopen RichOS.")? = resolve_claude_bin();
     state.quota.disconnect(); // Recheck after installation or a changed Claude binary.
     let engine = state.engine_dir.lock().unwrap().clone();
@@ -6419,7 +6500,7 @@ fn run_setup(app: tauri::AppHandle, state: State<AppState>) -> Result<serde_json
             held.replace_writer(Box::new(writer));
             spine.set_correction_desk(desk.as_ref().unwrap().clone());
         } else {
-            *state.correction.lock().unwrap() = install_correction_desk(&mut spine, &app, &state.data_dir, writer);
+            *state.correction.lock().unwrap() = install_correction_desk(&mut spine, app, &state.data_dir, writer);
         }
     } else { *state.correction.lock().unwrap() = None; }
     // **WHICH CONVERSATION IS ON SCREEN**, read while the guard is still in hand so the answer
@@ -6458,14 +6539,14 @@ fn run_setup(app: tauri::AppHandle, state: State<AppState>) -> Result<serde_json
         match on_screen {
             // A thread is open: its own desk, and then — inside `ready_the_front_desk` — the
             // spare for the company that thread is filed under.
-            Some(thread) => ready_the_front_desk_after_a_repair(&app, &thread),
+            Some(thread) => ready_the_front_desk_after_a_repair(app, &thread),
             // No conversation open yet, which is the FIRST-RUN shape and the one Ray walked:
             // the offer appears on entry, he answers it, and the first thing he does next is
             // type into a brand-new thread. A spare is the only desk that can be ready for a
             // thread that does not exist yet (`ready_a_spare_front_desk`).
             None => {
                 if let Some(entity) = state.entity.lock().unwrap().clone() {
-                    ready_a_spare_front_desk(&app, entity);
+                    ready_a_spare_front_desk(app, entity);
                 }
             }
         }

@@ -338,14 +338,98 @@ pub fn video_tools_downloading() -> bool {
 }
 
 /// **What the sheet asks for, and what a press installs**: everything missing, except the video
-/// tools while their background download runs. A pure function of the status and that one fact,
-/// so the rule is a unit test.
+/// tools while their background download runs and the engine while the app installs it by itself
+/// after an update ([`engine_updating`]). The rule is `SetupStatus::sheet_needs`, a unit test in
+/// `richos-core`.
 pub fn sheet_needs(status: &SetupStatus, downloading: bool) -> Vec<Component> {
-    status
-        .needs()
-        .into_iter()
-        .filter(|c| !(downloading && *c == Component::MediaTools))
-        .collect()
+    status.sheet_needs(downloading, engine_updating())
+}
+
+// =============================================================================================
+// AFTER AN UPDATE, THE APP INSTALLS ITS OWN BUILD'S ENGINE BY ITSELF (the CEO, 2026-11-14)
+// =============================================================================================
+//
+// *"Is it normal and expected that I always get to see the setup screen ... after updating to a
+// new version?"* It is not: each build pins its own engine (`setup.rs`, the pin), so after an
+// update the engine the previous build installed no longer matches and detection reports it
+// missing. Until this change the only way to the new one was his press of "Set it up".
+//
+// Now the boot sees that case (`SetupStatus::engine_update`), sets the flag below before the
+// window can ask anything, and installs this build's engine on its own thread (`main.rs`,
+// `update_engine_by_itself`). While it runs the sheet does not ask for the engine, and a send
+// waits for it rather than being refused ([`wait_for_engine_update`]). If it fails the flag
+// clears and the sheet offers the engine as it does on a first install, so a Mac that could not
+// fetch it still has a way to.
+
+/// Whether the app is installing its own build's engine after an update, right now.
+static ENGINE_UPDATING: Mutex<bool> = Mutex::new(false);
+/// Signaled when [`ENGINE_UPDATING`] clears.
+static ENGINE_UPDATED: std::sync::Condvar = std::sync::Condvar::new();
+
+/// Is the app installing its own build's engine after an update right now?
+pub fn engine_updating() -> bool {
+    ENGINE_UPDATING.lock().map(|g| *g).unwrap_or(false)
+}
+
+/// The update starts: set by the boot before the window can read the setup status.
+pub fn begin_engine_update() {
+    if let Ok(mut g) = ENGINE_UPDATING.lock() {
+        *g = true;
+    }
+}
+
+/// The update ended, either way: a waiting send goes on, and the sheet reads the disk again.
+pub fn end_engine_update() {
+    if let Ok(mut g) = ENGINE_UPDATING.lock() {
+        *g = false;
+    }
+    ENGINE_UPDATED.notify_all();
+}
+
+/// **A send made while the engine updates waits for it**, instead of being refused with a
+/// sentence that sends him to the sheet. Returns at once when no update is running. Called before
+/// the spine is taken, so the wait holds up nothing else. Bounded by the install itself: its
+/// download stops at curl's `--max-time` (`setup.rs`, `CurlFetcher`).
+pub fn wait_for_engine_update() {
+    let Ok(mut g) = ENGINE_UPDATING.lock() else { return };
+    if *g {
+        eprintln!("[richos] engine update: a send waits for this build's engine to finish installing");
+    }
+    while *g {
+        g = match ENGINE_UPDATED.wait(g) {
+            Ok(g) => g,
+            Err(_) => return,
+        };
+    }
+}
+
+/// **Install this build's pinned engine where RichOS installs it**, point the lease factory at
+/// it and give voice its decoder. One function for a press of "Set it up" ([`run`]) and for the
+/// app's own install after an update, so the two cannot install differently. `Ok` carries the
+/// line he is shown on the sheet.
+pub fn install_pinned_engine(
+    paths: &SetupPaths,
+    engine_dir: &Arc<Mutex<PathBuf>>,
+) -> Result<String, SetupError> {
+    let pin = setup::engine_pin().ok_or(SetupError::EngineUnpinned)?;
+    let home = paths.home.as_deref().ok_or(SetupError::NoHome)?;
+    let dest = setup::engine_install_dir(home);
+    let r = setup::install_engine(&CurlFetcher, &TarExtractor, &pin, &dest)?;
+    eprintln!(
+        "[richos] setup: engine {} at {} — sha256 {}, {} bytes",
+        r.version, r.installed_at, r.sha256, r.bytes
+    );
+    // THE LEASE FACTORY NOW POINTS AT IT. Without this line the app would have an engine on
+    // disk and keep starting `claude` in the directory it failed to find at boot.
+    if let Ok(mut cell) = engine_dir.lock() {
+        *cell = dest.clone();
+    }
+    // AND VOICE FINDS ITS DECODER IN IT: the engine's runtime carries `whisper-cli`
+    // (build-runtimes.py), verified here like every runtime file.
+    if let Ok(runtime) = richos_core::runtime::verify_engine(&dest) {
+        richos_voice::stt::set_delivered_runtime_bin(Some(runtime.root.join("bin")));
+    }
+    Ok("Your engine is installed.".to_string())
 }
 
 /// The steps a press of "Set it up" runs and waits for, in order. **Never the video tools**: a
@@ -601,38 +685,7 @@ pub fn run(
                     );
                     format!("Claude Code is installed. ({} bytes of installer)", r.installer_bytes)
                 }),
-            Component::Engine => match setup::engine_pin() {
-                None => Err(SetupError::EngineUnpinned),
-                Some(pin) => {
-                    let home = match paths.home.as_deref() {
-                        Some(h) => h.to_path_buf(),
-                        None => {
-                            let e = SetupError::NoHome;
-                            emit_failure(app, *component, index, total, &e);
-                            return Err(e.to_string());
-                        }
-                    };
-                    let dest = setup::engine_install_dir(&home);
-                    setup::install_engine(&CurlFetcher, &TarExtractor, &pin, &dest).map(|r| {
-                        eprintln!(
-                            "[richos] setup: engine {} at {} — sha256 {}, {} bytes",
-                            r.version, r.installed_at, r.sha256, r.bytes
-                        );
-                        // THE LEASE FACTORY NOW POINTS AT IT. Without this line the app would
-                        // have an engine on disk and keep starting `claude` in the directory
-                        // it failed to find at boot.
-                        if let Ok(mut cell) = engine_dir.lock() {
-                            *cell = dest.clone();
-                        }
-                        // AND VOICE FINDS ITS DECODER IN IT: the engine's runtime carries
-                        // `whisper-cli` (build-runtimes.py), verified here like every runtime file.
-                        if let Ok(runtime) = richos_core::runtime::verify_engine(&dest) {
-                            richos_voice::stt::set_delivered_runtime_bin(Some(runtime.root.join("bin")));
-                        }
-                        "Your engine is installed.".to_string()
-                    })
-                }
-            },
+            Component::Engine => install_pinned_engine(&paths, engine_dir),
             // Filtered out by `foreground_steps`: started in the background above, never waited for.
             Component::MediaTools => continue,
         };
