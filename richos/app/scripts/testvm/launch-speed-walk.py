@@ -299,12 +299,15 @@ def guest_limit(rows):
     if not windows:
         return LIMIT_MS, None, None
     guest = statistics.median(windows) + DOCK_PART_MS
-    ratio = max(1.0, guest / MAC_DICTIONARY_MEDIAN_MS)
+    # Rounded ONCE, and the limit is made from the rounded ratio: publication (nightly-local.py,
+    # `round(380 * ratio)` from the recorded ratio) re-derives exactly the same limit (review
+    # rv-20261114T153837Z-b8423a44-96f8).
+    ratio = round(max(1.0, guest / MAC_DICTIONARY_MEDIAN_MS), 3)
     inputs = {'guest_window_from_request_ms': sorted(windows), 'guest_median_from_request_ms': statistics.median(windows),
               'dock_part_ms': DOCK_PART_MS, 'dock_part_inputs_ms': list(DOCK_PART_INPUTS_MS),
               'guest_median_from_click_ms': guest, 'mac_median_from_click_ms': MAC_DICTIONARY_MEDIAN_MS,
               'mac_inputs_ms': list(MAC_DICTIONARY_MS), 'ratio': round(guest / MAC_DICTIONARY_MEDIAN_MS, 3)}
-    return round(LIMIT_MS * ratio), round(ratio, 3), inputs
+    return round(LIMIT_MS * ratio), ratio, inputs
 
 
 

@@ -144,6 +144,11 @@ check("the limit is 380 ms times (the guest's median from the request + the Dock
 check('a single cold outlier does not move the limit', walk.guest_limit(calib[:-1] + [dict(calib[-1], window=590)])[1]
       == ratio, walk.guest_limit(calib[:-1] + [dict(calib[-1], window=590)]))
 check('no calibration keeps 380 ms', walk.guest_limit([]) == (380, None, None))
+# Publication re-derives the limit from the recorded ratio as round(380 * ratio): the walk's own
+# limit is that same number for every guest median (review rv-20261114T153837Z-b8423a44-96f8).
+mismatched = [m for m in range(300, 900) if (lambda l, r, _i: l != round(380 * r))(
+    *walk.guest_limit([{'label': 'dictionary:calibration', 'window': m}]))]
+check('the limit is the one publication re-derives from the recorded ratio, for every median', mismatched == [], mismatched[:5])
 check('a guest faster than his Mac never tightens the limit',
       walk.guest_limit([{'label': 'dictionary:calibration', 'window': 200}])[:2] == (380, 1.0))
 scaled = walk.verdict(fast + calib, {'ordinary': 20}, limit, ratio, inputs)
