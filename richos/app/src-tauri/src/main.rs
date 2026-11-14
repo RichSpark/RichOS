@@ -220,6 +220,7 @@ impl TurnObserver for TauriEmitter {
         if let StreamEvent::TurnCompleted { thread_id, turn_id, .. } = event {
             let app = self.app.clone();
             tauri::async_runtime::spawn_blocking(move || adopt_companies_added_during_the_turn(&app));
+            spawn_onboarding_into_loro(&self.app);
             if let Some(runtime) = self.app.try_state::<Arc<phone::PhoneRuntime>>() {
                 let runtime=Arc::clone(&runtime);
                 let (thread_id,turn_id)=(thread_id.clone(),turn_id.clone());
@@ -264,6 +265,38 @@ fn adopt_companies_added_during_the_turn(app: &AppHandle) {
 /// True when the file's list adds a company the spine lacks and drops none it has.
 fn adopts_disk_registry(current: &EntityRegistry, disk: &EntityRegistry) -> bool {
     disk.entities().iter().any(|e| !current.contains(&e.id)) && current.entities().iter().all(|e| disk.contains(&e.id))
+}
+
+/// **WHAT ONBOARDING SAVED, INTO THE USER'S LORO** (CEO 2026-11-14, `richos_core::onboarding_loro`):
+/// at the end of every turn (Rich saves the answers and the team's research lands beside them),
+/// at launch and when the memory folder is set up or wired again. Off the calling thread: a new or
+/// changed file starts loro's writer, and an unchanged one starts nothing. No memory folder, or
+/// nothing saved yet, writes nothing.
+fn spawn_onboarding_into_loro(app: &AppHandle) {
+    let app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let Some(state) = app.try_state::<AppState>() else { return };
+        onboarding_into_loro(&state);
+    });
+}
+
+fn onboarding_into_loro(state: &AppState) {
+    let Some(install) = state.loro_install.lock().unwrap().clone() else { return };
+    let Some(central) = richos_core::company::install_central_root() else { return };
+    let registry = state.reader.snapshot().entity_registry().clone();
+    let sources = richos_core::onboarding_loro::sources(&central, &registry);
+    if sources.is_empty() {
+        return;
+    }
+    let writer = richos_core::correction::CliLoroWriter::from_install(&install);
+    let kept = state.data_dir.join(richos_core::onboarding_loro::KEPT_FILENAME);
+    let report = richos_core::onboarding_loro::sync(&sources, &writer, &install.root().path().display().to_string(), &kept);
+    for line in &report.written {
+        eprintln!("[richos] onboarding into loro: {line}");
+    }
+    for line in &report.problems {
+        eprintln!("[richos] onboarding into loro: NOT written, tried again after the next turn: {line}");
+    }
 }
 
 /// The SPOKEN-CORRECTION sink (`staging.rs`): forwards §7's ask to the webview on
@@ -3791,6 +3824,8 @@ fn main() {
                 claude_bin: claude_bin_cell.clone(),
                 boot_engine,
             });
+            // What onboarding saved before this launch (or before this fix), into his loro.
+            spawn_onboarding_into_loro(app.handle());
 
             // Resume only after AppState exists: PhoneBridge::new immediately reads
             // the spine to prime the paired phone's conversation. The window was
@@ -6058,6 +6093,7 @@ fn provision_memory(
     drop(spine);
     status.provisioned_now = true;
     *state.memory.lock().unwrap() = status.clone();
+    spawn_onboarding_into_loro(&app);
     Ok(memory::with_offered_location(status, home.as_deref()))
 }
 
@@ -6414,6 +6450,7 @@ fn run_setup(app: tauri::AppHandle, state: State<AppState>) -> Result<serde_json
     let wired = memory::wire_company_memory(&mut spine, &state.loro_provenance, &registry, &engine);
     *state.loro_install.lock().unwrap() = wired.install;
     *state.memory.lock().unwrap() = wired.status;
+    spawn_onboarding_into_loro(&app);
     if let Some(writer) = wired.writer {
         if let Some(held) = held_desk.as_mut() {
             held.replace_writer(Box::new(writer));

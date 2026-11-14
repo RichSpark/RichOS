@@ -442,6 +442,11 @@ declare_rules() {
   # below, so B8 fails on the fact rather than on a side effect of it.
   routine '^\[richos\] company registry: [0-9]+ compan\(ies\), /.+ \(file\)$' \
     'how many companies are on disk and where; the trusting of the file is the proof above'
+  # main.rs `onboarding_into_loro` (CEO 2026-11-14): the boot machine's company.md, copied into its
+  # provisioned corpus at the first launch, one line per record the writer wrote. The failure
+  # sibling ("NOT written") is listed in gui-boot-launch-lines.unaccounted.
+  routine '^\[richos\] onboarding into loro: (person|company/[a-z0-9-]+/[^ ]+\.md) -> rec:[^ ]+$' \
+    'what onboarding saved, copied into the corpus; the record is in loro and the line only names it'
   routine '^\[richos\] launch opens in no conversation; he picks one$' \
     'a launch with conversations on disk selects none (main.rs open_launch_context); a decision, not a finding'
   routine '^\[richos\] boot complete' \
