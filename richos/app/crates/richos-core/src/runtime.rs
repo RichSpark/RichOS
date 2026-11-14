@@ -1,6 +1,6 @@
 //! Verified runtime delivery, separate from private app state and target repositories.
 use serde::Deserialize;
-use sha2::{Digest, Sha256};
+use sha2_fast::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -46,17 +46,188 @@ fn stamp_of(meta: &std::fs::Metadata) -> Stamp {
 /// the link checks, the escape checks and the executable checks still run on every load, so an
 /// unexpected, missing, re-linked or re-permissioned file is refused as before. A file that is
 /// touched at all (its size, either time, its inode) is hashed again.
+///
+/// **AND IT OUTLIVES THE PROCESS** (launch-speed audit 2026-11-14, piece 1; Sage's review,
+/// finding 5). Remembered only in memory, every launch read and hashed all 431 MB in 6,542 files
+/// while the window waited. So the app names a file in ITS OWN data folder
+/// ([`remember_verified_at`]) and a load reads what an earlier process verified from it and
+/// writes back what it verified itself. Never inside the engine folder: anything new under
+/// `runtime/` is an unexpected file and fails the engine, and an engine shipped inside the app
+/// bundle would have its bundle checksum broken by a write there. A saved entry is trusted
+/// exactly as an in-memory one is: only while the file's stamp is unchanged AND the digest it
+/// was hashed to is the one the delivery names now.
 #[derive(Default)]
 struct Verified {
     files: std::collections::HashMap<PathBuf, (Stamp, String)>,
     hashed: std::collections::HashMap<PathBuf, usize>,
+    /// The runtime roots whose saved file this process has already read.
+    read_saved: BTreeSet<PathBuf>,
 }
 static VERIFIED: Mutex<Option<Verified>> = Mutex::new(None);
+/// Where verified stamps are saved between processes; `None` keeps them in memory only, as
+/// every caller but the app (a test, an example) has always had it.
+static SAVED_AT: Mutex<Option<PathBuf>> = Mutex::new(None);
 
 /// How many delivered files this process has read and hashed under `root` (the canonical
 /// runtime directory). An observation for tests and the boot log.
 pub fn files_hashed_under(root: &Path) -> usize {
     VERIFIED.lock().ok().and_then(|held| held.as_ref()?.hashed.get(root).copied()).unwrap_or(0)
+}
+
+/// Save what this process verifies to `file`, and start from what an earlier process saved
+/// there. The app calls it once, before its first engine check, with a file in its own data
+/// folder (under `RICHOS_TEST_DATA_DIR` that is the test's folder, never the live one). The app
+/// and its dictation process both write it: a write is a temporary file of this process renamed
+/// into place, and a file that does not read cleanly is ignored, which costs one full check.
+pub fn remember_verified_at(file: &Path) {
+    // (The app's file is `<its data folder>/`[`VERIFIED_FILE`], in the app and its dictation
+    // process alike.)
+    if let Ok(mut at) = SAVED_AT.lock() {
+        *at = Some(file.to_path_buf());
+    }
+}
+
+/// The saved file's name in the app's data folder.
+pub const VERIFIED_FILE: &str = "runtime-verified.txt";
+const SAVED_HEADER: &str = "richos-runtime-verified 1";
+
+/// The saved file's entries for `root`, or nothing when it is missing, for another root, or not
+/// exactly in the shape [`save_verified`] writes. One line per file:
+/// `<digest> <size> <mtime> <mtime_ns> <ctime> <ctime_ns> <inode> <device>\t<relative path>`.
+fn read_saved(file: &Path, root: &Path) -> Vec<(PathBuf, Stamp, String)> {
+    let Ok(text) = std::fs::read_to_string(file) else { return Vec::new() };
+    let mut lines = text.split('\n');
+    let root_line = format!("root\t{}", root.display());
+    if lines.next() != Some(SAVED_HEADER) || lines.next() != Some(root_line.as_str()) {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    for line in lines {
+        if line.is_empty() { continue; }
+        let Some((fields, name)) = line.split_once('\t') else { return Vec::new() };
+        let parts: Vec<&str> = fields.split(' ').collect();
+        let parsed = (|| -> Option<(Stamp, String)> {
+            let [digest, size, mt, mtn, ct, ctn, ino, dev] = parts.as_slice() else { return None };
+            if digest.len() != 64 || !digest.bytes().all(|b| b.is_ascii_hexdigit()) { return None; }
+            Some((Stamp(size.parse().ok()?, mt.parse().ok()?, mtn.parse().ok()?, ct.parse().ok()?,
+                ctn.parse().ok()?, ino.parse().ok()?, dev.parse().ok()?), digest.to_string()))
+        })();
+        match parsed {
+            Some((stamp, digest)) if relative(name) => out.push((root.join(name), stamp, digest)),
+            _ => return Vec::new(),
+        }
+    }
+    out
+}
+
+/// Write every verified entry under `root` to the saved file. Best effort: a file that cannot be
+/// written costs the next launch a full check, never a refusal.
+fn save_verified(file: &Path, root: &Path, files: &std::collections::HashMap<PathBuf, (Stamp, String)>) {
+    let mut text = format!("{SAVED_HEADER}\nroot\t{}\n", root.display());
+    let mut rows: Vec<_> = files.iter().filter_map(|(path, entry)| Some((path.strip_prefix(root).ok()?, entry))).collect();
+    rows.sort_by(|a, b| a.0.cmp(b.0));
+    for (name, (Stamp(size, mt, mtn, ct, ctn, ino, dev), digest)) in rows {
+        let Some(name) = name.to_str().filter(|n| relative(n)) else { continue };
+        text.push_str(&format!("{digest} {size} {mt} {mtn} {ct} {ctn} {ino} {dev}\t{name}\n"));
+    }
+    let temporary = file.with_extension(format!("{}.tmp", std::process::id()));
+    let written = file.parent().map(std::fs::create_dir_all).transpose().is_ok()
+        && std::fs::write(&temporary, text).is_ok()
+        && std::fs::rename(&temporary, file).is_ok();
+    if !written { std::fs::remove_file(&temporary).ok(); }
+}
+
+/// Forget everything verified under `root`, in memory and in the saved file, so the next load
+/// reads and hashes every delivered file. The ending of [`recheck_runtime_bytes`] on a mismatch.
+fn forget_verified(root: &Path) {
+    if let Ok(mut held) = VERIFIED.lock() {
+        if let Some(held) = held.as_mut() {
+            held.files.retain(|path, _| !path.starts_with(root));
+        }
+    }
+    if let Some(file) = SAVED_AT.lock().ok().and_then(|at| at.clone()) {
+        if !read_saved(&file, root).is_empty() { std::fs::remove_file(file).ok(); }
+    }
+}
+
+/// What the late full check of the engine runtime found.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RuntimeRecheck {
+    /// Every delivered file was read and hashed to the digest the delivery names.
+    Confirmed,
+    /// This file's bytes are not what the delivery names. Everything verified under the runtime
+    /// is forgotten, so the next engine check reads every file, refuses, and set-up offers the
+    /// reinstall it offers today (`setup::find_engine`'s "there but cannot be used").
+    Changed(String),
+}
+
+/// **THE FULL CHECK, LATE AND IN THE BACKGROUND** (Sage's review, finding 6). With the stamps
+/// saved, a launch reads no bytes; what a stamp cannot see is damage to a file's contents that
+/// changes nothing else about it. This reads every delivered file regardless of stamps, from the
+/// caller's thread, which should be a late, low-priority one: it is 431 MB of reading. Its
+/// ending is defined: on a mismatch it forgets what was verified, and work already running is
+/// left alone (stopping it over a damaged file it may never touch is worse than the damage; the
+/// review's stated default).
+pub fn recheck_runtime_bytes(engine: &Path) -> Result<RuntimeRecheck, RuntimeError> {
+    let root = std::fs::canonicalize(engine.join("runtime")).map_err(|_| RuntimeError("the selected engine has no delivered runtimes".into()))?;
+    let data = std::fs::read(root.join("delivery.json")).map_err(|e| RuntimeError(e.to_string()))?;
+    let delivery: Delivery = serde_json::from_slice(&data).map_err(|e| RuntimeError(e.to_string()))?;
+    for (name, wanted) in &delivery.files {
+        if !relative(name) || interpreter_bytecode_cache(name) { continue; }
+        let same = std::fs::File::open(root.join(name)).ok()
+            .and_then(|mut file| hash_file(&mut file).ok())
+            .is_some_and(|digest| digest.eq_ignore_ascii_case(wanted));
+        if !same {
+            forget_verified(&root);
+            return Ok(RuntimeRecheck::Changed(name.clone()));
+        }
+    }
+    Ok(RuntimeRecheck::Confirmed)
+}
+
+/// Lower-case hex SHA-256 of a file's bytes, spelled as `format!("{:x}")` spelled 0.10's digest
+/// (0.11's has no hex formatting).
+fn hash_file(file: &mut std::fs::File) -> std::io::Result<String> {
+    let mut hash = Sha256::new();
+    let mut buffer = [0; 65536];
+    loop {
+        let length = file.read(&mut buffer)?;
+        if length == 0 { break; }
+        hash.update(&buffer[..length]);
+    }
+    Ok(hash.finalize().iter().map(|b| format!("{b:02x}")).collect())
+}
+
+/// One entry of the runtime as the walk found it, without following a link.
+enum Found {
+    File(std::fs::Metadata),
+    Link,
+}
+
+/// **THE TREE, LISTED ONCE** (Sage's review, finding 5). Every delivered file used to be resolved
+/// path by path (one lookup per folder level), opened, and only then compared, and the tree was
+/// listed again afterwards. Now it is listed once without following links, each entry `lstat`ed
+/// in the same pass. A file reached only through real folders from the runtime's own resolved
+/// root cannot be outside it, so the per-file resolve is not needed and no check is lost: a
+/// delivered name that is a link, or that lies under a link, is not a regular file in this list.
+fn walk(root: &Path, directory: &Path, found: &mut BTreeMap<String, Found>) -> std::io::Result<()> {
+    for entry in std::fs::read_dir(directory)? {
+        let entry = entry?;
+        let kind = entry.file_type()?;
+        let path = entry.path();
+        if kind.is_dir() { walk(root, &path, found)?; continue; }
+        let name = path.strip_prefix(root).unwrap().to_string_lossy().to_string();
+        if kind.is_file() {
+            // A regular file only: a symlinked "cache" is recorded, and refused as unexpected.
+            if interpreter_bytecode_cache(&name) { continue; }
+            found.insert(name, Found::File(entry.metadata()?));
+        } else if kind.is_symlink() {
+            found.insert(name, Found::Link);
+        } else {
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "unsupported runtime file type"));
+        }
+    }
+    Ok(())
 }
 
 fn relative(name: &str) -> bool {
@@ -105,22 +276,6 @@ fn interpreter_bytecode_cache(name: &str) -> bool {
     }
 }
 
-fn inventory(root: &Path, directory: &Path, paths: &mut BTreeSet<String>) -> std::io::Result<()> {
-    for entry in std::fs::read_dir(directory)? {
-        let entry = entry?;
-        let kind = entry.file_type()?;
-        let path = entry.path();
-        if kind.is_dir() { inventory(root, &path, paths)?; }
-        else if kind.is_file() || kind.is_symlink() {
-            let name = path.strip_prefix(root).unwrap().to_string_lossy().to_string();
-            // A regular file only: a symlinked "cache" is recorded, and refused as unexpected.
-            if kind.is_file() && interpreter_bytecode_cache(&name) { continue; }
-            paths.insert(name);
-        } else { return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "unsupported runtime file type")); }
-    }
-    Ok(())
-}
-
 impl EngineRuntime {
     /// The override is an explicit development/testing input. Ordinary delivery
     /// uses the runtime in the selected engine, never Homebrew or a visited repo.
@@ -136,6 +291,21 @@ impl EngineRuntime {
         if delivery.schema != 1 || delivery.platform != "aarch64-apple-darwin" || !cfg!(all(target_os = "macos", target_arch = "aarch64")) {
             return Err(RuntimeError("unsupported runtime delivery".into()));
         }
+        let mut found = BTreeMap::new();
+        walk(&root, &root, &mut found).map_err(|e| RuntimeError(e.to_string()))?;
+        // What an earlier process verified and saved, read once per runtime per process.
+        let saved_at = SAVED_AT.lock().ok().and_then(|at| at.clone());
+        if let Some(file) = &saved_at {
+            if let Ok(mut held) = VERIFIED.lock() {
+                let held = held.get_or_insert_with(Verified::default);
+                if held.read_saved.insert(root.clone()) {
+                    for (path, stamp, digest) in read_saved(file, &root) {
+                        held.files.entry(path).or_insert((stamp, digest));
+                    }
+                }
+            }
+        }
+        let mut hashed_now = 0usize;
         let mut expected = BTreeSet::from(["delivery.json".to_string()]);
         for (name, wanted) in &delivery.files {
             if !relative(name) || wanted.len() != 64 || !wanted.bytes().all(|b| b.is_ascii_hexdigit()) {
@@ -145,28 +315,28 @@ impl EngineRuntime {
             // neither hashed nor required, and left out of the inventory on both sides.
             if interpreter_bytecode_cache(name) { continue; }
             let path = root.join(name);
-            let resolved = std::fs::canonicalize(&path).map_err(|_| RuntimeError(format!("missing runtime file: {name}")))?;
-            if !resolved.starts_with(&root) || path.is_symlink() {
-                return Err(RuntimeError(format!("runtime file escapes its delivery: {name}")));
-            }
-            let mut file = std::fs::File::open(&path).map_err(|e| RuntimeError(e.to_string()))?;
-            // Stamped from the open handle BEFORE the read, so a write that lands during the
-            // hash leaves a stamp that no longer matches and is hashed again next time.
-            let stamp = stamp_of(&file.metadata().map_err(|e| RuntimeError(e.to_string()))?);
+            let listed = match found.get(name) {
+                Some(Found::File(meta)) => stamp_of(meta),
+                Some(Found::Link) => return Err(RuntimeError(format!("runtime file escapes its delivery: {name}"))),
+                // Missing, or reached only through a link: either way not a file of this delivery.
+                None => return Err(RuntimeError(format!("missing runtime file: {name}"))),
+            };
             let known = VERIFIED.lock().is_ok_and(|held| {
                 held.as_ref()
                     .and_then(|v| v.files.get(&path))
-                    .is_some_and(|(seen, digest)| *seen == stamp && digest == wanted)
+                    .is_some_and(|(seen, digest)| *seen == listed && digest.eq_ignore_ascii_case(wanted))
             });
             if !known {
-                let mut hash = Sha256::new();
-                let mut buffer = [0; 65536];
-                loop {
-                    let length = file.read(&mut buffer).map_err(|e| RuntimeError(e.to_string()))?;
-                    if length == 0 { break; }
-                    hash.update(&buffer[..length]);
+                use std::os::unix::fs::OpenOptionsExt;
+                let mut file = std::fs::OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW).open(&path)
+                    .map_err(|e| RuntimeError(e.to_string()))?;
+                // Stamped from the open handle BEFORE the read, so a write that lands during the
+                // hash leaves a stamp that no longer matches and is hashed again next time.
+                let stamp = stamp_of(&file.metadata().map_err(|e| RuntimeError(e.to_string()))?);
+                if !hash_file(&mut file).map_err(|e| RuntimeError(e.to_string()))?.eq_ignore_ascii_case(wanted) {
+                    return Err(RuntimeError(format!("runtime file changed: {name}")));
                 }
-                if format!("{:x}", hash.finalize()) != *wanted { return Err(RuntimeError(format!("runtime file changed: {name}"))); }
+                hashed_now += 1;
                 if let Ok(mut held) = VERIFIED.lock() {
                     let held = held.get_or_insert_with(Verified::default);
                     held.files.insert(path.clone(), (stamp, wanted.clone()));
@@ -178,15 +348,23 @@ impl EngineRuntime {
         for (name, target) in &delivery.links {
             if !relative(name) { return Err(RuntimeError("invalid runtime link name".into())); }
             let path = root.join(name);
-            if std::fs::read_link(&path).ok().as_deref() != Some(Path::new(target)) ||
-                !std::fs::canonicalize(&path).map(|p| p.starts_with(&root)).unwrap_or(false) {
+            if !matches!(found.get(name), Some(Found::Link))
+                || std::fs::read_link(&path).ok().as_deref() != Some(Path::new(target))
+                || !std::fs::canonicalize(&path).map(|p| p.starts_with(&root)).unwrap_or(false) {
                 return Err(RuntimeError(format!("invalid runtime link: {name}")));
             }
             if !expected.insert(name.clone()) { return Err(RuntimeError("duplicate runtime member".into())); }
         }
-        let mut actual = BTreeSet::new();
-        inventory(&root, &root, &mut actual).map_err(|e| RuntimeError(e.to_string()))?;
-        if actual != expected { return Err(RuntimeError("runtime delivery has missing or unexpected files".into())); }
+        if !found.keys().eq(expected.iter()) { return Err(RuntimeError("runtime delivery has missing or unexpected files".into())); }
+        // Save only after the whole delivery passed, and only when something was hashed now: a
+        // launch that hashed nothing has nothing new to tell the next one.
+        if let (Some(file), true) = (&saved_at, hashed_now > 0) {
+            if let Ok(held) = VERIFIED.lock() {
+                if let Some(held) = held.as_ref() {
+                    save_verified(file, &root, &held.files);
+                }
+            }
+        }
         // ffmpeg and ffprobe since 2026-10-07: Rich watches and hears videos with them, and his
         // PATH reaches nothing outside this runtime and the system folders.
         for relative in ["bin/python3", "bin/node", "bin/git", "bin/jq", "bin/ffmpeg", "bin/ffprobe", "git/libexec/git-core/git-remote-https"] {
