@@ -3827,8 +3827,8 @@ fn main() {
             peer_messages::start(app.handle().clone())?;
             // After an update, this build's own engine, installed by the app itself (the flag
             // was set at the first-run setup block above, before the window could ask). The
-            // earlier build's engine serves meanwhile, so the desk below is readied in it, and
-            // readied again in the new one once that is in (`replace_engine`).
+            // earlier build's engine serves meanwhile, so the desk below is readied in it; the
+            // sessions that start after the swap start in the new one.
             if engine_update_now {
                 update_engine_by_itself(app.handle().clone());
             }
@@ -6403,18 +6403,16 @@ fn dictation_feature_thread(state: State<AppState>, create: bool) -> Result<Opti
 /// missing only because an earlier build set it up; `setup_view::begin_engine_update` was set
 /// before the window could ask, so the sheet does not ask for the engine.
 ///
-/// **He never waits on it.** Until the swap, the engine the earlier build installed is still in
-/// place and serves his messages (`setup_view::previous_engine_serves`) and his voice (its
-/// decoder, given here first). The download and the checks run with NO lock held
-/// (`setup_view::stage_pinned_engine`), and so does the swap (two renames; the earlier engine is
-/// moved aside, never deleted, so a process still in it keeps its directory). A session never
-/// waits for any of it: one started before the swap starts in the earlier engine as it is, with
+/// **Nothing waits on it, and nothing running is ended by it.** Until the swap, the engine the
+/// earlier build installed is in place and serves (`setup_view::previous_engine_serves`), with
 /// the skills it ships even where this build names one differently
-/// (`richos_core::skills::earlier_engine_serves`), and this build's engine serves from the first
-/// session after the swap. After the swap
-/// the window asks voice again, and the spine is taken for what a press of "Set it up" does after
-/// its install ([`replace_engine`]: idle lease retired, memory rewired, desk readied), asked again
-/// every 2 s while a turn or a worker runs. A failed download or check leaves the previous engine
+/// (`richos_core::skills::earlier_engine_serves`), and voice uses its decoder. The download, the
+/// checks and the swap run with no lock held (`setup_view::stage_pinned_engine`,
+/// `setup_view::swap_in_engine`: two renames; the earlier engine is moved aside, never deleted).
+/// After the swap the lease factory's cell names the new engine, so every session that starts
+/// from then on starts in it; a session already running, and any command it is running, carries
+/// on in the earlier engine until it ends by itself. No session is retired to make the switch.
+/// The window is told to ask voice again. A failed download or check leaves the previous engine
 /// where it was and clears the flag, and the sheet offers the engine as on a first install.
 fn update_engine_by_itself(app: AppHandle) {
     let spawned = std::thread::Builder::new().name("engine-update".into()).spawn(move || {
@@ -6428,45 +6426,16 @@ fn update_engine_by_itself(app: AppHandle) {
             setup_view::tell_the_window_the_engine_changed(&app);
         }
         let outcome = setup_view::stage_pinned_engine(&paths)
-            .and_then(|staged| setup_view::swap_in_engine(staged, &state.engine_dir))
-            .map_err(|e| e.to_string())
-            .and_then(|_| {
-                // THIS BUILD'S ENGINE IS IN PLACE, and every request from here starts in it,
-                // including one that was waiting because the earlier engine could not serve it.
-                // The swap took no lock: a request waiting for it may be holding the spine.
-                setup_view::retire_previous_engine();
-                setup_view::tell_the_window_the_engine_changed(&app);
-                // Then what a press does after its install, under the spine: the idle lease (in
-                // the earlier engine) retired, memory rewired, his desk readied in the new one.
-                // While a turn, a worker or a memory correction runs, that body declines before
-                // changing anything; it is asked again every 2 s, for at most an hour.
-                let mut said = false;
-                let mut tries = 0;
-                loop {
-                    let spine = take_the_spine(&state.spine);
-                    match replace_engine(&app, &state, spine, |selected, _| Ok(setup_view::detect(Some(selected)))) {
-                        Err(why) if tries < 1800 => {
-                            if !said {
-                                eprintln!("[richos] engine update: in place; the rest waits for a quiet moment ({why})");
-                                said = true;
-                            }
-                            tries += 1;
-                            std::thread::sleep(std::time::Duration::from_secs(2));
-                        }
-                        Err(why) => {
-                            eprintln!("[richos] engine update: in place; the rest could not be done ({why}); the next launch starts in it as on any launch");
-                            break Ok(serde_json::Value::Null);
-                        }
-                        ok => break ok,
-                    }
-                }
-            });
+            .and_then(|staged| setup_view::swap_in_engine(staged, &state.engine_dir));
         setup_view::end_engine_update();
         match outcome {
-            Ok(_) => eprintln!(
-                "[richos] engine update: this build's engine is installed and in use, in {} ms, with no setup sheet",
-                started.elapsed().as_millis()
-            ),
+            Ok(_) => {
+                setup_view::tell_the_window_the_engine_changed(&app);
+                eprintln!(
+                    "[richos] engine update: this build's engine is installed and in use, in {} ms, with no setup sheet",
+                    started.elapsed().as_millis()
+                )
+            }
             Err(e) => eprintln!(
                 "[richos] engine update FAILED after {} ms — {e}; the setup sheet offers the engine instead",
                 started.elapsed().as_millis()
@@ -6498,21 +6467,8 @@ fn update_engine_by_itself(app: AppHandle) {
 /// running spine or start an untracked model handshake. The idle spine stays locked through replacement.
 #[richos_command::command]
 fn run_setup(app: tauri::AppHandle, state: State<AppState>) -> Result<serde_json::Value, String> {
-    let spine = state.spine.try_lock().map_err(|_| "Rich is working. Stop or finish the current turn before changing the engine.".to_string())?;
-    replace_engine(&app, &state, spine, |selected, engine_dir| setup_view::run(&app, Some(selected), engine_dir))
-}
-
-/// **The engine changes under a held spine**: install (`install`, given the selected engine and
-/// the lease factory's cell), then re-point everything that holds the engine and make his desk
-/// ready. One body for a press of "Set it up" ([`run_setup`]) and the app's own install after an
-/// update ([`update_engine_by_itself`]), so the two cannot leave the app differently wired.
-fn replace_engine<S: std::ops::DerefMut<Target = Spine>>(
-    app: &AppHandle,
-    state: &AppState,
-    mut spine: S,
-    install: impl FnOnce(&Path, &Arc<Mutex<PathBuf>>) -> Result<richos_core::setup::SetupStatus, String>,
-) -> Result<serde_json::Value, String> {
     let selected = state.engine_dir.lock().unwrap().clone();
+    let mut spine = state.spine.try_lock().map_err(|_| "Rich is working. Stop or finish the current turn before changing the engine.".to_string())?;
     let registry = spine.entity_registry().clone();
     let workers:Vec<_>=state.control.lease_sessions().iter().map(|session|
         richos_core::app_workers::status(&state.data_dir.join("engine-state"),Some(session))).collect();
@@ -6526,7 +6482,7 @@ fn replace_engine<S: std::ops::DerefMut<Target = Spine>>(
     // Keep the idle spine and writer locked throughout replacement. New requests
     // cannot start against a changing engine and cached child hooks are retired first.
     spine.retire_idle_lease()?;
-    let installed = install(&selected, &state.engine_dir);
+    let installed = setup_view::run(&app, Some(&selected), &state.engine_dir);
     *state.claude_bin.lock().map_err(|_| "The connection settings could not be updated. Please reopen RichOS.")? = resolve_claude_bin();
     state.quota.disconnect(); // Recheck after installation or a changed Claude binary.
     let engine = state.engine_dir.lock().unwrap().clone();
@@ -6539,7 +6495,7 @@ fn replace_engine<S: std::ops::DerefMut<Target = Spine>>(
             held.replace_writer(Box::new(writer));
             spine.set_correction_desk(desk.as_ref().unwrap().clone());
         } else {
-            *state.correction.lock().unwrap() = install_correction_desk(&mut spine, app, &state.data_dir, writer);
+            *state.correction.lock().unwrap() = install_correction_desk(&mut spine, &app, &state.data_dir, writer);
         }
     } else { *state.correction.lock().unwrap() = None; }
     // **WHICH CONVERSATION IS ON SCREEN**, read while the guard is still in hand so the answer
@@ -6578,14 +6534,14 @@ fn replace_engine<S: std::ops::DerefMut<Target = Spine>>(
         match on_screen {
             // A thread is open: its own desk, and then — inside `ready_the_front_desk` — the
             // spare for the company that thread is filed under.
-            Some(thread) => ready_the_front_desk_after_a_repair(app, &thread),
+            Some(thread) => ready_the_front_desk_after_a_repair(&app, &thread),
             // No conversation open yet, which is the FIRST-RUN shape and the one Ray walked:
             // the offer appears on entry, he answers it, and the first thing he does next is
             // type into a brand-new thread. A spare is the only desk that can be ready for a
             // thread that does not exist yet (`ready_a_spare_front_desk`).
             None => {
                 if let Some(entity) = state.entity.lock().unwrap().clone() {
-                    ready_a_spare_front_desk(app, entity);
+                    ready_a_spare_front_desk(&app, entity);
                 }
             }
         }
@@ -7638,8 +7594,8 @@ mod repair_priming_tests {
         let body = run_setup_body();
 
         let release = concat!("drop(", "spine)");
-        let ready = concat!("ready_the_front_desk_after_a_", "repair(app");
-        let spare = concat!("ready_a_spare_front_", "desk(app");
+        let ready = concat!("ready_the_front_desk_after_a_", "repair(&app");
+        let spare = concat!("ready_a_spare_front_", "desk(&app");
 
         let release_at = body.find(release).expect(
             "run_setup must let go of the spine explicitly — the guard lives to the end of the \
@@ -7672,7 +7628,7 @@ mod repair_priming_tests {
         let repaired = body
             .find(concat!("if ", "repaired {"))
             .expect("the readying must be conditional on the install having succeeded");
-        let ready_at = body.find(concat!("ready_the_front_desk_after_a_", "repair(app")).unwrap();
+        let ready_at = body.find(concat!("ready_the_front_desk_after_a_", "repair(&app")).unwrap();
         assert!(
             repaired < ready_at,
             "a failed install leaves the machine it found; priming against an engine that is \
@@ -7705,6 +7661,38 @@ mod repair_priming_tests {
         let asked = body.find(concat!("ready_the_front_", "desk(app")).expect("and then the desk asked for");
         assert!(cleared < asked, "the memo must be cleared BEFORE the ask, or the ask does nothing");
         assert!(body.contains(".clear()"), "the conversation memo is cleared, not rewritten: {body}");
+    }
+}
+
+#[cfg(test)]
+mod engine_update_tests {
+    //! **THE APP'S OWN ENGINE INSTALL AFTER AN UPDATE ENDS NOTHING THAT IS RUNNING.** Read off
+    //! this file, as the tests above it are, because the function takes an `AppHandle` a unit
+    //! test cannot build.
+    //!
+    //! Review rv-20261114T130558Z-5ee15c6e-3a87: the install retired the session when the new
+    //! engine was in place (`replace_engine` -> `Spine::retire_idle_lease`), which checks turns
+    //! and workers but not a command the session is still running, so a user mid-task would lose
+    //! it. The switch happens at the next session: the cell names the new engine and nothing is
+    //! retired.
+
+    const SOURCE: &str = include_str!("main.rs");
+
+    #[test]
+    fn the_automatic_engine_install_retires_no_session_and_waits_for_none() {
+        let start = SOURCE.find(concat!("fn update_engine_by_", "itself(app: AppHandle)")).unwrap();
+        let end = SOURCE[start..].find("\n}\n").unwrap() + start;
+        let body = &SOURCE[start..end];
+        for ends_running_work in [
+            concat!("retire_idle_", "lease"),
+            concat!("clear_", "lease"),
+            concat!("replace_", "engine("),
+            concat!("run_", "setup("),
+        ] {
+            assert!(!body.contains(ends_running_work), "the update must not end a running session: {ends_running_work}");
+        }
+        assert!(!body.contains(concat!("take_the_", "spine(")), "the update must not hold or wait for the spine");
+        assert!(body.contains(concat!("swap_in_", "engine(")), "it still puts this build's engine in place");
     }
 }
 

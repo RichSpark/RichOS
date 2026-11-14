@@ -324,8 +324,6 @@
 [richos] document search: {} could not be removed ({})
 [richos] engine update FAILED after {} ms — {}; the setup sheet offers the engine instead
 [richos] engine update: could not start ({}); the setup sheet offers the engine instead
-[richos] engine update: in place; the rest could not be done ({}); the next launch starts in it as on any launch
-[richos] engine update: in place; the rest waits for a quiet moment ({})
 [richos] engine update: the installed engine is an earlier build's, so this build installs its own by itself, with no setup sheet.
 [richos] engine update: the window could not be told to ask voice again ({})
 [richos] engine update: this build's engine is installed and in use, in {} ms, with no setup sheet
