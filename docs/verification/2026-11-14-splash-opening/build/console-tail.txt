@@ -1,0 +1,12 @@
+tailnet=not-joined
+claude: host 2.1.325 guest 2.1.325
+claude login: guest logged in
+home:  /Users/admin/testvm/walk-5d5836c7d2cf/home
+guest: /Users/alex/ab/richos-wt/echo2-opus-splashbuild4/richos/app/scripts/testvm/guest.sh walk-5d5836c7d2cf '<shell command>'   # --pull/--push to move a file
+stop:  /Users/alex/ab/richos-wt/echo2-opus-splashbuild4/richos/app/scripts/testvm/stop.sh walk-5d5836c7d2cf      # ALWAYS, before you report (CEO §54)
+Launch speed, Dock click to the splash showing, against a p95 of 857 ms (380 ms on his Mac x 2.26, Dictionary's slowness in this guest: its median 717.5 ms from the Dock click here, the launch request's 674 ms plus the Dock's 43.5, against 318 ms on his Mac): p95 357 ms over 80 launches, within it. after-update p95 296 ms, median 223 ms (20 launches); cold p95 3284 ms, median 2280 ms (20 launches); ordinary p95 320 ms, median 237 ms (20 launches); rule-switch p95 359 ms, median 254 ms (40 launches); changed-splash-files:first 1585 ms (reported, not judged); round-11/v1 p95 2679 ms (80 launches); round-11/v2 p95 518 ms (20 launches); cold judged on its own against 5233 ms (380 x 13.772, Dictionary after the same purge: its median 4379.5 ms from the Dock click here, against 318 ms on his Mac).
+[testvm] 19:31:38Z stopping VM walk-5d5836c7d2cf...
+[testvm] 19:31:38Z ending the login keeper (pid 53636)
+[testvm] 19:31:39Z deleting ephemeral clone walk-5d5836c7d2cf...
+[testvm] 19:31:40Z clean: app quit, VM stopped, clone deleted, state removed.
+slot released: guest.lock after 1516s
