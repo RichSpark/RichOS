@@ -326,6 +326,8 @@
 [richos] file lookup: ready via {} in {}; used when saved memory cannot answer a question.
 [richos] file lookup: unavailable ({}); continuing without searching files.
 [richos] home field: could not keep the compile ({}); the next launch compiles again
+[richos] home field: could not keep the first-seen days ({})
+[richos] home field: could not keep the order objects were first seen in ({})
 [richos] home field: could not keep the repository picture; the next launch reads the repositories again
 [richos] input a cut turn was given stays open: {}
 [richos] loro lane: could not read which partitions this corpus has ({}) — the lane map is left exactly as configured rather than assumed empty.
