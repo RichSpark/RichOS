@@ -8,6 +8,27 @@ type StartupLease = ();
 
 const INHERITED_SESSION: &str = "RICHOS_UPDATE_SESSION_FD";
 
+/// Set by the copy that hands over to the updated one, read and removed by the copy that runs:
+/// which check the copy that handed over ran (launch-speed audit 2026-11-14, piece 4).
+pub const HANDOVER_ENV: &str = "RICHOS_LAUNCH_HANDOVER";
+
+/// What this launch's update step did, for the launch line (`launch_timing.rs`): the check on
+/// the updated bundle (`None` when no update is installed), and, when this copy was handed over
+/// to, what the copy that handed over said of its own check (empty from a copy too old to say).
+#[derive(Clone, Debug, Default)]
+pub struct LaunchReport {
+    pub bundle_check: Option<String>,
+    pub handover: Option<String>,
+    /// Whether this launch put a prepared update in place before its window.
+    pub activated: bool,
+}
+static REPORT: std::sync::Mutex<Option<LaunchReport>> = std::sync::Mutex::new(None);
+
+/// What [`prepare`] recorded for the launch line; empty when it recorded nothing.
+pub fn launch_report() -> LaunchReport {
+    REPORT.lock().ok().and_then(|report| report.clone()).unwrap_or_default()
+}
+
 /// This deliberately runs before home resolution, leases, Tauri or native workers.
 /// The installer invokes it inside a restricted process to detect a mismatched
 /// executable before changing the application the user opens.
@@ -47,6 +68,8 @@ pub fn prepare(compiled_version: &str) -> Result<Option<StartupLease>, String> {
     let redirected = inherited.is_some();
     // Never forward the hint to Claude or any other ordinary child.
     std::env::remove_var(INHERITED_SESSION);
+    let handed_over_said = std::env::var(HANDOVER_ENV).ok();
+    std::env::remove_var(HANDOVER_ENV);
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let Some(bundle) = crate::activation::bundle_root(&exe) else {
         if inherited.is_some() { return Err("Update redirect did not enter an application bundle.".into()); }
@@ -146,7 +169,11 @@ pub fn prepare(compiled_version: &str) -> Result<Option<StartupLease>, String> {
         }
         let mut command = Command::new(publication.executable(&home));
         command.args(std::env::args_os().skip(1))
-            .env(INHERITED_SESSION, lease.session_fd().to_string());
+            .env(INHERITED_SESSION, lease.session_fd().to_string())
+            // Which check this copy ran before handing over, for the launch line the copy that
+            // runs writes (`launch_timing.rs`); the process start it counts from is this one.
+            .env(HANDOVER_ENV,
+                 richos_user_update::last_bundle_check().map(|check| check.describe()).unwrap_or_default());
         // exec preserves the launch relationship. Carry explicit activation
         // overrides unchanged; do not turn background harness boots into GUI boots.
         let error = lease.exec(&mut command);
@@ -161,6 +188,15 @@ pub fn prepare(compiled_version: &str) -> Result<Option<StartupLease>, String> {
             eprintln!("[richos] preferred update remains deferred: {error}");
         }
         Err(error) => return Err(format!("The activated application could not start: {error}")),
+    }
+    // The launch line says which check ran on the updated bundle, and whether this copy was
+    // handed over to (launch-speed audit piece 4).
+    if let Ok(mut report) = REPORT.lock() {
+        *report = Some(LaunchReport {
+            bundle_check: richos_user_update::last_bundle_check().map(|check| check.describe()),
+            handover: redirected.then(|| handed_over_said.unwrap_or_default()),
+            activated,
+        });
     }
     wait_for_lock(|| lease.begin_session()).map_err(|e| e.to_string())?;
     Ok(Some(lease))

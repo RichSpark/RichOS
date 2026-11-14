@@ -16,6 +16,13 @@ mod events;
 // WHAT THE PERSON SEES WHEN THIS PROCESS DIES BEFORE THE WINDOW EXISTS. Declared next to
 // `activation` because it is armed by activation's own three-fact rule and by nothing else.
 mod startup_alert;
+/// The splash's first frame on the glass at once, and what waits for the page (Sage's plan
+/// 2026-11-14 "the splash under half a second", rules 1 to 3).
+mod first_frame;
+/// One line per launch with its own milestones and which checks it ran (the same plan, rule 5).
+mod launch_timing;
+/// Every byte of the updated bundle and the engine, read late and in the background.
+mod late_check;
 mod update_startup;
 /// The relaunch into a downloaded update once nothing is running (CEO feedback 2026-10-06, item 1).
 mod update_relaunch;
@@ -2355,6 +2362,8 @@ fn main() {
             std::process::exit(1);
         }
     };
+    // The launch line counts from the process start, which an update hand-over keeps.
+    launch_timing::mark_update_step(update_startup::launch_report());
     let mut args = std::env::args_os().skip(1);
     let first = args.next();
     // The ASSIGNMENT REGISTER's stdio server (`richos-core`'s `assignment_tools.rs`), in
@@ -2480,8 +2489,9 @@ fn main() {
         return;
     }
     // RICHDOCTOR (PRD 2026-10-22 §3): installed or refreshed beside this RichOS on a background
-    // thread, before any setting or engine exists; nothing below waits for it.
-    richdoctor_install::start();
+    // thread; nothing waits for it. It starts once the page has taken over the splash
+    // (`first_frame::after_page`, in the hook), never before the first frame: its thread competes
+    // for the processor in the same fraction of a second (Sage's plan 2026-11-14, rule 3).
     tauri::Builder::default()
         // =================================================================================
         // THE MENU, AND THE ONE ITEM IN IT THIS APP HAS TO OWN — background-work spec §2.5
@@ -2558,18 +2568,23 @@ fn main() {
         // read on the main thread.
         .register_asynchronous_uri_scheme_protocol(output_files::SCHEME, output_files::scheme_handler)
         .setup(|app| {
-            // The user's terminal environment, read once from the login shell for every lease
-            // (build plan item 4), started now so the first lease does not wait for it.
-            richos_core::login_environment::warm();
+            // =====================================================================
+            // BEFORE THE FIRST FRAME: A CLOSED LIST (Sage's plan 2026-11-14, rule 3)
+            // =====================================================================
+            //
+            // From here to `first_frame::commit` runs only what the first frame needs: the data
+            // folder, the launch decision, the launch record, the display sizes, the saved window
+            // position, the splash switch, the window. A test holds the list
+            // (`first_frame::tests`); a step that starts threads or programs waits for the page
+            // (`first_frame::after_page`). The terminal environment, the voice download,
+            // RichDoctor and the resource sampler used to start here and now start then.
+            //
             // Durable ledger lives in the app data dir (survives restart + rotation).
             let data_dir = app.path().app_data_dir().unwrap_or_else(|_| std::env::temp_dir());
             std::fs::create_dir_all(&data_dir).ok();
-
-            // Synthesis is independent of recognition and video transcription. Start it before
-            // the window and the rest of setup, even when no speech model is installed yet.
-            if updates::selftest_mode().is_none() {
-                voice_provision::fetch_rich_voice_in_background();
-            }
+            // The engine runtime's verification is recorded here, in the app's own data folder and
+            // never in the engine (`runtime.rs`); no file is read by this line.
+            richos_core::runtime::remember_verified_at(&data_dir.join(richos_core::runtime::VERIFIED_FILE));
 
             // =====================================================================
             // WHETHER THIS LAUNCH MAY TAKE THE SCREEN — BEFORE THE WINDOW EXISTS
@@ -2601,12 +2616,10 @@ fn main() {
             // AFTER `data_dir` is final, because "the data directory this boot will
             // actually write to" is one of the three facts, and reading it from anywhere
             // but the variable in use would be a second copy that can disagree.
-            let resources = match richos_core::system_resources::Monitor::start(&data_dir.join("engine-state")) {
-                Ok(monitor) => Some(monitor),
-                Err(error) => { eprintln!("[richos] resources unavailable: {error}"); None }
-            };
+            // The resource sampler starts once the page has taken over (rule 3); until then the
+            // square reads "not yet" exactly as it does when the sampler is unavailable.
             app.manage(richfiles_pane::PaneRequests::default());
-            app.manage(ResourceMonitor(Mutex::new(resources)));
+            app.manage(ResourceMonitor(Mutex::new(None)));
             let activation = activation::decide(&activation::gather(&data_dir, &app.config().identifier));
             eprintln!("[richos] {}", activation.log_message());
             // THE SAME DECISION, NOW AUTHORITATIVE, RE-ARMS THE FAILURE ALERT.
@@ -2696,6 +2709,14 @@ fn main() {
             // a missing ordinal as the first start, which shows splash #1.
             let start_ordinal = launch_store.start_ordinal();
             let window_configs = app.config().app.windows.clone();
+            // The splash switch and the saved theme, read once, for the window's own background
+            // (the first frame, `first_frame::ground`) and for the page's opening screen.
+            let launch_settings = ConfigStore::open(data_dir.join("config.json")).ok();
+            let durable_splash = launch_settings.as_ref().map(|store| store.splash_enabled());
+            let light_theme = launch_settings
+                .as_ref()
+                .is_some_and(|store| store.theme() == richos_core::config::Theme::Light);
+            drop(launch_settings);
 
             // =====================================================================
             // HOW BIG IT OPENS, AND WHERE — ASKED OF THE DISPLAY
@@ -2756,7 +2777,16 @@ fn main() {
                     .initialization_script(launch_init_script(
                         kind,
                         start_ordinal,
-                        durable_splash_enabled(&data_dir),
+                        durable_splash,
+                    ))
+                    // THE FIRST FRAME (Sage's plan 2026-11-14, rule 1, as the CEO narrowed it:
+                    // "We have the splash screen already"): the window's own background is the
+                    // splash's ground when the splash will play, else the app's ground for the
+                    // saved theme, so the window is never white and its first frame is the
+                    // splash's own first frame. `first_frame::commit` puts it on the glass.
+                    .background_color(first_frame::ground(
+                        kind == LaunchKind::Fresh && durable_splash != Some(false),
+                        light_theme,
                     ))
                     // The right-click guard in every frame, the PDF preview's too (nightly 66).
                     .initialization_script_for_all_frames(webview_menu::EVERY_FRAME)
@@ -2805,6 +2835,13 @@ fn main() {
                     builder = builder.position(x, y);
                 }
                 let window = builder.build()?;
+                launch_timing::mark_window();
+                // ON THE GLASS NOW, in the splash's own ground color: macOS would show the
+                // window only when this thread next goes idle. That color is not the splash and is
+                // not counted as it (the CEO, 2026-11-14: the job is the splash screen itself
+                // playing); it only means the window is never white while the page loads.
+                first_frame::commit(&window);
+                launch_timing::mark_first_frame(kind == LaunchKind::Fresh && durable_splash != Some(false));
                 #[cfg(target_os="macos")]
                 cleaner_host::watch_main(&window);
                 // WHERE HE LEFT IT, FOR NEXT TIME — and only if it is still reachable then.
@@ -2855,6 +2892,37 @@ fn main() {
                 start_ordinal.map(|n| n.to_string()).unwrap_or_else(|| "-".to_string()),
                 window_configs.len()
             );
+            // What waits for the page starts at the latest 5 s after the first frame, and the
+            // launch line is written then if the page never reported.
+            first_frame::arm_ceiling(app.handle().clone(), || launch_timing::write_line(false));
+            // WHAT USED TO START BEFORE THE WINDOW, NOW STARTED WHEN THE PAGE TAKES OVER (rule 3):
+            // each one starts a thread that competes for the processor in the first fraction of
+            // a second.
+            first_frame::after_page(app.handle(), || {
+                // The user's terminal environment, read once from the login shell for every
+                // lease (build plan item 4), so the first lease does not wait for it.
+                richos_core::login_environment::warm();
+                // Synthesis is independent of recognition and video transcription, and runs
+                // even when no speech model is installed yet.
+                if updates::selftest_mode().is_none() {
+                    voice_provision::fetch_rich_voice_in_background();
+                }
+                richdoctor_install::start();
+            });
+            {
+                let sampler_app = app.handle().clone();
+                let engine_state = data_dir.join("engine-state");
+                first_frame::after_page(app.handle(), move || {
+                    match richos_core::system_resources::Monitor::start(&engine_state) {
+                        Ok(monitor) => {
+                            if let Some(slot) = sampler_app.try_state::<ResourceMonitor>() {
+                                *slot.0.lock().unwrap_or_else(|e| e.into_inner()) = Some(monitor);
+                            }
+                        }
+                        Err(error) => eprintln!("[richos] resources unavailable: {error}"),
+                    }
+                });
+            }
             let ledger_path = data_dir.join("conversation-ledger.jsonl");
             let checkpoint_path = data_dir.join("swearmeter-cache");
             let cards_path = data_dir.join("engine-state/questions/store.json");
@@ -3265,11 +3333,18 @@ fn main() {
             // setup when it installs an engine (`setup_view::run`). The full hash this costs is
             // not paid twice: the recovery block below verifies the same runtime and
             // `runtime.rs` re-reads only files whose stamp changed.
+            // It reads no runtime bytes once the runtime was verified whole (at its install, or
+            // once when first met; `runtime.rs`), and the launch line says which and its cost.
+            let engine_check = std::time::Instant::now();
+            let first_runtime = boot_engine.as_deref().map(richos_core::runtime::verify_engine);
+            if let Some(verdict) = &first_runtime {
+                launch_timing::note_engine_check(
+                    verdict.as_ref().ok().map(|runtime| richos_core::runtime::files_hashed_under(&runtime.root)),
+                    engine_check.elapsed().as_millis() as u64,
+                );
+            }
             richos_voice::stt::set_delivered_runtime_bin(
-                boot_engine
-                    .as_deref()
-                    .and_then(|dir| richos_core::runtime::verify_engine(dir).ok())
-                    .map(|runtime| runtime.root.join("bin")),
+                first_runtime.and_then(Result::ok).map(|runtime| runtime.root.join("bin")),
             );
             // THE CELL THE LEASE FACTORY READS. Shared, so a successful first-run install can
             // re-point it without a relaunch (`setup_view::run`).
@@ -3855,7 +3930,10 @@ fn main() {
                     Arc::new(AppVoice { app: app.handle().clone() }),
                 );
                 app.manage(host.clone());
-                dictation_app::boot(host);
+                // The dictation process starts once the page has taken over the splash: a
+                // second program starting competes for the processor in the first fraction of a
+                // second (Sage's plan 2026-11-14, rule 3).
+                first_frame::after_page(app.handle(), move || dictation_app::boot(host));
             }
 
             // ================================================================
@@ -3929,6 +4007,11 @@ fn main() {
             // alert raised by a background thread that panicked would be an interruption
             // rather than a rescue. The log keeps taking everything either way.
             startup_alert::disarm();
+            launch_timing::mark_finished();
+            // Every byte of the updated bundle and the engine, once more, late, at background
+            // priority, and only after the page has taken over (`late_check.rs`).
+            let late_engine = app.state::<AppState>().boot_engine.clone();
+            first_frame::after_page(app.handle(), move || late_check::spawn_late_full_checks(late_engine));
             // The first window is up. Optional private starter I/O stays off startup.
             if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
                 std::thread::spawn(move || {
@@ -3944,6 +4027,7 @@ fn main() {
         // `output_files::output_save_copy` only; its commands are not granted to the page.
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
+            first_frame_painted,
             system_resources,
             richfiles_pane::richfiles_pane_available, richfiles_pane::richfiles_place_pane,
             richfiles_pane::richfiles_request_pending, richfiles_pane::richfiles_accept_request,
@@ -4466,6 +4550,16 @@ fn main() {
 /// UX §2.1: "Rail header = the company/CEO identity, not RichOS." Configurable,
 /// persisted, sensible fallback when unset — the fallback lives in richos-core's
 /// config.rs so this thin shell layer never has to know the placeholder string.
+/// The page's splash has painted (or, with no splash, the page has): what waited for the page
+/// starts now, and the launch line is written (Sage's plan 2026-11-14, rules 3 and 5). The
+/// first report of a launch counts; a reloaded page's is ignored. It reads no state.
+#[richos_command::command]
+fn first_frame_painted(app: AppHandle) {
+    if first_frame::page_took_over(&app) {
+        launch_timing::write_line(true);
+    }
+}
+
 #[richos_command::command]
 fn get_company_name(state: State<AppState>) -> String {
     state.config.lock().unwrap().company_name_or_default()

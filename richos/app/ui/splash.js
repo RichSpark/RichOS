@@ -1519,6 +1519,22 @@
     }, holdMs + CEILING_GRACE_MS);
   }
 
+  // THE PAGE HAS TAKEN OVER (Sage's plan 2026-11-14, rules 3 and 5): two animation frames after
+  // this script ran, the page, with its splash if one is drawn, has painted at least once. The
+  // shell then starts what waited for the page and writes its launch line. Reported whether or
+  // not a splash is drawn; the shell counts the first report of a launch. No shell, no report.
+  if (window.__TAURI_INTERNALS__ && typeof window.__TAURI_INTERNALS__.invoke === "function") {
+    requestAnimationFrame(function () {
+      requestAnimationFrame(function () {
+        try {
+          Promise.resolve(window.__TAURI_INTERNALS__.invoke("first_frame_painted")).catch(function () {});
+        } catch (e) {
+          /* the shell's ceiling starts the waiting work and writes the line instead */
+        }
+      });
+    });
+  }
+
   window.RichSplash = {
     yieldNow: yieldNow,
     state: state,

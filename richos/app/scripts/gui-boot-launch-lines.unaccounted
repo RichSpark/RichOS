@@ -542,3 +542,7 @@
 [richos] {} was not removed: {}
 [richos] {} {}/{} FAILED — {}
 [richos] {}: starting the cleanup
+[richos] first frame: deferred start-up work could not reach the main thread ({})
+[richos] first frame: no ceiling thread ({}); deferred work waits for the page
+[richos] late check: background priority refused; running at normal priority
+[richos] late check: not started ({}); the next launch's checks still run

@@ -431,6 +431,17 @@ declare_rules() {
   # shapes are the same routine fact.
   routine '^\[richos\] launch: [a-z-]+ \(start ([0-9]+|-), [0-9]+ window\(s\)\)$' \
     'which kind of start this is; carries no claim about anything being found'
+  # THE LAUNCH LINE (launch_timing.rs, Sage's plan 2026-11-14 rule 5): this launch's own times and
+  # which checks it ran. A measurement, written on every launch; it claims nothing was found.
+  routine '^\[richos\] launch timing: update step .+ process started at ([0-9]+|unknown)$' \
+    'the launch measuring itself; times and which checks ran, no claim that anything works'
+  # An unattended boot builds its window hidden, where the page may never paint, so the 5 s ceiling
+  # starts what waited for the page instead (first_frame.rs). A routine path, not a failure.
+  routine '^\[richos\] first frame: the page did not report its splash within [0-9]+ s; deferred start-up work started anyway$' \
+    'the ceiling that starts deferred work when a hidden window never paints'
+  # The late full read of the bundle and the engine, 60 s after the page (late_check.rs).
+  routine '^\[richos\] late check: the (updated bundle|engine runtime).s every byte matches its (receipt|delivery) \([0-9]+ ms\)$' \
+    'the late background check confirming what was written; a confirmation, not a finding'
 
   # A FACT ABOUT A FILE: how many companies are in it, where it is, and which of the three
   # load outcomes produced it. It asserts nothing was verified — the verification is the
