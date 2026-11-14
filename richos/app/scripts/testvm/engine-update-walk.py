@@ -114,6 +114,31 @@ class EngineUpdateWalk(new_user.NewUserWalk):
         self.next_log, self.next_pid = started['log'], started['pid']
         return {'app': app[0], 'pid': self.next_pid, 'log': self.next_log}
 
+    def send(self, words, name, seconds):
+        """new-user-walk.py's send (real keys, Return), and the Send button pressed once when the
+        Return was not taken: walk5 (2026-11-14) left the words in the composer for 250 s after
+        the Return, with the app answering nothing because nothing had been sent."""
+        self.type_into(words, '--role', 'AXTextArea', '--title', 'Message to Rich')
+        new_user.command([HERE / 'ax.sh', self.vm, '--key', new_user.RETURN_KEY])
+        end = time.monotonic() + 10
+        while time.monotonic() < end and not self.received(words):
+            time.sleep(1)
+        if not self.received(words):
+            self.ax('click', '--id', 'send', '--first')
+        end = time.monotonic() + seconds
+        outcome = None
+        while time.monotonic() < end:
+            outcome = new_user.turn_outcome(self.ledger_rows(), words)
+            if outcome:
+                break
+            time.sleep(2)
+        time.sleep(3)  # the card is drawn after the ledger row
+        return outcome, self.frame(name)
+
+    def received(self, words):
+        return any(r.get('event') == 'PromptReceived' and (r.get('text') or '').strip() == words
+                   for r in self.ledger_rows())
+
     def sheet_seen(self, name):
         """Whether the setup sheet's title is on screen: the accessibility tree, and OCR on a frame."""
         if self.shows_text(SHEET_TITLE):
