@@ -146,6 +146,23 @@ fn first_run_setup_does_not_ask_for_an_engine_whose_python_cached_bytecode() {
     assert!(after.present, "first-run setup asked again for a ready engine: {:?}", after.looked_in);
 }
 
+/// **The CEO's engine, 2026-11-14**: Finder had dropped a `.DS_Store` at `runtime/` and one in
+/// `runtime/node`, the check refused the whole engine as "missing or unexpected files", and the app
+/// fetched a fresh one. Finder's own file is never part of a delivery; an engine holding it passes.
+/// Anything else unlisted is still refused, a `.DS_Store` that is a link included.
+#[test]
+fn an_engine_finder_has_opened_is_still_ready() {
+    let fixture = Delivery::new();
+    fixture.deliver("node/lib/index.js", b"// delivered\n");
+    fixture.stray(".DS_Store", b"Finder's own");
+    fixture.stray("node/.DS_Store", b"Finder's own");
+    EngineRuntime::load(&fixture.0, None).expect("Finder's .DS_Store files must not unready the engine");
+    let fixture = Delivery::new();
+    std::os::unix::fs::symlink(fixture.0.join("runtime/bin/git"), fixture.0.join("runtime/.DS_Store")).unwrap();
+    let refused = EngineRuntime::load(&fixture.0, None).unwrap_err().to_string();
+    assert!(refused.contains("unexpected"), "a linked .DS_Store was accepted: {refused}");
+}
+
 #[test]
 fn delivery_uses_selected_engine_and_never_searches_host_path() {
     let fixture = Delivery::new();

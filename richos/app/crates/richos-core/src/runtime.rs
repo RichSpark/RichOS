@@ -273,6 +273,13 @@ fn walk(root: &Path, directory: &Path, found: &mut BTreeMap<String, Found>) -> s
         if kind.is_file() {
             // A regular file only: a symlinked "cache" is recorded, and refused as unexpected.
             if interpreter_bytecode_cache(&name) { continue; }
+            // FINDER'S OWN, NEVER PART OF A DELIVERY (2026-11-14): opening the engine folder in
+            // Finder drops a `.DS_Store` beside what it showed. Two of them (at `runtime/` and
+            // `runtime/node`) made the CEO's engine "missing or unexpected files", his home
+            // screen fell back to the example, and the app fetched a fresh 165 MB engine. A
+            // regular file of exactly that name is skipped on both sides, as the bytecode caches
+            // are; a link or folder of that name is still refused.
+            if entry.file_name() == ".DS_Store" { continue; }
             found.insert(name, Found::File(entry.metadata()?));
         } else if kind.is_symlink() {
             found.insert(name, Found::Link);
