@@ -468,6 +468,10 @@ struct Node {
     company: usize,
     cluster: String,
     key: u32,
+    /// Which bundle of its group's strands the object stands in, and whether it stands at the
+    /// bundle's core end. Both come from what the object is, never from the other objects.
+    bundle: u32,
+    hub: bool,
     created: i64,
     recency: f64,
     significance: f64,
@@ -562,7 +566,7 @@ pub fn build_repo_field_with(companies: &[CompanyRead], unread: &[(String, Strin
     let add_node = |nodes: &mut Vec<Node>, company: usize, ntype: &'static str, cluster: String, key: u32, created: i64, last: i64, commits: u32, recent: f64| -> usize {
         let recency = if last <= today { round3(1.0 - (today - last) as f64 / horizon.max(1) as f64) } else { 1.0 };
         let significance = round3(((commits as f64).ln_1p() / 40f64.ln_1p()).min(1.0));
-        nodes.push(Node { ntype, company, cluster, key, created: dnum(created), recency, significance, activity: round3(recent), degree: 0 });
+        nodes.push(Node { ntype, company, cluster, key, bundle: key, hub: false, created: dnum(created), recency, significance, activity: round3(recent), degree: 0 });
         nodes.len() - 1
     };
 
@@ -653,6 +657,12 @@ pub fn build_repo_field_with(companies: &[CompanyRead], unread: &[(String, Strin
             let recent = if today - d.last <= 30 { (d.commits as f64 / 12.0).min(1.0) } else { 0.0 };
             let key = key_of(&c.id, &c.repos[*ri].name, &d.path);
             let i = add_node(&mut nodes, ci, classify(&d.path), doc_cluster[&(*ri, d.path.clone())].clone(), key, d.first, d.last, d.commits, recent);
+            // WHERE IT STANDS NEVER FOLLOWS THE THREADS (review rv-20261114T012637Z-c24eda6f-0dcc: one
+            // more commit to one document made it its folder's anchor, and 389 of 3,001 objects
+            // moved). A document's bundle is its folder and the 30 days it was first written in; a
+            // folder's own page (README, index, dossier, CLAUDE, notes) stands at the core end.
+            nodes[i].bundle = key_of(&c.id, &c.repos[*ri].name, &format!("\u{0}folder {}\u{0}{}", dirname(&d.path), d.first.div_euclid(30)));
+            nodes[i].hub = matches!(basename(&d.path).to_lowercase().as_str(), "readme.md" | "index.md" | "dossier.md" | "claude.md" | "notes.md");
             doc_node.insert((ci, *ri, d.path.clone()), i);
         }
         let node_of = |ri: usize, d: &FileRec| doc_node[&(ci, ri, d.path.clone())];
@@ -661,7 +671,8 @@ pub fn build_repo_field_with(companies: &[CompanyRead], unread: &[(String, Strin
         let top_docs: Vec<(usize, &FileRec)> = { let t: Vec<_> = docs.iter().filter(|(_, d)| !d.path.contains('/')).copied().collect(); if t.is_empty() { docs.clone() } else { t } };
         let root_hub: Option<usize> = top_docs
             .iter()
-            .max_by_key(|(_, d)| { let b = basename(&d.path).to_lowercase(); (b == "claude.md" || b == "readme.md", d.commits) })
+            // by name and path, not by commits: a day with no new document takes this one's group
+            .max_by_key(|(_, d)| { let b = basename(&d.path).to_lowercase(); (b == "claude.md" || b == "readme.md", std::cmp::Reverse(d.path.clone())) })
             .map(|(ri, d)| node_of(*ri, d));
 
         // ---- membership: the folder tree ----
@@ -673,14 +684,11 @@ pub fn build_repo_field_with(companies: &[CompanyRead], unread: &[(String, Strin
         for (key, members) in &by_dir {
             let named: Vec<&&FileRec> = members.iter().filter(|m| matches!(basename(&m.path).to_lowercase().as_str(), "readme.md" | "index.md" | "dossier.md" | "claude.md" | "notes.md")).collect();
             let pool: Vec<&&FileRec> = if named.is_empty() { members.iter().collect() } else { named };
-            // max by (commits, -len(path)); Python's max keeps the first of equals
-            let mut a = pool[0];
-            for m in &pool[1..] {
-                if (m.commits, std::cmp::Reverse(m.path.len())) > (a.commits, std::cmp::Reverse(a.path.len())) {
-                    a = m;
-                }
-            }
-            anchor.insert(key.clone(), *a);
+            // The first written, then the shortest path. Round 71 took the most-committed, so one edit
+            // could hand a folder's threads, and with them the light a big anchor carries, to another
+            // document (review rv-20261114T012637Z-c24eda6f-0dcc). What was written first stays first.
+            let a = pool.iter().min_by_key(|m| (m.first, m.path.len(), &m.path)).expect("a folder in the map has a document");
+            anchor.insert(key.clone(), **a);
         }
         for ((ri, dpath), members) in &by_dir {
             let a = anchor[&(*ri, dpath.clone())];
@@ -689,12 +697,8 @@ pub fn build_repo_field_with(companies: &[CompanyRead], unread: &[(String, Strin
             rest.sort_by_key(|m| (m.first, &m.path));
             if rest.len() > 48 {
                 for run in rest.chunks(40) {
-                    let mut lead = run[0];
-                    for m in &run[1..] {
-                        if m.commits > lead.commits {
-                            lead = m;
-                        }
-                    }
+                    // the first written of the forty leads them, for the same reason
+                    let lead = run[0];
                     let ln = node_of(*ri, lead);
                     add_link(&mut nodes, &mut links, ln, an, "membership");
                     for m in run {
@@ -752,6 +756,7 @@ pub fn build_repo_field_with(companies: &[CompanyRead], unread: &[(String, Strin
                 let cl = nodes[dn].cluster.clone();
                 let key = key_of(&c.id, &c.repos[*ri].name, &format!("{}\u{0}ruling {num}", d.path));
                 let i = add_node(&mut nodes, ci, "decision", cl, key, when, when, weight, 0.0);
+                nodes[i].bundle = key_of(&c.id, &c.repos[*ri].name, &format!("{}\u{0}rulings", d.path));
                 ruling_node.insert((ci, *ri, d.path.clone(), *num), i);
                 add_link(&mut nodes, &mut links, i, dn, "membership");
                 n_rulings += 1;
@@ -777,9 +782,10 @@ pub fn build_repo_field_with(companies: &[CompanyRead], unread: &[(String, Strin
                 let recent = if today - day <= 30 { (n as f64 / 60.0).min(1.0) } else { 0.0 };
                 let key = key_of(&c.id, &r.name, &format!("\u{0}day {day}"));
                 let i = add_node(&mut nodes, ci, "memory", cl, key, day, day, n, recent);
+                nodes[i].bundle = key_of(&c.id, &r.name, "\u{0}days");
                 session_node.insert((ci, ri, day), i);
                 let mut made_sorted = made.clone();
-                made_sorted.sort_by_key(|m| std::cmp::Reverse(m.commits));
+                made_sorted.sort_by_key(|m| &m.path);
                 for m in made_sorted.iter().take(8) {
                     add_link(&mut nodes, &mut links, i, node_of(ri, m), "membership");
                 }
@@ -963,7 +969,7 @@ pub fn build_repo_field_with(companies: &[CompanyRead], unread: &[(String, Strin
             "createdDay": n.created, "recency": n.recency, "significance": n.significance, "activity": n.activity, "degree": n.degree,
             // each object is placed from its own stream (`field-prep.js` `placeKeyed`), so new work
             // moves nothing that was already drawn
-            "layoutSeed": seed_of(&n.cluster), "layoutKey": n.key }))
+            "layoutSeed": seed_of(&n.cluster), "layoutKey": n.key, "layoutBundle": n.bundle, "layoutHub": n.hub }))
         .collect();
     let link_values: Vec<Value> = links
         .iter()
@@ -1334,6 +1340,25 @@ mod tests {
         distinct.sort_unstable();
         distinct.dedup();
         assert_eq!(distinct.len(), keys(&before).len(), "two objects share a placement key");
+        // A DOCUMENT IS EDITED (review rv-20261114T012637Z-c24eda6f-0dcc): commits decide which
+        // document a folder's threads run to, and must not decide where anything stands. One
+        // document of "big" gets 30 more commits and three are added beside it.
+        let place = |f: &Value| -> HashMap<u64, (String, u64, bool)> { f["nodes"].as_array().unwrap().iter().filter(|n| n["domain"] == "big")
+            .map(|n| (n["layoutKey"].as_u64().unwrap(), (n["cluster"].as_str().unwrap().to_string(), n["layoutBundle"].as_u64().unwrap(), n["layoutHub"].as_bool().unwrap()))).collect() };
+        let mut edited = company("big", 12);
+        edited.repos[0].docs[4].commits = 31;
+        edited.repos[0].docs[4].last = day("2026-11-12");
+        let worked = build_repo_field(&[company("small", 20), edited], &[], day("2026-11-13"), &order_of(&after));
+        let (was, is) = (place(&after), place(&worked));
+        // and the threads of the documents drawn before run where they ran: the same number of each
+        let degrees = |f: &Value| -> HashMap<u64, u64> { f["nodes"].as_array().unwrap().iter().filter(|n| n["domain"] == "small").map(|n| (n["layoutKey"].as_u64().unwrap(), n["degree"].as_u64().unwrap())).collect() };
+        assert_eq!(degrees(&after), degrees(&worked), "an edit in one company rewired another");
+        let edited_only = { let mut c = company("big", 9); c.repos[0].docs[4].commits = 31; c };
+        let rewired = build_repo_field(&[company("small", 20), edited_only], &[], day("2026-11-13"), &order_of(&after));
+        let big_degrees = |f: &Value| -> HashMap<u64, u64> { f["nodes"].as_array().unwrap().iter().filter(|n| n["domain"] == "big").map(|n| (n["layoutKey"].as_u64().unwrap(), n["degree"].as_u64().unwrap())).collect() };
+        assert_eq!(big_degrees(&after), big_degrees(&rewired), "30 more commits to one document changed which document the folder's threads run to");
+        assert_eq!(was.iter().filter(|(key, at)| is.get(*key) != Some(*at)).count(), 0, "an edit changed where an existing object stands");
+        assert_eq!(is.len(), was.len() + 3);
         // a company connected later joins at the end
         let more = build_repo_field(&[company("small", 20), company("big", 9), company("new", 50)], &[], day("2026-11-13"), &order_of(&after));
         assert_eq!(order_of(&more).last().map(String::as_str), Some("new"));

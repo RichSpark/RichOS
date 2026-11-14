@@ -40,7 +40,8 @@ function swearResult(last30) {
 ///   swear: { show, last30 } -> get_swearmeter
 ///   lanes: [[id, label, objects | [group sizes]], ...] -> home_field_data, one company per lane
 ///   source: "repositories" -> the dataset says it was read from the connected repositories
-///   seeds: true -> every object carries its placement seed and key, as `home_repos.rs` writes them
+///   seeds: true -> every object carries its placement seed, key and bundle, as `home_repos.rs` writes them
+///   hub: N -> the object of each group that its threads run to (group sizes given), default the first
 ///   delayMs -> home_field_data answers that late (the screen waits 8 s)
 ///   team: [{ name, role }] -> the preset's homeTeam
 async function openApp(browser, fixture) {
@@ -71,10 +72,13 @@ async function openApp(browser, fixture) {
           const hash = (text) => { let h = 2166136261; for (const ch of text) h = Math.imul(h ^ ch.charCodeAt(0), 16777619) >>> 0; return h; };
           const seed = hash(gid);
           for (let i = 0; i < n; i++) {
+            // `f.hub`: which object of a group its threads run to. In a repository that follows
+            // the commits, so an edit changes it; where an object stands must not follow it.
+            const hub = Math.min(f.hub || 0, n - 1);
             nodes.push({ id: sizes ? gid + "-" + i : lane + "-obj-" + nodes.length, type: i === 0 ? "decision" : "memory", domain: lane, cluster: gid,
-              ...(f.seeds ? { layoutSeed: seed, layoutKey: hash(gid + "-" + i) } : {}),
-              degree: i === 0 ? n - 1 : 1, significance: 0.8, activity: 0, recency: 0, createdDay: 0 });
-            if (i > 0) links.push({ s: nodes[first].id, t: nodes[nodes.length - 1].id, class: "membership", cross: false });
+              ...(f.seeds ? { layoutSeed: seed, layoutKey: hash(gid + "-" + i), layoutBundle: hash(gid + "-folder-" + Math.floor(i / 40)), layoutHub: i % 40 === 0 } : {}),
+              degree: i === hub ? n - 1 : 1, significance: 0.8, activity: 0, recency: 0, createdDay: 0 });
+            if (i !== hub) links.push({ s: sizes ? gid + "-" + hub : nodes[first].id, t: nodes[nodes.length - 1].id, class: "membership", cross: false });
           }
           made += n;
           if (n > 0) {
@@ -380,8 +384,8 @@ async function main() {
   // object moved every object drawn after it, at every launch after a commit.
   await run.check("new work in one folder does not rearrange the picture", async () => {
     const team = [{ name: "Beth", role: "Bookkeeper" }];
-    const placed = async (first) => {
-      const page = await openApp(browser, { team, seeds: true, source: "repositories",
+    const placed = async (first, hub) => {
+      const page = await openApp(browser, { team, seeds: true, hub, source: "repositories",
         lanes: [["northwind", "Northwind Traders", [first, 400, 400, 400]], ["kestrel", "Kestrel Labs", [350, 350, 300]]] });
       await withField(page);
       const at = await page.evaluate(() => {
@@ -394,8 +398,9 @@ async function main() {
       await page.close();
       return at;
     };
-    // a day's work: 6 objects more in the first folder of the first company
-    const before = await placed(600), after = await placed(606);
+    // a day's work: 6 objects more in the first folder of the first company, and edits that make
+    // another document the one every folder's threads run to
+    const before = await placed(600, 0), after = await placed(606, 7);
     // The picture is 1,000 units across. A folder's strands are its share of the company's arc, so
     // when one grows the others slide by a strand: a few units. Dealt again, an object lands
     // anywhere in its folder's territory, hundreds of units away.
@@ -409,8 +414,8 @@ async function main() {
       else moved++;
     }
     assertEqual(compared, 2800, "not every object drawn before is drawn after");
-    assert(moved <= 0.02 * compared, `${moved} of ${compared} objects moved more than ${NUDGE} units (the picture is 1,000 across) when 6 were added to one folder`);
-    return `6 objects added to one folder: ${stayed} of ${compared} objects stay within ${NUDGE} units of where they stood, ${moved} moved farther`;
+    assert(moved <= 0.02 * compared, `${moved} of ${compared} objects moved more than ${NUDGE} units (the picture is 1,000 across) when 6 were added to one folder and the threads ran to another document`);
+    return `6 objects added to one folder and every folder's threads moved to another document: ${stayed} of ${compared} objects stay within ${NUDGE} units of where they stood, ${moved} moved farther`;
   });
 
   // ---------------------------------------------------------------------------------------

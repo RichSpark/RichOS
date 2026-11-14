@@ -191,6 +191,15 @@ function prepare(loro, REF, opts) {
   const stem = strands.filter(s => s.region === 'stem');
   const lobeLen = lobe.reduce((a, s) => a + s.len, 0);
   const ARC = arcOrderOf(domains, domainIndex);
+  // APP: A TERRITORY'S SHARE MOVES IN STEPS for a picture read from his repositories (its objects
+  // carry `layoutKey`). A share taken from the exact count moves every boundary of the picture by a
+  // strand or two with each day's work, and every boundary that moves makes a few objects find a
+  // new strand (measured in tests/home-standard.js: 6 objects added, 213 of 2,800 moved). So the
+  // count a share is taken from is rounded to an eighth of its power of two (600 and 606 are both
+  // 576; the step is 6 to 12 percent), and a boundary moves only when a count crosses a step. The
+  // demonstration and a picture compiled from loro carry no key and keep their exact shares.
+  const keyedPicture = N > 0 && nodes[0].layoutKey !== undefined;
+  const steady = (n) => { if (!keyedPicture || n < 16) return n; const step = Math.pow(2, Math.floor(Math.log2(n)) - 3); return Math.round(n / step) * step; };
   const domStrands = domains.map(() => []);
   {
     const order = ARC.map(id => domainIndex.get(id));
@@ -200,9 +209,9 @@ function prepare(loro, REF, opts) {
     // `home_field.rs::a_domains_node_count_is_its_own_nodes`). The ghost's own lanes are `nodeCount: 0`
     // because his objects stand in the example's clusters (see `hosted` below), and dividing by every
     // node would shrink the example's twelve arcs and leave a bare wedge at the end of the circle.
-    const shareN = domains.reduce((a, d) => a + d.nodeCount, 0) || N;
+    const shareN = domains.reduce((a, d) => a + steady(d.nodeCount), 0) || N;
     order.forEach((di, oi) => {
-      const share = domains[di].nodeCount / shareN;
+      const share = steady(domains[di].nodeCount) / shareN;
       const target = oi === order.length - 1 ? Infinity : acc + share * lobeLen;
       while (k < lobe.length && (acc < target || domStrands[di].length === 0)) { domStrands[di].push(lobe[k]); acc += lobe[k].len; k++; }
     });
@@ -212,8 +221,9 @@ function prepare(loro, REF, opts) {
     const ss = domStrands[di], total = ss.reduce((a, s) => a + s.len, 0);
     const cls = d.clusters.map(c => clusterList[clusterIndex.get(c.id)]);
     let k = 0, acc = 0;
+    const clsN = keyedPicture ? cls.reduce((a, c) => a + steady(c.n), 0) || 1 : d.nodeCount;
     cls.forEach((c, ci) => {
-      const target = ci === cls.length - 1 ? Infinity : acc + (c.n / d.nodeCount) * total;
+      const target = ci === cls.length - 1 ? Infinity : acc + (steady(c.n) / clsN) * total;
       while (k < ss.length && (acc < target || c.strands.length === 0)) { c.strands.push(ss[k]); acc += ss[k].len; k++; }
     });
     while (k < ss.length) cls[cls.length - 1].strands.push(ss[k++]);
@@ -271,14 +281,18 @@ function prepare(loro, REF, opts) {
   // below draws every object of the picture from one stream, hubs first, so one added object moves
   // every object drawn after it, and a team that commits all day would see the whole picture
   // rearranged at each launch. Here nothing depends on the order or the number of the others:
-  //   * an object's strand is the one of its group's strands that its own key scores best (a
-  //     weighted rendezvous hash: longer strands win in proportion to their length). When a folder
-  //     grows, its neighbors gain or lose a strand at their edge, and only the objects that stood
-  //     on a strand that left, or whose key prefers one that came, move;
-  //   * an object that hangs off a bigger one in the same group chooses among the strands of that
-  //     one's bundle (the strands either side of the strand the bigger one's key scores best), so
-  //     the threads still run along the strand bundle;
-  //   * its place along the strand and beside it come from a stream seeded with its key.
+  //   * an object stands in a bundle of its group's strands: the strands either side of the one
+  //     that its bundle's key scores best (a weighted rendezvous hash: longer strands win in
+  //     proportion to their length). The bundle is its folder and the 30 days it was first written
+  //     in (`layoutBundle`), so the objects of a folder stand together and the threads still run
+  //     along the strand bundle, and no thread decides it: which document a folder's threads run to
+  //     follows the commits, and one edit used to move 389 of 3,001 objects (review
+  //     rv-20261114T012637Z-c24eda6f-0dcc);
+  //   * its strand is the one of that bundle that its own key scores best. When a folder grows,
+  //     its neighbors gain or lose a strand at their edge, and only the objects that stood on a
+  //     strand that left, or whose key prefers one that came, move;
+  //   * its place along the strand and beside it come from a stream seeded with its key; a
+  //     folder's own page (`layoutHub`) stands at the core end.
   const placeKeyed = (c, ids) => {
     const ss = clusterList[c].strands;
     const mix = (x) => { x = Math.imul(x ^ (x >>> 16), 0x85ebca6b); x = Math.imul(x ^ (x >>> 13), 0xc2b2ae35); return (x ^ (x >>> 16)) >>> 0; };
@@ -292,24 +306,17 @@ function prepare(loro, REF, opts) {
     };
     const posOf = new Map(); ss.forEach((st, k) => posOf.set(st.i, k));
     const keyOf = (i) => (nodes[i].layoutKey ^ nodes[i].layoutSeed) >>> 0;
-    const ownStrand = new Map();
-    const own = (i) => { let st = ownStrand.get(i); if (!st) { st = pick(keyOf(i), 0, ss.length - 1); ownStrand.set(i, st); } return st; };
-    // half a bundle: a hub's share of the group's strands in the loop below, either side of its own
+    const bundleOf = (i) => ((nodes[i].layoutBundle === undefined ? nodes[i].layoutKey : nodes[i].layoutBundle) ^ nodes[i].layoutSeed) >>> 0;
+    const middle = new Map();
+    const middleOf = (b) => { let at = middle.get(b); if (at === undefined) { at = posOf.get(pick(b, 0, ss.length - 1).i); middle.set(b, at); } return at; };
+    // half a bundle: a hub's share of the group's strands in the loop below, either side of the middle
     const nh = Math.max(1, Math.min(ids.length, Math.round(ids.length * 0.07), Math.floor(ss.length / 2)));
     const half = Math.max(1, Math.round(ss.length / nh / 2));
     for (const i of ids) {
       pr = mulberry32(keyOf(i));
-      let best = -1, bd = nodes[i].degree;
-      for (const j of adjTmp.get(i) || []) {
-        if (nodeCluster[j] !== c || hosted(j)) continue;
-        const dj = nodes[j].degree;
-        if (dj > bd || (best >= 0 && dj === bd && nodes[j].layoutKey < nodes[best].layoutKey)) { bd = dj; best = j; }
-      }
-      if (best >= 0) {
-        const at = posOf.get(own(best).i);
-        place(i, pick(keyOf(i), Math.max(0, at - half), Math.min(ss.length - 1, at + half)), 0.06 + Math.pow(pr(), 0.8) * 0.92);
-      } else if (nodes[i].degree >= 3) place(i, own(i), 0.16 + pr() * 0.3);   // a hub of its own
-      else place(i, own(i), 0.06 + Math.pow(pr(), 0.8) * 0.92);
+      const at = middleOf(bundleOf(i));
+      const s = pick(keyOf(i), Math.max(0, at - half), Math.min(ss.length - 1, at + half));
+      place(i, s, nodes[i].layoutHub === true ? 0.16 + pr() * 0.3 : 0.06 + Math.pow(pr(), 0.8) * 0.92);
     }
     pr = rnd;
   };
