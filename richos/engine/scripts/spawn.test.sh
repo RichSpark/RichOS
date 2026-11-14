@@ -360,18 +360,29 @@ else
     bad "the printed payload is complete" "$OUT"
 fi
 
+# THE NUMBER (CEO, 2026-10-21): zach-sonnet-c2 is active now, so another zach is
+# zach2. Every later case that finds its workspace by the name it gave uses a first
+# name of its own for that reason (ruby, rita, rosa, ivan, mia, max, mel, moe).
+run "zach-sonnet-n1" --repo "$TARGET" --type zach --brief "$BRIEF" --dry-run
+if [ "$RC" -eq 0 ] && printf '%s' "$OUT" | grep -q '"name": "zach2-sonnet-n1"' \
+   && printf '%s' "$OUT" | grep -q "cross-repo-worktree: $SANDBOX/widgets-wt/zach2-sonnet-n1"; then
+    ok "with zach active, spawn.sh zach-sonnet-n1 starts zach2-sonnet-n1 (the lowest free number)"
+else
+    bad "a second active zach is numbered zach2" "rc=$RC $OUT"
+fi
+
 # 2026-10-14: --integration <repo>=v1.3.0 for one teammate CORRECTED the whole
 # repository's body of work and moved every running main-bound teammate with
 # it, and the appended last step still said to merge main into the release.
 git -C "$TARGET" branch rel "$(git -C "$TARGET" commit-tree -p main -m "rel only" "main^{tree}")"
-run "zach-sonnet-rel1" --repo "$TARGET" --type zach --brief "$BRIEF" --integration "$TARGET=rel"
-RELWT="$SANDBOX/widgets-wt/zach-sonnet-rel1"
+run "ruby-sonnet-rel1" --repo "$TARGET" --type zach --brief "$BRIEF" --integration "$TARGET=rel"
+RELWT="$SANDBOX/widgets-wt/ruby-sonnet-rel1"
 RELCHECK="$(python3 - "$RICHOS_WORKSPACES_DIR" "$TARGET" <<'PY'
 import glob, json, os, sys
 d, target = sys.argv[1], os.path.realpath(sys.argv[2])
 integ = json.load(open(os.path.join(d, "integration.json")))
 cur = integ["works"][integ["current"][target]]["branch"]
-rec = [json.load(open(p)) for p in glob.glob(os.path.join(d, "agents", "*zach-sonnet-rel1.json"))][0]
+rec = [json.load(open(p)) for p in glob.glob(os.path.join(d, "agents", "*ruby-sonnet-rel1.json"))][0]
 mine = integ["works"][rec["integration_work"][target]]["branch"]
 print("%s %s" % (cur, mine))
 PY
@@ -399,7 +410,7 @@ GADGETS="$SANDBOX/gadgets"
 mkrepo "$GADGETS"
 git -C "$GADGETS" branch rel "$(git -C "$GADGETS" commit-tree -p main -m "rel only" "main^{tree}")"
 python3 "$WS_PY" integration --repo "$GADGETS" --branch rel --why "the release" >/dev/null
-for case in "zach-sonnet-relrec1:" "zach-sonnet-relrec2:$GADGETS=rel"; do
+for case in "rita-sonnet-relrec1:" "rosa-sonnet-relrec2:$GADGETS=rel"; do
     name="${case%%:*}"; integ="${case#*:}"
     if [ -n "$integ" ]; then
         run "$name" --repo "$GADGETS" --type zach --brief "$BRIEF" --integration "$integ"
@@ -481,7 +492,7 @@ run "zach-sonnet-c3" --repo "$TARGET" --type zach --brief "$BRIEF" --dry-run
 # (Rich stopped a running spawn on 2026-10-06 and it left a WORKING row and a branch).
 for SIG in TERM INT HUP; do
     IDX=$(( ${IDX:-0} + 1 ))
-    N="zach-sonnet-i$IDX"
+    N="ivan-sonnet-i$IDX"
     MARK="$SANDBOX/stalled-$SIG"
     rm -f "$MARK"
     STALL_MARKER="$MARK" "$SPAWN" "$N" --repo "$TARGET" --type zach --brief "$BRIEF" \
@@ -516,9 +527,9 @@ echo "  several repositories, ONE teammate (point 10)"
 # SECOND NAME — which made it a second agent, landed separately.
 SECOND="$SANDBOX/gizmos"
 mkrepo "$SECOND"
-run "zach-sonnet-m1" --repo "$TARGET" --repo "$SECOND" --type zach --brief "$BRIEF" --dry-run
-M1A="$SANDBOX/widgets-wt/zach-sonnet-m1"
-M1B="$SANDBOX/gizmos-wt/zach-sonnet-m1"
+run "mia-sonnet-m1" --repo "$TARGET" --repo "$SECOND" --type zach --brief "$BRIEF" --dry-run
+M1A="$SANDBOX/widgets-wt/mia-sonnet-m1"
+M1B="$SANDBOX/gizmos-wt/mia-sonnet-m1"
 if [ "$RC" -eq 0 ] \
    && printf '%s' "$OUT" | grep -q "cross-repo-worktree: $M1A" \
    && printf '%s' "$OUT" | grep -q "cross-repo-worktree: $M1B"; then
@@ -532,17 +543,17 @@ else
     bad "every guard passes a two-workspace payload" "rc=$RC $OUT"
 fi
 
-run "zach-sonnet-m2" --repo "$TARGET" --repo "$SECOND" --type zach --brief "$BRIEF"
-M2A="$SANDBOX/widgets-wt/zach-sonnet-m2"
-M2B="$SANDBOX/gizmos-wt/zach-sonnet-m2"
+run "max-sonnet-m2" --repo "$TARGET" --repo "$SECOND" --type zach --brief "$BRIEF"
+M2A="$SANDBOX/widgets-wt/max-sonnet-m2"
+M2B="$SANDBOX/gizmos-wt/max-sonnet-m2"
 if [ "$RC" -eq 0 ] && [ -d "$M2A" ] && [ -d "$M2B" ] \
-   && [ "$(git -C "$M2A" symbolic-ref -q --short HEAD)" = "cc/zach-sonnet-m2" ] \
-   && [ "$(git -C "$M2B" symbolic-ref -q --short HEAD)" = "cc/zach-sonnet-m2" ]; then
+   && [ "$(git -C "$M2A" symbolic-ref -q --short HEAD)" = "cc/max-sonnet-m2" ] \
+   && [ "$(git -C "$M2B" symbolic-ref -q --short HEAD)" = "cc/max-sonnet-m2" ]; then
     ok "a clean run CREATES both workspaces, each on cc/<name> in its own repository"
 else
     bad "both workspaces are created" "rc=$RC $OUT"
 fi
-if python3 - "$RICHOS_WORKSPACES_DIR/agents/$RICHOS_SESSION_ID--zach-sonnet-m2.json" "$M2A" "$M2B" <<'PY' 2>/dev/null
+if python3 - "$RICHOS_WORKSPACES_DIR/agents/$RICHOS_SESSION_ID--max-sonnet-m2.json" "$M2A" "$M2B" <<'PY' 2>/dev/null
 import json, os, sys
 r = json.load(open(sys.argv[1]))
 live = [w for w in r["workspaces"] if not w.get("deleted_at")]
@@ -550,7 +561,7 @@ assert sorted(os.path.realpath(w["path"]) for w in live) == sorted(sys.argv[2:4]
 assert all(w["kind"] == "cc" and w["created"] is True for w in live), live
 PY
 then ok "and BOTH are registered on the ONE agent's record, so they go together at the land"
-else bad "both are on one record" "$(cat "$RICHOS_WORKSPACES_DIR/agents/$RICHOS_SESSION_ID--zach-sonnet-m2.json" 2>/dev/null | tr '\n' ' ' | cut -c1-400)"; fi
+else bad "both are on one record" "$(cat "$RICHOS_WORKSPACES_DIR/agents/$RICHOS_SESSION_ID--max-sonnet-m2.json" 2>/dev/null | tr '\n' ' ' | cut -c1-400)"; fi
 
 run "zach-sonnet-m3" --repo "$TARGET" --repo widgets --type zach --brief "$BRIEF" --dry-run
 if [ "$RC" -eq 1 ] && printf '%s' "$OUT" | grep -q "already this teammate's repository"; then
@@ -566,22 +577,22 @@ if [ "$RC" -eq 1 ] && printf '%s' "$OUT" | grep -q -- "--dir <repo>=<value>"; th
 else
     bad "an unscoped --dir is refused" "rc=$RC $OUT"
 fi
-run "zach-sonnet-m5" --repo "$TARGET" --repo "$SECOND" --type zach --brief "$BRIEF" \
+run "mel-sonnet-m5" --repo "$TARGET" --repo "$SECOND" --type zach --brief "$BRIEF" \
     --dir "$SECOND=$SANDBOX/anywhere/m5" --dry-run
 if [ "$RC" -eq 0 ] && printf '%s' "$OUT" | grep -q "cross-repo-worktree: $SANDBOX/anywhere/m5" \
-   && printf '%s' "$OUT" | grep -q "cross-repo-worktree: $SANDBOX/widgets-wt/zach-sonnet-m5"; then
+   && printf '%s' "$OUT" | grep -q "cross-repo-worktree: $SANDBOX/widgets-wt/mel-sonnet-m5"; then
     ok "POSITIVE CONTROL: the SCOPED form --dir <repo>=<path> is honored, and the other repository keeps its default"
 else
     bad "the scoped --dir is honored" "rc=$RC $OUT"
 fi
 
-REFUSE_AFTER=1 run "zach-sonnet-m6" --repo "$TARGET" --repo "$SECOND" --type zach --brief "$BRIEF"
-M6A="$SANDBOX/widgets-wt/zach-sonnet-m6"
-M6B="$SANDBOX/gizmos-wt/zach-sonnet-m6"
+REFUSE_AFTER=1 run "moe-sonnet-m6" --repo "$TARGET" --repo "$SECOND" --type zach --brief "$BRIEF"
+M6A="$SANDBOX/widgets-wt/moe-sonnet-m6"
+M6B="$SANDBOX/gizmos-wt/moe-sonnet-m6"
 if [ "$RC" -eq 4 ] && [ ! -e "$M6A" ] && [ ! -e "$M6B" ] \
-   && ! git -C "$TARGET" rev-parse --verify --quiet refs/heads/cc/zach-sonnet-m6 >/dev/null \
-   && ! git -C "$SECOND" rev-parse --verify --quiet refs/heads/cc/zach-sonnet-m6 >/dev/null \
-   && [ ! -e "$RICHOS_WORKSPACES_DIR/agents/$RICHOS_SESSION_ID--zach-sonnet-m6.json" ]; then
+   && ! git -C "$TARGET" rev-parse --verify --quiet refs/heads/cc/moe-sonnet-m6 >/dev/null \
+   && ! git -C "$SECOND" rev-parse --verify --quiet refs/heads/cc/moe-sonnet-m6 >/dev/null \
+   && [ ! -e "$RICHOS_WORKSPACES_DIR/agents/$RICHOS_SESSION_ID--moe-sonnet-m6.json" ]; then
     ok "FAULT INJECTION: a refusal after creation rolls back BOTH workspaces and both branches — nothing is left behind in either repository"
 else
     bad "the rollback covers every workspace" "rc=$RC a=$( [ -e "$M6A" ] && echo present || echo absent) b=$( [ -e "$M6B" ] && echo present || echo absent)"

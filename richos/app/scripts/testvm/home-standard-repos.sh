@@ -2,6 +2,7 @@
 # home-standard-repos.sh — two fictional companies' Git repositories, for the home screen's picture.
 #
 #   home-standard-repos.sh <folder> [documents in alder] [documents in brightwater]     (default 1800 and 900)
+#   home-standard-repos.sh <folder> --repo <name> <documents> <rulings>                 (one repository)
 #
 # WHY. The home screen draws every connected company from its own repositories (round 73, CEO
 # 2026-11-13; `richos-core/src/home_repos.rs`). `seed-records.sh` writes loro records, which that
@@ -9,18 +10,20 @@
 # big enough to be drawn alone (2,500 objects) with more than one company in it. This writes
 # <folder>/alder and <folder>/brightwater: Markdown documents in six folders, a decision register
 # with twelve numbered rulings, a source file a day, eight working days, and a document in
-# brightwater that names one in alder (a thread from one company to the other).
+# brightwater that names one in alder (a thread from one company to the other). `--repo` writes one
+# such repository with its own register length, for a walk that builds several companies.
 # `home-standard-walk.py` runs it in the guest. Everything is fictional and carries no names.
 set -eu
-ROOT="${1:?usage: home-standard-repos.sh <folder> [documents in alder] [documents in brightwater]}"
+ROOT="${1:?usage: home-standard-repos.sh <folder> [documents in alder] [documents in brightwater] | <folder> --repo <name> <documents> <rulings>}"
 A="${2:-1800}"
 B="${3:-900}"
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
 export GIT_AUTHOR_NAME=QA GIT_AUTHOR_EMAIL=qa@example.invalid GIT_COMMITTER_NAME=QA GIT_COMMITTER_EMAIL=qa@example.invalid
 
-make() { # <name> <documents> <a path the readme names>
+make() { # <name> <documents> <a path the readme names> [rulings, default 12]
   repo="$ROOT/$1"
   n="$2"
+  rulings="${4:-12}"
   mkdir -p "$repo/wiki" "$repo/src"
   cd "$repo"
   git init -q
@@ -28,7 +31,7 @@ make() { # <name> <documents> <a path the readme names>
   {
     printf '# Decisions\n\n'
     r=0
-    while [ "$r" -lt 12 ]; do
+    while [ "$r" -lt "$rulings" ]; do
       r=$((r + 1))
       printf '## %s. Berth %s is ordered monthly\n\nDecided 2026-08-03.\n\n' "$r" "$r"
     done
@@ -62,5 +65,9 @@ make() { # <name> <documents> <a path the readme names>
   printf '%s: %s documents, %s commits\n' "$1" "$(git ls-files '*.md' | wc -l | tr -d ' ')" "$(git rev-list --count HEAD)"
 }
 
+if [ "$A" = "--repo" ]; then
+  make "${3:?--repo needs a name}" "${4:?--repo needs a document count}" docs/plans/note-6.md "${5:?--repo needs a ruling count}"
+  exit 0
+fi
 make alder "$A" docs/plans/note-6.md
 make brightwater "$B" alder/README.md

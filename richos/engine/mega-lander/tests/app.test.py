@@ -379,6 +379,59 @@ class DesktopWork(unittest.TestCase):
         # The same request for another teammate is different work.
         with self.assertRaisesRegex(ValueError,"different work"):self.call("prepare",{**self.args,"teammate":"mark"})
 
+    def active_teammate(self,name):
+        """A running teammate in this fixture's registry. No session, so finished_state reads only
+        the record's own facts: running until an end is recorded."""
+        agents=Path(os.environ["RICHOS_WORKSPACES_DIR"])/"agents";agents.mkdir(parents=True,exist_ok=True)
+        key="numbering-fixture--"+name
+        (agents/(key+".json")).write_text(json.dumps({"key":key,"name":name,"session_id":"","agent_id":"","workspaces":[],
+            "end":None,"handed_in":None,"pause":None,"disposition":None,"orphan":False}))
+
+    def test_stus_teammate_with_mark_and_mark2_active_is_mark3(self):
+        """The CEO's numbering (2026-10-21, richos-hq docs/plans/follow-ups.md), for Stu's teammates
+        too: a second active teammate of one first name is mark2-..., a third mark3-...; the lowest
+        free number among the active ones, none for the first."""
+        self.active_teammate("mark-sonnet-aaaaaaaaaaaa");self.active_teammate("mark2-sonnet-bbbbbbbbbbbb")
+        ready=self.call("prepare",self.args)
+        self.assertEqual(ready["status"],"prepared",ready)
+        self.assertRegex(ready["name"],r"^mark3-sonnet-[0-9a-f]{12}$")
+        self.assertIsNotNone(self.app.W.load_agent(self.app.W.named_key(self.session,ready["name"])))
+
+    def test_stus_teammate_with_only_mark2_active_is_mark(self):
+        self.active_teammate("mark2-sonnet-bbbbbbbbbbbb")
+        self.assertRegex(self.call("prepare",self.args)["name"],r"^mark-sonnet-[0-9a-f]{12}$")
+
+    def other_conversation(self,entity,thread,running=(),pending=()):
+        """Another conversation's receipt folder and registry, laid out as the app lays them out
+        (both named by sha256 of [company, conversation]): RUNNING teammates in its registry and
+        PENDING receipts (prepared, not yet started) among its receipts."""
+        partition=hashlib.sha256(json.dumps([entity,thread],separators=(",",":")).encode()).hexdigest()
+        receipts=self.root/"engine-state/work-receipts"/partition;receipts.mkdir(parents=True,exist_ok=True)
+        agents=self.root/"engine-state/workspaces"/partition/"agents";agents.mkdir(parents=True,exist_ok=True)
+        for name in running:
+            key="numbering-fixture--"+name
+            (agents/(key+".json")).write_text(json.dumps({"key":key,"name":name,"session_id":"","agent_id":"","workspaces":[],
+                "end":None,"handed_in":None,"pause":None,"disposition":None,"orphan":False}))
+        # Every conversation has receipts once it has teammates; the first ties the folder to its company.
+        for n,(name,status) in enumerate([*((p,"prepared") for p in pending),("mark-sonnet-000000000000","run-ended")]):
+            (receipts/("%064x.json"%n)).write_text(json.dumps({"schema":1,"id":"%064x"%n,"name":name,"status":status,
+                "binding":{"entity_id":entity,"thread_id":thread}}))
+
+    def test_stus_teammate_counts_the_companys_other_conversations_only(self):
+        """Review rv-20261114T100953Z-491c7af2-d68d: the app keeps a registry per conversation, and
+        the CEO's lowest free number is among all the company's active teammates. Another
+        conversation of this company running mark and preparing mark2 makes this one mark3; another
+        company's mark4 and mark5 count for nothing."""
+        self.other_conversation("depot","thread-b",running=["mark-sonnet-aaaaaaaaaaaa"],pending=["mark2-sonnet-bbbbbbbbbbbb"])
+        self.other_conversation("elsewhere","thread-c",running=["mark3-sonnet-cccccccccccc"],pending=["mark4-sonnet-dddddddddddd"])
+        self.assertRegex(self.call("prepare",self.args)["name"],r"^mark3-sonnet-[0-9a-f]{12}$")
+
+    def test_two_of_stus_teammates_of_one_kind_prepared_together_are_mark_and_mark2(self):
+        first=self.call("prepare",self.args)
+        second=self.call("prepare",{**self.args,"request_id":"prepare-two","title":"Create a second fictional result"})
+        self.assertRegex(first["name"],r"^mark-sonnet-[0-9a-f]{12}$")
+        self.assertRegex(second["name"],r"^mark2-sonnet-[0-9a-f]{12}$")
+
     def test_prepare_runs_one_job_on_a_named_model_within_the_users_ceiling(self):
         """Build plan item 7 (richos-hq docs/plans/2026-10-21-everything-for-every-user.md): an
         optional `model` runs this one job on another model than the teammate's default. It must
@@ -410,7 +463,8 @@ class DesktopWork(unittest.TestCase):
         # Below the definition's default: with its reason stated, it starts.
         cheaper=self.call("prepare",{**self.args,"request_id":"cheaper","model":"haiku","title":"Cheaper",
             "brief":"model-downgrade-ack: a one-line rename that needs no reasoning at all\n"+self.args["brief"]})
-        self.assertRegex(cheaper["name"],r"^mark-haiku-[0-9a-f]{12}$")
+        # The "stronger" Mark is still prepared, so this second active Mark is mark2 (CEO, 2026-10-21).
+        self.assertRegex(cheaper["name"],r"^mark2-haiku-[0-9a-f]{12}$")
         self.assertEqual(cheaper["agent_call"]["model"],"haiku")
         # A user whose allowed list and ceiling sit below a teammate's own default can still run
         # that teammate on a model they allow (mid-job review rv-20261021T164124Z-0fe64c41-a94a,
