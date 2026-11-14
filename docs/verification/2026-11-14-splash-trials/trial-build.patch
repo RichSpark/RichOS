@@ -1,0 +1,977 @@
+# THROWAWAY trial build for splash trials 1-3 (never merged).
+# Applies to: richos main e2c4934c6 merged with cc/echo3-opus-launchfix4 952d0e9c9 (git merge --no-commit).
+# Apply from the repository root: git apply docs/verification/2026-11-14-splash-trials/trial-build.patch
+diff --git a/richos/app/src-tauri/src/main.rs b/richos/app/src-tauri/src/main.rs
+--- a/richos/app/src-tauri/src/main.rs
++++ b/richos/app/src-tauri/src/main.rs
+@@ -19,6 +19,9 @@
+ /// The splash's first frame on the glass at once, and what waits for the page (Sage's plan
+ /// 2026-11-14 "the splash under half a second", rules 1 to 3).
+ mod first_frame;
++/// THROWAWAY: splash trials 1-3 (Sage's plan 2026-11-14 "existing splash under half a second", section 7).
++#[cfg(target_os = "macos")]
++mod splash_trial;
+ /// One line per launch with its own milestones and which checks it ran (the same plan, rule 5).
+ mod launch_timing;
+ /// Every byte of the updated bundle and the engine, read late and in the background.
+@@ -2774,11 +2777,11 @@
+                     // The durable opening-screen answer travels with the launch kind, because
+                     // the curtain decides in the `<head>` and no command can answer by then
+                     // (audit-8 row 5 — see `launch_init_script`).
+-                    .initialization_script(launch_init_script(
+-                        kind,
+-                        start_ordinal,
+-                        durable_splash,
+-                    ))
++                    .initialization_script(if splash_trial::mode() == 2 {
++                        launch_init_script(LaunchKind::Fresh, Some(2), Some(true))
++                    } else {
++                        launch_init_script(kind, start_ordinal, durable_splash)
++                    })
+                     // THE FIRST FRAME (Sage's plan 2026-11-14, rule 1, as the CEO narrowed it:
+                     // "We have the splash screen already"): the window's own background is the
+                     // splash's ground when the splash will play, else the app's ground for the
+@@ -2834,14 +2837,21 @@
+                 if let Some((x, y)) = placement.position {
+                     builder = builder.position(x, y);
+                 }
++                if splash_trial::mode() == 2 {
++                    builder = builder.initialization_script(splash_trial::page_helper(false));
++                }
+                 let window = builder.build()?;
+                 launch_timing::mark_window();
++                splash_trial::before_commit(&window);
+                 // ON THE GLASS NOW, in the splash's own ground color: macOS would show the
+                 // window only when this thread next goes idle. That color is not the splash and is
+                 // not counted as it (the CEO, 2026-11-14: the job is the splash screen itself
+                 // playing); it only means the window is never white while the page loads.
+-                first_frame::commit(&window);
++                if !splash_trial::skip_push() {
++                    first_frame::commit(&window);
++                }
+                 launch_timing::mark_first_frame(kind == LaunchKind::Fresh && durable_splash != Some(false));
++                splash_trial::after_commit(&window);
+                 #[cfg(target_os="macos")]
+                 cleaner_host::watch_main(&window);
+                 // WHERE HE LEFT IT, FOR NEXT TIME — and only if it is still reachable then.
+diff --git a/richos/app/src-tauri/src/splash_trial.rs b/richos/app/src-tauri/src/splash_trial.rs
+--- /dev/null
++++ b/richos/app/src-tauri/src/splash_trial.rs
+@@ -0,0 +1,637 @@
++//! THROWAWAY — the three trials of Sage's plan
++//! `richos-hq/docs/plans/2026-11-14-existing-splash-under-half-a-second.md`, section 7. Never
++//! merged: this file reaches the branch only as a patch under `docs/verification/`.
++//!
++//! `RICHOS_TRIAL` picks one; unset, nothing here runs.
++//!
++//! * `1`: the window is built with a full-size picture in a layer above the web view, pushed
++//!   (`first_frame::commit`, Echo3's push), and then the main thread is kept busy for 2 s.
++//!   `RICHOS_TRIAL_NOPUSH=1` skips the push (the control).
++//! * `2`: the main window runs splash #2 for real; at three moments it is frozen where it stands
++//!   and the guest captures it from the screen. Then a web view nobody sees draws splash #2 held at
++//!   exactly those moments and its snapshots are written. Then the same hidden web view draws the
++//!   first second as 30 pictures (the opening trial 3 plays).
++//! * `3`: trial 1 with the opening's 30 pictures played by Core Animation while the main thread is
++//!   busy: the first picture whole, the later ones the changing region only.
++//!
++//! Every line starts `[trial]` and carries the wall clock in ms, so the guest can line it up with
++//! its own launch request and screen frames.
++#![cfg(target_os = "macos")]
++
++use crate::dictation::appkit::{NSPoint, NSRect, NSSize};
++use tauri::Manager;
++use objc2::runtime::{AnyClass, AnyObject, Bool};
++use objc2::msg_send;
++use std::ffi::{c_void, CStr, CString};
++use std::path::{Path, PathBuf};
++use std::sync::mpsc;
++use std::time::{Duration, Instant};
++
++type Id = *mut AnyObject;
++
++/// `CGImageRef`, encoded as AppKit declares it (`^{CGImage=}`), so objc2's debug-build check of
++/// each message's signature passes.
++#[repr(C)]
++pub struct CGImage {
++    _private: [u8; 0],
++}
++unsafe impl objc2::encode::RefEncode for CGImage {
++    const ENCODING_REF: objc2::encode::Encoding =
++        objc2::encode::Encoding::Pointer(&objc2::encode::Encoding::Struct("CGImage", &[]));
++}
++/// An `NSRect *` argument (`^{CGRect=...}`).
++#[repr(transparent)]
++struct RectRef(NSRect);
++unsafe impl objc2::encode::RefEncode for RectRef {
++    const ENCODING_REF: objc2::encode::Encoding = objc2::encode::Encoding::Pointer(
++        &<NSRect as objc2::encode::Encode>::ENCODING,
++    );
++}
++
++pub fn mode() -> u8 {
++    std::env::var("RICHOS_TRIAL").ok().and_then(|v| v.parse().ok()).unwrap_or(0)
++}
++
++fn dir() -> PathBuf {
++    PathBuf::from(std::env::var("RICHOS_TRIAL_DIR").unwrap_or_else(|_| "/tmp/richos-trial".into()))
++}
++
++pub fn epoch_ms() -> f64 {
++    std::time::SystemTime::now()
++        .duration_since(std::time::UNIX_EPOCH)
++        .map(|d| d.as_secs_f64() * 1000.0)
++        .unwrap_or(0.0)
++}
++
++pub fn log(what: &str) {
++    eprintln!("[trial] {:.1} {}", epoch_ms(), what);
++}
++
++#[link(name = "ImageIO", kind = "framework")]
++extern "C" {
++    fn CGImageSourceCreateWithURL(url: *const c_void, options: *const c_void) -> *mut c_void;
++    fn CGImageSourceCreateImageAtIndex(src: *mut c_void, index: usize, options: *const c_void) -> *mut c_void;
++    static kCGImageSourceShouldCacheImmediately: *const c_void;
++}
++#[link(name = "CoreGraphics", kind = "framework")]
++extern "C" {
++    fn CGImageGetWidth(image: *mut c_void) -> usize;
++    fn CGImageGetHeight(image: *mut c_void) -> usize;
++    fn CGImageGetBytesPerRow(image: *mut c_void) -> usize;
++}
++#[link(name = "QuartzCore", kind = "framework")]
++extern "C" {
++    fn CACurrentMediaTime() -> f64;
++    static kCAAnimationDiscrete: Id;
++    static kCAFillModeForwards: Id;
++    static kCAGravityResize: Id;
++}
++#[link(name = "CoreFoundation", kind = "framework")]
++extern "C" {
++    fn CFRelease(cf: *const c_void);
++}
++
++fn class(name: &CStr) -> &'static AnyClass {
++    AnyClass::get(name).unwrap_or_else(|| panic!("no class {name:?}"))
++}
++
++unsafe fn nsstring(s: &str) -> Id {
++    let c = CString::new(s).unwrap();
++    msg_send![class(c"NSString"), stringWithUTF8String: c.as_ptr()]
++}
++
++unsafe fn rust_string(ns: Id) -> String {
++    if ns.is_null() {
++        return String::new();
++    }
++    let p: *const std::ffi::c_char = msg_send![ns, UTF8String];
++    if p.is_null() { String::new() } else { CStr::from_ptr(p).to_string_lossy().into_owned() }
++}
++
++/// A decoded CGImage (+1, never released: throwaway), and its decoded byte size.
++pub fn load_image(path: &Path) -> Option<(*mut c_void, usize)> {
++    use core_foundation::base::TCFType;
++    use core_foundation::boolean::CFBoolean;
++    use core_foundation::dictionary::CFDictionary;
++    use core_foundation::string::CFString;
++    use core_foundation::url::CFURL;
++    let url = CFURL::from_path(path, false)?;
++    unsafe {
++        let key = CFString::wrap_under_get_rule(kCGImageSourceShouldCacheImmediately as _);
++        let options = CFDictionary::from_CFType_pairs(&[(key, CFBoolean::true_value())]);
++        let source = CGImageSourceCreateWithURL(url.as_concrete_TypeRef() as _, std::ptr::null());
++        if source.is_null() {
++            return None;
++        }
++        let image = CGImageSourceCreateImageAtIndex(source, 0, options.as_concrete_TypeRef() as _);
++        CFRelease(source);
++        if image.is_null() {
++            return None;
++        }
++        Some((image, CGImageGetBytesPerRow(image) * CGImageGetHeight(image)))
++    }
++}
++
++/// Where the content view sits on the screen, top-left origin, in points, and the scale.
++unsafe fn content_on_screen(ns_window: Id) -> (NSRect, f64) {
++    let content: Id = msg_send![ns_window, contentView];
++    let frame: NSRect = msg_send![content, frame];
++    let on_screen: NSRect = msg_send![ns_window, convertRectToScreen: frame];
++    let screens: Id = msg_send![class(c"NSScreen"), screens];
++    let first: Id = msg_send![screens, objectAtIndex: 0usize];
++    let screen_frame: NSRect = msg_send![first, frame];
++    let scale: f64 = msg_send![ns_window, backingScaleFactor];
++    let top = screen_frame.size.height - (on_screen.origin.y + on_screen.size.height);
++    (NSRect { origin: NSPoint { x: on_screen.origin.x, y: top }, size: on_screen.size }, scale)
++}
++
++/// The layer above the web view (trials 1 and 3): a layer-hosting NSView over the whole content.
++struct Pic {
++    view: Id,
++    layer: Id,
++}
++unsafe impl Send for Pic {}
++
++unsafe fn attach(ns_window: Id, image: *mut c_void, page: Option<[f64; 2]>) -> Pic {
++    let content: Id = msg_send![ns_window, contentView];
++    let mut bounds: NSRect = msg_send![content, bounds];
++    // The page draws below the window's title bar: the bottom `page height` points of the content
++    // view (AppKit's y runs upward). The opening was drawn at the page's size.
++    if let Some([_, h]) = page {
++        if h > 0.0 && h <= bounds.size.height {
++            bounds.size.height = h;
++        }
++    }
++    let scale: f64 = msg_send![ns_window, backingScaleFactor];
++    let layer: Id = msg_send![class(c"CALayer"), layer];
++    let _: () = msg_send![layer, setGeometryFlipped: Bool::YES];
++    let _: () = msg_send![layer, setFrame: bounds];
++    let _: () = msg_send![layer, setContentsGravity: kCAGravityResize];
++    let _: () = msg_send![layer, setContentsScale: scale];
++    let _: () = msg_send![layer, setContents: image as Id];
++    let view: Id = msg_send![class(c"NSView"), alloc];
++    let view: Id = msg_send![view, initWithFrame: bounds];
++    let _: () = msg_send![view, setLayer: layer];
++    let _: () = msg_send![view, setWantsLayer: Bool::YES];
++    let _: () = msg_send![view, setAutoresizingMask: 18usize];
++    // NSWindowAbove = 1, relative to nothing: above every other subview, the web view included.
++    let _: () = msg_send![content, addSubview: view, positioned: 1isize, relativeTo: std::ptr::null_mut::<AnyObject>()];
++    Pic { view, layer }
++}
++
++thread_local! {
++    static PIC: std::cell::RefCell<Option<Pic>> = const { std::cell::RefCell::new(None) };
++}
++
++/// After `build()`, before the push: the first picture goes in (trials 1 and 3).
++pub fn before_commit(window: &tauri::WebviewWindow) {
++    let m = mode();
++    if m != 1 && m != 3 {
++        return;
++    }
++    let Ok(ns) = window.ns_window() else { return };
++    let ns = ns as Id;
++    let picture = if m == 1 {
++        std::env::var("RICHOS_TRIAL_PICTURE").map(PathBuf::from).unwrap_or_else(|_| dir().join("full-000.png"))
++    } else {
++        opening_dir().join("full-000.png")
++    };
++    log(&format!("asked mode {m} picture {}", picture.display()));
++    let started = Instant::now();
++    let Some((image, bytes)) = load_image(&picture) else {
++        log("picture unreadable");
++        return;
++    };
++    let decoded = started.elapsed();
++    unsafe {
++        let pic = attach(ns, image, opening_meta().and_then(|m| m.page));
++        let (rect, scale) = content_on_screen(ns);
++        log(&format!(
++            "attached decode {:.2} ms attach {:.2} ms picture {}x{} {} bytes content {:.0} {:.0} {:.0} {:.0} scale {}",
++            decoded.as_secs_f64() * 1000.0,
++            (started.elapsed() - decoded).as_secs_f64() * 1000.0,
++            CGImageGetWidth(image),
++            CGImageGetHeight(image),
++            bytes,
++            rect.origin.x, rect.origin.y, rect.size.width, rect.size.height, scale
++        ));
++        PIC.with(|p| *p.borrow_mut() = Some(pic));
++    }
++}
++
++pub fn skip_push() -> bool {
++    mode() == 1 && std::env::var("RICHOS_TRIAL_NOPUSH").is_ok()
++}
++
++fn opening_dir() -> PathBuf {
++    std::env::var("RICHOS_TRIAL_OPENING").map(PathBuf::from).unwrap_or_else(|_| dir().join("opening"))
++}
++
++/// After the push: trial 3 hands the later pictures to Core Animation from a second thread, then
++/// the main thread is kept busy for 2 s (trials 1 and 3), then the picture is taken down so the
++/// recording shows where the busy time ended. Trial 2 starts its driver.
++pub fn after_commit(window: &tauri::WebviewWindow) {
++    let m = mode();
++    if m == 2 {
++        let app = window.app_handle().clone();
++        std::thread::spawn(move || {
++            if let Err(e) = trial2(app) {
++                log(&format!("trial 2 failed: {e}"));
++            }
++            let _ = std::fs::write(dir().join("trial2-done"), b"done");
++        });
++        return;
++    }
++    if m != 1 && m != 3 {
++        return;
++    }
++    let first_media = unsafe { CACurrentMediaTime() };
++    log(&format!(
++        "pushed media {first_media:.4} nopush {} process_started_ms {}",
++        skip_push(),
++        crate::launch_timing::process_started_ms().map(|v| v.to_string()).unwrap_or_default()
++    ));
++    if m == 3 {
++        let layer = PIC.with(|p| p.borrow().as_ref().map(|p| Pic { view: p.view, layer: p.layer }));
++        if let Some(pic) = layer {
++            std::thread::spawn(move || trial3_play(pic, first_media));
++        }
++    }
++    let busy = Instant::now();
++    let mut spins: u64 = 0;
++    while busy.elapsed() < Duration::from_millis(2000) {
++        spins = spins.wrapping_add(1);
++        std::hint::black_box(spins);
++    }
++    log("busy end");
++    PIC.with(|p| {
++        if let Some(pic) = p.borrow_mut().take() {
++            unsafe {
++                let _: () = msg_send![class(c"CATransaction"), begin];
++                let _: () = msg_send![pic.layer, removeAllAnimations];
++                let _: () = msg_send![pic.layer, setSublayers: std::ptr::null_mut::<AnyObject>()];
++                let _: () = msg_send![pic.layer, setContents: std::ptr::null_mut::<AnyObject>()];
++                let _: () = msg_send![class(c"CATransaction"), commit];
++                let _: () = msg_send![pic.view, removeFromSuperview];
++                let _: () = msg_send![class(c"CATransaction"), flush];
++            }
++        }
++    });
++    log("removed");
++}
++
++#[derive(serde::Deserialize)]
++struct OpeningMeta {
++    frames: usize,
++    fps: f64,
++    region: [f64; 4],
++    #[serde(default)]
++    page: Option<[f64; 2]>,
++}
++
++fn opening_meta() -> Option<OpeningMeta> {
++    std::fs::read(opening_dir().join("opening.json")).ok().and_then(|b| serde_json::from_slice(&b).ok())
++}
++
++fn trial3_play(pic: Pic, first_media: f64) {
++    let started = Instant::now();
++    let ext = std::env::var("RICHOS_TRIAL_EXT").unwrap_or_else(|_| "png".into());
++    let threads: usize = std::env::var("RICHOS_TRIAL_THREADS").ok().and_then(|v| v.parse().ok()).unwrap_or(4).max(1);
++    let chunk: usize = std::env::var("RICHOS_TRIAL_CHUNK").ok().and_then(|v| v.parse().ok()).unwrap_or(3).max(1);
++    let Some(meta) = opening_meta() else {
++        log("trial 3: no opening.json");
++        return;
++    };
++    let n = meta.frames;
++    // Read and decoded in the order they are needed: thread t takes pictures t, t+threads, ...
++    let (tx, rx) = mpsc::channel::<(usize, usize, usize, f64, f64)>();
++    for t in 0..threads {
++        let tx = tx.clone();
++        let dir = opening_dir();
++        let ext = ext.clone();
++        std::thread::spawn(move || {
++            let mut k = t;
++            while k < n {
++                let s = Instant::now();
++                if let Some((img, bytes)) = load_image(&dir.join(format!("region-{k:03}.{ext}"))) {
++                    let _ = tx.send((k, img as usize, bytes, s.elapsed().as_secs_f64() * 1000.0, started.elapsed().as_secs_f64() * 1000.0));
++                }
++                k += threads;
++            }
++        });
++    }
++    drop(tx);
++    let region: Id = unsafe {
++        let _: () = msg_send![class(c"CATransaction"), begin];
++        let _: () = msg_send![class(c"CATransaction"), setDisableActions: Bool::YES];
++        let region: Id = msg_send![class(c"CALayer"), layer];
++        let [x, y, w, h] = meta.region;
++        // The region is given from the page's top; AppKit resets geometryFlipped on a
++        // layer-hosting view's layer, so the frame is placed in its own bottom-up coordinates.
++        let parent: NSRect = msg_send![pic.layer, bounds];
++        let frame = NSRect { origin: NSPoint { x, y: parent.size.height - y - h }, size: NSSize { width: w, height: h } };
++        let scale: f64 = msg_send![pic.layer, contentsScale];
++        let _: () = msg_send![region, setFrame: frame];
++        let _: () = msg_send![region, setContentsGravity: kCAGravityResize];
++        let _: () = msg_send![region, setContentsScale: scale];
++        let _: () = msg_send![pic.layer, addSublayer: region];
++        let _: () = msg_send![class(c"CATransaction"), commit];
++        region
++    };
++    let begin: f64 = unsafe { msg_send![region, convertTime: first_media, fromLayer: std::ptr::null_mut::<AnyObject>()] };
++    let mut images: Vec<Option<(usize, usize, f64, f64)>> = vec![None; n];
++    let mut next = 0usize; // the first picture not yet handed over
++    let mut handed = Vec::new();
++    let mut total_bytes = 0usize;
++    for (k, img, bytes, ms, at) in rx {
++        images[k] = Some((img, bytes, ms, at));
++        total_bytes += bytes;
++        // Hand over every complete run of `chunk` pictures from `next` (the last run may be short).
++        loop {
++            let end = (next + chunk).min(n);
++            if next >= n || !(next..end).all(|i| images[i].is_some()) {
++                break;
++            }
++            let ptrs: Vec<Id> = (next..end).map(|i| images[i].unwrap().0 as Id).collect();
++            let count = end - next;
++            unsafe {
++                let _: () = msg_send![class(c"CATransaction"), begin];
++                let _: () = msg_send![class(c"CATransaction"), setDisableActions: Bool::YES];
++                let values: Id = msg_send![class(c"NSArray"), arrayWithObjects: ptrs.as_ptr(), count: count];
++                let times: Vec<Id> = (0..=count)
++                    .map(|i| msg_send![class(c"NSNumber"), numberWithDouble: i as f64 / count as f64])
++                    .collect();
++                let times: Id = msg_send![class(c"NSArray"), arrayWithObjects: times.as_ptr(), count: count + 1];
++                let anim: Id = msg_send![class(c"CAKeyframeAnimation"), animationWithKeyPath: nsstring("contents")];
++                let _: () = msg_send![anim, setValues: values];
++                let _: () = msg_send![anim, setKeyTimes: times];
++                let _: () = msg_send![anim, setCalculationMode: kCAAnimationDiscrete];
++                let _: () = msg_send![anim, setDuration: count as f64 / meta.fps];
++                let _: () = msg_send![anim, setBeginTime: begin + next as f64 / meta.fps];
++                let _: () = msg_send![anim, setFillMode: kCAFillModeForwards];
++                let _: () = msg_send![anim, setRemovedOnCompletion: Bool::NO];
++                if end == n {
++                    let _: () = msg_send![region, setContents: ptrs[count - 1]];
++                }
++                let _: () = msg_send![region, addAnimation: anim, forKey: nsstring(&format!("opening-{next}"))];
++                let _: () = msg_send![class(c"CATransaction"), commit];
++                let _: () = msg_send![class(c"CATransaction"), flush];
++                let now = CACurrentMediaTime();
++                // How far ahead of its slot the chunk's first picture was handed over (negative: late).
++                handed.push(format!("{next}-{}:{:.1}", end - 1, (first_media + next as f64 / meta.fps - now) * 1000.0));
++            }
++            next = end;
++        }
++    }
++    let ms: Vec<String> = images.iter().map(|i| i.map(|i| format!("{:.1}", i.2)).unwrap_or_else(|| "-".into())).collect();
++    log(&format!(
++        "trial 3 read {next} of {n} {ext} pictures on {threads} thread(s) in {:.1} ms, {total_bytes} decoded bytes, each ms [{}]",
++        started.elapsed().as_secs_f64() * 1000.0,
++        ms.join(",")
++    ));
++    log(&format!(
++        "trial 3 handed to Core Animation in chunks of {chunk}, ms ahead of the slot [{}], region {:?}",
++        handed.join(" "),
++        meta.region
++    ));
++}
++
++// =================================================================================
++// TRIAL 2
++// =================================================================================
++
++/// Run `script` in `window`'s page and return its value as a string (JSON-encode in the script).
++fn eval(window: &tauri::WebviewWindow, script: &str) -> Result<String, String> {
++    let (tx, rx) = mpsc::channel::<String>();
++    let script = script.to_string();
++    window
++        .with_webview(move |wv| unsafe {
++            let view = wv.inner() as Id;
++            let tx = std::sync::Mutex::new(Some(tx));
++            let block = block2::RcBlock::new(move |result: Id, _error: Id| {
++                let text = if result.is_null() {
++                    String::new()
++                } else {
++                    let is_string: bool = msg_send![result, isKindOfClass: class(c"NSString")];
++                    if is_string { rust_string(result) } else { rust_string(msg_send![result, description]) }
++                };
++                if let Some(tx) = tx.lock().unwrap().take() {
++                    let _ = tx.send(text);
++                }
++            });
++            let _: () = msg_send![view, evaluateJavaScript: nsstring(&script), completionHandler: &*block];
++        })
++        .map_err(|e| e.to_string())?;
++    rx.recv_timeout(Duration::from_secs(10)).map_err(|_| "no answer from the page".to_string())
++}
++
++/// A snapshot of `window`'s web view (the whole view, or `rect` in points), written as PNG and,
++/// when `jpeg` is set, also as JPEG beside it. Returns the pixel size and the ms it took.
++fn snapshot(window: &tauri::WebviewWindow, rect: Option<NSRect>, png: &Path, jpeg: Option<&Path>) -> Result<(usize, usize, f64, f64), String> {
++    let (tx, rx) = mpsc::channel::<Result<(usize, usize, f64), String>>();
++    let png = png.to_path_buf();
++    let jpeg = jpeg.map(Path::to_path_buf);
++    let started = Instant::now();
++    window
++        .with_webview(move |wv| unsafe {
++            let view = wv.inner() as Id;
++            let config: Id = msg_send![class(c"WKSnapshotConfiguration"), new];
++            if let Some(r) = rect {
++                let _: () = msg_send![config, setRect: r];
++            }
++            let _: () = msg_send![config, setAfterScreenUpdates: Bool::YES];
++            let tx = std::sync::Mutex::new(Some(tx));
++            let block = block2::RcBlock::new(move |image: Id, error: Id| {
++                let drawn = started.elapsed().as_secs_f64() * 1000.0;
++                let out = if image.is_null() {
++                    Err(format!("no image: {}", rust_string(if error.is_null() { error } else { msg_send![error, localizedDescription] })))
++                } else {
++                    write_image(image, &png, jpeg.as_deref()).map(|(w, h)| (w, h, drawn))
++                };
++                if let Some(tx) = tx.lock().unwrap().take() {
++                    let _ = tx.send(out);
++                }
++            });
++            let _: () = msg_send![view, takeSnapshotWithConfiguration: config, completionHandler: &*block];
++        })
++        .map_err(|e| e.to_string())?;
++    let (w, h, drawn) = rx.recv_timeout(Duration::from_secs(10)).map_err(|_| "snapshot: no answer in 10 s".to_string())??;
++    // (width, height, ms until WebKit handed over the image, ms including writing the files)
++    Ok((w, h, drawn, started.elapsed().as_secs_f64() * 1000.0))
++}
++
++unsafe fn write_image(image: Id, png: &Path, jpeg: Option<&Path>) -> Result<(usize, usize), String> {
++    let cg: *mut CGImage = msg_send![image, CGImageForProposedRect: std::ptr::null_mut::<RectRef>(), context: std::ptr::null_mut::<AnyObject>(), hints: std::ptr::null_mut::<AnyObject>()];
++    if cg.is_null() {
++        return Err("no CGImage".into());
++    }
++    let rep: Id = msg_send![class(c"NSBitmapImageRep"), alloc];
++    let rep: Id = msg_send![rep, initWithCGImage: cg];
++    let empty: Id = msg_send![class(c"NSDictionary"), dictionary];
++    let data: Id = msg_send![rep, representationUsingType: 4usize, properties: empty];
++    let ok: bool = msg_send![data, writeToFile: nsstring(&png.to_string_lossy()), atomically: Bool::YES];
++    if !ok {
++        return Err(format!("could not write {}", png.display()));
++    }
++    if let Some(jpeg) = jpeg {
++        #[link(name = "AppKit", kind = "framework")]
++        extern "C" {
++            static NSImageCompressionFactor: Id;
++        }
++        let q: Id = msg_send![class(c"NSNumber"), numberWithDouble: 0.92f64];
++        let props: Id = msg_send![class(c"NSDictionary"), dictionaryWithObject: q, forKey: NSImageCompressionFactor];
++        let data: Id = msg_send![rep, representationUsingType: 3usize, properties: props];
++        let _: bool = msg_send![data, writeToFile: nsstring(&jpeg.to_string_lossy()), atomically: Bool::YES];
++    }
++    Ok((CGImageGetWidth(cg.cast()), CGImageGetHeight(cg.cast())))
++}
++
++fn wait_for<T>(what: &str, limit: Duration, mut f: impl FnMut() -> Option<T>) -> Result<T, String> {
++    let end = Instant::now() + limit;
++    while Instant::now() < end {
++        if let Some(v) = f() {
++            return Ok(v);
++        }
++        std::thread::sleep(Duration::from_millis(5));
++    }
++    Err(format!("timed out waiting for {what}"))
++}
++
++const FRAMES: usize = 30;
++const FPS: f64 = 30.0;
++
++fn trial2(app: tauri::AppHandle) -> Result<(), String> {
++
++    let out = dir();
++    std::fs::create_dir_all(out.join("opening")).map_err(|e| e.to_string())?;
++    let main = app.get_webview_window("main").ok_or("no main window")?;
++    let ns = main.ns_window().map_err(|e| e.to_string())? as usize;
++    let mut report = serde_json::Map::new();
++    // 1. The running splash, frozen at three moments, captured from the screen by the guest.
++    let mut records = Vec::new();
++    for k in 0..3 {
++        let pending = wait_for("the running splash to freeze", Duration::from_secs(30), || {
++            let v = eval(&main, "JSON.stringify(window.__TRIAL__ ? window.__TRIAL__.pending : null)").ok()?;
++            (v != "null" && !v.is_empty()).then_some(v)
++        })?;
++        let rec: serde_json::Value = serde_json::from_str(&pending).map_err(|e| e.to_string())?;
++        let (rect, scale) = unsafe {
++            let (tx, rx) = mpsc::channel();
++            app.run_on_main_thread(move || {
++                let _ = tx.send(content_on_screen(ns as Id));
++            })
++            .map_err(|e| e.to_string())?;
++            rx.recv().map_err(|e| e.to_string())?
++        };
++        let window_number: isize = {
++            let (tx, rx) = mpsc::channel();
++            app.run_on_main_thread(move || unsafe {
++                let n: isize = msg_send![ns as Id, windowNumber];
++                let _ = tx.send(n);
++            })
++            .map_err(|e| e.to_string())?;
++            rx.recv().map_err(|e| e.to_string())?
++        };
++        let request = serde_json::json!({
++            "k": k, "window": window_number, "scale": scale,
++            "content": [rect.origin.x, rect.origin.y, rect.size.width, rect.size.height],
++        });
++        std::fs::write(out.join(format!("req-{k}.json")), request.to_string()).map_err(|e| e.to_string())?;
++        log(&format!("trial 2 frozen {k}: {pending}"));
++        let visible = snapshot(&main, None, &out.join(format!("visible-snapshot-{k}.png")), None);
++        wait_for("the guest's capture", Duration::from_secs(20), || out.join(format!("ack-{k}")).exists().then_some(()))?;
++        eval(&main, "window.__TRIAL__.ack(); 'ok'")?;
++        records.push(serde_json::json!({"k": k, "running": rec, "request": request, "visible_snapshot": format!("{visible:?}")}));
++    }
++    report.insert("running".into(), serde_json::Value::Array(records.clone()));
++    // 2. A web view nobody sees: never ordered on screen, the main window's size.
++    let size = main.inner_size().map_err(|e| e.to_string())?;
++    let factor = main.scale_factor().map_err(|e| e.to_string())?;
++    let (w, h) = (size.width as f64 / factor, size.height as f64 / factor);
++    let created = Instant::now();
++    let hidden = {
++        let (tx, rx) = mpsc::channel();
++        let app2 = app.clone();
++        app.run_on_main_thread(move || {
++            let built = tauri::WebviewWindowBuilder::new(&app2, "trial-hidden", tauri::WebviewUrl::App("trial-splash.html".into()))
++                .inner_size(w, h)
++                .visible(false)
++                .focused(false)
++                .initialization_script(crate::launch_init_script(richos_core::launch::LaunchKind::Fresh, Some(2), Some(true)))
++                .initialization_script(page_helper(true))
++                .build()
++                .map_err(|e| e.to_string());
++            let _ = tx.send(built);
++        })
++        .map_err(|e| e.to_string())?;
++        rx.recv().map_err(|e| e.to_string())??
++    };
++    wait_for("the hidden page's splash", Duration::from_secs(30), || {
++        let v = eval(&hidden, "String(!!(window.__TRIAL__ && window.__TRIAL__.shownAt !== null && document.getElementById('splash')))").ok()?;
++        (v == "true").then_some(())
++    })?;
++    let loaded_ms = created.elapsed().as_secs_f64() * 1000.0;
++    log(&format!("trial 2 hidden page ready {loaded_ms:.0} ms after it was asked for, {w}x{h} points"));
++    report.insert("hidden_ready_ms".into(), loaded_ms.into());
++    let page_text = eval(&hidden, "JSON.stringify([window.innerWidth, window.innerHeight])")?;
++    let page: [f64; 2] = serde_json::from_str(&page_text).map_err(|e| format!("page {page_text}: {e}"))?;
++    let page_rect = NSRect { origin: NSPoint { x: 0.0, y: 0.0 }, size: NSSize { width: page[0], height: page[1] } };
++    let hold = |rec: serde_json::Value, id: i64| -> Result<String, String> {
++        let script = format!("window.__TRIAL__.hold({rec}, {id}); 'ok'");
++        eval(&hidden, &script)?;
++        wait_for("the hold", Duration::from_secs(10), || {
++            let v = eval(&hidden, "String(window.__TRIAL__.held)").ok()?;
++            (v == id.to_string()).then_some(())
++        })?;
++        eval(&hidden, "JSON.stringify(window.__TRIAL__.heldInfo)")
++    };
++    let mut held = Vec::new();
++    for (k, r) in records.iter().enumerate() {
++        let started = Instant::now();
++        let info = hold(r["running"].clone(), k as i64)?;
++        let snap = snapshot(&hidden, Some(page_rect), &out.join(format!("hidden-{k}.png")), None);
++        log(&format!("trial 2 hidden {k}: {snap:?} held {info}"));
++        held.push(serde_json::json!({"k": k, "snapshot": format!("{snap:?}"), "held": info, "ms": started.elapsed().as_secs_f64() * 1000.0}));
++    }
++    report.insert("hidden".into(), serde_json::Value::Array(held));
++    let stats = eval(&hidden, "JSON.stringify({native: window.__TRIAL__.rafNative, fallback: window.__TRIAL__.rafFallback, visibility: document.visibilityState})")?;
++    report.insert("hidden_frames".into(), stats.into());
++    // 3. The opening: 30 moments of the first second, whole and as the changing region, stamped
++    //    with their index so a screen recording can tell them apart.
++    let region_text = eval(&hidden, "JSON.stringify(window.__TRIAL__.region())")?;
++    let region: [f64; 4] = serde_json::from_str(&region_text).map_err(|e| format!("region {region_text}: {e}"))?;
++    let opening_started = Instant::now();
++    let mut each = Vec::new();
++    for f in 0..FRAMES {
++        let m = f as f64 * 1000.0 / FPS;
++        let s = Instant::now();
++        hold(serde_json::json!({"delta": m, "anims": null, "stamp": f, "stampAt": [region[0] + 8.0, region[1] + 8.0]}), 100 + f as i64)?;
++        let held_ms = s.elapsed().as_secs_f64() * 1000.0;
++        // The whole page once (the first picture); the changing region at every moment.
++        let full = if f == 0 { Some(snapshot(&hidden, Some(page_rect), &out.join("opening/full-000.png"), None)?) } else { None };
++        let r = NSRect { origin: NSPoint { x: region[0], y: region[1] }, size: NSSize { width: region[2], height: region[3] } };
++        let part = snapshot(&hidden, Some(r), &out.join(format!("opening/region-{f:03}.png")), Some(&out.join(format!("opening/region-{f:03}.jpg"))))?;
++        each.push(serde_json::json!({"f": f, "hold_ms": held_ms, "full": full.map(|v| [v.0 as f64, v.1 as f64, v.2, v.3]),
++            "region_px": [part.0, part.1], "region_drawn_ms": part.2, "region_written_ms": part.3, "ms": s.elapsed().as_secs_f64() * 1000.0}));
++    }
++    let opening_ms = opening_started.elapsed().as_secs_f64() * 1000.0;
++    log(&format!("trial 2 opening: {FRAMES} moments drawn in {opening_ms:.0} ms, region {region:?}"));
++    std::fs::write(
++        out.join("opening/opening.json"),
++        serde_json::json!({"frames": FRAMES, "fps": FPS, "region": region, "page": page}).to_string(),
++    )
++    .map_err(|e| e.to_string())?;
++    report.insert("opening_ms".into(), opening_ms.into());
++    report.insert("opening".into(), serde_json::Value::Array(each));
++    report.insert("region".into(), serde_json::json!(region));
++    report.insert("points".into(), serde_json::json!([w, h, factor]));
++    let _ = hidden.close();
++    std::fs::write(out.join("trial2.json"), serde_json::to_vec_pretty(&serde_json::Value::Object(report)).unwrap())
++        .map_err(|e| e.to_string())?;
++    Ok(())
++}
++
++/// The page's half of trial 2. `hidden` is the web view nobody sees; otherwise the main window.
++pub fn page_helper(hidden: bool) -> String {
++    include_str!("splash_trial.js").replace("__HIDDEN__", if hidden { "true" } else { "false" })
++}
+diff --git a/richos/app/src-tauri/src/splash_trial.js b/richos/app/src-tauri/src/splash_trial.js
+--- /dev/null
++++ b/richos/app/src-tauri/src/splash_trial.js
+@@ -0,0 +1,194 @@
++// THROWAWAY: the page half of trial 2 (splash_trial.rs). Runs before the page's own scripts.
++//
++// The splash moves by three mechanisms (splash.js, "THE SPACE KEY'S CLOCK"): CSS animations,
++// the loading bar painted from `performance.now()` on animation frames, and one Web Animation.
++// So "held at a moment" is: the clock fixed at shownAt + delta, and every animation inside #splash
++// paused at its own time. In the main window the splash runs for real and is frozen at three
++// moments where it stands (the record says the exact values reached); the hidden web view is held
++// at exactly those values, and later at the 30 moments of the opening.
++(function () {
++  if (window.__TRIAL__) return;
++  var HIDDEN = __HIDDEN__;
++  var MOMENTS = [0, 400, 850];
++  var perf = window.performance;
++  var realNow = perf.now.bind(perf);
++  var T = (window.__TRIAL__ = {
++    frozen: null, offset: 0, shownAt: null, armed: false, pending: null, k: 0, done: false,
++    held: -1, heldInfo: null, rafNative: 0, rafFallback: 0
++  });
++  perf.now = function () {
++    var v = T.frozen !== null ? T.frozen : realNow() - T.offset;
++    if (T.armed) {
++      T.armed = false;
++      T.shownAt = v;
++      if (HIDDEN) {
++        // Time stands still in the hidden page until it is held somewhere.
++        T.frozen = v;
++        Promise.resolve().then(function () { anims().forEach(function (a) { a.pause(); a.currentTime = 0; }); });
++      } else {
++        Promise.resolve().then(schedule);
++      }
++    }
++    return v;
++  };
++  var insertBefore = Node.prototype.insertBefore;
++  Node.prototype.insertBefore = function (n, r) {
++    var out = insertBefore.call(this, n, r);
++    if (n && n.id === "splash") T.armed = true;
++    return out;
++  };
++  // The splash's own ceiling (holdMs + 1000 = 4000 ms of real time) would take it down while
++  // it is held for a capture; it is moved out of the way. Nothing else asks for exactly 4000.
++  var setTimeoutReal = window.setTimeout;
++  window.setTimeout = function (f, ms) {
++    var rest = Array.prototype.slice.call(arguments, 2);
++    if (ms === 4000) ms = 600000;
++    return setTimeoutReal.apply(window, [f, ms].concat(rest));
++  };
++  if (HIDDEN) {
++    // If this page gets no animation frames, the bar's tick is driven by a timer instead.
++    var nativeRaf = window.requestAnimationFrame.bind(window);
++    window.requestAnimationFrame = function (cb) {
++      var done = false;
++      var id = nativeRaf(function (ts) {
++        if (done) return;
++        done = true;
++        T.rafNative++;
++        cb(ts);
++      });
++      setTimeoutReal(function () {
++        if (done) return;
++        done = true;
++        T.rafFallback++;
++        cb(perf.now());
++      }, 1);
++      return id;
++    };
++  }
++  function anims() {
++    var s = document.getElementById("splash");
++    if (!s) return [];
++    return document.getAnimations().filter(function (a) {
++      var t = a.effect && a.effect.target;
++      return t && (t === s || s.contains(t));
++    });
++  }
++  function keyOf(a) {
++    var t = a.effect.target;
++    return (t.getAttribute("class") || t.tagName) + "|" + (a.animationName || "web-animation");
++  }
++  function frame(cb) {
++    var done = false;
++    window.requestAnimationFrame(function () { if (!done) { done = true; cb(); } });
++    setTimeoutReal(function () { if (!done) { done = true; cb(); } }, HIDDEN ? 1 : 120);
++  }
++  function twoFrames(cb) {
++    frame(function () { frame(cb); });
++  }
++  // ---- the main window: the running splash, frozen where it stands --------------------------
++  function delta() {
++    return realNow() - T.offset - T.shownAt;
++  }
++  function schedule() {
++    if (T.k >= MOMENTS.length) {
++      T.done = true;
++      return;
++    }
++    var m = MOMENTS[T.k];
++    (function wait() {
++      if (delta() >= m) freeze();
++      else setTimeoutReal(wait, 1);
++    })();
++  }
++  function freeze() {
++    T.frozen = realNow() - T.offset;
++    var as = anims();
++    as.forEach(function (a) { a.pause(); });
++    Promise.all(as.map(function (a) { return a.ready; })).then(function () {
++      twoFrames(function () {
++        T.pending = {
++          k: T.k,
++          delta: T.frozen - T.shownAt,
++          anims: as.map(function (a) { return { key: keyOf(a), t: a.currentTime }; }),
++          dpr: window.devicePixelRatio, w: window.innerWidth, h: window.innerHeight,
++          visibility: document.visibilityState
++        };
++      });
++    });
++  }
++  T.ack = function () {
++    T.pending = null;
++    T.offset = realNow() - T.frozen;
++    T.frozen = null;
++    anims().forEach(function (a) { a.play(); });
++    T.k++;
++    schedule();
++  };
++  // ---- the hidden web view: held at a given moment ------------------------------------------
++  T.hold = function (rec, id) {
++    T.held = -1;
++    T.frozen = T.shownAt + rec.delta;
++    var as = anims();
++    var keys = [];
++    as.forEach(function (a, i) {
++      a.pause();
++      var r = rec.anims ? rec.anims[i] : null;
++      a.currentTime = r ? r.t : rec.delta;
++      keys.push(keyOf(a) + (r && r.key !== keyOf(a) ? " MISMATCH " + r.key : ""));
++    });
++    stamp(rec.stamp, rec.stampAt);
++    Promise.all(as.map(function (a) { return a.ready; })).then(function () {
++      twoFrames(function () {
++        T.heldInfo = { count: as.length, expected: rec.anims ? rec.anims.length : null, keys: keys, visibility: document.visibilityState };
++        T.held = id;
++      });
++    });
++  };
++  function stamp(n, at) {
++    var el = document.getElementById("trial-stamp");
++    if (n === undefined || n === null) {
++      if (el) el.remove();
++      return;
++    }
++    if (!el) {
++      el = document.createElement("div");
++      el.id = "trial-stamp";
++      el.style.cssText = "position:fixed;z-index:2147483647;display:flex;pointer-events:none";
++      for (var i = 0; i < 6; i++) {
++        var b = document.createElement("div");
++        b.style.cssText = "width:24px;height:24px";
++        el.appendChild(b);
++      }
++      document.body.appendChild(el);
++    }
++    el.style.left = at[0] + "px";
++    el.style.top = at[1] + "px";
++    // The first cell is always white (it says "a picture is here"), then five bits, high first.
++    el.children[0].style.background = "#fff";
++    for (var j = 0; j < 5; j++) el.children[j + 1].style.background = (n >> (4 - j)) & 1 ? "#fff" : "#000";
++  }
++  // The part of the window the opening changes: every animated element's box at time zero and at
++  // the end of the first second (the rise moves 16px), plus the plinth's shadow, in points.
++  T.region = function () {
++    var box = null;
++    function add(b) {
++      if (!b || !b.width) return;
++      if (!box) box = { l: b.left, t: b.top, r: b.right, b: b.bottom };
++      else {
++        box.l = Math.min(box.l, b.left); box.t = Math.min(box.t, b.top);
++        box.r = Math.max(box.r, b.right); box.b = Math.max(box.b, b.bottom);
++      }
++    }
++    var as = anims();
++    [0, 1000].forEach(function (t) {
++      as.forEach(function (a) { a.pause(); a.currentTime = t; });
++      as.forEach(function (a) { add(a.effect.target.getBoundingClientRect()); });
++    });
++    var bar = document.querySelector("#splash .splash-bar");
++    if (bar) add(bar.getBoundingClientRect());
++    var margin = 96;
++    var l = Math.max(0, Math.floor(box.l - margin)), t = Math.max(0, Math.floor(box.t - margin));
++    var r = Math.min(window.innerWidth, Math.ceil(box.r + margin)), b = Math.min(window.innerHeight, Math.ceil(box.b + margin));
++    return [l, t, r - l, b - t];
++  };
++})();
+diff --git a/richos/app/ui/trial-splash.html b/richos/app/ui/trial-splash.html
+--- /dev/null
++++ b/richos/app/ui/trial-splash.html
+@@ -0,0 +1,78 @@
++<!DOCTYPE html>
++<html lang="en">
++  <head>
++    <meta charset="UTF-8" />
++    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
++    <title>RichOS</title>
++    <!-- THE THEME, BEFORE THE STYLESHEETS. Synchronous and first so the CEO's choice is in
++         the FIRST paint: an async read of config.rs cannot decide frame one, and booting on
++         the default then correcting is a full-screen flash of the wrong palette on every
++         launch. See theme-boot.js — the durable answer still lives in config.rs; this
++         applies a mirror of it and main.js reconciles the two at init. -->
++    <script src="no-native-menu.js"></script>
++    <script src="theme-boot.js"></script>
++    <!-- THE FACES, BEFORE ANYTHING THAT SETS TYPE IN THEM. First so the webview has the
++         @font-face declarations in hand the moment it meets text that needs them — the
++         splash is render-blocking and part of the window's first paint, and a font
++         request that starts after it would show the tagline slot empty for a frame.
++
++         These are not fetched from anywhere: tauri-codegen brotli-compresses everything
++         under the staged frontend into the executable, so this resolves to a read out of
++         memory the process is already holding. See fonts/fonts.css — the only file in
++         this product that names a typeface (ceo-decisions.md §22). -->
++    <link rel="stylesheet" href="fonts/fonts.css" />
++    <link rel="stylesheet" href="style.css" />
++    <link rel="stylesheet" href="cleaner.css" />
++    <link rel="stylesheet" href="search-folder-settings.css" />
++    <!-- The speckled ground's CSS half, from the design system, unedited. The app's own rules for
++         it (which planes are ground, and the splash/home exclusion) are in style.css. -->
++    <link rel="stylesheet" href="speckle.css" />
++    <!-- The opening screen. Render-blocking on purpose: the composition has to be part
++         of the window's first paint, not something that arrives after it. -->
++    <link rel="stylesheet" href="splash.css" />
++    <!-- The home screen — the surface after the curtain. Render-blocking for the same reason
++         splash.css is: its composition is part of the window's first paint. Everything in it
++         is scoped under `#home`, so it declares nothing that reaches the app UI, and it names
++         no typeface: the faces come from fonts/fonts.css above, which is the only file in this
++         product that names one. -->
++    <link rel="stylesheet" href="home.css" />
++    <!-- Improved Rich and Stu instructions: the question and the before and after (round 37). -->
++    <link rel="stylesheet" href="instructions-update.css" />
++    <!-- Terminal setup and your name in Git: the two Settings rows, their sheets and the card (round 41). -->
++    <link rel="stylesheet" href="terminal-and-git.css" />
++    <!-- The five tools that come with Rich (round 70): the setup sheet's strip, the tools card and
++         the line above the message box. -->
++    <link rel="stylesheet" href="suite-tools.css" />
++    <!-- THE MARK'S GOLD, PER THEME.
++
++         The wordmark below is two-tone by the approved treatment (round-8.1/v0 for dark,
++         round-9/v1 for light): ink letterforms, and the swoosh inside the R struck in the
++         signal. It was neither - the swoosh was painted `var(--rail-bg)` so that it read as
++         a hole, which made the app's mark MONOCHROME while the ruled standard, the start
++         screen and the shipped asset files all carry gold in it.
++
++         Two values rather than one, and the second is not a preference:
++
++           dark   #C2A35C   the ruled signal (ceo-decisions.md 14), 7.88:1 on the dark rail
++           light  #9C7C34   the CEO's ruled light signal, 3.15:1 on his ruled ground
++
++         The ruled LIGHT signal is #9C7C34, and on this rail (#E4DFD3, a shade under the
++         ruled light ground) it computes 2.95:1 - under the 3:1 floor a non-text indicator
++         has to clear. So the mark's swoosh is struck one step darker HERE only; the shipped
++         light asset file keeps the ruled #9C7C34, which is 3.15:1 on the ruled ground it is
++         for. This is the same split style.css already ships as `--gold` / `--gold-text`:
++         one value paints, a darker one has to survive a lighter ground.
++
++         Declared as its own variable rather than reusing `--gold` so that retoning the
++         accent never silently retones the logo. -->
++    <style>
++      #rail-wordmark { --mark-signal: #c2a35c; }
++      :root[data-theme="light"] #rail-wordmark { --mark-signal: #9c7c34; }
++    </style>
++  </head>
++  <body>
++    <!-- THROWAWAY (splash trial 2): the app's own head, and only the splash. -->
++    <script src="splash-library.js"></script>
++    <script src="splash.js"></script>
++  </body>
++</html>
