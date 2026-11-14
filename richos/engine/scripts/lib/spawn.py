@@ -159,6 +159,8 @@ class Refusal(Exception):
 # The app numbers its own teammates with this same function (mega-lander/app.py
 # prepare, through --next-name), because its receipt is keyed by the name before
 # this command runs; so an `--audience app` dispatch keeps the name it is given.
+# The app keeps one registry per conversation, so it names the registries of the
+# company's other conversations with --registry and they count too.
 
 def first_name(name):
     """(the first name without its number, its number): echo-opus-x1 is ('echo', 1),
@@ -189,10 +191,11 @@ def numbered_name(name, taken):
     return (base if k == 1 else "%s%d" % (base, k)) + ("-" + rest if rest else "")
 
 
-def active_names():
-    """The names of every teammate the workspace registry calls running."""
+def active_names(registries=()):
+    """The names of every teammate the workspace registry calls running: this one, and each
+    of REGISTRIES (the app's other conversations of the same company, `--registry`)."""
     cache, out = {}, []
-    for rec in W.all_agents():
+    for rec in [r for root in [None, *registries] for r in W.all_agents(root=root)]:
         try:
             finished = W.finished_state(rec, cache)[0]
         except Exception:      # undecided: it keeps its number
@@ -778,6 +781,7 @@ USAGE = """usage: spawn.sh <teammate-name> --repo <repo> [--repo <repo> ...]
                 [--integration-why <text>] [--payload-out <file>] [--json] [--dry-run]
                 [--audience operator|app]
        spawn.sh <teammate-name> --next-name [--type <subagent-type>] [--taken <name> ...]
+                [--registry <dir> ...]
 
   <teammate-name>      <role>-<model>-<identifier>, e.g. zach-opus-spawn1, or only
                        <model>-<identifier>, and the role is --type. THE FIRST NAME
@@ -786,7 +790,8 @@ USAGE = """usage: spawn.sh <teammate-name> --repo <repo> [--repo <repo> ...]
                        the lowest number no active zach holds, none for the first
                        (CEO, 2026-10-21). A number given by hand is replaced.
   --next-name          print the name this teammate would get and do nothing else;
-                       each --taken <name> counts as one more active teammate
+                       each --taken <name> counts as one more active teammate, and
+                       the running teammates of each --registry <dir> count too
   --repo <repo>        absolute path, OR a bare name where it is unambiguous.
                        GIVE IT ONCE PER REPOSITORY this teammate works in: one
                        cc/ workspace is created and registered in each, under
@@ -827,7 +832,7 @@ def parse_args(argv):
     args = {"name": "", "repos": [], "type": "", "brief": "", "model": "", "effort": "", "description": "",
             "bases": [], "dirs": [], "integrations": [], "integration_why": "", "payload_out": "",
             "json": False, "dry_run": False, "project_dir": "", "audience": OPERATOR,
-            "next_name": False, "taken": []}
+            "next_name": False, "taken": [], "registries": []}
     flags = {"--type": "type", "--brief": "brief", "--model": "model", "--effort": "effort",
              "--description": "description",
              "--integration-why": "integration_why",
@@ -840,7 +845,7 @@ def parse_args(argv):
     # and a separator a path may legally contain cannot be the one that splits
     # it.
     repeatable = {"--repo": "repos", "--dir": "dirs", "--integration": "integrations",
-                  "--base": "bases", "--taken": "taken"}
+                  "--base": "bases", "--taken": "taken", "--registry": "registries"}
     i = 0
     while i < len(argv):
         a = argv[i]
@@ -893,7 +898,7 @@ def _main(argv):
         if not args["name"]:
             sys.stderr.write("spawn: missing name\n\n%s" % USAGE)
             return 2
-        print(numbered_name(args["name"], active_names() + args["taken"]))
+        print(numbered_name(args["name"], active_names(args["registries"]) + args["taken"]))
         return 0
     missing = [k for k in ("name", "repos", "type", "brief") if not args[k]]
     if missing:

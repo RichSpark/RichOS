@@ -401,6 +401,31 @@ class DesktopWork(unittest.TestCase):
         self.active_teammate("mark2-sonnet-bbbbbbbbbbbb")
         self.assertRegex(self.call("prepare",self.args)["name"],r"^mark-sonnet-[0-9a-f]{12}$")
 
+    def other_conversation(self,entity,thread,running=(),pending=()):
+        """Another conversation's receipt folder and registry, laid out as the app lays them out
+        (both named by sha256 of [company, conversation]): RUNNING teammates in its registry and
+        PENDING receipts (prepared, not yet started) among its receipts."""
+        partition=hashlib.sha256(json.dumps([entity,thread],separators=(",",":")).encode()).hexdigest()
+        receipts=self.root/"engine-state/work-receipts"/partition;receipts.mkdir(parents=True,exist_ok=True)
+        agents=self.root/"engine-state/workspaces"/partition/"agents";agents.mkdir(parents=True,exist_ok=True)
+        for name in running:
+            key="numbering-fixture--"+name
+            (agents/(key+".json")).write_text(json.dumps({"key":key,"name":name,"session_id":"","agent_id":"","workspaces":[],
+                "end":None,"handed_in":None,"pause":None,"disposition":None,"orphan":False}))
+        # Every conversation has receipts once it has teammates; the first ties the folder to its company.
+        for n,(name,status) in enumerate([*((p,"prepared") for p in pending),("mark-sonnet-000000000000","run-ended")]):
+            (receipts/("%064x.json"%n)).write_text(json.dumps({"schema":1,"id":"%064x"%n,"name":name,"status":status,
+                "binding":{"entity_id":entity,"thread_id":thread}}))
+
+    def test_stus_teammate_counts_the_companys_other_conversations_only(self):
+        """Review rv-20261114T100953Z-491c7af2-d68d: the app keeps a registry per conversation, and
+        the CEO's lowest free number is among all the company's active teammates. Another
+        conversation of this company running mark and preparing mark2 makes this one mark3; another
+        company's mark4 and mark5 count for nothing."""
+        self.other_conversation("depot","thread-b",running=["mark-sonnet-aaaaaaaaaaaa"],pending=["mark2-sonnet-bbbbbbbbbbbb"])
+        self.other_conversation("elsewhere","thread-c",running=["mark3-sonnet-cccccccccccc"],pending=["mark4-sonnet-dddddddddddd"])
+        self.assertRegex(self.call("prepare",self.args)["name"],r"^mark3-sonnet-[0-9a-f]{12}$")
+
     def test_two_of_stus_teammates_of_one_kind_prepared_together_are_mark_and_mark2(self):
         first=self.call("prepare",self.args)
         second=self.call("prepare",{**self.args,"request_id":"prepare-two","title":"Create a second fictional result"})

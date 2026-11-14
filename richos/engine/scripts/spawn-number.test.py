@@ -69,6 +69,17 @@ class Numbering(unittest.TestCase):
         self.assertEqual(self.next_name("mark-opus-bbbbbbbbbbbb", "--taken", "mark2-opus-cccccccccccc"),
                          "mark3-opus-bbbbbbbbbbbb")
 
+    def test_a_named_registry_counts_its_running_teammates_too(self):
+        """The app keeps one registry per conversation and names the company's others."""
+        other = Path(self.tmp.name) / "other-conversation"
+        (other / "agents").mkdir(parents=True)
+        key = "fixture-session--mark-opus-aaaaaaaaaaaa"
+        (other / "agents" / (key + ".json")).write_text(json.dumps(
+            {"key": key, "name": "mark-opus-aaaaaaaaaaaa", "session_id": "", "agent_id": "", "workspaces": [],
+             "end": None, "handed_in": None, "pause": None, "disposition": None, "orphan": False}))
+        self.assertEqual(self.next_name("mark-opus-bbbbbbbbbbbb"), "mark-opus-bbbbbbbbbbbb")
+        self.assertEqual(self.next_name("mark-opus-bbbbbbbbbbbb", "--registry", str(other)), "mark2-opus-bbbbbbbbbbbb")
+
     def test_the_naming_guard_accepts_a_numbered_first_name_lowest_or_not(self):
         """guard-worktree-isolation.sh clause 2c applies this shared shape rule; it checks the
         shape only, so echo2 and a number that is not the lowest free one (echo5) both pass."""
