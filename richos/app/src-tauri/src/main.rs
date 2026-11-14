@@ -10258,10 +10258,12 @@ fn home_field_data(state: State<AppState>) -> serde_json::Value {
     let registry = state.reader.snapshot().entity_registry().clone();
     let folders = richos_core::home_repos::company_folders(&registry);
     let kept_repos = state.data_dir.join("home-field-repos.json");
-    // Read with the Git RichOS delivers, as `connect_repository` runs it: a Mac need not have one of
-    // its own, and Apple's stand-in opens an installation dialog. No verified runtime: the loro path.
-    let delivered_git = { let engine = state.engine_dir.lock().unwrap().clone(); richos_core::runtime::verify_engine(&engine).ok().map(|runtime| richos_core::home_repos::GitRuntime::from(&runtime)) };
-    if let Some((field, from)) = delivered_git.and_then(|git| richos_core::home_repos::field_kept_or_built(&kept_repos, &folders, richos_core::home_repos::today(), &git)) {
+    // Read with the Git RichOS delivers (a Mac need not have one of its own, and Apple's stand-in opens
+    // an installation dialog), or the Mac's own real one; never gated on the engine passing
+    // `verify_engine` (`home_repos::home_git` says why: two Finder `.DS_Store` files cost the CEO his
+    // picture on 2026-11-14).
+    let home_git = { let engine = state.engine_dir.lock().unwrap().clone(); richos_core::home_repos::home_git(&engine) };
+    if let Some((field, from)) = home_git.and_then(|git| richos_core::home_repos::field_kept_or_built(&kept_repos, &folders, richos_core::home_repos::today(), &git)) {
         eprintln!(
             "[richos] home field: {} object(s) in {} companies from their repositories ({:?}), {} link(s), {} source(s); unread folders: {}",
             field["meta"]["counts"]["objects"],

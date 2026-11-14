@@ -6,7 +6,7 @@ opening Talk to Rich.
 Run by run-walk.py, which holds one guest slot for this run only, boots the guest and removes the clone:
 
   run-walk.py --bundle ZIP --home EMPTY_DIR --engine ENGINE --report REPORT --wait 600 -- \\
-      home-standard-walk.py --out DIR [--expect-sha SHA] [--alder 1800] [--brightwater 900] [--steps a,b,c]
+      home-standard-walk.py --out DIR [--expect-sha SHA] [--alder 1800] [--brightwater 900] [--shape two|ceo] [--steps a,b,c]
 
 run-walk.py passes the owned VM name as the first argument.
 
@@ -17,13 +17,21 @@ on the navigation rail, and Enter or Space opening Talk to Rich.
 WHAT IT DOES, in the guest, never on the host's screen (CEO ruling 65):
   identity    the running app says it was built from --expect-sha (a nightly's build or source commit);
               skipped when --expect-sha is not given
+  fresh       a fresh user's home screen, before anything is written: round 73's first run, the
+              finished example with its sentence ("could look like"), never "Example, not yours"
+              (not in the default steps; name it first in --steps)
   history     a fictional Claude Code input history (history.jsonl in the app's CLAUDE_CONFIG_DIR):
               one swear word per entry, 14 months of it, a different count each month and none
               within a week of the 30-day edge, so the signal, the card's totals and its months
               have known answers
   companies   two fictional companies' repositories are written in the guest (home-standard-repos.sh),
               registered as two companies in the app's own registry with a team of three
-              (seed-team.sh), and the app is relaunched, as a returning user's app starts
+              (seed-team.sh), and the app is relaunched, as a returning user's app starts.
+              --shape ceo instead writes the CEO's install's shape (2026-11-14): six companies, one
+              with two connected repositories (one holding a decision register of 160 rulings), four
+              whose saved folder is a repository with nothing connected, one whose folder is gone;
+              and the two .DS_Store files Finder writes into an opened folder are put in the engine's
+              runtime (they made the engine fail verify_engine, which kept the repositories unread)
   picture     the home screen once the repositories are read: the kept picture
               (home-field-repos.json) holds both companies and at least 2,500 objects, the left
               column says how many memories that is, and no example is on the screen
@@ -58,6 +66,17 @@ sys.path.insert(0, str(HERE))
 from relaunch import guest, relaunch  # noqa: E402
 
 STEPS = ['identity', 'history', 'companies', 'picture', 'swear-on', 'space', 'card', 'enter', 'swear-off']
+EXTRA = ['fresh']  # named in --steps only
+# --shape ceo: (company id, display name, [(repository, documents, rulings)], connected). Fictional
+# names; the sizes keep the whole picture above 2,500 objects, where it is drawn alone.
+CEO_SHAPE = [
+    ('fennel', 'Fennel Works', [('fennel', 700, 10)], False),
+    ('dunmore', 'Dunmore Labs', [('dunmore', 600, 0)], False),
+    ('pike', 'Pike Pipeline', [('pike', 500, 0)], False),
+    ('rook', 'Rook Systems', [('rook-app', 400, 0), ('rook-hq', 600, 160)], True),
+    ('gully', 'Gully Export', [('gully', 40, 0)], False),
+    ('wren', 'Wren Webinars', [], False),  # its saved folder is gone
+]
 MONTHS = 14       # months of history written by `history`, the newest being this month
 THIS_MONTH = 5    # entries (one swear word each) in this month; month k back holds THIS_MONTH + 2k
 
@@ -112,8 +131,9 @@ def run(args, timeout=120):
 
 
 class Walk:
-    def __init__(self, vm, out, alder, brightwater, expect_sha=None):
-        self.vm, self.out, self.alder, self.brightwater, self.expect_sha = vm, out, alder, brightwater, expect_sha
+    def __init__(self, vm, out, alder, brightwater, expect_sha=None, shape='two'):
+        self.vm, self.out, self.alder, self.brightwater, self.expect_sha, self.shape = vm, out, alder, brightwater, expect_sha, shape
+        self.finder_files = []
         self.expected = None
         self.payload = (Path.home() / '.richos-testvm' / 'run' / vm / 'payload').read_text().strip()
         self.home = self.payload + '/home'
@@ -262,10 +282,32 @@ class Walk:
             raise StepFailed('the history in the guest has %s lines, not %d' % (lines, len(rows)))
         return {'file': root + '/history.jsonl', 'entries': len(rows), 'expected': self.expected}
 
+    def fresh(self):
+        """A fresh user's home screen: nothing written yet, no company and no team."""
+        # the very first launch opens on the memory question ("Where should I keep what you tell me?"),
+        # which a press of Not now does not put away in the guest; the next launch of the same fresh
+        # install, nothing written, opens on the home screen as a new user's does
+        relaunch(self.vm)
+        time.sleep(8)
+
+        def home_with_sentence():
+            # a new user's first-run sheets can come up after the home screen did: put them away and
+            # come back to the home screen until it is up with the example's sentence
+            self.to_home()
+            return self.text('could look like')
+        sentence = self.until(home_with_sentence, 90, 'the first-run example and its sentence are not on the home screen')
+        time.sleep(12)  # the picture draws itself in
+        frame = self.shot('home-fresh')
+        if self.text('Example, not yours'):
+            raise StepFailed('a fresh user is shown "Example, not yours"')
+        return {'sentence': self.rect(sentence), 'frame': frame, 'frame_reads_sentence': self.reads(frame, 'could look like')}
+
     def companies(self):
         repos = self.home + '/Companies'
         run([HERE / 'guest.sh', self.vm, '--push', HERE / 'home-standard-repos.sh', self.payload + '/'], 120)
         run([HERE / 'guest.sh', self.vm, '--push', HERE / 'seed-team.sh', self.payload + '/'], 120)
+        if self.shape == 'ceo':
+            return self.ceo_companies(repos)
         made = guest(self.vm, 'sh ' + shlex.quote(self.payload + '/home-standard-repos.sh') + ' ' + shlex.quote(repos) + ' %d %d' % (self.alder, self.brightwater), 600)
         registry = {'version': 1, 'entities': [
             {'id': 'alder', 'display_name': 'Alder Works', 'roots': [repos + '/alder']},
@@ -278,6 +320,30 @@ class Walk:
         time.sleep(8)
         self.to_home()
         return {'repositories': made.splitlines(), 'teammates': team.strip()}
+
+    def ceo_companies(self, repos):
+        made, entities = [], []
+        for cid, label, rows, connected in CEO_SHAPE:
+            folders = []
+            for name, docs, rulings in rows:
+                made += guest(self.vm, 'sh ' + shlex.quote(self.payload + '/home-standard-repos.sh') + ' ' + shlex.quote(repos)
+                              + ' --repo %s %d %d' % (name, docs, rulings), 600).splitlines()
+                folders.append(repos + '/' + name)
+            row = {'id': cid, 'display_name': label, 'roots': folders or [repos + '/' + cid + '-moved-away']}
+            if connected:
+                row['connected_repositories'] = folders
+            entities.append(row)
+        data = self.home + '/' + DATA
+        registry = {'version': 2, 'entities': entities}
+        guest(self.vm, 'mkdir -p ' + shlex.quote(data) + ' && printf %s ' + shlex.quote(json.dumps(registry)) + ' > ' + shlex.quote(data + '/entities.json'))
+        team = guest(self.vm, 'sh ' + shlex.quote(self.payload + '/seed-team.sh') + ' ' + shlex.quote(data) + ' 3')
+        runtime = self.payload + '/engine/runtime'
+        self.finder_files = [runtime + '/.DS_Store', runtime + '/node/.DS_Store']
+        guest(self.vm, ' && '.join('printf Bud1 > ' + shlex.quote(f) for f in self.finder_files))
+        relaunch(self.vm)
+        time.sleep(8)
+        self.to_home()
+        return {'repositories': made, 'companies': [e['id'] for e in entities], 'teammates': team.strip(), 'finder_files': self.finder_files}
 
     def kept(self):
         row = guest(self.vm, 'f="$(find ' + shlex.quote(self.home) + ' -name home-field-repos.json 2>/dev/null | head -1)"; [ -n "$f" ] && echo "$f" || true', 60)
@@ -294,19 +360,25 @@ class Walk:
         (self.out / 'home-field-repos.json').unlink()  # the counts are kept in the report; the file is 2 MB
         counts = field['meta']['counts']
         domains = [(d['label'], d['nodeCount']) for d in field['domains']]
-        if len(domains) != 2 or counts['objects'] < 2500:
-            raise StepFailed('the kept picture is not two companies of 2,500 objects or more: ' + json.dumps(domains))
+        want = 5 if self.shape == 'ceo' else 2  # --shape ceo: the company whose folder is gone has no territory
+        if len(domains) != want or counts['objects'] < 2500:
+            raise StepFailed('the kept picture is not %d companies of 2,500 objects or more: ' % want + json.dumps(domains))
         memories = '{:,} memories'.format(counts['objects'])
         # his objects arrive after the picture is first up; the column says so once they are drawn
         self.until(lambda: self.text(memories), 120,
                    'the left column never said "' + memories + '"')
         time.sleep(12)  # the picture draws itself in
-        frame = self.shot('home-two-companies')
+        frame = self.shot('home-ceo-shape' if self.shape == 'ceo' else 'home-two-companies')
+        # the engine still held Finder's files when the repositories were read (nothing replaced it)
+        still = [f for f in self.finder_files if guest(self.vm, 'test -f ' + shlex.quote(f) + ' && echo y || true').strip() == 'y']
+        if still != self.finder_files:
+            raise StepFailed('the engine lost the .DS_Store files before the picture was checked: ' + json.dumps(still))
         example = bool(self.text('Example, not yours'))
         if example:
             raise StepFailed('the example is still on the screen with ' + memories)
         return {'kept_after_s': read_s, 'companies': domains, 'objects': counts['objects'], 'links': counts['links'], 'sources': counts['sources'],
                 'cross_company_links': counts['crossCompanyLinks'], 'unread_folders': field['meta']['unreadFolders'], 'column': memories, 'frame': frame,
+                'per_company': counts['perCompany'], 'finder_files_in_engine': still,
                 'frame_reads_memories': self.reads(frame, 'memories')}
 
     def swear_on(self):
@@ -481,13 +553,14 @@ def main():
     p.add_argument('--brightwater', type=int, default=900, help='documents in the second company')
     p.add_argument('--steps', default=','.join(STEPS))
     p.add_argument('--expect-sha', help='identity: the build or source commit the running app must report')
+    p.add_argument('--shape', choices=['two', 'ceo'], default='two', help="companies: two fictional companies, or the CEO's install's shape")
     a = p.parse_args()
     steps = [s for s in a.steps.split(',') if s]
-    unknown = [s for s in steps if s not in STEPS]
+    unknown = [s for s in steps if s not in STEPS + EXTRA]
     if unknown:
         p.error('unknown step(s): ' + ', '.join(unknown))
     a.out.mkdir(parents=True, exist_ok=True)
-    walk = Walk(a.vm, a.out, a.alder, a.brightwater, a.expect_sha)
+    walk = Walk(a.vm, a.out, a.alder, a.brightwater, a.expect_sha, a.shape)
     report = {'vm': a.vm, 'steps': {}}
     failed = False
     for step in steps:
@@ -507,7 +580,7 @@ def main():
         print(step, 'PASS' if report['steps'][step]['pass'] else 'FAIL: ' + report['steps'][step]['why'][:400], flush=True)
         # identity, the history and the companies are every later step's premise; a screen step
         # failing leaves the others worth reading
-        if failed and step in ('identity', 'history', 'companies', 'picture'):
+        if not report['steps'][step]['pass'] and step in ('identity', 'history', 'companies', 'picture'):
             break
     (a.out / 'report.json').write_text(json.dumps(report, indent=2) + '\n')
     return 1 if failed else 0
