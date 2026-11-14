@@ -70,6 +70,7 @@ STARTED = '[richos] engine update: the installed engine is an earlier build'
 DONE = "[richos] engine update: this build's engine is installed and in use"
 FAILED = '[richos] engine update FAILED'
 REPLY_WORDS = 'Reply with one word: received.'
+SWAPPED = '[richos] setup: engine '
 
 
 def stamp_digest(text):
@@ -132,7 +133,7 @@ class EngineUpdateWalk(new_user.NewUserWalk):
         # A branch bundle reports the commit it was built from (branch-bundle.sh RICHOS_SOURCE_SHA).
         if not built or not (built.startswith(self.a.expect_sha) or self.a.expect_sha.startswith(built)):
             raise StepFailed('the next app was built from %r, not %s' % (built, self.a.expect_sha))
-        seen, done_at, n, entered, reply, voice_at_done = [], None, 0, None, None, None
+        seen, done_at, n, entered, reply = [], None, 0, None, None
         began = time.monotonic()
         end = began + self.a.within
         while time.monotonic() < end:
@@ -142,7 +143,6 @@ class EngineUpdateWalk(new_user.NewUserWalk):
                                  + next(l for l in text.splitlines() if l.startswith(FAILED)))
             if done_at is None and DONE in text:
                 done_at = time.monotonic()
-                voice_at_done = len(voice_lines(text))
             # A RELAUNCH OPENS ON THE HOME SCREEN, and the start's questions, the setup sheet
             # among them, wait for him to go in (ui/main.js askStartupQuestionsOffHome). So the
             # walk goes in as he does, by "Talk to Rich", the moment the home screen is up:
@@ -193,9 +193,14 @@ class EngineUpdateWalk(new_user.NewUserWalk):
             raise StepFailed('after the update the stamp carries %r, not %s' % (digest, self.a.next_sha256))
         # VOICE IS ASKED AGAIN once the new engine is in use, with no relaunch: the window's ask
         # prints a `[richos] voice:` line every time (main.rs voice_readiness).
-        asked = len(voice_lines(text)) - voice_at_done
+        # Counted from the swap, where the app tells the window (setup_view::swap_in_engine prints
+        # the `setup: engine` line, then the window is told): the done line comes after the rest
+        # of the wiring, so counting from it missed the ask (walk4, 2026-11-14).
+        lines = text.splitlines()
+        swapped = next((i for i, l in enumerate(lines) if l.startswith(SWAPPED)), None)
+        asked = len(voice_lines('\n'.join(lines[swapped + 1:]))) if swapped is not None else 0
         if asked < 1:
-            raise StepFailed('the window did not ask voice again after the install (no new voice line in 15 s)')
+            raise StepFailed("the window did not ask voice again after this build's engine came into use")
         final = self.frame('after-update')
         line = next(l for l in text.splitlines() if l.startswith(DONE))
         return {'built_from': built, 'installed_sha256': digest, 'done': line,

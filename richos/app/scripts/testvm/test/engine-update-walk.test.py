@@ -34,6 +34,7 @@ class TheAppsOwnWords(unittest.TestCase):
         source = (APP / 'src-tauri' / 'src' / 'main.rs').read_text()
         for line in (walk.STARTED, walk.DONE, walk.FAILED):
             self.assertIn(line, source, line)
+        self.assertIn(walk.SWAPPED, (APP / 'src-tauri' / 'src' / 'setup_view.rs').read_text())
 
     def test_the_sheet_title_is_the_sheets(self):
         self.assertIn(walk.SHEET_TITLE, (APP / 'ui' / 'index.html').read_text())
