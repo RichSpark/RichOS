@@ -2300,6 +2300,12 @@ fn main() {
     // Use the same merged build version for the probe, startup and final app.
     let context = tauri::generate_context!();
     let compiled_version = context.package_info().version.to_string();
+    // The helper a quitting app leaves behind to put a prepared update in place (Sage's plan
+    // 2026-11-14, rule 4): it needs this executable's own version, so it starts here, before any
+    // alert, lease or window, and exits without starting anything.
+    if let Some(code) = update_relaunch::at_quit_main(&compiled_version) {
+        std::process::exit(code);
+    }
     // =====================================================================================
     // THE FIRST LINE THAT CAN SPEAK — BECAUSE EVERYTHING BELOW IT COULD DIE IN SILENCE
     // =====================================================================================
@@ -4462,6 +4468,19 @@ fn main() {
                 });
             }
             if let tauri::RunEvent::Exit = event {
+                // AN UPDATE IS PUT IN PLACE NOW, NOT AT THE NEXT CLICK (Sage's plan 2026-11-14,
+                // rule 4): with one prepared, leave the helper that waits for this process to end,
+                // swaps it in and reclaims old copies, so the next launch starts the new copy
+                // directly. If it is interrupted, the next launch puts it in place as before.
+                #[cfg(target_os = "macos")]
+                if update_startup::leased()
+                    && std::env::var_os("HOME").is_some_and(|home| richos_user_update::has_prepared(Path::new(&home)))
+                {
+                    match update_relaunch::spawn_at_quit_helper() {
+                        Ok(()) => eprintln!("[richos] quit: the prepared update is put in place as RichOS closes"),
+                        Err(error) => eprintln!("[richos] quit: the update helper did not start ({error}); the next launch puts the update in place"),
+                    }
+                }
                 // A meeting being recorded is finished and kept FIRST, before the quit's own
                 // two-second bound below starts: its files and its notes are his data
                 // (handover review rv-20261013T145354Z-da4ac5cf-c86a #1).

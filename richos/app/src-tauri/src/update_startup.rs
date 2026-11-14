@@ -24,6 +24,13 @@ pub struct LaunchReport {
 }
 static REPORT: std::sync::Mutex<Option<LaunchReport>> = std::sync::Mutex::new(None);
 
+/// This process took part in update publication (it holds a session lease), so at quit it may
+/// leave the helper that puts a prepared update in place (`update_relaunch::spawn_at_quit_helper`).
+static LEASED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+pub fn leased() -> bool {
+    LEASED.load(std::sync::atomic::Ordering::SeqCst)
+}
+
 /// What [`prepare`] recorded for the launch line; empty when it recorded nothing.
 pub fn launch_report() -> LaunchReport {
     REPORT.lock().ok().and_then(|report| report.clone()).unwrap_or_default()
@@ -99,13 +106,10 @@ pub fn prepare(compiled_version: &str) -> Result<Option<StartupLease>, String> {
             && richos_user_update::bundle_version(&bundle).ok().as_deref() == Some(compiled_version)
     };
     let loaded_bundle_changed = !current_bundle_matches();
-    if lease.can_activate() && !redirected && !loaded_bundle_changed {
-        match wait_for_lock(|| richos_user_update::collect_retired(&mut lease, &bundle)) {
-            Ok(0) => (),
-            Ok(count) => eprintln!("[richos] reclaimed {count} retired update payloads"),
-            Err(error) => eprintln!("[richos] update payload reclamation deferred: {error}"),
-        }
-    }
+    // Old update payloads are no longer reclaimed here, in front of the window: they were whole
+    // copies of the app deleted before anything appeared. The helper an app leaves behind at quit
+    // reclaims them (`update_relaunch::at_quit_main`, Sage's plan 2026-11-14, rules 3 and 4).
+    LEASED.store(true, std::sync::atomic::Ordering::SeqCst);
     let activated = if lease.can_activate() && !redirected {
         match wait_for_lock(|| richos_user_update::activate_prepared(&mut lease, compiled_version)) {
             Ok(activation) => {

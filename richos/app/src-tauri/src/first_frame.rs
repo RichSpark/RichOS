@@ -133,7 +133,7 @@ mod tests {
         "startup_alert::cannot_start", "startup_alert::install", "startup_alert::rearm", "std::env::args",
         "std::env::args_os", "std::env::temp_dir", "std::ffi::OsStr::new", "std::fs::create_dir_all",
         "std::io::Error::other", "std::io::stdin", "std::io::stdout", "std::process::exit", "std::process::id",
-        "tauri::WebviewWindowBuilder::from_config", "update_relaunch::helper_main", "update_startup::identity_probe",
+        "tauri::WebviewWindowBuilder::from_config", "update_relaunch::at_quit_main", "update_relaunch::helper_main", "update_startup::identity_probe",
         "update_startup::launch_report", "update_startup::prepare", "webview_menu::install",
         "window_geometry::GeometryStore::new", "window_geometry::decide_with",
     ];

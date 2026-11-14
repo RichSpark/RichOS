@@ -2094,6 +2094,37 @@ pub fn wait_for_sessions_to_end(home: &Path, within: std::time::Duration) -> io:
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
 }
+/// Whether an update is prepared for the next start: one file's existence, nothing read. The
+/// quitting app asks this to decide whether to leave [`activate_at_quit`]'s helper behind.
+pub fn has_prepared(home: &Path) -> bool {
+    metadata(&home.join("Applications/.richos-updater/prepared.json")).is_ok_and(|m| m.is_file())
+}
+
+/// AN UPDATE IS PUT IN PLACE WHEN THE APP CLOSES, NOT WHEN IT NEXT OPENS (Sage's plan
+/// 2026-11-14, rule 4). Run by the helper the quitting app leaves behind, once every RichOS session
+/// has ended: it takes the exclusive side of the session lease, reclaims payloads earlier updates
+/// left (as a launch used to, before its window), and publishes the prepared update by the same
+/// atomic exchange a launch performs. The next click then starts the new copy directly, with no
+/// swap and no second program start in front of its window. `running_version` is the version of the
+/// app that just quit; `loaded_bundle` is the bundle it ran from. Returns what the activation did,
+/// or `None` when nothing was prepared, or when a session is still open (the next launch then puts
+/// it in place, exactly as before: that path stays the recovery for an interrupted helper).
+pub fn activate_at_quit(
+    home: &Path,
+    running_version: &str,
+    loaded_bundle: &Path,
+) -> io::Result<Option<Activation>> {
+    let mut lease = StartupLease::acquire(home)?;
+    if !lease.can_activate() {
+        return Ok(None);
+    }
+    if let Err(error) = collect_retired(&mut lease, loaded_bundle) {
+        // Reclaiming is housekeeping: a failure never holds back the update.
+        eprintln!("[richos] update at quit: payload reclamation deferred: {error}");
+    }
+    activate_prepared(&mut lease, running_version)
+}
+
 #[cfg(test)]
 fn install_verified(home: &Path, bytes: &[u8], version: &str) -> io::Result<Published> {
     let p = stage_verified(home, bytes, version)?;
@@ -3937,5 +3968,33 @@ released lease, so the next session refused to activate over a session that had 
         write_document(&updater_root(&h), DAMAGE, &foreign).unwrap();
         preferred(&h).unwrap().unwrap();
         assert!(!last_bundle_check().unwrap().full, "damage in another release was applied to this one");
+    }
+
+    /// RULE 4 (Sage's plan 2026-11-14): a prepared update is put in place by the helper the
+    /// quitting app leaves behind, so the next launch has nothing to swap. While another session
+    /// is open nothing happens, and the next launch's own activation stays the recovery.
+    #[test]
+    fn a_prepared_update_is_put_in_place_at_quit_and_the_next_launch_has_nothing_to_swap() {
+        let t = home();
+        let h = canonical(&t);
+        let old = install_verified(&h, &archive("1.0.0", |_| {}), "1.0.0").unwrap();
+        let app = h.join("Applications").join(APP);
+        assert!(!has_prepared(&h));
+        stage_verified(&h, &archive("2.0.0", |_| {}), "2.0.0").unwrap();
+        assert!(has_prepared(&h), "a staged update is not seen as prepared");
+
+        let mut open = StartupLease::acquire(&h).unwrap();
+        open.begin_session().unwrap();
+        assert!(activate_at_quit(&h, "1.0.0", &app).unwrap().is_none(), "it swapped under an open session");
+        assert_eq!(fs::read(fixture_version(old.executable(&h))).unwrap(), b"1.0.0");
+        drop(open);
+
+        let done = activate_at_quit(&h, "1.0.0", &app).unwrap().expect("the prepared update was not put in place");
+        assert_eq!(done.entered.version, "2.0.0");
+        assert_eq!(done.left.as_deref(), Some("1.0.0"));
+        assert_eq!(bundle_version(&app).unwrap(), "2.0.0");
+        assert!(!has_prepared(&h), "the receipt was left prepared");
+        let mut next_launch = StartupLease::acquire(&h).unwrap();
+        assert!(activate_prepared(&mut next_launch, "2.0.0").unwrap().is_none(), "the next launch still had a swap to do");
     }
 }
