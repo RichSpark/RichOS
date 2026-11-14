@@ -673,6 +673,12 @@ impl LeaseFactory for EngineLeaseFactory {
     /// host reports it in those words rather than leaving it to surface later as a worker
     /// that never speaks.
     fn spawn_work(&self, binding: &richos_core::entity::ThreadBinding) -> Result<Box<dyn Cognition>, CognitionError> {
+        self.on_the_engine_in_place(|| self.spawn_work_once(binding))
+    }
+}
+
+impl EngineLeaseFactory {
+    fn spawn_work_once(&self, binding: &richos_core::entity::ThreadBinding) -> Result<Box<dyn Cognition>, CognitionError> {
         let dir = self
             .engine_dir
             .lock()
@@ -729,6 +735,32 @@ impl LeaseFactory for EngineLeaseFactory {
 
 impl EngineLeaseFactory {
     fn spawn_chat(&self, control: Option<&ConversationControl>, binding: Option<&richos_core::entity::ThreadBinding>) -> Result<Box<dyn Cognition>, CognitionError> {
+        self.on_the_engine_in_place(|| self.spawn_chat_once(control, binding))
+    }
+
+    /// **A lease in the engine that is in place, after an update as on any launch.** While the
+    /// app installs its own build's engine, the earlier build's engine serves
+    /// (`setup_view::previous_engine_serves`). When this build changed what it needs of an engine
+    /// the earlier one cannot serve it, and the spawn then waits for this build's engine and is
+    /// tried once more there (`setup_view::wait_until_previous_engine_retires`), instead of
+    /// handing him a failed turn for an engine that is minutes from being replaced.
+    fn on_the_engine_in_place(
+        &self,
+        spawn: impl Fn() -> Result<Box<dyn Cognition>, CognitionError>,
+    ) -> Result<Box<dyn Cognition>, CognitionError> {
+        let dir = self.engine_dir.lock().map(|d| d.clone()).unwrap_or_default();
+        let previous = setup_view::previous_engine_serves(&dir);
+        match spawn() {
+            Err(e) if previous => {
+                eprintln!("[richos] engine update: the earlier build's engine could not serve this request ({e}); it waits for this build's engine");
+                setup_view::wait_until_previous_engine_retires();
+                spawn()
+            }
+            other => other,
+        }
+    }
+
+    fn spawn_chat_once(&self, control: Option<&ConversationControl>, binding: Option<&richos_core::entity::ThreadBinding>) -> Result<Box<dyn Cognition>, CognitionError> {
         let dir = self
             .engine_dir
             .lock()
@@ -6406,12 +6438,14 @@ fn dictation_feature_thread(state: State<AppState>, create: bool) -> Result<Opti
 /// **He never waits on it.** Until the swap, the engine the earlier build installed is still in
 /// place and serves his messages (`setup_view::previous_engine_serves`) and his voice (its
 /// decoder, given here first). The download and the checks run with NO lock held
-/// (`setup_view::stage_pinned_engine`). Only the swap waits, for a moment when nothing of his is
-/// running: it happens inside [`replace_engine`], exactly as a press of "Set it up" does it (the
-/// idle lease retired, memory wired to the new engine, his desk made ready), and while a turn or a
-/// worker is still running that body declines and the swap is asked again two seconds later.
-/// Then the window is told to ask voice again. A failure leaves the previous engine where it was
-/// and clears the flag, and the sheet offers the engine as on a first install.
+/// (`setup_view::stage_pinned_engine`), and so does the swap (two renames; the earlier engine is
+/// moved aside, never deleted, so a process still in it keeps its directory). The one case that
+/// waits: when this build changed what it needs of an engine, the earlier one cannot serve, and
+/// the request waits for the swap (`EngineLeaseFactory::on_the_engine_in_place`). After the swap
+/// the window asks voice again, and the spine is taken for what a press of "Set it up" does after
+/// its install ([`replace_engine`]: idle lease retired, memory rewired, desk readied), asked again
+/// every 2 s while a turn or a worker runs. A failed download or check leaves the previous engine
+/// where it was and clears the flag, and the sheet offers the engine as on a first install.
 fn update_engine_by_itself(app: AppHandle) {
     let spawned = std::thread::Builder::new().name("engine-update".into()).spawn(move || {
         let started = std::time::Instant::now();
@@ -6423,40 +6457,46 @@ fn update_engine_by_itself(app: AppHandle) {
         if previous.as_deref().is_some_and(setup_view::give_voice_its_decoder) {
             setup_view::tell_the_window_the_engine_changed(&app);
         }
-        let outcome = setup_view::stage_pinned_engine(&paths).map_err(|e| e.to_string()).and_then(|staged| {
-            let mut staged = Some(staged);
-            let mut said = false;
-            loop {
-                let spine = take_the_spine(&state.spine);
-                let replaced = replace_engine(&app, &state, spine, |_, engine_dir| {
-                    let staged = staged.take().ok_or_else(|| "the staged engine was already used".to_string())?;
-                    setup_view::swap_in_engine(staged, engine_dir).map_err(|e| e.to_string())?;
-                    let dir = engine_dir.lock().map_err(|_| "the engine cell could not be read".to_string())?.clone();
-                    Ok(setup_view::detect(Some(&dir)))
-                });
-                // Still staged: the body declined before the swap (a turn, a worker or a memory
-                // correction was running). Ask again once that has had a moment.
-                match (replaced, staged.is_some()) {
-                    (Err(why), true) => {
-                        if !said {
-                            eprintln!("[richos] engine update: staged; the swap waits for a quiet moment ({why})");
-                            said = true;
+        let outcome = setup_view::stage_pinned_engine(&paths)
+            .and_then(|staged| setup_view::swap_in_engine(staged, &state.engine_dir))
+            .map_err(|e| e.to_string())
+            .and_then(|_| {
+                // THIS BUILD'S ENGINE IS IN PLACE, and every request from here starts in it,
+                // including one that was waiting because the earlier engine could not serve it.
+                // The swap took no lock: a request waiting for it may be holding the spine.
+                setup_view::retire_previous_engine();
+                setup_view::tell_the_window_the_engine_changed(&app);
+                // Then what a press does after its install, under the spine: the idle lease (in
+                // the earlier engine) retired, memory rewired, his desk readied in the new one.
+                // While a turn, a worker or a memory correction runs, that body declines before
+                // changing anything; it is asked again every 2 s, for at most an hour.
+                let mut said = false;
+                let mut tries = 0;
+                loop {
+                    let spine = take_the_spine(&state.spine);
+                    match replace_engine(&app, &state, spine, |selected, _| Ok(setup_view::detect(Some(selected)))) {
+                        Err(why) if tries < 1800 => {
+                            if !said {
+                                eprintln!("[richos] engine update: in place; the rest waits for a quiet moment ({why})");
+                                said = true;
+                            }
+                            tries += 1;
+                            std::thread::sleep(std::time::Duration::from_secs(2));
                         }
-                        std::thread::sleep(std::time::Duration::from_secs(2));
+                        Err(why) => {
+                            eprintln!("[richos] engine update: in place; the rest could not be done ({why}); the next launch starts in it as on any launch");
+                            break Ok(serde_json::Value::Null);
+                        }
+                        ok => break ok,
                     }
-                    (outcome, _) => break outcome,
                 }
-            }
-        });
+            });
         setup_view::end_engine_update();
         match outcome {
-            Ok(_) => {
-                setup_view::tell_the_window_the_engine_changed(&app);
-                eprintln!(
-                    "[richos] engine update: this build's engine is installed and in use, in {} ms, with no setup sheet",
-                    started.elapsed().as_millis()
-                )
-            }
+            Ok(_) => eprintln!(
+                "[richos] engine update: this build's engine is installed and in use, in {} ms, with no setup sheet",
+                started.elapsed().as_millis()
+            ),
             Err(e) => eprintln!(
                 "[richos] engine update FAILED after {} ms — {e}; the setup sheet offers the engine instead",
                 started.elapsed().as_millis()

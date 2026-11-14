@@ -375,20 +375,60 @@ pub fn engine_updating() -> bool {
 /// The update starts: set by the boot before the window can read the setup status.
 pub fn begin_engine_update() {
     ENGINE_UPDATING.store(true, Ordering::SeqCst);
+    previous_engine_starts_serving();
 }
 
 /// The update ended, either way.
 pub fn end_engine_update() {
+    retire_previous_engine();
     ENGINE_UPDATING.store(false, Ordering::SeqCst);
 }
 
+/// Whether the engine the earlier build installed still serves: from the start of the update
+/// until this build's engine is swapped in, or the install fails.
+static PREVIOUS_SERVES: Mutex<bool> = Mutex::new(false);
+/// Signaled when [`PREVIOUS_SERVES`] clears.
+static PREVIOUS_RETIRED: std::sync::Condvar = std::sync::Condvar::new();
+
+/// The earlier build's engine serves from now on, until [`retire_previous_engine`].
+pub fn previous_engine_starts_serving() {
+    if let Ok(mut serves) = PREVIOUS_SERVES.lock() {
+        *serves = true;
+    }
+}
+
+/// This build's engine is in place (or will not be): the earlier one serves no more, and a
+/// request waiting in [`wait_until_previous_engine_retires`] goes on.
+pub fn retire_previous_engine() {
+    if let Ok(mut serves) = PREVIOUS_SERVES.lock() {
+        *serves = false;
+    }
+    PREVIOUS_RETIRED.notify_all();
+}
+
 /// **Does the engine the earlier build installed serve him in `dir` right now?** Only while the
-/// app installs its own build's engine after an update, and only in the directory RichOS installs
-/// into, where that engine still is until the swap. Everywhere else this build's pin decides, as
-/// it always has (`setup::engine_boot_refusal_demand`).
+/// app installs its own build's engine after an update, only until the swap, and only in the
+/// directory RichOS installs into, where that engine still is. Everywhere else this build's pin
+/// decides, as it always has (`setup::engine_boot_refusal_demand`).
 pub fn previous_engine_serves(dir: &std::path::Path) -> bool {
-    engine_updating()
+    PREVIOUS_SERVES.lock().map(|serves| *serves).unwrap_or(false)
         && SetupPaths::from_process().home.is_some_and(|home| setup::engine_install_dir(&home) == dir)
+}
+
+/// **The earlier build's engine could not serve a request** (this build changed what it needs
+/// of an engine): the request waits for this build's engine instead, which is the one case
+/// where a reply waits on the install. Returns at once when it is already in place. Bounded by
+/// the install: its download stops at curl's `--max-time` (`setup.rs`, `CurlFetcher`), and a
+/// failure retires the earlier engine too. The swap itself takes no lock a request holds
+/// (`main.rs`, `update_engine_by_itself`), so a request waiting here never holds it up.
+pub fn wait_until_previous_engine_retires() {
+    let Ok(mut serves) = PREVIOUS_SERVES.lock() else { return };
+    while *serves {
+        serves = match PREVIOUS_RETIRED.wait(serves) {
+            Ok(serves) => serves,
+            Err(_) => return,
+        };
+    }
 }
 
 /// **Voice finds its decoder in the engine in `dir`**: the engine's runtime carries `whisper-cli`
