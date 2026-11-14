@@ -746,6 +746,26 @@
     );
   }
 
+  /// The cited passage of a meeting source, brought to the middle of the panel ONCE THE PANEL
+  /// HAS ITS WIDTH. A press from a closed panel opens it growing from no width to its own over
+  /// `op-open` (0.38 s, style.css), and the transcript usually arrives inside that growth.
+  /// Measured then, the text is wrapped far narrower than it ends up: at no width the body
+  /// cannot scroll and stays at its top, a few frames in the offset is many times too large
+  /// and is clamped to the end (a walk of the packaged app saw both: two links at the top, one
+  /// at the end). So the landing waits for the panel's running animations; with none (already
+  /// open, reduced motion) it lands at once, after the box is in the document.
+  function landPassage(passage, requested) {
+    const panel = el("outpanel");
+    const opening = panel && panel.getAnimations ? panel.getAnimations().map((a) => a.finished.catch(() => null)) : [];
+    Promise.all(opening).then(() => {
+      if (!passage.isConnected || state.sourcePassage !== requested || requested.landed) return;
+      const body = el("op-body");
+      const rect = passage.getBoundingClientRect();
+      body.scrollTop += rect.top - body.getBoundingClientRect().top - (body.clientHeight - rect.height) / 2;
+      requested.landed = true;
+    });
+  }
+
   function drawPreview(f, a, box) {
     const key = previewKey(f);
     preview.last = { key, answer: a };
@@ -782,13 +802,7 @@
             } : null;
             window.RichTimeline.renderMarkdownInto(md, a.text, briefLinks, { document: true, sourceLine });
             const passage = md.querySelector("[data-source-passage]");
-            if (passage && !requested.landed) queueMicrotask(() => {
-              if (!passage.isConnected || state.sourcePassage !== requested || requested.landed) return;
-              const body = el("op-body");
-              const rect = passage.getBoundingClientRect();
-              body.scrollTop += rect.top - body.getBoundingClientRect().top - (body.clientHeight - rect.height) / 2;
-              requested.landed = true;
-            });
+            if (passage && !requested.landed) landPassage(passage, requested);
           } else {
             md.textContent = a.text;
           }
