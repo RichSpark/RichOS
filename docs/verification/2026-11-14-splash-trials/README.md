@@ -169,8 +169,8 @@ clone ("clean: app quit, VM stopped, clone deleted, state removed").
 
 ## The evidence here
 
-- `evidence/walkN/analysis.txt`: every launch's row as `analyze.py` read it, plus the statistics.
-- `evidence/walkN/raw.tgz`: the walk's own records. It holds each launch's app lines stamped on
+- `evidence/walk1/analysis.txt` and `evidence/walk2/analysis.txt`: every launch's row as `analyze.py` read it, plus the statistics.
+- `evidence/walk1/raw.tgz` and `evidence/walk2/raw.tgz`: each walk's own records. It holds each launch's app lines stamped on
   arrival, its pid and quit, its memory samples and the recorder's per-frame display times
   (`launches/*/`), `facts.json`, `summary.json`, `run-walk.py`'s report and trial 2's freeze
   records, requests and opening description (`trial2/`). The raw gray frames (2 GB a walk) are
