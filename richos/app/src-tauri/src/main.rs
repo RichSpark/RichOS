@@ -220,6 +220,7 @@ impl TurnObserver for TauriEmitter {
         if let StreamEvent::TurnCompleted { thread_id, turn_id, .. } = event {
             let app = self.app.clone();
             tauri::async_runtime::spawn_blocking(move || adopt_companies_added_during_the_turn(&app));
+            spawn_onboarding_into_loro(&self.app);
             if let Some(runtime) = self.app.try_state::<Arc<phone::PhoneRuntime>>() {
                 let runtime=Arc::clone(&runtime);
                 let (thread_id,turn_id)=(thread_id.clone(),turn_id.clone());
@@ -264,6 +265,62 @@ fn adopt_companies_added_during_the_turn(app: &AppHandle) {
 /// True when the file's list adds a company the spine lacks and drops none it has.
 fn adopts_disk_registry(current: &EntityRegistry, disk: &EntityRegistry) -> bool {
     disk.entities().iter().any(|e| !current.contains(&e.id)) && current.entities().iter().all(|e| disk.contains(&e.id))
+}
+
+/// **WHAT ONBOARDING SAVED, INTO THE USER'S LORO** (CEO 2026-11-14, `richos_core::onboarding_loro`):
+/// at the end of every turn (Rich saves the answers and the team's research lands beside them),
+/// at launch and when the memory folder is set up or wired again. Off the calling thread: a new or
+/// changed file starts loro's writer, and an unchanged one starts nothing. No memory folder, or
+/// nothing saved yet, writes nothing.
+fn spawn_onboarding_into_loro(app: &AppHandle) {
+    let app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let Some(state) = app.try_state::<AppState>() else { return };
+        if onboarding_into_loro(&state) {
+            home_field_after_onboarding(&app, &state);
+        }
+    });
+}
+
+/// The home screen asks for its picture again on this (`home.js`): what onboarding saved has just
+/// reached loro, so the user's records are not the ones the screen drew.
+const EVENT_HOME_FIELD_CHANGED: &str = "rich://home-field-changed";
+
+/// After a copy that wrote something: the repository picture, when the user has one, is read again
+/// now with the onboarding documents in it (`home_repos::rebuild_now`), so the window's next ask
+/// gets them rather than the kept picture; the loro path recompiles by itself (its kept compile is
+/// keyed on the corpus). Then the window is told.
+fn home_field_after_onboarding(app: &AppHandle, state: &AppState) {
+    let registry = state.reader.snapshot().entity_registry().clone();
+    let folders = richos_core::home_repos::company_folders(&registry);
+    let engine = state.engine_dir.lock().unwrap().clone();
+    if let (Some(git), Some(central)) = (richos_core::home_repos::home_git(&engine), richos_core::company::install_central_root()) {
+        let onboarding = richos_core::onboarding_loro::sources(&central, &registry);
+        let kept = state.data_dir.join("home-field-repos.json");
+        richos_core::home_repos::rebuild_now(&kept, &folders, richos_core::home_repos::today(), &git, &onboarding);
+    }
+    app.emit(EVENT_HOME_FIELD_CHANGED, ()).ok();
+}
+
+/// True when the copy wrote at least one record.
+fn onboarding_into_loro(state: &AppState) -> bool {
+    let Some(install) = state.loro_install.lock().unwrap().clone() else { return false };
+    let Some(central) = richos_core::company::install_central_root() else { return false };
+    let registry = state.reader.snapshot().entity_registry().clone();
+    let sources = richos_core::onboarding_loro::sources(&central, &registry);
+    if sources.is_empty() {
+        return false;
+    }
+    let writer = richos_core::correction::CliLoroWriter::from_install(&install);
+    let kept = state.data_dir.join(richos_core::onboarding_loro::KEPT_FILENAME);
+    let report = richos_core::onboarding_loro::sync(&sources, &writer, &install.root().path().display().to_string(), &kept);
+    for line in &report.written {
+        eprintln!("[richos] onboarding into loro: {line}");
+    }
+    for line in &report.problems {
+        eprintln!("[richos] onboarding into loro: NOT written, tried again after the next turn: {line}");
+    }
+    !report.written.is_empty()
 }
 
 /// The SPOKEN-CORRECTION sink (`staging.rs`): forwards §7's ask to the webview on
@@ -3809,6 +3866,8 @@ fn main() {
                 claude_bin: claude_bin_cell.clone(),
                 boot_engine,
             });
+            // What onboarding saved before this launch (or before this fix), into his loro.
+            spawn_onboarding_into_loro(app.handle());
 
             // Resume only after AppState exists: PhoneBridge::new immediately reads
             // the spine to prime the paired phone's conversation. The window was
@@ -6083,6 +6142,7 @@ fn provision_memory(
     drop(spine);
     status.provisioned_now = true;
     *state.memory.lock().unwrap() = status.clone();
+    spawn_onboarding_into_loro(&app);
     Ok(memory::with_offered_location(status, home.as_deref()))
 }
 
@@ -6490,6 +6550,7 @@ fn run_setup(app: tauri::AppHandle, state: State<AppState>) -> Result<serde_json
     let wired = memory::wire_company_memory(&mut spine, &state.loro_provenance, &registry, &engine);
     *state.loro_install.lock().unwrap() = wired.install;
     *state.memory.lock().unwrap() = wired.status;
+    spawn_onboarding_into_loro(&app);
     if let Some(writer) = wired.writer {
         if let Some(held) = held_desk.as_mut() {
             held.replace_writer(Box::new(writer));
@@ -10371,7 +10432,11 @@ fn home_field_data(state: State<AppState>) -> serde_json::Value {
     // `verify_engine` (`home_repos::home_git` says why: two Finder `.DS_Store` files cost the CEO his
     // picture on 2026-11-14).
     let home_git = { let engine = state.engine_dir.lock().unwrap().clone(); richos_core::home_repos::home_git(&engine) };
-    if let Some((field, from)) = home_git.and_then(|git| richos_core::home_repos::field_kept_or_built(&kept_repos, &folders, richos_core::home_repos::today(), &git)) {
+    // What onboarding saved is in that picture too (CEO 2026-11-14), the same files it copies into loro.
+    let onboarding = richos_core::company::install_central_root()
+        .map(|central| richos_core::onboarding_loro::sources(&central, &registry))
+        .unwrap_or_default();
+    if let Some((field, from)) = home_git.and_then(|git| richos_core::home_repos::field_kept_or_built_with(&kept_repos, &folders, richos_core::home_repos::today(), &git, &onboarding)) {
         eprintln!(
             "[richos] home field: {} object(s) in {} companies from their repositories ({:?}), {} link(s), {} source(s); unread folders: {}",
             field["meta"]["counts"]["objects"],

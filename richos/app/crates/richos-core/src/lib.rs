@@ -117,6 +117,7 @@ pub mod quota;
 pub mod replay;
 pub mod onboarding;
 pub mod onboarding_tools;
+pub mod onboarding_loro;
 pub mod linkedin_tools;
 pub mod provision;
 pub mod questions;

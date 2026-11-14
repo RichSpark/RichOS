@@ -345,6 +345,29 @@ async function main() {
   });
 
   // --------------------------------------------------------------------------------------
+  // WHAT ONBOARDING SAVED REACHES HIS LORO WHILE THE SCREEN IS UP (CEO 2026-11-14). A user with a
+  // team and none of his records yet; onboarding saves three; the app says so; the screen draws them
+  // and the count line says so, without a relaunch.
+  // --------------------------------------------------------------------------------------
+  await run.check("onboarding's records reach his loro mid-session: the screen redraws with them, no relaunch", async () => {
+    const page = await openApp(browser, { homeTeam: TEAM, homeWorking: [TEAM[0]], homeField: null });
+    const before = await factsOf(page);
+    assertEqual(before.count, 0, "the screen started with records of his");
+    await page.evaluate(() => window.__RICHOS_MOCK__.homeFieldChanged({ objects: 3, records: 3 }));
+    const came = await page
+      .waitForFunction("window.__loro && window.__loro.COUNT === 3 && window.__loro.blooming === false", null, { timeout: 60000 })
+      .then(() => true, () => false);
+    const f = await factsOf(page);
+    assert(came, "his 3 onboarding records never appeared after the app said they were in his loro: " + JSON.stringify({ field: f.field, count: f.count }));
+    assertEqual(f.field, "live", "the picture was taken down by the redraw");
+    assertEqual(f.nodes, 7500 + 3, "the picture is not the example plus his 3");
+    assert(/\b3 memories\b/.test(f.brand), "the count line does not say 3 memories: " + f.brand);
+    assertEqual(page.__errors, [], "the page reported errors");
+    await page.close();
+    return `0 at first; after the app's word, ${f.count} of ${f.nodes} objects are his and the line reads "${f.brand}"`;
+  });
+
+  // --------------------------------------------------------------------------------------
   // HIS FIRST HIRE WITH THE EXAMPLE UP. The first-run demonstration is on the screen; he hires; he comes
   // back to Home: it becomes the ghost with his records in front, without a relaunch.
   // --------------------------------------------------------------------------------------

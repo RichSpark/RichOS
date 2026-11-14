@@ -39,6 +39,7 @@
 //! in the app's Connected repositories sheet puts it back.
 
 use crate::entity::{EntityRegistry, EntityStatus};
+use crate::onboarding_loro::Source;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -1162,11 +1163,21 @@ fn order_of(field: &Value) -> Vec<String> {
 }
 
 /// Read, build and keep. `None` when no folder is a readable repository.
-fn build_and_keep(path: &Path, companies: &[CompanyFolders], today: i64, id: String, previous: &[String], mut groups: Groups, with: &GitRuntime) -> Option<Value> {
-    let (read, unread) = read_companies(companies, with);
+/// Every company's folders read, with what onboarding saved added ([`add_onboarding`]). `None` when no
+/// folder is a readable repository.
+/// Every company read, and the folders that could not be ((company id, reason)).
+type CompaniesRead = (Vec<CompanyRead>, Vec<(String, String)>);
+
+fn read_with_onboarding(companies: &[CompanyFolders], today: i64, with: &GitRuntime, onboarding: &[Source]) -> Option<CompaniesRead> {
+    let (mut read, unread) = read_companies(companies, with);
     if read.iter().all(|c| c.repos.is_empty()) {
         return None;
     }
+    add_onboarding(&mut read, onboarding, today);
+    Some((read, unread))
+}
+
+fn build_and_keep(path: &Path, (read, unread): CompaniesRead, today: i64, id: String, previous: &[String], mut groups: Groups) -> Option<Value> {
     let field = build_repo_field_with(&read, &unread, today, previous, &mut groups);
     let tmp = path.with_extension("json.tmp");
     let kept = Kept { identity: id, field, groups };
@@ -1198,24 +1209,96 @@ pub enum FieldFrom {
 /// when no folder of any company is a readable repository, which leaves the home screen on its loro
 /// path.
 pub fn field_kept_or_built(path: &Path, companies: &[CompanyFolders], today: i64, with: &GitRuntime) -> Option<(Value, FieldFrom)> {
+    field_kept_or_built_with(path, companies, today, with, &[])
+}
+
+/// [`field_kept_or_built`], with what onboarding saved ([`add_onboarding`]) in the picture and in
+/// what it was built from, so a new or changed onboarding file is a new picture.
+pub fn field_kept_or_built_with(path: &Path, companies: &[CompanyFolders], today: i64, with: &GitRuntime, onboarding: &[Source]) -> Option<(Value, FieldFrom)> {
     if !companies.iter().any(|c| c.folders.iter().any(|f| f.is_dir())) {
         return None;
     }
-    let id = identity(companies, today, with);
+    let id = identity(companies, today, with) + &onboarding_identity(onboarding);
     if let Some(kept) = std::fs::read(path).ok().and_then(|b| serde_json::from_slice::<Kept>(&b).ok()) {
         if kept.identity == id {
             return Some((kept.field, FieldFrom::Kept));
         }
         if !REFRESHING.swap(true, std::sync::atomic::Ordering::SeqCst) {
-            let (path, companies, previous, groups, with) = (path.to_path_buf(), companies.to_vec(), order_of(&kept.field), kept.groups.clone(), with.clone());
+            let (path, companies, previous, groups, with, onboarding) = (path.to_path_buf(), companies.to_vec(), order_of(&kept.field), kept.groups.clone(), with.clone(), onboarding.to_vec());
             std::thread::spawn(move || {
-                let _ = build_and_keep(&path, &companies, today, id, &previous, groups, &with);
+                if let Some(read) = read_with_onboarding(&companies, today, &with, &onboarding) {
+                    let _ = build_and_keep(&path, read, today, id, &previous, groups);
+                }
                 REFRESHING.store(false, std::sync::atomic::Ordering::SeqCst);
             });
         }
         return Some((kept.field, FieldFrom::KeptRefreshing));
     }
-    build_and_keep(path, companies, today, id, &[], Groups::default(), with).map(|f| (f, FieldFrom::Built))
+    let read = read_with_onboarding(companies, today, with, onboarding)?;
+    build_and_keep(path, read, today, id, &[], Groups::default()).map(|f| (f, FieldFrom::Built))
+}
+
+/// **THE PICTURE READ AGAIN NOW**, for the moment onboarding has just saved something
+/// (`main.rs` `onboarding_into_loro`): built and kept before the window is told to ask again, so
+/// its next [`field_kept_or_built_with`] answers with the new records rather than with the kept
+/// picture while a refresh runs behind it. The companies keep their order and groups. `None` when
+/// no folder is a readable repository (the home screen is on its loro path).
+pub fn rebuild_now(path: &Path, companies: &[CompanyFolders], today: i64, with: &GitRuntime, onboarding: &[Source]) -> Option<Value> {
+    if !companies.iter().any(|c| c.folders.iter().any(|f| f.is_dir())) {
+        return None;
+    }
+    let id = identity(companies, today, with) + &onboarding_identity(onboarding);
+    let kept = std::fs::read(path).ok().and_then(|b| serde_json::from_slice::<Kept>(&b).ok());
+    let (previous, groups) = kept.map(|k| (order_of(&k.field), k.groups)).unwrap_or_default();
+    let read = read_with_onboarding(companies, today, with, onboarding)?;
+    build_and_keep(path, read, today, id, &previous, groups)
+}
+
+// ---------------------------------------------------------------------------
+// what onboarding saved, in the picture
+// ---------------------------------------------------------------------------
+
+/// The folder name the onboarding documents are read under. Never emitted (no path or name is).
+const ONBOARDING_FOLDER: &str = "onboarding";
+
+/// **WHAT ONBOARDING SAVED, AS DOCUMENTS OF ITS COMPANY** (CEO 2026-11-14: what onboarding learns
+/// is added to the user's loro by itself, and it shows). The repository picture reads only
+/// repositories, so without this a user with a connected repository never saw the records
+/// `onboarding_loro` copies into loro. Each source ([`crate::onboarding_loro::sources`], the same
+/// list that is copied) is one more tracked Markdown document of the company it belongs to, dated
+/// by its file; the user's own details belong to the first company on the list. A company with no
+/// repository of its own gets its documents too.
+pub fn add_onboarding(read: &mut [CompanyRead], onboarding: &[Source], today: i64) {
+    for source in onboarding {
+        let at = match &source.company {
+            Some((id, _)) => read.iter().position(|c| &c.id == id),
+            None => (!read.is_empty()).then_some(0),
+        };
+        let Some(at) = at else { continue };
+        let day = std::fs::metadata(&source.path)
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| (d.as_secs() as i64).div_euclid(86_400))
+            .unwrap_or(today);
+        let company = &mut read[at];
+        let repo = match company.repos.iter().position(|r| r.name == ONBOARDING_FOLDER) {
+            Some(i) => &mut company.repos[i],
+            None => {
+                company.repos.push(RepoRead { name: ONBOARDING_FOLDER.into(), ..Default::default() });
+                company.repos.last_mut().expect("just pushed")
+            }
+        };
+        let file = source.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "notes.md".into());
+        let path = format!("{ONBOARDING_FOLDER}/{file}");
+        repo.texts.insert(path.clone(), first_chars(&source.body, READ_CHARS).to_string());
+        repo.docs.push(FileRec { path, first: day, last: day, commits: 1 });
+    }
+}
+
+/// What the onboarding part of a picture was built from: each source and its content hash.
+fn onboarding_identity(onboarding: &[Source]) -> String {
+    onboarding.iter().map(|s| format!("|onboarding:{}#{}", s.key, s.hash())).collect()
 }
 
 /// Wait for a refresh started by [`field_kept_or_built`] to finish. Tests only.
@@ -1745,6 +1828,43 @@ mod tests {
         }
         assert_eq!(field["domains"].as_array().unwrap().len(), 2);
         for d in [engine, a, b, kept.parent().unwrap().to_path_buf()] {
+            std::fs::remove_dir_all(d).ok();
+        }
+    }
+
+    /// What onboarding saved is in the repository picture (CEO 2026-11-14), counted as documents of
+    /// its company, and a save after the picture was kept is drawn at the next ask once
+    /// `rebuild_now` has run (`main.rs` `home_field_after_onboarding`).
+    #[test]
+    fn what_onboarding_saved_is_in_the_repository_picture_and_a_new_save_is_drawn_at_once() {
+        let _turn = BEHIND.lock().unwrap_or_else(|e| e.into_inner());
+        let a = tmp("ob-a");
+        let central = tmp("ob-central");
+        commit(&a, "2026-10-01", &[("README.md", "# A\n")]);
+        let reg = registry(&[("alpha", "Alpha Co", &[a.as_path()]), ("beta", "Beta Co", &[])]);
+        let path = tmp("ob-k").join("home-field-repos.json");
+        let today = day("2026-11-13");
+        let none = crate::onboarding_loro::sources(&central, &reg);
+        assert!(none.is_empty(), "nothing saved yet");
+        let (before, _) = field_kept_or_built_with(&path, &company_folders(&reg), today, &test_git(), &none).unwrap();
+        // Alpha: 1 document + 1 working day; Beta has no repository and nothing saved
+        assert_eq!(domain(&before, "alpha").unwrap()["nodeCount"].as_u64(), Some(2));
+        assert!(domain(&before, "beta").is_none_or(|b| b["nodeCount"].as_u64() == Some(0)));
+
+        let alpha = crate::entity::EntityId::parse("alpha").unwrap();
+        crate::company::save_company_notes(&central, &alpha, "Alpha sells ferry tickets.", crate::company::InterviewProgress::Partial).unwrap();
+        std::fs::write(crate::company::company_home(&central, &alpha).join("onboarding-research.md"), "Founded 2019.\n").unwrap();
+        crate::person::save(&central, "Dana Reyes.").unwrap();
+        let saved = crate::onboarding_loro::sources(&central, &reg);
+        assert_eq!(saved.len(), 3);
+        rebuild_now(&path, &company_folders(&reg), today, &test_git(), &saved).expect("a readable repository drew nothing");
+        let (after, from) = field_kept_or_built_with(&path, &company_folders(&reg), today, &test_git(), &saved).unwrap();
+        assert_eq!(from, FieldFrom::Kept, "the rebuilt picture is the one kept, not a refresh behind the old one");
+        assert_eq!(domain(&after, "alpha").unwrap()["nodeCount"].as_u64(), Some(5), "the notes, the research and the user's details");
+        assert_eq!(after["meta"]["counts"]["objects"].as_u64(), Some(5));
+        let text = after.to_string();
+        assert!(!text.contains("ferry") && !text.contains("onboarding-research") && !text.contains("Dana"), "no content, file name or name leaves");
+        for d in [a, central, path.parent().unwrap().to_path_buf()] {
             std::fs::remove_dir_all(d).ok();
         }
     }
