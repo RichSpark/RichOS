@@ -2130,8 +2130,8 @@ The delivered engine is exercised by `tests/delivered_ecs_tests.rs`,
 owned processes, provider authentication and repository connections are covered
 by `tests/runtime_delivery.rs`, `tests/owned_process.rs`, `tests/provider_auth.rs`
 and `tests/repository_connection.rs`. `tests/runtime_saved.rs` runs each launch as a new
-process and proves the runtime check saved by one launch spares the next from reading the
-runtime again and that the late full read still finds what a saved stamp cannot.
+process and proves a runtime verified whole once (at its install or the first time the app meets
+it) is never read at a launch again and that the late full read finds damage after the fact.
 `tests/land_checks_user_tools.rs` runs an app
 land's merge check in a lease's environment and proves it finds the user's own tools.
 `tests/team_sync.rs` proves a changed definition in a governed repository's `.claude/agents/`

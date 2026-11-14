@@ -1,11 +1,12 @@
 #![cfg(all(target_os = "macos", target_arch = "aarch64"))]
-//! **The engine check outlives the process** (launch-speed audit 2026-11-14, piece 1, built past
-//! Sage's review, findings 5 and 6). Every launch used to read and hash the whole engine runtime
-//! (431 MB in 6,542 files on the release Mac) while the window waited, because what it verified
-//! was remembered only in memory. Each launch here is a NEW PROCESS (this test binary run again
-//! as a child), because a second load in the same process was already cheap and proves nothing
-//! about the next launch.
-use std::os::unix::fs::{MetadataExt, PermissionsExt};
+//! **A runtime verified whole once is trusted as written** (launch-speed audit 2026-11-14,
+//! piece 1, and the CEO's question the same day: "Isn't there a more elegant way to completely
+//! eliminate the need for that check?"). Every launch used to read and hash the whole engine
+//! runtime (431 MB in 6,542 files on the release Mac) while the window waited. Now it is verified
+//! in full once -- at its install, or the first time the app meets it -- and the late background
+//! check finds damage afterwards. Each launch here is a NEW PROCESS (this test binary run again as
+//! a child), because what one process remembers in memory proves nothing about the next launch.
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -20,12 +21,20 @@ fn child_entry() {
     richos_core::runtime::remember_verified_at(Path::new(&saved));
     let engine = PathBuf::from(engine);
     let root = std::fs::canonicalize(engine.join("runtime")).unwrap();
-    if std::env::var(MODE).as_deref() == Ok("recheck") {
-        println!("RESULT {:?}", richos_core::runtime::recheck_runtime_bytes(&engine).map_err(|e| e.to_string()));
-        return;
+    match std::env::var(MODE).as_deref() {
+        Ok("recheck") => {
+            println!("RESULT {:?}", richos_core::runtime::recheck_runtime_bytes(&engine).map_err(|e| e.to_string()));
+        }
+        Ok("installed") => {
+            richos_core::runtime::record_delivered_whole(&engine);
+            println!("RESULT recorded");
+        }
+        _ => {
+            let loaded = richos_core::runtime::EngineRuntime::load(&engine, None).map(|_| ()).map_err(|e| e.to_string());
+            println!("RESULT full={} hashed={} {:?}", richos_core::runtime::full_checks_under(&root),
+                     richos_core::runtime::files_hashed_under(&root), loaded);
+        }
     }
-    let loaded = richos_core::runtime::EngineRuntime::load(&engine, None).map(|_| ()).map_err(|e| e.to_string());
-    println!("RESULT hashed={} {:?}", richos_core::runtime::files_hashed_under(&root), loaded);
 }
 
 /// One launch: this binary as a child, running only `child_entry`. Returns its RESULT line.
@@ -45,16 +54,23 @@ fn launch(engine: &Path, saved: &Path, mode: &str) -> String {
 
 struct Fixture { dir: PathBuf }
 impl Fixture {
-    /// An engine with a seven-file runtime, and a separate app data folder for the saved file.
+    /// An engine with a seven-file runtime, and a separate app data folder for the record.
     fn new() -> Self {
         let dir = std::env::temp_dir().join(format!("richos runtime saved {}", uuid::Uuid::new_v4()));
         let runtime = dir.join("engine/runtime");
         std::fs::create_dir_all(runtime.join("bin")).unwrap();
         std::fs::create_dir_all(runtime.join("git/libexec/git-core")).unwrap();
         std::fs::create_dir_all(dir.join("data")).unwrap();
+        let fixture = Self { dir };
+        fixture.deliver("");
+        fixture
+    }
+    /// (Re)write the seven commands and their `delivery.json`; `mark` changes their bytes.
+    fn deliver(&self, mark: &str) {
+        let runtime = self.engine().join("runtime");
         let mut files = serde_json::Map::new();
         for name in ["bin/python3", "bin/node", "bin/git", "bin/jq", "bin/ffmpeg", "bin/ffprobe", "git/libexec/git-core/git-remote-https"] {
-            let content = format!("#!/bin/sh\n# {name}\nexit 0\n");
+            let content = format!("#!/bin/sh\n# {name}{mark}\nexit 0\n");
             std::fs::write(runtime.join(name), &content).unwrap();
             std::fs::set_permissions(runtime.join(name), std::fs::Permissions::from_mode(0o755)).unwrap();
             use sha2::Digest;
@@ -63,7 +79,6 @@ impl Fixture {
         std::fs::write(runtime.join("delivery.json"), serde_json::to_vec(&serde_json::json!({
             "schema":1,"platform":"aarch64-apple-darwin","versions":{},"files":files,"links":{}
         })).unwrap()).unwrap();
-        Self { dir }
     }
     fn engine(&self) -> PathBuf { self.dir.join("engine") }
     fn saved(&self) -> PathBuf { self.dir.join("data/runtime-verified.txt") }
@@ -71,70 +86,62 @@ impl Fixture {
 }
 impl Drop for Fixture { fn drop(&mut self) { std::fs::remove_dir_all(&self.dir).ok(); } }
 
+const TRUSTED: &str = "full=0 hashed=0 Ok(())";
+const VERIFIED_IN_FULL: &str = "full=1 hashed=7 Ok(())";
+
 #[test]
-fn a_second_launch_reads_no_runtime_bytes_and_writes_nothing_into_the_engine() {
+fn a_runtime_verified_once_is_never_read_again_and_nothing_is_written_into_the_engine() {
     let f = Fixture::new();
-    assert_eq!(launch(&f.engine(), &f.saved(), "load"), "hashed=7 Ok(())", "the first launch reads every file");
-    assert!(f.saved().is_file(), "the first launch saved nothing in the app's data folder");
-    assert_eq!(launch(&f.engine(), &f.saved(), "load"), "hashed=0 Ok(())", "the second launch read the runtime again");
-    // The engine folder holds exactly what was delivered: the load above would have refused an
-    // unexpected file, and nothing was written beside the runtime either.
+    assert_eq!(launch(&f.engine(), &f.saved(), "load"), VERIFIED_IN_FULL, "the first meeting verifies in full");
+    assert!(f.saved().is_file(), "nothing was recorded in the app's data folder");
+    assert_eq!(launch(&f.engine(), &f.saved(), "load"), TRUSTED, "a later launch read the runtime again");
+    assert_eq!(launch(&f.engine(), &f.saved(), "load"), TRUSTED);
     let mut beside: Vec<_> = std::fs::read_dir(f.engine()).unwrap().map(|e| e.unwrap().file_name()).collect();
     beside.sort();
-    assert_eq!(beside, ["runtime"]);
+    assert_eq!(beside, ["runtime"], "something was written beside the runtime");
 }
 
+/// The install verifies the staged runtime in full and moves it into place whole; it records it
+/// there, so not even the first launch after an install reads it (`setup::install_engine`).
 #[test]
-fn a_touched_file_is_hashed_again_and_a_changed_one_refused() {
+fn an_installed_runtime_is_trusted_from_its_first_launch() {
     let f = Fixture::new();
-    launch(&f.engine(), &f.saved(), "load");
-    // Same length, different bytes, modified time put back: the status-changed time still moves.
-    let git = f.file("bin/git");
-    let modified = std::fs::metadata(&git).unwrap().modified().unwrap();
-    let before = std::fs::read(&git).unwrap();
-    let mut changed = before.clone();
-    changed[before.len() - 2] = b'1';
-    std::fs::write(&git, &changed).unwrap();
-    std::fs::OpenOptions::new().write(true).open(&git).unwrap().set_modified(modified).unwrap();
-    // Only that file is read (the six others keep their stamps), and its bytes are refused.
-    let result = launch(&f.engine(), &f.saved(), "load");
-    assert!(result.starts_with("hashed=0 Err(") && result.contains("runtime file changed: bin/git"), "{result}");
+    assert_eq!(launch(&f.engine(), &f.saved(), "installed"), "recorded");
+    assert_eq!(launch(&f.engine(), &f.saved(), "load"), TRUSTED);
 }
 
+/// Damage after the fact is not seen by a launch -- that is the point -- and is found by the late
+/// full check, which forgets the record: the next launch verifies in full and refuses, and
+/// set-up offers the reinstall (Sage's review, finding 6).
 #[test]
-fn a_saved_file_that_does_not_read_cleanly_costs_one_full_check_and_never_a_refusal() {
-    let f = Fixture::new();
-    for nonsense in [&b"not the format"[..], b"richos-runtime-verified 1\nroot\t/somewhere/else\n", b""] {
-        std::fs::write(f.saved(), nonsense).unwrap();
-        assert_eq!(launch(&f.engine(), &f.saved(), "load"), "hashed=7 Ok(())");
-        assert_eq!(launch(&f.engine(), &f.saved(), "load"), "hashed=0 Ok(())", "a good file was not written back");
-    }
-}
-
-/// What a stamp cannot see is found by the late full check, which forgets what was verified so
-/// the next launch reads everything and refuses (finding 6). Damage that keeps a file's stamp
-/// cannot be made from userland, so the saved line is brought up to the damaged file's stamp,
-/// which is exactly what such damage looks like to the quick check.
-#[test]
-fn the_late_full_check_finds_what_a_stamp_cannot_and_the_next_launch_refuses() {
+fn damage_is_found_by_the_late_check_and_the_next_launch_refuses() {
     let f = Fixture::new();
     launch(&f.engine(), &f.saved(), "load");
     assert_eq!(launch(&f.engine(), &f.saved(), "recheck"), "Ok(Confirmed)");
-
     let node = f.file("bin/node");
-    std::fs::write(&node, b"#!/bin/sh\n# damaged\nexit 9\n").unwrap();
-    let m = std::fs::metadata(&node).unwrap();
-    let stamp = format!("{} {} {} {} {} {} {}", m.len(), m.mtime(), m.mtime_nsec(), m.ctime(), m.ctime_nsec(), m.ino(), m.dev());
-    let text = std::fs::read_to_string(f.saved()).unwrap();
-    let restamped: String = text.lines().map(|line| match line.split_once('\t') {
-        Some((fields, "bin/node")) => format!("{} {stamp}\tbin/node\n", fields.split(' ').next().unwrap()),
-        _ => format!("{line}\n"),
-    }).collect();
-    std::fs::write(f.saved(), restamped).unwrap();
-    assert_eq!(launch(&f.engine(), &f.saved(), "load"), "hashed=0 Ok(())", "the quick check should not have seen it");
-
+    let modified = std::fs::metadata(&node).unwrap().modified().unwrap();
+    std::fs::write(&node, b"#!/bin/sh\n# damaged!\nexit 9\n").unwrap();
+    std::fs::OpenOptions::new().write(true).open(&node).unwrap().set_modified(modified).unwrap();
+    assert_eq!(launch(&f.engine(), &f.saved(), "load"), TRUSTED, "a launch read the runtime");
     assert_eq!(launch(&f.engine(), &f.saved(), "recheck"), "Ok(Changed(\"bin/node\"))");
-    assert!(!f.saved().exists(), "what was verified was not forgotten");
+    let left = std::fs::read_to_string(f.saved()).unwrap_or_default();
+    assert_eq!(left.lines().count(), 1, "the record still names the runtime: {left}");
     let next = launch(&f.engine(), &f.saved(), "load");
-    assert!(next.contains("runtime file changed: bin/node"), "the next launch did not refuse: {next}");
+    assert!(next.starts_with("full=1 ") && next.contains("runtime file changed: bin/node"),
+            "the next launch did not verify and refuse: {next}");
+}
+
+/// A record that does not read cleanly, or names another runtime, is no record: one full check,
+/// never a refusal. A runtime delivered again (a new `delivery.json`) is a different runtime.
+#[test]
+fn a_record_for_anything_else_costs_one_full_check_and_never_a_refusal() {
+    let f = Fixture::new();
+    for nonsense in [&b"not the format"[..], b"richos-runtime-whole 1\nroot\t/somewhere/else\ndelivery\t1 2 3 4 5 6 7\n", b""] {
+        std::fs::write(f.saved(), nonsense).unwrap();
+        assert_eq!(launch(&f.engine(), &f.saved(), "load"), VERIFIED_IN_FULL);
+        assert_eq!(launch(&f.engine(), &f.saved(), "load"), TRUSTED, "a good record was not written back");
+    }
+    f.deliver(" again");
+    assert_eq!(launch(&f.engine(), &f.saved(), "load"), VERIFIED_IN_FULL, "a new delivery was trusted unread");
+    assert_eq!(launch(&f.engine(), &f.saved(), "load"), TRUSTED);
 }

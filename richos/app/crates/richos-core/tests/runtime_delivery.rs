@@ -205,12 +205,19 @@ fn a_delivery_already_verified_is_not_read_and_hashed_again_but_a_touched_file_i
         EngineRuntime::load(&fixture.0, None).unwrap();
     }
     assert_eq!(richos_core::runtime::files_hashed_under(&root), 7, "later connections reuse the verified result");
-    // Everything else is still checked on every load: an unlisted file is refused...
-    std::fs::write(fixture.0.join("runtime/stray.txt"), "fictional only").unwrap();
-    assert!(EngineRuntime::load(&fixture.0, None).unwrap_err().to_string().contains("unexpected"));
-    std::fs::remove_file(fixture.0.join("runtime/stray.txt")).unwrap();
-    // ...and so is a file rewritten with different bytes of the very same length.
+    // VERIFIED WHOLE ONCE, TRUSTED AS WRITTEN (launch-speed audit 2026-11-14, the CEO's "completely
+    // eliminate the need for that check"): a later load, at a launch or a connection, reads no
+    // byte of the tree, so a file changed afterwards is not its business. It is the late check's,
+    // which finds it and forgets the record, and the next load verifies in full and refuses.
     std::fs::write(fixture.0.join("runtime/bin/git"), b"#!/bin/sh\nexit 1\n").unwrap();
+    EngineRuntime::load(&fixture.0, None).expect("a load after verification reads no runtime bytes");
+    assert_eq!(richos_core::runtime::full_checks_under(&root), 1, "a later load verified the runtime again");
+    assert_eq!(
+        richos_core::runtime::recheck_runtime_bytes(&fixture.0).unwrap(),
+        richos_core::runtime::RuntimeRecheck::Changed("bin/git".into())
+    );
     assert!(EngineRuntime::load(&fixture.0, None).unwrap_err().to_string().contains("changed"));
-    assert_eq!(richos_core::runtime::files_hashed_under(&root), 7, "a failed read is not remembered as verified");
+    // The full check after the late one forgot everything reads in name order and stops at the
+    // refusal: bin/ffmpeg and bin/ffprobe again, then bin/git, refused and not counted (7 + 2).
+    assert_eq!(richos_core::runtime::files_hashed_under(&root), 9, "a failed read is not remembered as verified");
 }

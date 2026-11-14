@@ -1856,6 +1856,12 @@ pub fn install_engine(
             detail: format!("could not put the new one in place: {e}"),
         });
     }
+    // VERIFIED WHOLE, AT THE MOMENT IT WAS WRITTEN (launch-speed audit 2026-11-14, piece 1): the
+    // runtime was checked in full in staging above and moved into place whole by the rename, so
+    // it is recorded as verified and no launch reads it again (`runtime.rs`).
+    if pin.version == "1.2.0" {
+        crate::runtime::record_delivered_whole(dest);
+    }
     // An older engine may contain adopter-owned doctrine, agents or wiki records.
     // Preserve the complete predecessor. Cleanup requires a separate inventory;
     // a successful code replacement is not permission to delete user knowledge.
