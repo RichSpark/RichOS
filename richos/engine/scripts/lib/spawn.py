@@ -86,6 +86,7 @@ fails protects nothing and teaches its reader to skip it. So workspaces.py
 grew `check-spawn`: the SAME code as `register-spawn` with the write removed,
 reached only when the platform minted no tool_use_id. See `is_spawn_check`.
 """
+import fcntl
 import importlib.util
 import json
 import os
@@ -139,6 +140,82 @@ APP, OPERATOR = "app", "operator"
 class Refusal(Exception):
     """One thing that must be fixed before this teammate can be started. Never
     raised one at a time where several can be collected."""
+
+
+# ---------------------------------------------------------------------------
+# 0. THE TEAMMATE'S NUMBER
+# ---------------------------------------------------------------------------
+# The CEO's order (2026-10-21, confirmed; richos-hq docs/plans/follow-ups.md): a
+# second ACTIVE teammate with the same first name is echo2-..., a third echo3-...;
+# the lowest free number among the active ones; the first has no number. With
+# three Echos running the names are echo-opus-rename4, echo2-fable-launch1 and
+# echo3-opus-engupd1. This command picks the number, so nobody counts by hand.
+#
+# "Active" is what the workspace registry calls running, the same answer
+# agent-liveness.sh gives: a record whose finished_state is not finished (a
+# paused one keeps its number). A record whose state cannot be read keeps its
+# number too: "I could not tell" is never "it is gone".
+#
+# The app numbers its own teammates with this same function (mega-lander/app.py
+# prepare, through --next-name), because its receipt is keyed by the name before
+# this command runs; so an `--audience app` dispatch keeps the name it is given.
+
+def first_name(name):
+    """(the first name without its number, its number): echo-opus-x1 is ('echo', 1),
+    echo3-opus-x1 is ('echo', 3)."""
+    first = (name or "").split("-", 1)[0]
+    m = re.match(r"^(.*[a-z])([0-9]*)$", first)
+    if not m:
+        return first, 1
+    return m.group(1), max(int(m.group(2) or 1), 1)
+
+
+def numbered_name(name, taken):
+    """NAME with its first name numbered by TAKEN, the names of the active teammates:
+    the lowest number no active teammate of that first name holds, and none for 1.
+    Whatever number NAME already carries is replaced, never trusted. THE SAME TEAMMATE
+    AGAIN keeps its name: an active teammate of this first name with this exact rest of
+    the name (echo2-opus-x1 for echo-opus-x1) is that name, so a command run twice is
+    refused as a reused name instead of quietly starting a second teammate."""
+    base, _ = first_name(name)
+    rest = name.split("-", 1)[1] if "-" in name else ""
+    for other in taken:
+        if first_name(other)[0] == base and other.split("-", 1)[1:] == [rest]:
+            return other
+    used = {n for b, n in map(first_name, taken) if b == base}
+    k = 1
+    while k in used:
+        k += 1
+    return (base if k == 1 else "%s%d" % (base, k)) + ("-" + rest if rest else "")
+
+
+def active_names():
+    """The names of every teammate the workspace registry calls running."""
+    cache, out = {}, []
+    for rec in W.all_agents():
+        try:
+            finished = W.finished_state(rec, cache)[0]
+        except Exception:      # undecided: it keeps its number
+            finished = False
+        if not finished and rec.get("name"):
+            out.append(rec["name"])
+    return out
+
+
+def hold_number(base):
+    """Two spawns of one first name started together must not both see the same free
+    number, so the number is chosen under a lock per first name, held by this process
+    until it exits (the kernel releases it), which is after the workspace is registered."""
+    folder = os.path.join(W.state_dir(), "numbering")
+    os.makedirs(folder, exist_ok=True)
+    fd = os.open(os.path.join(folder, base + ".lock"), os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        print("spawn: waiting for another spawn of a teammate named %s to register" % base,
+              file=sys.stderr)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+    return fd
 
 
 def sh(args, cwd=None, timeout=60):
@@ -700,8 +777,16 @@ USAGE = """usage: spawn.sh <teammate-name> --repo <repo> [--repo <repo> ...]
                 [--integration [<repo>=]<branch>]
                 [--integration-why <text>] [--payload-out <file>] [--json] [--dry-run]
                 [--audience operator|app]
+       spawn.sh <teammate-name> --next-name [--type <subagent-type>] [--taken <name> ...]
 
-  <teammate-name>      <role>-<model>-<identifier>, e.g. zach-opus-spawn1
+  <teammate-name>      <role>-<model>-<identifier>, e.g. zach-opus-spawn1, or only
+                       <model>-<identifier>, and the role is --type. THE FIRST NAME
+                       IS NUMBERED HERE: with an active zach the teammate starts as
+                       zach2-opus-spawn1, with zach and zach2 active as zach3-...;
+                       the lowest number no active zach holds, none for the first
+                       (CEO, 2026-10-21). A number given by hand is replaced.
+  --next-name          print the name this teammate would get and do nothing else;
+                       each --taken <name> counts as one more active teammate
   --repo <repo>        absolute path, OR a bare name where it is unambiguous.
                        GIVE IT ONCE PER REPOSITORY this teammate works in: one
                        cc/ workspace is created and registered in each, under
@@ -741,7 +826,8 @@ EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
 def parse_args(argv):
     args = {"name": "", "repos": [], "type": "", "brief": "", "model": "", "effort": "", "description": "",
             "bases": [], "dirs": [], "integrations": [], "integration_why": "", "payload_out": "",
-            "json": False, "dry_run": False, "project_dir": "", "audience": OPERATOR}
+            "json": False, "dry_run": False, "project_dir": "", "audience": OPERATOR,
+            "next_name": False, "taken": []}
     flags = {"--type": "type", "--brief": "brief", "--model": "model", "--effort": "effort",
              "--description": "description",
              "--integration-why": "integration_why",
@@ -754,7 +840,7 @@ def parse_args(argv):
     # and a separator a path may legally contain cannot be the one that splits
     # it.
     repeatable = {"--repo": "repos", "--dir": "dirs", "--integration": "integrations",
-                  "--base": "bases"}
+                  "--base": "bases", "--taken": "taken"}
     i = 0
     while i < len(argv):
         a = argv[i]
@@ -774,6 +860,9 @@ def parse_args(argv):
         elif a == "--dry-run":
             args["dry_run"] = True
             i += 1
+        elif a == "--next-name":
+            args["next_name"] = True
+            i += 1
         elif a in ("-h", "--help"):
             sys.stderr.write(USAGE)
             raise SystemExit(2)
@@ -788,6 +877,9 @@ def parse_args(argv):
         raise Refusal("--effort must be one of %s" % ", ".join(EFFORT_LEVELS))
     if args["audience"] not in (APP, OPERATOR):
         raise Refusal("--audience must be %s or %s" % (APP, OPERATOR))
+    if args["name"].count("-") == 1 and args["type"]:
+        # Only <model>-<identifier>: the first name is the teammate type's.
+        args["name"] = args["type"].split(":")[-1] + "-" + args["name"]
     return args
 
 
@@ -797,6 +889,12 @@ def _main(argv):
     except Refusal as exc:
         sys.stderr.write("spawn: %s\n\n%s" % (exc, USAGE))
         return 2
+    if args["next_name"]:
+        if not args["name"]:
+            sys.stderr.write("spawn: missing name\n\n%s" % USAGE)
+            return 2
+        print(numbered_name(args["name"], active_names() + args["taken"]))
+        return 0
     missing = [k for k in ("name", "repos", "type", "brief") if not args[k]]
     if missing:
         sys.stderr.write("spawn: missing %s\n\n%s"
@@ -808,6 +906,13 @@ def _main(argv):
     session = W.current_session()
     notes = []
     problems = []
+    if args["audience"] == OPERATOR:
+        # The number, chosen before anything else reads the name (section 0).
+        hold_number(first_name(args["name"])[0])
+        given, args["name"] = args["name"], numbered_name(args["name"], active_names())
+        if args["name"] != given:
+            notes.append("name:        %s (given as %s; the lowest free number among the active "
+                         "teammates of this first name)" % (args["name"], given))
 
     # --- everything that can be decided without creating anything -----------
     try:
