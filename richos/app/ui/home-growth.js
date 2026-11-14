@@ -162,7 +162,7 @@ window.RichHomeGrowth = (function () {
 
     // the engine's own arrival order, for the first hundred
     var order = nodes.slice().sort(function (a, b) {
-      return (a.createdDay || 0) - (b.createdDay || 0) || (b.significance || 0) - (a.significance || 0) || (b.degree || 0) - (a.degree || 0);
+      return (a.createdDay || 0) - (b.createdDay || 0) || (a.arrivalOrder || 0) - (b.arrivalOrder || 0) || (b.significance || 0) - (a.significance || 0) || (b.degree || 0) - (a.degree || 0);
     });
     var tally = {};
     firstLane = null;
@@ -179,6 +179,11 @@ window.RichHomeGrowth = (function () {
 
     var st = load();
     var stage = stageOf(N);
+    // THE TERRITORY THAT EARNED THE FIRST COLOR KEEPS IT: once stage 3 has been reached it is
+    // written down, so records that arrive later (and may outrank the first hundred within a day)
+    // never move the color to another territory. "Nothing in it is ever taken away."
+    if (storeOk && typeof st.firstLane === "string" && allLanes.indexOf(st.firstLane) >= 0) firstLane = st.firstLane;
+    else if (storeOk && stage >= 3 && firstLane !== null) save({ firstLane: firstLane });
     scene = "";
     newCount = 0;
     startStage = stage;
@@ -738,6 +743,7 @@ window.RichHomeGrowth = (function () {
     var st = load();
     if (scene !== "handover") weekly(now);
     else if (storeOk) save({ week: weekOf(now) });
+    if (weeklyShown && !el.caption.textContent) caption(weeklyShown);
     // he has looked: what is up now is what "new since" is counted from next time
     // (a crossing's stage is kept when its sentence shows, `playCrossed`)
     var seen = { look: { count: N, at: now } };
@@ -773,8 +779,12 @@ window.RichHomeGrowth = (function () {
     if (load().week === week) return;
     var line = weeklyLine(now);
     if (line) caption(line);
+    weeklyShown = line;
     save({ week: week });
   }
+  /// This visit's weekly line, so a picture drawn again during the visit (new records read
+  /// behind the first answer) puts it back; cleared when he leaves.
+  var weeklyShown = "";
   /// The home screen came back with its picture already up (`home.js`, `show`): a visit like any
   /// other, also for an app left running from one week into the next.
   function visited() {
@@ -839,6 +849,7 @@ window.RichHomeGrowth = (function () {
     closeCard();
     momentOff();
     caption("");
+    weeklyShown = "";
   }
 
   // Any key or press ends the handover; Escape closes the card, ends the example, stops the replay.
@@ -875,6 +886,10 @@ window.RichHomeGrowth = (function () {
     ready: ready,
     left: left,
     visited: visited,
+    /// Is "Watch it grow" running? A picture is not drawn again under it (`home.js`, `refreshRecords`).
+    get replaying() {
+      return replaying;
+    },
     exampleSeen: exampleSeen,
     get exampleUp() {
       return exampleUp;

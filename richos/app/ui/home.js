@@ -1677,7 +1677,18 @@ window.RichHome = (function () {
         var now = field && Array.isArray(field.nodes) ? field.nodes.length : 0;
         var drawn = state.ghost ? state.ghost.total : null;
         if (!state.open || drawn === null) return false;
-        if (now > drawn) return rebuildGhost(field);
+        if (now > drawn) {
+          // NOT UNDER "WATCH IT GROW": a picture drawn again would cut the film short. The new
+          // records wait for its last frame (asked about once a second) and arrive after it.
+          if (window.RichHomeGrowth && window.RichHomeGrowth.replaying) {
+            return new Promise(function (resolve) {
+              setTimeout(resolve, 1000);
+            }).then(function () {
+              return state.open ? ask(round) : false;
+            });
+          }
+          return rebuildGhost(field);
+        }
         if (round >= RECORDS_ASK_AGAIN_MS.length) return false;
         return new Promise(function (resolve) {
           setTimeout(resolve, RECORDS_ASK_AGAIN_MS[round]);

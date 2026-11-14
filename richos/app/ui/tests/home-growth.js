@@ -200,6 +200,24 @@ async function main() {
     });
   }
 
+  await run.check("the territory that earned the first color keeps it, whatever arrives later", async () => {
+    // by today's numbers the largest of the first hundred is Northwind; Alder is the one written
+    // down when the first color came
+    const page = await openApp(browser, { homeTeam: TEAM, homeField: field(186) }, seenAt(186, 3, { firstLane: "alder" }));
+    await arrived(page);
+    await countIs(page, 186);
+    await leveled(page, { threads: 1, river: 0, core: 0, color: 1, done: 0, lanes: 1 });
+    const lit = await page.evaluate(() => window.__loro.domains.filter((d, i) => window.__loro.growth.laneOn[i] > 0.99).map((d) => d.id));
+    assertEqual(lit, ["own-alder"], "the color moved to another territory");
+    await page.close();
+    // and a user reaching stage 3 has his written down
+    const fresh = await openApp(browser, { homeTeam: TEAM, homeField: field(120) }, seenAt(120, 3));
+    await arrived(fresh);
+    assertEqual((await stored(fresh)).firstLane, "northwind", "the first territory was not kept");
+    await fresh.close();
+    return "kept: Alder stays in color; a new stage 3 writes down Northwind";
+  });
+
   await run.check("the card behind the distance line: six stages, the next one says what it switches on, and it opens and closes by pointer and by key", async () => {
     const page = await openApp(browser, { homeTeam: TEAM, homeField: field(186) }, seenAt(186, 3));
     await arrived(page);
@@ -287,8 +305,8 @@ async function main() {
     await page.click("#home-grow");
     assertEqual((await growth(page)).replaying, true, "the press did not start the replay");
     assertEqual(await text(page, "#home-grow"), "Stop", "the press does not offer the way out");
-    await page.waitForFunction(() => window.__loro.COUNT === 0, null, { timeout: 60000 });
-    assert((await levels(page)).threads < 0.05, "the replay does not start before the threads");
+    // (the press itself empties the picture and switches every piece off: read at once, as set)
+    assertEqual(await page.evaluate(() => window.__loro.growth.XT.threads), 0, "the replay does not start before the threads");
     // partway: one light at a time, the counter under the picture, no stage yet
     await page.waitForFunction(() => window.__loro.COUNT >= 3 && window.__loro.COUNT < 30, null, { timeout: 60000 });
     const mid = await text(page, "#home-replay .line");
@@ -530,6 +548,12 @@ async function main() {
     }, field(204));
     await page.waitForFunction(() => document.getElementById("home").hidden === true, null, { timeout: 60000 });
     await page.evaluate(() => window.RichHome.show("wordmark"));
+    // ...and he presses Watch it grow meanwhile: the film runs to its last frame before the
+    // picture is drawn again with the new records
+    await page.click("#home-grow");
+    await page.waitForFunction(() => document.getElementById("home-replay").classList.contains("last"), null, { timeout: 60000 });
+    assertEqual(await page.evaluate(() => window.RichHomeGrowth.state().n), 196, "the picture was drawn again under the replay");
+    assertEqual(await text(page, "#home-replay .line"), "Day 67 · 196 memories · First Color", "the replay did not reach its last frame");
     await page.waitForFunction(() => window.RichHomeGrowth.state().n === 204 && window.RichHomeGrowth.state().arrived, null, { timeout: 60000 });
     await countIs(page, 204);
     assertEqual(await text(page, "#home-caption"), "8 new since this morning", "the caption once the read behind the answer finished");
@@ -591,10 +615,16 @@ async function main() {
     await open.evaluate(() => window.RichHome.hide("enter-app"));
     await open.waitForFunction(() => document.getElementById("home").hidden === true, null, { timeout: 60000 });
     await open.clock.setFixedTime(new Date(2026, 10, 25, 9, 0, 0)); // the Wednesday after
+    await open.evaluate((f) => window.__RICHOS_MOCK__.homeFieldSet(f), field(328)); // and Rich has learned more
     await open.evaluate(() => window.RichHome.show("wordmark"));
     // last week is now days 64 to 70 of the dataset: its last group of eight, one decision
-    assertEqual(await text(open, "#home-caption"), "Last week: 8 memories, 1 decision.", "the weekly line on a visit in a new week, the app never relaunched");
+    const lined = await open.waitForFunction(() => document.getElementById("home-caption").textContent === "Last week: 8 memories, 1 decision.", null, { timeout: 60000 }).then(() => true, () => false);
+    assert(lined, "no weekly line on a visit in a new week, the app never relaunched: " + (await text(open, "#home-caption")));
     assertEqual((await stored(open)).week, WEEK + 7, "the new week was not kept");
+    // the picture is drawn again with the new records during this same visit: the line stays
+    await open.waitForFunction(() => window.RichHomeGrowth.state().n === 328 && window.RichHomeGrowth.state().arrived, null, { timeout: 60000 });
+    await countIs(open, 328);
+    assertEqual(await text(open, "#home-caption"), "Last week: 8 memories, 1 decision.", "the weekly line was lost when the picture was drawn again on the same visit");
     await open.close();
     // a week with nothing is never mentioned, and neither is a week the app cannot date
     const quiet = await openApp(browser, { homeTeam: TEAM, homeField: field(320, { daysAgo: 30 }) }, { stage: 4, look: { count: 320, at: NOW.getTime() }, week: WEEK - 7 });
