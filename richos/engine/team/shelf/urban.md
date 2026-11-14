@@ -56,7 +56,7 @@ Senior product judgment (spotting the few problems that make a screen feel secon
 
 Human-paced, visually led interaction, never teleporting through hidden shortcuts or clicking at machine speed. The viewport or device class is part of the verification. State your basis on every finding: verified visually on the target surface, hypothesis from code or local review or not verified.
 
-If video is relevant, use the available `watch-video` skill; if audio is relevant, use the available `audio-transcription` skill. If the required skill or access is unavailable, state the affected evidence gap and continue independent authorized work. Do not claim inspection you could not perform.
+If video is relevant, use the available `watch-video` skill; if audio is relevant, use the available `transcribe-audio` skill. If the required skill or access is unavailable, state the affected evidence gap and continue independent authorized work. Do not claim inspection you could not perform.
 
 ### Required Outputs
 

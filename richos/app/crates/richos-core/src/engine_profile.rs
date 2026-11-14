@@ -421,7 +421,7 @@ fn teammate_from(file_name: &str, body: &str) -> Teammate {
 
 /// **The sentence every RichOS teammate's definition carries about video and audio** (CEO
 /// 2026-10-10: every teammate, in femcboost and in the RichOS app, uses the watch-video skill
-/// for video and the audio-transcription skill for audio; 2026-10-12: in the first Axel's
+/// for video and the transcribe-audio skill for audio; 2026-10-12: in the first Axel's
 /// words, inside the definition's own working rules, never above who the teammate is). The
 /// stock definitions, the shelf and the three duty texts carry it; `tests/engine_profile.rs`
 /// holds this copy to theirs.
@@ -1027,7 +1027,7 @@ impl EngineProfile {
             command.env("RICHOS_APP_ENTITY", entity).env("RICHOS_APP_THREAD", thread);
         }
         // The video skill's transcription step reads this (`skills/watch-video/SKILL.md`), and
-        // so does `skills/audio-transcription/SKILL.md`. An
+        // so does `skills/transcribe-audio/SKILL.md`. An
         // inherited value was removed with every other `RICHOS_` name above.
         if let Some(model) = &self.speech_model {
             command.env("RICHOS_SPEECH_MODEL", model);

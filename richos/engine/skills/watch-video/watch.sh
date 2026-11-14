@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # watch.sh — "watch" a video or screen recording: a timestamped transcript of its
-# sound (through the audio-transcription skill's script, i.e. RichOS's own
+# sound (through the transcribe-audio skill's script, i.e. RichOS's own
 # pipeline) plus still frames at every scene change and at least one frame every
 # N seconds while the screen does not change, and one time-ordered index that
 # puts every frame beside the words spoken at that moment. Read the index, then
@@ -20,7 +20,7 @@
 #   <output-dir>/frames/frame-NNNN-tMMmSS.Ss.png   one PNG per kept moment, at most 1920 px wide
 #   <output-dir>/sheets/sheet-NN-tMMmSS.Ss.jpg   (--sheet N only) N frames tiled in one image
 #   <output-dir>/video.<ext>         (a URL only) the downloaded video, for frames-at.sh
-#   <output-dir>/transcript.md       the transcript (see the audio-transcription skill)
+#   <output-dir>/transcript.md       the transcript (see the transcribe-audio skill)
 #   <output-dir>/pipeline/, pipeline.log   the transcription pipeline's own record
 #
 # Exit: 0 frames written (and the transcript, if the file has sound); 1 usage or
@@ -85,7 +85,7 @@ case "$HEIGHT" in ''|*[!0-9]*) echo "watch: --height takes a number of pixels" >
 if [ "$SHEET" -gt 24 ]; then echo "watch: --sheet takes at most 24 frames per sheet (more is not legible)" >&2; exit 1; fi
 
 HERE="$(cd -P "$(dirname "$0")" && pwd -P)"
-TRANSCRIBE="$HERE/../audio-transcription/transcribe.sh"
+TRANSCRIBE="$HERE/../transcribe-audio/transcribe.sh"
 [ -x "$TRANSCRIBE" ] || { echo "watch: transcribe script not found at $TRANSCRIBE" >&2; exit 1; }
 for tool in ffmpeg ffprobe python3; do
     if ! command -v "$tool" >/dev/null 2>&1; then
@@ -125,7 +125,7 @@ esac
 
 [ -f "$INPUT" ] || { echo "watch: no such file: $INPUT" >&2; exit 1; }
 if [ -z "$(ffprobe -v error -select_streams v -show_entries stream=index -of csv=p=0 "$INPUT")" ]; then
-    echo "watch: $INPUT has no video track; use the audio-transcription skill instead" >&2
+    echo "watch: $INPUT has no video track; use the transcribe-audio skill instead" >&2
     exit 1
 fi
 mkdir -p "$OUT"

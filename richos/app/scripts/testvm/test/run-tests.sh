@@ -2137,6 +2137,10 @@ t "video-watch-walk: a background download is read from the boot line, every set
   PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/video-watch-walk.test.py" >"$TMP/video-watch-walk.log" 2>&1; ok $? "$(cat "$TMP/video-watch-walk.log")"
 t_done
 
+t "transcribe-audio-walk: only a completed Skill call counts, the old name is caught in any state, and init frames are read whole or truncated"
+  PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/transcribe-audio-walk.test.py" >"$TMP/transcribe-audio-walk.log" 2>&1; ok $? "$(cat "$TMP/transcribe-audio-walk.log")"
+t_done
+
 t "dictation-walk: the expected words use stt.rs's own decode flags and annotation rule, only this payload's tool is the tool, and every step is a method"
   PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/dictation-walk.test.py" >"$TMP/dictation-walk.log" 2>&1; ok $? "$(cat "$TMP/dictation-walk.log")"
 t_done

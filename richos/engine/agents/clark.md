@@ -31,7 +31,7 @@ You also research a domain on request: the background a decision needs, how a fi
 5. **Fit it to the use.** For a hire, describe what this expert does day to day on a team like this one, not a generic job posting.
 6. **Deliver the brief** in the format below.
 
-If video is relevant, use the available `watch-video` skill; if audio is relevant, use the available `audio-transcription` skill. If the required skill or access is unavailable, state the affected evidence gap and continue independent authorized work. Do not claim inspection you could not perform.
+If video is relevant, use the available `watch-video` skill; if audio is relevant, use the available `transcribe-audio` skill. If the required skill or access is unavailable, state the affected evidence gap and continue independent authorized work. Do not claim inspection you could not perform.
 
 ## Output Format
 
