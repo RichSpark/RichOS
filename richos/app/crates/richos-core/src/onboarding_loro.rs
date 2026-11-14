@@ -7,7 +7,8 @@
 //!
 //! It was not happening. Onboarding keeps what it learns in the central folder: the user's
 //! answers and Rich's notes in `companies/<id>/company.md` (`onboarding_tools.rs`
-//! `save_company_notes`), the user's own details in `person.md` (`save_person`), and the team's
+//! `save_company_notes`), the user's own details in `person.md` (`save_person`), how the user
+//! wants Rich to work in `instructions.md` (`save_your_instructions`), and the team's
 //! research beside the company notes (Stu's dossier, `engine/app/agents/stu.md`). None of it
 //! reached the loro corpus, which is what the home screen and Rich's company memory read.
 //!
@@ -127,6 +128,20 @@ pub fn sources(central_root: &Path, registry: &EntityRegistry) -> Vec<Source> {
             title: "The user's own details".into(),
             body,
             path: crate::person::path(central_root),
+        });
+    }
+    // How the user wants Rich to work, which onboarding saves with `save_your_instructions`
+    // (`your_instructions.rs`) and the user may edit too. The file is read as it is; it keeps
+    // working as the user's instructions exactly as before.
+    if let Some(prefs) = crate::your_instructions::read(central_root).ok().map(|t| t.trim().to_string()).filter(|t| !t.is_empty()) {
+        let body = if names.is_empty() { prefs } else { format!("{prefs}\n\nTheir companies in RichOS: {}.", names.join(", ")) };
+        out.push(Source {
+            key: "instructions".into(),
+            company: None,
+            stem: "working-preferences".into(),
+            title: "How the user wants Rich to work".into(),
+            body,
+            path: crate::your_instructions::path(central_root),
         });
     }
     for entity in registry.entities() {
@@ -433,6 +448,21 @@ mod tests {
             }
             assert!(id.len() <= 80 && id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'), "{id}");
         }
+    }
+
+    /// How the user wants Rich to work, saved during onboarding with `save_your_instructions`
+    /// (`your_instructions.rs`), is onboarding info too (review rv-20261114T170005Z-715d6bef-7fd9).
+    #[test]
+    fn the_working_preferences_onboarding_saved_are_a_source() {
+        let root = tmp();
+        let reg = registry(&[("harborline", "Harborline")]);
+        assert!(sources(&root, &reg).is_empty());
+        crate::your_instructions::add_rules(&root, &["Do not disturb me before 10am.".to_string()]).unwrap();
+        let got = sources(&root, &reg);
+        let prefs = got.iter().find(|s| s.key == "instructions").expect("the saved working preferences are not a source");
+        assert!(prefs.body.contains("Do not disturb me before 10am."), "{}", prefs.body);
+        assert_eq!(prefs.partition(), "ceo");
+        assert_eq!(prefs.path, crate::your_instructions::path(&root));
     }
 
     #[test]
