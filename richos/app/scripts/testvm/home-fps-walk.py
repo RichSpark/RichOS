@@ -114,6 +114,18 @@ class Walk(standard.Walk):
             text = (found or {}).get('value') or (found or {}).get('title') or ''
         return text if 'memories' in text else None
 
+    def to_home(self):
+        """home-standard-walk.py's, with the sheets declined on every try: a first-run sheet that comes
+        up after the first look (the memory setup's "Where should I keep what you tell me?") covers the
+        rail, and a press on Home under it does nothing."""
+        for _ in range(8):
+            self.decline_sheets()
+            if self.node('--id', 'home-enter'):
+                return True
+            self.ax('click', '--id', 'nr-home', '--first')
+            time.sleep(3)
+        raise StepFailed('the home screen did not come up')
+
     # ---- the steps ------------------------------------------------------------------------
     def example(self):
         self.build_meter()
