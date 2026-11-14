@@ -30,6 +30,13 @@ struct Marks {
     splash: Option<bool>,
     report: crate::update_startup::LaunchReport,
     engine: Option<String>,
+    /// The splash this start shows, whether it was the pick saved at the last quit, and its
+    /// opening: `Ok(later pictures)` when it played, `Err(why not)`.
+    splash_id: Option<String>,
+    splash_saved: bool,
+    opening: Option<Result<usize, String>>,
+    /// The moment of the splash the page joined the opening at, ms after the first frame.
+    joined: Option<f64>,
     written: bool,
 }
 
@@ -107,6 +114,22 @@ pub fn note_engine_check(files_read: Option<usize>, millis: u64) {
     with(|m| m.engine = Some(said));
 }
 
+/// Which splash this start shows and whether its opening played (Sage's plan 2026-11-14, "the
+/// splash the rules picked is playing within 380 ms of the click", section 6, "The app's launch
+/// line": "which splash, whether its opening was used and, if not, why").
+pub fn note_splash(id: &str, saved: bool, opening: Result<usize, String>) {
+    with(|m| {
+        m.splash_id = Some(id.to_string());
+        m.splash_saved = saved;
+        m.opening = Some(opening);
+    });
+}
+
+/// The page joined the opening at this moment of the splash.
+pub fn note_joined(moment: f64) {
+    with(|m| m.joined = Some(moment));
+}
+
 /// The start-up hook has finished.
 pub fn mark_finished() {
     let at = since_start();
@@ -146,14 +169,27 @@ fn line(m: &Marks, started: Option<u64>) -> String {
         ),
         (Some(check), Some(old)) => format!("bundle check {check}, after a hand-over whose check was {old}"),
     };
+    let splash = match &m.splash_id {
+        Some(id) => {
+            let picked = if m.splash_saved { "picked at the last quit" } else { "picked by the rules at this start" };
+            let opening = match &m.opening {
+                Some(Ok(n)) => format!("its opening used ({n} later pictures)"),
+                Some(Err(why)) => format!("its opening not used: {why}"),
+                None => "its opening not used: not known".to_string(),
+            };
+            let joined = m.joined.map(|v| format!(", the page joined it at {v:.0} ms")).unwrap_or_default();
+            format!("splash shown, {id} ({picked}), {opening}{joined}")
+        }
+        None if m.splash == Some(true) => "splash shown".to_string(),
+        None => "no splash".to_string(),
+    };
     format!(
         "[richos] launch timing: update step {}, window {}, first frame {}, start-up finished {}, {page} after the \
-         process started; {}; update put in place: {}; {bundle}; engine check {}; process started at {}",
+         process started; {splash}; update put in place: {}; {bundle}; engine check {}; process started at {}",
         ms(m.update_step),
         ms(m.window),
         ms(m.first_frame),
         ms(m.finished),
-        if m.splash == Some(true) { "splash shown" } else { "no splash" },
         if m.report.activated { "yes" } else { "no" },
         m.engine.as_deref().unwrap_or("none (no engine)"),
         started.map(|s| s.to_string()).unwrap_or_else(|| "unknown".into()),
@@ -186,6 +222,10 @@ mod tests {
                 activated: false,
             },
             engine: Some("none (trusted as verified when it was written), 3 ms".into()),
+            splash_id: None,
+            splash_saved: false,
+            opening: None,
+            joined: None,
             written: false,
         };
         assert_eq!(
@@ -197,6 +237,20 @@ mod tests {
         );
         let old = Marks { report: crate::update_startup::LaunchReport { handover: Some(String::new()), ..m.report.clone() }, ..m.clone() };
         assert!(line(&old, None).contains("after a hand-over from an older copy that does not report its own"));
+        let opened = Marks {
+            splash_id: Some("round-11/v2".into()),
+            splash_saved: true,
+            opening: Some(Ok(30)),
+            joined: Some(412.4),
+            ..m.clone()
+        };
+        assert!(line(&opened, None).contains(
+            "; splash shown, round-11/v2 (picked at the last quit), its opening used (30 later pictures), the page joined it at 412 ms; "
+        ));
+        let fell_back = Marks { splash_saved: false, opening: Some(Err("nothing was saved at the last quit".into())), joined: None, ..opened };
+        assert!(line(&fell_back, None).contains(
+            "; splash shown, round-11/v2 (picked by the rules at this start), its opening not used: nothing was saved at the last quit; "
+        ));
         let ceiling = Marks { page: None, splash: Some(false), engine: None, ..m };
         let text = line(&ceiling, None);
         assert!(text.contains("page took over: not reported"), "{text}");

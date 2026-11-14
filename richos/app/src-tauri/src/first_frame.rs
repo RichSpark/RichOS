@@ -47,6 +47,12 @@ pub fn ground(splash: bool, light_theme: bool) -> tauri::window::Color {
     tauri::window::Color(r, g, b, 255)
 }
 
+/// The window's background when the splash plays: the picked splash's own ground
+/// (`splash_pick`), so a splash added later on another ground is never shown on the wrong one.
+pub fn color((r, g, b): (u8, u8, u8)) -> tauri::window::Color {
+    tauri::window::Color(r, g, b, 255)
+}
+
 /// RULE 2: show what the window holds now, without waiting for the main thread to go idle: draw
 /// its views and flush the drawing to the window server. Main thread only (the setup hook).
 #[cfg(target_os = "macos")]
@@ -128,6 +134,9 @@ mod tests {
         "richos_core::quota::reset_tools::run_stdio", "richos_core::quota::terminal::run",
         "richos_core::rich_files::run_stdio", "richos_core::runtime::remember_verified_at",
         "richos_core::search_tools::run_stdio", "richos_core::status_tools::run_stdio",
+        // The saved pick and its opening's first picture (Sage's plan 2026-11-14, "the splash the
+        // rules picked is playing within 380 ms of the click", section 5 item 5).
+        "splash_pick::for_launch", "splash_opening::reduce_motion", "splash_opening::show", "first_frame::color",
         "richos_core::status_tools::run_stdio_with_meeting", "richos_core::system_resources::read",
         "richos_core::system_resources::run_stdio", "richos_core::util::now_millis", "serde_json::to_string",
         "startup_alert::cannot_start", "startup_alert::install", "startup_alert::rearm", "std::env::args",
@@ -199,8 +208,13 @@ mod tests {
         for name in NEVER_BEFORE_THE_FIRST_FRAME {
             assert!(!before.contains(name), "{name} runs in front of the splash's first frame (rule 3)");
         }
-        // The window's background and the commit are what make the first frame the splash's own.
-        assert!(main[hook..commit].contains(".background_color(first_frame::ground("));
+        // The window's background (the picked splash's ground) and its opening's first picture,
+        // then the commit, are what make the first frame the splash's own.
+        let before_commit = &main[hook..commit];
+        assert!(before_commit.contains(".background_color(match window_splash {")
+            && before_commit.contains("first_frame::color(pick.ground)")
+            && before_commit.contains("first_frame::ground("));
+        assert!(before_commit.contains("splash_opening::show(&window, &o)"), "the opening's first picture goes in before the commit");
     }
 
     #[test]
@@ -209,10 +223,12 @@ mod tests {
         assert_eq!(ground(true, true), tauri::window::Color(0x0C, 0x13, 0x22, 255), "the splash is always dark");
         assert_eq!(ground(false, true), tauri::window::Color(0xEA, 0xE6, 0xDD, 255));
         assert_eq!(ground(false, false), tauri::window::Color(0x0C, 0x13, 0x22, 255));
-        let library = std::fs::read_to_string("../ui/splash-library.js").expect("run from src-tauri/");
-        let grounds: Vec<&str> = library.match_indices("\"ground\": \"").map(|(at, m)| &library[at + m.len()..at + m.len() + 7]).collect();
-        assert!(!grounds.is_empty() && grounds.iter().all(|g| g.eq_ignore_ascii_case("#0C1322")),
-                "a splash entry has a ground the first frame does not carry: {grounds:?}");
+        // Every catalog entry has a ground the window can carry (the saved pick brings its own,
+        // `first_frame::color`), and today's two are the splash ground this file names.
+        let catalog = crate::splash_pick::catalog();
+        assert!(!catalog.is_empty() && catalog.iter().all(|e| crate::splash_pick::parse_hex(&e.ground).is_some()));
+        assert!(catalog.iter().all(|e| crate::splash_pick::parse_hex(&e.ground) == Some(SPLASH_GROUND)));
+        assert_eq!(color(SPLASH_GROUND), ground(true, true));
         let style = std::fs::read_to_string("../ui/style.css").unwrap();
         assert!(style.contains("--ground: #0c1322;") && style.contains("--ground: #eae6dd;"), "the app's grounds moved");
     }
