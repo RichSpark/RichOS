@@ -497,6 +497,7 @@ richos/app/
                               prefix, and an unreachable engine answers no rather than
                               assuming support
     tests/onboarding_persistence_tests.rs regressions for verified tool persistence, per-company answers, resumption and MCP transport.
+    tests/onboarding_loro_tests.rs what onboarding saves (the user's details, the company notes, the team's research) reaching the user's loro by itself, against the real loro writer and compiler: written once, superseded when it changes, never written twice.
     tests/your_instructions_tool_tests.rs Rich saving the user's instructions (round 36 screen 1): rules added at the end of instructions.md only in a visible turn, extra arguments refused, and the card left for that conversation's turn.
     tests/failed_start_leaves_nothing_tests.rs a conversation lease that cannot start removes its scope files and starts no Haiku.
     tests/request_preparation_tests.rs regressions for cancellable preparation, independent replies and startup, rotation, provider retries and restart outcomes.

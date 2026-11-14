@@ -364,6 +364,12 @@ impl CliLoroWriter {
         Ok((install.as_ref().map(CliLoroWriter::from_install), tried))
     }
 
+    /// A real write with the writer's own arguments, for a caller whose write is not a CEO-confirmed
+    /// correction: onboarding's saved files (`onboarding_loro.rs`, CEO 2026-11-14).
+    pub(crate) fn run_verb(&self, verb: &str, extra: &[String], body: Option<&str>) -> Result<WriteOutput, CorrectionError> {
+        self.run(verb, extra, body, false)
+    }
+
     fn run(&self, verb: &str, extra: &[String], body: Option<&str>, dry_run: bool) -> Result<WriteOutput, CorrectionError> {
         use std::process::Stdio;
         let (root_flag, root_path) = self.root.args();
