@@ -125,6 +125,16 @@ class EngineUpdateWalk(new_user.NewUserWalk):
             time.sleep(1)
         if not self.received(words):
             self.ax('click', '--id', 'send', '--first')
+            end = time.monotonic() + 10
+            while time.monotonic() < end and not self.received(words):
+                time.sleep(1)
+        if not self.received(words):
+            # Still not taken: the screen and the app's log as they are now, then the words typed
+            # and sent once more, as a person would.
+            self.frame(name + '-not-taken')
+            (self.out / (name + '-not-taken.log')).write_text(self.read_log(self.next_log))
+            self.type_into(words, '--role', 'AXTextArea', '--title', 'Message to Rich')
+            new_user.command([HERE / 'ax.sh', self.vm, '--key', new_user.RETURN_KEY])
         end = time.monotonic() + seconds
         outcome = None
         while time.monotonic() < end:
@@ -189,6 +199,7 @@ class EngineUpdateWalk(new_user.NewUserWalk):
                 after = self.read_log(self.next_log)
                 reply = {'sent_at_s': round(sent - began, 1), 'seconds': round(time.monotonic() - sent, 1),
                          'outcome': outcome, 'install_done_when_answered': DONE in after}
+                (self.out / 'next.log').write_text(after)
                 if not outcome or outcome.get('state') != 'completed' or not outcome.get('rich_wrote'):
                     raise StepFailed('the message sent during the install was not answered: ' + json.dumps(reply))
                 if reply['install_done_when_answered']:
