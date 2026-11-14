@@ -70,9 +70,13 @@ impl Source {
         format!("{digest:x}")[..8].to_string()
     }
 
-    /// The record id: the stem, made a legal loro id (`[a-z0-9][a-z0-9-]{0,79}`), and the hash.
-    /// A new version of the file is a new id, so it can supersede the old one.
-    pub fn record_id(&self) -> String {
+    /// The record id: the stem, made a legal loro id (`[a-z0-9][a-z0-9-]{0,79}`), and the hash of what
+    /// the record says; from the second `try_n` on, `-r<n>` after it. A new version of the file is a
+    /// new id, so it can supersede the old one. Words the file held once before (a name changed and
+    /// changed back) find their first id taken by a superseded record, and [`sync`] goes on to the
+    /// next `try_n`, so they become a new current record at the top of the history, never the old
+    /// one again (review rv-20261114T145826Z-8ffdde80-6144).
+    pub fn record_id(&self, try_n: u32) -> String {
         let mut slug = String::new();
         for c in self.stem.chars() {
             let c = c.to_ascii_lowercase();
@@ -85,7 +89,11 @@ impl Source {
         slug.truncate(70);
         let slug = slug.trim_end_matches('-');
         let slug = if slug.is_empty() { "onboarding" } else { slug };
-        format!("{slug}-{}", self.hash())
+        if try_n <= 1 {
+            format!("{slug}-{}", self.hash())
+        } else {
+            format!("{slug}-{}-r{try_n}", self.hash())
+        }
     }
 }
 
@@ -187,6 +195,14 @@ fn record_args(source: &Source) -> Vec<String> {
     ]
 }
 
+impl CliLoroWriter {
+    /// Whether loro holds `record` and nothing has superseded it (its file says `supersededBy: null`).
+    fn is_current(&self, record: &str) -> bool {
+        self.run_verb("show", &["--ref".into(), record.to_string()], None)
+            .is_ok_and(|out| out.text.lines().any(|l| l.trim() == "supersededBy: null"))
+    }
+}
+
 impl OnboardingLoroWriter for CliLoroWriter {
     fn append(&self, source: &Source, id: &str) -> Result<String, String> {
         let mut args = vec!["--partition".into(), source.partition().to_string(), "--id".into(), id.to_string()];
@@ -198,7 +214,9 @@ impl OnboardingLoroWriter for CliLoroWriter {
                 // it: the writer names the record that holds them, and that is the one to keep.
                 let why = e.to_string();
                 match why.split('"').nth(1).filter(|r| r.starts_with("rec:") && why.contains("already exists")) {
-                    Some(existing) if existing.ends_with(&format!("/{id}")) => Ok(existing.to_string()),
+                    // Only a record that is still current: one a later revision replaced is
+                    // history, and taking it would put the old words back as if they were new.
+                    Some(existing) if existing.ends_with(&format!("/{id}")) && self.is_current(existing) => Ok(existing.to_string()),
                     _ => Err(why),
                 }
             }
@@ -253,6 +271,10 @@ pub struct SyncReport {
     pub problems: Vec<String>,
 }
 
+/// How many ids one file's words may take before [`sync`] reports it (the same words saved, replaced
+/// and saved again this many times).
+const MAX_TRIES: u32 = 9;
+
 /// One copy at a time in this process: the end of a turn and the boot can come together.
 static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
 
@@ -288,13 +310,20 @@ pub fn sync(sources: &[Source], writer: &dyn OnboardingLoroWriter, corpus: &str,
         if previous.as_ref().is_some_and(|p| p.hash == hash) {
             continue;
         }
-        let id = source.record_id();
-        let written = match &previous {
-            // A record that cannot be superseded (moved or removed by hand) is no reason to
-            // lose the new version: it is written as a new record.
-            Some(p) => writer.supersede(source, &p.record, &id).or_else(|_| append_into(writer, source, &id)),
-            None => append_into(writer, source, &id),
-        };
+        let mut written = Err(String::new());
+        for try_n in 1..=MAX_TRIES {
+            let id = source.record_id(try_n);
+            written = match &previous {
+                // A record that cannot be superseded (moved or removed by hand) is no reason to
+                // lose the new version: it is written as a new record.
+                Some(p) => writer.supersede(source, &p.record, &id).or_else(|_| append_into(writer, source, &id)),
+                None => append_into(writer, source, &id),
+            };
+            // The id is held by a record a later revision replaced: the next id.
+            if !matches!(&written, Err(why) if why.contains("already exists")) {
+                break;
+            }
+        }
         match written {
             Ok(record) => {
                 report.written.push(format!("{} -> {record}", source.key));
@@ -329,10 +358,24 @@ mod tests {
         r
     }
 
+    /// Loro as far as the copy can see it: ids are taken for good, as the real writer refuses to
+    /// write over a record, superseded or not.
     #[derive(Default)]
     struct Fake {
         calls: RefCell<Vec<String>>,
         partitions: RefCell<Vec<String>>,
+        taken: RefCell<Vec<String>>,
+    }
+
+    impl Fake {
+        fn take(&self, s: &Source, id: &str) -> Result<String, String> {
+            let r = format!("rec:{}/records/{id}", s.partition());
+            if self.taken.borrow().contains(&r) {
+                return Err(format!("loro write: \"{r}\" already exists. Refusing to overwrite it"));
+            }
+            self.taken.borrow_mut().push(r.clone());
+            Ok(r)
+        }
     }
 
     impl OnboardingLoroWriter for Fake {
@@ -341,11 +384,11 @@ mod tests {
             if s.partition() != "ceo" && !self.partitions.borrow().iter().any(|p| p == s.partition()) {
                 return Err(format!("loro write: no company \"{}\" in this corpus.", s.partition()));
             }
-            Ok(format!("rec:{}/records/{id}", s.partition()))
+            self.take(s, id)
         }
         fn supersede(&self, s: &Source, old: &str, id: &str) -> Result<String, String> {
             self.calls.borrow_mut().push(format!("supersede {old} {id}"));
-            Ok(format!("rec:{}/records/{id}", s.partition()))
+            self.take(s, id)
         }
         fn create_company(&self, id: &str, _name: &str) -> Result<(), String> {
             self.calls.borrow_mut().push(format!("create {id}"));
@@ -376,7 +419,8 @@ mod tests {
         assert_eq!(got[2].title, "Harborline: onboarding research");
         assert!(got[0].body.ends_with("Their companies in RichOS: Harborline."));
         for s in &got {
-            let id = s.record_id();
+            let id = s.record_id(1);
+            assert!(s.record_id(9).len() <= 80, "{}", s.record_id(9));
             assert!(id.len() <= 80 && id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'), "{id}");
         }
     }
@@ -409,5 +453,28 @@ mod tests {
         fake.calls.borrow_mut().clear();
         sync(&sources(&root, &reg), &fake, "/another-corpus", &kept);
         assert!(fake.calls.borrow()[0].starts_with("append "), "a different corpus gets its own records");
+    }
+
+    /// Changed and changed back: the restored words are a new current record that supersedes the
+    /// one in between, never the first, superseded record again (review rv-20261114T145826Z-8ffdde80-6144).
+    #[test]
+    fn words_saved_again_after_a_change_are_a_new_current_record() {
+        let root = tmp();
+        let kept = root.join(KEPT_FILENAME);
+        let reg = registry(&[]);
+        let fake = Fake::default();
+        crate::person::save(&root, "Alex.").unwrap();
+        let first = sync(&sources(&root, &reg), &fake, "/corpus", &kept).written;
+        crate::person::save(&root, "Alexander.").unwrap();
+        let second = sync(&sources(&root, &reg), &fake, "/corpus", &kept).written;
+        crate::person::save(&root, "Alex.").unwrap();
+        let third = sync(&sources(&root, &reg), &fake, "/corpus", &kept);
+        assert!(third.problems.is_empty(), "{:?}", third.problems);
+        let (first, second, third) = (first[0].clone(), second[0].clone(), third.written[0].clone());
+        let ref_of = |line: &str| line.rsplit(" -> ").next().unwrap().to_string();
+        assert_ne!(ref_of(&third), ref_of(&first), "the first, superseded record came back as current");
+        assert!(ref_of(&third).ends_with("-r2"), "{third}");
+        assert!(fake.calls.borrow().iter().any(|c| c == &format!("supersede {} {}", ref_of(&second), ref_of(&third).rsplit('/').next().unwrap())),
+            "the restored words do not supersede the record in between: {:?}", fake.calls.borrow());
     }
 }

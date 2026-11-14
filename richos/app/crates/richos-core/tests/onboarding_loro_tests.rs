@@ -116,9 +116,24 @@ fn what_onboarding_saves_is_added_to_the_users_loro_and_a_change_supersedes_it()
     let notes = now.iter().find(|r| r.contains("harborline-company-")).unwrap();
     assert!(!after.contains(notes), "the current company notes are the new version");
 
+    // Changed back to the first words: a new current record on top of the history, never the first
+    // record (superseded) brought back.
+    onboarding_tools::call(&scope_path, "save_company_notes", json!({
+        "notes": "Harborline Ferries runs three fictional island routes. Dana wants weekly bookings off her plate.",
+        "progress": "partial"})).unwrap();
+    let restored = onboarding_loro::sync(&onboarding_loro::sources(&central, &registry), &writer, &corpus, &kept);
+    assert!(restored.problems.is_empty(), "{:?}", restored.problems);
+    assert_eq!(restored.written.len(), 1);
+    let back = current_records(&install, &registry);
+    assert_eq!(back.len(), 3, "{back:?}");
+    let current_notes = back.iter().find(|r| r.contains("harborline-company-")).unwrap();
+    assert!(current_notes.ends_with("-r2"), "the restored notes are not a new revision: {current_notes}");
+    assert!(!after.contains(current_notes), "the first, superseded record came back as current");
+    assert_eq!(census_total(&install), 5, "the history is first, second, restored: nothing rewritten");
+
     // The kept file lost: the same words are recognized, not written twice.
     std::fs::remove_file(&kept).unwrap();
     let relearned = onboarding_loro::sync(&onboarding_loro::sources(&central, &registry), &writer, &corpus, &kept);
     assert!(relearned.problems.is_empty(), "{:?}", relearned.problems);
-    assert_eq!(census_total(&install), 4);
+    assert_eq!(census_total(&install), 5);
 }
