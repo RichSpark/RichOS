@@ -263,13 +263,23 @@ struct BrowserView: View {
     private var searchBar: some View {
         HStack(spacing: 5) {
             Image(systemName: "magnifyingglass").foregroundStyle(palette.muted).accessibilityHidden(true)
-            TextField(model.searchContent ? "Search text contents" : "Search " + model.folder.lastPathComponent,
-                      text: $model.searchText)
-                .textFieldStyle(.plain)
-                .focused($focus, equals: .search)
-                .accessibilityLabel(model.searchContent ? "Search text contents" : "Search this folder")
-                .accessibilityIdentifier("folder-search")
-                .onSubmit { startSearch() }
+            // The prompt is drawn in `palette.hint`, not by the field: the system placeholder color
+            // cannot be set on macOS 13 and measured 1.80:1 light and 2.19:1 dark.
+            ZStack(alignment: .leading) {
+                if model.searchText.isEmpty {
+                    Text(model.searchContent ? "Search text contents" : "Search " + model.folder.lastPathComponent)
+                        .foregroundStyle(palette.hint)
+                        .lineLimit(1)
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                }
+                TextField("", text: $model.searchText)
+                    .textFieldStyle(.plain)
+                    .focused($focus, equals: .search)
+                    .accessibilityLabel(model.searchContent ? "Search text contents" : "Search this folder")
+                    .accessibilityIdentifier("folder-search")
+                    .onSubmit { startSearch() }
+            }
             if model.searchActive {
                 barButton("Clear Search", "xmark.circle") { model.clearSearch() }
             }

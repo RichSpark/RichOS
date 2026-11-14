@@ -28,8 +28,8 @@ STEPS (in the guest, never on the host's screen, CEO section 65; nothing is play
                   Rich's note that five tools came with him and the tools card with Turn on RichScribe;
                   Turn on RichScribe pressed: the card asks for the key, the microphone and Accessibility
   richfiles       the rail's RichFiles item opens the RichFiles page with the native browser in it (its
-                  accessibility tree kept); Compare Folders, Find Duplicate Files and Disk Usage each
-                  opened; Undock RichFiles opens RichFiles as its own app, which is then docked again
+                  accessibility tree kept), light and dark frames; Compare Folders, Find Duplicate Files
+                  and Disk Usage each opened and framed in both themes; Undock RichFiles opens RichFiles as its own app, which is then docked again
   output-file     Rich writes a file; in the Output panel, the file's menu has Show in RichFiles, and
                   pressing it opens the RichFiles page on that file
   moments-local   a recording in ~/Downloads (the meeting fixture) and a question about where in it a
@@ -304,9 +304,11 @@ class Walk(MeetingWalk):
                 self.tree_to('richfiles-tools-menu.tree.jsonl')
                 self.ax('click', '--title', label, '--role', 'AXMenuItem', '--first', '--contains')
                 time.sleep(4)
-                self.shot('richfiles-%s.png' % slug)
+                # Each sheet in both themes: its hints (Disk Usage's footnote) are measured in both.
+                frames = self.both_themes('richfiles-%s' % slug)
                 after = self.tree_to('richfiles-%s.tree.jsonl' % slug)
-                tools[label] = {'pressed': True, 'windows': [v for r, v in self.titles(after) if r in ('AXWindow', 'AXSheet')],
+                tools[label] = {'pressed': True, 'frames': frames,
+                                'windows': [v for r, v in self.titles(after) if r in ('AXWindow', 'AXSheet')],
                                 'texts': [v for r, v in self.titles(after) if r == 'AXStaticText' and v][:25]}
                 self.esc()
                 self.esc()
