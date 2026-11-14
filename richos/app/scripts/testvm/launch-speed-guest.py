@@ -151,9 +151,16 @@ def launch(n, step, out):
             events.append({'what': 'frame', 't': now})
             shot = None
         if quit_at is not None and pid is not None and now - t_open >= quit_at:
+            # The app's menu exists a moment after its process does: the Quit is pressed again
+            # until a press lands, and the press that landed is the one recorded.
             r = menu_quit(pid, step['menu_quit'])
+            pressed_until = time.time() + 20
+            while r.returncode != 0 and alive(pid) and time.time() < pressed_until:
+                time.sleep(0.3)
+                r = menu_quit(pid, step['menu_quit'])
             events.append({'what': 'quit pressed during start-up', 't': time.time(), 'osascript': r.returncode,
-                           'stderr': r.stderr.strip()[:300]})
+                           'stderr': r.stderr.strip()[:300],
+                           'start_up_finished_before': any('boot complete' in t for _, t in lines)})
             quit_at = None
             gone = wait_gone(pid, 30)
             events.append({'what': 'gone after the quit' if gone else 'STILL RUNNING 30 s after the quit',
@@ -163,10 +170,16 @@ def launch(n, step, out):
             time.sleep(1.5)
             frame(os.path.join(run_dir, 'frame-alert.jpg'))
             events.append({'what': 'alert frame', 't': time.time()})
-            r = dismiss_alert()
-            events.append({'what': 'alert dismissed', 't': time.time(), 'osascript': r.returncode,
-                           'stderr': r.stderr.strip()[:300]})
-            gone = wait_gone(pid, 30)
+            # A panic in start-up can raise the alert twice (the panic, then the abort that ends
+            # the process from inside the window's callback); each is dismissed as it comes.
+            gone = False
+            for _ in range(3):
+                r = dismiss_alert()
+                events.append({'what': 'alert dismissed', 't': time.time(), 'osascript': r.returncode,
+                               'stderr': r.stderr.strip()[:300]})
+                gone = wait_gone(pid, 10)
+                if gone:
+                    break
             events.append({'what': 'exited after the alert' if gone else 'STILL RUNNING after the alert',
                            't': time.time()})
             break

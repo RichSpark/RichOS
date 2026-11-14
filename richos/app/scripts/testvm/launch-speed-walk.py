@@ -271,6 +271,8 @@ def main():
     p.add_argument('--runs', type=int, default=20, help='judged launches per route')
     p.add_argument('--checks', action='store_true',
                    help='also: a start-up step made to fail, and a quit during start-up')
+    p.add_argument('--only-checks', action='store_true',
+                   help='only the start-up checks, no timed routes (a re-take of a failed check)')
     p.add_argument('--report-only', action='store_true',
                    help='measure and report, never exit 1 for speed (a before/after measurement of an old build)')
     a = p.parse_args()
@@ -345,10 +347,10 @@ def main():
     fresh = [INSTALLED]
     # Its very first launch (reported), then the first launch after a cold start, three times, each
     # after the disk cache is flushed, then --runs ordinary launches.
-    said = [run_plan('fresh', [richos('fresh:first', homes['fresh'], fresh, frame_at=1.0)]
+    said = [] if a.only_checks else [run_plan('fresh', [richos('fresh:first', homes['fresh'], fresh, frame_at=1.0)]
                      + [richos('cold:judged', homes['fresh'], fresh, purge=True) for _ in range(COLD_RUNS)]
                      + [richos('ordinary:judged', homes['fresh'], fresh) for _ in range(a.runs)])]
-    if a.checks:
+    if a.checks or a.only_checks:
         ledger = homes['checks'] + '/Library/Application Support/com.richos.app/conversation-ledger.jsonl'
         said.append(run_plan('checks', [
             # The first launch writes the home's records; the next is made to fail at its first
@@ -360,7 +362,7 @@ def main():
             # so start-up is still running when it arrives.
             richos('checks:quit-during-startup', homes['checks'], fresh, purge=True, quit_at=0.0),
             richos('checks:after', homes['checks'], fresh)]))
-    if a.previous_app:
+    if a.previous_app and not a.only_checks:
         user_app = homes['updated'] + '/Applications/RichOS.app'
         g('mkdir -p ' + shlex.quote(homes['updated'] + '/Applications') + ' && ditto ' + shlex.quote(staged[0])
           + ' ' + shlex.quote(user_app), 600)
@@ -404,7 +406,7 @@ def main():
     if a.previous_app:
         planned["updated-from-applications"] = a.runs
     summary = verdict(rows, planned)
-    checks = check_results(results) if a.checks else []
+    checks = check_results(results) if a.checks or a.only_checks else []
     report = {'facts': facts, 'summary': summary, 'sentence': sentence(summary), 'launches': rows,
               'checks': checks, 'refusing': not a.report_only,
               'instances': [{'label': r['label'], 'pid': r['pid'], 'quit': r['quit'], 'all_gone': r['all_gone']}
@@ -413,10 +415,10 @@ def main():
     print(report['sentence'])
     for c in checks:
         print('%s: %s' % ('PASS' if c['pass'] else 'FAIL', c['check']))
-    if facts['left_running'] or any(r['pid'] and not r['all_gone'] for r in results) or not rows:
+    if facts['left_running'] or any(r['pid'] and not r['all_gone'] for r in results) or (not rows and not a.only_checks):
         print('harness failure: an instance was left running, or nothing was measured', file=sys.stderr)
         return 2
-    if any(not c['pass'] for c in checks) or (summary['refused'] and not a.report_only):
+    if any(not c['pass'] for c in checks) or (summary['refused'] and not a.report_only and not a.only_checks):
         return 1
     return 0
 
