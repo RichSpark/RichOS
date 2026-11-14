@@ -436,6 +436,93 @@ async function main() {
     await sourcePage.close();
   });
 
+  // THE NEXT SOURCE PRESS, WITH THE PANEL ALREADY OPEN (a walk of the packaged app): the first
+  // press, from a closed panel, landed on its passage; the next one, a different passage of the
+  // same transcript, reopened it at its header with the cited line far below the panel's visible
+  // area. The check above presses with the mouse, which leaves focus where it was; the
+  // walk pressed through accessibility, which FOCUSES the link and clicks it in the same task, as
+  // VoiceOver does. `pressLikeAccessibility` below is that press.
+  await run.check("a second meeting source pressed with the panel open lands on its own passage", async () => {
+    const sourcePage = await openApp(browser);
+    await openThread(sourcePage, "acme", 9);
+    await sourcePage.evaluate(async () => {
+      const session = "2026-11-11T11-00-00Z--system--call";
+      const folder = "/acme/evidence/meetings/" + session;
+      const lines = ["# Transcript — Desktop call", ""];
+      const say = (text) => lines.push(text, "");
+      for (let n = 0; n < 24; n += 1) say("**[00:03] Them:** Earlier context.");
+      say("**[00:29] Me:** Raise wholesale prices on March 1.");
+      const first = lines.length - 1;
+      for (let n = 0; n < 40; n += 1) say("**[00:35] Them:** Middle context.");
+      say("**[00:44] Them:** No grace period.");
+      const second = lines.length - 1;
+      for (let n = 0; n < 40; n += 1) say("**[01:10] Me:** Later context.");
+      const text = lines.join("\n");
+      const original = window.RichBridge.invoke.bind(window.RichBridge);
+      window.RichBridge.invoke = async (command, args) => {
+        if (command === "output_preview" && args.outputId === "fixture-meeting-transcript") return { view: "text", text };
+        const result = await original(command, args);
+        if (command !== "list_output") return result;
+        const base = result.files.find((file) => file.name === "brief.md");
+        const file = { ...base, id: "fixture-meeting-transcript", name: "transcript.md", path: folder + "/transcript.md", folder };
+        const files = [...result.files, file];
+        return { ...result, files, count: files.length };
+      };
+      await window.RichOutput.reload();
+      const note = document.createElement("div");
+      note.id = "fixture-meeting-notes";
+      document.getElementById("conversation").appendChild(note);
+      window.RichTimeline.renderMarkdownInto(note,
+        "Raise prices. `meeting-source " + session + " " + first + " 00:29` " +
+        "No grace period. `meeting-source " + session + " " + second + " 00:44`",
+        window.RichOutput.links);
+    });
+    const note = sourcePage.locator("#fixture-meeting-notes");
+    assertEqual(await note.getByRole("button").allTextContents(), ["Source 00:29", "Source 00:44"]);
+    // Where a cited line sits against the panel body's visible box, once the panel is still and
+    // two frames have painted.
+    const where = (stamp) => sourcePage.evaluate(async (s) => {
+      const panel = document.getElementById("outpanel");
+      await Promise.all(panel.getAnimations().map((a) => a.finished.catch(() => null)));
+      await new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)));
+      const passage = document.querySelector("#op-viewer [data-source-passage]");
+      const body = document.getElementById("op-body").getBoundingClientRect();
+      const line = passage.getBoundingClientRect();
+      return {
+        text: passage.innerText,
+        stamp: s,
+        body: [Math.round(body.top), Math.round(body.bottom)],
+        line: [Math.round(line.top), Math.round(line.bottom)],
+      };
+    }, stamp);
+    const inView = (w) => w.line[0] >= w.body[0] && w.line[1] <= w.body[1];
+    const pressLikeAccessibility = (label) => note.getByRole("button", { name: label }).evaluate((b) => {
+      b.focus();
+      b.click();
+    });
+    assert(!(await panelState(sourcePage)).open, "the first Source press must come from a closed panel");
+    await pressLikeAccessibility("Source 00:29");
+    await sourcePage.locator('#op-viewer [data-source-passage]').filter({ hasText: "Raise wholesale prices" }).waitFor();
+    const first = await where("00:29");
+    assert(inView(first), "first press: line " + first.line.join("–") + " px, panel body " + first.body.join("–") + " px");
+    assert((await panelState(sourcePage)).open, "the second Source press must come from an open panel");
+    await pressLikeAccessibility("Source 00:44");
+    await sourcePage.locator('#op-viewer [data-source-passage]').filter({ hasText: "No grace period" }).waitFor();
+    const second = await where("00:44");
+    assert(inView(second),
+      "second press, panel open: the cited line is not in view: line " + second.line.join("–") + " px, panel body " + second.body.join("–") + " px");
+    // Focus still goes where a file view puts it (§6.8): the way back to the list.
+    assert(await sourcePage.evaluate(() => document.activeElement.classList.contains("of-back")), "focus is not on the way back to the list");
+    // And back up the transcript: the press after that, to an earlier passage, lands too.
+    await pressLikeAccessibility("Source 00:29");
+    await sourcePage.locator('#op-viewer [data-source-passage]').filter({ hasText: "Raise wholesale prices" }).waitFor();
+    const third = await where("00:29");
+    assert(inView(third), "third press, back up: line " + third.line.join("–") + " px, panel body " + third.body.join("–") + " px");
+    assertEqual(sourcePage.__errors, [], "no page errors");
+    await sourcePage.close();
+    return "00:29 from closed at " + first.line[0] + " px, 00:44 from open at " + second.line[0] + " px, 00:29 again at " + third.line[0] + " px (body " + second.body.join("–") + ")";
+  });
+
   await run.check("from-digest — 'Wrote 3 files' opens the panel at the list and that turn's group pulses", async () => {
     const turn = byName("brief.md").turnId;
     const sel = '[id="wrote:' + turn + '"]';

@@ -614,9 +614,21 @@
     body.appendChild(view);
     body.scrollTop = scroll;
     if (opts.keepFocus) return;
-    if (opts.focusStep === "prev") prev.focus({ preventScroll: true });
-    else if (opts.focusStep === "next") next.focus({ preventScroll: true });
-    else back.focus({ preventScroll: true });
+    const target = opts.focusStep === "prev" ? prev : opts.focusStep === "next" ? next : back;
+    // A SOURCE PASSAGE TO LAND ON TAKES FOCUS ONE TASK LATER. An accessibility press (VoiceOver,
+    // the walk's `ax click`) focuses the link in the conversation and clicks it in the same task.
+    // WebKit answers that focus with a scroll to the focused element a task later, and it scrolls
+    // whatever is focused BY THEN: given `back` here, it brought `back` into view, the body went
+    // to its top and the cited line sat far below it (a walk of the packaged app saw it on every
+    // Source pressed with the panel already open). Focused after that scroll has run,
+    // `preventScroll` holds and the passage `landPassage` centered stays where it was put.
+    if (state.sourcePassage && !state.sourcePassage.landed) {
+      window.setTimeout(() => {
+        if (target.isConnected) target.focus({ preventScroll: true });
+      }, 0);
+    } else {
+      target.focus({ preventScroll: true });
+    }
   }
 
   // ---- S5: THE PREVIEWS, ONE VIEWER PER KIND (§7, §6.4, §6.7, §12.5) ------------------------
