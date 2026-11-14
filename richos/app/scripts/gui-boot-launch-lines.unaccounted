@@ -13,6 +13,14 @@
 #   - a line here that no source file prints any more, or that a rule now accounts for, fails it too.
 # Started from main.rs as it stood when the check was added; it is a classification nobody had
 # written down, not a review of each line.
+# Exceptional account-change save failure. A healthy boot must still fail if it prints this.
+#
+# THE OTHER SOURCE FILES. When the check widened from main.rs to every app source file, the lines
+# below were taken from the rest of the source exactly as --print-unclassified listed them. Like the
+# block above, it is a classification nobody had written down, not a review of each line. What
+# stands behind it: the VM boot proof's B2 report on the commit they were taken from accounted for
+# every line of the healthy boot except the SwearMeter `read` line, which now has its routine rule,
+# so none of these is printed by gui-boot's healthy boot as the source stood then.
 [richos]   looked in {}
 [richos]   looked in {} ({})
 [richos]   passed over {} ({}) — {}
@@ -47,6 +55,8 @@
 [richos] home field: no topic compiled ({}) — the home screen keeps the demonstration
 [richos] home field: {} object(s) in {} companies from their repositories ({}), {} link(s), {} source(s); unread folders: {}
 [richos] home field: {} object(s) of {} record(s) at {}, {} link(s), {} source(s), {} question(s) asked. Whether that replaces the demonstration is home.js's HOME_FIELD_MIN_OBJECTS, not this line.
+[richos] home video: could not save to {}: {}
+[richos] home video: saved {} byte(s) to {}
 [richos] hop-trace +{} ms  spine RELEASED at {} after holding {} ms
 [richos] hop-trace +{} ms  spine TAKEN at {} after waiting {} ms
 [richos] idle sessions: could not start the check, every session stays running: {}
@@ -118,17 +128,8 @@
 [richos] yt-dlp: installed nightly {}{}
 [richos] yt-dlp: nightly {} is the newest
 [richos] yt-dlp: no HOME, so no tools folder; not checking
-
-# Exceptional account-change save failure. A healthy boot must still fail if it prints this.
 [richos] writing permission could not be saved after the account change
 [richos] numeric checkpoint could not be saved: {}
-#
-# THE OTHER SOURCE FILES. When the check widened from main.rs to every app source file, the lines
-# below were taken from the rest of the source exactly as --print-unclassified listed them. Like the
-# block above, it is a classification nobody had written down, not a review of each line. What
-# stands behind it: the VM boot proof's B2 report on the commit they were taken from accounted for
-# every line of the healthy boot except the SwearMeter `read` line, which now has its routine rule,
-# so none of these is printed by gui-boot's healthy boot as the source stood then.
 [richos] CORRECTION DESK RECORD SKIPPED ({}): line {} ({} bytes) — {}
 [richos] CORRECTION DESK SUMMARY for {}: {} records read, {} applied, {} skipped ({} from a newer version, {} damaged, {} undetermined). These are corrections the CEO was asked about and the answers he gave. Nothing was deleted or rewritten.
 [richos] CORRECTION DESK: {} further skipped records not listed individually

@@ -776,7 +776,9 @@ window.RichHomeVideo = (function () {
     root.appendChild(el.count);
 
     // Escape closes it (`main.js`, `data-dismiss`; on this screen the key is taken below first).
-    el.sheet = make("div", "hv-sheet hv-skip", "", { id: "home-video-sheet", role: "dialog", "aria-modal": "true", "aria-label": "Your video", "data-dismiss": "escape" });
+    // Not `aria-modal`: WebKit would leave the settings button, which floats over this screen,
+    // out of the accessibility tree while focus is in the sheet (`tests/appearance.js`, 7c).
+    el.sheet = make("div", "hv-sheet hv-skip", "", { id: "home-video-sheet", role: "dialog", "aria-label": "Your video", "data-dismiss": "escape" });
     el.sheet.hidden = true;
     var card = make("div", "card");
     el.video = make("video", "", "", { controls: "", loop: "", playsinline: "" });
@@ -993,7 +995,9 @@ window.RichHomeVideo = (function () {
   }
 
   /// The home screen was left (`home.js`, `hide`): the choices close and a count is called off; a
-  /// recording ends with what it has (the frame loop sees it too) and its sheet waits here.
+  /// recording ends with what it has (the frame loop sees it too) and its sheet waits here. The
+  /// video on a sheet that is up stops playing, so one with his voice is not heard behind the
+  /// screen he went to; the recording is kept, and he plays it again when he is back.
   function left() {
     if (!root) return;
     if (state === "choosing") closePanel();
@@ -1001,6 +1005,11 @@ window.RichHomeVideo = (function () {
       cancelCount();
       rest();
     } else if (state === "rec") finish();
+    else if (state === "sheet") {
+      try {
+        el.video.pause();
+      } catch (e) {}
+    }
   }
 
   // Escape goes one step back: out of the sheet, the choices, the count, the recording (which

@@ -522,6 +522,17 @@ async function main() {
     assert(await appears(page, ".hv-sheet"), "the sheet is not there when he comes back");
     const file = await saved(page, "left");
     assert(file.video && file.video.codec === "h264" && file.seconds >= 0.9, "what it had is not a video: " + JSON.stringify(file));
+    // THE VIDEO ON THE SHEET STOPS PLAYING WHEN HE LEAVES THE HOME SCREEN FROM IT (a desk sheet opened
+    // from Settings takes the home screen away): a video with his voice would go on playing aloud
+    // behind the screen he went to. The recording is kept and the sheet is there when he is back.
+    // (it stood still while he was away; he presses play on the player)
+    await page.evaluate(() => document.querySelector(".hv-sheet video").play());
+    await page.waitForFunction(() => !document.querySelector(".hv-sheet video").paused, null, { timeout: 60000 }).catch(() => {});
+    assertEqual(await page.evaluate(() => document.querySelector(".hv-sheet video").paused), false, "the video does not play on the sheet he came back to");
+    await page.evaluate(() => window.RichHome.hide("suite"));
+    assertEqual(await page.evaluate(() => [window.RichHome.isOpen(), document.querySelector(".hv-sheet video").paused, window.RichHomeVideo.state().state]), [false, true, "sheet"], "the video went on playing behind the screen he went to, or the recording was let go");
+    await page.evaluate(() => window.RichHome.show("suite"));
+    assert((await appears(page, ".hv-sheet")) && (await page.evaluate(() => document.querySelector(".hv-sheet video").src.slice(0, 5))) === "blob:", "the recording is not on the sheet when he comes back");
     // a count is called off by leaving, and never starts a recording behind his back
     await page.click(".hv-sheet .row .hv-plain:last-child");
     await page.click("#home-video");
@@ -533,7 +544,7 @@ async function main() {
     assertEqual((await video(page)).state, "idle", "a count went on after he left the home screen");
     assertEqual(page.__errors, [], "the page reported errors");
     await page.close();
-    return `ended with ${file.seconds.toFixed(1)} s; the sheet waited; a count was called off by leaving`;
+    return `ended with ${file.seconds.toFixed(1)} s; the sheet waited; its video stopped playing when he left from the sheet and was kept; a count was called off by leaving`;
   });
 
   await run.check("the microphone is asked for when he switches it on, said plainly when it is not given, and let go whenever he is not choosing, counting or recording", async () => {
