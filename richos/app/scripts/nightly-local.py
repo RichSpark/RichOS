@@ -325,8 +325,10 @@ NEW_USER_WALK_BUDGET = NEW_USER_WALK_WAIT + 2400
 # its own guest, from the launch request to its splash playing (testvm/launch-speed-walk.py: a
 # returning user's launch, the first launch after the guest starts, and the CEO's own route, an
 # older published copy in /Applications handing over, 20 launches a route), and it is refused when the
-# p95 of every judged launch is over 380 ms (the CEO: "380 ms as the maximum allowed p95 time"); the
-# nightly states the p95 and every route's own numbers either way. A refusal, or a
+# p95 of every judged launch is over 380 ms (the CEO: "380 ms as the maximum allowed p95 time"),
+# scaled once by how much slower Dictionary launches in that guest than on his Mac, the ratio
+# recorded beside the limit (the CEO: "if the VM is slower, then the measurements need to be adjusted
+# accordingly"); the nightly states the p95 and every route's own numbers either way. A refusal, or a
 # walk that could not run, is taken once more before the candidate is refused
 # (verification-retries.md). The plan's route 3 (the first launch after an update put in place at
 # quit) is not yet a route of the walk.
@@ -3014,14 +3016,22 @@ class Runner:
                 continue
             summary, facts = walked.get("summary") or {}, walked.get("facts") or {}
             p95 = summary.get("p95_ms")
+            # The limit is 380 ms scaled by Dictionary's slowness in the guest (the CEO, 2026-11-14:
+            # "if the VM is slower, then the measurements need to be adjusted accordingly"); it
+            # must be exactly 380 ms times the ratio recorded beside it, never below 380 ms.
+            ratio = summary.get("guest_ratio")
+            limit = 380 if ratio is None else (
+                round(380 * ratio) if isinstance(ratio, (int, float)) and ratio >= 1 else None)
             if facts.get("version") != info.get("version"):
                 problems.append(f"{report} measured {facts.get('version') or '<no version>'}, not {info.get('version')}")
             elif summary.get("incomplete") is not False or summary.get("refused") is not False \
-                    or not isinstance(p95, (int, float)) or p95 > summary.get("limit_ms", 380) or p95 > 380:
+                    or not isinstance(p95, (int, float)) or limit is None \
+                    or summary.get("limit_ms") != limit or p95 > limit:
                 problems.append(f"{report}: {walked.get('sentence') or 'no passing verdict'}")
             else:
                 return walked.get("sentence")
         raise ValueError("no complete launch-speed measurement of this candidate shows a p95 at or under 380 ms "
+                         "(scaled by the guest's Dictionary ratio) "
                          "from the click to the splash showing: " + "; ".join(problems)
                          + ". Take the check again without a rebuild (nightly-local.py's launch-speed phase).")
 

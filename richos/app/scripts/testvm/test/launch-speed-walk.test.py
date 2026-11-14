@@ -82,6 +82,18 @@ whole = walk.verdict(fast, {'ordinary': 20})
 check('a complete fast measurement passes', whole['refused'] is False and whole['missing'] == [], whole)
 check('the sentence says the measurement was incomplete', 'INCOMPLETE' in walk.sentence(gone), walk.sentence(gone))
 
+# The guest is slower than his Mac: the limit is scaled by Dictionary's p95 there (the CEO, 2026-11-14).
+calib = [{'label': 'dictionary:calibration', 'splash': ms} for ms in (420, 450, 470, 480, 500, 760)]
+limit, ratio = walk.guest_limit(calib)
+check("the limit is 380 ms times Dictionary's p95 in the guest over 380", (limit, ratio) == (760, 2.0), (limit, ratio))
+check('no calibration keeps 380 ms', walk.guest_limit([]) == (380, None))
+check('a guest faster than his Mac never tightens the limit',
+      walk.guest_limit([{'label': 'dictionary:calibration', 'splash': 200}]) == (380, 1.0))
+scaled = walk.verdict(fast + calib, {'ordinary': 20}, limit, ratio)
+check('the calibration launches are not judged, and the scaled limit is used',
+      scaled['launches'] == 20 and scaled['limit_ms'] == 760 and scaled['refused'] is False, scaled)
+check('the sentence records the ratio beside the limit', 'x 2.00' in walk.sentence(scaled), walk.sentence(scaled))
+
 # The receipt's tree digest, on the tree whose digest the updater's own test pins
 # (crates/richos-user-update/src/lib.rs, digests_are_spelled_as_sha2_0_10_spelled_them).
 with tempfile.TemporaryDirectory() as d:

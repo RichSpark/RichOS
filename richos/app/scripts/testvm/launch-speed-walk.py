@@ -41,7 +41,9 @@ splash). One untimed frame per route shows what was on screen.
 
 THE RULE, the CEO's (2026-11-14): "380 ms as the maximum allowed p95 time for the RichOS app to
 start showing the splash screen." The p95 of every judged launch, every route together, over
-LIMIT_MS refuses; every route's own p95 and median are stated. 20 launches a route by default, so
+the limit refuses: LIMIT_MS times Dictionary's slowness in the same guest (its p95 there over its
+380 ms p95 on his Mac, six launches, before the app's), the ratio recorded beside the limit; every
+route's own p95 and median are stated. 20 launches a route by default, so
 a p95 is a real 95th percentile and not the slowest of a handful.
 
 Every instance it starts is quit by the pid captured at spawn and checked gone in the guest.
@@ -66,6 +68,15 @@ HERE = Path(__file__).resolve().parent
 # The CEO's rule (2026-11-14): at most 380 ms p95 from the click to the splash showing (his
 # benchmark was Dictionary's measured Dock launch on his Mac, at most 380 ms).
 LIMIT_MS = 380
+# THE GUEST IS SLOWER THAN HIS MAC, SO THE LIMIT IS SCALED, ONCE PER WALK (the CEO, 2026-11-14: "if
+# the VM is slower, then the measurements need to be adjusted accordingly. This is NOT about some 100
+# or 200 ms."). Dictionary's Dock launch on his Mac had a p95 of 380 ms (Echo's audit: 287, 305, 318,
+# 318, 328 and 380 ms); the walk launches Dictionary DICTIONARY_RUNS times in the same guest, and the
+# limit there is LIMIT_MS x (Dictionary's p95 in the guest / MAC_DICTIONARY_P95_MS), the ratio
+# recorded beside it.
+MAC_DICTIONARY_P95_MS = 380
+DICTIONARY_RUNS = 6
+DICTIONARY = '/System/Applications/Dictionary.app'
 # Cold launches judged per walk, each after its own `sudo purge`.
 COLD_RUNS = 3
 # A p95 is a 95th percentile only over enough launches: fewer judged launches than this refuse.
@@ -149,6 +160,8 @@ def measure(run, events):
     # carries it as "page took over". The window's ground color does not count.
     if 'page_took_over' in row:
         row['splash'], row['splash_from'] = row['page_took_over'] + ALLOWANCE_MS, "the page's splash playing"
+    elif run['label'].startswith('dictionary') and 'window' in row:
+        row['splash'], row['splash_from'] = row['window'] + ALLOWANCE_MS, "AppKit's window ordered front"
     elif 'document_loaded' in row:
         row['splash'], row['splash_from'] = row['document_loaded'] + ALLOWANCE_MS, "WebKit's document loaded"
     return row
@@ -161,7 +174,7 @@ def p95(values):
     return ordered[max(0, -(-len(ordered) * 95 // 100) - 1)]
 
 
-def verdict(rows, planned=None):
+def verdict(rows, planned=None, limit_ms=LIMIT_MS, ratio=None):
     """The CEO's rule, 2026-11-14: "380 ms as the maximum allowed p95 time for the RichOS app to
     start showing the splash screen." The p95 of every judged launch, every route together, against
     LIMIT_MS; each route's own p95 and median are stated beside it.
@@ -172,7 +185,7 @@ def verdict(rows, planned=None):
     judged, missing = {}, []
     for row in rows:
         route, _, kind = row['label'].partition(':')
-        if kind != 'judged':
+        if kind != 'judged' or route == 'dictionary':
             continue
         if 'splash' in row:
             judged.setdefault(route, []).append(row['splash'])
@@ -183,10 +196,10 @@ def verdict(rows, planned=None):
         if got < count:
             missing += ['%s:not launched' % route] * (count - got)
     every = [v for values in judged.values() for v in values]
-    summary = {'limit_ms': LIMIT_MS, 'launches': len(every), 'p95_ms': p95(every) if every else None,
+    summary = {'limit_ms': limit_ms, 'guest_ratio': ratio, 'launches': len(every), 'p95_ms': p95(every) if every else None,
                'routes': {}, 'reported': {}, 'missing': missing}
     summary['incomplete'] = bool(missing) or len(every) < MIN_LAUNCHES
-    summary['refused'] = summary['incomplete'] or summary['p95_ms'] > LIMIT_MS
+    summary['refused'] = summary['incomplete'] or summary['p95_ms'] > limit_ms
     for route, values in sorted(judged.items()):
         summary['routes'][route] = {'p95_ms': p95(values), 'median_ms': statistics.median(values),
                                     'max_ms': max(values), 'launches': len(values)}
@@ -209,8 +222,20 @@ def sentence(summary):
                  '%d launches where at least %d are required' % (
                      len(summary['missing']), ', '.join(sorted(set(summary['missing']))) or 'none',
                      summary['launches'], MIN_LAUNCHES))
-    return 'Launch speed, Dock click to the splash showing, against a p95 of %d ms: %s. %s.' % (
-        summary['limit_ms'], head, '; '.join(parts))
+    scaled = ('' if not summary.get('guest_ratio') else
+              ' (%d ms on his Mac x %.2f, Dictionary\'s slowness in this guest)' % (LIMIT_MS, summary['guest_ratio']))
+    return 'Launch speed, Dock click to the splash showing, against a p95 of %d ms%s: %s. %s.' % (
+        summary['limit_ms'], scaled, head, '; '.join(parts))
+
+
+def guest_limit(rows):
+    """(limit in ms, ratio) from the Dictionary calibration launches; (LIMIT_MS, None) without
+    them. A guest faster than his Mac never tightens the limit below LIMIT_MS."""
+    values = [r['splash'] for r in rows if r['label'] == 'dictionary:calibration' and 'splash' in r]
+    if not values:
+        return LIMIT_MS, None
+    ratio = max(1.0, p95(values) / MAC_DICTIONARY_P95_MS)
+    return round(LIMIT_MS * ratio), round(ratio, 3)
 
 
 
@@ -343,6 +368,10 @@ def main():
         (a.out / (name + '.probe.txt')).write_text(said + '\n')
         return said
 
+    # Dictionary first, DICTIONARY_RUNS times: the guest's slowness against his Mac, measured once.
+    said_dictionary = None if a.only_checks else run_plan('dictionary', [
+        {'label': 'dictionary:calibration', 'app': DICTIONARY, 'owns': [DICTIONARY], 'env': {},
+         'menu_quit': 'Quit Dictionary', 'done': '', 'settle': 4} for _ in range(DICTIONARY_RUNS)])
     install(staged[0])
     fresh = [INSTALLED]
     # Its very first launch (reported), then the first launch after a cold start, three times, each
@@ -383,12 +412,12 @@ def main():
                                 for _ in range(a.runs)]))
 
     # The guest's own system log for the walk, on the guest's clock.
-    predicate = 'process == "richos-tauri"'
+    predicate = 'process == "richos-tauri" OR process == "Dictionary"'
     g('/usr/bin/log show --last 90m --style compact --predicate ' + shlex.quote(predicate) + ' > '
       + shlex.quote(work + '/guest-system.log') + ' 2>&1 || true', 900)
-    facts['left_running'] = g('ps -axo pid=,comm= | grep -e "/richos-tauri$" | grep -v grep || true')
+    facts['left_running'] = g('ps -axo pid=,comm= | grep -e "/richos-tauri$" -e "/Dictionary$" | grep -v grep || true')
     g('cd ' + shlex.quote(payload) + ' && tar czf launch-speed.tgz launch-speed/guest-system.log '
-      + ' '.join('launch-speed/' + n for n in ('fresh', 'checks', 'updated')) + ' 2>/dev/null; true', 600)
+      + ' '.join('launch-speed/' + n for n in ('dictionary', 'fresh', 'checks', 'updated')) + ' 2>/dev/null; true', 600)
     subprocess.run([str(HERE / 'guest.sh'), a.vm, '--pull', payload + '/launch-speed.tgz', str(a.out / 'launch-speed.tgz')],
                    check=True, timeout=900)
     with tarfile.open(a.out / 'launch-speed.tgz') as t:
@@ -396,7 +425,7 @@ def main():
     events = syslog_events((a.out / 'launch-speed/guest-system.log').read_text(errors='replace'),
                            utc_offset(facts['utc_offset']))
     rows, results = [], []
-    for name in ('fresh', 'checks', 'updated'):
+    for name in ('dictionary', 'fresh', 'checks', 'updated'):
         probe = a.out / 'launch-speed' / name / 'probe.json'
         if probe.exists():
             ran = json.loads(probe.read_text())['results']
@@ -405,7 +434,8 @@ def main():
     planned = {"ordinary": a.runs, "cold": COLD_RUNS}
     if a.previous_app:
         planned["updated-from-applications"] = a.runs
-    summary = verdict(rows, planned)
+    limit_ms, ratio = guest_limit(rows)
+    summary = verdict(rows, planned, limit_ms, ratio)
     checks = check_results(results) if a.checks or a.only_checks else []
     report = {'facts': facts, 'summary': summary, 'sentence': sentence(summary), 'launches': rows,
               'checks': checks, 'refusing': not a.report_only,

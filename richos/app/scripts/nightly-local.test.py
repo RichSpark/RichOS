@@ -1924,6 +1924,32 @@ while True: time.sleep(.02)
         self.assertFalse(any(len(c.args) > 2 and c.args[2] == "finish" for c in publisher.command.call_args_list),
                          "a candidate over 380 ms was published")
 
+    def test_publish_takes_380_ms_scaled_by_the_guests_dictionary_ratio_and_nothing_else(self):
+        # The CEO, 2026-11-14: "if the VM is slower, then the measurements need to be adjusted
+        # accordingly." The walk scales 380 ms by Dictionary's p95 in the guest over his Mac's 380 ms
+        # and records the ratio beside the limit; publish holds the limit to exactly that.
+        r = self.runner()
+        info = {**self.CANDIDATE_INFO, "launch_speed_required": True}
+        report = r.state / "launch-speed" / "fixture-run-id.2" / "report.json"
+        report.parent.mkdir(parents=True, exist_ok=True)
+
+        def walked(p95, limit, ratio):
+            report.write_text(json.dumps({"sentence": "p95 %d ms against %d ms" % (p95, limit),
+                "summary": {"p95_ms": p95, "limit_ms": limit, "guest_ratio": ratio, "refused": p95 > limit,
+                            "incomplete": False}, "facts": {"version": info["version"]}}))
+
+        walked(700, 760, 2.0)
+        self.assertEqual(r.require_launch_speed(info, "fixture-run-id"), "p95 700 ms against 760 ms")
+        for what, p95, limit, ratio in (("over the scaled limit", 800, 760, 2.0),
+                                        ("a limit that is not 380 ms times its ratio", 800, 900, 2.0),
+                                        ("a ratio below 1 tightening nothing and loosening nothing", 150, 190, 0.5),
+                                        ("no ratio, over 380 ms", 500, 500, None)):
+            with self.subTest(what):
+                walked(p95, limit, ratio)
+                report.write_text(report.read_text().replace('"refused": true', '"refused": false'))
+                with self.assertRaisesRegex(ValueError, "p95 at or under"):
+                    r.require_launch_speed(info, "fixture-run-id")
+
     def test_a_walk_that_stopped_before_its_end_is_refused_however_its_steps_went(self):
         # Review rv-20261021T163510Z-b612361c-0e62, finding 3: the walk rewrites report.json after
         # every step, and publish accepted any nonempty all-PASS list, so a walk that stopped after
