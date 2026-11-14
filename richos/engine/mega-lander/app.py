@@ -714,6 +714,15 @@ def project(scope, path, record):
     save(path, record)
 
 
+def next_name(name, taken):
+    """NAME numbered by spawn.py's own rule (`--next-name`): the registry's active teammates
+    and TAKEN, the names of this conversation's receipts not yet settled."""
+    command = [sys.executable, str(ENGINE / "scripts/lib/spawn.py"), name, "--next-name"]
+    for other in taken:
+        command += ["--taken", other]
+    return run(command, cwd=os.environ["RICHOS_ENTITY_ROOT"]).strip()
+
+
 def build_spawn_command(repo_dests, name, teammate, model, brief_path, title, integration=None, base=None):
     """The exact `spawn.py` invocation for one named teammate (proto-teammate shelf plan §3,
     richos-hq `docs/plans/2026-10-06-proto-teammate-shelf.md`): its own definition,
@@ -1381,7 +1390,14 @@ def prepare(scope_path, scope, args):
                                      "prepared in turn %s) has the same assignment, role and brief. Dispatch or "
                                      "inspect that receipt, or settle it, before preparing it again"
                                      % (old["name"], old.get("request_id"), old["status"], old["binding"].get("turn_id")))
-        name = f"{teammate}-{model}-{identity[:12]}"
+        # THE CEO'S NUMBERING (2026-10-21): a second active teammate of one first name is
+        # mark2-..., a third mark3-...; the lowest free number, none for the first. The
+        # terminal's own rule picks it (spawn.py --next-name, from the registry's active
+        # teammates) with this conversation's receipts still being prepared or running
+        # added, read under this lock, so two of one kind prepared together differ.
+        unsettled = [old["name"] for _old_path, old in receipts(root) if not old.get("settled")
+                     and old["status"] in ("preparing","prepared","dispatching","running","unknown")]
+        name = next_name(f"{teammate}-{model}-{identity[:12]}", unsettled)
         record = {"schema":1,"id":identity,"request_id":request_id,"binding":scope["binding"],
             "recovery_acceptance": hashlib.sha256(json.dumps({k:item.get(k) for k in
                 ("item_id", "title", "details", "beneficiary")}, sort_keys=True).encode()).hexdigest(),
