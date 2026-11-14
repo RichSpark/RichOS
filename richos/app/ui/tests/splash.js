@@ -2909,11 +2909,25 @@ async function main() {
       for (const f of fns) if (f.at < mr.index) owner = f.name;
       rafOwners.push(owner);
     }
+    //   release()  picks up a pass HELD AT A MOMENT (Sage's plan 2026-11-14, the page joining the
+    //              splash's opening), under the same `!state.barStopped` guard as unpause.
+    // The other frames in the file never paint the bar: they wait two frames before the page
+    // reports it has painted (`reportPainted`, and `takeOver` once it has joined the opening).
+    const tickOwners = [];
+    const otherOwners = [];
+    rafRe.lastIndex = 0;
+    while ((mr = rafRe.exec(code)) !== null) {
+      let owner = "(top level)";
+      for (const f of fns) if (f.at < mr.index) owner = f.name;
+      (/^\s*tick\s*\)/.test(code.slice(mr.index + "requestAnimationFrame(".length)) ? tickOwners : otherOwners).push(owner);
+    }
     assertEqual(
-      rafOwners.slice().sort(),
-      ["start", "tick", "unpause"],
-      "requestAnimationFrame call sites — one to start the pass, one to continue it, and one to pick up a held one"
+      tickOwners.slice().sort(),
+      ["release", "start", "tick", "unpause"],
+      "the bar's frame loop — one to start the pass, one to continue it, and one each to pick up a held one"
     );
+    assert(otherOwners.every((o) => o === "reportPainted" || o === "takeOver"),
+      "a frame that is not the bar's loop and not a report of the page's paint: " + JSON.stringify(otherOwners) + " (all: " + JSON.stringify(rafOwners) + ")");
     // And the strip has to have left something to read, or all four assertions above are
     // vacuous — the failure mode a negative check dies of.
     assert(code.indexOf("function tick(") > 0, "the comment strip ate the renderer");
@@ -3808,6 +3822,345 @@ async function main() {
       }
       noErrors(page, "25g " + theme);
       await page.__ctx.close();
+    }
+    return out.join(" · ");
+  });
+
+  // ---- THE OPENING: picked at quit, drawn ahead, played at the click (Sage's plan 2026-11-14,
+  //      "the splash the rules picked is playing within 380 ms of the click", sections 1, 2, 6) ----
+
+  await run.check("26  the shell's pick decides the splash; the page's own rule is only its fallback", async () => {
+    const out = [];
+    const ids = libraryFromDisk().variations.map((v) => v.id);
+    // Start 2, where the page's own table says #2: the shell's pick of #1 wins, and an id this
+    // page does not know falls back to the table.
+    for (const [picked, expect, by] of [[ids[0], ids[0], "shell"], ["not/an-entry", ids[1], "page"], [ids[1], ids[1], "shell"]]) {
+      const page = await launch(browser, {
+        hold: true,
+        init: (p) => {
+          window.__RICHOS_LAUNCH__ = Object.freeze({ kind: "fresh", ordinal: 2, splashEnabled: true, splash: Object.freeze({ id: p, opening: false }) });
+        },
+        initArg: picked,
+      });
+      await page.waitForFunction(() => window.RichSplash && window.RichSplash.state.shown, null, { timeout: 60000 });
+      const s = await splashState(page);
+      assertEqual(s.variation, expect, "the splash drawn for a shell pick of " + picked);
+      assertEqual(s.state.pickedBy, by, "who picked it for " + picked);
+      noErrors(page, "26");
+      await page.__ctx.close();
+      out.push(picked + " -> " + s.variation + " (" + by + ")");
+    }
+    return out.join(" · ");
+  });
+
+  /// The opening page in DRAW mode, as the shell opens it at quit (`splash_opening.rs`): the picked
+  /// splash built and held at its first moment, its faces loaded.
+  async function openingPage(viewport, id, extra, init) {
+    const ctx = await browser.newContext({ viewport });
+    const page = await newPage(ctx);
+    if (init) await page.addInitScript(init);
+    await page.addInitScript((o) => {
+      window.__RICHOS_LAUNCH__ = Object.freeze(Object.assign({ kind: "fresh", ordinal: null, splashEnabled: true }, o));
+    }, Object.assign({ draw: true, splash: { id } }, extra || {}));
+    await page.goto("file://" + path.join(UI_DIR, "splash-opening.html"));
+    await page.waitForFunction(() => window.RichSplash && window.RichSplash.state.shown, null, { timeout: 60000 });
+    await page.evaluate(() => document.fonts.ready);
+    page.__ctx = ctx;
+    return page;
+  }
+
+  await run.check("27  every entry can be HELD at a moment, and STARTED from one", async () => {
+    const out = [];
+    for (const entry of libraryFromDisk().variations) {
+      // Held, in the page the shell draws from: every animation paused at the moment, the clock
+      // reading it, the bar painted at once without a frame.
+      const page = await openingPage({ width: 1280, height: 800 }, entry.id);
+      const held = await page.evaluate(() => {
+        const at = (ms) => {
+          window.RichSplash.holdAt(ms);
+          const anims = document.getAnimations().filter((a) => a.effect && a.effect.target && a.effect.target.closest && a.effect.target.closest("#splash"));
+          const fill = document.querySelector('#splash .splash-bar [data-role="progress"]');
+          return {
+            moment: window.RichSplash.moment(),
+            heldAt: window.RichSplash.state.heldAt,
+            anims: anims.length,
+            allAt: anims.every((a) => Math.abs(Number(a.currentTime) - ms) < 0.5 && a.playState === "paused"),
+            fill: fill ? fill.getBoundingClientRect().width : null,
+          };
+        };
+        return { drawing: window.RichSplash.state.drawing, first: window.RichSplash.state.heldAt, a: at(500), b: at(950), back: at(500) };
+      });
+      assert(held.drawing === true && held.first === 0, entry.id + ": the opening page comes up held at its first moment: " + JSON.stringify(held));
+      for (const k of ["a", "b", "back"]) {
+        assert(held[k].allAt && held[k].anims > 0, entry.id + ": every animation stands at the held moment: " + JSON.stringify(held[k]));
+        assert(Math.abs(held[k].moment - held[k].heldAt) < 0.5, entry.id + ": the clock reads the held moment: " + JSON.stringify(held[k]));
+      }
+      assert(held.a.fill === 0 && held.b.fill > 0, entry.id + ": the bar is painted from the moment with no frame (empty before " + BAR_START_MS + " ms, running at 950): " + JSON.stringify([held.a.fill, held.b.fill]));
+      assertEqual(held.back.fill, held.a.fill, entry.id + ": holding an earlier moment after a later one draws the earlier one");
+      noErrors(page, "27 held " + entry.id);
+      await page.__ctx.close();
+      // Started from a moment, in the app's own page: it runs on from there, and the hold is
+      // counted from the splash's first frame.
+      const app = await launch(browser, { hold: true, force: entry.id });
+      await app.waitForFunction(() => window.RichSplash && window.RichSplash.state.shown, null, { timeout: 60000 });
+      const started = await app.evaluate(async () => {
+        window.RichSplash.holdAt(400);
+        const t0 = performance.now();
+        window.RichSplash.release();
+        const anims = document.getAnimations().filter((a) => a.effect && a.effect.target && a.effect.target.closest && a.effect.target.closest("#splash"));
+        // Each animation now runs from 400 ms as of the release: its start is the release instant
+        // less 400 ms, on the page's own clock (its reading between frames is the last frame's,
+        // so the start is what is held to, not a reading).
+        const starts = anims.map((a) => Number(a.startTime) - (t0 - 400));
+        await new Promise((r) => setTimeout(r, 300));
+        return {
+          ran: performance.now() - t0,
+          moment: window.RichSplash.moment(),
+          running: anims.every((a) => a.playState === "running" || a.playState === "finished"),
+          startOff: Math.max(...starts.map(Math.abs)),
+          heldAt: window.RichSplash.state.heldAt,
+        };
+      });
+      assert(started.heldAt === null && started.running, entry.id + ": released, everything runs: " + JSON.stringify(started));
+      assert(Math.abs(started.moment - (400 + started.ran)) < 40 && started.startOff < 2,
+        entry.id + ": it runs on from 400 ms, not from the start: " + JSON.stringify(started));
+      noErrors(app, "27 started " + entry.id);
+      await app.__ctx.close();
+      out.push(entry.id + " held at 500/950/500, started from 400 (at " + Math.round(started.moment) + " ms after " + Math.round(started.ran) + " ms)");
+    }
+    return out.join(" · ");
+  });
+
+  /// Stops the running splash where it stands, for a photograph: every animation paused in place,
+  /// and the clock the bar reads frozen at the same moment the animations show, so the bar is
+  /// painted (by its own frame) exactly there. Then lets it run on.
+  const FREEZER = () => {
+    const perf = window.performance;
+    const real = perf.now.bind(perf);
+    const F = (window.__freezer = { frozen: null, offset: 0 });
+    perf.now = function () {
+      return F.frozen !== null ? F.frozen : real() - F.offset;
+    };
+    F.anims = () => {
+      const s = document.getElementById("splash");
+      return s ? document.getAnimations().filter((a) => a.effect && a.effect.target && (a.effect.target === s || s.contains(a.effect.target))) : [];
+    };
+    F.freeze = () => {
+      const as = F.anims();
+      // `pause()` alone waits for the page's next frame and the animation runs on until then
+      // (measured: 145 ms read, 178 ms held); setting the time it stands at holds it there now.
+      as.forEach((a) => {
+        const t = a.currentTime;
+        a.pause();
+        a.currentTime = t;
+      });
+      // A stage that has finished reads its own end (its time is clamped there), so the moment is
+      // the latest time any of them reads.
+      const times = as.map((a) => Number(a.currentTime));
+      const c = times.length ? Math.max(...times) : null;
+      const pnow = real() - F.offset;
+      const m = window.RichSplash.moment();
+      F.frozen = c === null ? pnow : pnow - (m - c);
+      return { moment: c === null ? m : c };
+    };
+    /// Stop it at the first instant the page's own timers reach `ms`, from inside the page, so a
+    /// slow harness turn does not carry it past the moment asked for.
+    F.freezeAt = (ms) =>
+      new Promise((done) => {
+        const poll = () => (window.RichSplash.moment() >= ms ? done(F.freeze()) : setTimeout(poll, 1));
+        poll();
+      });
+    F.thaw = () => {
+      F.offset = real() - F.frozen;
+      F.frozen = null;
+      // Not one that has run to its end: `play()` would start it again from the beginning.
+      F.anims().forEach((a) => {
+        if (Number(a.currentTime) < a.effect.getComputedTiming().endTime) a.play();
+      });
+    };
+  };
+
+  /// Pixels of a decoded PNG, `o` = offset of (x, y).
+  const pngAt = (img, x, y) => (y * img.width + x) * img.channels;
+
+  await run.check("28  the opening's pictures ARE the running splash — every entry, its first second, three window sizes", async () => {
+    // THE PER-ENTRY CHECK OF SECTION 6. The opening the shell plays is its first picture (the whole
+    // page held at 0) with, at each later moment, only the changing part (`openingRegion`) held at
+    // that moment laid over it. That composite, built here from the opening page exactly as the
+    // shell builds it, is compared with the same splash RUNNING in the app's own head (28b), stopped
+    // where it stands at the same moment. A splash added to the library later is held to the same
+    // check with no change here.
+    //
+    // THE ALLOWED DIFFERENCE, set from the first run and stated: no channel off by more than
+    // MAX_LEVEL anywhere, at most MAX_FRACTION of the pixels off at all. Measured on the first run:
+    // see this check's detail line, which prints the worst of each.
+    const MAX_LEVEL = 24;
+    const MAX_FRACTION = 0.002;
+    const conf = JSON.parse(fs.readFileSync(path.resolve(UI_DIR, "..", "src-tauri", "tauri.conf.json"), "utf8")).app.windows[0];
+    const sizes = [
+      { width: conf.minWidth, height: conf.minHeight },
+      { width: 1280, height: 800 },
+      { width: conf.width, height: conf.height },
+    ];
+    // Asked for; each is stopped where the page has got to when the harness gets its turn (a
+    // little later), and the opening is compared at exactly that moment. The last is asked for
+    // early enough that a slow turn still lands inside the opening's second.
+    const MOMENTS = [30, 220, 430, 620, 800];
+    const { decode } = require("./lib/png");
+    let worstLevel = 0;
+    let worstFraction = 0;
+    const skipped = [];
+    const out = [];
+    for (const entry of libraryFromDisk().variations) {
+      for (const viewport of sizes) {
+        const opening = await openingPage(viewport, entry.id);
+        const region = await opening.evaluate(() => window.RichSplash.openingRegion(1000));
+        assert(Array.isArray(region) && region[2] > 0 && region[3] > 0, entry.id + ": a changing part to draw: " + JSON.stringify(region));
+        await opening.evaluate(() => window.RichSplash.holdAt(0));
+        const first = decode(await opening.screenshot());
+        // THE RUNNING SPLASH, in the same page RUNNING (no draw mode): the app's own head and the
+        // same two scripts first in the body (28b holds that to `index.html`), with nothing else on
+        // the page to hold its main thread, so each moment is stopped where it is asked for. (In
+        // `index.html` the app's own boot shares that thread during the splash's first second and
+        // carried a stop asked for at 430 ms to 1,048 ms on a loaded host.) Its own ceiling stays
+        // armed (check 10b): five moments of its first second are over well inside four seconds.
+        const app = await openingPage(viewport, entry.id, { draw: false, splash: { id: entry.id, opening: false } }, FREEZER);
+        await app.evaluate(() => document.fonts.ready);
+        let compared = 0;
+        for (const m of MOMENTS) {
+          const frozen = await app.evaluate((ms) => window.__freezer.freezeAt(ms), m);
+          if (frozen.moment >= 1000) {
+            // A busy page got there after the opening's second: nothing of the opening to compare.
+            skipped.push(entry.id + " " + viewport.width + "x" + viewport.height + " asked " + m + " got " + Math.round(frozen.moment));
+            await app.evaluate(() => window.__freezer.thaw());
+            continue;
+          }
+          compared++;
+          // Two frames, so the bar is painted by its own tick at the frozen moment.
+          await app.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+          const runningPng = await app.screenshot();
+          const running = decode(runningPng);
+          await opening.evaluate((ms) => window.RichSplash.holdAt(ms), frozen.moment);
+          const heldPng = await opening.screenshot();
+          const held = decode(heldPng);
+          // A look at the pictures themselves, on request, outside the tree.
+          if (process.env.RICHOS_SPLASH_OPENING_DUMP) {
+            const tag = entry.id.replace(/\W+/g, "-") + "-" + viewport.width + "x" + viewport.height + "-" + m;
+            fs.mkdirSync(process.env.RICHOS_SPLASH_OPENING_DUMP, { recursive: true });
+            fs.writeFileSync(path.join(process.env.RICHOS_SPLASH_OPENING_DUMP, tag + "-running.png"), runningPng);
+            fs.writeFileSync(path.join(process.env.RICHOS_SPLASH_OPENING_DUMP, tag + "-held.png"), heldPng);
+          }
+          // The opening's frame: the first picture, with the changing part at this moment over it.
+          const dpr = running.width / viewport.width;
+          const [rx, ry, rw, rh] = region.map((v) => Math.round(v * dpr));
+          let off = 0;
+          let worst = 0;
+          for (let y = 0; y < running.height; y++) {
+            for (let x = 0; x < running.width; x++) {
+              const inside = x >= rx && x < rx + rw && y >= ry && y < ry + rh;
+              const src = inside ? held : first;
+              const a = pngAt(running, x, y);
+              const b = pngAt(src, x, y);
+              let d = 0;
+              for (let c = 0; c < 3; c++) d = Math.max(d, Math.abs(running.data[a + c] - src.data[b + c]));
+              if (d > 0) off++;
+              if (d > worst) worst = d;
+            }
+          }
+          const fraction = off / (running.width * running.height);
+          worstLevel = Math.max(worstLevel, worst);
+          worstFraction = Math.max(worstFraction, fraction);
+          assert(worst <= MAX_LEVEL && fraction <= MAX_FRACTION,
+            entry.id + " at " + viewport.width + "x" + viewport.height + ", " + frozen.moment.toFixed(1) + " ms: the opening's frame is off the running splash by up to " +
+            worst + " levels on " + (fraction * 100).toFixed(3) + "% of the pixels (allowed " + MAX_LEVEL + " on " + (MAX_FRACTION * 100) + "%)");
+          await app.evaluate(() => window.__freezer.thaw());
+        }
+        assert(compared >= 3, entry.id + " at " + viewport.width + "x" + viewport.height + ": only " + compared +
+          " of " + MOMENTS.length + " moments landed inside the opening's second (" + skipped.join("; ") + "), a harness fault");
+        noErrors(app, "28 " + entry.id);
+        noErrors(opening, "28 opening " + entry.id);
+        await app.__ctx.close();
+        await opening.__ctx.close();
+        out.push(entry.id + " " + viewport.width + "x" + viewport.height + " part " + region.join(","));
+      }
+    }
+    return "worst " + worstLevel + " levels, " + (worstFraction * 100).toFixed(4) + "% of pixels · " +
+      (skipped.length ? "past the second, not compared: " + skipped.join("; ") + " · " : "") + out.join(" · ");
+  });
+
+  await run.check("28b  the page the opening is drawn in is the app's own: the same head, the splash first in the body", async () => {
+    const tags = (file) => {
+      const html = fs.readFileSync(path.join(UI_DIR, file), "utf8").replace(/<!--[\s\S]*?-->/g, "");
+      const head = html.slice(0, html.indexOf("</head>"));
+      const body = html.slice(html.indexOf("<body"));
+      const list = (text) => (text.match(/<(?:link|script)\b[^>]*>/g) || []).map((t) => t.replace(/\s+/g, " ").trim());
+      const style = (head.match(/<style>[\s\S]*?<\/style>/g) || []).map((s) => s.replace(/\s+/g, " "));
+      return { head: list(head), style, body: list(body).slice(0, 2) };
+    };
+    const app = tags("index.html");
+    const opening = tags("splash-opening.html");
+    assertEqual(JSON.stringify(opening.head), JSON.stringify(app.head), "the opening page's head (scripts and stylesheets, in order)");
+    assertEqual(JSON.stringify(opening.style), JSON.stringify(app.style), "the opening page's inline style");
+    assertEqual(JSON.stringify(opening.body), JSON.stringify(app.body), "the first two scripts in the body");
+    assertEqual(JSON.stringify(opening.body), JSON.stringify(['<script src="splash-library.js"></script>', '<script src="splash.js"></script>'].map((t) => t.replace("</script>", ""))),
+      "the body starts with the library and the renderer");
+    return opening.head.length + " head tags identical; body opens with " + opening.body.join(", ");
+  });
+
+  await run.check("29  the page JOINS the opening where it has reached, reports it, and its hold counts from the first frame", async () => {
+    const out = [];
+    const id = libraryFromDisk().variations[1].id;
+    // `elapsed` ms since the opening's first picture reached the glass, an opening `length` ms
+    // long, and how long the shell takes to take the pictures down.
+    for (const [elapsed, length, takeDown] of [[400, 1000, 0], [1800, 1000, 300]]) {
+      const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+      const page = await newPage(ctx);
+      await page.addInitScript((o) => {
+        window.__RICHOS_LAUNCH__ = Object.freeze({ kind: "fresh", ordinal: 2, splashEnabled: true, splash: Object.freeze({ id: o.id, opening: true }) });
+        const calls = (window.__calls = []);
+        window.__TAURI_INTERNALS__ = {
+          invoke: (cmd, args) => {
+            calls.push({ cmd, args: args || null, at: performance.now(), moment: window.RichSplash ? window.RichSplash.moment() : null });
+            // The opening's first picture reached the glass `elapsed` ms before the page asked.
+            if (cmd === "splash_take_over") return Promise.resolve({ firstFrameMs: Date.now() - o.elapsed, openingMs: o.length });
+            if (cmd === "first_frame_painted") return new Promise((r) => setTimeout(() => { calls.push({ cmd: "down", at: performance.now(), moment: window.RichSplash.moment() }); r(null); }, o.takeDown));
+            return Promise.resolve(null);
+          },
+        };
+      }, { id, elapsed, length, takeDown });
+      await page.goto("file://" + path.join(UI_DIR, "splash-opening.html"));
+      await page.waitForFunction(() => (window.__calls || []).some((c) => c.cmd === "down"), null, { timeout: 60000 });
+      // Running on for a fifth of a second past where it joined, by its own clock.
+      await page.waitForFunction(() => window.RichSplash.state.heldAt === null && window.RichSplash.state.joinedAt !== null && window.RichSplash.moment() >= window.RichSplash.state.joinedAt + 200, null, { timeout: 60000 });
+      const seen = await page.evaluate(() => ({
+        calls: window.__calls,
+        state: JSON.parse(JSON.stringify(window.RichSplash.state)),
+        moment: window.RichSplash.moment(),
+        now: performance.now(),
+      }));
+      const report = seen.calls.find((c) => c.cmd === "first_frame_painted");
+      const down = seen.calls.find((c) => c.cmd === "down");
+      assert(seen.state.opening === true && seen.state.pickedBy === "shell", "the page knows the opening is up: " + JSON.stringify(seen.state));
+      assert(seen.calls[0].cmd === "splash_take_over", "the page asks where the opening has reached first: " + JSON.stringify(seen.calls.map((c) => c.cmd)));
+      const want = Math.min(elapsed, length);
+      assert(Math.abs(seen.state.joinedAt - want) <= 120, "joined at " + seen.state.joinedAt + " ms, the opening was at " + want);
+      assertEqual(report.args && report.args.moment, seen.state.joinedAt, "the report names the moment it joined at");
+      if (elapsed >= length) {
+        // Past the opening's end: held at its last picture until the pictures are down, then on.
+        assert(Math.abs(down.moment - length) < 1, "held at the opening's last picture until it came down: " + down.moment);
+      }
+      // After the take-down it runs: on from where it joined, by the time that has passed since.
+      const runningFor = seen.now - (elapsed >= length ? down.at : report.at);
+      assert(seen.state.heldAt === null && seen.moment > seen.state.joinedAt + runningFor - 120,
+        "it runs on from the joined moment: at " + Math.round(seen.moment) + " ms, " + Math.round(runningFor) + " ms after " + seen.state.joinedAt);
+      noErrors(page, "29");
+      // The hold counts from the first frame: no app-ready here, so the ceiling takes it down at
+      // its seconds plus the grace, counted from the moment he first saw the splash.
+      await page.waitForFunction(() => window.RichSplash.state.reason !== null, null, { timeout: 60000 });
+      const gone = await page.evaluate(() => ({ reason: window.RichSplash.state.reason, moment: window.RichSplash.moment() }));
+      assertEqual(gone.reason, "ceiling", "how it left");
+      await ctx.close();
+      out.push("elapsed " + elapsed + "/" + length + " ms: joined at " + seen.state.joinedAt + ", running at " + Math.round(seen.moment) + ", left by the ceiling");
     }
     return out.join(" · ");
   });

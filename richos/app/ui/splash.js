@@ -81,9 +81,38 @@
   // each one is paused where it lives.
   var pausedTotal = 0;
   var pausedSince = null;
-  function clock() {
+  function runningClock() {
     return (pausedSince === null ? now() : pausedSince) - pausedTotal;
   }
+  function clock() {
+    return heldMoment !== null && shownAt !== null ? shownAt + heldMoment : runningClock();
+  }
+
+  // -------------------------------------------------------------------------------------
+  // HELD AT A MOMENT, AND STARTED FROM ONE (Sage's plan 2026-11-14, "the splash the rules
+  // picked is playing within 380 ms of the click", section 1)
+  // -------------------------------------------------------------------------------------
+  //
+  // The opening of the splash is drawn when the app QUITS, as pictures of this code held still
+  // at one moment after another, in a web view nobody sees; at the next start macOS plays those
+  // pictures while this page loads, and this page then joins the splash at the moment the
+  // pictures have reached. So every splash must be drawable at any moment of its first second
+  // without playing up to it, and startable from that moment. `holdAt(ms)` and `release()` are
+  // that, for every entry the library will ever hold, because they hold the three kinds of
+  // motion this file already names (THE SPACE KEY'S CLOCK) where each lives:
+  //
+  //   * the clock: `clock()` returns `shownAt + heldMoment` while held, so the bar and the hold
+  //     read the held moment;
+  //   * every animation inside `#splash` (the CSS ones and the bar's fade alike, read off the
+  //     document rather than listed, so a stage added later is held without anyone remembering
+  //     it): paused and set to the moment;
+  //   * the bar: painted at once from the moment (`paintMoment`). A web view nobody sees gets no
+  //     animation frames at all (the trials measured none), so a hold never waits for one.
+  //
+  // `release()` starts the splash from where it is held: the clock carries on from the held
+  // moment and every animation plays on from it. `shownAt` then counts from the moment the
+  // splash was FIRST on the glass, so its 3 or 5 seconds are measured from when he first saw it.
+  var heldMoment = null;
 
   var KEY_ENABLED = "richos.splash.enabled";
 
@@ -575,10 +604,15 @@
   // asked for in v1. `KEY_LAST`, the no-repeat guard's storage, went with it: a deterministic
   // rule has nothing to remember.
   //
-  // WHERE THE LATER CRITERIA ATTACH: this function, and only this function. It already takes
-  // the whole pool and the ordinal; a criteria-driven pick takes the same two arguments plus
-  // whatever the criterion reads, and nothing else in this file changes. The pool is an
-  // ARRAY and the rule reads its length, so a third screen is a third object in the library.
+  // WHERE THE RULES LIVE NOW: in the shell, `richos-core`'s `launch::pick_splash`, applied when
+  // the app quits (Sage's plan 2026-11-14, section 1: the shell needs the answer before this page
+  // exists, so the opening can be drawn ahead and played at the click). The shell puts its pick in
+  // front of this page (`window.__RICHOS_LAUNCH__.splash`) and `start()` draws it. `choose()` is
+  // this page's own fallback where nothing was injected or the id is unknown here (a plain
+  // browser, the acceptance suite, the first start after an update to a build that dropped the
+  // picked entry), and it gives the same answer as `pick_splash` for the same start; a later rule
+  // is a change to `pick_splash`. The pool is an ARRAY and the rule reads its length, so a third
+  // screen is a third object in the library.
   //
   // A LIBRARY OF ONE gets that one every time, which is the only honest answer: a rule that
   // says "the second start shows the second screen" cannot be applied where there is no
@@ -977,16 +1011,52 @@
     state.barStopped = true;
   }
 
+  /// How far the bar has run at `t` ms after the first frame, 0 to 1, and its paint on THE
+  /// PROGRESS CURVE. One reading for the running bar and the held one.
+  function barSpan() {
+    var span = holdMs - BAR_START_MS;
+    return span < 350 ? 350 : span;
+  }
+  function barRun(t) {
+    var u = (t - BAR_START_MS) / barSpan();
+    return u < 0 ? 0 : u > 1 ? 1 : u;
+  }
+  function barCurve(u) {
+    return u + BAR_SURGE * Math.sin(2 * Math.PI * u) * (1 - u);
+  }
+
+  /// The bar exactly as it stands `t` ms after the first frame, painted now and without a frame
+  /// (a held splash). It changes no record of the bar's one pass: holding is looking, not running.
+  function paintMoment(t) {
+    if (!bar) return;
+    var u = barRun(t);
+    paintBar(barCurve(u));
+    var i;
+    if (u < 1) {
+      for (i = 0; i < bar.leads.length; i++) {
+        bar.leads[i].style.removeProperty("transition");
+        bar.leads[i].style.removeProperty("opacity");
+      }
+      hideFlares();
+      return;
+    }
+    retireLeads(false);
+    var q = (t - BAR_START_MS - barSpan()) / FLARE_MS;
+    if (q >= 0 && q < 1 && !reduceMotion()) paintFlare(q);
+    else hideFlares();
+  }
+
   /// ONE PASS, AND THEN IT STOPS. The only exits that do not schedule another frame are the
   /// two that call `stopTicking()`, and there is no other caller of `tick`.
   function tick() {
     if (!bar) return;
-    var span = holdMs - BAR_START_MS;
-    if (span < 350) span = 350;
-    var u = (clock() - shownAt - BAR_START_MS) / span;
-    if (u < 0) u = 0;
-    if (u > 1) u = 1;
-    paintBar(u + BAR_SURGE * Math.sin(2 * Math.PI * u) * (1 - u));
+    // A held splash is painted by its hold, never by a frame.
+    if (heldMoment !== null) {
+      raf = null;
+      return;
+    }
+    var u = barRun(clock() - shownAt);
+    paintBar(barCurve(u));
 
     if (u >= 1 && !bar.landed) {
       bar.landed = true;
@@ -1265,6 +1335,9 @@
       state.deferred = "app-ready";
     }
     node.classList.add("splash--paused");
+    // The class holds a CSS animation only until script has played or paused it; a splash the
+    // page joined at a moment (`release`) has been, so its animations are held here by hand too.
+    setAnimationsPlaying(false);
     if (bar && bar.enter && bar.enter.pause) {
       try {
         bar.enter.pause();
@@ -1295,6 +1368,7 @@
       state.pausedMs = Math.round(pausedTotal);
     }
     if (node) node.classList.remove("splash--paused");
+    if (heldMoment === null) setAnimationsPlaying(true);
     if (bar && bar.enter && bar.enter.play) {
       try {
         bar.enter.play();
@@ -1459,6 +1533,254 @@
     if (window.RichTheme) window.RichTheme.forceDark(false);
   }
 
+  // -------------------------------------------------------------------------------------
+  // HOLDING AND STARTING (see HELD AT A MOMENT, AND STARTED FROM ONE, at the top)
+  // -------------------------------------------------------------------------------------
+
+  /// Every animation on this surface, read off the document: the CSS stages, the strike, the
+  /// rule and the bar's fade, and whatever a later entry adds.
+  function splashAnimations() {
+    if (!node || !document.getAnimations) return [];
+    return document.getAnimations().filter(function (a) {
+      var t = a.effect && a.effect.target;
+      return !!t && (t === node || node.contains(t));
+    });
+  }
+
+  /// Pause or play every animation on this surface where it stands. One that has already run to
+  /// its end is left alone either way: `play()` on an animation at its end starts it again from
+  /// the beginning, and a stage that rose once must never rise twice.
+  function setAnimationsPlaying(on) {
+    var all = splashAnimations();
+    for (var i = 0; i < all.length; i++) {
+      try {
+        var a = all[i];
+        var end = a.effect && a.effect.getComputedTiming ? a.effect.getComputedTiming().endTime : Infinity;
+        if (Number(a.currentTime) >= end) continue;
+        if (on) a.play();
+        else a.pause();
+      } catch (_e) {
+        /* an animation that will not move stays where it stands */
+      }
+    }
+  }
+
+  /// HOLD the splash at `ms` after its first frame: everything on it stands exactly where the
+  /// running splash stands at that moment, painted now. True when there is a splash to hold.
+  function holdAt(ms) {
+    if (!node || shownAt === null) return false;
+    var t = Number(ms);
+    if (!isFinite(t) || t < 0) t = 0;
+    heldMoment = t;
+    if (raf !== null) {
+      cancelAnimationFrame(raf);
+      raf = null;
+    }
+    var all = splashAnimations();
+    for (var i = 0; i < all.length; i++) {
+      try {
+        all[i].pause();
+        all[i].currentTime = t;
+      } catch (_e) {
+        /* see setAnimationsPlaying */
+      }
+    }
+    paintMoment(t);
+    state.heldAt = t;
+    return true;
+  }
+
+  /// START the splash from the moment it is held at. The clock carries on from that moment, so
+  /// the bar, the hold and the ceiling all count from the splash's first frame.
+  function release() {
+    if (heldMoment === null) return;
+    var t = heldMoment;
+    heldMoment = null;
+    shownAt = runningClock() - t;
+    state.heldAt = null;
+    if (paused) return; // the space key holds it; its second press lets it go
+    // Each animation runs on from the held moment AS OF NOW, on the same clock as the bar: its
+    // start is set rather than asked for with `play()`, which would wait for the page's next
+    // frame (on a busy page, a tenth of a second and more) and leave the stages that far behind
+    // the bar and behind the opening the page has just joined.
+    var real = window.performance && window.performance.now ? window.performance.now() : null;
+    var all = splashAnimations();
+    for (var i = 0; i < all.length; i++) {
+      try {
+        if (real !== null && document.timeline) all[i].startTime = real - t;
+        else all[i].play();
+      } catch (_e) {
+        /* see setAnimationsPlaying */
+      }
+    }
+    if (bar && !state.barStopped && raf === null) raf = requestAnimationFrame(tick);
+  }
+
+  /// THE PART OF THE PAGE THE OPENING CHANGES, in CSS pixels `[left, top, width, height]`:
+  /// every element inside a moving thing (an animation's target, or the bar, which the clock
+  /// paints), as it stands at the opening's first and last moments, with its shadows and its
+  /// outline. The opening's later pictures are only this part, laid over its first picture
+  /// (Sage's plan, section 1: "each later one is only the part that changes"); the splash
+  /// suite composites them that way and holds the result against the running splash, so a
+  /// part that is missed here is a failed commit, not a quiet seam.
+  function openingRegion(endMs) {
+    if (!node || shownAt === null) return null;
+    var was = heldMoment;
+    var box = null;
+    function grow(l, t, r, b) {
+      if (!(r > l) || !(b > t)) return;
+      if (!box) box = { l: l, t: t, r: r, b: b };
+      else {
+        if (l < box.l) box.l = l;
+        if (t < box.t) box.t = t;
+        if (r > box.r) box.r = r;
+        if (b > box.b) box.b = b;
+      }
+    }
+    function px(v) {
+      var n = parseFloat(v);
+      return isFinite(n) ? n : 0;
+    }
+    /// A box-shadow list's reach outside the element: each shadow's offset plus blur plus spread.
+    function shadowReach(r, list) {
+      if (!list || list === "none") return;
+      var depth = 0;
+      var parts = [];
+      var cur = "";
+      for (var i = 0; i < list.length; i++) {
+        var c = list.charAt(i);
+        if (c === "(") depth++;
+        if (c === ")") depth--;
+        if (c === "," && depth === 0) {
+          parts.push(cur);
+          cur = "";
+        } else cur += c;
+      }
+      parts.push(cur);
+      for (var j = 0; j < parts.length; j++) {
+        if (/\binset\b/.test(parts[j])) continue;
+        var nums = parts[j].replace(/\([^)]*\)/g, "").match(/-?[\d.]+px/g) || [];
+        var ox = px(nums[0]), oy = px(nums[1]), blur = px(nums[2]), spread = px(nums[3]);
+        grow(r.left + ox - blur - spread, r.top + oy - blur - spread, r.right + ox + blur + spread, r.bottom + oy + blur + spread);
+      }
+    }
+    function measure() {
+      var movers = splashAnimations().map(function (a) { return a.effect.target; });
+      if (bar) movers.push(bar.root);
+      for (var i = 0; i < movers.length; i++) {
+        var els = [movers[i]].concat(Array.prototype.slice.call(movers[i].querySelectorAll("*")));
+        for (var j = 0; j < els.length; j++) {
+          var r = els[j].getBoundingClientRect();
+          if (!r.width && !r.height) continue;
+          grow(r.left, r.top, r.right, r.bottom);
+          var cs = getComputedStyle(els[j]);
+          shadowReach(r, cs.boxShadow);
+          var ow = cs.outlineStyle !== "none" ? px(cs.outlineWidth) + Math.max(0, px(cs.outlineOffset)) : 0;
+          if (ow) grow(r.left - ow, r.top - ow, r.right + ow, r.bottom + ow);
+          // A filter's reach (a drop shadow, a blur) is not in its box; give it room.
+          if (cs.filter && cs.filter !== "none") grow(r.left - 48, r.top - 48, r.right + 48, r.bottom + 48);
+        }
+      }
+    }
+    holdAt(0);
+    measure();
+    holdAt(endMs);
+    measure();
+    if (was === null) holdAt(0);
+    else holdAt(was);
+    if (!box) return null;
+    var w = window.innerWidth;
+    var h = window.innerHeight;
+    var l = Math.max(0, Math.floor(box.l) - 2);
+    var t = Math.max(0, Math.floor(box.t) - 2);
+    var r = Math.min(w, Math.ceil(box.r) + 2);
+    var b = Math.min(h, Math.ceil(box.b) + 2);
+    return [l, t, r - l, b - t];
+  }
+
+  /// THE SHELL'S PICK, from the object it puts in front of every page script, or `null`. The
+  /// rules run in the shell when the app quits (`richos-core` `launch::pick_splash`); this page
+  /// draws what was picked and no longer chooses, except where nothing was injected or the id is
+  /// one it does not know (`choose()` below is that fallback).
+  function shellPick() {
+    try {
+      var s = window.__RICHOS_LAUNCH__ && window.__RICHOS_LAUNCH__.splash;
+      if (s && typeof s.id === "string" && s.id) return s;
+    } catch (_e) {
+      /* fall through */
+    }
+    return null;
+  }
+
+  /// Drawing an opening (the web view nobody sees, at quit): build the picked splash, hold it at
+  /// its first moment, and nothing else: no listeners, no ceiling, no report.
+  function drawing() {
+    try {
+      return !!(window.__RICHOS_LAUNCH__ && window.__RICHOS_LAUNCH__.draw === true);
+    } catch (_e) {
+      return false;
+    }
+  }
+
+  var tookOver = false;
+
+  /// THE PAGE TAKES OVER FROM THE OPENING. The shell has its saved pictures of this splash's
+  /// first second playing above this page; it says when the first of them reached the glass and
+  /// how long they run. This page draws the splash at the moment they have reached (or holds at
+  /// their last picture when it is later than they are long), reports, and the shell takes the
+  /// pictures down in that step. Both show the same moment of the same splash, drawn by the same
+  /// code, so nothing moves. With no answer it starts from the beginning, as it always did.
+  function takeOver(invoke) {
+    tookOver = true;
+    var report = function (moment) {
+      var done = function () {
+        release();
+      };
+      requestAnimationFrame(function () {
+        requestAnimationFrame(function () {
+          try {
+            Promise.resolve(invoke("first_frame_painted", moment === null ? {} : { moment: moment })).then(done, done);
+          } catch (_e) {
+            done();
+          }
+        });
+      });
+    };
+    var fromStart = function () {
+      state.joinedAt = null;
+      release();
+      report(null);
+    };
+    var asked;
+    try {
+      asked = Promise.resolve(invoke("splash_take_over"));
+    } catch (_e) {
+      fromStart();
+      return;
+    }
+    asked.then(function (r) {
+      if (!r || typeof r.firstFrameMs !== "number" || typeof r.openingMs !== "number") {
+        fromStart();
+        return;
+      }
+      var elapsed = Date.now() - r.firstFrameMs;
+      var at = elapsed < r.openingMs ? elapsed : r.openingMs;
+      if (!(at >= 0)) at = 0;
+      holdAt(at);
+      state.joinedAt = Math.round(at);
+      // Inside the opening: it is still playing, so the page plays from the same moment. Past
+      // its end: the page holds at the last picture until the pictures are down.
+      if (elapsed < r.openingMs) release();
+      if (ceiling !== null) {
+        clearTimeout(ceiling);
+        ceiling = setTimeout(function () {
+          yieldNow("ceiling");
+        }, Math.max(0, holdMs + CEILING_GRACE_MS - at));
+      }
+      report(Math.round(at));
+    }, fromStart);
+  }
+
   function start() {
     if (!enabled()) {
       state.declined = "switched off";
@@ -1482,7 +1804,13 @@
     }
     var ordinal = launchOrdinal();
     state.ordinal = ordinal;
-    var entry = choose(candidates, ordinal);
+    var picked = shellPick();
+    var entry = null;
+    for (var c = 0; picked && c < candidates.length; c++) {
+      if (candidates[c].id === picked.id) entry = candidates[c];
+    }
+    state.pickedBy = entry ? "shell" : "page";
+    if (!entry) entry = choose(candidates, ordinal);
     holdMs = Math.round(secondsFor(entry) * 1000);
     state.seconds = holdMs / 1000;
     try {
@@ -1496,10 +1824,25 @@
     state.shown = true;
     state.variationId = entry.id;
     shownAt = clock();
+    if (drawing()) {
+      // The web view nobody sees, drawing the opening at quit: held at the first moment, and the
+      // shell moves the hold from there. Nothing here is for a person.
+      state.drawing = true;
+      holdAt(0);
+      return;
+    }
+    var invoke = window.__TAURI_INTERNALS__ && typeof window.__TAURI_INTERNALS__.invoke === "function"
+      ? window.__TAURI_INTERNALS__.invoke.bind(window.__TAURI_INTERNALS__)
+      : null;
+    // THE SHELL'S OPENING IS ON THE GLASS ABOVE THIS PAGE: hold at the first moment (nobody sees
+    // this page yet) and join the opening where it has reached.
+    var joining = !!(entry && picked && picked.opening === true && state.pickedBy === "shell" && invoke);
+    state.opening = joining;
+    if (joining) holdAt(0);
     // ONE PASS OF THE LOADING BAR, STARTING NOW. `shownAt` is the clock it runs on and the
     // clock the hold is measured against, so the bar reaches 100% at exactly the instant the
     // hold is served - the same number, not two numbers that agree.
-    if (bar) raf = requestAnimationFrame(tick);
+    else if (bar) raf = requestAnimationFrame(tick);
     // §15's ONE PERMANENT EXCEPTION: "because of its nature the start screen will always
     // need to be in dark mode", and no switch reaches it. The curtain's own composition was
     // always dark — it draws from `--splash-*` properties this file sets, never from the
@@ -1517,13 +1860,17 @@
     ceiling = setTimeout(function () {
       yieldNow("ceiling");
     }, holdMs + CEILING_GRACE_MS);
+    if (joining) takeOver(invoke);
   }
 
   // THE PAGE HAS TAKEN OVER (Sage's plan 2026-11-14, rules 3 and 5): two animation frames after
   // this script ran, the page, with its splash if one is drawn, has painted at least once. The
   // shell then starts what waited for the page and writes its launch line. Reported whether or
   // not a splash is drawn; the shell counts the first report of a launch. No shell, no report.
-  if (window.__TAURI_INTERNALS__ && typeof window.__TAURI_INTERNALS__.invoke === "function") {
+  // A page joining the shell's opening reports from `takeOver`, once it has joined.
+  function reportPainted() {
+    if (tookOver || drawing()) return;
+    if (!window.__TAURI_INTERNALS__ || typeof window.__TAURI_INTERNALS__.invoke !== "function") return;
     requestAnimationFrame(function () {
       requestAnimationFrame(function () {
         try {
@@ -1557,8 +1904,19 @@
     /// The rule, exported so it can be driven directly against a pool the suite supplies.
     /// It is a pure function of the pool and the ordinal; that is what makes it testable
     /// without launching anything, and what makes the later criteria a change to one place.
-    choose: choose
+    choose: choose,
+    /// HELD AT A MOMENT, AND STARTED FROM ONE: the shell draws the opening at quit with these
+    /// (`src-tauri/src/splash_opening.rs`), and the splash suite holds every entry to them.
+    holdAt: holdAt,
+    release: release,
+    openingRegion: openingRegion,
+    /// Where the splash stands now, in ms after its first frame (`null` before it is up): the
+    /// reading the bar and the hold are painted from. Read-only; the suite compares by it.
+    moment: function () {
+      return shownAt === null ? null : clock() - shownAt;
+    }
   };
 
   start();
+  reportPainted();
 })();
