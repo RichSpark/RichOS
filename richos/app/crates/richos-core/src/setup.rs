@@ -766,6 +766,12 @@ pub struct SetupStatus {
     /// The engine release this build is pinned to, for the operator's line. Never shown to
     /// the CEO: no version numbers on his screen.
     pub engine_pin_version: Option<String>,
+    /// **The engine is missing only because this app was updated** ([`engine_update_due`]): an
+    /// earlier build set the engine up, and this build pins a different one. The app then
+    /// installs its own build's engine by itself, without the setup sheet (the CEO, 2026-11-14:
+    /// *"Is it normal and expected that I always get to see the setup screen ... after updating
+    /// to a new version?"*). `false` on a first install, which still shows the sheet.
+    pub engine_update: bool,
     /// Set by `run_setup` on the status it returns, so the window can say "done" rather than
     /// re-asking. Mirrors `MemoryStatus::provisioned_now`.
     pub installed_now: bool,
@@ -794,6 +800,20 @@ impl SetupStatus {
     /// Nothing missing — the state in which first run says nothing at all.
     pub fn complete(&self) -> bool {
         self.needs().is_empty()
+    }
+
+    /// **What the setup sheet asks for**: everything missing except what the app is already
+    /// fetching by itself: the video tools while their background download runs, and the
+    /// engine while the app installs its own build's engine after an update
+    /// ([`Self::engine_update`]). If that install fails, `engine_updating` is `false` again and
+    /// the sheet offers the engine as on a first install, so a Mac that could not fetch it still
+    /// has a way to.
+    pub fn sheet_needs(&self, media_downloading: bool, engine_updating: bool) -> Vec<Component> {
+        self.needs()
+            .into_iter()
+            .filter(|c| !(media_downloading && *c == Component::MediaTools))
+            .filter(|c| !(engine_updating && *c == Component::Engine))
+            .collect()
     }
 
     /// Missing something this build cannot fix. The surface must then explain rather than
@@ -1078,17 +1098,44 @@ pub fn detect_with_pin(
     pin: Option<&EnginePin>,
     speech: SpeechModel<'_>,
 ) -> SetupStatus {
+    // **ONE PIN ANSWERS BOTH HALVES, AND NOW BOTH HALVES OF THE PIN ARE ASKED.** Until
+    // 2026-09-18 this passed `p.version` and dropped `p.sha256` on the floor — the pin has
+    // carried the digest since it was written, and detection simply never looked at it.
+    let engine = find_engine_demanded(paths, extra_engine_candidates, usable, EngineDemand::pinned(pin));
     SetupStatus {
         claude: find_claude(paths),
-        // **ONE PIN ANSWERS BOTH HALVES, AND NOW BOTH HALVES OF THE PIN ARE ASKED.** Until
-        // 2026-09-18 this passed `p.version` and dropped `p.sha256` on the floor — the pin has
-        // carried the digest since it was written, and detection simply never looked at it.
-        engine: find_engine_demanded(paths, extra_engine_candidates, usable, EngineDemand::pinned(pin)),
+        // Only when the engine is MISSING: a stale install beside an engine that answered
+        // elsewhere is not something this launch needs replaced.
+        engine_update: !engine.present && engine_update_due(paths, pin),
+        engine,
         media_tools: find_media_tools(paths, speech),
         engine_installable: pin.is_some(),
         engine_pin_version: pin.map(|p| p.version.clone()),
         installed_now: false,
     }
+}
+
+/// **Was the engine set up before, by another build?** Then the app installs its own build's
+/// engine by itself after an update, and the setup sheet never asks for it.
+///
+/// Each build pins its own engine ([`EngineDemand::pinned`]), so after an update the engine an
+/// earlier build installed no longer matches and detection reports it missing. This tells that
+/// case apart from a first install: the directory RichOS installs into
+/// ([`engine_install_dir`]) holds an engine, and this build's pin refuses it for its release or
+/// its contents. Nothing there means nothing was ever set up, and the sheet asks as before.
+///
+/// `false` when this build carries no pin (it can install nothing), when an operator named the
+/// engine in `$RICHOS_ENGINE_DIR` (a statement outranks the pin everywhere), and when the
+/// installed engine is the pinned one (then it is not out of date, whatever else is wrong).
+pub fn engine_update_due(paths: &SetupPaths, pin: Option<&EnginePin>) -> bool {
+    let (Some(pin), Some(home), None) = (pin, paths.home.as_deref(), paths.engine_override.as_deref())
+    else {
+        return false;
+    };
+    matches!(
+        engine_accepted_demand(&engine_install_dir(home), EngineDemand::pinned(Some(pin))),
+        Err(EngineRejected::WrongRelease { .. } | EngineRejected::WrongIdentity { .. })
+    )
 }
 
 // ===========================================================================================
