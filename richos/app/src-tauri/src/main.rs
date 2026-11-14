@@ -673,12 +673,6 @@ impl LeaseFactory for EngineLeaseFactory {
     /// host reports it in those words rather than leaving it to surface later as a worker
     /// that never speaks.
     fn spawn_work(&self, binding: &richos_core::entity::ThreadBinding) -> Result<Box<dyn Cognition>, CognitionError> {
-        self.on_the_engine_in_place(|| self.spawn_work_once(binding))
-    }
-}
-
-impl EngineLeaseFactory {
-    fn spawn_work_once(&self, binding: &richos_core::entity::ThreadBinding) -> Result<Box<dyn Cognition>, CognitionError> {
         let dir = self
             .engine_dir
             .lock()
@@ -735,32 +729,6 @@ impl EngineLeaseFactory {
 
 impl EngineLeaseFactory {
     fn spawn_chat(&self, control: Option<&ConversationControl>, binding: Option<&richos_core::entity::ThreadBinding>) -> Result<Box<dyn Cognition>, CognitionError> {
-        self.on_the_engine_in_place(|| self.spawn_chat_once(control, binding))
-    }
-
-    /// **A lease in the engine that is in place, after an update as on any launch.** While the
-    /// app installs its own build's engine, the earlier build's engine serves
-    /// (`setup_view::previous_engine_serves`). When this build changed what it needs of an engine
-    /// the earlier one cannot serve it, and the spawn then waits for this build's engine and is
-    /// tried once more there (`setup_view::wait_until_previous_engine_retires`), instead of
-    /// handing him a failed turn for an engine that is minutes from being replaced.
-    fn on_the_engine_in_place(
-        &self,
-        spawn: impl Fn() -> Result<Box<dyn Cognition>, CognitionError>,
-    ) -> Result<Box<dyn Cognition>, CognitionError> {
-        let dir = self.engine_dir.lock().map(|d| d.clone()).unwrap_or_default();
-        let previous = setup_view::previous_engine_serves(&dir);
-        match spawn() {
-            Err(e) if previous => {
-                eprintln!("[richos] engine update: the earlier build's engine could not serve this request ({e}); it waits for this build's engine");
-                setup_view::wait_until_previous_engine_retires();
-                spawn()
-            }
-            other => other,
-        }
-    }
-
-    fn spawn_chat_once(&self, control: Option<&ConversationControl>, binding: Option<&richos_core::entity::ThreadBinding>) -> Result<Box<dyn Cognition>, CognitionError> {
         let dir = self
             .engine_dir
             .lock()
@@ -6439,9 +6407,11 @@ fn dictation_feature_thread(state: State<AppState>, create: bool) -> Result<Opti
 /// place and serves his messages (`setup_view::previous_engine_serves`) and his voice (its
 /// decoder, given here first). The download and the checks run with NO lock held
 /// (`setup_view::stage_pinned_engine`), and so does the swap (two renames; the earlier engine is
-/// moved aside, never deleted, so a process still in it keeps its directory). The one case that
-/// waits: when this build changed what it needs of an engine, the earlier one cannot serve, and
-/// the request waits for the swap (`EngineLeaseFactory::on_the_engine_in_place`). After the swap
+/// moved aside, never deleted, so a process still in it keeps its directory). A session never
+/// waits for any of it: one started before the swap starts in the earlier engine as it is, with
+/// the skills it ships even where this build names one differently
+/// (`richos_core::skills::earlier_engine_serves`), and this build's engine serves from the first
+/// session after the swap. After the swap
 /// the window asks voice again, and the spine is taken for what a press of "Set it up" does after
 /// its install ([`replace_engine`]: idle lease retired, memory rewired, desk readied), asked again
 /// every 2 s while a turn or a worker runs. A failed download or check leaves the previous engine
