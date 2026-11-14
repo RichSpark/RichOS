@@ -3025,11 +3025,22 @@ class Runner:
             ratio = summary.get("guest_ratio")
             limit = 380 if ratio is None else (
                 round(380 * ratio) if isinstance(ratio, (int, float)) and ratio >= 1 else None)
+            # A route with its own like-for-like limit (the cold route, against Dictionary after the
+            # same purge) is held to it the same way: exactly 380 ms times its ratio, its p95 under it.
+            own_limits_hold = True
+            for route, own in (summary.get("route_limits") or {}).items():
+                own_ratio = (own or {}).get("ratio")
+                own_limit = 380 if own_ratio is None else (
+                    round(380 * own_ratio) if isinstance(own_ratio, (int, float)) and own_ratio >= 1 else None)
+                route_p95 = ((summary.get("routes") or {}).get(route) or {}).get("p95_ms")
+                if own_limit is None or (own or {}).get("limit_ms") != own_limit \
+                        or not isinstance(route_p95, (int, float)) or route_p95 > own_limit:
+                    own_limits_hold = False
             if facts.get("version") != info.get("version"):
                 problems.append(f"{report} measured {facts.get('version') or '<no version>'}, not {info.get('version')}")
             elif summary.get("incomplete") is not False or summary.get("refused") is not False \
                     or not isinstance(p95, (int, float)) or limit is None \
-                    or summary.get("limit_ms") != limit or p95 > limit:
+                    or summary.get("limit_ms") != limit or p95 > limit or not own_limits_hold:
                 problems.append(f"{report}: {walked.get('sentence') or 'no passing verdict'}")
             else:
                 return walked.get("sentence")

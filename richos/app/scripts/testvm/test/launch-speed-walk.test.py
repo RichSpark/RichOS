@@ -144,6 +144,24 @@ check("the limit is 380 ms times (the guest's median from the request + the Dock
 check('a single cold outlier does not move the limit', walk.guest_limit(calib[:-1] + [dict(calib[-1], window=590)])[1]
       == ratio, walk.guest_limit(calib[:-1] + [dict(calib[-1], window=590)]))
 check('no calibration keeps 380 ms', walk.guest_limit([]) == (380, None, None))
+# THE COLD ROUTE AGAINST COLD DICTIONARY (the lead's decision on esc-20261114T164747Z-54632204):
+# its own limit from Dictionary after the same purge, and it is not pooled with the warm routes.
+cold_calib = [{'label': 'dictionary:cold', 'window': ms} for ms in (1500, 1600, 1700)]
+cold_limit, cold_ratio, cold_inputs = walk.guest_limit(cold_calib, 'dictionary:cold')
+check('the cold limit comes from cold Dictionary only', cold_inputs['guest_median_from_request_ms'] == 1600
+      and cold_limit == round(380 * cold_ratio) and walk.guest_limit(cold_calib)[1] is None, (cold_limit, cold_ratio))
+own = {'cold': {'limit_ms': cold_limit, 'ratio': cold_ratio, 'inputs': cold_inputs}}
+cold_rows = [{'label': 'ordinary:judged', 'splash': 300} for _ in range(20)] + \
+            [{'label': 'cold:judged', 'splash': 1900} for _ in range(20)]
+judged_own = walk.verdict(cold_rows, {'ordinary': 20, 'cold': 20}, 380, None, None, own)
+check('a cold route within its own cold limit passes, and is not pooled with the warm routes',
+      judged_own['refused'] is False and judged_own['p95_ms'] == 300 and judged_own['launches'] == 20, judged_own)
+slow_cold = walk.verdict(cold_rows[:20] + [{'label': 'cold:judged', 'splash': 9000} for _ in range(20)],
+                         {'ordinary': 20, 'cold': 20}, 380, None, None, own)
+check('a cold route over its own limit refuses', slow_cold['refused'] is True and slow_cold['routes_over'] == ['cold'],
+      slow_cold)
+check('the sentence names the cold route\'s own limit', 'cold judged on its own against %d ms' % cold_limit
+      in walk.sentence(judged_own), walk.sentence(judged_own))
 # Publication re-derives the limit from the recorded ratio as round(380 * ratio): the walk's own
 # limit is that same number for every guest median (review rv-20261114T153837Z-b8423a44-96f8).
 mismatched = [m for m in range(300, 900) if (lambda l, r, _i: l != round(380 * r))(

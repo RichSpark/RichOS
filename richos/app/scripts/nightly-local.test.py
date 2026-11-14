@@ -1950,6 +1950,31 @@ while True: time.sleep(.02)
                 with self.assertRaisesRegex(ValueError, "p95 at or under"):
                     r.require_launch_speed(info, "fixture-run-id")
 
+    def test_publish_holds_a_route_to_its_own_like_for_like_limit(self):
+        # The lead's decision on esc-20261114T164747Z-54632204: the cold route is judged against 380 ms
+        # scaled by Dictionary after the same purge, recorded in `route_limits`; publish holds it to
+        # exactly 380 ms times that ratio, and its own p95 under it.
+        r = self.runner()
+        info = {**self.CANDIDATE_INFO, "launch_speed_required": True}
+        report = r.state / "launch-speed" / "fixture-run-id.2" / "report.json"
+        report.parent.mkdir(parents=True, exist_ok=True)
+
+        def walked(cold_p95, cold_limit, cold_ratio):
+            report.write_text(json.dumps({"sentence": "cold p95 %d ms against %d ms" % (cold_p95, cold_limit),
+                "summary": {"p95_ms": 300, "limit_ms": 760, "guest_ratio": 2.0, "refused": False, "incomplete": False,
+                            "routes": {"cold": {"p95_ms": cold_p95}},
+                            "route_limits": {"cold": {"limit_ms": cold_limit, "ratio": cold_ratio}}},
+                "facts": {"version": info["version"]}}))
+
+        walked(1800, 1900, 5.0)
+        self.assertEqual(r.require_launch_speed(info, "fixture-run-id"), "cold p95 1800 ms against 1900 ms")
+        for what, cold_p95, cold_limit, cold_ratio in (("over its own limit", 2000, 1900, 5.0),
+                                                       ("a limit that is not 380 ms times its ratio", 1800, 2500, 5.0)):
+            with self.subTest(what):
+                walked(cold_p95, cold_limit, cold_ratio)
+                with self.assertRaisesRegex(ValueError, "p95 at or under"):
+                    r.require_launch_speed(info, "fixture-run-id")
+
     def test_a_walk_that_stopped_before_its_end_is_refused_however_its_steps_went(self):
         # Review rv-20261021T163510Z-b612361c-0e62, finding 3: the walk rewrites report.json after
         # every step, and publish accepted any nonempty all-PASS list, so a walk that stopped after

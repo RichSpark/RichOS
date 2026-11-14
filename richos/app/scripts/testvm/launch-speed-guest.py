@@ -113,7 +113,7 @@ def owned(row, before, owns):
     return row[0] not in before and row[1] == 1 and any(row[2].startswith(o.rstrip('/') + '/') for o in owns)
 
 
-def launch(n, step, out):
+def launch(n, step, out, seen=None):
     run_dir = os.path.join(out, 'run%02d' % n)
     os.makedirs(run_dir, exist_ok=True)
     log = os.path.join(run_dir, 'app.log')
@@ -124,7 +124,7 @@ def launch(n, step, out):
     before = {r[0] for r in ps_rows()}
     stop = threading.Event()
     lines = []
-    follower = threading.Thread(target=follow, args=(log, stop, lines))
+    follower = threading.Thread(target=follow, args=(log, stop, lines), daemon=True)
     follower.start()
     cmd = ['open', '-n', '-a', step['app']]
     for k, v in step.get('env', {}).items():
@@ -146,6 +146,8 @@ def launch(n, step, out):
             for row in ps_rows():
                 if owned(row, before, step['owns']):
                     pid, t_pid = row[0], now
+                    if seen is not None:
+                        seen["pid"] = pid
                     break
         if shots and now - t_open >= shots[0]:
             shot = shots.pop(0)
@@ -244,12 +246,16 @@ def main():
     for n, step in enumerate(plan, 1):
         if step.get('before'):
             subprocess.run(['/bin/sh', '-c', step['before']], capture_output=True, timeout=600)
+        seen = {}
         try:
-            results.append(launch(n, step, a.out))
+            results.append(launch(n, step, a.out, seen))
         except Exception as error:  # one launch that could not run is a missing result, never every result
-            results.append({'n': n, 'label': step['label'], 'app': step['app'], 't_open': None, 'pid': None,
-                            'quit': 'not launched: %s' % error, 'all_gone': True, 'events': [], 'lines': [],
-                            'expect_splash': step.get('expect_splash'), 'quit_lines': []})
+            # A process it had already started is quit by its captured pid and checked gone, as any.
+            pid = seen.get('pid')
+            how = quit_pid(pid, step.get('menu_quit', '')) if pid else 'no process found'
+            results.append({'n': n, 'label': step['label'], 'app': step['app'], 't_open': None, 'pid': pid,
+                            'quit': 'not launched: %s; %s' % (error, how), 'all_gone': not (pid and alive(pid)),
+                            'events': [], 'lines': [], 'expect_splash': step.get('expect_splash'), 'quit_lines': []})
             print('launch %d %s could not run: %s' % (n, step['label'], error), flush=True)
         if step.get('after'):
             subprocess.run(['/bin/sh', '-c', step['after']], capture_output=True, timeout=600)

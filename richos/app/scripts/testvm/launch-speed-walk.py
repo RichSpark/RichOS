@@ -216,10 +216,12 @@ def p95(values):
     return ordered[max(0, -(-len(ordered) * 95 // 100) - 1)]
 
 
-def verdict(rows, planned=None, limit_ms=LIMIT_MS, ratio=None, inputs=None):
+def verdict(rows, planned=None, limit_ms=LIMIT_MS, ratio=None, inputs=None, route_limits=None):
     """The CEO's rule, 2026-11-14: "380 ms as the maximum allowed p95 time for the RichOS app to
     start showing the splash screen." The p95 of each judged route, and of every judged launch
-    together, against the limit: any one over it refuses.
+    together, against the limit: any one over it refuses. A route in `route_limits` ({route:
+    {'limit_ms', 'ratio', 'inputs'}}) is judged against its own like-for-like limit (the cold route
+    against Dictionary after the same purge) and is not pooled with the others.
 
     MISSING EVIDENCE NEVER PASSES (review rv-20261114T115101Z-10e7c6ac-7689, finding 1): a judged
     launch with no timing, a planned route with no launches (`planned`, {route: launches}), or
@@ -237,16 +239,19 @@ def verdict(rows, planned=None, limit_ms=LIMIT_MS, ratio=None, inputs=None):
         got = len(judged.get(route, [])) + sum(1 for m in missing if m.startswith(route + ':'))
         if got < count:
             missing += ['%s:not launched' % route] * (count - got)
-    every = [v for values in judged.values() for v in values]
+    route_limits = route_limits or {}
+    every = [v for route, values in judged.items() if route not in route_limits for v in values]
     summary = {'limit_ms': limit_ms, 'guest_ratio': ratio, 'guest_inputs': inputs, 'launches': len(every),
-               'p95_ms': p95(every) if every else None, 'routes': {}, 'reported': {}, 'missing': missing}
+               'p95_ms': p95(every) if every else None, 'routes': {}, 'reported': {}, 'missing': missing,
+               'route_limits': route_limits}
     summary['incomplete'] = bool(missing) or len(every) < MIN_LAUNCHES
     for route, values in sorted(judged.items()):
         summary['routes'][route] = {'p95_ms': p95(values), 'median_ms': statistics.median(values),
                                     'max_ms': max(values), 'launches': len(values)}
     # EVERY JUDGED ROUTE ON ITS OWN, and all of them together: one fast route never hides a slow
     # one (review rv-20261114T143754Z-7a96691c-3106, finding 2).
-    summary['routes_over'] = sorted(r for r, s in summary['routes'].items() if s['p95_ms'] > limit_ms)
+    summary['routes_over'] = sorted(r for r, s in summary['routes'].items()
+                                    if s['p95_ms'] > route_limits.get(r, {}).get('limit_ms', limit_ms))
     summary['refused'] = summary['incomplete'] or summary['p95_ms'] > limit_ms or bool(summary['routes_over'])
     # Every splash the rules picked, on its own: the hundredth splash must cost what the first does.
     by_splash = {}
@@ -286,16 +291,22 @@ def sentence(summary):
                   inputs.get('mac_median_from_click_ms')))
     parts += ['%s p95 %d ms (%d launches)' % (sid, s['p95_ms'], s['launches'])
               for sid, s in sorted(summary.get('splashes', {}).items())]
+    for route, own in sorted((summary.get('route_limits') or {}).items()):
+        got = (own.get('inputs') or {})
+        parts.append('%s judged on its own against %d ms (380 x %s, Dictionary after the same purge: its median %s ms '
+                     'from the Dock click here, against %g ms on his Mac)' % (
+                         route, own['limit_ms'], own.get('ratio'), got.get('guest_median_from_click_ms'),
+                         MAC_DICTIONARY_MEDIAN_MS))
     return 'Launch speed, Dock click to the splash showing, against a p95 of %d ms%s: %s. %s.' % (
         summary['limit_ms'], scaled, head, '; '.join(parts))
 
 
-def guest_limit(rows):
+def guest_limit(rows, label='dictionary:calibration'):
     """(limit in ms, ratio, inputs) from the Dictionary calibration launches, LIKE FOR LIKE: its
     median from the launch request to its window in the guest, plus the Dock's own part measured on
     his Mac, against its median from the Dock click to its window on his Mac. (LIMIT_MS, None, None)
     without them. A guest faster than his Mac never tightens the limit below LIMIT_MS."""
-    windows = [r['window'] for r in rows if r['label'] == 'dictionary:calibration' and 'window' in r]
+    windows = [r['window'] for r in rows if r['label'] == label and 'window' in r]
     if not windows:
         return LIMIT_MS, None, None
     guest = statistics.median(windows) + DOCK_PART_MS
@@ -486,7 +497,11 @@ def main():
     # Dictionary first, DICTIONARY_RUNS times: the guest's slowness against his Mac, measured once.
     said_dictionary = None if a.only_checks else run_plan('dictionary', [
         {'label': 'dictionary:calibration', 'app': DICTIONARY, 'owns': [DICTIONARY], 'env': {},
-         'menu_quit': 'Quit Dictionary', 'done': '', 'settle': 4} for _ in range(DICTIONARY_RUNS)])
+         'menu_quit': 'Quit Dictionary', 'done': '', 'settle': 4} for _ in range(DICTIONARY_RUNS)]
+        # THE COLD ROUTE'S OWN CALIBRATION, like for like (the lead's decision on
+        # esc-20261114T164747Z-54632204, 2026-11-14): Dictionary after the same `sudo purge`.
+        + [{'label': 'dictionary:cold', 'app': DICTIONARY, 'owns': [DICTIONARY], 'env': {}, 'purge': True,
+            'menu_quit': 'Quit Dictionary', 'done': '', 'settle': 6} for _ in range(DICTIONARY_RUNS)])
     install(staged[0])
     fresh = [INSTALLED]
 
@@ -647,7 +662,9 @@ def main():
             planned["after-update"] = a.runs
     facts['playing'] = splash_playing(a.out / 'launch-speed' / 'fresh')
     limit_ms, ratio, inputs = guest_limit(rows)
-    summary = verdict(rows, planned, limit_ms, ratio, inputs)
+    cold_limit, cold_ratio, cold_inputs = guest_limit(rows, 'dictionary:cold')
+    summary = verdict(rows, planned, limit_ms, ratio, inputs,
+                      {'cold': {'limit_ms': cold_limit, 'ratio': cold_ratio, 'inputs': cold_inputs}})
     checks = check_results(results) if a.checks or a.only_checks else []
     report = {'facts': facts, 'summary': summary, 'sentence': sentence(summary), 'launches': rows,
               'checks': checks, 'refusing': not a.report_only,
