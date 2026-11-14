@@ -880,9 +880,19 @@ window.RichHomeGrowth = (function () {
   );
   window.addEventListener("resize", placeMoment);
 
+  /// Today counted from his first light ("Day 67"), or 0 where the dataset cannot vouch for days.
+  /// For the name of a saved video (`home-video.js`).
+  function day() {
+    if (!lo || !N || !dates || dates.undated !== 0) return 0;
+    return Math.max((lo.stats && lo.stats.days) || 0, dates.today - lo.D.createdDay[lo.arrival[0]] + 1);
+  }
+
   return {
     build: build,
     variant: variant,
+    /// "Watch it grow", pressed: starts the replay, or stops one that is running (`home-video.js`).
+    grow: growPressed,
+    day: day,
     onCount: onCount,
     ready: ready,
     left: left,

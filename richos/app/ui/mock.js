@@ -1715,6 +1715,9 @@
   // WHO IS WORKING AT THIS MOMENT (`main.rs::home_working`, CEO 2026-11-02). None by default;
   // `preset.homeWorking` (`[{ name, role }]`) is teammates running before the home screen asks.
   const homeStageNotices = [];
+  // "Make a video" (round 77, `home_video.rs`): every file the sheet handed to "Save video", with
+  // its bytes, so a suite can read the video back.
+  const homeVideoSaves = [];
   let homeWorking = Array.isArray(preset.homeWorking) ? preset.homeWorking.map((t) => ({ ...t })) : [];
 
   function homeFieldAnswer() {
@@ -3797,6 +3800,19 @@
           return null;
         case "home_working":
           return homeWorking.map((t) => ({ ...t }));
+        // "Make a video" (round 77, `home_video.rs`). `preset.homeVideoInput: "tone"` is a test run's
+        // made-up microphone. `home_video_save` is the Mac's own save window: he saves to Desktop
+        // under the suggested name, or `preset.homeVideoSave` is "cancel" (his Cancel) or "fail" (a
+        // folder that cannot be written).
+        case "home_video_input":
+          return preset.homeVideoInput === "tone" ? "tone" : "microphone";
+        case "home_video_save": {
+          const name = decodeURIComponent(((options && options.headers) || {})["x-richos-name"] || "");
+          homeVideoSaves.push({ name, bytes: args, answer: preset.homeVideoSave || "save" });
+          if (preset.homeVideoSave === "fail") throw "The video could not be saved there. Choose another folder.";
+          if (preset.homeVideoSave === "cancel") return { saved: false, name: "", folder: "" };
+          return { saved: true, name, folder: "Desktop" };
+        }
         // WHAT DID NOT LOAD OUT OF THE LEDGER (`Ledger::history_health`). The default is a
         // CLEAN load, because that is what every real launch produces — the notice is
         // supposed to be invisible almost always, and a preview that showed it constantly
@@ -5898,6 +5914,14 @@
     ///
     ///     __RICHOS_MOCK__.homeWorkingSet([{ name: "Will", role: "Marketing Director" }]);
     /// The stages the home screen reported reached, in order (`home_stage_reached`).
+    /// What "Save video" handed over (`home_video_save`): the name, the size, and the bytes in base64.
+    homeVideoSaves() {
+      return homeVideoSaves.map((v) => {
+        let binary = "";
+        for (let i = 0; i < v.bytes.length; i += 0x8000) binary += String.fromCharCode.apply(null, v.bytes.subarray(i, i + 0x8000));
+        return { name: v.name, size: v.bytes.length, answer: v.answer, base64: btoa(binary) };
+      });
+    },
     get homeStageNotices() {
       return homeStageNotices.map((n) => ({ ...n }));
     },

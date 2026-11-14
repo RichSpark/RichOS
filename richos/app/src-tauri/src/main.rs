@@ -137,6 +137,9 @@ mod mac_attachments;
 /// an output id, never a path, and the `richos-output` scheme serves only what the active
 /// thread's record holds.
 mod output_files;
+/// "MAKE A VIDEO" ON THE HOME SCREEN (round 77, CEO 2026-11-14): the Mac's own save window for
+/// the file the window recorded, and what stands in for the microphone in a test run.
+mod home_video;
 /// BUST A BUG (CEO §115, round 21): Rich writes the report, the reporting account's token is
 /// read from the keychain at send time, and a report that could not go waits on this Mac.
 mod bug_report;
@@ -4299,6 +4302,9 @@ fn main() {
             home_team,
             home_working,
             home_stage_reached,
+            // "Make a video" on the home screen (round 77, CEO 2026-11-14)
+            home_video::home_video_input,
+            home_video::home_video_save,
             // --- a job's result said on its own (2026-10-15) — appended ---
             // --- the Oxford comma in what Claude writes (CEO 2026-10-19) — appended ---
             set_oxford_comma,

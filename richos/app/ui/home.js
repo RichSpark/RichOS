@@ -339,6 +339,9 @@ window.RichHome = (function () {
     // The stages (round 75): the distance line and its card, the two presses on the legend, the
     // sentence under the core, the caption and the replay's counter (`home-growth.js`).
     if (window.RichHomeGrowth) window.RichHomeGrowth.build(r);
+    // "Make a video" (round 77): the button beside the settings button, its choices, the count
+    // and the sheet (`home-video.js`).
+    if (window.RichHomeVideo) window.RichHomeVideo.build(r);
 
     var live = elem("aside", null, { id: "home-live" });
     var cap = elem("div", "cap");
@@ -1523,6 +1526,7 @@ window.RichHome = (function () {
 
     renderTeamColumn();
     if (window.RichHomeGrowth) window.RichHomeGrowth.onCount(count, stats, lo);
+    if (window.RichHomeVideo) window.RichHomeVideo.onCount();
   }
 
   /// The line under the core hangs 218px below it (`v2/v2.js`).
@@ -2056,6 +2060,8 @@ window.RichHome = (function () {
     if (window.RichTheme && !splashStillUp()) window.RichTheme.forceDark(false);
 
     // A replay, the lit example, a sentence under the core: each is for the visit it began in.
+    // (a recording first: it ends with what it has before the replay under it is stopped)
+    if (window.RichHomeVideo) window.RichHomeVideo.left();
     if (window.RichHomeGrowth) window.RichHomeGrowth.left();
 
     if (appEl) appEl.removeAttribute("inert");
