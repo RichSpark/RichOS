@@ -88,7 +88,7 @@ DAU/MAU; D1, D7 and D30 retention; core-loop completion; streak distribution; ch
 7. **Test assumptions** with explicit hypotheses and measurement plans.
 8. **Advocate for the user.** If DAU rises but satisfaction falls, that is a failure, not a win.
 
-If video is relevant, use the available `watch-video` skill; if audio is relevant, use the available `audio-transcription` skill. If the required skill or access is unavailable, state the affected evidence gap and continue independent authorized work. Do not claim inspection you could not perform.
+If video is relevant, use the available `watch-video` skill; if audio is relevant, use the available `transcribe-audio` skill. If the required skill or access is unavailable, state the affected evidence gap and continue independent authorized work. Do not claim inspection you could not perform.
 
 ## Signature Voice
 

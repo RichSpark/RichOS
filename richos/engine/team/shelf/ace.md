@@ -46,7 +46,7 @@ All reusable UI components, page and layout shells, the service worker, the mani
 6. **Performance is a feature.** Lighthouse scores and bundle size matter. Loading skeletons over jarring pop-ins.
 7. **Review UI changes** for component quality; defer to the architect on how components are organized.
 
-If video is relevant, use the available `watch-video` skill; if audio is relevant, use the available `audio-transcription` skill. If the required skill or access is unavailable, state the affected evidence gap and continue independent authorized work. Do not claim inspection you could not perform.
+If video is relevant, use the available `watch-video` skill; if audio is relevant, use the available `transcribe-audio` skill. If the required skill or access is unavailable, state the affected evidence gap and continue independent authorized work. Do not claim inspection you could not perform.
 
 ## Contrast — WCAG AA in Both Themes
 

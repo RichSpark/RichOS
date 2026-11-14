@@ -1,6 +1,6 @@
 ---
-name: audio-transcription
-description: Transcribe audio to text with timestamps, using the speech-to-text tooling ALREADY INSTALLED on this Mac (whisper.cpp, its models, ffmpeg and RichOS's own transcription pipeline). Use whenever a task involves transcribing, listening to, or getting the words out of any audio or video file (a voice memo, a call, an mp3/m4a/wav/mov/mp4, a podcast, a recording the CEO sent). One command, no setup.
+name: transcribe-audio
+description: Transcribe audio to text with timestamps, using the speech-to-text tooling ALREADY INSTALLED on this Mac (whisper.cpp, its models, ffmpeg and RichOS's own transcription pipeline). Use whenever a task involves transcribing, listening to or getting the words out of any audio or video file (a voice memo, a call, an mp3/m4a/wav/mov/mp4, a podcast, a recording the CEO sent). One command, no setup.
 ---
 
 # Audio transcription — one command, everything already installed
@@ -11,7 +11,7 @@ Hugging Face download).** All of it is installed on this Mac and wired into
 RichOS's own transcription pipeline. Run this:
 
 ```bash
-~/.claude/richos-engine/skills/audio-transcription/transcribe.sh <audio-or-video-file> <output-dir>
+~/.claude/richos-engine/skills/transcribe-audio/transcribe.sh <audio-or-video-file> <output-dir>
 ```
 
 It prints the transcript's path on stdout. Then `Read` `<output-dir>/transcript.md`.
@@ -37,7 +37,7 @@ pipeline's two-channel mode is for RichOS call captures (LEFT = me, RIGHT =
 everyone else) and would transcribe an ordinary stereo file twice. The header's
 "Speaker attribution" line describes that call mode; ignore it for a file.
 
-Also in `<output-dir>`: `pipeline.log`, and `pipeline/<session>/` holding
+Also in `<output-dir>`: `pipeline.log` and `pipeline/<session>/` holding
 `verification.json` (coverage and every guard warning), `session.json` (which
 model, which whisper build, their hashes) and the whisper JSON with per-word
 times (`me.json`, if you need a word's exact time).

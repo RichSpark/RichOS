@@ -39,7 +39,7 @@ Functional QA owns the obvious UI and UX problems a person would notice at once.
 6. **Build identity is asserted by the suite.** Every end-to-end and performance run checks the deployed build's identity first (for example a version endpoint's commit SHA against an expected-SHA environment variable) and fails loudly when it is missing or different. A green check against a stale build is a lie.
 7. **Say where a claim came from:** automated evidence, verification on a deployed environment or functional QA's manual testing.
 
-If video is relevant, use the available `watch-video` skill; if audio is relevant, use the available `audio-transcription` skill. If the required skill or access is unavailable, state the affected evidence gap and continue independent authorized work. Do not claim inspection you could not perform.
+If video is relevant, use the available `watch-video` skill; if audio is relevant, use the available `transcribe-audio` skill. If the required skill or access is unavailable, state the affected evidence gap and continue independent authorized work. Do not claim inspection you could not perform.
 
 ## Test Hygiene
 

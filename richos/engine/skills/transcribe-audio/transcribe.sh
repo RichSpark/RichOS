@@ -43,7 +43,7 @@ done
 
 [ -f "$INPUT" ] || { echo "transcribe: no such file: $INPUT" >&2; exit 1; }
 
-# This script lives in <richos>/engine/skills/audio-transcription/, and the
+# This script lives in <richos>/engine/skills/transcribe-audio/, and the
 # engine is usually reached through the ~/.claude/richos-engine symlink, so
 # resolve the physical directory before walking up to the pipeline.
 HERE="$(cd -P "$(dirname "$0")" && pwd -P)"

@@ -434,7 +434,7 @@ class DesktopWork(unittest.TestCase):
 
     def test_a_consult_may_make_the_media_skills_working_folder_and_no_other_file(self):
         """Every teammate's standing instruction sends a recording to `watch-video` or
-        `audio-transcription` (CEO 2026-10-10), and both make a working folder for frames,
+        `transcribe-audio` (CEO 2026-10-10), and both make a working folder for frames,
         converted audio and a transcript (`mktemp -d "$PWD/video-XXXXXX"`, `audio-XXXXXX`) and
         delete it. A consult duty that forbade creating any file left a consulted teammate
         unable to follow both (second review of 79ba6eb7e, finding 2). The duty allows that
@@ -446,7 +446,7 @@ class DesktopWork(unittest.TestCase):
         # Everything the skills put in that folder: a linked video is downloaded into it
         # (watch-video step 3) and its uploaded captions written there (step 4a) before any
         # frame or transcript exists (mid-job review of 7f6ea1dd8).
-        for name in ("`watch-video`","`audio-transcription`","working folder","copy of a linked video",
+        for name in ("`watch-video`","`transcribe-audio`","working folder","copy of a linked video",
                      "captions","frames","converted audio","transcript"):
             self.assertIn(name,exception.group(1))
         self.assertIn("No other file",duty[exception.end():])

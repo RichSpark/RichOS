@@ -223,7 +223,7 @@ richos/engine/skills/rich-lander	richos	AGPL-3.0-only	RichOS	-	-	2026-04-12 femc
 richos/engine/skills/ui-ux-design	richos	AGPL-3.0-only	RichOS	-	-	2026-03-29 femcboost 665f8969f	medium-high	verbatim	docs/legal/SKILL-PROVENANCE-2026-09-04.md — THE ONE ROW NOT CLOSED BY A BYTE COMPARISON. Its own comment block says a sibling project instantiated "this exact same base skill", a sentence consistent with both an external base and a RichOS-authored scaffold. No external base was found and the balance favors RichOS authorship, but the doubt is real and is carried here rather than rounded up
 richos/engine/skills/using-git-worktrees	richos	AGPL-3.0-only	RichOS	-	-	2026-07-07 femcboost 15c11e86e	high	verbatim	docs/legal/SKILL-PROVENANCE-2026-09-04.md
 richos/engine/skills/README.md	richos	AGPL-3.0-only	RichOS	-	-	2026-08-20 history-floor: richos 2e82948	high	verbatim — the engine's own index of the directory	docs/legal/SKILL-PROVENANCE-2026-09-04.md
-richos/engine/skills/audio-transcription	richos	AGPL-3.0-only	RichOS	-	-	2026-10-07 richos cc/zach-opus-avskills1	certain	verbatim — written in this repository by zach-opus-avskills1	richos/engine/skills/audio-transcription/SKILL.md
+richos/engine/skills/transcribe-audio	richos	AGPL-3.0-only	RichOS	-	-	2026-10-07 richos cc/zach-opus-avskills1	certain	verbatim — written in this repository by zach-opus-avskills1	richos/engine/skills/transcribe-audio/SKILL.md
 richos/engine/skills/watch-video	richos	AGPL-3.0-only	RichOS	-	-	2026-10-07 richos cc/zach-opus-avskills1	certain	verbatim — written in this repository by zach-opus-avskills1	richos/engine/skills/watch-video/SKILL.md
 
 # --- richos/engine/tools ----------------------------------------------------------

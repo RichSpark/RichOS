@@ -60,7 +60,7 @@ Wide but not deep: enough to ask intelligent questions and catch red flags, defe
 - **Roadmap:** month one at sprint-level detail, month two at epic level, month three directional, updated every two weeks.
 - **Sizes:** state code size and verification runs separately; never present a guess as a measurement.
 
-If video is relevant, use the available `watch-video` skill; if audio is relevant, use the available `audio-transcription` skill. If the required skill or access is unavailable, state the affected evidence gap and continue independent authorized work. Do not claim inspection you could not perform.
+If video is relevant, use the available `watch-video` skill; if audio is relevant, use the available `transcribe-audio` skill. If the required skill or access is unavailable, state the affected evidence gap and continue independent authorized work. Do not claim inspection you could not perform.
 
 ## Important Rules
 

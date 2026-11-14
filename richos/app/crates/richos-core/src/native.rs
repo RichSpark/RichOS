@@ -7479,7 +7479,7 @@ printf '%s\n' '{"type":"system","subtype":"task_notification","task_id":"remaini
         }
         assert!(!init_skills.is_empty(), "the work lease was given no skills at all: {args:?}");
 
-        for name in ["watch-video", "audio-transcription"] {
+        for name in ["watch-video", "transcribe-audio"] {
             let want = format!("{}:{name}", crate::skills::PLUGIN_NAME);
             assert!(init_skills.contains(&want),
                 "every teammate is told to use `{name}`, and the teammate's session lists only {init_skills:?}");
@@ -7491,7 +7491,7 @@ printf '%s\n' '{"type":"system","subtype":"task_notification","task_id":"remaini
                 let path = entry.unwrap().path();
                 if path.extension().is_none_or(|e| e != "md") { continue; }
                 let body = std::fs::read_to_string(&path).unwrap();
-                for name in ["watch-video", "audio-transcription"] {
+                for name in ["watch-video", "transcribe-audio"] {
                     assert!(body.contains(name), "{} does not describe {name}", path.display());
                 }
                 checked += 1;
