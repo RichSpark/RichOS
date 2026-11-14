@@ -25,6 +25,11 @@ fn scratch(name: &str) -> PathBuf {
     dir
 }
 
+fn write_file(path: &Path, text: &str) {
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, text).unwrap();
+}
+
 /// A directory that passes [`engine_looks_valid`], shaped the way the real one is.
 fn make_engine(at: &Path, version: &str) {
     std::fs::create_dir_all(at.join("scripts/hooks")).unwrap();
@@ -1176,6 +1181,101 @@ fn a_refresh_replaces_the_engine_and_leaves_the_ceos_data_untouched() {
 
     // AND HIS DATA IS BYTE-FOR-BYTE WHAT IT WAS.
     assert_eq!(walk_files(&his), before, "the refresh touched the CEO's own data");
+}
+
+/// **AFTER AN UPDATE THE APP INSTALLS ITS OWN BUILD'S ENGINE, AND THE SETUP SHEET ASKS NOTHING.**
+///
+/// The CEO, 2026-11-14, with the sheet on his screen after updating: *"Is it normal and expected
+/// that I always get to see the setup screen ... after updating to a new version?"* It is not.
+/// Each build pins its own engine, so the engine the previous build installed no longer matches,
+/// and until this change the only way to the new one was his press of "Set it up".
+///
+/// The update case is told apart from a first install by what is in the directory RichOS installs
+/// into: an engine an earlier build put there. A first install, where nothing was ever set up,
+/// still gets the sheet.
+#[test]
+fn an_engine_an_older_build_set_up_is_replaced_by_this_builds_without_the_sheet() {
+    let root = scratch("update-by-itself");
+    let home = root.join("home");
+    let managed = engine_install_dir(&home);
+    // Claude Code and the video tools present, so the engine is the only thing in question.
+    std::fs::create_dir_all(home.join(".local/bin")).unwrap();
+    std::fs::write(home.join(".local/bin/claude"), b"#!/bin/sh\n").unwrap();
+    install_yt_dlp(&home);
+
+    // The engine the PREVIOUS build installed, stamped with its pin.
+    make_engine(&managed, "1.0.0");
+    std::fs::write(managed.join("marker"), "the previous build's engine").unwrap();
+    stamp_engine(&managed, "1.0.0", STALE_DIGEST, "https://example.invalid/previous.tar.gz");
+
+    // THIS build pins a different asset.
+    let body = b"this build's engine asset";
+    let digest = body_and_digest(&root, body);
+    assert_ne!(digest, STALE_DIGEST);
+    let pin = a_pin(&digest);
+    let paths = SetupPaths { home: Some(home.clone()), ..Default::default() };
+
+    // ---- THE FIRST LAUNCH AFTER THE UPDATE: the engine is out of date, and that is an update.
+    let after_update = detect_with_pin(&paths, &[], &every_engine_is_usable, Some(&pin), &a_speech_model);
+    assert_eq!(after_update.needs(), vec![Component::Engine], "{after_update:?}");
+    assert!(after_update.engine_update, "an engine an older build set up was not seen as an update: {after_update:?}");
+    // While the app installs it by itself, the sheet asks for nothing.
+    assert_eq!(after_update.sheet_needs(false, true), Vec::<Component>::new(), "the setup sheet would open");
+
+    // ---- THE APP FETCHES AND CHECKS ITS OWN BUILD'S ENGINE, and until it is swapped in the
+    // previous one is where it was, untouched, so he is never left waiting on the download.
+    let staged = stage_engine(&FakeFetcher::new(body), &good_engine_plan("1.0.0"), &pin, &managed)
+        .expect("the update fetches and checks this build's engine");
+    assert!(managed.join("marker").is_file(), "the previous engine was touched before the swap");
+    assert_eq!(installed_from(&managed).and_then(|s| s.sha256).as_deref(), Some(STALE_DIGEST));
+
+    // ---- AND PUTS IT IN PLACE, where the previous one was.
+    let report = staged.swap().expect("the update installs this build's engine");
+    let previous = PathBuf::from(report.previous_at.expect("the previous engine is kept aside"));
+    assert!(previous.join("marker").is_file(), "the previous engine is moved aside, never deleted");
+
+    // ---- AND THE ENGINE IS THIS BUILD'S: nothing missing, nothing to ask, on a fresh read.
+    let now = detect_with_pin(&paths, &[], &every_engine_is_usable, Some(&pin), &a_speech_model);
+    assert!(now.engine.present, "{now:?}");
+    assert_eq!(now.engine.at.as_deref(), Some(managed.display().to_string().as_str()));
+    assert_eq!(installed_from(&managed).and_then(|s| s.sha256).as_deref(), Some(digest.as_str()));
+    assert!(!managed.join("marker").exists(), "the previous build's engine is still there");
+    assert!(now.complete(), "{now:?}");
+    assert!(!now.engine_update, "{now:?}");
+    assert_eq!(now.sheet_needs(false, false), Vec::<Component>::new());
+
+    // ---- A SESSION STARTED BEFORE THE SWAP KEEPS RUNNING, and the helper paths it was given still
+    // resolve: a skill the previous engine had under a name this build dropped stays reachable at
+    // its old path, through the predecessor that is kept aside.
+    let renamed = root.join("renamed");
+    make_engine(&renamed, "1.0.0");
+    write_file(&renamed.join("app/skills/audio-transcription/waveform.py"), "the old helper");
+    stamp_engine(&renamed, "1.0.0", STALE_DIGEST, "https://example.invalid/previous.tar.gz");
+    let mut plan = good_engine_plan("1.0.0");
+    plan.plan.push(("engine/app/skills/transcribe-audio/waveform.py".into(), false, "the new helper".into()));
+    let swapped = stage_engine(&FakeFetcher::new(body), &plan, &pin, &renamed).unwrap().swap().unwrap();
+    let old_path = renamed.join("app/skills/audio-transcription/waveform.py");
+    assert_eq!(std::fs::read_to_string(&old_path).unwrap(), "the old helper", "a retained session lost its helper");
+    assert_eq!(std::fs::read_to_string(renamed.join("app/skills/transcribe-audio/waveform.py")).unwrap(), "the new helper");
+    assert!(swapped.previous_at.is_some());
+
+    // ---- A FIRST INSTALL is not an update: nothing was ever set up, so the sheet asks as before.
+    let fresh = root.join("fresh");
+    std::fs::create_dir_all(fresh.join(".local/bin")).unwrap();
+    std::fs::write(fresh.join(".local/bin/claude"), b"#!/bin/sh\n").unwrap();
+    install_yt_dlp(&fresh);
+    let fresh_paths = SetupPaths { home: Some(fresh.clone()), ..Default::default() };
+    let first = detect_with_pin(&fresh_paths, &[], &every_engine_is_usable, Some(&pin), &a_speech_model);
+    assert!(!first.engine_update, "a first install was taken for an update: {first:?}");
+    assert_eq!(first.sheet_needs(false, false), vec![Component::Engine], "the first install lost its sheet");
+
+    // ---- NOT AN UPDATE EITHER: a build that pins nothing can install nothing, and an engine an
+    // operator named outranks the pin.
+    assert!(!engine_update_due(&SetupPaths { home: Some(home.clone()), ..Default::default() }, None));
+    stamp_engine(&managed, "1.0.0", STALE_DIGEST, "https://example.invalid/previous.tar.gz");
+    assert!(engine_update_due(&paths, Some(&pin)), "the control must start from an update case");
+    let named = SetupPaths { engine_override: Some(root.join("named")), ..paths.clone() };
+    assert!(!engine_update_due(&named, Some(&pin)));
 }
 
 // ===========================================================================================

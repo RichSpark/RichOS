@@ -67,7 +67,7 @@
 "use strict";
 
 const path = require("path");
-const { loadPlaywright, leaveHome, createRun, assert, assertEqual, UI_DIR } = require("./lib/harness");
+const { loadPlaywright, leaveHome, leaveSplash, createRun, assert, assertEqual, UI_DIR } = require("./lib/harness");
 
 const APP = "file://" + path.join(UI_DIR, "index.html");
 
@@ -921,6 +921,100 @@ async function main() {
       assertEqual(page.__errors, [], "the shell logged errors while the two held sends went out");
       await page.close();
       return `first send_message ${4 * lag}ms, second 0ms: Rich received "${FIRST}" then "${SECOND}", once each`;
+    });
+  }
+
+  // ---- 12. a relaunch whose voice answer is slow still takes his first message ------------
+  //
+  // THE ENGINE UPDATE, IN THE TEST GUEST (engine-update-walk.py walk10 and walk11, build
+  // b4300bb3c, 2026-11-14). After an update the relaunch opens on the home screen in no
+  // conversation; he goes in by "Talk to Rich" and sends a message 15 s later. It was put up on
+  // screen and never sent: `init()` awaited `voice_readiness` before it made its landing decision,
+  // and that call times real decodes on a machine whose speeds are not cached yet (14.3 s an
+  // utterance for large-v3-turbo, three tries, then small.en) and returned only after 2 minutes,
+  // after the install. Until then `send()` held his message as one pressed before the launch had
+  // landed, and the landing, with no conversation to open, put it back in the box.
+  //
+  // Here `voice_readiness` answers after VOICE_MS, longer than the whole check with both its hang
+  // guards, and the rest of the bridge at the given latency. One company and a saved choice, as on
+  // the guest.
+  const VOICE_MS = 180000;
+  const SLOW_VOICE = ([ms, voiceMs]) => {
+    window.__sentTexts = [];
+    let firstActive = true;
+    let real;
+    Object.defineProperty(window, "RichBridge", {
+      configurable: true,
+      get: () => real,
+      set: (v) => {
+        real = v;
+        const invoke = v.invoke.bind(v);
+        v.invoke = async (name, args) => {
+          if (name === "send_message") window.__sentTexts.push(args && args.text);
+          // The launch opens in no conversation (the relaunch's `active_thread` is none).
+          if (name === "active_thread" && firstActive) {
+            firstActive = false;
+            return null;
+          }
+          await new Promise((r) => setTimeout(r, name === "voice_readiness" ? voiceMs : ms));
+          const out = await invoke(name, args);
+          if (name === "navigation_tree" && out && out.groups) {
+            return Object.assign({}, out, { groups: out.groups.filter((g) => g.entity.id === "northwind") });
+          }
+          return out;
+        };
+      },
+    });
+  };
+  for (const lag of [0, 120]) {
+    await run.check(`a message sent after going in is sent while voice readiness is still unanswered (${lag}ms bridge)`, async () => {
+      const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+      const errors = [];
+      page.on("pageerror", (e) => errors.push("pageerror: " + e.message));
+      page.on("console", (m) => {
+        if (m.type() === "error") errors.push("console: " + m.text());
+      });
+      await page.addInitScript(SLOW_VOICE, [lag, VOICE_MS]);
+      await page.addInitScript(() => {
+        window.__RICHOS_MOCK_PRESET__ = { memory: "ready", chosenEntity: "northwind" };
+        window.__RICHOS_LAUNCH__ = Object.freeze({ kind: "fresh", ordinal: 2, splashEnabled: true });
+      });
+      await page.goto(APP);
+      await leaveSplash(page);
+      await page.waitForSelector("#home-enter", { state: "visible", timeout: 30000 });
+      await page.click("#home-enter");
+      // In, as he goes in; the company's new chat is where his first message goes. A hang guard,
+      // not an assertion: the outcome below says what happened.
+      await page
+        .waitForFunction(() => !document.getElementById("entity-view").hidden, null, { timeout: 30000 })
+        .catch(() => {});
+      const SENTENCE = "Reply with one word: received.";
+      await page.click("#input");
+      await page.keyboard.type(SENTENCE);
+      await page.keyboard.press("Enter");
+      const sent = await page
+        .waitForFunction((t) => window.__sentTexts.includes(t), SENTENCE, { timeout: 60000 }) // a hang guard: sent at once, or held until voice answers
+        .then(() => true)
+        .catch(() => false);
+      const after = await page.evaluate((t) => ({
+        sent: window.__sentTexts.slice(),
+        box: document.getElementById("input").value,
+        thread: window.__RICHOS_TIMELINE__ ? window.__RICHOS_TIMELINE__().threadId : null,
+        copies: Array.from(document.querySelectorAll(".tl-user-text")).filter((n) => n.textContent.trim() === t).length,
+        talk: !document.getElementById("talk-toggle").hidden,
+      }), SENTENCE);
+      assert(
+        sent,
+        `his message was not sent while voice readiness was unanswered: send_message carried ` +
+          `${JSON.stringify(after.sent)}, the box reads ${JSON.stringify(after.box)}, the conversation is ` +
+          `${JSON.stringify(after.thread)} and shows it ${after.copies} time(s)`
+      );
+      assert(after.thread && after.thread !== "general", `it was not sent in a new conversation: ${JSON.stringify(after.thread)}`);
+      assertEqual(after.copies, 1, `his sentence is on screen ${after.copies} times`);
+      assertEqual(after.box, "", "the composer still holds the sentence that was sent");
+      assertEqual(errors, [], "the shell logged errors");
+      await page.close();
+      return `went in on the relaunch's home screen, sent "${SENTENCE}" with voice_readiness still unanswered: sent once, to ${after.thread}`;
     });
   }
 

@@ -766,6 +766,12 @@ pub struct SetupStatus {
     /// The engine release this build is pinned to, for the operator's line. Never shown to
     /// the CEO: no version numbers on his screen.
     pub engine_pin_version: Option<String>,
+    /// **The engine is missing only because this app was updated** ([`engine_update_due`]): an
+    /// earlier build set the engine up, and this build pins a different one. The app then
+    /// installs its own build's engine by itself, without the setup sheet (the CEO, 2026-11-14:
+    /// *"Is it normal and expected that I always get to see the setup screen ... after updating
+    /// to a new version?"*). `false` on a first install, which still shows the sheet.
+    pub engine_update: bool,
     /// Set by `run_setup` on the status it returns, so the window can say "done" rather than
     /// re-asking. Mirrors `MemoryStatus::provisioned_now`.
     pub installed_now: bool,
@@ -794,6 +800,20 @@ impl SetupStatus {
     /// Nothing missing — the state in which first run says nothing at all.
     pub fn complete(&self) -> bool {
         self.needs().is_empty()
+    }
+
+    /// **What the setup sheet asks for**: everything missing except what the app is already
+    /// fetching by itself: the video tools while their background download runs, and the
+    /// engine while the app installs its own build's engine after an update
+    /// ([`Self::engine_update`]). If that install fails, `engine_updating` is `false` again and
+    /// the sheet offers the engine as on a first install, so a Mac that could not fetch it still
+    /// has a way to.
+    pub fn sheet_needs(&self, media_downloading: bool, engine_updating: bool) -> Vec<Component> {
+        self.needs()
+            .into_iter()
+            .filter(|c| !(media_downloading && *c == Component::MediaTools))
+            .filter(|c| !(engine_updating && *c == Component::Engine))
+            .collect()
     }
 
     /// Missing something this build cannot fix. The surface must then explain rather than
@@ -1078,17 +1098,44 @@ pub fn detect_with_pin(
     pin: Option<&EnginePin>,
     speech: SpeechModel<'_>,
 ) -> SetupStatus {
+    // **ONE PIN ANSWERS BOTH HALVES, AND NOW BOTH HALVES OF THE PIN ARE ASKED.** Until
+    // 2026-09-18 this passed `p.version` and dropped `p.sha256` on the floor — the pin has
+    // carried the digest since it was written, and detection simply never looked at it.
+    let engine = find_engine_demanded(paths, extra_engine_candidates, usable, EngineDemand::pinned(pin));
     SetupStatus {
         claude: find_claude(paths),
-        // **ONE PIN ANSWERS BOTH HALVES, AND NOW BOTH HALVES OF THE PIN ARE ASKED.** Until
-        // 2026-09-18 this passed `p.version` and dropped `p.sha256` on the floor — the pin has
-        // carried the digest since it was written, and detection simply never looked at it.
-        engine: find_engine_demanded(paths, extra_engine_candidates, usable, EngineDemand::pinned(pin)),
+        // Only when the engine is MISSING: a stale install beside an engine that answered
+        // elsewhere is not something this launch needs replaced.
+        engine_update: !engine.present && engine_update_due(paths, pin),
+        engine,
         media_tools: find_media_tools(paths, speech),
         engine_installable: pin.is_some(),
         engine_pin_version: pin.map(|p| p.version.clone()),
         installed_now: false,
     }
+}
+
+/// **Was the engine set up before, by another build?** Then the app installs its own build's
+/// engine by itself after an update, and the setup sheet never asks for it.
+///
+/// Each build pins its own engine ([`EngineDemand::pinned`]), so after an update the engine an
+/// earlier build installed no longer matches and detection reports it missing. This tells that
+/// case apart from a first install: the directory RichOS installs into
+/// ([`engine_install_dir`]) holds an engine, and this build's pin refuses it for its release or
+/// its contents. Nothing there means nothing was ever set up, and the sheet asks as before.
+///
+/// `false` when this build carries no pin (it can install nothing), when an operator named the
+/// engine in `$RICHOS_ENGINE_DIR` (a statement outranks the pin everywhere), and when the
+/// installed engine is the pinned one (then it is not out of date, whatever else is wrong).
+pub fn engine_update_due(paths: &SetupPaths, pin: Option<&EnginePin>) -> bool {
+    let (Some(pin), Some(home), None) = (pin, paths.home.as_deref(), paths.engine_override.as_deref())
+    else {
+        return false;
+    };
+    matches!(
+        engine_accepted_demand(&engine_install_dir(home), EngineDemand::pinned(Some(pin))),
+        Err(EngineRejected::WrongRelease { .. } | EngineRejected::WrongIdentity { .. })
+    )
 }
 
 // ===========================================================================================
@@ -1705,6 +1752,35 @@ pub fn install_engine(
     pin: &EnginePin,
     dest: &Path,
 ) -> Result<EngineReport, SetupError> {
+    stage_engine(fetcher, extractor, pin, dest)?.swap()
+}
+
+/// **An engine fetched, verified and stamped, not yet in place** — [`install_engine`]'s steps 1 to
+/// 5, with step 6 left to [`StagedEngine::swap`].
+///
+/// It exists for the app's own install after an update (the CEO, 2026-11-14): the download and
+/// the checks take as long as the network does, and while they run the engine the earlier build
+/// installed is still where it was and still serves him. Only the swap, which is two renames, has
+/// to wait for a moment when nothing of his is running. Dropped without a swap, it removes its
+/// staging directory and leaves `dest` exactly as it found it.
+pub struct StagedEngine {
+    staging: Staging,
+    root: PathBuf,
+    dest: PathBuf,
+    version: String,
+    sha256: String,
+    bytes: u64,
+    stamp: String,
+}
+
+/// [`install_engine`] up to the swap: everything that can fail slowly, and nothing that touches
+/// `dest`.
+pub fn stage_engine(
+    fetcher: &dyn Fetcher,
+    extractor: &dyn Extractor,
+    pin: &EnginePin,
+    dest: &Path,
+) -> Result<StagedEngine, SetupError> {
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent).map_err(|e| SetupError::InstallFailed {
             what: "the RichOS engine".to_string(),
@@ -1832,43 +1908,88 @@ pub fn install_engine(
         detail: format!("could not write the version stamp: {e}"),
     })?;
 
-    // 6. SWAP. The old copy is moved aside, not deleted, until the new one is in place.
-    let previous = dest.with_file_name(format!(
-        "{}.previous.{}",
-        dest.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "engine".into()),
-        uuid::Uuid::new_v4()
-    ));
-    let had_previous = dest.exists();
-    if had_previous {
-        std::fs::rename(dest, &previous).map_err(|e| SetupError::InstallFailed {
-            what: "the RichOS engine".to_string(),
-            detail: format!("could not move the existing one aside: {e}"),
-        })?;
-    }
-    if let Err(e) = std::fs::rename(&root, dest) {
-        // PUT IT BACK. This is the branch that decides whether a failure leaves him with the
-        // engine he had or with nothing.
-        if had_previous {
-            let _ = std::fs::rename(&previous, dest);
-        }
-        return Err(SetupError::InstallFailed {
-            what: "the RichOS engine".to_string(),
-            detail: format!("could not put the new one in place: {e}"),
-        });
-    }
-    // An older engine may contain adopter-owned doctrine, agents or wiki records.
-    // Preserve the complete predecessor. Cleanup requires a separate inventory;
-    // a successful code replacement is not permission to delete user knowledge.
-    // `staging` is dropped here and its directory removed. The engine has already been renamed
-    // OUT of it; what goes is the downloaded archive and the emptied `unpacked/`.
-    drop(staging);
-
-    Ok(EngineReport {
-        installed_at: dest.display().to_string(),
+    Ok(StagedEngine {
+        staging,
+        root,
+        dest: dest.to_path_buf(),
         version: pin.version.clone(),
         sha256: pin.sha256.clone(),
         bytes,
         stamp,
-        previous_at: had_previous.then(|| previous.display().to_string()),
     })
+}
+
+/// **A session still running in the engine that was replaced keeps finding its skills' helpers.**
+///
+/// After an update the app swaps its own build's engine in while sessions started in the earlier
+/// one keep running, and nothing is ended to make the switch. Those sessions were told absolute
+/// paths under `dest` (`<dest>/app/skills/<name>/waveform.py`), and a skill this build renamed
+/// (`audio-transcription` to `transcribe-audio`) is no longer at that path. So every skill folder
+/// the predecessor has and the new engine does not is linked to the predecessor's own copy, which
+/// is kept, never deleted. This build's sessions are untouched by it: they start with
+/// `skills::SKILLS`, which do not name the linked folders. Best effort: a link that cannot be made
+/// leaves that one helper missing in a session that predates the swap, nothing more.
+fn keep_retired_skills_reachable(previous: &Path, dest: &Path) {
+    let Ok(entries) = std::fs::read_dir(previous.join("app/skills")) else { return };
+    for entry in entries.flatten() {
+        let target = dest.join("app/skills").join(entry.file_name());
+        if !entry.path().is_dir() || std::fs::symlink_metadata(&target).is_ok() {
+            continue;
+        }
+        #[cfg(unix)]
+        if std::os::unix::fs::symlink(entry.path(), &target).is_err() {
+            continue;
+        }
+    }
+}
+
+impl StagedEngine {
+    /// **Step 6: put it in place.** The engine that was there is moved aside, never deleted, so
+    /// a process still running in it keeps its working directory.
+    pub fn swap(self) -> Result<EngineReport, SetupError> {
+        let StagedEngine { staging, root, dest, version, sha256, bytes, stamp } = self;
+        let dest = dest.as_path();
+        // 6. SWAP. The old copy is moved aside, not deleted, until the new one is in place.
+        let previous = dest.with_file_name(format!(
+            "{}.previous.{}",
+            dest.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "engine".into()),
+            uuid::Uuid::new_v4()
+        ));
+        let had_previous = dest.exists();
+        if had_previous {
+            std::fs::rename(dest, &previous).map_err(|e| SetupError::InstallFailed {
+                what: "the RichOS engine".to_string(),
+                detail: format!("could not move the existing one aside: {e}"),
+            })?;
+        }
+        if let Err(e) = std::fs::rename(&root, dest) {
+            // PUT IT BACK. This is the branch that decides whether a failure leaves him with the
+            // engine he had or with nothing.
+            if had_previous {
+                let _ = std::fs::rename(&previous, dest);
+            }
+            return Err(SetupError::InstallFailed {
+                what: "the RichOS engine".to_string(),
+                detail: format!("could not put the new one in place: {e}"),
+            });
+        }
+        // An older engine may contain adopter-owned doctrine, agents or wiki records.
+        // Preserve the complete predecessor. Cleanup requires a separate inventory;
+        // a successful code replacement is not permission to delete user knowledge.
+        // `staging` is dropped here and its directory removed. The engine has already been renamed
+        // OUT of it; what goes is the downloaded archive and the emptied `unpacked/`.
+        drop(staging);
+        if had_previous {
+            keep_retired_skills_reachable(&previous, dest);
+        }
+
+        Ok(EngineReport {
+            installed_at: dest.display().to_string(),
+            version,
+            sha256,
+            bytes,
+            stamp,
+            previous_at: had_previous.then(|| previous.display().to_string()),
+        })
+    }
 }

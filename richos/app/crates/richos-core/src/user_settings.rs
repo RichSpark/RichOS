@@ -96,8 +96,18 @@ pub fn standing_plugin(folder: &Path, shipped: &Path, root: &Path) -> Result<Pat
         std::fs::write(&target, body).map_err(|e| RuntimeError(format!("{} could not be written: {e}", target.display())))
     };
     copy(&crate::skills::manifest_path(shipped), ".claude-plugin/plugin.json")?;
-    for name in crate::skills::SKILLS {
-        copy(&crate::skills::skill_path(shipped, name), &format!("skills/{name}/SKILL.md"))?;
+    // This build's skills, or while the earlier build's engine serves after an update, the ones
+    // that engine ships (`skills::names_in`), so the session starts rather than waits. Written
+    // into an emptied folder, so a skill an earlier session copied under another name is not
+    // carried into this one.
+    match std::fs::remove_dir_all(root.join("skills")) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+            return Err(RuntimeError(format!("{} could not be emptied: {e}", root.join("skills").display())));
+        }
+        _ => {}
+    }
+    for name in crate::skills::names_in(shipped) {
+        copy(&crate::skills::skill_path(shipped, &name), &format!("skills/{name}/SKILL.md"))?;
     }
     // The user's own standing instructions, in full and as written, at the end of both
     // definitions: the definition's body is that agent's standing instruction, so a line the

@@ -7470,6 +7470,13 @@ setupStartEl.addEventListener("click", closeSetupSheet);
 Bridge.listen("richos://setup", (payload) => {
   const p = payload && payload.payload ? payload.payload : payload;
   if (!p) return;
+  // AN ENGINE CAME INTO USE WITHOUT A PRESS (the app's own install after an update,
+  // `setup_view::tell_the_window_the_engine_changed`): voice is asked again, so Talk to Rich
+  // works without a relaunch. Nothing on the sheet moves; it never asked for this engine.
+  if (p.component === "engine" && p.state === "updated") {
+    refreshVoiceReadiness();
+    return;
+  }
   // THE VIDEO TOOLS' BACKGROUND DOWNLOAD (CEO, 2026-10-07: they "begin downloading in the
   // background at first launch, while the user does the rest of setup"). Its lines are this
   // step's own; while a press runs, that press keeps the line. When they are in, voice is asked
@@ -11320,11 +11327,16 @@ async function init() {
   // choice is: this question comes FIRST when both are open, and the branch below must know
   // that so it holds the company question back instead of stacking a second dialog on it.
   await refreshMemory();
-  // WHETHER VOICE IS EVEN OFFERED, read before anything renders the greeting or the
-  // composer row. It sits beside the setup read below because it answers the same kind of
-  // question — what this machine does and does not have — and it costs the same kind of
-  // work: path lookups and one `command -v`, no device and no permission prompt.
-  await refreshVoiceReadiness();
+  // WHETHER VOICE IS EVEN OFFERED, asked here and NOT WAITED FOR. The answer can take minutes:
+  // `voice_readiness` chooses the speech model by timing real decodes whenever this machine's
+  // speeds are not cached yet (stt.rs `choose_model`; 14.3 s an utterance for large-v3-turbo in
+  // the test guest, three tries, then small.en), which is the first launch with a new decoder or
+  // a new model, an update among them. Waited for, it held this launch's landing back past the
+  // engine install, and a message he sent after going in from the home screen was held with it
+  // and then put back in his box, never sent (engine-update-walk.py walk10 and walk11,
+  // 2026-11-14). Talk to Rich, the composer's placeholder and the tools note follow the answer
+  // when it comes (`refreshVoiceReadiness`).
+  refreshVoiceReadiness();
   // WHAT THIS MACHINE IS MISSING, read and asked FIRST when it is missing anything. The
   // order is not cosmetic: without a `claude` binary and an engine directory there is
   // nothing for a corpus to be read by and nothing for a company to be chosen for. One
