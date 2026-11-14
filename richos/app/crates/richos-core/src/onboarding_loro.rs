@@ -86,7 +86,9 @@ impl Source {
                 slug.push('-');
             }
         }
-        slug.truncate(70);
+        // Room for everything after the stem: `-` and the 8-digit hash, and `-r9`, the longest
+        // revision suffix (`MAX_TRIES`), inside loro's 80 characters.
+        slug.truncate(80 - 1 - 8 - 3);
         let slug = slug.trim_end_matches('-');
         let slug = if slug.is_empty() { "onboarding" } else { slug };
         if try_n <= 1 {
@@ -419,8 +421,16 @@ mod tests {
         assert_eq!(got[2].title, "Harborline: onboarding research");
         assert!(got[0].body.ends_with("Their companies in RichOS: Harborline."));
         for s in &got {
-            let id = s.record_id(1);
             assert!(s.record_id(9).len() <= 80, "{}", s.record_id(9));
+        }
+        // A stem as long as an entity id can make it keeps its revision suffix inside 80 characters.
+        let long = Source { stem: format!("{}-{}", "a".repeat(64), "onboarding-research-notes"), ..got[2].clone() };
+        for n in 1..=MAX_TRIES {
+            let id = long.record_id(n);
+            assert!(id.len() <= 80, "{id} is {} characters", id.len());
+            if n > 1 {
+                assert!(id.ends_with(&format!("-r{n}")), "{id} lost its revision suffix");
+            }
             assert!(id.len() <= 80 && id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'), "{id}");
         }
     }
