@@ -301,6 +301,41 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
 }
 
 // -------------------------------------------------------------------------------------
+// THE SPLASH RULES — one function, applied when the app quits
+// -------------------------------------------------------------------------------------
+
+/// Everything a splash rule may read. Every fact here must be known when the app QUITS,
+/// because the pick for the next start is made then and saved (Sage's plan 2026-11-14 "the
+/// splash the rules picked is playing within 380 ms of the click", section 1): the next start
+/// only reads the answer and plays it. A rule added later adds its fact here, read at quit.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SplashFacts {
+    /// Which start the pick is for ([`LaunchStore::next_start_ordinal`]); `None` when the
+    /// launch record could not be read.
+    pub start: Option<u64>,
+}
+
+/// THE ONE PLACE THE RULES LIVE. `catalog` is the splash ids in the library's own order
+/// (`ui/splash-library.js`, data, read by the shell and the page alike); the answer is one of
+/// them, or `None` for an empty catalog.
+///
+/// Today's rule, the CEO's of 2026-09-01: *"USE THE APPROVED SPLASH SCREEN #1 to always
+/// deterministically show as SPLASH SCREEN #1 and splash screen #2 to always show as splash
+/// screen for the SECOND APP START in RichOS v1. From the third app start onwards: Only
+/// splash screen #1."* Start 1 shows the first entry, start 2 the second, every later start the
+/// first again; an unknown start shows the first, which is never wrong to give, and a library
+/// of one gives that one every time. It moved here from `ui/splash.js`'s `choose()`, which
+/// stays as the page's own fallback where the shell said nothing (a plain browser, the test
+/// harness) and must give the same answer for the same start.
+pub fn pick_splash<'a>(catalog: &'a [String], facts: &SplashFacts) -> Option<&'a str> {
+    match catalog.len() {
+        0 => None,
+        1 => Some(catalog[0].as_str()),
+        _ => Some(if facts.start == Some(2) { catalog[1].as_str() } else { catalog[0].as_str() }),
+    }
+}
+
+// -------------------------------------------------------------------------------------
 // The stored record
 // -------------------------------------------------------------------------------------
 
@@ -598,6 +633,21 @@ impl LaunchStore {
         }
     }
 
+    /// WHICH START THE NEXT ONE WILL BE, 1-based, or `None` when this module cannot say.
+    ///
+    /// Asked at QUIT, for the splash the next start shows (the CEO, 2026-11-14: "when the app
+    /// quits, it should already determine which splash screen will be shown on the next
+    /// startup"). A fresh start always follows a quit, so the next start is this log's length
+    /// plus one, whatever kind this run was: a crash-restart is not counted and neither is
+    /// the run asking. `None` exactly when [`LaunchStore::start_ordinal`] would refuse a
+    /// number: the record on disk could not be read.
+    pub fn next_start_ordinal(&self) -> Option<u64> {
+        if !self.readable {
+            return None;
+        }
+        Some(self.record.starts.len() as u64 + 1)
+    }
+
     /// The last [`RECENCY_RING_LEN`] splash ids shown, most recent FIRST.
     pub fn recent_splashes(&self) -> &[String] {
         &self.record.recent_splashes
@@ -660,6 +710,53 @@ impl LaunchStore {
         let temporary = self.path.with_extension("json.writing");
         fs::write(&temporary, serialized)?;
         fs::rename(&temporary, &self.path)
+    }
+}
+
+#[cfg(test)]
+mod splash_rule_tests {
+    use super::*;
+
+    fn ids(n: usize) -> Vec<String> {
+        (1..=n).map(|i| format!("s{i}")).collect()
+    }
+
+    #[test]
+    fn start_one_shows_the_first_start_two_the_second_and_every_later_start_the_first() {
+        let catalog = ids(3);
+        let pick = |start| pick_splash(&catalog, &SplashFacts { start });
+        assert_eq!(pick(Some(1)), Some("s1"));
+        assert_eq!(pick(Some(2)), Some("s2"));
+        for later in 3..40 {
+            assert_eq!(pick(Some(later)), Some("s1"), "start {later}");
+        }
+        assert_eq!(pick(None), Some("s1"), "an unknown start shows the first, never nothing");
+    }
+
+    #[test]
+    fn a_library_of_one_gives_that_one_and_an_empty_library_gives_nothing() {
+        assert_eq!(pick_splash(&ids(1), &SplashFacts { start: Some(2) }), Some("s1"));
+        assert_eq!(pick_splash(&[], &SplashFacts { start: Some(1) }), None);
+    }
+
+    #[test]
+    fn the_next_start_is_the_log_plus_one_whatever_this_run_was() {
+        let dir = std::env::temp_dir().join(format!("richos-next-start-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        let path = dir.join("launches.json");
+        let mut store = LaunchStore::open(&path, 1).unwrap();
+        assert_eq!(store.next_start_ordinal(), Some(1), "an empty record: the next start is the first");
+        store.begin_run(2, "a", PriorRun::Unknown).unwrap();
+        assert_eq!(store.start_ordinal(), Some(1));
+        assert_eq!(store.next_start_ordinal(), Some(2), "asked at the quit of start 1");
+        // A crash-restart is not a start, and neither is the run that asks.
+        let mut crashed = LaunchStore::open(&path, 3).unwrap();
+        assert_eq!(crashed.begin_run(3, "b", PriorRun::Unknown).unwrap(), LaunchKind::CrashRestart);
+        assert_eq!(crashed.next_start_ordinal(), Some(2));
+        std::fs::write(&path, "not json").unwrap();
+        let unreadable = LaunchStore::open(&path, 4).unwrap();
+        assert_eq!(unreadable.next_start_ordinal(), None, "an unreadable record names no number");
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
 
