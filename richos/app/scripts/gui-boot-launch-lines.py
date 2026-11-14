@@ -15,8 +15,9 @@ proof then failed B2 on `[richos] SwearMeter historical sources: read (0 ms)`, p
 swearmeter_host.rs, which the check could not see. Each template must be exactly one of:
   - ACCOUNTED: some rendering of it (its `{}` holes filled with a number, a word, a path, a dash, or
     a string literal passed among the eprintln!'s own arguments, the way
-    `if partial { "partial" } else { "read" }` fills a hole) matches a `resolved`, `routine` or `gap` rule of gui-boot.test.sh, with the same `grep -E` its
-    own accounting uses; or it matches a line the file declares `refused`;
+    `if partial { "partial" } else { "read" }` fills a hole) matches a `resolved`, `routine` or
+    `gap` rule of gui-boot.test.sh, with the same `grep -E` its own accounting uses; or it matches
+    a line the file declares `refused`;
   - NOT ON A HEALTHY BOOT, listed in gui-boot-launch-lines.unaccounted: a failure, a runtime event or
     a sibling of an accounted line. If a healthy boot ever printed one, B2 would still fail on it,
     which is how those lines are meant to stay.
