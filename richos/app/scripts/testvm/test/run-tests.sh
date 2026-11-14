@@ -1951,6 +1951,10 @@ t "reserve: stopping a command ends its whole group, a descendant that ignores S
   PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/reserve-stop-descendant.test.py" >"$TMP/reserve-stop-descendant.log" 2>&1; ok $? "$(cat "$TMP/reserve-stop-descendant.log")"
 t_done
 
+t "launch speed: click to the splash showing from log lines, the p95 against 380 ms, the updater receipt digest, the start-up checks"
+  PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/launch-speed-walk.test.py" >"$TMP/launch-speed-walk.log" 2>&1; ok $? "$(cat "$TMP/launch-speed-walk.log")"
+t_done
+
 t "run-walk --wait reaches the guest-slot admission; the default still refuses at once; hold-walk.py is retired"
   PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/run-walk-wait.test.py" >"$TMP/run-walk-wait.log" 2>&1; ok $? "$(cat "$TMP/run-walk-wait.log")"
 t_done

@@ -69,7 +69,7 @@ const ENTRY = "index.html";
 /// Named here rather than discovered, because "this HTML file is a window the app opens" is a
 /// claim about Rust code no scanner here reads; step 3 still refuses an HTML file that is
 /// neither, so a stray page cannot hide.
-const EXTRA_ENTRIES = ["dictation-bar.html", "dictation-menu.html", "meeting-panel.html", "cleaner.html"];
+const EXTRA_ENTRIES = ["dictation-bar.html", "dictation-menu.html", "meeting-panel.html", "cleaner.html", "splash-opening.html"];
 
 /// What each shipped file is. Every row says WHY, because every row is a claim about
 /// whether a gate needs to look at the file, and an undeclared claim is the defect above.
@@ -85,6 +85,7 @@ const EXTRA_ENTRIES = ["dictation-bar.html", "dictation-menu.html", "meeting-pan
 const ROLES = {
   "richpass.js": {role:"ui", why:"RichPass native file protection status, explicit consent entry points and repair notices; no secret entry"},
   "cleaner.html":{role:"ui",why:"RichCleaner capture and personal library windows"},
+  "splash-opening.html": { role: "ui", why: "the page a web view nobody sees opens at quit to draw the next start's splash opening (src-tauri/src/splash_opening.rs); it has no user-visible strings of its own" },
   "cleaner.js":{role:"ui",why:"RichCleaner owner-driven capture and retrieval"},
   "authored-input.js": { role: "ui", why: "numeric authorship for edited attachment drafts, without retaining another text corpus" },
   "swearmeter.js": { role: "ui", why: "maintained local word count, optional settings/home display and coverage/retry text" },

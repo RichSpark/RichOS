@@ -169,8 +169,11 @@ fn the_crate_depends_on_nothing_that_could_open_a_connection() {
             found.insert(name.trim());
         }
     }
+    // `sha2_fast` is the same `sha2` crate at 0.11 (the engine runtime check, `runtime.rs`): a
+    // hash, no transport. Its tree is digest, block-buffer, crypto-common, hybrid-array, typenum,
+    // const-oid, cpufeatures, cfg-if and libc, none of which opens a connection.
     let expected: BTreeSet<&str> =
-        ["serde", "serde_json", "uuid", "thiserror", "sha2", "time", "unicode-normalization", "zstd"].into_iter().collect();
+        ["serde", "serde_json", "uuid", "thiserror", "sha2", "sha2_fast", "time", "unicode-normalization", "zstd"].into_iter().collect();
     assert_eq!(
         found, expected,
         "richos-core's dependency set changed. The launch record's 'never outbound' \

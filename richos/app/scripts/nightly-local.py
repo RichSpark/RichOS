@@ -318,6 +318,30 @@ NEW_USER_WALK_STEPS = ("identity", "setup", "signed-out", "accounts", "update", 
 NEW_USER_WALK_WAIT = 3600
 NEW_USER_WALK_BUDGET = NEW_USER_WALK_WAIT + 2400
 
+# THE LAUNCH-SPEED GATE (Sage's plan 2026-11-14, rule 5, with the CEO's measure and number of the
+# same day: "THE JOB AT HAND IS TO START SHOWING OUR ALREADY WELL-DESIGNED AND FULLY-BUILT SPLASH
+# SCREEN IN WELL UNDER 500 MS AFTER BUTTON CLICK", and Dictionary's measured Dock launch on his Mac,
+# at most 380 ms, as the benchmark). Every candidate that takes the new-user walk is also timed, in
+# its own guest, from the launch request to its splash playing (testvm/launch-speed-walk.py, the
+# routes of Sage's plan 2026-11-14 "the splash the rules picked is playing within 380 ms of the
+# click", section 6: a returning user's launch, the first launch after the guest starts (each after
+# its own purge, judged against Dictionary after the same purge), the first launch after an update
+# put in place at quit, and a quit at which the rules pick another splash; 20 launches a route, 40
+# for the last so that every splash today's rule picks is timed; no route of an older copy in
+# /Applications handing over, which no real user has), and it is refused when the p95 of any judged
+# route is over 380 ms (the CEO: "380 ms as the maximum allowed p95 time"), scaled by how much slower
+# Dictionary launches in that guest than on his Mac, compared like for like by medians, the ratio and
+# its inputs recorded beside the limit (the CEO: "if the VM is slower, then the measurements need to
+# be adjusted accordingly"); the nightly states the p95 and every route's and every splash's own
+# numbers either way. A refusal, or a walk that could not run, is taken once more before the
+# candidate is refused (verification-retries.md).
+LAUNCH_SPEED_PHASE = "launch-speed"
+LAUNCH_SPEED_WAIT = 3600
+# About 165 launches (20 Dictionary, 1 + 20 cold + 20 ordinary + 2, 60 for the rule switch, 42 after
+# an update; measured in this branch's walks of 2026-11-14, see docs/verification/
+# 2026-11-14-splash-opening/); the budget is the slot wait plus 90 minutes.
+LAUNCH_SPEED_BUDGET = LAUNCH_SPEED_WAIT + 5400
+
 # GUEST MEMORY, ASKED AT ONCE. A build that passed every gate could wait the full hour for a
 # guest slot and end "a guest needs N MB: M MB available ... (floor F MB)": memory no slot wait
 # could free, found only at the deadline. So a build that will boot a guest asks `testvm/slots.py fits` before its
@@ -2925,6 +2949,107 @@ class Runner:
         self.announce(f"New-user walk PASSED: {walk / 'report.json'}.")
         return None
 
+    def launch_speed_check(self, run_id, out, info):
+        """Time the candidate from the launch request to its splash showing, a p95 against 380 ms, in
+        its own guest (LAUNCH_SPEED_PHASE). None on a pass, else the sentence that says why it is
+        refused, where the evidence is and how to take it again without a rebuild."""
+        bundle = Path(out) / f"RichOS-{info['version']}-macos-aarch64.zip"
+        testvm = self.source / SCRIPTS / "testvm"
+        # The older copy an updated user still has in /Applications: the newest earlier release
+        # this Mac built, as a download installed it.
+        older = None
+        releases = self.state / "releases"
+        if releases.is_dir():
+            for candidate in sorted(releases.glob("*/RichOS-*-macos-aarch64.zip"),
+                                    key=lambda p: p.stat().st_mtime, reverse=True):
+                if candidate.parent.name != info.get("tag"):
+                    older = candidate
+                    break
+        engine = Path(out) / "richos-engine-1.2.0.tar.gz"
+        said, failed = None, None
+        for attempt in (1, 2):
+            walk = self.state / "launch-speed" / f"{run_id}.{attempt}"
+            home = walk.parent / f"{run_id}.{attempt}.home"
+            shutil.rmtree(walk, ignore_errors=True)
+            shutil.rmtree(home, ignore_errors=True)
+            home.mkdir(parents=True)
+            args = [sys.executable, testvm / "run-walk.py", "--no-app", "--wait", str(LAUNCH_SPEED_WAIT),
+                    "--home", home, "--engine", engine if engine.exists() else "none",
+                    "--report", walk.parent / f"{run_id}.{attempt}.run.json"]
+            if older:
+                args += ["--previous-bundle", older]
+            args += ["--", testvm / "launch-speed-walk.py", "--candidate", bundle, "--out", walk]
+            self.announce("Timing the candidate from the launch request to its splash showing, a p95 against "
+                          f"380 ms, in a fresh guest on the test VM (attempt {attempt})...")
+            failed = None
+            try:
+                with self.phase(LAUNCH_SPEED_PHASE):
+                    self.command(*args, env_extra={**self.vm_settings,
+                                                   NIGHTLY_WAIT_ENV: f"{LAUNCH_SPEED_PHASE} (run {run_id})"},
+                                 timeout=LAUNCH_SPEED_BUDGET)
+            except RuntimeError as error:
+                failed = str(error)
+            finally:
+                shutil.rmtree(home, ignore_errors=True)
+            try:
+                said = json.loads((walk / "report.json").read_text())["sentence"]
+            except (OSError, ValueError, KeyError):
+                said = None
+            self.announce(f"{said or 'Launch speed not measured.'} Evidence: {walk}.")
+            if failed is None:
+                return None
+        return (f"THE CANDIDATE IS BUILT, AND ITS LAUNCH SPEED WAS REFUSED OR COULD NOT BE PROVEN, twice: "
+                f"{said or failed}. The evidence is in {self.state / 'launch-speed'}. `publish` refuses "
+                "this candidate until the check passes; take it again without a rebuild.")
+
+    def require_launch_speed(self, info, run_id):
+        """Refuse to publish a candidate without a complete, matching launch-speed measurement
+        whose p95 is at or under 380 ms (review rv-20261114T115101Z-10e7c6ac-7689, finding 2).
+        A candidate built before the gate carries no `launch_speed_required` and keeps the
+        contract it was built under. Returns the accepted sentence, or None when not required."""
+        if not info.get("launch_speed_required"):
+            return None
+        run = run_id or info.get("run_id") or "none"
+        problems = []
+        for attempt in (2, 1):
+            report = self.state / "launch-speed" / f"{run}.{attempt}" / "report.json"
+            try:
+                walked = json.loads(report.read_text())
+            except (OSError, ValueError) as error:
+                problems.append(f"{report}: {error}")
+                continue
+            summary, facts = walked.get("summary") or {}, walked.get("facts") or {}
+            p95 = summary.get("p95_ms")
+            # The limit is 380 ms scaled by Dictionary's slowness in the guest (the CEO, 2026-11-14:
+            # "if the VM is slower, then the measurements need to be adjusted accordingly"); it
+            # must be exactly 380 ms times the ratio recorded beside it, never below 380 ms.
+            ratio = summary.get("guest_ratio")
+            limit = 380 if ratio is None else (
+                round(380 * ratio) if isinstance(ratio, (int, float)) and ratio >= 1 else None)
+            # A route with its own like-for-like limit (the cold route, against Dictionary after the
+            # same purge) is held to it the same way: exactly 380 ms times its ratio, its p95 under it.
+            own_limits_hold = True
+            for route, own in (summary.get("route_limits") or {}).items():
+                own_ratio = (own or {}).get("ratio")
+                own_limit = 380 if own_ratio is None else (
+                    round(380 * own_ratio) if isinstance(own_ratio, (int, float)) and own_ratio >= 1 else None)
+                route_p95 = ((summary.get("routes") or {}).get(route) or {}).get("p95_ms")
+                if own_limit is None or (own or {}).get("limit_ms") != own_limit \
+                        or not isinstance(route_p95, (int, float)) or route_p95 > own_limit:
+                    own_limits_hold = False
+            if facts.get("version") != info.get("version"):
+                problems.append(f"{report} measured {facts.get('version') or '<no version>'}, not {info.get('version')}")
+            elif summary.get("incomplete") is not False or summary.get("refused") is not False \
+                    or not isinstance(p95, (int, float)) or limit is None \
+                    or summary.get("limit_ms") != limit or p95 > limit or not own_limits_hold:
+                problems.append(f"{report}: {walked.get('sentence') or 'no passing verdict'}")
+            else:
+                return walked.get("sentence")
+        raise ValueError("no complete launch-speed measurement of this candidate shows a p95 at or under 380 ms "
+                         "(scaled by the guest's Dictionary ratio) "
+                         "from the click to the splash showing: " + "; ".join(problems)
+                         + ". Take the check again without a rebuild (nightly-local.py's launch-speed phase).")
+
     def require_new_user_walk(self, info, run_id):
         """Refuse to publish a candidate a new user's first run has not passed on (2026-10-21).
         A candidate built before the requirement carries no `new_user_walk_required` and keeps
@@ -3418,6 +3543,9 @@ class Runner:
                       f"commit {proof.get('commit')}, taken {proof.get('at')}", flush=True)
             if self.require_new_user_walk(info, run_id):
                 print(f"New-user walk accepted: every step passed on {info.get('build_commit')}", flush=True)
+            said = self.require_launch_speed(info, run_id)
+            if said:
+                print(f"Launch speed accepted: {said}", flush=True)
             # A `check` or another `build` since this candidate was built moved the worktree
             # that `finish` runs from; put its build commit back rather than refuse.
             self.restore_build_commit(info)
@@ -3557,6 +3685,16 @@ class Runner:
         # Then a new user's first run of the same archive, in its own guest (NEW_USER_WALK_PHASE).
         if not proof_error and candidate_info.get("new_user_walk_required"):
             proof_error = self.new_user_walk(self.env["RICHOS_NIGHTLY_RUN_ID"], out, candidate_info)
+        # Then its launch speed: the p95 from the click to the splash showing, against 380 ms
+        # (LAUNCH_SPEED_PHASE), for the same candidates the new-user walk takes.
+        if not proof_error and candidate_info.get("new_user_walk_required"):
+            # Recorded on the candidate first, so `publish` requires the evidence whatever happens next.
+            candidate_file = Path(out) / "candidate.json"
+            candidate = json.loads(candidate_file.read_text())
+            candidate["info"]["launch_speed_required"] = True
+            candidate_file.write_text(json.dumps(candidate, indent=2) + "\n")
+            candidate_info = {**candidate_info, "launch_speed_required": True}
+            proof_error = self.launch_speed_check(self.env["RICHOS_NIGHTLY_RUN_ID"], out, candidate_info)
         self.summary()
         print("", flush=True)
         self.print_candidate(candidate_info, out)

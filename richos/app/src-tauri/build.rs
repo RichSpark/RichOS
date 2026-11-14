@@ -47,6 +47,7 @@ fn main() {
 
     check_icons(Path::new("tauri.conf.json"), Path::new("icons"));
     stage_frontend(Path::new("tauri.conf.json"), Path::new("../ui"));
+    splash_fingerprint(Path::new("../ui"));
     tauri_build::build();
 }
 
@@ -84,6 +85,38 @@ const UI_NOT_SHIPPED: &[&str] = &["tests", "node_modules"];
 /// WHY IT REFUSES RATHER THAN WARNS. A wrong icon is cosmetic, which is why `check_icons`
 /// only warns by default. Shipping 21 MB of test evidence to a customer is not cosmetic
 /// and there is no artwork to wait on, so every failure below is a panic.
+/// THE SPLASH'S OWN FILES, FINGERPRINTED (Sage's plan 2026-11-14, "the splash the rules picked
+/// is playing within 380 ms of the click", section 1). The opening a quit draws is used at the
+/// next start only if it was drawn by these very files, so an update that changed how a splash
+/// looks never plays pictures of the old one. Computed here, once per build, so a launch only
+/// compares two strings (`splash_pick::FINGERPRINT`). FNV-1a over each file's name, length and
+/// bytes: a change detector, not a security boundary (the pictures are the user's own files).
+/// The list is the files that decide what a splash draws; `tests/splash.js` holds the opening
+/// page's head equal to `index.html`'s, so a stylesheet the splash leans on is in both or neither.
+fn splash_fingerprint(ui: &Path) {
+    const FILES: &[&str] = &[
+        "splash-library.js",
+        "splash.js",
+        "splash.css",
+        "splash-opening.html",
+        "fonts/fonts.css",
+    ];
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    let mut eat = |bytes: &[u8]| {
+        for b in bytes {
+            hash ^= u64::from(*b);
+            hash = hash.wrapping_mul(0x0100_0000_01b3);
+        }
+    };
+    for name in FILES {
+        let bytes = fs::read(ui.join(name)).unwrap_or_else(|e| panic!("the splash file {name} could not be read: {e}"));
+        eat(name.as_bytes());
+        eat(&(bytes.len() as u64).to_le_bytes());
+        eat(&bytes);
+    }
+    println!("cargo::rustc-env=RICHOS_SPLASH_FINGERPRINT={hash:016x}");
+}
+
 fn stage_frontend(conf_path: &Path, source: &Path) {
     let dist = match frontend_dist(conf_path) {
         Ok(d) => d,

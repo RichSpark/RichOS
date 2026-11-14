@@ -45,4 +45,33 @@ class BundleOutput(unittest.TestCase):
                     self.assertEqual(done.returncode, 0, done.stderr)
                     self.assertTrue((root / out).is_file(), done.stdout)
 
+    def test_release_builds_optimized_and_says_so(self):
+        """--release reaches cargo, and the bundle line names the profile (a launch-speed walk
+        times optimized code); without it, a debug build as before."""
+        for release in (False, True):
+            with self.subTest(release=release), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                scripts = root / 'app/scripts'
+                (scripts / 'testvm').mkdir(parents=True)
+                (scripts / 'lib').mkdir()
+                (root / 'app/src-tauri').mkdir()
+                shutil.copy2(HERE / 'branch-bundle.sh', scripts / 'testvm' / 'branch-bundle.sh')
+                bin_dir = root / 'bin'; bin_dir.mkdir()
+                exe = root / 'richos-tauri'; exe.write_text('fixture'); exe.chmod(0o755)
+                seen = root / 'cargo-args'
+                for name, body in {
+                    'cargo': f'echo "$@" > {seen}; echo \'{{"executable":"{exe}"}}\'',
+                    'git': 'echo fixture-sha',
+                    'codesign': 'exit 0',
+                }.items():
+                    file = bin_dir / name; file.write_text('#!/bin/sh\n' + body + '\n'); file.chmod(0o755)
+                (scripts / 'lib/gui-launch.sh').write_text('gui_identity() { echo fixture 1.0; }\ngui_bundle() { mkdir -p "$1"; cp "$2" "$1/exe"; }\n')
+                args = ['--out', str(root / 'out.zip'), '--engine-version', '1', '--engine-url', 'fixture', '--engine-sha256', 'fixture']
+                done = subprocess.run(['bash', str(scripts / 'testvm/branch-bundle.sh'), *args, *(['--release'] if release else [])],
+                                      cwd=root, env={**os.environ, 'PATH': str(bin_dir) + ':' + os.environ['PATH']},
+                                      capture_output=True, text=True, timeout=30)
+                self.assertEqual(done.returncode, 0, done.stderr)
+                self.assertEqual('--release' in seen.read_text().split(), release, seen.read_text())
+                self.assertIn('profile=' + ('--release' if release else 'debug'), done.stdout)
+
 if __name__ == '__main__': unittest.main()

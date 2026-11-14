@@ -427,7 +427,6 @@
 [richos] quota reading history: {}
 [richos] quota snapshot: {}
 [richos] quota: the tokens per point could not be kept ({})
-[richos] reclaimed {} retired update payloads
 [richos] refusing to open an address that is not one of the screens': {}
 [richos] register: left out {} named repository path(s) not connected to this company
 [richos] resource endpoint cleanup: {}
@@ -514,7 +513,6 @@
 [richos] the wait for the connection could not start: {}
 [richos] this back end has {} background commands running; a further one ({}) is not being tracked
 [richos] turn interrupted [{}]: {}
-[richos] update payload reclamation deferred: {}
 [richos] update ready and nothing is running: relaunching into {}
 [richos] update relaunch: RichOS did not quit, so nothing was started
 [richos] update relaunch: a RichOS session still holds the update lease; starting anyway
@@ -548,3 +546,24 @@
 [richos] {} was not removed: {}
 [richos] {} {}/{} FAILED — {}
 [richos] {}: starting the cleanup
+[richos] first frame: deferred start-up work could not reach the main thread ({})
+[richos] first frame: no ceiling thread ({}); deferred work waits for the page
+[richos] late check: background priority refused; running at normal priority
+[richos] late check: not started ({}); the next launch's checks still run
+[richos] quit: the prepared update is put in place as RichOS closes
+[richos] quit: the update helper did not start ({}); the next launch puts the update in place
+[richos] splash at quit: the Dock icon was clicked during the quit; RichOS stays open
+[richos] splash at quit: the Dock icon was clicked while the opening was drawn; the quit is called off
+[richos] splash at quit: the next start shows {} (start {}); its opening was drawn: {}; {} ms
+[richos] splash at quit: the next start shows {}; no opening was saved ({}), so it shows the splash's ground until the page draws it; {} ms
+[richos] splash at quit: the next start's splash and its opening are already saved; nothing drawn
+[richos] splash at quit: the pick could not be saved ({}); the next start applies the rules itself
+[richos] splash: a reader of the opening's pictures could not start ({})
+[richos] splash: the opening's later pictures could not start ({}); its first picture holds
+[richos] update at quit: RichOS did not end; the next launch puts the update in place
+[richos] update at quit: a RichOS session is still open; the next launch puts the update in place
+[richos] update at quit: could not read the update lease ({}); the next launch puts the update in place
+[richos] update at quit: deferred to the next launch: {}
+[richos] update at quit: nothing to put in place now; the next launch checks again
+[richos] update at quit: payload reclamation deferred: {}
+[richos] update at quit: {} put in place: {} -> {}

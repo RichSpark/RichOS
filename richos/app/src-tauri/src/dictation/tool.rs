@@ -369,6 +369,9 @@ pub fn main(context: tauri::Context<tauri::Wry>, args: &[String]) -> i32 {
     };
     let launched_by = if args.parent.is_some() { "as the app's child" } else { "on its own" };
     log::init(&data_dir);
+    // The app's saved runtime check, so a tool started on its own reads no runtime bytes the app
+    // already verified (launch-speed audit piece 1; `runtime.rs`).
+    richos_core::runtime::remember_verified_at(&data_dir.join(richos_core::runtime::VERIFIED_FILE));
     let runtime_note = match std::env::var_os("RICHOS_DICTATION_RUNTIME_BIN").filter(|d| !d.is_empty()) {
         Some(dir) => {
             stt::set_delivered_runtime_bin(Some(PathBuf::from(&dir)));
