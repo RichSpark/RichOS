@@ -2996,6 +2996,35 @@ class Runner:
                 f"{said or failed}. The evidence is in {self.state / 'launch-speed'}. `publish` refuses "
                 "this candidate until the check passes; take it again without a rebuild.")
 
+    def require_launch_speed(self, info, run_id):
+        """Refuse to publish a candidate without a complete, matching launch-speed measurement
+        whose p95 is at or under 380 ms (review rv-20261114T115101Z-10e7c6ac-7689, finding 2).
+        A candidate built before the gate carries no `launch_speed_required` and keeps the
+        contract it was built under. Returns the accepted sentence, or None when not required."""
+        if not info.get("launch_speed_required"):
+            return None
+        run = run_id or info.get("run_id") or "none"
+        problems = []
+        for attempt in (2, 1):
+            report = self.state / "launch-speed" / f"{run}.{attempt}" / "report.json"
+            try:
+                walked = json.loads(report.read_text())
+            except (OSError, ValueError) as error:
+                problems.append(f"{report}: {error}")
+                continue
+            summary, facts = walked.get("summary") or {}, walked.get("facts") or {}
+            p95 = summary.get("p95_ms")
+            if facts.get("version") != info.get("version"):
+                problems.append(f"{report} measured {facts.get('version') or '<no version>'}, not {info.get('version')}")
+            elif summary.get("incomplete") is not False or summary.get("refused") is not False \
+                    or not isinstance(p95, (int, float)) or p95 > summary.get("limit_ms", 380) or p95 > 380:
+                problems.append(f"{report}: {walked.get('sentence') or 'no passing verdict'}")
+            else:
+                return walked.get("sentence")
+        raise ValueError("no complete launch-speed measurement of this candidate shows a p95 at or under 380 ms "
+                         "from the click to the splash showing: " + "; ".join(problems)
+                         + ". Take the check again without a rebuild (nightly-local.py's launch-speed phase).")
+
     def require_new_user_walk(self, info, run_id):
         """Refuse to publish a candidate a new user's first run has not passed on (2026-10-21).
         A candidate built before the requirement carries no `new_user_walk_required` and keeps
@@ -3489,6 +3518,9 @@ class Runner:
                       f"commit {proof.get('commit')}, taken {proof.get('at')}", flush=True)
             if self.require_new_user_walk(info, run_id):
                 print(f"New-user walk accepted: every step passed on {info.get('build_commit')}", flush=True)
+            said = self.require_launch_speed(info, run_id)
+            if said:
+                print(f"Launch speed accepted: {said}", flush=True)
             # A `check` or another `build` since this candidate was built moved the worktree
             # that `finish` runs from; put its build commit back rather than refuse.
             self.restore_build_commit(info)
@@ -3631,6 +3663,12 @@ class Runner:
         # Then its launch speed: the p95 from the click to the splash showing, against 380 ms
         # (LAUNCH_SPEED_PHASE), for the same candidates the new-user walk takes.
         if not proof_error and candidate_info.get("new_user_walk_required"):
+            # Recorded on the candidate first, so `publish` requires the evidence whatever happens next.
+            candidate_file = Path(out) / "candidate.json"
+            candidate = json.loads(candidate_file.read_text())
+            candidate["info"]["launch_speed_required"] = True
+            candidate_file.write_text(json.dumps(candidate, indent=2) + "\n")
+            candidate_info = {**candidate_info, "launch_speed_required": True}
             proof_error = self.launch_speed_check(self.env["RICHOS_NIGHTLY_RUN_ID"], out, candidate_info)
         self.summary()
         print("", flush=True)

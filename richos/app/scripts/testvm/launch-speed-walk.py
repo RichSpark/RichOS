@@ -68,6 +68,8 @@ HERE = Path(__file__).resolve().parent
 LIMIT_MS = 380
 # Cold launches judged per walk, each after its own `sudo purge`.
 COLD_RUNS = 3
+# A p95 is a 95th percentile only over enough launches: fewer judged launches than this refuse.
+MIN_LAUNCHES = 20
 # Added to every judged stamp: the Dock's own part of a click
 # (41 to 54 ms on the CEO's Mac, the audit) and the screen's next refresh (one 60 Hz frame).
 ALLOWANCE_MS = 54 + 17
@@ -159,19 +161,32 @@ def p95(values):
     return ordered[max(0, -(-len(ordered) * 95 // 100) - 1)]
 
 
-def verdict(rows):
+def verdict(rows, planned=None):
     """The CEO's rule, 2026-11-14: "380 ms as the maximum allowed p95 time for the RichOS app to
     start showing the splash screen." The p95 of every judged launch, every route together, against
-    LIMIT_MS; each route's own p95 and median are stated beside it."""
-    judged = {}
+    LIMIT_MS; each route's own p95 and median are stated beside it.
+
+    MISSING EVIDENCE NEVER PASSES (review rv-20261114T115101Z-10e7c6ac-7689, finding 1): a judged
+    launch with no timing, a planned route with no launches (`planned`, {route: launches}), or
+    fewer than MIN_LAUNCHES judged launches in all refuses, and says which."""
+    judged, missing = {}, []
     for row in rows:
         route, _, kind = row['label'].partition(':')
-        if kind == 'judged' and 'splash' in row:
+        if kind != 'judged':
+            continue
+        if 'splash' in row:
             judged.setdefault(route, []).append(row['splash'])
+        else:
+            missing.append(row['label'])
+    for route, count in sorted((planned or {}).items()):
+        got = len(judged.get(route, [])) + sum(1 for m in missing if m.startswith(route + ':'))
+        if got < count:
+            missing += ['%s:not launched' % route] * (count - got)
     every = [v for values in judged.values() for v in values]
     summary = {'limit_ms': LIMIT_MS, 'launches': len(every), 'p95_ms': p95(every) if every else None,
-               'routes': {}, 'reported': {}}
-    summary['refused'] = summary['p95_ms'] is None or summary['p95_ms'] > LIMIT_MS
+               'routes': {}, 'reported': {}, 'missing': missing}
+    summary['incomplete'] = bool(missing) or len(every) < MIN_LAUNCHES
+    summary['refused'] = summary['incomplete'] or summary['p95_ms'] > LIMIT_MS
     for route, values in sorted(judged.items()):
         summary['routes'][route] = {'p95_ms': p95(values), 'median_ms': statistics.median(values),
                                     'max_ms': max(values), 'launches': len(values)}
@@ -189,6 +204,11 @@ def sentence(summary):
     head = ('nothing measured' if summary['p95_ms'] is None else
             'p95 %d ms over %d launches, %s' % (summary['p95_ms'], summary['launches'],
                                                 'REFUSED' if summary['refused'] else 'within it'))
+    if summary.get('incomplete'):
+        head += ('; REFUSED, THE MEASUREMENT IS INCOMPLETE: %d judged launch(es) without a timing (%s), '
+                 '%d launches where at least %d are required' % (
+                     len(summary['missing']), ', '.join(sorted(set(summary['missing']))) or 'none',
+                     summary['launches'], MIN_LAUNCHES))
     return 'Launch speed, Dock click to the splash showing, against a p95 of %d ms: %s. %s.' % (
         summary['limit_ms'], head, '; '.join(parts))
 
@@ -380,7 +400,10 @@ def main():
             ran = json.loads(probe.read_text())['results']
             results += ran
             rows += [measure(r, events) for r in ran if not r['label'].startswith('checks')]
-    summary = verdict(rows)
+    planned = {"ordinary": a.runs, "cold": COLD_RUNS}
+    if a.previous_app:
+        planned["updated-from-applications"] = a.runs
+    summary = verdict(rows, planned)
     checks = check_results(results) if a.checks else []
     report = {'facts': facts, 'summary': summary, 'sentence': sentence(summary), 'launches': rows,
               'checks': checks, 'refusing': not a.report_only,

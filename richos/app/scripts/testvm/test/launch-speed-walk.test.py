@@ -68,6 +68,20 @@ check('the sentence states the p95 against 380 ms and every route',
       'p95 of 380 ms' in said and 'p95 360 ms over 23 launches' in said and 'cold p95 370 ms' in said
       and 'Dictionary' not in said, said)
 
+# Missing evidence never passes (review rv-20261114T115101Z-10e7c6ac-7689, finding 1).
+fast = [{'label': 'ordinary:judged', 'splash': 300} for _ in range(20)]
+untimed = walk.verdict(fast + [{'label': 'ordinary:judged'}])
+check('a judged launch with no timing refuses', untimed['refused'] is True and untimed['missing'] == ['ordinary:judged'],
+      untimed)
+gone = walk.verdict(fast, {'ordinary': 20, 'updated-from-applications': 20})
+check('a planned route with no launches refuses, however fast the rest', gone['refused'] is True
+      and gone['missing'].count('updated-from-applications:not launched') == 20, gone)
+few = walk.verdict(fast[:19])
+check('fewer than 20 judged launches refuse', few['refused'] is True and few['incomplete'] is True, few)
+whole = walk.verdict(fast, {'ordinary': 20})
+check('a complete fast measurement passes', whole['refused'] is False and whole['missing'] == [], whole)
+check('the sentence says the measurement was incomplete', 'INCOMPLETE' in walk.sentence(gone), walk.sentence(gone))
+
 # The receipt's tree digest, on the tree whose digest the updater's own test pins
 # (crates/richos-user-update/src/lib.rs, digests_are_spelled_as_sha2_0_10_spelled_them).
 with tempfile.TemporaryDirectory() as d:

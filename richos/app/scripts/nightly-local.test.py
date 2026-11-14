@@ -1836,9 +1836,12 @@ while True: time.sleep(.02)
                 walk = Path(args[args.index("--out") + 1])
                 walk.mkdir(parents=True, exist_ok=True)
                 slow = getattr(self, "launch_is_slow", False)
-                (walk / "report.json").write_text(json.dumps({"sentence": "Launch speed, Dock click to the splash "
-                                                              "showing, against a p95 of 380 ms: p95 %d ms over 43 launches."
-                                                              % (520 if slow else 300)}))
+                p95 = 520 if slow else 300
+                (walk / "report.json").write_text(json.dumps({
+                    "sentence": "Launch speed, Dock click to the splash showing, against a p95 of 380 ms: "
+                                "p95 %d ms over 43 launches." % p95,
+                    "summary": {"p95_ms": p95, "limit_ms": 380, "refused": slow, "incomplete": False},
+                    "facts": {"version": self.CANDIDATE_INFO["version"]}}))
                 if slow:
                     raise RuntimeError("python3 failed (exit 1); see the run log")
                 return
@@ -1911,6 +1914,15 @@ while True: time.sleep(.02)
         self.assertEqual(len(gate), 2, "a refusal is taken once more before the build is refused")
         self.assertIn("LAUNCH SPEED WAS REFUSED", str(refused.exception))
         self.assertIn("p95 520 ms", str(refused.exception))
+        # And `publish` refuses the built candidate without passing evidence (review
+        # rv-20261114T115101Z-10e7c6ac-7689, finding 2).
+        (self.root / "state" / "source").mkdir(parents=True, exist_ok=True)
+        publisher = self.runner()
+        publisher.command = Mock()
+        with contextlib.redirect_stdout(io.StringIO()), self.assertRaisesRegex(ValueError, "p95 at or under 380 ms"):
+            publisher.perform("publish", run_id="fixture-run-id")
+        self.assertFalse(any(len(c.args) > 2 and c.args[2] == "finish" for c in publisher.command.call_args_list),
+                         "a candidate over 380 ms was published")
 
     def test_a_walk_that_stopped_before_its_end_is_refused_however_its_steps_went(self):
         # Review rv-20261021T163510Z-b612361c-0e62, finding 3: the walk rewrites report.json after
