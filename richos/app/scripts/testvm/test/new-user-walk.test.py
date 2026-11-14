@@ -406,6 +406,89 @@ Be0~« 78
                          ('RichOS 1.2.3-nightly.20261025.75 is up to date.', 'Checked just now.'))
         self.assertIsNone(walk.update_verdict(*walk.update_row(self.COLUMNS), []))
 
+    # A guest walk frame's OCR text, verbatim: the heading came out at the end of a line from the
+    # other columns, "... interrupt you? Updates", with the row plainly below it.
+    HEADING_MERGED = """@ = RichOs Edit View Window
+
+claude.ai Login Item Added
+
+*RichDoctor” will open automat
+you log in. You can manage this in
+Items & Extensions.
+
+Richos
+
+® RichoS © First Run Workshop / Onboarding 3 Vutput y
+}@ © search | Settings
++ New chat or company 3
+Q HOW IT LOOKS WORKING WITH RICH YOUR COMPANY AND TEAM
+Corrections ; , ——
+Theme *@e Your instructions 5 Company { First Run Workshc - |
+=) Feedback Not written yet
+ve Oldestiopen queation - Text size - 100% + Home screen | Company buttons... |
+Search folders 5 Tok 4 aa th
+‘oken spent .00 this moni
+1) First Run Workshop oxford comma: OFF . Document search off
+rama x Rich's model & Start meeting notes
+q ig Oxford comma AKA serial comma is When he talks with you coer
+what some style guides place before Pause meeting prompts
+keep that nuisance off. Claude accounts his Mt >
+When he directs your team default ot-signediinion|this Mac)
+Technical view ) (Opus high effort ene Connected folders (repositories) >
+
+SBO@®=8O"G
+
+38T asks where to show it.
+
+Your name in Git
+
+Opus is the default for both. Fable is Not set yet
+more capable than Opus and uses u
+
+Keep the stored output Pp! Pp Pp Memory folder >
+your Claude limits faster.
+
+O For two weeks
+
+O For three months How much should Rich interrupt you? Updates
+
+@ Forever
+
+Nothing is ever removed. Using 22 KB
+now.
+
+Your name
+
+Shown at the bottom of the navigation
+rail, with your initials.
+
+® Quiet
+O Balanced
+O Only when it's urgent
+
+Splash screen
+Show it when RichOS starts
+
+RichOS 1.3.2-nightly.20261114.99 is up to
+date.
+
+Checked just now.
+
+Check for updates
+2% Bust a bug!
+
+2 Request a feature
+
+BSOQ"5
+
+"""
+
+    def test_the_heading_is_found_at_the_end_of_another_columns_line(self):
+        self.assertEqual(walk.update_row(self.HEADING_MERGED),
+                         ('RichOS 1.3.2-nightly.20261114.99 is up to date.', 'Checked just now.'))
+        self.assertIsNone(walk.update_verdict(*walk.update_row(self.HEADING_MERGED), []))
+        self.assertEqual(walk.update_row('Check for updates\nRichOS 1.2.3 is up to date.\n'), (None, None))
+
     def test_every_headline_the_row_can_show_is_its_headline(self):
         # ui/updates.js `sentences` and the failure headlines of src-tauri/src/updates.rs, each with
         # another column's line between the heading and the row.
