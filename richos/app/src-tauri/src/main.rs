@@ -693,7 +693,8 @@ impl LeaseFactory for EngineLeaseFactory {
         // looked. An operator's explicit statement still outranks both halves.
         if let Some(why) = richos_core::setup::engine_boot_refusal_demand(
             &dir,
-            self.explicit_engine,
+            // The earlier build's engine serves while this build's installs after an update.
+            self.explicit_engine || setup_view::previous_engine_serves(&dir),
             richos_core::setup::EngineDemand::pinned(richos_core::setup::engine_pin().as_ref()),
         ) {
             return Err(CognitionError::Io(why));
@@ -766,7 +767,8 @@ impl EngineLeaseFactory {
         // looked. An operator's explicit statement still outranks both halves.
         if let Some(why) = richos_core::setup::engine_boot_refusal_demand(
             &dir,
-            self.explicit_engine,
+            // The earlier build's engine serves while this build's installs after an update.
+            self.explicit_engine || setup_view::previous_engine_serves(&dir),
             richos_core::setup::EngineDemand::pinned(richos_core::setup::engine_pin().as_ref()),
         ) {
             return Err(CognitionError::Io(why));
@@ -1709,10 +1711,6 @@ fn send_message(
     } else {
         None
     };
-    // AFTER AN UPDATE, A SEND MADE WHILE THE APP INSTALLS ITS OWN BUILD'S ENGINE WAITS FOR IT,
-    // rather than being refused below with a sentence that sends him to the setup sheet
-    // (`update_engine_by_itself`). Returns at once when no update runs; never under the spine.
-    setup_view::wait_for_engine_update();
     // `take_the_spine` is what writes the wait down now, for THIS site and for every other
     // one — see the block above it. The measurement did not move; it stopped being unique
     // to this line, which is what let six seconds go unattributed on candidate .12.
@@ -1750,7 +1748,10 @@ fn send_message(
     // engine, and a launch that did cannot be first-run-incomplete — so the disk is read only
     // on the launches that already know something is wrong, where every candidate is refused
     // on its stamp and nothing is hashed at all.
-    if !spine.has_lease() && state.boot_engine.is_none() {
+    // NOT WHILE THE APP INSTALLS ITS OWN BUILD'S ENGINE AFTER AN UPDATE: the earlier build's
+    // engine serves him meanwhile (`setup_view::previous_engine_serves`), so he is neither
+    // refused nor kept waiting on the download.
+    if !spine.has_lease() && state.boot_engine.is_none() && !setup_view::engine_updating() {
         let disk = setup_view::detect(None);
         if let Some(sentence) = setup_view::incomplete_message(&disk) {
             return Err(refused_send("first-run setup is incomplete", sentence.into()));
@@ -3825,16 +3826,15 @@ fn main() {
             git_name_host::start(app.handle().clone());
             peer_messages::start(app.handle().clone())?;
             // After an update, this build's own engine, installed by the app itself (the flag
-            // was set at the first-run setup block above, before the window could ask). It
-            // readies his desk itself once the engine is in (`replace_engine`); readying it now
-            // would be a spawn into the earlier build's engine, which the pin refuses.
+            // was set at the first-run setup block above, before the window could ask). The
+            // earlier build's engine serves meanwhile, so the desk below is readied in it, and
+            // readied again in the new one once that is in (`replace_engine`).
             if engine_update_now {
                 update_engine_by_itself(app.handle().clone());
-            } else {
-                // Readiness starts before the window's setup/navigation reads, with the
-                // selected thread's immutable company scope. Reader snapshots stay available.
-                ready_selected_front_desk(app.handle());
             }
+            // Readiness starts before the window's setup/navigation reads, with the
+            // selected thread's immutable company scope. Reader snapshots stay available.
+            ready_selected_front_desk(app.handle());
             spawn_idle_session_retirement(app.handle().clone());
             // The composer's attachments, in the SAME app-data directory the phone's
             // attachment desk writes to (`phone/attachments.rs`). No I/O until a file arrives.
@@ -5083,8 +5083,6 @@ fn start_voice_capture(app: AppHandle, thread_id: Option<String>) -> Result<serd
                 return;
             }
             let state = submit_app.state::<AppState>();
-            // The spoken half of `send_message`'s wait for the app's own engine update.
-            setup_view::wait_for_engine_update();
             let Some(spine) = take_the_spine_or_give_up(&state.spine) else { return };
             // HIS WHOLE THOUGHT IS ONE REQUEST, even after a wait here: earlier work held the
             // spine, he went on talking meanwhile, and his next turn already carries these words.
@@ -5118,7 +5116,7 @@ fn start_voice_capture(app: AppHandle, thread_id: Option<String>) -> Result<serd
             // `Some` exactly when this launch resolved a usable, correctly-pinned engine, so
             // the 322 MB hash `setup_view::detect` pays for is only ever paid on a launch that
             // already knows something is wrong.
-            if !spine.has_lease() && state.boot_engine.is_none() {
+            if !spine.has_lease() && state.boot_engine.is_none() && !setup_view::engine_updating() {
                 let disk = setup_view::detect(None);
                 if let Some(sentence) = setup_view::incomplete_message(&disk) {
                     drop(spine);
@@ -6403,31 +6401,62 @@ fn dictation_feature_thread(state: State<AppState>, create: bool) -> Result<Opti
 /// *"Is it normal and expected that I always get to see the setup screen ... after updating to a
 /// new version?"*). Started by the boot when `SetupStatus::engine_update` says the engine is
 /// missing only because an earlier build set it up; `setup_view::begin_engine_update` was set
-/// before the window could ask, so the sheet does not ask for the engine and a send waits.
+/// before the window could ask, so the sheet does not ask for the engine.
 ///
-/// The download and the swap run with NO lock held, so the window, his threads and his typing
-/// are never held up by them. Only then is the spine taken, waiting its turn like any other
-/// command, for exactly what a press of "Set it up" does after its install
-/// ([`replace_engine`]): the idle lease retired, memory wired to the new engine and his desk made
-/// ready. A failure leaves the previous engine where it was (`install_engine` swaps only a
-/// verified one) and clears the flag, and the sheet offers the engine as on a first install.
+/// **He never waits on it.** Until the swap, the engine the earlier build installed is still in
+/// place and serves his messages (`setup_view::previous_engine_serves`) and his voice (its
+/// decoder, given here first). The download and the checks run with NO lock held
+/// (`setup_view::stage_pinned_engine`). Only the swap waits, for a moment when nothing of his is
+/// running: it happens inside [`replace_engine`], exactly as a press of "Set it up" does it (the
+/// idle lease retired, memory wired to the new engine, his desk made ready), and while a turn or a
+/// worker is still running that body declines and the swap is asked again two seconds later.
+/// Then the window is told to ask voice again. A failure leaves the previous engine where it was
+/// and clears the flag, and the sheet offers the engine as on a first install.
 fn update_engine_by_itself(app: AppHandle) {
     let spawned = std::thread::Builder::new().name("engine-update".into()).spawn(move || {
         let started = std::time::Instant::now();
         let state = app.state::<AppState>();
         let paths = richos_core::setup::SetupPaths::from_process();
-        let outcome = setup_view::install_pinned_engine(&paths, &state.engine_dir)
-            .map_err(|e| e.to_string())
-            .and_then(|_| {
+        // Voice on the earlier build's engine meanwhile: the boot gave it no decoder, because the
+        // pin refused that engine.
+        let previous = state.engine_dir.lock().map(|d| d.clone()).ok();
+        if previous.as_deref().is_some_and(setup_view::give_voice_its_decoder) {
+            setup_view::tell_the_window_the_engine_changed(&app);
+        }
+        let outcome = setup_view::stage_pinned_engine(&paths).map_err(|e| e.to_string()).and_then(|staged| {
+            let mut staged = Some(staged);
+            let mut said = false;
+            loop {
                 let spine = take_the_spine(&state.spine);
-                replace_engine(&app, &state, spine, |selected, _| Ok(setup_view::detect(Some(selected))))
-            });
+                let replaced = replace_engine(&app, &state, spine, |_, engine_dir| {
+                    let staged = staged.take().ok_or_else(|| "the staged engine was already used".to_string())?;
+                    setup_view::swap_in_engine(staged, engine_dir).map_err(|e| e.to_string())?;
+                    let dir = engine_dir.lock().map_err(|_| "the engine cell could not be read".to_string())?.clone();
+                    Ok(setup_view::detect(Some(&dir)))
+                });
+                // Still staged: the body declined before the swap (a turn, a worker or a memory
+                // correction was running). Ask again once that has had a moment.
+                match (replaced, staged.is_some()) {
+                    (Err(why), true) => {
+                        if !said {
+                            eprintln!("[richos] engine update: staged; the swap waits for a quiet moment ({why})");
+                            said = true;
+                        }
+                        std::thread::sleep(std::time::Duration::from_secs(2));
+                    }
+                    (outcome, _) => break outcome,
+                }
+            }
+        });
         setup_view::end_engine_update();
         match outcome {
-            Ok(_) => eprintln!(
-                "[richos] engine update: this build's engine is installed and in use, in {} ms, with no setup sheet",
-                started.elapsed().as_millis()
-            ),
+            Ok(_) => {
+                setup_view::tell_the_window_the_engine_changed(&app);
+                eprintln!(
+                    "[richos] engine update: this build's engine is installed and in use, in {} ms, with no setup sheet",
+                    started.elapsed().as_millis()
+                )
+            }
             Err(e) => eprintln!(
                 "[richos] engine update FAILED after {} ms — {e}; the setup sheet offers the engine instead",
                 started.elapsed().as_millis()
@@ -7751,7 +7780,7 @@ mod lease_gate_tests {
     /// is asserted for real in `stale_engine_send_gate_tests` below.
     #[test]
     fn the_first_run_arm_is_asked_before_a_turn_starts_and_not_behind_the_factory() {
-        let arm = concat!("if !spine.has_lease() && state.boot_", "engine.is_none() {");
+        let arm = concat!("if !spine.has_lease() && state.boot_", "engine.is_none()");
         // TWO SITES, AND THE SECOND ONE IS WHY THIS NUMBER IS ASSERTED RATHER THAN >= 1.
         // `send_message` got this arm on 2026-09-19 and `start_voice_capture`'s submit
         // closure did not, so a SPOKEN sentence on a Mac with a stale engine still started a

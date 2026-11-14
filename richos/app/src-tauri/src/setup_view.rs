@@ -237,7 +237,8 @@ pub fn incomplete_message(status: &SetupStatus) -> Option<&'static str> {
 /// One step of the run, as it happens.
 #[derive(Debug, Clone, Serialize)]
 pub struct SetupProgress {
-    /// `started`, `done`, `failed`, or `finished` for the whole run.
+    /// `started`, `done`, `failed`, or `finished` for the whole run; `updated` on an `engine` line
+    /// when the app put its own build's engine in use after an update (the window asks voice again).
     pub state: &'static str,
     /// Which component this is about, when it is about one.
     pub component: Option<&'static str>,
@@ -356,80 +357,100 @@ pub fn sheet_needs(status: &SetupStatus, downloading: bool) -> Vec<Component> {
 //
 // Now the boot sees that case (`SetupStatus::engine_update`), sets the flag below before the
 // window can ask anything, and installs this build's engine on its own thread (`main.rs`,
-// `update_engine_by_itself`). While it runs the sheet does not ask for the engine, and a send
-// waits for it rather than being refused ([`wait_for_engine_update`]). If it fails the flag
-// clears and the sheet offers the engine as it does on a first install, so a Mac that could not
-// fetch it still has a way to.
+// `update_engine_by_itself`). While it runs the sheet does not ask for the engine, and NOTHING
+// WAITS FOR IT: the engine the earlier build installed is still in place until the very end and
+// serves his messages and his voice meanwhile ([`previous_engine_serves`]). The download and the
+// checks run beside him; only the swap, two renames, waits for a moment when no turn of his is
+// running. If the install fails the flag clears and the sheet offers the engine as it does on a
+// first install, so a Mac that could not fetch it still has a way to.
 
 /// Whether the app is installing its own build's engine after an update, right now.
-static ENGINE_UPDATING: Mutex<bool> = Mutex::new(false);
-/// Signaled when [`ENGINE_UPDATING`] clears.
-static ENGINE_UPDATED: std::sync::Condvar = std::sync::Condvar::new();
+static ENGINE_UPDATING: AtomicBool = AtomicBool::new(false);
 
 /// Is the app installing its own build's engine after an update right now?
 pub fn engine_updating() -> bool {
-    ENGINE_UPDATING.lock().map(|g| *g).unwrap_or(false)
+    ENGINE_UPDATING.load(Ordering::SeqCst)
 }
 
 /// The update starts: set by the boot before the window can read the setup status.
 pub fn begin_engine_update() {
-    if let Ok(mut g) = ENGINE_UPDATING.lock() {
-        *g = true;
-    }
+    ENGINE_UPDATING.store(true, Ordering::SeqCst);
 }
 
-/// The update ended, either way: a waiting send goes on, and the sheet reads the disk again.
+/// The update ended, either way.
 pub fn end_engine_update() {
-    if let Ok(mut g) = ENGINE_UPDATING.lock() {
-        *g = false;
-    }
-    ENGINE_UPDATED.notify_all();
+    ENGINE_UPDATING.store(false, Ordering::SeqCst);
 }
 
-/// **A send made while the engine updates waits for it**, instead of being refused with a
-/// sentence that sends him to the sheet. Returns at once when no update is running. Called before
-/// the spine is taken, so the wait holds up nothing else. Bounded by the install itself: its
-/// download stops at curl's `--max-time` (`setup.rs`, `CurlFetcher`).
-pub fn wait_for_engine_update() {
-    let Ok(mut g) = ENGINE_UPDATING.lock() else { return };
-    if *g {
-        eprintln!("[richos] engine update: a send waits for this build's engine to finish installing");
-    }
-    while *g {
-        g = match ENGINE_UPDATED.wait(g) {
-            Ok(g) => g,
-            Err(_) => return,
-        };
+/// **Does the engine the earlier build installed serve him in `dir` right now?** Only while the
+/// app installs its own build's engine after an update, and only in the directory RichOS installs
+/// into, where that engine still is until the swap. Everywhere else this build's pin decides, as
+/// it always has (`setup::engine_boot_refusal_demand`).
+pub fn previous_engine_serves(dir: &std::path::Path) -> bool {
+    engine_updating()
+        && SetupPaths::from_process().home.is_some_and(|home| setup::engine_install_dir(&home) == dir)
+}
+
+/// **Voice finds its decoder in the engine in `dir`**: the engine's runtime carries `whisper-cli`
+/// (build-runtimes.py), verified here like every runtime file. `false` when it does not verify.
+pub fn give_voice_its_decoder(dir: &std::path::Path) -> bool {
+    match richos_core::runtime::verify_engine(dir) {
+        Ok(runtime) => {
+            richos_voice::stt::set_delivered_runtime_bin(Some(runtime.root.join("bin")));
+            true
+        }
+        Err(_) => false,
     }
 }
 
-/// **Install this build's pinned engine where RichOS installs it**, point the lease factory at
-/// it and give voice its decoder. One function for a press of "Set it up" ([`run`]) and for the
-/// app's own install after an update, so the two cannot install differently. `Ok` carries the
-/// line he is shown on the sheet.
-pub fn install_pinned_engine(
-    paths: &SetupPaths,
-    engine_dir: &Arc<Mutex<PathBuf>>,
-) -> Result<String, SetupError> {
+/// **The window asks voice again**: an engine came into use without a press, so nothing else
+/// would tell it (a press of "Set it up" asks after its own run). On this channel, as an
+/// `engine` line in the state `updated`, which the window answers by re-reading voice readiness
+/// and nothing else.
+pub fn tell_the_window_the_engine_changed(app: &AppHandle) {
+    let line = SetupProgress::line("updated", Some(Component::Engine.as_str()), String::new(), 1, 1);
+    if let Err(e) = app.emit(EVENT_SETUP, line) {
+        eprintln!("[richos] engine update: the window could not be told to ask voice again ({e})");
+    }
+}
+
+/// **Fetch and check this build's pinned engine**, without touching the one in place
+/// (`setup::stage_engine`).
+pub fn stage_pinned_engine(paths: &SetupPaths) -> Result<setup::StagedEngine, SetupError> {
     let pin = setup::engine_pin().ok_or(SetupError::EngineUnpinned)?;
     let home = paths.home.as_deref().ok_or(SetupError::NoHome)?;
-    let dest = setup::engine_install_dir(home);
-    let r = setup::install_engine(&CurlFetcher, &TarExtractor, &pin, &dest)?;
+    setup::stage_engine(&CurlFetcher, &TarExtractor, &pin, &setup::engine_install_dir(home))
+}
+
+/// **Put a staged engine in place**, point the lease factory at it and give voice its decoder.
+/// One function for a press of "Set it up" ([`install_pinned_engine`]) and for the app's own
+/// install after an update, so the two cannot install differently. `Ok` carries the line he is
+/// shown on the sheet.
+pub fn swap_in_engine(
+    staged: setup::StagedEngine,
+    engine_dir: &Arc<Mutex<PathBuf>>,
+) -> Result<String, SetupError> {
+    let r = staged.swap()?;
     eprintln!(
         "[richos] setup: engine {} at {} — sha256 {}, {} bytes",
         r.version, r.installed_at, r.sha256, r.bytes
     );
+    let dest = PathBuf::from(&r.installed_at);
     // THE LEASE FACTORY NOW POINTS AT IT. Without this line the app would have an engine on
     // disk and keep starting `claude` in the directory it failed to find at boot.
     if let Ok(mut cell) = engine_dir.lock() {
         *cell = dest.clone();
     }
-    // AND VOICE FINDS ITS DECODER IN IT: the engine's runtime carries `whisper-cli`
-    // (build-runtimes.py), verified here like every runtime file.
-    if let Ok(runtime) = richos_core::runtime::verify_engine(&dest) {
-        richos_voice::stt::set_delivered_runtime_bin(Some(runtime.root.join("bin")));
-    }
+    give_voice_its_decoder(&dest);
     Ok("Your engine is installed.".to_string())
+}
+
+/// A press of "Set it up": fetch, check and put this build's engine in place, in one go.
+pub fn install_pinned_engine(
+    paths: &SetupPaths,
+    engine_dir: &Arc<Mutex<PathBuf>>,
+) -> Result<String, SetupError> {
+    swap_in_engine(stage_pinned_engine(paths)?, engine_dir)
 }
 
 /// The steps a press of "Set it up" runs and waits for, in order. **Never the video tools**: a
