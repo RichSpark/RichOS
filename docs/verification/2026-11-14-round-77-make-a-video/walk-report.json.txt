@@ -1,0 +1,114 @@
+{
+  "vm": "walk-69e3f5abf0c6",
+  "steps": {
+    "seed": {
+      "pass": true,
+      "result": {
+        "repository": "alder: 314 documents, 8 commits",
+        "teammates": "3",
+        "launches": [
+          "window"
+        ],
+        "memories": 322
+      },
+      "seconds": 84.9
+    },
+    "button": {
+      "pass": true,
+      "result": {
+        "make_a_video": {
+          "x": 1307,
+          "y": 123,
+          "w": 164,
+          "h": 40
+        },
+        "settings": {
+          "x": 1482,
+          "y": 123,
+          "w": 40,
+          "h": 40
+        },
+        "frame": "1-button.png",
+        "frame_reads_make_a_video": false,
+        "choices_frame": "2-choices.png",
+        "rows": [
+          true,
+          true,
+          true
+        ],
+        "choices": [
+          true,
+          true,
+          true,
+          true,
+          true,
+          true
+        ],
+        "as_first_opened": [
+          "Off",
+          "When I stop it",
+          "Shown"
+        ],
+        "escape_closed_the_choices": true,
+        "still_on_the_home_screen": true
+      },
+      "seconds": 28.5
+    },
+    "voice": {
+      "pass": true,
+      "result": {
+        "microphone_frame": "3-microphone-on.png",
+        "count_frame": "4-count.png",
+        "pointer_rests_at": [
+          922,
+          633
+        ],
+        "recording_frame": "5-recording.png",
+        "pressed_stop_after_s": 10.1,
+        "sheet_frame": "6-sheet.png",
+        "sheet_says": "0:10 \u00b7 with your voice \u00b7 with the mouse pointer \u00b7 1,400 \u00d7 836 \u00b7 0.1 MB",
+        "save_window_frame": "7-voice-save-window.png",
+        "said": "Saved to Documents as RichOS-day-104-322-memories.mp4",
+        "saved_frame": "7-voice-saved.png",
+        "folder": "Documents",
+        "name": "RichOS-day-104-322-memories.mp4",
+        "guest_path": "/Users/admin/Documents/RichOS-day-104-322-memories.mp4",
+        "app_log": "[richos] home video: saved 112672 byte(s) to /Users/admin/Documents/RichOS-day-104-322-memories.mp4",
+        "read_back": {
+          "file": "7-voice-RichOS-day-104-322-memories.mp4",
+          "bytes": 112672,
+          "seconds": 10.39,
+          "video": null,
+          "audio": {
+            "codec": "aac",
+            "sample_rate": 48000,
+            "mean_volume_db": -27.5
+          },
+          "decodes": true,
+          "frames": []
+        },
+        "sheet_seconds": 10,
+        "picture_in_the_file": false,
+        "done_closed_the_sheet": true
+      },
+      "seconds": 55.6
+    },
+    "film": {
+      "pass": true,
+      "result": {
+        "choices_frame": "8-film-choices.png",
+        "film_frame": "9-film.png",
+        "numbers_off_the_screen": false,
+        "watch_it_grow_off_the_screen": false,
+        "ended_by_itself_after_s": 20.7,
+        "sheet_frame": "10-film-sheet.png",
+        "sheet_says": "0:16 \u00b7 no sound \u00b7 no mouse pointer \u00b7 1,400 \u00d7 836 \u00b7 0.0 MB",
+        "numbers_back": false,
+        "picture_in_the_file": false,
+        "sheet_says_no_file": "This Mac could not record the window, so there is no file to play here.",
+        "discard_closed_the_sheet": true
+      },
+      "seconds": 50.0
+    }
+  }
+}

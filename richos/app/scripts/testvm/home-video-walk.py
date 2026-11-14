@@ -335,15 +335,16 @@ class Walk(stages.Walk):
         self.pointer('%d,%d' % (x, y), '%d,%d' % (x + 60, y + 60), hover=True)  # over the picture, and not in the file
         time.sleep(4)
         result['film_frame'] = self.shot('9-film')
-        result['numbers_off_the_screen'] = not self.text('sources understood')
-        result['watch_it_grow_off_the_screen'] = not self.node('--id', 'home-grow') and not self.node('--id', 'home-grow-solo')
+        # (what has left the screen for the film is seen in that frame: a faded element stays in the Mac's tree)
+        result['film_frame_reads_talk_to_rich'] = self.reads(result['film_frame'], 'Talk to Rich')
+        if result['film_frame_reads_talk_to_rich']:
+            raise StepFailed('Talk to Rich is still on the screen while the film is recorded (frame 9-film)')
         has_video = self.to_the_sheet(60)
         result['ended_by_itself_after_s'] = round(time.monotonic() - began, 1)
         result['sheet_frame'] = self.shot('10-film-sheet')
         result['sheet_says'] = self.words(' · no sound · ')
         if not result['sheet_says'] or 'no mouse pointer' not in result['sheet_says']:
             raise StepFailed('the sheet does not say the video has no sound and no pointer: ' + str(result['sheet_says']))
-        result['numbers_back'] = bool(self.text('sources understood'))
         if not 13 <= result['ended_by_itself_after_s'] <= 40:
             raise StepFailed('the film ended after %.1f s' % result['ended_by_itself_after_s'])
         if not has_video:
