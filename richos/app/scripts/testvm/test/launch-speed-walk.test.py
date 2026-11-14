@@ -44,6 +44,40 @@ check("the judged moment is the page's splash playing, plus the allowance",
       and row.get('first_frame') == 245, row)
 check('the launch line says which checks ran', row.get('bundle_check', '').startswith('bundle check none (trusted')
       and row.get('engine_check', '').startswith('none (trusted'), row)
+# THE SPLASH'S OPENING ON THE GLASS IS THE SPLASH PLAYING (Sage's plan 2026-11-14, "the splash the
+# rules picked is playing within 380 ms of the click", section 6): with "its opening used", the judged
+# moment is the first frame, not the page.
+opened_line = line.replace('; splash shown;', '; splash shown, round-11/v2 (picked at the last quit), its opening used '
+                           '(30 later pictures), the page joined it at 165 ms;')
+opened = walk.measure({'label': 'rule-switch:judged', 'pid': 501, 't_open': t_open, 'expect_splash': 'round-11/v2',
+                       'lines': [{'t': 0, 'text': opened_line}]}, events)
+check("with its opening used, the judged moment is the opening's first picture on the glass, plus the allowance",
+      opened.get('splash') == 245 + A and opened.get('splash_from') == "the splash's opening on the glass"
+      and opened.get('splash_id') == 'round-11/v2' and opened.get('opening') == 30 and opened.get('joined_ms') == 165, opened)
+fell_back_line = line.replace('; splash shown;', '; splash shown, round-11/v1 (picked by the rules at this start), its '
+                              'opening not used: nothing was saved at the last quit (the first start after an install '
+                              'or an update);')
+fell_back = walk.measure({'label': 'fresh:first', 'pid': 501, 't_open': t_open, 'lines': [{'t': 0, 'text': fell_back_line}]}, events)
+check("without its opening, the page's splash is the judged moment, and the launch line says why",
+      fell_back.get('splash') == 410 + A and fell_back.get('opening') is None
+      and fell_back.get('opening_not_used', '').startswith('nothing was saved at the last quit'), fell_back)
+wrong = walk.measure({'label': 'rule-switch:judged', 'pid': 501, 't_open': t_open, 'expect_splash': 'round-11/v1',
+                      'lines': [{'t': 0, 'text': opened_line}]}, events)
+check('the wrong splash is not the splash: no time is judged for it', 'splash' not in wrong
+      and wrong.get('wrong_splash') == 'expected round-11/v1, the launch line says round-11/v2', wrong)
+wrong_verdict = walk.verdict([{'label': 'ordinary:judged', 'splash': 300} for _ in range(20)] + [wrong])
+check('a launch that showed the wrong splash refuses the measurement, by name', wrong_verdict['refused'] is True
+      and wrong_verdict['missing'] == ['rule-switch:judged (expected round-11/v1, the launch line says round-11/v2)'],
+      wrong_verdict)
+per_splash = walk.verdict([{'label': 'ordinary:judged', 'splash': 300, 'splash_id': 'round-11/v1'} for _ in range(20)]
+                          + [{'label': 'rule-switch:judged', 'splash': 320, 'splash_id': 'round-11/v2'} for _ in range(20)])
+check("every splash's own p95 is stated", per_splash['splashes'] == {
+    'round-11/v1': {'p95_ms': 300, 'median_ms': 300, 'launches': 20},
+    'round-11/v2': {'p95_ms': 320, 'median_ms': 320, 'launches': 20}} and 'round-11/v2 p95 320 ms (20 launches)'
+      in walk.sentence(per_splash), per_splash)
+check('the rule the walk expects is the shell\'s: start 2 shows #2, every other start #1',
+      walk.SPLASH_FOR_START == {2: 'round-11/v2'} and walk.SPLASH_OTHERWISE == 'round-11/v1')
+
 old = walk.measure({'label': 'ordinary:judged', 'pid': 501, 't_open': t_open, 'lines': []}, events)
 check("an older build with no launch line falls back to WebKit's document loaded",
       old.get('splash') == 600 + A and old.get('splash_from') == "WebKit's document loaded", old)
@@ -60,6 +94,18 @@ check('the p95 of every judged launch together, within 380 ms, passes',
 check("each route's own p95 and median are stated",
       summary['routes']['cold'] == {'p95_ms': 370, 'median_ms': 360, 'max_ms': 370, 'launches': 3}, summary)
 check('first launches are reported, not judged', summary['reported'] == {'ordinary:first': 1200}, summary)
+# Each judged route on its own (review rv-20261114T143754Z-7a96691c-3106, finding 2): a slow route
+# refuses even when the pooled p95 is fast.
+hidden = walk.verdict([{'label': 'ordinary:judged', 'splash': 300} for _ in range(40)]
+                      + [{'label': 'updated-from-applications:judged', 'splash': ms} for ms in [300] * 18 + [700, 700]])
+check('one slow route refuses, however fast the rest pooled', hidden['p95_ms'] == 300 and hidden['refused'] is True
+      and hidden['routes_over'] == ['updated-from-applications'] and 'OVER THE LIMIT ON ITS OWN' in walk.sentence(hidden),
+      hidden)
+# A build that writes the launch line and did not report its splash is missing evidence, never
+# timed by WebKit's document loaded (finding 3).
+unreported = line.replace('page took over 330 ms', 'page took over: not reported (the ceiling ended the wait)')
+silent = walk.measure({'label': 'ordinary:judged', 'pid': 501, 't_open': t_open, 'lines': [{'t': 0, 'text': unreported}]}, events)
+check('a current build whose page never reported has no timing', 'splash' not in silent and 'document_loaded' in silent, silent)
 slow = walk.verdict([{'label': 'ordinary:judged', 'splash': ms} for ms in [300] * 18 + [390, 400]])
 check('a p95 over 380 ms refuses, however good the median', slow['p95_ms'] == 390 and slow['refused'] is True, slow)
 check('nothing measured refuses', walk.verdict([])['refused'] is True)
@@ -82,17 +128,30 @@ whole = walk.verdict(fast, {'ordinary': 20})
 check('a complete fast measurement passes', whole['refused'] is False and whole['missing'] == [], whole)
 check('the sentence says the measurement was incomplete', 'INCOMPLETE' in walk.sentence(gone), walk.sentence(gone))
 
-# The guest is slower than his Mac: the limit is scaled by Dictionary's p95 there (the CEO, 2026-11-14).
-calib = [{'label': 'dictionary:calibration', 'splash': ms} for ms in (420, 450, 470, 480, 500, 760)]
-limit, ratio = walk.guest_limit(calib)
-check("the limit is 380 ms times Dictionary's p95 in the guest over 380", (limit, ratio) == (760, 2.0), (limit, ratio))
-check('no calibration keeps 380 ms', walk.guest_limit([]) == (380, None))
+# The guest is slower than his Mac: the limit is scaled by Dictionary's slowness there, LIKE FOR LIKE
+# and BY MEDIANS (the CEO, 2026-11-14): its median from the launch request to its window in the guest,
+# plus the Dock's part measured on his Mac, against its median from the Dock click on his Mac.
+check("his Mac's Dictionary median and Dock part are the audit's measurements",
+      (walk.MAC_DICTIONARY_MEDIAN_MS, walk.DOCK_PART_MS) == (318, 43.5))
+# Ten guest launches, one of them a cold outlier at 1,900 ms: the median ignores it, a p95 would not.
+windows = (500, 510, 520, 530, 540, 550, 560, 570, 580, 1900)
+calib = [{'label': 'dictionary:calibration', 'window': ms, 'splash': ms + A} for ms in windows]
+limit, ratio, inputs = walk.guest_limit(calib)
+want = (545 + 43.5) / 318
+check("the limit is 380 ms times (the guest's median from the request + the Dock part) over his Mac's median",
+      ratio == round(want, 3) and limit == round(380 * round(want, 3)) and inputs['guest_median_from_request_ms'] == 545
+      and inputs['guest_median_from_click_ms'] == 588.5 and inputs['mac_median_from_click_ms'] == 318, (limit, ratio, inputs))
+check('a single cold outlier does not move the limit', walk.guest_limit(calib[:-1] + [dict(calib[-1], window=590)])[1]
+      == ratio, walk.guest_limit(calib[:-1] + [dict(calib[-1], window=590)]))
+check('no calibration keeps 380 ms', walk.guest_limit([]) == (380, None, None))
 check('a guest faster than his Mac never tightens the limit',
-      walk.guest_limit([{'label': 'dictionary:calibration', 'splash': 200}]) == (380, 1.0))
-scaled = walk.verdict(fast + calib, {'ordinary': 20}, limit, ratio)
+      walk.guest_limit([{'label': 'dictionary:calibration', 'window': 200}])[:2] == (380, 1.0))
+scaled = walk.verdict(fast + calib, {'ordinary': 20}, limit, ratio, inputs)
 check('the calibration launches are not judged, and the scaled limit is used',
-      scaled['launches'] == 20 and scaled['limit_ms'] == 760 and scaled['refused'] is False, scaled)
-check('the sentence records the ratio beside the limit', 'x 2.00' in walk.sentence(scaled), walk.sentence(scaled))
+      scaled['launches'] == 20 and scaled['limit_ms'] == limit and scaled['refused'] is False, scaled)
+said_scaled = walk.sentence(scaled)
+check('the sentence records the ratio and its inputs beside the limit', ('x %.2f' % ratio) in said_scaled
+      and '588.5 ms from the Dock click here' in said_scaled and 'against 318 ms on his Mac' in said_scaled, said_scaled)
 
 # The receipt's tree digest, on the tree whose digest the updater's own test pins
 # (crates/richos-user-update/src/lib.rs, digests_are_spelled_as_sha2_0_10_spelled_them).

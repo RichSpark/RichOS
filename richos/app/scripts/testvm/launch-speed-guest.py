@@ -137,7 +137,8 @@ def launch(n, step, out):
     events = []
     end = t_open + step.get('settle', 20)
     done_at = None
-    shot = step.get('frame_at')
+    # Untimed pictures: one at `frame_at`, or one at each of `frames_at` (seconds after `open`).
+    shots = sorted(step.get('frames_at') or ([step['frame_at']] if step.get('frame_at') is not None else []))
     quit_at = step.get('quit_at')
     while time.time() < end:
         now = time.time()
@@ -146,10 +147,10 @@ def launch(n, step, out):
                 if owned(row, before, step['owns']):
                     pid, t_pid = row[0], now
                     break
-        if shot is not None and now - t_open >= shot:
-            frame(os.path.join(run_dir, 'frame-%.1fs.jpg' % shot))
-            events.append({'what': 'frame', 't': now})
-            shot = None
+        if shots and now - t_open >= shots[0]:
+            shot = shots.pop(0)
+            frame(os.path.join(run_dir, ('frame-%.2fs.jpg' if step.get('frames_at') else 'frame-%.1fs.jpg') % shot))
+            events.append({'what': 'frame', 't': now, 'at': shot})
         if quit_at is not None and pid is not None and now - t_open >= quit_at:
             # The app's menu exists a moment after its process does: the Quit is pressed again
             # until a press lands, and the press that landed is the one recorded.
@@ -213,9 +214,18 @@ def launch(n, step, out):
             except OSError:
                 pass
     gone = pid is not None and not alive(pid) and not any(alive(c) for c in children)
+    # What the app said while it quit (the splash picked for the next start, its opening drawn, the
+    # update put in place), read after it ended: unstamped.
+    try:
+        with open(log, 'rb') as f:
+            said = f.read().decode('utf-8', 'replace').splitlines()
+    except OSError:
+        said = []
     result = {'n': n, 'label': step['label'], 'app': step['app'], 't_open': t_open, 't_open_done': t_open_done,
               'pid': pid, 't_pid_seen': t_pid, 'quit': how, 'all_gone': gone, 'events': events,
-              'lines': [{'t': t, 'text': text} for t, text in lines]}
+              'expect_splash': step.get('expect_splash'),
+              'lines': [{'t': t, 'text': text} for t, text in lines],
+              'quit_lines': said[len(lines):]}
     print('launch %d %s pid %s: %s, all gone %s, %d log lines' % (n, step['label'], pid, how, gone, len(lines)),
           flush=True)
     return result
