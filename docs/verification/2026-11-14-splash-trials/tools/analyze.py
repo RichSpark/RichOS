@@ -24,6 +24,21 @@ def p95(values):
     return v[max(0, math.ceil(0.95 * len(v)) - 1)] if v else None
 
 
+def ranges(numbers):
+    """[1, 3, 4, 5, 15] -> '1, 3-5, 15'; [] -> 'none'."""
+    out, run = [], []
+    for n in sorted(numbers):
+        if run and n == run[-1] + 1:
+            run.append(n)
+            continue
+        if run:
+            out.append(str(run[0]) if len(run) == 1 else '%d-%d' % (run[0], run[-1]))
+        run = [n]
+    if run:
+        out.append(str(run[0]) if len(run) == 1 else '%d-%d' % (run[0], run[-1]))
+    return ', '.join(out) if out else 'none'
+
+
 def median(values):
     v = sorted(values)
     if not v:
@@ -272,7 +287,7 @@ def main():
                 first_seen.setdefault(v, frames.t[i])
             late = {k: round(first_seen[k] - (t0 + k * 1000 / 30), 1) for k in sorted(first_seen)}
             row['pictures_seen'] = len(first_seen)
-            row['pictures_missing'] = [k for k in range(30) if k not in first_seen]
+            row['pictures_missing'] = ranges([k for k in range(30) if k not in first_seen])
             row['lateness_ms_by_picture'] = late
             row['worst_lateness_ms'] = max(late.values())
             seq = [v for _, v in on]

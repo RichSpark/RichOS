@@ -119,7 +119,10 @@ class Tools(unittest.TestCase):
         self.assertEqual(t1['process_start_to_pushed_ms'], 115.0)
         t3 = summary['launches']['t3png'][0]
         self.assertEqual(t3['pictures_seen'], 3)
-        self.assertEqual(t3['pictures_missing'], list(range(3, 30)))
+        self.assertEqual(t3['pictures_missing'], '3-29')
+        analyze = load('analyze.py')
+        self.assertEqual(analyze.ranges([1, 3, 4, 15]), '1, 3-4, 15')
+        self.assertEqual(analyze.ranges([]), 'none')
         self.assertEqual(t3['worst_lateness_ms'], 0.0)
         self.assertEqual(summary['t1_stats']['request_to_picture_on_glass_ms']['p95_nearest_rank'], 200.0)
 
