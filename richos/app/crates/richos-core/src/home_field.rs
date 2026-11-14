@@ -472,6 +472,127 @@ pub fn items_kept_or_compiled(
     Ok((items, ItemsFrom::Compiled))
 }
 
+// ---------------------------------------------------------------------------
+// the day each object was first seen (round 75, the home screen's stages)
+// ---------------------------------------------------------------------------
+
+/// **THE DAY EACH OBJECT WAS FIRST SEEN, KEPT BESIDE THE KEPT COMPILE.**
+///
+/// A slice item carries no date (see "What this does not have" above), and the home screen's
+/// stages need three things only a date gives: the order his lights arrived in, the day count
+/// under "Watch it grow" and last week's line (`richos-hq` round 75; the design's 3.4: "The order
+/// of arrival has to be kept"). So the first compile that surfaces an object writes down the day,
+/// and the day never changes afterwards.
+///
+/// `seen` maps an object's key ([`seen_key`], one-way: no ref, title or file name is in the file)
+/// to days since 1970-01-01. `began` is the day of the first entry. `undated` is how many objects
+/// were written down on that first day although the corpus already had files older than it: their
+/// real days are not known, and the home screen then leaves the day count out and holds the weekly
+/// line until a whole week lies after `began`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FirstSeen {
+    #[serde(default)]
+    pub began: Option<i64>,
+    #[serde(default)]
+    pub undated: u64,
+    #[serde(default)]
+    pub seen: BTreeMap<String, i64>,
+}
+
+/// The ledger at `path`; a missing or unreadable file is an empty one (it begins today).
+pub fn read_first_seen(path: &std::path::Path) -> FirstSeen {
+    std::fs::read(path).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
+}
+
+/// Write the ledger atomically, as [`write_kept`] does.
+pub fn write_first_seen(path: &std::path::Path, ledger: &FirstSeen) -> std::io::Result<()> {
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, serde_json::to_vec(ledger).map_err(std::io::Error::other)?)?;
+    std::fs::rename(&tmp, path)
+}
+
+/// `seen-` plus 64 bits of FNV-1a over a record's ref: the same record has the same key on every
+/// compile, and the ref cannot be read back out of it.
+pub fn seen_key(r#ref: &str) -> String {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in r#ref.bytes() {
+        h ^= u64::from(b);
+        h = h.wrapping_mul(0x0100_0000_01b3);
+    }
+    format!("seen-{h:016x}")
+}
+
+/// The day (since 1970-01-01, UTC) of the oldest file under the corpus, or `None` when it cannot be
+/// said (an unreadable folder, no file, more than `STAMP_FILE_LIMIT` files). Skips what
+/// [`corpus_stamp`] skips.
+pub fn oldest_file_day(root: &std::path::Path) -> Option<i64> {
+    let mut oldest: Option<i64> = None;
+    let mut files = 0usize;
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(&dir).ok()? {
+            let entry = entry.ok()?;
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with('.') || name == "node_modules" {
+                continue;
+            }
+            let meta = entry.metadata().ok()?;
+            if meta.is_dir() {
+                stack.push(entry.path());
+                continue;
+            }
+            files += 1;
+            if files > STAMP_FILE_LIMIT {
+                return None;
+            }
+            let day = meta.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?.as_secs() as i64 / 86_400;
+            oldest = Some(oldest.map_or(day, |o| o.min(day)));
+        }
+    }
+    oldest
+}
+
+/// Give every node of a built field the day it was first seen, and write down today for the ones
+/// not seen before. **Pure** apart from its two arguments: `today` is days since 1970-01-01 and
+/// `corpus_began` the oldest file's day ([`oldest_file_day`]), or `None` when unknown.
+///
+/// Each node's `createdDay` becomes its day counted from `ledger.began`, so the engine's arrival
+/// order (`field-engine.js`: by `createdDay`, then significance) is the order they were first seen.
+/// `meta.horizonDays` stays [`HORIZON_DAYS`], so nothing is drawn as new, as before.
+/// `meta.dates` says where today stands on that axis and how many objects are undated.
+/// Returns whether the ledger changed (and so needs writing).
+pub fn date_field(field: &mut Value, ledger: &mut FirstSeen, today: i64, corpus_began: Option<i64>) -> bool {
+    let keys: Vec<String> = field["nodes"]
+        .as_array()
+        .map(|nodes| nodes.iter().filter_map(|n| n["seen"].as_str().map(str::to_string)).collect())
+        .unwrap_or_default();
+    let mut changed = false;
+    if ledger.began.is_none() && !keys.is_empty() {
+        ledger.began = Some(today);
+        // Unknown counts as older: a day count nobody can vouch for is left out, not guessed.
+        if corpus_began.is_none_or(|day| day < today) {
+            ledger.undated = keys.len() as u64;
+        }
+        changed = true;
+    }
+    for key in &keys {
+        if !ledger.seen.contains_key(key) {
+            ledger.seen.insert(key.clone(), today);
+            changed = true;
+        }
+    }
+    let began = ledger.began.unwrap_or(today);
+    if let Some(nodes) = field["nodes"].as_array_mut() {
+        for n in nodes {
+            let day = n["seen"].as_str().and_then(|k| ledger.seen.get(k)).copied().unwrap_or(today);
+            n["createdDay"] = json!((day - began).clamp(0, HORIZON_DAYS - 15));
+        }
+    }
+    field["meta"]["dates"] = json!({ "today": (today - began).max(0), "undated": ledger.undated, "from": "first-seen" });
+    changed
+}
+
 const STAMP_FILE_LIMIT: usize = 200_000;
 
 /// A hash of every file under the corpus: relative path, size and modification time, in path order.
@@ -718,6 +839,8 @@ pub fn build_field(census: &Census, items: &[FieldItem], registry: &EntityRegist
                 // audited from the payload rather than trusted.
                 "loroKind": it.kind,
                 "domain": it.lane(),
+                // What `date_field` finds this object's first-seen day by.
+                "seen": seen_key(&it.r#ref),
                 "cluster": group_id[&(it.lane().to_string(), it.group_key())].clone(),
                 "degree": degree.get(&id).copied().unwrap_or(0),
                 "significance": it.confidence,
@@ -852,7 +975,7 @@ pub fn build_field(census: &Census, items: &[FieldItem], registry: &EntityRegist
             "typeMap": TYPE_MAP.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect::<BTreeMap<_, _>>(),
             "absent": [
                 "an enumeration: loro-context.mjs compiles a topic behind a relevance floor and has no verb that returns every record, so counts.objects is what one query surfaced of counts.records",
-                "dates: a slice item carries no observation date, so every node's createdDay is 0 and nothing is drawn as new",
+                "dates: a slice item carries no observation date, so createdDay is 0 here and becomes the day the app first saw the object (date_field); nothing is drawn as new",
                 "a link graph: inter-record citations are not exposed, so the only links here join objects compiled out of the same source file, and no cross-domain link is drawn",
                 "a per-company census: the corpus verb counts the whole corpus by kind and by nothing else, so domains[].nodeCount counts drawn objects rather than the corpus's true share",
                 "specialists, tasks and minutes: loro holds none of these, so those bragSignals are zero rather than estimated",
@@ -874,6 +997,80 @@ pub fn build_field(census: &Census, items: &[FieldItem], registry: &EntityRegist
 mod tests {
     use super::*;
     use crate::entity::{Entity, EntityRegistry};
+
+    fn dated_fixture(refs: &[&str]) -> Value {
+        json!({
+            "meta": { "horizonDays": HORIZON_DAYS },
+            "nodes": refs.iter().map(|r| json!({ "id": r, "seen": seen_key(r), "createdDay": 0 })).collect::<Vec<_>>(),
+        })
+    }
+
+    #[test]
+    fn an_object_keeps_the_day_it_was_first_seen_and_new_ones_get_today() {
+        let mut ledger = FirstSeen::default();
+        // day 20000: a corpus begun that same day, two objects
+        let mut first = dated_fixture(&["a", "b"]);
+        assert!(date_field(&mut first, &mut ledger, 20_000, Some(20_000)));
+        assert_eq!(ledger.began, Some(20_000));
+        assert_eq!(ledger.undated, 0, "a corpus begun today has no object older than the ledger");
+        assert_eq!(first["meta"]["dates"], json!({ "today": 0, "undated": 0, "from": "first-seen" }));
+        // nine days later: one more object, and the first two keep their day
+        let mut later = dated_fixture(&["c", "a", "b"]);
+        assert!(date_field(&mut later, &mut ledger, 20_009, Some(20_000)));
+        let days: Vec<i64> = later["nodes"].as_array().unwrap().iter().map(|n| n["createdDay"].as_i64().unwrap()).collect();
+        assert_eq!(days, vec![9, 0, 0], "the new object is day 9; the others are still day 0");
+        assert_eq!(later["meta"]["dates"]["today"], 9);
+        // the same compile again changes nothing and needs no write
+        let mut again = dated_fixture(&["c", "a", "b"]);
+        assert!(!date_field(&mut again, &mut ledger, 20_030, Some(20_000)));
+        assert_eq!(again["nodes"][0]["createdDay"], 9);
+        assert_eq!(again["meta"]["dates"]["today"], 30);
+        // nothing is drawn as new (`field-prep.js`: createdDay >= horizonDays - 14)
+        assert!(again["nodes"].as_array().unwrap().iter().all(|n| n["createdDay"].as_i64().unwrap() < HORIZON_DAYS - 14));
+    }
+
+    #[test]
+    fn objects_older_than_the_ledger_are_counted_as_undated() {
+        // an install that had records before dates were kept: the corpus's oldest file is 200 days old
+        let mut ledger = FirstSeen::default();
+        let mut field = dated_fixture(&["a", "b", "c"]);
+        date_field(&mut field, &mut ledger, 20_000, Some(19_800));
+        assert_eq!(ledger.undated, 3);
+        assert_eq!(field["meta"]["dates"]["undated"], 3);
+        // an unknown corpus age is not vouched for either
+        let mut unknown = FirstSeen::default();
+        date_field(&mut dated_fixture(&["a"]), &mut unknown, 20_000, None);
+        assert_eq!(unknown.undated, 1);
+        // and an empty field begins nothing: the ledger starts with the first object
+        let mut empty = FirstSeen::default();
+        assert!(!date_field(&mut dated_fixture(&[]), &mut empty, 20_000, Some(19_800)));
+        assert_eq!(empty, FirstSeen::default());
+    }
+
+    #[test]
+    fn the_ledger_round_trips_through_its_file_and_holds_no_ref() {
+        let dir = std::env::temp_dir().join(format!("richos-first-seen-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("home-field-first-seen.json");
+        assert_eq!(read_first_seen(&path), FirstSeen::default(), "a missing file is an empty ledger");
+        let mut ledger = FirstSeen::default();
+        date_field(&mut dated_fixture(&["decisions/2026-pricing"]), &mut ledger, 20_000, Some(20_000));
+        write_first_seen(&path, &ledger).unwrap();
+        assert_eq!(read_first_seen(&path), ledger);
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(!text.contains("pricing"), "the record's ref is in the ledger file: {text}");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn every_built_node_carries_the_key_its_day_is_found_by() {
+        let census = census();
+        let items = vec![item("r-1", "decision", Some("acme"), "a.md", 0.9), item("r-2", "fact", Some("acme"), "a.md", 0.5)];
+        let field = build_field(&census, &items, &registry());
+        let keys: Vec<&str> = field["nodes"].as_array().unwrap().iter().map(|n| n["seen"].as_str().unwrap()).collect();
+        assert_eq!(keys.len(), 2);
+        assert!(keys.contains(&seen_key("r-1").as_str()) && keys.contains(&seen_key("r-2").as_str()));
+    }
 
     fn item(r: &str, kind: &str, company: Option<&str>, path: &str, conf: f64) -> FieldItem {
         FieldItem {
