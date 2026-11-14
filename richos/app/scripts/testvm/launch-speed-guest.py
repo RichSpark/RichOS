@@ -173,6 +173,10 @@ def launch(n, step, out):
         if step.get('done') and done_at is None and any(step['done'] in t for _, t in lines):
             done_at = now
             end = min(end, now + 1.5)
+        # A build older than the launch line never prints it: its boot's end, plus time for the
+        # page to load and the system log to record it, ends the watch instead of the full settle.
+        if step.get('done') and done_at is None and any('boot complete' in t for _, t in lines):
+            end = min(end, now + 6.0)
         time.sleep(0.02)
     stop.set()
     follower.join()
