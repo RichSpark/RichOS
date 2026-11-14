@@ -52,8 +52,19 @@ const CODE_EXT: &[&str] = &[
 ];
 /// Round 71's `SKIP_PARTS`: vendored and generated trees are not his.
 const SKIP_PARTS: &[&str] = &["node_modules/", "third-party/", "third_party/", "vendor/", "/dist/", "ui-dist/", ".min."];
-/// A document is read for its references only this far (round 71: `read(200000)`).
+/// A document is scanned for its references only this far (round 71: `read(200000)`). It never
+/// limits the counting of a decision register's rulings: a register is read whole.
 const READ_CHARS: usize = 200_000;
+
+/// A decision register by its name, as round 71's census picks one.
+fn is_register(path: &str) -> bool {
+    basename(path).to_lowercase().contains("decisions")
+}
+
+/// The first `n` characters of a text.
+fn first_chars(text: &str, n: usize) -> &str {
+    text.char_indices().nth(n).map_or(text, |(at, _)| &text[..at])
+}
 /// Where the biggest company's arc is centered, as a fraction of the picture's lobe, counter-clockwise
 /// from the lower right: where round 71 put it, the crown of the approved composition (the middle of
 /// its biggest company's arc, 0.638).
@@ -125,8 +136,9 @@ pub struct RepoRead {
     /// Commit day -> commits that day.
     pub sessions: BTreeMap<i64, u32>,
     pub commits: u32,
-    /// The text of each document, as far as [`READ_CHARS`]. Read only to find rulings and
-    /// references; never emitted.
+    /// The text of each document: a decision register whole, so every ruling is counted, any
+    /// other document as far as [`READ_CHARS`]. Read only to find rulings and references; never
+    /// emitted.
     pub texts: HashMap<String, String>,
 }
 
@@ -250,7 +262,8 @@ pub fn read_repo(root: &Path, with: &GitRuntime) -> Option<RepoRead> {
         let rec = FileRec { path: f.clone(), first, last, commits: n };
         if ext == "md" {
             if let Ok(bytes) = std::fs::read(root.join(&f)) {
-                let text: String = String::from_utf8_lossy(&bytes).chars().take(READ_CHARS).collect();
+                let text = String::from_utf8_lossy(&bytes);
+                let text = if is_register(&f) { text.into_owned() } else { first_chars(&text, READ_CHARS).to_string() };
                 repo.texts.insert(f.clone(), text);
             }
             repo.docs.push(rec);
@@ -758,7 +771,7 @@ pub fn build_repo_field_with(companies: &[CompanyRead], unread: &[(String, Strin
         // ---- decision registers: one object per numbered ruling ----
         let mut n_rulings = 0usize;
         for (ri, d) in &docs {
-            if !basename(&d.path).to_lowercase().contains("decisions") {
+            if !is_register(&d.path) {
                 continue;
             }
             let Some(text) = c.repos[*ri].texts.get(&d.path) else { continue };
@@ -863,6 +876,8 @@ pub fn build_repo_field_with(companies: &[CompanyRead], unread: &[(String, Strin
         for (ri, r) in c.repos.iter().enumerate() {
             for d in &r.docs {
                 let Some(text) = r.texts.get(&d.path) else { continue };
+                // references are scanned as far as before; only the rulings are counted past it
+                let text = first_chars(text, READ_CHARS);
                 let here = dirname(&d.path);
                 let me = doc_node[&(ci, ri, d.path.clone())];
                 let mut found: Vec<usize> = Vec::new();
@@ -1291,6 +1306,32 @@ mod tests {
         assert_eq!(field["meta"]["counts"]["byType"]["decision"].as_u64(), Some(4), "the register and its three rulings are decisions");
         assert_eq!(field["meta"]["counts"]["perCompany"][0]["rulings"].as_u64(), Some(3));
         let _ = std::fs::remove_dir_all(r);
+    }
+
+    /// Review rv-20261114T024335Z-21d69d0d-88d9: every document was cut at 200,000 characters before
+    /// its rulings were counted, so a long register lost its later ones (189 of 300 here). A
+    /// register is read whole; the cut applies to scanning for references only.
+    #[test]
+    fn a_long_decision_register_keeps_every_ruling() {
+        let r = tmp("longreg");
+        let body = "We chose the proposed approach after reviewing the alternatives. ".repeat(16);
+        let mut register = String::from("# Decisions\n\n");
+        for n in 1..=300 {
+            register.push_str(&format!("## {n}. Decision {n}\n\n{body}\n\n"));
+        }
+        assert!(register.chars().count() > READ_CHARS + 100_000, "the register is not long enough to prove anything");
+        let long_notes = "word ".repeat(60_000);
+        commit(&r, "2026-10-01", &[("decisions.md", &register), ("notes.md", &long_notes)]);
+        let reg = registry(&[("acme", "Acme", &[r.as_path()])]);
+        let (read, unread) = read_companies(&company_folders(&reg), &test_git());
+        assert!(unread.is_empty());
+        // any other document is still held only as far as the reference scan reads
+        assert_eq!(read[0].repos[0].texts["notes.md"].chars().count(), READ_CHARS);
+        let field = build_repo_field(&read, &unread, day("2026-11-13"), &[]);
+        assert_eq!(field["meta"]["counts"]["perCompany"][0]["rulings"].as_u64(), Some(300));
+        // the register and its 300 rulings
+        assert_eq!(field["meta"]["counts"]["byType"]["decision"].as_u64(), Some(301));
+        std::fs::remove_dir_all(r).ok();
     }
 
     /// CAUSE 3: the picture was one ranked compile per company name behind a relevance floor (186 of
