@@ -318,6 +318,24 @@ NEW_USER_WALK_STEPS = ("identity", "setup", "signed-out", "accounts", "update", 
 NEW_USER_WALK_WAIT = 3600
 NEW_USER_WALK_BUDGET = NEW_USER_WALK_WAIT + 2400
 
+# THE LAUNCH-SPEED GATE (Sage's plan 2026-11-14, rule 5, with the CEO's measure and number of the
+# same day: "THE JOB AT HAND IS TO START SHOWING OUR ALREADY WELL-DESIGNED AND FULLY-BUILT SPLASH
+# SCREEN IN WELL UNDER 500 MS AFTER BUTTON CLICK", and Dictionary's measured Dock launch on his Mac,
+# at most 380 ms, as the benchmark). Every candidate that takes the new-user walk is also timed, in
+# its own guest, from the launch request to its splash playing (testvm/launch-speed-walk.py: a
+# returning user's launch, the first launch after the guest starts, and the CEO's own route, an
+# older published copy in /Applications handing over, 20 launches a route), and it is refused when the
+# p95 of every judged launch is over 380 ms (the CEO: "380 ms as the maximum allowed p95 time"); the
+# nightly states the p95 and every route's own numbers either way. A refusal, or a
+# walk that could not run, is taken once more before the candidate is refused
+# (verification-retries.md). The plan's route 3 (the first launch after an update put in place at
+# quit) is not yet a route of the walk.
+LAUNCH_SPEED_PHASE = "launch-speed"
+LAUNCH_SPEED_WAIT = 3600
+# About 43 launches (20 + 3 cold + 20 updated; unverified until its first nightly run); the budget is
+# the slot wait plus 30 minutes.
+LAUNCH_SPEED_BUDGET = LAUNCH_SPEED_WAIT + 1800
+
 # GUEST MEMORY, ASKED AT ONCE. A build that passed every gate could wait the full hour for a
 # guest slot and end "a guest needs N MB: M MB available ... (floor F MB)": memory no slot wait
 # could free, found only at the deadline. So a build that will boot a guest asks `testvm/slots.py fits` before its
@@ -2925,6 +2943,59 @@ class Runner:
         self.announce(f"New-user walk PASSED: {walk / 'report.json'}.")
         return None
 
+    def launch_speed_check(self, run_id, out, info):
+        """Time the candidate from the launch request to its splash showing, a p95 against 380 ms, in
+        its own guest (LAUNCH_SPEED_PHASE). None on a pass, else the sentence that says why it is
+        refused, where the evidence is and how to take it again without a rebuild."""
+        bundle = Path(out) / f"RichOS-{info['version']}-macos-aarch64.zip"
+        testvm = self.source / SCRIPTS / "testvm"
+        # The older copy an updated user still has in /Applications: the newest earlier release
+        # this Mac built, as a download installed it.
+        older = None
+        releases = self.state / "releases"
+        if releases.is_dir():
+            for candidate in sorted(releases.glob("*/RichOS-*-macos-aarch64.zip"),
+                                    key=lambda p: p.stat().st_mtime, reverse=True):
+                if candidate.parent.name != info.get("tag"):
+                    older = candidate
+                    break
+        engine = Path(out) / "richos-engine-1.2.0.tar.gz"
+        said, failed = None, None
+        for attempt in (1, 2):
+            walk = self.state / "launch-speed" / f"{run_id}.{attempt}"
+            home = walk.parent / f"{run_id}.{attempt}.home"
+            shutil.rmtree(walk, ignore_errors=True)
+            shutil.rmtree(home, ignore_errors=True)
+            home.mkdir(parents=True)
+            args = [sys.executable, testvm / "run-walk.py", "--no-app", "--wait", str(LAUNCH_SPEED_WAIT),
+                    "--home", home, "--engine", engine if engine.exists() else "none",
+                    "--report", walk.parent / f"{run_id}.{attempt}.run.json"]
+            if older:
+                args += ["--previous-bundle", older]
+            args += ["--", testvm / "launch-speed-walk.py", "--candidate", bundle, "--out", walk]
+            self.announce("Timing the candidate from the launch request to its splash showing, a p95 against "
+                          f"380 ms, in a fresh guest on the test VM (attempt {attempt})...")
+            failed = None
+            try:
+                with self.phase(LAUNCH_SPEED_PHASE):
+                    self.command(*args, env_extra={**self.vm_settings,
+                                                   NIGHTLY_WAIT_ENV: f"{LAUNCH_SPEED_PHASE} (run {run_id})"},
+                                 timeout=LAUNCH_SPEED_BUDGET)
+            except RuntimeError as error:
+                failed = str(error)
+            finally:
+                shutil.rmtree(home, ignore_errors=True)
+            try:
+                said = json.loads((walk / "report.json").read_text())["sentence"]
+            except (OSError, ValueError, KeyError):
+                said = None
+            self.announce(f"{said or 'Launch speed not measured.'} Evidence: {walk}.")
+            if failed is None:
+                return None
+        return (f"THE CANDIDATE IS BUILT, AND ITS LAUNCH SPEED WAS REFUSED OR COULD NOT BE PROVEN, twice: "
+                f"{said or failed}. The evidence is in {self.state / 'launch-speed'}. `publish` refuses "
+                "this candidate until the check passes; take it again without a rebuild.")
+
     def require_new_user_walk(self, info, run_id):
         """Refuse to publish a candidate a new user's first run has not passed on (2026-10-21).
         A candidate built before the requirement carries no `new_user_walk_required` and keeps
@@ -3557,6 +3628,10 @@ class Runner:
         # Then a new user's first run of the same archive, in its own guest (NEW_USER_WALK_PHASE).
         if not proof_error and candidate_info.get("new_user_walk_required"):
             proof_error = self.new_user_walk(self.env["RICHOS_NIGHTLY_RUN_ID"], out, candidate_info)
+        # Then its launch speed: the p95 from the click to the splash showing, against 380 ms
+        # (LAUNCH_SPEED_PHASE), for the same candidates the new-user walk takes.
+        if not proof_error and candidate_info.get("new_user_walk_required"):
+            proof_error = self.launch_speed_check(self.env["RICHOS_NIGHTLY_RUN_ID"], out, candidate_info)
         self.summary()
         print("", flush=True)
         self.print_candidate(candidate_info, out)

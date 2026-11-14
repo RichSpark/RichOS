@@ -1829,6 +1829,19 @@ while True: time.sleep(.02)
         proof_and_build = r.command.side_effect
 
         def fake_command(*args, **kwargs):
+            if str(args[1]).endswith("run-walk.py") and any(str(a).endswith("launch-speed-walk.py") for a in args):
+                # The launch-speed gate's walk (LAUNCH_SPEED_PHASE): a report, and a refusal when
+                # this fixture is told the launch is slow.
+                calls.append((args, kwargs))
+                walk = Path(args[args.index("--out") + 1])
+                walk.mkdir(parents=True, exist_ok=True)
+                slow = getattr(self, "launch_is_slow", False)
+                (walk / "report.json").write_text(json.dumps({"sentence": "Launch speed, Dock click to the splash "
+                                                              "showing, against a p95 of 380 ms: p95 %d ms over 43 launches."
+                                                              % (520 if slow else 300)}))
+                if slow:
+                    raise RuntimeError("python3 failed (exit 1); see the run log")
+                return
             if str(args[1]).endswith("run-walk.py"):
                 calls.append((args, kwargs))
                 walk = Path(args[args.index("--out") + 1])
@@ -1857,7 +1870,8 @@ while True: time.sleep(.02)
         with contextlib.redirect_stdout(buf):
             r.perform("build", no_host_screen=True)
         order = [Path(str(a[1])).name for a, _ in calls if Path(str(a[1])).name in ("gui-proof-in-vm.sh", "run-walk.py")]
-        self.assertEqual(order, ["gui-proof-in-vm.sh", "run-walk.py"], "the walk follows the boot proof, one guest at a time")
+        self.assertEqual(order, ["gui-proof-in-vm.sh", "run-walk.py", "run-walk.py"],
+                         "the new-user walk follows the boot proof and the launch-speed gate follows it, one guest at a time")
         args, kwargs = [(a, k) for a, k in calls if str(a[1]).endswith("run-walk.py")][0]
         self.assertIn("--new-user", args)
         self.assertEqual(Path(args[args.index("--bundle") + 1]).name,
@@ -1871,6 +1885,32 @@ while True: time.sleep(.02)
         with contextlib.redirect_stdout(io.StringIO()):
             publisher.perform("publish", run_id="fixture-run-id")
         self.assertEqual(publisher.command.call_args.args[2], "finish")
+
+    # ---- 2026-11-14: the launch-speed gate, a p95 against 380 ms ----------------------------
+    def test_a_build_times_its_launch_after_the_new_user_walk_and_states_the_p95(self):
+        passed = [{"step": s, "outcome": "PASS"} for s in m.NEW_USER_WALK_STEPS]
+        r, calls = self.build_that_walks_as_a_new_user(passed)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            r.perform("build", no_host_screen=True)
+        gate = [a for a, _ in calls if any(str(x).endswith("launch-speed-walk.py") for x in a)]
+        self.assertEqual(len(gate), 1, "a passing gate runs once")
+        self.assertIn("--no-app", gate[0])
+        self.assertEqual(Path(gate[0][gate[0].index("--candidate") + 1]).name,
+                         f"RichOS-{self.CANDIDATE_INFO['version']}-macos-aarch64.zip")
+        self.assertIn("p95 300 ms over 43 launches", buf.getvalue(), "the nightly does not state the p95")
+
+    def test_a_launch_over_380_ms_p95_refuses_the_build_after_one_more_try(self):
+        passed = [{"step": s, "outcome": "PASS"} for s in m.NEW_USER_WALK_STEPS]
+        r, calls = self.build_that_walks_as_a_new_user(passed)
+        self.launch_is_slow = True
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf), self.assertRaises(RuntimeError) as refused:
+            r.perform("build", no_host_screen=True)
+        gate = [a for a, _ in calls if any(str(x).endswith("launch-speed-walk.py") for x in a)]
+        self.assertEqual(len(gate), 2, "a refusal is taken once more before the build is refused")
+        self.assertIn("LAUNCH SPEED WAS REFUSED", str(refused.exception))
+        self.assertIn("p95 520 ms", str(refused.exception))
 
     def test_a_walk_that_stopped_before_its_end_is_refused_however_its_steps_went(self):
         # Review rv-20261021T163510Z-b612361c-0e62, finding 3: the walk rewrites report.json after
@@ -2022,10 +2062,11 @@ while True: time.sleep(.02)
         r, calls = self.build_that_walks_as_a_new_user(passed)
         with contextlib.redirect_stdout(io.StringIO()):
             r.perform("build", no_host_screen=True)
-        named = {Path(str(a[1])).name: k["env_extra"].get(m.NIGHTLY_WAIT_ENV) for a, k in calls
-                 if Path(str(a[1])).name in ("gui-proof-in-vm.sh", "run-walk.py")}
-        self.assertEqual(named, {"gui-proof-in-vm.sh": "vm-boot-proof (run fixture-run-id)",
-                                 "run-walk.py": "new-user-walk (run fixture-run-id)"})
+        named = [(Path(str(a[1])).name, k["env_extra"].get(m.NIGHTLY_WAIT_ENV)) for a, k in calls
+                 if Path(str(a[1])).name in ("gui-proof-in-vm.sh", "run-walk.py")]
+        self.assertEqual(named, [("gui-proof-in-vm.sh", "vm-boot-proof (run fixture-run-id)"),
+                                 ("run-walk.py", "new-user-walk (run fixture-run-id)"),
+                                 ("run-walk.py", "launch-speed (run fixture-run-id)")])
         self.assertEqual(m.NIGHTLY_WAIT_ENV, "TESTVM_NIGHTLY_WAIT", "the name testvm/slots.py reads")
 
     def test_the_memory_question_is_slots_py_fits_and_a_garbled_answer_is_not_a_pass(self):
