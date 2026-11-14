@@ -272,7 +272,7 @@ class ConversationWalk(adopt_walk.Walk):
         while presses < tries and time.monotonic() < end:
             if self.present('Add this company'):
                 break
-            if not answered and self.ax('find', '--id', 'memory-setup-go', '--first'):
+            if not answered and self.memory_question_up():
                 self.ax('click', '--id', 'memory-setup-go', '--first')
                 answered, presses = True, presses + 1
                 time.sleep(5)
@@ -285,6 +285,14 @@ class ConversationWalk(adopt_walk.Walk):
         print('memory question: %s' % ('answered Set it up' if answered else 'NOT seen'), flush=True)
         if not answered:
             raise StepFailed('--memory: the memory question never came up, so there is no loro to count')
+
+    def memory_question_up(self):
+        """Whether the memory question's own "Set it up" is on screen. A find that matches nothing
+        exits non-zero (ax.sh), which here means "not up yet", never a failed step."""
+        try:
+            return bool(self.ax('find', '--id', 'memory-setup-go', '--first'))
+        except StepFailed:
+            return False
 
     def loro_census(self):
         """The user's loro memory count, from loro's own census of ~/RichOS/corpus with the engine the
