@@ -146,6 +146,23 @@ fn first_run_setup_does_not_ask_for_an_engine_whose_python_cached_bytecode() {
     assert!(after.present, "first-run setup asked again for a ready engine: {:?}", after.looked_in);
 }
 
+/// **The CEO's engine, 2026-11-14**: Finder had dropped a `.DS_Store` at `runtime/` and one in
+/// `runtime/node`, the check refused the whole engine as "missing or unexpected files", and the app
+/// fetched a fresh one. Finder's own file is never part of a delivery; an engine holding it passes.
+/// Anything else unlisted is still refused, a `.DS_Store` that is a link included.
+#[test]
+fn an_engine_finder_has_opened_is_still_ready() {
+    let fixture = Delivery::new();
+    fixture.deliver("node/lib/index.js", b"// delivered\n");
+    fixture.stray(".DS_Store", b"Finder's own");
+    fixture.stray("node/.DS_Store", b"Finder's own");
+    EngineRuntime::load(&fixture.0, None).expect("Finder's .DS_Store files must not unready the engine");
+    let fixture = Delivery::new();
+    std::os::unix::fs::symlink(fixture.0.join("runtime/bin/git"), fixture.0.join("runtime/.DS_Store")).unwrap();
+    let refused = EngineRuntime::load(&fixture.0, None).unwrap_err().to_string();
+    assert!(refused.contains("unexpected"), "a linked .DS_Store was accepted: {refused}");
+}
+
 #[test]
 fn delivery_uses_selected_engine_and_never_searches_host_path() {
     let fixture = Delivery::new();
@@ -205,12 +222,19 @@ fn a_delivery_already_verified_is_not_read_and_hashed_again_but_a_touched_file_i
         EngineRuntime::load(&fixture.0, None).unwrap();
     }
     assert_eq!(richos_core::runtime::files_hashed_under(&root), 7, "later connections reuse the verified result");
-    // Everything else is still checked on every load: an unlisted file is refused...
-    std::fs::write(fixture.0.join("runtime/stray.txt"), "fictional only").unwrap();
-    assert!(EngineRuntime::load(&fixture.0, None).unwrap_err().to_string().contains("unexpected"));
-    std::fs::remove_file(fixture.0.join("runtime/stray.txt")).unwrap();
-    // ...and so is a file rewritten with different bytes of the very same length.
+    // VERIFIED WHOLE ONCE, TRUSTED AS WRITTEN (launch-speed audit 2026-11-14, the CEO's "completely
+    // eliminate the need for that check"): a later load, at a launch or a connection, reads no
+    // byte of the tree, so a file changed afterwards is not its business. It is the late check's,
+    // which finds it and forgets the record, and the next load verifies in full and refuses.
     std::fs::write(fixture.0.join("runtime/bin/git"), b"#!/bin/sh\nexit 1\n").unwrap();
+    EngineRuntime::load(&fixture.0, None).expect("a load after verification reads no runtime bytes");
+    assert_eq!(richos_core::runtime::full_checks_under(&root), 1, "a later load verified the runtime again");
+    assert_eq!(
+        richos_core::runtime::recheck_runtime_bytes(&fixture.0).unwrap(),
+        richos_core::runtime::RuntimeRecheck::Changed("bin/git".into())
+    );
     assert!(EngineRuntime::load(&fixture.0, None).unwrap_err().to_string().contains("changed"));
-    assert_eq!(richos_core::runtime::files_hashed_under(&root), 7, "a failed read is not remembered as verified");
+    // The full check after the late one forgot everything reads in name order and stops at the
+    // refusal: bin/ffmpeg and bin/ffprobe again, then bin/git, refused and not counted (7 + 2).
+    assert_eq!(richos_core::runtime::files_hashed_under(&root), 9, "a failed read is not remembered as verified");
 }

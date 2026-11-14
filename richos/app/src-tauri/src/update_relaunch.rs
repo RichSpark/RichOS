@@ -118,6 +118,86 @@ pub fn helper_main() -> Option<i32> {
     Some(code)
 }
 
+
+// =========================================================================================
+// AN UPDATE IS PUT IN PLACE WHEN THE APP CLOSES (Sage's plan 2026-11-14, rule 4)
+// =========================================================================================
+//
+// A downloaded update used to wait for the next launch, which started the old program, swapped the
+// folders, cleared out old copies and started the new program, all before any window: the first
+// click after every update paid for it. So when the app quits with an update prepared it leaves
+// this same executable behind, started with [`AT_QUIT_ARG`]: it waits for the app to end and for
+// every RichOS session to close, puts the update in place and clears out old copies
+// (`richos_user_update::activate_at_quit`), and exits without starting anything. The next click
+// starts the new copy directly. An interrupted helper loses nothing: putting an update in place at
+// launch stays exactly as it was, as the recovery path.
+
+/// The helper's argument: `--richos-internal-update-at-quit <app pid>`.
+pub const AT_QUIT_ARG: &str = "--richos-internal-update-at-quit";
+
+/// The pid an at-quit helper waits for, from its arguments; `None` for anything else.
+pub fn parse_at_quit_args(args: &[OsString]) -> Option<u32> {
+    if args.len() != 2 || args.first()?.to_str()? != AT_QUIT_ARG {
+        return None;
+    }
+    args.get(1)?.to_str()?.parse::<u32>().ok().filter(|p| *p > 1)
+}
+
+/// Leave the helper behind; called by the quitting app when an update is prepared.
+pub fn spawn_at_quit_helper() -> std::io::Result<()> {
+    std::process::Command::new(std::env::current_exe()?)
+        .args([OsString::from(AT_QUIT_ARG), OsString::from(std::process::id().to_string())])
+        .stdin(std::process::Stdio::null())
+        .spawn()
+        .map(|_| ())
+}
+
+/// The helper itself. `Some(exit code)` when this process is one; `None` to carry on as the app.
+/// `compiled_version` is this executable's, which is the version of the app that just quit.
+pub fn at_quit_main(compiled_version: &str) -> Option<i32> {
+    let args: Vec<OsString> = std::env::args_os().skip(1).collect();
+    let app_pid = parse_at_quit_args(&args)?;
+    let started = Instant::now();
+    while parent_pid() == app_pid {
+        if started.elapsed() >= QUIT_BOUND {
+            eprintln!("[richos] update at quit: RichOS did not end; the next launch puts the update in place");
+            return Some(0);
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let Some(home) = std::env::var_os("HOME").map(std::path::PathBuf::from) else { return Some(0) };
+        match richos_user_update::wait_for_sessions_to_end(&home, LEASE_BOUND) {
+            Ok(true) => {}
+            Ok(false) => {
+                eprintln!("[richos] update at quit: a RichOS session is still open; the next launch puts the update in place");
+                return Some(0);
+            }
+            Err(error) => {
+                eprintln!("[richos] update at quit: could not read the update lease ({error}); the next launch puts the update in place");
+                return Some(0);
+            }
+        }
+        let Some(bundle) = std::env::current_exe().ok().and_then(|exe| crate::activation::bundle_root(&exe)) else {
+            return Some(0);
+        };
+        match richos_user_update::activate_at_quit(&home, compiled_version, &bundle) {
+            Ok(Some(done)) => eprintln!(
+                "[richos] update at quit: {} put in place: {} -> {}",
+                if done.rollback { "rollback" } else { "update" },
+                done.left.as_deref().unwrap_or("(nothing installed)"),
+                done.entered.version
+            ),
+            Ok(None) => eprintln!("[richos] update at quit: nothing to put in place now; the next launch checks again"),
+            Err(error) => eprintln!("[richos] update at quit: deferred to the next launch: {error}"),
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = compiled_version;
+    Some(0)
+}
+
 #[cfg(unix)]
 fn parent_pid() -> u32 {
     std::os::unix::process::parent_id()
@@ -150,5 +230,19 @@ mod tests {
         // launchd's pid is never the app, so waiting on it would never end.
         assert_eq!(parse_helper_args(&os(&[HELPER_ARG, "1", "--"])), None);
         assert_eq!(parse_helper_args(&os(&[HELPER_ARG, "42", "x"])), None);
+    }
+
+    /// The helper an app leaves behind at quit (Sage's plan 2026-11-14, rule 4) is told only the
+    /// pid it waits for, and is never mistaken for the relaunch helper or the app.
+    #[test]
+    fn the_at_quit_helper_is_told_only_the_pid_it_waits_for() {
+        let os = |v: &[&str]| v.iter().map(OsString::from).collect::<Vec<_>>();
+        assert_eq!(parse_at_quit_args(&os(&[AT_QUIT_ARG, "4242"])), Some(4242));
+        assert_eq!(parse_at_quit_args(&os(&[AT_QUIT_ARG, "1"])), None, "launchd is never the app");
+        assert_eq!(parse_at_quit_args(&os(&[AT_QUIT_ARG])), None);
+        assert_eq!(parse_at_quit_args(&os(&[AT_QUIT_ARG, "42", "--"])), None);
+        assert_eq!(parse_at_quit_args(&os(&[HELPER_ARG, "42"])), None);
+        assert_eq!(parse_helper_args(&os(&[AT_QUIT_ARG, "42", "--"])), None);
+        assert_eq!(parse_at_quit_args(&[]), None);
     }
 }

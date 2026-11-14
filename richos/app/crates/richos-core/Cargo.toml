@@ -16,6 +16,13 @@ time = { version = "0.3", features = ["parsing"] }
 # `shasum -a 256` because an integrity check whose answer depends on parsing a subprocess's
 # stdout is the exact shape of "exit 0 while doing the wrong thing".
 sha2 = "0.10"
+# The same crate's 0.11, for the engine runtime check only (`runtime.rs`): it uses the
+# processor's SHA instructions on Apple chips with run-time detection, no feature switch and no
+# C compiler, and it is already in this workspace's lockfile. Measured on the release Mac over
+# the real 431 MB runtime, one hash per file: 0.93 to 1.64 s on 0.10.9, 0.30 to 0.33 s on 0.11.1
+# (launch-speed audit 2026-11-14, piece 1). The other 70-odd uses stay on 0.10 until someone
+# moves them with their own tests.
+sha2_fast = { package = "sha2", version = "0.11" }
 # Unicode canonical decomposition (NFD) for matching a bug report's private names
 # (`bug_report.rs`): "é" written as one character and as "e" plus a combining accent are one
 # name. Pure Rust, no native dependency. Chosen over a decomposition table kept by hand, which

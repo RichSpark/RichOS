@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>RichOS</title>
+    <!-- THE SPLASH'S OPENING, DRAWN WHEN THE APP QUITS (Sage's plan 2026-11-14, "the splash the
+         rules picked is playing within 380 ms of the click", section 1).
+
+         The shell opens this page in a web view nobody sees, after the windows are gone, and
+         holds the splash it picked for the next start at one moment after another of its first
+         second, taking a picture each time (`src-tauri/src/splash_opening.rs`). At that start
+         macOS plays the pictures while the app's own page loads; the page then joins the splash
+         at the moment they have reached. So these pictures must be exactly what the running
+         splash draws in `index.html`, and that is why this page is the app's own: the same
+         head, in the same order, and the same two splash scripts first in the body, nothing
+         else. `tests/splash.js` holds this head equal to `index.html`'s and holds every
+         catalog entry's pictures from here against the running splash there. -->
+    <script src="no-native-menu.js"></script>
+    <script src="theme-boot.js"></script>
+    <link rel="stylesheet" href="fonts/fonts.css" />
+    <link rel="stylesheet" href="style.css" />
+    <link rel="stylesheet" href="cleaner.css" />
+    <link rel="stylesheet" href="search-folder-settings.css" />
+    <link rel="stylesheet" href="speckle.css" />
+    <link rel="stylesheet" href="splash.css" />
+    <link rel="stylesheet" href="home.css" />
+    <link rel="stylesheet" href="instructions-update.css" />
+    <link rel="stylesheet" href="terminal-and-git.css" />
+    <link rel="stylesheet" href="suite-tools.css" />
+    <style>
+      #rail-wordmark { --mark-signal: #c2a35c; }
+      :root[data-theme="light"] #rail-wordmark { --mark-signal: #9c7c34; }
+    </style>
+  </head>
+  <body>
+    <script src="splash-library.js"></script>
+    <script src="splash.js"></script>
+  </body>
+</html>

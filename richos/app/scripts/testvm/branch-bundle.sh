@@ -29,11 +29,17 @@
 # meeting walk (Take Notes, the notes and their Source links) runs. Without it the app runs with no
 # meeting notes (meetings.rs looks for that file).
 #
+# --release builds the executable with `cargo build --release`, so a launch-time measurement in the
+# guest (testvm/launch-speed-walk.py) times optimized code: the CEO's 380 ms is a release-build
+# number, and a debug build's Rust before the window is slower (the splash trials of 2026-11-14,
+# whose throwaway release-bundle.sh this replaces). Run it through reserve.py with
+# CARGO_BUILD_JOBS=2 on a host whose CPU breaker stops a release rustc above three cores.
+#
 # Unsigned (ad-hoc), never for anyone's own Mac: the guest is the only place it runs.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_DIR="$(cd "$HERE/../.." && pwd)"
-OUT=""; ENGINE_VERSION=""; ENGINE_URL=""; ENGINE_SHA256=""; RICHFILES=0; COMPANION=0
+OUT=""; ENGINE_VERSION=""; ENGINE_URL=""; ENGINE_SHA256=""; RICHFILES=0; COMPANION=0; PROFILE=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --out) OUT="$2"; shift 2 ;;
@@ -42,7 +48,8 @@ while [ $# -gt 0 ]; do
     --engine-sha256) ENGINE_SHA256="$2"; shift 2 ;;
     --richfiles) RICHFILES=1; shift ;;
     --companion) COMPANION=1; shift ;;
-    -h|--help) sed -n '2,34p' "$0"; exit 0 ;;
+    --release) PROFILE=(--release); shift ;;
+    -h|--help) sed -n '2,40p' "$0"; exit 0 ;;
     *) echo "branch-bundle.sh: unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -60,7 +67,7 @@ trap 'rm -rf "$JSON" "$STAGE"' EXIT
 echo "branch-bundle.sh: building richos-tauri at $SHA with engine $ENGINE_VERSION pinned" >&2
 ( cd "$APP_DIR/src-tauri" && RICHOS_SOURCE_SHA="$SHA" RICHOS_ENGINE_VERSION="$ENGINE_VERSION" \
     RICHOS_ENGINE_URL="$ENGINE_URL" RICHOS_ENGINE_SHA256="$ENGINE_SHA256" \
-    cargo build --quiet --bin richos-tauri --message-format=json-render-diagnostics ) > "$JSON"
+    cargo build ${PROFILE[@]+"${PROFILE[@]}"} --quiet --bin richos-tauri --message-format=json-render-diagnostics ) > "$JSON"
 EXE="$(sed -n 's/.*"executable":"\([^"]*richos-tauri\)".*/\1/p' "$JSON" | tail -1)"
 [ -x "$EXE" ] || { echo "branch-bundle.sh: cargo reported no richos-tauri executable" >&2; exit 1; }
 
@@ -85,4 +92,4 @@ codesign --force -s - "$STAGE/RichOS.app" >/dev/null 2>&1
 mkdir -p "$(dirname "$OUT")"
 rm -f "$OUT"
 ( cd "$STAGE" && ditto -c -k --keepParent RichOS.app "$OUT" )
-echo "bundle=$OUT commit=$SHA identity=$IDENTIFIER $VERSION engine=$ENGINE_VERSION richfiles=$RICHFILES companion=$COMPANION"
+echo "bundle=$OUT commit=$SHA identity=$IDENTIFIER $VERSION engine=$ENGINE_VERSION richfiles=$RICHFILES companion=$COMPANION profile=${PROFILE[0]:-debug}"

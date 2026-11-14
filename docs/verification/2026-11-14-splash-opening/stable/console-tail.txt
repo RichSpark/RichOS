@@ -1,0 +1,12 @@
+tailnet=not-joined
+claude: host 2.1.325 guest 2.1.325
+claude login: guest logged in
+home:  /Users/admin/testvm/walk-c27d38f3ae5f/home
+guest: /Users/alex/ab/richos-wt/echo2-opus-splashbuild4/richos/app/scripts/testvm/guest.sh walk-c27d38f3ae5f '<shell command>'   # --pull/--push to move a file
+stop:  /Users/alex/ab/richos-wt/echo2-opus-splashbuild4/richos/app/scripts/testvm/stop.sh walk-c27d38f3ae5f      # ALWAYS, before you report (CEO §54)
+Launch speed, Dock click to the splash showing, against a p95 of 1009 ms (380 ms on his Mac x 2.65, Dictionary's slowness in this guest: its median 844 ms from the Dock click here, the launch request's 800.5 ms plus the Dock's 43.5, against 318 ms on his Mac): nothing measured; REFUSED, THE MEASUREMENT IS INCOMPLETE: 100 judged launch(es) without a timing (cold:judged (expected round-11/v1, the launch line says None), ordinary:judged (expected round-11/v1, the launch line says None), rule-switch:judged (expected round-11/v1, the launch line says None), rule-switch:judged (expected round-11/v2, the launch line says None), updated-from-applications:judged (expected round-11/v1, the launch line says None)), 0 launches where at least 20 are required. changed-splash-files:first 8803 ms (reported, not judged); updated:first 104667 ms (reported, not judged); cold judged on its own against 6884 ms (380 x 18.116, Dictionary after the same purge: its median 5761.0 ms from the Dock click here, against 318 ms on his Mac).
+[testvm] 19:03:00Z stopping VM walk-c27d38f3ae5f...
+[testvm] 19:03:00Z ending the login keeper (pid 48500)
+[testvm] 19:03:01Z deleting ephemeral clone walk-c27d38f3ae5f...
+[testvm] 19:03:03Z clean: app quit, VM stopped, clone deleted, state removed.
+slot released: guest-2.lock after 7262s

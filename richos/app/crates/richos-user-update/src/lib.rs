@@ -188,8 +188,20 @@ fn release_files_before_exec(command: &mut std::process::Command) {
 /// Not implemented off macOS, where `probe` and `exchange` refuse and nothing is published.
 #[cfg(not(target_os = "macos"))]
 fn release_files_before_exec(_command: &mut std::process::Command) {}
+/// Lower-case hex, as `format!("{:x}", …)` wrote it under `sha2` 0.10. `sha2` 0.11's digest is a
+/// `hybrid-array`, which implements no hex formatting, and every receipt an installed version
+/// wrote has to keep verifying, so the spelling is pinned here and by a test on a fixed input
+/// (`digests_are_spelled_as_sha2_0_10_spelled_them`).
+///
+/// WHY 0.11 (launch-speed audit 2026-11-14, piece 1; Sage's review finding 7): it uses the
+/// processor's SHA instructions on Apple chips with run-time detection, no feature switch and no
+/// C compiler. Measured on the release Mac, the same 321 MB bundle read and hashed the way
+/// `tree_hash` does: 0.65 to 1.20 s on 0.10.9, 0.18 to 0.19 s on 0.11.1.
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
 fn digest(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    hex(&Sha256::digest(bytes))
 }
 #[cfg(test)]
 thread_local! { static SYNC_TRACE: std::cell::RefCell<Vec<PathBuf>> = const { std::cell::RefCell::new(Vec::new()) }; }
@@ -929,10 +941,20 @@ fn bundle_identity(app: &Path, version: Option<&str>) -> io::Result<String> {
     if !single_name(executable) {
         return Err(refuse("invalid executable name"));
     }
-    let m = metadata(&app.join("Contents/MacOS").join(executable))?;
-    if !m.is_file() || m.uid() != uid() || m.nlink() != 1 || m.mode() & 0o111 == 0 {
+    let path = app.join("Contents/MacOS").join(executable);
+    let m = metadata(&path)?;
+    // The one file a launch is about to run is never writable by anyone else, by its mode or by
+    // an access list: with no full check in front of a launch (A LAUNCH TRUSTS THE BUNDLE AS IT
+    // WAS WRITTEN), this is what still keeps another account from swapping what runs.
+    if !m.is_file()
+        || m.uid() != uid()
+        || m.nlink() != 1
+        || m.mode() & 0o111 == 0
+        || m.mode() & 0o022 != 0
+    {
         return Err(refuse("invalid bundle executable"));
     }
+    no_write_acl(&path)?;
     Ok(executable.to_owned())
 }
 fn tree_hash(root: &Path) -> io::Result<String> {
@@ -995,7 +1017,7 @@ fn tree_hash(root: &Path) -> io::Result<String> {
     }
     let mut h = Sha256::new();
     visit(root, root, &mut h)?;
-    Ok(format!("{:x}", h.finalize()))
+    Ok(hex(&h.finalize()))
 }
 fn matches(app: &Path, p: &Published) -> io::Result<bool> {
     match metadata(app) {
@@ -1010,6 +1032,139 @@ fn matches(app: &Path, p: &Published) -> io::Result<bool> {
     }
     Ok(tree_hash(app)? == p.tree_sha256)
 }
+
+// =========================================================================================
+// A LAUNCH TRUSTS THE BUNDLE AS IT WAS WRITTEN; THE FULL CHECK RUNS LATE, IN THE BACKGROUND
+// =========================================================================================
+//
+// Launch-speed audit 2026-11-14, piece 1, and the CEO's question about it the same day:
+// "Doesn't the check at launch take a lot of time? Isn't there a more elegant way to completely
+// eliminate the need for that check?" Every launch of an updated user used to run `tree_hash`
+// over all of `~/Applications/RichOS.app` (321 MB, 1,891 files) before anything appeared, and an
+// update hand-over ran it twice. That read never proved the bundle genuine: genuineness is
+// proven once, by the signature on the download, and the receipt it compared with sits beside
+// the bundle, owned by the same user (this file's header). What it caught was damage and
+// half-finished changes, and a half-finished change cannot happen here: an update is staged,
+// checked in full (`stage`), probed, and only then published by one atomic exchange of two
+// directories (`activate_prepared`), with a journal that finishes or undoes an interrupted one
+// (`recover`). So the bundle is checked in full exactly when it is written, and a launch reads
+// only its identity: the receipt, `Info.plist`, and the executable it is about to run.
+//
+// What is left is damage after the fact -- a disk fault, or something that changed a file it
+// should not have. `recheck_preferred` looks for exactly that, late and in the background, from
+// the copy that is running, and its ending is defined: on a mismatch it records the damage for
+// this release (`launch-damage.json`, beside `published.json` and never in it: `Published` is
+// `deny_unknown_fields` in every installed copy), and the next launch of that release, and only
+// that one, runs the full check in front of the window and refuses as it always has. A launch in
+// normal use runs no check at all.
+
+/// The record of damage the late check found, beside `published.json`. Old copies ignore this
+/// name: `collect_retired` looks only at names of 64 hex characters.
+const DAMAGE: &str = "launch-damage.json";
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Damage {
+    /// The release the damage was found in, so a later update never inherits it.
+    archive_sha256: String,
+    tree_sha256: String,
+}
+
+/// Whether the late check recorded damage for exactly this release. A record that cannot be
+/// read is not damage: the late check runs again at this launch.
+fn damage_recorded(root: &Path, p: &Published) -> bool {
+    read_document::<Damage>(&root.join(DAMAGE))
+        .is_ok_and(|d| d.archive_sha256 == p.archive_sha256 && d.tree_sha256 == p.tree_sha256)
+}
+
+fn clear_damage(root: &Path) -> io::Result<()> {
+    match fs::remove_file(root.join(DAMAGE)) {
+        Err(e) if e.kind() != io::ErrorKind::NotFound => Err(e),
+        _ => Ok(()),
+    }
+}
+
+/// Which check a launch ran on the published bundle, and what it cost: the launch line says it
+/// (audit piece 4), so a launch that did run the full check can be read afterwards.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BundleCheck {
+    /// True only on the launch after the late check found damage.
+    pub full: bool,
+    pub millis: u64,
+}
+impl BundleCheck {
+    /// `none (trusted as written), 1 ms` or `full (damage was found), 190 ms`.
+    pub fn describe(&self) -> String {
+        if self.full {
+            format!("full (the late check had found damage), {} ms", self.millis)
+        } else {
+            format!("none (trusted as written at its update), {} ms", self.millis)
+        }
+    }
+}
+thread_local! {
+    /// Set by `with_preferred` on the thread that called it, so two threads (or two tests)
+    /// asking at once never read each other's answer.
+    static LAST_CHECK: std::cell::RefCell<Option<BundleCheck>> = const { std::cell::RefCell::new(None) };
+}
+/// The check the last `with_preferred` on this thread ran, if it reached one.
+pub fn last_bundle_check() -> Option<BundleCheck> {
+    LAST_CHECK.with(|last| last.borrow().clone())
+}
+
+/// What the late background check of the published bundle found.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BundleRecheck {
+    /// Nothing is published, or the running executable is not the published copy (only the
+    /// copy that is running is held still by this process's session lease).
+    NotPreferred,
+    /// Every byte read and the tree's digest is the receipt's.
+    Confirmed,
+    /// The bytes no longer match. The damage is recorded, so the next launch of this release
+    /// runs the full check in the foreground and refuses exactly as it always has.
+    Mismatch,
+}
+
+/// THE FULL CHECK, LATE AND IN THE BACKGROUND. It reads every byte of the published bundle from
+/// the copy that is running and, on a mismatch, records the damage for this release (see the
+/// section above). It never stops the running app.
+///
+/// It must not hold the update record's lock for the length of the read, or a second launch and
+/// the updater's own staging would wait behind it: the lock is taken only to read the receipt
+/// and, on a mismatch, to write the record. The session lease the running app holds is what keeps
+/// another launch from exchanging the bundle mid-read (`update_startup.rs`), which is why only
+/// the running copy is read. Never call it from the old copy that hands over: `exec` ends its
+/// threads.
+pub fn recheck_preferred(home: &Path, running: &Path) -> io::Result<BundleRecheck> {
+    let root = root(home)?;
+    let p = {
+        let _lock = Lock::acquire(&root)?;
+        match read_json(&root.join("published.json")) {
+            Ok(p) => p,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(BundleRecheck::NotPreferred),
+            Err(e) => return Err(e),
+        }
+    };
+    let preferred = p.executable(home);
+    if running.canonicalize()? != preferred.canonicalize()? {
+        return Ok(BundleRecheck::NotPreferred);
+    }
+    let app = home.join("Applications").join(APP);
+    if matches(&app, &p).unwrap_or(false) {
+        return Ok(BundleRecheck::Confirmed);
+    }
+    let _lock = Lock::acquire(&root)?;
+    write_document(
+        &root,
+        DAMAGE,
+        &Damage {
+            archive_sha256: p.archive_sha256.clone(),
+            tree_sha256: p.tree_sha256.clone(),
+        },
+    )?;
+    Ok(BundleRecheck::Mismatch)
+}
+
 #[cfg(target_os = "macos")]
 fn exchange(a: &Path, b: &Path) -> io::Result<()> {
     use std::{ffi::CString, os::unix::ffi::OsStrExt};
@@ -1939,6 +2094,37 @@ pub fn wait_for_sessions_to_end(home: &Path, within: std::time::Duration) -> io:
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
 }
+/// Whether an update is prepared for the next start: one file's existence, nothing read. The
+/// quitting app asks this to decide whether to leave [`activate_at_quit`]'s helper behind.
+pub fn has_prepared(home: &Path) -> bool {
+    metadata(&home.join("Applications/.richos-updater/prepared.json")).is_ok_and(|m| m.is_file())
+}
+
+/// AN UPDATE IS PUT IN PLACE WHEN THE APP CLOSES, NOT WHEN IT NEXT OPENS (Sage's plan
+/// 2026-11-14, rule 4). Run by the helper the quitting app leaves behind, once every RichOS session
+/// has ended: it takes the exclusive side of the session lease, reclaims payloads earlier updates
+/// left (as a launch used to, before its window), and publishes the prepared update by the same
+/// atomic exchange a launch performs. The next click then starts the new copy directly, with no
+/// swap and no second program start in front of its window. `running_version` is the version of the
+/// app that just quit; `loaded_bundle` is the bundle it ran from. Returns what the activation did,
+/// or `None` when nothing was prepared, or when a session is still open (the next launch then puts
+/// it in place, exactly as before: that path stays the recovery for an interrupted helper).
+pub fn activate_at_quit(
+    home: &Path,
+    running_version: &str,
+    loaded_bundle: &Path,
+) -> io::Result<Option<Activation>> {
+    let mut lease = StartupLease::acquire(home)?;
+    if !lease.can_activate() {
+        return Ok(None);
+    }
+    if let Err(error) = collect_retired(&mut lease, loaded_bundle) {
+        // Reclaiming is housekeeping: a failure never holds back the update.
+        eprintln!("[richos] update at quit: payload reclamation deferred: {error}");
+    }
+    activate_prepared(&mut lease, running_version)
+}
+
 #[cfg(test)]
 fn install_verified(home: &Path, bytes: &[u8], version: &str) -> io::Result<Published> {
     let p = stage_verified(home, bytes, version)?;
@@ -1946,8 +2132,10 @@ fn install_verified(home: &Path, bytes: &[u8], version: &str) -> io::Result<Publ
     activate_prepared(&mut lease, "0.0.0")?;
     Ok(p)
 }
-/// Validate the recorded preferred user app, including its complete tree, before a
-/// startup redirect or relaunch. Returns None when no user update has been installed.
+/// The recorded preferred user app, before a startup redirect or relaunch: its receipt and its
+/// identity (`Info.plist` and the executable), and its complete tree only when the late check
+/// recorded damage in this release (see A LAUNCH TRUSTS THE BUNDLE AS IT WAS WRITTEN). Returns
+/// None when no user update has been installed.
 /// This read does not complete a prepared update or replace a running app.
 pub fn preferred(home: &Path) -> io::Result<Option<Published>> {
     with_preferred(home, |p| Ok(p.clone()))
@@ -1958,6 +2146,7 @@ pub fn with_preferred<T>(
     home: &Path,
     action: impl FnOnce(&Published) -> io::Result<T>,
 ) -> io::Result<Option<T>> {
+    LAST_CHECK.with(|last| *last.borrow_mut() = None);
     let root = root(home)?;
     let _lock = Lock::acquire_startup(&root)?;
     let p = match read_json(&root.join("published.json")) {
@@ -1966,11 +2155,29 @@ pub fn with_preferred<T>(
         Err(e) => return Err(e),
     };
     let app = home.join("Applications").join(APP);
-    if bundle_identity(&app, Some(&p.version))? != p.executable_name || !matches(&app, &p)? {
+    let started = std::time::Instant::now();
+    if bundle_identity(&app, Some(&p.version))? != p.executable_name {
         return Err(refuse(
             "preferred application does not match publication receipt",
         ));
     }
+    // Trusted as written at its update (see A LAUNCH TRUSTS THE BUNDLE AS IT WAS WRITTEN). The
+    // full check runs here only when the late check found damage in this very release; a pass
+    // then clears the record, a failure refuses as it always did.
+    let full = damage_recorded(&root, &p);
+    if full {
+        if !matches(&app, &p)? {
+            return Err(refuse(
+                "preferred application does not match publication receipt",
+            ));
+        }
+        clear_damage(&root)?;
+    }
+    let check = BundleCheck {
+        full,
+        millis: started.elapsed().as_millis() as u64,
+    };
+    LAST_CHECK.with(|last| *last.borrow_mut() = Some(check));
     Ok(Some(action(&p)?))
 }
 
@@ -2326,12 +2533,18 @@ mod tests {
             .is_err());
         }
     }
+    /// A launch no longer reads the tree (A LAUNCH TRUSTS THE BUNDLE AS IT WAS WRITTEN, CEO
+    /// 2026-11-14); a changed tree is found by the late check, and the launch after it refuses.
     #[test]
-    fn changed_published_tree_cannot_relaunch() {
+    fn changed_published_tree_cannot_relaunch_once_the_late_check_has_seen_it() {
         let t = home();
         let h = canonical(&t);
         let p = install_verified(&h, &archive("1.0.0", |_| {}), "1.0.0").unwrap();
         fs::write(p.executable(&h), b"tampered").unwrap();
+        assert_eq!(
+            recheck_preferred(&h, &p.executable(&h)).unwrap(),
+            BundleRecheck::Mismatch
+        );
         assert!(preferred(&h).is_err());
     }
     #[test]
@@ -3654,5 +3867,134 @@ released lease, so the next session refused to activate over a session that had 
         assert!(record.check(&tx, &payload).is_err());
         let legacy = serde_json::json!({"transaction_dev":metadata(&tx).unwrap().dev(),"transaction_ino":metadata(&tx).unwrap().ino(),"payload_dev":metadata(&payload).unwrap().dev(),"payload_ino":metadata(&payload).unwrap().ino()});
         assert!(serde_json::from_value::<Retirement>(legacy).is_err());
+    }
+
+    // ---- launch-speed audit 2026-11-14, piece 1: the quick check and the faster hash ----
+
+    /// Receipts written by every installed version must keep verifying, so the 0.11 hash is
+    /// spelled exactly as 0.10's `format!("{:x}", …)` spelled it. The tree digest below was
+    /// derived independently (Python's hashlib over the same framing `tree_hash` feeds:
+    /// name length, name, mode, kind, size, bytes), not copied from this code's output.
+    #[test]
+    fn digests_are_spelled_as_sha2_0_10_spelled_them() {
+        assert_eq!(
+            digest(b"abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        let t = home();
+        let root = canonical(&t);
+        ensure_dir(&root.join("a"), 0o755).unwrap();
+        for (name, body, mode) in [("a/x", &b"hello"[..], 0o644), ("b", &b"world!"[..], 0o755)] {
+            fs::write(root.join(name), body).unwrap();
+            fs::set_permissions(root.join(name), fs::Permissions::from_mode(mode)).unwrap();
+        }
+        assert_eq!(
+            tree_hash(&root).unwrap(),
+            "6e96a12b30eb6d6763477bfec950ae61bc1d0a701a9421d529986c7a80ca58fa"
+        );
+    }
+
+    fn updater_root(h: &Path) -> PathBuf {
+        h.join("Applications/.richos-updater")
+    }
+
+    /// A launch reads no byte of the bundle: it was checked in full when the update was written.
+    /// Proved by a change no identity read can see -- different bytes in a resource -- which a
+    /// launch no longer refuses. `published.json` keeps exactly its four fields, because an
+    /// installed old copy refuses any fifth (Sage's review, finding 3).
+    #[test]
+    fn a_launch_reads_no_bundle_bytes_and_says_so() {
+        let t = home();
+        let h = canonical(&t);
+        let p = install_verified(&h, &archive("2.0.0", |_| {}), "2.0.0").unwrap();
+        fs::write(fixture_version(p.executable(&h)), b"9.9.9").unwrap();
+        assert_eq!(preferred(&h).unwrap().unwrap().tree_sha256, p.tree_sha256);
+        let check = last_bundle_check().unwrap();
+        assert!(!check.full, "a launch read the bundle: {check:?}");
+        assert!(check.describe().starts_with("none (trusted as written at its update), "));
+        let raw: serde_json::Value =
+            serde_json::from_slice(&fs::read(updater_root(&h).join("published.json")).unwrap())
+                .unwrap();
+        let mut keys: Vec<_> = raw.as_object().unwrap().keys().cloned().collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            ["archive_sha256", "executable_name", "tree_sha256", "version"]
+        );
+    }
+
+    /// What a launch still reads is the identity of what it runs, and the executable must be
+    /// writable by nobody else: a group write bit on it is refused at once.
+    #[test]
+    fn the_executable_a_launch_runs_is_never_writable_by_anyone_else() {
+        let t = home();
+        let h = canonical(&t);
+        let p = install_verified(&h, &archive("2.0.0", |_| {}), "2.0.0").unwrap();
+        fs::set_permissions(p.executable(&h), fs::Permissions::from_mode(0o775)).unwrap();
+        assert!(preferred(&h).is_err(), "a group-writable executable was run");
+    }
+
+    /// Damage after the fact is found by the late check, which records it for this release; the
+    /// next launch of this release runs the full check and refuses (Sage's finding 6). A copy
+    /// that is not the running one is never read. A record for another release is not damage.
+    #[test]
+    fn the_late_check_records_damage_and_the_next_launch_refuses() {
+        let t = home();
+        let h = canonical(&t);
+        let p = install_verified(&h, &archive("2.0.0", |_| {}), "2.0.0").unwrap();
+        let exe = p.executable(&h);
+        assert_eq!(recheck_preferred(&h, &exe).unwrap(), BundleRecheck::Confirmed);
+        assert_eq!(
+            recheck_preferred(&h, Path::new("/bin/ls")).unwrap(),
+            BundleRecheck::NotPreferred
+        );
+        fs::write(fixture_version(exe.clone()), b"9.9.9").unwrap();
+        preferred(&h).unwrap().unwrap();
+        assert_eq!(recheck_preferred(&h, &exe).unwrap(), BundleRecheck::Mismatch);
+        assert!(updater_root(&h).join(DAMAGE).exists(), "the damage was not recorded");
+        assert!(preferred(&h).is_err(), "the next launch did not refuse");
+        assert!(last_bundle_check().is_none_or(|c| c.full));
+
+        // Put right (here by hand; for a user, by the next update), the full check passes once
+        // and clears the record, and the launch after it reads no bytes again.
+        fs::write(fixture_version(exe.clone()), b"2.0.0").unwrap();
+        preferred(&h).unwrap().unwrap();
+        assert!(last_bundle_check().unwrap().full);
+        assert!(!updater_root(&h).join(DAMAGE).exists());
+        preferred(&h).unwrap().unwrap();
+        assert!(!last_bundle_check().unwrap().full);
+
+        let foreign = serde_json::json!({"archive_sha256": "b".repeat(64), "tree_sha256": "c".repeat(64)});
+        write_document(&updater_root(&h), DAMAGE, &foreign).unwrap();
+        preferred(&h).unwrap().unwrap();
+        assert!(!last_bundle_check().unwrap().full, "damage in another release was applied to this one");
+    }
+
+    /// RULE 4 (Sage's plan 2026-11-14): a prepared update is put in place by the helper the
+    /// quitting app leaves behind, so the next launch has nothing to swap. While another session
+    /// is open nothing happens, and the next launch's own activation stays the recovery.
+    #[test]
+    fn a_prepared_update_is_put_in_place_at_quit_and_the_next_launch_has_nothing_to_swap() {
+        let t = home();
+        let h = canonical(&t);
+        let old = install_verified(&h, &archive("1.0.0", |_| {}), "1.0.0").unwrap();
+        let app = h.join("Applications").join(APP);
+        assert!(!has_prepared(&h));
+        stage_verified(&h, &archive("2.0.0", |_| {}), "2.0.0").unwrap();
+        assert!(has_prepared(&h), "a staged update is not seen as prepared");
+
+        let mut open = StartupLease::acquire(&h).unwrap();
+        open.begin_session().unwrap();
+        assert!(activate_at_quit(&h, "1.0.0", &app).unwrap().is_none(), "it swapped under an open session");
+        assert_eq!(fs::read(fixture_version(old.executable(&h))).unwrap(), b"1.0.0");
+        drop(open);
+
+        let done = activate_at_quit(&h, "1.0.0", &app).unwrap().expect("the prepared update was not put in place");
+        assert_eq!(done.entered.version, "2.0.0");
+        assert_eq!(done.left.as_deref(), Some("1.0.0"));
+        assert_eq!(bundle_version(&app).unwrap(), "2.0.0");
+        assert!(!has_prepared(&h), "the receipt was left prepared");
+        let mut next_launch = StartupLease::acquire(&h).unwrap();
+        assert!(activate_prepared(&mut next_launch, "2.0.0").unwrap().is_none(), "the next launch still had a swap to do");
     }
 }
