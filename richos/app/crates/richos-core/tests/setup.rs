@@ -1217,9 +1217,17 @@ fn an_engine_an_older_build_set_up_is_replaced_by_this_builds_without_the_sheet(
     // While the app installs it by itself, the sheet asks for nothing.
     assert_eq!(after_update.sheet_needs(false, true), Vec::<Component>::new(), "the setup sheet would open");
 
-    // ---- THE APP INSTALLS ITS OWN BUILD'S ENGINE, where the previous one was.
-    install_engine(&FakeFetcher::new(body), &good_engine_plan("1.0.0"), &pin, &managed)
-        .expect("the update installs this build's engine");
+    // ---- THE APP FETCHES AND CHECKS ITS OWN BUILD'S ENGINE, and until it is swapped in the
+    // previous one is where it was, untouched, so he is never left waiting on the download.
+    let staged = stage_engine(&FakeFetcher::new(body), &good_engine_plan("1.0.0"), &pin, &managed)
+        .expect("the update fetches and checks this build's engine");
+    assert!(managed.join("marker").is_file(), "the previous engine was touched before the swap");
+    assert_eq!(installed_from(&managed).and_then(|s| s.sha256).as_deref(), Some(STALE_DIGEST));
+
+    // ---- AND PUTS IT IN PLACE, where the previous one was.
+    let report = staged.swap().expect("the update installs this build's engine");
+    let previous = PathBuf::from(report.previous_at.expect("the previous engine is kept aside"));
+    assert!(previous.join("marker").is_file(), "the previous engine is moved aside, never deleted");
 
     // ---- AND THE ENGINE IS THIS BUILD'S: nothing missing, nothing to ask, on a fresh read.
     let now = detect_with_pin(&paths, &[], &every_engine_is_usable, Some(&pin), &a_speech_model);

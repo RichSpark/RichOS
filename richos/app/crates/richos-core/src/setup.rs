@@ -1752,6 +1752,35 @@ pub fn install_engine(
     pin: &EnginePin,
     dest: &Path,
 ) -> Result<EngineReport, SetupError> {
+    stage_engine(fetcher, extractor, pin, dest)?.swap()
+}
+
+/// **An engine fetched, verified and stamped, not yet in place** — [`install_engine`]'s steps 1 to
+/// 5, with step 6 left to [`StagedEngine::swap`].
+///
+/// It exists for the app's own install after an update (the CEO, 2026-11-14): the download and
+/// the checks take as long as the network does, and while they run the engine the earlier build
+/// installed is still where it was and still serves him. Only the swap, which is two renames, has
+/// to wait for a moment when nothing of his is running. Dropped without a swap, it removes its
+/// staging directory and leaves `dest` exactly as it found it.
+pub struct StagedEngine {
+    staging: Staging,
+    root: PathBuf,
+    dest: PathBuf,
+    version: String,
+    sha256: String,
+    bytes: u64,
+    stamp: String,
+}
+
+/// [`install_engine`] up to the swap: everything that can fail slowly, and nothing that touches
+/// `dest`.
+pub fn stage_engine(
+    fetcher: &dyn Fetcher,
+    extractor: &dyn Extractor,
+    pin: &EnginePin,
+    dest: &Path,
+) -> Result<StagedEngine, SetupError> {
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent).map_err(|e| SetupError::InstallFailed {
             what: "the RichOS engine".to_string(),
@@ -1879,43 +1908,61 @@ pub fn install_engine(
         detail: format!("could not write the version stamp: {e}"),
     })?;
 
-    // 6. SWAP. The old copy is moved aside, not deleted, until the new one is in place.
-    let previous = dest.with_file_name(format!(
-        "{}.previous.{}",
-        dest.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "engine".into()),
-        uuid::Uuid::new_v4()
-    ));
-    let had_previous = dest.exists();
-    if had_previous {
-        std::fs::rename(dest, &previous).map_err(|e| SetupError::InstallFailed {
-            what: "the RichOS engine".to_string(),
-            detail: format!("could not move the existing one aside: {e}"),
-        })?;
-    }
-    if let Err(e) = std::fs::rename(&root, dest) {
-        // PUT IT BACK. This is the branch that decides whether a failure leaves him with the
-        // engine he had or with nothing.
-        if had_previous {
-            let _ = std::fs::rename(&previous, dest);
-        }
-        return Err(SetupError::InstallFailed {
-            what: "the RichOS engine".to_string(),
-            detail: format!("could not put the new one in place: {e}"),
-        });
-    }
-    // An older engine may contain adopter-owned doctrine, agents or wiki records.
-    // Preserve the complete predecessor. Cleanup requires a separate inventory;
-    // a successful code replacement is not permission to delete user knowledge.
-    // `staging` is dropped here and its directory removed. The engine has already been renamed
-    // OUT of it; what goes is the downloaded archive and the emptied `unpacked/`.
-    drop(staging);
-
-    Ok(EngineReport {
-        installed_at: dest.display().to_string(),
+    Ok(StagedEngine {
+        staging,
+        root,
+        dest: dest.to_path_buf(),
         version: pin.version.clone(),
         sha256: pin.sha256.clone(),
         bytes,
         stamp,
-        previous_at: had_previous.then(|| previous.display().to_string()),
     })
+}
+
+impl StagedEngine {
+    /// **Step 6: put it in place.** The engine that was there is moved aside, never deleted, so
+    /// a process still running in it keeps its working directory.
+    pub fn swap(self) -> Result<EngineReport, SetupError> {
+        let StagedEngine { staging, root, dest, version, sha256, bytes, stamp } = self;
+        let dest = dest.as_path();
+        // 6. SWAP. The old copy is moved aside, not deleted, until the new one is in place.
+        let previous = dest.with_file_name(format!(
+            "{}.previous.{}",
+            dest.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "engine".into()),
+            uuid::Uuid::new_v4()
+        ));
+        let had_previous = dest.exists();
+        if had_previous {
+            std::fs::rename(dest, &previous).map_err(|e| SetupError::InstallFailed {
+                what: "the RichOS engine".to_string(),
+                detail: format!("could not move the existing one aside: {e}"),
+            })?;
+        }
+        if let Err(e) = std::fs::rename(&root, dest) {
+            // PUT IT BACK. This is the branch that decides whether a failure leaves him with the
+            // engine he had or with nothing.
+            if had_previous {
+                let _ = std::fs::rename(&previous, dest);
+            }
+            return Err(SetupError::InstallFailed {
+                what: "the RichOS engine".to_string(),
+                detail: format!("could not put the new one in place: {e}"),
+            });
+        }
+        // An older engine may contain adopter-owned doctrine, agents or wiki records.
+        // Preserve the complete predecessor. Cleanup requires a separate inventory;
+        // a successful code replacement is not permission to delete user knowledge.
+        // `staging` is dropped here and its directory removed. The engine has already been renamed
+        // OUT of it; what goes is the downloaded archive and the emptied `unpacked/`.
+        drop(staging);
+
+        Ok(EngineReport {
+            installed_at: dest.display().to_string(),
+            version,
+            sha256,
+            bytes,
+            stamp,
+            previous_at: had_previous.then(|| previous.display().to_string()),
+        })
+    }
 }
