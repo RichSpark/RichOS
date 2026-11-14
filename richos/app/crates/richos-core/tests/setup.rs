@@ -25,6 +25,11 @@ fn scratch(name: &str) -> PathBuf {
     dir
 }
 
+fn write_file(path: &Path, text: &str) {
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, text).unwrap();
+}
+
 /// A directory that passes [`engine_looks_valid`], shaped the way the real one is.
 fn make_engine(at: &Path, version: &str) {
     std::fs::create_dir_all(at.join("scripts/hooks")).unwrap();
@@ -1238,6 +1243,21 @@ fn an_engine_an_older_build_set_up_is_replaced_by_this_builds_without_the_sheet(
     assert!(now.complete(), "{now:?}");
     assert!(!now.engine_update, "{now:?}");
     assert_eq!(now.sheet_needs(false, false), Vec::<Component>::new());
+
+    // ---- A SESSION STARTED BEFORE THE SWAP KEEPS RUNNING, and the helper paths it was given still
+    // resolve: a skill the previous engine had under a name this build dropped stays reachable at
+    // its old path, through the predecessor that is kept aside.
+    let renamed = root.join("renamed");
+    make_engine(&renamed, "1.0.0");
+    write_file(&renamed.join("app/skills/audio-transcription/waveform.py"), "the old helper");
+    stamp_engine(&renamed, "1.0.0", STALE_DIGEST, "https://example.invalid/previous.tar.gz");
+    let mut plan = good_engine_plan("1.0.0");
+    plan.plan.push(("engine/app/skills/transcribe-audio/waveform.py".into(), false, "the new helper".into()));
+    let swapped = stage_engine(&FakeFetcher::new(body), &plan, &pin, &renamed).unwrap().swap().unwrap();
+    let old_path = renamed.join("app/skills/audio-transcription/waveform.py");
+    assert_eq!(std::fs::read_to_string(&old_path).unwrap(), "the old helper", "a retained session lost its helper");
+    assert_eq!(std::fs::read_to_string(renamed.join("app/skills/transcribe-audio/waveform.py")).unwrap(), "the new helper");
+    assert!(swapped.previous_at.is_some());
 
     // ---- A FIRST INSTALL is not an update: nothing was ever set up, so the sheet asks as before.
     let fresh = root.join("fresh");

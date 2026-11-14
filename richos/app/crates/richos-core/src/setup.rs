@@ -1919,6 +1919,30 @@ pub fn stage_engine(
     })
 }
 
+/// **A session still running in the engine that was replaced keeps finding its skills' helpers.**
+///
+/// After an update the app swaps its own build's engine in while sessions started in the earlier
+/// one keep running, and nothing is ended to make the switch. Those sessions were told absolute
+/// paths under `dest` (`<dest>/app/skills/<name>/waveform.py`), and a skill this build renamed
+/// (`audio-transcription` to `transcribe-audio`) is no longer at that path. So every skill folder
+/// the predecessor has and the new engine does not is linked to the predecessor's own copy, which
+/// is kept, never deleted. This build's sessions are untouched by it: they start with
+/// `skills::SKILLS`, which do not name the linked folders. Best effort: a link that cannot be made
+/// leaves that one helper missing in a session that predates the swap, nothing more.
+fn keep_retired_skills_reachable(previous: &Path, dest: &Path) {
+    let Ok(entries) = std::fs::read_dir(previous.join("app/skills")) else { return };
+    for entry in entries.flatten() {
+        let target = dest.join("app/skills").join(entry.file_name());
+        if !entry.path().is_dir() || std::fs::symlink_metadata(&target).is_ok() {
+            continue;
+        }
+        #[cfg(unix)]
+        if std::os::unix::fs::symlink(entry.path(), &target).is_err() {
+            continue;
+        }
+    }
+}
+
 impl StagedEngine {
     /// **Step 6: put it in place.** The engine that was there is moved aside, never deleted, so
     /// a process still running in it keeps its working directory.
@@ -1955,6 +1979,9 @@ impl StagedEngine {
         // `staging` is dropped here and its directory removed. The engine has already been renamed
         // OUT of it; what goes is the downloaded archive and the emptied `unpacked/`.
         drop(staging);
+        if had_previous {
+            keep_retired_skills_reachable(&previous, dest);
+        }
 
         Ok(EngineReport {
             installed_at: dest.display().to_string(),
