@@ -7,11 +7,17 @@ only in the nightly: nightly 78's boot proof failed on `[richos] Codex watch: wa
 (process 17902)`, a launch line landed with no rule, at the cost of a failed proof and a retake.
 This reads the same rules WITHOUT a boot, in a second, so the land that adds a line learns it.
 
-WHAT IT CHECKS. Every `eprintln!("[richos] ...")` literal in src-tauri/src/main.rs outside its test
-module is a template. Each template must be exactly one of:
-  - ACCOUNTED: some rendering of it (its `{}` holes filled with a number, a word, a path or a dash)
-    matches a `resolved`, `routine` or `gap` rule of gui-boot.test.sh, with the same `grep -E` its
-    own accounting uses; or it matches a line the file declares `refused`;
+WHAT IT CHECKS. Every `eprintln!("[richos] ...")` literal in the app's own Rust source outside its
+test code is a template: every `.rs` file under src-tauri/src and under each crates/<crate>/src,
+except src/bin (other programs) and test code (a `#[cfg(test)]` item, or a test module declared
+`#[cfg(test)] mod x;` and kept in its own file). It once read main.rs alone, and a nightly's boot
+proof then failed B2 on `[richos] SwearMeter historical sources: read (0 ms)`, printed from
+swearmeter_host.rs, which the check could not see. Each template must be exactly one of:
+  - ACCOUNTED: some rendering of it (its `{}` holes filled with a number, a word, a path, a dash, or
+    a string literal passed among the eprintln!'s own arguments, the way
+    `if partial { "partial" } else { "read" }` fills a hole) matches a `resolved`, `routine` or
+    `gap` rule of gui-boot.test.sh, with the same `grep -E` its own accounting uses; or it matches
+    a line the file declares `refused`;
   - NOT ON A HEALTHY BOOT, listed in gui-boot-launch-lines.unaccounted: a failure, a runtime event or
     a sibling of an accounted line. If a healthy boot ever printed one, B2 would still fail on it,
     which is how those lines are meant to stay.
@@ -23,6 +29,7 @@ counted, not checked; B2 still sees what it prints.
 Exit 0 when clean, 1 on a finding, 2 when an input cannot be read (never a quiet pass over nothing).
 """
 import argparse
+import glob
 import itertools
 import os
 import re
@@ -31,7 +38,7 @@ import sys
 import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-DEFAULT_MAIN = os.path.join(HERE, "..", "src-tauri", "src", "main.rs")
+DEFAULT_APP = os.path.normpath(os.path.join(HERE, ".."))
 DEFAULT_RULES = os.path.join(HERE, "gui-boot.test.sh")
 DEFAULT_LIST = os.path.join(HERE, "gui-boot-launch-lines.unaccounted")
 
@@ -103,8 +110,37 @@ def test_ranges(text, spans):
     return ranges
 
 
+STRING = re.compile(r'"((?:[^"\\]|\\.)*)"', re.S)
+TEST_MODULE = re.compile(r"#\[cfg\(test\)\]\s*((?:#\[[^\]]*\]\s*)*)(?:pub(?:\([^)]*\))?\s+)?mod\s+([A-Za-z_][A-Za-z0-9_]*)\s*;")
+PATH_ATTRIBUTE = re.compile(r'#\[path\s*=\s*"([^"]+)"\s*\]')
+
+
+def call_arguments(text, start, spans):
+    """The plain string literals among a call's arguments, read from `start` (just past its format
+    string) to the parenthesis that closes the call."""
+    skip_to = dict(spans)
+    depth, i, literals = 0, start, []
+    while i < len(text):
+        if i in skip_to:
+            string = STRING.match(text, i)
+            if string:
+                literals.append(unescape(string.group(1)).replace("\n", " "))
+            i = skip_to[i]
+            continue
+        ch = text[i]
+        if ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            if depth == 0:
+                break
+            depth -= 1
+        i += 1
+    return literals
+
+
 def templates(main_text):
-    """[(line number, template)] for each `[richos]` eprintln! outside every test item."""
+    """[(line number, template, string literals among its arguments)] for each `[richos]` eprintln!
+    outside every test item."""
     spans = code_map(main_text)
     excluded = test_ranges(main_text, spans)
     found = []
@@ -113,7 +149,62 @@ def templates(main_text):
             continue
         literal = unescape(match.group(1))
         if literal.startswith("[richos]"):
-            found.append((main_text.count("\n", 0, match.start()) + 1, literal))
+            found.append((main_text.count("\n", 0, match.start()) + 1, literal,
+                          call_arguments(main_text, match.end(), spans)))
+    return found
+
+
+def module_dir(path):
+    """Where the files of the modules `path` declares live (Rust's rule for a non-`#[path]` `mod x;`)."""
+    base = os.path.basename(path)
+    return os.path.dirname(path) if base in ("main.rs", "lib.rs", "mod.rs") else os.path.splitext(path)[0]
+
+
+def test_module_paths(path, text):
+    """The file and directory of each test module `path` declares out of line (`#[cfg(test)] mod x;`)."""
+    spans = code_map(text)
+    out = []
+    for match in TEST_MODULE.finditer(text):
+        if in_spans(match.start(), spans):
+            continue
+        attribute = PATH_ATTRIBUTE.search(match.group(1) or "")
+        if attribute:
+            out.append(os.path.normpath(os.path.join(os.path.dirname(path), attribute.group(1))))
+        else:
+            out += [os.path.join(module_dir(path), match.group(2) + ".rs"), os.path.join(module_dir(path), match.group(2))]
+    return out
+
+
+def source_files(app, main_override=None):
+    """[(text, path relative to `app`)] for every app source file: each `.rs` under src-tauri/src and
+    crates/*/src, without src/bin and without test modules kept in their own files. `main_override`
+    is read in place of src-tauri/src/main.rs (the tests replay a changed main.rs that way)."""
+    shell = os.path.join(app, "src-tauri", "src")
+    if not os.path.isdir(shell):
+        raise InputError("%s is not a directory: the app source this check reads is not there" % shell)
+    real_main = os.path.join(shell, "main.rs")
+    files = []
+    for root in [shell] + sorted(glob.glob(os.path.join(app, "crates", "*", "src"))):
+        for directory, subdirs, names in os.walk(root):
+            subdirs.sort()
+            if directory == root and "bin" in subdirs:
+                subdirs.remove("bin")
+            files += [os.path.join(directory, n) for n in sorted(names) if n.endswith(".rs")]
+    texts = {path: read(main_override if main_override and path == real_main else path) for path in files}
+    tests = set()
+    for path, text in texts.items():
+        tests.update(test_module_paths(path, text))
+    return [(texts[path], os.path.relpath(path, app)) for path in files
+            if path not in tests and not any(path.startswith(t + os.sep) for t in tests)]
+
+
+def all_templates(app, main_override=None):
+    """{template's stable name: ("file:line" where it is first printed, string literals its calls pass)}."""
+    found = {}
+    for text, name in source_files(app, main_override):
+        for number, template, literals in templates(text):
+            _where, fills = found.setdefault(normal(template), ("%s:%d" % (name, number), []))
+            fills.extend(literal for literal in literals if literal not in fills)
     return found
 
 
@@ -126,16 +217,18 @@ def has_own_words(template):
     return bool(re.search(r"[A-Za-z]", re.sub(r"^\[richos\]", "", normal(template)).replace("{}", "")))
 
 
-def renderings(template):
-    """Candidate boot lines for a template: its holes filled in every combination of a few shapes."""
+def renderings(template, chosen=()):
+    """Candidate boot lines for a template: its holes filled in every combination of a few shapes and
+    of the words its own call passes (`chosen`), which are the words that call can print there."""
     parts = normal(template).split("{}")
     holes = len(parts) - 1
     if holes == 0:
         return [parts[0]]
-    if len(FILLS) ** holes > len(FILLS) ** MAX_HOLES_PRODUCT:
-        combos = [(fill,) * holes for fill in FILLS]
+    fills = FILLS + tuple(word for word in chosen if word not in FILLS)
+    if len(fills) ** holes > len(FILLS) ** MAX_HOLES_PRODUCT:
+        combos = [(fill,) * holes for fill in fills]
     else:
-        combos = itertools.product(FILLS, repeat=holes)
+        combos = itertools.product(fills, repeat=holes)
     out = []
     for combo in combos:
         text = parts[0]
@@ -248,34 +341,35 @@ def read_list(path):
     return out
 
 
-def check(main_path, rules_path, list_path):
-    """Findings as printable strings, plus (templates checked, templates skipped for having no words)."""
-    found = templates(read(main_path))
-    first_line = {}
-    for number, template in found:
-        first_line.setdefault(normal(template), number)
-    names = sorted(first_line)
+def classify(app, rules_path, main_override=None):
+    """(templates found, the ones with words of their own, the ones a rule, refusal or prefix accounts for, skipped)."""
+    found = all_templates(app, main_override)
+    names = sorted(found)
     judged = [n for n in names if has_own_words(n)]
-    skipped = len(names) - len(judged)
     patterns, refused = load_rules(rules_path)
-    by_rule = accounted_by_rule({n: renderings(n) for n in judged}, patterns)
+    by_rule = accounted_by_rule({n: renderings(n, found[n][1]) for n in judged}, patterns)
     by_refusal = {n for n in judged if any(template_regex(n).match(line) for line in refused)}
     by_prefix = {n for n in judged if covered_by_prefix(n, patterns)}
-    accounted = by_rule | by_refusal | by_prefix
+    return found, judged, by_rule | by_refusal | by_prefix, len(names) - len(judged)
+
+
+def check(app, rules_path, list_path, main_override=None):
+    """Findings as printable strings, plus (templates checked, templates skipped for having no words)."""
+    found, judged, accounted, skipped = classify(app, rules_path, main_override)
     listed = read_list(list_path)
     findings = []
     for name in judged:
         if name not in accounted and name not in listed:
             findings.append(
-                "UNCLASSIFIED  %s:%d\n    %s\n"
+                "UNCLASSIFIED  %s\n    %s\n"
                 "    No resolved/routine/gap rule in gui-boot.test.sh accounts for it, no `refused` line is it, and\n"
                 "    it is not listed in gui-boot-launch-lines.unaccounted. If a healthy boot prints it, add a rule to\n"
                 "    gui-boot.test.sh (B2 would fail on it at the next nightly otherwise). If a healthy boot never\n"
                 "    does (an error, a runtime event), append the line above, exactly, to the list."
-                % (os.path.basename(main_path), first_line[name], name))
+                % (found[name][0], name))
     for name, number in sorted(listed.items(), key=lambda kv: kv[1]):
-        if name not in first_line:
-            findings.append("STALE  %s:%d\n    %s\n    main.rs no longer prints it; delete it from the list." % (os.path.basename(list_path), number, name))
+        if name not in found:
+            findings.append("STALE  %s:%d\n    %s\n    No app source file prints it any more; delete it from the list." % (os.path.basename(list_path), number, name))
         elif name in accounted:
             findings.append("COVERED  %s:%d\n    %s\n    A rule in gui-boot.test.sh accounts for it now; delete it from the list." % (os.path.basename(list_path), number, name))
     return findings, (len(judged), skipped)
@@ -283,7 +377,8 @@ def check(main_path, rules_path, list_path):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    parser.add_argument("--main", default=DEFAULT_MAIN)
+    parser.add_argument("--app", default=DEFAULT_APP, help="the app directory whose src-tauri/src and crates/*/src are read")
+    parser.add_argument("--main", default=None, help="a file read in place of the app's src-tauri/src/main.rs")
     parser.add_argument("--rules", default=DEFAULT_RULES)
     parser.add_argument("--list", default=DEFAULT_LIST)
     parser.add_argument("--print-unclassified", action="store_true",
@@ -291,16 +386,12 @@ def main(argv=None):
     args = parser.parse_args(argv)
     try:
         if args.print_unclassified:
-            names = sorted({normal(t) for _n, t in templates(read(args.main))})
-            judged = [n for n in names if has_own_words(n)]
-            patterns, refused = load_rules(args.rules)
-            by_rule = accounted_by_rule({n: renderings(n) for n in judged}, patterns)
+            _found, judged, accounted, _skipped = classify(args.app, args.rules, args.main)
             for name in judged:
-                if (name not in by_rule and not covered_by_prefix(name, patterns)
-                        and not any(template_regex(name).match(line) for line in refused)):
+                if name not in accounted:
                     print(name)
             return 0
-        findings, (judged, skipped) = check(args.main, args.rules, args.list)
+        findings, (judged, skipped) = check(args.app, args.rules, args.list, args.main)
     except InputError as error:
         print("gui-boot-launch-lines: %s" % error, file=sys.stderr)
         return 2

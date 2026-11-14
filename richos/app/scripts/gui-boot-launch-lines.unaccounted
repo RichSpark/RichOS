@@ -1,15 +1,16 @@
-# gui-boot-launch-lines.unaccounted: the `[richos] ...` lines src-tauri/src/main.rs can print that
-# gui-boot.test.sh deliberately has NO rule for, one per line, each hole written `{}`.
+# gui-boot-launch-lines.unaccounted: the `[richos] ...` lines the app's source can print (every .rs
+# file under src-tauri/src and crates/*/src, test code and src/bin aside) that gui-boot.test.sh
+# deliberately has NO rule for, one per line, each hole written `{}`.
 #
 # Why they are here: gui-boot's B2 fails on any line of a healthy boot that no rule accounts for.
 # These are the failures, runtime events and not-running siblings of accounted lines that a healthy
 # boot never prints. Leaving them without a rule is the point: if a healthy boot ever printed one,
 # B2 would fail on it. gui-boot-launch-lines.py (test: gui-boot-launch-lines.test.sh) reads this list
-# at every land that touches main.rs or gui-boot.test.sh:
-#   - a new line in main.rs that no rule accounts for and that is not here fails it, so the author
-#     decides: add a routine/resolved/gap rule to gui-boot.test.sh if a healthy boot prints it, or
-#     append it here (exactly as the check prints it) if a healthy boot never does;
-#   - a line here that main.rs no longer prints, or that a rule now accounts for, fails it too.
+# at every land that touches the app's Rust source or gui-boot.test.sh:
+#   - a new line anywhere in that source that no rule accounts for and that is not here fails it,
+#     so the author decides: add a routine/resolved/gap rule to gui-boot.test.sh if a healthy boot
+#     prints it, or append it here (exactly as the check prints it) if a healthy boot never does;
+#   - a line here that no source file prints any more, or that a rule now accounts for, fails it too.
 # Started from main.rs as it stood when the check was added; it is a classification nobody had
 # written down, not a review of each line.
 [richos]   looked in {}
@@ -120,3 +121,424 @@
 # Exceptional account-change save failure. A healthy boot must still fail if it prints this.
 [richos] writing permission could not be saved after the account change
 [richos] numeric checkpoint could not be saved: {}
+#
+# THE OTHER SOURCE FILES. When the check widened from main.rs to every app source file, the lines
+# below were taken from the rest of the source exactly as --print-unclassified listed them. Like the
+# block above, it is a classification nobody had written down, not a review of each line. What
+# stands behind it: the VM boot proof's B2 report on the commit they were taken from accounted for
+# every line of the healthy boot except the SwearMeter `read` line, which now has its routine rule,
+# so none of these is printed by gui-boot's healthy boot as the source stood then.
+[richos] CORRECTION DESK RECORD SKIPPED ({}): line {} ({} bytes) — {}
+[richos] CORRECTION DESK SUMMARY for {}: {} records read, {} applied, {} skipped ({} from a newer version, {} damaged, {} undetermined). These are corrections the CEO was asked about and the answers he gave. Nothing was deleted or rewritten.
+[richos] CORRECTION DESK: {} further skipped records not listed individually
+[richos] Codex channels: {}; the conventional folders are watched
+[richos] Codex watch: watcher {} could not be reaped ({})
+[richos] INTAKE RECORD SKIPPED ({}): line {} ({} bytes) — {}
+[richos] INTAKE SUMMARY for {}: {} records read, {} applied, {} skipped ({} from a newer version, {} damaged, {} undetermined). These are things the CEO asked for that Rich has not acted on yet. Nothing was deleted or rewritten.
+[richos] INTAKE: {} further skipped records not listed individually
+[richos] LEDGER RECORD SKIPPED ({}): line {} ({} bytes) — {}
+[richos] LEDGER SUMMARY for {}: {} records read, {} applied, {} skipped ({} from a newer version, {} damaged, {} undetermined). Nothing was deleted or rewritten.
+[richos] LEDGER: {} further skipped records not listed individually
+[richos] RichCleaner Service: {}
+[richos] RichCleaner busy: {}
+[richos] RichCleaner cancel before note acceptance: {}
+[richos] RichCleaner card watch: {}
+[richos] RichCleaner card: {}
+[richos] RichCleaner cards: {}
+[richos] RichCleaner close: {}
+[richos] RichCleaner folder answer no longer has a receiver
+[richos] RichCleaner folder helper failed while stopping
+[richos] RichCleaner meter: {}
+[richos] RichCleaner mode: {}
+[richos] RichCleaner panel: the main thread did not answer in time; it is built when first shown
+[richos] RichCleaner panel: {}
+[richos] RichCleaner release: {}
+[richos] RichCleaner state: {}
+[richos] RichCleaner window close: {}
+[richos] RichFinder Service notification failed: {}
+[richos] RichFinder Service: {}
+[richos] RichOS Connect recovery did not complete; it will be retried: {}
+[richos] RichOS Connect was turned off, but its remote cleanup did not finish and will be retried: {}
+[richos] RichOS Connect's supervisor had already ended when it was asked to stop
+[richos] RichOS Connect's supervisor panicked; its helper is ended by the closed guard pipe
+[richos] SCOPE VIOLATION rejected: turn={} thread={} {}
+[richos] Stu's record {} could not be read: {}
+[richos] SwearMeter historical sources unavailable: {}
+[richos] THE SKILLS DID NOT LOAD. `{}` was accepted and `{}` is not in this session's plugin list, so every skill RichOS ships is absent from this lease. The files passed preflight, so this is the binary declining them — check `claude --version` against the last release gate.
+[richos] Tailscale would not issue a certificate for this Mac, so the phone channel cannot start: {}
+[richos] a RichOS Connect connection ended with an error: {} (sampled)
+[richos] a dictation correction could not be staged: {}
+[richos] a file for the composer could not be staged: {}
+[richos] a file from the phone could not be saved: {}
+[richos] a file pasted into the composer could not be staged: {}
+[richos] a helper's run ended on the lost connection ({}); its parent is told when it is back
+[richos] a live input cut by a usage limit was not sent again: {}
+[richos] a live input's usage-limit retry could not start: {}
+[richos] a loro correction could not be proposed: {}
+[richos] a minted audio id pointed at nothing readable: {}
+[richos] a pairing ran out of time but could not be forgotten: {}
+[richos] a phone recording's scratch folder could not be removed: {}
+[richos] a push could not be sent: {}
+[richos] a push subscription that has lapsed ({}) had already been replaced; the new one is kept.
+[richos] a push was refused with {}: {}
+[richos] a removed attachment could not be deleted: {}
+[richos] a reply was too long for one push; its opening was sent
+[richos] a resource monitor thread ended unexpectedly
+[richos] a sent message's upload folder could not be removed; the sweep will retry: {}
+[richos] a usage limit could not be passed to Stu: {}
+[richos] a voice note's length could not be saved: {}
+[richos] a voice note's length could not be saved; it is still shown: {}
+[richos] a watcher's record: {} was left behind
+[richos] a worker's overload wait could not start: {}
+[richos] an attached file could not be read for the phone: {}
+[richos] an automatic turn's overload wait could not start: {}
+[richos] an automatic turn's usage-limit recovery could not start: {}
+[richos] an emptied attachment folder was left for the sweep: {}
+[richos] an overload could not be passed to Stu: {}
+[richos] an unsupported web push subscription was refused at the edge
+[richos] answer receipt remains unreadable: {}
+[richos] assignments: a record could not be read, so its notices wait: {}
+[richos] assignments: a record on this conversation could not be read, so its notices wait: {}
+[richos] attached files could not be moved into the conversation: {}
+[richos] attachments: the file picker's task did not finish: {}
+[richos] attachments: the picker answered after nobody was waiting for it
+[richos] attachments: the picker could not be put on the main thread: {}
+[richos] attachments: the picker's task did not finish: {}
+[richos] attachments: the window for the picker sheet is not available: {}
+[richos] back end: not moved to the next Claude account ({})
+[richos] bug report {}: Rich could not check it ({}); it waits on this Mac
+[richos] bug report {}: Rich could not check the changed words ({}); it waits on this Mac
+[richos] bug report {}: Rich still could not check it ({}); it waits on this Mac
+[richos] bug report {}: could not be read on this Mac ({}); it still waits
+[richos] bug report {}: could not be taken off this Mac ({})
+[richos] bug report {}: could not be taken off this Mac ({}); it still waits
+[richos] bug report {}: not sent ({}); it waits on this Mac
+[richos] bug report {}: sent, but its waiting copy could not be removed ({})
+[richos] bug report {}: the changed card could not be kept on this Mac ({}); a relaunch would lose the change
+[richos] bug report {}: the changed words could not be kept on this Mac ({})
+[richos] bug report {}: the kept card could not be taken off this Mac ({})
+[richos] bug report {}: the kept card could not be taken off this Mac ({}); it returns after a relaunch
+[richos] bug report {}: the kept card could not be updated ({})
+[richos] bug report {}: the written-up card could not be kept on this Mac ({}); a relaunch would lose it
+[richos] bug report: Rich could not check the change ({}); nothing was added
+[richos] bug report: WebKit did not draw the window within {}; Rich gets the words only
+[richos] bug report: not a report the relay takes ({}); it waits
+[richos] bug report: not sent: {}
+[richos] bug report: refusing to open a link that is not a post of {}: {}
+[richos] bug report: the changed report could not be kept on this Mac ({})
+[richos] bug report: the check loop did not start ({}); a report Rich could not check waits for the next launch
+[richos] bug report: the report could not be kept on this Mac ({})
+[richos] bug report: the reporting relay is not set right ({}); it waits
+[richos] bug report: the retry loop did not start ({}); a waiting report goes out on Try now
+[richos] bug report: the waiting {} posts could not be read ({})
+[richos] bug report: the window could not be told Rich checked it: {}
+[richos] bug report: the window could not be told it went out: {}
+[richos] bug report: the window's picture came after it was no longer waited for
+[richos] bug report: the window's picture could not be asked for ({})
+[richos] bug report: the window's picture is {} bytes, over {}; Rich gets the words only
+[richos] bug report: the work stopped ({})
+[richos] bug report: the {} posts Rich has not checked could not be kept ({})
+[richos] bug report: the {} posts Rich has not checked could not be read ({})
+[richos] bug report: {} could not be read ({}); left in place
+[richos] bug report: {}: {}
+[richos] channel {} waits: {}
+[richos] classifier cleanup failed: {}
+[richos] classifier reader ended unexpectedly
+[richos] classifier stop failed: {}
+[richos] classifier unavailable: {}
+[richos] classifier warm and ready
+[richos] claude accounts: a line's buttons could not be recorded ({})
+[richos] claude accounts: a new account's chats could not be linked to the shared records ({})
+[richos] claude accounts: a notice could not be written ({})
+[richos] claude accounts: an account's chats could not be moved to the shared records folder ({})
+[richos] claude accounts: the line could not be recorded ({})
+[richos] claude accounts: the reset could not be recorded ({})
+[richos] claude accounts: the suggestion could not be recorded ({})
+[richos] claude accounts: the switch could not be saved ({})
+[richos] claude accounts: {}
+[richos] claude accounts: {}'s chats stay in its folder for now ({})
+[richos] codex reviews: `{} login status` could not be ended ({})
+[richos] conversation connection: replies are matched to their requests.
+[richos] correction could not be staged: {}
+[richos] correction desk lock is poisoned — the question is dropped, the turn is not
+[richos] correction trigger could not read the record: {}
+[richos] could not check owned decoder before cleanup: {}
+[richos] could not collect a RichOS Connect process after stopping it: {}
+[richos] could not deliver the RichFiles workspace: {}
+[richos] could not finish stopping after the phone rejected the six words: {}
+[richos] could not forget the phone after a rejected fingerprint: {}
+[richos] could not forget the phone after the words were refused on this Mac: {}
+[richos] could not load meeting history instructions: {}
+[richos] could not mark the lost history as told: {}
+[richos] could not reap owned decoder: {}
+[richos] could not record the phone reply receipt: {}
+[richos] could not record the phone's fingerprint confirmation: {}
+[richos] could not record the push subscription: {}
+[richos] could not reveal the selected output in RichFiles: {}
+[richos] could not show the RichFiles window: {}
+[richos] could not start the pairing deadline watch; an unconfirmed phone will be forgotten the next time the sheet is open: {}
+[richos] could not start the thread that stops this channel when the phone rejects the six words, so a rejection will drop the phone's credential without closing the port: {}
+[richos] could not stop a RichOS Connect process: {}
+[richos] could not stop owned decoder: {}
+[richos] dictation feature conversation: left as it is, because {}
+[richos] dictation offer: not offered, because {}
+[richos] dictation offer: the partial file was left behind: {}
+[richos] dictation: connected to the tool
+[richos] dictation: could not start: {}
+[richos] dictation: no tool answered within 5 s: {}
+[richos] dictation: the microphone was {}
+[richos] dictation: the test switch could not write dictation.json: {}
+[richos] dictation: the tool (pid {}) ended: {}
+[richos] dictation: the tool could not be started again: {}
+[richos] dictation: the tool could not be started: {}
+[richos] dictation: the tool ended because dictation was turned off, and this copy's switch could not follow: {}
+[richos] dictation: the tool ended because dictation was turned off; this copy's switch follows it
+[richos] dictation: the tool started as this app's child (pid {})
+[richos] dictation: the tool went away while dictation is on; starting it again
+[richos] dictation: the tool went away {} times in a minute; not started again until the switch is used
+[richos] dictation: the tool's end will not be reported: {}
+[richos] dictation: the tool's socket closed
+[richos] dictation: the window could not be {}: {}
+[richos] dictation: this executable's path is unknown, so the tool cannot start: {}
+[richos] dictation: turned {} by the test switch ({})
+[richos] dictation: {}
+[richos] disk watch: could not start ({})
+[richos] document search model: bulk index helper failed, using the shared helper
+[richos] document search model: bulk index helper ready in {} ms
+[richos] document search model: ready in {} ms
+[richos] document search model: restarting after a failed background request
+[richos] document search model: retrying startup ({})
+[richos] document search model: socket cleanup failed
+[richos] document search: Rich's search tool is unavailable this launch ({})
+[richos] document search: background grant revoked
+[richos] document search: cleanup interrupted at shutdown
+[richos] document search: could not cache portable metadata
+[richos] document search: could not issue this lease's endpoint ({})
+[richos] document search: could not set relevance worker priority
+[richos] document search: grant={}; previous access revoked
+[richos] document search: preliminary relevance scoring is unavailable
+[richos] document search: relevance scoring failed
+[richos] document search: settings unreadable, no folder searched
+[richos] document search: system opener refused the file
+[richos] document search: the relevance model is unavailable
+[richos] document search: {} could not be removed ({})
+[richos] event-timing at={} event={} thread={} turn={}
+[richos] file lookup: ready via {} in {}; used when saved memory cannot answer a question.
+[richos] file lookup: unavailable ({}); continuing without searching files.
+[richos] home field: could not keep the compile ({}); the next launch compiles again
+[richos] home field: could not keep the repository picture; the next launch reads the repositories again
+[richos] input a cut turn was given stays open: {}
+[richos] loro lane: could not read which partitions this corpus has ({}) — the lane map is left exactly as configured rather than assumed empty.
+[richos] loro lane: this corpus has partitions ({}) but {} {} bound to none of them — every slice for {} will be REFUSED by the cross-entity guard. Give the company a partition of its own name, or set RICHOS_LORO_LANES.
+[richos] loro lane: {}
+[richos] machinery journal write failed (turn continues): {}
+[richos] meeting notes: Rich said the notes in the conversation ({})
+[richos] meeting notes: a rejoin continues the notes of {} ({} recordings)
+[richos] meeting notes: a stopped recorder ({}) reported {} while finishing: {}
+[richos] meeting notes: brief attempt {} failed: {}
+[richos] meeting notes: brief written on attempt {}
+[richos] meeting notes: calendar reconnect ({}) browser did not open
+[richos] meeting notes: calendar reconnect ({}) did not complete: {}
+[richos] meeting notes: calendar recovery ({}): {} accounts need sign-in
+[richos] meeting notes: calendar status ({}) unavailable
+[richos] meeting notes: calendar sync ({}) did not complete: {}
+[richos] meeting notes: capture alarm: {}
+[richos] meeting notes: capture {} ended (exit {}, {}), session {}
+[richos] meeting notes: capture {}: {}
+[richos] meeting notes: capture: {}
+[richos] meeting notes: claiming the saved retry failed: {}
+[richos] meeting notes: finishing the notes a previous launch left unfinished ({})
+[richos] meeting notes: its recording was cut short by the previous launch's end; the recorder {}
+[richos] meeting notes: live excerpt available={} elapsed_ms={}
+[richos] meeting notes: live transcription could not start: {}
+[richos] meeting notes: live transcription did not drain; finishing from retained audio
+[richos] meeting notes: live transcription ended with {}
+[richos] meeting notes: live transcription skipped because the model is unavailable
+[richos] meeting notes: live transcription staging could not be cleared after capture failed
+[richos] meeting notes: no calendar sync in this build; keeping the last known calendar status
+[richos] meeting notes: quitting with {} recorder(s) running; {} of {} recording(s) closed within {} ms; their notes come at the next launch
+[richos] meeting notes: reading the transcript failed: {}
+[richos] meeting notes: recorded {} ({}, company {}, partial: {}) into {}
+[richos] meeting notes: retrying a saved recording
+[richos] meeting notes: saving retry state failed: {}
+[richos] meeting notes: saying the failure failed: {}
+[richos] meeting notes: starting saved retry failed: {}
+[richos] meeting notes: the brief is written but Rich could not say it: {}
+[richos] meeting notes: the panel stays a plain window: {}
+[richos] meeting notes: the previous launch's transcription (pid {}) ended after {} s
+[richos] meeting notes: the previous launch's transcription (pid {}) is still running; waiting for it
+[richos] meeting notes: the recorder closed without naming its session
+[richos] meeting notes: the voice bar's level did not start: {}
+[richos] meeting notes: transcription failed: {}
+[richos] meeting notes: transcription model ready after {} ms
+[richos] meeting notes: transcription model wait ended after {} ms, available={}
+[richos] meeting notes: watcher: {}
+[richos] memory: RichOS will offer to set up a memory folder in the window.
+[richos] memory: corrections are unavailable because the writing tools are missing.
+[richos] memory: corrections can still be saved to {}.
+[richos] memory: could not read saved information; continuing without it: {}
+[richos] memory: looked in {}
+[richos] memory: no saved memory folder is configured.
+[richos] memory: saved at {}, but its reading tools are missing. Conversation memory is unavailable. Looked in: {}
+[richos] native input receipt remains pending: {}
+[richos] native input status: {}
+[richos] native notification recovery failed; pending work will be retried: {}
+[richos] native reply notification could not be sent; queued work will be retried: {}
+[richos] native turn status: {}
+[richos] nothing owns this channel, so it keeps serving after a rejected fingerprint - the device record is gone either way
+[richos] nothing owns this channel, so it keeps serving after the spent-code alarm - the device record is gone either way
+[richos] numeric checkpoint was not saved: {}
+[richos] operator inbox: {}
+[richos] operator input remains saved: {}
+[richos] operator live input remains pending: {}
+[richos] output: /usr/bin/open could not be started: {}
+[richos] output: a file Rich wrote could not be recorded: {}
+[richos] output: a part-written copy was not removed: {}
+[richos] output: a rendition's working folder was not removed: {}
+[richos] output: a stopped qlmanage could not be reaped: {}
+[richos] output: an old preview could not be swept: {}
+[richos] output: could not converge this thread's record: {}
+[richos] output: qlmanage could not be started: {}
+[richos] output: qlmanage did not finish and could not be stopped: {}
+[richos] output: the assignments of {} could not be read: {}
+[richos] output: the back end's written files could not be recorded: {}
+[richos] output: the preview cache could not be made: {}
+[richos] output: the record of {} could not be listed: {}
+[richos] output: the record of {} could not be read: {}
+[richos] output: the save sheet's task did not finish: {}
+[richos] output: this turn's hook witnesses could not be recorded: {}
+[richos] peer input receiver closed
+[richos] peer input remains on disk: {}
+[richos] peer message watch: {}
+[richos] preferred update remains deferred: {}
+[richos] question answer remains saved: {}
+[richos] question continuation failed: {}
+[richos] question notification remains pending: {}
+[richos] question witness remains pending: {}
+[richos] queued input after preparation: {}
+[richos] quota reader 1: {}
+[richos] quota reader {}: {}
+[richos] quota reading history: {}
+[richos] quota snapshot: {}
+[richos] quota: the tokens per point could not be kept ({})
+[richos] reclaimed {} retired update payloads
+[richos] refusing to open an address that is not one of the screens': {}
+[richos] register: left out {} named repository path(s) not connected to this company
+[richos] resource endpoint cleanup: {}
+[richos] resource endpoint will retry after an I/O error: {}
+[richos] richdoctor: RichOS's own signature could not be read ({}); nothing installed
+[richos] richdoctor: the payload has no version; nothing installed
+[richos] richdoctor: {}
+[richos] richpass check phase={} elapsed_ms={} event_watch={} build={}
+[richos] richpass notification_delivered_to_center={}
+[richos] richpass notification_permission={}
+[richos] right-click menu: AppKit or WebKit is not loaded; the page's own guard is all there is
+[richos] right-click menu: NSMenu has no popUpContextMenu:withEvent:forView:; the page's own guard is all there is
+[richos] second review: stopping a watcher panicked
+[richos] second review: watcher {} could not be reaped ({})
+[richos] setup: Claude Code at {} — signature {} ({})
+[richos] setup: engine {} at {} — sha256 {}, {} bytes
+[richos] setup: speech model fetch answered {}
+[richos] setup: speech model {} in place and verified against its pin
+[richos] setup: speech model {} not in place after the fetch ({})
+[richos] setup: speech model {}: another download is running; waiting for it
+[richos] setup: the speech model download stopped unexpectedly
+[richos] setup: the voice and video tools download brings {} bytes ({})
+[richos] setup: the voice panel missed a model event ({})
+[richos] setup: the window missed a download update ({})
+[richos] setup: transcription model {} already installed and verified at {}
+[richos] setup: transcription model {} missing ({}); fetching it
+[richos] setup: voice speech model missing ({}); fetching {}
+[richos] setup: voice speech model {} already installed and verified
+[richos] setup: yt-dlp nightly {} already installed
+[richos] setup: yt-dlp nightly {} already the newest
+[richos] setup: yt-dlp nightly {} installed — sha256 {}
+[richos] speech synthesis install failed this time: {}
+[richos] speech synthesis install: file {} of {} attempt {} failed: {}
+[richos] spend: the ledger could not be saved ({})
+[richos] stall-watch input remains pending: {}
+[richos] stall-watch lead file {}: {}
+[richos] stall-watch output: {}
+[richos] team answer remains saved: {}
+[richos] the Connect guard could not read its parent's pipe ({}); stopping the helper
+[richos] the Git name could not be asked ({}); this commit goes ahead with the name RichOS
+[richos] the Git name question cannot be watched: {}
+[richos] the account switch could not be passed to Stu: {}
+[richos] the commit that waited could not be marked ({}); it keeps the name RichOS
+[richos] the commit that waited keeps the name RichOS: {}
+[richos] the connection is back; the helper's parent is told to continue it
+[richos] the connection is back; the same turn carries on
+[richos] the continuation wait could not start: {}
+[richos] the conversation keeps its first title: {}
+[richos] the correction desk lock is poisoned — the proposal is dropped, the turn is not
+[richos] the file cards cannot be watched: {}
+[richos] the helper's parent could not be told: {}
+[richos] the internet connection is lost ({}); the turn carries on when it is back
+[richos] the job's record still says it waits for the screen: {}
+[richos] the login environment read could not start early ({}); the first lease reads it
+[richos] the login shell's environment was not read: {}
+[richos] the loro provenance lock is poisoned — the question is dropped, the turn is not
+[richos] the paired-phone record at {} could not be read ({}). RichOS is treating this install as having no phone paired rather than guessing. Nothing was deleted; pair the phone again to replace it.
+[richos] the pairing code was used by a second device; forgetting the unconfirmed phone
+[richos] the phone channel could not issue a challenge: {}
+[richos] the phone channel could not read the thread: {}
+[richos] the phone channel could not start its runtime: {}
+[richos] the phone channel is listening on {} — pairing at {}
+[richos] the phone channel refused a request: {} (sampled)
+[richos] the phone reported that the six words did NOT match; forgetting it
+[richos] the phone used its pairing but that could not be written down: {}
+[richos] the phone's push subscription has lapsed ({}) and was forgotten. It will be asked for a new one the next time it connects.
+[richos] the phone's push subscription has lapsed ({}) but could not be forgotten: {}
+[richos] the phone's refusal could not be written down ({}); this Mac will stop serving as it should, but the next launch will not say why
+[richos] the reason for that interruption could not be written down: {}
+[richos] the screen is back but the job's record could not say so: {}
+[richos] the screen wait could not be closed: {}
+[richos] the screen wait could not be recorded, so the job goes ahead: {}
+[richos] the screen wait could not start, so the job goes ahead: {}
+[richos] the team could not be brought up to date: {}
+[richos] the team could not be reloaded after an automatic turn: {}
+[richos] the team reload could not be passed to Stu: {}
+[richos] the terminal's attribution setting was not read: {}
+[richos] the turn after a background command could not be filed: {}
+[richos] the turn after a background command could not be started: {}
+[richos] the turn after a background command was not adopted within {}s; it runs unadopted
+[richos] the turn could not carry on: {}
+[richos] the update's work folder {} could not be removed: {}
+[richos] the wait for a helper's connection could not start: {}
+[richos] the wait for the connection could not start: {}
+[richos] this back end has {} background commands running; a further one ({}) is not being tracked
+[richos] turn interrupted [{}]: {}
+[richos] update payload reclamation deferred: {}
+[richos] update ready and nothing is running: relaunching into {}
+[richos] update relaunch: RichOS did not quit, so nothing was started
+[richos] update relaunch: a RichOS session still holds the update lease; starting anyway
+[richos] update relaunch: could not read the update lease ({}); starting anyway
+[richos] update relaunch: could not start RichOS again: {}
+[richos] update relaunch: could not start the helper: {}
+[richos] update remains deferred: {}
+[richos] upstream overloaded: retrying in {} s on the same session
+[richos] video tools: the background download could not start: {}
+[richos] voice model: the server ignored the resume request — starting over
+[richos] voice model: {}
+[richos] voice model: {} installed and verified against its pinned sha256 ({} bytes, resumed from {})
+[richos] voice model: {} is already installed and verifies
+[richos] voice model: {} — {}
+[richos] voice: an utterance was discarded because dictation took the microphone
+[richos] voice: ended because dictation started listening
+[richos] voice: the dictation did not stop listening within 3 s; voice mode does not open
+[richos] what Stu's session already holds could not be read: {}
+[richos] your phone is paired but the channel could not restart, so the phone cannot reach this Mac: {}
+[richos] your phone is paired but the channel could not start, so the phone cannot reach this Mac: {}
+[richos] {} - stopping the channel, forgetting the phone and deleting this Mac's authority
+[richos] {} activated: {} -> {}
+[richos] {} carries no owner record: {}
+[richos] {} could not be removed: {}
+[richos] {} could not reach the window: {}
+[richos] {} is not a JSON object; nothing in it was applied
+[richos] {} is not a record of the instructions ({}); it is written again
+[richos] {} is not valid JSON ({}); nothing in it was applied
+[richos] {} reply timing: first text from the model
+[richos] {} reply timing: visible input sent to the model
+[richos] {} was not removed: {}
+[richos] {} {}/{} FAILED — {}
+[richos] {}: starting the cleanup

@@ -7,20 +7,27 @@
 # gui-boot.test.sh. The land did not run gui-boot (it needs the test VM), so the first run of B2
 # against the new line was the nightly. gui-boot-launch-lines.py reads the same rules without a boot.
 #
+# THE SECOND INCIDENT. The check then read main.rs alone, and a later nightly's boot proof failed B2
+# on `[richos] SwearMeter historical sources: read (0 ms)`, printed from swearmeter_host.rs with no
+# rule. It now reads every app source file (src-tauri/src and crates/*/src); L11-L13 hold that.
+#
 # Cases (each negative has its positive probe, so "clean" cannot be passing for the wrong reason):
-#   L1  the real main.rs, gui-boot.test.sh and list are clean
+#   L1  the real app source, gui-boot.test.sh and list are clean
 #   L2  the incident replayed: the Codex watcher's routine rule removed -> RED, the line named
 #   L3  a new launch line with no rule and no list entry -> RED, the exact line to add printed
 #   L4  ...the same line with a routine rule that accounts for it -> clean
 #   L5  ...the same line appended to the list -> clean
 #   L6  the same line inside a #[cfg(test)] module is never a launch line -> clean
-#   L7  a listed line main.rs no longer prints -> RED (STALE)
+#   L7  a listed line no app source file prints -> RED (STALE)
 #   L8  a listed line a rule now accounts for -> RED (COVERED)
 #   L9  an unreadable input is exit 2, never a pass over nothing
 #   L10 the land selects this check when main.rs or gui-boot.test.sh changes (proof-for.sh)
+#   L11 the second incident replayed: the SwearMeter rule removed -> RED, located in swearmeter_host.rs
+#   L12 a new launch line in a crate's source file -> RED, located in that file
+#   L13 the same line in a crate's src/bin program or in a test module kept in its own file -> clean
 #
 # run-tests: no-host-screen: reads source files and runs grep and bash on rule declarations; nothing is launched
-# run-tests: inputs richos/app/scripts/gui-boot-launch-lines.test.sh richos/app/scripts/gui-boot-launch-lines.py richos/app/scripts/gui-boot-launch-lines.unaccounted richos/app/scripts/gui-boot.test.sh richos/app/src-tauri/src/main.rs richos/app/scripts/proof-for.sh
+# run-tests: inputs richos/app/scripts/gui-boot-launch-lines.test.sh richos/app/scripts/gui-boot-launch-lines.py richos/app/scripts/gui-boot-launch-lines.unaccounted richos/app/scripts/gui-boot.test.sh richos/app/src-tauri/src/main.rs richos/app/src-tauri richos/app/crates richos/app/scripts/proof-for.sh
 # run-tests: covers richos/app/scripts/gui-boot-launch-lines.py richos/app/scripts/gui-boot-launch-lines.unaccounted richos/app/src-tauri/src/main.rs richos/app/scripts/gui-boot.test.sh
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -40,7 +47,7 @@ run_check() { python3 -B "$CHECK" "$@" 2>&1; }
 # --- L1
 OUT="$(run_check)"; CODE=$?
 if [ "$CODE" -eq 0 ] && printf '%s' "$OUT" | grep -q ' 0 finding(s)'; then
-  ok "L1 main.rs, gui-boot.test.sh and the list agree: $(printf '%s' "$OUT" | tail -1)"
+  ok "L1 the app source, gui-boot.test.sh and the list agree: $(printf '%s' "$OUT" | tail -1)"
 else
   bad "L1 the real tree is clean" "exit $CODE: $(printf '%s' "$OUT" | head -8 | tr '\n' ' ')"
 fi
@@ -116,10 +123,10 @@ OUT="$(run_check --main "$SCRATCH/main-test-only.rs")"; CODE=$?
 if [ "$CODE" -eq 0 ]; then ok "L6 the same line inside a #[cfg(test)] module is not a launch line"; else bad "L6 test code is out of scope" "exit $CODE: $(printf '%s' "$OUT" | head -6 | tr '\n' ' ')"; fi
 
 # --- L7, L8: the list cannot rot
-{ cat "$LIST"; echo '[richos] a line main.rs stopped printing long ago'; } > "$SCRATCH/list-stale"
+{ cat "$LIST"; echo '[richos] a line the app stopped printing long ago'; } > "$SCRATCH/list-stale"
 OUT="$(run_check --list "$SCRATCH/list-stale")"; CODE=$?
 if [ "$CODE" -eq 1 ] && printf '%s' "$OUT" | grep -q 'STALE' && printf '%s' "$OUT" | grep -q 'stopped printing'; then
-  ok "L7 a listed line main.rs no longer prints is RED (STALE)"
+  ok "L7 a listed line no app source file prints is RED (STALE)"
 else
   bad "L7 stale list entry" "exit $CODE: $(printf '%s' "$OUT" | head -6 | tr '\n' ' ')"
 fi
@@ -149,6 +156,58 @@ if printf '%s' "$SEL" | grep -q 'gui-boot-launch-lines' && printf '%s' "$SEL2" |
   ok "L10 proof-for.sh selects this check for a change to main.rs and for a change to gui-boot.test.sh"
 else
   bad "L10 selection" "main.rs: $(printf '%s' "$SEL" | grep -c launch-lines) hit(s); gui-boot.test.sh: $(printf '%s' "$SEL2" | grep -c launch-lines) hit(s)"
+fi
+
+# --- L11: the second incident. Every SwearMeter rule removed (none on a tree that never had one).
+python3 -B - "$RULES" "$SCRATCH/rules-without-swearmeter.sh" <<'PY'
+import sys
+src, dst = sys.argv[1:3]
+lines = open(src, encoding="utf-8").read().split("\n")
+out, i = [], 0
+while i < len(lines):
+    if lines[i].startswith("  routine '") and "SwearMeter historical sources" in lines[i]:
+        while lines[i].rstrip().endswith("\\"):
+            i += 1
+        i += 1
+        continue
+    out.append(lines[i])
+    i += 1
+open(dst, "w", encoding="utf-8").write("\n".join(out))
+PY
+OUT="$(run_check --rules "$SCRATCH/rules-without-swearmeter.sh")"; CODE=$?
+if [ "$CODE" -eq 1 ] && printf '%s' "$OUT" | grep -q 'UNCLASSIFIED' \
+   && printf '%s' "$OUT" | grep -qF '[richos] SwearMeter historical sources: {} ({} ms)' \
+   && printf '%s' "$OUT" | grep -Eq 'src-tauri/src/swearmeter_host\.rs:[0-9]+'; then
+  ok "L11 the SwearMeter line without its rule is RED, named, and located in swearmeter_host.rs, not main.rs"
+else
+  bad "L11 a launch line printed outside main.rs is caught" "exit $CODE: $(printf '%s' "$OUT" | head -6 | tr '\n' ' ')"
+fi
+
+# --- L12, L13: a copy of the app's source, so a crate file can be changed without touching the tree.
+COPY="$SCRATCH/app"
+mkdir -p "$COPY/src-tauri" && cp -R "$APP/src-tauri/src" "$COPY/src-tauri/src"
+for d in "$APP"/crates/*/src; do
+  c="$(basename "$(dirname "$d")")"; mkdir -p "$COPY/crates/$c" && cp -R "$d" "$COPY/crates/$c/src"
+done
+CORE="$COPY/crates/richos-core/src"
+CALL="    eprintln!(\"$NEW\", a, b, c);"
+printf 'fn zz_probe() {\n%s\n}\n' "$CALL" > "$CORE/zz_probe.rs"
+OUT="$(run_check --app "$COPY")"; CODE=$?
+if [ "$CODE" -eq 1 ] && printf '%s' "$OUT" | grep -q 'UNCLASSIFIED' \
+   && printf '%s' "$OUT" | grep -q 'crates/richos-core/src/zz_probe\.rs:2'; then
+  ok "L12 a new launch line in a crate's source file is RED and located in that file"
+else
+  bad "L12 a crate's launch line is caught" "exit $CODE: $(printf '%s' "$OUT" | head -6 | tr '\n' ' ')"
+fi
+rm -f "$CORE/zz_probe.rs"
+mkdir -p "$CORE/bin" && printf 'fn main() {\n%s\n}\n' "$CALL" > "$CORE/bin/zz_probe.rs"
+printf '\n#[cfg(test)]\nmod zz_probe_tests;\n' >> "$CORE/lib.rs"
+printf 'fn t() {\n%s\n}\n' "$CALL" > "$CORE/zz_probe_tests.rs"
+OUT="$(run_check --app "$COPY")"; CODE=$?
+if [ "$CODE" -eq 0 ]; then
+  ok "L13 the same line in a crate's src/bin program and in a test module kept in its own file is not a launch line"
+else
+  bad "L13 other programs and out-of-line test modules are out of scope" "exit $CODE: $(printf '%s' "$OUT" | head -6 | tr '\n' ' ')"
 fi
 
 printf '\n=== gui-boot-launch-lines.test.sh: %d FAILED, %d passed ===\n' "$FAIL" "$PASS"
