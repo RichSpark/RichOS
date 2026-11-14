@@ -276,17 +276,40 @@ fn spawn_onboarding_into_loro(app: &AppHandle) {
     let app = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let Some(state) = app.try_state::<AppState>() else { return };
-        onboarding_into_loro(&state);
+        if onboarding_into_loro(&state) {
+            home_field_after_onboarding(&app, &state);
+        }
     });
 }
 
-fn onboarding_into_loro(state: &AppState) {
-    let Some(install) = state.loro_install.lock().unwrap().clone() else { return };
-    let Some(central) = richos_core::company::install_central_root() else { return };
+/// The home screen asks for its picture again on this (`home.js`): what onboarding saved has just
+/// reached loro, so the user's records are not the ones the screen drew.
+const EVENT_HOME_FIELD_CHANGED: &str = "rich://home-field-changed";
+
+/// After a copy that wrote something: the repository picture, when the user has one, is read again
+/// now with the onboarding documents in it (`home_repos::rebuild_now`), so the window's next ask
+/// gets them rather than the kept picture; the loro path recompiles by itself (its kept compile is
+/// keyed on the corpus). Then the window is told.
+fn home_field_after_onboarding(app: &AppHandle, state: &AppState) {
+    let registry = state.reader.snapshot().entity_registry().clone();
+    let folders = richos_core::home_repos::company_folders(&registry);
+    let engine = state.engine_dir.lock().unwrap().clone();
+    if let (Some(git), Some(central)) = (richos_core::home_repos::home_git(&engine), richos_core::company::install_central_root()) {
+        let onboarding = richos_core::onboarding_loro::sources(&central, &registry);
+        let kept = state.data_dir.join("home-field-repos.json");
+        richos_core::home_repos::rebuild_now(&kept, &folders, richos_core::home_repos::today(), &git, &onboarding);
+    }
+    app.emit(EVENT_HOME_FIELD_CHANGED, ()).ok();
+}
+
+/// True when the copy wrote at least one record.
+fn onboarding_into_loro(state: &AppState) -> bool {
+    let Some(install) = state.loro_install.lock().unwrap().clone() else { return false };
+    let Some(central) = richos_core::company::install_central_root() else { return false };
     let registry = state.reader.snapshot().entity_registry().clone();
     let sources = richos_core::onboarding_loro::sources(&central, &registry);
     if sources.is_empty() {
-        return;
+        return false;
     }
     let writer = richos_core::correction::CliLoroWriter::from_install(&install);
     let kept = state.data_dir.join(richos_core::onboarding_loro::KEPT_FILENAME);
@@ -297,6 +320,7 @@ fn onboarding_into_loro(state: &AppState) {
     for line in &report.problems {
         eprintln!("[richos] onboarding into loro: NOT written, tried again after the next turn: {line}");
     }
+    !report.written.is_empty()
 }
 
 /// The SPOKEN-CORRECTION sink (`staging.rs`): forwards §7's ask to the webview on
@@ -10300,7 +10324,11 @@ fn home_field_data(state: State<AppState>) -> serde_json::Value {
     // `verify_engine` (`home_repos::home_git` says why: two Finder `.DS_Store` files cost the CEO his
     // picture on 2026-11-14).
     let home_git = { let engine = state.engine_dir.lock().unwrap().clone(); richos_core::home_repos::home_git(&engine) };
-    if let Some((field, from)) = home_git.and_then(|git| richos_core::home_repos::field_kept_or_built(&kept_repos, &folders, richos_core::home_repos::today(), &git)) {
+    // What onboarding saved is in that picture too (CEO 2026-11-14), the same files it copies into loro.
+    let onboarding = richos_core::company::install_central_root()
+        .map(|central| richos_core::onboarding_loro::sources(&central, &registry))
+        .unwrap_or_default();
+    if let Some((field, from)) = home_git.and_then(|git| richos_core::home_repos::field_kept_or_built_with(&kept_repos, &folders, richos_core::home_repos::today(), &git, &onboarding)) {
         eprintln!(
             "[richos] home field: {} object(s) in {} companies from their repositories ({:?}), {} link(s), {} source(s); unread folders: {}",
             field["meta"]["counts"]["objects"],

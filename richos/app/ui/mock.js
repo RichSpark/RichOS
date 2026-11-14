@@ -5859,6 +5859,16 @@
       homeField = field ? { ...field } : null;
       return homeField;
     },
+    /// What onboarding saved reaches his loro mid-session (CEO 2026-11-14): `home_field_data` answers
+    /// with `field` from now on, and the window is told, as `main.rs` `home_field_after_onboarding`
+    /// emits `rich://home-field-changed` after a copy that wrote something.
+    ///
+    ///     __RICHOS_MOCK__.homeFieldChanged({ objects: 3, records: 3 });
+    homeFieldChanged(field) {
+      homeField = field ? { ...field } : null;
+      emit("rich://home-field-changed", null);
+      return homeField;
+    },
     /// Teammates start or finish: what `home_working` answers from now on (CEO 2026-11-02).
     ///
     ///     __RICHOS_MOCK__.homeWorkingSet([{ name: "Will", role: "Marketing Director" }]);

@@ -1349,6 +1349,7 @@ window.RichHome = (function () {
   /// down. Built with `textContent`, never markup: the names come from files he saved.
   function showTeam(team) {
     state.team = team;
+    watchField();
     // Tells `home/field-engine.js` the columns are this file's, so drawing his loro under them
     // does not put the dataset's own lines back.
     window.RICHOS_HOME_HUD_OWNED = true;
@@ -1627,6 +1628,26 @@ window.RichHome = (function () {
       if (!team) return;
       showTeam(team);
       if (state.field === "live") enterGhost();
+    });
+  }
+
+  /// WHAT ONBOARDING SAVED HAS REACHED HIS LORO (`main.rs` `home_field_after_onboarding`, on
+  /// `rich://home-field-changed`, CEO 2026-11-14): his records are asked for again and drawn the way
+  /// records that arrive after the ceiling are (`rebuildGhost`), so the count is his new one without a
+  /// relaunch. Only for a screen already showing his records; which screen that is stays decided above.
+  function refreshField() {
+    if (!state.team || state.field !== "live" || state.enteringGhost) return Promise.resolve(false);
+    return askForCustomerField(true).then(function (dataset) {
+      return dataset && Array.isArray(dataset.nodes) && dataset.nodes.length ? rebuildGhost(dataset) : false;
+    });
+  }
+
+  function watchField() {
+    var bridge = window.RichBridge;
+    if (state.watchingField || !bridge || typeof bridge.listen !== "function") return;
+    state.watchingField = true;
+    bridge.listen("rich://home-field-changed", function () {
+      refreshField();
     });
   }
 
