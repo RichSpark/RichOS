@@ -181,7 +181,9 @@ def measure(run, events):
         row['opening_not_used'] = app['opening_not']
         row['joined_ms'] = int(app['joined']) if app['joined'] else None
     expect = run.get('expect_splash')
-    if expect and row.get('splash_id') != expect:
+    # Only a build that writes the launch line says which splash it showed; an older one is timed
+    # as before (and refused on its time), never refused for not naming a splash.
+    if expect and 'process_start' in row and row.get('splash_id') != expect:
         # The wrong splash is not the splash: no time is judged for it, so the route refuses.
         row['wrong_splash'] = 'expected %s, the launch line says %s' % (expect, row.get('splash_id'))
         return row

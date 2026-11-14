@@ -65,6 +65,10 @@ wrong = walk.measure({'label': 'rule-switch:judged', 'pid': 501, 't_open': t_ope
                       'lines': [{'t': 0, 'text': opened_line}]}, events)
 check('the wrong splash is not the splash: no time is judged for it', 'splash' not in wrong
       and wrong.get('wrong_splash') == 'expected round-11/v1, the launch line says round-11/v2', wrong)
+older_build = walk.measure({'label': 'ordinary:judged', 'pid': 501, 't_open': t_open, 'expect_splash': 'round-11/v1',
+                            'lines': []}, events)
+check('a build older than the launch line cannot name its splash, and is timed rather than refused for it',
+      'wrong_splash' not in older_build and older_build.get('splash') == 600 + A, older_build)
 wrong_verdict = walk.verdict([{'label': 'ordinary:judged', 'splash': 300} for _ in range(20)] + [wrong])
 check('a launch that showed the wrong splash refuses the measurement, by name', wrong_verdict['refused'] is True
       and wrong_verdict['missing'] == ['rule-switch:judged (expected round-11/v1, the launch line says round-11/v2)'],
