@@ -20,9 +20,39 @@ pub fn ensure_rendered(config_dir: &Path, source: &Path) -> Result<PathBuf, Doct
     Ok(root)
 }
 pub fn ensure_for_install() -> Result<PathBuf, DoctrineError> { Ok(crate::doctrine::install_config_dir()?.join("engine/app")) }
+/// Whether the engine an earlier build installed is serving while the app installs its own
+/// build's engine after an update (`setup_view::previous_engine_serves` in the app).
+static EARLIER_ENGINE_SERVES: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// **The earlier build's engine serves, or no longer does.** It may name a skill differently from
+/// this build ([`SKILLS`]), as an engine that ships `audio-transcription` does against a build that
+/// names it `transcribe-audio`. A lease never waits for the install (the CEO: users
+/// "will not wait"), so while it serves a lease starts with the skills that engine has, and this
+/// build's skill names apply from the first session after its own engine is in place.
+pub fn earlier_engine_serves(serves: bool) {
+    EARLIER_ENGINE_SERVES.store(serves, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// **The skills a session starts with from the plugin at `root`**: [`SKILLS`], or, while the
+/// earlier build's engine serves ([`earlier_engine_serves`]), every skill that plugin ships under
+/// whatever name it gives it.
+pub fn names_in(root: &Path) -> Vec<String> {
+    if !EARLIER_ENGINE_SERVES.load(std::sync::atomic::Ordering::SeqCst) {
+        return SKILLS.iter().map(|name| name.to_string()).collect();
+    }
+    let mut names: Vec<String> = std::fs::read_dir(root.join("skills"))
+        .map(|entries| entries.flatten()
+            .filter(|entry| entry.path().join("SKILL.md").is_file())
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .collect())
+        .unwrap_or_default();
+    names.sort();
+    names
+}
+
 pub fn verify_present(root: &Path) -> Result<(), (PathBuf, String)> {
     let mut required = vec![manifest_path(root), root.join("agents/rich.md"), root.join("agents/stu.md")];
-    required.extend(SKILLS.iter().map(|name|skill_path(root,name)));
+    required.extend(names_in(root).iter().map(|name|skill_path(root,name)));
     for path in required {
         let text=std::fs::read_to_string(&path).map_err(|error|(path.clone(),error.to_string()))?;
         if text.trim().is_empty() {return Err((path,"instruction file is empty".into()));}

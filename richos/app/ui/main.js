@@ -7470,6 +7470,13 @@ setupStartEl.addEventListener("click", closeSetupSheet);
 Bridge.listen("richos://setup", (payload) => {
   const p = payload && payload.payload ? payload.payload : payload;
   if (!p) return;
+  // AN ENGINE CAME INTO USE WITHOUT A PRESS (the app's own install after an update,
+  // `setup_view::tell_the_window_the_engine_changed`): voice is asked again, so Talk to Rich
+  // works without a relaunch. Nothing on the sheet moves; it never asked for this engine.
+  if (p.component === "engine" && p.state === "updated") {
+    refreshVoiceReadiness();
+    return;
+  }
   // THE VIDEO TOOLS' BACKGROUND DOWNLOAD (CEO, 2026-10-07: they "begin downloading in the
   // background at first launch, while the user does the rest of setup"). Its lines are this
   // step's own; while a press runs, that press keeps the line. When they are in, voice is asked

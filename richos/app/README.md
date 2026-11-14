@@ -568,6 +568,12 @@ richos/app/
                               run since that job landed. Off macOS it is now
                               `ignored, NOT CHECKABLE ON THIS TARGET: …`, because the pin is
                               read by `/usr/bin/codesign`. The negative half needs nothing
+    tests/earlier_engine_skills.rs
+                             for a session started while the app installs its own build's
+                              engine after an update: it starts in the earlier build's engine
+                              as it is, with the skills that engine ships even where this build
+                              names one differently, never waiting for the install; this build's
+                              names apply again once its engine is in place.
     tests/media_tools.rs     for YT-DLP KEPT AT THE NEWEST NIGHTLY (`src/media_tools.rs`,
                               media-tools plan slice 2): a newer nightly replaces the copy, a
                               download that does not match its checksum is deleted, offline

@@ -322,6 +322,11 @@
 [richos] document search: system opener refused the file
 [richos] document search: the relevance model is unavailable
 [richos] document search: {} could not be removed ({})
+[richos] engine update FAILED after {} ms — {}; the setup sheet offers the engine instead
+[richos] engine update: could not start ({}); the setup sheet offers the engine instead
+[richos] engine update: the installed engine is an earlier build's, so this build installs its own by itself, with no setup sheet.
+[richos] engine update: the window could not be told to ask voice again ({})
+[richos] engine update: this build's engine is installed and in use, in {} ms, with no setup sheet
 [richos] event-timing at={} event={} thread={} turn={}
 [richos] file lookup: ready via {} in {}; used when saved memory cannot answer a question.
 [richos] file lookup: unavailable ({}); continuing without searching files.
