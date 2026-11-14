@@ -96,8 +96,13 @@ class Walk(standard.Walk):
         row = json.loads(r.stdout.strip().splitlines()[-1])
         row['fps'] = [s['fps'] for s in row['samples']]
         row['at'] = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+        # the guests share this Mac's GPU and cores: a second guest running beside this one is part of
+        # the conditions a rate was measured under, so it is written down with it
+        runs = Path(os.environ.get('TESTVM_ROOT', str(Path.home() / '.richos-testvm'))) / 'run'
+        row['other_guests'] = sorted(p.name for p in runs.iterdir() if p.is_dir() and p.name != self.vm)
+        row['host_load'] = [round(x, 1) for x in os.getloadavg()]
         row['frame'] = self.shot('fps-' + name)
-        print('  %s: %s frames a second' % (name, ', '.join('%g' % f for f in row['fps'])), flush=True)
+        print('  %s: %s frames a second (other guests: %s)' % (name, ', '.join('%g' % f for f in row['fps']), ', '.join(row['other_guests']) or 'none'), flush=True)
         return row
 
     def memories(self):
