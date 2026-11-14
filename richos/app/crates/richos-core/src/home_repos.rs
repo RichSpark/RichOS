@@ -475,6 +475,32 @@ struct Node {
     degree: u32,
 }
 
+/// WHAT A COMPANY'S GROUPS WERE DECIDED TO BE, kept beside the picture so the next build decides
+/// nothing again (review rv-20261114T004049Z-3a3331d3-4a8e: the six biggest folders were ranked on
+/// every build, so when a seventh overtook the sixth, 600 of 2,900 objects changed group and 1,684
+/// moved). A company's groups are chosen once, the first time it is drawn: which top folders are
+/// split by their second level (and, for a top with more than twelve of those, which quarter each
+/// second-level folder is in), and which groups stand on their own (at most six; the rest share
+/// one). After that a folder that grows, or a new one, changes neither. Folder names are kept only
+/// as one-way hashes, and nothing here is sent to the page.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Groups {
+    companies: BTreeMap<String, CompanyGroups>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+struct CompanyGroups {
+    /// Hash of a split top folder -> `None` (one group per second-level folder) or the quarter of
+    /// each second-level folder known when the company was first drawn (hash -> 0..=3).
+    split: BTreeMap<String, Option<BTreeMap<String, u8>>>,
+    /// The cluster ids that stand on their own.
+    own: Vec<String>,
+}
+
+fn name_hash(name: &str) -> String {
+    stable_id("", name, "")
+}
+
 /// The order the companies stand in around the picture: the biggest with its arc's middle as near
 /// [`CROWN`] as the others allow, the others in the registry's order, as many before it as bring it
 /// nearest, the rest after it. `sizes` is each company's object count, in registry order.
@@ -510,6 +536,12 @@ pub fn arc_order(sizes: &[usize]) -> Vec<usize> {
 /// already drawn keep that order, so a company overtaking another moves no territory; a new company
 /// joins at the end.
 pub fn build_repo_field(companies: &[CompanyRead], unread: &[(String, String)], today: i64, previous: &[String]) -> Value {
+    build_repo_field_with(companies, unread, today, previous, &mut Groups::default())
+}
+
+/// [`build_repo_field`] with the groups decided on earlier builds: a company in `groups` keeps
+/// them, and a company drawn for the first time is added.
+pub fn build_repo_field_with(companies: &[CompanyRead], unread: &[(String, String)], today: i64, previous: &[String], groups: &mut Groups) -> Value {
     let all_days: Vec<i64> = companies.iter().flat_map(|c| c.repos.iter().flat_map(|r| r.sessions.keys().copied())).collect();
     let day0 = all_days.iter().copied().min().unwrap_or(today).min(today);
     let horizon = (today - day0).max(0);
@@ -557,18 +589,33 @@ pub fn build_repo_field(companies: &[CompanyRead], unread: &[(String, String)], 
             s.dedup();
             s
         };
-        let mut seconds_cache: HashMap<String, Vec<String>> = HashMap::new();
-        let mut cluster_key = |p: &str| -> String {
+        // Decided once, the first time the company is drawn (round 71's rule: a top folder holding
+        // more than 40% of the documents is split by its second level, in quarters past twelve).
+        let first_time = !groups.companies.contains_key(&c.id);
+        let decided = groups.companies.entry(c.id.clone()).or_default();
+        if first_time {
+            for (t, n) in &tops {
+                if *n as f64 > 0.4 * docs.len() as f64 {
+                    let seconds = seconds_of(t);
+                    let quarters = (seconds.len() > 12).then(|| seconds.iter().enumerate().map(|(at, s)| (name_hash(s), (at * 4 / seconds.len()).min(3) as u8)).collect());
+                    decided.split.insert(name_hash(t), quarters);
+                }
+            }
+        }
+        let split = decided.split.clone();
+        let cluster_key = |p: &str| -> String {
             let parts: Vec<&str> = p.split('/').collect();
             let t = top_key(p);
-            if tops[&t] as f64 > 0.4 * docs.len() as f64 && parts.len() > 2 {
-                let seconds = seconds_cache.entry(t.clone()).or_insert_with(|| seconds_of(&t));
-                if seconds.len() > 12 {
-                    let at = seconds.iter().position(|s| s == parts[1]).unwrap_or(0);
-                    let q = (at * 4 / seconds.len()).min(3);
-                    return format!("{t}/{} of 4", q + 1);
+            if parts.len() > 2 {
+                match split.get(&name_hash(&t)) {
+                    Some(Some(quarters)) => {
+                        // a second-level folder made since takes a quarter from its own name
+                        let q = quarters.get(&name_hash(parts[1])).copied().unwrap_or_else(|| (seed_of(&stable_id("cl-", &t, parts[1])) % 4) as u8);
+                        return format!("{t}/{} of 4", q + 1);
+                    }
+                    Some(None) => return format!("{t}/{}", parts[1]),
+                    None => {}
                 }
-                return format!("{t}/{}", parts[1]);
             }
             t
         };
@@ -580,11 +627,22 @@ pub fn build_repo_field(companies: &[CompanyRead], unread: &[(String, String)], 
                 None => keyed.push((k.clone(), 1)),
             }
         }
-        // `Counter.most_common(6)`: by count, ties in first-seen order
+        // The six that stand on their own: `Counter.most_common(6)` (by count, ties in first-seen
+        // order) the first time. Later only a free place is filled, by a group that has no place yet,
+        // so a folder overtaking another moves nothing.
         let mut ranked = keyed.clone();
         ranked.sort_by_key(|k| std::cmp::Reverse(k.1));
-        let keep: Vec<String> = ranked.into_iter().take(6).map(|(k, _)| k).collect();
-        let cluster_of = |k: &str| -> String { stable_id("cl-", &c.id, if keep.iter().any(|x| x == k) { k } else { "\u{0}everything-else" }) };
+        for (k, _) in ranked {
+            let id = stable_id("cl-", &c.id, &k);
+            if decided.own.len() < 6 && !decided.own.contains(&id) {
+                decided.own.push(id);
+            }
+        }
+        let own = decided.own.clone();
+        let cluster_of = |k: &str| -> String {
+            let id = stable_id("cl-", &c.id, k);
+            if own.contains(&id) { id } else { stable_id("cl-", &c.id, "\u{0}everything-else") }
+        };
         let doc_cluster: HashMap<(usize, String), String> = docs.iter().zip(keys.iter()).map(|((ri, d), k)| ((*ri, d.path.clone()), cluster_of(k))).collect();
         let else_cluster = stable_id("cl-", &c.id, "\u{0}everything-else");
 
@@ -711,7 +769,8 @@ pub fn build_repo_field(companies: &[CompanyRead], unread: &[(String, String)], 
             for (&day, &n) in &r.sessions {
                 days += 1;
                 let made = created_on.get(&(ri, day)).cloned().unwrap_or_default();
-                let cl = match made.iter().max_by_key(|m| m.commits) {
+                // the group of the first of them by path, which later commits to a document never change
+                let cl = match made.iter().min_by_key(|m| &m.path) {
                     Some(m) => nodes[node_of(ri, m)].cluster.clone(),
                     None => root_hub.map(|h| nodes[h].cluster.clone()).unwrap_or_else(|| else_cluster.clone()),
                 };
@@ -1005,6 +1064,9 @@ pub fn identity(companies: &[CompanyFolders], today: i64) -> String {
 struct Kept {
     identity: String,
     field: Value,
+    /// What each company's groups were decided to be; a kept file from before this has none.
+    #[serde(default)]
+    groups: Groups,
 }
 
 /// The company order of a kept picture.
@@ -1013,14 +1075,14 @@ fn order_of(field: &Value) -> Vec<String> {
 }
 
 /// Read, build and keep. `None` when no folder is a readable repository.
-fn build_and_keep(path: &Path, companies: &[CompanyFolders], today: i64, id: String, previous: &[String]) -> Option<Value> {
+fn build_and_keep(path: &Path, companies: &[CompanyFolders], today: i64, id: String, previous: &[String], mut groups: Groups) -> Option<Value> {
     let (read, unread) = read_companies(companies);
     if read.iter().all(|c| c.repos.is_empty()) {
         return None;
     }
-    let field = build_repo_field(&read, &unread, today, previous);
+    let field = build_repo_field_with(&read, &unread, today, previous, &mut groups);
     let tmp = path.with_extension("json.tmp");
-    let kept = Kept { identity: id, field };
+    let kept = Kept { identity: id, field, groups };
     let wrote = serde_json::to_vec(&kept).ok().map(|bytes| std::fs::write(&tmp, bytes).and_then(|_| std::fs::rename(&tmp, path)));
     if !matches!(wrote, Some(Ok(()))) {
         eprintln!("[richos] home field: could not keep the repository picture; the next launch reads the repositories again");
@@ -1058,15 +1120,15 @@ pub fn field_kept_or_built(path: &Path, companies: &[CompanyFolders], today: i64
             return Some((kept.field, FieldFrom::Kept));
         }
         if !REFRESHING.swap(true, std::sync::atomic::Ordering::SeqCst) {
-            let (path, companies, previous) = (path.to_path_buf(), companies.to_vec(), order_of(&kept.field));
+            let (path, companies, previous, groups) = (path.to_path_buf(), companies.to_vec(), order_of(&kept.field), kept.groups.clone());
             std::thread::spawn(move || {
-                let _ = build_and_keep(&path, &companies, today, id, &previous);
+                let _ = build_and_keep(&path, &companies, today, id, &previous, groups);
                 REFRESHING.store(false, std::sync::atomic::Ordering::SeqCst);
             });
         }
         return Some((kept.field, FieldFrom::KeptRefreshing));
     }
-    build_and_keep(path, companies, today, id, &[]).map(|f| (f, FieldFrom::Built))
+    build_and_keep(path, companies, today, id, &[], Groups::default()).map(|f| (f, FieldFrom::Built))
 }
 
 /// Wait for a refresh started by [`field_kept_or_built`] to finish. Tests only.
@@ -1275,6 +1337,59 @@ mod tests {
         // a company connected later joins at the end
         let more = build_repo_field(&[company("small", 20), company("big", 9), company("new", 50)], &[], day("2026-11-13"), &order_of(&after));
         assert_eq!(order_of(&more).last().map(String::as_str), Some("new"));
+    }
+
+    /// Review rv-20261114T004049Z-3a3331d3-4a8e: the six biggest folders were ranked on every build,
+    /// so a seventh folder overtaking the sixth moved every document of both into another group.
+    /// The groups are decided once and kept with the picture.
+    #[test]
+    fn a_folder_overtaking_another_changes_no_objects_group() {
+        let rec = |p: String| FileRec { path: p, first: day("2026-10-01"), last: day("2026-10-01"), commits: 1 };
+        // seven folders, the seventh the smallest
+        let company = |sizes: [usize; 7]| CompanyRead { id: "acme".into(), label: "Acme".into(), repos: vec![RepoRead {
+            docs: sizes.iter().enumerate().flat_map(|(f, n)| (0..*n).map(move |i| (f, i))).map(|(f, i)| rec(format!("area{f}/d{i}.md"))).collect(),
+            sessions: BTreeMap::from([(day("2026-10-01"), 1)]), commits: 1, ..Default::default() }] };
+        let clusters = |f: &Value| -> HashMap<u64, String> { f["nodes"].as_array().unwrap().iter().map(|n| (n["layoutKey"].as_u64().unwrap(), n["cluster"].as_str().unwrap().to_string())).collect() };
+        let mut groups = Groups::default();
+        let before = clusters(&build_repo_field_with(&[company([10, 9, 8, 7, 6, 5, 4])], &[], day("2026-11-13"), &[], &mut groups));
+        // the seventh folder grows past the sixth and the fifth
+        let after = clusters(&build_repo_field_with(&[company([10, 9, 8, 7, 6, 5, 7])], &[], day("2026-11-13"), &[], &mut groups));
+        let changed = before.iter().filter(|(key, cluster)| after.get(*key) != Some(*cluster)).count();
+        assert_eq!(changed, 0, "{changed} of {} objects changed group when one folder overtook another", before.len());
+        assert_eq!(after.len(), before.len() + 3);
+        // and without the kept groups the same growth does move them: the defect, kept visible
+        let cold = clusters(&build_repo_field(&[company([10, 9, 8, 7, 6, 5, 7])], &[], day("2026-11-13"), &[]));
+        assert!(before.iter().any(|(key, cluster)| cold.get(key) != Some(cluster)), "the fixture no longer crosses the ranking");
+    }
+
+    /// The same through the kept file: the groups decided at the first build are read back for the
+    /// build behind a later launch.
+    #[test]
+    fn the_kept_picture_keeps_its_groups_across_builds() {
+        let r = tmp("grp");
+        let mut files: Vec<(String, String)> = Vec::new();
+        for (f, n) in [10, 9, 8, 7, 6, 5, 4].iter().enumerate() {
+            for i in 0..*n {
+                files.push((format!("area{f}/d{i}.md"), format!("# {f} {i}\n")));
+            }
+        }
+        let refs: Vec<(&str, &str)> = files.iter().map(|(p, b)| (p.as_str(), b.as_str())).collect();
+        commit(&r, "2026-10-01", &refs);
+        let reg = registry(&[("acme", "Acme", &[r.as_path()])]);
+        let path = tmp("grpk").join("home-field-repos.json");
+        let clusters = |f: &Value| -> HashMap<u64, String> { f["nodes"].as_array().unwrap().iter().map(|n| (n["layoutKey"].as_u64().unwrap(), n["cluster"].as_str().unwrap().to_string())).collect() };
+        let (first, _) = field_kept_or_built(&path, &company_folders(&reg), day("2026-11-13")).unwrap();
+        commit(&r, "2026-10-01", &[("area6/n1.md", "n"), ("area6/n2.md", "n"), ("area6/n3.md", "n")]);
+        assert!(field_kept_or_built(&path, &company_folders(&reg), day("2026-11-13")).is_some());
+        wait_for_refresh();
+        let (second, from) = field_kept_or_built(&path, &company_folders(&reg), day("2026-11-13")).unwrap();
+        assert_eq!(from, FieldFrom::Kept);
+        let (before, after) = (clusters(&first), clusters(&second));
+        assert_eq!(before.iter().filter(|(key, cluster)| after.get(*key) != Some(*cluster)).count(), 0);
+        assert_eq!(after.len(), before.len() + 3);
+        for d in [r, path.parent().unwrap().to_path_buf()] {
+            std::fs::remove_dir_all(d).ok();
+        }
     }
 
     #[test]
