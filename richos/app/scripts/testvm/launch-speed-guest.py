@@ -183,9 +183,22 @@ def launch(n, step, out):
     children = [r[0] for r in ps_rows() if pid is not None and r[1] == pid]
     how = quit_pid(pid, step.get('menu_quit', '')) if pid is not None else 'no process found'
     time.sleep(0.5)
-    for c in children:
+    # Children the app left behind are stopped together, not one 8-second wait after another.
+    left = [c for c in children if alive(c)]
+    for c in left:
+        try:
+            os.kill(c, 15)
+        except OSError:
+            pass
+    deadline = time.time() + 8
+    while time.time() < deadline and any(alive(c) for c in left):
+        time.sleep(0.05)
+    for c in left:
         if alive(c):
-            quit_pid(c, '')
+            try:
+                os.kill(c, 9)
+            except OSError:
+                pass
     gone = pid is not None and not alive(pid) and not any(alive(c) for c in children)
     result = {'n': n, 'label': step['label'], 'app': step['app'], 't_open': t_open, 't_open_done': t_open_done,
               'pid': pid, 't_pid_seen': t_pid, 'quit': how, 'all_gone': gone, 'events': events,
