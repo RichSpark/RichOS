@@ -4741,7 +4741,20 @@ fn splash_at_quit(app: &AppHandle) -> bool {
         min_height: config.min_height.unwrap_or(window_geometry::PREFERRED_MIN_HEIGHT),
     };
     let placement = window_geometry::decide_with(&displays, saved_geometry.as_ref(), preference);
-    let target = splash_target(&placement, &displays, splash_opening::reduce_motion());
+    let mut target = splash_target(&placement, &displays, splash_opening::reduce_motion());
+    // THE WINDOW HE IS LEAVING, when it is still there (plan section 1: "at the size of the window
+    // as he left it"): its own size and scale, not a second prediction of them. Measured in the test
+    // VM, 2026-11-14: the prediction said 1400x869 where the next start built 1400x866 (the window
+    // record held a height the display's work area clamps), so the opening was never used; the
+    // live window is the clamped size the next start builds again.
+    if let Some(window) = conversation_window(app) {
+        if let (Ok(size), Ok(scale)) = (window.inner_size(), window.scale_factor()) {
+            if scale.is_finite() && scale > 0.0 && size.width > 0 && size.height > 0 {
+                target.page = [f64::from(size.width) / scale, f64::from(size.height) / scale];
+                target.scale = scale;
+            }
+        }
+    }
     let saved = splash_pick::read_saved(&state.data_dir);
     let nonce = splash_pick::manifest_nonce(&state.data_dir);
     match splash_pick::at_quit(saved.as_ref(), nonce.as_deref(), next, &target, splash_opening::nonce()) {
