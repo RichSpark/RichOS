@@ -1,0 +1,103 @@
+slot waiting: every slot is executing a run (guest.lock: running, pid 72639 for 0.3 min (run-walk walk-43754ae1b41c home-fps-walk.py); guest-2.lock: running, pid 75999 for 20.7 min (run-walk walk-2e0626775ac0 launch-speed-walk.py)); up to 1800s more
+slot waiting: every slot is executing a run (guest.lock: running, pid 72639 for 0.4 min (run-walk walk-43754ae1b41c home-fps-walk.py); guest-2.lock: running, pid 75999 for 20.7 min (run-walk walk-2e0626775ac0 launch-speed-walk.py)); up to 1798s more
+slot waiting: every slot is executing a run (guest.lock: running, pid 72639 for 0.4 min (run-walk walk-43754ae1b41c home-fps-walk.py); guest-2.lock: running, pid 75999 for 20.8 min (run-walk walk-2e0626775ac0 launch-speed-walk.py)); up to 1796s more
+slot waiting: every slot is executing a run (guest.lock: running, pid 72639 for 0.5 min (run-walk walk-43754ae1b41c home-fps-walk.py); guest-2.lock: running, pid 75999 for 20.8 min (run-walk walk-2e0626775ac0 launch-speed-walk.py)); up to 1792s more
+slot waiting: every slot is executing a run (guest.lock: running, pid 72639 for 0.5 min (run-walk walk-43754ae1b41c home-fps-walk.py); guest-2.lock: running, pid 75999 for 20.9 min (run-walk walk-2e0626775ac0 launch-speed-walk.py)); up to 1790s more
+slot waiting: every slot is executing a run (guest.lock: running, pid 72639 for 0.6 min (run-walk walk-43754ae1b41c home-fps-walk.py); guest-2.lock: running, pid 75999 for 20.9 min (run-walk walk-2e0626775ac0 launch-speed-walk.py)); up to 1786s more
+slot waiting: every slot is executing a run (guest.lock: running, pid 72639 for 0.6 min (run-walk walk-43754ae1b41c home-fps-walk.py); guest-2.lock: running, pid 75999 for 21.0 min (run-walk walk-2e0626775ac0 launch-speed-walk.py)); up to 1784s more
+slot waiting: every slot is executing a run (guest.lock: running, pid 72639 for 0.7 min (run-walk walk-43754ae1b41c home-fps-walk.py); guest-2.lock: running, pid 75999 for 21.0 min (run-walk walk-2e0626775ac0 launch-speed-walk.py)); up to 1780s more
+slot waiting: every slot is executing a run (guest.lock: running, pid 72639 for 0.7 min (run-walk walk-43754ae1b41c home-fps-walk.py); guest-2.lock: running, pid 75999 for 21.1 min (run-walk walk-2e0626775ac0 launch-speed-walk.py)); up to 1778s more
+slot waiting: every slot is executing a run (guest.lock: running, pid 72639 for 0.8 min (run-walk walk-43754ae1b41c home-fps-walk.py); guest-2.lock: running, pid 75999 for 21.1 min (run-walk walk-2e0626775ac0 launch-speed-walk.py)); up to 1774s more
+slot waiting: every slot is executing a run (guest.lock: running, pid 72639 for 0.8 min (run-walk walk-43754ae1b41c home-fps-walk.py); guest-2.lock: running, pid 75999 for 21.2 min (run-walk walk-2e0626775ac0 launch-speed-walk.py)); up to 1772s more
+slot waiting: every slot is executing a run (guest.lock: running, pid 72639 for 0.9 min (run-walk walk-43754ae1b41c home-fps-walk.py); guest-2.lock: running, pid 75999 for 21.2 min (run-walk walk-2e0626775ac0 launch-speed-walk.py)); up to 1768s more
+slot waiting: every slot is executing a run (guest.lock: running, pid 72639 for 0.9 min (run-walk walk-43754ae1b41c home-fps-walk.py); guest-2.lock: running, pid 75999 for 21.3 min (run-walk walk-2e0626775ac0 launch-speed-walk.py)); up to 1766s more
+slot waiting: every slot is executing a run (guest.lock: running, pid 72639 for 1.0 min (run-walk walk-43754ae1b41c home-fps-walk.py); guest-2.lock: running, pid 75999 for 21.3 min (run-walk walk-2e0626775ac0 launch-speed-walk.py)); up to 1762s more
+slot waiting: every slot is executing a run (guest.lock: running, pid 72639 for 1.0 min (run-walk walk-43754ae1b41c home-fps-walk.py); guest-2.lock: running, pid 75999 for 21.4 min (run-walk walk-2e0626775ac0 launch-speed-walk.py)); up to 1760s more
+slot waiting: every slot is executing a run (guest.lock: running, pid 72639 for 1.1 min (run-walk walk-43754ae1b41c home-fps-walk.py); guest-2.lock: running, pid 75999 for 21.4 min (run-walk walk-2e0626775ac0 launch-speed-walk.py)); up to 1756s more
+slot waiting: every slot is executing a run (guest.lock: running, pid 72639 for 1.1 min (run-walk walk-43754ae1b41c home-fps-walk.py); guest-2.lock: running, pid 75999 for 21.5 min (run-walk walk-2e0626775ac0 launch-speed-walk.py)); up to 1754s more
+slot waiting: every slot is executing a run (guest.lock: running, pid 72639 for 1.2 min (run-walk walk-43754ae1b41c home-fps-walk.py); guest-2.lock: running, pid 75999 for 21.5 min (run-walk walk-2e0626775ac0 launch-speed-walk.py)); up to 1750s more
+slot waiting: every slot is executing a run (guest.lock: running, pid 72639 for 1.2 min (run-walk walk-43754ae1b41c home-fps-walk.py); guest-2.lock: running, pid 75999 for 21.6 min (run-walk walk-2e0626775ac0 launch-speed-walk.py)); up to 1748s more
+slot waiting: every slot is executing a run (guest.lock: running, pid 72639 for 1.3 min (run-walk walk-43754ae1b41c home-fps-walk.py); guest-2.lock: running, pid 75999 for 21.6 min (run-walk walk-2e0626775ac0 launch-speed-walk.py)); up to 1744s more
+slot waiting: every slot is executing a run (guest.lock: running, pid 72639 for 1.3 min (run-walk walk-43754ae1b41c home-fps-walk.py); guest-2.lock: running, pid 75999 for 21.7 min (run-walk walk-2e0626775ac0 launch-speed-walk.py)); up to 1742s more
+slot waiting: every slot is executing a run (guest.lock: running, pid 72639 for 1.4 min (run-walk walk-43754ae1b41c home-fps-walk.py); guest-2.lock: running, pid 75999 for 21.7 min (run-walk walk-2e0626775ac0 launch-speed-walk.py)); up to 1738s more
+slot waiting: every slot is executing a run (guest.lock: running, pid 72639 for 1.4 min (run-walk walk-43754ae1b41c home-fps-walk.py); guest-2.lock: running, pid 75999 for 21.8 min (run-walk walk-2e0626775ac0 launch-speed-walk.py)); up to 1736s more
+slot waiting: every slot is executing a run (guest.lock: running, pid 72639 for 1.5 min (run-walk walk-43754ae1b41c home-fps-walk.py); guest-2.lock: running, pid 75999 for 21.8 min (run-walk walk-2e0626775ac0 launch-speed-walk.py)); up to 1732s more
+slot waiting: every slot is executing a run (guest.lock: running, pid 72639 for 1.5 min (run-walk walk-43754ae1b41c home-fps-walk.py); guest-2.lock: running, pid 75999 for 21.9 min (run-walk walk-2e0626775ac0 launch-speed-walk.py)); up to 1730s more
+slot held: /Users/alex/.richos-testvm/guest.lock (waited 72s; admission checks 1.7s; user CPU 42.4%, system 10.8%, idle 46.8%; memory pressure normal, free 72%, swap used 181 MB, swap-out 0.0 MB/s)
+[testvm] 12:15:43Z cloning richos-base -> walk-ff51a0b83666 (copy-on-write)
+[testvm] 12:15:43Z booting walk-ff51a0b83666 headless...
+[testvm] 12:15:43Z waiting for walk-ff51a0b83666 to report an IP...
+[testvm] 12:15:52Z walk-ff51a0b83666 is up at 192.168.64.9
+[testvm] 12:15:59Z screen-capture consent renewed: /usr/libexec/sshd-keygen-wrapper until 2026-12-14T12:15:59Z
+[testvm] 12:16:00Z host claude: 2.1.325  (/Users/alex/.local/share/claude/versions/2.1.325)
+[testvm] 12:16:03Z the guest's claude is not the host's (2.1.277 vs 2.1.325) — copying the host's in
+[testvm] 12:16:07Z copied in 4s
+claude: host 2.1.325 guest 2.1.325
+[testvm] 12:16:09Z copying the bundle in...
+[testvm] 12:16:10Z copying the fixture home in...
+[testvm] 12:16:10Z keychain: preparing an empty, unlocked login keychain at /Users/admin/testvm/walk-ff51a0b83666/home/Library/Keychains/login.keychain-db
+{"ax_phase": "guest"}
+{"ax_guest_seconds": 0.1891}
+{"ax_phase": "guest"}
+{"ax_guest_seconds": 0.0154}
+{"ax_phase": "guest"}
+{"ax_guest_seconds": 0.0087}
+{"ax_phase": "guest"}
+{"ax_guest_seconds": 0.0756}
+{"ax_phase": "guest"}
+{"ax_guest_seconds": 0.0104}
+{"ax_phase": "guest"}
+{"ax_guest_seconds": 0.0111}
+gui-settings=no-timeout
+keychain=/Users/admin/testvm/walk-ff51a0b83666/home/Library/Keychains/login.keychain-db
+{"ax_phase": "guest"}
+{"ax_guest_seconds": 0.0104}
+gui-settings=no-timeout
+{"ax_phase": "guest"}
+{"ax_guest_seconds": 0.0391}
+{"ax_phase": "guest"}
+{"ax_guest_seconds": 0.0461}
+{"ax_phase": "guest"}
+{"ax_guest_seconds": 0.0096}
+default=/Users/admin/testvm/walk-ff51a0b83666/home/Library/Keychains/login.keychain-db
+gui-session=usable
+ssh-session=UNUSABLE (security:SecKeychainSearchCopyNext:Thespecifieditemcouldnotbefoundinthekeychain.)
+note: gui-session is the verdict — it is the session 'open -n -a' launches the app into.
+      ssh-session is informational; a different securityd session, frequently UNUSABLE by design.
+[testvm] 12:16:14Z the guest's login is the app's account in use, Home (this Mac's keychain item 'Claude Code-credentials')
+[testvm] 12:16:14Z writing the access snapshot into the guest's credential file (no refresh token; may expire during the run)
+[testvm] 12:16:14Z copying a Claude access snapshot into walk-ff51a0b83666 (no refresh token; stdin only)
+[testvm] 12:16:15Z login stored: credential file yes (360 bytes, matching the access snapshot), keychain item yes
+[testvm] 12:16:15Z the guest's access token expires 18:48Z (no refresh token; keep renews it from this Mac)
+claude login: guest logged in
+[testvm] 12:16:15Z copying the engine payload in...
+[testvm] 12:16:18Z engine payload verified in the guest (scripts/hooks + VERSION present)
+[testvm] 12:16:18Z launching the app in the guest's GUI session...
+[testvm] 12:16:23Z ready in 41s
+vm=walk-ff51a0b83666 ip=192.168.64.9 pid=1049 ssh=admin@192.168.64.9 windows=1 elapsed=41s
+tailnet=not-joined
+claude: host 2.1.325 guest 2.1.325
+claude login: guest logged in
+shot:  /Users/alex/ab/richos-wt/echo2-opus-trials2/richos/app/scripts/testvm/shot.sh walk-ff51a0b83666 <out.png> [--ocr]
+tree:  /Users/alex/ab/richos-wt/echo2-opus-trials2/richos/app/scripts/testvm/ax.sh walk-ff51a0b83666 tree            # the screen as text, with real geometry
+click: /Users/alex/ab/richos-wt/echo2-opus-trials2/richos/app/scripts/testvm/ax.sh walk-ff51a0b83666 click --title '<button>'
+guest: /Users/alex/ab/richos-wt/echo2-opus-trials2/richos/app/scripts/testvm/guest.sh walk-ff51a0b83666 '<shell command>'   # --pull/--push to move a file
+ax:    /Users/alex/ab/richos-wt/echo2-opus-trials2/richos/app/scripts/testvm/ax.sh walk-ff51a0b83666 '<applescript>'
+stop:  /Users/alex/ab/richos-wt/echo2-opus-trials2/richos/app/scripts/testvm/stop.sh walk-ff51a0b83666      # ALWAYS, before you report (CEO §54)
+{
+ "vm": "walk-ff51a0b83666",
+ "app": "/Users/admin/testvm/walk-ff51a0b83666/RichOS.app",
+ "guest_os": "15.7.7",
+ "guest_cpu": "4 cpus, 5368709120 bytes",
+ "display": "",
+ "load_before": "{ 43.12 13.20 4.97 }",
+ "guest_run": "settled 175 s, load (2.85107421875, 7.68798828125, 4.1875)\nt2: pid 1412 quit on TERM, all gone True, 63 log lines; \nt1-01: pid 1779 quit on TERM, all gone True, 58 log lines; DONE 230 frames 840x525\nt1-02: pid 1969 quit on TERM, all gone True, 56 log lines; DONE 241 frames 840x525\nt1-03: pid 2158 quit on TERM, all gone True, 56 log lines; DONE 284 frames 840x525\nt1-04: pid 2349 quit on TERM, all gone True, 56 log lines; DONE 292 frames 840x525\nt1-05: pid 2535 quit on TERM, all gone True, 56 log lines; DONE 290 frames 840x525\nt1-06: pid 2722 quit on TERM, all gone True, 56 log lines; DONE 273 frames 840x525\nt1-07: pid 2908 quit on TERM, all gone True, 56 log lines; DONE 248 frames 840x525\nt1-08: pid 3089 quit on TERM, all gone True, 63 log lines; DONE 275 frames 840x525\nt1-09: pid 3270 quit on TERM, all gone True, 60 log lines; DONE 283 frames 840x525\nt1-10: pid 3439 quit on TERM, all gone True, 60 log lines; DONE 282 frames 840x525\nt1-11: pid 3610 quit on TERM, all gone True, 61 log lines; DONE 292 frames 840x525\nt1-12: pid 3794 quit on TERM, all gone True, 60 log lines; DONE 284 frames 840x525\nt1-13: pid 3971 quit on TERM, all gone True, 60 log lines; DONE 289 frames 840x525\nt1-14: pid 4147 quit on TERM, all gone True, 61 log lines; DONE 293 frames 840x525\nt1-15: pid 4319 quit on TERM, all gone True, 60 log lines; DONE 290 frames 840x525\nt1-16: pid 4490 quit on TERM, all gone True, 60 log lines; DONE 284 frames 840x525\nt1-17: pid 4662 quit on TERM, all gone True, 61 log lines; DONE 292 frames 840x525\nt1-18: pid 4834 quit on TERM, all gone True, 60 log lines; DONE 290 frames 840x525\nt1-19: pid 5007 quit on TERM, all gone True, 60 log lines; DONE 288 frames 840x525\nt1-20: pid 5182 quit on TERM, all gone True, 61 log lines; DONE 297 frames 840x525\nt1nopush-01: pid 5358 quit on TERM, all gone True, 60 log lines; DONE 291 frames 840x525\nt1nopush-02: pid 5533 quit on TERM, all gone True, 61 log lines; DONE 276 frames 840x525\nt3png-01: pid 5704 quit on TERM, all gone True, 62 log lines; DONE 298 frames 840x525\nt3png-02: pid 5875 quit on TERM, all gone True, 62 log lines; DONE 296 frames 840x525\nt3png-03: pid 6045 quit on TERM, all gone True, 63 log lines; DONE 313 frames 840x525\nt3jpg-01: pid 6226 quit on TERM, all gone True, 62 log lines; DONE 297 frames 840x525\nt3jpg-02: pid 6403 quit on TERM, all gone True, 62 log lines; DONE 305 frames 840x525\nt3jpg-03: pid 6571 quit on TERM, all gone True, 62 log lines; DONE 303 frames 840x525\nt3png2x-01: pid 6746 quit on TERM, all gone True, 62 log lines; DONE 295 frames 840x525\nt3png2x-02: pid 6917 quit on TERM, all gone True, 62 log lines; DONE 316 frames 840x525\nt3png2x-03: pid 7094 quit on TERM, all gone True, 63 log lines; DONE 309 frames 840x525\nt3jpg2x-01: pid 7268 quit on TERM, all gone True, 62 log lines; DONE 303 frames 840x525\nt3jpg2x-02: pid 7441 quit on TERM, all gone True, 63 log lines; DONE 307 frames 840x525\nt3jpg2x-03: pid 7615 quit on TERM, all gone True, 62 log lines; DONE 300 frames 840x525\ndictionary-01: pid 7790 quit on TERM, all gone True, 0 log lines; DONE 130 frames 840x525\ndictionary-02: pid 7962 quit on TERM, all gone True, 0 log lines; DONE 128 frames 840x525\ndictionary-03: pid 8128 quit on TERM, all gone True, 0 log lines; DONE 116 frames 840x525\ndictionary-04: pid 8286 quit on TERM, all gone True, 0 log lines; DONE 124 frames 840x525\ndictionary-05: pid 8451 quit on TERM, all gone True, 0 log lines; DONE 129 frames 840x525\ndictionary-06: pid 8614 quit on TERM, all gone True, 0 log lines; DONE 126 frames 840x525\ndictionary-07: pid 8782 quit on TERM, all gone True, 0 log lines; DONE 125 frames 840x525\ndictionary-08: pid 8928 quit on TERM, all gone True, 0 log lines; DONE 129 frames 840x525\ndictionary-09: pid 9093 quit on TERM, all gone True, 0 log lines; DONE 130 frames 840x525\ndictionary-10: pid 9259 quit on TERM, all gone True, 0 log lines; DONE 125 frames 840x525\nlaunches 45, not gone 0",
+ "load_after": "{ 2.08 3.98 3.65 }",
+ "left_running": ""
+}
+[testvm] 12:28:13Z recorded app pid 1049 has exited; no process selected by name
+[testvm] 12:28:14Z stopping VM walk-ff51a0b83666...
+[testvm] 12:28:14Z ending the login keeper (pid 95194)
+[testvm] 12:28:15Z deleting ephemeral clone walk-ff51a0b83666...
+[testvm] 12:28:17Z clean: app quit, VM stopped, clone deleted, state removed.
+slot released: guest.lock after 754s
