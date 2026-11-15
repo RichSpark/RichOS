@@ -131,22 +131,22 @@ check('a planned route with no launches refuses, however fast the rest', gone['r
 # is outside what's required, only then do you need to extend to 20. Otherwise i.e. if the first 5
 # are fine, it's a PASS.").
 check('a route runs five starts first, and is taken to twenty', (walk.FIRST_STARTS, walk.FULL_STARTS) == (5, 20))
-five = walk.verdict(fast[:5], {'ordinary': 5}, 857)
+five = walk.verdict(fast[:5], {'ordinary': 5}, 385)
 check('five starts, every one within the limit, pass', five['refused'] is False and five['routes_over'] == [], five)
-one_of_five = walk.verdict(fast[:4] + [{'label': 'ordinary:judged', 'splash': 900}], {'ordinary': 5}, 857)
+one_of_five = walk.verdict(fast[:4] + [{'label': 'ordinary:judged', 'splash': 900}], {'ordinary': 5}, 385)
 check('five starts with one over, never taken on to twenty, refuse', one_of_five['refused'] is True
       and one_of_five['routes_over'] == ['ordinary'] and one_of_five['routes']['ordinary']['over'] == 1, one_of_five)
-one_of_twenty = walk.verdict(fast[:19] + [{'label': 'ordinary:judged', 'splash': 900}], {'ordinary': 20}, 857)
+one_of_twenty = walk.verdict(fast[:19] + [{'label': 'ordinary:judged', 'splash': 900}], {'ordinary': 20}, 385)
 check('taken to twenty with one over, its p95 within the limit, it passes', one_of_twenty['refused'] is False
       and one_of_twenty['routes']['ordinary']['p95_ms'] == 300, one_of_twenty)
-two_of_twenty = walk.verdict(fast[:18] + [{'label': 'ordinary:judged', 'splash': 900}] * 2, {'ordinary': 20}, 857)
+two_of_twenty = walk.verdict(fast[:18] + [{'label': 'ordinary:judged', 'splash': 900}] * 2, {'ordinary': 20}, 385)
 check('taken to twenty with its p95 over the limit, it refuses', two_of_twenty['refused'] is True
       and two_of_twenty['routes_over'] == ['ordinary'], two_of_twenty)
 check('only a route with a start over ITS limit is taken on, and a start without a timing takes nothing on',
-      walk.needing_more([{'label': 'ordinary:judged', 'splash': 900}, {'label': 'cold:judged', 'splash': 5000},
+      walk.needing_more([{'label': 'ordinary:judged', 'splash': 900}, {'label': 'cold:judged', 'splash': 2900},
                          {'label': 'day-change:judged'}, {'label': 'ordinary:first', 'splash': 5000},
-                         {'label': 'rule-switch:judged', 'splash': 857}],
-                        857, {'cold': {'limit_ms': 6341}}) == ['ordinary'])
+                         {'label': 'rule-switch:judged', 'splash': 385}],
+                        385, {'cold': {'limit_ms': 2979}}) == ['ordinary'])
 whole = walk.verdict(fast, {'ordinary': 20})
 check('a complete fast measurement passes', whole['refused'] is False and whole['missing'] == [], whole)
 check('the sentence says the measurement was incomplete', 'INCOMPLETE' in walk.sentence(gone), walk.sentence(gone))
@@ -155,15 +155,16 @@ check('the sentence says the measurement was incomplete', 'INCOMPLETE' in walk.s
 # NEVER LAUNCHED (the CEO, 2026-11-14: "if the VM is slower, then the measurements need to be
 # adjusted accordingly", and "Stop all that retarded "launch-speed walk beside Dictionary"
 # fuckshit!"; 2026-11-15: "What the fuck did I say about that????"). The ratios are the Dictionary
-# measurements on record (docs/verification/2026-11-14-splash-opening/), like for like, by medians.
+# measurements on record (the launch-speed record of run 20261115T061911Z-109b9887.1),
+# like for like, by medians.
 check("his Mac's Dictionary median and Dock part are the audit's measurements",
       (walk.MAC_DICTIONARY_MEDIAN_MS, walk.DOCK_PART_MS) == (318, 43.5))
-check('the warm ratio is the record\'s: (median 674 ms of its 30 guest launches + 43.5) / 318, limit 857 ms',
-      len(walk.GUEST_DICTIONARY_WARM_MS) == 30 and walk.WARM_INPUTS['guest_median_from_request_ms'] == 674
-      and walk.WARM_RATIO == 2.256 and walk.WARM_LIMIT_MS == 857, (walk.WARM_RATIO, walk.WARM_LIMIT_MS))
-check('the cold ratio is the record\'s: (median 5262.5 ms of its 20 launches after a purge + 43.5) / 318, limit 6341 ms',
-      len(walk.GUEST_DICTIONARY_COLD_MS) == 20 and walk.COLD_INPUTS['guest_median_from_request_ms'] == 5262.5
-      and walk.COLD_RATIO == 16.686 and walk.COLD_LIMIT_MS == 6341, (walk.COLD_RATIO, walk.COLD_LIMIT_MS))
+check('the warm ratio is the record\'s: (median 278.5 ms of its 10 guest launches + 43.5) / 318, limit 385 ms',
+      len(walk.GUEST_DICTIONARY_WARM_MS) == 10 and walk.WARM_INPUTS['guest_median_from_request_ms'] == 278.5
+      and walk.WARM_RATIO == 1.013 and walk.WARM_LIMIT_MS == 385, (walk.WARM_RATIO, walk.WARM_LIMIT_MS))
+check('the cold ratio is the record\'s: (median 2449.5 ms of its 10 launches after a purge + 43.5) / 318, limit 2979 ms',
+      len(walk.GUEST_DICTIONARY_COLD_MS) == 10 and walk.COLD_INPUTS['guest_median_from_request_ms'] == 2449.5
+      and walk.COLD_RATIO == 7.84 and walk.COLD_LIMIT_MS == 2979, (walk.COLD_RATIO, walk.COLD_LIMIT_MS))
 check('each limit is the one publication re-derives from the recorded ratio',
       walk.WARM_LIMIT_MS == round(380 * walk.WARM_RATIO) and walk.COLD_LIMIT_MS == round(380 * walk.COLD_RATIO))
 own = {'cold': {'limit_ms': walk.COLD_LIMIT_MS, 'ratio': walk.COLD_RATIO, 'inputs': walk.COLD_INPUTS}}
@@ -179,7 +180,7 @@ check('a cold route over its own limit refuses', slow_cold['refused'] is True an
       slow_cold)
 said_scaled = walk.sentence(judged_own)
 check('the sentence names both fixed limits and their ratios, and no Dictionary launch',
-      'p95 of 857 ms' in said_scaled and 'x 2.256' in said_scaled and 'cold judged on its own against 6341 ms' in said_scaled
+      'p95 of 385 ms' in said_scaled and 'x 1.013' in said_scaled and 'cold judged on its own against 2979 ms' in said_scaled
       and 'Dictionary' not in said_scaled, said_scaled)
 
 
@@ -268,9 +269,9 @@ check('the walk launches no Dictionary, in any plan: only the app under test',
       launched and not [s for s in launched if 'Dictionary' in s['app'] or s['label'].startswith('dictionary')]
       and 'dictionary' not in fast_plans, sorted({s['app'] for s in launched}))
 check('its limits are the fixed ones on record, recorded beside the verdict',
-      fast_report['summary']['limit_ms'] == 857 and fast_report['summary']['guest_ratio'] == 2.256
-      and fast_report['summary']['route_limits']['cold']['limit_ms'] == 6341
-      and fast_report['summary']['route_limits']['cold']['ratio'] == 16.686, fast_report['summary'])
+      fast_report['summary']['limit_ms'] == 385 and fast_report['summary']['guest_ratio'] == 1.013
+      and fast_report['summary']['route_limits']['cold']['limit_ms'] == 2979
+      and fast_report['summary']['route_limits']['cold']['ratio'] == 7.84, fast_report['summary'])
 check('a walk whose every start is within the limits passes', fast_code == 0 and fast_report['summary']['refused'] is False,
       (fast_code, fast_report['sentence']))
 
@@ -318,7 +319,7 @@ code, report, plans = walk_in_fake_guest(slow_at('ordinary', {2, 4}), PREVIOUS)
 check('two of twenty over the limit: the p95 is over, and the walk refuses', code == 1
       and report['summary']['routes_over'] == ['ordinary'] and report['summary']['routes']['ordinary']['launches'] == 20,
       report['sentence'])
-code, report, plans = walk_in_fake_guest(slow_at('cold', {1}, 5000), PREVIOUS)
+code, report, plans = walk_in_fake_guest(slow_at('cold', {1}, 2900), PREVIOUS)
 check('a cold start over the warm limit and within its own is not taken on', not judged_in(plans, 'cold', 'more-cold')
       and code == 0, report['sentence'])
 _, _, plans = walk_in_fake_guest(slow_at('day-change', {1}), PREVIOUS)

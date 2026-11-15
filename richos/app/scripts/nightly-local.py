@@ -339,11 +339,12 @@ NEW_USER_WALK_BUDGET = NEW_USER_WALK_WAIT + 2400
 # splash's own numbers either way. A refusal, or a walk that could not run, is taken once more
 # before the candidate is refused (verification-retries.md).
 LAUNCH_SPEED_PHASE = "launch-speed"
-# The fixed ratios (testvm/launch-speed-walk.py WARM_RATIO and COLD_RATIO, from
-# docs/verification/2026-11-14-splash-opening/; nightly-local.test.py asserts the two are the same):
-# publish holds a report's limits to exactly round(380 x these), 857 ms and, for the cold route, 6341 ms.
-LAUNCH_SPEED_WARM_RATIO = 2.256
-LAUNCH_SPEED_COLD_RATIO = 16.686
+# The fixed ratios (testvm/launch-speed-walk.py WARM_RATIO and COLD_RATIO, from the newest
+# launch-speed record in the nightly's guest image, run 20261115T061911Z-109b9887.1; nightly-local.test.py asserts the two are
+# the same): publish holds a report's limits to exactly round(380 x these), 385 ms and, for the
+# cold route, 2979 ms.
+LAUNCH_SPEED_WARM_RATIO = 1.013
+LAUNCH_SPEED_COLD_RATIO = 7.84
 LAUNCH_SPEED_WAIT = 3600
 # Launches (testvm/launch-speed-walk.py): with every route passing at 5 starts, 40 (1 + 5 cold + 5
 # ordinary + 2; 3 + 5 for the rule switch, three fresh homes; 2 + 5 for the day change; 2 + 10

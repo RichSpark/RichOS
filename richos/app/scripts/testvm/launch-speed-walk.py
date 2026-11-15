@@ -91,27 +91,25 @@ LIMIT_MS = 380
 # ms."), BY A FIXED RATIO, AND DICTIONARY IS NEVER LAUNCHED (the CEO, 2026-11-14: "Stop all that
 # retarded "launch-speed walk beside Dictionary" fuckshit!", and 2026-11-15 when a nightly still
 # launched it 20 times: "What the fuck did I say about that????"). The ratios are the Dictionary
-# measurements already on record, like for like and by medians, taken once
-# (docs/verification/2026-11-14-splash-opening/, the three walks in its walks.tgz):
+# measurements already on record, like for like and by medians, taken once, from the newest record
+# in the guest image the nightly uses: the nightly's own launch-speed walk of run
+# 20261115T061911Z-109b9887.1 (under the nightly state directory's launch-speed/, its report.json summary `guest_inputs` and `route_limits.cold.inputs`):
 #   his Mac: Dictionary's window 287, 305, 318, 318, 328 and 380 ms after the Dock click (Echo's
 #     audit, `richos-hq/docs/research/2026-11-14-app-launch-speed-audit.md`), median 318 ms; the
 #     Dock's own part before the launch request 44, 41, 43 and 54 ms, median 43.5 ms;
-#   the guest, warm: 30 launches, launch request to window (build 540..1277, stable 556..2813,
-#     smoke 383..2610), median 674 ms; (674 + 43.5) / 318 = 2.256, limit round(380 x 2.256) = 857 ms
-#     (the build walk's own ratio, the same median);
+#   the guest, warm: 10 launches, launch request to window (264..709), median 278.5 ms;
+#     (278.5 + 43.5) / 318 = 1.013, limit round(380 x 1.013) = 385 ms;
 #   the guest, after a `sudo purge` (the cold route's own, the lead's decision on
-#     esc-20261114T164747Z-54632204): 20 launches (build 2355..8130, stable 4193..8441), median
-#     5262.5 ms; (5262.5 + 43.5) / 318 = 16.686, limit round(380 x 16.686) = 6341 ms.
+#     esc-20261114T164747Z-54632204): 10 launches (1596..2524), median 2449.5 ms;
+#     (2449.5 + 43.5) / 318 = 7.84, limit round(380 x 7.84) = 2979 ms.
 MAC_DICTIONARY_MS = (287, 305, 318, 318, 328, 380)
 MAC_DICTIONARY_MEDIAN_MS = statistics.median(MAC_DICTIONARY_MS)
 DOCK_PART_INPUTS_MS = (44, 41, 43, 54)
 DOCK_PART_MS = statistics.median(DOCK_PART_INPUTS_MS)
-GUEST_DICTIONARY_WARM_MS = (540, 551, 621, 634, 648, 700, 714, 824, 1185, 1277,
-                            556, 585, 645, 704, 783, 818, 920, 1132, 1439, 2813,
-                            383, 420, 464, 482, 548, 560, 582, 741, 1170, 2610)
-GUEST_DICTIONARY_COLD_MS = (2355, 3536, 3573, 3672, 3854, 4818, 5135, 5233, 7213, 8130,
-                            4193, 5071, 5292, 5604, 5624, 5811, 5833, 6045, 6590, 8441)
-RECORD = 'docs/verification/2026-11-14-splash-opening/ (walks.tgz: build, stable, smoke-report)'
+GUEST_DICTIONARY_WARM_MS = (264, 271, 275, 276, 278, 279, 281, 286, 299, 709)
+GUEST_DICTIONARY_COLD_MS = (1596, 2280, 2436, 2444, 2446, 2453, 2454, 2467, 2502, 2524)
+RECORD = ('launch-speed run 20261115T061911Z-109b9887.1, '
+          'report.json summary guest_inputs and route_limits.cold.inputs')
 
 
 def recorded_ratio(guest_ms):
