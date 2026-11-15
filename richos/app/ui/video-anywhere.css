@@ -1,0 +1,438 @@
+/* =============================================================================================
+   MAKE A VIDEO, ANYWHERE IN THE APP (round 79, CEO 2026-11-15; `video-anywhere.js`).
+
+   The button stands in the heading of the Settings panel, at its right end, on every screen that
+   is not the home screen or the opening curtain. It opens two choices (the microphone, the mouse
+   pointer) and "Start recording"; then the count, the red Stop beside the settings button, and
+   the sheet with the video. The pieces are the home screen's own (`home.css`, `.hv-*`, round 77),
+   set in the app's tokens so they stand in both themes. Every line and edge is measured in both
+   themes by `tests/video-anywhere.js`.
+
+   EVERY SIZE OF TYPE IS IN `rem`, so it follows Text size (16px is 1rem at 100%). NO PLATE OR EDGE
+   FADES from one color to another: the very frame after the theme is switched must read as well as
+   the settled one (`tests/contrast.js`, 19). THE COUNT AND THE SHEET STAND UNDER THE SETTINGS
+   BUTTON (240 and 250 against its 300, over the home screen's 150): section 15 puts that button
+   above every overlay.
+   ============================================================================================= */
+
+:root {
+  --rv-red: #ff6b5e;
+  --rv-edge: var(--chrome-edge);
+  --rv-plate: var(--card);
+  --rv-gold-ink: var(--gold-text);
+}
+:root[data-theme="light"] {
+  --rv-red: #b93426;
+}
+
+/* ---- shared pieces ------------------------------------------------------------------------- */
+
+.rv-ico {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.rv-ico path.f { fill: currentColor; stroke-width: 1; }
+
+/* the red light: only while it records, and it beats */
+.rv-light {
+  flex: none;
+  display: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--rv-red);
+}
+body.rv-rec .rv-light {
+  display: inline-block;
+  animation: rv-beat 1.2s ease-in-out infinite;
+}
+@keyframes rv-beat {
+  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 color-mix(in srgb, var(--rv-red) 55%, transparent); }
+  50% { opacity: 0.6; box-shadow: 0 0 0 7px color-mix(in srgb, var(--rv-red) 0%, transparent); }
+}
+
+/* five bars that move with his voice */
+.rv-level {
+  display: none;
+  align-items: flex-end;
+  gap: 3px;
+  height: 18px;
+}
+body.rv-mic-on .rv-level { display: inline-flex; }
+.rv-level i {
+  display: block;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--rv-edge);
+}
+.rv-level i:nth-child(1) { height: 6px; }
+.rv-level i:nth-child(2) { height: 9px; }
+.rv-level i:nth-child(3) { height: 12px; }
+.rv-level i:nth-child(4) { height: 15px; }
+.rv-level i:nth-child(5) { height: 18px; }
+.rv-level i.on { background: var(--rv-gold-ink); }
+
+.rv-time {
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+.rv-time:empty { display: none; }
+
+.rv-make:focus-visible,
+.rv-pill:focus-visible,
+.rv-panel button:focus-visible,
+.rv-sheet button:focus-visible { outline: 2px solid var(--rv-gold-ink); outline-offset: 2px; }
+
+/* plain and main buttons */
+.rv-plain,
+.rv-main {
+  height: 44px;
+  padding: 0 22px;
+  border-radius: 22px;
+  border: 1px solid var(--rv-edge);
+  background: var(--rv-plate);
+  color: var(--ink);
+  font-family: var(--font);
+  font-size: 1rem;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: filter 0.2s ease;
+}
+.rv-plain:hover { border-color: var(--rv-gold-ink); background: var(--tint-gold-strong); }
+.rv-main {
+  border-color: var(--gold);
+  background: var(--gold);
+  color: var(--on-gold);
+  font-weight: 600;
+}
+.rv-main:hover { filter: brightness(1.08); }
+.rv-main[hidden],
+.rv-plain[hidden] { display: none; }
+
+/* ---- the button, in the heading of Settings ------------------------------------------------ */
+
+/* 36px in a heading whose line is 29px: the 4px it is taller by above and below are taken back, so
+   the heading, and with it the whole panel, is exactly as tall as it was */
+.sm-head .rv-make {
+  margin: -4px 0 -4px auto;
+  align-self: center;
+}
+.rv-make {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  height: 36px;
+  padding: 0 16px 0 12px;
+  border-radius: 18px;
+  border: 1px solid var(--rv-edge);
+  background: var(--rv-plate);
+  color: var(--ink);
+  font-family: var(--font);
+  font-size: 1rem;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.rv-make .rv-ico { color: var(--rv-gold-ink); }
+.rv-make:hover,
+.rv-make[aria-expanded="true"] { border-color: var(--rv-gold-ink); background: var(--tint-gold-strong); }
+/* the home screen has its own button (round 77), and the curtain has none (a held opening
+   screen keeps the settings button, `splash.css`) */
+body.home-open .rv-make,
+#splash ~ .settings .rv-make { display: none; }
+/* red only while it records: the light, the time, Stop */
+.rv-make.going,
+.rv-pill.going { border-color: var(--rv-red); padding-left: 14px; }
+.rv-make.going .rv-ico { display: none; }
+.rv-make:not(.going) .rv-level,
+.rv-pill:not(.going) .rv-level { display: none; }
+
+/* ---- the same button beside the settings button, while it counts and records ---------------- */
+
+.rv-pill {
+  display: none;
+  align-items: center;
+  gap: 9px;
+  height: 36px;
+  padding: 0 16px 0 14px;
+  border-radius: 18px;
+  border: 1px solid var(--rv-edge);
+  background: var(--rv-plate);
+  color: var(--ink);
+  font-family: var(--font);
+  font-size: 1rem;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  box-shadow: 0 10px 26px -18px var(--shadow-strong);
+}
+body.rv-busy .rv-pill { display: inline-flex; }
+.rv-pill:hover { background: var(--tint-gold-strong); }
+/* EVERY HEADING THAT REACHES THE TOP RIGHT CORNER MAKES ROOM FOR IT, IN ONE PLACE. A pane up there
+   (the conversation's heading, the Output panel's, the worker details') keeps the settings
+   button's lane clear by adding `--chrome-lane` to its right edge (`style.css`, "THE TOP-RIGHT
+   LANE IS RESERVED"), and each has its close button at that edge. The red Stop stands in the
+   same corner, above them all: under it, a press on close stopped the recording. So while this
+   button is there the lane itself is the settings cluster's measured width
+   (`--chrome-lane-live`, `output-panel.js` `watchChromeLane`), and every pane that adds the
+   lane, today's and the next one, clears Stop without knowing it exists. */
+body.rv-busy {
+  --chrome-lane: max(66px, var(--chrome-lane-live, 0px));
+}
+/* the home screen's own button gives its place to this one while a recording runs */
+body.rv-busy #home-video,
+body.rv-busy #home-video-choices { display: none !important; }
+
+/* ---- the two choices, opening out of the button ------------------------------------------- */
+
+.rv-panel {
+  position: fixed;
+  z-index: 2;
+  width: 430px;
+  box-sizing: border-box;
+  padding: 16px 18px 18px;
+  border-radius: 18px;
+  border: 1px solid var(--rv-edge);
+  background: var(--rv-plate);
+  box-shadow: 0 22px 60px -8px var(--shadow-strong), 0 2px 10px var(--shadow-weak);
+  transform-origin: calc(100% - 80px) 0;
+  animation: rv-open 0.24s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+.rv-panel[hidden] { display: none; }
+@keyframes rv-open {
+  from { opacity: 0; transform: translateY(-10px) scale(0.92, 0.6); }
+  to { opacity: 1; transform: none; }
+}
+.rv-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 48px;
+}
+.rv-row + .rv-row,
+.rv-mic-note + .rv-row { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line-strong); }
+.rv-row .lab {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-family: var(--font);
+  font-size: 1.0625rem;
+  line-height: 1.2;
+  color: var(--ink);
+  white-space: nowrap;
+}
+.rv-row .lab .rv-ico { width: 22px; height: 22px; color: var(--rv-gold-ink); }
+.rv-row .lab .rv-level { margin-left: 4px; }
+.rv-panel .says,
+.rv-panel .rv-mic-note {
+  margin: 12px 0 0;
+  font-family: var(--font-serif);
+  font-size: 1.0625rem;
+  line-height: 1.45;
+  color: var(--ink);
+}
+.rv-panel .rv-mic-note { margin: 6px 0 0 32px; font-size: 1rem; }
+.rv-panel .rv-mic-note[hidden] { display: none; }
+.rv-seg {
+  flex: none;
+  display: inline-flex;
+  padding: 3px;
+  border-radius: 16px;
+  border: 1px solid var(--rv-edge);
+}
+.rv-seg button {
+  min-width: 74px;
+  height: 40px;
+  padding: 0 15px;
+  border-radius: 12px;
+  border: 0;
+  background: none;
+  font-family: var(--font);
+  cursor: pointer;
+}
+.rv-seg button b { font-size: 1rem; font-weight: 500; line-height: 1.2; color: var(--ink); white-space: nowrap; }
+.rv-seg button:hover { background: var(--tint-gold-strong); }
+.rv-seg button[aria-pressed="true"] { background: var(--gold); }
+.rv-seg button[aria-pressed="true"] b { color: var(--on-gold); font-weight: 600; }
+.rv-go {
+  display: block;
+  width: 100%;
+  height: 48px;
+  margin-top: 16px;
+  border-radius: 24px;
+  font-size: 1.0625rem;
+}
+
+/* the canvas the video is drawn on: in the page so its words are smoothed like the page's, never seen */
+.rv-canvas {
+  position: fixed;
+  left: 0;
+  top: 0;
+  width: 2px;
+  height: 2px;
+  opacity: 0;
+  pointer-events: none;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* the words of a text box of several lines, laid out again where the box's own words stand so the
+   video can draw them line by line (`paintArea`): never seen, never pressed */
+.rv-twin {
+  position: fixed;
+  z-index: -1;
+  box-sizing: border-box;
+  margin: 0;
+  border: 0 solid transparent;
+  visibility: hidden;
+  pointer-events: none;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+
+/* ---- the count ------------------------------------------------------------------------------ */
+
+.rv-count {
+  position: fixed;
+  left: 50%;
+  top: 45%;
+  transform: translate(-50%, -50%);
+  z-index: 240;
+  text-align: center;
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+}
+.rv-count.on { opacity: 1; visibility: visible; }
+.rv-count .n {
+  font-family: var(--font-serif);
+  font-weight: 300;
+  font-size: 11.875rem;
+  line-height: 1;
+  color: var(--ink);
+  font-variant-numeric: lining-nums;
+  width: 320px;
+  height: 320px;
+  margin: 0 auto -50px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(circle, var(--rv-plate) 0%, color-mix(in srgb, var(--rv-plate) 94%, transparent) 40%, color-mix(in srgb, var(--rv-plate) 0%, transparent) 70%);
+}
+.rv-count .n.beat { animation: rv-count 0.8s cubic-bezier(0.2, 0.7, 0.2, 1) both; }
+@keyframes rv-count {
+  from { transform: scale(1.35); opacity: 0; }
+  30% { opacity: 1; }
+  to { transform: scale(1); opacity: 1; }
+}
+.rv-count .l {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
+  padding: 10px 22px 12px;
+  border-radius: 18px;
+  border: 1px solid var(--rv-edge);
+  background: var(--rv-plate);
+  box-shadow: 0 14px 40px -12px var(--shadow-strong);
+  font-family: var(--font-serif);
+  font-size: 1.25rem;
+  line-height: 1.3;
+  color: var(--ink);
+}
+.rv-count .voice {
+  display: none;
+  align-items: center;
+  gap: 9px;
+  font-family: var(--font);
+  font-size: 1rem;
+  color: var(--ink);
+}
+.rv-count .voice .rv-ico { color: var(--rv-gold-ink); }
+body.rv-mic-on .rv-count .voice { display: inline-flex; }
+
+/* ---- the sheet: the video he just made, and what to do with it ----------------------------- */
+
+.rv-sheet {
+  position: fixed;
+  inset: 0;
+  z-index: 250;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--scrim);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+  animation: rv-in 0.3s ease both;
+}
+.rv-sheet[hidden] { display: none; }
+@keyframes rv-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.rv-sheet .card {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  width: min(880px, calc(100vw - 80px));
+  padding: 22px;
+  border-radius: 20px;
+  border: 1px solid var(--rv-edge);
+  background: var(--rv-plate);
+  box-shadow: 0 30px 90px -20px var(--shadow-strong);
+}
+.rv-sheet video {
+  display: block;
+  width: 100%;
+  max-height: calc(100vh - 290px);
+  border-radius: 12px;
+  border: 1px solid var(--line-strong);
+  background: var(--surface-sunk);
+  object-fit: contain;
+}
+.rv-sheet video[hidden] { display: none; }
+.rv-sheet .side { padding: 0 6px 2px; }
+.rv-sheet h2 {
+  margin: 0;
+  font-family: var(--font-serif);
+  font-weight: 400;
+  font-size: 1.75rem;
+  line-height: 1.25;
+  color: var(--ink);
+  font-variant-numeric: lining-nums;
+}
+.rv-sheet .meta,
+.rv-sheet .saved,
+.rv-sheet .none {
+  margin: 6px 0 0;
+  font-family: var(--font);
+  font-size: 1rem;
+  line-height: 1.45;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+.rv-sheet .saved { color: var(--rv-gold-ink); overflow-wrap: anywhere; }
+.rv-sheet .saved[hidden],
+.rv-sheet .none[hidden] { display: none; }
+.rv-sheet .none { padding: 60px 30px; text-align: center; }
+.rv-sheet .row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rv-count .n.beat,
+  .rv-panel,
+  .rv-sheet,
+  body.rv-rec .rv-light { animation: none; }
+}

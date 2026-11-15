@@ -54,11 +54,11 @@ window.RichHomeVideo = (function () {
     stops: ["M12 3.5a8.5 8.5 0 1 0 0 17a8.5 8.5 0 0 0 0-17z", "fM9.5 9.5h5v5h-5z"],
     pointer: ["M6.5 3.8l11.6 7.4-5.3 1.2-2.4 5z"],
   };
-  function icon(kind) {
+  function icon(kind, cls) {
     var s = document.createElementNS(NS, "svg");
     s.setAttribute("viewBox", "0 0 24 24");
     s.setAttribute("aria-hidden", "true");
-    s.setAttribute("class", "hv-ico");
+    s.setAttribute("class", cls || "hv-ico");
     ICONS[kind].forEach(function (d) {
       var p = document.createElementNS(NS, "path");
       if (d[0] === "f") p.setAttribute("class", "f"); // a filled shape
@@ -80,7 +80,10 @@ window.RichHomeVideo = (function () {
   // ---------------------------------------------------------------------------------------------
   // `want` is his choice, which stays as he left it; the microphone itself is held only while he is
   // choosing, counting or recording, so the Mac's microphone light is never left on behind him.
-  var mic = { want: false, state: "off", stream: null, ac: null, an: null, buf: null, level: 0, tone: false };
+  //
+  // ONE MICROPHONE FOR EACH RECORDER (`microphone`): this screen's, and the one that records the
+  // whole app from the heading of Settings (round 79, `video-anywhere.js`). `paint` is called
+  // whenever what the microphone is changes; `bars` answers the rows of five bars to move.
   /// "tone" in a test run, "microphone" for everybody else (`home_video.rs`). Asked once.
   var inputKind = null;
   function input() {
@@ -96,118 +99,134 @@ window.RichHomeVideo = (function () {
     );
     return inputKind;
   }
-  /// The made-up microphone: a 196 Hz tone that swells 1.7 times a second, into the file only.
-  function tone(AC) {
-    var ac = (mic.ac = new AC());
-    var osc = ac.createOscillator();
-    var g = ac.createGain();
-    var lfo = ac.createOscillator();
-    var lg = ac.createGain();
-    osc.frequency.value = 196;
-    g.gain.value = 0.05;
-    lfo.frequency.value = 1.7;
-    lg.gain.value = 0.045;
-    lfo.connect(lg);
-    lg.connect(g.gain);
-    var dest = ac.createMediaStreamDestination();
-    osc.connect(g);
-    g.connect(dest);
-    osc.start();
-    lfo.start();
-    return dest.stream;
-  }
-  function micStart() {
-    if (mic.stream) return Promise.resolve(true);
-    mic.state = "asking";
-    paintMic();
-    var AC = window.AudioContext || window.webkitAudioContext;
-    return input()
-      .then(function (kind) {
-        mic.tone = kind === "tone";
-        if (mic.tone) {
-          if (!AC) throw new Error("no microphone");
-          return tone(AC);
-        }
-        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw new Error("no microphone");
-        return navigator.mediaDevices.getUserMedia({ audio: true });
-      })
-      .then(
-        function (stream) {
-          // he switched it off again while the Mac was asking
-          if (mic.state !== "asking") {
-            stream.getTracks().forEach(function (t) {
-              t.stop();
-            });
+  function microphone(paint, bars) {
+    var mic = { want: false, state: "off", stream: null, ac: null, an: null, buf: null, level: 0, tone: false };
+    /// The made-up microphone: a 196 Hz tone that swells 1.7 times a second, into the file only.
+    function tone(AC) {
+      var ac = (mic.ac = new AC());
+      var osc = ac.createOscillator();
+      var g = ac.createGain();
+      var lfo = ac.createOscillator();
+      var lg = ac.createGain();
+      osc.frequency.value = 196;
+      g.gain.value = 0.05;
+      lfo.frequency.value = 1.7;
+      lg.gain.value = 0.045;
+      lfo.connect(lg);
+      lg.connect(g.gain);
+      var dest = ac.createMediaStreamDestination();
+      osc.connect(g);
+      g.connect(dest);
+      osc.start();
+      lfo.start();
+      return dest.stream;
+    }
+    mic.start = function () {
+      if (mic.stream) return Promise.resolve(true);
+      mic.state = "asking";
+      paint();
+      var AC = window.AudioContext || window.webkitAudioContext;
+      return input()
+        .then(function (kind) {
+          mic.tone = kind === "tone";
+          if (mic.tone) {
+            if (!AC) throw new Error("no microphone");
+            return tone(AC);
+          }
+          if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw new Error("no microphone");
+          return navigator.mediaDevices.getUserMedia({ audio: true });
+        })
+        .then(
+          function (stream) {
+            // he switched it off again while the Mac was asking
+            if (mic.state !== "asking") {
+              stream.getTracks().forEach(function (t) {
+                t.stop();
+              });
+              return false;
+            }
+            mic.stream = stream;
+            try {
+              if (AC) {
+                var ac2 = mic.ac || (mic.ac = new AC());
+                mic.an = ac2.createAnalyser();
+                mic.an.fftSize = 512;
+                mic.buf = new Uint8Array(mic.an.fftSize);
+                ac2.createMediaStreamSource(stream).connect(mic.an);
+              }
+            } catch (e) {
+              mic.an = null;
+            }
+            mic.state = "on";
+            paint();
+            return true;
+          },
+          function () {
+            mic.want = false;
+            mic.state = "denied";
+            paint();
             return false;
           }
-          mic.stream = stream;
-          try {
-            if (AC) {
-              var ac2 = mic.ac || (mic.ac = new AC());
-              mic.an = ac2.createAnalyser();
-              mic.an.fftSize = 512;
-              mic.buf = new Uint8Array(mic.an.fftSize);
-              ac2.createMediaStreamSource(stream).connect(mic.an);
-            }
-          } catch (e) {
-            mic.an = null;
-          }
-          mic.state = "on";
-          paintMic();
-          return true;
-        },
-        function () {
-          mic.want = false;
-          mic.state = "denied";
-          paintMic();
-          return false;
+        );
+    };
+    mic.stop = function () {
+      if (mic.stream)
+        mic.stream.getTracks().forEach(function (t) {
+          t.stop();
+        });
+      mic.stream = null;
+      mic.an = null;
+      if (mic.ac) {
+        try {
+          mic.ac.close();
+        } catch (e) {}
+        mic.ac = null;
+      }
+      mic.state = "off";
+      mic.level = 0;
+      paint();
+    };
+    var raf = 0;
+    function tick() {
+      raf = 0;
+      if (mic.state !== "on") return;
+      if (mic.an) {
+        mic.an.getByteTimeDomainData(mic.buf);
+        var sum = 0;
+        for (var i = 0; i < mic.buf.length; i++) {
+          var v = (mic.buf[i] - 128) / 128;
+          sum += v * v;
         }
-      );
-  }
-  function micStop() {
-    if (mic.stream)
-      mic.stream.getTracks().forEach(function (t) {
-        t.stop();
-      });
-    mic.stream = null;
-    mic.an = null;
-    if (mic.ac) {
-      try {
-        mic.ac.close();
-      } catch (e) {}
-      mic.ac = null;
+        var rms = Math.sqrt(sum / mic.buf.length);
+        mic.level += (Math.min(1, rms * 9) - mic.level) * 0.35;
+      } else mic.level = 0;
+      var lit = Math.round(mic.level * 5);
+      var all = bars();
+      for (var k = 0; k < all.length; k++) {
+        var row = all[k].children;
+        for (var j = 0; j < row.length; j++) row[j].classList.toggle("on", j < Math.max(1, lit));
+      }
+      raf = requestAnimationFrame(tick);
     }
-    mic.state = "off";
-    mic.level = 0;
-    paintMic();
+    /// The bars move only while there is a microphone to move them.
+    mic.watch = function () {
+      if (mic.state === "on" && !raf) raf = requestAnimationFrame(tick);
+    };
+    return mic;
   }
+  var mic = microphone(
+    function () {
+      paintMic();
+    },
+    function () {
+      return root ? root.querySelectorAll(".hv-level") : [];
+    }
+  );
   /// Five bars that move with his voice: the proof the microphone hears him.
-  function level() {
-    var m = make("span", "hv-level", "", { "aria-hidden": "true" });
+  function level(cls) {
+    var m = make("span", cls || "hv-level", "", { "aria-hidden": "true" });
     for (var i = 0; i < 5; i++) m.appendChild(make("i"));
     return m;
-  }
-  var levelRaf = 0;
-  function tickLevel() {
-    levelRaf = 0;
-    if (mic.state !== "on") return;
-    if (mic.an) {
-      mic.an.getByteTimeDomainData(mic.buf);
-      var sum = 0;
-      for (var i = 0; i < mic.buf.length; i++) {
-        var v = (mic.buf[i] - 128) / 128;
-        sum += v * v;
-      }
-      var rms = Math.sqrt(sum / mic.buf.length);
-      mic.level += (Math.min(1, rms * 9) - mic.level) * 0.35;
-    } else mic.level = 0;
-    var lit = Math.round(mic.level * 5);
-    var all = root.querySelectorAll(".hv-level");
-    for (var k = 0; k < all.length; k++) {
-      var bars = all[k].children;
-      for (var j = 0; j < bars.length; j++) bars[j].classList.toggle("on", j < Math.max(1, lit));
-    }
-    levelRaf = requestAnimationFrame(tickLevel);
   }
   /// The microphone row says what the microphone is.
   function paintMic() {
@@ -216,8 +235,7 @@ window.RichHomeVideo = (function () {
     if (el.micSeg) el.micSeg.paint();
     if (el.micOn) el.micOn.querySelector("b").textContent = mic.state === "asking" ? "Asking…" : "On";
     if (el.micNote) el.micNote.hidden = mic.state !== "denied";
-    // the bars move only while there is a microphone to move them
-    if (mic.state === "on" && !levelRaf) levelRaf = requestAnimationFrame(tickLevel);
+    mic.watch();
   }
   var DENIED = "This window was not given a microphone. The video will have no sound.";
 
@@ -668,7 +686,7 @@ window.RichHomeVideo = (function () {
     stale = null;
     shot = out;
     state = "sheet";
-    micStop(); // the file is whole: the microphone is let go (his choice stays)
+    mic.stop(); // the file is whole: the microphone is let go (his choice stays)
     var g = growth();
     var n = g.state().n;
     var day = g.day();
@@ -739,27 +757,28 @@ window.RichHomeVideo = (function () {
       el.sheetSaved.textContent = text;
       el.sheetSaved.hidden = false;
     };
-    out.blob
-      .arrayBuffer()
-      .then(function (buffer) {
-        return bridge.invoke("home_video_save", new Uint8Array(buffer), { headers: { "x-richos-name": encodeURIComponent(fileName(out)) } });
-      })
-      .then(
-        function (answer) {
-          if (shot !== out) return;
-          el.sheetSave.disabled = false;
-          if (!answer || answer.saved !== true) return;
-          said("Saved to " + answer.folder + " as " + answer.name);
-          el.sheetSave.hidden = true;
-          el.sheetDiscard.textContent = "Done";
-          el.sheetDiscard.focus();
-        },
-        function (error) {
-          if (shot !== out) return;
-          el.sheetSave.disabled = false;
-          said(typeof error === "string" && error ? error : "The video could not be saved there. Choose another folder.");
-        }
-      );
+    handOver(out.blob, fileName(out)).then(
+      function (answer) {
+        if (shot !== out) return;
+        el.sheetSave.disabled = false;
+        if (!answer || answer.saved !== true) return;
+        said("Saved to " + answer.folder + " as " + answer.name);
+        el.sheetSave.hidden = true;
+        el.sheetDiscard.textContent = "Done";
+        el.sheetDiscard.focus();
+      },
+      function (error) {
+        if (shot !== out) return;
+        el.sheetSave.disabled = false;
+        said(typeof error === "string" && error ? error : "The video could not be saved there. Choose another folder.");
+      }
+    );
+  }
+  /// The file and the name to suggest, handed to the Mac's own save window (`home_video_save`).
+  function handOver(blob, name) {
+    return blob.arrayBuffer().then(function (buffer) {
+      return window.RichBridge.invoke("home_video_save", new Uint8Array(buffer), { headers: { "x-richos-name": encodeURIComponent(name) } });
+    });
   }
   function buildShared() {
     el.count = make("div", "hv-count hv-skip", "", { role: "status" });
@@ -886,8 +905,8 @@ window.RichHomeVideo = (function () {
       },
       function (k) {
         mic.want = k === "on";
-        if (mic.want) micStart();
-        else micStop();
+        if (mic.want) mic.start();
+        else mic.stop();
       }
     );
     el.micOn = el.micSeg.items[1].b;
@@ -947,7 +966,7 @@ window.RichHomeVideo = (function () {
     state = "choosing";
     if (mic.state === "denied") mic.state = "off";
     paintMic();
-    if (mic.want && !mic.stream) micStart(); // his choice from last time: the microphone again
+    if (mic.want && !mic.stream) mic.start(); // his choice from last time: the microphone again
     el.panel.hidden = false;
     paintState();
     el.go.focus();
@@ -963,7 +982,7 @@ window.RichHomeVideo = (function () {
   /// Back to the button alone: the microphone is let go (his choice stays).
   function rest() {
     state = "idle";
-    micStop();
+    mic.stop();
     paintState();
   }
 
@@ -1066,6 +1085,8 @@ window.RichHomeVideo = (function () {
     build: build,
     onCount: onCount,
     left: left,
+    /// What the recorder of the whole app is made of too (round 79, `video-anywhere.js`).
+    parts: { make: make, icon: icon, level: level, fmt: fmt, clock: clock, microphone: microphone, radius: radius, plate: plate, ground: ground, paintPointer: paintPointer, mimeType: mimeType, even: even, handOver: handOver, DENIED: DENIED },
     state: function () {
       return { state: state, mic: mic.state, stops: opts.stops, pointer: opts.pointer, frames: rec ? rec.frames : shot ? shot.frames : 0, ended: shot ? shot.ended || null : null, saved: !!(el.sheetSaved && !el.sheetSaved.hidden && el.sheetSave.hidden) };
     },

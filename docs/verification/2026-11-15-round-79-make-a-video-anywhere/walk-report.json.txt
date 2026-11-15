@@ -1,0 +1,136 @@
+{
+  "vm": "walk-d6a4a0af2fbc",
+  "steps": {
+    "seed": {
+      "pass": true,
+      "result": {
+        "repository": "alder: 314 documents, 8 commits",
+        "teammates": "3",
+        "launches": [
+          "window",
+          "window"
+        ],
+        "memories": 322
+      },
+      "seconds": 124.2
+    },
+    "button": {
+      "pass": true,
+      "result": {
+        "nothing_of_the_recorder_before_settings": true,
+        "make_a_video": {
+          "x": 1328,
+          "y": 166,
+          "w": 160,
+          "h": 36
+        },
+        "reads": "Make a video",
+        "settings": {
+          "x": 455,
+          "y": 159,
+          "w": 1070,
+          "h": 764
+        },
+        "frame": "1-button.png",
+        "frame_reads_make_a_video": true,
+        "choices_frame": "2-choices.png",
+        "rows": [
+          true,
+          true
+        ],
+        "choices": [
+          true,
+          true,
+          true,
+          true
+        ],
+        "as_first_opened": [
+          "Off",
+          "Shown"
+        ],
+        "a_choice_for_when_it_stops": [],
+        "escape_closed_the_choices": true,
+        "settings_stayed": true
+      },
+      "seconds": 47.7
+    },
+    "record": {
+      "pass": true,
+      "result": {
+        "count_frame": "3-count.png",
+        "settings_closed_for_the_count": true,
+        "stop": {
+          "x": 1311,
+          "y": 113,
+          "w": 167,
+          "h": 36
+        },
+        "settings_button": {
+          "x": 1485,
+          "y": 111,
+          "w": 40,
+          "h": 40
+        },
+        "recording_frame": "4-recording.png",
+        "another_page": {
+          "still_recording": true,
+          "frame": "5-another-page.png"
+        },
+        "highlighted": {
+          "line": {
+            "x": 640,
+            "y": 277,
+            "w": 737,
+            "h": 10
+          },
+          "still_recording": true,
+          "frame": "6-highlighted.png"
+        },
+        "in_settings": {
+          "the_heading_button_reads": "Stop recording",
+          "frame": "7-in-settings.png"
+        },
+        "escape": {
+          "closed_settings": true,
+          "still_recording": true
+        },
+        "home": {
+          "still_recording": true,
+          "the_home_screens_own_button_gave_its_place": true,
+          "frame": "8-home.png"
+        },
+        "pressed_stop_after_s": 33.7,
+        "sheet_frame": "9-sheet.png",
+        "still_on_the_home_screen": true,
+        "sheet_says": "0:35 \u00b7 with your voice \u00b7 with the mouse pointer \u00b7 1,400 \u00d7 836 \u00b7 0.1 MB",
+        "save_window_frame": "10-anywhere-save-window.png",
+        "said": "Saved to Documents as RichOS-2026-11-15-at-15.57.23.mp4",
+        "saved_frame": "10-anywhere-saved.png",
+        "folder": "Documents",
+        "name": "RichOS-2026-11-15-at-15.57.23.mp4",
+        "guest_path": "/Users/admin/Documents/RichOS-2026-11-15-at-15.57.23.mp4",
+        "app_log": "[richos] home video: saved 133176 byte(s) to /Users/admin/Documents/RichOS-2026-11-15-at-15.57.23.mp4",
+        "read_back": {
+          "file": "10-anywhere-RichOS-2026-11-15-at-15.57.23.mp4",
+          "bytes": 133176,
+          "seconds": 11.67,
+          "video": null,
+          "audio": {
+            "codec": "aac",
+            "sample_rate": 48000,
+            "mean_volume_db": -27.5
+          },
+          "decodes": true,
+          "frames": []
+        },
+        "sheet_seconds": 35,
+        "picture_in_the_file": false,
+        "whole": false,
+        "done_closed_the_sheet": true,
+        "stop_is_gone": true,
+        "the_home_screens_own_button_is_back": true
+      },
+      "seconds": 70.2
+    }
+  }
+}

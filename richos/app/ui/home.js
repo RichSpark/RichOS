@@ -1015,6 +1015,10 @@ window.RichHome = (function () {
       // Enter in Bust a bug's panel sends the answer to Rich; it never goes through the door.
       if (t.closest("#bugdock")) return;
       if (t.closest(".settings") && settingsMenuUp()) return;
+      // Enter or Space on a piece of the recorder that stands on this screen while the whole app is
+      // recorded (round 79, `video-anywhere.js`: the red Stop, its sheet's buttons and player, its
+      // choices) is that piece's: it never goes through the door.
+      if (t.closest(".rv-skip")) return;
       if (t.closest("#home button, #home a[href], #home input, #home textarea, #home select, #home [tabindex]")) return;
     }
     e.preventDefault();
@@ -2200,6 +2204,10 @@ window.RichHome = (function () {
     // layer): its answer box takes focus, and pulling it back to the door
     // would leave a report on screen that cannot be answered.
     if (t.closest && t.closest("#bugdock")) return;
+    // ...AND THE SHEET OF A RECORDING OF THE WHOLE APP THAT WAS STOPPED ON THIS SCREEN (round 79,
+    // `video-anywhere.js`), which stands on top of it: its Save video takes focus, and pulling it
+    // back to the door would make Enter there open Talk to Rich with the video unsaved.
+    if (t.closest && t.closest(".rv-skip")) return;
     // ...AND THE TOKEN SPEND SCREEN (round 22.1, `spend.js`), which opens from Settings OVER this
     // screen and covers it whole: its Back takes focus, and pulling it back to the door would put
     // the keyboard on a screen nobody can see.
