@@ -215,13 +215,26 @@ def build_walk(folders, guest):
             """Issue #19: "Make a video" with the microphone on showed "Call detected". The webview
             records in WebKit's media process, not the app's pid or bundle id; the watcher now leaves
             out every process macOS holds RichOS responsible for."""
-            for _ in range(6):
+            # The home screen: a new user's sheets ("Not now") declined whenever they come up, then
+            # the rail's Home or the RichOS mark (openings-walk.py's to_home, ghost-walk.py's mark).
+            seen = []
+            for _ in range(20):
                 if self.nodes('--id', 'home-video'):
                     break
-                self.ax('click', '--id', 'nr-home', '--first')
-                time.sleep(3)
+                for sel in (('--title', 'Not now', '--role', 'AXButton'), ('--id', 'nr-home'),
+                            ('--title', 'go to the home screen', '--contains')):
+                    try:
+                        self.ax('click', *sel, '--first')
+                        seen.append(sel[1])
+                        time.sleep(3)
+                        break
+                    except StepFailed:
+                        continue
+                else:
+                    time.sleep(3)
             else:
-                raise StepFailed('Make a video is not on the home screen')
+                self.shot('own-mic-no-home.png')
+                raise StepFailed('Make a video is not on the home screen; pressed: ' + ', '.join(seen))
             prompts, in_use = self.log_has('ShowPrompt'), self.log_has('microphone in use')
             self.ax('click', '--id', 'home-video', '--first')
             end = time.monotonic() + 15
