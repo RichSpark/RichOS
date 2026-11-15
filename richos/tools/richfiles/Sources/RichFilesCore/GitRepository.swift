@@ -153,11 +153,15 @@ public struct GitRepository: Sendable {
         return "Detached at " + head
     }
 
-    public func history(tip: String, limit: Int) throws -> [GitCommit] {
-        guard Self.isObjectID(tip), (1...100_000).contains(limit) else { throw GitReadError.unreadable }
+    public func history(tip: String, limit: Int, offset: Int = 0) throws -> [GitCommit] {
+        guard Self.isObjectID(tip), limit > 0, offset >= 0, offset <= Int(Int32.max) - limit else {
+            throw GitReadError.unreadable
+        }
+        // Ask Git to draw every lane up to the page. --skip would omit the
+        // already-drawn lanes and make connections jump at a page boundary.
         let reply = try call(["log", "--graph", "--no-color", "--no-notes", "--no-decorate", "--no-show-signature",
-                              "--max-count=\(limit)", "--format=format:%x00%H%x00%P%x00%aI%x00%an%x00%s", tip, "--"],
-                             cap: 32 * 1024 * 1024)
+                              "--max-count=\(offset + limit)", "--format=format:%x00%H%x00%P%x00%aI%x00%an%x00%s", tip, "--"],
+                             cap: 32 * 1024 * 1024, skipGraphRows: offset)
         var commits: [GitCommit] = []
         var continuation: [String] = []
         for line in reply.string.split(separator: "\n", omittingEmptySubsequences: false) {
@@ -393,9 +397,10 @@ public struct GitRepository: Sendable {
         return lstat(url.path, &status) == 0 && status.st_mode & S_IFMT == S_IFLNK
     }
 
-    private func call(_ args: [String], cap: Int = 1024 * 1024, allow: Set<Int32> = [0]) throws -> GitReply {
+    private func call(_ args: [String], cap: Int = 1024 * 1024, allow: Set<Int32> = [0],
+                      skipGraphRows: Int = 0) throws -> GitReply {
         try verifyIdentity()
-        let reply = try Self.run(git, root, args, cap: cap, allow: allow)
+        let reply = try Self.run(git, root, args, cap: cap, allow: allow, skipGraphRows: skipGraphRows)
         try verifyIdentity()
         return reply
     }
@@ -413,7 +418,7 @@ public struct GitRepository: Sendable {
     }
 
     private static func run(_ git: URL, _ directory: URL, _ args: [String], cap: Int = 1024 * 1024,
-                            allow: Set<Int32> = [0]) throws -> GitReply {
+                            allow: Set<Int32> = [0], skipGraphRows: Int = 0) throws -> GitReply {
         try Task.checkCancellation()
         let process = Process()
         let output = Pipe()
@@ -441,6 +446,8 @@ public struct GitRepository: Sendable {
         }
         let stop = DispatchTime.now().uptimeNanoseconds + 12_000_000_000
         var buffers = [Data(), Data()]
+        var graphRowsLeft = skipGraphRows
+        var graphPending = Data()
         var descriptors = [output, errors].map { pollfd(fd: $0.fileHandleForReading.fileDescriptor, events: Int16(POLLIN), revents: 0) }
         var block = [UInt8](repeating: 0, count: 32_768)
         while descriptors.contains(where: { $0.fd >= 0 }) {
@@ -458,8 +465,23 @@ public struct GitRepository: Sendable {
                 if count == 0 {
                     descriptors[index].fd = -1
                 } else if index == 0 {
-                    guard buffers[0].count + count <= cap else { throw GitReadError.tooLarge }
-                    buffers[0].append(contentsOf: block.prefix(count))
+                    if graphRowsLeft == 0 {
+                        guard buffers[0].count + count <= cap else { throw GitReadError.tooLarge }
+                        buffers[0].append(contentsOf: block.prefix(count))
+                    } else {
+                        graphPending.append(contentsOf: block.prefix(count))
+                        var start = graphPending.startIndex
+                        while graphRowsLeft > 0, let end = graphPending[start...].firstIndex(of: 10) {
+                            if graphPending[start..<end].contains(0) { graphRowsLeft -= 1 }
+                            start = end + 1
+                        }
+                        graphPending = Data(graphPending[start...])
+                        guard graphPending.count <= cap else { throw GitReadError.tooLarge }
+                        if graphRowsLeft == 0 {
+                            buffers[0] = graphPending
+                            graphPending.removeAll()
+                        }
+                    }
                 } else if buffers[1].count < 32_768 {
                     buffers[1].append(contentsOf: block.prefix(min(count, 32_768 - buffers[1].count)))
                 }

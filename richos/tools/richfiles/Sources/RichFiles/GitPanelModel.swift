@@ -64,7 +64,6 @@ public final class GitPanelModel: ObservableObject {
     private(set) var context: GitPanelContext?
     private var folder: URL?
     private var tip: String?
-    private var maximum = 160
     private var verifiedLands: [String: GitLandEvidence] = [:]
     private var historyTask: Task<Void, Never>?
     private var detailTask: Task<Void, Never>?
@@ -226,7 +225,6 @@ public final class GitPanelModel: ObservableObject {
 
     func loadMore() {
         guard hasMore, !loading else { return }
-        maximum = min(100_000, maximum * 2)
         loadHistory(newTip: false, nextPage: true)
     }
 
@@ -252,7 +250,6 @@ public final class GitPanelModel: ObservableObject {
             commits = []
             repository = nil
             verifiedLands = [:]
-            maximum = 160
             repositoryCheckout = nil
         }
         if newTip { tip = nil; hasMore = false; offMain = 0; shallow = false }
@@ -284,7 +281,7 @@ public final class GitPanelModel: ObservableObject {
         let evidence = chosen?.lands ?? snapshot?.lands ?? []
         let scope = scope
         let oldTip = tip
-        let limit = maximum
+        let currentPage = nextPage ? commits : []
         let started = ProcessInfo.processInfo.systemUptime
         historyTask = Task {
             do {
@@ -304,18 +301,15 @@ public final class GitPanelModel: ObservableObject {
                         for land in evidence where verified.reachable.contains(land.id) { reachable[land.id] = land }
                         offMain = verified.offMain
                     }
-                    var actual = limit
-                    var commits: [GitCommit] = []
+                    var commits = currentPage
+                    var more = false
                     if scope == .all {
                         repeat {
-                            commits = try repo.history(tip: tip, limit: min(actual + 1, 100_000))
-                            if let preferredCommit, !commits.contains(where: { $0.id == preferredCommit }),
-                               commits.count > actual, actual < 100_000 {
-                                actual = min(100_000, actual * 2)
-                            } else {
-                                break
-                            }
-                        } while true
+                            let limit = min(max(160, commits.count), 2000)
+                            let page = try repo.history(tip: tip, limit: limit + 1, offset: commits.count)
+                            more = page.count > limit
+                            commits.append(contentsOf: page.prefix(limit))
+                        } while more && preferredCommit.map { id in !commits.contains { $0.id == id } } == true
                     } else {
                         let order = reachable.values.sorted(by: { ($0.at, $0.id) > ($1.at, $1.id) }).map(\.id)
                         commits = try repo.commits(order)
@@ -324,10 +318,9 @@ public final class GitPanelModel: ObservableObject {
                     let chosenCommit = preferredCommit ?? path.flatMap { path in
                         commits.first { reachable[$0.id]?.paths.contains(path) == true }?.id
                     }
-                    return HistoryResult(repo: repo, tip: tip, shallow: shallow,
-                                         commits: scope == .all ? Array(commits.prefix(actual)) : commits,
+                    return HistoryResult(repo: repo, tip: tip, shallow: shallow, commits: commits,
                                          reachable: reachable, offMain: offMain, checkout: try? repo.checkoutName(),
-                                         hasMore: scope == .all && commits.count > actual, preferredCommit: chosenCommit)
+                                         hasMore: more, preferredCommit: chosenCommit)
                 }
                 guard !Task.isCancelled, revision == historyRevision, open else { return }
                 repository = result.repo
@@ -338,7 +331,6 @@ public final class GitPanelModel: ObservableObject {
                 offMain = result.offMain
                 repositoryCheckout = result.checkout
                 hasMore = result.hasMore
-                maximum = max(limit, commits.count)
                 loading = false
                 if let id = result.preferredCommit, let row = commits.first(where: { $0.id == id }) {
                     select(row, path: preferredFile, direct: direct)

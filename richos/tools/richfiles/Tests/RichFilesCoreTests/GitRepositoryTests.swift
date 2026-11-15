@@ -47,6 +47,9 @@ final class GitRepositoryTests: XCTestCase {
         let commits = try repo.history(tip: pinned, limit: 20)
         XCTAssertEqual(commits.first?.parents, [old, reviewed])
         XCTAssertEqual(Set(commits.map(\.id)), Set([old, reviewed, pinned]))
+        let subsequent = try repo.history(tip: pinned, limit: 2, offset: 1)
+        XCTAssertEqual(subsequent.map(\.id), commits.dropFirst().map(\.id))
+        XCTAssertEqual(subsequent.map(\.graph), commits.dropFirst().map(\.graph))
 
         let marker = GitLandEvidence(id: pinned, paths: [], before: old, reviewed: reviewed, at: 0)
         let comparison = try repo.comparison(XCTUnwrap(commits.first), land: marker)
