@@ -68,8 +68,10 @@ pub async fn richfiles_place_pane(window: WebviewWindow, bounds: PaneBounds) -> 
 /// ever the library and the system frameworks it brings in were read from the disk as well
 /// (`scripts/testvm/richfiles-open-walk.py` measures it). Here the library is loaded on a
 /// background thread and the pane is then built, hidden, on the main thread, so the first click
-/// only shows it. The page asks for this once the app is usable (`ui/richfiles-page.js`), never
-/// on the launch path.
+/// only shows it. Building the pane holds the window still for a fraction of a second, so the
+/// page asks for this at the first quiet moment once the app is usable (`ui/richfiles-page.js`):
+/// never on the launch path and never over the opening screen or the home screen, whose pictures
+/// move. The line this writes says how long each half took and when.
 #[richos_command::command]
 pub async fn richfiles_prepare_pane(window: WebviewWindow) -> Result<(), String> {
     if window.label() != "main" {
@@ -77,6 +79,11 @@ pub async fn richfiles_prepare_pane(window: WebviewWindow) -> Result<(), String>
     }
     #[cfg(target_os = "macos")]
     {
+        let since_start = || {
+            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
+            crate::launch_timing::process_started_ms().map_or(0, |start| now.saturating_sub(start))
+        };
+        let asked = since_start();
         let started = std::time::Instant::now();
         tauri::async_runtime::spawn_blocking(mac::load_ahead)
             .await
@@ -93,9 +100,11 @@ pub async fn richfiles_prepare_pane(window: WebviewWindow) -> Result<(), String>
         let (result, pane) = receive.await.map_err(|_| "The RichOS window closed.".to_owned())?;
         result?;
         eprintln!(
-            "[richos] RichFiles ready before its first click: library {} ms on a background thread, pane {} ms on the main thread",
+            "[richos] RichFiles ready before its first click: library {} ms on a background thread, pane {} ms on the main thread, \
+             asked {asked} ms and ready {} ms after the process started",
             library.as_millis(),
-            pane.as_millis()
+            pane.as_millis(),
+            since_start()
         );
         Ok(())
     }

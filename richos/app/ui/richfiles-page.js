@@ -69,6 +69,7 @@
   const size = new ResizeObserver(schedule);
   const overlays = new MutationObserver(schedule);
   function show() {
+    prepared = true; // showing it builds it: nothing is left to make ready
     page.hidden = false;
     document.body.classList.add("page-open");
     size.observe(pane);
@@ -100,20 +101,33 @@
   // have before the user click on the RichFiles icon for the first time."
   //
   // The first click used to load RichFiles and build its pane while the window stood still. The
-  // shell now does both ahead of it (`richfiles_prepare_pane`), asked once: after `main.js` says
-  // the app is usable, so none of it is on the launch path, and after the opening screen has
-  // left, so it never plays over it. A click that comes first is served as before.
+  // shell now does both ahead of it (`richfiles_prepare_pane`), asked once, at the first quiet
+  // moment after `main.js` says the app is usable, so none of it is on the launch path.
+  //
+  // A QUIET MOMENT, because building the pane holds the window still for a fraction of a second
+  // (the same work the first click used to wait for): the opening screen and the home screen
+  // have left, since their pictures move and would be seen to stop, and no key was pressed and
+  // nothing was clicked or scrolled for QUIET_MS, so it does not land on his typing. The rail is
+  // only on screen once both have left, so this is always before the icon can be clicked. A
+  // click that comes first is served as before.
+  const QUIET_MS = 1000;
   let usable = false;
   let offered = false;
   let prepared = false;
+  let lastInput = 0;
+  const quiet = () => !window.RichSplash?.isUp?.() && !window.RichHome?.isOpen?.()
+    && performance.now() - lastInput >= QUIET_MS;
   function prepare() {
     if (prepared || !usable || !offered) return;
-    if (window.RichSplash?.isUp?.()) {
+    if (!quiet()) {
       setTimeout(prepare, 250);
       return;
     }
     prepared = true;
     bridge.invoke("richfiles_prepare_pane", {}).catch(() => {});
+  }
+  for (const type of ["keydown", "pointerdown", "wheel"]) {
+    window.addEventListener(type, () => { lastInput = performance.now(); }, { capture: true, passive: true });
   }
   window.RichFilesReady = { start() { usable = true; prepare(); } };
   if (window.__richosRichFilesReady) window.RichFilesReady.start();

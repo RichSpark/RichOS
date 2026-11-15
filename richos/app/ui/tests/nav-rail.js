@@ -221,13 +221,16 @@ async function verifyRichFilesColdDock(sourcePath) {
 /// click can and should be done in those few seconds that we are almost always guaranteed to
 /// have before the user click on the RichFiles icon for the first time"). `richfiles-page.js`
 /// alone, against a shell that records what it is asked: the shell is asked to prepare RichFiles
-/// once, with no click, only after the app is usable and the opening screen has left, and never
-/// when this build has no RichFiles.
+/// once, with no click on its icon, at the first quiet moment after the app is usable (the opening
+/// screen and the home screen gone, a second with no key, click or scroll), never after RichFiles
+/// has been shown and never when this build has no RichFiles.
 async function verifyRichFilesMadeReady(sourcePath) {
   async function load({ available, readyFirst }) {
     const trace = [];
     const timers = [];
-    const splash = { up: true };
+    const listeners = {};
+    const screen = { opening: true, home: true, now: 5000 };
+    let hooks;
     const nodes = {
       "nr-richfiles": { hidden: true },
       "richfiles-page": { hidden: true },
@@ -235,9 +238,10 @@ async function verifyRichFilesMadeReady(sourcePath) {
       "richfiles-pane-error": { hidden: true },
     };
     const window = {
-      addEventListener() {},
-      RichSplash: { isUp: () => splash.up },
-      RichNavRail: { registerPage() {}, showPage(name) { trace.push("show " + name); } },
+      addEventListener(type, handler) { listeners[type] = handler; },
+      RichSplash: { isUp: () => screen.opening },
+      RichHome: { isOpen: () => screen.home },
+      RichNavRail: { registerPage(_name, registered) { hooks = registered; }, showPage(name) { trace.push("show " + name); } },
       RichBridge: {
         async invoke(command, args) {
           if (command === "richfiles_pane_available") return available;
@@ -255,43 +259,70 @@ async function verifyRichFilesMadeReady(sourcePath) {
       window, innerWidth: 1000, innerHeight: 700,
       document: { getElementById: (id) => nodes[id], body: { classList: { add() {} } } },
       ResizeObserver: Observer, MutationObserver: Observer,
+      performance: { now: () => screen.now },
       requestAnimationFrame() { return 1; },
       setTimeout(callback) { timers.push(callback); return timers.length; },
     }, { filename: sourcePath });
     await new Promise(setImmediate);
-    const tick = async () => { for (const timer of timers.splice(0)) timer(); await new Promise(setImmediate); };
-    return { trace, splash, tick, usable: () => window.RichFilesReady.start() };
+    // Time passes, then every waiting timer runs.
+    const later = async (ms) => {
+      screen.now += ms;
+      for (const timer of timers.splice(0)) timer();
+      await new Promise(setImmediate);
+    };
+    return { trace, screen, later, usable: () => window.RichFilesReady.start(), input: (type) => listeners[type](), show: () => hooks.show() };
   }
 
-  // The app becomes usable while the opening screen is still up: nothing yet; then it leaves.
   const first = await load({ available: true, readyFirst: false });
   assertEqual(first.trace, [], "nothing is prepared before the app is usable");
   first.usable();
-  await first.tick();
+  await first.later(3000);
   assertEqual(first.trace, [], "nothing is prepared while the opening screen is up");
-  first.splash.up = false;
-  await first.tick();
-  assertEqual(first.trace, ["prepare"], "RichFiles is prepared once the opening screen has left, with no click");
+  first.screen.opening = false;
+  await first.later(3000);
+  assertEqual(first.trace, [], "nothing is prepared while the home screen is up: its picture moves");
+  first.input("pointerdown");
+  first.screen.home = false;
+  await first.later(600);
+  assertEqual(first.trace, [], "nothing is prepared within a second of a click");
+  first.input("keydown");
+  await first.later(600);
+  first.input("wheel");
+  await first.later(600);
+  assertEqual(first.trace, [], "nothing is prepared within a second of a key press or a scroll");
+  await first.later(1000);
+  assertEqual(first.trace, ["prepare"], "RichFiles is prepared after a quiet second, with no click on its icon");
   first.usable();
-  await first.tick();
+  await first.later(5000);
   assertEqual(first.trace, ["prepare"], "RichFiles is prepared once");
 
-  // `main.js` reached its usable line before this script ran, and no opening screen is up.
+  // `main.js` reached its usable line before this script ran; no opening screen, no home screen.
   const second = await load({ available: true, readyFirst: true });
-  second.splash.up = false;
-  await second.tick();
-  assertEqual(second.trace, ["prepare"], "a page that loads after the app is usable prepares RichFiles when it does");
+  second.screen.opening = false;
+  second.screen.home = false;
+  await second.later(250);
+  assertEqual(second.trace, ["prepare"], "a page that loads after the app is usable prepares RichFiles at its first quiet moment");
+
+  // A click on the icon that comes first shows RichFiles as before; nothing is left to prepare.
+  const third = await load({ available: true, readyFirst: true });
+  third.screen.opening = false;
+  third.show();
+  third.screen.home = false;
+  await third.later(5000);
+  assertEqual(third.trace.filter((t) => t === "prepare"), [], "RichFiles that was shown first is not prepared afterwards");
 
   // A build without RichFiles has nothing to prepare.
-  const third = await load({ available: false, readyFirst: true });
-  third.splash.up = false;
-  await third.tick();
-  assertEqual(third.trace, [], "a build without RichFiles prepares nothing");
-  return "prepared once, with no click: after the app is usable and the opening screen has left; never without RichFiles";
+  const fourth = await load({ available: false, readyFirst: true });
+  fourth.screen.opening = false;
+  fourth.screen.home = false;
+  await fourth.later(5000);
+  assertEqual(fourth.trace, [], "a build without RichFiles prepares nothing");
+  return "prepared once at the first quiet moment: the app usable, the opening and home screens gone, a second with no key, click or scroll";
 }
 
 /// The same in the real shell: `main.js` tells the RichFiles page when the app is usable, and the
-/// page asks the shell to prepare RichFiles with the opening screen gone and no click made.
+/// page asks the shell to prepare RichFiles only once the home screen has been left, with no click
+/// on the RichFiles icon.
 async function verifyRichFilesMadeReadyInShell(browser) {
   const context = await newContext(browser, "dark", {});
   const page = await context.newPage();
@@ -309,6 +340,7 @@ async function verifyRichFilesMadeReadyInShell(browser) {
               window.__richFilesAsked.push({
                 command, visible: args && args.bounds ? args.bounds.visible : null,
                 openingUp: !!(window.RichSplash && window.RichSplash.isUp()),
+                homeUp: !!(window.RichHome && window.RichHome.isOpen()),
                 pageHidden: document.getElementById("richfiles-page").hidden,
               });
               return;
@@ -320,13 +352,21 @@ async function verifyRichFilesMadeReadyInShell(browser) {
       });
     });
     await page.goto(APP);
+    await shellSettled(page);
+    await page.waitForFunction(() => window.RichHome.isOpen() && !window.RichSplash.isUp(), null, { timeout: 30000 });
+    // Longer than the quiet second: on the home screen nothing is prepared, however long it is up.
+    // load-bound: an absence. Under any load nothing is asked on the home screen, so a slower host cannot fail this; the rule itself is proved on a clock the check above controls.
+    await page.waitForTimeout(2500);
+    const onHome = await page.evaluate(() => window.__richFilesAsked.filter((a) => a.command === "richfiles_prepare_pane"));
+    assertEqual(onHome, [], "nothing is prepared while the home screen is up");
+    await leaveHome(page);
     await page.waitForFunction(() => window.__richFilesAsked.some((a) => a.command === "richfiles_prepare_pane"), null, { timeout: 30000 });
     const asked = await page.evaluate(() => window.__richFilesAsked);
     assertEqual(asked.filter((a) => a.command === "richfiles_prepare_pane"),
-      [{ command: "richfiles_prepare_pane", visible: null, openingUp: false, pageHidden: true }],
-      "RichFiles is prepared once, after the opening screen has left, with its page still hidden");
-    assertEqual(asked.filter((a) => a.visible === true), [], "nothing showed RichFiles: no click was made");
-    return "asked once by the real shell, the opening screen gone, the RichFiles page hidden";
+      [{ command: "richfiles_prepare_pane", visible: null, openingUp: false, homeUp: false, pageHidden: true }],
+      "RichFiles is prepared once, with the opening and home screens gone and its own page still hidden");
+    assertEqual(asked.filter((a) => a.visible === true), [], "nothing showed RichFiles: its icon was not clicked");
+    return "asked once by the real shell after the home screen was left, the RichFiles page hidden";
   } finally {
     await context.close();
   }
@@ -336,7 +376,7 @@ async function main() {
   const run = createRun("The navigation rail (round 58, version A): items, selection, the moved square and initials, contrast");
   await run.check("RichFiles accepts a cold dock request queued while its listener starts", () =>
     verifyRichFilesColdDock(path.join(UI_DIR, "richfiles-page.js")));
-  await run.check("RichFiles is made ready before the first click: once the app is usable and the opening screen has left", () =>
+  await run.check("RichFiles is made ready before the first click, at the first quiet moment once the app is usable", () =>
     verifyRichFilesMadeReady(path.join(UI_DIR, "richfiles-page.js")));
   const { webkit } = loadPlaywright();
   const browser = await webkit.launch();
