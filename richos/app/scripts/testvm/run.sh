@@ -6,7 +6,7 @@
 #                 [--vm <name>] [--keep] [--engine <engine.tar.gz>] [--no-tailnet]
 #   testvm/run.sh --no-app --home <fixture-home-dir> [--vm <name>] [--keep] [--no-tailnet]
 #   testvm/run.sh --bundle <...> --home <fixture-home-dir> --new-user [--vm <name>] [--no-tailnet]
-#   any of these with --audio: a guest sound device, its output muted before the app launches
+#   any of these with --audio: the guest's sound passed through to this Mac, muted before the app launches
 #
 # --new-user: the app is launched the way a person's first double-click launches it,
 # with HOME and nothing else the harness normally hands it: no RICHOS_CLAUDE_BIN, no
@@ -17,14 +17,17 @@
 # out. A walk signs in later with `claude-login.sh push` when it means to. Every
 # harness default left out here is one a new user does not have: a first-run walk
 # that inherits them proves the harness, not the product (new-user-walk.py).
-# A GUEST HAS NO SOUND DEVICE UNLESS ITS CALLER ASKS FOR ONE BY NAME (the CEO, 2026-11-15: "I've
+# NO GUEST'S SOUND REACHES THIS MAC UNLESS ITS CALLER ASKS BY NAME (the CEO, 2026-11-15: "I've
 # heard the start sound well over 40 times now"; standing rule: no check that is not an audio test
-# plays sound on this Mac). Every guest boots with tart's --no-audio: nothing it plays reaches this
-# Mac's speakers and nothing it records reads this Mac's microphone. --no-audio is still accepted
-# and changes nothing.
-# --audio: boot the guest WITH its sound device, which passes audio through to the HOST, for a walk
-# that starts voice (voice needs an output device to start: richos-voice playout.rs). Its output is
-# muted HERE and read back before anything launches (the app's opening plays a start sound at
+# plays sound on this Mac). Every guest boots with tart's --no-audio, which leaves the guest only
+# "a null speaker" (tart 2.33.1 Sources/tart/VM.swift: an output stream with no host sink; the
+# guest lists "Apple Virtual Sound Device", output only, no input): nothing it plays reaches this
+# Mac's speakers and nothing reads this Mac's microphone. No tart flag removes that null speaker.
+# --no-audio is still accepted and changes nothing.
+# --audio: boot the guest WITH the host passthrough (input and output, tart's default), for a walk
+# that starts voice and asks for it (run-walk.py VOICE_WALKS; voice needs an output device to
+# start, richos-voice playout.rs, and whether the null speaker alone serves it is unproven,
+# esc-20261115T081129Z-97865c5f). Its output is muted HERE and read back before anything launches (the app's opening plays a start sound at
 # every launch); a guest that does not read back muted is refused, so nothing the guest plays
 # reaches this Mac's speakers. A walk that runs a real call in the guest never asks for it and
 # installs its own virtual audio devices (the Mac call lab; run-walk.py refuses --audio to it).
@@ -185,7 +188,7 @@ clean_up_this_runs_clone() {
   fi
 }
 
-# --- 2-a. a guest sound device is muted before anything can play -------------
+# --- 2-a. a guest's passthrough is muted before anything can play ------------
 # Only with --audio, and FIRST, before the consent, the claude binary or the app: the app's opening
 # plays its start sound at every launch, and walks that muted the guest only inside their own
 # voice steps had already let it through to this Mac's speakers (the CEO, 2026-11-15). A guest

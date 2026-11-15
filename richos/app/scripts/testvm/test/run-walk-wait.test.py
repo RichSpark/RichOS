@@ -96,10 +96,10 @@ plain = run_walk.boot_argv('vm1', 'b.zip', 'home', 'e.tar.gz', False)
 check('a walk that does not pair a phone boots with --no-tailnet', '--no-tailnet' in plain, plain)
 phone = run_walk.boot_argv('vm1', 'b.zip', 'home', 'e.tar.gz', True)
 check('--tailnet keeps the join for a walk that does pair a phone', '--no-tailnet' not in phone, phone)
-# A GUEST HAS NO SOUND DEVICE UNLESS ITS CALLER ASKS FOR ONE BY NAME (the CEO, 2026-11-15: "I've
-# heard the start sound well over 40 times now"): run.sh's default is no device, so a default boot
-# asks for none, and --audio is the only way to one.
-check('a walk boots with no guest sound device by default (no --audio)', '--audio' not in plain, plain)
+# NO GUEST'S SOUND REACHES THIS MAC UNLESS ITS CALLER ASKS BY NAME (the CEO, 2026-11-15: "I've
+# heard the start sound well over 40 times now"): run.sh's default is tart's null speaker only, so a
+# default boot asks for nothing, and --audio is the only way to the host passthrough.
+check('a walk boots with no host passthrough by default (no --audio)', '--audio' not in plain, plain)
 loud = run_walk.boot_argv('vm1', None, 'home', '', False, audio=True)
 check('audio=True, and only that, asks run.sh for --audio (which mutes it before anything launches)',
       '--audio' in loud and '--no-app' in loud, loud)
@@ -140,7 +140,7 @@ for name in sorted(run_walk.CALL_WALKS):
     check(name + ' (a call on its own virtual devices) is refused --audio', outcome == 'exit 2' and 'never --audio' in said,
           (outcome, said))
     _, _, call_boot = booted_with('--no-audio', command=(str(HERE / name), '--out', '/tmp/x'))
-    check(name + ' boots with no guest sound device', call_boot is not None and '--audio' not in call_boot, call_boot)
+    check(name + ' boots with no host passthrough', call_boot is not None and '--audio' not in call_boot, call_boot)
 outcome, said = main_with('--audio', '--no-audio')
 check('--audio beside --no-audio is refused', outcome == 'exit 2' and 'contradict' in said, (outcome, said))
 outcome, said = main_with(command=(str(HERE / 'delta-walk.py'), '--out', '/tmp/x'))

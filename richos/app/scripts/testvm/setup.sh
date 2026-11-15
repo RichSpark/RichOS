@@ -102,7 +102,7 @@ boot_base() {
   if vm_running "$TESTVM_BASE_VM"; then log "base VM already running"; return; fi
   log "booting base VM headless (no window on the host)..."
   # Respect the host's power and sleep policy, including during provisioning.
-  # --no-audio: no guest has a sound device unless a walk asks for one (run.sh --audio; the CEO,
+  # --no-audio: no guest's sound is passed to this Mac unless a walk asks (run.sh --audio; the CEO,
   # 2026-11-15), so nothing the base plays while it is provisioned reaches this Mac's speakers.
   nohup "$TART_BIN" run "$TESTVM_BASE_VM" --no-graphics --no-audio \
     > "$TESTVM_LOG/$TESTVM_BASE_VM.log" 2>&1 &

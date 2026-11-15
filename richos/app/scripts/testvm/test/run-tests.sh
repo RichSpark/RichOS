@@ -152,9 +152,9 @@ t "audio: run.sh records the booted mode and checks it before reusing a running 
   has "$src" 'guest_audio_reusable "$STATE" "$WANT_AUDIO"'
 t_done
 
-# The CEO, 2026-11-15: "I've heard the start sound well over 40 times now". No guest has a sound
-# device unless its caller asks for one by name, and one asked for is muted before anything launches.
-t "audio: a guest has no sound device unless --audio asks for one, and its output is muted before anything launches"
+# The CEO, 2026-11-15: "I've heard the start sound well over 40 times now". No guest's sound is passed
+# to this Mac unless its caller asks by name, and then it is muted before anything launches.
+t "audio: no guest sound reaches this Mac unless --audio asks for it, and then it is muted before anything launches"
   src="$(cat "$TESTVM_DIR/run.sh")"
   default_line="$(grep -E '^BUNDLE=""; FIXTURE_HOME=""' "$TESTVM_DIR/run.sh")"
   has "$default_line" "AUDIO=0"
