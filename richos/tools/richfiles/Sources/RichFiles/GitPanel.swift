@@ -130,6 +130,10 @@ public struct RichFilesGitPanel: View {
                 Text("Showing local \(line.name). The current checkout is \(checkout).")
                     .foregroundStyle(palette.hint).lineLimit(1)
             }
+            if model.unavailableComparisonPath != nil {
+                Text("There is no verified earlier version for this file.")
+                    .foregroundStyle(palette.hint).fixedSize(horizontal: false, vertical: true)
+            }
             if let commit = model.commit {
                 Button {
                     _ = model.back()

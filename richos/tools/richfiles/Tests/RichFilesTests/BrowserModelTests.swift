@@ -89,6 +89,70 @@ final class BrowserModelTests: XCTestCase {
     }
 
     @MainActor
+    func testGitFocusRefreshKeepsUnavailableComparisonNotice() async throws {
+        let git = try XCTUnwrap(GitPanelModel.localGit())
+        let root = FileManager.default.temporaryDirectory.resolvingSymlinksInPath()
+            .appendingPathComponent("RichFilesGitFocus-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        @discardableResult func run(_ arguments: String...) throws -> String {
+            let command = Process()
+            let output = Pipe()
+            command.executableURL = git
+            command.currentDirectoryURL = root
+            command.environment = ["PATH": "/usr/bin:/bin", "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/dev/null"]
+            command.arguments = arguments
+            command.standardOutput = output
+            try command.run()
+            let data = output.fileHandleForReading.readDataToEndOfFile()
+            command.waitUntilExit()
+            guard command.terminationStatus == 0 else { throw CocoaError(.fileWriteUnknown) }
+            return String(decoding: data, as: UTF8.self).trimmingCharacters(in: .newlines)
+        }
+        try run("init", "-b", "main")
+        try run("-c", "user.name=Example", "-c", "user.email=example@example.test", "commit", "--allow-empty", "-m", "First")
+        let tip = try run("rev-parse", "HEAD")
+        let repo = try GitRepository(folder: root, git: git)
+        let missingPath = "missing.md"
+
+        for commit: String? in [nil, tip] {
+            let model = GitPanelModel()
+            let snapshot = GitPanelSnapshot(threadId: nil, chatName: "", capturedAt: Date(),
+                                            repository: repo.identity, administration: repo.administration,
+                                            lands: nil, allOnMain: true, commit: commit, path: missingPath)
+            func waitForHistory() async {
+                // Published results prove completion. The deadline only stops a hung fixture.
+                let finished = expectation(description: "Git history and optional comparison finished")
+                let observation = model.objectWillChange.sink { _ in
+                    Task { @MainActor in
+                        guard !model.loading, model.repository != nil,
+                              commit == nil || model.comparison != nil || model.detailMessage != nil else { return }
+                        finished.fulfill()
+                    }
+                }
+                finished.assertForOverFulfill = false
+                defer { observation.cancel() }
+                await fulfillment(of: [finished], timeout: 10)
+            }
+
+            model.startSnapshot(snapshot, folder: root, currentChat: nil)
+            await waitForHistory()
+            XCTAssertEqual(model.unavailableComparisonPath, missingPath)
+
+            model.refreshOnWindowFocus()
+            XCTAssertTrue(model.loading)
+            XCTAssertEqual(model.unavailableComparisonPath, missingPath)
+            await waitForHistory()
+            XCTAssertEqual(model.unavailableComparisonPath, missingPath)
+            XCTAssertNil(model.selectedFile)
+            model.select(try XCTUnwrap(model.commits.first))
+            XCTAssertNil(model.unavailableComparisonPath)
+            model.close()
+        }
+    }
+
+    @MainActor
     func testNamedSplitWorkspaceRestoresBothPanesAndTheActiveTab() async throws {
         let temporary = try XCTUnwrap(ProcessInfo.processInfo.environment["TMPDIR"])
         let root = URL(fileURLWithPath: temporary, isDirectory: true)
