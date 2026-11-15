@@ -29,25 +29,33 @@ WHAT IT DOES, in the guest, never on the host's screen (CEO ruling 65):
           no choice for when the recording stops (frame 2-choices); Escape closes them and
           Settings stays
   record  Microphone On, pointer Shown, Start recording: Settings closes, the count (frame
-          3-count), the red Stop beside the settings button (frame 4-recording); the real mouse
-          is dragged over a line of the conversation, which highlights it (frame 5-highlighted);
-          the RichPass page (frame 6-another-page); Settings, whose heading holds the same red
+          3-count), the red Stop beside the settings button (frame 4-recording); the RichPass
+          page (frame 5-another-page), where the real mouse is dragged over a line of text,
+          which highlights it (frame 6-highlighted); Settings, whose heading holds the same red
           Stop (frame 7-in-settings); Escape, which closes Settings and does not stop the
           recording; the home screen, where Stop stands in place of the home screen's own button
           (frame 8-home); Stop; the sheet (frame 9-sheet); Save video, the Mac's save window
           (frame 10-anywhere-save-window), Save, "Saved to …" (frame 10-anywhere-saved). The file
           is pulled out of the guest and read back.
+  still   (not run unless named) a recording of 25 s in which nothing is pressed, saved and read
+          back: how long a guest's file is when the walk leaves the app alone while it records
 
 READ BACK is home-video-walk.py's `read_back`: ffprobe's streams and length (AAC, and that sound
-is not silence), everything in the file decoded with no error, the length against what the sheet
-said and against how long the walk recorded, the name saying when it was made, and, where the
-file has a picture, frames taken out of it into --out for a person to look at.
+is not silence), everything in the file decoded with no error, the name saying when it was made,
+and, where the file has a picture, its length against what the sheet said and against how long
+the walk recorded, and frames taken out of it into --out for a person to look at.
 
-THE PICTURE IS NOT IN A GUEST'S FILE unless --expect-picture is given, for the reason
-home-video-walk.py gives: the guest has no hardware H.264 encoder, and the webview's recorder
-then writes the sound and no picture. The picture in the file (every screen he went to, the
-pointer, the text he highlighted) is proved on the host by ui/tests/video-anywhere.js, which
-records through the same code in headless WebKit and reads the H.264 back.
+A GUEST'S FILE HAS NO PICTURE AND 10 s OF SOUND, and this walk asks for more only with
+--expect-picture. The guest has no hardware H.264 encoder (home-video-walk.py's note), and the
+webview's recorder then writes the sound and no picture, and closes that sound at 10.03 s
+whatever is recorded: measured 2026-11-15 in two guests, a recording of 48 s that went through
+four screens and one of 27 s in which nothing was pressed (the `still` step) both left a file of
+10.03 s. On this Mac's own encoder the same code writes a recording of 30 s whole (30.1 s of
+H.264 and of AAC, headless WebKit). The picture in the file (every screen he went to, the
+pointer, the text he highlighted, every line of a text box) and its length are proved on the host
+by ui/tests/video-anywhere.js, which records through the same code in headless WebKit and reads
+the H.264 back. What the guest proves is the real app: the button, the choices, the count, Stop on
+every screen, the sheet and the Mac's save window, and a real file with the recording's sound.
 
 Evidence (frames, the file's facts, every step's result) is written to --out/report.json. Exit 0
 when every step passes. It quits nothing itself: run-walk.py quits the app by its pid and deletes
@@ -80,7 +88,7 @@ home_video = load('home_video_walk', 'home-video-walk.py')
 standard = home_video.standard
 StepFailed = home_video.StepFailed
 
-STEPS = ['seed', 'button', 'record']
+STEPS = ['seed', 'button', 'record', 'still']
 NAME = r'RichOS-\d{4}-\d\d-\d\d-at-\d\d\.\d\d\.\d\d\.mp4'
 
 
@@ -93,7 +101,9 @@ class Walk(home_video.Walk):
         return self.says('video-anywhere-stop') == 'Stop recording'
 
     def settings_open(self):
-        return bool(self.node('--id', 'set-menu'))
+        # closed, the panel is still in the Mac's tree, as an empty group 10 high under the button
+        menu = self.node('--id', 'set-menu')
+        return bool(menu and (menu.get('h') or 0) > 100)
 
     def open_settings(self):
         if not self.settings_open():
@@ -106,11 +116,23 @@ class Walk(home_video.Walk):
         time.sleep(1.5)
 
     # ---- the steps ------------------------------------------------------------------------
-    def button_step(self):
+    def to_the_conversation(self):
+        """Talk to Rich, from the home screen, and the conversation's own first questions declined."""
         self.to_home()
         self.press('--id', 'home-enter')
         self.until(lambda: not self.node('--id', 'home-enter') or None, 20, 'Talk to Rich did not open the conversation')
         time.sleep(2)
+        # a new user's conversation asks its own questions, one after the other ("Where should I keep
+        # what you tell me?", "Which company is this copy of Rich for?"), and each covers the app
+        for _ in range(5):
+            self.decline_sheets()
+            time.sleep(4)
+            if not self.button('Not now'):
+                return
+        raise StepFailed('a sheet still covers the conversation after five rounds of Not now')
+
+    def button_step(self):
+        self.to_the_conversation()
         result = {'nothing_of_the_recorder_before_settings': not self.node('--id', 'video-anywhere') and not self.node('--id', 'video-anywhere-stop')}
         self.open_settings()
         make = self.until(lambda: self.node('--id', 'video-anywhere'), 15, 'Make a video is not in Settings')
@@ -153,6 +175,27 @@ class Walk(home_video.Walk):
         if pressed != list(titles):
             raise StepFailed('chose %s and the choices read %s' % (', '.join(titles), ', '.join(pressed) or 'none of them'))
 
+    def still(self):
+        """A recording of 25 s in which nothing is pressed and nothing moves, saved and read back:
+        how long a guest's file is when the walk does nothing to the app while it records."""
+        self.to_the_conversation()
+        self.choose('On', 'Shown')
+        time.sleep(2)
+        self.press('--title', 'Start recording', '--role', 'AXButton')
+        self.until(self.recording, 20, 'the button beside the settings button never became Stop')
+        began = time.monotonic()
+        time.sleep(25)
+        self.press('--id', 'video-anywhere-stop')
+        result = {'pressed_stop_after_s': round(time.monotonic() - began, 1)}
+        if not self.to_the_sheet(30):
+            raise StepFailed('the sheet has no video to save: ' + str(self.words('could not record')))
+        result['sheet_says'] = self.words(' · with your voice · ')
+        result.update(self.save('11-still'))
+        result['seconds_in_the_file'] = result['read_back']['seconds']
+        self.press('--title', 'Done', '--role', 'AXButton')
+        time.sleep(1.5)
+        return result
+
     def record(self):
         self.choose('On', 'Shown')
         time.sleep(2)
@@ -165,19 +208,19 @@ class Walk(home_video.Walk):
         if not (abs((stop['y'] + stop['h'] / 2) - (settings['y'] + settings['h'] / 2)) <= 3 and 0 < settings['x'] - (stop['x'] + stop['w']) <= 20):
             raise StepFailed('Stop is not beside the settings button: ' + json.dumps(result))
         result['recording_frame'] = self.shot('4-recording')
-        # a line of the conversation highlighted with the real mouse, the way a hand selects text
-        line = self.text('chief of staff') or self.text('Rich')
-        if line and line.get('w', 0) > 80:
-            y = int(line['y'] + min(line['h'], 24) / 2)
-            self.pointer('%d,%d' % (line['x'] + 4, y), '%d,%d' % (line['x'] + min(int(line['w']) - 6, 420), y))
-            time.sleep(1.5)
-            result['highlighted'] = {'line': self.rect(line), 'frame': self.shot('5-highlighted')}
-        else:
-            result['highlighted'] = None
         # every screen he goes to: a tool's page, Settings, the home screen
         self.press('--id', 'nr-pass')
         time.sleep(3)
-        result['another_page'] = {'still_recording': self.recording(), 'frame': self.shot('6-another-page')}
+        result['another_page'] = {'still_recording': self.recording(), 'frame': self.shot('5-another-page')}
+        # a line of that page highlighted with the real mouse, the way a hand selects text (a new
+        # user's conversation has no line in it yet)
+        line = self.text('Safer Than Any Password Manager') or self.text('unbreakable passwords')
+        if not line or line.get('w', 0) < 80:
+            raise StepFailed('the RichPass page has no line of text to highlight: ' + json.dumps(line))
+        y = int(line['y'] + line['h'] / 2)
+        self.pointer('%d,%d' % (line['x'] + 4, y), '%d,%d' % (line['x'] + min(int(line['w']) - 6, 420), y))
+        time.sleep(1.5)
+        result['highlighted'] = {'line': self.rect(line), 'still_recording': self.recording(), 'frame': self.shot('6-highlighted')}
         self.open_settings()
         result['in_settings'] = {'the_heading_button_reads': self.says('video-anywhere'), 'frame': self.shot('7-in-settings')}
         self.escape()
@@ -191,6 +234,8 @@ class Walk(home_video.Walk):
             problems.append('Settings stayed open for the count')
         if not result['another_page']['still_recording']:
             problems.append('the RichPass page ended the recording')
+        if not result['highlighted']['still_recording']:
+            problems.append('highlighting a line ended the recording')
         if result['in_settings']['the_heading_button_reads'] != 'Stop recording':
             problems.append('in Settings the button reads %s' % result['in_settings']['the_heading_button_reads'])
         if not (result['escape']['closed_settings'] and result['escape']['still_recording']):
@@ -222,11 +267,14 @@ class Walk(home_video.Walk):
             problems.append('no AAC sound in a video made with the microphone')
         elif facts['audio']['mean_volume_db'] is None or facts['audio']['mean_volume_db'] < -60:
             problems.append('its sound is silence (%s dB)' % facts['audio']['mean_volume_db'])
-        if abs(facts['seconds'] - said_s) > 1.5:
-            problems.append('it is %.1f s long and the sheet said %d s' % (facts['seconds'], said_s))
-        # the whole way through the app is in it: as long as the walk recorded, give or take the presses
-        if abs(facts['seconds'] - result['pressed_stop_after_s']) > 6:
-            problems.append('it is %.1f s long and the walk recorded for %.1f s' % (facts['seconds'], result['pressed_stop_after_s']))
+        # the whole way through the app is in it: as long as the sheet said and as the walk recorded,
+        # give or take the presses. Asked of a file with a picture only: a guest's recorder, which
+        # has no picture to write, closes its sound after 10 s whatever is recorded (the `still` step).
+        result['whole'] = abs(facts['seconds'] - said_s) <= 1.5 and abs(facts['seconds'] - result['pressed_stop_after_s']) <= 6
+        if facts['video'] and not result['whole']:
+            problems.append('it is %.1f s long, the sheet said %d s and the walk recorded for %.1f s' % (facts['seconds'], said_s, result['pressed_stop_after_s']))
+        if not facts['video'] and facts['seconds'] < min(9.5, said_s - 1.5):
+            problems.append('it is %.1f s long, under the 10 s of sound a guest keeps' % facts['seconds'])
         if not re.fullmatch(NAME, result['name']):
             problems.append('its name is ' + result['name'])
         if not result['still_on_the_home_screen']:
@@ -248,7 +296,7 @@ def main():
     p.add_argument('vm')
     p.add_argument('--out', type=Path, required=True)
     p.add_argument('--size', type=int, default=312, help='about how many memories his picture has')
-    p.add_argument('--steps', default=','.join(STEPS))
+    p.add_argument('--steps', default='seed,button,record')
     p.add_argument('--expect-picture', action='store_true', help='fail when the saved file has no picture (a machine with a hardware H.264 encoder; a guest has none)')
     a = p.parse_args()
     steps = [s for s in a.steps.split(',') if s]
