@@ -161,9 +161,9 @@ public struct GitRepository: Sendable {
     public func mainLine() throws -> MainLine {
         let origin = try call(["symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"], allow: [0, 1])
         let originPrefix = "refs/remotes/origin/"
-        let candidates: [String]
+        let recorded: String?
         if origin.code == 0, origin.string.hasPrefix(originPrefix) {
-            candidates = [String(origin.string.dropFinalLineFeed().dropFirst(originPrefix.count))]
+            recorded = String(origin.string.dropFinalLineFeed().dropFirst(originPrefix.count))
         } else {
             let defaults = try call(["for-each-ref", "--format=%(symref)", "refs/remotes/*/HEAD"])
             let names = Set(defaults.string.split(separator: "\n").compactMap { reference -> String? in
@@ -171,8 +171,9 @@ public struct GitRepository: Sendable {
                 guard components.count == 4, components[0] == "refs", components[1] == "remotes" else { return nil }
                 return String(components[3])
             })
-            candidates = names.count == 1 ? Array(names) : ["main", "master"]
+            recorded = names.count == 1 ? names.first : nil
         }
+        let candidates = [recorded].compactMap { $0 } + ["main", "master"].filter { $0 != recorded }
         for name in candidates {
             let result = try call(["rev-parse", "--verify", "--quiet", "refs/heads/\(name)^{commit}"], allow: [0, 1])
             guard result.code == 0 else { continue }

@@ -101,6 +101,9 @@ final class GitRepositoryTests: XCTestCase {
         XCTAssertEqual(evidence.reachable, [])
         XCTAssertEqual(evidence.offMain, 1)
         try run("branch", "-D", "qa/trunk")
+        XCTAssertEqual(try repo.mainLine().name, "master")
+        XCTAssertEqual(try repo.mainLine().tip, pinned)
+        try run("branch", "-D", "master")
         XCTAssertThrowsError(try repo.mainLine()) { XCTAssertEqual($0 as? GitReadError, .noMain) }
 
         try run("symbolic-ref", "-d", "refs/remotes/origin/HEAD")

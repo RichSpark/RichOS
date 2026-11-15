@@ -212,7 +212,9 @@ public struct RichFilesGitPanel: View {
                     if model.aboveLost { message("Showing the current folder’s repository.") }
                     if let reason = model.sectionMessage { message(reason) }
                     else if model.commits.isEmpty && !model.loading {
-                        message(model.scope == .chat ? "No recorded lands on local main." : "No local history to show.")
+                        message(model.scope == .chat
+                                ? "No recorded lands on \(model.mainLine?.name ?? "the local default branch")."
+                                : "No local history to show.")
                     }
                     ForEach(model.commits) { commit in
                         historyRow(commit).id(commit.id)
