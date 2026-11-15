@@ -175,13 +175,16 @@ body.home-open .rv-make,
 }
 body.rv-busy .rv-pill { display: inline-flex; }
 .rv-pill:hover { background: var(--tint-gold-strong); }
-/* THE OUTPUT PANEL'S HEADING MAKES ROOM FOR IT TOO. The panel's close button stands at the right
-   end of its heading, where the red Stop stands while a recording runs, and Stop is above it: a
-   press on close stopped the recording. The conversation's heading already keeps the settings
-   cluster's measured width clear (`--chrome-lane-live`, `output-panel.js` `watchChromeLane`);
-   while this button is there, the panel's heading keeps the same. */
-body.rv-busy .op-head {
-  padding-right: calc(14px + max(var(--chrome-lane), var(--chrome-lane-live, 0px)));
+/* EVERY HEADING THAT REACHES THE TOP RIGHT CORNER MAKES ROOM FOR IT, IN ONE PLACE. A pane up there
+   (the conversation's heading, the Output panel's, the worker details') keeps the settings
+   button's lane clear by adding `--chrome-lane` to its right edge (`style.css`, "THE TOP-RIGHT
+   LANE IS RESERVED"), and each has its close button at that edge. The red Stop stands in the
+   same corner, above them all: under it, a press on close stopped the recording. So while this
+   button is there the lane itself is the settings cluster's measured width
+   (`--chrome-lane-live`, `output-panel.js` `watchChromeLane`), and every pane that adds the
+   lane, today's and the next one, clears Stop without knowing it exists. */
+body.rv-busy {
+  --chrome-lane: max(66px, var(--chrome-lane-live, 0px));
 }
 /* the home screen's own button gives its place to this one while a recording runs */
 body.rv-busy #home-video,

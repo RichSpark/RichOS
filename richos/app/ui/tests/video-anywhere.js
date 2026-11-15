@@ -559,9 +559,9 @@ async function main() {
     return `count ${counted.toFixed(1)} s; ${file.name}: ${file.video.codec} ${file.video.width}×${file.video.height} + ${file.audio}, ${file.seconds.toFixed(1)} s, ${(file.size / 1048576).toFixed(1)} MB; each frame against the window on ${marks.map((m) => m.tag).join(" / ")}: ${table.join("; ")}; pointer in the frame (edge ${arrow.edge}, inside ${arrow.inside}); the red button ${red[0]} px in the window, ${red[1]} in the file; the highlight on "${lit.text}" ${tinted[0]} px before, ${tinted[1]} of ${area} while selected; a frame of the home screen cost ${cost.cost.toFixed(1)} ms (${cost.nodes} pieces)`;
   });
 
-  await run.check("no microphone is said plainly and records without sound; Enter starts; Escape and Cancel call the count off; the Output panel's close button is clear of Stop; the save window's Cancel and a folder that cannot be written; Record again opens Settings with the choices as he left them; Escape discards", async () => {
+  await run.check("no microphone is said plainly and records without sound; Enter starts; Escape and Cancel call the count off; every pane in the top right corner is clear of Stop; the save window's Cancel and a folder that cannot be written; Record again opens Settings with the choices as he left them; Escape discards", async () => {
     const page = await open(browser, "dark", { preset: { homeVideoSave: "cancel" } });
-    await page.click("text=Acme deal"); // a chat with files in its Output panel
+    await page.click('.nav-thread[data-thread-id="hiring"]'); // a chat with files in its Output panel and a worker to look at
     await page.mouse.move(700, 400);
     await openChoices(page);
     await choose(page, "Microphone", "On");
@@ -591,19 +591,47 @@ async function main() {
     await until(page, "rec");
     await page.mouse.move(700, 400, { steps: 12 });
     await recorded(page, 2);
-    // THE OUTPUT PANEL, OPENED WHILE IT RECORDS: its close button is clear of the red Stop, which
-    // stands above the panel, so a press on close closes the panel and the recording goes on
+    // EVERY PANE THAT REACHES THE TOP RIGHT CORNER, OPENED WHILE IT RECORDS, is clear of the red
+    // Stop, which stands above them all: the conversation's heading, the Output panel, the worker
+    // details. A press on a pane's close button closes the pane and the recording goes on.
+    const clearOfStop = (sel) =>
+      page.evaluate((s) => {
+        const c = document.querySelector(s).getBoundingClientRect();
+        const stop = document.querySelector("#video-anywhere-stop").getBoundingClientRect();
+        const at = document.elementFromPoint(c.left + c.width / 2, c.top + c.height / 2);
+        return { underStop: !(c.right <= stop.left || c.left >= stop.right || c.bottom <= stop.top || c.top >= stop.bottom), pressed: !!at && !!at.closest(s), gap: Math.round(stop.left - c.right) };
+      }, sel);
+    const gaps = [];
+    const top = await clearOfStop("#out-top");
+    assertEqual([top.underStop, top.pressed], [false, true], "the conversation's Output button is under the red Stop: " + JSON.stringify(top));
+    gaps.push("the conversation's Output button " + top.gap + "px");
     await page.click("#out-top");
     assert(await appears(page, "#outpanel"), "the Output panel did not open during a recording");
-    const close = await page.evaluate(() => {
-      const c = document.querySelector("#op-close").getBoundingClientRect();
-      const s = document.querySelector("#video-anywhere-stop").getBoundingClientRect();
-      const at = document.elementFromPoint(c.left + c.width / 2, c.top + c.height / 2);
-      return { underStop: !(c.right <= s.left || c.left >= s.right || c.bottom <= s.top || c.top >= s.bottom), pressed: !!at && !!at.closest("#op-close"), gap: Math.round(s.left - c.right) };
-    });
+    const close = await clearOfStop("#op-close");
     assertEqual([close.underStop, close.pressed], [false, true], "the Output panel's close button is under the red Stop: " + JSON.stringify(close));
+    gaps.push("the Output panel's close " + close.gap + "px");
     await page.click("#op-close");
     assertEqual([(await st(page)).state, await shown(page, "#outpanel")], ["rec", false], "close on the Output panel did not close it alone");
+    await page.click(".tl-duration-btn");
+    await page.click(".tl-chip");
+    assert(await appears(page, "#inspector"), "the worker details did not open during a recording");
+    const details = await clearOfStop("#inspector-close");
+    assertEqual([details.underStop, details.pressed], [false, true], "the worker details' close button is under the red Stop: " + JSON.stringify(details));
+    gaps.push("the worker details' close " + details.gap + "px");
+    await page.click("#inspector-close");
+    assertEqual([(await st(page)).state, await shown(page, "#inspector")], ["rec", false], "close on the worker details did not close them alone");
+    // and every heading that adds the lane is counted in the shipped stylesheets, so a pane added to
+    // that corner sends its author here to open it under a recording too: the conversation's
+    // heading twice (its own rule and the one that adds the live lane), the worker details', the
+    // Output panel's
+    const lanes = [];
+    for (const file of fs.readdirSync(UI_DIR).filter((f) => f.endsWith(".css"))) {
+      const lines = fs.readFileSync(path.join(UI_DIR, file), "utf8").split("\n");
+      lines.forEach((line, i) => {
+        if (/^\s*padding-right:.*var\(--chrome-lane\b/.test(line)) lanes.push(file + ":" + (i + 1));
+      });
+    }
+    assertEqual(lanes.length, 4, "the headings that keep the top right lane clear are not the three this check opens: " + lanes.join(", "));
     await page.mouse.move(700, 400, { steps: 12 });
     await page.click("#video-anywhere-stop");
     await until(page, "sheet");
@@ -638,7 +666,7 @@ async function main() {
     assertEqual([(await st(page)).state, await shown(page, ".rv-sheet"), await page.evaluate(() => window.__RICHOS_MOCK__.homeVideoSaves().length)], ["idle", false, handed], "Escape did not discard the video");
     assertEqual(page.__errors, [], "the page reported errors");
     await page.close();
-    return `no microphone: the sentence, Off, no sound; ${file.name}: ${file.video.codec}, no sound, ${file.seconds.toFixed(1)} s, no pointer in a frame (edge ${arrow.edge}, inside ${arrow.inside}); the count called off by Escape and by Cancel; the Output panel's close button ${close.gap}px clear of Stop; Cancel and a failed save said; Record again kept Hidden; Escape discarded`;
+    return `no microphone: the sentence, Off, no sound; ${file.name}: ${file.video.codec}, no sound, ${file.seconds.toFixed(1)} s, no pointer in a frame (edge ${arrow.edge}, inside ${arrow.inside}); the count called off by Escape and by Cancel; clear of Stop: ${gaps.join(", ")}; Cancel and a failed save said; Record again kept Hidden; Escape discarded`;
   });
 
   await run.check("a recording stopped on the home screen: Space on the sheet's player pauses and plays it and the home screen stays, and Record again opens the home screen's own choices; on a home screen with no button of its own it opens these choices", async () => {
