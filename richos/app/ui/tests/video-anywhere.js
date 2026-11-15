@@ -559,8 +559,9 @@ async function main() {
     return `count ${counted.toFixed(1)} s; ${file.name}: ${file.video.codec} ${file.video.width}×${file.video.height} + ${file.audio}, ${file.seconds.toFixed(1)} s, ${(file.size / 1048576).toFixed(1)} MB; each frame against the window on ${marks.map((m) => m.tag).join(" / ")}: ${table.join("; ")}; pointer in the frame (edge ${arrow.edge}, inside ${arrow.inside}); the red button ${red[0]} px in the window, ${red[1]} in the file; the highlight on "${lit.text}" ${tinted[0]} px before, ${tinted[1]} of ${area} while selected; a frame of the home screen cost ${cost.cost.toFixed(1)} ms (${cost.nodes} pieces)`;
   });
 
-  await run.check("no microphone is said plainly and records without sound; Enter starts; Escape and Cancel call the count off; the save window's Cancel and a folder that cannot be written; Record again opens Settings with the choices as he left them; Escape discards", async () => {
+  await run.check("no microphone is said plainly and records without sound; Enter starts; Escape and Cancel call the count off; the Output panel's close button is clear of Stop; the save window's Cancel and a folder that cannot be written; Record again opens Settings with the choices as he left them; Escape discards", async () => {
     const page = await open(browser, "dark", { preset: { homeVideoSave: "cancel" } });
+    await page.click("text=Acme deal"); // a chat with files in its Output panel
     await page.mouse.move(700, 400);
     await openChoices(page);
     await choose(page, "Microphone", "On");
@@ -590,6 +591,20 @@ async function main() {
     await until(page, "rec");
     await page.mouse.move(700, 400, { steps: 12 });
     await recorded(page, 2);
+    // THE OUTPUT PANEL, OPENED WHILE IT RECORDS: its close button is clear of the red Stop, which
+    // stands above the panel, so a press on close closes the panel and the recording goes on
+    await page.click("#out-top");
+    assert(await appears(page, "#outpanel"), "the Output panel did not open during a recording");
+    const close = await page.evaluate(() => {
+      const c = document.querySelector("#op-close").getBoundingClientRect();
+      const s = document.querySelector("#video-anywhere-stop").getBoundingClientRect();
+      const at = document.elementFromPoint(c.left + c.width / 2, c.top + c.height / 2);
+      return { underStop: !(c.right <= s.left || c.left >= s.right || c.bottom <= s.top || c.top >= s.bottom), pressed: !!at && !!at.closest("#op-close"), gap: Math.round(s.left - c.right) };
+    });
+    assertEqual([close.underStop, close.pressed], [false, true], "the Output panel's close button is under the red Stop: " + JSON.stringify(close));
+    await page.click("#op-close");
+    assertEqual([(await st(page)).state, await shown(page, "#outpanel")], ["rec", false], "close on the Output panel did not close it alone");
+    await page.mouse.move(700, 400, { steps: 12 });
     await page.click("#video-anywhere-stop");
     await until(page, "sheet");
     assert(await appears(page, ".rv-sheet"), "the sheet did not open");
@@ -623,7 +638,7 @@ async function main() {
     assertEqual([(await st(page)).state, await shown(page, ".rv-sheet"), await page.evaluate(() => window.__RICHOS_MOCK__.homeVideoSaves().length)], ["idle", false, handed], "Escape did not discard the video");
     assertEqual(page.__errors, [], "the page reported errors");
     await page.close();
-    return `no microphone: the sentence, Off, no sound; ${file.name}: ${file.video.codec}, no sound, ${file.seconds.toFixed(1)} s, no pointer in a frame (edge ${arrow.edge}, inside ${arrow.inside}); the count called off by Escape and by Cancel; Cancel and a failed save said; Record again kept Hidden; Escape discarded`;
+    return `no microphone: the sentence, Off, no sound; ${file.name}: ${file.video.codec}, no sound, ${file.seconds.toFixed(1)} s, no pointer in a frame (edge ${arrow.edge}, inside ${arrow.inside}); the count called off by Escape and by Cancel; the Output panel's close button ${close.gap}px clear of Stop; Cancel and a failed save said; Record again kept Hidden; Escape discarded`;
   });
 
   await run.check("a recording stopped on the home screen: Space on the sheet's player pauses and plays it and the home screen stays, and Record again opens the home screen's own choices; on a home screen with no button of its own it opens these choices", async () => {

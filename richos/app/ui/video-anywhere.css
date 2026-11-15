@@ -175,6 +175,14 @@ body.home-open .rv-make,
 }
 body.rv-busy .rv-pill { display: inline-flex; }
 .rv-pill:hover { background: var(--tint-gold-strong); }
+/* THE OUTPUT PANEL'S HEADING MAKES ROOM FOR IT TOO. The panel's close button stands at the right
+   end of its heading, where the red Stop stands while a recording runs, and Stop is above it: a
+   press on close stopped the recording. The conversation's heading already keeps the settings
+   cluster's measured width clear (`--chrome-lane-live`, `output-panel.js` `watchChromeLane`);
+   while this button is there, the panel's heading keeps the same. */
+body.rv-busy .op-head {
+  padding-right: calc(14px + max(var(--chrome-lane), var(--chrome-lane-live, 0px)));
+}
 /* the home screen's own button gives its place to this one while a recording runs */
 body.rv-busy #home-video,
 body.rv-busy #home-video-choices { display: none !important; }
