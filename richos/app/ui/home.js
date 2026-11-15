@@ -1004,6 +1004,8 @@ window.RichHome = (function () {
     // there is its own (Back, Refresh, a period), never the door's. Keyed on the screen being up,
     // not on where focus sits, so no Enter reaches the door of a screen nobody can see.
     if (document.body.classList.contains("spend-open")) return;
+    // Your openings (round 74) covers this screen whole in the same way.
+    if (document.body.classList.contains("openings-open")) return;
     var t = e.target;
     // SPACE IS TYPED; ENTER IS NOT. A space in any field that takes text is that field's, wherever
     // the field is, and a held Space (which repeats after the door has opened) opens nothing.
@@ -2202,6 +2204,8 @@ window.RichHome = (function () {
     // screen and covers it whole: its Back takes focus, and pulling it back to the door would put
     // the keyboard on a screen nobody can see.
     if (t.closest && t.closest("#spend")) return;
+    // ...and Your openings (round 74), which covers this screen whole in the same way.
+    if (t.closest && t.closest("#openings-page")) return;
     focusHome();
   }
 

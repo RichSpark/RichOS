@@ -23,6 +23,12 @@
 //!   ([`LaunchPick::opening`]); otherwise it says why, and the window shows the splash's ground until
 //!   the page draws the splash from its start (plan section 9).
 //!
+//! THE OPENINGS ARE IN THE CATALOG TOO (round 74, the CEO's order of 2026-11-14): every row of
+//! `ui/openings-catalog.js` is an entry `opening/<id>` after the library's own, on the ground of
+//! the library entry it is built on (the materials' are `ui/splash-materials.js`), so the user's
+//! own pick is picked, saved and drawn at quit exactly as the rule's is. The page builds the same
+//! entries in the same order (`ui/openings.js` `installLibrary`).
+//!
 //! Nothing here touches AppKit; the drawing and the playing are `splash_opening.rs`'s.
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -38,6 +44,34 @@ pub const MANIFEST_FILE: &str = "opening.json";
 pub const FIRST_PICTURE: &str = "first.bgra";
 const SCHEMA: u32 = 1;
 
+/// THE TWO OPENINGS A QUIT CAN SAVE, each a record and a folder of pictures with fixed names.
+/// `Next` is the next start's, as always. `Later` is for a user of "one of mine, a different
+/// one each day" only: the opening the NEXT DAY opens on, drawn at the same quit, so the first
+/// start of a new day plays its pictures like any other (the CEO's order of 2026-11-14 keeps
+/// the launch speed; a start that had to draw its splash in the page showed bare ground for
+/// 1.7 s in the test VM).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Slot {
+    Next,
+    Later,
+}
+
+impl Slot {
+    pub fn record(self) -> &'static str {
+        match self {
+            Slot::Next => RECORD_FILE,
+            Slot::Later => "splash-later.json",
+        }
+    }
+
+    pub fn dir(self) -> &'static str {
+        match self {
+            Slot::Next => OPENING_DIR,
+            Slot::Later => "splash-opening-later",
+        }
+    }
+}
+
 /// `splash.js`'s `SPLASH_SECONDS` and `MAX_SPLASH_SECONDS` (held equal by a test below).
 pub const DEFAULT_SECONDS: f64 = 3.0;
 pub const MAX_SECONDS: f64 = 5.0;
@@ -50,6 +84,8 @@ pub const OPENING_FPS: f64 = 30.0;
 /// The library the page draws from, compiled in. Its own test (`ui/tests/splash.js` check 1)
 /// holds it to plain data after the assignment, which is what lets this read it as JSON.
 const LIBRARY: &str = include_str!("../../ui/splash-library.js");
+/// The material entries the openings' ladder is built on: data, in the library's own shape.
+const MATERIALS: &str = include_str!("../../ui/splash-materials.js");
 
 /// One catalog entry, as far as the shell needs it.
 #[derive(Debug, Clone, PartialEq)]
@@ -59,19 +95,22 @@ pub struct Entry {
     pub seconds: f64,
 }
 
-/// The catalog, in the library's own order: every entry with an id and a ground. `splash.js`
-/// validates the rest of each entry; the splash suite holds this list equal to the page's pool.
+/// The catalog: the library in its own order, every entry with an id and a ground, then the
+/// openings in theirs. `splash.js` validates the rest of each entry; the splash suite holds this
+/// list equal to the page's pool.
 pub fn catalog() -> Vec<Entry> {
-    catalog_from(LIBRARY)
+    catalog_from(LIBRARY, MATERIALS, crate::openings::catalog())
 }
 
-fn catalog_from(source: &str) -> Vec<Entry> {
-    let Some(at) = source.find("window.RichSplashLibrary") else { return Vec::new() };
+/// The entries of one data file: everything after `window.<name> =` is JSON, either the list
+/// itself or an object holding it under `variations`.
+fn entries_of(source: &str, name: &str) -> Vec<Entry> {
+    let Some(at) = source.find(name) else { return Vec::new() };
     let rest = &source[at..];
     let Some(eq) = rest.find('=') else { return Vec::new() };
     let json = rest[eq + 1..].trim().trim_end_matches(';').trim();
     let Ok(value) = serde_json::from_str::<serde_json::Value>(json) else { return Vec::new() };
-    let Some(variations) = value.get("variations").and_then(|v| v.as_array()) else { return Vec::new() };
+    let Some(variations) = value.get("variations").unwrap_or(&value).as_array() else { return Vec::new() };
     variations
         .iter()
         .filter_map(|v| {
@@ -90,6 +129,21 @@ fn catalog_from(source: &str) -> Vec<Entry> {
         .collect()
 }
 
+fn catalog_from(library: &str, materials: &str, openings: &richos_core::openings::Catalog) -> Vec<Entry> {
+    let mut entries = entries_of(library, "window.RichSplashLibrary");
+    let mut sources = entries.clone();
+    sources.extend(entries_of(materials, "window.RichSplashMaterials"));
+    for opening in &openings.openings {
+        let Some(from) = openings.base_of(opening).and_then(|base| sources.iter().find(|s| s.id == base)) else { continue };
+        entries.push(Entry {
+            id: richos_core::openings::key(&opening.id),
+            ground: from.ground.clone(),
+            seconds: openings.seconds_of(opening).map(|n| n.min(MAX_SECONDS)).unwrap_or(from.seconds),
+        });
+    }
+    entries
+}
+
 /// `#RRGGBB` as three bytes.
 pub fn parse_hex(hex: &str) -> Option<(u8, u8, u8)> {
     let h = hex.strip_prefix('#')?;
@@ -100,11 +154,12 @@ pub fn parse_hex(hex: &str) -> Option<(u8, u8, u8)> {
     Some((byte(0)?, byte(2)?, byte(4)?))
 }
 
-/// THE PICK for a start, by the rules, from the catalog: `start` is which start it is for.
-pub fn pick_for(start: Option<u64>) -> Option<Entry> {
+/// THE PICK for a start, by the rules, from the catalog: `facts` is everything the rules read
+/// (which start it is for, the user's own pick, what he has, the day).
+pub fn pick_for(facts: &richos_core::launch::SplashFacts) -> Option<Entry> {
     let entries = catalog();
     let ids: Vec<String> = entries.iter().map(|e| e.id.clone()).collect();
-    let id = richos_core::launch::pick_splash(&ids, &richos_core::launch::SplashFacts { start })?.to_string();
+    let id = richos_core::launch::pick_splash(&ids, facts)?.to_string();
     entries.into_iter().find(|e| e.id == id)
 }
 
@@ -205,8 +260,13 @@ pub struct LaunchPick {
     pub id: String,
     pub ground: (u8, u8, u8),
     /// The saved pick (`true`) or the rules applied now because nothing was saved (`false`: the
-    /// first start after an install, or after an update from a build that saved none).
+    /// first start after an install, or after an update from a build that saved none; or the
+    /// saved pick was for another day, see `another_day`).
     pub saved: bool,
+    /// "One of mine, a different one each day": neither opening saved at the last quit is the
+    /// one this day opens on (he earned or lost one since, or that quit drew none), so the rules
+    /// were applied now and nothing was drawn for it.
+    pub another_day: bool,
     record: Option<MadeFor>,
     dir: PathBuf,
 }
@@ -219,17 +279,36 @@ pub struct Opening {
 }
 
 /// READ, at a start, before the window: the saved pick, or the rules' answer for this start when
-/// nothing was saved. `None` only for an empty catalog. Reads one small file.
-pub fn for_launch(data_dir: &Path, start: Option<u64>) -> Option<LaunchPick> {
+/// nothing was saved. `None` only for an empty catalog. Reads one small file, two for a user of
+/// "a different one each day".
+///
+/// ONE CASE CHOOSES AT THE START: "one of mine, a different one each day". The quit could not
+/// know which day the next start would be on, so it saved two openings: that day's, and the one
+/// any later day opens on ([`Slot`]). The start asks the rule which one this day opens on (it
+/// reads the day and the last such day, nothing else) and plays whichever saved opening that
+/// is. Every other way of starting only reads the saved answer.
+pub fn for_launch(data_dir: &Path, facts: &richos_core::launch::SplashFacts) -> Option<LaunchPick> {
+    let daily = facts.pick.as_deref() == Some(richos_core::openings::DAILY);
+    if daily {
+        if let Some(entry) = pick_for(facts) {
+            let ground = parse_hex(&entry.ground)?;
+            for slot in [Slot::Next, Slot::Later] {
+                if let Some(saved) = read_slot(data_dir, slot).filter(|s| s.id == entry.id) {
+                    return Some(LaunchPick { id: saved.id, ground, saved: true, another_day: false, record: saved.opening, dir: data_dir.join(slot.dir()) });
+                }
+            }
+            return Some(LaunchPick { id: entry.id, ground, saved: false, another_day: true, record: None, dir: data_dir.join(OPENING_DIR) });
+        }
+    }
     let dir = data_dir.join(OPENING_DIR);
     if let Some(saved) = read_saved(data_dir) {
         if let Some(ground) = parse_hex(&saved.ground) {
-            return Some(LaunchPick { id: saved.id, ground, saved: true, record: saved.opening, dir });
+            return Some(LaunchPick { id: saved.id, ground, saved: true, another_day: false, record: saved.opening, dir });
         }
     }
-    let entry = pick_for(start)?;
+    let entry = pick_for(facts)?;
     let ground = parse_hex(&entry.ground)?;
-    Some(LaunchPick { id: entry.id, ground, saved: false, record: None, dir })
+    Some(LaunchPick { id: entry.id, ground, saved: false, another_day: false, record: None, dir })
 }
 
 impl LaunchPick {
@@ -239,6 +318,8 @@ impl LaunchPick {
         let Some(made) = &self.record else {
             return Err(if self.saved {
                 "the last quit saved no opening (its drawing failed or ran out of time)".into()
+            } else if self.another_day {
+                "the openings saved at the last quit are not this day's (one of his, a different one each day)".into()
             } else {
                 "nothing was saved at the last quit (the first start after an install or an update)".into()
             });
@@ -254,29 +335,34 @@ impl LaunchPick {
 }
 
 pub fn read_saved(data_dir: &Path) -> Option<Saved> {
-    let bytes = std::fs::read(data_dir.join(RECORD_FILE)).ok()?;
+    read_slot(data_dir, Slot::Next)
+}
+
+pub fn read_slot(data_dir: &Path, slot: Slot) -> Option<Saved> {
+    let bytes = std::fs::read(data_dir.join(slot.record())).ok()?;
     let saved: Saved = serde_json::from_slice(&bytes).ok()?;
     (saved.schema == SCHEMA).then_some(saved)
 }
 
 /// Write the record whole, by a temporary file and a rename, so a start reads the old record or
 /// the new one, never half of one.
-pub fn write_saved(data_dir: &Path, saved: &Saved) -> std::io::Result<()> {
-    let path = data_dir.join(RECORD_FILE);
-    let temporary = data_dir.join(format!("{RECORD_FILE}.writing"));
+pub fn write_slot(data_dir: &Path, slot: Slot, saved: &Saved) -> std::io::Result<()> {
+    let path = data_dir.join(slot.record());
+    let temporary = data_dir.join(format!("{}.writing", slot.record()));
     let bytes = serde_json::to_vec_pretty(saved).map_err(std::io::Error::other)?;
     std::fs::write(&temporary, bytes)?;
     std::fs::rename(&temporary, &path)
 }
 
-/// THE PICK AT QUIT, for the next start, by the rules.
-pub fn next(start: Option<u64>) -> Option<Saved> {
-    let entry = pick_for(start)?;
+/// THE PICK AT QUIT, for the next start, by the rules. `shown` is what the picked splash shows
+/// that its own files do not hold (`openings::shown_facts`: his company's line, the version).
+pub fn next(facts: &richos_core::launch::SplashFacts, shown: impl FnOnce(&str) -> BTreeMap<String, String>) -> Option<Saved> {
+    let entry = pick_for(facts)?;
     Some(Saved {
         schema: SCHEMA,
+        start: facts.start,
+        facts: shown(&entry.id),
         id: entry.id,
-        start,
-        facts: BTreeMap::new(),
         ground: entry.ground,
         seconds: entry.seconds,
         opening: None,
@@ -317,8 +403,8 @@ pub fn at_quit(saved: Option<&Saved>, manifest_nonce: Option<&str>, next: Saved,
 }
 
 /// The nonce in the saved manifest, if any.
-pub fn manifest_nonce(data_dir: &Path) -> Option<String> {
-    let bytes = std::fs::read(data_dir.join(OPENING_DIR).join(MANIFEST_FILE)).ok()?;
+pub fn manifest_nonce_in(data_dir: &Path, slot: Slot) -> Option<String> {
+    let bytes = std::fs::read(data_dir.join(slot.dir()).join(MANIFEST_FILE)).ok()?;
     serde_json::from_slice::<Manifest>(&bytes).ok().map(|m| m.nonce)
 }
 
@@ -350,18 +436,55 @@ mod tests {
         Target { page: [1400.0, 852.0], scale: 1.0, reduce_motion: false }
     }
 
+    use richos_core::launch::SplashFacts;
+
+    fn start(n: Option<u64>) -> SplashFacts {
+        SplashFacts { start: n, ..SplashFacts::default() }
+    }
+
+    fn next_for(n: Option<u64>) -> Option<Saved> {
+        next(&start(n), |_| BTreeMap::new())
+    }
+
     #[test]
-    fn the_catalog_is_the_library_in_its_own_order_and_the_rule_picks_from_it() {
-        let ids: Vec<String> = catalog().into_iter().map(|e| e.id).collect();
-        assert_eq!(ids, ["round-11/v1", "round-11/v2"], "the shipped library");
-        assert_eq!(pick_for(Some(1)).unwrap().id, "round-11/v1");
-        assert_eq!(pick_for(Some(2)).unwrap().id, "round-11/v2");
-        assert_eq!(pick_for(Some(3)).unwrap().id, "round-11/v1");
-        assert_eq!(pick_for(None).unwrap().id, "round-11/v1");
-        for e in catalog() {
-            assert_eq!(e.seconds, DEFAULT_SECONDS, "{} asks for no seconds of its own", e.id);
-            assert!(parse_hex(&e.ground).is_some());
+    fn the_catalog_is_the_library_in_its_own_order_then_the_openings_and_the_rule_picks_from_it() {
+        let entries = catalog();
+        let ids: Vec<&str> = entries.iter().map(|e| e.id.as_str()).collect();
+        assert_eq!(&ids[..2], ["round-11/v1", "round-11/v2"], "the shipped library, first and in its own order");
+        assert_eq!(ids.len(), 2 + 28, "then round 74's twenty-eight openings");
+        assert_eq!((ids[2], ids[3], ids[8], ids[29]), ("opening/ruled-standard", "opening/midnight-suede", "opening/power-100k", "opening/material-leaf"));
+        assert_eq!(pick_for(&start(Some(1))).unwrap().id, "round-11/v1");
+        assert_eq!(pick_for(&start(Some(2))).unwrap().id, "round-11/v2");
+        assert_eq!(pick_for(&start(Some(3))).unwrap().id, "round-11/v1");
+        assert_eq!(pick_for(&start(None)).unwrap().id, "round-11/v1");
+        for e in &entries {
+            assert!(parse_hex(&e.ground).is_some(), "{}", e.id);
+            // The library's two and the materials stay their own 3 seconds; a milestone or an
+            // edition is up for 5.
+            let five = ["opening/power-", "opening/jobs-", "opening/hours-", "opening/edition-"].iter().any(|p| e.id.starts_with(p));
+            assert_eq!(e.seconds, if five { MAX_SECONDS } else { DEFAULT_SECONDS }, "{}", e.id);
         }
+        // An opening stands on the ground of the entry it is built on.
+        let ground = |id: &str| entries.iter().find(|e| e.id == id).unwrap().ground.clone();
+        assert_eq!(ground("opening/ruled-standard"), ground("round-11/v1"));
+        assert_eq!(ground("opening/jobs-100"), ground("round-11/v2"));
+        assert_eq!(ground("opening/power-100"), ground("round-11/v1"));
+    }
+
+    #[test]
+    fn his_own_opening_is_picked_saved_and_carries_what_it_shows() {
+        let mine = SplashFacts { start: Some(5), pick: Some("power-100".into()), earned: vec!["ruled-standard".into(), "power-100".into()], day: Some(20_000), daily: None };
+        assert_eq!(pick_for(&mine).unwrap().id, "opening/power-100");
+        let saved = next(&mine, |id| BTreeMap::from([("company".to_string(), format!("Acme on {id}"))])).unwrap();
+        assert_eq!((saved.id.as_str(), saved.seconds, saved.start), ("opening/power-100", 5.0, Some(5)));
+        assert_eq!(saved.facts.get("company").map(String::as_str), Some("Acme on opening/power-100"));
+        // A changed company line is a changed fact: the quit draws again.
+        let AtQuit::Draw(drawn) = at_quit(None, None, saved.clone(), &target(), "n1".into()) else { panic!() };
+        let (s, made) = *drawn;
+        let kept = Saved { opening: Some(made), ..s };
+        assert_eq!(at_quit(Some(&kept), Some("n1"), saved.clone(), &target(), "n2".into()), AtQuit::Keep);
+        let renamed = Saved { facts: BTreeMap::from([("company".to_string(), "Acme Robotics".to_string())]), ..saved };
+        assert!(matches!(at_quit(Some(&kept), Some("n1"), renamed, &target(), "n2".into()), AtQuit::Draw(..)));
     }
 
     #[test]
@@ -371,9 +494,18 @@ mod tests {
             "\"variations\": [{\"id\": \"later/v9\", \"tokens\": {\"ground\": \"#101010\", \"seconds\": \"9\"}},",
             1,
         );
-        let entries = catalog_from(&library);
+        let entries = catalog_from(&library, MATERIALS, &richos_core::openings::Catalog::default());
         assert_eq!(entries[0], Entry { id: "later/v9".into(), ground: "#101010".into(), seconds: MAX_SECONDS });
         assert_eq!(entries.len(), 3);
+        // And an opening added to the data is an entry too, on its base's ground.
+        let more = crate::openings::CATALOG_SOURCE.replacen(
+            "\"openings\": [",
+            "\"openings\": [{ \"id\": \"later\", \"family\": \"house\", \"name\": \"Later\", \"base\": \"later/v9\", \"earn\": { \"start\": true } },",
+            1,
+        );
+        let entries = catalog_from(&library, MATERIALS, &richos_core::openings::parse(&more).unwrap());
+        assert_eq!(entries[3], Entry { id: "opening/later".into(), ground: "#101010".into(), seconds: MAX_SECONDS });
+        assert_eq!(entries.len(), 3 + 29);
     }
 
     #[test]
@@ -385,7 +517,7 @@ mod tests {
 
     #[test]
     fn a_quit_draws_only_when_something_changed() {
-        let next1 = next(Some(3)).unwrap();
+        let next1 = next_for(Some(3)).unwrap();
         // Nothing saved: draw.
         let AtQuit::Draw(drawn) = at_quit(None, None, next1.clone(), &target(), "n1".into()) else { panic!() };
         let (saved, made) = *drawn;
@@ -395,7 +527,7 @@ mod tests {
         // Its pictures belong to another drawing: draw.
         assert!(matches!(at_quit(Some(&saved), Some("other"), next1.clone(), &target(), "n2".into()), AtQuit::Draw(..)));
         // A different splash for the next start (start 1 to start 2 does this today): draw it.
-        let AtQuit::Draw(drawn2) = at_quit(Some(&saved), Some("n1"), next(Some(2)).unwrap(), &target(), "n2".into()) else { panic!() };
+        let AtQuit::Draw(drawn2) = at_quit(Some(&saved), Some("n1"), next_for(Some(2)).unwrap(), &target(), "n2".into()) else { panic!() };
         let (s2, m2) = *drawn2;
         assert_eq!((s2.id.as_str(), m2.id.as_str(), m2.nonce.as_str()), ("round-11/v2", "round-11/v2", "n2"));
         // A resized window, another scale, reduced motion switched: draw.
@@ -413,17 +545,17 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
         std::fs::create_dir_all(dir.join(OPENING_DIR)).unwrap();
         // Nothing saved: the rules for this start, no opening.
-        let first = for_launch(&dir, Some(1)).unwrap();
+        let first = for_launch(&dir, &start(Some(1))).unwrap();
         assert_eq!((first.id.as_str(), first.saved, first.ground), ("round-11/v1", false, (0x0C, 0x13, 0x22)));
         assert!(first.opening(&target()).unwrap_err().contains("first start after an install"));
         // Saved with an opening made for this window.
-        let AtQuit::Draw(drawn) = at_quit(None, None, next(Some(2)).unwrap(), &target(), "n7".into()) else { panic!() };
+        let AtQuit::Draw(drawn) = at_quit(None, None, next_for(Some(2)).unwrap(), &target(), "n7".into()) else { panic!() };
         let (saved, made) = *drawn;
-        write_saved(&dir, &Saved { opening: Some(made), ..saved }).unwrap();
+        write_slot(&dir, Slot::Next, &Saved { opening: Some(made), ..saved }).unwrap();
         let manifest = Manifest { nonce: "n7".into(), page: [1400.0, 852.0], scale: 1.0, first: [1400, 852, 5600],
                                   region: [100.0, 100.0, 800.0, 700.0], frames: vec![Frame { k: 1, at_ms: 33.3 }], length_ms: 33.3 };
         std::fs::write(dir.join(OPENING_DIR).join(MANIFEST_FILE), serde_json::to_vec(&manifest).unwrap()).unwrap();
-        let pick = for_launch(&dir, Some(9)).unwrap();
+        let pick = for_launch(&dir, &start(Some(9))).unwrap();
         assert_eq!((pick.id.as_str(), pick.saved), ("round-11/v2", true), "the saved pick wins; nothing is chosen at the start");
         assert_eq!(pick.opening(&target()).unwrap().manifest, manifest);
         let resized = Target { page: [1100.0, 800.0], ..target() };
@@ -434,8 +566,63 @@ mod tests {
         // A record from changed splash files (an update that changed them).
         let mut changed = read_saved(&dir).unwrap();
         changed.opening.as_mut().unwrap().fingerprint = "0".into();
-        write_saved(&dir, &changed).unwrap();
-        assert!(for_launch(&dir, None).unwrap().opening(&target()).unwrap_err().contains("files changed"));
+        write_slot(&dir, Slot::Next, &changed).unwrap();
+        assert!(for_launch(&dir, &start(None)).unwrap().opening(&target()).unwrap_err().contains("files changed"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_different_one_each_day_plays_from_saved_pictures_on_the_same_day_and_on_any_later_one() {
+        let dir = std::env::temp_dir().join(format!("richos-splash-pick-daily-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(&dir).unwrap();
+        let his: Vec<String> = vec!["ruled-standard".into(), "midnight-suede".into(), "power-100".into()];
+        let on = |day, last: Option<(i64, &str)>| SplashFacts {
+            start: Some(9),
+            pick: Some("daily".into()),
+            earned: his.clone(),
+            day: Some(day),
+            daily: last.map(|(d, id)| (d, id.to_string())),
+        };
+        let save = |slot: Slot, facts: &SplashFacts, nonce: &str| {
+            let picked = next(facts, |_| BTreeMap::new()).unwrap();
+            let id = picked.id.clone();
+            let AtQuit::Draw(drawn) = at_quit(None, None, picked, &target(), nonce.into()) else { panic!() };
+            let (saved, made) = *drawn;
+            write_slot(&dir, slot, &Saved { opening: Some(made), ..saved }).unwrap();
+            std::fs::create_dir_all(dir.join(slot.dir())).unwrap();
+            let manifest = Manifest { nonce: nonce.into(), page: [1400.0, 852.0], scale: 1.0, first: [1400, 852, 5600],
+                                      region: [100.0, 100.0, 800.0, 700.0], frames: vec![Frame { k: 1, at_ms: 33.3 }], length_ms: 33.3 };
+            std::fs::write(dir.join(slot.dir()).join(MANIFEST_FILE), serde_json::to_vec(&manifest).unwrap()).unwrap();
+            id
+        };
+        // The quit, on day 30,000: that day's opening, and the one a later day opens on.
+        let today = on(30_000, None);
+        assert_eq!(save(Slot::Next, &today, "n1"), "opening/ruled-standard");
+        let last = Some((30_000, "ruled-standard"));
+        assert_eq!(save(Slot::Later, &on(30_001, last), "n2"), "opening/midnight-suede");
+        // A start the same day plays the day's own.
+        let same = for_launch(&dir, &on(30_000, last)).unwrap();
+        assert_eq!((same.id.as_str(), same.saved, same.another_day), ("opening/ruled-standard", true, false));
+        assert_eq!(same.opening(&target()).unwrap().manifest.nonce, "n1");
+        // THE FIRST START OF A NEW DAY PLAYS PICTURES TOO: after a night, a weekend, a month.
+        for day in [30_001, 30_003, 30_031] {
+            let later = for_launch(&dir, &on(day, last)).unwrap();
+            assert_eq!((later.id.as_str(), later.saved, later.another_day), ("opening/midnight-suede", true, false), "day {day}");
+            assert_eq!(later.ground, parse_hex(&catalog()[1].ground).unwrap());
+            let opening = later.opening(&target()).unwrap();
+            assert_eq!(opening.manifest.nonce, "n2", "day {day}");
+            assert_eq!(opening.dir, dir.join(Slot::Later.dir()), "its pictures are the later day's");
+        }
+        // Neither saved opening is this day's (he lost the one that was next): the rules now,
+        // from the page, and the launch line says why.
+        let fewer = SplashFacts { earned: vec!["ruled-standard".into(), "power-100".into()], ..on(30_001, last) };
+        let neither = for_launch(&dir, &fewer).unwrap();
+        assert_eq!((neither.id.as_str(), neither.saved, neither.another_day), ("opening/power-100", false, true));
+        assert!(neither.opening(&target()).unwrap_err().contains("not this day's"));
+        // A user who picked one opening only reads the next start's, whatever the day.
+        let fixed = SplashFacts { pick: Some("power-100".into()), ..on(30_500, last) };
+        assert_eq!(for_launch(&dir, &fixed).unwrap().id, "opening/ruled-standard", "the saved pick wins; nothing is chosen at the start");
         std::fs::remove_dir_all(&dir).ok();
     }
 

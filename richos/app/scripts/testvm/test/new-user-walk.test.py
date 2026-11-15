@@ -383,7 +383,7 @@ RichScribe
 Off
 
 Splash screen
-Show it when RichOS starts
+Play its sound
 
 RichOS 1.2.3-nightly.20261025.75 is up to
 date.
@@ -467,7 +467,7 @@ O Balanced
 O Only when it's urgent
 
 Splash screen
-Show it when RichOS starts
+Play its sound
 
 RichOS 1.3.2-nightly.20261114.99 is up to
 date.

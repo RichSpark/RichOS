@@ -722,7 +722,7 @@ window.RichSettings = (function () {
   }
 
   /// A part of the panel that `main.js` owns (Rich's model, interruptions, stored output, the
-  /// technical-view hint, the name field, the splash switch), or null when no host registered
+  /// technical-view hint, the name field, the splash screen's row), or null when no host registered
   /// it. The SAME node every rebuild: it is moved, never copied, so its listeners and its
   /// state come with it.
   function part(key) {

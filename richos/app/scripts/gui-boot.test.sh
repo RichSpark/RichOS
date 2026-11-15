@@ -493,9 +493,9 @@ declare_rules() {
     'whose record an in-repo corpus is; a statement about ownership, not resolution'
 
   # THE WINDOW'S LAUNCH KIND AND SPLASH STATE (main.rs `launch_init_script`, ef9fbbe81): one line
-  # per window. Only the three pairings the code can print are accepted: a fresh start with the
-  # splash on or off by the switch, and the other two kinds, which never show it.
-  routine '^\[richos\] window: launch kind (fresh, splash (on|off by the switch)|(crash-restart|second-window), splash not for this kind)$' \
+  # per window. Only the pairings the code can print are accepted: a fresh start, which always
+  # shows the splash (its off switch went on 2026-11-14), and the other two kinds, which never do.
+  routine '^\[richos\] window: launch kind (fresh, splash on|(crash-restart|second-window), splash not for this kind)$' \
     'which kind of window this is and whether the splash applies; a fact about the launch'
   # THE SECOND-REVIEW WATCHER (main.rs `review_watch::ensure`, d74d92732): printed only when it
   # started at launch. Its "could not start" form stays UNACCOUNTED on purpose.

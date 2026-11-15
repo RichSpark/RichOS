@@ -17,7 +17,7 @@ WALK = Path(__file__).resolve().parents[1] / 'fbcopy-walk.sh'
 GOOD = ('Settings Theme Text size Technical view Company\n'
         'Use Rich from your phone RichConnect for RichOS Set up RichConnect for RichOS\n'
         'Keep the stored output Forever Nothing is ever removed.\n'
-        'Show it when RichOS starts\n')
+        'Play its sound\n')
 failed = 0
 
 

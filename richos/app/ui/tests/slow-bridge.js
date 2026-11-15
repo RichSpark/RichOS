@@ -977,7 +977,7 @@ async function main() {
       await page.addInitScript(SLOW_VOICE, [lag, VOICE_MS]);
       await page.addInitScript(() => {
         window.__RICHOS_MOCK_PRESET__ = { memory: "ready", chosenEntity: "northwind" };
-        window.__RICHOS_LAUNCH__ = Object.freeze({ kind: "fresh", ordinal: 2, splashEnabled: true });
+        window.__RICHOS_LAUNCH__ = Object.freeze({ kind: "fresh", ordinal: 2 });
       });
       await page.goto(APP);
       await leaveSplash(page);

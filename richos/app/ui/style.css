@@ -8124,7 +8124,7 @@ body.home-open {
    held lives in this one panel: a heading, three columns divided by `--line-soft` rules, then a
    band across the foot on a faint `--tint-weak` wash. `settings-button.js` `buildMenu` builds
    it; the parts `main.js` owns (Rich's model, interruptions, stored output, the technical
-   view's hint, the name field, the splash switch) are placed in it by `registerPreferences`.
+   view's hint, the name field, the splash screen's row) are placed in it by `registerPreferences`.
 
    THE PANEL'S OWN NAME — Ray's candidate .11 defect 3.4 — is now its heading, in Newsreader
    at 26px, and the dialog's accessible name. --ink on --card: 12.06:1 dark, 18.07:1 light.

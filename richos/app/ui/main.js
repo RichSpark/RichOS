@@ -357,7 +357,7 @@ const scrollTops = new Map(); // threadId -> conversation scrollTop (§3.1)
 // handler runs, so `beforeunload` would save exactly the sessions that do not need saving.
 // Every write below is debounced by `PARK_DEBOUNCE_MS` and happens while he types.
 //
-// LOCAL, and the same storage the splash switch already uses — this window's own origin, on
+// LOCAL — this window's own origin, on
 // his own disk, read by nothing else. `launch_no_outbound_tests.rs` covers this file.
 //
 // THE ENTITY BOUNDARY IS PRESERVED VERBATIM. `stashThreadViewState`'s comment explains why
@@ -373,7 +373,7 @@ const KEY_SCROLL = "richos.view.scroll";
 const PARK_DEBOUNCE_MS = 400;
 
 /// A ceiling on what is kept, so a pasted document cannot fill the origin's storage quota
-/// and take the splash preference down with it. Drafts are parked newest-first and the
+/// and take every other local preference down with it. Drafts are parked newest-first and the
 /// overflow is dropped; the ACTIVE thread's draft is written first, so the one he is
 /// looking at is the one that is never the casualty.
 const PARKED_DRAFT_MAX_CHARS = 64 * 1024;
@@ -5914,7 +5914,7 @@ function onSettingsOpen() {
 }
 /// ROUND 27: ONE SETTINGS, REACHED ONE WAY. What the rail gear's Preferences held (Rich's
 /// model, interruptions, stored output, the technical view's hint, the name field and the
-/// splash switch) is handed to the panel `settings-button.js` builds, which places each part
+/// splash screen's row) is handed to the panel `settings-button.js` builds, which places each part
 /// where the round's NOTES.md puts it. Every close of that panel saves and applies the model
 /// choice (round 23), whichever way it closes: the button, Escape, a click outside.
 if (settingsPartsEl) {
@@ -5934,72 +5934,25 @@ if (settingsPartsEl) {
 }
 
 // ---------------------------------------------------------------------------------------
-// The opening screen's off switch — the same shape as the dial above, for the same reason.
+// The splash screen's sound switch (CEO, 2026-11-14).
 //
-// `splash.js` has to know whether to draw BEFORE anything can be awaited, so it reads
-// `localStorage` synchronously; the Rust `ConfigStore` is the durable source of truth and
-// is reconciled here, after boot, exactly as `syncAssertivenessFromBackend` does. The two
-// sides agree on what an absent value means — ON — so a first launch cannot disagree with
-// itself (`config.rs`'s `splash_default`, and `splash.js`'s `enabled()`).
+// This row was the splash screen's off switch. His words: "We now also need to remove the
+// settings toggle for disabling the splash screen. Because the splash screen is now needed for
+// the illusion of a super-fast app launch", and "that same switch can be replaced with the
+// switch for switching off the sound in the splash screen". So the row stays where it was and
+// switches the sound, which is on unless he turns it off.
 //
-// The keys are read off `window.RichSplash` rather than retyped, so there is one place the
-// strings live.
-//
-// ONE CONTROL FOR ONE STATE (Ray's candidate .11 defect 3.4), and since the CEO's 2026-10-06
-// feedback item 7 it is the rail gear popover's `#splash-enabled`, not the universal menu's.
-// `index.html` carries the argument beside the markup.
+// ONE STATE, TWO PLACES THAT SHOW IT: this row and the gallery's own ("Your openings"). Both
+// go through `RichOpeningsPage.setSound`, which writes the durable setting (`set_opening_sound`)
+// and keeps the other in step. What it is at launch came with the page (`openings.js`'s record,
+// put there by the shell), so the row paints right without waiting for a command.
 // ---------------------------------------------------------------------------------------
-function splashKey(name) {
-  return window.RichSplash ? window.RichSplash[name] : null;
-}
-function readSplashEnabled() {
-  const key = splashKey("KEY_ENABLED");
-  if (!key) return true;
-  return window.localStorage.getItem(key) !== "false";
-}
-function writeSplashEnabled(on) {
-  const key = splashKey("KEY_ENABLED");
-  if (key) window.localStorage.setItem(key, on ? "true" : "false");
-}
-/// The splash's off switch, and it is ONE control now.
-///
-/// The CEO restated on 2026-08-31 that turning the opening screen off FROM SETTINGS is a
-/// requirement. One state, one door (Ray's candidate .11 defect 3.4), and since the CEO's
-/// 2026-10-06 feedback item 7 that door is the rail gear's general settings, not the quick
-/// settings menu: "ideally I don't want them to turn it off". This is still the only place
-/// that writes it.
-///
-/// It writes the local mirror FIRST and the durable store second, deliberately: splash.js
-/// reads the mirror synchronously before the app has a bridge, so the mirror is what decides
-/// the next launch. A failed durable write costs the preference at reinstall, not tonight.
-function setSplashEnabled(on) {
-  writeSplashEnabled(on);
-  if (splashToggle) splashToggle.checked = on;
-  return Bridge.invoke("set_splash_enabled", { enabled: on }).catch(() => {
-    // Unwired (the mock harness) or a genuine write failure. The local mirror already
-    // carries his choice and the next launch honours it; there is nothing here worth
-    // interrupting him about.
+const splashSoundToggle = el("splash-sound");
+if (splashSoundToggle && window.RichOpenings) {
+  splashSoundToggle.checked = window.RichOpenings.sound.on();
+  splashSoundToggle.addEventListener("change", () => {
+    if (window.RichOpeningsPage) window.RichOpeningsPage.setSound(splashSoundToggle.checked);
   });
-}
-
-// THE ONE CONTROL IS THE GEAR POPOVER'S `#splash-enabled` (CEO 2026-10-06, feedback item 7:
-// out of the quick settings, into the general settings). Nothing registers with
-// `RichSettings` for it any more, so the universal menu draws no splash row.
-const splashToggle = el("splash-enabled");
-if (splashToggle) {
-  splashToggle.checked = readSplashEnabled();
-  splashToggle.addEventListener("change", () => setSplashEnabled(splashToggle.checked));
-}
-
-async function syncSplashFromBackend() {
-  try {
-    const backendValue = (await Bridge.invoke("splash_enabled")) !== false;
-    writeSplashEnabled(backendValue);
-    // The one control that shows this state is the gear popover's: the backend wins.
-    if (splashToggle) splashToggle.checked = backendValue;
-  } catch (_e) {
-    // Unwired (the mock harness): the localStorage-only value already painted correctly.
-  }
 }
 /// Tell the durable store the surface has been seen. Idempotent on the Rust side — only the
 /// first call in a store's life touches the disk — and it is the zero point time-to-disable
@@ -10443,9 +10396,8 @@ async function fillMachineryRaw(machineryId, pane) {
 // each of his answers cost the same: three named choices, backed by `raw_retention` /
 // `set_raw_retention` (main.rs -> config.rs), durable, applied the moment he picks one.
 //
-// UNLIKE THE TWO PREFERENCES ABOVE, THIS ONE HAS NO `localStorage` MIRROR. The dial and the
-// splash switch cache locally because something has to paint before the async round trip
-// resolves. This control governs a DELETE, and a local cache of a delete setting is a second
+// UNLIKE THE DIAL ABOVE, THIS ONE HAS NO `localStorage` MIRROR. The dial caches locally
+// because something has to paint before the async round trip resolves. This control governs a DELETE, and a local cache of a delete setting is a second
 // answer that can disagree with the store — so there is exactly one source of truth, and
 // until it answers the surface shows nothing selected rather than a guess. On an unwired
 // bridge (the mock harness with these commands absent) the group stays empty and says so,
@@ -11468,9 +11420,8 @@ async function init() {
   // but six commands' worth of reads must not stand between him and a focused composer, so
   // it happens after the app is usable.
   await refreshDesk();
-  // The splash's durable bookkeeping, dead last on purpose: neither call affects anything
-  // the CEO can see this launch, and neither may stand between him and a focused composer.
-  syncSplashFromBackend();
+  // The splash's durable bookkeeping, dead last on purpose: it affects nothing the CEO can
+  // see this launch, and it may not stand between him and a focused composer.
   noteSplashShown();
   // The launch record, beside them and dead last for the same reason: it changes nothing
   // the CEO can see this launch.

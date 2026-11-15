@@ -55,7 +55,7 @@
 .splash-lamp {
   z-index: 3;
   mix-blend-mode: soft-light;
-  background: radial-gradient(var(--splash-lamp-radius) circle at 40% 40%, var(--splash-lamp), rgba(0, 0, 0, 0) var(--splash-lamp-stop));
+  background: radial-gradient(var(--splash-lamp-radius) circle at var(--ro-lx, 40%) var(--ro-ly, 40%), var(--splash-lamp), rgba(0, 0, 0, 0) var(--splash-lamp-stop));
 }
 .splash-vignette {
   z-index: 2;
@@ -388,7 +388,7 @@
 }
 
 /* ---------------------------------------------------------------------------------------
-   The off switch's own chrome.
+   The Settings row's own chrome.
 
    It lives in this file rather than in `style.css` for one reason: the separator and the
    second heading exist only because the splash gave the settings popover a second group.

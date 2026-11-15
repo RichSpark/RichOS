@@ -3330,7 +3330,7 @@ async function main() {
       //      two crops are the same element, at the same size, on the same ground, one frame
       //      apart. Nothing but the state differs.
       //
-      // It reads `#splash-enabled`, the checkbox of this kind that Settings still holds (in the
+      // It reads `#splash-sound`, the checkbox of this kind that Settings still holds (in the
       // band across its foot). Round 27 removed the Preferences "Show it" checkbox this used
       // to read: the technical view has one switch now, `#set-techy`, which is a switch.
       //
@@ -3341,10 +3341,10 @@ async function main() {
       const measured = [];
       for (const want of [false, true]) {
         const b = await page.evaluate((state) => {
-          const node = document.getElementById("splash-enabled");
+          const node = document.getElementById("splash-sound");
           node.checked = state;
           const r = node.getBoundingClientRect();
-          return { id: "splash-enabled", checked: node.checked, x: r.x, y: r.y, w: r.width, h: r.height };
+          return { id: "splash-sound", checked: node.checked, x: r.x, y: r.y, w: r.width, h: r.height };
         }, want);
         assertEqual(b.checked, want, "the checkbox would not take the state to be measured");
         // The same three-pixel skirt check 16 uses, so the ground is READ off the panel
@@ -3358,7 +3358,7 @@ async function main() {
             height: Math.ceil(b.h + 6),
           },
         }));
-        crops[theme + ":splash-enabled:" + b.checked] = buf.toString("base64");
+        crops[theme + ":splash-sound:" + b.checked] = buf.toString("base64");
         measured.push(Object.assign({ theme: theme }, C.measureIndicatorCrop(buf), { id: b.id, checked: b.checked }));
       }
       assert(
@@ -3396,7 +3396,7 @@ async function main() {
     // stops a half-themed control passing.
     for (const state of ["false", "true"]) {
       assert(
-        crops["light:splash-enabled:" + state] !== crops["dark:splash-enabled:" + state],
+        crops["light:splash-sound:" + state] !== crops["dark:splash-sound:" + state],
         "the " + (state === "true" ? "checked" : "unchecked") + " checkbox paints " +
           "byte-identical pixels in light and dark. That is not a ratio failure, it is the " +
           "proof that nothing in this app is painting the control — which is how defect 3.6 " +
