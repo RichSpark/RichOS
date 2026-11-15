@@ -2017,6 +2017,10 @@ t "openings walk: the opening a day expects (the guest's local day), what 430 da
   PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/openings-walk.test.py" >"$TMP/openings-walk.log" 2>&1; ok $? "$(cat "$TMP/openings-walk.log")"
 t_done
 
+t "browser reader walk: the driver against a stand-in tool server, the local site, and a release executable pushed with its bundle"
+  PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/browser-reader-walk.test.py" >"$TMP/browser-reader-walk.log" 2>&1; ok $? "$(cat "$TMP/browser-reader-walk.log")"
+t_done
+
 t "no-grant reader: RichOS's Accessibility requests and macOS's request window, one line each, from the TCC log"
   PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/no-grant-reader.test.py" >"$TMP/no-grant-reader.log" 2>&1; ok $? "$(cat "$TMP/no-grant-reader.log")"
 t_done

@@ -34,7 +34,8 @@ names the page and what was missing, and the tool's whole answer is kept beside 
   firefox        Firefox installed and started
   brave          Brave installed and started (a second Chromium browser)
   edge           Microsoft Edge installed and started (a third)
-  tool           the executable pushed; it lists exactly the five tools
+  tool           the executable pushed (with its whole app bundle when it is in one, as a release is);
+                 it lists exactly the five tools
   read-safari    every page of PAGES with Safari the default browser
   read-chrome    the same with Chrome
   read-firefox   the same with Firefox
@@ -290,15 +291,38 @@ class Walk:
     def edge(self):
         return self.install('edge')
 
+    def push_exe(self):
+        """The executable into the guest. One inside an app bundle (a candidate's RichOS.app) goes
+        with its whole bundle, packed with ditto and unpacked in the payload: taken out of its
+        bundle, a signed release executable no longer matches its signature ("invalid Info.plist")
+        and a lone copy ended in the guest before it answered `initialize`. A bare built
+        executable is pushed as it is."""
+        exe = self.a.exe.resolve()
+        bundle = next((d for d in exe.parents if d.suffix == '.app'), None)
+        if not bundle:
+            command([HERE / 'guest.sh', self.vm, '--push', exe, self.exe], 900)
+            self.g(f'chmod +x {shlex.quote(self.exe)}')
+            return {'pushed': 'executable'}
+        packed = self.a.out / (bundle.stem + '-under-test.zip')
+        subprocess.run(['/usr/bin/ditto', '-c', '-k', '--keepParent', str(bundle), str(packed)], check=True)
+        try:
+            command([HERE / 'guest.sh', self.vm, '--push', packed, self.payload + '/bundle.zip'], 900)
+        finally:
+            packed.unlink(missing_ok=True)
+        self.g(f'mkdir -p {shlex.quote(self.payload)}/bundle && /usr/bin/ditto -x -k {shlex.quote(self.payload)}/bundle.zip '
+               f'{shlex.quote(self.payload)}/bundle && rm -f {shlex.quote(self.payload)}/bundle.zip', 300)
+        self.exe = f'{self.payload}/bundle/{bundle.name}/{exe.relative_to(bundle)}'
+        verify = self.g(f'codesign -v {shlex.quote(self.payload + "/bundle/" + bundle.name)} 2>&1 && echo signature-valid || true', 120)
+        return {'pushed': 'bundle', 'bundle': bundle.name, 'exe': self.exe, 'codesign': verify.strip()[-200:]}
+
     def tool(self):
         command([HERE / 'guest.sh', self.vm, '--push', HERE / 'browser-reader-guest.py', self.driver])
-        command([HERE / 'guest.sh', self.vm, '--push', self.a.exe, self.exe], 900)
-        self.g(f'chmod +x {shlex.quote(self.exe)}')
+        pushed = self.push_exe()
         result = self.drive([{'do': 'tools'}], 120)
         tools = result['rows'][0].get('answer')
         if tools != TOOLS:
             raise StepFailed(f'the tool server listed {tools}: {result}')
-        return {'tools': tools, 'server_exit': result['server_exit']}
+        return {'tools': tools, 'server_exit': result['server_exit'], 'exe': pushed}
 
     def make_default(self, name):
         """The browser made the guest's default and running. The default-browser helper's row."""
@@ -458,7 +482,8 @@ def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('vm')
     p.add_argument('--out', type=Path, required=True)
-    p.add_argument('--exe', type=Path, required=True, help='the richos-tauri executable under test')
+    p.add_argument('--exe', type=Path, required=True,
+                   help='the richos-tauri executable under test; one inside an app bundle is pushed with its bundle')
     p.add_argument('--expect-sha', default='')
     p.add_argument('--steps', default=','.join(STEPS))
     p.add_argument('--pages', default='', type=re.compile, help='walk only the pages of PAGES whose name matches (the local pages are always walked)')

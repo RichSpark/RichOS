@@ -148,5 +148,56 @@ class Pages(unittest.TestCase):
             self.assertTrue(hasattr(walk.Walk, step.replace('-', '_')), step)
 
 
+class PushExe(unittest.TestCase):
+    """A release executable goes into the guest inside its whole bundle (out of it, its signature
+    no longer matches its bundle and a lone copy ended before it answered);
+    a bare built executable goes as it is. Guest calls are recorded, never made."""
+
+    def walker(self, exe, out):
+        w = object.__new__(walk.Walk)
+        w.a, w.vm, w.payload = type('A', (), {'exe': exe, 'out': out})(), 'vm', '/guest/payload'
+        w.exe = '/guest/payload/richos-tauri'
+        w.calls, w.guest = [], []
+        w.g = lambda cmd, timeout=60: (w.guest.append(cmd), 'signature-valid')[1]
+        return w
+
+    def test_an_executable_inside_an_app_goes_with_its_bundle(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            exe = Path(tmp, 'RichOS.app', 'Contents', 'MacOS', 'richos-tauri')
+            exe.parent.mkdir(parents=True)
+            exe.write_text('#!/bin/sh\n')
+            w = self.walker(exe, Path(tmp, 'out'))
+            Path(tmp, 'out').mkdir()
+            pushed = []
+            real = walk.command
+            walk.command = lambda argv, *rest: pushed.append([str(a) for a in argv]) or ''
+            try:
+                said = w.push_exe()
+            finally:
+                walk.command = real
+            self.assertEqual(said['pushed'], 'bundle')
+            self.assertEqual(w.exe, '/guest/payload/bundle/RichOS.app/Contents/MacOS/richos-tauri')
+            self.assertTrue(pushed[0][-2].endswith('RichOS-under-test.zip') and pushed[0][-1] == '/guest/payload/bundle.zip', pushed)
+            self.assertFalse(list(Path(tmp, 'out').glob('*.zip')), 'the packed bundle is left behind')
+            self.assertTrue(any('ditto -x -k' in c for c in w.guest), w.guest)
+
+    def test_a_bare_executable_goes_as_it_is(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            exe = Path(tmp, 'target', 'richos-tauri')
+            exe.parent.mkdir(parents=True)
+            exe.write_text('#!/bin/sh\n')
+            w = self.walker(exe, Path(tmp))
+            pushed = []
+            real = walk.command
+            walk.command = lambda argv, *rest: pushed.append([str(a) for a in argv]) or ''
+            try:
+                said = w.push_exe()
+            finally:
+                walk.command = real
+            self.assertEqual(said, {'pushed': 'executable'})
+            self.assertEqual(w.exe, '/guest/payload/richos-tauri')
+            self.assertEqual(pushed[0][-2:], [str(exe.resolve()), '/guest/payload/richos-tauri'])
+
+
 if __name__ == '__main__':
     unittest.main()
