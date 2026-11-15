@@ -2477,8 +2477,14 @@ mod tests {
             }
             read += 1;
         }
-        assert_eq!(read, 1, "a capability file was added; this test must read it on purpose");
-        assert_eq!(granted, ["core:default"], "capabilities/default.json is not what it was: {granted:?}");
+        // default.json, and cleaner.json: RichCleaner's own window may close itself (CEO, 2026-11-15).
+        assert_eq!(read, 2, "a capability file was added; this test must read it on purpose");
+        granted.sort();
+        assert_eq!(
+            granted,
+            ["core:default", "core:window:allow-close", "core:window:allow-destroy"],
+            "the capability files are not what they were: {granted:?}"
+        );
         let conf: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(root.join("tauri.conf.json")).unwrap()).unwrap();
         let inline = conf["app"]["security"]["capabilities"].as_array().cloned().unwrap_or_default();
         let inline_text = serde_json::to_string(&inline).unwrap();

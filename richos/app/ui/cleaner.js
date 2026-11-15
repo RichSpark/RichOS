@@ -146,7 +146,9 @@
   function flushEdits(){clearTimeout(saveTimer);const field=document.getElementById("cleaner-note");return field ? saveNote(field) : saveChain;}
   root.addEventListener("input",event=>{if(event.target.id!=="cleaner-note")return;clearTimeout(saveTimer);const field=event.target;const hint=document.getElementById("cleaner-save-state");if(hint)hint.textContent="Unsaved changes";saveTimer=setTimeout(()=>saveNote(field).catch(tell),600);});
   root.addEventListener("focusout",event=>{if(event.target.id!=="cleaner-note")return;clearTimeout(saveTimer);if(dirty())saveNote(event.target).catch(tell);});
-  if(!panel && native.window?.getCurrentWindow){const win=native.window.getCurrentWindow();let closing=false;win.onCloseRequested(async event=>{if(closing || !dirty() && !saveBusy)return;event.preventDefault();try{await flushEdits();closing=true;await win.close();}catch(e){tell(e);}}).catch(tell);}
+  if(!panel && native.window?.getCurrentWindow){const win=native.window.getCurrentWindow();let closing=false;win.onCloseRequested(async event=>{if(closing || !dirty() && !saveBusy)return;event.preventDefault();try{await flushEdits();closing=true;await win.close();}catch(e){tell(e);}}).catch(tell);
+    // Escape closes the window as its red button does (same save-first path), unless a popup in it is open: that Escape is the popup's.
+    window.addEventListener("keydown",event=>{if(event.key!=="Escape" || event.isComposing || [...document.querySelectorAll('[role="dialog"]')].some(n=>n.getClientRects().length))return;event.preventDefault();win.close().catch(tell);},true);}
   // Back in the window (after Turn on RichCleaner in the main window, say), read the switch and the list
   // again, so an off state that is no longer true never stays on screen (round 58); never while the note is being edited.
   if(!panel){const back=()=>{if(document.hidden || !document.getElementById("cleaner-list") || saveBusy || dirty() || document.activeElement?.id==="cleaner-note")return;load(false);};window.addEventListener("focus",back);document.addEventListener("visibilitychange",back);}
