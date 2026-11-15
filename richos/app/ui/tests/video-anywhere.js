@@ -730,8 +730,9 @@ async function main() {
     const seen = await windowOf(page);
     await painted(page, 20); // more than the half second before the end at which the file is read
     // A RECORDING LONGER THAN TEN SECONDS IS WHOLE. In a test VM guest, whose recorder has no
-    // picture to write, every file ended at 10.03 s (2026-11-15, `testvm/video-anywhere-walk.py`):
-    // here, on a Mac's own encoder, the file is as long as the recording.
+    // picture to write, the file's sound ended early, twice at 10.03 s (2026-11-15,
+    // `testvm/video-anywhere-walk.py`): here, on a Mac's own encoder, the file is as long as the
+    // recording.
     await recorded(page, 12);
     await page.click("#video-anywhere-stop");
     await until(page, "sheet");

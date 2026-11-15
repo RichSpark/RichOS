@@ -45,13 +45,14 @@ is not silence), everything in the file decoded with no error, the name saying w
 and, where the file has a picture, its length against what the sheet said and against how long
 the walk recorded, and frames taken out of it into --out for a person to look at.
 
-A GUEST'S FILE HAS NO PICTURE AND 10 s OF SOUND, and this walk asks for more only with
+A GUEST'S FILE HAS NO PICTURE AND ONLY PART OF THE SOUND, and this walk asks for more only with
 --expect-picture. The guest has no hardware H.264 encoder (home-video-walk.py's note), and the
-webview's recorder then writes the sound and no picture, and closes that sound at 10.03 s
-whatever is recorded: measured 2026-11-15 in two guests, a recording of 48 s that went through
-four screens and one of 27 s in which nothing was pressed (the `still` step) both left a file of
-10.03 s. On this Mac's own encoder the same code writes a recording of 30 s whole (30.1 s of
-H.264 and of AAC, headless WebKit). The picture in the file (every screen he went to, the
+webview's recorder then writes the sound and no picture, and that sound ends before the
+recording does. Measured 2026-11-15 in three guests: 10.03 s of sound for a recording of 48 s that
+went through four screens, 10.03 s for one of 27 s in which nothing was pressed (the `still`
+step), 28.91 s for one of 42 s. WHY IT ENDS EARLY THERE IS NOT ESTABLISHED; it does not follow
+what is pressed. On this Mac's own encoder the same code writes a recording of 30 s whole (30.1 s
+of H.264 and of AAC, headless WebKit). The picture in the file (every screen he went to, the
 pointer, the text he highlighted, every line of a text box) and its length are proved on the host
 by ui/tests/video-anywhere.js, which records through the same code in headless WebKit and reads
 the H.264 back. What the guest proves is the real app: the button, the choices, the count, Stop on
@@ -177,7 +178,8 @@ class Walk(home_video.Walk):
 
     def still(self):
         """A recording of 25 s in which nothing is pressed and nothing moves, saved and read back:
-        how long a guest's file is when the walk does nothing to the app while it records."""
+        how long a guest's file is when the walk does nothing to the app while it records (10.03 s
+        of sound, 2026-11-15: a guest's file ends early whatever is pressed)."""
         self.to_the_conversation()
         self.choose('On', 'Shown')
         time.sleep(2)
@@ -269,12 +271,13 @@ class Walk(home_video.Walk):
             problems.append('its sound is silence (%s dB)' % facts['audio']['mean_volume_db'])
         # the whole way through the app is in it: as long as the sheet said and as the walk recorded,
         # give or take the presses. Asked of a file with a picture only: a guest's recorder, which
-        # has no picture to write, closes its sound after 10 s whatever is recorded (the `still` step).
+        # has no picture to write, ends its sound early (10.03 to 28.91 s measured; see the head of
+        # this file), and never under 9.5 s.
         result['whole'] = abs(facts['seconds'] - said_s) <= 1.5 and abs(facts['seconds'] - result['pressed_stop_after_s']) <= 6
         if facts['video'] and not result['whole']:
             problems.append('it is %.1f s long, the sheet said %d s and the walk recorded for %.1f s' % (facts['seconds'], said_s, result['pressed_stop_after_s']))
         if not facts['video'] and facts['seconds'] < min(9.5, said_s - 1.5):
-            problems.append('it is %.1f s long, under the 10 s of sound a guest keeps' % facts['seconds'])
+            problems.append('it is %.1f s long, under the 9.5 s every guest has kept' % facts['seconds'])
         if not re.fullmatch(NAME, result['name']):
             problems.append('its name is ' + result['name'])
         if not result['still_on_the_home_screen']:
