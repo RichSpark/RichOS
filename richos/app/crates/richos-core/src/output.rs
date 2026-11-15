@@ -86,6 +86,8 @@ pub enum WriteSource {
     /// (d) a worker's file landed into the connected repository by `integrate` (slice S2b).
     /// The row carries the worktree copy it retires in [`WriteRow::landed_from`].
     Land,
+    /// A confirmed ref update with no file entry, recorded even for a deletion-only land.
+    LandMarker,
     /// (e) a file the APP itself wrote for this thread and named in Rich's message: meeting
     /// notes' `brief.md` and the `transcript.md` beside it (Granola PRD V4), recorded under the
     /// turn that delivered them so the message's `brief.md` is the normal file link. Key
@@ -120,8 +122,22 @@ pub struct WriteRow {
     /// still existed at witness time, else as written. Absent on every row written before S2b.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub landed_from: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub land_marker: Option<LandMarker>,
     /// Epoch millis. A LABEL; order is append order.
     pub at: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LandMarker {
+    pub before: String,
+    pub reviewed: String,
+    pub branch: String,
+    pub device: u64,
+    pub inode: u64,
+    pub git_device: u64,
+    pub git_inode: u64,
 }
 
 impl WriteRow {
@@ -148,6 +164,7 @@ impl WriteRow {
             agent_id: None,
             source,
             landed_from: None,
+            land_marker: None,
             at,
         }
     }
@@ -357,6 +374,7 @@ pub fn project(thread_id: &str, rows: &[WriteRow]) -> Vec<Entry> {
     let mut order: Vec<&str> = Vec::new();
     let mut spans: HashMap<&str, (Vec<usize>, Option<usize>, bool)> = HashMap::new();
     for (i, row) in rows.iter().enumerate() {
+        if row.source == WriteSource::LandMarker { continue; }
         let (key, own) = match retiring_key(row, &retired) {
             Some(landed) => (landed, false),
             None => (row.file_key(), true),
@@ -1041,6 +1059,8 @@ struct EvidenceWrite {
     /// (d) only: the worker, read off its own receipt by the land step.
     #[serde(default)]
     worker: Option<LandWorker>,
+    #[serde(default)]
+    land_marker: Option<LandMarker>,
 }
 
 /// The worker a land row names (§4.1 (d)): the receipt's `name` and `agent_id`.
@@ -1053,7 +1073,7 @@ struct LandWorker {
 }
 
 /// A commit id as Git prints it in full: 40 (SHA-1) or 64 (SHA-256) lowercase hex digits.
-fn usable_commit(commit: &str) -> bool {
+pub fn usable_commit(commit: &str) -> bool {
     matches!(commit.len(), 40 | 64) && commit.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
@@ -1170,6 +1190,20 @@ pub fn evidence_rows(
         }
         let Some(joined) = join.resolve(session_id, w.at) else { continue };
         if joined.thread_id != thread_id {
+            continue;
+        }
+        if w.source == "land-marker" {
+            let (Some(commit), Some(marker)) = (w.commit.as_deref(), w.land_marker) else { continue };
+            if !matches!(joined.lease, Lease::Backend)
+                || !usable_commit(commit) || !usable_commit(&marker.before)
+                || !usable_commit(&marker.reviewed) || marker.before == commit || marker.branch.is_empty() {
+                continue;
+            }
+            let key = format!("land-marker:{session_id}:{commit}:{}", w.path);
+            let mut row = WriteRow::witnessed(key, thread_id, joined.turn_id.as_deref(), &w.path,
+                                               Actor::Backend, WriteSource::LandMarker, w.at);
+            row.land_marker = Some(marker);
+            out.push(row);
             continue;
         }
         let (source, key) = match (w.source.as_str(), &w.tool_use_id, w.mtime_ns, w.commit.as_deref()) {
@@ -1823,6 +1857,32 @@ mod tests {
     // ---- S2b: witness (d), the land ---------------------------------------------------------
 
     const LANDED: &str = "0123456789abcdef0123456789abcdef01234567";
+
+    #[test]
+    fn output_projects_a_git_marker_only_through_its_backend_chat() {
+        let w = world("output-git-marker");
+        let store = OutputStore::for_data_dir(&w.dir.0);
+        let repo = w.dir.0.join("checkout");
+        let marker = json!({
+            "schema": 1, "path": repo, "commit": LANDED, "source": "land-marker", "at": 20,
+            "land_marker": {"before": "1".repeat(40), "reviewed": "2".repeat(40), "branch": "main",
+                            "device": 1, "inode": 2, "gitDevice": 1, "gitInode": 3}
+        });
+        for session in ["work-1", "desk-1"] {
+            let folder = w.evidence.join(session);
+            std::fs::create_dir_all(&folder).unwrap();
+            let mut row = marker.clone();
+            row["session_id"] = json!(session);
+            std::fs::write(folder.join(WRITES_FILE), format!("{row}\n")).unwrap();
+        }
+        assert!(store.project_session(&w.thread, &w.evidence, "desk-1", &w.join()).unwrap().is_empty());
+        let rows = store.project_session(&w.thread, &w.evidence, "work-1", &w.join()).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].source, WriteSource::LandMarker);
+        assert_eq!(rows[0].land_marker.as_ref().unwrap().git_inode, 3);
+        assert_eq!(store.project(&w.thread).unwrap().count, 0);
+        assert!(store.project_session(&w.thread, &w.evidence, "work-1", &w.join()).unwrap().is_empty());
+    }
 
     /// A worker's worktree copy and the connected repository's landed copy of one file.
     fn worktree_and_landed(w: &World, name: &str) -> (String, String) {
