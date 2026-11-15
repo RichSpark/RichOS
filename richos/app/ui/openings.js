@@ -82,7 +82,9 @@
       pick: typeof r.pick === "string" && r.pick ? r.pick : null,
       sound: r.sound === true,
       company: typeof r.company === "string" && r.company ? r.company : null,
-      day: typeof r.day === "number" && isFinite(r.day) ? Math.floor(r.day) : null
+      day: typeof r.day === "number" && isFinite(r.day) ? Math.floor(r.day) : null,
+      // The shell is still counting his spend for the first time (the gallery asks again).
+      counting: r.counting === true
     };
   }
   var record = normalize(window.__RICHOS_OPENINGS__);

@@ -59,11 +59,20 @@
 
   /// Ask the shell what is his now, and draw from the answer. A page with no shell keeps what
   /// it was given.
+  ///
+  /// WHILE THE MONEY IS STILL BEING COUNTED the shell says so (`counting`): the first read of
+  /// his history takes a while on a Mac that has years of it, and until it is done no
+  /// milestone of AI power can be given. The page asks again every two seconds for as long as
+  /// it is open and that is so, so those openings arrive on the wall by themselves.
+  var again = null;
   function refresh() {
+    clearTimeout(again);
+    again = null;
     return invoke("openings_state").then(
       function (r) {
         RO.update(r);
         fill();
+        if (RO.record().counting && page && !page.hidden) again = setTimeout(refresh, 2000);
       },
       function () {
         fill();
@@ -369,6 +378,9 @@
     opener = document.activeElement;
     // It was opened from the Settings panel, which would otherwise stay up over this page.
     if (window.RichSettings && window.RichSettings.close) window.RichSettings.close(false);
+    // And from a splash HELD with the space key, whose settings button is how he got here: the
+    // held splash is above every page, so it is let go now, or it would cover this one for good.
+    if (window.RichSplash && window.RichSplash.isUp && window.RichSplash.isUp()) window.RichSplash.yieldNow("your-openings");
     page.hidden = false;
     document.body.classList.add("openings-open");
     fill();
@@ -378,6 +390,8 @@
   function close() {
     if (!page) return;
     page.hidden = true;
+    clearTimeout(again);
+    again = null;
     document.body.classList.remove("openings-open");
     // Back to the settings button: the control he opened Settings with, which is still there.
     var gear = document.getElementById("set-btn");

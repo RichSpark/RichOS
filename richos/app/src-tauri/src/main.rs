@@ -10139,7 +10139,9 @@ fn spend_all_time(state: &AppState) -> Option<f64> {
 
 /// "YOUR OPENINGS" (round 74): which openings are his and since when, and his three settings,
 /// as the page reads them (`openings::record`). What he has earned is brought up to date first,
-/// so the gallery never shows less than he has.
+/// so the gallery never shows less than he has. `counting` is true while his spend history is
+/// still being read for the first time: nothing that needs the money can be given yet, and the
+/// gallery asks again until it can.
 #[richos_command::command]
 fn openings_state(app: AppHandle, state: State<AppState>) -> serde_json::Value {
     let version = app.package_info().version.to_string();
@@ -10149,7 +10151,9 @@ fn openings_state(app: AppHandle, state: State<AppState>) -> serde_json::Value {
     let spend = spend_all_time(&state);
     let mut launch = state.launch.lock().unwrap();
     openings::sync(&mut launch, spend, &version, now);
-    openings::record(&launch, &settings, &version, now)
+    let mut record = openings::record(&launch, &settings, &version, now);
+    record["counting"] = serde_json::Value::Bool(spend.is_none());
+    record
 }
 
 /// "Make it my opening", and "One of mine, a different one each day" (`"daily"`); `None` goes

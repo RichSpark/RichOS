@@ -789,6 +789,11 @@ pub fn save_card(app: &tauri::AppHandle, entry_id: &str, page: &str, out: &Path)
     app.run_on_main_thread(move || {
         let built = tauri::WebviewWindowBuilder::new(&builder_app, label, tauri::WebviewUrl::App("splash-opening.html".into()))
             .inner_size(CARD_SIZE.0, CARD_SIZE.1)
+            // No title bar: macOS keeps a titled window inside the screen, so on a display
+            // smaller than the card the page came out smaller than asked (test VM, 2026-11-15:
+            // 1600 x 872 on a 1680 x 1050 screen). A window with no frame is never moved or
+            // shrunk to fit, so the picture is 1600 x 900 on every Mac.
+            .decorations(false)
             .visible(false)
             .focused(false)
             .initialization_script(script)

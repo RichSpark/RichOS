@@ -2846,6 +2846,7 @@
   const launchCalls = { splashShown: [], stateReads: [] };
   // Your openings (round 74): the record the five commands below answer from, and every call.
   const openingsCalls = [];
+  let openingsCounting = false; // the shell's first read of his spend history is still running
   const openingsRecord = Object.assign(
     { firstStart: "2026-09-01", version: "1.0.0", earned: { "ruled-standard": "2026-09-01", "midnight-suede": "2026-09-01" }, pick: null, sound: false, company: null, day: 20000 },
     JSON.parse(JSON.stringify(window.__RICHOS_OPENINGS__ || {}))
@@ -4799,7 +4800,7 @@
         // browser plays nothing unless a suite asks it to).
         case "openings_state":
           openingsCalls.push({ cmd });
-          return JSON.parse(JSON.stringify(openingsRecord));
+          return Object.assign(JSON.parse(JSON.stringify(openingsRecord)), { counting: openingsCounting });
         case "set_opening_pick": {
           openingsCalls.push({ cmd, pick: args.pick });
           const pick = args.pick || null;
@@ -5961,6 +5962,8 @@
     openingsRecord() { return JSON.parse(JSON.stringify(openingsRecord)); },
     /// Something happened in the shell: an opening became his (`id`, on `date`).
     openingsEarn(id, date) { openingsRecord.earned[id] = date; },
+    /// The shell's first count of his spend is running (true) or done (false).
+    openingsCounting(on) { openingsCounting = on === true; },
     // ---- techy mode, driven the way the CEO drives it and the way the OS breaks it -----
     /// Make one thread's machinery unreadable — a real `chmod 000` in the product, a set
     /// membership here. The point of the control is that "unreadable" must never be served

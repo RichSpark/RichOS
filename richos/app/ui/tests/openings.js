@@ -543,9 +543,42 @@ async function main() {
     await page.click("#openings-open");
     await page.waitForFunction(() => !!document.querySelector('.opg-card[data-opening="power-250k"]'));
     assert(/14 so far/.test(await page.evaluate(() => document.querySelector(".opg-lede").textContent)), "the count did not follow");
+    // WHILE HIS SPEND IS STILL BEING COUNTED for the first time, the page asks again by itself,
+    // and an opening the count gives him arrives on the wall with nobody pressing anything.
+    await page.click("#openings-page .opg-back");
+    await page.evaluate(() => window.__RICHOS_MOCK__.openingsCounting(true));
+    await page.evaluate(() => window.RichSettings.openMenu());
+    await page.click("#openings-open");
+    await page.waitForFunction(() => window.RichOpenings.record().counting === true);
+    const asked = (await calls(page, "openings_state")).length;
+    await page.evaluate(() => { window.__RICHOS_MOCK__.openingsEarn("power-500k", "2026-11-15"); window.__RICHOS_MOCK__.openingsCounting(false); });
+    await page.waitForFunction(() => !!document.querySelector('.opg-card[data-opening="power-500k"]'));
+    assert((await calls(page, "openings_state")).length > asked, "the page did not ask the shell again while the count was running");
+    assertEqual(await page.evaluate(() => window.RichOpenings.record().counting), false, "the page still thinks the count is running");
+    const settled = (await calls(page, "openings_state")).length;
+    await page.evaluate(() => new Promise((r) => setTimeout(r, 2500)));
+    assertEqual((await calls(page, "openings_state")).length, settled, "the page keeps asking after the count is done");
     assertEqual(page.__errors.length, 0, "page errors: " + page.__errors.join("; "));
     await page.__ctx.close();
-    return "Back and Escape close it; Enter and Space reach nothing under it; a newly earned opening appears on the next open";
+
+    // A SPLASH HELD WITH THE SPACE KEY shows the settings button, and Settings leads here: the
+    // held splash is above every page, so opening the gallery lets it go.
+    const held = await open(browser);
+    await held.keyboard.press(" ");
+    assert(await held.evaluate(() => window.RichSplash.state.paused && window.RichSplash.isUp()), "the space key did not hold the splash");
+    await held.waitForFunction(() => window.RichSettings && window.RichOpeningsPage);
+    await held.evaluate(() => window.RichSettings.openMenu());
+    await held.click("#openings-open");
+    await held.waitForFunction(() => window.RichOpeningsPage.isOpen() && !window.RichSplash.isUp());
+    const over = await held.evaluate(() => {
+      const b = document.querySelector("#openings-page .opg-back").getBoundingClientRect();
+      const top = document.elementFromPoint(b.x + b.width / 2, b.y + b.height / 2);
+      return { reason: window.RichSplash.state.reason, splash: document.querySelectorAll("#splash").length, top: top ? top.className : null };
+    });
+    assertEqual(over.reason + " / " + over.splash + " / " + over.top, "your-openings / 0 / opg-back", "why the held splash left, what is left of it, and what is on top where Back is");
+    assertEqual(held.__errors.length, 0, "page errors: " + held.__errors.join("; "));
+    await held.__ctx.close();
+    return "Back and Escape close it; Enter and Space reach nothing under it; a newly earned opening appears on the next open, and by itself while the spend is still being counted; a held splash is let go when the gallery opens";
   });
 
   await run.check("13  Save image asks the shell for that opening's picture and says where it went; his company's line is saved", async () => {

@@ -366,6 +366,9 @@ class Walk(standard.Walk):
         if data[:3] != b'\xff\xd8\xff':
             raise StepFailed('the saved file is not a JPEG')
         size = guest(self.vm, 'sips -g pixelWidth -g pixelHeight ' + shlex.quote(target) + ' 2>/dev/null | tail -2 | tr -s " \\n" " "')
+        # The share card's size, whatever the guest's screen: 1600 x 900 at this guest's 1x.
+        if 'pixelWidth: 1600' not in size or 'pixelHeight: 900' not in size:
+            raise StepFailed('the saved picture is not 1600 x 900: ' + size.strip())
         return {'file': 'RichOS Bridle Leather.jpg', 'bytes': len(data), 'sha256': hashlib.sha256(data).hexdigest(), 'pixels': size.strip(),
                 'said': (said.get('value') or said.get('title') or '')[:160], 'copy': 'saved-bridle-leather.jpg'}
 
