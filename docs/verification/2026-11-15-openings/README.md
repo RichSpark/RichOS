@@ -12,58 +12,74 @@ this Mac's screen and nothing was played on it.
 
 ## What ran
 
-- **The build:** this branch at `583c4e00f`, `testvm/branch-bundle.sh --release`, version 1.3.3,
+- **The build:** this branch at `73b752872`, `testvm/branch-bundle.sh --release`, version 1.3.3,
   ad-hoc signed, engine 1.2.0.
-- **The walk:** `testvm/openings-walk.py` (committed with this work), eight steps, each a real press
-  on the app's own window or a read of its own files. Result: `walk-report.json` inside `walk.tgz`. **All eight passed**,
-  258 s.
-- **The launch speed:** `testvm/launch-speed-walk.py`, unchanged, three runs (below).
+- **The walk:** `testvm/openings-walk.py` (committed with this work), nine steps, each a real press
+  on the app's own window or a read of its own files. Result: `walk-report.json` inside `walk.tgz`.
+  **All nine passed**, 206 s.
+- **The launch speed:** `testvm/launch-speed-walk.py` with its new day-change route, on `408e628f9`
+  (the commit before, which differs in the page's Token spend script only, nothing on the launch
+  path). Result: `launch-speed-report.json` inside `walk.tgz`. **It passes.**
 
 ## The walk, step by step
 
 | Step | What was done | What the app did |
 |---|---|---|
 | first | A new user's first start | The splash played (`splash shown, round-11/v1`). The launch record gave him the two openings and nothing else. The sound is on: the settings file says `"opening_sound": true` and the Settings switch reads on (`first-settings-row.jpg`). |
-| history | The app quit from its own menu. Its launch record made 430 days old; its settings file given `"splash_enabled": false` and a `splash_disabled_at`, as a user of an older build who had switched the splash off. Started again. | `window: launch kind fresh, splash on` and the splash played from the pictures drawn at the quit (`round-11/v2 (picked at the last quit), its opening used`). Time with Rich earned exactly four more: the year's edition and the leather, slate and steel. |
+| history | The app quit from its own menu. Its launch record made 430 days old; its settings file given `"splash_enabled": false` and a `splash_disabled_at`, as a user of an older build who had switched the splash off. Started again. | `window: launch kind fresh, splash on` and the splash played from the pictures drawn at the quit. Time with Rich earned exactly four more: the year's edition and the leather, slate and steel. |
 | gallery | Settings, "Your openings" | Six cards (The Ruled Standard, Midnight Suede, One Year with Rich, Bridle Leather, Honed Slate, Blued Steel), "6 so far", one sealed tile on each ladder that has more and none of the names it must not show (`gallery.jpg`). |
-| play | Play on Bridle Leather and on One Year with Rich | Each covered the window with its own screen (`play-material-leather.jpg`, `play-edition-year.jpg`: "1 year", "with Rich, to the day", the bar running) and left by itself; the gallery was there again. |
-| pick | "Make it my opening" on Bridle Leather, then the app's own Quit | The settings file says `material-leather`; the page said "Bridle Leather is your opening now." (`picked-leather.jpg`). The quit: `the next start shows opening/material-leather (start 3); its opening was drawn: 11 of 30 pictures over 933 ms ... 2798 ms`. The next start: `splash shown, opening/material-leather (picked at the last quit), its opening used (11 later pictures), the page joined it at 933 ms` (`start-leather.jpg`). |
-| daily | "One of mine, a different one each day", quit, start; then the guest's clock a day on, start, quit, start | Day 20,772: the quit picked `opening/ruled-standard` (20,772 mod 6 = 0, the first of his six) and the start played it from its pictures. Day 20,773: the start showed `opening/midnight-suede (picked by the rules at this start), its opening not used: the opening saved at the last quit was another day's` (`daily-next-day.jpg`); the start after that played the same one from the quit's pictures. |
+| play | Play on Bridle Leather and on One Year with Rich | Each covered the window with its own screen (`play-material-leather.jpg`, `play-edition-year.jpg`) and left by itself; the gallery was there again. |
+| pick | "Make it my opening" on Bridle Leather, then the app's own Quit | The settings file says `material-leather` (`picked-leather.jpg`). The quit picked `opening/material-leather` and drew its opening; the next start played it from those pictures (`start-leather.jpg`). |
+| daily | "One of mine, a different one each day", quit, start; then the guest's clock a day on, start, quit, start | Below. |
 | sound | The Settings switch "Play its sound" pressed off; quit; start | Before: on. After the press the settings file says `"opening_sound": false` and the old `splash_enabled` and `splash_disabled_at` keys are gone from it. After the restart the switch is off in Settings and in the gallery (`sound-on.jpg`, `sound-off.jpg`). |
-| save | Save image on Bridle Leather | "Saved to your Downloads folder as RichOS Bridle Leather.jpg." The file: a JPEG, 1600 x 900, 133,214 bytes, with "No. 24 · Bridle Leather · Earned December 11, 2025" at its foot (`saved-bridle-leather.jpg`, the file itself). |
+| save | Save image on Bridle Leather | "Saved to your Downloads folder as RichOS Bridle Leather.jpg." The file: a JPEG, 1600 x 900 (`saved-bridle-leather.jpg`, the file itself). |
+| spend | Token spend opened from Settings; then Settings, "Your openings" over it | The gallery is on the screen and Token spend is gone from under it (`spend-open.jpg`, `gallery-over-spend.jpg`). The same step on the build before this fix (`408e628f9`) fails: "Token spend is still up with the gallery open: the gallery is under it". |
 
-Two things the walk found and this branch fixed before this run: a home with no Downloads folder had
-nowhere to put the saved image (the folder is made now) and the image came out 1600 x 872 because
-macOS keeps a titled window inside the screen (the hidden window has no title bar now).
+### A different one each day, across a change of day
 
-## Launch speed: the committed gate, three runs
+The mid-job review found that the first start of a new day showed bare ground until the page drew the
+splash: 1,726 ms in this guest, against 265 ms the same day. The quit now draws the next day's
+opening beside today's and a later day opens on the one after the last (so a Monday follows a
+Friday's).
+
+| Moment | The app's own line |
+|---|---|
+| The quit on day 20,772 | `the next start shows opening/ruled-standard (start 4); its opening was drawn: 30 of 30 pictures ... 1175 ms` and `a start on a later day shows opening/midnight-suede; its opening was drawn: 30 of 30 pictures ... 1706 ms` |
+| The start the same day | `first frame 154 ms ... splash shown, opening/ruled-standard (picked at the last quit), its opening used (30 later pictures)` |
+| The first start of day 20,773 | `first frame 166 ms ... splash shown, opening/midnight-suede (picked at the last quit), its opening used (30 later pictures)` (`daily-next-day.jpg`) |
+| The quit on day 20,773 | `the next start shows opening/midnight-suede ... 1926 ms` and `a start on a later day shows opening/edition-year ... 1967 ms` |
+
+What it costs: the first quit of a day for such a user draws two openings, 2.9 s and 3.9 s in all
+here, with no window on screen; later quits that day find both saved and draw nothing.
+
+## Launch speed: the committed gate
 
 `launch-speed-walk.py` judges the p95 of every warm launch, from the launch request to the splash
 playing, against 380 ms scaled by Dictionary's slowness in the same guest (the CEO: "if the VM is
-slower, then the measurements need to be adjusted accordingly"). 20 ordinary launches and 40
-rule-switch launches a run, plus 20 cold ones judged on their own.
+slower, then the measurements need to be adjusted accordingly").
 
-| Run | Build | p95, 60 warm launches | Limit in that guest | ordinary p95 / median | rule switch p95 / median | cold p95 against its own limit | Verdict |
-|---|---|---|---|---|---|---|---|
-| 1 | an earlier state of this branch | 374 ms | 709 ms (x 1.87) | 403 / 256 ms | 361 / 241 ms | 2,889 against 3,119 ms | passes |
-| 2 | `b7d692a55` | 640 ms | 740 ms (x 1.95) | 442 / 301 ms | 706 / 384 ms | 5,937 against 6,113 ms | passes |
-| 3 | `583c4e00f`, the build walked above | 454 ms | 1,089 ms (x 2.87) | 770 / 288 ms | 440 / 277 ms | 2,569 against 5,353 ms | passes |
+**The run on `408e628f9`, with the day-change route.** The host was quiet: Dictionary took 321 ms
+from the click in the guest against 318 ms on his Mac, so the limit was 383 ms (x 1.01) and every
+number below is also within 380 ms unscaled.
 
-- The same gate on `4145eb904`, which this branch is built on (its own record,
-  `docs/verification/2026-11-14-splash-opening/`): ordinary 320 / 237 ms, rule switch 359 / 254 ms.
-  The medians here (256 to 301 and 241 to 384 ms) sit beside those; the p95s move with the host.
-- The host carried other agents' work during all three runs. Run 2 also carried this branch's own
-  release build, a second guest and its browser suites, which is why it is the slowest; run 3 had
-  nothing else of this branch's running and its guest was the slowest of the three by Dictionary's
-  own measure (911 ms from the click against 593 and 619).
-- Measured against 380 ms unscaled: run 1's p95 is within it (374); runs 2 and 3 are not (640, 454).
-- Runs 1 and 2 are builds from before the last two commits, which touch nothing on the launch path
-  (the gallery's page script, the saved image's hidden window).
-- One start in the walk does not play from saved pictures and it is the first start of a new day
-  for a user of "a different one each day": the quit could only draw the day it was on. That start
-  showed the splash's ground at 218 ms and the splash itself once the page had drawn it (the page
-  took over at 1,655 ms). Every other start in the walk played its pictures (first frame 194 to
-  658 ms).
+| Route | Launches | p95 | median | slowest |
+|---|---|---|---|---|
+| ordinary | 20 | 217 ms | 191 ms | 232 ms |
+| rule switch (#1 to #2 to #1) | 40 | 225 ms | 217 ms | 239 ms |
+| **day change** (the first start of a new day, his two openings in turn) | 20 | 223 ms | 214 ms | 233 ms |
+| all warm launches together | 80 | 225 ms | | |
+| cold (after `sudo purge`), judged on its own against 2,998 ms | 20 | 1,653 ms | 1,482 ms | 2,967 ms |
+
+The day-change route: one home set to "a different one each day"; before each judged launch its
+record of the last such day is made a day older, which is what a night does; the launch must show the
+other opening than the one before it. A start that drew its splash in the page would refuse the
+route on its time (the gate's own test holds that with the 1,726 ms the review measured).
+
+Three earlier runs of the gate on earlier states of this branch, without the day-change route, all
+passed on a busy host: p95 374 ms against 709, 640 against 740 and 454 against 1,089.
+
+The same gate on `4145eb904`, which this branch is built on (its own record,
+`docs/verification/2026-11-14-splash-opening/`): ordinary 320 / 237 ms, rule switch 359 / 254 ms.
 
 ## What this does not cover
 
@@ -76,13 +92,17 @@ rule-switch launches a run, plus 20 cold ones judged on their own.
   those ten openings cannot be earned yet; they are drawn and tested and stay sealed.
 - **The money ladder on the real app.** The guest's home has no spend, so no opening of AI power was
   earned in the walk; the rule is tested in Rust and the gallery's handling in the browser suite.
+- **Two starts of "a different one each day" still draw in the page:** one after he earned or lost an
+  opening in a way that changes whose turn it is and one after a quit whose drawing failed. The
+  launch line says which.
 - A Retina display, Windows and his own Mac.
 
 ## Instances
 
 Every instance the walk started was quit from the app's own menu between its starts; `run-walk.py`
-quit the last one by its recorded pid (4492) and ended "clean: app quit, VM stopped, clone deleted,
-state removed." Each launch-speed run quit every instance it started by the pid captured at spawn
-(123 instances a run, none left running) and ended the same way.
+quit the last one by its recorded pid (5011) and ended "clean: app quit, VM stopped, clone deleted,
+state removed." The launch-speed run quit every instance it started by the pid captured at spawn
+(145 instances, none left running) and ended the same way.
 
-The frames passed the privacy gate (`scripts/qa/ocr-gate.sh`, 0 of 12 frames, 0 of 1 text file).
+The frames and reports passed the privacy gate (`scripts/qa/ocr-gate.sh`, 0 of 14 frames, 0 of 2
+text files).
