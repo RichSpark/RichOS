@@ -12,14 +12,14 @@ this Mac's screen and nothing was played on it.
 
 ## What ran
 
-- **The build:** this branch at `73b752872`, `testvm/branch-bundle.sh --release`, version 1.3.3,
+- **The build:** this branch at `ba53bfa6b`, `testvm/branch-bundle.sh --release`, version 1.3.3,
   ad-hoc signed, engine 1.2.0.
-- **The walk:** `testvm/openings-walk.py` (committed with this work), nine steps, each a real press
+- **The walk:** `testvm/openings-walk.py` (committed with this work), ten steps, each a real press
   on the app's own window or a read of its own files. Result: `walk-report.json` inside `walk.tgz`.
-  **All nine passed**, 206 s.
-- **The launch speed:** `testvm/launch-speed-walk.py` with its new day-change route, on `408e628f9`
-  (the commit before, which differs in the page's Token spend script only, nothing on the launch
-  path). Result: `launch-speed-report.json` inside `walk.tgz`. **It passes.**
+  **All ten passed**, 212 s.
+- **The launch speed:** `testvm/launch-speed-walk.py` with its new day-change route, on `408e628f9`.
+  The two commits after it change the gallery's page script and Token spend's (which sheet gives
+  way to which) and nothing on the launch path. Result: `launch-speed-report.json` inside `walk.tgz`. **It passes.**
 
 ## The walk, step by step
 
@@ -34,6 +34,7 @@ this Mac's screen and nothing was played on it.
 | sound | The Settings switch "Play its sound" pressed off; quit; start | Before: on. After the press the settings file says `"opening_sound": false` and the old `splash_enabled` and `splash_disabled_at` keys are gone from it. After the restart the switch is off in Settings and in the gallery (`sound-on.jpg`, `sound-off.jpg`). |
 | save | Save image on Bridle Leather | "Saved to your Downloads folder as RichOS Bridle Leather.jpg." The file: a JPEG, 1600 x 900 (`saved-bridle-leather.jpg`, the file itself). |
 | spend | Token spend opened from Settings; then Settings, "Your openings" over it | The gallery is on the screen and Token spend is gone from under it (`spend-open.jpg`, `gallery-over-spend.jpg`). The same step on the build before this fix (`408e628f9`) fails: "Token spend is still up with the gallery open: the gallery is under it". |
+| sheet | With the gallery up: Settings, "Connected folders (repositories)" | The gallery gives way and the sheet is on the screen (`sheet-over-gallery.jpg`). The same step on the build before this fix (`73b752872`) fails: "the gallery is still up after Connected folders was pressed: its sheet is under the gallery". |
 
 ### A different one each day, across a change of day
 
@@ -44,12 +45,12 @@ Friday's).
 
 | Moment | The app's own line |
 |---|---|
-| The quit on day 20,772 | `the next start shows opening/ruled-standard (start 4); its opening was drawn: 30 of 30 pictures ... 1175 ms` and `a start on a later day shows opening/midnight-suede; its opening was drawn: 30 of 30 pictures ... 1706 ms` |
-| The start the same day | `first frame 154 ms ... splash shown, opening/ruled-standard (picked at the last quit), its opening used (30 later pictures)` |
-| The first start of day 20,773 | `first frame 166 ms ... splash shown, opening/midnight-suede (picked at the last quit), its opening used (30 later pictures)` (`daily-next-day.jpg`) |
-| The quit on day 20,773 | `the next start shows opening/midnight-suede ... 1926 ms` and `a start on a later day shows opening/edition-year ... 1967 ms` |
+| The quit on day 20,772 | `the next start shows opening/ruled-standard (start 4); its opening was drawn: 30 of 30 pictures ... 1180 ms` and `a start on a later day shows opening/midnight-suede; its opening was drawn: 30 of 30 pictures ... 1740 ms` |
+| The start the same day | `first frame 151 ms ... splash shown, opening/ruled-standard (picked at the last quit), its opening used (30 later pictures)` |
+| The first start of day 20,773 | `first frame 173 ms ... splash shown, opening/midnight-suede (picked at the last quit), its opening used (30 later pictures)` (`daily-next-day.jpg`) |
+| The quit on day 20,773 | `the next start shows opening/midnight-suede ... 2174 ms` and `a start on a later day shows opening/edition-year ... 1986 ms` |
 
-What it costs: the first quit of a day for such a user draws two openings, 2.9 s and 3.9 s in all
+What it costs: the first quit of a day for such a user draws two openings, 2.9 s and 4.2 s in all
 here, with no window on screen; later quits that day find both saved and draw nothing.
 
 ## Launch speed: the committed gate
@@ -100,9 +101,9 @@ The same gate on `4145eb904`, which this branch is built on (its own record,
 ## Instances
 
 Every instance the walk started was quit from the app's own menu between its starts; `run-walk.py`
-quit the last one by its recorded pid (5011) and ended "clean: app quit, VM stopped, clone deleted,
+quit the last one by its recorded pid (4968) and ended "clean: app quit, VM stopped, clone deleted,
 state removed." The launch-speed run quit every instance it started by the pid captured at spawn
 (145 instances, none left running) and ended the same way.
 
-The frames and reports passed the privacy gate (`scripts/qa/ocr-gate.sh`, 0 of 14 frames, 0 of 2
+The frames and reports passed the privacy gate (`scripts/qa/ocr-gate.sh`, 0 of 15 frames, 0 of 2
 text files).
