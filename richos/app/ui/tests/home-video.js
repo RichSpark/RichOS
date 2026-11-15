@@ -526,6 +526,30 @@ async function main() {
     return "the count called off by the button (choices again) and by Escape; Escape stopped a recording and kept it; Record again kept Hidden; Escape discarded";
   });
 
+  await run.check("Space on the sheet's player pauses and plays the video, and the home screen stays", async () => {
+    const page = await openAt(browser, 312);
+    await page.click("#home-video");
+    await page.click("#home-video-choices .hv-go");
+    await until(page, "rec");
+    await recorded(page, 1);
+    await page.click("#home-video");
+    await until(page, "sheet");
+    assert(await appears(page, ".hv-sheet"), "the sheet did not open");
+    await page.waitForFunction(() => !document.querySelector(".hv-sheet video").paused, null, { timeout: 60000 }).catch(() => {});
+    assertEqual(await page.evaluate(() => document.querySelector(".hv-sheet video").paused), false, "the video does not play on the sheet");
+    await page.focus(".hv-sheet video");
+    assertEqual(await page.evaluate(() => document.activeElement === document.querySelector(".hv-sheet video")), true, "the keyboard is not on the player");
+    await page.keyboard.press(" ");
+    const after = () => page.evaluate(() => [window.RichHome.isOpen(), window.RichHomeVideo.state().state, document.querySelector(".hv-sheet video").paused]);
+    assertEqual(await after(), [true, "sheet", true], "Space on the player (home open, recorder state, video paused)");
+    await page.keyboard.press(" ");
+    await page.waitForFunction(() => !document.querySelector(".hv-sheet video").paused, null, { timeout: 60000 }).catch(() => {});
+    assertEqual(await after(), [true, "sheet", false], "Space again on the player (home open, recorder state, video paused)");
+    assertEqual(page.__errors, [], "the page reported errors");
+    await page.close();
+    return "Space paused the video and played it again; the home screen and the sheet stayed";
+  });
+
   await run.check("Talk to Rich during a recording ends it with what it has, and the sheet is there when he comes back", async () => {
     const page = await openAt(browser, 312);
     await page.click("#home-video");

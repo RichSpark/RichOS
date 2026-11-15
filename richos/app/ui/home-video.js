@@ -1014,10 +1014,29 @@ window.RichHomeVideo = (function () {
 
   // Escape goes one step back: out of the sheet, the choices, the count, the recording (which
   // keeps what it has). Registered before `home.js`, in the capture phase, so it is taken here first.
+  //
+  // SPACE ON THE SHEET'S PLAYER PLAYS AND PAUSES IT, the usual key for a video. Without this it
+  // reached `home.js`, which opens Talk to Rich on Space (a player is not one of the controls it
+  // leaves keys to), and the home screen went away under the video. Taken here and played or
+  // paused by hand, so it does the same whether or not the webview's own controls answer Space.
   document.addEventListener(
     "keydown",
     function (e) {
-      if (!root || e.key !== "Escape" || !homeOpen()) return;
+      if (!root || !homeOpen()) return;
+      if ((e.key === " " || e.key === "Spacebar") && state === "sheet" && e.target === el.video) {
+        if (e.metaKey || e.ctrlKey || e.altKey) return;
+        e.preventDefault();
+        e.stopPropagation();
+        if (e.repeat) return;
+        try {
+          if (el.video.paused) {
+            var pl = el.video.play();
+            if (pl && pl.catch) pl.catch(function () {});
+          } else el.video.pause();
+        } catch (err) {}
+        return;
+      }
+      if (e.key !== "Escape") return;
       var took = true;
       if (state === "sheet") closeSheet(false);
       else if (state === "choosing") {
