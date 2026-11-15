@@ -7,7 +7,8 @@
   const page = document.getElementById("richfiles-page");
   const pane = document.getElementById("richfiles-pane");
   const error = document.getElementById("richfiles-pane-error");
-  if (!bridge || !rail || !button || !page || !pane || !error) return;
+  const loading = document.getElementById("richfiles-loading");
+  if (!bridge || !rail || !button || !page || !pane || !error || !loading) return;
 
   const hiddenBounds = { left: 0, top: 0, width: 0, height: 0, visible: false };
   let last = "";
@@ -15,6 +16,10 @@
   let waiting = false;
   let again = false;
   let showRequested = false;
+  // RichFiles' pane exists: it was built ahead of the click, or a click has shown it.
+  let ready = false;
+  // Two frames on: what the page changed has been drawn.
+  const painted = () => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)));
 
   function intersects(first, second) {
     return first.left < second.right && second.left < first.right
@@ -47,8 +52,18 @@
     waiting = true;
     try {
       if (key !== last) {
+        // A CLICK NEVER LOOKS DEAD (the CEO, 2026-11-15: "when technically not possible to
+        // eliminate the wait, then at least show a basic FUCKING LOADING SCREEN!!!"). A click that
+        // comes before RichFiles is ready makes the shell load and build it, which holds the
+        // window still until it is done. So the loading line (`show`) is drawn first, and only
+        // then is the shell asked.
+        if (next.visible && !ready) await painted();
         await bridge.invoke("richfiles_place_pane", { bounds: next });
         last = key;
+        if (next.visible) {
+          ready = true;
+          loading.hidden = true;
+        }
       }
       if (next.visible && showRequested) {
         showRequested = false;
@@ -56,6 +71,7 @@
       }
       error.hidden = true;
     } catch (reason) {
+      loading.hidden = true;
       if (!page.hidden) {
         error.textContent = String(reason);
         error.hidden = false;
@@ -70,6 +86,7 @@
   const overlays = new MutationObserver(schedule);
   function show() {
     prepared = true; // showing it builds it: nothing is left to make ready
+    loading.hidden = ready;
     page.hidden = false;
     document.body.classList.add("page-open");
     size.observe(pane);
@@ -79,6 +96,7 @@
   }
 
   function hide() {
+    loading.hidden = true;
     page.hidden = true;
     document.body.classList.remove("page-open");
     size.disconnect();
@@ -133,7 +151,7 @@
       else if (clear === null) clear = now;
       if (clear !== null && now - clear >= SETTLE_MS) {
         prepared = true;
-        bridge.invoke("richfiles_prepare_pane", { pane: true }).catch(() => {});
+        bridge.invoke("richfiles_prepare_pane", { pane: true }).then(() => { ready = true; }).catch(() => {});
         return;
       }
     }

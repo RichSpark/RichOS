@@ -140,6 +140,7 @@ async function verifyRichFilesColdDock(sourcePath) {
     "richfiles-page": page,
     "richfiles-pane": { getBoundingClientRect: () => ({ left: 52, top: 40, right: 1000, bottom: 700, width: 948, height: 660 }) },
     "richfiles-pane-error": { hidden: true },
+    "richfiles-loading": { hidden: true },
   };
   let hooks;
   let installListener;
@@ -200,8 +201,11 @@ async function verifyRichFilesColdDock(sourcePath) {
   installListener();
 
   await new Promise(setImmediate);
-  for (const frame of frames.splice(0)) frame();
-  await new Promise(setImmediate);
+  // The pane was not ready: the page draws its loading line (two frames) before it asks the shell.
+  for (let round = 0; round < 4; round++) {
+    for (const frame of frames.splice(0)) frame();
+    await new Promise(setImmediate);
+  }
   assertEqual(trace, [
     "subscribe rich://richfiles-show",
     "dock request arrived",
@@ -221,6 +225,7 @@ async function verifyRichFilesColdDock(sourcePath) {
 async function loadRichFilesPage(sourcePath, { available, readyFirst }) {
   const trace = [];
   const timers = [];
+  const frames = [];
   const listeners = {};
   const screen = { opening: true, home: true, now: 5000 };
   let hooks;
@@ -229,6 +234,7 @@ async function loadRichFilesPage(sourcePath, { available, readyFirst }) {
     "richfiles-page": { hidden: true },
     "richfiles-pane": { getBoundingClientRect: () => ({ left: 52, top: 40, right: 1000, bottom: 700, width: 948, height: 660 }) },
     "richfiles-pane-error": { hidden: true },
+    "richfiles-loading": { hidden: true },
   };
   const window = {
     addEventListener(type, handler) { listeners[type] = handler; },
@@ -253,7 +259,7 @@ async function loadRichFilesPage(sourcePath, { available, readyFirst }) {
     document: { getElementById: (id) => nodes[id], body: { classList: { add() {} } } },
     ResizeObserver: Observer, MutationObserver: Observer,
     performance: { now: () => screen.now },
-    requestAnimationFrame() { return 1; },
+    requestAnimationFrame(callback) { frames.push(callback); return frames.length; },
     setTimeout(callback) { timers.push(callback); return timers.length; },
   }, { filename: sourcePath });
   await new Promise(setImmediate);
@@ -264,7 +270,13 @@ async function loadRichFilesPage(sourcePath, { available, readyFirst }) {
     await new Promise(setImmediate);
   };
   const prepared = () => trace.filter((t) => t === "library" || t === "pane");
-  return { prepared, screen, later, usable: () => window.RichFilesReady.start(), input: (type) => listeners[type]?.(), show: () => hooks.show() };
+  // One frame is drawn: every waiting animation-frame callback runs.
+  const frame = async () => {
+    for (const callback of frames.splice(0)) callback();
+    await new Promise(setImmediate);
+  };
+  const placed = () => trace.filter((t) => t.startsWith("place"));
+  return { prepared, placed, frame, loading: nodes["richfiles-loading"], screen, later, usable: () => window.RichFilesReady.start(), input: (type) => listeners[type]?.(), show: () => hooks.show() };
 }
 
 /// RichFiles is made ready before the first click on its icon (the CEO, 2026-11-15: "whatever
@@ -348,6 +360,36 @@ async function verifyRichFilesMadeReadyUnderTyping(sourcePath) {
   return "prepared one second into six seconds of typing that never pauses; the click found it ready";
 }
 
+/// A CLICK NEVER LOOKS DEAD (the CEO, 2026-11-15: "when technically not possible to eliminate the
+/// wait, then at least show a basic FUCKING LOADING SCREEN!!!"). A click on the icon that comes
+/// before RichFiles is ready puts the loading line on screen at once, and the shell, whose loading
+/// and building holds the window still, is asked only after the line has been drawn. A click on
+/// RichFiles that is ready shows no loading line and asks the shell at once.
+async function verifyRichFilesEarlyClick(sourcePath) {
+  const early = await loadRichFilesPage(sourcePath, { available: true, readyFirst: false });
+  assertEqual([early.prepared(), early.loading.hidden], [[], true], "nothing is prepared yet and no loading line is up");
+  early.show();
+  assertEqual(early.loading.hidden, false, "the loading line is on screen with the click, before anything else happens");
+  await early.frame();
+  await early.frame();
+  assertEqual(early.placed(), [], "the shell is not asked to load RichFiles before the loading line has been drawn");
+  await early.frame();
+  assertEqual(early.placed(), ["place visible=true"], "then the shell is asked");
+  assertEqual(early.loading.hidden, true, "the loading line leaves when RichFiles is on screen");
+
+  const ready = await loadRichFilesPage(sourcePath, { available: true, readyFirst: true });
+  ready.screen.opening = false;
+  ready.screen.home = false;
+  await ready.later(100);
+  await ready.later(400);
+  assertEqual(ready.prepared(), ["library", "pane"], "RichFiles was made ready ahead of the click");
+  ready.show();
+  assertEqual(ready.loading.hidden, true, "RichFiles that is ready shows no loading line");
+  await ready.frame();
+  assertEqual(ready.placed(), ["place visible=true"], "and the shell is asked in the click's own frame");
+  return "an early click: the loading line at once, the shell asked two frames later; a click on ready RichFiles: no loading line";
+}
+
 /// The same in the real shell: `main.js` tells the RichFiles page when the app is usable; on the
 /// home screen the page asks the shell for the library only, and for the pane once the home screen
 /// has been left, with no click on the RichFiles icon.
@@ -409,6 +451,8 @@ async function main() {
     verifyRichFilesColdDock(path.join(UI_DIR, "richfiles-page.js")));
   await run.check("RichFiles is made ready before the first click: a moment after the home screen has left", () =>
     verifyRichFilesMadeReady(path.join(UI_DIR, "richfiles-page.js")));
+  await run.check("RichFiles: a click before it is ready shows the loading line at once, and the shell is asked after it is drawn", () =>
+    verifyRichFilesEarlyClick(path.join(UI_DIR, "richfiles-page.js")));
   await run.check("RichFiles is made ready under typing that never pauses: six seconds of it, then the click", () =>
     verifyRichFilesMadeReadyUnderTyping(path.join(UI_DIR, "richfiles-page.js")));
   const { webkit } = loadPlaywright();
@@ -756,6 +800,58 @@ async function main() {
         assertEqual(mine(walk.unresolvable), [], "the contrast walk could not prove a pair on the RichFiles page");
         assertEqual(mine(walk.exempt), [], "the RichFiles page needs no contrast exemptions");
         return "the shipped RichFiles heading and placement error were both measured";
+      } finally {
+        await richFiles.close();
+      }
+    });
+
+    await run.check(`RichFiles ${theme}  a click before it is ready: the loading line is on the page, and it passes contrast`, async () => {
+      const richFiles = await context.newPage();
+      try {
+        await richFiles.addInitScript(() => {
+          window.__richFilesPlaced = [];
+          Object.defineProperty(window, "RichBridge", {
+            configurable: true,
+            set(bridge) {
+              const invoke = bridge.invoke.bind(bridge);
+              bridge.invoke = async (command, args, options) => {
+                if (command === "richfiles_pane_available") return true;
+                if (command === "richfiles_request_pending") return false;
+                // RichFiles is never ready here, and never arrives: the loading line stays to be looked at.
+                if (command === "richfiles_prepare_pane") return new Promise(() => {});
+                if (command === "richfiles_place_pane") {
+                  if (!args.bounds.visible) return;
+                  window.__richFilesPlaced.push({ loadingUp: !document.getElementById("richfiles-loading").hidden });
+                  return new Promise(() => {});
+                }
+                return invoke(command, args, options);
+              };
+              Object.defineProperty(window, "RichBridge", { value: bridge, writable: true, configurable: true });
+            },
+          });
+        });
+        await richFiles.goto(APP);
+        await leaveHome(richFiles);
+        await shellSettled(richFiles);
+        await richFiles.locator("#nr-richfiles").click();
+        await richFiles.locator("#richfiles-loading").waitFor({ state: "visible" });
+        await richFiles.waitForFunction(() => window.__richFilesPlaced.length > 0, null, { timeout: 30000 });
+        await richFiles.mouse.move(700, 80);
+        await flushFrames(richFiles);
+        assertEqual(await richFiles.evaluate(() => window.__richFilesPlaced), [{ loadingUp: true }],
+          "the shell was asked for RichFiles once, with the loading line already up");
+        assertEqual((await railFacts(richFiles)).selected, ["richfiles"], "the rail selected the RichFiles page");
+        assertEqual(await richFiles.locator("#richfiles-loading").innerText(), "Opening RichFiles…", "the loading line says what is happening");
+        assertEqual(await richFiles.evaluate(() => document.documentElement.dataset.theme), theme,
+          "the document is using the requested theme");
+        await richFiles.evaluate(C.pageScript());
+        const walk = await richFiles.evaluate((t) => window.__contrastProbe({ surface: "richfiles-page", theme: t }), theme);
+        assert(walk.measuredPaths.includes("p#richfiles-loading"), "the contrast probe did not measure p#richfiles-loading");
+        const mine = (pairs) => Object.values(pairs).filter((pair) => /#richfiles-loading/.test(pair.selector || pair.path || ""));
+        assertEqual(mine(walk.failures), [], "the contrast walk found a failing pair on the loading line");
+        assertEqual(mine(walk.unresolvable), [], "the contrast walk could not prove a pair on the loading line");
+        assertEqual(mine(walk.exempt), [], "the loading line needs no contrast exemption");
+        return "the loading line was up before the shell was asked, and its text was measured";
       } finally {
         await richFiles.close();
       }
