@@ -31,6 +31,12 @@ STEPS (in the guest, never on the host's screen, CEO section 65; the guest has n
                  key. Reported like the other timed steps, with what the typing cost: the longest time the
                  window did not change while keys were arriving. Run it with identity and first-run only
                  and the click is also the first one ever
+  early-open     (optional) a click that comes before RichFiles is ready (the CEO, 2026-11-15: "at least
+                 show a basic FUCKING LOADING SCREEN!!!"): the app started again and, seconds in, before it
+                 has said it is usable, the guest presses Talk to Rich and clicks the RichFiles icon 0.4 s
+                 later. Reported: the click to the loading line on screen, and the click to RichFiles on
+                 screen. It fails when RichFiles had been made ready before the click after all (then it
+                 was not an early click) or when no frame shows the loading line
   home-still     (optional) what getting RichFiles ready costs the start: the app quit from its own menu and
                  started again, and the home screen's moving picture watched from outside for --still-seconds
                  (frame-rate.swift, in the guest: the picture's frames in each second and the longest pause
@@ -65,8 +71,8 @@ QA = HERE.parent / 'qa'
 sys.path.insert(0, str(QA / 'lib'))
 
 STEPS = ['identity', 'first-run', 'first-open', 'again', 'after-restart']
-OPTIONAL = ['after-purge', 'typed-open', 'home-still']
-TIMED = ('first-open', 'again', 'after-restart', 'after-purge', 'typed-open')
+OPTIONAL = ['after-purge', 'typed-open', 'early-open', 'home-still']
+TIMED = ('first-open', 'again', 'after-restart', 'after-purge', 'typed-open', 'early-open')
 # The app's own line when it has loaded RichFiles and built its pane ahead of a click
 # (src-tauri/src/richfiles_pane.rs); a build from before that writes none.
 READY = re.compile(r'RichFiles ready before its first click: library (\d+) ms on a background thread, '
@@ -74,6 +80,8 @@ READY = re.compile(r'RichFiles ready before its first click: library (\d+) ms on
 # RichFiles' own words, which no other screen of the app shows: its sidebar's first row and the
 # Details view's date column (tools/richfiles/Sources/RichFiles/BrowserView.swift).
 WORDS = r'This Mac|Modified'
+# The loading line a click shows when RichFiles is not ready yet (ui/index.html, #richfiles-loading).
+LOADING = r'Opening RichFiles'
 
 
 def visible_bounds(record, readings, words=WORDS):
@@ -168,6 +176,7 @@ def type_in_guest(argv):
             post(cg.CGEventCreateKeyboardEvent(None, 0, down))  # the letter a
         last, keys = time.time(), keys + 1
         time.sleep(key_ms / 1000)
+    last = last or first  # no key was asked for: the press alone
     print(json.dumps({'pressed_ms': round(pressed * 1000), 'first_key_ms': round(first * 1000),
                       'last_key_ms': round(last * 1000), 'keys': keys}))
     return 0
@@ -239,9 +248,11 @@ def main():
                 time.sleep(1)
             raise StepFailed('the RichFiles rail icon never came on screen within %d s %s' % (seconds, last))
 
-        def timed_open(self, label, icon=None, talk=None):
-            """One click on the RichFiles icon, timed. With `talk` (typed-open) the app is on the home
-            screen: the guest first presses that point and types, and the icon is where `icon` says."""
+        def timed_open(self, label, icon=None, talk=None, typed=None):
+            """One click on the RichFiles icon, timed. With `talk` (typed-open, early-open) the app is on
+            the home screen: the guest first presses that point and types for `typed` seconds, and the
+            icon is where `icon` says."""
+            typed = a.typed_seconds if typed is None else typed
             if not talk:
                 self.script('tell application "RichOS" to activate')
                 time.sleep(1)
@@ -267,14 +278,14 @@ def main():
                 time.sleep(1.5)
             capture = shlex.join(
                 ['python3', remote + '/timeline.py', 'capture', frames, str(a.seconds), '--region', region,
-                 '--native-click', '%d,%d' % (x, y), '--baseline', str(a.typed_seconds + 0.7 if talk else 1.5)])
+                 '--native-click', '%d,%d' % (x, y), '--baseline', str(typed + 0.7 if talk else 1.5)])
             if talk:
                 # The typist and the camera start together; the click comes right after the last key.
                 command([HERE / 'guest.sh', self.vm, '--push', Path(__file__).resolve(), remote + '/richfiles-open-walk.py'], 120)
                 capture = '(python3 {w} --type-in-guest {t} {s} {k} > {o} 2>&1 &); {c}'.format(
-                    w=shlex.quote(remote + '/richfiles-open-walk.py'), t='%d,%d' % talk, s=a.typed_seconds, k=a.key_ms,
+                    w=shlex.quote(remote + '/richfiles-open-walk.py'), t='%d,%d' % talk, s=typed, k=a.key_ms,
                     o=shlex.quote(frames + '.typing.json'), c=capture)
-            ev['capture'] = guest(self.vm, capture, int(a.seconds + a.typed_seconds) + 90).strip()
+            ev['capture'] = guest(self.vm, capture, int(a.seconds + typed) + 90).strip()
             if kept and label == 'first-open':
                 time.sleep(4)
                 guest(self.vm, '/usr/bin/log show --last 25s --style compact > {f} 2>&1 || true'.format(
@@ -306,6 +317,12 @@ def main():
             if answer is None:
                 raise StepFailed('%s (frames kept in %s)' % (why, local))
             ev.update(answer)
+            # The loading line, when the click showed one before RichFiles: from the same frames.
+            try:
+                line = visible_bounds(record, readings, words=LOADING)
+                ev['loading_line'] = {'low_ms': line['low_ms'], 'high_ms': line['high_ms']}
+            except ValueError:
+                ev['loading_line'] = None
             # Whether the app had RichFiles ready when the click came, by its own line and the
             # click's moment on the same clock (the guest's), both counted from the process's start.
             log = self.app_log()
@@ -337,6 +354,9 @@ def main():
             print('%s: RichFiles on screen between %.0f and %.0f ms after the click, %s ms after the app started; made ready: %s%s'
                   % (label, ev['low_ms'], ev['high_ms'], ev.get('click_ms_after_start'), json.dumps(ev['made_ready']),
                      '; typed: ' + json.dumps(ev['typed']) if talk else ''), flush=True)
+            if ev['loading_line']:
+                print('%s: the loading line on screen between %.0f and %.0f ms after the click'
+                      % (label, ev['loading_line']['low_ms'], ev['loading_line']['high_ms']), flush=True)
             if a.limit_ms is not None and ev['high_ms'] > a.limit_ms and not (a.diagnose == 'sample' and label == 'first-open'):
                 raise StepFailed('RichFiles took up to %.0f ms to appear, over the %.0f ms limit: %s'
                                  % (ev['high_ms'], a.limit_ms, json.dumps(ev)))
@@ -355,6 +375,30 @@ def main():
             self.log = started.get('log')
             ev = self.timed_open('after-restart')
             ev['relaunched_pid'] = started.get('pid')
+            return ev
+
+        def early_open(self):
+            self.script('tell application "RichOS" to activate')
+            time.sleep(1)
+            self.to_conversation()
+            icon = self.geometry('nr-richfiles')
+            if not icon:
+                raise StepFailed('the RichFiles rail icon was not on the conversation screen')
+            # Where Talk to Rich is, read on one start; pressed on the next, too early for a read.
+            relaunch.relaunch(self.vm)
+            self.wait_for('Talk to Rich', seconds=90)
+            talk = self.node('Talk to Rich', 'AXButton')
+            started = relaunch.relaunch(self.vm)
+            self.log = started.get('log')
+            # The home screen is up; the app does not say it is usable for some seconds more.
+            time.sleep(2.5)
+            ev = self.timed_open('early-open', icon=icon, typed=0,
+                                 talk=(round(talk['x'] + talk['w'] / 2), round(talk['y'] + talk['h'] / 2)))
+            ev['relaunched_pid'] = started.get('pid')
+            if ev.get('ready_before_the_click'):
+                raise StepFailed('not an early click: RichFiles had been made ready before it: ' + json.dumps(ev))
+            if not ev['loading_line']:
+                raise StepFailed('no frame shows the loading line between the click and RichFiles: ' + json.dumps(ev))
             return ev
 
         def typed_open(self):

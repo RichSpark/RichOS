@@ -57,6 +57,13 @@ readings = {n: ('Name  Size  Kind  Modified' if n >= 15 else chat) for n in rang
 check('the Details view\'s Modified column counts as RichFiles on screen',
       walk.visible_bounds(record, readings)['first_present_frame'] == 15)
 
+# The loading line an early click shows, from the same frames: it comes first, RichFiles after.
+readings = {n: (files if n >= 23 else 'RichFiles\nOpening RichFiles...' if n >= 12 else chat) for n in range(40)}
+line = walk.visible_bounds(record, readings, words=walk.LOADING)
+check('the loading line is timed by its own words, ahead of RichFiles',
+      (line['first_present_frame'], line['high_ms']) == (12, 260.0)
+      and walk.visible_bounds(record, readings)['first_present_frame'] == 23, line)
+
 check('RichFiles on screen before the click is refused: there is nothing to time',
       'already on screen' in refusal(record, {n: files for n in range(40)}))
 check('RichFiles in no frame after the click is refused, with the count of frames looked at',
