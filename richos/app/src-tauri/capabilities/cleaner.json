@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "cleaner-window",
+  "description": "Lets RichCleaner's own window (the one the nav rail opens, label `cleaner`) close itself. Its page listens for close-requested so an unsaved note edit is saved first (ui/cleaner.js); with a listener, Tauri holds the native close and the page's onCloseRequested finishes it with destroy(), and Escape uses close(). Without these two grants both were refused and the window could not be closed (CEO, 2026-11-15).",
+  "windows": ["cleaner"],
+  "permissions": ["core:window:allow-close", "core:window:allow-destroy"]
+}

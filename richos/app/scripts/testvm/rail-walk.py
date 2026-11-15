@@ -23,6 +23,8 @@ STEPS (in the guest, never on the host's screen, CEO section 65):
                and the activity square's menu opens on a real right-click and a real click on Readout takes;
                put back to Ink
   home         the Home button and the RichOS wordmark both lead to Home; on Home no rail item is on screen
+  cleaner-close  (optional) RichCleaner's window, opened from the rail, closes with a real click on its red
+               button, and opened again, with a real Escape (CEO 2026-11-15)
 Exit 0 when every step passes.
 """
 import argparse
@@ -43,7 +45,7 @@ StepFailed = folders.StepFailed
 command = folders.command
 
 STEPS = ['identity', 'first-run', 'rail', 'hover', 'items', 'spend', 'scribe', 'home-screen']
-OPTIONAL = ['net-cut', 'net-restore', 'richpass-download', 'first-click', 'richpass-page', 'richpass-links', 'richpass-protect', 'richpass-html']
+OPTIONAL = ['cleaner-close', 'net-cut', 'net-restore', 'richpass-download', 'first-click', 'richpass-page', 'richpass-links', 'richpass-protect', 'richpass-html']
 ITEMS = ['nr-home', 'nr-chats', 'nr-finder', 'nr-cleaner', 'nr-scribe', 'nr-bug', 'res-square', 'nr-me']
 
 
@@ -323,6 +325,45 @@ class Walk(folders.Walk):
         bad = [k for k, v in ev.items() if k.endswith('first_click') and not v]
         if bad:
             raise StepFailed('not opened on the first click after RichCleaner closed: ' + json.dumps(ev))
+        return ev
+
+    def cleaner_close(self):
+        """CEO 2026-11-15: the RichCleaner window the rail opens closes with its red button and with
+        Escape. Opened from the rail and closed by a real click on its close button; opened again and
+        closed by a real Escape. Each close is read back from the app's window list."""
+        ev = {}
+        listed = lambda: self.script('tell application "System Events" to tell process "RichOS" to get name of every window')
+
+        def open_cleaner(label):
+            self.script('tell application "RichOS" to activate')
+            time.sleep(1)
+            self.click_id('nr-cleaner')
+            time.sleep(3)
+            ev[label + '_windows_open'] = listed()
+            self.shot('cleaner-' + label + '-open.png')
+            if 'RichCleaner' not in ev[label + '_windows_open']:
+                raise StepFailed('the rail did not open the RichCleaner window: ' + json.dumps(ev))
+
+        def closed(label):
+            time.sleep(2)
+            ev[label + '_windows_after'] = listed()
+            self.shot('cleaner-' + label + '-after.png')
+            ev[label + '_closed'] = 'RichCleaner' not in ev[label + '_windows_after']
+
+        open_cleaner('red')
+        box = self.script('tell application "System Events" to tell process "RichOS" to get {position, size} of '
+                          '(first button of window "RichCleaner" whose subrole is "AXCloseButton")')
+        x, y, w, h = (int(float(v)) for v in box.split(','))
+        ev['close_button'] = [x, y, w, h]
+        self.pointer(x + w // 2, y + h // 2)
+        closed('red')
+        open_cleaner('escape')
+        self.escape()
+        closed('escape')
+        self.facts['cleaner_close'] = ev
+        self.save()
+        if not (ev['red_closed'] and ev['escape_closed']):
+            raise StepFailed('the RichCleaner window did not close: ' + json.dumps(ev))
         return ev
 
     RICHPASS_TEXTS = ['Safer Than Any Password Manager', 'More info', 'RichPass.html \u00b7 free \u00b7 open-source \u00b7 one file',
