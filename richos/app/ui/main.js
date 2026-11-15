@@ -11414,6 +11414,10 @@ async function init() {
   // itself when it does.
   if (window.RichResources) window.RichResources.start();
   else window.__richosResourcesReady = true;
+  // RichFiles is loaded and its pane built ahead of the first click on its rail icon only from
+  // here (`richfiles-page.js`), so that work is never on the launch path either.
+  if (window.RichFilesReady) window.RichFilesReady.start();
+  else window.__richosRichFilesReady = true;
   // The correction badge, read at launch and LAST. A proposal the CEO has not answered
   // survives a crash, a rotation and a relaunch by design (`correction.rs`'s fsync'd log),
   // so the count is re-read on the way up rather than inferred from this session's events —

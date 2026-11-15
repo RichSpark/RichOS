@@ -58,6 +58,51 @@ pub async fn richfiles_place_pane(window: WebviewWindow, bounds: PaneBounds) -> 
     Err("RichFiles requires macOS.".to_owned())
 }
 
+/// RichFiles made ready before the first click on its rail icon (the CEO, 2026-11-15: "whatever
+/// indexing or loading needs to be done to make RichFiles appear instantly after nav rail button
+/// click can and should be done in those few seconds that we are almost always guaranteed to
+/// have before the user click on the RichFiles icon for the first time").
+///
+/// A first click used to do two things on the main thread while the window stood still: load
+/// the RichFiles library and build and lay out its pane for the first time, and the first time
+/// ever the library and the system frameworks it brings in were read from the disk as well
+/// (`scripts/testvm/richfiles-open-walk.py` measures it). Here the library is loaded on a
+/// background thread and the pane is then built, hidden, on the main thread, so the first click
+/// only shows it. The page asks for this once the app is usable (`ui/richfiles-page.js`), never
+/// on the launch path.
+#[richos_command::command]
+pub async fn richfiles_prepare_pane(window: WebviewWindow) -> Result<(), String> {
+    if window.label() != "main" {
+        return Err("RichFiles could not reach the window.".to_owned());
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let started = std::time::Instant::now();
+        tauri::async_runtime::spawn_blocking(mac::load_ahead)
+            .await
+            .map_err(|_| "RichFiles could not load from this installation.".to_owned())??;
+        let library = started.elapsed();
+        let (send, receive) = tokio::sync::oneshot::channel();
+        window
+            .with_webview(move |webview| {
+                let began = std::time::Instant::now();
+                let result = mac::prepare(webview.inner());
+                let _ignored = send.send((result, began.elapsed()));
+            })
+            .map_err(|_| "RichFiles could not reach the window.".to_owned())?;
+        let (result, pane) = receive.await.map_err(|_| "The RichOS window closed.".to_owned())?;
+        result?;
+        eprintln!(
+            "[richos] RichFiles ready before its first click: library {} ms on a background thread, pane {} ms on the main thread",
+            library.as_millis(),
+            pane.as_millis()
+        );
+        Ok(())
+    }
+    #[cfg(not(target_os = "macos"))]
+    Err("RichFiles requires macOS.".to_owned())
+}
+
 #[richos_command::command]
 pub async fn output_git_open(window: WebviewWindow, bounds: PaneBounds, dark: bool,
                              output_id: Option<String>, thread_id: String, refresh: bool) -> Result<(), String> {
@@ -325,11 +370,13 @@ mod mac {
     use super::PaneBounds;
 
     type Place = unsafe extern "C" fn(*mut c_void, f64, f64, f64, f64, i32) -> i32;
+    type Prepare = unsafe extern "C" fn(*mut c_void) -> i32;
     type Accept = unsafe extern "C" fn(*const std::ffi::c_char) -> i32;
     type PlaceGit = unsafe extern "C" fn(*mut c_void, f64, f64, f64, f64, i32, i32, *const std::ffi::c_char, i32) -> i32;
 
     struct Bridge {
         place: Place,
+        prepare: Prepare,
         accept: Accept,
         reveal: Accept,
         place_git: PlaceGit,
@@ -360,11 +407,12 @@ mod mac {
             return Err("RichFiles could not load from this installation.");
         }
         let symbol = unsafe { libc::dlsym(library, c"richfiles_rail_place".as_ptr()) };
+        let prepare = unsafe { libc::dlsym(library, c"richfiles_rail_prepare".as_ptr()) };
         let accept = unsafe { libc::dlsym(library, c"richfiles_rail_receive_workspace".as_ptr()) };
         let reveal = unsafe { libc::dlsym(library, c"richfiles_rail_reveal".as_ptr()) };
         let git = unsafe { libc::dlsym(library, c"richfiles_git_place".as_ptr()) };
         let git_chat = unsafe { libc::dlsym(library, c"richfiles_git_chat".as_ptr()) };
-        if symbol.is_null() || accept.is_null() || reveal.is_null() || git.is_null() || git_chat.is_null() {
+        if symbol.is_null() || prepare.is_null() || accept.is_null() || reveal.is_null() || git.is_null() || git_chat.is_null() {
             unsafe { libc::dlclose(library) };
             return Err("This installation has an incompatible RichFiles pane.");
         }
@@ -372,11 +420,28 @@ mod mac {
         // place on the main thread with its live WKWebView pointer.
         Ok(Bridge {
             place: unsafe { std::mem::transmute::<*mut c_void, Place>(symbol) },
+            prepare: unsafe { std::mem::transmute::<*mut c_void, Prepare>(prepare) },
             accept: unsafe { std::mem::transmute::<*mut c_void, Accept>(accept) },
             reveal: unsafe { std::mem::transmute::<*mut c_void, Accept>(reveal) },
             place_git: unsafe { std::mem::transmute::<*mut c_void, PlaceGit>(git) },
             git_chat: unsafe { std::mem::transmute::<*mut c_void, Accept>(git_chat) },
         })
+    }
+
+    /// The library loaded, from any thread: a click that comes while this runs waits for it in
+    /// `place` and loads nothing twice.
+    pub fn load_ahead() -> Result<(), String> {
+        BRIDGE.get_or_init(load).as_ref().map(|_| ()).map_err(|message| (*message).to_owned())
+    }
+
+    /// The pane built and laid out, hidden, on the main thread with the live WKWebView pointer.
+    pub fn prepare(webview: *mut c_void) -> Result<(), String> {
+        let action = BRIDGE.get_or_init(load).as_ref().map_err(|message| (*message).to_owned())?.prepare;
+        if unsafe { action(webview) } == 1 {
+            Ok(())
+        } else {
+            Err("RichFiles could not be made ready in this window.".to_owned())
+        }
     }
 
     pub fn place_git(webview: *mut c_void, bounds: &PaneBounds, dark: bool, context: Option<Vec<u8>>, mode: i32) -> Result<(), String> {

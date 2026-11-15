@@ -4209,6 +4209,7 @@ fn main() {
             splash_take_over,
             system_resources,
             richfiles_pane::richfiles_pane_available, richfiles_pane::richfiles_place_pane,
+            richfiles_pane::richfiles_prepare_pane,
             richfiles_pane::richfiles_request_pending, richfiles_pane::richfiles_accept_request,
             richfiles_pane::output_git_open, richfiles_pane::output_git_place, richfiles_pane::richfiles_git_chat,
             question_host::answer_question, question_host::question_shown, question_host::open_question_counts,

@@ -94,11 +94,37 @@
     schedule();
   }
 
+  // RICHFILES IS MADE READY BEFORE THE FIRST CLICK ON ITS ICON. The CEO, 2026-11-15: "whatever
+  // indexing or loading needs to be done to make RichFiles appear instantly after nav rail button
+  // click can and should be done in those few seconds that we are almost always guaranteed to
+  // have before the user click on the RichFiles icon for the first time."
+  //
+  // The first click used to load RichFiles and build its pane while the window stood still. The
+  // shell now does both ahead of it (`richfiles_prepare_pane`), asked once: after `main.js` says
+  // the app is usable, so none of it is on the launch path, and after the opening screen has
+  // left, so it never plays over it. A click that comes first is served as before.
+  let usable = false;
+  let offered = false;
+  let prepared = false;
+  function prepare() {
+    if (prepared || !usable || !offered) return;
+    if (window.RichSplash?.isUp?.()) {
+      setTimeout(prepare, 250);
+      return;
+    }
+    prepared = true;
+    bridge.invoke("richfiles_prepare_pane", {}).catch(() => {});
+  }
+  window.RichFilesReady = { start() { usable = true; prepare(); } };
+  if (window.__richosRichFilesReady) window.RichFilesReady.start();
+
   bridge.invoke("richfiles_pane_available", {}).then(async (available) => {
     if (available !== true) return;
     rail.registerPage("richfiles", { show, hide });
     button.hidden = false;
     window.RichFilesPage = { available: true };
+    offered = true;
+    prepare();
     try {
       await bridge.listen?.("rich://richfiles-show", requestPane);
     } catch {
