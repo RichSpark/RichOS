@@ -1,0 +1,61 @@
+{
+  "vm": "walk-61b5d1e25acd",
+  "steps": {
+    "seed": {
+      "pass": true,
+      "result": {
+        "repository": "alder: 314 documents, 8 commits",
+        "teammates": "3",
+        "launches": [
+          "window",
+          "window"
+        ],
+        "memories": 322
+      },
+      "seconds": 105.6
+    },
+    "space": {
+      "pass": true,
+      "result": {
+        "focus": "AXVideo focused",
+        "focused": "{\"ax_phase\": \"guest\"}\nwindow: RichOS\nrole: AXGroup\ntitle: \ndescription: \nvalue: \n\n{\"ax_guest_seconds\": 0.4701}\n{\"ax_timing\": true, \"total_seconds\": 1.1877, \"preflight_seconds\": 0.5422, \"transport_seconds\": 0.6458}",
+        "before": {
+          "offers": "Pause",
+          "time": [
+            "0",
+            "0.640999972820282"
+          ],
+          "moving": true,
+          "playing": true
+        },
+        "before_frame": "12-space-playing.png",
+        "after_space": {
+          "offers": "Play",
+          "time": [
+            "0.9150000214576721",
+            "0.9150000214576721"
+          ],
+          "moving": false,
+          "playing": false,
+          "home_screen": true,
+          "sheet": true
+        },
+        "after_space_frame": "13-space-paused.png",
+        "after_second_space": {
+          "offers": "Pause",
+          "time": [
+            "0.1940000057220459",
+            "0.8560000061988831"
+          ],
+          "moving": true,
+          "playing": true,
+          "home_screen": true,
+          "sheet": true
+        },
+        "after_second_space_frame": "14-space-playing-again.png",
+        "discard_closed_the_sheet": true
+      },
+      "seconds": 57.4
+    }
+  }
+}
