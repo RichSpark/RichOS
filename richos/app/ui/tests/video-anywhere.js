@@ -679,6 +679,98 @@ async function main() {
     return "Space paused the video and played it again on the home screen; Record again opened the home screen's own choices; with no button of its own, these choices 8px under the settings button";
   });
 
+  await run.check("every line of text that shows is in the file: a message he is writing over several lines, scrolled as the box scrolls it, with the highlight on its last line, and a word the page breaks over lines; and a recording longer than ten seconds is whole", async () => {
+    // light: the words are dark on a light ground, in the window and in the file alike
+    const page = await open(browser, "light");
+    // a draft of four lines, the last of them highlighted; and in the conversation an address with
+    // no space in it, which the page breaks over three lines or more
+    const made = await page.evaluate(() => {
+      const box = document.querySelector("#input");
+      box.focus();
+      box.value = "First line of the message\nSecond line of the message\nThird line of the message\nFourth line of the message";
+      box.dispatchEvent(new Event("input", { bubbles: true }));
+      const from = box.value.lastIndexOf("Fourth");
+      box.setSelectionRange(from, box.value.length);
+      const p = document.createElement("p");
+      p.id = "long-word";
+      // (standing over the conversation, where an empty one has room for it)
+      p.style.cssText = "position: fixed; left: 560px; top: 240px; width: 400px; margin: 0; overflow-wrap: anywhere; font: 18px/1.5 var(--font); color: var(--ink); background: var(--card);";
+      p.textContent = "https://example.com/" + "a-very-long-address-with-no-space-in-it/".repeat(4);
+      document.querySelector("#app").appendChild(p);
+      const probe = document.createElement("i");
+      probe.style.cssText = "display:none;background-color:Highlight";
+      document.body.appendChild(probe);
+      const tint = getComputedStyle(probe).backgroundColor.match(/[\d.]+/g).map(Number);
+      const under = getComputedStyle(box).backgroundColor.match(/[\d.]+/g).map(Number);
+      probe.remove();
+      const r = document.createRange();
+      r.selectNodeContents(p);
+      const whole = (b) => ({ left: Math.ceil(b.left), top: Math.ceil(b.top), right: Math.floor(b.right), bottom: Math.floor(b.bottom) });
+      const a = tint.length > 3 ? tint[3] : 1;
+      return {
+        lines: r.getClientRects().length,
+        word: whole(p.getBoundingClientRect()),
+        box: whole(box.getBoundingClientRect()),
+        rows: Math.round(box.clientHeight / parseFloat(getComputedStyle(box).lineHeight)),
+        tint: [0, 1, 2].map((i) => Math.round(tint[i] * a + (under.length > 3 && under[3] < 1 ? 255 : under[i]) * (1 - a))),
+      };
+    });
+    assert(made.lines >= 3 && made.rows >= 2, `the page did not break the address over three lines (${made.lines}) or the box does not show two lines (${made.rows})`);
+    await openChoices(page);
+    await page.click("#video-anywhere-choices .rv-go");
+    await until(page, "rec");
+    // the keyboard back in the box he is writing in, with his highlight, as a press in it puts it
+    await page.evaluate(() => {
+      const box = document.querySelector("#input");
+      box.focus();
+      box.setSelectionRange(box.value.lastIndexOf("Fourth"), box.value.length);
+      box.scrollTop = box.scrollHeight; // a box that shows fewer lines than he wrote is scrolled to the last
+    });
+    await painted(page, 12);
+    const seen = await windowOf(page);
+    await painted(page, 20); // more than the half second before the end at which the file is read
+    // A RECORDING LONGER THAN TEN SECONDS IS WHOLE. In a test VM guest, whose recorder has no
+    // picture to write, every file ended at 10.03 s (2026-11-15, `testvm/video-anywhere-walk.py`):
+    // here, on a Mac's own encoder, the file is as long as the recording.
+    await recorded(page, 12);
+    await page.click("#video-anywhere-stop");
+    await until(page, "sheet");
+    const meta = await text(page, ".rv-sheet .meta");
+    const file = await saved(page, "lines");
+    const sheet = Number(meta.slice(0, 1)) * 60 + Number(meta.slice(2, 4));
+    assert(file.seconds >= 12 && Math.abs(file.seconds - sheet) <= 1.5, `the file is ${file.seconds.toFixed(1)} s long and the sheet says ${meta.slice(0, 4)}`);
+    const frame = frameOf(file, Math.max(0.2, file.seconds - 0.5));
+    // the words are dark on light: how much of a box is ink, in the window and in the file
+    const ink = (img, box) => {
+      let n = 0;
+      for (let y = box.top; y < box.bottom; y++) {
+        for (let x = box.left; x < box.right; x++) {
+          const i = (y * img.width + x) * img.channels;
+          if ((img.data[i] + img.data[i + 1] + img.data[i + 2]) / 3 < 140) n++;
+        }
+      }
+      return n;
+    };
+    const third = (box, k) => ({ left: box.left, right: box.right, top: Math.round(box.top + ((box.bottom - box.top) * k) / 3), bottom: Math.round(box.top + ((box.bottom - box.top) * (k + 1)) / 3) });
+    const said = [];
+    // each third of the address's box and of the message box holds ink in the file as it does in the window
+    for (const [name, box] of [["the address", made.word], ["the message box", made.box]]) {
+      for (let k = 0; k < 3; k++) {
+        const w = ink(seen, third(box, k));
+        const f = ink(frame, third(box, k));
+        said.push(`${name}, third ${k + 1}: ${w} in the window, ${f} in the file`);
+        assert(w > 150 && f > w * 0.5 && f < w * 2, `${name}, third ${k + 1} of its box: ${w} pixels of ink in the window and ${f} in the file`);
+      }
+    }
+    // the highlight is on the last line of the message, in the lower half of the box and not the upper
+    const half = (k) => ({ left: made.box.left, right: made.box.right, top: k ? Math.round((made.box.top + made.box.bottom) / 2) : made.box.top, bottom: k ? made.box.bottom : Math.round((made.box.top + made.box.bottom) / 2) });
+    const tinted = [colorIn(frame, half(0), made.tint), colorIn(frame, half(1), made.tint)];
+    assert(tinted[0] * 10 < tinted[1] && tinted[1] > 1500, `the highlight on the fourth line: ${tinted[0]} pixels of its color in the upper half of the box and ${tinted[1]} in the lower (the color ${JSON.stringify(made.tint)})`);
+    assertEqual(page.__errors, [], "the page reported errors");
+    await page.close();
+    return `${file.seconds.toFixed(1)} s in the file for ${meta.slice(0, 4)} on the sheet; ${said.join("; ")}; the highlight ${tinted[0]} px in the upper half of the box, ${tinted[1]} in the lower`;
+  });
+
   for (const theme of ["dark", "light"]) {
     await run.check(`${theme}: every line of the recorder is 16px or larger and clears 4.5:1, and every edge, icon and light clears 3:1`, async () => {
       const page = await open(browser, theme, { preset: { homeVideoInput: "tone" } });

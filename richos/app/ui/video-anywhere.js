@@ -30,7 +30,8 @@
 // the file. TEXT HE HIGHLIGHTS IS IN THE FILE (CEO 2026-11-15, on the round's mockup: "it was
 // recording the mouse but not recording text highlights when I was highlighting the text with the
 // mouse. I would expect the screen recording to record the text highlighting as well."): the
-// highlight is drawn behind the words he selected, in the Mac's own highlight color. What the
+// highlight is drawn behind the words he selected, in the Mac's own highlight color, in the
+// conversation and in a text box, on every line of it that shows. What the
 // painter leaves out: gradients behind plates, a picture the canvas may not read (a quiet plate
 // stands in), the blinking text cursor, tooltips the Mac draws, a select's small arrow and a
 // playing video. "Save video" hands the file to the Mac's own save window (`home_video_save`).
@@ -184,7 +185,7 @@ window.RichVideoAnywhere = (function () {
     }
     return { range: r, color: getComputedStyle(tint).backgroundColor };
   }
-  function paintText(cx, node, s, alpha, R) {
+  function paintText(cx, node, s, alpha, R, ink) {
     var t = node.textContent;
     var hl = R.sel && R.sel.range;
     // the highlight, behind the words: the part of this piece of text that is inside what he selected
@@ -202,7 +203,7 @@ window.RichVideoAnywhere = (function () {
     }
     if (!/\S/.test(t)) return;
     setFont(cx, s);
-    cx.fillStyle = s.color;
+    cx.fillStyle = ink || s.color;
     cx.globalAlpha = alpha;
     var ls = parseFloat(s.letterSpacing) || 0;
     var native = "letterSpacing" in cx;
@@ -211,14 +212,10 @@ window.RichVideoAnywhere = (function () {
     var re = /\S+/g;
     var m;
     var H = innerHeight;
-    while ((m = re.exec(t))) {
-      range.setStart(node, m.index);
-      range.setEnd(node, m.index + m[0].length);
-      var rects = range.getClientRects();
-      if (!rects.length) continue;
-      var rc = rects[0];
-      if (rc.width === 0 || rc.bottom < 0 || rc.top > H) continue;
-      var w = upper ? m[0].toUpperCase() : m[0];
+    /// Letters that stand on one line, drawn where the page put the first of them.
+    var run = function (a, b, rc) {
+      if (!rc || rc.width === 0 || rc.bottom < 0 || rc.top > H) return;
+      var w = upper ? t.slice(a, b).toUpperCase() : t.slice(a, b);
       var mt = cx.measureText(w);
       var fa = mt.fontBoundingBoxAscent || parseFloat(s.fontSize) * 0.8;
       var fd = mt.fontBoundingBoxDescent || parseFloat(s.fontSize) * 0.2;
@@ -231,12 +228,89 @@ window.RichVideoAnywhere = (function () {
           x += cx.measureText(w[i]).width + ls;
         }
       }
+    };
+    while ((m = re.exec(t))) {
+      var a = m.index;
+      var b = a + m[0].length;
+      range.setStart(node, a);
+      range.setEnd(node, b);
+      var rects = range.getClientRects();
+      if (!rects.length) continue;
+      if (rects.length === 1) {
+        run(a, b, rects[0]);
+        continue;
+      }
+      // A WORD THE PAGE BROKE OVER LINES (a long address, text with no spaces): each line's part
+      // of it is drawn on its own line, found letter by letter.
+      var at = a;
+      var first = null;
+      for (var c = a; c <= b; c++) {
+        var cr = null;
+        if (c < b) {
+          range.setStart(node, c);
+          range.setEnd(node, c + 1);
+          cr = range.getClientRects()[0];
+          if (!cr) continue;
+        }
+        if (first && (c === b || Math.abs(cr.top - first.top) > 1)) {
+          run(at, c, first);
+          first = null;
+        }
+        if (!first && cr) {
+          first = cr;
+          at = c;
+        }
+      }
     }
     if (native) cx.letterSpacing = "0px";
   }
-  /// What a field holds (or asks for), on its first line, with what he highlighted in it.
+  // WHAT A BOX OF SEVERAL LINES HOLDS (the message box, Your instructions): every line of it that
+  // shows, wrapped and scrolled as the box wraps and scrolls it, with what he highlighted in it.
+  // The words of a text box cannot be asked where they stand, so the same words are laid out in a
+  // piece of the page of the same width and face that is never seen, standing exactly where the
+  // box's own words stand, and that piece is drawn as any other text is.
+  var twin = null;
+  var COPIED = ["fontStyle", "fontWeight", "fontSize", "fontFamily", "lineHeight", "letterSpacing", "wordSpacing", "textAlign", "textIndent", "textTransform", "tabSize", "paddingTop", "paddingRight", "paddingBottom", "paddingLeft", "borderTopWidth", "borderRightWidth", "borderBottomWidth", "borderLeftWidth"];
+  function paintArea(cx, e, s, r, alpha, R) {
+    var text = e.value;
+    var faint = "";
+    if (!text) {
+      text = e.getAttribute("placeholder") || "";
+      faint = getComputedStyle(e, "::placeholder").color;
+      if (CLEAR.test(faint)) return; // a box whose own placeholder the app does not paint
+    }
+    if (!/\S/.test(text)) return;
+    if (!twin) {
+      twin = make("div", "rv-skip rv-twin", "", { "aria-hidden": "true" });
+      document.body.appendChild(twin);
+    }
+    var bl = parseFloat(s.borderLeftWidth) || 0;
+    var br = parseFloat(s.borderRightWidth) || 0;
+    var bt = parseFloat(s.borderTopWidth) || 0;
+    var bb = parseFloat(s.borderBottomWidth) || 0;
+    for (var i = 0; i < COPIED.length; i++) if (twin.style[COPIED[i]] !== s[COPIED[i]]) twin.style[COPIED[i]] = s[COPIED[i]];
+    twin.style.left = r.left + "px";
+    twin.style.top = r.top - e.scrollTop + "px";
+    twin.style.width = e.clientWidth + bl + br + "px";
+    if (twin.textContent !== text) twin.textContent = text;
+    var node = twin.firstChild;
+    var sel = null;
+    if (R.sel && !faint && e === document.activeElement && e.selectionEnd > e.selectionStart) {
+      sel = { range: document.createRange(), color: R.sel.color };
+      sel.range.setStart(node, Math.min(e.selectionStart, text.length));
+      sel.range.setEnd(node, Math.min(e.selectionEnd, text.length));
+    }
+    cx.save();
+    cx.beginPath();
+    cx.rect(r.left + bl, r.top + bt, r.width - bl - br, r.height - bt - bb);
+    cx.clip();
+    paintText(cx, node, s, alpha, { sel: sel }, faint);
+    cx.restore();
+  }
+  /// What a field of one line holds (or asks for), with what he highlighted in it.
   function paintField(cx, e, s, r, alpha, R) {
     var tag = e.tagName;
+    if (tag === "TEXTAREA") return paintArea(cx, e, s, r, alpha, R);
     var type = (e.getAttribute("type") || "text").toLowerCase();
     var text = "";
     var faint = "";
@@ -613,6 +687,8 @@ window.RichVideoAnywhere = (function () {
     cancelAnimationFrame(R.raf);
     clearTimeout(R.timer);
     R.cv.remove();
+    if (twin) twin.remove();
+    twin = null;
     var out = { ms: performance.now() - R.t0, w: R.cv.width, h: R.cv.height, voice: R.voice, tone: R.tone, pointer: R.pointer, mime: R.mime, blob: null, frames: R.frames, cost: R.cost, nodes: R.nodes, at: new Date() };
     if (!R.mr) return Promise.resolve(out);
     return new Promise(function (done) {

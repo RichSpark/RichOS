@@ -270,6 +270,20 @@ body.rv-busy #home-video-choices { display: none !important; }
   -webkit-font-smoothing: antialiased;
 }
 
+/* the words of a text box of several lines, laid out again where the box's own words stand so the
+   video can draw them line by line (`paintArea`): never seen, never pressed */
+.rv-twin {
+  position: fixed;
+  z-index: -1;
+  box-sizing: border-box;
+  margin: 0;
+  border: 0 solid transparent;
+  visibility: hidden;
+  pointer-events: none;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+
 /* ---- the count ------------------------------------------------------------------------------ */
 
 .rv-count {
