@@ -9,7 +9,7 @@ public enum GitReadError: LocalizedError {
         case .noGit: return "Git is unavailable in this installation."
         case .noRepository: return "This folder is outside a Git repository."
         case .unreadable: return "Git could not read this repository or version."
-        case .noMain: return "This repository has no local main branch."
+        case .noMain: return "This repository has no identifiable local default branch."
         case .tooLarge: return "This comparison is too large to display."
         case .binary: return "A text comparison is unavailable for this file."
         case .timedOut: return "Git took too long to read this data. Try refreshing."
@@ -153,12 +153,34 @@ public struct GitRepository: Sendable {
 
     public var name: String { root.lastPathComponent }
 
-    public func mainTip() throws -> String {
-        let result = try call(["rev-parse", "--verify", "--quiet", "refs/heads/main^{commit}"], allow: [0, 1])
-        guard result.code == 0 else { throw GitReadError.noMain }
-        let id = result.string.dropFinalLineFeed()
-        guard Self.isObjectID(id) else { throw GitReadError.unreadable }
-        return id
+    public struct MainLine: Sendable {
+        public let name: String
+        public let tip: String
+    }
+
+    public func mainLine() throws -> MainLine {
+        let origin = try call(["symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"], allow: [0, 1])
+        let originPrefix = "refs/remotes/origin/"
+        let candidates: [String]
+        if origin.code == 0, origin.string.hasPrefix(originPrefix) {
+            candidates = [String(origin.string.dropFinalLineFeed().dropFirst(originPrefix.count))]
+        } else {
+            let defaults = try call(["for-each-ref", "--format=%(symref)", "refs/remotes/*/HEAD"])
+            let names = Set(defaults.string.split(separator: "\n").compactMap { reference -> String? in
+                let components = reference.split(separator: "/", maxSplits: 3)
+                guard components.count == 4, components[0] == "refs", components[1] == "remotes" else { return nil }
+                return String(components[3])
+            })
+            candidates = names.count == 1 ? Array(names) : ["main", "master"]
+        }
+        for name in candidates {
+            let result = try call(["rev-parse", "--verify", "--quiet", "refs/heads/\(name)^{commit}"], allow: [0, 1])
+            guard result.code == 0 else { continue }
+            let id = result.string.dropFinalLineFeed()
+            guard Self.isObjectID(id) else { throw GitReadError.unreadable }
+            return MainLine(name: name, tip: id)
+        }
+        throw GitReadError.noMain
     }
 
     public func isShallow() throws -> Bool {

@@ -60,10 +60,10 @@ public final class GitPanelModel: ObservableObject {
     @Published private(set) var alternateLands: [GitCommit] = []
     @Published private(set) var aboveLost = false
     @Published private(set) var repositoryCheckout: String?
+    @Published private(set) var mainLine: GitRepository.MainLine?
 
     private(set) var context: GitPanelContext?
     private var folder: URL?
-    private var tip: String?
     private var verifiedLands: [String: GitLandEvidence] = [:]
     private var historyTask: Task<Void, Never>?
     private var detailTask: Task<Void, Never>?
@@ -77,6 +77,7 @@ public final class GitPanelModel: ObservableObject {
     var repositories: [GitPanelContext.Repository] { context?.repositories ?? [] }
     var isOutput: Bool { context != nil }
     var sourceChat: Bool { isOutput || snapshot != nil || snapshotUnavailable }
+    var fullHistory: String { mainLine.map { "All on \($0.name)" } ?? "Repository history" }
 
     // The native rail uses the Rust runtime resolver. The same installed Git is
     // also available to RichFiles when it is launched directly.
@@ -230,7 +231,7 @@ public final class GitPanelModel: ObservableObject {
 
     private struct HistoryResult: Sendable {
         let repo: GitRepository
-        let tip: String
+        let mainLine: GitRepository.MainLine
         let shallow: Bool
         let commits: [GitCommit]
         let reachable: [String: GitLandEvidence]
@@ -252,11 +253,11 @@ public final class GitPanelModel: ObservableObject {
             verifiedLands = [:]
             repositoryCheckout = nil
         }
-        if newTip { tip = nil; hasMore = false; offMain = 0; shallow = false }
+        if newTip { mainLine = nil; hasMore = false; offMain = 0; shallow = false }
         sectionMessage = nil
         if snapshotUnavailable && scope == .chat {
             loading = false
-            sectionMessage = "The chat snapshot is unavailable. Open All on main to browse this repository."
+            sectionMessage = "The chat snapshot is unavailable. Open repository history to browse this repository."
             return
         }
         let chosen = repositories.first { $0.path == selectedRepository }
@@ -280,7 +281,7 @@ public final class GitPanelModel: ObservableObject {
         let expected = snapshot
         let evidence = chosen?.lands ?? snapshot?.lands ?? []
         let scope = scope
-        let oldTip = tip
+        let previousMainLine = mainLine
         let currentPage = nextPage ? commits : []
         let started = ProcessInfo.processInfo.systemUptime
         historyTask = Task {
@@ -292,7 +293,8 @@ public final class GitPanelModel: ObservableObject {
                     }
                     if let chosen, UInt64(exactly: repo.identity.identity.device) != chosen.device ||
                        repo.identity.identity.inode != chosen.inode { throw GitReadError.changed }
-                    let tip = try oldTip ?? repo.mainTip()
+                    let mainLine = try previousMainLine ?? repo.mainLine()
+                    let tip = mainLine.tip
                     let shallow = try repo.isShallow()
                     var reachable: [String: GitLandEvidence] = [:]
                     var offMain = 0
@@ -318,13 +320,13 @@ public final class GitPanelModel: ObservableObject {
                     let chosenCommit = preferredCommit ?? path.flatMap { path in
                         commits.first { reachable[$0.id]?.paths.contains(path) == true }?.id
                     }
-                    return HistoryResult(repo: repo, tip: tip, shallow: shallow, commits: commits,
+                    return HistoryResult(repo: repo, mainLine: mainLine, shallow: shallow, commits: commits,
                                          reachable: reachable, offMain: offMain, checkout: try? repo.checkoutName(),
                                          hasMore: more, preferredCommit: chosenCommit)
                 }
                 guard !Task.isCancelled, revision == historyRevision, open else { return }
                 repository = result.repo
-                tip = result.tip
+                mainLine = result.mainLine
                 shallow = result.shallow
                 commits = result.commits
                 verifiedLands = result.reachable

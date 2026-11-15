@@ -44,7 +44,8 @@ final class GitRepositoryTests: XCTestCase {
         try run("merge", "--no-ff", "review", "-m", "Land review")
         try run("config", "diff.renames", "false")
         let repo = try GitRepository(folder: root, git: git)
-        let pinned = try repo.mainTip()
+        let pinned = try repo.mainLine().tip
+        XCTAssertEqual(try repo.mainLine().name, "main")
         let commits = try repo.history(tip: pinned, limit: 20)
         XCTAssertEqual(commits.first?.parents, [old, reviewed])
         XCTAssertEqual(Set(commits.map(\.id)), Set([old, reviewed, pinned]))
@@ -79,7 +80,7 @@ final class GitRepositoryTests: XCTestCase {
         let wrong = GitLandEvidence(id: pinned, paths: ["renamed.md"], before: reviewed, reviewed: old, at: 0)
         XCTAssertEqual(try repo.comparison(XCTUnwrap(commits.first), land: wrong).basis, .unavailable)
         try run("switch", "review")
-        XCTAssertEqual(try repo.mainTip(), pinned)
+        XCTAssertEqual(try repo.mainLine().tip, pinned)
         XCTAssertEqual(try repo.checkoutName(), "review")
 
         try FileManager.default.removeItem(at: moved)
@@ -87,6 +88,26 @@ final class GitRepositoryTests: XCTestCase {
         XCTAssertThrowsError(try repo.liveFile(file))
 
         try run("branch", "-m", "main", "master")
-        XCTAssertThrowsError(try repo.mainTip()) { XCTAssertEqual($0 as? GitReadError, .noMain) }
+        XCTAssertEqual(try repo.mainLine().name, "master")
+        XCTAssertEqual(try repo.mainLine().tip, pinned)
+
+        try run("branch", "qa/trunk", reviewed)
+        try run("update-ref", "refs/remotes/origin/qa/trunk", pinned)
+        try run("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/qa/trunk")
+        let trunk = try repo.mainLine()
+        XCTAssertEqual(trunk.name, "qa/trunk")
+        XCTAssertEqual(trunk.tip, reviewed)
+        let evidence = try repo.recordedLands([marker], on: trunk.tip)
+        XCTAssertEqual(evidence.reachable, [])
+        XCTAssertEqual(evidence.offMain, 1)
+        try run("branch", "-D", "qa/trunk")
+        XCTAssertThrowsError(try repo.mainLine()) { XCTAssertEqual($0 as? GitReadError, .noMain) }
+
+        try run("symbolic-ref", "-d", "refs/remotes/origin/HEAD")
+        try run("branch", "trunk", reviewed)
+        try run("update-ref", "refs/remotes/upstream/trunk", pinned)
+        try run("symbolic-ref", "refs/remotes/upstream/HEAD", "refs/remotes/upstream/trunk")
+        XCTAssertEqual(try repo.mainLine().name, "trunk")
+        XCTAssertEqual(try repo.mainLine().tip, reviewed)
     }
 }

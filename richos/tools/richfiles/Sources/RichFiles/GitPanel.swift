@@ -123,11 +123,11 @@ public struct RichFilesGitPanel: View {
             if model.scope == .chat && model.isOutput {
                 HStack(alignment: .top, spacing: 6) {
                     Image(systemName: "info.circle").foregroundStyle(palette.signal).accessibilityHidden(true)
-                    Text("Shows lands RichOS recorded for this chat. For manual or unrecorded work, open All on main.")
+                    Text("Shows lands RichOS recorded for this chat. For manual or unrecorded work, open \(model.fullHistory).")
                         .foregroundStyle(palette.hint)
                 }
-            } else if model.scope == .all, let checkout = model.repositoryCheckout, checkout != "main" {
-                Text("Showing local main. The current checkout is \(checkout).")
+            } else if model.scope == .all, let line = model.mainLine, let checkout = model.repositoryCheckout, checkout != line.name {
+                Text("Showing local \(line.name). The current checkout is \(checkout).")
                     .foregroundStyle(palette.hint).lineLimit(1)
             }
             if let commit = model.commit {
@@ -175,7 +175,7 @@ public struct RichFilesGitPanel: View {
                 Button(label) { model.useScope(.chat) }
                     .buttonStyle(BrowserButtonStyle(selected: model.scope == .chat))
             }
-            Button("All on main") { model.useScope(.all) }
+            Button(model.fullHistory) { model.useScope(.all) }
                 .buttonStyle(BrowserButtonStyle(selected: model.scope == .all))
                 .focused($scopeFocused)
         }
@@ -207,7 +207,7 @@ public struct RichFilesGitPanel: View {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     if model.shallow { message("This shallow repository contains only part of the history.") }
                     if model.scope == .chat && model.offMain > 0 {
-                        message("\(model.offMain) recorded \(model.offMain == 1 ? "land has" : "lands have") yet to reach local main.")
+                        message("\(model.offMain) recorded \(model.offMain == 1 ? "land has" : "lands have") yet to reach \(model.mainLine?.name ?? "the local default branch").")
                     }
                     if model.aboveLost { message("Showing the current folder’s repository.") }
                     if let reason = model.sectionMessage { message(reason) }
@@ -273,7 +273,7 @@ public struct RichFilesGitPanel: View {
                         Text(verbatim: "\(commit.author) · \(commit.date.prefix(10))")
                         Text(verbatim: commit.id).textSelection(.enabled)
                         if model.scope == .chat {
-                            Button("Show in All on main") { model.useScope(.all, reveal: true) }
+                            Button("Show in \(model.fullHistory)") { model.useScope(.all, reveal: true) }
                                 .buttonStyle(BrowserButtonStyle(bordered: true))
                         }
                     }
