@@ -11415,8 +11415,7 @@ async function init() {
   if (window.RichResources) window.RichResources.start();
   else window.__richosResourcesReady = true;
   // RichFiles is loaded and its pane built ahead of the first click on its rail icon only from
-  // here, at the first quiet moment (`richfiles-page.js`), so that work is never on the launch
-  // path either.
+  // here (`richfiles-page.js`), so that work is never on the launch path either.
   if (window.RichFilesReady) window.RichFilesReady.start();
   else window.__richosRichFilesReady = true;
   // The correction badge, read at launch and LAST. A proposal the CEO has not answered
