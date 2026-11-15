@@ -4,6 +4,7 @@ p95 verdict against the CEO's 380 ms, the sentence the nightly prints, the start
 and the receipt it writes for the updated route, whose tree digest must be the updater's own."""
 import importlib.util
 import os
+import shlex
 import sys
 import tempfile
 from pathlib import Path
@@ -96,7 +97,7 @@ summary = walk.verdict(rows)
 check('the p95 of every judged launch together, within 380 ms, passes',
       summary['p95_ms'] == 360 and summary['launches'] == 23 and summary['refused'] is False, summary)
 check("each route's own p95 and median are stated",
-      summary['routes']['cold'] == {'p95_ms': 370, 'median_ms': 360, 'max_ms': 370, 'launches': 3}, summary)
+      summary['routes']['cold'] == {'p95_ms': 370, 'median_ms': 360, 'max_ms': 370, 'launches': 3, 'over': 0}, summary)
 check('first launches are reported, not judged', summary['reported'] == {'ordinary:first': 1200}, summary)
 # Each judged route on its own (review rv-20261114T143754Z-7a96691c-3106, finding 2): a slow route
 # refuses even when the pooled p95 is fast.
@@ -126,60 +127,216 @@ check('a judged launch with no timing refuses', untimed['refused'] is True and u
 gone = walk.verdict(fast, {'ordinary': 20, 'updated-from-applications': 20})
 check('a planned route with no launches refuses, however fast the rest', gone['refused'] is True
       and gone['missing'].count('updated-from-applications:not launched') == 20, gone)
-few = walk.verdict(fast[:19])
-check('fewer than 20 judged launches refuse', few['refused'] is True and few['incomplete'] is True, few)
+# FIVE STARTS, TWENTY ONLY WHEN ONE FAILS (the CEO, 2026-11-15: "Reduce to 5. Only if one of the 5
+# is outside what's required, only then do you need to extend to 20. Otherwise i.e. if the first 5
+# are fine, it's a PASS.").
+check('a route runs five starts first, and is taken to twenty', (walk.FIRST_STARTS, walk.FULL_STARTS) == (5, 20))
+five = walk.verdict(fast[:5], {'ordinary': 5}, 385)
+check('five starts, every one within the limit, pass', five['refused'] is False and five['routes_over'] == [], five)
+one_of_five = walk.verdict(fast[:4] + [{'label': 'ordinary:judged', 'splash': 900}], {'ordinary': 5}, 385)
+check('five starts with one over, never taken on to twenty, refuse', one_of_five['refused'] is True
+      and one_of_five['routes_over'] == ['ordinary'] and one_of_five['routes']['ordinary']['over'] == 1, one_of_five)
+one_of_twenty = walk.verdict(fast[:19] + [{'label': 'ordinary:judged', 'splash': 900}], {'ordinary': 20}, 385)
+check('taken to twenty with one over, its p95 within the limit, it passes', one_of_twenty['refused'] is False
+      and one_of_twenty['routes']['ordinary']['p95_ms'] == 300, one_of_twenty)
+two_of_twenty = walk.verdict(fast[:18] + [{'label': 'ordinary:judged', 'splash': 900}] * 2, {'ordinary': 20}, 385)
+check('taken to twenty with its p95 over the limit, it refuses', two_of_twenty['refused'] is True
+      and two_of_twenty['routes_over'] == ['ordinary'], two_of_twenty)
+check('only a route with a start over ITS limit is taken on, and a start without a timing takes nothing on',
+      walk.needing_more([{'label': 'ordinary:judged', 'splash': 900}, {'label': 'cold:judged', 'splash': 2900},
+                         {'label': 'day-change:judged'}, {'label': 'ordinary:first', 'splash': 5000},
+                         {'label': 'rule-switch:judged', 'splash': 385}],
+                        385, {'cold': {'limit_ms': 2979}}) == ['ordinary'])
 whole = walk.verdict(fast, {'ordinary': 20})
 check('a complete fast measurement passes', whole['refused'] is False and whole['missing'] == [], whole)
 check('the sentence says the measurement was incomplete', 'INCOMPLETE' in walk.sentence(gone), walk.sentence(gone))
 
-# The guest is slower than his Mac: the limit is scaled by Dictionary's slowness there, LIKE FOR LIKE
-# and BY MEDIANS (the CEO, 2026-11-14): its median from the launch request to its window in the guest,
-# plus the Dock's part measured on his Mac, against its median from the Dock click on his Mac.
+# THE GUEST IS SLOWER THAN HIS MAC, SO THE LIMIT IS SCALED, BY A FIXED RATIO, AND DICTIONARY IS
+# NEVER LAUNCHED (the CEO, 2026-11-14: "if the VM is slower, then the measurements need to be
+# adjusted accordingly", and "Stop all that retarded "launch-speed walk beside Dictionary"
+# fuckshit!"; 2026-11-15: "What the fuck did I say about that????"). The ratios are the Dictionary
+# measurements on record (the launch-speed record of run 20261115T061911Z-109b9887.1),
+# like for like, by medians.
 check("his Mac's Dictionary median and Dock part are the audit's measurements",
       (walk.MAC_DICTIONARY_MEDIAN_MS, walk.DOCK_PART_MS) == (318, 43.5))
-# Ten guest launches, one of them a cold outlier at 1,900 ms: the median ignores it, a p95 would not.
-windows = (500, 510, 520, 530, 540, 550, 560, 570, 580, 1900)
-calib = [{'label': 'dictionary:calibration', 'window': ms, 'splash': ms + A} for ms in windows]
-limit, ratio, inputs = walk.guest_limit(calib)
-want = (545 + 43.5) / 318
-check("the limit is 380 ms times (the guest's median from the request + the Dock part) over his Mac's median",
-      ratio == round(want, 3) and limit == round(380 * round(want, 3)) and inputs['guest_median_from_request_ms'] == 545
-      and inputs['guest_median_from_click_ms'] == 588.5 and inputs['mac_median_from_click_ms'] == 318, (limit, ratio, inputs))
-check('a single cold outlier does not move the limit', walk.guest_limit(calib[:-1] + [dict(calib[-1], window=590)])[1]
-      == ratio, walk.guest_limit(calib[:-1] + [dict(calib[-1], window=590)]))
-check('no calibration keeps 380 ms', walk.guest_limit([]) == (380, None, None))
-# THE COLD ROUTE AGAINST COLD DICTIONARY (the lead's decision on esc-20261114T164747Z-54632204):
-# its own limit from Dictionary after the same purge, and it is not pooled with the warm routes.
-cold_calib = [{'label': 'dictionary:cold', 'window': ms} for ms in (1500, 1600, 1700)]
-cold_limit, cold_ratio, cold_inputs = walk.guest_limit(cold_calib, 'dictionary:cold')
-check('the cold limit comes from cold Dictionary only', cold_inputs['guest_median_from_request_ms'] == 1600
-      and cold_limit == round(380 * cold_ratio) and walk.guest_limit(cold_calib)[1] is None, (cold_limit, cold_ratio))
-own = {'cold': {'limit_ms': cold_limit, 'ratio': cold_ratio, 'inputs': cold_inputs}}
+check('the warm ratio is the record\'s: (median 278.5 ms of its 10 guest launches + 43.5) / 318, limit 385 ms',
+      len(walk.GUEST_DICTIONARY_WARM_MS) == 10 and walk.WARM_INPUTS['guest_median_from_request_ms'] == 278.5
+      and walk.WARM_RATIO == 1.013 and walk.WARM_LIMIT_MS == 385, (walk.WARM_RATIO, walk.WARM_LIMIT_MS))
+check('the cold ratio is the record\'s: (median 2449.5 ms of its 10 launches after a purge + 43.5) / 318, limit 2979 ms',
+      len(walk.GUEST_DICTIONARY_COLD_MS) == 10 and walk.COLD_INPUTS['guest_median_from_request_ms'] == 2449.5
+      and walk.COLD_RATIO == 7.84 and walk.COLD_LIMIT_MS == 2979, (walk.COLD_RATIO, walk.COLD_LIMIT_MS))
+check('each limit is the one publication re-derives from the recorded ratio',
+      walk.WARM_LIMIT_MS == round(380 * walk.WARM_RATIO) and walk.COLD_LIMIT_MS == round(380 * walk.COLD_RATIO))
+own = {'cold': {'limit_ms': walk.COLD_LIMIT_MS, 'ratio': walk.COLD_RATIO, 'inputs': walk.COLD_INPUTS}}
 cold_rows = [{'label': 'ordinary:judged', 'splash': 300} for _ in range(20)] + \
             [{'label': 'cold:judged', 'splash': 1900} for _ in range(20)]
-judged_own = walk.verdict(cold_rows, {'ordinary': 20, 'cold': 20}, 380, None, None, own)
+judged_own = walk.verdict(cold_rows, {'ordinary': 20, 'cold': 20}, walk.WARM_LIMIT_MS, walk.WARM_RATIO,
+                          walk.WARM_INPUTS, own)
 check('a cold route within its own cold limit passes, and is not pooled with the warm routes',
       judged_own['refused'] is False and judged_own['p95_ms'] == 300 and judged_own['launches'] == 20, judged_own)
 slow_cold = walk.verdict(cold_rows[:20] + [{'label': 'cold:judged', 'splash': 9000} for _ in range(20)],
-                         {'ordinary': 20, 'cold': 20}, 380, None, None, own)
+                         {'ordinary': 20, 'cold': 20}, walk.WARM_LIMIT_MS, walk.WARM_RATIO, walk.WARM_INPUTS, own)
 check('a cold route over its own limit refuses', slow_cold['refused'] is True and slow_cold['routes_over'] == ['cold'],
       slow_cold)
-check('the sentence names the cold route\'s own limit', 'cold judged on its own against %d ms' % cold_limit
-      in walk.sentence(judged_own), walk.sentence(judged_own))
-# Publication re-derives the limit from the recorded ratio as round(380 * ratio): the walk's own
-# limit is that same number for every guest median (review rv-20261114T153837Z-b8423a44-96f8).
-mismatched = [m for m in range(300, 900) if (lambda l, r, _i: l != round(380 * r))(
-    *walk.guest_limit([{'label': 'dictionary:calibration', 'window': m}]))]
-check('the limit is the one publication re-derives from the recorded ratio, for every median', mismatched == [], mismatched[:5])
-check('a guest faster than his Mac never tightens the limit',
-      walk.guest_limit([{'label': 'dictionary:calibration', 'window': 200}])[:2] == (380, 1.0))
-scaled = walk.verdict(fast + calib, {'ordinary': 20}, limit, ratio, inputs)
-check('the calibration launches are not judged, and the scaled limit is used',
-      scaled['launches'] == 20 and scaled['limit_ms'] == limit and scaled['refused'] is False, scaled)
-said_scaled = walk.sentence(scaled)
-check('the sentence records the ratio and its inputs beside the limit', ('x %.2f' % ratio) in said_scaled
-      and '588.5 ms from the Dock click here' in said_scaled and 'against 318 ms on his Mac' in said_scaled, said_scaled)
+said_scaled = walk.sentence(judged_own)
+check('the sentence names both fixed limits and their ratios, and no Dictionary launch',
+      'p95 of 385 ms' in said_scaled and 'x 1.013' in said_scaled and 'cold judged on its own against 2979 ms' in said_scaled
+      and 'Dictionary' not in said_scaled, said_scaled)
 
+
+# THE WALK ITSELF, AGAINST A FAKE GUEST: main() runs as the nightly runs it, every guest command and
+# every push and pull answered here, and every launch given the time `time_for(label, n)` says
+# (from the launch line, as a real build writes it). What the walk asked the guest to launch is
+# read back from the plans it wrote.
+def walk_in_fake_guest(time_for, extra=()):
+    import contextlib
+    import io
+    import json
+    import tarfile
+    import types
+    probes, counter = {}, [0]
+    with tempfile.TemporaryDirectory() as root:
+        root = Path(root)
+        vm, payload = 'fake-vm', '/Users/admin/testvm/fake-vm'
+        (root / 'run' / vm).mkdir(parents=True)
+        (root / 'run' / vm / 'payload').write_text(payload + '\n')
+        out = root / 'out'
+
+        def probe(plan_file):
+            name = Path(plan_file).stem
+            results = []
+            for step in json.loads((out / (name + '.json')).read_text()):
+                counter[0] += 1
+                n = counter[0]
+                t_open = 1000.0 + 10 * n
+                ms = time_for(step['label'], n)
+                splash = step.get('expect_splash') or 'round-11/v1'
+                text = ('[richos] launch timing: update step 15 ms, window 100 ms, first frame %d ms, page took over '
+                        '%d ms after the process started; splash shown, %s (picked at the last quit), its opening used '
+                        '(30 later pictures), the page joined it at 500 ms; update put in place: no; bundle check none '
+                        '(trusted), 1 ms; engine check none (trusted), 3 ms; process started at %d'
+                        % (ms - walk.ALLOWANCE_MS, ms + 400, splash, int(t_open * 1000)))
+                results.append({'n': n, 'label': step['label'], 'app': step['app'], 't_open': t_open, 'pid': 5000 + n,
+                                'quit': 'quit from its own menu', 'all_gone': True, 'events': [],
+                                'lines': [{'t': t_open, 'text': text}]})
+            probes[name] = results
+
+        def guest(_vm, command, timeout=30):
+            if 'launch-speed-guest.py --plan' in command:
+                probe(shlex.split(command)[shlex.split(command).index('--plan') + 1])
+                return 'probe exit 0'
+            for needle, answer in (('PlistBuddy', '1.3.3'), ('ls -d', payload + '/launch-speed/candidate/RichOS.app'),
+                                   ('sw_vers', '15.1'), ('hw.ncpu', '4'), ('date +%z', '+0000'),
+                                   ('print(len(json.load', '0'), ('receipt_tree_sha256', 'f' * 64)):
+                if needle in command:
+                    return answer
+            return ''
+
+        def run(argv, **kwargs):
+            if len(argv) > 2 and argv[2] == '--pull':
+                with tarfile.open(argv[4], 'w:gz') as t:
+                    for name, body in [('launch-speed/guest-system.log', b'')] + [
+                            ('launch-speed/%s/probe.json' % n, json.dumps({'results': r}).encode()) for n, r in probes.items()]:
+                        info = tarfile.TarInfo(name)
+                        info.size = len(body)
+                        t.addfile(info, io.BytesIO(body))
+            return types.SimpleNamespace(returncode=0, stdout='', stderr='')
+        saved = (sys.modules.get('relaunch'), walk.subprocess.run, sys.argv, os.environ.get('TESTVM_ROOT'))
+        sys.modules['relaunch'] = types.SimpleNamespace(guest=guest)
+        walk.subprocess.run, os.environ['TESTVM_ROOT'] = run, str(root)
+        sys.argv = ['launch-speed-walk.py', vm, '--candidate', str(root / 'RichOS-1.3.3.zip'), '--out', str(out), *extra]
+        try:
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                code = walk.main()
+        finally:
+            if saved[0] is None:
+                sys.modules.pop('relaunch', None)
+            else:
+                sys.modules['relaunch'] = saved[0]
+            walk.subprocess.run, sys.argv = saved[1], saved[2]
+            if saved[3] is None:
+                os.environ.pop('TESTVM_ROOT', None)
+            else:
+                os.environ['TESTVM_ROOT'] = saved[3]
+        plans = {p.stem: json.loads(p.read_text()) for p in out.glob('*.json') if p.name != 'report.json'}
+        report = json.loads((out / 'report.json').read_text())
+    return code, report, plans
+
+
+fast_code, fast_report, fast_plans = walk_in_fake_guest(lambda label, n: 300)
+launched = [step for steps in fast_plans.values() for step in steps]
+check('the walk launches no Dictionary, in any plan: only the app under test',
+      launched and not [s for s in launched if 'Dictionary' in s['app'] or s['label'].startswith('dictionary')]
+      and 'dictionary' not in fast_plans, sorted({s['app'] for s in launched}))
+check('its limits are the fixed ones on record, recorded beside the verdict',
+      fast_report['summary']['limit_ms'] == 385 and fast_report['summary']['guest_ratio'] == 1.013
+      and fast_report['summary']['route_limits']['cold']['limit_ms'] == 2979
+      and fast_report['summary']['route_limits']['cold']['ratio'] == 7.84, fast_report['summary'])
+check('a walk whose every start is within the limits passes', fast_code == 0 and fast_report['summary']['refused'] is False,
+      (fast_code, fast_report['sentence']))
+
+
+def judged_in(plans, route, plan=None):
+    return [s for name, steps in plans.items() if plan in (None, name) for s in steps if s['label'] == route + ':judged']
+
+
+ROUTES = ('ordinary', 'cold', 'rule-switch', 'day-change', 'after-update')
+PREVIOUS = ('--previous-app', '/Users/admin/testvm/fake-vm/previous/RichOS.app')
+fast_code, fast_report, fast_plans = walk_in_fake_guest(lambda label, n: 300, PREVIOUS)
+check('every route, the rule switch too, runs five starts, and none is taken on when all five are within',
+      {r: len(judged_in(fast_plans, r)) for r in ROUTES} == dict.fromkeys(ROUTES, 5)
+      and not [n for n in fast_plans if n.startswith('more-')] and fast_code == 0
+      and fast_report['facts']['taken_to_full'] == [], (sorted(fast_plans), fast_report['sentence']))
+switch = judged_in(fast_plans, 'rule-switch')
+check("the rule switch's five: start 2 and start 3 of fresh homes, each home removed after its last start",
+      [s['expect_splash'] for s in switch] == ['round-11/v2', 'round-11/v1'] * 2 + ['round-11/v2']
+      and len({s['env']['HOME'] for s in switch}) == 3
+      and [bool(s.get('after')) for s in switch] == [False, True, False, True, True], switch)
+
+
+def slow_at(route, which, ms=900):
+    """The `which`-th judged starts (1-based) of `route` take `ms`; every other start 300 ms."""
+    seen = [0]
+
+    def time_for(label, n):
+        if label == route + ':judged':
+            seen[0] += 1
+            if seen[0] in which:
+                return ms
+        return 300
+    return time_for
+
+
+for route in ROUTES:
+    code, report, plans = walk_in_fake_guest(slow_at(route, {3}, 9000 if route == 'cold' else 900), PREVIOUS)
+    counts = {r: len(judged_in(plans, r)) for r in ROUTES}
+    check("one of %s's five over its limit takes that route, and only it, on to twenty, judged by its p95 (one over: "
+          "passes)" % route, counts == {**dict.fromkeys(ROUTES, 5), route: 20}
+          and len(judged_in(plans, route, 'more-' + route)) == 15 and report['facts']['taken_to_full'] == [route]
+          and report['summary']['routes'][route]['launches'] == 20 and report['summary']['refused'] is False
+          and code == 0, (counts, sorted(plans), report['sentence']))
+code, report, plans = walk_in_fake_guest(slow_at('ordinary', {2, 4}), PREVIOUS)
+check('two of twenty over the limit: the p95 is over, and the walk refuses', code == 1
+      and report['summary']['routes_over'] == ['ordinary'] and report['summary']['routes']['ordinary']['launches'] == 20,
+      report['sentence'])
+code, report, plans = walk_in_fake_guest(slow_at('cold', {1}, 2900), PREVIOUS)
+check('a cold start over the warm limit and within its own is not taken on', not judged_in(plans, 'cold', 'more-cold')
+      and code == 0, report['sentence'])
+_, _, plans = walk_in_fake_guest(slow_at('day-change', {1}), PREVIOUS)
+more_days = judged_in(plans, 'day-change', 'more-day-change')
+check('the day-change route goes on in the same home, no set-up again, its two openings still in turn',
+      not [s for s in plans['more-day-change'] if s['label'] == 'day-change:prep']
+      and [s['expect_splash'] for s in judged_in(plans, 'day-change')]
+      == ['opening/midnight-suede', 'opening/ruled-standard'] * 10
+      and {s['env']['HOME'] for s in more_days} == {s['env']['HOME'] for s in judged_in(plans, 'day-change', 'daily')},
+      more_days[:2])
+_, _, plans = walk_in_fake_guest(slow_at('rule-switch', {1}), PREVIOUS)
+more_switch = judged_in(plans, 'rule-switch', 'more-rule-switch')
+check('the rule switch goes on in new fresh homes, each one\'s start 2 and start 3 (the fifth was a home\'s start 2)',
+      [s['expect_splash'] for s in judged_in(plans, 'rule-switch')]
+      == ['round-11/v2', 'round-11/v1'] * 2 + ['round-11/v2'] + ['round-11/v2', 'round-11/v1'] * 7 + ['round-11/v2']
+      and not {s['env']['HOME'] for s in more_switch} & {s['env']['HOME'] for s in judged_in(plans, 'rule-switch', 'switch')},
+      more_switch[:2])
 # The receipt's tree digest, on the tree whose digest the updater's own test pins
 # (crates/richos-user-update/src/lib.rs, digests_are_spelled_as_sha2_0_10_spelled_them).
 with tempfile.TemporaryDirectory() as d:
@@ -224,6 +381,14 @@ check('a day-change route that was planned and not launched refuses',
       walk.verdict(fast, {'ordinary': 20, 'day-change': 20})['refused'] is True)
 check('the day-change route within the limit passes with the rest',
       walk.verdict(fast + day, {'ordinary': 20, 'day-change': 20})['refused'] is False)
+
+# The nightly's budget (nightly-local.py LAUNCH_SPEED_BUDGET) is made from these two counts: every
+# route passing at five starts, and every route taken on to twenty.
+usual = sum(len(steps) for steps in fast_plans.values())
+_, _, worst_plans = walk_in_fake_guest(lambda label, n: 9000 if label.endswith(':judged') else 300, PREVIOUS)
+worst = sum(len(steps) for steps in worst_plans.values())
+check('a walk launches 40 times when every route passes at five, at most 138 when every route goes on to twenty',
+      (usual, worst) == (40, 138), (usual, worst))
 
 print('%d failure(s)' % len(failures))
 sys.exit(1 if failures else 0)

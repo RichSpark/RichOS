@@ -3,7 +3,7 @@
 
 Run by run-walk.py, which holds one guest slot for this run only, boots the guest and removes the clone:
 
-  run-walk.py --bundle ZIP --home EMPTY_DIR --engine ENGINE --report REPORT -- \\
+  run-walk.py --audio --bundle ZIP --home EMPTY_DIR --engine ENGINE --report REPORT -- \\
       garbage-walk.py --out DIR --expect-sha SHA [--gone PATTERN ...] [--wav SPOKEN.wav --model GGML.bin]
 
 THE QUESTION (CEO §54 addendum 2, 2026-09-18): "The RichOS app must always clean up its garbage

@@ -4,7 +4,7 @@ not wait for them (CEO 2026-10-07).
 
 Run by run-walk.py, which holds one guest slot for this run only, boots the guest and removes the clone:
 
-  run-walk.py --bundle ZIP --home EMPTY_DIR --engine ENGINE --report REPORT -- \\
+  run-walk.py --audio --bundle ZIP --home EMPTY_DIR --engine ENGINE --report REPORT -- \\
       setup-walk.py --out DIR --expect-sha SHA
 
 run-walk.py passes the owned VM name as the first argument.
