@@ -2,6 +2,20 @@
 
 What changed in each stable version of RichOS, newest first; nightly builds are in the [nightly changelog](CHANGELOG-NIGHTLY.md).
 
+## 1.3.3
+
+[GitHub release](https://github.com/RichSpark/RichOS/releases/tag/v1.3.3)
+
+- Added Your openings in Settings, under Splash screen: a gallery of the opening screens you have, with more earned as you use RichOS, such as for the AI power you harness and your months with Rich; play any of them, make one the opening RichOS starts with or have a different one each day, save one as a picture in your Downloads folder and add your company's name in gold to every opening
+- Added stages to the home screen picture as Rich learns more, from One Light at the first memory to Self-Made at 2,500: each stage lights up a new part of the picture, a line says how far the next stage is, new lights arrive with how many are new since you last looked, Watch it grow plays your picture from its first light and Rich mentions a new stage once in his next reply
+- Added Make a video at the top right of the home screen: record the picture with or without your voice and the mouse pointer, stopping when you choose or after Watch it grow plays once, then watch it and save it as a video file
+- Changed the splash screen to show at every start, since it now covers RichOS starting up; its switch in Settings now turns off the splash screen's new two-note sound instead
+- Changed two of Rich's team members of the same kind working at once to show as, for example, Mark and Mark2 instead of both as Mark
+- Improved starting RichOS: the splash screen now appears almost the moment you click RichOS and an update you downloaded is put in place when you quit instead of holding up your next start
+- Fixed the setup screen appearing after every update: RichOS now installs its new engine by itself while you keep working and anything already running carries on
+- Fixed what you told Rich during onboarding and what his team found then not reaching his memory of you and your companies; it is now added by itself and shows on the home screen picture without a restart
+- Fixed the home screen showing the example instead of the picture of your connected repositories while RichOS's engine was being installed, being replaced or had been opened in Finder; that last case also made RichOS download the engine again
+
 ## 1.3.2
 
 [GitHub release](https://github.com/RichSpark/RichOS/releases/tag/v1.3.2)
