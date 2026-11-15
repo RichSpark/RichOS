@@ -1149,9 +1149,13 @@ impl Session {
             if let Some(id) = owned_tab(&before, &now, &url, poll >= shared::OPEN_WAITS) {
                 // Beyond doubt the reader's own, so closed at the end: it did not exist before
                 // and the open added exactly one tab; or the browser showed no tab at all
-                // before (it had no window, or was not running) and shows this one tab now.
+                // before (it had no window, or was not running) and shows this one tab now, a
+                // tab its tab bar names. A window without a readable tab bar that a browser
+                // shows when it starts can hold the tabs it restored, and closing that "tab"
+                // presses the window's close button: it is left open.
                 let fresh = !before.iter().any(|b| b.id == id);
-                let closable = fresh && now.len() == before.len() + 1;
+                let closable = fresh && now.len() == before.len() + 1
+                    && (!before.is_empty() || host.view(&app, id).is_some_and(|v| v.tabbed));
                 owned = Some((id, closable));
                 break;
             }
@@ -1995,6 +1999,30 @@ mod tests {
         fake.tabs.borrow_mut().retain(|t| t.id == 1);
         let err = Session::default().open(&fake, ADMIN).unwrap_err();
         assert!(err.contains("could not tell which tab") && !err.contains("payroll"), "{err}");
+    }
+
+    /// A browser the read itself starts restores the user's saved tabs, and its tab bar cannot
+    /// be read: the one "tab" is the whole window, so the cleanup leaves it and says so.
+    #[test]
+    fn a_window_a_starting_browser_restored_is_never_closed() {
+        let mut fake = store(BrowserApp { bundle_id: "company.thebrowser.Browser".into(), name: "Arc".into() });
+        fake.tabbed = false;
+        fake.running.set(false);
+        let mut session = Session::default();
+        assert!(page(&session.open(&fake, ADMIN).unwrap()).contains("Orders this week: 214"));
+        assert_eq!(fake.open_tabs(), vec![1, 2, 101], "the saved mail and news tabs are in that window");
+        let said = session.close(&fake).unwrap();
+        assert!(fake.closed.borrow().is_empty(), "the window with the user's saved tabs was closed");
+        assert!(said.contains("left as it is"), "{said}");
+        // A tab the tab bar names, the only one a browser that was not running shows, is the
+        // reader's own and is closed.
+        let fake = store(chrome());
+        fake.running.set(false);
+        fake.tabs.borrow_mut().clear();
+        let mut session = Session::default();
+        session.open(&fake, ADMIN).unwrap();
+        assert!(session.close(&fake).unwrap().contains("is closed"));
+        assert_eq!(*fake.closed.borrow(), vec![101]);
     }
 
     /// The tab an open made or navigated, case by case.
