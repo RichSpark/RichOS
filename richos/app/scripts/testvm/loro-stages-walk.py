@@ -5,7 +5,7 @@ launch, the handover at his first hire, and his picture at about 30, 100, 300 an
 Run by run-walk.py, which holds one guest slot for this run only, boots the guest and removes the clone:
 
   run-walk.py --bundle ZIP --home EMPTY_DIR --engine ENGINE --report REPORT --wait 600 -- \\
-      loro-stages-walk.py --out DIR [--sizes 30,100,300,1000] [--steps fresh,hire,grow]
+      loro-stages-walk.py --out DIR [--sizes 30,100,300,1000] [--steps fresh,hire,grow,replay]
 
 run-walk.py passes the owned VM name as the first argument.
 
@@ -26,6 +26,11 @@ WHAT IT DOES, in the guest, never on the host's screen (CEO ruling 65):
           arriving); once the stage's moment has played out (20 s), the frame home-<size> is
           taken. Each records what the screen says: the
           brand line, the distance line, and the stage's name where one was crossed.
+  replay  on the last size's picture, "Watch it grow" pressed as a hand presses it: the button
+          reads "Stop", the replay's line counts memories up from the first light (read from the
+          accessibility tree about every second, frames replay-early and replay-late), the last
+          frame reads "<n> memories · <stage>" (frame replay-last), and the replay ends by itself
+          with the button reading "Watch it grow" again (added with the nightly 100 walk)
 
 A repository is drawn as a few more objects than it has documents (its README, its decision
 register, its working days), so each size is asked for as that many documents rounded up to a
@@ -53,7 +58,7 @@ standard = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(standard)
 StepFailed, DATA = standard.StepFailed, standard.DATA
 
-STEPS = ['fresh', 'hire', 'grow']
+STEPS = ['fresh', 'hire', 'grow', 'replay']
 
 
 class Walk(standard.Walk):
@@ -176,6 +181,70 @@ class Walk(standard.Walk):
                          'crossed': crossed, 'caption': self.said('home-caption'), 'watch_it_grow': bool(self.node('--id', 'home-grow')),
                          'see_it_finished': bool(self.node('--id', 'home-finished')), 'frame': frame})
         return rows
+
+    def replay_line(self):
+        """What the replay's line reads: the status element's own text, or, where the tree gives
+        its words on its children, the texts drawn inside its rectangle."""
+        node = self.node('--id', 'home-replay')
+        if not node:
+            return None
+        own = ' '.join(str(node.get(k) or '') for k in ('value', 'title', 'desc')).strip()
+        if own:
+            return own
+        r = self.rect(node)
+        if not r or not r.get('w'):
+            return None
+        inside = [n for n in self.ax('find', '--value', 'memor', '--contains')
+                  if r['x'] - 2 <= (n.get('x') or -1) <= r['x'] + r['w'] and r['y'] - 2 <= (n.get('y') or -1) <= r['y'] + r['h']]
+        return ' '.join(str(n.get('value')) for n in inside).strip() or None
+
+    def replay(self):
+        """"Watch it grow" on the picture the last step left: pressed, it plays the picture from
+        the first light to today and ends by itself (`home-growth.js`, `growPressed`)."""
+        button = next((b for b in ('home-grow', 'home-grow-solo') if self.node('--id', b)), None)
+        if not button:
+            raise StepFailed('no "Watch it grow" button on the home screen')
+        before = self.said(button)
+        if not before or 'Watch it grow' not in before:
+            raise StepFailed('the button reads %r, not "Watch it grow"' % before)
+        r = self.rect(self.node('--id', button))
+        point = '%d,%d' % (r['x'] + r['w'] / 2, r['y'] + r['h'] / 2)
+        self.pointer(point, point)  # the real mouse, the same point twice: a click
+        began = time.monotonic()
+        lines, frames, stop_seen = [], [], False
+        while time.monotonic() - began < 40:
+            label = self.said(button) or ''
+            stop_seen = stop_seen or 'Stop' in label
+            line = self.replay_line()
+            if line and (not lines or lines[-1][1] != line):
+                lines.append((round(time.monotonic() - began, 1), line))
+            if len(frames) == 0 and time.monotonic() - began > 3:
+                frames.append(self.shot('replay-early'))
+            elif len(frames) == 1 and time.monotonic() - began > 8:
+                frames.append(self.shot('replay-late'))
+            if line and ' · ' in line and 'memories ·' in line and len(frames) < 3:
+                frames.append(self.shot('replay-last'))
+            if stop_seen and 'Watch it grow' in label and time.monotonic() - began > 5:
+                break
+            time.sleep(0.5)
+        after = self.said(button)
+        counts = []
+        for _, line in lines:
+            words = line.split(' memor')[0].split('·')[-1]
+            digits = ''.join(c for c in words if c.isdigit())
+            if digits:
+                counts.append(int(digits))
+        result = {'button': button, 'stop_seen': stop_seen, 'lines': lines, 'counts': counts, 'frames': frames,
+                  'after': after, 'seconds': round(time.monotonic() - began, 1)}
+        if not stop_seen:
+            raise StepFailed('the button never read "Stop" after the press: ' + json.dumps(result)[:900])
+        if len(counts) < 3 or counts != sorted(counts) or counts[0] >= counts[-1]:
+            raise StepFailed('the replay\'s count did not rise from the first light: ' + json.dumps(result)[:900])
+        if not any('memories ·' in line for _, line in lines):
+            raise StepFailed('the replay\'s last frame "<n> memories · <stage>" never showed: ' + json.dumps(result)[:900])
+        if not after or 'Watch it grow' not in after:
+            raise StepFailed('the replay did not end by itself within 40 s: ' + json.dumps(result)[:900])
+        return result
 
 
 def main():
