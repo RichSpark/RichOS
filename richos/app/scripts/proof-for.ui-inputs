@@ -170,6 +170,7 @@ home-frame-pass.js      richos/app/ui/home/field-engine.js
 home-ghost.js           @shell @home richos/app/ui/mock.js richos/app/ui/home/field-data.js richos/app/ui/splash.js richos/app/ui/theme-boot.js
 home-growth.js          @shell @home richos/app/ui/mock.js richos/app/ui/home/field-data.js richos/app/ui/splash.js richos/app/ui/theme-boot.js
 home-video.js           @shell @home richos/app/ui/mock.js richos/app/ui/home/field-data.js richos/app/ui/splash.js richos/app/ui/theme-boot.js richos/app/ui/settings-button.js
+video-anywhere.js       @shell @home richos/app/ui/video-anywhere.js richos/app/ui/video-anywhere.css richos/app/ui/mock.js richos/app/ui/home/field-data.js richos/app/ui/splash.js richos/app/ui/splash.css richos/app/ui/theme-boot.js richos/app/ui/settings-button.js richos/app/ui/nav-rail.js
 home-standard.js        @shell @home richos/app/ui/mock.js richos/app/ui/home/field-data.js richos/app/ui/splash.js richos/app/ui/theme-boot.js richos/app/ui/settings-button.js
 home.js               @shell @home richos/app/ui/mock.js richos/app/ui/home/field-data.js richos/app/ui/splash.js richos/app/ui/settings-button.js richos/app/ui/theme-boot.js richos/app/ui/tests/fixtures/slow-round-trips-preload.js
 ticker-wrap.js          @shell @home
