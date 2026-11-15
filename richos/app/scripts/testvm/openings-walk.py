@@ -387,10 +387,18 @@ class Walk(standard.Walk):
         openings" pressed there must show the gallery, with Token spend gone from under it."""
         self.quit_from_menu()
         self.start()
-        self.to_home()
-        self.settings()
-        self.ax('click', '--id', 'set-spend-open', '--first')
-        self.until(lambda: self.node('--id', 'spend-back'), 30, 'Token spend did not open')
+        # A new user's sheet can come up late and take Token spend's place, as any sheet does
+        # (2026-11-15: "Which company is this copy of Rich for?" arrived after the press). It is
+        # declined (`to_home`) and Token spend opened again, until it stays up.
+        for _ in range(4):
+            self.to_home()
+            self.settings()
+            self.ax('click', '--id', 'set-spend-open', '--first')
+            time.sleep(4)
+            if self.node('--id', 'spend-back'):
+                break
+        else:
+            raise StepFailed('Token spend did not open and stay open')
         frame = self.shot('spend-open')
         self.settings()
         self.ax('click', '--id', 'openings-open', '--first')
