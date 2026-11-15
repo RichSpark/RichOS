@@ -14,6 +14,14 @@
   ],
   "unwalkedPanels": [
     {
+      "id": "video-anywhere-choices",
+      "why": "The two choices under Make a video in the heading of Settings (round 79) are measured in both themes by tests/video-anywhere.js: every line of them against the plate it stands on at 4.5:1 and every edge, icon and lit bar at 3:1, from the computed colors, with the microphone on and with the sentence for no microphone shown. They open only from that button, with a made-up microphone, which that suite drives."
+    },
+    {
+      "id": "video-anywhere-sheet",
+      "why": "The sheet with the video he just made (round 79) is measured in both themes by tests/video-anywhere.js: its heading, its line, Save video, Record again, Discard and where it says the file went at 4.5:1, their edges and the card's at 3:1. It opens only after a recording, which that suite makes."
+    },
+    {
       "id": "richfiles-page",
       "why": "The RichFiles page is covered by the two-theme RichFiles check in tests/nav-rail.js. It opens the shipped page from the navigation rail, makes native placement return the standard error and requires window.__contrastProbe to measure the heading and error without a failing or unprovable pair. The file browser itself uses AppKit and is outside WebKit's DOM contrast walk."
     },

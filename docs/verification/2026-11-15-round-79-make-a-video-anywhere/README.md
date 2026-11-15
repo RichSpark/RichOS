@@ -54,6 +54,16 @@ where Stop stood.
 The suite is red on main `8cad38a78` (0 of 7 checks, as it was first written) and green on the
 branch (8 of 8).
 
+## What the recording does not show
+
+The window is redrawn for the video, not photographed (the CEO, 2026-11-15, asked whether to keep
+the redraw or capture the real window: "Yes. Keep the redraw with highlights."). Left out:
+gradients behind plates; the blinking text cursor; tooltips the Mac draws; a select's small arrow;
+a playing video; a PDF shown in the Output panel; the previews of files in the Output panel (a
+quiet plate stands in for each: they come from another place than the window's own and a canvas
+that drew one could no longer be recorded); and a one-line field scrolled sideways, which is drawn
+from its start.
+
 ## Not checked
 
 - A file written by the app's own WKWebView on a real Mac: its picture, its length past ten
@@ -73,3 +83,5 @@ branch (8 of 8).
   not open Talk to Rich; Space on the sheet's player pauses and plays it.
 - "Record again" on a home screen that has no "Make a video" of its own opens these choices under
   the settings button.
+- The count and the sheet stand under the settings button, not over it (the app's rule that the
+  button is above every overlay) and every size of type follows Text size.

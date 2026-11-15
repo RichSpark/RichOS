@@ -31,10 +31,16 @@
 // recording the mouse but not recording text highlights when I was highlighting the text with the
 // mouse. I would expect the screen recording to record the text highlighting as well."): the
 // highlight is drawn behind the words he selected, in the Mac's own highlight color, in the
-// conversation and in a text box, on every line of it that shows. What the
-// painter leaves out: gradients behind plates, a picture the canvas may not read (a quiet plate
-// stands in), the blinking text cursor, tooltips the Mac draws, a select's small arrow and a
-// playing video. "Save video" hands the file to the Mac's own save window (`home_video_save`).
+// conversation and in a text box, on every line of it that shows.
+//
+// WHAT THE RECORDING DOES NOT SHOW (the CEO chose the redraw knowing it, 2026-11-15: "Keep the
+// redraw with highlights"): gradients behind plates; the blinking text cursor; tooltips the Mac
+// draws; a select's small arrow; a playing video; a PDF shown in the Output panel (its place is
+// left as it is behind it); a picture the canvas may not read, which is every preview of a file
+// in the Output panel (`richos-output://`, another place than the window's own: a quiet plate
+// stands in); and a one-line field scrolled sideways, which is drawn from its start.
+//
+// "Save video" hands the file to the Mac's own save window (`home_video_save`).
 //
 // THE MICROPHONE, the icons, the mouse pointer drawn in the file and the save window are the home
 // screen's own (`RichHomeVideo.parts`): one of each in the app.
@@ -803,6 +809,9 @@ window.RichVideoAnywhere = (function () {
     shot = out;
     state = "sheet";
     mic.stop(); // the file is whole: the microphone is let go (his choice stays)
+    // Stop pressed in the heading of Settings: Settings closes, or the sheet would open under it
+    // (the settings button and its panel stand above every overlay, this sheet among them)
+    if (window.RichSettings) window.RichSettings.close();
     var parts = [clock(out.ms), out.voice ? "with your voice" : "no sound", out.pointer ? "with the mouse pointer" : "no mouse pointer", fmt(out.w) + " × " + fmt(out.h)];
     if (out.blob) parts.push((out.blob.size / 1048576).toFixed(1) + " MB");
     el.sheetMeta.textContent = parts.join(" · ");

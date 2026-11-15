@@ -7,6 +7,12 @@
    the sheet with the video. The pieces are the home screen's own (`home.css`, `.hv-*`, round 77),
    set in the app's tokens so they stand in both themes. Every line and edge is measured in both
    themes by `tests/video-anywhere.js`.
+
+   EVERY SIZE OF TYPE IS IN `rem`, so it follows Text size (16px is 1rem at 100%). NO PLATE OR EDGE
+   FADES from one color to another: the very frame after the theme is switched must read as well as
+   the settled one (`tests/contrast.js`, 19). THE COUNT AND THE SHEET STAND UNDER THE SETTINGS
+   BUTTON (240 and 250 against its 300, over the home screen's 150): section 15 puts that button
+   above every overlay.
    ============================================================================================= */
 
 :root {
@@ -64,7 +70,6 @@ body.rv-mic-on .rv-level { display: inline-flex; }
   width: 3px;
   border-radius: 2px;
   background: var(--rv-edge);
-  transition: background 0.08s linear;
 }
 .rv-level i:nth-child(1) { height: 6px; }
 .rv-level i:nth-child(2) { height: 9px; }
@@ -94,11 +99,11 @@ body.rv-mic-on .rv-level { display: inline-flex; }
   background: var(--rv-plate);
   color: var(--ink);
   font-family: var(--font);
-  font-size: 16px;
+  font-size: 1rem;
   line-height: 1;
   white-space: nowrap;
   cursor: pointer;
-  transition: border-color 0.2s ease, background 0.2s ease, filter 0.2s ease;
+  transition: filter 0.2s ease;
 }
 .rv-plain:hover { border-color: var(--rv-gold-ink); background: var(--tint-gold-strong); }
 .rv-main {
@@ -130,11 +135,10 @@ body.rv-mic-on .rv-level { display: inline-flex; }
   background: var(--rv-plate);
   color: var(--ink);
   font-family: var(--font);
-  font-size: 16px;
+  font-size: 1rem;
   line-height: 1;
   white-space: nowrap;
   cursor: pointer;
-  transition: border-color 0.2s ease, background 0.2s ease;
 }
 .rv-make .rv-ico { color: var(--rv-gold-ink); }
 .rv-make:hover,
@@ -163,12 +167,11 @@ body.home-open .rv-make,
   background: var(--rv-plate);
   color: var(--ink);
   font-family: var(--font);
-  font-size: 16px;
+  font-size: 1rem;
   line-height: 1;
   white-space: nowrap;
   cursor: pointer;
   box-shadow: 0 10px 26px -18px var(--shadow-strong);
-  transition: border-color 0.2s ease, background 0.2s ease;
 }
 body.rv-busy .rv-pill { display: inline-flex; }
 .rv-pill:hover { background: var(--tint-gold-strong); }
@@ -210,7 +213,7 @@ body.rv-busy #home-video-choices { display: none !important; }
   align-items: center;
   gap: 10px;
   font-family: var(--font);
-  font-size: 17px;
+  font-size: 1.0625rem;
   line-height: 1.2;
   color: var(--ink);
   white-space: nowrap;
@@ -221,11 +224,11 @@ body.rv-busy #home-video-choices { display: none !important; }
 .rv-panel .rv-mic-note {
   margin: 12px 0 0;
   font-family: var(--font-serif);
-  font-size: 17px;
+  font-size: 1.0625rem;
   line-height: 1.45;
   color: var(--ink);
 }
-.rv-panel .rv-mic-note { margin: 6px 0 0 32px; font-size: 16px; }
+.rv-panel .rv-mic-note { margin: 6px 0 0 32px; font-size: 1rem; }
 .rv-panel .rv-mic-note[hidden] { display: none; }
 .rv-seg {
   flex: none;
@@ -243,9 +246,8 @@ body.rv-busy #home-video-choices { display: none !important; }
   background: none;
   font-family: var(--font);
   cursor: pointer;
-  transition: background 0.2s ease;
 }
-.rv-seg button b { font-size: 16px; font-weight: 500; line-height: 1.2; color: var(--ink); white-space: nowrap; }
+.rv-seg button b { font-size: 1rem; font-weight: 500; line-height: 1.2; color: var(--ink); white-space: nowrap; }
 .rv-seg button:hover { background: var(--tint-gold-strong); }
 .rv-seg button[aria-pressed="true"] { background: var(--gold); }
 .rv-seg button[aria-pressed="true"] b { color: var(--on-gold); font-weight: 600; }
@@ -255,7 +257,7 @@ body.rv-busy #home-video-choices { display: none !important; }
   height: 48px;
   margin-top: 16px;
   border-radius: 24px;
-  font-size: 17px;
+  font-size: 1.0625rem;
 }
 
 /* the canvas the video is drawn on: in the page so its words are smoothed like the page's, never seen */
@@ -291,7 +293,7 @@ body.rv-busy #home-video-choices { display: none !important; }
   left: 50%;
   top: 45%;
   transform: translate(-50%, -50%);
-  z-index: 900;
+  z-index: 240;
   text-align: center;
   pointer-events: none;
   opacity: 0;
@@ -301,7 +303,7 @@ body.rv-busy #home-video-choices { display: none !important; }
 .rv-count .n {
   font-family: var(--font-serif);
   font-weight: 300;
-  font-size: 190px;
+  font-size: 11.875rem;
   line-height: 1;
   color: var(--ink);
   font-variant-numeric: lining-nums;
@@ -331,7 +333,7 @@ body.rv-busy #home-video-choices { display: none !important; }
   background: var(--rv-plate);
   box-shadow: 0 14px 40px -12px var(--shadow-strong);
   font-family: var(--font-serif);
-  font-size: 20px;
+  font-size: 1.25rem;
   line-height: 1.3;
   color: var(--ink);
 }
@@ -340,7 +342,7 @@ body.rv-busy #home-video-choices { display: none !important; }
   align-items: center;
   gap: 9px;
   font-family: var(--font);
-  font-size: 16px;
+  font-size: 1rem;
   color: var(--ink);
 }
 .rv-count .voice .rv-ico { color: var(--rv-gold-ink); }
@@ -351,7 +353,7 @@ body.rv-mic-on .rv-count .voice { display: inline-flex; }
 .rv-sheet {
   position: fixed;
   inset: 0;
-  z-index: 1000;
+  z-index: 250;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -391,7 +393,7 @@ body.rv-mic-on .rv-count .voice { display: inline-flex; }
   margin: 0;
   font-family: var(--font-serif);
   font-weight: 400;
-  font-size: 28px;
+  font-size: 1.75rem;
   line-height: 1.25;
   color: var(--ink);
   font-variant-numeric: lining-nums;
@@ -401,7 +403,7 @@ body.rv-mic-on .rv-count .voice { display: inline-flex; }
 .rv-sheet .none {
   margin: 6px 0 0;
   font-family: var(--font);
-  font-size: 16px;
+  font-size: 1rem;
   line-height: 1.45;
   color: var(--ink);
   font-variant-numeric: tabular-nums;
