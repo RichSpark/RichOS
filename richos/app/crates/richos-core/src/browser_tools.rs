@@ -155,6 +155,9 @@ pub enum Item {
     /// A heading and its level (1-6, 0 when the browser does not say).
     Heading(u8, String),
     Text(String),
+    /// A code sample, exactly as its element shows it ([`code_as_shown`]): every space and
+    /// line break in it is the page's own, so the reading gives it unchanged.
+    Code(String),
     /// Something that can be pressed. Numbered in page order; [`PageHost::press_item`] takes
     /// its place among the controls. `state` is `collapsed`, `expanded` or `selected`.
     Control { kind: &'static str, name: String, url: Option<String>, state: Option<&'static str> },
@@ -431,7 +434,7 @@ pub fn walk<N: AxNode>(area: &N) -> Walked<N> {
                     stack.push(Step::After(Item::Break));
                 }
                 if let Some(shown) = code_as_shown(&el, subrole.as_deref(), &kids) {
-                    out.push(Item::Text(shown), &place, kids.last());
+                    out.push(Item::Code(shown), &place, kids.last());
                     continue;
                 }
                 let in_tabs = in_tabs || role == "AXTabGroup";
@@ -874,6 +877,10 @@ pub fn render(page_url: &str, items: &[Item], first: usize) -> (String, Vec<Stri
                 current.text(&format!("{} {}", "#".repeat((*level).max(1) as usize), clean(text)));
             }
             Item::Text(text) => current.text(text),
+            Item::Code(code) => {
+                current.flush(&mut lines);
+                lines.push(code.clone());
+            }
             Item::Control { kind, name, url, state } => {
                 let said = format!("{kind} \"{}\"", clean(name));
                 let state = state.map(|s| format!(" {s}")).unwrap_or_default();
@@ -1002,7 +1009,7 @@ fn close_and_wait(host: &dyn PageHost, app: &BrowserApp, id: u64) -> bool {
 fn has_content(snapshot: &Snapshot) -> bool {
     snapshot.items.iter().any(|i| match i {
         Item::Region(_) | Item::Break | Item::Cell => false,
-        Item::Text(text) => !blank(text),
+        Item::Text(text) | Item::Code(text) => !blank(text),
         _ => true,
     })
 }
@@ -1010,7 +1017,7 @@ fn has_content(snapshot: &Snapshot) -> bool {
 /// Whether a page shows less than [`THIN_CHARS`] of words: it may still be on its way.
 fn thin(snapshot: &Snapshot) -> bool {
     let shown: usize = snapshot.items.iter().map(|i| match i {
-        Item::Text(t) | Item::Heading(_, t) => t.trim().chars().count(),
+        Item::Text(t) | Item::Code(t) | Item::Heading(_, t) => t.trim().chars().count(),
         Item::Control { name, .. } => name.chars().count(),
         Item::Value { name, value, .. } => name.chars().count() + value.chars().count(),
         Item::Region(_) | Item::Break | Item::Cell => 0,
@@ -2237,6 +2244,27 @@ mod tests {
         let pieces = "<div class= \"accordion\" id= \"accordionExample\" > <h2 class= \"accordion-header\" > Item #1";
         assert_eq!(read(code(bare(), None)), pieces);
         assert_eq!(read(code(bare(), Some("Copy to clipboard"))), pieces);
+    }
+
+    /// Spacing in code is part of the program: a sample reads character for character as its
+    /// element shows it.
+    #[test]
+    fn code_spacing_reads_unchanged() {
+        let read = |shown: &'static str| {
+            let code = Node { subrole: Some("AXCodeStyleGroup"), shown: Some(shown), ..el("AXGroup", vec![text(shown)]) };
+            render("https://docs.example/", &walk(&el("AXWebArea", vec![el("AXGroup", vec![code])])).items, 1).0
+        };
+        // A space inside a string literal, at the end of its line.
+        let literal = "message = \"\"\"first \nlast\"\"\"";
+        assert_eq!(read(literal), literal);
+        // A one-space indent, on the first line too.
+        let indent = " if ready:\n  run()\n done()";
+        assert_eq!(read(indent), indent);
+        // Two programs that differ only in spacing.
+        let two_blanks = "message = \"\"\"first\n\n\nlast\"\"\"";
+        let one_blank = "message = \"\"\"first\n\nlast\"\"\"";
+        assert_eq!(read(two_blanks), two_blanks);
+        assert_ne!(read(two_blanks), read(one_blank));
     }
 
     fn frames(lines: &[Value]) -> Receiver<(Vec<u8>, bool)> {
