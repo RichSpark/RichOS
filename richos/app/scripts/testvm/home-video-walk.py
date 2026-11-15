@@ -5,7 +5,7 @@ with each choice, saved through the Mac's own save window, and each saved file r
 Run by run-walk.py, which holds one guest slot for this run only, boots the guest and removes the clone:
 
   run-walk.py --bundle ZIP --home EMPTY_DIR --engine ENGINE --report REPORT --wait 600 -- \\
-      home-video-walk.py --out DIR [--size 312] [--steps seed,button,voice,film]
+      home-video-walk.py --out DIR [--size 312] [--steps seed,button,voice,film,space]
 
 run-walk.py passes the owned VM name as the first argument.
 
@@ -31,6 +31,12 @@ WHAT IT DOES, in the guest, never on the host's screen (CEO ruling 65):
   film    Microphone Off, "By itself", pointer Hidden: the film plays once with the numbers, the
           team and the buttons off the screen (frame 9-film), the recording ends by itself, and the
           sheet's video is saved under another name typed into the save window. Pulled and read back.
+
+  space   Microphone On (the tone, so a guest's file has sound to play), "When I stop it", pointer
+          Hidden: a short recording, the sheet, the keyboard put on the sheet's player, and Space
+          pressed twice: the video pauses, then plays, and the home screen and the sheet stay
+          (frames 12-space-playing, 13-space-paused, 14-space-playing-again). Whether it plays is
+          read from the player's own controls (Play or Pause) and its time moving or standing.
 
 READ BACK means: ffprobe's streams and length (AAC only with the microphone, and that sound is not
 silence), everything in the file decoded by ffmpeg with no error, the length against what the sheet
@@ -77,7 +83,7 @@ stages = load('loro_stages_walk', 'loro-stages-walk.py')
 standard = stages.standard  # the one copy of home-standard-walk.py: its StepFailed is the one raised and caught
 StepFailed, DATA = standard.StepFailed, standard.DATA
 
-STEPS = ['seed', 'button', 'voice', 'film']
+STEPS = ['seed', 'button', 'voice', 'film', 'space']
 TONE = {'RICHOS_VIDEO_INPUT_TONE': '1'}
 
 
@@ -372,6 +378,74 @@ class Walk(stages.Walk):
         if problems:
             raise StepFailed('; '.join(problems) + ' ' + json.dumps(facts))
         self.press('--title', 'Done', '--role', 'AXButton')
+        return result
+
+    def player(self):
+        """What the sheet's player says about itself: which of Play and Pause its controls offer,
+        and its time, read twice 1.5 s apart (moving is playing)."""
+        def offer():
+            pause = self.node('--title', 'Pause', '--role', 'AXButton')
+            play = self.node('--title', 'Play', '--role', 'AXButton')
+            return 'Pause' if pause and not play else 'Play' if play and not pause else None
+        def clock():
+            for node in self.ax('find', '--role', 'AXSlider'):
+                if node.get('value') not in (None, ''):
+                    return str(node.get('value'))
+            return None
+        first, offered = clock(), offer()
+        time.sleep(1.5)
+        second = clock()
+        moving = None if first is None or second is None else first != second
+        playing = moving if moving is not None else ({'Pause': True, 'Play': False}.get(offered))
+        return {'offers': offered, 'time': [first, second], 'moving': moving, 'playing': playing}
+
+    def stays(self):
+        return {'home_screen': bool(self.node('--id', 'home-enter')), 'sheet': bool(self.button('Record again'))}
+
+    def space(self):
+        self.choose('On', 'When I stop it', 'Hidden')
+        self.press('--title', 'Start recording', '--role', 'AXButton')
+        self.until(self.recording, 20, 'the button never became Stop')
+        time.sleep(5)
+        self.press('--id', 'home-video')
+        if not self.to_the_sheet(30):
+            raise StepFailed('the sheet has no video to play: ' + str(self.words('could not record')))
+        result = {}
+        # the keyboard on the player, the way a Tab or a click puts it there; never a press on Play
+        code, text = standard.run([HERE / 'ax.sh', self.vm, 'focus', '--subrole', 'AXVideo', '--first'], 60)
+        result['focus'] = 'AXVideo focused' if code == 0 else text[-300:]
+        if code:
+            code, text = standard.run([HERE / 'ax.sh', self.vm, 'focus', '--role', 'AXGroup', '--title', 'video', '--contains', '--first'], 60)
+            result['focus'] += ' | ' + ('a video group focused' if code == 0 else text[-300:])
+        code, text = standard.run([HERE / 'ax.sh', self.vm, '--focused'], 60)
+        result['focused'] = text[-400:]
+        if 'focused' not in result['focus']:
+            raise StepFailed('the keyboard could not be put on the player: ' + json.dumps(result))
+        result['before'] = self.player()
+        result['before_frame'] = self.shot('12-space-playing')
+        self.key(49)  # Space
+        time.sleep(1.5)
+        result['after_space'] = self.player()
+        result['after_space'].update(self.stays())
+        result['after_space_frame'] = self.shot('13-space-paused')
+        self.key(49)
+        time.sleep(1.5)
+        result['after_second_space'] = self.player()
+        result['after_second_space'].update(self.stays())
+        result['after_second_space_frame'] = self.shot('14-space-playing-again')
+        problems = []
+        a, b = result['after_space'], result['after_second_space']
+        if not (a['home_screen'] and a['sheet'] and b['home_screen'] and b['sheet']):
+            problems.append('the home screen or the sheet went away')
+        if a['playing'] is not False:
+            problems.append('Space did not pause the video (%s)' % a['playing'])
+        if b['playing'] is not True:
+            problems.append('Space again did not play it (%s)' % b['playing'])
+        if problems:
+            raise StepFailed('; '.join(problems) + ' ' + json.dumps(result))
+        self.press('--title', 'Discard', '--role', 'AXButton')
+        time.sleep(1.5)
+        result['discard_closed_the_sheet'] = not self.button('Record again')
         return result
 
 
