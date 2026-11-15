@@ -6,7 +6,7 @@
 //! ([`parse`]), says which openings a user's facts have earned and on what day ([`earned_at`]),
 //! and names the key each is recorded under in the launch record (`launch.rs` `rewards_fired`,
 //! "the log the reward logic will read"). The rule that picks the opening for a start lives with
-//! the other splash rules, [`crate::launch::pick_splash`].
+//! the other splash rules, `pick_splash` in the launch module.
 //!
 //! THE NUMBERS ARE IN THE DATA, not here (CEO, 2026-11-14, on the thresholds: "adjust later"):
 //! a threshold is changed in `openings-catalog.js` and nothing in this file moves.
@@ -203,23 +203,52 @@ pub fn earned_at(earn: Earn, facts: &Facts) -> Option<u64> {
 
 const MS_PER_DAY: u64 = 86_400_000;
 
+// This module's own copy of the two civil-date conversions (Howard Hinnant's), as `journal.rs`
+// and `home_repos.rs` carry theirs: the launch record's module is read by nothing else in this
+// crate (`tests/launch_no_outbound_tests.rs`), and a date needs none of it.
+
+/// Days since 1970-01-01 for a civil (proleptic Gregorian) date.
+fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = if y >= 0 { y } else { y - 399 }.div_euclid(400);
+    let yoe = y - era * 400;
+    let mp = ((m as i64) + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + d as i64 - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
+}
+
+/// The civil date for a count of days since 1970-01-01.
+fn civil_from_days(z: i64) -> (i64, u32, u32) {
+    let z = z + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 }.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    (if m <= 2 { y + 1 } else { y }, m, d)
+}
+
 /// The same time of day, `months` calendar months later (UTC); a day the later month does not
 /// have (the 31st) is that month's last.
 fn months_after(at_ms: u64, months: u32) -> u64 {
     let days = (at_ms / MS_PER_DAY) as i64;
-    let (y, m, d) = crate::launch::civil_from_days(days);
+    let (y, m, d) = civil_from_days(days);
     let total = (m as i64 - 1) + months as i64;
     let (y2, m2) = (y + total.div_euclid(12), (total.rem_euclid(12) + 1) as u32);
     let next_month = if m2 == 12 { (y2 + 1, 1) } else { (y2, m2 + 1) };
-    let last = (crate::launch::days_from_civil(next_month.0, next_month.1, 1) - crate::launch::days_from_civil(y2, m2, 1)) as u32;
-    let day = crate::launch::days_from_civil(y2, m2, d.min(last));
+    let last = (days_from_civil(next_month.0, next_month.1, 1) - days_from_civil(y2, m2, 1)) as u32;
+    let day = days_from_civil(y2, m2, d.min(last));
     (day.max(0) as u64) * MS_PER_DAY + at_ms % MS_PER_DAY
 }
 
 /// The calendar day an instant falls on where the user is, as `YYYY-MM-DD` (the page's
 /// `longDate` reads it). `utc_offset_minutes` is positive east.
 pub fn date(at_ms: u64, utc_offset_minutes: i32) -> String {
-    let (y, m, d) = crate::launch::civil_from_days(local_day(at_ms, utc_offset_minutes));
+    let (y, m, d) = civil_from_days(local_day(at_ms, utc_offset_minutes));
     format!("{y:04}-{m:02}-{d:02}")
 }
 
@@ -227,6 +256,27 @@ pub fn date(at_ms: u64, utc_offset_minutes: i32) -> String {
 /// day" counts by.
 pub fn local_day(at_ms: u64, utc_offset_minutes: i32) -> i64 {
     (at_ms as i64 + i64::from(utc_offset_minutes) * 60_000).div_euclid(MS_PER_DAY as i64)
+}
+
+/// "ONE OF MINE, A DIFFERENT ONE EACH DAY": which of his openings `day` opens on. `mine` is
+/// his openings in the catalog's order; `last` is the one the last such day opened on, and
+/// that day.
+///
+/// The same day opens on the same one. ANY LATER DAY OPENS ON THE ONE AFTER IT, round again
+/// after the last, however many days went by: so the quit, which draws the next start's
+/// opening ahead, knows the next day's as well as today's (after a night, a weekend, a
+/// month), and a start on a new day plays as fast as any other. Before the first one, or when
+/// the last one is no longer his, the calendar picks: the day's number among how many he has.
+pub fn daily<'a>(mine: &'a [String], day: i64, last: Option<(i64, &str)>) -> Option<&'a str> {
+    if mine.is_empty() {
+        return None;
+    }
+    let at = match last.and_then(|(on, id)| Some((on, mine.iter().position(|m| m == id)?))) {
+        Some((on, at)) if on == day => at,
+        Some((_, at)) => (at + 1) % mine.len(),
+        None => day.rem_euclid(mine.len() as i64) as usize,
+    };
+    Some(mine[at].as_str())
 }
 
 /// The ids of the openings a launch record says are the user's, in the catalog's own order.
@@ -332,7 +382,7 @@ mod tests {
         let eve = Facts { now_ms: months_after(FIRST, 3) - 1, installed_at: Some(FIRST), ..Facts::default() };
         assert_eq!(earned_at(Earn::Months(3), &eve), None);
         // A first start on the 31st: the month that has no 31st gives its last day.
-        let jan31 = (crate::launch::days_from_civil(2026, 1, 31) as u64) * DAY;
+        let jan31 = (days_from_civil(2026, 1, 31) as u64) * DAY;
         assert_eq!(date(months_after(jan31, 1), 0), "2026-02-28");
         assert_eq!(date(months_after(jan31, 3), 0), "2026-04-30");
         assert_eq!(date(months_after(jan31, 12), 0), "2027-01-31");
@@ -341,7 +391,7 @@ mod tests {
     #[test]
     fn the_day_is_the_users_own() {
         // 2026-11-14 23:30 in US Pacific (UTC-8) is already the 15th in UTC.
-        let at = (crate::launch::days_from_civil(2026, 11, 15) as u64) * DAY + 7 * 3_600_000 + 1_800_000;
+        let at = (days_from_civil(2026, 11, 15) as u64) * DAY + 7 * 3_600_000 + 1_800_000;
         assert_eq!(date(at, 0), "2026-11-15");
         assert_eq!(date(at, -480), "2026-11-14");
         assert_eq!(local_day(at, 0) - local_day(at, -480), 1);

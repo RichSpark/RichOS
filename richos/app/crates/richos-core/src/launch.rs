@@ -276,7 +276,7 @@ fn week_start_index(day_index: i64) -> i64 {
 }
 
 /// Days since 1970-01-01 for a civil (proleptic Gregorian) date.
-pub(crate) fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
+fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
     let y = if m <= 2 { y - 1 } else { y };
     let era = if y >= 0 { y } else { y - 399 }.div_euclid(400);
     let yoe = y - era * 400;
@@ -287,7 +287,7 @@ pub(crate) fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
 }
 
 /// The civil date for a count of days since 1970-01-01.
-pub(crate) fn civil_from_days(z: i64) -> (i64, u32, u32) {
+fn civil_from_days(z: i64) -> (i64, u32, u32) {
     let z = z + 719_468;
     let era = if z >= 0 { z } else { z - 146_096 }.div_euclid(146_097);
     let doe = z - era * 146_097;
@@ -322,6 +322,9 @@ pub struct SplashFacts {
     /// The local day the pick is for, as days since 1970-01-01 (`openings::local_day`); what
     /// "a different one each day" counts by. `None` when nobody could say.
     pub day: Option<i64>,
+    /// "A different one each day": the opening the last such day opened on, and that day
+    /// (`ConfigStore::opening_daily`). `None` before the first one.
+    pub daily: Option<(i64, String)>,
 }
 
 /// THE ONE PLACE THE RULES LIVE. `catalog` is the splash ids in the library's own order
@@ -340,8 +343,9 @@ pub struct SplashFacts {
 /// BEFORE THAT RULE, THE USER'S OWN PICK (the CEO, 2026-11-14, on round 74's "Your openings"
 /// gallery with "Make it my opening": "yes"; on "One of mine, a different one each day" as a
 /// second way to start: "yes"). An opening he picked and has earned starts RichOS from then
-/// on. With `"daily"`, the calendar picks among the openings he has, in their own order:
-/// the same day always opens on the same one, and it is never a dice roll. An opening is the
+/// on. With `"daily"`, the openings he has take turns in their own order, one a day
+/// (`openings::daily`): the same day always opens on the same one, a later day on the one
+/// after it, and it is never a dice roll. An opening is the
 /// catalog entry `opening/<id>`; a pick that is not his, or not in the catalog, is no pick and
 /// the rule above stands, so nothing changes for a user who never opens the gallery.
 pub fn pick_splash<'a>(catalog: &'a [String], facts: &SplashFacts) -> Option<&'a str> {
@@ -351,11 +355,9 @@ pub fn pick_splash<'a>(catalog: &'a [String], facts: &SplashFacts) -> Option<&'a
     };
     let own = match facts.pick.as_deref() {
         Some(crate::openings::DAILY) => {
-            let mine: Vec<&str> = facts.earned.iter().filter_map(|id| entry(id)).collect();
-            match (facts.day, mine.len()) {
-                (Some(day), n) if n > 0 => Some(mine[day.rem_euclid(n as i64) as usize]),
-                _ => None,
-            }
+            let mine: Vec<String> = facts.earned.iter().filter(|id| entry(id).is_some()).cloned().collect();
+            let last = facts.daily.as_ref().map(|(day, id)| (*day, id.as_str()));
+            facts.day.and_then(|day| crate::openings::daily(&mine, day, last)).and_then(entry)
         }
         Some(id) if facts.earned.iter().any(|e| e == id) => entry(id),
         _ => None,
@@ -822,7 +824,7 @@ mod splash_rule_tests {
     fn the_opening_he_picked_starts_richos_and_only_if_it_is_his() {
         let catalog = with_openings();
         let earned = mine(&["ruled-standard", "midnight-suede", "power-100"]);
-        let facts = |pick: Option<&str>, start| SplashFacts { start, pick: pick.map(String::from), earned: earned.clone(), day: Some(20_000) };
+        let facts = |pick: Option<&str>, start| SplashFacts { start, pick: pick.map(String::from), earned: earned.clone(), day: Some(20_000), daily: None };
         // No pick: the rule of 2026-09-01, untouched by the openings being in the catalog.
         assert_eq!(pick_splash(&catalog, &facts(None, Some(1))), Some("s1"));
         assert_eq!(pick_splash(&catalog, &facts(None, Some(2))), Some("s2"));
@@ -843,7 +845,7 @@ mod splash_rule_tests {
         let catalog = with_openings();
         let earned = mine(&["ruled-standard", "midnight-suede", "power-100"]);
         let on = |day| {
-            pick_splash(&catalog, &SplashFacts { start: Some(9), pick: Some("daily".into()), earned: earned.clone(), day })
+            pick_splash(&catalog, &SplashFacts { start: Some(9), pick: Some("daily".into()), earned: earned.clone(), day, daily: None })
         };
         // Three days in a row are his three openings in their own order, then round again.
         let run: Vec<_> = (30_000..30_006).map(|d| on(Some(d)).unwrap()).collect();
@@ -862,8 +864,36 @@ mod splash_rule_tests {
         }
         // A day nobody could name, or nothing earned: the rule stands.
         assert_eq!(on(None), Some("s1"));
-        let nothing = SplashFacts { start: Some(2), pick: Some("daily".into()), earned: Vec::new(), day: Some(30_000) };
+        let nothing = SplashFacts { start: Some(2), pick: Some("daily".into()), earned: Vec::new(), day: Some(30_000), daily: None };
         assert_eq!(pick_splash(&catalog, &nothing), Some("s2"));
+    }
+
+    #[test]
+    fn a_later_day_opens_on_the_one_after_the_last_however_many_days_went_by() {
+        // The quit draws the next day's opening ahead, so it has to know which one that is
+        // whenever the next day comes: after a night, a weekend or a month.
+        let catalog = with_openings();
+        let earned = mine(&["ruled-standard", "midnight-suede", "power-100"]);
+        let on = |day, last: Option<(i64, &str)>| {
+            pick_splash(
+                &catalog,
+                &SplashFacts {
+                    start: Some(9),
+                    pick: Some("daily".into()),
+                    earned: earned.clone(),
+                    day: Some(day),
+                    daily: last.map(|(d, id)| (d, id.to_string())),
+                },
+            )
+        };
+        let last = Some((30_000, "midnight-suede"));
+        assert_eq!(on(30_000, last), Some("opening/midnight-suede"), "the same day, the same one");
+        for later in [30_001, 30_003, 30_031] {
+            assert_eq!(on(later, last), Some("opening/power-100"), "day {later}");
+        }
+        assert_eq!(on(30_001, Some((30_000, "power-100"))), Some("opening/ruled-standard"), "round again after the last");
+        // The last one is no longer his (or was never in the catalog): the calendar picks.
+        assert_eq!(on(30_001, Some((30_000, "material-leather"))), on(30_001, None));
     }
 
     #[test]

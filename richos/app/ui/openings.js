@@ -83,6 +83,8 @@
       sound: r.sound === true,
       company: typeof r.company === "string" && r.company ? r.company : null,
       day: typeof r.day === "number" && isFinite(r.day) ? Math.floor(r.day) : null,
+      // With "a different one each day": the one the shell says today opens on.
+      today: typeof r.today === "string" && r.today ? r.today : null,
       // The shell is still counting his spend for the first time (the gallery asks again).
       counting: r.counting === true
     };
@@ -166,8 +168,12 @@
   function current() {
     var stored = record.pick;
     if (stored === DAILY) {
-      // A different one of his each day. The calendar picks, never a dice roll: the same
-      // day always opens on the same screen, and only on one he has.
+      // A different one of his each day, never a dice roll: the same day always opens on the
+      // same screen, and only on one he has. The shell says which (`openings::daily`: his
+      // openings take turns, a later day on the one after the last); where it said nothing (a
+      // plain browser), the calendar picks, which is also the shell's answer before the first.
+      var told = record.today ? byId(record.today) : null;
+      if (told && earnedOn(told)) return told;
       var mine = earnedList();
       if (!mine.length || record.day === null) return null;
       return mine[((record.day % mine.length) + mine.length) % mine.length];

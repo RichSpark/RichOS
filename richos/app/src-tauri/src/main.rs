@@ -4841,15 +4841,27 @@ fn splash_at_quit(app: &AppHandle) -> bool {
     // As already counted: a quit starts no read of the history and waits for none. Read before
     // the launch record is held, so no lock is taken inside another here.
     let spend = state.quota.spend_all_time_counted();
-    let (facts, page) = {
+    let (facts, page, today) = {
         let mut launch = state.launch.lock().unwrap_or_else(|p| p.into_inner());
         openings::sync(&mut launch, spend, &version, now);
         (
             openings::splash_facts(&launch, &settings, launch.next_start_ordinal(), now),
             openings::page_record(&launch, &settings, &version, now),
+            openings::today(&launch, &settings, now),
         )
     };
     let Some(next) = splash_pick::next(&facts, |id| openings::shown_facts(id, &settings, &version)) else { return false };
+    // "ONE OF MINE, A DIFFERENT ONE EACH DAY": the quit cannot know which day the next start is
+    // on, so it saves today's opening and the one any later day opens on (`openings::daily`), and
+    // the first start of a new day plays its pictures like every other start. Today's is written
+    // down first, as the one the later day follows.
+    let later = today.as_ref().and_then(|today| {
+        if let Err(e) = state.config.lock().unwrap_or_else(|p| p.into_inner()).set_opening_daily(today.0, &today.1) {
+            eprintln!("[richos] splash at quit: today's opening could not be written down ({e})");
+        }
+        splash_pick::next(&openings::later_day_facts(&facts, today), |id| openings::shown_facts(id, &settings, &version))
+            .filter(|later| later.id != next.id)
+    });
     let Some(config) = app.config().app.windows.first().cloned() else { return false };
     let displays = read_displays(app);
     let saved_geometry = window_geometry::GeometryStore::new(state.data_dir.join("window.json")).load();
@@ -4874,18 +4886,21 @@ fn splash_at_quit(app: &AppHandle) -> bool {
             }
         }
     }
-    let saved = splash_pick::read_saved(&state.data_dir);
-    let nonce = splash_pick::manifest_nonce(&state.data_dir);
-    match splash_pick::at_quit(saved.as_ref(), nonce.as_deref(), next, &target, splash_opening::nonce()) {
-        splash_pick::AtQuit::Keep => {
-            eprintln!("[richos] splash at quit: the next start's splash and its opening are already saved; nothing drawn");
-            false
-        }
-        splash_pick::AtQuit::Draw(drawn) => {
+    let mut drawings = Vec::new();
+    for (slot, picked) in [(splash_pick::Slot::Next, Some(next)), (splash_pick::Slot::Later, later)] {
+        let Some(picked) = picked else { continue };
+        let saved = splash_pick::read_slot(&state.data_dir, slot);
+        let nonce = splash_pick::manifest_nonce_in(&state.data_dir, slot);
+        if let splash_pick::AtQuit::Draw(drawn) = splash_pick::at_quit(saved.as_ref(), nonce.as_deref(), picked, &target, splash_opening::nonce()) {
             let (saved, made) = *drawn;
-            splash_opening::draw_before_quit(app, state.data_dir.clone(), saved, made, placement.position, page)
+            drawings.push(splash_opening::Drawing { slot, saved, made });
         }
     }
+    if drawings.is_empty() {
+        eprintln!("[richos] splash at quit: the next start's splash and its opening are already saved; nothing drawn");
+        return false;
+    }
+    splash_opening::draw_before_quit(app, state.data_dir.clone(), drawings, placement.position, page)
 }
 
 #[richos_command::command]
@@ -10618,6 +10633,16 @@ fn launch_state(state: State<AppState>, utc_offset_minutes: i32) -> LaunchStateV
 /// (`splash.js` has three such paths, and all three leave `state.shown` false).
 #[richos_command::command]
 fn launch_note_splash_shown(state: State<AppState>, id: String) -> Result<(), String> {
+    // "A DIFFERENT ONE EACH DAY": the day's opening has been shown, so it is written down as the
+    // one a later day follows (`openings::daily`). Read first, then written: the settings and the
+    // launch record are never held together.
+    let settings = openings::Settings::of(&state.config.lock().unwrap_or_else(|p| p.into_inner()));
+    let today = openings::today(&state.launch.lock().unwrap_or_else(|p| p.into_inner()), &settings, richos_core::util::now_millis());
+    if let Some((day, opening)) = today {
+        if let Err(e) = state.config.lock().unwrap_or_else(|p| p.into_inner()).set_opening_daily(day, &opening) {
+            eprintln!("[richos] openings: today's opening could not be written down ({e})");
+        }
+    }
     state.launch.lock().unwrap().note_splash_shown(&id).map_err(|e| e.to_string())
 }
 

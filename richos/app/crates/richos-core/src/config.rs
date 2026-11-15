@@ -429,6 +429,10 @@ struct StoredConfig {
     /// one each day), or absent (the app's own rule: #1, then #2, then #1).
     #[serde(default)]
     opening_pick: Option<String>,
+    /// "A different one each day": the day (days since 1970-01-01, where he is) the last such
+    /// start was on, and the opening it showed. What a later day's opening follows.
+    #[serde(default)]
+    opening_daily: Option<(i64, String)>,
     /// His company's name as one line on the opening, or absent for none.
     #[serde(default)]
     opening_company: Option<String>,
@@ -598,6 +602,7 @@ impl Default for StoredConfig {
             assertiveness: Assertiveness::default(),
             opening_sound: opening_sound_default(),
             opening_pick: None,
+            opening_daily: None,
             opening_company: None,
             splash_first_shown_at: None,
             techy_default: false,
@@ -1006,6 +1011,21 @@ impl ConfigStore {
             return Ok(());
         }
         self.config.opening_pick = pick;
+        self.persist()
+    }
+
+    /// "A different one each day": the last such day and the opening it showed
+    /// (`openings::daily` reads it).
+    pub fn opening_daily(&self) -> Option<(i64, &str)> {
+        self.config.opening_daily.as_ref().map(|(day, id)| (*day, id.as_str()))
+    }
+
+    /// Written when a start shows the day's opening and at the quit; nothing when unchanged.
+    pub fn set_opening_daily(&mut self, day: i64, id: &str) -> io::Result<()> {
+        if self.opening_daily() == Some((day, id)) {
+            return Ok(());
+        }
+        self.config.opening_daily = Some((day, id.to_string()));
         self.persist()
     }
 
@@ -2230,6 +2250,9 @@ mod tests {
         assert_eq!(reopened.opening_company(), Some("Acme Robotics, a company with a "), "one line, 32 characters");
         reopened.set_opening_pick(Some("daily")).unwrap();
         assert_eq!(reopened.opening_pick(), Some("daily"));
+        assert_eq!(reopened.opening_daily(), None);
+        reopened.set_opening_daily(20_772, "midnight-suede").unwrap();
+        assert_eq!(ConfigStore::open(&path).unwrap().opening_daily(), Some((20_772, "midnight-suede")));
         reopened.set_opening_pick(None).unwrap();
         reopened.set_opening_company("   ").unwrap();
         reopened.set_opening_sound(true).unwrap();

@@ -843,6 +843,11 @@ async function main() {
       await page.locator("#bug-btn").isVisible(),
       "...and the floor is intact: 'the very least that settings button always provides is a quick access to Bust a bug'"
     );
+    // THE PICTURE STANDS AT ONE MOMENT. The space key holds the screen where this machine
+    // happened to be, and the screen's lamp drifts with the splash's clock (round 74), so two
+    // runs held it 10,030 pixels apart (2 levels at most, all in the lamp). `holdAt` puts the
+    // held screen at the end of its own time, as the splash suite's pictures stand.
+    await page.evaluate(() => window.RichSplash.holdAt(window.RichSplash.state.seconds * 1000));
     const s = await shot(page, SHOTS + "/10-1-start-screen-always-dark", { fullPage: false });
     await page.close();
     return "absent while it ran, present once space held it, 0 theme options, Bust a bug reachable — " +

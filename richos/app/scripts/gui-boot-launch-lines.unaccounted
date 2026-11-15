@@ -556,6 +556,9 @@
 [richos] splash at quit: the Dock icon was clicked while the opening was drawn; the quit is called off
 [richos] splash at quit: the next start shows {} (start {}); its opening was drawn: {}; {} ms
 [richos] splash at quit: the next start shows {}; no opening was saved ({}), so it shows the splash's ground until the page draws it; {} ms
+[richos] splash at quit: a start on a later day shows {}; its opening was drawn: {}; {} ms
+[richos] splash at quit: a start on a later day shows {}; no opening was saved ({}), so it shows the splash's ground until the page draws it; {} ms
+[richos] splash at quit: today's opening could not be written down ({})
 [richos] splash at quit: the next start's splash and its opening are already saved; nothing drawn
 [richos] splash at quit: the pick could not be saved ({}); the next start applies the rules itself
 [richos] splash: a reader of the opening's pictures could not start ({})
@@ -569,3 +572,4 @@
 [richos] update at quit: {} put in place: {} -> {}
 [richos] openings: the image of {} was not saved ({})
 [richos] openings: what was earned could not be saved ({})
+[richos] openings: today's opening could not be written down ({})

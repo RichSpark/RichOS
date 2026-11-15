@@ -412,6 +412,16 @@ async function main() {
     }
     const at = (d) => EARNED[d % EARNED.length];
     assertEqual(seen.join(" "), [at(20000), at(20001), at(20002), at(20000), at(20001)].join(" "), "which opening each day starts with");
+    // THE SHELL'S WORD WINS: his openings take turns, a later day on the one after the last
+    // (so a Monday follows Friday's), and the shell says which one that is. One that is not his
+    // is not taken at its word.
+    const turn = at(20003);
+    const told = await open(browser, { record: { pick: "daily", day: 20000, today: turn } });
+    assertEqual(await told.evaluate(() => document.getElementById("splash").dataset.opening), turn, "the opening the shell said today opens on");
+    await told.__ctx.close();
+    const wrong = await open(browser, { record: { pick: "daily", day: 20000, today: "power-1m" } });
+    assertEqual(await wrong.evaluate(() => document.getElementById("splash").dataset.opening), at(20000), "told one that is not his");
+    await wrong.__ctx.close();
     assert(new Set(seen.slice(0, 3)).size === 3, "three days in a row were not three openings");
     // Every day of a long run is one he has.
     const all = await (async () => {

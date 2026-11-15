@@ -40,12 +40,14 @@ pub fn local_offset_minutes(_now_ms: u64) -> i32 {
     0
 }
 
-/// His three settings, read off the settings store by whoever holds it.
+/// His settings for the opening, read off the settings store by whoever holds it.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Settings {
     pub pick: Option<String>,
     pub sound: bool,
     pub company: Option<String>,
+    /// "A different one each day": the last such day and the opening it showed.
+    pub daily: Option<(i64, String)>,
 }
 
 impl Settings {
@@ -54,6 +56,7 @@ impl Settings {
             pick: config.opening_pick().map(str::to_string),
             sound: config.opening_sound(),
             company: config.opening_company().map(str::to_string),
+            daily: config.opening_daily().map(|(day, id)| (day, id.to_string())),
         }
     }
 }
@@ -103,7 +106,25 @@ pub fn splash_facts(launch: &LaunchStore, settings: &Settings, start: Option<u64
         pick: settings.pick.clone(),
         earned: openings::earned_ids(catalog(), launch.rewards_fired()),
         day: Some(openings::local_day(now_ms, local_offset_minutes(now_ms))),
+        daily: settings.daily.clone(),
     }
+}
+
+/// "A DIFFERENT ONE EACH DAY", TODAY'S: the day where he is and the opening it opens on, or
+/// `None` when that is not how he starts or nothing is his (`openings::daily`).
+pub fn today(launch: &LaunchStore, settings: &Settings, now_ms: u64) -> Option<(i64, String)> {
+    if settings.pick.as_deref() != Some(openings::DAILY) {
+        return None;
+    }
+    let day = openings::local_day(now_ms, local_offset_minutes(now_ms));
+    let mine = openings::earned_ids(catalog(), launch.rewards_fired());
+    let last = settings.daily.as_ref().map(|(on, id)| (*on, id.as_str()));
+    openings::daily(&mine, day, last).map(|id| (day, id.to_string()))
+}
+
+/// The facts for THE NEXT DAY'S pick, from today's: a day on, with today's opening as the last.
+pub fn later_day_facts(facts: &SplashFacts, today: &(i64, String)) -> SplashFacts {
+    SplashFacts { day: Some(today.0 + 1), daily: Some(today.clone()), ..facts.clone() }
 }
 
 /// THE FACTS A PICKED SPLASH SHOWS (`splash_pick::Saved::facts`): what is drawn on it that is
@@ -143,6 +164,8 @@ pub fn record(launch: &LaunchStore, settings: &Settings, version: &str, now_ms: 
         "sound": settings.sound,
         "company": settings.company,
         "day": openings::local_day(now_ms, offset),
+        // With "a different one each day", the one today opens on (the gallery marks it).
+        "today": today(launch, settings, now_ms).map(|(_, id)| id),
     })
 }
 
@@ -245,7 +268,7 @@ mod tests {
     fn the_pick_reads_his_setting_what_he_has_and_the_day() {
         let (dir, mut launch) = store("facts", FIRST);
         sync(&mut launch, Some(150.0), "1.4.0", FIRST);
-        let settings = Settings { pick: Some("power-100".into()), sound: true, company: Some("Acme".into()) };
+        let settings = Settings { pick: Some("power-100".into()), sound: true, company: Some("Acme".into()), daily: None };
         let facts = splash_facts(&launch, &settings, Some(7), FIRST);
         assert_eq!(facts.start, Some(7));
         assert_eq!(facts.pick.as_deref(), Some("power-100"));
@@ -255,6 +278,39 @@ mod tests {
         assert_eq!(shown_facts("opening/power-100", &settings, "1.4.0").into_iter().collect::<Vec<_>>(), [("company".to_string(), "Acme".to_string())]);
         assert_eq!(shown_facts("opening/edition-update", &settings, "1.4.0").get("version").map(String::as_str), Some("1.4.0"));
         assert!(shown_facts("round-11/v1", &Settings::default(), "1.4.0").is_empty());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_different_one_each_day_says_todays_and_the_next_days_for_the_quit_to_draw_both() {
+        let (dir, mut launch) = store("daily", FIRST);
+        sync(&mut launch, Some(150.0), "1.4.0", FIRST);
+        let day = openings::local_day(FIRST, local_offset_minutes(FIRST));
+        let his = ["ruled-standard", "midnight-suede", "power-100"];
+        let daily = |last: Option<(i64, &str)>| Settings {
+            pick: Some(openings::DAILY.into()),
+            sound: true,
+            company: None,
+            daily: last.map(|(on, id)| (on, id.to_string())),
+        };
+        // Before the first such day the calendar picks; from then on they take turns.
+        let first = today(&launch, &daily(None), FIRST).unwrap();
+        assert_eq!(first, (day, his[day.rem_euclid(3) as usize].to_string()));
+        assert_eq!(today(&launch, &daily(Some((day, "midnight-suede"))), FIRST), Some((day, "midnight-suede".to_string())));
+        // Left on Friday, back on Monday: the one after Friday's.
+        assert_eq!(today(&launch, &daily(Some((day - 3, "midnight-suede"))), FIRST), Some((day, "power-100".to_string())));
+        // What the quit draws beside today's: the pick for any later day.
+        let settings = daily(Some((day, "midnight-suede")));
+        let facts = splash_facts(&launch, &settings, Some(7), FIRST);
+        let ids: Vec<String> = his.iter().map(|id| openings::key(id)).collect();
+        assert_eq!(richos_core::launch::pick_splash(&ids, &facts), Some("opening/midnight-suede"));
+        let later = later_day_facts(&facts, &(day, "midnight-suede".to_string()));
+        assert_eq!(richos_core::launch::pick_splash(&ids, &later), Some("opening/power-100"));
+        // The page is told today's, so the gallery marks the one the start showed.
+        assert_eq!(record(&launch, &settings, "1.4.0", FIRST)["today"], "midnight-suede");
+        // Not his way of starting: nothing to say, nothing to draw ahead.
+        assert_eq!(today(&launch, &Settings { pick: Some("power-100".into()), ..settings.clone() }, FIRST), None);
+        assert!(record(&launch, &Settings::default(), "1.4.0", FIRST)["today"].is_null());
         std::fs::remove_dir_all(&dir).ok();
     }
 }

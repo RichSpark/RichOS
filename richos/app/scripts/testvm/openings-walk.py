@@ -77,9 +77,10 @@ NOT_HIS = ['Gold Leaf', 'Guilloch', 'First Light', 'The First Job', 'Half a Day'
 
 
 def daily_opening(seconds, zone, his):
-    """Today's opening by the app's rule (`launch::pick_splash`): the guest's LOCAL day number,
-    modulo how many openings are his, in the catalog's order. `seconds` is the guest's Unix
-    time, `zone` its `date +%z` (+0100, -0800). Returns (day, opening)."""
+    """The first day's opening by the app's rule (`openings::daily`, before any such day): the
+    guest's LOCAL day number, modulo how many openings are his, in the catalog's order. A later
+    day opens on the one after the last. `seconds` is the guest's Unix time, `zone` its
+    `date +%z` (+0100, -0800). Returns (day, opening)."""
     offset = (1 if zone[0] == '+' else -1) * (int(zone[1:3]) * 3600 + int(zone[3:5]) * 60)
     day = (seconds + offset) // DAY
     return day, his[day % len(his)]
@@ -140,7 +141,9 @@ class Walk(standard.Walk):
             time.sleep(0.2)
         else:
             raise StepFailed('the app (pid ' + pid + ') was still running 20 s after its own Quit')
-        return (self.log_lines(r'splash at quit:') or ['(no splash-at-quit line)'])[-1]
+        # Every line of this quit (this instance's log): a user of "a different one each day" gets
+        # two, the next start's opening and a later day's.
+        return ' | '.join(self.log_lines(r'splash at quit:') or ['(no splash-at-quit line)'])
 
     def start(self):
         """Start the app again as LaunchServices starts it, with the same fixture home."""
@@ -294,7 +297,7 @@ class Walk(standard.Walk):
         frame = self.shot('daily')
         day, today = self.expected_daily()
         said = self.quit_from_menu()
-        if 'opening/' + today not in said:
+        if 'the next start shows opening/' + today not in said:
             raise StepFailed('day %d: the quit picked something other than %s: %s' % (day, today, said))
         line = self.start()
         if 'opening/' + today + ' (picked at the last quit)' not in line:
@@ -304,13 +307,18 @@ class Walk(standard.Walk):
         self.to_home()
         self.quit_from_menu()
         guest(self.vm, 'sudo systemsetup -setusingnetworktime off >/dev/null 2>&1; sudo date "$(date -v+1d +%m%d%H%M%Y.%S)" >/dev/null', 60)
-        day2, tomorrow = self.expected_daily()
-        if day2 != day + 1 or tomorrow == today:
+        day2, _ = self.expected_daily()
+        tomorrow = HIS[(HIS.index(today) + 1) % len(HIS)]
+        if day2 != day + 1:
             raise StepFailed('the guest\'s clock did not move a day on: day %d then %d' % (day, day2))
+        if 'a start on a later day shows opening/' + tomorrow not in said or 'its opening was drawn' not in said.split('later day')[1]:
+            raise StepFailed('the quit on day %d did not draw the next day\'s opening (%s): %s' % (day, tomorrow, said))
         line2 = self.start()
         frame2 = self.shot('daily-next-day')
-        if 'opening/' + tomorrow not in line2 or 'another day' not in line2:
-            raise StepFailed('day %d: the start did not ask the rules again and show %s: %s' % (day2, tomorrow, line2))
+        # THE FIRST START OF A NEW DAY PLAYS ITS PICTURES like any other: the quit the day before
+        # drew this day's opening beside its own.
+        if 'opening/' + tomorrow + ' (picked at the last quit)' not in line2 or 'its opening used' not in line2:
+            raise StepFailed('day %d: the start did not play %s from the pictures drawn the day before: %s' % (day2, tomorrow, line2))
         self.to_home()
         said3 = self.quit_from_menu()
         line3 = self.start()
