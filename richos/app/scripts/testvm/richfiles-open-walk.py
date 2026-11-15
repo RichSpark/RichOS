@@ -77,9 +77,15 @@ TIMED = ('first-open', 'again', 'after-restart', 'after-purge', 'typed-open', 'e
 # (src-tauri/src/richfiles_pane.rs); a build from before that writes none.
 READY = re.compile(r'RichFiles ready before its first click: library (\d+) ms on a background thread, '
                    r'pane (\d+) ms on the main thread(?:, asked (\d+) ms and ready (\d+) ms after the process started)?')
-# RichFiles' own words, which no other screen of the app shows: its sidebar's first row and the
-# Details view's date column (tools/richfiles/Sources/RichFiles/BrowserView.swift).
-WORDS = r'This Mac|Modified'
+# RichFiles' own words, which no other screen of the app shows: its sidebar's headings and first
+# row, its Workspaces button and the Details view's date column
+# (tools/richfiles/Sources/RichFiles/BrowserView.swift). Several, and "This Mac" with or without its
+# space: the reader took "ThisMac" off seven frames in a row that plainly showed RichFiles, and the
+# walk dated RichFiles 0.4 s late by it.
+WORDS = r'This ?Mac|Quick Access|Pin Current Folder|Workspaces|Modified'
+# How the frames are read: as sparse text. Read as a page, the reader finds nothing at all on a
+# screen that holds one short line (the loading line), and joins words on a busy one.
+SPARSE = 11
 # The loading line a click shows when RichFiles is not ready yet (ui/index.html, #richfiles-loading).
 LOADING = r'Opening RichFiles'
 
@@ -306,7 +312,7 @@ def main():
             # read in order, stopping at the first that shows RichFiles.
             readings, answer, why = {}, None, 'no frame was complete before the click'
             for frame in ordered[max(0, len(before) - 1):]:
-                readings[frame['number']] = qaocr.text(str(local / ('%04d.png' % frame['number'])))
+                readings[frame['number']] = qaocr.text(str(local / ('%04d.png' % frame['number'])), psm=SPARSE)
                 try:
                     answer = visible_bounds(record, readings)
                     break

@@ -52,6 +52,14 @@ got = walk.visible_bounds(record, readings)
 check('a frame begun before the click was posted gives a low of 0, not a negative time',
       got['low_ms'] == 0.0 and got['high_ms'] == 60.0 and got['first_present_frame'] == 10, got)
 
+# The reader sometimes joins the two words; RichFiles is on screen all the same.
+readings = {n: ('a ThisMac = Downloads' if n >= 15 else chat) for n in range(40)}
+check('"ThisMac" read without its space still counts as RichFiles on screen',
+      walk.visible_bounds(record, readings)['first_present_frame'] == 15)
+readings = {n: ('Workspaces\nQuick Access\n+ Pin Current Folder' if n >= 15 else chat) for n in range(40)}
+check('RichFiles\' other words count when "This Mac" was not read at all',
+      walk.visible_bounds(record, readings)['first_present_frame'] == 15)
+
 # The Details view's own column is RichFiles' words too.
 readings = {n: ('Name  Size  Kind  Modified' if n >= 15 else chat) for n in range(40)}
 check('the Details view\'s Modified column counts as RichFiles on screen',
