@@ -96,10 +96,53 @@ plain = run_walk.boot_argv('vm1', 'b.zip', 'home', 'e.tar.gz', False)
 check('a walk that does not pair a phone boots with --no-tailnet', '--no-tailnet' in plain, plain)
 phone = run_walk.boot_argv('vm1', 'b.zip', 'home', 'e.tar.gz', True)
 check('--tailnet keeps the join for a walk that does pair a phone', '--no-tailnet' not in phone, phone)
-check('a walk boots with the guest sound device by default (no --no-audio)', '--no-audio' not in plain, plain)
-quiet = run_walk.boot_argv('vm1', None, 'home', '', False, audio=False)
-check('audio=False asks run.sh for --no-audio: a call walk never reaches the host microphone or speakers',
-      '--no-audio' in quiet and '--no-app' in quiet, quiet)
+# A GUEST HAS NO SOUND DEVICE UNLESS ITS CALLER ASKS FOR ONE BY NAME (the CEO, 2026-11-15: "I've
+# heard the start sound well over 40 times now"): run.sh's default is no device, so a default boot
+# asks for none, and --audio is the only way to one.
+check('a walk boots with no guest sound device by default (no --audio)', '--audio' not in plain, plain)
+loud = run_walk.boot_argv('vm1', None, 'home', '', False, audio=True)
+check('audio=True, and only that, asks run.sh for --audio (which mutes it before anything launches)',
+      '--audio' in loud and '--no-app' in loud, loud)
+
+
+def booted_with(*extra, command=('true',)):
+    """The run.sh command line main() would boot with: the slot is granted, and the boot itself
+    is the stub's refusal, so nothing runs."""
+    seen = []
+
+    @contextlib.contextmanager
+    def granted(**kw):
+        yield Path('/nonexistent/slot')
+
+    def popen(argv, **kw):
+        seen.append(argv)
+        raise BlockingIOError('stub: the boot is not run')
+    saved = (run_walk.guest_slot, run_walk.subprocess.Popen)
+    run_walk.guest_slot, run_walk.subprocess.Popen = granted, popen
+    try:
+        outcome, said = main_with(*extra, command=command)
+    finally:
+        run_walk.guest_slot, run_walk.subprocess.Popen = saved
+    return outcome, said, (seen[0] if seen else None)
+
+
+_, _, default_boot = booted_with()
+check('main() boots a plain walk with no --audio', default_boot is not None and '--audio' not in default_boot,
+      default_boot)
+for name in sorted(run_walk.VOICE_WALKS):
+    outcome, said = main_with(command=(str(HERE / name), '--out', '/tmp/x'))
+    check(name + ' (it starts voice) without --audio is refused before a slot, and says --audio',
+          outcome == 'exit 2' and '--audio' in said, (outcome, said))
+    _, _, voice_boot = booted_with('--audio', command=(str(HERE / name), '--out', '/tmp/x'))
+    check(name + ' with --audio boots run.sh --audio', voice_boot is not None and '--audio' in voice_boot, voice_boot)
+for name in sorted(run_walk.CALL_WALKS):
+    outcome, said = main_with('--audio', command=(str(HERE / name), '--out', '/tmp/x'))
+    check(name + ' (a call on its own virtual devices) is refused --audio', outcome == 'exit 2' and 'never --audio' in said,
+          (outcome, said))
+    _, _, call_boot = booted_with('--no-audio', command=(str(HERE / name), '--out', '/tmp/x'))
+    check(name + ' boots with no guest sound device', call_boot is not None and '--audio' not in call_boot, call_boot)
+outcome, said = main_with('--audio', '--no-audio')
+check('--audio beside --no-audio is refused', outcome == 'exit 2' and 'contradict' in said, (outcome, said))
 outcome, said = main_with(command=(str(HERE / 'delta-walk.py'), '--out', '/tmp/x'))
 check('delta-walk.py (the phone walk) without --tailnet is refused before a slot is asked for',
       outcome == 'exit 2' and not asked and '--tailnet' in said, (outcome, asked, said))

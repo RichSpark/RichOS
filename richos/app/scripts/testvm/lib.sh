@@ -220,6 +220,20 @@ guest_audio_reusable() {
   return 0
 }
 
+# mute_guest_sound <vm>
+# Mute the GUEST's sound output and read it back; prints what the guest answered and returns 0 only
+# when it answers `true`. run.sh calls it, for a guest booted with --audio, before anything launches
+# (tart passes a guest's sound through to this Mac's speakers). Only the guest is touched; the host's
+# volume is never read or set (CEO §65). The same two AppleScript lines voice-walk.py's
+# mute_guest_output has used in the guest since 2026-10-07.
+mute_guest_sound() {
+  local muted
+  guest_ssh "$1" "osascript -e 'set volume with output muted'" >/dev/null 2>&1 || true
+  muted="$(guest_ssh "$1" "osascript -e 'output muted of (get volume settings)'" 2>&1 | tr -d '[:space:]')" || true
+  printf '%s\n' "${muted:-no answer}"
+  [ "$muted" = true ]
+}
+
 vm_running() {
   tart list --format json 2>/dev/null \
     | python3 -c "
