@@ -10139,6 +10139,57 @@ body.bp-narrow #out-bottom .out-word {
   outline: none;
 }
 
+.op-git-tabs {
+  display: flex;
+  gap: 6px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.op-git-tabs[hidden], .op-filename-filter[hidden] { display: none; }
+
+.op-git-tab, .op-row-compare {
+  background: transparent;
+  color: var(--ink);
+  border: 1px solid transparent;
+  border-radius: 6px;
+  font: inherit;
+  padding: 5px 9px;
+  cursor: pointer;
+}
+
+.op-git-tab[aria-pressed="true"] {
+  color: var(--ground);
+  border-color: var(--ctl-line);
+  background: var(--accent-text);
+}
+
+.op-filename-filter {
+  margin: 8px 16px;
+  padding: 7px 10px;
+  border: 1px solid var(--ctl-line);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+}
+
+.op-filename-filter::placeholder { color: var(--ink-soft); }
+.op-native-git { overflow: hidden; }
+.op-native-git .op-view { visibility: hidden; }
+.op-row-compare {
+  margin: 0 0 3px 50px;
+  color: var(--ink);
+  border-color: var(--ctl-line);
+  background: var(--surface-raised);
+  border-radius: 16px;
+}
+.op-row-compare:hover, .op-git-tab:hover { border-color: var(--ctl-line); }
+.op-git-tab:focus-visible, .op-filename-filter:focus-visible, .op-row-compare:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 .op-view {
   animation: op-fade 0.22s ease both;
 }
@@ -11917,6 +11968,8 @@ body.panel-full #op-float {
 body.panel-full .op-body {
   padding-bottom: calc(var(--op-float-h, 72px) + 36px);
 }
+
+body.panel-full .op-body.op-native-git { padding-bottom: 0; }
 
 /* ---- the conversation at its narrowest (§9.2): reflowed by its own width, not the window's ---- */
 #stage.narrow #messages {

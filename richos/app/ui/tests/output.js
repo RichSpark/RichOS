@@ -1823,6 +1823,41 @@ async function main() {
   // up — the events WebKit delivers to a hand, not a call into the panel's code.
   await pullChecks(run, browser, byName);
 
+  await run.check("Git entry uses the active chat and output handle, then restores the Files view", async () => {
+    const p = await openApp(browser, { preset: { output: "round-17", gitView: true }, reducedMotion: "reduce" });
+    await p.evaluate(() => {
+      const original = window.RichBridge.invoke.bind(window.RichBridge);
+      window.gitOutputRequests = [];
+      window.RichBridge.invoke = async (command, args) => {
+        if (command === "output_git_open" || command === "output_git_place") {
+          window.gitOutputRequests.push({ command, args });
+          return null;
+        }
+        const result = await original(command, args);
+        if (command !== "list_output") return result;
+        const file = result.files.find((file) => file.name === "brief.md");
+        return { ...result, gitCandidates: file ? [file.id] : [] };
+      };
+    });
+    await openThread(p, "acme", 9);
+    await p.click("#out-top");
+    await p.locator("#op-filename-filter").fill("BRIEF.MD");
+    assertEqual(await p.locator("#op-body .orow").count(), 1);
+    const compare = p.getByRole("button", { name: "View Changes for brief.md" });
+    await compare.click();
+    await p.waitForFunction(() => window.gitOutputRequests.some((request) => request.command === "output_git_open"));
+    const request = await p.evaluate(() => window.gitOutputRequests.find((request) => request.command === "output_git_open").args);
+    assertEqual(request.threadId, "acme");
+    assertEqual(request.outputId, byName("brief.md").id);
+    assert(request.bounds.visible && request.bounds.width > 0, "the native pane has no usable bounds");
+    await p.evaluate(() => window.RichOutput.nativeGitClosed());
+    assertEqual(await p.locator("#op-git-files").getAttribute("aria-pressed"), "true");
+    assertEqual(await p.locator("#op-filename-filter").inputValue(), "BRIEF.MD");
+    assertEqual(await p.evaluate(() => document.activeElement.dataset.act), "git-compare");
+    await p.context().close();
+    return "the filename filter, output handle, native geometry and focus return agree";
+  });
+
   await run.check("no page errors in the main walk", async () => {
     assertEqual(page.__errors, [], "the page reported errors");
     return "0 errors";

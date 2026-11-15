@@ -4436,6 +4436,8 @@
           if (outputUnreadable) return Promise.reject(OUTPUT_RECORD_UNREADABLE);
           return outputListOf(args.threadId ?? args.thread_id);
         }
+        case "richfiles_pane_available":
+          return window.__RICHOS_MOCK_PRESET__?.gitView === true;
         // One file's preview (output side-panel PRD §5.4, §7, slice S5), by its output id.
         case "output_preview":
           return outputPreviewOf(args.outputId ?? args.output_id);

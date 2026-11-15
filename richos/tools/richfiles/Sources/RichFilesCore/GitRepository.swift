@@ -104,6 +104,7 @@ public struct GitRepository: Sendable {
     public let root: URL
     public let identity: FileReference
     private let administration: FileReference
+    private let worktreeDescription: Data?
     private let git: URL
     private static let patchLimit = 4 * 1024 * 1024
     private static let renameLimit = 500
@@ -127,6 +128,7 @@ public struct GitRepository: Sendable {
         let gitEntry = location.appendingPathComponent(".git")
         guard !Self.isLink(gitEntry) else { throw GitReadError.unreadable }
         administration = try FileReference(url: gitEntry)
+        worktreeDescription = try Self.worktreeFile(gitEntry)
         self.git = git
     }
 
@@ -181,12 +183,25 @@ public struct GitRepository: Sendable {
     }
 
     public func commit(_ id: String) throws -> GitCommit {
-        guard Self.isObjectID(id) else { throw GitReadError.unreadable }
-        let reply = try call(["log", "-1", "--no-notes", "--no-decorate", "--no-show-signature",
-                              "--format=format:%x00%H%x00%P%x00%aI%x00%an%x00%s", id, "--"])
-        let parts = reply.string.split(separator: "\0", maxSplits: 5, omittingEmptySubsequences: false)
-        guard parts.count == 6, parts[1] == id else { throw GitReadError.unreadable }
-        return Self.commit(parts, graph: [])
+        guard let item = try commits([id]).first, item.id == id else { throw GitReadError.unreadable }
+        return item
+    }
+
+    public func commits(_ ids: [String]) throws -> [GitCommit] {
+        guard ids.allSatisfy(Self.isObjectID) else { throw GitReadError.unreadable }
+        var result: [GitCommit] = []
+        for part in stride(from: 0, to: ids.count, by: 128) {
+            let batch = Array(ids[part..<min(part + 128, ids.count)])
+            let reply = try call(["log", "--no-walk=unsorted", "--no-notes", "--no-decorate", "--no-show-signature",
+                                  "--format=format:%x00%H%x00%P%x00%aI%x00%an%x00%s"] + batch + ["--"],
+                                 cap: 8 * 1024 * 1024)
+            result.append(contentsOf: reply.string.split(separator: "\n").compactMap { line in
+                let fields = line.split(separator: "\0", maxSplits: 5, omittingEmptySubsequences: false)
+                guard fields.count == 6, Self.isObjectID(String(fields[1])) else { return nil }
+                return Self.commit(fields, graph: [])
+            })
+        }
+        return result
     }
 
     private static func commit(_ parts: [Substring], graph: [String]) -> GitCommit {
@@ -203,7 +218,10 @@ public struct GitRepository: Sendable {
             let id = String(text)
             return wanted.contains(id) ? id : nil
         })
-        return (reachable, wanted.subtracting(reachable).count)
+        let offMain = wanted.subtracting(reachable).filter { id in
+            Self.isObjectID(id) && (try? call(["cat-file", "-e", id + "^{commit}"])) != nil
+        }.count
+        return (reachable, offMain)
     }
 
     public func comparison(_ commit: GitCommit, land: GitLandEvidence? = nil) throws -> GitComparison {
@@ -330,7 +348,21 @@ public struct GitRepository: Sendable {
 
     public func verifyIdentity() throws {
         guard try FileReference(url: root) == identity,
-              try FileReference(url: administration.url) == administration else { throw GitReadError.changed }
+              try FileReference(url: administration.url) == administration,
+              try Self.worktreeFile(administration.url) == worktreeDescription else { throw GitReadError.changed }
+    }
+
+    private static func worktreeFile(_ url: URL) throws -> Data? {
+        var status = stat()
+        guard lstat(url.path, &status) == 0 else { throw GitReadError.changed }
+        if status.st_mode & S_IFMT == S_IFDIR { return nil }
+        guard status.st_mode & S_IFMT == S_IFREG, (1...8192).contains(status.st_size) else { throw GitReadError.changed }
+        let descriptor = open(url.path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
+        guard descriptor >= 0 else { throw GitReadError.changed }
+        let file = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+        defer { try? file.close() }
+        guard let bytes = try file.read(upToCount: 8193), bytes.count == status.st_size else { throw GitReadError.changed }
+        return bytes
     }
 
     private func blob(_ id: String, cap: Int) throws -> Data {

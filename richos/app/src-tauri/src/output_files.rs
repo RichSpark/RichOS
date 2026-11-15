@@ -64,12 +64,12 @@
 //!   step 3 has nothing to compare and is skipped for it; steps 2 and 5 still hold.
 
 use richos_core::media_moments::{self, FileVersion};
-use richos_core::output::{entry_id, kind_of, Entry, OutputList, OutputStore, Sources};
+use richos_core::output::{entry_id, kind_of, usable_commit, Entry, OutputList, OutputStore, Sources, WriteSource};
 use richos_core::read_view::{SpineReader, SpineView};
 use serde::Serialize;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::io::{Read, Seek, SeekFrom};
-use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
@@ -564,6 +564,33 @@ pub struct OutputFiles {
     shown: Mutex<HashMap<String, Apps>>,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct GitContext {
+    pub thread_id: String,
+    chat_name: String,
+    git: Option<PathBuf>,
+    repositories: Vec<GitContextRepository>,
+    selected_path: Option<PathBuf>,
+}
+
+#[derive(Serialize)]
+struct GitContextRepository {
+    path: PathBuf,
+    lands: Vec<GitContextLand>,
+}
+
+#[derive(Default, Serialize)]
+struct GitContextLand {
+    id: String,
+    paths: BTreeSet<String>,
+    before: Option<String>,
+    reviewed: Option<String>,
+    at: u64,
+    #[serde(skip)]
+    refused: bool,
+}
+
 impl OutputFiles {
     /// The app's: the active thread from the published spine, convergence over its ledger,
     /// its machinery journal, the thread's assignments and the evidence folder.
@@ -632,7 +659,8 @@ impl OutputFiles {
             .rows
             .iter()
             .rev()
-            .find(|row| entry_id(&thread, row.canonical.as_deref().unwrap_or(&row.path)) == output_id)
+            .find(|row| row.source != WriteSource::LandMarker &&
+                  entry_id(&thread, row.canonical.as_deref().unwrap_or(&row.path)) == output_id)
             .ok_or_else(|| NOT_IN_RECORD.to_string())?;
         let path = PathBuf::from(&latest.path);
         if !path.is_absolute() {
@@ -703,6 +731,74 @@ impl OutputFiles {
             eprintln!("[richos] output: the record of {thread_id} could not be listed: {e}");
             RECORD_UNREADABLE.to_string()
         })
+    }
+
+    pub(crate) fn active_chat(&self) -> Option<String> { (self.active)() }
+
+    pub(crate) fn git_context(&self, output_id: Option<&str>, git: Option<PathBuf>) -> Result<GitContext, String> {
+        let source = self.converge.as_ref().ok_or("Git is unavailable for this chat.")?;
+        let view = source.reader.snapshot();
+        let binding = view.active_binding().ok_or("Choose a chat to open Git.")?;
+        let thread = binding.thread_id();
+        let chat_name = view.ledger().threads().iter().find(|row| row.id == thread)
+            .map(|row| row.title.clone()).unwrap_or_else(|| "Chat".into());
+        let selected_path = output_id.map(|id| self.locate(id)).transpose()?.map(|located| located.path);
+        let connected = view.entity_registry().get(binding.entity_id())
+            .ok_or("This chat has no connected company.")?;
+        let mut rows_by_repo = BTreeMap::new();
+        for root in &connected.connected_repositories {
+            if root.is_absolute() && root.to_str().is_some() {
+                rows_by_repo.insert(root.clone(), BTreeMap::<String, GitContextLand>::new());
+            }
+        }
+        let read = self.store.read(thread).map_err(|_| RECORD_UNREADABLE)?;
+        for row in read.rows.iter().filter(|row| matches!(row.source, WriteSource::Land | WriteSource::LandMarker)) {
+            let mut fields = row.key.splitn(4, ':');
+            let expected = if row.source == WriteSource::Land { "land" } else { "land-marker" };
+            if fields.next() != Some(expected) { continue; }
+            let Some(session) = fields.next() else { continue };
+            if session.is_empty() || session.len() > 128 || !session.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_') {
+                continue;
+            }
+            let Some(id) = fields.next().filter(|id| usable_commit(id)) else { continue };
+            if fields.next() != Some(row.path.as_str()) { continue; }
+            let path = Path::new(&row.path);
+            if !path.is_absolute() || path.components().any(|c| matches!(c, std::path::Component::ParentDir)) { continue; }
+            let mut roots = rows_by_repo.keys().filter(|root| path.starts_with(root));
+            let Some(root) = roots.next().cloned() else { continue };
+            if roots.next().is_some() || row.canonical.as_deref().is_some_and(|known| !Path::new(known).starts_with(&root)) { continue; }
+            let Some(repo) = rows_by_repo.get_mut(&root) else { continue };
+            if let Some(marker) = row.land_marker.as_ref().filter(|_| row.source == WriteSource::LandMarker && path == root) {
+                let entry = repo.entry(id.into()).or_insert_with(|| GitContextLand { id: id.into(), ..Default::default() });
+                let disk = std::fs::symlink_metadata(&root).ok().zip(std::fs::symlink_metadata(root.join(".git")).ok());
+                if !disk.is_some_and(|(directory, git)| directory.is_dir() && !git.file_type().is_symlink() &&
+                     (directory.dev(), directory.ino(), git.dev(), git.ino()) ==
+                     (marker.device, marker.inode, marker.git_device, marker.git_inode)) ||
+                    entry.before.as_ref().is_some_and(|before| before != &marker.before) ||
+                    entry.reviewed.as_ref().is_some_and(|tip| tip != &marker.reviewed) {
+                    entry.refused = true;
+                }
+                entry.before = Some(marker.before.clone());
+                entry.reviewed = Some(marker.reviewed.clone());
+                entry.at = entry.at.max(row.at);
+            } else if row.source == WriteSource::Land {
+                let Ok(relative) = path.strip_prefix(&root) else { continue };
+                let Some(name) = relative.to_str().filter(|name| !name.is_empty()) else { continue };
+                // A connected outer checkout does not authorize an unrelated nested repo.
+                if path.ancestors().skip(1).take_while(|parent| *parent != root).any(|parent| parent.join(".git").exists()) {
+                    continue;
+                }
+                let entry = repo.entry(id.into()).or_insert_with(|| GitContextLand { id: id.into(), ..Default::default() });
+                entry.paths.insert(name.to_string());
+                entry.at = entry.at.max(row.at);
+            }
+        }
+        if self.active_chat().as_deref() != Some(thread) { return Err("The active chat changed.".into()); }
+        let repositories = rows_by_repo.into_iter().map(|(path, lands)| GitContextRepository {
+            path,
+            lands: lands.into_values().filter(|land| !land.refused).collect(),
+        }).collect();
+        Ok(GitContext { thread_id: thread.into(), chat_name, git, repositories, selected_path })
     }
 
     /// `output_file(output_id)` (§5.4).

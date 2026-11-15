@@ -246,6 +246,9 @@ pub struct OutputList {
     /// Lines skipped because they would not parse, carried another schema, or named another
     /// thread. Counted, never fatal.
     pub corrupt: usize,
+    /// Output IDs with a landed file witness. Git validates the comparison on demand.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub git_candidates: Vec<String>,
 }
 
 impl OutputList {
@@ -683,11 +686,17 @@ impl OutputStore {
         if let Some(roots) = self.scratch.as_ref().filter(|_| hide_scratch) {
             files.retain(|e| !roots.is_scratch(&e.path));
         }
+        let witnesses: HashSet<String> = read.rows.iter().filter(|row| row.source == WriteSource::Land)
+            .map(|row| entry_id(thread_id, row.file_key())).collect();
+        let git_candidates = files.iter().filter(|file| matches!(file.kind.as_str(), "md" | "txt" | "csv") &&
+            witnesses.contains(&file.id))
+            .map(|file| file.id.clone()).collect();
         Ok(OutputList {
             count: files.len(),
             missing: files.iter().filter(|e| !e.exists).count(),
             files,
             corrupt: read.corrupt,
+            git_candidates,
         })
     }
 

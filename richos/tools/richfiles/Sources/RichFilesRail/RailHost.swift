@@ -29,6 +29,36 @@ public func revealRichFilesItem(_ path: UnsafePointer<CChar>?) -> Int32 {
     }
 }
 
+@_cdecl("richfiles_git_place")
+public func placeOutputGit(_ webViewPointer: UnsafeMutableRawPointer?, _ left: Double, _ top: Double,
+                           _ width: Double, _ height: Double, _ visible: Int32, _ dark: Int32,
+                           _ context: UnsafePointer<CChar>?, _ compare: Int32) -> Int32 {
+    guard Thread.isMainThread, let webViewPointer else { return 0 }
+    return MainActor.assumeIsolated {
+        guard let web = Unmanaged<NSView>.fromOpaque(webViewPointer).takeUnretainedValue() as? WKWebView else { return 0 }
+        let payload: GitPanelContext?
+        if let context {
+            guard let value = String(validatingUTF8: context),
+                  let decoded = try? JSONDecoder().decode(GitPanelContext.self, from: Data(value.utf8)) else { return 0 }
+            payload = decoded
+        } else { payload = nil }
+        return OutputGitHost.shared.place(web, frame: CGRect(x: left, y: top, width: width, height: height),
+                                          visible: visible != 0, dark: dark != 0, context: payload,
+                                          mode: compare) ? 1 : 0
+    }
+}
+
+@_cdecl("richfiles_git_chat")
+public func changeRichFilesGitChat(_ value: UnsafePointer<CChar>?) -> Int32 {
+    guard Thread.isMainThread else { return 0 }
+    return MainActor.assumeIsolated {
+        let thread = value.flatMap(String.init(validatingUTF8:))
+        RailHost.shared.setChat(thread)
+        OutputGitHost.shared.chatChanged(thread)
+        return 1
+    }
+}
+
 @MainActor
 private final class RailHost {
     static let shared = RailHost()
@@ -36,6 +66,8 @@ private final class RailHost {
     private var hosting: PaneHostingView?
     private var dockTarget: RichFilesDockTarget?
     private var monitor: Any?
+    private var currentChat: String?
+    private var gitHandoff: GitPanelSnapshot?
 
     func place(beside webView: NSView, normalizedFrame: CGRect, visible: Bool) -> Bool {
         guard visible else {
@@ -52,6 +84,7 @@ private final class RailHost {
             self.webView = webView
             let home = FileManager.default.homeDirectoryForCurrentUser
             let destination = RichFilesDockTarget()
+            destination.chatChanged(currentChat)
             dockTarget = destination
             let pane = RichFilesPane(folder: home, recoveryStore: RichFilesInstallation.dockedRecoveryStore,
                                      openWindow: { [weak self] folder in self?.openStandalone(folder: folder) },
@@ -78,7 +111,25 @@ private final class RailHost {
             hosting.isHidden = false
             focusPane()
         }
+        if let snapshot = gitHandoff {
+            gitHandoff = nil
+            _ = performInPane { try await $0.showGit(snapshot) }
+        }
         return true
+    }
+
+    func setChat(_ thread: String?) {
+        currentChat = thread
+        if let gitHandoff, gitHandoff.threadId != thread { self.gitHandoff = nil }
+        dockTarget?.chatChanged(thread)
+    }
+
+    func showGit(_ snapshot: GitPanelSnapshot, from web: WKWebView) {
+        guard snapshot.threadId == currentChat else { return }
+        if !performInPane({ try await $0.showGit(snapshot) }) {
+            gitHandoff = snapshot
+            web.evaluateJavaScript("window.RichOutput?.close({keepFocus:true}); window.RichNavRail?.showPage('richfiles')")
+        }
     }
 
     func receive(_ id: UUID) -> Bool {
@@ -148,5 +199,83 @@ private final class RailHost {
 }
 
 private final class PaneHostingView: NSHostingView<RichFilesPane> {
+    override var acceptsFirstResponder: Bool { true }
+}
+
+@MainActor
+private final class OutputGitHost {
+    static let shared = OutputGitHost()
+    private let model = GitPanelModel()
+    private weak var web: WKWebView?
+    private var hosting: OutputGitHostingView?
+    private var thread: String?
+    private var dark: Bool?
+
+    func chatChanged(_ next: String?) {
+        guard thread != next else { return }
+        thread = next
+        hide()
+    }
+
+    func place(_ web: WKWebView, frame: CGRect, visible: Bool, dark: Bool, context: GitPanelContext?, mode: Int32) -> Bool {
+        if !visible { hide(clear: mode == 3); return true }
+        if let context {
+            thread = context.threadId
+            RailHost.shared.setChat(context.threadId)
+            model.beginOutput(context, compare: mode == 1, refresh: mode == 2)
+        }
+        guard model.open, let parent = web.superview, web.window != nil, !frame.isEmpty,
+              CGRect(x: 0, y: 0, width: 1.000001, height: 1.000001).contains(frame) else { return false }
+        let needsFocus = hosting == nil || hosting?.isHidden == true
+        if self.web !== web || hosting?.superview !== parent || self.dark != dark {
+            hosting?.removeFromSuperview()
+            self.web = web
+            self.dark = dark
+            let panel = RichFilesGitPanel(model: model, dismiss: { [weak self] in self?.closeFromPanel() },
+                                          handoff: { [weak self] in self?.handoff($0) },
+                                          refresh: { [weak self] in self?.web?.evaluateJavaScript("window.RichOutput?.nativeGitRefresh()") })
+                .onReceive(model.$directComparisonUnavailable) { [weak self] unavailable in
+                    if unavailable { self?.web?.evaluateJavaScript("window.RichOutput?.nativeGitUnavailable()") }
+                }
+                .environment(\.colorScheme, dark ? .dark : .light)
+                .defaultAppStorage(RichFilesInstallation.gitPreferences)
+            let view = OutputGitHostingView(rootView: AnyView(panel))
+            view.sizingOptions = []
+            parent.addSubview(view, positioned: .above, relativeTo: web)
+            hosting = view
+        }
+        let bounds = web.bounds
+        let top = web.isFlipped ? frame.minY : 1 - frame.maxY
+        let local = CGRect(x: bounds.minX + frame.minX * bounds.width, y: bounds.minY + top * bounds.height,
+                           width: frame.width * bounds.width, height: frame.height * bounds.height)
+        hosting?.frame = web.convert(local, to: parent)
+        hosting?.isHidden = false
+        if needsFocus || mode == 1, let hosting { web.window?.makeFirstResponder(hosting) }
+        return true
+    }
+
+    private func hide(clear: Bool = true) {
+        if clear { model.close() }
+        guard let hosting, !hosting.isHidden else { return }
+        if let responder = hosting.window?.firstResponder as? NSView,
+           responder === hosting || responder.isDescendant(of: hosting), let web {
+            web.window?.makeFirstResponder(web)
+        }
+        hosting.isHidden = true
+    }
+
+    private func closeFromPanel() {
+        hide()
+        web?.evaluateJavaScript("window.RichOutput?.nativeGitClosed()")
+    }
+
+    private func handoff(_ snapshot: GitPanelSnapshot) {
+        guard let web else { return }
+        hide()
+        RailHost.shared.showGit(snapshot, from: web)
+    }
+}
+
+private final class OutputGitHostingView: NSHostingView<AnyView> {
     override var acceptsFirstResponder: Bool { true }
 }
