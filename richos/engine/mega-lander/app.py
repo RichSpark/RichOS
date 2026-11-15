@@ -1826,6 +1826,18 @@ def assignment_notice(payload, text):
 
 # The app's LinkedIn reader (`richos-core` linkedin_tools.rs QUALIFIED_TOOL).
 LINKEDIN_READER = "mcp__richos_linkedin__read_profile"
+# The app's reader for any website: every tool of its server (`richos-core` browser_tools.rs
+# QUALIFIED_TOOLS: open_page, press, scroll_down, next_part, close_page).
+BROWSER_READER_TOOLS = "mcp__richos_browser__"
+
+
+def browser_reader(tool):
+    """What a tool of the user's-own-browser readers is called, or None for any other tool."""
+    if tool == LINKEDIN_READER:
+        return "LinkedIn reader"
+    if str(tool or "").startswith(BROWSER_READER_TOOLS):
+        return "browser reader"
+    return None
 
 
 def worker_context(scope, payload):
@@ -1852,10 +1864,11 @@ def worker_context(scope, payload):
         # The shared host observation carries no company mutation or orchestration grant.
         if payload.get("tool_name") == "mcp__richos_status__system_resources":
             return None
-        # Neither does the LinkedIn reader: it reads the user's own browser and changes nothing
-        # in RichOS. It is the named specialist's tool for delegated research, granted by the
-        # teammate's own definition (stock Reed and Clark list it), never by this gate.
-        if payload.get("tool_name") == LINKEDIN_READER:
+        # Neither do the browser readers (LinkedIn's and any website's): they work in the user's
+        # own browser and change nothing in RichOS. They are the named specialist's tools for
+        # delegated research, granted by the teammate's own definition (stock Reed and Clark
+        # list them), never by this gate.
+        if browser_reader(payload.get("tool_name")):
             return None
         if str(payload.get("tool_name", "")).startswith("mcp__richos_"):
             raise ValueError("CEO-scoped continuity, onboarding and orchestration tools are not worker tools")

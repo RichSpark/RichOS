@@ -13,7 +13,12 @@ signed-in"; the user is signed in to every social profile in their default brows
                            /sign-in   sets the cookie a "signed-in browser" holds;
                            /profile   a profile that shows a different sentence to a browser
                                       holding that cookie than to a plain fetch (the LinkedIn
-                                      shape: signed out, you get a sign-in wall).
+                                      shape: signed out, you get a sign-in wall);
+                           /links     one link to /profile that opens in a new tab, for
+                                      browser-reader-walk.py;
+                           /store     a store admin only a signed-in browser is shown, whose
+                                      "Shipping" panel is closed until its button is pressed, for
+                                      conversation-walk.py --reader-site.
                            Its pid is written to D/server.pid; it serves until killed.
 
   measure --bundle B --url-contains U --expect F [--manual] [--enhanced]
@@ -37,6 +42,12 @@ signed-in"; the user is signed in to every social profile in their default brows
                            make B the default browser for http and https and press "Use …" in
                            the confirmation macOS shows. Prints one JSON object.
 
+  window-state --bundle B --state normal|minimized|hidden|no-windows|not-running|observe
+                           put the browser in a state a user's desktop leaves it in (every window
+                           minimized, the app hidden, every window closed, the app quit) or back to
+                           normal, through Accessibility, for browser-reader-walk.py. Prints one JSON
+                           object: the windows before and after.
+
   tab-bar --bundle B [--depth N] [--max N]
                            every window of B as Accessibility shows it outside its web pages
                            (role, subrole, title, description, value by depth): what the tab bar
@@ -59,6 +70,10 @@ COOKIE = 'richos_walk_session=signed-in'
 SIGNED_IN = 'Ada Walker, signed-in view: works on accessible browsers at Example Works.'
 SIGNED_OUT = 'Sign in to see this profile.'
 HIDDEN = 'This hidden sentence must never be read.'
+# A code sample whose spacing is part of the program: a one-space indent (on its first line
+# too), two spaces and a space at the end inside a string, a line ending in a space inside a
+# string of several lines, and two empty lines in a row.
+CODE = ' if ready:\n  say("a  b ")\n done()\nmessage = """first \n\n\nlast"""'
 
 
 def sentences(n=400):
@@ -81,6 +96,20 @@ def article_html():
             parts.append('<p>' + ' '.join('<span>%s</span>' % s for s in block) + '</p>')
     parts.append('<div style="display:none">%s</div></body></html>' % HIDDEN)
     return '\n'.join(parts)
+
+
+STORE_SIGNED_OUT = 'Sign in to see this store.'
+STORE_ORDERS = 'Orders this week: 214'
+STORE_HIDDEN = 'Ships from Rotterdam within two days.'
+# The closed panel's text is not in the page until the button is pressed: no reader gets it
+# without choosing to open "Shipping".
+STORE = ('<!doctype html><html><head><meta charset=utf-8><title>Store admin</title></head><body><main>'
+         '<h1>Store admin</h1><p>%s</p>'
+         '<h2><button type="button" id="b" aria-expanded="false" aria-controls="p">Shipping</button></h2>'
+         '<div id="p" hidden></div></main>'
+         '<script>document.getElementById("b").addEventListener("click",function(){var p=document.getElementById("p");'
+         'p.textContent=%s;p.hidden=false;this.setAttribute("aria-expanded","true");});</script></body></html>'
+         ) % (STORE_ORDERS, json.dumps(STORE_HIDDEN))
 
 
 class Site(http.server.BaseHTTPRequestHandler):
@@ -106,6 +135,15 @@ class Site(http.server.BaseHTTPRequestHandler):
             signed = COOKIE in (self.headers.get('Cookie') or '')
             body = SIGNED_IN if signed else SIGNED_OUT
             return self.send('<!doctype html><title>Profile</title><h1>Profile</h1><p>%s</p>' % body)
+        if path == '/store':
+            if COOKIE not in (self.headers.get('Cookie') or ''):
+                return self.send('<!doctype html><title>Sign in</title><h1>Sign in</h1><p>%s</p>' % STORE_SIGNED_OUT)
+            return self.send(STORE)
+        if path == '/code':
+            return self.send('<!doctype html><title>Code</title><h1>Code</h1><pre><code>%s</code></pre><p>End.</p>' % CODE)
+        if path == '/links':
+            return self.send('<!doctype html><title>Links</title><h1>Links</h1>'
+                             '<p><a href="/profile" target="_blank">Profile in a new tab</a></p>')
         self.send_response(404)
         self.end_headers()
 
@@ -399,6 +437,77 @@ def measure(a):
     return 0
 
 
+def window_state(a):
+    """Put the browser in one of the states a user's desktop leaves it in, the way the user does
+    (the window's own minimize and close, the app's hide, its quit), and say what its windows are
+    before and after. `observe` changes nothing."""
+    ax = AX()
+    ax.AS.AXUIElementPerformAction.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    false = ctypes.c_void_p.in_dll(ax.CF, 'kCFBooleanFalse')
+
+    def flag(el, attr):
+        value = ax.raw(el, attr)
+        if value and ax.CF.CFGetTypeID(value) == ax.CF.CFBooleanGetTypeID():
+            return bool(ax.CF.CFBooleanGetValue(value))
+        return None
+
+    def app():
+        pid = pid_of(a.bundle)
+        return (pid, ax.AS.AXUIElementCreateApplication(pid)) if pid else (None, None)
+
+    def windows(el):
+        arr = ax.raw(el, 'AXWindows')
+        if not arr or ax.CF.CFGetTypeID(arr) != ax.CF.CFArrayGetTypeID():
+            return []
+        return [ax.CF.CFArrayGetValueAtIndex(arr, i) for i in range(ax.CF.CFArrayGetCount(arr))]
+
+    def observe():
+        pid, el = app()
+        if not pid:
+            return {'running': False, 'windows': []}
+        return {'running': True, 'hidden': flag(el, 'AXHidden'),
+                'windows': [{'title': ax.text(w, 'AXTitle'), 'minimized': flag(w, 'AXMinimized')} for w in windows(el)]}
+
+    def set_flag(el, attr, on):
+        return ax.AS.AXUIElementSetAttributeValue(el, ax.name(attr), ax.true if on else false)
+
+    result = {'bundle': a.bundle, 'state': a.state, 'before': observe(), 'errors': []}
+    pid, el = app()
+    if a.state != 'observe' and not pid:
+        result['errors'].append('not running')
+    elif a.state == 'normal':
+        set_flag(el, 'AXHidden', False)
+        for w in windows(el):
+            set_flag(w, 'AXMinimized', False)
+    elif a.state == 'minimized':
+        for w in windows(el):
+            err = set_flag(w, 'AXMinimized', True)
+            if err:
+                result['errors'].append('AXMinimized: %d' % err)
+    elif a.state == 'hidden':
+        err = set_flag(el, 'AXHidden', True)
+        if err:
+            result['errors'].append('AXHidden: %d' % err)
+    elif a.state == 'no-windows':
+        deadline = time.monotonic() + 15
+        while windows(el) and time.monotonic() < deadline:
+            for w in windows(el):
+                button = ax.raw(w, 'AXCloseButton')
+                if button:
+                    ax.AS.AXUIElementPerformAction(button, ax.name('AXPress'))
+            time.sleep(1)
+    elif a.state == 'not-running':
+        os.kill(pid, 15)
+        deadline = time.monotonic() + 20
+        while pid_of(a.bundle) and time.monotonic() < deadline:
+            time.sleep(0.5)
+    if a.state != 'observe':
+        time.sleep(2)
+    result['after'] = observe()
+    print(json.dumps(result))
+    return 0
+
+
 def tab_bar(a):
     """Each window of the app as Accessibility shows it outside its web pages (never walked):
     role, subrole, title, description and value of every element, indented by depth, so a walk
@@ -449,13 +558,16 @@ def main():
     s.add_argument('--dir', required=True)
     d = sub.add_parser('default-browser')
     d.add_argument('--bundle', required=True)
+    w = sub.add_parser('window-state')
+    w.add_argument('--bundle', required=True)
+    w.add_argument('--state', required=True, choices=['normal', 'minimized', 'hidden', 'no-windows', 'not-running', 'observe'])
     t = sub.add_parser('tab-bar')
     t.add_argument('--bundle', required=True)
     t.add_argument('--depth', type=int, default=12)
     t.add_argument('--max', type=int, default=600)
     a = p.parse_args()
     return {'serve': serve, 'measure': measure, 'serve-site': serve_site, 'default-browser': default_browser,
-            'tab-bar': tab_bar}[a.mode](a)
+            'tab-bar': tab_bar, 'window-state': window_state}[a.mode](a)
 
 
 if __name__ == '__main__':

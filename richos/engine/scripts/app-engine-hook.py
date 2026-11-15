@@ -288,19 +288,21 @@ def lease_role(root, payload):
 
 
 def refuse_the_leads_own_read(work, root, payload):
-    """THE LINKEDIN READER IS THE SPECIALIST'S TOOL ON THE WORK SIDE (richos-hq
+    """THE BROWSER READERS ARE THE SPECIALIST'S TOOLS ON THE WORK SIDE (richos-hq
     wiki/how-richos-works.md, "Who gets the capabilities"; docs/plans/richos-team-execution.md).
-    Stu's lease carries the server only because Claude Code gives a teammate the MCP tools of
+    The LinkedIn reader and the reader for any website (`browser_tools.rs`). Stu's lease carries
+    their servers only because Claude Code gives a teammate the MCP tools of
     the session it runs in; Stu himself coordinates and never performs the read. Measured on
     `claude` 2.1.322: a plugin teammate whose definition lists the tool calls it with its own
     `agent_id` on the payload, and Stu's own call arrives with none. Rich's conversation lease
     is untouched: a read the user asks Rich for directly is his (§123)."""
-    if payload.get("tool_name") != work.LINKEDIN_READER or payload.get("agent_id"):
+    reader = work.browser_reader(payload.get("tool_name"))
+    if not reader or payload.get("agent_id"):
         return
     if lease_role(root, payload) == "stu":
-        raise ValueError("The LinkedIn reader is a teammate's tool, not yours: give the read to a named teammate "
-                         "whose definition lists mcp__richos_linkedin__read_profile (the stock Reed and Clark do) "
-                         "and use what it returns. Nothing was opened.")
+        raise ValueError("The %s is a teammate's tool, not yours: give the read to a named teammate "
+                         "whose definition lists %s (the stock Reed and Clark do) "
+                         "and use what it returns. Nothing was opened." % (reader, payload.get("tool_name")))
 
 
 def handle(payload):

@@ -51,6 +51,9 @@ mod screen;
 // Services half of `richos_core::linkedin_tools`, started as `--linkedin-mcp` below.
 #[cfg(target_os = "macos")]
 mod linkedin_host;
+// Services half of `richos_core::browser_tools` (any website), started as `--browser-mcp` below.
+#[cfg(target_os = "macos")]
+mod browser_host;
 
 use richos_core::read_view::{SpineReader, SpineView};
 use richos_core::native::{resolve_claude_bin, resolve_claude_bin_checked, NativeCognition};
@@ -2475,6 +2478,16 @@ fn main() {
         #[cfg(not(target_os = "macos"))]
         let result: Result<(), String> = Err("reading the browser needs macOS Accessibility".into());
         if let Err(error) = result {eprintln!("LinkedIn tool server: {error}");std::process::exit(1);}
+        return;
+    }
+    // THE TEAM READS ANY WEBSITE IN THE USER'S OWN BROWSER (`richos-core`'s `browser_tools.rs`):
+    // the same executable and the same browser half as the LinkedIn reader. No scope, like it.
+    if first.as_deref() == Some(std::ffi::OsStr::new("--browser-mcp")) {
+        #[cfg(target_os = "macos")]
+        let result = richos_core::browser_tools::run_stdio(&linkedin_host::MacBrowser::default()).map_err(|e| e.to_string());
+        #[cfg(not(target_os = "macos"))]
+        let result: Result<(), String> = Err("reading the browser needs macOS Accessibility".into());
+        if let Err(error) = result {eprintln!("Browser tool server: {error}");std::process::exit(1);}
         return;
     }
     if first.as_deref() == Some(std::ffi::OsStr::new("--assignments-mcp")) {

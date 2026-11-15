@@ -1,0 +1,288 @@
+{
+  "vm": "walk-6cb98ec23018",
+  "expect_sha": "",
+  "steps": [
+    {
+      "step": "site",
+      "evidence": {
+        "url": "http://127.0.0.1:18765",
+        "plain_fetch_profile": "<!doctype html><title>Profile</title><h1>Profile</h1><p>Sign in to see this profile.</p>"
+      },
+      "outcome": "PASS",
+      "seconds": 1.0
+    },
+    {
+      "step": "firefox",
+      "evidence": {
+        "installed": true,
+        "version": "160.0"
+      },
+      "outcome": "PASS",
+      "seconds": 28.6
+    },
+    {
+      "step": "tool",
+      "evidence": {
+        "tools": [
+          "open_page",
+          "press",
+          "scroll_down",
+          "next_part",
+          "close_page"
+        ],
+        "server_exit": 0
+      },
+      "outcome": "PASS",
+      "seconds": 1.2
+    },
+    {
+      "step": "read-safari",
+      "evidence": {
+        "browser": "safari",
+        "default": {
+          "bundle": "com.apple.Safari",
+          "before": "com.apple.safari",
+          "set": {},
+          "pressed": null,
+          "after": "com.apple.safari"
+        },
+        "pages": [
+          {
+            "page": "accordion (Bootstrap): a closed panel opened",
+            "outcome": "PASS",
+            "seconds": 6.0,
+            "address": "https://getbootstrap.com/docs/5.3/components/accordion/",
+            "characters": 31379,
+            "notes": null
+          },
+          {
+            "page": "a page only a signed-in browser is shown",
+            "outcome": "PASS",
+            "seconds": 5.6,
+            "address": "http://127.0.0.1:18765/profile",
+            "characters": 84,
+            "notes": [
+              "Safari exposed only 84 characters of text for this page. It may be drawn as a picture, be empty, want a sign-in or still be loading (scroll_down reads it again); this is everything that could be read."
+            ]
+          },
+          {
+            "page": "a link that opens in a new tab",
+            "outcome": "PASS",
+            "seconds": 10.4,
+            "address": "http://127.0.0.1:18765/profile",
+            "characters": 84,
+            "notes": [
+              "Safari exposed only 84 characters of text for this page. It may be drawn as a picture, be empty, want a sign-in or still be loading (scroll_down reads it again); this is everything that could be read."
+            ]
+          }
+        ],
+        "closed": "The tab RichOS opened in Safari is closed.",
+        "server_exit": 0,
+        "passed": 3,
+        "of": 3
+      },
+      "outcome": "PASS",
+      "seconds": 33.9
+    },
+    {
+      "step": "states-safari",
+      "evidence": {
+        "browser": "safari",
+        "page": "https://github.com/rust-lang/rust",
+        "states": [
+          {
+            "state": "minimized",
+            "reached": true,
+            "put": {
+              "running": true,
+              "hidden": false,
+              "windows": [
+                {
+                  "title": "Walk article",
+                  "minimized": true
+                }
+              ]
+            },
+            "errors": [],
+            "first open": {
+              "outcome": "read",
+              "seconds": 4.4,
+              "characters": 17508,
+              "closed": {
+                "closed": "The tab RichOS opened in Safari is closed."
+              },
+              "notes": [
+                "Safari had no window on screen (it was hidden or its windows were minimized), so RichOS brought one back to read the page. It is left showing."
+              ]
+            },
+            "left": {
+              "running": true,
+              "hidden": false,
+              "windows": [
+                {
+                  "title": "Walk article",
+                  "minimized": false
+                }
+              ]
+            }
+          },
+          {
+            "state": "hidden",
+            "reached": true,
+            "put": {
+              "running": true,
+              "hidden": true,
+              "windows": [
+                {
+                  "title": "Walk article",
+                  "minimized": false
+                }
+              ]
+            },
+            "errors": [],
+            "first open": {
+              "outcome": "read",
+              "seconds": 4.0,
+              "characters": 17508,
+              "closed": {
+                "closed": "The tab RichOS opened in Safari is closed."
+              },
+              "notes": [
+                "Safari had no window on screen (it was hidden or its windows were minimized), so RichOS brought one back to read the page. It is left showing."
+              ]
+            },
+            "left": {
+              "running": true,
+              "hidden": false,
+              "windows": [
+                {
+                  "title": "Walk article",
+                  "minimized": false
+                }
+              ]
+            }
+          },
+          {
+            "state": "no-windows",
+            "reached": true,
+            "put": {
+              "running": true,
+              "hidden": false,
+              "windows": []
+            },
+            "errors": [],
+            "first open": {
+              "outcome": "read",
+              "seconds": 2.9,
+              "characters": 17508,
+              "closed": {
+                "closed": "RichOS could not be sure that the tab showing the page in Safari was one it opened itself (the browser showed the page in a tab that was already there or its tabs could not be counted), so the tab is left as it is."
+              },
+              "notes": null
+            },
+            "left": {
+              "running": true,
+              "hidden": false,
+              "windows": [
+                {
+                  "title": "GitHub - rust-lang/rust: Empowering everyone to build reliable and efficient software. \u00b7 GitHub",
+                  "minimized": false
+                }
+              ]
+            }
+          },
+          {
+            "state": "not-running",
+            "reached": true,
+            "put": {
+              "running": false,
+              "windows": []
+            },
+            "errors": [],
+            "first open": {
+              "outcome": "read",
+              "seconds": 4.2,
+              "characters": 17485,
+              "closed": {
+                "closed": "RichOS could not be sure that the tab showing the page in Safari was one it opened itself (the browser showed the page in a tab that was already there or its tabs could not be counted), so the tab is left as it is."
+              },
+              "notes": null
+            },
+            "left": {
+              "running": true,
+              "hidden": false,
+              "windows": [
+                {
+                  "title": "GitHub - rust-lang/rust: Empowering everyone to build reliable and efficient software. \u00b7 GitHub",
+                  "minimized": false
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "outcome": "PASS",
+      "seconds": 63.8
+    },
+    {
+      "step": "read-firefox",
+      "evidence": {
+        "browser": "firefox",
+        "default": {
+          "bundle": "org.mozilla.firefox",
+          "before": "com.apple.safari",
+          "set": {
+            "http": 0,
+            "https": -54
+          },
+          "pressed": "Use \u201cFirefox\u201d",
+          "after": "org.mozilla.firefox"
+        },
+        "pages": [
+          {
+            "page": "accordion (Bootstrap): a closed panel opened",
+            "outcome": "PASS",
+            "seconds": 7.6,
+            "address": "https://getbootstrap.com/docs/5.3/components/accordion/",
+            "characters": 31189,
+            "notes": null
+          },
+          {
+            "page": "a page only a signed-in browser is shown",
+            "outcome": "PASS",
+            "seconds": 6.5,
+            "address": "http://127.0.0.1:18765/profile",
+            "characters": 84,
+            "notes": [
+              "Firefox exposed only 84 characters of text for this page. It may be drawn as a picture, be empty, want a sign-in or still be loading (scroll_down reads it again); this is everything that could be read."
+            ]
+          },
+          {
+            "page": "a link that opens in a new tab",
+            "outcome": "PASS",
+            "seconds": 11.6,
+            "address": "http://127.0.0.1:18765/profile",
+            "characters": 84,
+            "notes": [
+              "Firefox exposed only 84 characters of text for this page. It may be drawn as a picture, be empty, want a sign-in or still be loading (scroll_down reads it again); this is everything that could be read."
+            ]
+          }
+        ],
+        "closed": "The tab RichOS opened in Firefox is closed.",
+        "server_exit": 0,
+        "passed": 3,
+        "of": 3
+      },
+      "outcome": "PASS",
+      "seconds": 32.1
+    },
+    {
+      "step": "cleanup",
+      "evidence": {
+        "server_pid_stopped": "957"
+      },
+      "outcome": "PASS",
+      "seconds": 0.2
+    }
+  ]
+}

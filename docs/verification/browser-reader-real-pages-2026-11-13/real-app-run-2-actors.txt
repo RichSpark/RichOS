@@ -1,0 +1,42 @@
+{
+ "records": [
+  {
+   "action": "open",
+   "time": "2026-11-13T13:34:58.767Z",
+   "session": "22082697",
+   "actor": "rich",
+   "specialist": false,
+   "tool": "mcp__richos_browser__open_page",
+   "call": "toolu_019EQcGXFksdvy45R1cfRmsV",
+   "input": {
+    "url": "http://127.0.0.1:18765/store"
+   },
+   "ok": true,
+   "result": "{\"browser\":\"Safari\",\"address\":\"http://127.0.0.1:18765/store\",\"title\":\"Store admin\",\"page\":\"--- main content ---\\n# Store admin\\nOrders this week: 214\\n## Shipping [1 button \\\"Shipping\\\" collapsed]\",\"items\":\"1 to 1\",\"notes\":[\"Safari exposed only 100 characters of text for this page. It may be draw..."
+  },
+  {
+   "action": "press",
+   "time": "2026-11-13T13:35:12.162Z",
+   "session": "22082697",
+   "actor": "rich",
+   "specialist": false,
+   "tool": "mcp__richos_browser__press",
+   "call": "toolu_012sxYqArcoMAtnCqwRGnrjN",
+   "input": {
+    "item": 1
+   },
+   "ok": true,
+   "result": "{\"browser\":\"Safari\",\"address\":\"http://127.0.0.1:18765/store\",\"title\":\"Store admin\",\"page\":\"--- main content ---\\n# Store admin\\nOrders this week: 214\\n## Shipping [2 button \\\"Shipping\\\" expanded]\\nShips from Rotterdam within two days.\",\"items\":\"2 to 2\",\"notes\":[\"Safari exposed only 137 characters..."
+  }
+ ],
+ "verdicts": {
+  "open": {
+   "verdict": "FAIL",
+   "why": "performed by rich itself"
+  },
+  "press": {
+   "verdict": "FAIL",
+   "why": "performed by rich itself"
+  }
+ }
+}
