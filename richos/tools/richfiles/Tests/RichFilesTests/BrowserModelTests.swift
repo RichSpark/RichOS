@@ -70,6 +70,13 @@ final class BrowserModelTests: XCTestCase {
                                         repository: try FileReference(url: directory),
                                         administration: try FileReference(url: administration),
                                         lands: [], allOnMain: false, commit: nil, path: nil)
+        let startingFolder = directory.deletingLastPathComponent()
+        git.startSnapshot(snapshot, folder: startingFolder, currentChat: "source", docked: true)
+        git.follow(startingFolder)
+        git.follow(directory)
+        XCTAssertEqual(git.snapshot, snapshot)
+        XCTAssertEqual(git.scope, .chat)
+
         git.startSnapshot(snapshot, folder: child, currentChat: nil)
         git.follow(directory)
         XCTAssertEqual(git.snapshot, snapshot)

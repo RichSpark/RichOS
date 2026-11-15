@@ -180,7 +180,9 @@ public final class RichFilesDockTarget {
         let root = snapshot.repository.url
         let active = workspace.activeModel
         active.openFolder(root)
-        workspace.git.startSnapshot(snapshot, folder: root, currentChat: currentChat, docked: true)
+        // The browser validates the destination asynchronously. Git reads its
+        // pinned root immediately and follows the browser once navigation lands.
+        workspace.git.startSnapshot(snapshot, folder: active.folder, currentChat: currentChat, docked: true)
     }
 
     // The webview can become visible before SwiftUI appears.
