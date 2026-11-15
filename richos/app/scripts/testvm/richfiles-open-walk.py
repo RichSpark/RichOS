@@ -4,7 +4,7 @@
 Run by run-walk.py, which holds one guest slot for this run only, boots the guest and removes the clone:
 
   run-walk.py --bundle ZIP --home EMPTY_DIR --engine ENGINE --report REPORT --wait 600 -- \\
-      richfiles-open-walk.py --out DIR --expect-sha SHA [--limit-ms N] [--diagnose]
+      richfiles-open-walk.py --out DIR --expect-sha SHA [--steps a,b,c] [--limit-ms N] [--diagnose sample|disk]
 
 THE QUESTION, the CEO's words (2026-11-15): "The very first time when I clicked on the RichFiles icon in
 the nav rail ... it took quite a long time (probably at least 2 or 3 seconds) where absolutely nothing
@@ -24,10 +24,18 @@ STEPS (in the guest, never on the host's screen, CEO section 65; the guest has n
                  multiple app restarts"
   after-purge    (optional, a diagnosis) the app quit, the guest's file cache emptied (`sudo purge`), the app
                  started again, then the same click: an open whose files all come from the disk again
+  home-still     (optional) what getting RichFiles ready costs the start: the app quit from its own menu and
+                 started again, and the home screen's moving picture watched from outside for --still-seconds
+                 (frame-rate.swift, in the guest: the picture's frames in each second and the longest pause
+                 between two of them). The seconds are listed by when they began after the process started,
+                 beside the app's own line saying when it loaded RichFiles and built its pane. Run it on the
+                 build before the change too: the pauses are the result, not a pass mark.
 
 Each timed step reports the click-to-visible interval as two bounds in milliseconds: RichFiles was not on
 screen in the frame that began `low` ms after the click and was on screen in the frame that ended `high`
 ms after it. `high` is the number to quote. `--limit-ms N` fails a timed step whose `high` is over N.
+Each also reads the app's own line about getting RichFiles ready ahead of a click (how long its library
+and its pane took, and when after the process started) and says whether that was before the click.
 `--diagnose sample` also samples the app's process across the first click (`sample`, saved as
 first-open.sample.txt); `--diagnose disk` records every read from the guest's disk across it (`fs_usage`,
 first-open.disk.txt). Both keep the guest's system log for those seconds. A sampled click is slower, so its
@@ -50,8 +58,12 @@ QA = HERE.parent / 'qa'
 sys.path.insert(0, str(QA / 'lib'))
 
 STEPS = ['identity', 'first-run', 'first-open', 'again', 'after-restart']
-OPTIONAL = ['after-purge']
+OPTIONAL = ['after-purge', 'home-still']
 TIMED = ('first-open', 'again', 'after-restart', 'after-purge')
+# The app's own line when it has loaded RichFiles and built its pane ahead of a click
+# (src-tauri/src/richfiles_pane.rs); a build from before that writes none.
+READY = re.compile(r'RichFiles ready before its first click: library (\d+) ms on a background thread, '
+                   r'pane (\d+) ms on the main thread(?:, asked (\d+) ms and ready (\d+) ms after the process started)?')
 # RichFiles' own words, which no other screen of the app shows: its sidebar's first row and the
 # Details view's date column (tools/richfiles/Sources/RichFiles/BrowserView.swift).
 WORDS = r'This Mac|Modified'
@@ -82,6 +94,15 @@ def visible_bounds(record, readings, words=WORDS):
             'frames': len(frames), 'click_window_ms': round((action['after_ns'] - action['before_ns']) / 1e6, 1)}
 
 
+def ready_line(log):
+    """What the app's log says about getting RichFiles ready ahead of a click, or None."""
+    found = READY.search(log or '')
+    if not found:
+        return None
+    keys = ('library_ms', 'pane_ms', 'asked_ms_after_start', 'ready_ms_after_start')
+    return {k: int(v) for k, v in zip(keys, found.groups()) if v is not None}
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('vm')
@@ -90,6 +111,7 @@ def main():
     p.add_argument('--steps', default=','.join(STEPS))
     p.add_argument('--seconds', type=float, default=8.0, help='how long each click is photographed (default 8)')
     p.add_argument('--limit-ms', type=float, help='fail a timed step whose click-to-visible upper bound is over this')
+    p.add_argument('--still-seconds', type=int, default=16, help='home-still: how many seconds of the start are watched (default 16, at most 20)')
     p.add_argument('--diagnose', choices=('sample', 'disk'),
                    help="across the first click: sample the app's process, or record every read from the guest's disk")
     a = p.parse_args()
@@ -107,6 +129,10 @@ def main():
 
     class Walk(rail.Walk):
         remote = None
+        log = None  # the running app's own log in the guest
+
+        def app_log(self):
+            return guest(self.vm, 'cat ' + shlex.quote(self.log or self.payload + '/app.log') + ' 2>/dev/null || true', 60)
 
         def tools(self):
             if self.remote:
@@ -153,7 +179,8 @@ def main():
             frames = remote + '/' + label
             pid = self.app_pid()
             ev = {'click': [x, y], 'region': region, 'app_pid': pid,
-                  'app_running_for': guest(self.vm, 'ps -o etime= -p %s' % pid).strip()}
+                  'app_running_for': guest(self.vm, 'ps -o etime= -p %s' % pid).strip(),
+                  'app_memory_mb': round(int(guest(self.vm, 'ps -o rss= -p %s' % pid).strip() or 0) / 1024)}
             kept = {'sample': 'first-open.sample.txt', 'disk': 'first-open.disk.txt'}.get(a.diagnose)
             if kept and label == 'first-open':
                 watch = ('sample {p} {s} 1 -file {f}' if a.diagnose == 'sample' else
@@ -195,10 +222,21 @@ def main():
             if answer is None:
                 raise StepFailed('%s (frames kept in %s)' % (why, local))
             ev.update(answer)
+            # Whether the app had RichFiles ready when the click came, by its own line and the
+            # click's moment on the same clock (the guest's), both counted from the process's start.
+            log = self.app_log()
+            born = re.search(r'process started at (\d+)', log)
+            clicked = re.search(r'^t_action_before\t([0-9.]+)', (local / 'meta.tsv').read_text(), re.M)
+            ev['made_ready'] = ready_line(log)
+            if born and clicked:
+                ev['click_ms_after_start'] = round(float(clicked.group(1)) - int(born.group(1)))
+            ready_at = (ev['made_ready'] or {}).get('ready_ms_after_start')
+            ev['ready_before_the_click'] = (ready_at < ev['click_ms_after_start']
+                                            if ready_at is not None and 'click_ms_after_start' in ev else None)
             self.facts[label] = ev
             self.save()
-            print('%s: RichFiles on screen between %.0f and %.0f ms after the click (app running for %s)'
-                  % (label, ev['low_ms'], ev['high_ms'], ev['app_running_for']), flush=True)
+            print('%s: RichFiles on screen between %.0f and %.0f ms after the click, %s ms after the app started; made ready: %s'
+                  % (label, ev['low_ms'], ev['high_ms'], ev.get('click_ms_after_start'), json.dumps(ev['made_ready'])), flush=True)
             if a.limit_ms is not None and ev['high_ms'] > a.limit_ms and not (a.diagnose == 'sample' and label == 'first-open'):
                 raise StepFailed('RichFiles took up to %.0f ms to appear, over the %.0f ms limit: %s'
                                  % (ev['high_ms'], a.limit_ms, json.dumps(ev)))
@@ -214,6 +252,7 @@ def main():
 
         def after_restart(self):
             started = relaunch.relaunch(self.vm)
+            self.log = started.get('log')
             ev = self.timed_open('after-restart')
             ev['relaunched_pid'] = started.get('pid')
             return ev
@@ -222,8 +261,64 @@ def main():
             relaunch.quit_app(self.vm)
             guest(self.vm, 'sudo purge', 120)
             started = relaunch.relaunch(self.vm)
+            self.log = started.get('log')
             ev = self.timed_open('after-purge')
             ev['relaunched_pid'] = started.get('pid')
+            return ev
+
+        def home_still(self):
+            binary = self.out / 'frame-rate'
+            built = subprocess.run(['swiftc', '-O', '-target', 'arm64-apple-macos14.0', str(HERE / 'frame-rate.swift'),
+                                    '-o', str(binary)], capture_output=True, text=True, timeout=600)
+            if built.returncode:
+                raise StepFailed('frame-rate.swift did not compile: ' + (built.stdout + built.stderr)[-600:])
+            meter = self.tools() + '/frame-rate'
+            command([HERE / 'guest.sh', self.vm, '--push', binary, meter], 120)
+            # The app's own Quit, so the next start is an ordinary one and plays its opening screen.
+            old = self.app_pid()
+            try:
+                self.script('tell application "System Events" to tell (first process whose unix id is %s) to click '
+                            'menu item "Quit RichOS" of menu 1 of menu bar item 2 of menu bar 1' % old)
+            except StepFailed:
+                pass  # relaunch.py ends it instead; the evidence says which kind of start followed
+            end = time.monotonic() + 20
+            while time.monotonic() < end and guest(self.vm, 'kill -0 %s 2>/dev/null && echo alive || true' % old) == 'alive':
+                time.sleep(0.5)
+            started = relaunch.relaunch(self.vm)
+            self.log = started.get('log')
+            report, why = None, ''
+            for _ in range(8):  # the window is on screen a fraction of a second after the start
+                time.sleep(0.5)
+                try:
+                    report = json.loads(guest(self.vm, '%s %s 1 %d' % (shlex.quote(meter), started['pid'], a.still_seconds),
+                                              a.still_seconds + 60))
+                    break
+                except (RuntimeError, ValueError) as exc:
+                    why = str(exc)[-300:]
+            if report is None:
+                raise StepFailed('the window could not be watched: ' + why)
+            log = self.app_log()
+            (self.out / 'home-still.app.log').write_text(log)
+            born = re.search(r'process started at (\d+)', log)
+            kind = re.search(r'\[richos\] launch: (\S+)', log)
+            if not born:
+                raise StepFailed('the app wrote no launch line with its start time: ' + log[-400:])
+            born = int(born.group(1))
+            seconds = [{'from_ms': round(r['began_ms'] - born), 'picture_frames': r['picture'], 'window_frames': r['complete'],
+                        'longest_pause_ms': round(r['longest_gap_ms']),
+                        'pause_began_ms': round(r['longest_gap_began_ms'] - born) if r['longest_gap_began_ms'] else None}
+                       for r in report['samples']]
+            ev = {'launch': kind.group(1) if kind else None, 'relaunched_pid': started.get('pid'),
+                  'made_ready': ready_line(log), 'seconds': seconds,
+                  'longest_pause': max(seconds, key=lambda r: r['longest_pause_ms'])}
+            self.facts['home-still'] = ev
+            self.save()
+            print('home-still: a %s start; made ready: %s; the longest pause of the picture: %d ms, begun %s ms after the start; '
+                  'by second (from ms: frames, longest pause): %s' % (
+                      ev['launch'], json.dumps(ev['made_ready']), ev['longest_pause']['longest_pause_ms'],
+                      ev['longest_pause']['pause_began_ms'],
+                      ', '.join('%d: %d, %d' % (r['from_ms'], r['picture_frames'], r['longest_pause_ms']) for r in seconds)),
+                  flush=True)
             return ev
 
     walk = Walk(a)
