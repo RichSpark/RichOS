@@ -3719,12 +3719,24 @@ class DesktopWork(unittest.TestCase):
         self.assertNotIn("landed",self.app._read_land_lock(self.app.land_lock_path(self.repo)) or {})
 
     # ---- WITNESS (d), THE LAND (Output side panel PRD §4.1 (d), slice S2b) -----------------
-    # integrate writes one row per landed file into the back-end session's writes.jsonl: the
-    # landed path, the worktree path it retires, the commit and the worker its receipt names.
+    # integrate writes one ref-update marker per repository and one row per landed file into the
+    # back-end session's writes.jsonl. Only file rows carry the retired worktree path and worker.
 
     def land_rows(self):
         path=self.root/"engine-state/evidence"/self.session/"writes.jsonl"
         return [json.loads(l) for l in path.read_text().splitlines()] if path.exists() else []
+
+    def assert_land_marker(self,row,repo,before,reviewed):
+        root=Path(repo).resolve()
+        disk,administration=root.stat(),(root/".git").lstat()
+        self.assertEqual({k:v for k,v in row.items() if k!="at"},{
+            "schema":1,"source":"land-marker","session_id":self.session,"path":str(root),
+            "commit":self.app.git(repo,"rev-parse","main"),
+            "land_marker":{"branch":"main","before":before,"reviewed":reviewed,
+                "device":disk.st_dev,"inode":disk.st_ino,
+                "gitDevice":administration.st_dev,"gitInode":administration.st_ino},
+        })
+        self.assertIsInstance(row["at"],int)
 
     def reviewed_change(self,tag,edit):
         """reviewed_pair with any change: `edit(target)` edits the worker's worktree, and
@@ -3751,13 +3763,17 @@ class DesktopWork(unittest.TestCase):
             (target/"notes.pdf").write_bytes(b"%PDF-1.7 fictional")
         args,worker,worktree=self.reviewed_change("notes",notes)
         self.assertEqual(self.land_rows(),[])                  # POSITIVE CONTROL: nothing before the land
+        before=self.app.git(self.repo,"rev-parse","main")
+        reviewed=self.app.git(worktree,"rev-parse","HEAD")
         landed=self.call("integrate",args)
         self.assertTrue(landed["work_integrated"])
         head=self.app.git(self.repo,"rev-parse","main")
         rows=self.land_rows()
-        self.assertEqual(sorted((r["source"],r["path"],r["from"],r["commit"]) for r in rows),
+        marker,*files=rows
+        self.assert_land_marker(marker,self.repo,before,reviewed)
+        self.assertEqual(sorted((r["source"],r["path"],r["from"],r["commit"]) for r in files),
             [("land",str(self.repo/n),os.path.join(worktree,n),head) for n in ("notes.md","notes.pdf")])
-        for r in rows:
+        for r in files:
             self.assertEqual(r["worker"],{"name":worker["name"],"agent_id":"notes-worker"})   # the receipt's own
             self.assertEqual((r["session_id"],r["tool_use_id"],r["agent_id"]),(self.session,None,None))
             self.assertTrue((self.repo/Path(r["path"]).name).is_file())                  # the copy that opens
@@ -3766,14 +3782,20 @@ class DesktopWork(unittest.TestCase):
         self.assertTrue(self.call("integrate",args)["work_integrated"])
         self.assertEqual(self.land_rows(),rows)
 
-    def test_land_witness_records_nothing_for_a_land_that_only_deletes_a_file(self):
+    def test_land_witness_records_only_a_marker_for_a_land_that_only_deletes_a_file(self):
         self.call("integrate",self.reviewed_change("add",lambda t:(t/"gone.txt").write_text("soon gone"))[0])
         before=self.land_rows()
-        self.assertEqual([Path(r["path"]).name for r in before],["gone.txt"])
-        removed=self.call("integrate",self.reviewed_change("remove",lambda t:(t/"gone.txt").unlink())[0])
+        self.assertEqual([(r["source"],Path(r["path"]).name) for r in before],
+            [("land-marker",self.repo.name),("land","gone.txt")])
+        old_tip=self.app.git(self.repo,"rev-parse","main")
+        args,_,worktree=self.reviewed_change("remove",lambda t:(t/"gone.txt").unlink())
+        reviewed=self.app.git(worktree,"rev-parse","HEAD")
+        removed=self.call("integrate",args)
         self.assertTrue(removed["work_integrated"])
         self.assertFalse((self.repo/"gone.txt").exists())
-        self.assertEqual(self.land_rows(),before)
+        after=self.land_rows()
+        self.assertEqual(after[:-1],before)
+        self.assert_land_marker(after[-1],self.repo,old_tip,reviewed)
 
     def test_land_witness_that_raises_never_fails_the_land(self):
         args,_,_=self.reviewed_change("boom",lambda t:(t/"notes.md").write_text("n"))
@@ -3783,6 +3805,7 @@ class DesktopWork(unittest.TestCase):
             if name=="richos_app_evidence":
                 def refuse(*_a,**_k): raise OSError("synthetic: the evidence folder is unwritable")
                 module.append_land_rows=refuse
+                module.append_land_marker=refuse
             return module
         with patch.object(self.app,"load",side_effect=broken) as loaded:
             landed=self.call("integrate",args)
@@ -3805,9 +3828,16 @@ class DesktopWork(unittest.TestCase):
         self.start_fixture_worker(reviewer,"multi-witness-reviewer")
         self.finish_fixture_worker("multi-witness-reviewer","RICHOS_REVIEW "+json.dumps(
             {"commit":commits[str(self.repo)],"commits":commits,"verdict":"passed","checks":["both repositories"]}))
+        before={repo:self.app.git(repo,"rev-parse","main") for repo in commits}
         self.assertTrue(self.call("integrate",{"worker_id":worker["id"],"reviewer_id":reviewer["id"]})["work_integrated"])
+        rows=self.land_rows()
+        self.assertCountEqual([r["source"] for r in rows],["land-marker","land"] * len(commits))
+        markers={r["path"]:r for r in rows if r["source"]=="land-marker"}
+        self.assertEqual(set(markers),set(commits))
+        for repo in commits:
+            self.assert_land_marker(markers[repo],repo,before[repo],commits[repo])
         # Each row names the commit its repository's branch now points at: that land's merge commit.
-        self.assertEqual(sorted((r["path"],r["from"],r["commit"]) for r in self.land_rows()),
+        self.assertEqual(sorted((r["path"],r["from"],r["commit"]) for r in rows if r["source"]=="land"),
             sorted((os.path.join(repo,"result.txt"),os.path.join(paths[repo],"result.txt"),
                     self.app.git(repo,"rev-parse","main")) for repo in commits))
 
