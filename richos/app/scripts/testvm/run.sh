@@ -6,6 +6,7 @@
 #                 [--vm <name>] [--keep] [--engine <engine.tar.gz>] [--no-tailnet]
 #   testvm/run.sh --no-app --home <fixture-home-dir> [--vm <name>] [--keep] [--no-tailnet]
 #   testvm/run.sh --bundle <...> --home <fixture-home-dir> --new-user [--vm <name>] [--no-tailnet]
+#   any of these with --audio: the guest's sound passed through to this Mac, muted before the app launches
 #
 # --new-user: the app is launched the way a person's first double-click launches it,
 # with HOME and nothing else the harness normally hands it: no RICHOS_CLAUDE_BIN, no
@@ -16,11 +17,20 @@
 # out. A walk signs in later with `claude-login.sh push` when it means to. Every
 # harness default left out here is one a new user does not have: a first-run walk
 # that inherits them proves the harness, not the product (new-user-walk.py).
-# --no-audio: boot the guest with no sound device at all (tart's --no-audio). Without it the
-# guest's sound device passes audio through to the HOST: a guest app that opens its microphone
-# reads the host's microphone (the CEO's room, and a permission prompt on his screen), and what it
-# plays comes out of the host's speakers. A walk that runs a real call in the guest boots with
-# this and gives the guest its own virtual audio devices (the Mac call lab).
+# NO GUEST'S SOUND REACHES THIS MAC UNLESS ITS CALLER ASKS BY NAME (the CEO, 2026-11-15: "I've
+# heard the start sound well over 40 times now"; standing rule: no check that is not an audio test
+# plays sound on this Mac). Every guest boots with tart's --no-audio, which leaves the guest only
+# "a null speaker" (tart 2.33.1 Sources/tart/VM.swift: an output stream with no host sink; the
+# guest lists "Apple Virtual Sound Device", output only, no input): nothing it plays reaches this
+# Mac's speakers and nothing reads this Mac's microphone. No tart flag removes that null speaker.
+# --no-audio is still accepted and changes nothing.
+# --audio: boot the guest WITH the host passthrough (input and output, tart's default), for a walk
+# that starts voice and asks for it (run-walk.py VOICE_WALKS; voice needs an output device to
+# start, richos-voice playout.rs, and whether the null speaker alone serves it is unproven,
+# esc-20261115T081129Z-97865c5f). Its output is muted HERE and read back before anything launches (the app's opening plays a start sound at
+# every launch); a guest that does not read back muted is refused, so nothing the guest plays
+# reaches this Mac's speakers. A walk that runs a real call in the guest never asks for it and
+# installs its own virtual audio devices (the Mac call lab; run-walk.py refuses --audio to it).
 #
 # --no-app: the same guest (the host's claude synced in, the host's login pushed
 # into the fixture home, a login keychain ready) and NO app launched, for a proof
@@ -40,7 +50,7 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$HERE/lib.sh"
 
-BUNDLE=""; FIXTURE_HOME=""; VM="richos-test-1"; ENGINE=""; KEEP=0; TAILNET=1; NOAPP=0; NEWUSER=0; AUDIO=1
+BUNDLE=""; FIXTURE_HOME=""; VM="richos-test-1"; ENGINE=""; KEEP=0; TAILNET=1; NOAPP=0; NEWUSER=0; AUDIO=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --bundle) BUNDLE="$2"; shift 2 ;;
@@ -57,6 +67,7 @@ while [ $# -gt 0 ]; do
     # would rather not spend twenty seconds and a node on one.
     --no-tailnet) TAILNET=0; shift ;;
     --no-audio) AUDIO=0; shift ;;
+    --audio) AUDIO=1; shift ;;
     *) die "unknown argument: $1" ;;
   esac
 done
@@ -176,6 +187,22 @@ clean_up_this_runs_clone() {
     log "$VM was already running before this call, so it is left alone."
   fi
 }
+
+# --- 2-a. a guest's passthrough is muted before anything can play ------------
+# Only with --audio, and FIRST, before the consent, the claude binary or the app: the app's opening
+# plays its start sound at every launch, and walks that muted the guest only inside their own
+# voice steps had already let it through to this Mac's speakers (the CEO, 2026-11-15). A guest
+# whose output does not read back muted is never used.
+if [ "$WANT_AUDIO" = on ]; then
+  if MUTED="$(mute_guest_sound "$VM" 2>&1)"; then
+    log "the guest's sound output is muted (output muted = $MUTED): nothing it plays reaches this Mac's speakers"
+    echo muted > "$STATE/output"
+  else
+    log "REFUSED: the guest's sound output did not mute (${MUTED:-no answer}); a guest whose sound reaches this Mac's speakers is never used"
+    clean_up_this_runs_clone
+    exit 1
+  fi
+fi
 
 # --- 2-. the screen-capture consent -------------------------------------------
 # BEFORE anything captures: macOS 15 asks again every 30 days whether the ssh client may

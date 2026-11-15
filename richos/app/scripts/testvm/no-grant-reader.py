@@ -184,7 +184,8 @@ def main():
             if r.returncode:
                 return 1
             tart('set', vm, '--cpu', '4', '--memory', '5120')
-            run = subprocess.Popen([TART, 'run', '--no-graphics', vm], env=env, stdout=log, stderr=log)
+            # --no-audio: no guest's sound is passed to this Mac unless a walk asks (run.sh --audio).
+            run = subprocess.Popen([TART, 'run', '--no-graphics', '--no-audio', vm], env=env, stdout=log, stderr=log)
             say('tart run pid', run.pid)
             try:
                 ip = None

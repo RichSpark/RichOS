@@ -16,7 +16,7 @@ Run by run-walk.py with --no-app, so the walk installs what it launches and the 
 the boot is its own; never on the host's screen (CEO ruling §65):
 
   run-walk.py --no-app --home FIXTURE --engine ENGINE [--previous-bundle OLDER.zip] --report R -- \\
-      launch-speed-walk.py --candidate CANDIDATE.zip --out DIR [--runs 20] [--checks] [--report-only]
+      launch-speed-walk.py --candidate CANDIDATE.zip --out DIR [--runs 5] [--full-runs 20] [--checks] [--report-only]
 
 run-walk.py passes the owned VM name first and, with --previous-bundle, appends --previous-app.
 
@@ -31,10 +31,10 @@ through LaunchServices), as a regular launch (an unattended one builds its windo
                   receipts the updater writes, derived as it derives them), the older copy launched
                   and quit so its helper puts the candidate in place at quit, then the candidate
                   launched: that launch is judged, --runs times;
-  rule-switch     the plan's route 5, --runs fresh homes: the first start (no saved pick, reported),
+  rule-switch     the plan's route 5, fresh homes: the first start (no saved pick, reported),
                   then start 2, whose quit before it picked the other splash (#2) and drew its
-                  opening, then start 3 (#1 again): both judged, so every splash today's rule can
-                  pick is timed at least --runs times;
+                  opening, then start 3 (#1 again): both judged, --runs judged starts in all, so
+                  every splash today's rule can pick is timed;
   day-change      a user of "one of mine, a different one each day" (round 74, the CEO's order of
                   2026-11-14): the first start of a new day, after an ordinary quit the day before.
                   That quit drew the next day's opening beside its own, so this start plays pictures
@@ -53,14 +53,16 @@ line, and for builds older than it, the guest's system log (WebKit's document lo
 splash). One untimed frame per route shows what was on screen.
 
 THE RULE, the CEO's (2026-11-14): "380 ms as the maximum allowed p95 time for the RichOS app to
-start showing the splash screen." The p95 of every judged launch, every route together, over
-the limit refuses: LIMIT_MS times Dictionary's slowness in the same guest, compared like for like
-(the CEO: "if the VM is slower, then the measurements need to be adjusted accordingly"): its median
-on his Mac from the Dock click to its window, against its median in the guest from the same
-starting point (the guest's launch-request median plus the Dock's own part measured on his Mac),
-never a p95 a single cold outlier sets; the ratio and its inputs are recorded beside the limit.
-Every route's own p95 and median, and every splash's, are stated. 20 launches a route by default,
-so a p95 is a real 95th percentile and not the slowest of a handful.
+start showing the splash screen." And (2026-11-15): "Reduce to 5. Only if one of the 5 is outside
+what's required, only then do you need to extend to 20. Otherwise i.e. if the first 5 are fine,
+it's a PASS." Every judged route runs --runs (5) starts; a route all of whose starts are at or under
+the limit passes; a route with one over goes on to --full-runs (20) starts and is refused when its
+p95 is over the limit. The limit is LIMIT_MS times the test VM's slowness against his Mac (the CEO: "if the VM is
+slower, then the measurements need to be adjusted accordingly"), a FIXED ratio taken once from the
+Dictionary measurements on record (WARM_RATIO, and COLD_RATIO for the cold route); Dictionary is
+never launched (the CEO, 2026-11-14 and 2026-11-15). The ratio and its inputs are recorded beside
+the limit.
+Every route's own p95 and median, and every splash's, are stated.
 
 Every instance it starts is quit by the pid captured at spawn and checked gone in the guest.
 Exit 0 on a pass; 1 when a route is refused (unless --report-only) or a check failed; 2 on a harness
@@ -84,27 +86,61 @@ HERE = Path(__file__).resolve().parent
 # The CEO's rule (2026-11-14): at most 380 ms p95 from the click to the splash showing (his
 # benchmark was Dictionary's measured Dock launch on his Mac, at most 380 ms).
 LIMIT_MS = 380
-# THE GUEST IS SLOWER THAN HIS MAC, SO THE LIMIT IS SCALED, ONCE PER WALK (the CEO, 2026-11-14: "if
-# the VM is slower, then the measurements need to be adjusted accordingly. This is NOT about some 100
-# or 200 ms."), LIKE FOR LIKE AND BY MEDIANS: Dictionary's window was ordered front 287, 305, 318, 318,
-# 328 and 380 ms after the Dock click on his Mac (Echo's audit, `richos-hq/docs/research/2026-11-14-
-# app-launch-speed-audit.md`, "Dictionary, same Mac, same Dock"), median MAC_DICTIONARY_MEDIAN_MS; the
-# walk launches Dictionary DICTIONARY_RUNS times in the same guest and times its window from the
-# launch request, and adds the Dock's own part before the request (44, 41, 43 and 54 ms on his Mac,
-# the audit's Dock-click table, median DOCK_PART_MS). The limit is LIMIT_MS x (that guest median /
-# MAC_DICTIONARY_MEDIAN_MS), never below LIMIT_MS, recorded with its inputs.
+# THE GUEST IS SLOWER THAN HIS MAC, SO THE LIMIT IS SCALED (the CEO, 2026-11-14: "if the VM is
+# slower, then the measurements need to be adjusted accordingly. This is NOT about some 100 or 200
+# ms."), BY A FIXED RATIO, AND DICTIONARY IS NEVER LAUNCHED (the CEO, 2026-11-14: "Stop all that
+# retarded "launch-speed walk beside Dictionary" fuckshit!", and 2026-11-15 when a nightly still
+# launched it 20 times: "What the fuck did I say about that????"). The ratios are the Dictionary
+# measurements already on record, like for like and by medians, taken once
+# (docs/verification/2026-11-14-splash-opening/, the three walks in its walks.tgz):
+#   his Mac: Dictionary's window 287, 305, 318, 318, 328 and 380 ms after the Dock click (Echo's
+#     audit, `richos-hq/docs/research/2026-11-14-app-launch-speed-audit.md`), median 318 ms; the
+#     Dock's own part before the launch request 44, 41, 43 and 54 ms, median 43.5 ms;
+#   the guest, warm: 30 launches, launch request to window (build 540..1277, stable 556..2813,
+#     smoke 383..2610), median 674 ms; (674 + 43.5) / 318 = 2.256, limit round(380 x 2.256) = 857 ms
+#     (the build walk's own ratio, the same median);
+#   the guest, after a `sudo purge` (the cold route's own, the lead's decision on
+#     esc-20261114T164747Z-54632204): 20 launches (build 2355..8130, stable 4193..8441), median
+#     5262.5 ms; (5262.5 + 43.5) / 318 = 16.686, limit round(380 x 16.686) = 6341 ms.
 MAC_DICTIONARY_MS = (287, 305, 318, 318, 328, 380)
 MAC_DICTIONARY_MEDIAN_MS = statistics.median(MAC_DICTIONARY_MS)
 DOCK_PART_INPUTS_MS = (44, 41, 43, 54)
 DOCK_PART_MS = statistics.median(DOCK_PART_INPUTS_MS)
-DICTIONARY_RUNS = 10
-DICTIONARY = '/System/Applications/Dictionary.app'
+GUEST_DICTIONARY_WARM_MS = (540, 551, 621, 634, 648, 700, 714, 824, 1185, 1277,
+                            556, 585, 645, 704, 783, 818, 920, 1132, 1439, 2813,
+                            383, 420, 464, 482, 548, 560, 582, 741, 1170, 2610)
+GUEST_DICTIONARY_COLD_MS = (2355, 3536, 3573, 3672, 3854, 4818, 5135, 5233, 7213, 8130,
+                            4193, 5071, 5292, 5604, 5624, 5811, 5833, 6045, 6590, 8441)
+RECORD = 'docs/verification/2026-11-14-splash-opening/ (walks.tgz: build, stable, smoke-report)'
+
+
+def recorded_ratio(guest_ms):
+    """(ratio, inputs) from Dictionary launches on record in the guest, LIKE FOR LIKE: their median
+    from the launch request to the window, plus the Dock's own part measured on his Mac, against
+    his Mac's median from the Dock click. Rounded once to three places, never below 1."""
+    guest = statistics.median(guest_ms) + DOCK_PART_MS
+    ratio = round(max(1.0, guest / MAC_DICTIONARY_MEDIAN_MS), 3)
+    return ratio, {'guest_median_from_request_ms': statistics.median(guest_ms), 'guest_launches': len(guest_ms),
+                   'dock_part_ms': DOCK_PART_MS, 'guest_median_from_click_ms': guest,
+                   'mac_median_from_click_ms': MAC_DICTIONARY_MEDIAN_MS, 'record': RECORD}
+
+
+WARM_RATIO, WARM_INPUTS = recorded_ratio(GUEST_DICTIONARY_WARM_MS)
+COLD_RATIO, COLD_INPUTS = recorded_ratio(GUEST_DICTIONARY_COLD_MS)
+# Made from the rounded ratio, so publication (nightly-local.py) re-derives round(380 x ratio) exactly.
+WARM_LIMIT_MS = round(LIMIT_MS * WARM_RATIO)
+COLD_LIMIT_MS = round(LIMIT_MS * COLD_RATIO)
 # The splash today's rule picks for each start (richos-core `launch::pick_splash`): start 2 shows the
 # second entry, every other start the first.
 SPLASH_FOR_START = {2: 'round-11/v2'}
 SPLASH_OTHERWISE = 'round-11/v1'
-# A p95 is a 95th percentile only over enough launches: fewer judged launches than this refuse.
-MIN_LAUNCHES = 20
+# FIVE STARTS A ROUTE, TWENTY ONLY WHEN ONE FAILS (the CEO, 2026-11-15: "Reduce to 5. Only if one
+# of the 5 is outside what's required, only then do you need to extend to 20. Otherwise i.e. if the
+# first 5 are fine, it's a PASS."): every judged route, the rule switch too, runs FIRST_STARTS
+# starts; a route all of whose starts are at or under its limit has passed; a route with one over
+# goes on to FULL_STARTS starts and is judged by its p95 against the same limit.
+FIRST_STARTS = 5
+FULL_STARTS = 20
 # Added to every judged stamp: the Dock's own part of a click
 # (41 to 54 ms on the CEO's Mac, the audit) and the screen's next refresh (one 60 Hz frame).
 ALLOWANCE_MS = 54 + 17
@@ -203,8 +239,6 @@ def measure(run, events):
         row['splash'], row['splash_from'] = row['first_frame'] + ALLOWANCE_MS, "the splash's opening on the glass"
     elif 'page_took_over' in row:
         row['splash'], row['splash_from'] = row['page_took_over'] + ALLOWANCE_MS, "the page's splash playing"
-    elif run['label'].startswith('dictionary') and 'window' in row:
-        row['splash'], row['splash_from'] = row['window'] + ALLOWANCE_MS, "AppKit's window ordered front"
     elif 'document_loaded' in row and 'process_start' not in row:
         # Only a build older than the launch line: a build that writes it and did not report its
         # splash is missing evidence, never timed by WebKit's document instead (review
@@ -220,20 +254,38 @@ def p95(values):
     return ordered[max(0, -(-len(ordered) * 95 // 100) - 1)]
 
 
-def verdict(rows, planned=None, limit_ms=LIMIT_MS, ratio=None, inputs=None, route_limits=None):
-    """The CEO's rule, 2026-11-14: "380 ms as the maximum allowed p95 time for the RichOS app to
-    start showing the splash screen." The p95 of each judged route, and of every judged launch
-    together, against the limit: any one over it refuses. A route in `route_limits` ({route:
-    {'limit_ms', 'ratio', 'inputs'}}) is judged against its own like-for-like limit (the cold route
-    against Dictionary after the same purge) and is not pooled with the others.
+def route_limit(route, limit_ms=LIMIT_MS, route_limits=None):
+    """The limit a route's starts are judged against: its own (the cold route's) or the walk's."""
+    return (route_limits or {}).get(route, {}).get('limit_ms', limit_ms)
+
+
+def needing_more(rows, limit_ms=LIMIT_MS, route_limits=None):
+    """The judged routes one of whose starts is over its limit (the CEO, 2026-11-15: "Only if one of
+    the 5 is outside what's required, only then do you need to extend to 20"): these, and only
+    these, go on to FULL_STARTS. A start with no timing is missing evidence, which refuses the walk
+    whatever more starts show, so it takes nothing on."""
+    return sorted({row['label'].partition(':')[0] for row in rows
+                   if row['label'].endswith(':judged') and 'splash' in row
+                   and row['splash'] > route_limit(row['label'].partition(':')[0], limit_ms, route_limits)})
+
+
+def verdict(rows, planned=None, limit_ms=LIMIT_MS, ratio=None, inputs=None, route_limits=None, full=FULL_STARTS):
+    """The CEO's rules: "380 ms as the maximum allowed p95 time for the RichOS app to start showing
+    the splash screen" (2026-11-14), and "Reduce to 5. Only if one of the 5 is outside what's
+    required, only then do you need to extend to 20. Otherwise i.e. if the first 5 are fine, it's a
+    PASS." (2026-11-15). Each judged route on its own: every one of its starts at or under its limit
+    passes; with one over, it passes only when it was taken to `full` starts and its p95 is at or
+    under the limit. A route in `route_limits` ({route: {'limit_ms', 'ratio', 'inputs'}}) is judged
+    against its own limit (the cold route, scaled by Dictionary after a purge on record) and is not
+    pooled with the others; every other route's p95 together is stated beside them.
 
     MISSING EVIDENCE NEVER PASSES (review rv-20261114T115101Z-10e7c6ac-7689, finding 1): a judged
-    launch with no timing, a planned route with no launches (`planned`, {route: launches}), or
-    fewer than MIN_LAUNCHES judged launches in all refuses, and says which."""
+    launch with no timing, a planned route short of its launches (`planned`, {route: launches}), or
+    no judged launch at all refuses, and says which."""
     judged, missing = {}, []
     for row in rows:
         route, _, kind = row['label'].partition(':')
-        if kind != 'judged' or route == 'dictionary':
+        if kind != 'judged':
             continue
         if 'splash' in row:
             judged.setdefault(route, []).append(row['splash'])
@@ -248,20 +300,25 @@ def verdict(rows, planned=None, limit_ms=LIMIT_MS, ratio=None, inputs=None, rout
     summary = {'limit_ms': limit_ms, 'guest_ratio': ratio, 'guest_inputs': inputs, 'launches': len(every),
                'p95_ms': p95(every) if every else None, 'routes': {}, 'reported': {}, 'missing': missing,
                'route_limits': route_limits}
-    summary['incomplete'] = bool(missing) or len(every) < MIN_LAUNCHES
+    summary['incomplete'] = bool(missing) or not judged
     for route, values in sorted(judged.items()):
+        own = route_limit(route, limit_ms, route_limits)
         summary['routes'][route] = {'p95_ms': p95(values), 'median_ms': statistics.median(values),
-                                    'max_ms': max(values), 'launches': len(values)}
-    # EVERY JUDGED ROUTE ON ITS OWN, and all of them together: one fast route never hides a slow
-    # one (review rv-20261114T143754Z-7a96691c-3106, finding 2).
-    summary['routes_over'] = sorted(r for r, s in summary['routes'].items()
-                                    if s['p95_ms'] > route_limits.get(r, {}).get('limit_ms', limit_ms))
-    summary['refused'] = summary['incomplete'] or summary['p95_ms'] > limit_ms or bool(summary['routes_over'])
+                                    'max_ms': max(values), 'launches': len(values),
+                                    'over': sum(1 for v in values if v > own)}
+    # EVERY JUDGED ROUTE ON ITS OWN: one fast route never hides a slow one (review
+    # rv-20261114T143754Z-7a96691c-3106, finding 2). (The p95 of the routes together is stated, not
+    # judged: with every route passing as above, at most one start in each twenty is over, so it is
+    # within the limit too.)
+    summary['routes_over'] = sorted(
+        r for r, s in summary['routes'].items()
+        if s['over'] and (s['launches'] < full or s['p95_ms'] > route_limit(r, limit_ms, route_limits)))
+    summary['refused'] = summary['incomplete'] or bool(summary['routes_over'])
     # Every splash the rules picked, on its own: the hundredth splash must cost what the first does.
     by_splash = {}
     for row in rows:
         route, _, kind = row['label'].partition(':')
-        if kind == 'judged' and route != 'dictionary' and 'splash' in row and row.get('splash_id'):
+        if kind == 'judged' and 'splash' in row and row.get('splash_id'):
             by_splash.setdefault(row['splash_id'], []).append(row['splash'])
     summary['splashes'] = {sid: {'p95_ms': p95(v), 'median_ms': statistics.median(v), 'launches': len(v)}
                            for sid, v in sorted(by_splash.items())}
@@ -273,8 +330,10 @@ def verdict(rows, planned=None, limit_ms=LIMIT_MS, ratio=None, inputs=None, rout
 
 def sentence(summary):
     """What the nightly prints: the p95 against 380 ms, and every route's own numbers."""
-    parts = ['%s p95 %d ms, median %d ms (%d launches)' % (route, r['p95_ms'], r['median_ms'], r['launches'])
-             for route, r in sorted(summary['routes'].items())]
+    parts = ['%s p95 %d ms, median %d ms (%d launches%s)' % (
+        route, r['p95_ms'], r['median_ms'], r['launches'],
+        ', %d over its limit' % r['over'] if r.get('over') else ', every one within its limit')
+        for route, r in sorted(summary['routes'].items())]
     parts += ['%s %d ms (reported, not judged)' % (label, ms) for label, ms in sorted(summary['reported'].items())]
     head = ('nothing measured' if summary['p95_ms'] is None else
             'p95 %d ms over %d launches, %s' % (summary['p95_ms'], summary['launches'],
@@ -282,58 +341,29 @@ def sentence(summary):
     if summary.get('routes_over'):
         head += '; OVER THE LIMIT ON ITS OWN: ' + ', '.join(summary['routes_over'])
     if summary.get('incomplete'):
-        head += ('; REFUSED, THE MEASUREMENT IS INCOMPLETE: %d judged launch(es) without a timing (%s), '
-                 '%d launches where at least %d are required' % (
-                     len(summary['missing']), ', '.join(sorted(set(summary['missing']))) or 'none',
-                     summary['launches'], MIN_LAUNCHES))
-    inputs = summary.get('guest_inputs') or {}
+        head += ('; REFUSED, THE MEASUREMENT IS INCOMPLETE: %d judged launch(es) without a timing or not launched (%s)'
+                 % (len(summary['missing']), ', '.join(sorted(set(summary['missing']))) or 'no judged launch at all'))
     scaled = ('' if not summary.get('guest_ratio') else
-              ' (%d ms on his Mac x %.2f, Dictionary\'s slowness in this guest: its median %g ms from the Dock click here, '
-              'the launch request\'s %g ms plus the Dock\'s %g, against %g ms on his Mac)' % (
-                  LIMIT_MS, summary['guest_ratio'], inputs.get('guest_median_from_click_ms'),
-                  inputs.get('guest_median_from_request_ms'), inputs.get('dock_part_ms'),
-                  inputs.get('mac_median_from_click_ms')))
+              ' (%d ms on his Mac x %.3f, the test VM\'s slowness on record, fixed)' % (LIMIT_MS, summary['guest_ratio']))
     parts += ['%s p95 %d ms (%d launches)' % (sid, s['p95_ms'], s['launches'])
               for sid, s in sorted(summary.get('splashes', {}).items())]
     for route, own in sorted((summary.get('route_limits') or {}).items()):
-        got = (own.get('inputs') or {})
-        parts.append('%s judged on its own against %d ms (380 x %s, Dictionary after the same purge: its median %s ms '
-                     'from the Dock click here, against %g ms on his Mac)' % (
-                         route, own['limit_ms'], own.get('ratio'), got.get('guest_median_from_click_ms'),
-                         MAC_DICTIONARY_MEDIAN_MS))
+        parts.append('%s judged on its own against %d ms (380 x %s, the test VM\'s slowness after a purge on record, '
+                     'fixed)' % (route, own['limit_ms'], own.get('ratio')))
     return 'Launch speed, Dock click to the splash showing, against a p95 of %d ms%s: %s. %s.' % (
         summary['limit_ms'], scaled, head, '; '.join(parts))
 
 
-def guest_limit(rows, label='dictionary:calibration'):
-    """(limit in ms, ratio, inputs) from the Dictionary calibration launches, LIKE FOR LIKE: its
-    median from the launch request to its window in the guest, plus the Dock's own part measured on
-    his Mac, against its median from the Dock click to its window on his Mac. (LIMIT_MS, None, None)
-    without them. A guest faster than his Mac never tightens the limit below LIMIT_MS."""
-    windows = [r['window'] for r in rows if r['label'] == label and 'window' in r]
-    if not windows:
-        return LIMIT_MS, None, None
-    guest = statistics.median(windows) + DOCK_PART_MS
-    # Rounded ONCE, and the limit is made from the rounded ratio: publication (nightly-local.py,
-    # `round(380 * ratio)` from the recorded ratio) re-derives exactly the same limit (review
-    # rv-20261114T153837Z-b8423a44-96f8).
-    ratio = round(max(1.0, guest / MAC_DICTIONARY_MEDIAN_MS), 3)
-    inputs = {'guest_window_from_request_ms': sorted(windows), 'guest_median_from_request_ms': statistics.median(windows),
-              'dock_part_ms': DOCK_PART_MS, 'dock_part_inputs_ms': list(DOCK_PART_INPUTS_MS),
-              'guest_median_from_click_ms': guest, 'mac_median_from_click_ms': MAC_DICTIONARY_MEDIAN_MS,
-              'mac_inputs_ms': list(MAC_DICTIONARY_MS), 'ratio': round(guest / MAC_DICTIONARY_MEDIAN_MS, 3)}
-    return round(LIMIT_MS * ratio), ratio, inputs
-
-
 
 # The guest's plans, in the order they run (each its own probe and folder).
-PLANS = ('dictionary', 'fresh', 'switch', 'daily', 'checks', 'after')
+PLANS = ('fresh', 'switch', 'daily', 'checks', 'after', 'more-cold', 'more-ordinary', 'more-rule-switch',
+         'more-day-change', 'more-after-update')
 # The two openings every user has from the first start (ui/openings-catalog.js), in the
 # catalog's order: what "a different one each day" turns between in a new home.
 DAILY_TURN = ('opening/ruled-standard', 'opening/midnight-suede')
 
 
-def day_change_plan(richos, home, owns, runs, config):
+def day_change_plan(richos, home, owns, runs, config, start=0):
     """THE FIRST START OF A NEW DAY for a user of "one of mine, a different one each day". Pure:
     the steps, from `richos` (the walk's step maker) and the home's settings file.
 
@@ -341,16 +371,18 @@ def day_change_plan(richos, home, owns, runs, config):
     that way, with the last such day long ago on the second opening, so it shows the first (from
     the page: nothing was drawn for it) and its quit draws that one and the next day's. Then each
     judged launch: the last such day made a day older, the start, which must show the OTHER
-    opening than the launch before it, and the quit, which draws the two again."""
+    opening than the launch before it, and the quit, which draws the two again. With `start`, the
+    route is taken on from its `start`-th judged launch in the same home: no set-up, the turn
+    continuing."""
     def settings(change):
         return ('python3 -c ' + shlex.quote(
             'import json,sys; p=sys.argv[1]; c=json.load(open(p)); ' + change + '; json.dump(c, open(p, "w"))')
             + ' ' + shlex.quote(config))
     start_daily = settings('c["opening_pick"]="daily"; c["opening_daily"]=[0, "%s"]' % DAILY_TURN[1].split('/')[1])
     a_night = settings('c["opening_daily"][0]-=1')
-    return ([richos('day-change:prep', home, owns), richos('day-change:prep', home, owns, before=start_daily)]
-            + [richos('day-change:judged', home, owns, before=a_night, expect_splash=DAILY_TURN[(i + 1) % 2])
-               for i in range(runs)])
+    setup = [] if start else [richos('day-change:prep', home, owns), richos('day-change:prep', home, owns, before=start_daily)]
+    return setup + [richos('day-change:judged', home, owns, before=a_night, expect_splash=DAILY_TURN[(i + 1) % 2])
+                    for i in range(start, start + runs)]
 
 
 
@@ -447,7 +479,12 @@ def main():
     p.add_argument('--candidate', type=Path, required=True, help='the build under test, a RichOS zip')
     p.add_argument('--previous-app', help='(added by run-walk.py --previous-bundle) the older copy, in the guest')
     p.add_argument('--out', type=Path, required=True)
-    p.add_argument('--runs', type=int, default=20, help='judged launches per route')
+    p.add_argument('--runs', type=int, default=FIRST_STARTS,
+                   help='judged starts per route first (default %d): a route all of whose starts are within its '
+                        'limit has passed' % FIRST_STARTS)
+    p.add_argument('--full-runs', type=int, default=FULL_STARTS,
+                   help='judged starts a route is taken to when one of its first starts is over its limit, then '
+                        'judged by its p95 (default %d)' % FULL_STARTS)
     p.add_argument('--checks', action='store_true',
                    help='also: a start-up step made to fail, and a quit during start-up')
     p.add_argument('--only-checks', action='store_true',
@@ -522,19 +559,17 @@ def main():
         (a.out / (name + '.probe.txt')).write_text(said + '\n')
         return said
 
-    # Dictionary first, DICTIONARY_RUNS times: the guest's slowness against his Mac, measured once.
-    said_dictionary = None if a.only_checks else run_plan('dictionary', [
-        {'label': 'dictionary:calibration', 'app': DICTIONARY, 'owns': [DICTIONARY], 'env': {},
-         'menu_quit': 'Quit Dictionary', 'done': '', 'settle': 4} for _ in range(DICTIONARY_RUNS)]
-        # THE COLD ROUTE'S OWN CALIBRATION, like for like (the lead's decision on
-        # esc-20261114T164747Z-54632204, 2026-11-14): Dictionary after the same `sudo purge`.
-        + [{'label': 'dictionary:cold', 'app': DICTIONARY, 'owns': [DICTIONARY], 'env': {}, 'purge': True,
-            'menu_quit': 'Quit Dictionary', 'done': '', 'settle': 6} for _ in range(DICTIONARY_RUNS)])
+    # No Dictionary launch: the guest's slowness is the fixed ratio on record (WARM_RATIO, COLD_RATIO).
     install(staged[0])
     fresh = [INSTALLED]
+    q = shlex.quote
+    limits = {'cold': {'limit_ms': COLD_LIMIT_MS, 'ratio': COLD_RATIO, 'inputs': COLD_INPUTS}}
 
     def expect(start):
         return SPLASH_FOR_START.get(start, SPLASH_OTHERWISE)
+
+    def route_error(route, error):  # a route that cannot be set up is missing evidence, never the end of the walk
+        facts.setdefault('route_errors', {})[route] = str(error)[:500]
 
     # The fixture records earlier starts (launch-nothing-walk.py), so a home copied from it starts
     # at that count plus one; the rule-switch homes have the record removed (a fresh install).
@@ -548,48 +583,71 @@ def main():
     changed_files = ('python3 -c ' + shlex.quote(
         'import json,sys; p=sys.argv[1]; r=json.load(open(p)); r["opening"]["fingerprint"]="0"; '
         'json.dump(r, open(p, "w"))') + ' ' + shlex.quote(splash_record))
-    # Its very first launch (the first start after an install: reported), then the first launch
-    # after a cold start, --runs times, each after the disk cache is flushed, then --runs ordinary
-    # launches; then one ordinary launch photographed twice, a quarter of a second apart (the splash,
-    # and playing: reported), and the first start after an update that changed the splash's own
-    # files (reported).
-    said = [] if a.only_checks else [run_plan('fresh', [richos('fresh:first', homes['fresh'], fresh, frame_at=1.0)]
-                     + [richos('cold:judged', homes['fresh'], fresh, purge=True, expect_splash=expect(prior + 2 + i))
-                        for i in range(a.runs)]
-                     + [richos('ordinary:judged', homes['fresh'], fresh, expect_splash=expect(prior + 2 + a.runs + i))
-                        for i in range(a.runs)]
-                     + [richos('ordinary:frames', homes['fresh'], fresh, frames_at=[0.45, 0.70]),
-                        richos('changed-splash-files:first', homes['fresh'], fresh, before=changed_files)])]
+    # Every start of the fresh home, counted as it is planned: the splash each judged start must
+    # show follows from its count (the home's first start is the fixture's count plus one).
+    fresh_starts = [prior]
+
+    def at_fresh(label, judged=False, **extra):
+        fresh_starts[0] += 1
+        if judged:
+            extra['expect_splash'] = expect(fresh_starts[0])
+        return richos(label, homes['fresh'], fresh, **extra)
+
+    def cold_starts(n):
+        return [at_fresh('cold:judged', True, purge=True) for _ in range(n)]
+
+    def ordinary_starts(n):
+        return [at_fresh('ordinary:judged', True) for _ in range(n)]
+
     # THE PLAN'S ROUTE 5: a quit at which the rules pick a different splash than the one just shown,
     # then the launch. Start 1 to start 2 does this today (#1, then #2), and start 2 to start 3 again
-    # (#2, then #1): each of --runs fresh homes is started three times, the last two judged.
+    # (#2, then #1): each fresh home is started up to three times, its second and third starts judged,
+    # until `n` starts are judged.
+    switch_homes = [0]
+
+    def switch_starts(n):
+        plan, judged = [], 0
+        while judged < n:
+            home = payload + '/home-switch-%02d' % switch_homes[0]
+            switch_homes[0] += 1
+            g('rm -rf ' + q(home) + ' && cp -cRp ' + q(fixture) + ' ' + q(home) + ' && rm -f ' + q(home + '/' + launches_json))
+            # Each home is removed after its last start: a first start fills a home with what the
+            # app sets up (measured 2026-11-14: twenty kept homes filled the guest's disk, "No space
+            # left on device", and the walk ended without a verdict).
+            starts = min(2, n - judged)
+            plan.append(richos('rule-switch:prep', home, fresh))
+            plan += [richos('rule-switch:judged', home, fresh, expect_splash=expect(2 + k),
+                            **({'after': 'rm -rf ' + q(home)} if k == starts - 1 else {})) for k in range(starts)]
+            judged += starts
+        return plan
+
+    day_home = payload + '/home-day-change'
+    day_config = day_home + '/Library/Application Support/com.richos.app/config.json'
+    more = {}  # route -> the plan maker that takes it on from FIRST_STARTS to FULL_STARTS
+    said = []
     if not a.only_checks:
+        # Its very first launch (the first start after an install: reported), then the first launch
+        # after a cold start, --runs times, each after the disk cache is flushed, then --runs ordinary
+        # launches; then one ordinary launch photographed twice, a quarter of a second apart (the
+        # splash, and playing: reported), and the first start after an update that changed the
+        # splash's own files (reported).
+        said.append(run_plan('fresh', [at_fresh('fresh:first', frame_at=1.0)] + cold_starts(a.runs)
+                             + ordinary_starts(a.runs)
+                             + [at_fresh('ordinary:frames', frames_at=[0.45, 0.70]),
+                                at_fresh('changed-splash-files:first', before=changed_files)]))
+        more.update({'cold': cold_starts, 'ordinary': ordinary_starts})
         try:
-            switch_plan = []
-            for i in range(a.runs):
-                home = payload + '/home-switch-%02d' % i
-                g('rm -rf ' + shlex.quote(home) + ' && cp -cRp ' + shlex.quote(fixture) + ' ' + shlex.quote(home)
-                  + ' && rm -f ' + shlex.quote(home + '/' + launches_json))
-                # Each home is removed after its third start: a first start fills a home with what the
-                # app sets up (measured 2026-11-14: twenty kept homes filled the guest's disk, "No space
-                # left on device", and the walk ended without a verdict).
-                switch_plan += [richos('rule-switch:prep', home, fresh),
-                                richos('rule-switch:judged', home, fresh, expect_splash=expect(2)),
-                                richos('rule-switch:judged', home, fresh, expect_splash=expect(3),
-                                       after='rm -rf ' + shlex.quote(home))]
-            said.append(run_plan('switch', switch_plan))
-        except Exception as error:  # a route that cannot be set up is missing evidence, never the end of the walk
-            facts.setdefault("route_errors", {})['rule-switch'] = str(error)[:500]
-    if not a.only_checks:
+            said.append(run_plan('switch', switch_starts(a.runs)))
+            more['rule-switch'] = switch_starts
+        except Exception as error:
+            route_error('rule-switch', error)
         try:
-            home = payload + '/home-day-change'
-            g('rm -rf ' + shlex.quote(home) + ' && cp -cRp ' + shlex.quote(fixture) + ' ' + shlex.quote(home)
-              + ' && rm -f ' + shlex.quote(home + '/' + launches_json))
-            said.append(run_plan('daily', day_change_plan(
-                richos, home, fresh, a.runs, home + '/Library/Application Support/com.richos.app/config.json')))
-            g('rm -rf ' + shlex.quote(home))
-        except Exception as error:  # a route that cannot be set up is missing evidence, never the end of the walk
-            facts.setdefault("route_errors", {})['day-change'] = str(error)[:500]
+            g('rm -rf ' + q(day_home) + ' && cp -cRp ' + q(fixture) + ' ' + q(day_home)
+              + ' && rm -f ' + q(day_home + '/' + launches_json))
+            said.append(run_plan('daily', day_change_plan(richos, day_home, fresh, a.runs, day_config)))
+            more['day-change'] = lambda n: day_change_plan(richos, day_home, fresh, n, day_config, start=a.runs)
+        except Exception as error:
+            route_error('day-change', error)
     if a.checks or a.only_checks:
         ledger = homes['checks'] + '/Library/Application Support/com.richos.app/conversation-ledger.jsonl'
         said.append(run_plan('checks', [
@@ -625,7 +683,6 @@ def main():
                                    'executable_name': 'richos-tauri'})
             home_app = after + '/Applications/RichOS.app'
             root = after + '/Applications/.richos-updater'
-            q = shlex.quote
             older_in_place = ('rm -rf %s %s && cp -cR %s %s && mkdir -m 700 %s && (umask 077 && printf %%s %s > %s/published.json)'
                               % (q(home_app), q(root), q(a.previous_app), q(home_app), q(root), q(older_receipt), q(root)))
             stage_update = ('mkdir -m 700 %s/%s && cp -cR %s %s/%s/incoming.app && (umask 077 && printf %%s %s > %s/prepared.json)'
@@ -638,37 +695,44 @@ def main():
 
             def at_home(label, **extra):
                 return dict(richos(label, after, [home_app], **extra), app=home_app)
-            # Two starts of the older copy first, so the saved pick and its opening exist.
-            plan3 = [at_home('after-update:warm', before=older_in_place), at_home('after-update:warm')]
-            for i in range(a.runs):
-                plan3 += [at_home('after-update:prep', before=older_in_place + ' && ' + stage_update),
-                          at_home('after-update:judged', before=helper_done, expect_splash=expect(prior + 4 + 2 * i))]
-            said.append(run_plan('after', plan3))
-        except Exception as error:  # a route that cannot be set up is missing evidence, never the end of the walk
-            facts.setdefault("route_errors", {})['after-update'] = str(error)[:500]
+            rounds_done = [0]
 
-    # The guest's own system log for the walk, on the guest's clock.
-    predicate = 'process == "richos-tauri" OR process == "Dictionary"'
-    g('/usr/bin/log show --last 300m --style compact --predicate ' + shlex.quote(predicate) + ' > '
-      + shlex.quote(work + '/guest-system.log') + ' 2>&1 || true', 900)
-    facts['left_running'] = g('ps -axo pid=,comm= | grep -e "/richos-tauri$" -e "/Dictionary$" | grep -v grep || true')
-    g('cd ' + shlex.quote(payload) + ' && tar czf launch-speed.tgz launch-speed/guest-system.log '
-      + ' '.join('launch-speed/' + n for n in PLANS) + ' 2>/dev/null; true', 600)
-    subprocess.run([str(HERE / 'guest.sh'), a.vm, '--pull', payload + '/launch-speed.tgz', str(a.out / 'launch-speed.tgz')],
-                   check=True, timeout=900)
-    with tarfile.open(a.out / 'launch-speed.tgz') as t:
-        t.extractall(a.out, filter='data')
-    events = syslog_events((a.out / 'launch-speed/guest-system.log').read_text(errors='replace'),
-                           utc_offset(facts['utc_offset']))
-    rows, results = [], []
-    for name in PLANS:
-        probe = a.out / 'launch-speed' / name / 'probe.json'
-        if probe.exists():
-            ran = json.loads(probe.read_text())['results']
-            results += ran
-            rows += [measure(r, events) for r in ran if not r['label'].startswith('checks')]
-    planned = {"ordinary": a.runs, "cold": a.runs, "rule-switch": 2 * a.runs, "day-change": a.runs}
-    if a.previous_app:
+            def after_rounds(n):
+                plan = []
+                for _ in range(n):
+                    i = rounds_done[0]
+                    rounds_done[0] += 1
+                    plan += [at_home('after-update:prep', before=older_in_place + ' && ' + stage_update),
+                             at_home('after-update:judged', before=helper_done, expect_splash=expect(prior + 4 + 2 * i))]
+                return plan
+            # Two starts of the older copy first, so the saved pick and its opening exist.
+            said.append(run_plan('after', [at_home('after-update:warm', before=older_in_place),
+                                           at_home('after-update:warm')] + after_rounds(a.runs)))
+            more['after-update'] = after_rounds
+        except Exception as error:
+            route_error('after-update', error)
+
+    def collect():
+        """The guest's own system log for the walk, on the guest's clock, and every plan's results
+        pulled back: (rows, results)."""
+        predicate = 'process == "richos-tauri"'
+        g('/usr/bin/log show --last 300m --style compact --predicate ' + shlex.quote(predicate) + ' > '
+          + shlex.quote(work + '/guest-system.log') + ' 2>&1 || true', 900)
+        g('cd ' + shlex.quote(payload) + ' && tar czf launch-speed.tgz launch-speed/guest-system.log '
+          + ' '.join('launch-speed/' + n for n in PLANS) + ' 2>/dev/null; true', 600)
+        subprocess.run([str(HERE / 'guest.sh'), a.vm, '--pull', payload + '/launch-speed.tgz',
+                        str(a.out / 'launch-speed.tgz')], check=True, timeout=900)
+        with tarfile.open(a.out / 'launch-speed.tgz') as t:
+            t.extractall(a.out, filter='data')
+        events = syslog_events((a.out / 'launch-speed/guest-system.log').read_text(errors='replace'),
+                               utc_offset(facts['utc_offset']))
+        rows, results = [], []
+        for name in PLANS:
+            probe = a.out / 'launch-speed' / name / 'probe.json'
+            if probe.exists():
+                ran = json.loads(probe.read_text())['results']
+                results += ran
+                rows += [measure(r, events) for r in ran if not r['label'].startswith('checks')]
         # An older copy from before the saved pick existed saves nothing at its quit, so the first
         # start after it hands over has no opening to play: that route is then reported, and says
         # why, rather than judged (the plan's section 9, "the first start after an update is picked
@@ -677,16 +741,36 @@ def main():
                 r['label'] == 'after-update:prep' and r.get('splash_id') for r in rows):
             facts['after_update_not_judged'] = ('the older copy (%s) predates the splash picked at quit, so it saved '
                                                 'no opening for the candidate' % facts['older'])
+            more.pop('after-update', None)
             for r in rows:
                 if r['label'] == 'after-update:judged':
                     r['label'] = 'after-update:reported'
-        else:
-            planned["after-update"] = a.runs
+        return rows, results
+
+    # FIVE STARTS, TWENTY ONLY WHEN ONE FAILS (the CEO, 2026-11-15): a route whose first --runs
+    # starts are all within its limit has passed; a route with one over goes on to --full-runs starts
+    # and is judged by its p95 against the same limit.
+    extended = []
+    if not a.only_checks and a.full_runs > a.runs:
+        for route in needing_more(collect()[0], WARM_LIMIT_MS, limits):
+            if route not in more:
+                continue
+            try:
+                said.append(run_plan('more-' + route, more[route](a.full_runs - a.runs)))
+                extended.append(route)
+            except Exception as error:
+                route_error(route, error)
+    if not a.only_checks:
+        g('rm -rf ' + q(day_home))
+    facts['left_running'] = g('ps -axo pid=,comm= | grep -e "/richos-tauri$" | grep -v grep || true')
+    rows, results = collect()
+    facts['taken_to_full'] = extended
+    planned = {route: a.full_runs if route in extended else a.runs
+               for route in ('ordinary', 'cold', 'rule-switch', 'day-change')}
+    if a.previous_app and not facts.get('after_update_not_judged'):
+        planned['after-update'] = a.full_runs if 'after-update' in extended else a.runs
     facts['playing'] = splash_playing(a.out / 'launch-speed' / 'fresh')
-    limit_ms, ratio, inputs = guest_limit(rows)
-    cold_limit, cold_ratio, cold_inputs = guest_limit(rows, 'dictionary:cold')
-    summary = verdict(rows, planned, limit_ms, ratio, inputs,
-                      {'cold': {'limit_ms': cold_limit, 'ratio': cold_ratio, 'inputs': cold_inputs}})
+    summary = verdict(rows, planned, WARM_LIMIT_MS, WARM_RATIO, WARM_INPUTS, limits, a.full_runs)
     checks = check_results(results) if a.checks or a.only_checks else []
     report = {'facts': facts, 'summary': summary, 'sentence': sentence(summary), 'launches': rows,
               'checks': checks, 'refusing': not a.report_only,

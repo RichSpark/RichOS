@@ -152,6 +152,48 @@ t "audio: run.sh records the booted mode and checks it before reusing a running 
   has "$src" 'guest_audio_reusable "$STATE" "$WANT_AUDIO"'
 t_done
 
+# The CEO, 2026-11-15: "I've heard the start sound well over 40 times now". No guest's sound is passed
+# to this Mac unless its caller asks by name, and then it is muted before anything launches.
+t "audio: no guest sound reaches this Mac unless --audio asks for it, and then it is muted before anything launches"
+  src="$(cat "$TESTVM_DIR/run.sh")"
+  default_line="$(grep -E '^BUNDLE=""; FIXTURE_HOME=""' "$TESTVM_DIR/run.sh")"
+  has "$default_line" "AUDIO=0"
+  hasnt "$default_line" "AUDIO=1"
+  has "$src" '--audio) AUDIO=1; shift ;;'
+  # shellcheck disable=SC2016  # literal run.sh source text to find, not an expansion
+  has "$src" '[ "$AUDIO" -eq 1 ] || AUDIO_ARGS=(--no-audio)'
+  # shellcheck disable=SC2016  # literal run.sh source text to find, not an expansion
+  mute_at="$(grep -n 'MUTED="$(mute_guest_sound "$VM"' "$TESTVM_DIR/run.sh" | head -1 | cut -d: -f1)"
+  noapp_at="$(grep -n -- '--- 3d. --no-app stops here' "$TESTVM_DIR/run.sh" | cut -d: -f1)"
+  launch_at="$(grep -n "open -n -a '\$APP'" "$TESTVM_DIR/run.sh" | cut -d: -f1)"
+  # shellcheck disable=SC2016  # literal run.sh source text to find, not an expansion
+  sync_at="$(grep -n 'CLAUDE_LINE="$("$HERE/claude-sync.sh"' "$TESTVM_DIR/run.sh" | cut -d: -f1)"
+  in_order=1
+  if [ -n "$mute_at" ] && [ -n "$noapp_at" ] && [ -n "$launch_at" ] && [ -n "$sync_at" ] \
+    && [ "$mute_at" -lt "$sync_at" ] && [ "$mute_at" -lt "$noapp_at" ] && [ "$mute_at" -lt "$launch_at" ]; then
+    in_order=0
+  fi
+  ok "$in_order" "the mute ($mute_at) comes before the claude sync ($sync_at), the --no-app return ($noapp_at) and the launch ($launch_at)"
+  # The mute itself, against a guest that answers each way (guest_ssh stood in for, in a subshell).
+  # (if/else, not `case`: bash 3.2 misreads a case pattern's `)` inside "$( ... )".)
+  # shellcheck disable=SC2329  # a guest_ssh stand-in, invoked indirectly by mute_guest_sound
+  answering() {  # a guest_ssh stand-in: logs what it is sent, answers "$GUEST_SAYS" to the read-back
+    printf '%s\n' "$2" >> "$TMP/mute.log"
+    if [ "${2#*output muted of}" != "$2" ]; then printf '%s\n' "$GUEST_SAYS"; fi
+  }
+  : > "$TMP/mute.log"
+  # shellcheck disable=SC2329  # a guest_ssh stand-in, invoked indirectly by mute_guest_sound
+  out="$(GUEST_SAYS=true; guest_ssh() { answering "$@"; }; mute_guest_sound vm-a)"; ok $? "a guest that reads back muted"
+  eq "$out" "true"
+  has "$(cat "$TMP/mute.log")" "osascript -e 'set volume with output muted'"
+  # shellcheck disable=SC2329  # a guest_ssh stand-in, invoked indirectly by mute_guest_sound
+  out="$(GUEST_SAYS=false; guest_ssh() { answering "$@"; }; mute_guest_sound vm-a)"; no $? "a guest that reads back unmuted is refused"
+  eq "$out" "false"
+  # shellcheck disable=SC2329  # a guest_ssh stand-in, invoked indirectly by mute_guest_sound
+  out="$(guest_ssh() { return 255; }; mute_guest_sound vm-a)"; no $? "a guest that does not answer is refused"
+  eq "$out" "no answer"
+t_done
+
 t "node name: an already-prefixed VM name is left alone, never doubled"
   eq "$(tailnet_node_name richos-test-b)" "richos-test-b"
 t_done

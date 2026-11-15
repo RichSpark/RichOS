@@ -49,9 +49,19 @@ RETIRED={'hold-walk.py':'hold-walk.py is retired (the CEO, 2026-09-27): a guest 
 
 # Scenarios whose proof IS the phone path: only these get the tailnet join.
 PHONE_WALKS={'delta-walk.py'}
+# NO GUEST'S SOUND REACHES THIS MAC UNLESS ITS CALLER ASKS BY NAME, --audio (the CEO, 2026-11-15:
+# "I've heard the start sound well over 40 times now"). Without it the guest has only tart's null
+# speaker, which plays nothing (run.sh). These walks start voice in the guest (they press the talk
+# control, #talk-toggle), and voice needs an output device to start (richos-voice playout.rs,
+# VoiceStartError::Playout(NoOutputDevice)): each is refused without --audio, and run.sh mutes
+# the passthrough it then gets before anything launches.
+VOICE_WALKS={'voice-walk.py','garbage-walk.py','setup-walk.py'}
+# The call walks install their own virtual devices in a guest with only the null speaker
+# (BlackHole, the Mac call lab): never the host passthrough, so --audio is refused to them.
+CALL_WALKS={'meeting-walk.py','richbrief-walk.py'}
 
 
-def boot_argv(vm,bundle,home,engine,tailnet,new_user=False,audio=True):
+def boot_argv(vm,bundle,home,engine,tailnet,new_user=False,audio=False):
     """run.sh's command line. The tailnet join is the phone path's and nothing else's: a
     walk that never touches the phone must not fail because a network join failed (run.sh
     exits 1 on a failed join), so --no-tailnet is the default and --tailnet opts in.
@@ -59,9 +69,9 @@ def boot_argv(vm,bundle,home,engine,tailnet,new_user=False,audio=True):
     app=['--bundle',bundle] if bundle else ['--no-app']
     argv=[str(HERE/'run.sh'),'--vm',vm,*app,'--home',home,'--engine',engine]
     if not tailnet:argv.append('--no-tailnet')
-    # No sound device in the guest (run.sh --no-audio): its default device passes audio
-    # through to the host's microphone and speakers, which a call walk must never reach.
-    if not audio:argv.append('--no-audio')
+    # No host passthrough unless asked for (run.sh's default: tart's null speaker only); the
+    # passthrough reaches this Mac's speakers and microphone. Asked for, run.sh mutes it first.
+    if audio:argv.append('--audio')
     # A first run as a new user has it: HOME only, no harness login, claude path or engine (run.sh).
     if new_user:argv.append('--new-user')
     return argv
@@ -81,9 +91,12 @@ def main():
                    help='wait for a free guest slot and CPU/memory admission for at most SECONDS (default 0: refuse at once)')
     p.add_argument('--tailnet',action='store_true',
                    help='join the phone network in the guest (only a walk that pairs a phone needs it; default: no join)')
+    p.add_argument('--audio',action='store_true',
+                   help="pass the guest's sound through to this Mac (run.sh --audio), for a walk that starts voice; "
+                        'run.sh mutes its output before anything launches. Without it the guest has only tart\'s null '
+                        "speaker: nothing reaches this Mac's microphone or speakers")
     p.add_argument('--no-audio',action='store_true',
-                   help="boot the guest with no sound device (run.sh --no-audio): nothing reaches the host's "
-                        'microphone or speakers; a call walk installs its own virtual devices in the guest')
+                   help='accepted so older command lines parse: no host passthrough is the default')
     p.add_argument('--new-user',action='store_true',
                    help='launch the app as a new user does: HOME only, no harness claude path, login or engine '
                         '(run.sh --new-user; new-user-walk.py)')
@@ -94,6 +107,13 @@ def main():
     retired=RETIRED.get(Path(command[0]).name)
     if retired:p.error(retired)
     if Path(command[0]).name in PHONE_WALKS and not a.tailnet:p.error(Path(command[0]).name+' pairs a phone: pass --tailnet')
+    if a.audio and a.no_audio:p.error('--audio and --no-audio contradict each other: say which one')
+    if Path(command[0]).name in VOICE_WALKS and not a.audio:
+        p.error(Path(command[0]).name+' starts voice, which needs an output device in the guest: pass --audio '
+                '(run.sh mutes it before anything launches)')
+    if Path(command[0]).name in CALL_WALKS and a.audio:
+        p.error(Path(command[0]).name+' runs a call on its own virtual devices: never --audio, which passes the '
+                "guest's sound through to this Mac")
     # Before a slot is taken and a guest is booted: a command that cannot start would
     # spend a boot and a slot to find that out.
     if shutil.which(command[0]) is None:p.error('the scenario command is not an executable file: '+command[0])
@@ -129,7 +149,7 @@ def main():
         try:
             # Give each subprocess a group so interruption cannot strand the SSH
             # command. stop.sh subsequently reaps the captured VM process.
-            boot=boot_argv(vm,a.bundle,a.home,a.engine,a.tailnet,a.new_user,not a.no_audio)
+            boot=boot_argv(vm,a.bundle,a.home,a.engine,a.tailnet,a.new_user,a.audio)
             active_scope=uuid.uuid4().hex
             child=subprocess.Popen(boot,start_new_session=True,
                                    env={**env,proc_tree.SCOPE_ENV:env[proc_tree.SCOPE_ENV]+':'+active_scope})

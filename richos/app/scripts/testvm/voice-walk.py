@@ -3,7 +3,7 @@
 
 Run by run-walk.py, which holds one guest slot for this run only, boots the guest and removes the clone:
 
-  run-walk.py --bundle ZIP --home EMPTY_DIR --engine ENGINE --report REPORT -- \\
+  run-walk.py --audio --bundle ZIP --home EMPTY_DIR --engine ENGINE --report REPORT -- \\
       voice-walk.py --out DIR --expect-sha SHA --wav SPOKEN.wav --model GGML.bin [--model-id ID]
 
 run-walk.py passes the owned VM name as the first argument.
@@ -44,8 +44,9 @@ WHAT IT DOES, in the guest, never on the host's screen (CEO ruling §65):
               and Rich answered the first half while the CEO was saying the second).
 
 CEO §53: no sound is played anywhere. The sample is made with `say -o`, which writes a file.
-Rich's spoken answer is played into the guest's MUTED output: tart passes guest audio through to
-the host unless it is run with --no-audio, and the guest needs an output device for voice to start.
+Rich's spoken answer is played into the guest's MUTED output: voice needs an output device to start,
+so this walk asks run-walk.py for one by name (--audio; run-walk.py refuses it without), and tart
+passes that device's sound through to the host, so run.sh mutes it before anything launches.
 Exit 0 when every step passes. Every app instance is quit by run-walk.py's stop.sh (CEO §54).
 """
 import argparse
@@ -610,8 +611,9 @@ class VoiceWalk(adopt_walk.Walk):
         raise StepFailed(f'the talk control did not turn into "Stop talking" within 30 s: {toggle}\nlog tail:\n{log}')
 
     def mute_guest_output(self):
-        """Mute the GUEST's sound output before Rich can answer aloud. run.sh starts tart without
-        --no-audio, and tart then passes guest audio through to the host ("Disable audio
+        """Mute the GUEST's sound output before Rich can answer aloud (run.sh --audio already muted
+        it before the launch; this reads it again at the step). With --audio, tart passes guest
+        audio through to the host ("Disable audio
         pass-through to host" is the opt-in flag), so a spoken answer in the guest would come out
         of this Mac's speakers: a live playback on the CEO's Mac (CEO §53). The guest keeps its
         output device, which voice needs to start (playout opens it), and plays into silence.

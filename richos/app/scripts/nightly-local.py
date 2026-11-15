@@ -325,22 +325,34 @@ NEW_USER_WALK_BUDGET = NEW_USER_WALK_WAIT + 2400
 # its own guest, from the launch request to its splash playing (testvm/launch-speed-walk.py, the
 # routes of Sage's plan 2026-11-14 "the splash the rules picked is playing within 380 ms of the
 # click", section 6: a returning user's launch, the first launch after the guest starts (each after
-# its own purge, judged against Dictionary after the same purge), the first launch after an update
-# put in place at quit, and a quit at which the rules pick another splash; 20 launches a route, 40
-# for the last so that every splash today's rule picks is timed; no route of an older copy in
-# /Applications handing over, which no real user has), and it is refused when the p95 of any judged
-# route is over 380 ms (the CEO: "380 ms as the maximum allowed p95 time"), scaled by how much slower
-# Dictionary launches in that guest than on his Mac, compared like for like by medians, the ratio and
-# its inputs recorded beside the limit (the CEO: "if the VM is slower, then the measurements need to
-# be adjusted accordingly"); the nightly states the p95 and every route's and every splash's own
-# numbers either way. A refusal, or a walk that could not run, is taken once more before the
-# candidate is refused (verification-retries.md).
+# its own purge, with its own limit), the first launch after an update put in place at quit, and a
+# quit at which the rules pick another splash; no route of an older copy in /Applications handing
+# over, which no real user has). Each route runs 5 starts, the rule switch too (the CEO, 2026-11-15:
+# "Reduce to 5. Only if one of the 5 is outside what's required, only then do you need to extend to
+# 20. Otherwise i.e. if the first 5 are fine, it's a PASS."): a route all of whose starts are within
+# the limit passes, and only a route with one over goes on to 20 starts and is refused when its p95
+# is over the limit (the CEO: "380 ms as the maximum allowed p95 time"), scaled by how much slower the test VM is than his Mac (the
+# CEO: "if the VM is slower, then the measurements need to be adjusted accordingly"): a FIXED ratio,
+# taken once from the Dictionary measurements on record, and Dictionary is never launched (the CEO,
+# 2026-11-14: "Stop all that retarded "launch-speed walk beside Dictionary" fuckshit!"; 2026-11-15:
+# "What the fuck did I say about that????"). The nightly states the p95 and every route's and every
+# splash's own numbers either way. A refusal, or a walk that could not run, is taken once more
+# before the candidate is refused (verification-retries.md).
 LAUNCH_SPEED_PHASE = "launch-speed"
+# The fixed ratios (testvm/launch-speed-walk.py WARM_RATIO and COLD_RATIO, from
+# docs/verification/2026-11-14-splash-opening/; nightly-local.test.py asserts the two are the same):
+# publish holds a report's limits to exactly round(380 x these), 857 ms and, for the cold route, 6341 ms.
+LAUNCH_SPEED_WARM_RATIO = 2.256
+LAUNCH_SPEED_COLD_RATIO = 16.686
 LAUNCH_SPEED_WAIT = 3600
-# About 165 launches (20 Dictionary, 1 + 20 cold + 20 ordinary + 2, 60 for the rule switch, 42 after
-# an update; measured in this branch's walks of 2026-11-14, see docs/verification/
-# 2026-11-14-splash-opening/); the budget is the slot wait plus 90 minutes.
-LAUNCH_SPEED_BUDGET = LAUNCH_SPEED_WAIT + 5400
+# Launches (testvm/launch-speed-walk.py): with every route passing at 5 starts, 40 (1 + 5 cold + 5
+# ordinary + 2; 3 + 5 for the rule switch, three fresh homes; 2 + 5 for the day change; 2 + 10
+# after an update). With every route taken on to 20, at most 138 (15 more cold, 15 more ordinary,
+# 8 + 15 for the rule switch in eight more homes, 15 more day changes, 30 more after an update).
+# The 90 minutes this budget had covered 165 launches, Dictionary's 20 among them (5400 s / 165 =
+# 32.7 s a launch); 138 x 32.7 s = 4516 s, so the budget is the slot wait plus 80 minutes, and the
+# usual walk of 40 launches takes about a quarter of it.
+LAUNCH_SPEED_BUDGET = LAUNCH_SPEED_WAIT + 4800
 
 # GUEST MEMORY, ASKED AT ONCE. A build that passed every gate could wait the full hour for a
 # guest slot and end "a guest needs N MB: M MB available ... (floor F MB)": memory no slot wait
@@ -3020,19 +3032,18 @@ class Runner:
                 continue
             summary, facts = walked.get("summary") or {}, walked.get("facts") or {}
             p95 = summary.get("p95_ms")
-            # The limit is 380 ms scaled by Dictionary's slowness in the guest (the CEO, 2026-11-14:
-            # "if the VM is slower, then the measurements need to be adjusted accordingly"); it
-            # must be exactly 380 ms times the ratio recorded beside it, never below 380 ms.
+            # The limit is 380 ms scaled by the test VM's slowness (the CEO, 2026-11-14: "if the VM is
+            # slower, then the measurements need to be adjusted accordingly"), by the FIXED ratio on
+            # record: exactly 380 ms times LAUNCH_SPEED_WARM_RATIO, recorded beside it, and nothing
+            # else (no ratio measured in a guest, no Dictionary launch).
             ratio = summary.get("guest_ratio")
-            limit = 380 if ratio is None else (
-                round(380 * ratio) if isinstance(ratio, (int, float)) and ratio >= 1 else None)
-            # A route with its own like-for-like limit (the cold route, against Dictionary after the
-            # same purge) is held to it the same way: exactly 380 ms times its ratio, its p95 under it.
+            limit = round(380 * ratio) if ratio == LAUNCH_SPEED_WARM_RATIO else None
+            # The cold route's own limit is held the same way: exactly 380 ms times
+            # LAUNCH_SPEED_COLD_RATIO, its p95 under it.
             own_limits_hold = True
             for route, own in (summary.get("route_limits") or {}).items():
                 own_ratio = (own or {}).get("ratio")
-                own_limit = 380 if own_ratio is None else (
-                    round(380 * own_ratio) if isinstance(own_ratio, (int, float)) and own_ratio >= 1 else None)
+                own_limit = round(380 * own_ratio) if route == "cold" and own_ratio == LAUNCH_SPEED_COLD_RATIO else None
                 route_p95 = ((summary.get("routes") or {}).get(route) or {}).get("p95_ms")
                 if own_limit is None or (own or {}).get("limit_ms") != own_limit \
                         or not isinstance(route_p95, (int, float)) or route_p95 > own_limit:
@@ -3046,7 +3057,7 @@ class Runner:
             else:
                 return walked.get("sentence")
         raise ValueError("no complete launch-speed measurement of this candidate shows a p95 at or under 380 ms "
-                         "(scaled by the guest's Dictionary ratio) "
+                         "(scaled by the test VM's fixed ratio on record) "
                          "from the click to the splash showing: " + "; ".join(problems)
                          + ". Take the check again without a rebuild (nightly-local.py's launch-speed phase).")
 
