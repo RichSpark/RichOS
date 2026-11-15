@@ -16,12 +16,19 @@ public struct AudioProcess: Equatable {
     public let bundleId: String?
     public let runningInput: Bool
     public let runningOutput: Bool
+    /// The process macOS holds responsible for this one: itself for an app the Dock or Finder
+    /// opened, the app for its children and for the XPC services that work for it. RichOS's own
+    /// webview records the microphone ("Make a video") in WebKit's media process
+    /// (`com.apple.WebKit.GPU`), whose pid and bundle id are not the app's; only this names RichOS
+    /// as its owner. Safari's media process names Safari, so a call there is still a call.
+    public let responsiblePid: Int32?
 
-    public init(pid: Int32, bundleId: String?, runningInput: Bool, runningOutput: Bool) {
+    public init(pid: Int32, bundleId: String?, runningInput: Bool, runningOutput: Bool, responsiblePid: Int32? = nil) {
         self.pid = pid
         self.bundleId = bundleId
         self.runningInput = runningInput
         self.runningOutput = runningOutput
+        self.responsiblePid = responsiblePid
     }
 
     /// The app this process belongs to, by bundle id. Chrome, Edge, Brave and Electron apps run
@@ -40,7 +47,8 @@ public struct AudioProcess: Equatable {
 }
 
 /// Processes the watcher must never report: RichOS's own voice and dictation (the app's pid), the
-/// capture companion recording a meeting, and the watcher itself.
+/// capture companion recording a meeting, the watcher itself, and any process one of those is
+/// responsible for (the webview's microphone, recorded in WebKit's media process).
 public struct MicActivityFilter: Equatable {
     public var pids: Set<Int32>
     /// Matched against a process's bundle id AND its family, so excluding `com.richos.app`
@@ -54,6 +62,7 @@ public struct MicActivityFilter: Equatable {
 
     public func excludes(_ p: AudioProcess) -> Bool {
         if pids.contains(p.pid) { return true }
+        if let owner = p.responsiblePid, pids.contains(owner) { return true }
         if let id = p.bundleId, bundleIds.contains(id) { return true }
         if let fam = p.family, bundleIds.contains(fam) { return true }
         return false

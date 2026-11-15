@@ -12,7 +12,7 @@ import CoreAudio
 ///   {"type":"hello","version":..,"at":ms,"pid":<watcher pid>}
 ///   {"type":"input","state":"started"|"stopped",["exited":bool,]"at":ms,"pid":..,"bundleId":..,"family":..,"app":..}
 ///   {"type":"error","at":ms,"message":..}
-///   {"type":"trace","at":ms,"processes":[{"pid":..,"bundleId":..,"in":bool,"out":bool}]}  (--trace only:
+///   {"type":"trace","at":ms,"processes":[{"pid":..,"bundleId":..,"responsible":..,"in":bool,"out":bool}]}  (--trace only:
 ///     every process Core Audio lists, for measurement; the app never passes it)
 ///
 /// Reading the process list needs no permission: no TCC prompt, no microphone opened.
@@ -78,7 +78,8 @@ final class MicWatcher {
             let input: UInt32 = MicWatcher.read(id, kAudioProcessPropertyIsRunningInput) ?? 0
             let output: UInt32 = MicWatcher.read(id, kAudioProcessPropertyIsRunningOutput) ?? 0
             reading.append(AudioProcess(pid: pid, bundleId: MicWatcher.bundleId(id),
-                                        runningInput: input != 0, runningOutput: output != 0))
+                                        runningInput: input != 0, runningOutput: output != 0,
+                                        responsiblePid: MicWatcher.responsiblePid(pid)))
             listen(id)
         }
         let at = nowMs()
@@ -92,6 +93,7 @@ final class MicWatcher {
                     ("type", .string("trace")), ("at", .int(Int(at))),
                     ("processes", .array(sorted.map { p in .object([
                         ("pid", .int(Int(p.pid))), ("bundleId", p.bundleId.map(JSON.string) ?? .null),
+                        ("responsible", p.responsiblePid.map { .int(Int($0)) } ?? .null),
                         ("in", .bool(p.runningInput)), ("out", .bool(p.runningOutput)),
                     ]) })),
                 ]))
@@ -161,6 +163,23 @@ final class MicWatcher {
         guard AudioObjectGetPropertyData(id, &addr, 0, nil, &size, &value) == noErr,
               let s = value?.takeRetainedValue() as String?, !s.isEmpty else { return nil }
         return s
+    }
+
+    /// The process macOS holds responsible for `pid` (what Activity Monitor and the privacy prompts
+    /// attribute it to): an XPC service such as WebKit's media process answers with the app it works
+    /// for. libsystem exports `responsibility_get_pid_responsible_for_pid` without a header, so it is
+    /// looked up once by name; where it is missing every answer is nil and only the pid and bundle id
+    /// exclusions apply, as before.
+    private static let responsibleFor: (@convention(c) (pid_t) -> pid_t)? = {
+        let anyImage = UnsafeMutableRawPointer(bitPattern: -2)  // RTLD_DEFAULT, a C macro Swift does not import
+        guard let sym = dlsym(anyImage, "responsibility_get_pid_responsible_for_pid") else { return nil }
+        return unsafeBitCast(sym, to: (@convention(c) (pid_t) -> pid_t).self)
+    }()
+
+    static func responsiblePid(_ pid: Int32) -> Int32? {
+        guard let call = responsibleFor else { return nil }
+        let owner = call(pid)
+        return owner > 0 ? owner : nil
     }
 
     /// The name a person knows the app by: the running app with the process's family bundle id
