@@ -432,6 +432,16 @@ async function main() {
     assert(await shown(page, "#home-video"), "the Stop button left the screen");
     assertEqual(await shown(page, "#home-video .hv-level"), false, "the bars are on the button with the microphone off");
     const t0 = Date.now();
+    // the film's last frame: where its line stands on the screen, and what it says
+    await page.waitForFunction(() => !!document.querySelector("#home-replay.last"), null, { timeout: 60000 });
+    const last = await page.evaluate(() => {
+      const line = document.querySelector("#home-replay .line");
+      const r = document.createRange();
+      r.selectNodeContents(line);
+      const b = r.getBoundingClientRect();
+      return { text: line.textContent, left: Math.floor(b.left), right: Math.ceil(b.right), top: Math.floor(b.top), bottom: Math.ceil(b.bottom) };
+    });
+    assertEqual(last.text, "Day 67 · 312 memories · The River", "the film's last frame");
     await until(page, "sheet");
     const ran = (Date.now() - t0) / 1000;
     assertEqual(await page.evaluate(() => window.RichHomeGrowth.replaying), false, "the film is still running under the sheet");
@@ -447,21 +457,30 @@ async function main() {
     const end = frameOf(file, Math.floor(file.seconds) - 1);
     const arrows = [start, frameOf(file, 8), end].map((img) => arrowAt(img, 700, 620));
     assertEqual(arrows.filter((a) => a.there), [], "a mouse pointer is in a file made with the pointer hidden");
-    // the picture grows in the file: early in the film it has his first lights, the end has all 312.
-    // The emptiest of the frames at 2, 3 and 4 s stands for early: his lights of before the film fade
-    // out over its first moments, sooner or later with the host's load.
-    // (the core and the wordmark are bright in both; his 312 lights are the difference)
-    const lit = (img) => {
+    // THE FILM IS IN THE FILE, FIRST TO LAST. Its last frame's line ("Day 67 · 312 memories · The
+    // River") stands in the file's last second where it stood on the screen: read as type-bright
+    // pixels in the line's first and last fifths, where the running counter, which is shorter and
+    // centered, never reaches. Three seconds in, the same two places hold no type: the film had
+    // not ended there. (How bright the picture is says nothing either way: each light flashes as
+    // it lands, so an early frame can be brighter than the last.)
+    const type = (img) => {
+      const fifth = Math.floor((last.right - last.left) / 5);
       let n = 0;
-      // every pixel as bright as one of his lights (the ground and the dimmed example are far under it)
-      for (let i = 0; i < img.data.length; i += img.channels) if ((img.data[i] + img.data[i + 1] + img.data[i + 2]) / 3 > 150) n++;
+      for (const x0 of [last.left, last.right - fifth]) {
+        for (let y = last.top; y < last.bottom; y++) {
+          for (let x = x0; x < x0 + fifth; x++) {
+            const k = (y * img.width + x) * img.channels;
+            if ((img.data[k] + img.data[k + 1] + img.data[k + 2]) / 3 > 140) n++;
+          }
+        }
+      }
       return n;
     };
-    const early = Math.min(...[2, 3, 4].map((t) => lit(frameOf(file, t))));
-    assert(lit(end) > early + 1000, `the picture does not grow in the file (bright pixels: ${early} early, ${lit(end)} at the end)`);
+    const lit = { early: type(frameOf(file, 3)), end: type(end) };
+    assert(lit.end >= 150 && lit.early * 5 < lit.end, `the film's last line is not in the file's last second alone (type-bright pixels in its first and last fifths: ${lit.early} at 3 s, ${lit.end} at the end)`);
     assertEqual(page.__errors, [], "the page reported errors");
     await page.close();
-    return `the film ran ${ran.toFixed(1)} s; ${file.name}: ${file.video.codec}, no sound, ${file.seconds.toFixed(1)} s, ${(file.size / 1048576).toFixed(1)} MB; bright pixels ${early} early, ${lit(end)} at the end; no pointer in three frames`;
+    return `the film ran ${ran.toFixed(1)} s; ${file.name}: ${file.video.codec}, no sound, ${file.seconds.toFixed(1)} s, ${(file.size / 1048576).toFixed(1)} MB; the last line's type ${lit.early} at 3 s, ${lit.end} at the end; no pointer in three frames`;
   });
 
   await run.check("Escape goes one step back at every step, the button calls the count off, Record again opens the choices as he left them, Discard lets the video go", async () => {
