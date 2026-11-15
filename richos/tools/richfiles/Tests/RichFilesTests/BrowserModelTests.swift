@@ -55,6 +55,33 @@ final class BrowserModelTests: XCTestCase {
     }
 
     @MainActor
+    func testGitHandoffKeepsTheSourceWhenNavigatingInsideItsRepositoryDuringLoad() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("RichFilesGitHandoff-\(UUID().uuidString)", isDirectory: true)
+        let child = directory.appendingPathComponent("Child", isDirectory: true)
+        let administration = directory.appendingPathComponent(".git", isDirectory: true)
+        for folder in [child, administration] {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        }
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let git = GitPanelModel()
+        let snapshot = GitPanelSnapshot(threadId: "source", chatName: "Recorded chat", capturedAt: Date(),
+                                        repository: try FileReference(url: directory),
+                                        administration: try FileReference(url: administration),
+                                        lands: [], allOnMain: false, commit: nil, path: nil)
+        git.startSnapshot(snapshot, folder: child, currentChat: nil)
+        git.follow(directory)
+        XCTAssertEqual(git.snapshot, snapshot)
+        XCTAssertEqual(git.scope, .chat)
+
+        git.follow(directory.deletingLastPathComponent())
+        XCTAssertNil(git.snapshot)
+        XCTAssertEqual(git.scope, .all)
+        git.close()
+    }
+
+    @MainActor
     func testNamedSplitWorkspaceRestoresBothPanesAndTheActiveTab() async throws {
         let temporary = try XCTUnwrap(ProcessInfo.processInfo.environment["TMPDIR"])
         let root = URL(fileURLWithPath: temporary, isDirectory: true)

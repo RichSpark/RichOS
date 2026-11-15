@@ -119,27 +119,28 @@ public final class GitPanelModel: ObservableObject {
         guard context == nil, folder?.path != newFolder.path else { return }
         folder = newFolder
         guard open else { return }
-        if let held = repository, Self.relative(newFolder.path, in: held.root.path) != nil,
-           !FileManager.default.fileExists(atPath: newFolder.appendingPathComponent(".git").path) {
-            // A descendant can itself be inside a nested repo. Resolve it off
-            // the main thread and keep the old selection only for the same root.
-            checkFolder(newFolder, preserving: held)
-        } else {
-            snapshot = nil
-            snapshotUnavailable = false
-            scope = .all
-            loadHistory(newTip: true)
+        if let held = repository?.identity ?? snapshot?.repository {
+            if newFolder.path == held.url.path { return }
+            if Self.relative(newFolder.path, in: held.url.path) != nil {
+                // A descendant can be inside a different, nested repository.
+                checkFolder(newFolder, preserving: held)
+                return
+            }
         }
+        snapshot = nil
+        snapshotUnavailable = false
+        scope = .all
+        loadHistory(newTip: true)
     }
 
-    private func checkFolder(_ newFolder: URL, preserving held: GitRepository) {
+    private func checkFolder(_ newFolder: URL, preserving held: FileReference) {
         let candidate = Self.localGit()
         Task {
             let resolved = await Task.detached(priority: .userInitiated) {
                 candidate.flatMap { try? GitRepository(folder: newFolder, git: $0) }
             }.value
-            guard self.folder == newFolder, open, repository?.identity == held.identity else { return }
-            if resolved?.identity != held.identity {
+            guard self.folder == newFolder, open, (repository?.identity ?? snapshot?.repository) == held else { return }
+            if resolved?.identity != held {
                 snapshot = nil
                 snapshotUnavailable = false
                 scope = .all

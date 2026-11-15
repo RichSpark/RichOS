@@ -202,7 +202,6 @@ struct WindowBrowserView: View {
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { notice in
             if let window = notice.object as? NSWindow, window.windowNumber == nativeWindowNumber {
                 receiveFolderOpen()
-                if workspace.git.open { workspace.git.refresh() }
             }
         }
         .onReceive(Publishers.Merge3(
@@ -222,9 +221,14 @@ struct WindowBrowserView: View {
         .onAppear(perform: appear)
         .onChange(of: workspace.isSplit) { _ in saveSession(rememberWindow: true) }
         .onChange(of: workspace.active) { _ in saveSession(rememberWindow: true) }
-        .onReceive(workspace.activeModel.$folder) { folder in
-            if let number = nativeWindowNumber { updateTitle(of: NSApp.window(withWindowNumber: number), folder: folder) }
-            workspace.git.follow(folder)
+        .onReceive(workspace.activeModel.$folder) { _ in
+            // The folder publisher fires before its model stores the value.
+            // A handoff restores the folder and Git selection together.
+            Task { @MainActor in
+                let folder = workspace.activeModel.folder
+                if let number = nativeWindowNumber { updateTitle(of: NSApp.window(withWindowNumber: number), folder: folder) }
+                workspace.git.follow(folder)
+            }
         }
         .onChange(of: scenePhase) { if $0 != .active { saveSession() } }
         .onChange(of: restoreSession) { _ in saveSession(rememberWindow: true) }
