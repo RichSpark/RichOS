@@ -1,0 +1,253 @@
+#!/usr/bin/env python3
+"""richfiles-open-walk.py — how long RichFiles takes to appear after a click on its rail icon, in the guest.
+
+Run by run-walk.py, which holds one guest slot for this run only, boots the guest and removes the clone:
+
+  run-walk.py --bundle ZIP --home EMPTY_DIR --engine ENGINE --report REPORT --wait 600 -- \\
+      richfiles-open-walk.py --out DIR --expect-sha SHA [--limit-ms N] [--diagnose]
+
+THE QUESTION, the CEO's words (2026-11-15): "The very first time when I clicked on the RichFiles icon in
+the nav rail ... it took quite a long time (probably at least 2 or 3 seconds) where absolutely nothing
+happened after my click ... Ever since then (even after multiple app restarts) RichFiles comes up near
+instantly ... whatever is done to make RichFiles appearance near instant in all those subsequent clicks,
+should also be done for that initial click."
+
+A guest is a fresh clone, so RichFiles has never opened in it: the first click here is his first click.
+
+STEPS (in the guest, never on the host's screen, CEO section 65; the guest has no sound device):
+  identity, first-run   as folders-walk.py: a new user's first run up to the conversation screen
+  first-open     the real pointer clicks the RichFiles rail icon; the window is photographed on the same
+                 clock as the click (qa/timeline.py, in the guest) and the first frame that shows RichFiles'
+                 own words is found by reading the frames in order
+  again          back to Chats, then the same click: an open in a process that has already shown RichFiles
+  after-restart  the app quit and started again (relaunch.py), then the same click: his "even after
+                 multiple app restarts"
+  after-purge    (optional, a diagnosis) the app quit, the guest's file cache emptied (`sudo purge`), the app
+                 started again, then the same click: an open whose files all come from the disk again
+
+Each timed step reports the click-to-visible interval as two bounds in milliseconds: RichFiles was not on
+screen in the frame that began `low` ms after the click and was on screen in the frame that ended `high`
+ms after it. `high` is the number to quote. `--limit-ms N` fails a timed step whose `high` is over N.
+`--diagnose sample` also samples the app's process across the first click (`sample`, saved as
+first-open.sample.txt); `--diagnose disk` records every read from the guest's disk across it (`fs_usage`,
+first-open.disk.txt). Both keep the guest's system log for those seconds. A sampled click is slower, so its
+time is not a result and `--limit-ms` does not judge it.
+Exit 0 when every step passes. Every app instance is quit by run-walk.py's stop.sh (CEO section 54).
+"""
+import argparse
+import importlib.util
+import json
+import os
+import re
+import shlex
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+QA = HERE.parent / 'qa'
+sys.path.insert(0, str(QA / 'lib'))
+
+STEPS = ['identity', 'first-run', 'first-open', 'again', 'after-restart']
+OPTIONAL = ['after-purge']
+TIMED = ('first-open', 'again', 'after-restart', 'after-purge')
+# RichFiles' own words, which no other screen of the app shows: its sidebar's first row and the
+# Details view's date column (tools/richfiles/Sources/RichFiles/BrowserView.swift).
+WORDS = r'This Mac|Modified'
+
+
+def visible_bounds(record, readings, words=WORDS):
+    """Click-to-visible, from one capture's bounds.json and what each frame reads.
+
+    `readings` maps a frame number to the text read off it. Returns low and high in milliseconds
+    with the two frames they come from, or raises ValueError saying why there is no answer: the
+    words were on screen before the click (nothing to time), or never appeared."""
+    action = record['action']
+    frames = sorted(record['frames'], key=lambda f: f['number'])
+    shows = lambda f: re.search(words, readings.get(f['number'], ''), re.I) is not None  # noqa: E731
+    before = [f for f in frames if f['after_ns'] <= action['before_ns']]
+    if not before:
+        raise ValueError('no frame was complete before the click: nothing shows what was on screen then')
+    if shows(before[-1]):
+        raise ValueError('RichFiles was already on screen before the click')
+    later = [f for f in frames if f['number'] > before[-1]['number']]
+    present = next((f for f in later if shows(f)), None)
+    if present is None:
+        raise ValueError('RichFiles was on screen in none of the %d frames after the click' % len(later))
+    absent = next(f for f in frames if f['number'] == present['number'] - 1)
+    return {'low_ms': round(max(0, absent['before_ns'] - action['after_ns']) / 1e6, 1),
+            'high_ms': round((present['after_ns'] - action['before_ns']) / 1e6, 1),
+            'last_absent_frame': absent['number'], 'first_present_frame': present['number'],
+            'frames': len(frames), 'click_window_ms': round((action['after_ns'] - action['before_ns']) / 1e6, 1)}
+
+
+def main():
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument('vm')
+    p.add_argument('--out', type=Path, required=True)
+    p.add_argument('--expect-sha', required=True, help='the commit the bundle under test was built from')
+    p.add_argument('--steps', default=','.join(STEPS))
+    p.add_argument('--seconds', type=float, default=8.0, help='how long each click is photographed (default 8)')
+    p.add_argument('--limit-ms', type=float, help='fail a timed step whose click-to-visible upper bound is over this')
+    p.add_argument('--diagnose', choices=('sample', 'disk'),
+                   help="across the first click: sample the app's process, or record every read from the guest's disk")
+    a = p.parse_args()
+    steps = a.steps.split(',')
+    bad = [s for s in steps if s not in STEPS + OPTIONAL]
+    if bad:
+        p.error('unknown step(s): ' + ', '.join(bad))
+
+    import qaocr  # noqa: E402 - the host's reader; refused with a sentence when there is none
+    spec = importlib.util.spec_from_file_location('rail_walk', HERE / 'rail-walk.py')
+    rail = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(rail)
+    StepFailed, command, guest = rail.StepFailed, rail.command, rail.folders.guest
+    import relaunch  # noqa: E402 - beside this file; folders-walk.py put this directory on the path
+
+    class Walk(rail.Walk):
+        remote = None
+
+        def tools(self):
+            if self.remote:
+                return self.remote
+            remote = self.payload + '/qa'
+            guest(self.vm, 'mkdir -p ' + shlex.quote(remote + '/lib'), 60)
+            command([HERE / 'guest.sh', self.vm, '--push', QA / 'timeline.py', remote + '/timeline.py'], 120)
+            for lib in ('qaimg.py', 'qaocr.py'):
+                command([HERE / 'guest.sh', self.vm, '--push', QA / 'lib' / lib, remote + '/lib/' + lib], 120)
+            self.remote = remote
+            return remote
+
+        def app_pid(self):
+            state = Path(os.environ.get('TESTVM_ROOT', str(Path.home() / '.richos-testvm'))) / 'run' / self.vm
+            return (state / 'app.pid').read_text().strip()
+
+        def to_conversation(self, seconds=90):
+            """The conversation screen, where the rail is: after a restart the app opens on Home.
+            A read the starting app does not answer yet is asked again."""
+            end = time.monotonic() + seconds
+            last = ''
+            while time.monotonic() < end:
+                try:
+                    if self.geometry('nr-richfiles'):
+                        return
+                    if self.present('Talk to Rich'):
+                        self.press('Talk to Rich', contains=True)
+                except StepFailed as exc:
+                    last = str(exc)[-300:]
+                time.sleep(1)
+            raise StepFailed('the RichFiles rail icon never came on screen within %d s %s' % (seconds, last))
+
+        def timed_open(self, label):
+            self.script('tell application "RichOS" to activate')
+            time.sleep(1)
+            self.to_conversation()
+            icon = self.geometry('nr-richfiles')
+            window = next((n for n in self.ax('find', '--role', 'AXWindow', '--first') if n.get('role') == 'AXWindow'), None)
+            if not icon or not window:
+                raise StepFailed('no RichFiles rail icon or no window to photograph: %r %r' % (icon, window))
+            x, y = round(icon['x'] + icon['w'] / 2), round(icon['y'] + icon['h'] / 2)
+            region = '%d,%d,%d,%d' % (window['x'], window['y'], window['w'], window['h'])
+            remote = self.tools()
+            frames = remote + '/' + label
+            pid = self.app_pid()
+            ev = {'click': [x, y], 'region': region, 'app_pid': pid,
+                  'app_running_for': guest(self.vm, 'ps -o etime= -p %s' % pid).strip()}
+            kept = {'sample': 'first-open.sample.txt', 'disk': 'first-open.disk.txt'}.get(a.diagnose)
+            if kept and label == 'first-open':
+                watch = ('sample {p} {s} 1 -file {f}' if a.diagnose == 'sample' else
+                         'sudo fs_usage -w -t {s} -f diskio > {f} 2>&1').format(
+                             p=pid, s=int(a.seconds) + 4, f=shlex.quote(remote + '/' + kept))
+                guest(self.vm, 'nohup sh -c {w} >/dev/null 2>&1 &'.format(w=shlex.quote(watch)), 30)
+                time.sleep(1.5)
+            ev['capture'] = guest(self.vm, shlex.join(
+                ['python3', remote + '/timeline.py', 'capture', frames, str(a.seconds), '--region', region,
+                 '--native-click', '%d,%d' % (x, y), '--baseline', '1.5']), int(a.seconds) + 90).strip()
+            if kept and label == 'first-open':
+                time.sleep(4)
+                guest(self.vm, '/usr/bin/log show --last 25s --style compact > {f} 2>&1 || true'.format(
+                    f=shlex.quote(remote + '/first-open.syslog.txt')), 120)
+                for name in (kept, 'first-open.syslog.txt'):
+                    try:
+                        command([HERE / 'guest.sh', self.vm, '--pull', remote + '/' + name, self.out / name], 120)
+                    except StepFailed as exc:
+                        ev[name] = 'not kept: ' + str(exc)[-200:]
+            guest(self.vm, 'cd {r} && tar -czf {l}.tgz {l}'.format(r=shlex.quote(remote), l=label), 120)
+            command([HERE / 'guest.sh', self.vm, '--pull', frames + '.tgz', self.out / (label + '.tgz')], 180)
+            command(['tar', '-xzf', self.out / (label + '.tgz'), '-C', self.out], 120)
+            local = self.out / label
+            record = json.loads((local / 'bounds.json').read_text())
+            ordered = sorted(record['frames'], key=lambda f: f['number'])
+            before = [f for f in ordered if f['after_ns'] <= record['action']['before_ns']]
+            # The last frame before the click says what was on screen then; the frames after it are
+            # read in order, stopping at the first that shows RichFiles.
+            readings, answer, why = {}, None, 'no frame was complete before the click'
+            for frame in ordered[max(0, len(before) - 1):]:
+                readings[frame['number']] = qaocr.text(str(local / ('%04d.png' % frame['number'])))
+                try:
+                    answer = visible_bounds(record, readings)
+                    break
+                except ValueError as exc:
+                    why = str(exc)
+                    if 'already on screen' in why:
+                        break
+            if answer is None:
+                raise StepFailed('%s (frames kept in %s)' % (why, local))
+            ev.update(answer)
+            self.facts[label] = ev
+            self.save()
+            print('%s: RichFiles on screen between %.0f and %.0f ms after the click (app running for %s)'
+                  % (label, ev['low_ms'], ev['high_ms'], ev['app_running_for']), flush=True)
+            if a.limit_ms is not None and ev['high_ms'] > a.limit_ms and not (a.diagnose == 'sample' and label == 'first-open'):
+                raise StepFailed('RichFiles took up to %.0f ms to appear, over the %.0f ms limit: %s'
+                                 % (ev['high_ms'], a.limit_ms, json.dumps(ev)))
+            return ev
+
+        def first_open(self):
+            return self.timed_open('first-open')
+
+        def again(self):
+            self.click_id('nr-chats')
+            time.sleep(2)
+            return self.timed_open('again')
+
+        def after_restart(self):
+            started = relaunch.relaunch(self.vm)
+            ev = self.timed_open('after-restart')
+            ev['relaunched_pid'] = started.get('pid')
+            return ev
+
+        def after_purge(self):
+            relaunch.quit_app(self.vm)
+            guest(self.vm, 'sudo purge', 120)
+            started = relaunch.relaunch(self.vm)
+            ev = self.timed_open('after-purge')
+            ev['relaunched_pid'] = started.get('pid')
+            return ev
+
+    walk = Walk(a)
+    report = {'vm': a.vm, 'expect_sha': a.expect_sha, 'steps': []}
+    ok = True
+    for step in steps:
+        began = time.monotonic()
+        row = {'step': step}
+        try:
+            row['evidence'] = getattr(walk, step.replace('-', '_'))()
+            row['outcome'] = 'PASS'
+        except (StepFailed, RuntimeError, ValueError, subprocess.TimeoutExpired) as exc:
+            row['outcome'] = 'FAIL'
+            row['detail'] = str(exc)[:3000]
+            ok = False
+        row['seconds'] = round(time.monotonic() - began, 1)
+        report['steps'].append(row)
+        (a.out / 'report.json').write_text(json.dumps(report, indent=2) + '\n')
+        print(f"{step}: {row['outcome']}" + (f" - {row.get('detail')}" if row['outcome'] != 'PASS' else ''), flush=True)
+        # The timed steps each carry on, so one slow open does not hide the next number.
+        if not ok and step not in TIMED:
+            break
+    return 0 if ok else 1
+
+
+if __name__ == '__main__':
+    sys.exit(main())
