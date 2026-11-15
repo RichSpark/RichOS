@@ -54,11 +54,11 @@ splash). One untimed frame per route shows what was on screen.
 
 THE RULE, the CEO's (2026-11-14): "380 ms as the maximum allowed p95 time for the RichOS app to
 start showing the splash screen." The p95 of every judged launch, every route together, over
-the limit refuses: LIMIT_MS times Dictionary's slowness in the same guest, compared like for like
-(the CEO: "if the VM is slower, then the measurements need to be adjusted accordingly"): its median
-on his Mac from the Dock click to its window, against its median in the guest from the same
-starting point (the guest's launch-request median plus the Dock's own part measured on his Mac),
-never a p95 a single cold outlier sets; the ratio and its inputs are recorded beside the limit.
+the limit refuses: LIMIT_MS times the test VM's slowness against his Mac (the CEO: "if the VM is
+slower, then the measurements need to be adjusted accordingly"), a FIXED ratio taken once from the
+Dictionary measurements on record (WARM_RATIO, and COLD_RATIO for the cold route); Dictionary is
+never launched (the CEO, 2026-11-14 and 2026-11-15). The ratio and its inputs are recorded beside
+the limit.
 Every route's own p95 and median, and every splash's, are stated. 20 launches a route by default,
 so a p95 is a real 95th percentile and not the slowest of a handful.
 
@@ -84,21 +84,50 @@ HERE = Path(__file__).resolve().parent
 # The CEO's rule (2026-11-14): at most 380 ms p95 from the click to the splash showing (his
 # benchmark was Dictionary's measured Dock launch on his Mac, at most 380 ms).
 LIMIT_MS = 380
-# THE GUEST IS SLOWER THAN HIS MAC, SO THE LIMIT IS SCALED, ONCE PER WALK (the CEO, 2026-11-14: "if
-# the VM is slower, then the measurements need to be adjusted accordingly. This is NOT about some 100
-# or 200 ms."), LIKE FOR LIKE AND BY MEDIANS: Dictionary's window was ordered front 287, 305, 318, 318,
-# 328 and 380 ms after the Dock click on his Mac (Echo's audit, `richos-hq/docs/research/2026-11-14-
-# app-launch-speed-audit.md`, "Dictionary, same Mac, same Dock"), median MAC_DICTIONARY_MEDIAN_MS; the
-# walk launches Dictionary DICTIONARY_RUNS times in the same guest and times its window from the
-# launch request, and adds the Dock's own part before the request (44, 41, 43 and 54 ms on his Mac,
-# the audit's Dock-click table, median DOCK_PART_MS). The limit is LIMIT_MS x (that guest median /
-# MAC_DICTIONARY_MEDIAN_MS), never below LIMIT_MS, recorded with its inputs.
+# THE GUEST IS SLOWER THAN HIS MAC, SO THE LIMIT IS SCALED (the CEO, 2026-11-14: "if the VM is
+# slower, then the measurements need to be adjusted accordingly. This is NOT about some 100 or 200
+# ms."), BY A FIXED RATIO, AND DICTIONARY IS NEVER LAUNCHED (the CEO, 2026-11-14: "Stop all that
+# retarded "launch-speed walk beside Dictionary" fuckshit!", and 2026-11-15 when a nightly still
+# launched it 20 times: "What the fuck did I say about that????"). The ratios are the Dictionary
+# measurements already on record, like for like and by medians, taken once
+# (docs/verification/2026-11-14-splash-opening/, the three walks in its walks.tgz):
+#   his Mac: Dictionary's window 287, 305, 318, 318, 328 and 380 ms after the Dock click (Echo's
+#     audit, `richos-hq/docs/research/2026-11-14-app-launch-speed-audit.md`), median 318 ms; the
+#     Dock's own part before the launch request 44, 41, 43 and 54 ms, median 43.5 ms;
+#   the guest, warm: 30 launches, launch request to window (build 540..1277, stable 556..2813,
+#     smoke 383..2610), median 674 ms; (674 + 43.5) / 318 = 2.256, limit round(380 x 2.256) = 857 ms
+#     (the build walk's own ratio, the same median);
+#   the guest, after a `sudo purge` (the cold route's own, the lead's decision on
+#     esc-20261114T164747Z-54632204): 20 launches (build 2355..8130, stable 4193..8441), median
+#     5262.5 ms; (5262.5 + 43.5) / 318 = 16.686, limit round(380 x 16.686) = 6341 ms.
 MAC_DICTIONARY_MS = (287, 305, 318, 318, 328, 380)
 MAC_DICTIONARY_MEDIAN_MS = statistics.median(MAC_DICTIONARY_MS)
 DOCK_PART_INPUTS_MS = (44, 41, 43, 54)
 DOCK_PART_MS = statistics.median(DOCK_PART_INPUTS_MS)
-DICTIONARY_RUNS = 10
-DICTIONARY = '/System/Applications/Dictionary.app'
+GUEST_DICTIONARY_WARM_MS = (540, 551, 621, 634, 648, 700, 714, 824, 1185, 1277,
+                            556, 585, 645, 704, 783, 818, 920, 1132, 1439, 2813,
+                            383, 420, 464, 482, 548, 560, 582, 741, 1170, 2610)
+GUEST_DICTIONARY_COLD_MS = (2355, 3536, 3573, 3672, 3854, 4818, 5135, 5233, 7213, 8130,
+                            4193, 5071, 5292, 5604, 5624, 5811, 5833, 6045, 6590, 8441)
+RECORD = 'docs/verification/2026-11-14-splash-opening/ (walks.tgz: build, stable, smoke-report)'
+
+
+def recorded_ratio(guest_ms):
+    """(ratio, inputs) from Dictionary launches on record in the guest, LIKE FOR LIKE: their median
+    from the launch request to the window, plus the Dock's own part measured on his Mac, against
+    his Mac's median from the Dock click. Rounded once to three places, never below 1."""
+    guest = statistics.median(guest_ms) + DOCK_PART_MS
+    ratio = round(max(1.0, guest / MAC_DICTIONARY_MEDIAN_MS), 3)
+    return ratio, {'guest_median_from_request_ms': statistics.median(guest_ms), 'guest_launches': len(guest_ms),
+                   'dock_part_ms': DOCK_PART_MS, 'guest_median_from_click_ms': guest,
+                   'mac_median_from_click_ms': MAC_DICTIONARY_MEDIAN_MS, 'record': RECORD}
+
+
+WARM_RATIO, WARM_INPUTS = recorded_ratio(GUEST_DICTIONARY_WARM_MS)
+COLD_RATIO, COLD_INPUTS = recorded_ratio(GUEST_DICTIONARY_COLD_MS)
+# Made from the rounded ratio, so publication (nightly-local.py) re-derives round(380 x ratio) exactly.
+WARM_LIMIT_MS = round(LIMIT_MS * WARM_RATIO)
+COLD_LIMIT_MS = round(LIMIT_MS * COLD_RATIO)
 # The splash today's rule picks for each start (richos-core `launch::pick_splash`): start 2 shows the
 # second entry, every other start the first.
 SPLASH_FOR_START = {2: 'round-11/v2'}
@@ -203,8 +232,6 @@ def measure(run, events):
         row['splash'], row['splash_from'] = row['first_frame'] + ALLOWANCE_MS, "the splash's opening on the glass"
     elif 'page_took_over' in row:
         row['splash'], row['splash_from'] = row['page_took_over'] + ALLOWANCE_MS, "the page's splash playing"
-    elif run['label'].startswith('dictionary') and 'window' in row:
-        row['splash'], row['splash_from'] = row['window'] + ALLOWANCE_MS, "AppKit's window ordered front"
     elif 'document_loaded' in row and 'process_start' not in row:
         # Only a build older than the launch line: a build that writes it and did not report its
         # splash is missing evidence, never timed by WebKit's document instead (review
@@ -224,8 +251,8 @@ def verdict(rows, planned=None, limit_ms=LIMIT_MS, ratio=None, inputs=None, rout
     """The CEO's rule, 2026-11-14: "380 ms as the maximum allowed p95 time for the RichOS app to
     start showing the splash screen." The p95 of each judged route, and of every judged launch
     together, against the limit: any one over it refuses. A route in `route_limits` ({route:
-    {'limit_ms', 'ratio', 'inputs'}}) is judged against its own like-for-like limit (the cold route
-    against Dictionary after the same purge) and is not pooled with the others.
+    {'limit_ms', 'ratio', 'inputs'}}) is judged against its own like-for-like limit (the cold route,
+    scaled by Dictionary after a purge on record) and is not pooled with the others.
 
     MISSING EVIDENCE NEVER PASSES (review rv-20261114T115101Z-10e7c6ac-7689, finding 1): a judged
     launch with no timing, a planned route with no launches (`planned`, {route: launches}), or
@@ -233,7 +260,7 @@ def verdict(rows, planned=None, limit_ms=LIMIT_MS, ratio=None, inputs=None, rout
     judged, missing = {}, []
     for row in rows:
         route, _, kind = row['label'].partition(':')
-        if kind != 'judged' or route == 'dictionary':
+        if kind != 'judged':
             continue
         if 'splash' in row:
             judged.setdefault(route, []).append(row['splash'])
@@ -261,7 +288,7 @@ def verdict(rows, planned=None, limit_ms=LIMIT_MS, ratio=None, inputs=None, rout
     by_splash = {}
     for row in rows:
         route, _, kind = row['label'].partition(':')
-        if kind == 'judged' and route != 'dictionary' and 'splash' in row and row.get('splash_id'):
+        if kind == 'judged' and 'splash' in row and row.get('splash_id'):
             by_splash.setdefault(row['splash_id'], []).append(row['splash'])
     summary['splashes'] = {sid: {'p95_ms': p95(v), 'median_ms': statistics.median(v), 'launches': len(v)}
                            for sid, v in sorted(by_splash.items())}
@@ -286,48 +313,20 @@ def sentence(summary):
                  '%d launches where at least %d are required' % (
                      len(summary['missing']), ', '.join(sorted(set(summary['missing']))) or 'none',
                      summary['launches'], MIN_LAUNCHES))
-    inputs = summary.get('guest_inputs') or {}
     scaled = ('' if not summary.get('guest_ratio') else
-              ' (%d ms on his Mac x %.2f, Dictionary\'s slowness in this guest: its median %g ms from the Dock click here, '
-              'the launch request\'s %g ms plus the Dock\'s %g, against %g ms on his Mac)' % (
-                  LIMIT_MS, summary['guest_ratio'], inputs.get('guest_median_from_click_ms'),
-                  inputs.get('guest_median_from_request_ms'), inputs.get('dock_part_ms'),
-                  inputs.get('mac_median_from_click_ms')))
+              ' (%d ms on his Mac x %.3f, the test VM\'s slowness on record, fixed)' % (LIMIT_MS, summary['guest_ratio']))
     parts += ['%s p95 %d ms (%d launches)' % (sid, s['p95_ms'], s['launches'])
               for sid, s in sorted(summary.get('splashes', {}).items())]
     for route, own in sorted((summary.get('route_limits') or {}).items()):
-        got = (own.get('inputs') or {})
-        parts.append('%s judged on its own against %d ms (380 x %s, Dictionary after the same purge: its median %s ms '
-                     'from the Dock click here, against %g ms on his Mac)' % (
-                         route, own['limit_ms'], own.get('ratio'), got.get('guest_median_from_click_ms'),
-                         MAC_DICTIONARY_MEDIAN_MS))
+        parts.append('%s judged on its own against %d ms (380 x %s, the test VM\'s slowness after a purge on record, '
+                     'fixed)' % (route, own['limit_ms'], own.get('ratio')))
     return 'Launch speed, Dock click to the splash showing, against a p95 of %d ms%s: %s. %s.' % (
         summary['limit_ms'], scaled, head, '; '.join(parts))
 
 
-def guest_limit(rows, label='dictionary:calibration'):
-    """(limit in ms, ratio, inputs) from the Dictionary calibration launches, LIKE FOR LIKE: its
-    median from the launch request to its window in the guest, plus the Dock's own part measured on
-    his Mac, against its median from the Dock click to its window on his Mac. (LIMIT_MS, None, None)
-    without them. A guest faster than his Mac never tightens the limit below LIMIT_MS."""
-    windows = [r['window'] for r in rows if r['label'] == label and 'window' in r]
-    if not windows:
-        return LIMIT_MS, None, None
-    guest = statistics.median(windows) + DOCK_PART_MS
-    # Rounded ONCE, and the limit is made from the rounded ratio: publication (nightly-local.py,
-    # `round(380 * ratio)` from the recorded ratio) re-derives exactly the same limit (review
-    # rv-20261114T153837Z-b8423a44-96f8).
-    ratio = round(max(1.0, guest / MAC_DICTIONARY_MEDIAN_MS), 3)
-    inputs = {'guest_window_from_request_ms': sorted(windows), 'guest_median_from_request_ms': statistics.median(windows),
-              'dock_part_ms': DOCK_PART_MS, 'dock_part_inputs_ms': list(DOCK_PART_INPUTS_MS),
-              'guest_median_from_click_ms': guest, 'mac_median_from_click_ms': MAC_DICTIONARY_MEDIAN_MS,
-              'mac_inputs_ms': list(MAC_DICTIONARY_MS), 'ratio': round(guest / MAC_DICTIONARY_MEDIAN_MS, 3)}
-    return round(LIMIT_MS * ratio), ratio, inputs
-
-
 
 # The guest's plans, in the order they run (each its own probe and folder).
-PLANS = ('dictionary', 'fresh', 'switch', 'daily', 'checks', 'after')
+PLANS = ('fresh', 'switch', 'daily', 'checks', 'after')
 # The two openings every user has from the first start (ui/openings-catalog.js), in the
 # catalog's order: what "a different one each day" turns between in a new home.
 DAILY_TURN = ('opening/ruled-standard', 'opening/midnight-suede')
@@ -522,14 +521,7 @@ def main():
         (a.out / (name + '.probe.txt')).write_text(said + '\n')
         return said
 
-    # Dictionary first, DICTIONARY_RUNS times: the guest's slowness against his Mac, measured once.
-    said_dictionary = None if a.only_checks else run_plan('dictionary', [
-        {'label': 'dictionary:calibration', 'app': DICTIONARY, 'owns': [DICTIONARY], 'env': {},
-         'menu_quit': 'Quit Dictionary', 'done': '', 'settle': 4} for _ in range(DICTIONARY_RUNS)]
-        # THE COLD ROUTE'S OWN CALIBRATION, like for like (the lead's decision on
-        # esc-20261114T164747Z-54632204, 2026-11-14): Dictionary after the same `sudo purge`.
-        + [{'label': 'dictionary:cold', 'app': DICTIONARY, 'owns': [DICTIONARY], 'env': {}, 'purge': True,
-            'menu_quit': 'Quit Dictionary', 'done': '', 'settle': 6} for _ in range(DICTIONARY_RUNS)])
+    # No Dictionary launch: the guest's slowness is the fixed ratio on record (WARM_RATIO, COLD_RATIO).
     install(staged[0])
     fresh = [INSTALLED]
 
@@ -648,10 +640,10 @@ def main():
             facts.setdefault("route_errors", {})['after-update'] = str(error)[:500]
 
     # The guest's own system log for the walk, on the guest's clock.
-    predicate = 'process == "richos-tauri" OR process == "Dictionary"'
+    predicate = 'process == "richos-tauri"'
     g('/usr/bin/log show --last 300m --style compact --predicate ' + shlex.quote(predicate) + ' > '
       + shlex.quote(work + '/guest-system.log') + ' 2>&1 || true', 900)
-    facts['left_running'] = g('ps -axo pid=,comm= | grep -e "/richos-tauri$" -e "/Dictionary$" | grep -v grep || true')
+    facts['left_running'] = g('ps -axo pid=,comm= | grep -e "/richos-tauri$" | grep -v grep || true')
     g('cd ' + shlex.quote(payload) + ' && tar czf launch-speed.tgz launch-speed/guest-system.log '
       + ' '.join('launch-speed/' + n for n in PLANS) + ' 2>/dev/null; true', 600)
     subprocess.run([str(HERE / 'guest.sh'), a.vm, '--pull', payload + '/launch-speed.tgz', str(a.out / 'launch-speed.tgz')],
@@ -683,10 +675,8 @@ def main():
         else:
             planned["after-update"] = a.runs
     facts['playing'] = splash_playing(a.out / 'launch-speed' / 'fresh')
-    limit_ms, ratio, inputs = guest_limit(rows)
-    cold_limit, cold_ratio, cold_inputs = guest_limit(rows, 'dictionary:cold')
-    summary = verdict(rows, planned, limit_ms, ratio, inputs,
-                      {'cold': {'limit_ms': cold_limit, 'ratio': cold_ratio, 'inputs': cold_inputs}})
+    summary = verdict(rows, planned, WARM_LIMIT_MS, WARM_RATIO, WARM_INPUTS,
+                      {'cold': {'limit_ms': COLD_LIMIT_MS, 'ratio': COLD_RATIO, 'inputs': COLD_INPUTS}})
     checks = check_results(results) if a.checks or a.only_checks else []
     report = {'facts': facts, 'summary': summary, 'sentence': sentence(summary), 'launches': rows,
               'checks': checks, 'refusing': not a.report_only,
