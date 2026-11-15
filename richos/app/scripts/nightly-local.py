@@ -326,10 +326,12 @@ NEW_USER_WALK_BUDGET = NEW_USER_WALK_WAIT + 2400
 # routes of Sage's plan 2026-11-14 "the splash the rules picked is playing within 380 ms of the
 # click", section 6: a returning user's launch, the first launch after the guest starts (each after
 # its own purge, with its own limit), the first launch after an update put in place at quit, and a
-# quit at which the rules pick another splash; 20 launches a route, 40 for the last so that every
-# splash today's rule picks is timed; no route of an older copy in /Applications handing over, which
-# no real user has), and it is refused when the p95 of any judged route is over 380 ms (the CEO: "380
-# ms as the maximum allowed p95 time"), scaled by how much slower the test VM is than his Mac (the
+# quit at which the rules pick another splash; no route of an older copy in /Applications handing
+# over, which no real user has). Each route runs 5 starts, the rule switch too (the CEO, 2026-11-15:
+# "Reduce to 5. Only if one of the 5 is outside what's required, only then do you need to extend to
+# 20. Otherwise i.e. if the first 5 are fine, it's a PASS."): a route all of whose starts are within
+# the limit passes, and only a route with one over goes on to 20 starts and is refused when its p95
+# is over the limit (the CEO: "380 ms as the maximum allowed p95 time"), scaled by how much slower the test VM is than his Mac (the
 # CEO: "if the VM is slower, then the measurements need to be adjusted accordingly"): a FIXED ratio,
 # taken once from the Dictionary measurements on record, and Dictionary is never launched (the CEO,
 # 2026-11-14: "Stop all that retarded "launch-speed walk beside Dictionary" fuckshit!"; 2026-11-15:
@@ -343,10 +345,14 @@ LAUNCH_SPEED_PHASE = "launch-speed"
 LAUNCH_SPEED_WARM_RATIO = 2.256
 LAUNCH_SPEED_COLD_RATIO = 16.686
 LAUNCH_SPEED_WAIT = 3600
-# About 145 launches (1 + 20 cold + 20 ordinary + 2, 60 for the rule switch, 42 after an update;
-# the 2026-11-14 walks, docs/verification/2026-11-14-splash-opening/, also launched Dictionary 20
-# times, which no walk does now); the budget is the slot wait plus 90 minutes.
-LAUNCH_SPEED_BUDGET = LAUNCH_SPEED_WAIT + 5400
+# Launches (testvm/launch-speed-walk.py): with every route passing at 5 starts, 40 (1 + 5 cold + 5
+# ordinary + 2; 3 + 5 for the rule switch, three fresh homes; 2 + 5 for the day change; 2 + 10
+# after an update). With every route taken on to 20, at most 138 (15 more cold, 15 more ordinary,
+# 8 + 15 for the rule switch in eight more homes, 15 more day changes, 30 more after an update).
+# The 90 minutes this budget had covered 165 launches, Dictionary's 20 among them (5400 s / 165 =
+# 32.7 s a launch); 138 x 32.7 s = 4516 s, so the budget is the slot wait plus 80 minutes, and the
+# usual walk of 40 launches takes about a quarter of it.
+LAUNCH_SPEED_BUDGET = LAUNCH_SPEED_WAIT + 4800
 
 # GUEST MEMORY, ASKED AT ONCE. A build that passed every gate could wait the full hour for a
 # guest slot and end "a guest needs N MB: M MB available ... (floor F MB)": memory no slot wait

@@ -97,7 +97,7 @@ summary = walk.verdict(rows)
 check('the p95 of every judged launch together, within 380 ms, passes',
       summary['p95_ms'] == 360 and summary['launches'] == 23 and summary['refused'] is False, summary)
 check("each route's own p95 and median are stated",
-      summary['routes']['cold'] == {'p95_ms': 370, 'median_ms': 360, 'max_ms': 370, 'launches': 3}, summary)
+      summary['routes']['cold'] == {'p95_ms': 370, 'median_ms': 360, 'max_ms': 370, 'launches': 3, 'over': 0}, summary)
 check('first launches are reported, not judged', summary['reported'] == {'ordinary:first': 1200}, summary)
 # Each judged route on its own (review rv-20261114T143754Z-7a96691c-3106, finding 2): a slow route
 # refuses even when the pooled p95 is fast.
@@ -127,8 +127,26 @@ check('a judged launch with no timing refuses', untimed['refused'] is True and u
 gone = walk.verdict(fast, {'ordinary': 20, 'updated-from-applications': 20})
 check('a planned route with no launches refuses, however fast the rest', gone['refused'] is True
       and gone['missing'].count('updated-from-applications:not launched') == 20, gone)
-few = walk.verdict(fast[:19])
-check('fewer than 20 judged launches refuse', few['refused'] is True and few['incomplete'] is True, few)
+# FIVE STARTS, TWENTY ONLY WHEN ONE FAILS (the CEO, 2026-11-15: "Reduce to 5. Only if one of the 5
+# is outside what's required, only then do you need to extend to 20. Otherwise i.e. if the first 5
+# are fine, it's a PASS.").
+check('a route runs five starts first, and is taken to twenty', (walk.FIRST_STARTS, walk.FULL_STARTS) == (5, 20))
+five = walk.verdict(fast[:5], {'ordinary': 5}, 857)
+check('five starts, every one within the limit, pass', five['refused'] is False and five['routes_over'] == [], five)
+one_of_five = walk.verdict(fast[:4] + [{'label': 'ordinary:judged', 'splash': 900}], {'ordinary': 5}, 857)
+check('five starts with one over, never taken on to twenty, refuse', one_of_five['refused'] is True
+      and one_of_five['routes_over'] == ['ordinary'] and one_of_five['routes']['ordinary']['over'] == 1, one_of_five)
+one_of_twenty = walk.verdict(fast[:19] + [{'label': 'ordinary:judged', 'splash': 900}], {'ordinary': 20}, 857)
+check('taken to twenty with one over, its p95 within the limit, it passes', one_of_twenty['refused'] is False
+      and one_of_twenty['routes']['ordinary']['p95_ms'] == 300, one_of_twenty)
+two_of_twenty = walk.verdict(fast[:18] + [{'label': 'ordinary:judged', 'splash': 900}] * 2, {'ordinary': 20}, 857)
+check('taken to twenty with its p95 over the limit, it refuses', two_of_twenty['refused'] is True
+      and two_of_twenty['routes_over'] == ['ordinary'], two_of_twenty)
+check('only a route with a start over ITS limit is taken on, and a start without a timing takes nothing on',
+      walk.needing_more([{'label': 'ordinary:judged', 'splash': 900}, {'label': 'cold:judged', 'splash': 5000},
+                         {'label': 'day-change:judged'}, {'label': 'ordinary:first', 'splash': 5000},
+                         {'label': 'rule-switch:judged', 'splash': 857}],
+                        857, {'cold': {'limit_ms': 6341}}) == ['ordinary'])
 whole = walk.verdict(fast, {'ordinary': 20})
 check('a complete fast measurement passes', whole['refused'] is False and whole['missing'] == [], whole)
 check('the sentence says the measurement was incomplete', 'INCOMPLETE' in walk.sentence(gone), walk.sentence(gone))
@@ -255,6 +273,69 @@ check('its limits are the fixed ones on record, recorded beside the verdict',
       and fast_report['summary']['route_limits']['cold']['ratio'] == 16.686, fast_report['summary'])
 check('a walk whose every start is within the limits passes', fast_code == 0 and fast_report['summary']['refused'] is False,
       (fast_code, fast_report['sentence']))
+
+
+def judged_in(plans, route, plan=None):
+    return [s for name, steps in plans.items() if plan in (None, name) for s in steps if s['label'] == route + ':judged']
+
+
+ROUTES = ('ordinary', 'cold', 'rule-switch', 'day-change', 'after-update')
+PREVIOUS = ('--previous-app', '/Users/admin/testvm/fake-vm/previous/RichOS.app')
+fast_code, fast_report, fast_plans = walk_in_fake_guest(lambda label, n: 300, PREVIOUS)
+check('every route, the rule switch too, runs five starts, and none is taken on when all five are within',
+      {r: len(judged_in(fast_plans, r)) for r in ROUTES} == dict.fromkeys(ROUTES, 5)
+      and not [n for n in fast_plans if n.startswith('more-')] and fast_code == 0
+      and fast_report['facts']['taken_to_full'] == [], (sorted(fast_plans), fast_report['sentence']))
+switch = judged_in(fast_plans, 'rule-switch')
+check("the rule switch's five: start 2 and start 3 of fresh homes, each home removed after its last start",
+      [s['expect_splash'] for s in switch] == ['round-11/v2', 'round-11/v1'] * 2 + ['round-11/v2']
+      and len({s['env']['HOME'] for s in switch}) == 3
+      and [bool(s.get('after')) for s in switch] == [False, True, False, True, True], switch)
+
+
+def slow_at(route, which, ms=900):
+    """The `which`-th judged starts (1-based) of `route` take `ms`; every other start 300 ms."""
+    seen = [0]
+
+    def time_for(label, n):
+        if label == route + ':judged':
+            seen[0] += 1
+            if seen[0] in which:
+                return ms
+        return 300
+    return time_for
+
+
+for route in ROUTES:
+    code, report, plans = walk_in_fake_guest(slow_at(route, {3}, 9000 if route == 'cold' else 900), PREVIOUS)
+    counts = {r: len(judged_in(plans, r)) for r in ROUTES}
+    check("one of %s's five over its limit takes that route, and only it, on to twenty, judged by its p95 (one over: "
+          "passes)" % route, counts == {**dict.fromkeys(ROUTES, 5), route: 20}
+          and len(judged_in(plans, route, 'more-' + route)) == 15 and report['facts']['taken_to_full'] == [route]
+          and report['summary']['routes'][route]['launches'] == 20 and report['summary']['refused'] is False
+          and code == 0, (counts, sorted(plans), report['sentence']))
+code, report, plans = walk_in_fake_guest(slow_at('ordinary', {2, 4}), PREVIOUS)
+check('two of twenty over the limit: the p95 is over, and the walk refuses', code == 1
+      and report['summary']['routes_over'] == ['ordinary'] and report['summary']['routes']['ordinary']['launches'] == 20,
+      report['sentence'])
+code, report, plans = walk_in_fake_guest(slow_at('cold', {1}, 5000), PREVIOUS)
+check('a cold start over the warm limit and within its own is not taken on', not judged_in(plans, 'cold', 'more-cold')
+      and code == 0, report['sentence'])
+_, _, plans = walk_in_fake_guest(slow_at('day-change', {1}), PREVIOUS)
+more_days = judged_in(plans, 'day-change', 'more-day-change')
+check('the day-change route goes on in the same home, no set-up again, its two openings still in turn',
+      not [s for s in plans['more-day-change'] if s['label'] == 'day-change:prep']
+      and [s['expect_splash'] for s in judged_in(plans, 'day-change')]
+      == ['opening/midnight-suede', 'opening/ruled-standard'] * 10
+      and {s['env']['HOME'] for s in more_days} == {s['env']['HOME'] for s in judged_in(plans, 'day-change', 'daily')},
+      more_days[:2])
+_, _, plans = walk_in_fake_guest(slow_at('rule-switch', {1}), PREVIOUS)
+more_switch = judged_in(plans, 'rule-switch', 'more-rule-switch')
+check('the rule switch goes on in new fresh homes, each one\'s start 2 and start 3 (the fifth was a home\'s start 2)',
+      [s['expect_splash'] for s in judged_in(plans, 'rule-switch')]
+      == ['round-11/v2', 'round-11/v1'] * 2 + ['round-11/v2'] + ['round-11/v2', 'round-11/v1'] * 7 + ['round-11/v2']
+      and not {s['env']['HOME'] for s in more_switch} & {s['env']['HOME'] for s in judged_in(plans, 'rule-switch', 'switch')},
+      more_switch[:2])
 # The receipt's tree digest, on the tree whose digest the updater's own test pins
 # (crates/richos-user-update/src/lib.rs, digests_are_spelled_as_sha2_0_10_spelled_them).
 with tempfile.TemporaryDirectory() as d:
@@ -299,6 +380,14 @@ check('a day-change route that was planned and not launched refuses',
       walk.verdict(fast, {'ordinary': 20, 'day-change': 20})['refused'] is True)
 check('the day-change route within the limit passes with the rest',
       walk.verdict(fast + day, {'ordinary': 20, 'day-change': 20})['refused'] is False)
+
+# The nightly's budget (nightly-local.py LAUNCH_SPEED_BUDGET) is made from these two counts: every
+# route passing at five starts, and every route taken on to twenty.
+usual = sum(len(steps) for steps in fast_plans.values())
+_, _, worst_plans = walk_in_fake_guest(lambda label, n: 9000 if label.endswith(':judged') else 300, PREVIOUS)
+worst = sum(len(steps) for steps in worst_plans.values())
+check('a walk launches 40 times when every route passes at five, at most 138 when every route goes on to twenty',
+      (usual, worst) == (40, 138), (usual, worst))
 
 print('%d failure(s)' % len(failures))
 sys.exit(1 if failures else 0)
