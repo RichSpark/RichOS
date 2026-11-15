@@ -1,7 +1,7 @@
 // THE PRE-PAINT THEME BOOT — synchronous, tiny, and first in `<head>` on purpose.
 //
 // The durable answer to "which theme?" and "how big is the type?" lives in `config.rs`,
-// beside `splash_enabled` and `techy_default`, and it reaches this UI over the Tauri
+// beside `opening_sound` and `techy_default`, and it reaches this UI over the Tauri
 // bridge — which is asynchronous. An async read cannot decide the FIRST FRAME. Boot the
 // app on the default and reconcile a moment later and the CEO who chose light mode gets a
 // full-screen flash of midnight blue on every single launch, which is exactly the kind of

@@ -567,3 +567,5 @@
 [richos] update at quit: nothing to put in place now; the next launch checks again
 [richos] update at quit: payload reclamation deferred: {}
 [richos] update at quit: {} put in place: {} -> {}
+[richos] openings: the image of {} was not saved ({})
+[richos] openings: what was earned could not be saved ({})

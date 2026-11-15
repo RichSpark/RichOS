@@ -118,8 +118,8 @@ sleep 3
 tree 2-general-settings
 shot 2-general-settings
 if ! read_ok 2-general-settings; then verdict UNKNOWN "items 6 and 7: the general settings were not read"
-elif has 2-general-settings 'Show it when RichOS starts'; then verdict PASS "item 7: the general settings hold the splash switch"
-else verdict FAIL "item 7: the general settings do not hold the splash switch"; fi
+elif has 2-general-settings 'Play its sound'; then verdict PASS "item 7: the general settings hold the splash screen's row (its sound switch since 2026-11-14)"
+else verdict FAIL "item 7: the general settings do not hold the splash screen's row"; fi
 if ! read_ok 2-general-settings; then :
 elif has 2-general-settings 'Nothing is ever removed'; then verdict PASS "item 6: a fresh install keeps the stored output forever"
 else verdict FAIL "item 6: the retention hint is not the forever one on a fresh install"; fi

@@ -98,7 +98,8 @@ corrections.js          @allui richos/app/ui/tests/fixtures/loro-proposal.json r
 feedback.js             @allui richos/app/ui/tests/fixtures/feedback-vocabulary.json richos/app/ui/tests/fixtures/feedback-previews.json richos/app/ui/tests/fixtures/feedback-entries.json richos/app/src-tauri/src/main.rs
 memory.js               @allui
 setup.js                @allui richos/app/crates/richos-core/src/setup.rs richos/app/src-tauri/src/setup_view.rs
-splash.js               @allui richos/app/src-tauri/src/main.rs richos/app/crates/richos-core/src/config.rs richos/app/crates/richos-core/src/launch.rs
+splash.js               @allui richos/app/src-tauri/src/main.rs richos/app/crates/richos-core/src/config.rs richos/app/crates/richos-core/src/launch.rs richos/app/src-tauri/src/splash_opening.rs
+openings.js             @allui richos/app/src-tauri/src/main.rs richos/app/crates/richos-core/src/config.rs
 
 # ---- the chat surface and its states ----------------------------------------------------
 compaction-notice.js    @shell docs/verification/compaction-notice-2026-09-06/raw/cellT1.jsonl docs/verification/compaction-notice-2026-09-06/raw/cellT1.jsonl.timed.jsonl richos/app/crates/richos-core/src/timeline.rs

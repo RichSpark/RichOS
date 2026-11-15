@@ -43,6 +43,9 @@ type Id = *mut AnyObject;
 
 /// The quit's drawing gets at most this long (plan section 1, "Bounded").
 pub const DRAW_BOUND: Duration = Duration::from_secs(3);
+/// A saved image gets at most this long, and is drawn at the share card's size (round 74: 1600 x 900).
+const CARD_BOUND: Duration = Duration::from_secs(10);
+const CARD_SIZE: (f64, f64) = (1600.0, 900.0);
 /// The later pictures are read on this many threads, in the order they are needed, and handed to
 /// Core Animation in runs of this many as they arrive (trial 3's packing).
 const READERS: usize = 4;
@@ -624,7 +627,7 @@ pub fn call_off_quit() -> bool {
 /// quit is allowed, with the pick the rules made and what its opening is made for. Hides every
 /// window, draws on its own thread for at most [`DRAW_BOUND`], saves the pick (with its opening
 /// when the drawing finished) and exits. The caller prevents this exit when this returns true.
-pub fn draw_before_quit(app: &tauri::AppHandle, data_dir: PathBuf, saved: Saved, made: MadeFor, position: Option<(f64, f64)>) -> bool {
+pub fn draw_before_quit(app: &tauri::AppHandle, data_dir: PathBuf, saved: Saved, made: MadeFor, position: Option<(f64, f64)>, page: String) -> bool {
     if DRAWING.swap(true, Ordering::SeqCst) {
         return true; // already drawing: a second quit request in the same instant
     }
@@ -640,7 +643,7 @@ pub fn draw_before_quit(app: &tauri::AppHandle, data_dir: PathBuf, saved: Saved,
     let spawned = std::thread::Builder::new().name("richos-splash-at-quit".into()).spawn(move || {
         let started = Instant::now();
         let deadline = started + DRAW_BOUND;
-        let outcome = draw(&app, &data_dir, &made, position, deadline);
+        let outcome = draw(&app, &data_dir, &made, position, deadline, &page);
         if CALLED_OFF.load(Ordering::SeqCst) {
             DRAWING.store(false, Ordering::SeqCst);
             // Every window that was on screen comes back (the conversation window is also brought
@@ -767,16 +770,80 @@ fn hold_and_draw(window: &tauri::WebviewWindow, ms: f64, rect: NSRect, until: In
     rx.recv_timeout(until.saturating_duration_since(Instant::now())).map_err(|_| "out of time".to_string())?
 }
 
+/// "SAVE IMAGE" (round 74's gallery): one picture of an opening's finished frame, with the line
+/// that names it and says when it became his, written to `out` as a JPEG. The same hidden page
+/// the quit draws with, at the share card's size, held at the opening's last moment
+/// (`splash.js`, `card`); `page` is the openings' record, so the picture carries his own date
+/// and company line. Called off the main thread; bounded.
+pub fn save_card(app: &tauri::AppHandle, entry_id: &str, page: &str, out: &Path) -> Result<(), String> {
+    static NUMBER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let deadline = Instant::now() + CARD_BOUND;
+    let script = format!(
+        "window.__RICHOS_LAUNCH__ = Object.freeze({{ kind: \"fresh\", ordinal: null, draw: true, card: true, \
+         splash: Object.freeze({{ id: {} }}) }});\n{page}",
+        serde_json::to_string(entry_id).unwrap_or_default()
+    );
+    let label = format!("opening-card-{}", NUMBER.fetch_add(1, Ordering::SeqCst));
+    let (tx, rx) = mpsc::channel();
+    let builder_app = app.clone();
+    app.run_on_main_thread(move || {
+        let built = tauri::WebviewWindowBuilder::new(&builder_app, label, tauri::WebviewUrl::App("splash-opening.html".into()))
+            .inner_size(CARD_SIZE.0, CARD_SIZE.1)
+            .visible(false)
+            .focused(false)
+            .initialization_script(script)
+            .build();
+        tx.send(built.map_err(|e| e.to_string())).ok();
+    })
+    .map_err(|e| e.to_string())?;
+    let window = rx
+        .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+        .map_err(|_| "the hidden page was not made in time".to_string())??;
+    let result = (|| {
+        // Ready: the opening asked for is built, held at its finished frame, and its faces loaded.
+        let (size, moment): ([f64; 2], f64) = loop {
+            let said = eval(
+                &window,
+                "(window.RichSplash && window.RichSplash.state.card === true && \
+                 (!document.fonts || document.fonts.status === 'loaded')) ? \
+                 JSON.stringify([innerWidth, innerHeight, window.RichSplash.state.heldAt, window.RichSplash.state.variationId]) : ''",
+                deadline,
+            )?;
+            if !said.is_empty() {
+                let (w, h, at, id): (f64, f64, f64, String) = serde_json::from_str(&said).map_err(|e| format!("the hidden page's answer: {e}"))?;
+                if id != entry_id {
+                    return Err(format!("the hidden page drew {id}, not {entry_id}"));
+                }
+                break ([w, h], at);
+            }
+            if Instant::now() >= deadline {
+                return Err("the hidden page's opening was not ready in time".into());
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        let whole = NSRect { origin: NSPoint::default(), size: NSSize { width: size[0], height: size[1] } };
+        let image = hold_and_draw(&window, moment, whole, deadline)?;
+        let written = write_jpeg(image as *mut c_void, out);
+        // SAFETY: a retained CGImage from `hold_and_draw`, released here.
+        unsafe { CGImageRelease(image as *mut c_void) };
+        if written { Ok(()) } else { Err(format!("the picture could not be written to {}", out.display())) }
+    })();
+    window.destroy().ok();
+    result
+}
+
 enum Job {
     First(usize, PathBuf, mpsc::Sender<Option<[u32; 3]>>),
     Later(usize, PathBuf),
 }
 
-/// The drawing itself. `Ok(what was drawn)` or `Err(why nothing was saved)`.
-fn draw(app: &tauri::AppHandle, data_dir: &Path, made: &MadeFor, position: Option<(f64, f64)>, deadline: Instant) -> Result<String, String> {
+/// The drawing itself. `Ok(what was drawn)` or `Err(why nothing was saved)`. `page` is what the
+/// app's own page is given beside the launch object (the openings' record, `openings::page_record`),
+/// so the hidden page draws the splash with exactly what the next start's page will have.
+fn draw(app: &tauri::AppHandle, data_dir: &Path, made: &MadeFor, position: Option<(f64, f64)>, deadline: Instant, page: &str) -> Result<String, String> {
     let script = format!(
-        "window.__RICHOS_LAUNCH__ = Object.freeze({{ kind: \"fresh\", ordinal: null, splashEnabled: true, draw: true, \
-         splash: Object.freeze({{ id: {} }}) }});",
+        "window.__RICHOS_LAUNCH__ = Object.freeze({{ kind: \"fresh\", ordinal: null, draw: true, \
+         splash: Object.freeze({{ id: {} }}) }});\n{page}",
         serde_json::to_string(&made.id).unwrap_or_default()
     );
     let (w, h) = (made.page[0], made.page[1]);

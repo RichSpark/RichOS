@@ -85,9 +85,9 @@ async function openApp(browser, launchKind) {
   });
   if (launchKind) {
     // The shell injects this before any page script — `main.rs::launch_init_script`, which is
-    // `window.__RICHOS_LAUNCH__ = Object.freeze({ kind: …, ordinal: …, splashEnabled: … })`.
+    // `window.__RICHOS_LAUNCH__ = Object.freeze({ kind: …, ordinal: …, splash: … })`.
     await page.addInitScript((k) => {
-      window.__RICHOS_LAUNCH__ = Object.freeze({ kind: k, ordinal: null, splashEnabled: null });
+      window.__RICHOS_LAUNCH__ = Object.freeze({ kind: k, ordinal: null });
     }, launchKind);
   }
   await page.goto(APP);

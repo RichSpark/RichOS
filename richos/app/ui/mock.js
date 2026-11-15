@@ -2844,6 +2844,12 @@
   // 292,194 days from 1600 to 2400. So the mock records the calls and returns a fixed
   // record; the numbers are Rust's job.
   const launchCalls = { splashShown: [], stateReads: [] };
+  // Your openings (round 74): the record the five commands below answer from, and every call.
+  const openingsCalls = [];
+  const openingsRecord = Object.assign(
+    { firstStart: "2026-09-01", version: "1.0.0", earned: { "ruled-standard": "2026-09-01", "midnight-suede": "2026-09-01" }, pick: null, sound: false, company: null, day: 20000 },
+    JSON.parse(JSON.stringify(window.__RICHOS_OPENINGS__ || {}))
+  );
   const LAUNCH_STATE = {
     kind: "fresh",
     counts: { today: 1, thisWeek: 3, thisMonth: 12, thisYear: 47, total: 47 },
@@ -4786,6 +4792,34 @@
           launchCalls.splashShown.push(args.id);
           return null;
 
+        // ---- Your openings (round 74) -------------------------------------------------
+        // The shell's five commands, answered from one record held here. It starts as whatever
+        // was put in front of the page (`window.__RICHOS_OPENINGS__`, a suite's own user), or
+        // as a new user's: the two openings and nothing else, sound off (a stand-in in a
+        // browser plays nothing unless a suite asks it to).
+        case "openings_state":
+          openingsCalls.push({ cmd });
+          return JSON.parse(JSON.stringify(openingsRecord));
+        case "set_opening_pick": {
+          openingsCalls.push({ cmd, pick: args.pick });
+          const pick = args.pick || null;
+          if (pick && pick !== "daily" && !openingsRecord.earned[pick]) throw "That opening is not one of yours yet.";
+          openingsRecord.pick = pick;
+          return null;
+        }
+        case "set_opening_sound":
+          openingsCalls.push({ cmd, on: args.on });
+          openingsRecord.sound = args.on === true;
+          return null;
+        case "set_opening_company":
+          openingsCalls.push({ cmd, name: args.name });
+          openingsRecord.company = String(args.name || "").trim().replace(/\s+/g, " ").slice(0, 32) || null;
+          return null;
+        case "save_opening_image":
+          openingsCalls.push({ cmd, id: args.id });
+          if (!openingsRecord.earned[args.id]) throw "That opening is not one of yours yet.";
+          return "RichOS " + args.id + ".jpg";
+
         // ---- the update path (RICH-TODOs row 12) ---------------------------------
         // Shapes are `UpdateView` from `src-tauri/src/updates.rs`, verbatim. The harness
         // does NOT simulate a download: `mockUpdate.script` is a queue of views a test
@@ -5922,6 +5956,11 @@
     /// The suite asserts against these rather than against a re-derived count — see the
     /// note over `launchCalls`.
     launchCalls() { return { splashShown: launchCalls.splashShown.slice(), stateReads: launchCalls.stateReads.slice() }; },
+    /// Your openings: every command the gallery sent, in order, and the record as it stands.
+    openingsCalls() { return openingsCalls.slice(); },
+    openingsRecord() { return JSON.parse(JSON.stringify(openingsRecord)); },
+    /// Something happened in the shell: an opening became his (`id`, on `date`).
+    openingsEarn(id, date) { openingsRecord.earned[id] = date; },
     // ---- techy mode, driven the way the CEO drives it and the way the OS breaks it -----
     /// Make one thread's machinery unreadable — a real `chmod 000` in the product, a set
     /// membership here. The point of the control is that "unreadable" must never be served

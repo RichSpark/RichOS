@@ -135,6 +135,10 @@ const ROLES = {
   "settings-button.js": { role: "ui", why: "the universal settings button — CEO ruling §15" },
   "splash.js": { role: "ui", why: "the opening curtain's renderer" },
   "splash-library.js": { role: "ui", why: "the two approved splash compositions — data, with prose in it" },
+  "splash-materials.js": { role: "ui", why: "the five material compositions the openings' materials ladder is built on (round 74) — data, in the library's shape" },
+  "openings-catalog.js": { role: "ui", why: "every opening there is and what earns it (round 74) — data, read by the shell too" },
+  "openings.js": { role: "ui", why: "what round 74 adds to the opening curtain: the number, the light, the landing, the sound, the handover" },
+  "openings-page.js": { role: "ui", why: "Your openings (round 74): the gallery, reached from Settings" },
   "theme-boot.js": { role: "ui", why: "the pre-paint theme mirror" },
   "no-native-menu.js": { role: "ui", why: "the one place that keeps the web view's own right-click menu (Look Up, Translate, Share) from appearing; it has no user-visible strings" },
   "speckle.js": {
@@ -210,6 +214,7 @@ const ROLES = {
   "terminal-and-git.css": { role: "style", why: "the Terminal setup sheet's and the Git name card's and sheet's stylesheet" },
   "suite-tools.css": { role: "style", why: "the five tools' stylesheet (round 70): the setup sheet's strip, the tools card and the line above the message box" },
   "splash.css": { role: "style", why: "the opening curtain's stylesheet" },
+  "openings.css": { role: "style", why: "what round 74 adds to the opening curtain, and the gallery's stylesheet" },
   "speckle.css": { role: "style", why: "the speckled ground's CSS half, copied unedited from the design system" },
   "fonts/fonts.css": { role: "style", why: "the vendored font faces" },
 };

@@ -72,6 +72,7 @@ const {
 } = require("./lib/harness");
 const SOURCES = require("./lib/ui-sources");
 const OVERLAYS = require("./lib/overlays");
+const { SILENT_AUDIO } = require("./lib/silent-audio");
 const { collectPageErrors, createErrorTracker } = require("./lib/page-errors");
 
 const APP = "file://" + path.join(UI_DIR, "index.html");
@@ -118,8 +119,8 @@ const LAG_MS = Number(process.env.RICHOS_APPEARANCE_LAG_MS || 0);
 /// red. So the wait is on a DIFFERENT fact from the assertion: that the call has completed.
 /// What it wrote is still entirely open, and still asserted.
 ///
-/// Recorded in a `finally`, so a command the mock does not implement (`set_splash_enabled` is
-/// one — it rejects with "no such command", which `main.js` swallows on purpose) still counts
+/// Recorded in a `finally`, so a command the mock does not implement (it rejects with "no such
+/// command", which a caller may swallow on purpose) still counts
 /// as completed. The alternative would hang on exactly the paths the product treats as fine.
 const INSTRUMENT_BRIDGE = (lagMs) => {
   let real;
@@ -1442,19 +1443,19 @@ async function main() {
     return "in a conversation: switch -> sheet (first option preselected) -> store, on and off; with none open: straight to set_techy_default, no sheet";
   });
 
-  await run.check("11b  the splash off switch is in the foot band of the one Settings panel, once (CEO 2026-10-06 item 7, round 27)", async () => {
-    // A GUARD-RAIL, and it has changed shape three times: READ THIS BEFORE CHANGING IT AGAIN.
+  await run.check("11b  the splash screen's row is in the foot band of the one Settings panel, once, and it switches the SOUND (CEO 2026-11-14)", async () => {
+    // A GUARD-RAIL, and it has changed shape four times: READ THIS BEFORE CHANGING IT AGAIN.
     //
-    // It was written for one state behind two doors (the rail gear popover AND the universal
-    // menu), then Ray's candidate .11 defect 3.4 cut it to one door. The CEO's feedback of
-    // 2026-10-06, item 7: "Move the splash screen toggle to the general settings section (i.e.
-    // remove from quick settings because ideally I don't want them to turn it off)". Round 27
-    // (product hunt 57 finding 18) made Settings ONE panel, so there is no quick tier; the
-    // switch sits in the band across its foot, away from the first things it shows.
+    // It was written for the splash's off switch behind two doors (the rail gear popover AND the
+    // universal menu), then Ray's candidate .11 defect 3.4 cut it to one door, then the CEO's
+    // feedback of 2026-10-06, item 7, and round 27 put it in the foot band of the ONE Settings
+    // panel, away from the first things it shows. On 2026-11-14 he took the off switch away
+    // ("the splash screen is now needed for the illusion of a super-fast app launch") and gave
+    // the row to the sound ("that same switch can be replaced with the switch for switching off
+    // the sound in the splash screen").
     //
-    // So this pins: the switch exists ONCE, in the foot band and not in the first column, it
-    // moves the state both ways, and the mirror `splash.js` reads synchronously on the next
-    // launch agrees with it.
+    // So this pins: the row exists ONCE, in the foot band and not in the first column, it holds
+    // no off switch, and its switch moves the sound both ways and tells the shell.
     const page = track(await openApp(browser));
     await openMenu(page);
     assertEqual(
@@ -1463,42 +1464,42 @@ async function main() {
       "the settings panel does not name itself, so the panel a person lands on is unlabeled"
     );
     const where = await page.evaluate(() => {
-      const box = document.getElementById("splash-enabled");
+      const box = document.getElementById("splash-sound");
       return {
-        copies: document.querySelectorAll("#splash-enabled, #set-splash, #set-splash-row").length,
+        copies: document.querySelectorAll("#splash-sound, #set-splash, #set-splash-row").length,
+        offSwitch: document.querySelectorAll("#splash-enabled").length,
         inFoot: !!box.closest("#set-menu .sm-foot"),
         inFirstColumn: !!box.closest("#set-menu .sm-col:first-child"),
       };
     });
-    assertEqual(where, { copies: 1, inFoot: true, inFirstColumn: false },
-      "one splash switch, in the panel's foot band, away from the first things it shows");
+    assertEqual(where, { copies: 1, offSwitch: 0, inFoot: true, inFirstColumn: false },
+      "one splash screen switch, the sound's, in the panel's foot band, away from the first things it shows");
     const title = await page.evaluate(() => {
-      let n = document.getElementById("splash-enabled").closest(".popover-option").previousElementSibling;
+      let n = document.getElementById("splash-sound").closest(".popover-option").previousElementSibling;
       while (n && !n.classList.contains("popover-title")) n = n.previousElementSibling;
       return n ? n.textContent.trim() : null;
     });
-    assertEqual(title, "Splash screen", "the switch's group does not name the surface it governs");
-    const read = () => page.evaluate(() => document.getElementById("splash-enabled").checked);
-    assertEqual(await read(), true, "it starts on, which is the shipped default");
-
-    // `set_splash_enabled` is NOT implemented by the mock; `main.js` fires it and swallows the
-    // rejection on purpose, because the local mirror is what decides the next launch. The
-    // ledger records a completion either way, so this waits for the round trip to be over.
-    const offCall = await invokeCount(page, "set_splash_enabled");
-    await page.click("#splash-enabled");
-    await afterInvoke(page, "set_splash_enabled", offCall);
-    assertEqual(await read(), false, "the switch did not take his answer");
-    assertEqual(await page.evaluate(() => window.localStorage.getItem("richos.splash.enabled")), "false",
-      "the mirror splash.js reads disagrees with the switch");
-
-    const onCall = await invokeCount(page, "set_splash_enabled");
-    await page.click("#splash-enabled");
-    await afterInvoke(page, "set_splash_enabled", onCall);
-    assertEqual(await read(), true, "it does not come back on");
-    const mirrored = await page.evaluate(() => window.localStorage.getItem("richos.splash.enabled"));
-    assert(mirrored !== "false", "the local mirror disagrees with the switch: " + mirrored);
+    assertEqual(title, "Splash screen", "the switch's group does not name the surface it is about");
+    // Nothing a suite runs makes a sound: turning the switch on answers with the sound itself.
+    await page.evaluate(SILENT_AUDIO);
+    const read = () => page.evaluate(() => document.getElementById("splash-sound").checked);
+    const durable = () => page.evaluate(() => window.__RICHOS_MOCK__.openingsRecord().sound);
+    // The switch shows what the shell said at launch; this page has no shell behind it, and a
+    // page nobody told has no sound (the app's own default, ON, is `config.rs`'s and is tested
+    // there and in the guest).
+    assertEqual(await read(), false, "with no shell behind the page the sound is off");
+    await page.click("#splash-sound");
+    await page.waitForFunction(() => window.__RICHOS_MOCK__.openingsRecord().sound === true);
+    assertEqual(await read(), true, "the switch did not take his answer");
+    assertEqual(await page.evaluate(() => window.__audio.filter((a) => a.playedAt !== null).map((a) => a.src).join(" ")), "assets/sounds/two-note.wav",
+      "turning it on is answered with the sound itself, once");
+    await page.click("#splash-sound");
+    await page.waitForFunction(() => window.__RICHOS_MOCK__.openingsRecord().sound === false);
+    assertEqual(await read(), false, "it does not go back off");
+    assertEqual(await durable(), false, "the shell was not told");
+    assertEqual(await page.evaluate(() => window.localStorage.getItem("richos.splash.enabled")), null, "something still writes the off switch's old mirror");
     await page.close();
-    return "once, in the foot band, both directions observed, the mirror agrees";
+    return "once, in the foot band, no off switch; the sound switched on and off, the shell told both times";
   });
 
   // ---- 12-13. the type scale itself ------------------------------------------------------
@@ -1548,7 +1549,7 @@ async function main() {
     // so it needs no px declaration; the walk below holds it to the same floor as the rest.
     assertEqual(
       SOURCES.styleSources(),
-      ["fonts/fonts.css", "style.css", "cleaner.css", "search-folder-settings.css", "speckle.css", "splash.css", "home.css", "instructions-update.css", "terminal-and-git.css", "suite-tools.css", "dictation-overlay.css", "meeting-panel.css"],
+      ["fonts/fonts.css", "style.css", "cleaner.css", "search-folder-settings.css", "speckle.css", "splash.css", "openings.css", "home.css", "instructions-update.css", "terminal-and-git.css", "suite-tools.css", "dictation-overlay.css", "meeting-panel.css"],
       "the shipped windows have a different set of stylesheets from the declared list"
     );
     // THE TWO DERIVATIONS ARE JOINED, the way `lib/harness.js` joins its two PNG decoders: a
@@ -1589,6 +1590,14 @@ async function main() {
           "`.splash-line`, and the declaration is DEAD: `splash.js` sets the size inline on every " +
           "composition, so the CSS value never paints. Held equal to the shipped value below so " +
           "the two cannot drift.",
+      },
+      "openings.css": {
+        count: 2,
+        why:
+          "`.ro-company` and `.ro-collector` (round 74): two lines ON THE OPENING SCREEN, which is one " +
+          "fixed composition that does not follow the text size (its own line, above, is px for the " +
+          "same reason). Both are 16px, at the floor for text meant to be read. The gallery in the " +
+          "same file is a page of the app and is all rem.",
       },
     };
 
@@ -1643,6 +1652,11 @@ async function main() {
         return { px: parseFloat(v.match(/^calc\(\s*([0-9.]+)px/)[1]), unit: "root" };
       }
       if (v === "inherit") return { px: null, inherits: true };
+      // `clamp(MINpx, preferred, MAXpx)` paints at least its first argument at every window
+      // size, and the floor is a question about the least it paints: resolved to MIN. (Round 74's
+      // milestone number and its line on the opening screen are sized this way, by the window's
+      // height, like the marks beside them.)
+      if ((m = /^clamp\(\s*([0-9.]+)px\s*,[^,]+,\s*[0-9.]+px\s*\)$/.exec(v))) return { px: parseFloat(m[1]), unit: "clamp" };
       if ((m = /^([0-9.]+)(em)$/.exec(v)) || (m = /^([0-9.]+)(%)$/.exec(v))) {
         const factor = m[2] === "%" ? parseFloat(m[1]) / 100 : parseFloat(m[1]);
         const parts = d.selector.split(/\s+/);
@@ -1795,7 +1809,7 @@ async function main() {
 
     return (
       rules.length + " font-size declaration(s) across " + SOURCES.styleSources().join(" + ") +
-      "; " + px.length + " in px, every one declared (style.css 2, home.css 17, splash.css 1). " +
+      "; " + px.length + " in px, every one declared (style.css 2, home.css 17, splash.css 1, openings.css 2). " +
       "RESOLVED IN EVERY UNIT against a root of " + ROOT + "px: " + readable.length + " readable, " +
       "smallest " + smallest + "px (" + [...new Set(smallestSites)].slice(0, 3).join(", ") + ") — at §15's floor; " +
       below.length + " under it, every one declared AND checked: " +

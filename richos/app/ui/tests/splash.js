@@ -639,8 +639,8 @@ const LAUNCH_COUNTERS = () => {
   });
 };
 
-/// One launch, with every counter reading. `off` starts from a machine where the CEO has
-/// already switched the curtain off, so the two arms differ by the curtain and nothing else.
+/// One launch, with every counter reading. `off` is a start that draws no curtain (a second
+/// window), so the two arms differ by the curtain and nothing else.
 ///
 /// The whole ceremony is watched, not only the boot: the per-frame read/write shape is a claim
 /// about the bar's paint loop and the bar runs for three seconds. The launch-path figures are
@@ -649,7 +649,9 @@ const LAUNCH_COUNTERS = () => {
 async function countedLaunch(browser, off) {
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   const page = await newPage(ctx);
-  if (off) await page.addInitScript(() => window.localStorage.setItem("richos.splash.enabled", "false"));
+  // The arm without the curtain is a start that draws none: a second window (the off switch
+  // this used went on 2026-11-14).
+  if (off) await page.addInitScript(() => { window.__RICHOS_LAUNCH__ = Object.freeze({ kind: "second-window", ordinal: null }); });
   await page.addInitScript(LAUNCH_COUNTERS);
   await page.goto(APP);
   await page.waitForFunction(() => window.__atReady != null, null, { timeout: 30000 });
@@ -740,7 +742,9 @@ async function launch(browser, opts) {
     await page.clock.install({ time: new Date(0) });
     await page.clock.pauseAt(new Date(0));
   }
-  if (opts.off) await page.addInitScript(() => window.localStorage.setItem("richos.splash.enabled", "false"));
+  // A start that draws no splash. There is no switch for it any more (CEO, 2026-11-14), so it
+  // is the kind of start that never had one: a window coming back on a run that never stopped.
+  if (opts.off) await page.addInitScript(() => { window.__RICHOS_LAUNCH__ = Object.freeze({ kind: "second-window", ordinal: null }); });
   // FIRST, so the clock is running before anything else the page or this suite does.
   await page.addInitScript(CURTAIN_CLOCK, opts.clock || {});
   if (opts.hold) await page.addInitScript(HOLD_OPEN);
@@ -811,6 +815,11 @@ async function settledShot(page, name) {
       "product now arms its failsafe some other way"
   );
   await stillUp(page, "the settled photograph");
+  // THE PICTURE STANDS AT ONE MOMENT: the end of the screen's own time, held (`holdAt`, the
+  // surface's own way of standing still, which the shell draws its pictures with). Since round
+  // 74 the lamp drifts once the first second is over, so "after the bar stopped" is a different
+  // picture every few milliseconds: two runs of this photograph differed in 1,271 pixels.
+  await page.evaluate(() => window.RichSplash.holdAt(window.RichSplash.state.seconds * 1000));
   fs.mkdirSync(SHOTS, { recursive: true });
   // THE CURTAIN IS READ AT THE SHUTTER, not after the developing. `shot()` decodes the PNG in
   // WebKit and compares it against the committed file before it returns, which is a second or
@@ -886,6 +895,10 @@ async function matShot(browser, id, mute) {
   await atCurtain(page, 2200);
   if (SHUTTER_LAG_MS > 0) await page.waitForTimeout(SHUTTER_LAG_MS);
   await stillUp(page, "the mat photograph for " + id);
+  // Held at that moment for the exposure, for the reason `settledShot` gives: the pool of light
+  // on the mat follows a lamp that drifts, and a mat photographed "about 2.2 s in" is a
+  // different mat each run.
+  await page.evaluate(() => window.RichSplash.holdAt(2200));
   const r = await page.evaluate(() => {
     const n = document.querySelector("#splash .splash-plinth");
     const q = n.getBoundingClientRect();
@@ -1270,8 +1283,11 @@ async function main() {
         return {
           id: n.dataset.variation,
           plinth: !!n.querySelector(".splash-plinth"),
-          logo: n.querySelectorAll(".splash-logo path").length,
-          wordmark: n.querySelectorAll(".splash-wordmark path").length,
+          // The mark's own paths. Round 74 lays one glint path over each gold path (the light
+          // that follows his pointer); those are counted on their own line.
+          logo: n.querySelectorAll(".splash-logo path:not(.ro-glint)").length,
+          wordmark: n.querySelectorAll(".splash-wordmark path:not(.ro-glint)").length,
+          glints: n.querySelectorAll("path.ro-glint").length,
           rule: !!n.querySelector(".splash-rule"),
           signal: n.querySelectorAll(".splash-signal").length,
           bar: !!n.querySelector(".splash-bar"),
@@ -1292,6 +1308,7 @@ async function main() {
       assert(r.logo === 2, v.id + ": the mark has " + r.logo + " paths");
       assert(r.wordmark === 7, v.id + ": the wordmark has " + r.wordmark + " paths");
       assert(r.signal === 2, v.id + ": " + r.signal + " gold paths");
+      assertEqual(r.glints, r.signal, v.id + ": one glint over each gold path");
       drawn.push(v.id);
       await page.__ctx.close();
     }
@@ -1300,8 +1317,11 @@ async function main() {
     // And the pool the renderer would draw from is the WHOLE library — nothing shipped is
     // silently being skipped by the validator.
     const page = await launch(browser, { hold: true });
+    // The library's own entries come first; round 74's openings follow them (`openings.js`
+    // `entries`, held to the catalog by `openings.js` the suite).
     const pool = await page.evaluate(() => window.RichSplash.pool().map((v) => v.id));
-    assertEqual(pool, ids, "the drawable pool is not the shipped library");
+    assertEqual(pool.filter((id) => id.indexOf("opening/") !== 0), ids, "the drawable pool is not the shipped library");
+    assertEqual(pool.slice(0, ids.length), ids, "the library's entries are not first in the pool");
     await page.__ctx.close();
     return drawn.length + " entries, each drawn in full with a bar the width of its plinth: " + drawn.join(", ");
   });
@@ -1431,6 +1451,11 @@ async function main() {
       // a bar — which layer progresses, which one flares — is a `data-role`, not a class,
       // precisely so this list does not have to grow with the vocabulary.
       "splash-bar", "splash-bar-layer", "splash-bar-lead",
+      // Round 74 (the CEO's order of 2026-11-14), on every opening: the pool of light on the
+      // mat, a glint over each gold path and on the bar, and the line that names the opening,
+      // shown only while the space key holds the screen. The landing adds one class.
+      "ro-pool", "ro-glint", "ro-bar-glint", "ro-collector", "ro-collector-no", "ro-collector-dot",
+      "splash--landed",
     ]);
     // EVERY entry, not one. This check used to inspect v6 alone, which was enough when the
     // library was seven colour variations of one composition and is not enough now: v7-v17
@@ -1454,7 +1479,12 @@ async function main() {
       return {
         classes: Array.from(new Set(classes)),
         tags: Array.from(new Set(tags)),
-        text: (n.innerText || "").replace(/\s+/g, " ").trim(),
+        // The text on the running screen. The held line (`ro-collector`) is not on it: it is
+        // at opacity 0 until the space key holds the screen, and is read on its own below.
+        text: Array.from(n.querySelectorAll(".splash-line")).map((l) => l.innerText).join(" ").replace(/\s+/g, " ").trim(),
+        every: (n.innerText || "").replace(/\s+/g, " ").trim(),
+        held: (n.querySelector(".ro-collector") || { innerText: "" }).innerText.replace(/\s+/g, " ").trim(),
+        heldOpacity: n.querySelector(".ro-collector") ? getComputedStyle(n.querySelector(".ro-collector")).opacity : null,
         buttons: n.querySelectorAll("button, a, input, [role=button]").length,
         // §15's type floor, on the only text this surface has. The CEO set the size himself:
         // 18px. It was 12px, which is below the 16px minimum for text meant to be read.
@@ -1465,7 +1495,10 @@ async function main() {
     const stray = r.classes.filter((c) => !ALLOWED.has(c));
     assertEqual(stray, [], v.id + ": elements the composition is not made of");
     assertEqual(r.buttons, 0, v.id + ": the study's five clickable chips came across");
-    assertEqual(r.text, "The Operating System for the AI-Enabled CEO", v.id + ": the only text on the surface");
+    assertEqual(r.text, "The Operating System for the AI-Enabled CEO", v.id + ": the only text on the running surface");
+    assertEqual(r.every.replace(r.held, "").trim(), r.text, v.id + ": text on the surface that is neither the line nor the held line");
+    assert(/^No\. \d+ · /.test(r.held), v.id + ": the held line does not name the opening: " + r.held);
+    assertEqual(r.heldOpacity, "0", v.id + ": the held line shows on a screen nobody is holding");
     assertEqual(r.lineSize, "18px", v.id + ": the CEO set the tagline at 18px");
     // NO CANVAS ANYWHERE ON THIS SURFACE, and this is not tidiness. `tests/contrast.js`
     // check 14 asserts zero canvas elements on every walked surface so that a green contrast
@@ -1797,118 +1830,96 @@ async function main() {
 
   // ---- the off switch ---------------------------------------------------------------------
 
-  await run.check("11  the switch is where he would look, and off stays off", async () => {
+  await run.check("11  the splash screen has NO off switch: its row is the sound's, and a start that had it off plays it", async () => {
     let aside = "";
-    // The second constraint on this work, and the reason it shipped in the same commit as
-    // the surface: the failure mode is silent. He switches it off behind the same gear as
-    // the only other preference this product has, and the next launch is plain.
+    // CEO, 2026-11-14, verbatim: "We now also need to remove the settings toggle for disabling
+    // the splash screen. Because the splash screen is now needed for the illusion of a super-fast
+    // app launch." And: "that same switch can be replaced with the switch for switching off the
+    // sound in the splash screen."
+    //
+    // This check used to switch the splash off behind the gear and relaunch plain. It is that
+    // check turned round: the row is still where he would look, it switches the sound, and a
+    // user who HAD switched the splash off (the old local mirror says so) gets the splash.
     const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
     const page = await newPage(ctx);
-    // THIS CHECK'S TWO PHOTOGRAPHS ARE OF THE APP, NOT OF THE CURTAIN — `splash-03` is the
-    // settings menu with the switch in it and `splash-04` is a launch with no curtain at
-    // all — so since CEO §63 (2026-09-19) their palette is the PREFERENCE's, and the default
-    // preference is now `system`, which under this harness's light OS resolves light. Both
-    // references flipped palette in one run with the check still green, because nothing here
-    // is about lighting. Named rather than inherited. `SEED_THEME` merges into the store
-    // rather than replacing it, so the splash-off state this check writes a moment later
-    // survives the relaunch, which is the thing it actually asserts.
+    // THIS CHECK'S PHOTOGRAPH IS OF THE APP, NOT OF THE CURTAIN, so since CEO §63 (2026-09-19)
+    // its palette is the PREFERENCE's; named rather than inherited.
     await page.addInitScript(SEED_THEME, "dark");
+    await page.addInitScript(() => window.localStorage.setItem("richos.splash.enabled", "false"));
     await page.goto(APP);
     await page.waitForSelector(".nav-thread", { state: "attached" });
-    // THE SWITCH THIS CHECK REACHES FOR IS IN THE FOOT BAND OF THE ONE SETTINGS PANEL (round 27;
-    // CEO 2026-10-06, feedback item 7: away from the first things Settings shows, so it is
-    // harder to turn off by accident). There is exactly one copy (Ray's candidate .11 defect 3.4).
+    const start = await page.evaluate(() => ({ shown: window.RichSplash.state.shown, declined: window.RichSplash.state.declined }));
+    assertEqual(start.shown, true, "a start that had the splash switched off did not play it");
+    assertEqual(start.declined, null, "it gave a reason for not drawing");
     await leaveHome(page);
-    // BOTH PICTURES WAIT FOR THE APP TO HAVE FINISHED STARTING (2026-10-20, verification
-    // reliability PRD A6). Under `SLOW_BRIDGE(120)` this check photographed the rail before
-    // `init()`'s last read had put the Corrections badge up (splash-03, 343 px) and the relaunch
-    // before its conversation was painted (splash-04, 27797 px): the same race a loaded host
-    // runs. `shellSettled` waits for the two elements `init()` fills last. It also means no
-    // capability registers late and rebuilds the open panel under this check.
+    // The picture waits for the app to have finished starting (2026-10-20, verification
+    // reliability PRD A6): `shellSettled` waits for the two elements `init()` fills last, and it
+    // also means no capability registers late and rebuilds the open panel under this check.
     await shellSettled(page);
     await page.click("#set-btn");
     await page.waitForSelector("#set-menu:not([hidden])");
-    const before = await page.isChecked("#splash-enabled");
-    assertEqual(before, true, "the opening screen is on by default");
-    await page.uncheck("#splash-enabled");
-    await page.waitForTimeout(200);
-    // THE PANEL IS PHOTOGRAPHED AT ITS BOTTOM, AND THIS LINE PUTS IT THERE. Where `uncheck` left
-    // it is Playwright's choice, not the app's: its first try scrolls the switch into view "if
-    // needed", which lands this panel at its bottom (scrollTop 475 of 475 at 1280x800), but a
-    // try that misses is retried with scrollIntoView block "end", then "center", then "start"
-    // (playwright-core 1.61.1, `_retryAction` in lib/coreBundle.js). Measured on this panel:
-    // "center" from the top leaves it at 275, and that is, pixel for pixel, the picture the
-    // merge gate took on a loaded host (2026-10-19, autocheck attempt-b7mrf6gl: 200px short of
-    // the bottom, Memory folder and Updates under the foot band; the same tree passed with the
-    // host free). One way a retry starts from the top, inferred and not caught in the act: a
-    // capability registering late rebuilds the open panel, and a rebuild reopens it at its top
-    // (settings-button.js `rebuild` then `open`).
+    const row = await page.evaluate(() => {
+      const part = document.querySelector('[data-settings-part="splash"]');
+      const box = document.getElementById("splash-sound");
+      return {
+        off: document.querySelectorAll("#splash-enabled").length,
+        copies: document.querySelectorAll("#splash-sound").length,
+        title: part ? part.querySelector(".popover-title").textContent.trim() : null,
+        label: box ? box.closest("label").textContent.trim() : null,
+        gallery: part && part.querySelector("#openings-open") ? part.querySelector("#openings-open").textContent.trim() : null,
+        inPanel: !!(box && box.closest("#set-menu")),
+      };
+    });
+    assertEqual(row.off, 0, "the off switch is still in Settings");
+    assertEqual(row.copies, 1, "exactly one sound switch");
+    assert(row.inPanel, "the sound switch is not in the Settings panel");
+    assertEqual(row.title + " / " + row.label, "Splash screen / Play its sound", "the row names its subject and its act");
+    assertEqual(row.gallery, "Your openings", "the way into the gallery, under the switch");
+    // THE PANEL IS PHOTOGRAPHED AT ITS BOTTOM, AND THIS LINE PUTS IT THERE (the foot band is
+    // where the row is; where a click left the panel is Playwright's choice, not the app's).
     await page.evaluate(() => {
       const menu = document.getElementById("set-menu");
       menu.scrollTop = menu.scrollHeight;
     });
     fs.mkdirSync(SHOTS, { recursive: true });
-    const sw = await shot(page, "splash-03-the-off-switch", { fullPage: false });
-    publishShotFile(sw.file, path.join(SHOTS, "splash-03-the-off-switch.png"));
-    shotNames.push("splash-03-the-off-switch.png");
-
-    // Relaunch in the same webview, exactly as reopening the app does.
-    await page.goto(APP);
-    await page.waitForSelector(".nav-thread", { state: "attached" });
-    await leaveHome(page);
-    await shellSettled(page);
-    const after = await page.evaluate(() => ({
-      splashNodes: document.querySelectorAll("#splash, .splash").length,
-      shown: window.RichSplash.state.shown,
-      declined: window.RichSplash.state.declined,
-      // The Settings panel's switch is the one control there is (feedback item 7, round 27).
-      checked: (() => {
-        const box = document.getElementById("splash-enabled");
-        return box ? box.checked : null;
-      })(),
-    }));
-    assertEqual(after.splashNodes, 0, "it came back after being switched off");
-    assertEqual(after.shown, false, "it thinks it drew");
-    assertEqual(after.declined, "switched off", "why it declined");
-    assertEqual(after.checked, false, "the control does not remember his answer");
-    const off = await shot(page, "splash-04-a-launch-with-it-off", { fullPage: false });
-    publishShotFile(off.file, path.join(SHOTS, "splash-04-a-launch-with-it-off.png"));
-    shotNames.push("splash-04-a-launch-with-it-off.png");
+    const sw = await shot(page, "splash-03-the-sound-switch", { fullPage: false });
+    publishShotFile(sw.file, path.join(SHOTS, "splash-03-the-sound-switch.png"));
+    shotNames.push("splash-03-the-sound-switch.png");
     aside += noErrors(page);
     await ctx.close();
-    return `on by default → unchecked in Settings → relaunched plain ("${after.declined}"), control still unchecked` + aside;
+    return "a start with the old off mirror played the splash · Settings: “" + row.title + "” / “" + row.label + "” / “" + row.gallery + "”, no off switch" + aside;
   });
 
-  await run.check("12  the switch is durable in Rust, and both sides agree absent means ON", async () => {
-    // The webview's `localStorage` is an instant cache so the surface can decide before it
-    // can await anything — the pattern `main.js` already uses for the assertiveness dial.
-    // The CEO's actual preference lives in `config.rs` beside it. The two have to agree on
-    // what NO stored value means, or a first launch disagrees with itself; and the Rust
-    // default has to be a named function, because `#[serde(default)]` on a bool is `false`
-    // and would have silently switched the surface off for everyone who already had a
-    // config file.
+  await run.check("12  nothing durable can switch the splash off, and the sound's switch is durable in Rust with absent meaning ON", async () => {
+    // The CEO's preference lives in `config.rs`. Two things about it, read off the shipped
+    // source: the off switch and its stamp are gone from the store and from the shell's
+    // commands (CEO, 2026-11-14), and the sound's default is a named function, because
+    // `#[serde(default)]` on a bool is `false` and would have silenced it for everyone who
+    // already had a config file ("on by default with the option to turn off in settings").
     const cfg = fs.readFileSync(CONFIG_RS, "utf8");
     const rs = fs.readFileSync(MAIN_RS, "utf8");
-    const js = fs.readFileSync(MAIN_JS, "utf8");
-    assert(/fn splash_default\(\) -> bool \{\s*true\s*\}/.test(cfg), "config.rs's splash default is not `true`");
-    assert(/#\[serde\(default = "splash_default"\)\]\s*\n\s*splash_enabled: bool/.test(cfg), "splash_enabled does not use the named default");
-    assert(/read\(KEY_ENABLED\) !== "false"/.test(fs.readFileSync(RENDERER_FILE, "utf8")), "splash.js does not treat an absent value as ON");
+    assert(!/^\s*splash_enabled: bool/m.test(cfg), "config.rs still stores the off switch");
+    assert(!/^\s*splash_disabled_at: Option/m.test(cfg), "config.rs still stores when it was switched off");
+    assert(!/fn set_splash_enabled|fn splash_enabled\(/.test(cfg), "config.rs can still switch the splash off");
+    assert(/fn opening_sound_default\(\) -> bool \{\s*true\s*\}/.test(cfg), "config.rs's sound default is not `true`");
+    assert(/#\[serde\(default = "opening_sound_default"\)\]\s*\n\s*opening_sound: bool/.test(cfg), "opening_sound does not use the named default");
     // A window command is `#[richos_command::command]` since a498a1e1c (it expands to
     // `#[tauri::command(async)]` over a body that never blocks an async worker); the bare
     // Tauri attribute is still accepted, and either may carry arguments.
     const COMMAND_ATTR = "#\\[(?:richos_command|tauri)::command(?:\\([^)\\]]*\\))?\\]";
-    for (const cmd of ["splash_enabled", "set_splash_enabled", "splash_note_shown"]) {
-      assert(new RegExp(COMMAND_ATTR + "\\s*\\nfn " + cmd + "\\b").test(rs), cmd + " is not a command");
+    const ui = (cmd) => SOURCES.uiMatches(new RegExp('"' + cmd + '"')).length > 0;
+    for (const cmd of ["set_opening_sound", "splash_note_shown"]) {
+      assert(new RegExp(COMMAND_ATTR + "\\s*\\n(?:async )?fn " + cmd + "\\b").test(rs), cmd + " is not a command");
       assert(new RegExp("^\\s*" + cmd + "[,\\s]*$", "m").test(rs), cmd + " is not registered in generate_handler!");
-      assert(js.includes('"' + cmd + '"'), cmd + " is never invoked by main.js");
+      assert(ui(cmd), cmd + " is never invoked by the UI");
     }
-    // And the three timestamps §7 needs are stored, not displayed: nothing reads them back.
-    //
-    // "THE UI" WAS `main.js` UNTIL 2026-09-05, which is the wrong file to have picked: this
-    // surface's own renderer is `splash.js`, and `splash-library.js` beside it. A timestamp
-    // leaking into either would have been invisible to the check written to forbid it. The
-    // question goes to every shipped UI file the manifest reaches now.
-    assert(/splash_first_shown_at/.test(cfg) && /splash_disabled_at/.test(cfg), "the two measurement timestamps");
+    for (const gone of ["splash_enabled", "set_splash_enabled"]) {
+      assert(!new RegExp("fn " + gone + "\\b").test(rs), gone + " is still a command");
+      assert(!new RegExp("^\\s*" + gone + "[,\\s]*$", "m").test(rs), gone + " is still registered in generate_handler!");
+      assert(!ui(gone), gone + " is still invoked by the UI");
+    }
+    // And the timestamp §7 needs is stored, not displayed: nothing reads it back.
+    assert(/splash_first_shown_at/.test(cfg), "the measurement timestamp");
     const leaked = SOURCES.uiMatches(/splash_first_shown_at|splash_disabled_at/);
     assertEqual(
       leaked.map((l) => l.site),
@@ -1916,50 +1927,28 @@ async function main() {
       "a measurement timestamp reached the UI at: " + leaked.map((l) => l.site).join(", ")
     );
     return (
-      "config.rs default true via a named fn · 3 commands declared, registered and invoked · " +
-      "2 timestamps stored, 0 displayed anywhere in the " + SOURCES.stateSources().length +
-      " shipped UI file(s)"
+      "config.rs: no off switch, the sound's default true via a named fn · set_opening_sound and splash_note_shown " +
+      "declared, registered and invoked; the two off-switch commands gone from all three · 1 timestamp stored, 0 displayed anywhere in the " +
+      SOURCES.stateSources().length + " shipped UI file(s)"
     );
   });
 
-  await run.check("11b  the switch names the CURTAIN, and the home screen is the negative control", async () => {
-    // AUDIT-10 ROW 1, AND IT IS THE SECOND AUDIT TO FILE IT.
-    //
-    // Ray relaunched candidate .10 into a complete setup — the build's own log says
-    // "first-run setup: nothing missing" — photographed the first thing on screen
-    // (`52-relaunch-first-screen.png`) and photographed `Opening screen` sitting OFF in
-    // Settings (`53`, `54`), and filed "the opening screen appears with its own switch off,
-    // and the first-run excuse is dead". He is right about both photographs. The conclusion
-    // does not follow, because THE TWO PHOTOGRAPHS ARE OF DIFFERENT SURFACES.
-    //
-    //   the CURTAIN     `splash.js`  the mark, one line, a loading bar, 3 s, click-through
-    //   the HOME SCREEN `home.js`    the picture, the counters, "Talk to Rich" / "Enter"
-    //
-    // Frame 52 is the home screen — it carries "Talk to Rich", "Enter", CUSTOMERS, CAPITAL,
-    // SOURCES UNDERSTOOD, none of which exist on the curtain. This switch has only ever been
-    // the curtain's, and the home screen has never had one by the CEO's ruling of 2026-09-01
-    // that it "must be shown in the app after the splash screen".
-    //
-    // THIS EXACT MISREADING WAS ALREADY FOUND AND ALREADY WRITTEN DOWN — in `home.js:1548`,
-    // after audit-9, IN A CODE COMMENT. A walker does not read code comments. So the record
-    // was corrected and the misleading label was left on the screen, and it produced the
-    // same FAIL again one audit later. The label is what changed this time.
-    //
-    // THE CHECK IS TWO THINGS THE OLD NAME MADE INDISTINGUISHABLE:
-    //
-    //   1. the switch GOVERNS the curtain — durable OFF, no curtain, every launch shape;
-    //   2. the switch does NOT govern the home screen — the negative control, and the whole
-    //      reason the row was filed.
-    //
-    // Check 11 above cannot do this: it never looks at the home screen, so it would pass
-    // unchanged if the switch silently started suppressing it.
+  await run.check("11b  the row names the SPLASH SCREEN, every fresh start draws it, and the home screen is up either way", async () => {
+    // AUDIT-10 ROW 1 was a row called "Opening screen" being read as the home screen's switch.
+    // The row's title has named the surface since: "Splash screen". The switch it titled went on
+    // 2026-11-14 (the CEO: "the splash screen is now needed for the illusion of a super-fast app
+    // launch") and the row now holds the splash screen's SOUND, so the title is still the truth
+    // and is still held here. What is also held is what removing the switch means on the page:
+    // whatever an older shell says in the launch object, a fresh start draws the curtain, and
+    // the home screen (which never had a switch, by the CEO's ruling of 2026-09-01 that it "must
+    // be shown in the app after the splash screen") is up behind it.
     const seen = [];
-    for (const durable of [true, false]) {
+    for (const flag of [true, false, undefined]) {
       const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
       const p = await newPage(ctx);
       await p.addInitScript((v) => {
-        window.__RICHOS_LAUNCH__ = Object.freeze({ kind: "fresh", ordinal: 1, splashEnabled: v });
-      }, durable);
+        window.__RICHOS_LAUNCH__ = Object.freeze(v === undefined ? { kind: "fresh", ordinal: 1 } : { kind: "fresh", ordinal: 1, splashEnabled: v });
+      }, flag);
       await p.goto(APP);
       await p.waitForFunction("typeof window.RichHome === 'object'", null, { timeout: 30000 });
       const got = await p.evaluate(() => {
@@ -1971,74 +1960,52 @@ async function main() {
           homeOpen: !!(window.RichHome && window.RichHome.isOpen()),
           homeVisible: !!(cs && cs.display !== "none" && cs.visibility === "visible"),
           // The word the CEO would look for, off the rendered control rather than the source.
-          // It reads the switch's group title in the Settings panel: that is the one control
-          // there is (the CEO's 2026-10-06 feedback item 7, round 27).
           title: (() => {
-            const box = document.getElementById("splash-enabled");
+            const box = document.getElementById("splash-sound");
             let n = box && box.closest(".popover-option") ? box.closest(".popover-option").previousElementSibling : null;
             while (n && !n.classList.contains("popover-title")) n = n.previousElementSibling;
             return n ? n.textContent.trim() : null;
           })(),
         };
       });
-      const drew = got.curtainNodes > 0 || got.curtainShown;
-      assertEqual(drew, durable, "the switch did not decide the curtain with splashEnabled=" + durable);
-      // THE NEGATIVE CONTROL. The home screen is up either way, and that is the answer to the
-      // row: it was never ignoring a switch, it has never had one.
+      assert(got.curtainNodes > 0 && got.curtainShown, "a fresh start with splashEnabled=" + flag + " in the launch object drew no curtain");
       assert(
         got.homeOpen && got.homeVisible,
-        "splashEnabled=" + durable + ": the home screen is not up. The CEO ruled on 2026-09-01 " +
-          "that it \"must be shown in the app after the splash screen\", so the curtain's switch " +
-          "must never reach it — in either direction."
+        "splashEnabled=" + flag + ": the home screen is not up. The CEO ruled on 2026-09-01 " +
+          "that it \"must be shown in the app after the splash screen\"."
       );
-      // AND THE NAME. "Opening screen" is the phrase a person maps onto the first thing they
-      // see, which is the home screen, and it cost two audits. The CEO's own word for what
-      // this switch governs, in the same sentence, is "the splash screen".
-      assertEqual(got.title, "Splash screen", "the switch's title does not name the surface it governs");
-      seen.push("splashEnabled=" + durable + " -> " + (drew ? "curtain" : "plain") + ", home up");
+      assertEqual(got.title, "Splash screen", "the row's title does not name the surface it is about");
+      seen.push("splashEnabled=" + flag + " -> curtain, home up");
       await ctx.close();
     }
     // And there is no second door: the quick settings menu builds no splash row (item 7).
     const setbtn = fs.readFileSync(path.join(UI_DIR, "settings-button.js"), "utf8");
     assert(!/set-splash/.test(setbtn), "the quick settings menu builds a splash row again; the CEO moved it to the gear");
-    return seen.join(" · ") + " · the one door says “Splash screen”";
+    return seen.join(" · ") + " · the one row says “Splash screen”";
   });
 
-  await run.check("12a  the DURABLE answer decides the curtain, and the mirror only when there isn't one", async () => {
-    // **AUDIT-8 ROW 5.** The CEO switched the opening screen off, `config.json` recorded it
-    // (`"splash_enabled": false`, `splash_disabled_at` stamped), and it came back on the next
-    // two launches. Check 11 above passes and always did, because it flips the switch and
-    // relaunches in ONE webview where the mirror is intact — which is exactly the case that
-    // was never broken.
-    //
-    // WHAT BREAKS IT IS THAT THE MIRROR IS A SHARED CACHE. WebKit keys website data by BUNDLE
-    // ID and ignores `$HOME`
-    // (`~/Library/WebKit/com.richos.app/WebsiteData/…/LocalStorage/localstorage.sqlite3`,
-    // verified on this machine, written during both walks), so a candidate walked under a QA
-    // scratch `HOME` shares one `localStorage` with the CEO's installed app while reading a
-    // DIFFERENT `config.json` — and `main.js` writes each instance's own durable answer into
-    // that one mirror at the end of every boot. Last writer wins, and the loser draws a
-    // curtain its owner switched off. (Ray's earlier runs used `com.richos.app.RAY-101-RUN-A`
-    // and friends for exactly this reason; the walks that found this did not.)
-    //
-    // So this check is the one check 11 cannot be: the mirror and the durable answer DISAGREE,
-    // and the durable one has to win. `window.__RICHOS_LAUNCH__` is the Tauri initialization
-    // script that already carried the launch kind, which is the only thing in front of
-    // `splash.js` — it runs in the `<head>` and cannot await a command.
+  await run.check("12a  nothing left over from the off switch decides the curtain: not an old flag, not the old mirror", async () => {
+    // AUDIT-8 ROW 5 was the curtain coming back for a CEO who had switched it off, because the
+    // page decided from a local mirror that installs shared. The fix put the durable answer in
+    // the launch object (`splashEnabled`) and made the mirror a fallback. Both are gone now with
+    // the switch itself (CEO, 2026-11-14), and this check holds the page to that: every
+    // combination a build before this one could have left behind draws the curtain, and neither
+    // side of the app carries the flag any more.
     const cases = [
-      { durable: false, mirror: "true", draws: false, what: "he switched it off; a sibling install wrote true into the shared mirror" },
-      { durable: true, mirror: "false", draws: true, what: "he has it on; a sibling install wrote false into the shared mirror" },
-      { durable: null, mirror: "false", draws: false, what: "no Tauri behind the page — the mirror decides, exactly as it did before" },
-      { durable: null, mirror: null, draws: true, what: "nothing stored anywhere — absent means ON, on both sides" },
+      { flag: false, mirror: "true", what: "an older shell says off; the mirror says on" },
+      { flag: true, mirror: "false", what: "an older shell says on; the mirror says off" },
+      { flag: false, mirror: "false", what: "both say off (he had switched it off)" },
+      { flag: null, mirror: "false", what: "no shell behind the page; the mirror says off" },
+      { flag: null, mirror: null, what: "nothing stored anywhere" },
     ];
     const seen = [];
     for (const c of cases) {
       const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
       const p = await newPage(ctx);
       await p.addInitScript(
-        ([durable, mirror]) => {
-          if (durable !== null) {
-            window.__RICHOS_LAUNCH__ = Object.freeze({ kind: "fresh", ordinal: 1, splashEnabled: durable });
+        ([flag, mirror]) => {
+          if (flag !== null) {
+            window.__RICHOS_LAUNCH__ = Object.freeze({ kind: "fresh", ordinal: 1, splashEnabled: flag });
           }
           try {
             if (mirror === null) window.localStorage.removeItem("richos.splash.enabled");
@@ -2047,7 +2014,7 @@ async function main() {
             /* a context that refuses storage is a case this check does not cover */
           }
         },
-        [c.durable, c.mirror]
+        [c.flag, c.mirror]
       );
       await p.goto(APP);
       await p.waitForFunction("typeof window.RichSplash === 'object'", null, { timeout: 30000 });
@@ -2056,35 +2023,20 @@ async function main() {
         shown: window.RichSplash.state.shown,
         declined: window.RichSplash.state.declined,
       }));
-      const drew = got.nodes > 0 || got.shown === true;
-      assertEqual(
-        drew,
-        c.draws,
-        `durable=${c.durable}, mirror=${JSON.stringify(c.mirror)} (${c.what}) — expected the curtain ` +
-          `${c.draws ? "to draw" : "NOT to draw"}, and it ${drew ? "drew" : "did not"} ` +
-          `(declined: ${JSON.stringify(got.declined)})`
+      assert(
+        got.nodes > 0 && got.shown === true,
+        `flag=${c.flag}, mirror=${JSON.stringify(c.mirror)} (${c.what}): the curtain did not draw (declined: ${JSON.stringify(got.declined)})`
       );
-      if (!c.draws) assertEqual(got.declined, "switched off", "it declined for some other reason than the setting");
-      seen.push(`durable=${c.durable} mirror=${JSON.stringify(c.mirror)} -> ${drew ? "curtain" : "plain"}`);
+      seen.push(`flag=${c.flag} mirror=${JSON.stringify(c.mirror)} -> curtain`);
       await ctx.close();
     }
-
-    // AND THE DURABLE ANSWER COMES FROM RUST, not from something the page could have written
-    // for itself. Read off the shipped source, both sides.
+    // Read off the shipped source, both sides.
     const rs = fs.readFileSync(MAIN_RS, "utf8");
-    assert(
-      /fn durable_splash_enabled\(/.test(rs),
-      "src-tauri no longer reads the durable opening-screen answer before the window is built"
-    );
-    assert(
-      /splashEnabled: \{\}/.test(rs) || /splashEnabled/.test(rs),
-      "the initialization script no longer carries splashEnabled"
-    );
+    assert(!/fn durable_splash_enabled\(/.test(rs), "src-tauri still reads an opening-screen switch before the window is built");
+    assert(!/splashEnabled/.test(rs), "the initialization script still carries splashEnabled");
+    assert(!/splashEnabled/.test(fs.readFileSync(path.join(UI_DIR, "..", "src-tauri", "src", "splash_opening.rs"), "utf8")), "the page drawn at quit is still told splashEnabled");
     const js = fs.readFileSync(RENDERER_FILE, "utf8");
-    assert(
-      /__RICHOS_LAUNCH__/.test(js) && /typeof launch\.splashEnabled === "boolean"/.test(js),
-      "splash.js no longer prefers the durable answer, so it is back to deciding from a shared cache"
-    );
+    assert(!/splashEnabled|KEY_ENABLED|richos\.splash\.enabled/.test(js), "splash.js still reads the off switch");
     return seen.join(" · ");
   });
 
@@ -2230,9 +2182,9 @@ async function main() {
     //
     // WHAT COSTS A LAUNCH A FRAME, and every one of these is a COUNT rather than a duration:
     //
-    //   * asking for something and waiting — a Tauri command, a fetch, an XHR. The splash
-    //     reads its switch synchronously out of `localStorage` for exactly this reason
-    //     (this file's own header, line 15), and a round trip on the boot path is the one
+    //   * asking for something and waiting — a Tauri command, a fetch, an XHR. What the
+    //     splash needs to know is in front of it before it runs (the launch object and his
+    //     openings, put there by the shell), and a round trip on the boot path is the one
     //     thing that would cost a launch real time on any hardware. Zero, both arms.
     //   * fetching bytes — a background image, a second font, a script the curtain pulls in.
     //     Zero: nothing inside the curtain carries a `src` or an `href`.
@@ -2259,7 +2211,7 @@ async function main() {
     //    that works. A splash that resolved its variation through a command would read above
     //    the shell's own figure.
     assert(off.invokes > 0, "the command counter never saw a command at all — a zero below would prove nothing");
-    assertEqual(on.invokes, off.invokes, "the splash put commands on the launch path — its switch is meant to be a synchronous localStorage read");
+    assertEqual(on.invokes, off.invokes, "the splash put commands on the launch path — everything it reads is meant to be in front of it already");
     // 2. NOTHING WAS FETCHED. Both counters carry their own positive probe, run in the page
     //    after the measurement is taken (`countedLaunch` -> `probe`).
     assert(m.probe.fetchMoved, "the fetch counter did not move when the page fetched — a zero below would prove nothing");
@@ -2281,8 +2233,8 @@ async function main() {
     );
     assert(
       on.splashNodes <= CURTAIN_NODE_CEILING,
-      `the curtain is ${on.splashNodes} nodes — measured 30 for round-11/v1 and 30 for round-11/v2, and a ceiling of ` +
-        `${CURTAIN_NODE_CEILING} is four times the composition that ships`
+      `the curtain is ${on.splashNodes} nodes — measured 48 for round-11/v1 with round 74's light and held line on it ` +
+        `(30 before them), against a ceiling of ${CURTAIN_NODE_CEILING}`
     );
     // 5. THE LAUNCH PATH DOES NOT WAIT ON IT. Two facts, and the second is the one that
     //    matters: `yieldNow` hands back nothing that can be awaited, and the app reports
@@ -2492,7 +2444,13 @@ async function main() {
     });
     const pool = await page.evaluate(() => window.RichSplash.pool().map((v) => v.id));
     assert(pool.indexOf(victim.id) < 0, victim.id + " was still drawable with a key the renderer ignores");
-    assertEqual(pool.length, LIBRARY.variations.length - 1, "exactly one entry should have been refused");
+    assertEqual(pool.filter((id) => id.indexOf("opening/") !== 0).length, LIBRARY.variations.length - 1, "exactly one of the library's entries should have been refused");
+    // And every opening built on the refused entry left with it: an opening is its base's
+    // tokens, so a base the renderer will not draw is an opening it will not draw.
+    const page2 = await launch(browser, { hold: true });
+    const whole = await page2.evaluate(() => window.RichSplash.pool().map((v) => v.id));
+    await page2.__ctx.close();
+    assert(pool.length < whole.length - 1, "no opening built on the refused entry left the pool with it (" + pool.length + " of " + whole.length + ")");
     await page.__ctx.close();
     return `${layers} layers across ${LIBRARY.variations.length} entries, every key in the renderer's own vocabulary (${Array.from(used).sort().join(", ")}) · one added key drops its entry from the pool`;
   });
@@ -2880,7 +2838,15 @@ async function main() {
     const source = fs.readFileSync(RENDERER_FILE, "utf8");
     const code = source.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/^[ \t]*\/\/.*$/gm, " ");
     assertEqual((code.match(/setInterval/g) || []).length, 0, "a timer that repeats");
-    assertEqual((code.match(/AUTO_REPLAY|replay|restart/gi) || []).length, 0, "a replay path in the code");
+    assertEqual((code.match(/AUTO_REPLAY|restart/gi) || []).length, 0, "a restart path in the code");
+    // ONE REPLAY PATH SINCE ROUND 74, and it is a person's: the gallery's Play (the CEO,
+    // 2026-11-14, on "the gallery with Play and Make it my opening": "yes"). `replay()` builds
+    // the screen a second time for exactly its own time, only when no screen is up, and the
+    // only caller in the shipped UI is the gallery's Play button. Nothing in this file calls it.
+    assertEqual((code.match(/function replay\(/g) || []).length, 1, "exactly one replay function");
+    assertEqual((code.match(/\breplay\(/g) || []).length, 1, "splash.js calls its own replay");
+    const callers = SOURCES.uiMatches(/RichSplash\.replay\(/).map((l) => l.site.split(":")[0]);
+    assertEqual(Array.from(new Set(callers)).join(","), "openings-page.js", "who may replay an opening");
     assertEqual(
       (code.match(/addEventListener\(\s*"(focus|visibilitychange|pageshow|blur)"/g) || []).length,
       0,
@@ -2923,8 +2889,8 @@ async function main() {
     }
     assertEqual(
       tickOwners.slice().sort(),
-      ["release", "start", "tick", "unpause"],
-      "the bar's frame loop — one to start the pass, one to continue it, and one each to pick up a held one"
+      ["release", "replay", "start", "tick", "unpause"],
+      "the bar's frame loop — one to start the pass, one to continue it, one each to pick up a held one, and the gallery's Play starting its own"
     );
     assert(otherOwners.every((o) => o === "reportPainted" || o === "takeOver"),
       "a frame that is not the bar's loop and not a report of the page's paint: " + JSON.stringify(otherOwners) + " (all: " + JSON.stringify(rafOwners) + ")");
@@ -3838,7 +3804,7 @@ async function main() {
       const page = await launch(browser, {
         hold: true,
         init: (p) => {
-          window.__RICHOS_LAUNCH__ = Object.freeze({ kind: "fresh", ordinal: 2, splashEnabled: true, splash: Object.freeze({ id: p, opening: false }) });
+          window.__RICHOS_LAUNCH__ = Object.freeze({ kind: "fresh", ordinal: 2, splash: Object.freeze({ id: p, opening: false }) });
         },
         initArg: picked,
       });
@@ -3858,9 +3824,10 @@ async function main() {
   async function openingPage(viewport, id, extra, init) {
     const ctx = await browser.newContext({ viewport });
     const page = await newPage(ctx);
-    if (init) await page.addInitScript(init);
+    // `init`: one script, or several, run before the page's own in the order given.
+    for (const script of [].concat(init || [])) await page.addInitScript(script);
     await page.addInitScript((o) => {
-      window.__RICHOS_LAUNCH__ = Object.freeze(Object.assign({ kind: "fresh", ordinal: null, splashEnabled: true }, o));
+      window.__RICHOS_LAUNCH__ = Object.freeze(Object.assign({ kind: "fresh", ordinal: null }, o));
     }, Object.assign({ draw: true, splash: { id } }, extra || {}));
     await page.goto("file://" + path.join(UI_DIR, "splash-opening.html"));
     await page.waitForFunction(() => window.RichSplash && window.RichSplash.state.shown, null, { timeout: 60000 });
@@ -3869,12 +3836,27 @@ async function main() {
     return page;
   }
 
+  /// ROUND 74'S OPENINGS ARE HELD TO THE SAME TWO CHECKS AS THE LIBRARY'S OWN (27 and 28): the
+  /// shell draws the first second of whichever opening the user picked, so each kind of thing an
+  /// opening adds has to stand at a moment and be the running splash. One of each kind, at one
+  /// window size: sparks and a struck number that counts, a light for every job (a canvas, the
+  /// whole page), digits on wheels, a sealed edition with a still number, and a material.
+  const OPENING_SAMPLE = ["opening/power-100k", "opening/jobs-500", "opening/hours-20", "opening/edition-year", "opening/material-leather"].map((id) => ({ id }));
+  /// What the shell puts in front of the page for an opening: the record that says it is his.
+  const HIS_OPENINGS = () => {
+    window.__RICHOS_OPENINGS__ = {
+      firstStart: "2025-09-08", version: "1.4.0", pick: null, sound: false, company: "Acme Robotics", day: 20000,
+      earned: { "ruled-standard": "2025-09-08", "midnight-suede": "2025-09-08", "power-100k": "2026-09-02", "jobs-500": "2026-02-20", "hours-20": "2026-06-01", "edition-year": "2026-09-08", "material-leather": "2025-12-08" },
+    };
+  };
+
   await run.check("27  every entry can be HELD at a moment, and STARTED from one", async () => {
     const out = [];
-    for (const entry of libraryFromDisk().variations) {
+    for (const entry of libraryFromDisk().variations.concat(OPENING_SAMPLE)) {
+      const anOpening = entry.id.indexOf("opening/") === 0;
       // Held, in the page the shell draws from: every animation paused at the moment, the clock
       // reading it, the bar painted at once without a frame.
-      const page = await openingPage({ width: 1280, height: 800 }, entry.id);
+      const page = await openingPage({ width: 1280, height: 800 }, entry.id, null, anOpening ? HIS_OPENINGS : null);
       const held = await page.evaluate(() => {
         const at = (ms) => {
           window.RichSplash.holdAt(ms);
@@ -3901,8 +3883,13 @@ async function main() {
       await page.__ctx.close();
       // Started from a moment, in the app's own page: it runs on from there, and the hold is
       // counted from the splash's first frame.
-      const app = await launch(browser, { hold: true, force: entry.id });
+      // (`force` narrows the library to one entry; an opening is not in the library, so it is
+      // asked for the way the shell asks: as the picked splash.)
+      const app = anOpening
+        ? await launch(browser, { hold: true, initArg: entry.id, init: (id) => { window.__RICHOS_LAUNCH__ = Object.freeze({ kind: "fresh", ordinal: 5, splash: Object.freeze({ id, opening: false }) }); } })
+        : await launch(browser, { hold: true, force: entry.id });
       await app.waitForFunction(() => window.RichSplash && window.RichSplash.state.shown, null, { timeout: 60000 });
+      assertEqual(await app.evaluate(() => window.RichSplash.state.variationId), entry.id, "the entry that was asked for is the one started");
       const started = await app.evaluate(async () => {
         window.RichSplash.holdAt(400);
         const t0 = performance.now();
@@ -4011,9 +3998,12 @@ async function main() {
     let worstFraction = 0;
     const skipped = [];
     const out = [];
-    for (const entry of libraryFromDisk().variations) {
-      for (const viewport of sizes) {
-        const opening = await openingPage(viewport, entry.id);
+    for (const entry of libraryFromDisk().variations.concat(OPENING_SAMPLE)) {
+      const anOpening = entry.id.indexOf("opening/") === 0;
+      // The library's own at three window sizes; each sampled opening at one.
+      for (const viewport of anOpening ? [sizes[1]] : sizes) {
+        const opening = await openingPage(viewport, entry.id, null, anOpening ? HIS_OPENINGS : null);
+        assertEqual(await opening.evaluate(() => window.RichSplash.state.variationId), entry.id, "the opening page drew the entry that was asked for");
         const region = await opening.evaluate(() => window.RichSplash.openingRegion(1000));
         assert(Array.isArray(region) && region[2] > 0 && region[3] > 0, entry.id + ": a changing part to draw: " + JSON.stringify(region));
         await opening.evaluate(() => window.RichSplash.holdAt(0));
@@ -4024,7 +4014,7 @@ async function main() {
         // `index.html` the app's own boot shares that thread during the splash's first second and
         // carried a stop asked for at 430 ms to 1,048 ms on a loaded host.) Its own ceiling stays
         // armed (check 10b): five moments of its first second are over well inside four seconds.
-        const app = await openingPage(viewport, entry.id, { draw: false, splash: { id: entry.id, opening: false } }, FREEZER);
+        const app = await openingPage(viewport, entry.id, { draw: false, splash: { id: entry.id, opening: false } }, anOpening ? [FREEZER, HIS_OPENINGS] : FREEZER);
         await app.evaluate(() => document.fonts.ready);
         let compared = 0;
         for (const m of MOMENTS) {
@@ -4088,15 +4078,18 @@ async function main() {
       const body = html.slice(html.indexOf("<body"));
       const list = (text) => (text.match(/<(?:link|script)\b[^>]*>/g) || []).map((t) => t.replace(/\s+/g, " ").trim());
       const style = (head.match(/<style>[\s\S]*?<\/style>/g) || []).map((s) => s.replace(/\s+/g, " "));
-      return { head: list(head), style, body: list(body).slice(0, 2) };
+      return { head: list(head), style, body: list(body).slice(0, 5) };
     };
     const app = tags("index.html");
     const opening = tags("splash-opening.html");
     assertEqual(JSON.stringify(opening.head), JSON.stringify(app.head), "the opening page's head (scripts and stylesheets, in order)");
     assertEqual(JSON.stringify(opening.style), JSON.stringify(app.style), "the opening page's inline style");
-    assertEqual(JSON.stringify(opening.body), JSON.stringify(app.body), "the first two scripts in the body");
-    assertEqual(JSON.stringify(opening.body), JSON.stringify(['<script src="splash-library.js"></script>', '<script src="splash.js"></script>'].map((t) => t.replace("</script>", ""))),
-      "the body starts with the library and the renderer");
+    assertEqual(JSON.stringify(opening.body), JSON.stringify(app.body), "the first five scripts in the body");
+    assertEqual(
+      JSON.stringify(opening.body),
+      JSON.stringify(["splash-library.js", "splash-materials.js", "openings-catalog.js", "openings.js", "splash.js"].map((f) => '<script src="' + f + '">')),
+      "the body starts with the library, the openings' data and code, and the renderer"
+    );
     return opening.head.length + " head tags identical; body opens with " + opening.body.join(", ");
   });
 
@@ -4109,7 +4102,7 @@ async function main() {
       const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
       const page = await newPage(ctx);
       await page.addInitScript((o) => {
-        window.__RICHOS_LAUNCH__ = Object.freeze({ kind: "fresh", ordinal: 2, splashEnabled: true, splash: Object.freeze({ id: o.id, opening: true }) });
+        window.__RICHOS_LAUNCH__ = Object.freeze({ kind: "fresh", ordinal: 2, splash: Object.freeze({ id: o.id, opening: true }) });
         const calls = (window.__calls = []);
         window.__TAURI_INTERNALS__ = {
           invoke: (cmd, args) => {

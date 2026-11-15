@@ -99,6 +99,10 @@ fn splash_fingerprint(ui: &Path) {
         "splash.js",
         "splash.css",
         "splash-opening.html",
+        "splash-materials.js",
+        "openings-catalog.js",
+        "openings.js",
+        "openings.css",
         "fonts/fonts.css",
     ];
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;

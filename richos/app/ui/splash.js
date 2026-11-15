@@ -11,21 +11,30 @@
 //   * it adds no `await` to `main.js`'s boot path. `main.js` calls exactly one function
 //     from this file, `RichSplash.yieldNow()`, and calls it at the point its own comment
 //     already calls "the app is usable";
-//   * it does no I/O, reads no file, and awaits no command before painting. The setting it
-//     needs is read synchronously out of `localStorage` - the same instant-local-cache
-//     pattern `main.js` already uses for the assertiveness dial, for the same reason, with
-//     the Rust `ConfigStore` as the durable source of truth reconciled afterwards;
+//   * it does no I/O, reads no file, and awaits no command before painting. What it needs
+//     to know (what kind of start this is, which splash was picked, which openings are his)
+//     is already in front of this script, put there by the shell;
 //   * the curtain is `pointer-events: none` for its whole life, so the live app underneath
 //     is reachable the moment it is live;
 //   * and it gets out of the way on the FIRST of three signals - the app reporting ready,
 //     the CEO touching a key or the trackpad, or a hard ceiling - so no failure anywhere
 //     else in the shell can leave it up.
 //
-// THE HONEST STATES. If the switch is off, if the library is missing, unparseable or
+// THE HONEST STATES. If the library is missing, unparseable or
 // empty, if every entry in it is malformed, or if anything at all throws while drawing,
 // the result is the same and it is deliberate: NO SPLASH, and a completely normal launch.
 // Never a half-drawn frame, never a fallback that looks like a broken app. `removeSelf()`
 // below is what makes a partial build leave nothing behind.
+//
+// IT HAS NO OFF SWITCH (CEO, 2026-11-14: "We now also need to remove the settings toggle for
+// disabling the splash screen. Because the splash screen is now needed for the illusion of a
+// super-fast app launch."). Every fresh start draws it.
+//
+// ROUND 74 (the CEO's order of 2026-11-14; richos-hq design/mockups/rounds/round-74): the
+// openings. Everything that round adds lives in `openings.js`, which loads before this file
+// and which this file asks at five marked points (which opening, dress it, the landing, the
+// handover, stop). One new path, `replay()`, shows a screen a second time; only the gallery's
+// Play calls it. Without `openings.js` this file behaves exactly as it did.
 //
 // WHAT IS NOT HERE, named rather than hidden: tier 2 (a true line about his record) and
 // tier 3 (hallmarks) from `richos-splash-micro-game-2026-08-30.md`. Both wait on CEO
@@ -35,14 +44,6 @@
 "use strict";
 
 (function () {
-  // The one key this surface owns in the webview's local store: a mirror of the Rust
-  // `ConfigStore` (durable, authoritative, reconciled by `main.js` after boot), read
-  // synchronously because this file has to decide whether to draw before it can await
-  // anything.
-  //
-  // `richos.splash.last` used to live here as well - the no-immediate-repeat guard for the
-  // random draw. The draw is gone (see `choose()`), so the guard is gone with it: a rule
-  // that says "the second start shows #2" has nothing to remember between launches.
   /// The clock the hold is measured on. `performance.now()` is monotonic and immune to a
   /// wall-clock adjustment mid-launch; `Date.now()` is the fallback. Neither is stored and
   /// neither is displayed, so no timezone question arises here - the UTC ruling applies to
@@ -113,8 +114,6 @@
   // moment and every animation plays on from it. `shownAt` then counts from the moment the
   // splash was FIRST on the glass, so its 3 or 5 seconds are measured from when he first saw it.
   var heldMoment = null;
-
-  var KEY_ENABLED = "richos.splash.enabled";
 
   // -------------------------------------------------------------------------------------
   // WHICH LAUNCHES GET A CEREMONY
@@ -314,7 +313,11 @@
   // from off one end to off the other, over a 260%-wide gradient the ENTRY paints; these
   // three numbers are the sweep's geometry and they are identical in both, which is what
   // makes them structure rather than a value belonging to either screen.
-  var FLARE_MS = 950;
+  // ROUND 74 (Vic 3.1, "let the ending happen"): 620, was 950. The bar now lands 0.8 s before
+  // the screen's time is up (`RichOpenings.landEarly()`), and the flare has to be over inside
+  // that with a still, finished frame left after it: 620 ms of flare, then 180 ms of the
+  // settled gold. 620 + 180 = 800.
+  var FLARE_MS = 620;
   var FLARE_FROM_PCT = 130;
   var FLARE_TO_PCT = -40;
   var FLARE_PEAK_AT = 0.17;
@@ -377,65 +380,6 @@
   var LINE = "The Operating System for the AI-Enabled CEO";
   var LINE_SIZE = "18px";
   var LINE_TRACKING = "0.10em";
-
-  // -------------------------------------------------------------------------------------
-  // Storage, which is allowed to be unavailable
-  // -------------------------------------------------------------------------------------
-
-  function read(key) {
-    try {
-      return window.localStorage.getItem(key);
-    } catch (_e) {
-      return null;
-    }
-  }
-
-  function write(key, value) {
-    try {
-      window.localStorage.setItem(key, value);
-    } catch (_e) {
-      /* A webview with storage denied still gets a splash; it just gets no repeat guard. */
-    }
-  }
-
-  /// ABSENT MEANS ON. An absent key is an absent opinion, not a decision to switch the
-  /// surface off - the same rule `config.rs` states on the Rust side, and the two have to
-  /// agree or a first launch would disagree with itself.
-  /// THE DURABLE ANSWER FIRST, THE MIRROR ONLY WHEN THERE ISN'T ONE — audit-8 row 5.
-  ///
-  /// This read used to be `read(KEY_ENABLED) !== "false"` and nothing else, and it decided the
-  /// curtain in the `<head>`, before any command could answer. The CEO switched the opening
-  /// screen off, `config.json` recorded it, and it came back on the next two launches.
-  ///
-  /// THE MIRROR IS A CACHE AND IT IS SHARED BETWEEN INSTALLS THAT DISAGREE. WebKit keys its
-  /// website data by BUNDLE ID and ignores `$HOME`, so a candidate walked under a QA scratch
-  /// `HOME` shares one `localStorage` with the CEO's installed app while reading a different
-  /// `config.json` — and `main.js`'s `syncSplashFromBackend` writes each instance's own durable
-  /// answer into that one shared mirror at the end of every boot. Last writer wins, and the
-  /// loser draws a curtain its owner switched off.
-  ///
-  /// `window.__RICHOS_LAUNCH__.splashEnabled` is the durable answer, put in front of every page
-  /// script by the Tauri initialization script that already carries the launch kind. `null`
-  /// means this process could not read the store, and only then does the mirror decide — which
-  /// is exactly today's behavior, so the degraded path is no worse than what shipped.
-  ///
-  /// The mirror stays: it is what `main.js`'s settings row reads synchronously to paint the
-  /// switch, and it is the only answer a page with no Tauri behind it (the acceptance suite,
-  /// a browser) can have.
-  function durableEnabled() {
-    try {
-      var launch = window.__RICHOS_LAUNCH__;
-      return launch && typeof launch.splashEnabled === "boolean" ? launch.splashEnabled : null;
-    } catch (e) {
-      return null;
-    }
-  }
-
-  function enabled() {
-    var durable = durableEnabled();
-    if (durable !== null) return durable;
-    return read(KEY_ENABLED) !== "false";
-  }
 
   // -------------------------------------------------------------------------------------
   // The library
@@ -581,6 +525,15 @@
     for (var i = 0; i < lib.variations.length; i++) {
       if (valid(lib.variations[i])) out.push(lib.variations[i]);
     }
+    // ROUND 74: the openings, after the library's own and in the catalog's order (the list the
+    // shell builds). Only where the library itself is usable: with no entry of its own there is
+    // no splash, as before.
+    if (out.length && RO) {
+      var more = RO.entries();
+      for (var j = 0; j < more.length; j++) {
+        if (valid(more[j])) out.push(more[j]);
+      }
+    }
     return out;
   }
 
@@ -639,6 +592,12 @@
   }
 
   function choose(candidates, ordinal) {
+    // ROUND 74: the user's own pick first, as `pick_splash` reads it. Null means he has none,
+    // and the rule below stands.
+    if (RO) {
+      var picked = RO.pick(candidates);
+      if (picked) return picked;
+    }
     if (candidates.length < 2) return candidates[0];
     return ordinal === 2 ? candidates[1] : candidates[0];
   }
@@ -1014,7 +973,8 @@
   /// How far the bar has run at `t` ms after the first frame, 0 to 1, and its paint on THE
   /// PROGRESS CURVE. One reading for the running bar and the held one.
   function barSpan() {
-    var span = holdMs - BAR_START_MS;
+    // ROUND 74: the bar lands early, so its ending happens inside the screen's own time.
+    var span = holdMs - BAR_START_MS - (RO ? RO.landEarly() : 0);
     return span < 350 ? 350 : span;
   }
   function barRun(t) {
@@ -1028,6 +988,8 @@
   /// The bar exactly as it stands `t` ms after the first frame, painted now and without a frame
   /// (a held splash). It changes no record of the bar's one pass: holding is looking, not running.
   function paintMoment(t) {
+    // ROUND 74: what the openings add stands at the same moment (the number, the lights).
+    if (RO) RO.paint(t);
     if (!bar) return;
     var u = barRun(t);
     paintBar(barCurve(u));
@@ -1062,6 +1024,7 @@
       bar.landed = true;
       bar.landedAt = clock();
       state.barPasses++;
+      if (RO) RO.landed(); // ROUND 74: the strike, the sparks, the sound
       retireLeads(!reduceMotion());
       if (reduceMotion()) {
         stopTicking();
@@ -1203,12 +1166,41 @@
     frame.appendChild(buildBar(t.bar));
     stage.appendChild(frame);
     root.appendChild(stage);
+    // ROUND 74: the number, his company's line, the held line, the light. A throw in there
+    // leaves the screen exactly as it was drawn above.
+    if (RO) {
+      try {
+        RO.dress(root, entry, {
+          elapsed: function () {
+            return shownAt === null ? 0 : clock() - shownAt;
+          },
+          paused: function () {
+            return paused;
+          },
+          held: function () {
+            return heldMoment !== null;
+          },
+          hold: holdMs,
+          // The page nobody sees (the opening drawn at quit, a saved image) makes no sound.
+          silent: drawing()
+        });
+      } catch (_e) {
+        /* drawn without the additions */
+      }
+    }
     return root;
   }
 
   // -------------------------------------------------------------------------------------
   // The surface's life
   // -------------------------------------------------------------------------------------
+
+  // ROUND 74: everything round 74 adds lives in `openings.js`, which loads before this file.
+  // Without it this file behaves exactly as it did.
+  var RO = window.RichOpenings || null;
+  if (RO) RO.arrow = LOGO.paths[1].d;
+  var replaying = null; // the gallery's Play: the callback to run when the screen has left
+  var replayKept = null; // what `state` said about the start, while a replay is up
 
   var node = null;
   var yielded = false;
@@ -1223,8 +1215,8 @@
     declined: null,
     /// What kind of start this was, as `start()` read it - `"fresh"`, `"crash-restart"` or
     /// `"second-window"`. `null` until `start()` has run. Reported rather than inferred
-    /// from `shown`, because "no splash because he never quit" and "no splash because he
-    /// switched it off" are two different answers and a surface should be able to say which.
+    /// from `shown`, because "no splash because he never quit" and "no splash because the
+    /// library would not draw" are two different answers and a surface should be able to say which.
     kind: null,
     /// WHICH START THIS IS, as the shell reported it - `1`, `2`, `3`... or `null` when
     /// nobody said. Reported rather than derived from `variationId`, because "start 4, which
@@ -1271,6 +1263,22 @@
     bar = null;
     if (node && node.parentNode) node.parentNode.removeChild(node);
     node = null;
+    // ROUND 74
+    if (RO) RO.stop();
+    if (replaying) {
+      var after = replaying;
+      replaying = null;
+      if (replayKept) {
+        state.barPasses = replayKept.barPasses;
+        state.barStopped = replayKept.barStopped;
+        state.pauses = replayKept.pauses;
+        state.pausedMs = replayKept.pausedMs;
+        state.deferred = replayKept.deferred;
+        holdMs = replayKept.hold;
+        replayKept = null;
+      }
+      after();
+    }
   }
 
   // -------------------------------------------------------------------------------------
@@ -1513,7 +1521,9 @@
       clearTimeout(holdTimer);
       holdTimer = null;
     }
-    state.reason = reason;
+    // ROUND 74: a replay is not the start; how it left is its own reading.
+    if (replaying) state.replayReason = reason;
+    else state.reason = reason;
     if (ceiling !== null) {
       clearTimeout(ceiling);
       ceiling = null;
@@ -1523,14 +1533,67 @@
     if (!node) return;
     // Pin the composition where it was going BEFORE fading it, so a launch that finishes
     // mid-ceremony shows a finished mark on its way out rather than unlit metal.
+    // ROUND 74: a bar that had landed is handed to the home screen; one cut short is not.
+    var hadLanded = !!(bar && bar.landed);
     node.classList.add("splash--settled");
     settleBar();
+    if (RO) {
+      RO.settle();
+      if (hadLanded && !replaying) RO.handover(node);
+    }
     node.classList.add("splash--yielding");
     setTimeout(removeSelf, FADE_MS + 40);
     // Drop the always-dark clamp as the curtain goes, not after it has gone: the fade is
     // the app arriving, and the control crossing over with it is the same "one system, two
     // lightings" move every other element makes.
     if (window.RichTheme) window.RichTheme.forceDark(false);
+  }
+
+  // ROUND 74. THE GALLERY'S PLAY. This file used to have no path that showed the screen a
+  // second time, by design. This is that path, and it is the only one: the same build, the same
+  // clock, the same space key and the same first-click-leaves, for exactly the screen's own
+  // time. It is asked for by a person pressing Play; nothing else calls it. It never joins the
+  // shell's pictures and reports nothing to the shell: it is not a start.
+  function replay(openingId, done) {
+    if (node || !RO) return false;
+    var candidates = pool();
+    var entry = null;
+    for (var i = 0; i < candidates.length; i++) {
+      if (candidates[i].id === RO.entryId({ id: openingId })) entry = candidates[i];
+    }
+    if (!entry) return false;
+    yielded = false;
+    paused = false;
+    pausedTotal = 0;
+    pausedSince = null;
+    heldMoment = null;
+    state.barStopped = false;
+    state.paused = false;
+    state.deferred = null;
+    state.heldAt = null;
+    // The start's own record is kept and put back when the replay has left: a replay is not
+    // a start, and what `state` says about the launch stays what happened at the launch.
+    replayKept = { barPasses: state.barPasses, barStopped: state.barStopped, pauses: state.pauses, pausedMs: state.pausedMs, deferred: state.deferred, hold: holdMs };
+    holdMs = Math.round(secondsFor(entry) * 1000);
+    replaying = typeof done === "function" ? done : function () {};
+    try {
+      node = build(entry);
+      document.body.insertBefore(node, document.body.firstChild);
+    } catch (e) {
+      removeSelf();
+      return false;
+    }
+    state.replayed = entry.id;
+    state.replays = (state.replays || 0) + 1;
+    shownAt = clock();
+    if (bar) raf = requestAnimationFrame(tick);
+    if (window.RichTheme) window.RichTheme.forceDark(true);
+    window.addEventListener("keydown", onInput, true);
+    window.addEventListener("pointerdown", onInput, true);
+    ceiling = setTimeout(function () {
+      yieldNow("ceiling");
+    }, holdMs);
+    return true;
   }
 
   // -------------------------------------------------------------------------------------
@@ -1667,6 +1730,8 @@
     function measure() {
       var movers = splashAnimations().map(function (a) { return a.effect.target; });
       if (bar) movers.push(bar.root);
+      // ROUND 74: what the openings paint from the clock (the lights' canvas).
+      if (RO) movers = movers.concat(RO.movers());
       for (var i = 0; i < movers.length; i++) {
         var els = [movers[i]].concat(Array.prototype.slice.call(movers[i].querySelectorAll("*")));
         for (var j = 0; j < els.length; j++) {
@@ -1782,10 +1847,6 @@
   }
 
   function start() {
-    if (!enabled()) {
-      state.declined = "switched off";
-      return;
-    }
     // The launch kind is checked BEFORE the library is read: a crash-restart must cost
     // nothing at all, not "a pool built and then thrown away".
     var kind = launchKind();
@@ -1828,6 +1889,16 @@
       // The web view nobody sees, drawing the opening at quit: held at the first moment, and the
       // shell moves the hold from there. Nothing here is for a person.
       state.drawing = true;
+      if (window.__RICHOS_LAUNCH__.card === true) {
+        // ROUND 74, "Save image": the same hidden page, held at the finished frame with the
+        // line that names the opening, for one picture (`splash_opening.rs` `save_card`).
+        node.classList.add("splash--settled");
+        node.classList.add("splash--card");
+        if (RO) RO.settle();
+        holdAt(holdMs);
+        state.card = true;
+        return;
+      }
       holdAt(0);
       return;
     }
@@ -1885,9 +1956,6 @@
   window.RichSplash = {
     yieldNow: yieldNow,
     state: state,
-    /// The key, exported so `main.js` mirrors the durable Rust setting into the same place
-    /// this file reads it from, rather than knowing the string twice.
-    KEY_ENABLED: KEY_ENABLED,
     /// Every entry the library offers that this renderer would actually draw. `main.js`
     /// does not use it; the acceptance suite does, to prove the pool it draws from is the
     /// pool that is shipped.
@@ -1905,6 +1973,11 @@
     /// It is a pure function of the pool and the ordinal; that is what makes it testable
     /// without launching anything, and what makes the later criteria a change to one place.
     choose: choose,
+    /// ROUND 74: the gallery's Play, and whether a screen is up (the gallery leaves the keys to it).
+    replay: replay,
+    isUp: function () {
+      return !!node;
+    },
     /// HELD AT A MOMENT, AND STARTED FROM ONE: the shell draws the opening at quit with these
     /// (`src-tauri/src/splash_opening.rs`), and the splash suite holds every entry to them.
     holdAt: holdAt,
