@@ -6,6 +6,8 @@ public struct GitPanelContext: Codable, Sendable, Equatable {
     public struct Repository: Codable, Sendable, Equatable {
         let path: String
         let lands: [GitLandEvidence]
+        let device: UInt64?
+        let inode: UInt64?
     }
 
     public let threadId: String
@@ -20,6 +22,7 @@ public struct GitPanelSnapshot: Codable, Sendable, Equatable {
     let chatName: String
     let capturedAt: Date
     let repository: FileReference
+    let administration: FileReference
     let lands: [GitLandEvidence]?
     let allOnMain: Bool
     let commit: String?
@@ -193,11 +196,13 @@ public final class GitPanelModel: ObservableObject {
             let capacity = 200
             let size = (try? JSONEncoder().encode(lands).count) ?? Int.max
             return GitPanelSnapshot(threadId: context.threadId, chatName: context.chatName, capturedAt: Date(),
-                                    repository: repository.identity, lands: lands.count <= capacity && size <= 256 * 1024 ? lands : nil,
+                                    repository: repository.identity, administration: repository.administration,
+                                    lands: lands.count <= capacity && size <= 256 * 1024 ? lands : nil,
                                     allOnMain: scope == .all, commit: commit?.id, path: selectedFile?.path)
         }
         return GitPanelSnapshot(threadId: snapshot?.threadId, chatName: snapshot?.chatName ?? "",
                                 capturedAt: snapshot?.capturedAt ?? Date(), repository: repository.identity,
+                                administration: repository.administration,
                                 lands: snapshot?.lands, allOnMain: scope == .all,
                                 commit: commit?.id, path: selectedFile?.path)
     }
@@ -275,7 +280,7 @@ public final class GitPanelModel: ObservableObject {
             return
         }
         loading = true
-        let expected = snapshot?.repository
+        let expected = snapshot
         let evidence = chosen?.lands ?? snapshot?.lands ?? []
         let scope = scope
         let oldTip = tip
@@ -285,7 +290,11 @@ public final class GitPanelModel: ObservableObject {
             do {
                 let result = try await Self.worker {
                     let repo = try GitRepository(folder: root, git: git, exactRoot: exact)
-                    if let expected, repo.identity != expected { throw GitReadError.changed }
+                    if let expected, repo.identity != expected.repository || repo.administration != expected.administration {
+                        throw GitReadError.changed
+                    }
+                    if let chosen, UInt64(exactly: repo.identity.identity.device) != chosen.device ||
+                       repo.identity.identity.inode != chosen.inode { throw GitReadError.changed }
                     let tip = try oldTip ?? repo.mainTip()
                     let shallow = try repo.isShallow()
                     var reachable: [String: GitLandEvidence] = [:]

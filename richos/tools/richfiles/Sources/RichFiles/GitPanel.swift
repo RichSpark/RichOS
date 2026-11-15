@@ -2,6 +2,17 @@ import AppKit
 import RichFilesCore
 import SwiftUI
 
+private struct GitPanelFocusKey: FocusedValueKey {
+    typealias Value = Bool
+}
+
+extension FocusedValues {
+    var gitPanelFocus: Bool? {
+        get { self[GitPanelFocusKey.self] }
+        set { self[GitPanelFocusKey.self] = newValue }
+    }
+}
+
 @MainActor
 struct GitBrowserSplit<Browser: View>: View {
     @ObservedObject var git: GitPanelModel
@@ -25,6 +36,7 @@ public struct RichFilesGitPanel: View {
     @ObservedObject private var model: GitPanelModel
     @Environment(\.colorScheme) private var scheme
     @AppStorage("richfiles.textSize") private var textSize = BrowserTextSize.standard
+    @FocusState private var scopeFocused: Bool
     @State private var currentHunk = 0
     private let dismiss: () -> Void
     private let handoff: ((GitPanelSnapshot) -> Void)?
@@ -74,6 +86,8 @@ public struct RichFilesGitPanel: View {
             .background(palette.pane)
         }
         .font(BrowserTypography.reading(16 * textSize.scale))
+        .focusedValue(\.gitPanelFocus, true)
+        .onAppear { scopeFocused = true }
         .onExitCommand { if !model.back() { dismiss() } }
         .accessibilityIdentifier("richfiles-git-panel")
         .onChange(of: model.selectedFile?.id) { _ in currentHunk = 0 }
@@ -163,6 +177,7 @@ public struct RichFilesGitPanel: View {
             }
             Button("All on main") { model.useScope(.all) }
                 .buttonStyle(BrowserButtonStyle(selected: model.scope == .all))
+                .focused($scopeFocused)
         }
         .padding(2)
         .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(palette.controlLine).allowsHitTesting(false))

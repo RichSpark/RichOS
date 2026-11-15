@@ -92,7 +92,8 @@
   const el = (id) => document.getElementById(id);
 
   const git = { available: false, active: false, ready: false, ticket: 0, frame: 0,
-    width: 840, previousWidth: null, previousFull: false, top: 0, opener: null, file: null };
+    width: 840, previousWidth: null, previousFull: false, top: 0, opener: null, file: null,
+    size: null, appearance: null, overlays: null };
 
   function gitBounds(visible) {
     const hidden = { left: 0, top: 0, width: 0, height: 0, visible: false };
@@ -150,6 +151,9 @@
       pullPaint({ instant: true });
       body.setAttribute("aria-busy", "true");
       paintGitTabs();
+      git.size?.observe(body);
+      git.appearance?.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+      git.overlays?.observe(document.body, { subtree: true, attributes: true, attributeFilter: ["hidden", "inert", "open"] });
     }
     if (file) git.file = file;
     const ticket = ++git.ticket;
@@ -178,6 +182,9 @@
     git.ticket += 1;
     git.active = false;
     git.ready = false;
+    git.size?.disconnect();
+    git.appearance?.disconnect();
+    git.overlays?.disconnect();
     git.width = pull.split;
     const body = el("op-body");
     body.classList.remove("op-native-git");
@@ -1518,11 +1525,10 @@
       git.available = available === true;
       paintGitTabs();
     }).catch(() => {});
-    if (typeof ResizeObserver === "function") new ResizeObserver(placeGit).observe(el("op-body"));
+    if (typeof ResizeObserver === "function") git.size = new ResizeObserver(placeGit);
     if (typeof MutationObserver === "function") {
-      new MutationObserver(placeGit).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
-      new MutationObserver(placeGit).observe(document.body, { subtree: true, attributes: true,
-        attributeFilter: ["hidden", "inert", "open"] });
+      git.appearance = new MutationObserver(placeGit);
+      git.overlays = new MutationObserver(placeGit);
     }
     pullInit();
     paintButtons();

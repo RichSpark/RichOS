@@ -37,6 +37,7 @@ struct BrowserView: View {
     @AppStorage("richfiles.inspectorVisible") private var inspectorVisible = false
     @FocusState private var focus: FocusTarget?
     @FocusedValue(\.browserControl) private var controlFocused
+    @FocusedValue(\.gitPanelFocus) private var gitPanelFocused
     @State private var editingAddress = false
     @State private var address = ""
     @State private var suggestions: [URL] = []
@@ -147,7 +148,7 @@ struct BrowserView: View {
         .font(BrowserTypography.reading(16 * textSize.scale))
         .background(palette.pane)
         .accessibilityIdentifier(side == .primary ? "richfiles-primary-pane" : "richfiles-secondary-pane")
-        .background(KeyboardBridge(windowsKeys: windowsKeys, acceptsInput: acceptsKeyboard,
+        .background(KeyboardBridge(windowsKeys: windowsKeys, acceptsInput: { acceptsKeyboard() && gitPanelFocused != true },
                                    controlFocused: controlFocused == true,
                                    shortcuts: BrowserShortcut.load(shortcutData),
                                    activate: { workspace.select(side) },

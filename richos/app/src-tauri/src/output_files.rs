@@ -578,6 +578,8 @@ pub(crate) struct GitContext {
 struct GitContextRepository {
     path: PathBuf,
     lands: Vec<GitContextLand>,
+    device: Option<u64>,
+    inode: Option<u64>,
 }
 
 #[derive(Default, Serialize)]
@@ -794,9 +796,14 @@ impl OutputFiles {
             }
         }
         if self.active_chat().as_deref() != Some(thread) { return Err("The active chat changed.".into()); }
-        let repositories = rows_by_repo.into_iter().map(|(path, lands)| GitContextRepository {
-            path,
-            lands: lands.into_values().filter(|land| !land.refused).collect(),
+        let repositories = rows_by_repo.into_iter().map(|(path, lands)| {
+            let info = std::fs::symlink_metadata(&path).ok().filter(|info| info.is_dir());
+            GitContextRepository {
+                path,
+                lands: lands.into_values().filter(|land| !land.refused).collect(),
+                device: info.as_ref().map(MetadataExt::dev),
+                inode: info.as_ref().map(MetadataExt::ino),
+            }
         }).collect();
         Ok(GitContext { thread_id: thread.into(), chat_name, git, repositories, selected_path })
     }

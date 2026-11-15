@@ -103,7 +103,7 @@ public struct GitDiffHunk: Identifiable, Sendable {
 public struct GitRepository: Sendable {
     public let root: URL
     public let identity: FileReference
-    private let administration: FileReference
+    public let administration: FileReference
     private let worktreeDescription: Data?
     private let git: URL
     private static let patchLimit = 4 * 1024 * 1024
