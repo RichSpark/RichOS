@@ -30,7 +30,7 @@ WHAT IT DOES, in the guest, never on the host's screen (CEO ruling 65):
           reads "Stop", the replay's line counts memories up from the first light (read from the
           accessibility tree about every second, frames replay-early and replay-late), the last
           frame reads "<n> memories · <stage>" (frame replay-last), and the replay ends by itself
-          with the button reading "Watch it grow" again (added with the nightly 100 walk)
+          with the button reading "Watch it grow" again
 
 A repository is drawn as a few more objects than it has documents (its README, its decision
 register, its working days), so each size is asked for as that many documents rounded up to a
