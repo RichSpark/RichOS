@@ -1,8 +1,9 @@
 # Round 79, "Make a video" anywhere in the app, on the real app (2026-11-15)
 
 The CEO's order: "Get someone on Fable to build round 79." This is the check of branch
-`cc/echo2-fable-r79build1`: the app built from `50b60fe63` (`branch-bundle.sh`, engine 1.2.0 pinned
-as nightly 100 pins it, bundle sha256 `6bdc6a44…d1c1e7`), run in a fresh test VM guest by
+`cc/echo2-fable-r79build1`: the app built from `ffded7fea`, the branch with main merged in
+(`branch-bundle.sh`, engine 1.2.0 pinned as nightly 100 pins it, bundle sha256 `146e7076…469dd6`),
+run in a fresh test VM guest by
 `run-walk.py` and driven by `richos/app/scripts/testvm/video-anywhere-walk.py`. Nothing ran on the
 host's screen. No sound was played and no microphone was opened: the guest has no sound device and
 the app was started with `RICHOS_VIDEO_INPUT_TONE=1`, so the "Microphone" choice recorded a tone
@@ -15,23 +16,24 @@ made in the page.
 | The button | In the conversation, nothing of the recorder is on the screen until Settings is open. "Make a video" stands in the heading of Settings at its right end (160 × 36 at 1328,166; the panel is 1070 wide from 455, so 37 px from its right edge) | |
 | The choices | Microphone (Off, On) and Mouse pointer (Shown, Hidden); as first opened Off and Shown; no "Recording stops", "By itself" or "When I stop it"; Escape closes them and Settings stays | `guest-2-choices.jpg` |
 | Start recording | Settings closes for the count; the red Stop with the time stands beside the settings button (7 px to its left, level with it) | |
-| A line highlighted | On the RichPass page the real mouse is dragged over "Safer Than Any Password Manager"; the recording goes on (0:19) | `guest-6-highlighted.jpg` |
-| Settings while it records | The heading of Settings holds the same red Stop with the same time (0:26); Escape closes Settings and the recording goes on | `guest-7-in-settings.jpg` |
-| The home screen | Still recording (0:40); Stop stands where the home screen's own "Make a video" stands, which is out of its way | `guest-8-home.jpg` |
-| Stop, the sheet | "Your video", "0:42 · with your voice · with the mouse pointer · 1,400 × 836 · 0.4 MB", over the home screen, which stays | `guest-9-sheet.jpg` |
-| Save video | The Mac's own save window, then "Saved to Documents as RichOS-2026-11-15-at-13.02.56.mp4"; Done puts the home screen's own button back | `guest-10-anywhere-saved.jpg` |
-| The saved file | In the guest at `/Users/admin/Documents/RichOS-2026-11-15-at-13.02.56.mp4`, 416,149 bytes (the app's log names the same path and size). Read back on the host: AAC, 48 kHz, mean volume −27.6 dB (the tone, not silence), decodes with no error, 28.91 s | `walk-report.json.txt` |
+| A line highlighted | On the RichPass page the real mouse is dragged over "Safer Than Any Password Manager"; the recording goes on | `guest-6-highlighted.jpg` |
+| Settings while it records | The heading of Settings holds the same red Stop with the same time; Escape closes Settings and the recording goes on | `guest-7-in-settings.jpg` |
+| The home screen | Still recording; Stop stands where the home screen's own "Make a video" stands, which is out of its way | `guest-8-home.jpg` |
+| Stop, the sheet | "Your video", "1:24 · with your voice · with the mouse pointer · 1,400 × 836 · 0.1 MB", over the home screen, which stays, under the settings button | `guest-9-sheet.jpg` |
+| Save video | The Mac's own save window, then "Saved to Documents as RichOS-2026-11-15-at-14.33.19.mp4"; Done puts the home screen's own button back | `guest-10-anywhere-saved.jpg` |
+| The saved file | In the guest at `/Users/admin/Documents/RichOS-2026-11-15-at-14.33.19.mp4`, 106,431 bytes (the app's log names the same path and size). Read back on the host: AAC, 48 kHz, mean volume −27.6 dB (the tone, not silence), decodes with no error, 10.03 s | `walk-report.json.txt` |
 
-`run-walk.py` quit the app by its pid (1668), stopped the VM and deleted the clone.
+`run-walk.py` quit the app by its pid (2147), stopped the VM and deleted the clone. The same walk
+passed before the merge on the app built from `50b60fe63` (pid 1668; 28.91 s of sound for 42 s).
 
 ## What the guest cannot show and where it is shown instead
 
 **The picture in the file and the whole length of the sound.** The guest has no hardware H.264
 encoder and the webview's recorder then writes the sound and no picture
 (`docs/verification/2026-11-14-round-77-make-a-video`). In a guest the sound also ends before the
-recording does: 28.91 s of sound for the 42 s above and in two earlier guests 10.03 s for a
-recording of 48 s and 10.03 s for one of 27 s in which nothing was pressed. Why it ends early there
-is not established.
+recording does: 10.03 s of sound for the 84 s above and in three earlier guests 28.91 s for a
+recording of 42 s, 10.03 s for one of 48 s and 10.03 s for one of 27 s in which nothing was
+pressed. Why it ends early there is not established.
 
 The picture and the length are proved on this Mac's own hardware, with no window, no screen and no
 sound, by `richos/app/ui/tests/video-anywhere.js`: the same `video-anywhere.js` records in headless

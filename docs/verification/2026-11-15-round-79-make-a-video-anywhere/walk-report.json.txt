@@ -1,5 +1,5 @@
 {
-  "vm": "walk-93b86a6fc4f5",
+  "vm": "walk-5b200585ec27",
   "steps": {
     "seed": {
       "pass": true,
@@ -7,11 +7,12 @@
         "repository": "alder: 314 documents, 8 commits",
         "teammates": "3",
         "launches": [
+          "window",
           "window"
         ],
         "memories": 322
       },
-      "seconds": 57.4
+      "seconds": 120.0
     },
     "button": {
       "pass": true,
@@ -51,7 +52,7 @@
         "escape_closed_the_choices": true,
         "settings_stayed": true
       },
-      "seconds": 57.2
+      "seconds": 69.6
     },
     "record": {
       "pass": true,
@@ -98,21 +99,21 @@
           "the_home_screens_own_button_gave_its_place": true,
           "frame": "8-home.png"
         },
-        "pressed_stop_after_s": 41.8,
+        "pressed_stop_after_s": 80.1,
         "sheet_frame": "9-sheet.png",
         "still_on_the_home_screen": true,
-        "sheet_says": "0:42 \u00b7 with your voice \u00b7 with the mouse pointer \u00b7 1,400 \u00d7 836 \u00b7 0.4 MB",
+        "sheet_says": "1:24 \u00b7 with your voice \u00b7 with the mouse pointer \u00b7 1,400 \u00d7 836 \u00b7 0.1 MB",
         "save_window_frame": "10-anywhere-save-window.png",
-        "said": "Saved to Documents as RichOS-2026-11-15-at-13.02.56.mp4",
+        "said": "Saved to Documents as RichOS-2026-11-15-at-14.33.19.mp4",
         "saved_frame": "10-anywhere-saved.png",
         "folder": "Documents",
-        "name": "RichOS-2026-11-15-at-13.02.56.mp4",
-        "guest_path": "/Users/admin/Documents/RichOS-2026-11-15-at-13.02.56.mp4",
-        "app_log": "[richos] home video: saved 416149 byte(s) to /Users/admin/Documents/RichOS-2026-11-15-at-13.02.56.mp4",
+        "name": "RichOS-2026-11-15-at-14.33.19.mp4",
+        "guest_path": "/Users/admin/Documents/RichOS-2026-11-15-at-14.33.19.mp4",
+        "app_log": "[richos] home video: saved 106431 byte(s) to /Users/admin/Documents/RichOS-2026-11-15-at-14.33.19.mp4",
         "read_back": {
-          "file": "10-anywhere-RichOS-2026-11-15-at-13.02.56.mp4",
-          "bytes": 416149,
-          "seconds": 28.91,
+          "file": "10-anywhere-RichOS-2026-11-15-at-14.33.19.mp4",
+          "bytes": 106431,
+          "seconds": 10.03,
           "video": null,
           "audio": {
             "codec": "aac",
@@ -122,14 +123,14 @@
           "decodes": true,
           "frames": []
         },
-        "sheet_seconds": 42,
+        "sheet_seconds": 84,
         "picture_in_the_file": false,
         "whole": false,
         "done_closed_the_sheet": true,
         "stop_is_gone": true,
         "the_home_screens_own_button_is_back": true
       },
-      "seconds": 81.6
+      "seconds": 153.1
     }
   }
 }
