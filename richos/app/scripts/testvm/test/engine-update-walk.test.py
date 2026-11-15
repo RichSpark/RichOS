@@ -38,6 +38,27 @@ class VoiceAskedAgain(unittest.TestCase):
         self.assertEqual(walk.voice_asked_after_swap(log.split('\n' + walk.SWAPPED)[0]), 0)
 
 
+class HeldOrNot(unittest.TestCase):
+    """A message sent during the install whose answer outlasts the install was not held when the
+    app sent it to the model before the install's done line."""
+
+    def test_sent_to_the_model_before_the_done_line_was_not_held(self):
+        log = '\n'.join(['[richos] 08:14:07.454Z ' + walk.TO_MODEL, walk.DONE + ', in 30836 ms, with no setup sheet',
+                          '[richos] 08:14:12.888Z reply timing: first text from the model'])
+        self.assertTrue(walk.sent_before_done(log))
+
+    def test_sent_to_the_model_only_after_the_done_line_was_held(self):
+        log = '\n'.join([walk.DONE + ', in 30836 ms, with no setup sheet', '[richos] 08:14:40.000Z ' + walk.TO_MODEL])
+        self.assertFalse(walk.sent_before_done(log))
+
+    def test_never_sent_to_the_model_is_not_a_pass(self):
+        self.assertFalse(walk.sent_before_done(walk.DONE + ', in 1 ms'))
+        self.assertFalse(walk.sent_before_done(''))
+
+    def test_sent_with_the_install_still_running_was_not_held(self):
+        self.assertTrue(walk.sent_before_done('[richos] 08:14:07.454Z ' + walk.TO_MODEL))
+
+
 class TheAppsOwnWords(unittest.TestCase):
     """The walk waits on the app's operator lines; a reworded line would leave it waiting on
     nothing, so each one it reads must still be in the app's source."""
@@ -47,6 +68,7 @@ class TheAppsOwnWords(unittest.TestCase):
         for line in (walk.STARTED, walk.DONE, walk.FAILED):
             self.assertIn(line, source, line)
         self.assertIn(walk.SWAPPED, (APP / 'src-tauri' / 'src' / 'setup_view.rs').read_text())
+        self.assertIn(walk.TO_MODEL, (APP / 'crates' / 'richos-core' / 'src' / 'native.rs').read_text())
 
     def test_the_sheet_title_is_the_sheets(self):
         self.assertIn(walk.SHEET_TITLE, (APP / 'ui' / 'index.html').read_text())
