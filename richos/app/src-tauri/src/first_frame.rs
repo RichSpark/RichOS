@@ -129,6 +129,9 @@ mod tests {
         "activation::gather", "dictation::tool::main", "first_frame::ground", "launch_timing::mark_update_step",
         "launch_timing::mark_window", "linkedin_host::MacBrowser::default", "phone::connect::supervisor::guard_main",
         "richfiles_pane::PaneRequests::default", "richos_core::assignment_tools::run_stdio",
+        // The team's browser reader (`--browser-mcp`): a helper mode that exits before any window,
+        // like the LinkedIn reader's.
+        "richos_core::browser_tools::run_stdio",
         "richos_core::git_name::redo_cli", "richos_core::git_name::wait_cli", "richos_core::linkedin_tools::run_stdio",
         "richos_core::question_tools::run_stdio", "richos_core::quota::gate::run_cli",
         "richos_core::quota::reset_tools::run_stdio", "richos_core::quota::terminal::run",

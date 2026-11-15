@@ -2042,6 +2042,11 @@ fn mcp_config(executable: &Path, onboarding_scope: &Path, assignments_scope: &Pa
     config["mcpServers"][crate::linkedin_tools::SERVER_NAME] = json!({
         "type": "stdio", "command": executable, "args": ["--linkedin-mcp"]
     });
+    // **Reading any website in the user's own browser, on BOTH leases, for the same callers**
+    // (`browser_tools.rs`, "Who calls it").
+    config["mcpServers"][crate::browser_tools::SERVER_NAME] = json!({
+        "type": "stdio", "command": executable, "args": ["--browser-mcp"]
+    });
     if role == LeaseRole::Conversation {
         config["mcpServers"][crate::assignment_tools::SERVER_NAME] = json!({
             "type":"stdio","command":executable,"args":["--assignments-mcp",assignments_scope]
@@ -6597,13 +6602,14 @@ exec /bin/sleep 1000
             Some((&bridge, &continuity)), Some(continuity_tools.as_path()), Some(&profile), LeaseRole::Conversation, Path::new("claude"));
         assert_eq!(
             names(&chat),
-            vec!["richos_assignments", "richos_continuity", "richos_files", "richos_linkedin", "richos_onboarding", "richos_questions",
+            vec!["richos_assignments", "richos_browser", "richos_continuity", "richos_files", "richos_linkedin", "richos_onboarding", "richos_questions",
                 "richos_status", "richos_work"],
             "the front desk's tool list moved"
         );
         // The LinkedIn reader is the app's own executable with nothing but its flag: it reads
         // the user's browser and no RichOS scope.
         assert_eq!(chat["mcpServers"][crate::linkedin_tools::SERVER_NAME]["args"], json!(["--linkedin-mcp"]));
+        assert_eq!(chat["mcpServers"][crate::browser_tools::SERVER_NAME]["args"], json!(["--browser-mcp"]));
         // Named on its own as well, because the list above is the WHAT and this is the WHY.
         assert_eq!(chat["mcpServers"]["richos_work"]["args"].as_array().unwrap().len(), 2);
 
@@ -6613,13 +6619,14 @@ exec /bin/sleep 1000
             Some((&bridge, &continuity)), Some(continuity_tools.as_path()), Some(&profile), LeaseRole::Work, Path::new("claude"));
         assert_eq!(
             names(&work),
-            vec!["richos_continuity", "richos_files", "richos_linkedin", "richos_questions", "richos_quota", "richos_status",
+            vec!["richos_browser", "richos_continuity", "richos_files", "richos_linkedin", "richos_questions", "richos_quota", "richos_status",
                 "richos_work"],
             "the back end's tool list moved"
         );
         // The work lease carries the same reader for Stu's named specialists: a teammate gets the
         // MCP tools of the session it runs in (Stu's own call is refused by the app hook).
         assert_eq!(work["mcpServers"][crate::linkedin_tools::SERVER_NAME], chat["mcpServers"][crate::linkedin_tools::SERVER_NAME]);
+        assert_eq!(work["mcpServers"][crate::browser_tools::SERVER_NAME], chat["mcpServers"][crate::browser_tools::SERVER_NAME]);
         // **The back end holds the work and NOTHING ELSE, and that is the third absence.**
         // The list above read `["richos_onboarding", "richos_work"]` until 2026-09-18. Named
         // on its own for the same reason `richos_work`'s absence is named above the

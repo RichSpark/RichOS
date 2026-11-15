@@ -82,12 +82,14 @@ const MAX_CHROME_NODES: usize = 5_000;
 #[derive(Default)]
 pub struct MacBrowser {
     seen: Mutex<Vec<Element>>,
+    /// The elements of the general reader's last reading (`browser_host.rs`).
+    pub(crate) kept: Mutex<crate::browser_host::Kept>,
 }
 
 /// An Accessibility element or CF value we own.
-type Element = CFType;
+pub(crate) type Element = CFType;
 
-fn attribute(element: &Element, name: &'static str) -> Option<CFType> {
+pub(crate) fn attribute(element: &Element, name: &'static str) -> Option<CFType> {
     let name = CFString::from_static_string(name);
     let mut value: CFTypeRef = std::ptr::null();
     // SAFETY: a live element, a CFString attribute name and an out-parameter; a value returned
@@ -100,7 +102,7 @@ fn attribute(element: &Element, name: &'static str) -> Option<CFType> {
     (error == 0).then_some(value)
 }
 
-fn text(element: &Element, name: &'static str) -> Option<String> {
+pub(crate) fn text(element: &Element, name: &'static str) -> Option<String> {
     let value = attribute(element, name)?;
     if let Some(s) = value.downcast::<CFString>() {
         return Some(s.to_string());
@@ -108,7 +110,7 @@ fn text(element: &Element, name: &'static str) -> Option<String> {
     value.downcast::<CFURL>().map(|u| u.get_string().to_string())
 }
 
-fn children(element: &Element) -> Vec<Element> {
+pub(crate) fn children(element: &Element) -> Vec<Element> {
     let Some(value) = attribute(element, "AXChildren") else { return Vec::new() };
     let Some(array) = value.downcast::<CFArray<*const c_void>>() else { return Vec::new() };
     // SAFETY: each item is a live element the array holds; wrapping under the get rule
@@ -267,12 +269,27 @@ fn pid_of(bundle_id: &str) -> Option<i32> {
     })
 }
 
+/// Whether the element is a panel the browser lays over a window: a dialog or a sheet. Never
+/// the window's tab bar and never its page.
+///
+/// Measured in the guest walks of 2026-11-13 (Chrome 157, Brave): on a page in another
+/// language than the browser's, Chrome shows "Translate this page?" as a window of its own
+/// (`AXWindow`, subrole `AXUnknown`) and again inside the browser window (an `AXGroup` with the
+/// subrole `AXApplicationAlertDialog`), each holding an `AXTabGroup` of two `AXTabButton`s,
+/// "German" and "English". Counted as tabs, they made every such page unreadable: no tab could
+/// be told to be the reader's.
+fn is_overlay(element: &Element, role: &str) -> bool {
+    role == "AXSheet" || (role == "AXGroup" && matches!(text(element, "AXSubrole").as_deref(),
+        Some("AXApplicationAlertDialog" | "AXApplicationDialog" | "AXDialog" | "AXSystemDialog")))
+}
+
 /// The window's tab buttons: `AXRadioButton`s with the subrole `AXTabButton`, or inside an
-/// `AXTabGroup`, never inside a web page (a page's own tab list is the page's). Measured in the
+/// `AXTabGroup`, never inside a web page (a page's own tab list is the page's) and never inside
+/// a panel laid over the window ([`is_overlay`]). Measured in the
 /// guest (walk-59ad5d5270c7, Safari): the tab bar is an `AXGroup` ("Tab bar, 13 tabs"), each tab
 /// an `AXRadioButton`/`AXTabButton` holding one `AXButton` (its close button, "Close") and an
 /// image, while Safari's `AXTabGroup` holds the page.
-fn tab_buttons(window: &Element) -> Vec<Element> {
+pub(crate) fn tab_buttons(window: &Element) -> Vec<Element> {
     let mut out = Vec::new();
     let mut stack: Vec<(Element, usize, bool)> = children(window).into_iter().rev().map(|c| (c, 1, false)).collect();
     let mut nodes = 0;
@@ -288,6 +305,7 @@ fn tab_buttons(window: &Element) -> Vec<Element> {
                 out.push(el);
                 continue;
             }
+            _ if is_overlay(&el, &role) => continue,
             _ => {}
         }
         if depth < 30 {
@@ -300,26 +318,51 @@ fn tab_buttons(window: &Element) -> Vec<Element> {
     out
 }
 
-/// The address of the page a window shows: its first `AXWebArea` (a frame inside it is not walked).
-fn window_url(window: &Element) -> String {
+/// The page a window shows: its first `AXWebArea` at a web address, or else its first
+/// `AXWebArea` (a page still on its way, a start page). A frame inside a page is not walked, and
+/// neither is a panel laid over the window ([`is_overlay`]): a browser's own panels can be web
+/// pages too, at an address of the browser's own.
+pub(crate) fn window_area(window: &Element) -> Option<Element> {
     let mut stack: Vec<(Element, usize)> = children(window).into_iter().map(|c| (c, 1)).collect();
     let mut nodes = 0;
+    let mut first = None;
     while let Some((el, depth)) = stack.pop() {
         nodes += 1;
         if nodes > MAX_CHROME_NODES {
             break;
         }
-        if text(&el, "AXRole").as_deref() == Some("AXWebArea") {
-            return text(&el, "AXURL").unwrap_or_default();
+        let role = text(&el, "AXRole").unwrap_or_default();
+        if role == "AXWebArea" {
+            if text(&el, "AXURL").is_some_and(|url| url.starts_with("http")) {
+                return Some(el);
+            }
+            first.get_or_insert(el);
+            continue;
         }
-        if depth < 30 {
+        if depth < 30 && !is_overlay(&el, &role) {
             stack.extend(children(&el).into_iter().map(|c| (c, depth + 1)));
         }
     }
-    String::new()
+    first
 }
 
-fn is_selected(tab: &Element) -> bool {
+/// The address of the page a window shows.
+fn window_url(window: &Element) -> String {
+    window_area(window).and_then(|area| text(&area, "AXURL")).unwrap_or_default()
+}
+
+/// The app's browser windows, or `None` when they cannot be read: its standard windows
+/// (`AXStandardWindow`), never a bubble or a dialog the browser shows as a window of its own
+/// ([`is_overlay`]'s measurement). An app that lists no standard window at all is taken as it is.
+pub(crate) fn windows_of(app: &Element) -> Option<Vec<Element>> {
+    let windows = attribute(app, "AXWindows")?.downcast::<CFArray<*const c_void>>()?;
+    // SAFETY: each item is a live element the array holds; the get rule retains it.
+    let all: Vec<Element> = windows.iter().filter(|w| !w.is_null()).map(|w| unsafe { CFType::wrap_under_get_rule(*w) }).collect();
+    let standard: Vec<Element> = all.iter().filter(|w| text(w, "AXSubrole").as_deref() == Some("AXStandardWindow")).cloned().collect();
+    Some(if standard.is_empty() { all } else { standard })
+}
+
+pub(crate) fn is_selected(tab: &Element) -> bool {
     let Some(value) = attribute(tab, "AXValue") else { return false };
     if let Some(n) = value.downcast::<CFNumber>() {
         return n.to_i64() == Some(1);
@@ -352,7 +395,12 @@ fn press_element(element: &Element) -> bool {
 
 impl MacBrowser {
     /// The number of `element`: where it sits in `seen`, added at the end when it is new.
-    fn id_of(&self, element: &Element) -> u64 {
+    /// The tab or window element numbered `id`, when one was read.
+    pub(crate) fn element_of(&self, id: u64) -> Option<Element> {
+        self.seen.lock().unwrap_or_else(|e| e.into_inner()).get(id as usize).cloned()
+    }
+
+    pub(crate) fn id_of(&self, element: &Element) -> u64 {
         let mut seen = self.seen.lock().unwrap_or_else(|e| e.into_inner());
         // CFType's equality is CFEqual, which compares two Accessibility elements by the process
         // and the element they name.
@@ -364,7 +412,7 @@ impl MacBrowser {
     }
 }
 
-fn app_element(app: &BrowserApp) -> Option<Element> {
+pub(crate) fn app_element(app: &BrowserApp) -> Option<Element> {
     let pid = pid_of(&app.bundle_id)?;
     // SAFETY: AXUIElementCreateApplication returns a +1 element, wrapped once.
     let element = unsafe { CFType::wrap_under_create_rule(AXUIElementCreateApplication(pid)) };
@@ -442,10 +490,7 @@ impl BrowserHost for MacBrowser {
 
     fn tabs(&self, app: &BrowserApp) -> Option<Vec<Tab>> {
         let Some(element) = app_element(app) else { return Some(Vec::new()) };
-        let windows = attribute(&element, "AXWindows")?.downcast::<CFArray<*const c_void>>()?;
-        // SAFETY: each item is a live element the array holds; the get rule retains it.
-        let windows: Vec<Element> = windows.iter().filter(|w| !w.is_null())
-            .map(|w| unsafe { CFType::wrap_under_get_rule(*w) }).collect();
+        let windows = windows_of(&element)?;
         let mut out = Vec::new();
         for window in windows {
             let url = window_url(&window);
