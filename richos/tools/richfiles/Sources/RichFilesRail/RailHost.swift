@@ -224,7 +224,7 @@ private final class OutputGitHost {
             RailHost.shared.setChat(context.threadId)
             model.beginOutput(context, compare: mode == 1, refresh: mode == 2)
         }
-        guard model.open, let parent = web.superview, web.window != nil, !frame.isEmpty,
+        guard model.open, let parent = web.superview, let window = web.window, !frame.isEmpty,
               CGRect(x: 0, y: 0, width: 1.000001, height: 1.000001).contains(frame) else { return false }
         let needsFocus = hosting == nil || hosting?.isHidden == true
         if self.web !== web || hosting?.superview !== parent || self.dark != dark {
@@ -244,13 +244,16 @@ private final class OutputGitHost {
             parent.addSubview(view, positioned: .above, relativeTo: web)
             hosting = view
         }
-        let bounds = web.bounds
+        // WKWebView can extend beneath the title bar. CSS viewport coordinates
+        // start at the visible content, which is also the overlay's origin.
+        let bounds = web.bounds.intersection(web.convert(window.contentLayoutRect, from: nil))
+        guard !bounds.isEmpty else { return false }
         let top = web.isFlipped ? frame.minY : 1 - frame.maxY
         let local = CGRect(x: bounds.minX + frame.minX * bounds.width, y: bounds.minY + top * bounds.height,
                            width: frame.width * bounds.width, height: frame.height * bounds.height)
         hosting?.frame = web.convert(local, to: parent)
         hosting?.isHidden = false
-        if needsFocus || mode == 1, let hosting { web.window?.makeFirstResponder(hosting) }
+        if needsFocus || mode == 1, let hosting { window.makeFirstResponder(hosting) }
         return true
     }
 

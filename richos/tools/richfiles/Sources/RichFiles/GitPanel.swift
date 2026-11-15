@@ -229,6 +229,7 @@ public struct RichFilesGitPanel: View {
                 if let id { scroll.scrollTo(id, anchor: .center) }
             }
         }
+        .accessibilityElement(children: .contain)
         .accessibilityLabel("Git history")
     }
 
@@ -316,6 +317,7 @@ public struct RichFilesGitPanel: View {
                 }
             }
         }
+        .accessibilityElement(children: .contain)
         .accessibilityLabel("Changed files")
     }
 
@@ -355,6 +357,7 @@ public struct RichFilesGitPanel: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .accessibilityElement(children: .contain)
         .accessibilityLabel("Read-only comparison")
     }
 
@@ -492,6 +495,7 @@ public struct RichFilesGitPanel: View {
         .padding(.horizontal, 5).padding(.vertical, 2)
         .frame(width: max(1, width), alignment: .leading)
         .background(changed && line != nil ? color.opacity(0.13) : Color.clear)
+        .accessibilityElement(children: .ignore)
         .accessibilityLabel(before ? "Earlier version" : "Later version")
         .accessibilityValue(Text(verbatim: readout))
     }
