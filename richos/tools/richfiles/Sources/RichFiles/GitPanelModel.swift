@@ -37,6 +37,7 @@ public final class GitPanelModel: ObservableObject {
     @Published private(set) var repository: GitRepository?
     @Published private(set) var loading = false
     @Published private(set) var sectionMessage: String?
+    @Published private(set) var unavailableComparisonPath: String?
     @Published public private(set) var directComparisonUnavailable = false
     @Published private(set) var commits: [GitCommit] = []
     @Published private(set) var comparison: GitComparison?
@@ -222,7 +223,8 @@ public final class GitPanelModel: ObservableObject {
     }
 
     func refresh() {
-        loadHistory(newTip: true, preferredCommit: commit?.id, preferredFile: selectedFile?.path)
+        loadHistory(newTip: true, preferredCommit: commit?.id,
+                    preferredFile: selectedFile?.path ?? unavailableComparisonPath, preservingUnavailableComparison: true)
     }
 
     func refreshOnWindowFocus() {
@@ -250,12 +252,12 @@ public final class GitPanelModel: ObservableObject {
     }
 
     private func loadHistory(newTip: Bool, nextPage: Bool = false, preferredCommit: String? = nil,
-                             preferredFile: String? = nil, direct: Bool = false) {
+                             preferredFile: String? = nil, direct: Bool = false, preservingUnavailableComparison: Bool = false) {
         historyTask?.cancel()
         historyRevision = UUID()
         let revision = historyRevision
         if !nextPage {
-            clearDetails()
+            clearDetails(keepingUnavailableFor: preservingUnavailableComparison ? preferredFile : nil)
             commits = []
             repository = nil
             verifiedLands = [:]
@@ -344,8 +346,8 @@ public final class GitPanelModel: ObservableObject {
                 loading = false
                 if let id = result.preferredCommit, let row = commits.first(where: { $0.id == id }) {
                     select(row, path: preferredFile, direct: direct)
-                } else if preferredFile != nil {
-                    sectionMessage = "There is no verified earlier version for this file."
+                } else if let preferredFile {
+                    unavailableComparisonPath = preferredFile
                     directComparisonUnavailable = direct
                 }
                 RichFilesDiagnostics.record(.gitHistory, id: revision, outcome: .complete, started: started,
@@ -365,7 +367,7 @@ public final class GitPanelModel: ObservableObject {
 
     func select(_ row: GitCommit, path: String? = nil, direct: Bool = false) {
         guard let repository else { return }
-        clearDetails()
+        clearDetails(keepingUnavailableFor: path)
         commit = row
         let revision = detailRevision
         let land = scope == .chat ? verifiedLands[row.id] : nil
@@ -382,7 +384,7 @@ public final class GitPanelModel: ObservableObject {
                     if let file = result.files.first(where: { $0.path == preferred }), result.basis != .unavailable,
                        file.status != .unresolved { selectFile(file) }
                     else {
-                        detailMessage = "There is no verified earlier version for this file."
+                        unavailableComparisonPath = path
                         directComparisonUnavailable = direct
                     }
                 }
@@ -395,6 +397,7 @@ public final class GitPanelModel: ObservableObject {
 
     func selectFile(_ file: GitChangedFile) {
         guard let repository else { return }
+        unavailableComparisonPath = nil
         clearFile()
         selectedFile = file
         fileLoading = true
@@ -459,9 +462,10 @@ public final class GitPanelModel: ObservableObject {
         return false
     }
 
-    private func clearDetails() {
+    private func clearDetails(keepingUnavailableFor path: String? = nil) {
         detailRevision = UUID()
         detailTask?.cancel()
+        if unavailableComparisonPath != path { unavailableComparisonPath = nil }
         commit = nil
         comparison = nil
         detailMessage = nil
