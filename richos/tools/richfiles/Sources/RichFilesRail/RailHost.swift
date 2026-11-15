@@ -14,6 +14,16 @@ public func placeRichFilesRail(_ webViewPointer: UnsafeMutableRawPointer?, _ lef
     }
 }
 
+/// Builds the pane, hidden, before the first click on its rail icon, so that click only shows it.
+@_cdecl("richfiles_rail_prepare")
+public func prepareRichFilesRail(_ webViewPointer: UnsafeMutableRawPointer?) -> Int32 {
+    guard Thread.isMainThread, let webViewPointer else { return 0 }
+    return MainActor.assumeIsolated {
+        let view = Unmanaged<NSView>.fromOpaque(webViewPointer).takeUnretainedValue()
+        return RailHost.shared.prepare(beside: view) ? 1 : 0
+    }
+}
+
 @_cdecl("richfiles_rail_receive_workspace")
 public func receiveRichFilesWorkspace(_ identifier: UnsafePointer<CChar>?) -> Int32 {
     guard Thread.isMainThread, let identifier, let value = String(validatingUTF8: identifier),
@@ -78,27 +88,7 @@ private final class RailHost {
               CGRect(x: 0, y: 0, width: 1.000001, height: 1.000001).contains(normalizedFrame) else {
             return false
         }
-        if self.webView !== webView || hosting?.superview !== parent {
-            hide()
-            hosting?.removeFromSuperview()
-            self.webView = webView
-            let home = FileManager.default.homeDirectoryForCurrentUser
-            let destination = RichFilesDockTarget()
-            destination.chatChanged(currentChat)
-            dockTarget = destination
-            let pane = RichFilesPane(folder: home, recoveryStore: RichFilesInstallation.dockedRecoveryStore,
-                                     openWindow: { [weak self] folder in self?.openStandalone(folder: folder) },
-                                     acceptsKeyboard: { [weak self] in self?.hasPaneFocus() == true },
-                                     returnKeyboardFocus: { [weak self] in self?.focusPane() },
-                                     dockTarget: destination, didUndock: { [weak self] in self?.showChats() })
-            let view = PaneHostingView(rootView: pane)
-            view.sizingOptions = []
-            view.autoresizingMask = []
-            view.isHidden = true
-            parent.addSubview(view, positioned: .above, relativeTo: webView)
-            hosting = view
-            installFocusMonitor()
-        }
+        build(beside: webView, in: parent)
         guard let hosting else { return false }
         let bounds = webView.bounds
         let top = webView.isFlipped ? normalizedFrame.minY : 1 - normalizedFrame.maxY
@@ -116,6 +106,42 @@ private final class RailHost {
             _ = performInPane { try await $0.showGit(snapshot) }
         }
         return true
+    }
+
+    /// The pane built and laid out while still hidden, in the web view's own area: `place` gives
+    /// it its frame and shows it. A pane that is already on screen is left as it is.
+    func prepare(beside webView: NSView) -> Bool {
+        guard let parent = webView.superview, webView.window != nil else { return false }
+        build(beside: webView, in: parent)
+        guard let hosting else { return false }
+        if hosting.isHidden {
+            hosting.frame = webView.frame
+            hosting.layoutSubtreeIfNeeded()
+        }
+        return true
+    }
+
+    private func build(beside webView: NSView, in parent: NSView) {
+        guard self.webView !== webView || hosting?.superview !== parent else { return }
+        hide()
+        hosting?.removeFromSuperview()
+        self.webView = webView
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let destination = RichFilesDockTarget()
+        destination.chatChanged(currentChat)
+        dockTarget = destination
+        let pane = RichFilesPane(folder: home, recoveryStore: RichFilesInstallation.dockedRecoveryStore,
+                                 openWindow: { [weak self] folder in self?.openStandalone(folder: folder) },
+                                 acceptsKeyboard: { [weak self] in self?.hasPaneFocus() == true },
+                                 returnKeyboardFocus: { [weak self] in self?.focusPane() },
+                                 dockTarget: destination, didUndock: { [weak self] in self?.showChats() })
+        let view = PaneHostingView(rootView: pane)
+        view.sizingOptions = []
+        view.autoresizingMask = []
+        view.isHidden = true
+        parent.addSubview(view, positioned: .above, relativeTo: webView)
+        hosting = view
+        installFocusMonitor()
     }
 
     func setChat(_ thread: String?) {
