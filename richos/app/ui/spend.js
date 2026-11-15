@@ -396,7 +396,9 @@
     for (const r of records) {
       const nodes = r.type === "attributes" ? [r.target] : [...r.addedNodes];
       for (const n of nodes) {
-        if (!(n instanceof Element) || !n.classList.contains("overlay") || n.hidden || screen.contains(n)) continue;
+        // Your openings (round 74) is a page at the body, not an `.overlay`, and is reached from
+        // Settings in the same way: it takes this screen's place by the same rule.
+        if (!(n instanceof Element) || !(n.classList.contains("overlay") || n.id === "openings-page") || n.hidden || screen.contains(n)) continue;
         close(true);
         if (!n.contains(document.activeElement)) {
           const first = [...n.querySelectorAll("button:not([disabled])")].find(e => e.offsetParent !== null)

@@ -28,14 +28,16 @@ THE STEPS, in order (each is a real press on the app's own window or a read of i
   pick      "Make it my opening" on Bridle Leather; the app quit from its own menu, which picks that
             opening for the next start and draws its first second; the next start plays it, from
             the pictures drawn at the quit
-  daily     "One of mine, a different one each day": the quit picks today's; the next start plays
-            it; with the guest's clock a day on, the start after shows the next one of his (drawn
-            by the page, since the quit could only draw the day it was on), and the start after
-            that plays that day's from its pictures
+  daily     "One of mine, a different one each day": the quit picks today's and draws it, and
+            draws the next day's beside it; the next start plays today's; with the guest's clock
+            a day on, the start after plays the next one of his from the pictures drawn the day
+            before, and the start after that plays the same one again
   sound     the Settings switch "Play its sound" is on; pressed, it is off in the settings file,
             and still off, in Settings and in the gallery, after the app is started again
   save      Save image on a card: a picture of that opening in the guest's Downloads folder,
             copied out as evidence
+  spend     Token spend opened from Settings, then Settings, "Your openings" over it: the gallery
+            is on the screen and Token spend is gone from under it
 
 Evidence: --out/report.json (every step's result), frames of the guest's screen, the app's own log
 lines quoted in the report. Exit 0 when every step passed. It quits the app only from the app's
@@ -66,7 +68,7 @@ _spec.loader.exec_module(standard)
 StepFailed = standard.StepFailed
 run = standard.run
 
-STEPS = ['first', 'history', 'gallery', 'play', 'pick', 'daily', 'sound', 'save']
+STEPS = ['first', 'history', 'gallery', 'play', 'pick', 'daily', 'sound', 'save', 'spend']
 DAY = 86400
 # What 430 days with Rich earns by the catalog's own rules (ui/openings-catalog.js): 3, 6 and 12
 # months, and the year's edition; with the two every user starts with, in the catalog's order.
@@ -379,6 +381,24 @@ class Walk(standard.Walk):
             raise StepFailed('the saved picture is not 1600 x 900: ' + size.strip())
         return {'file': 'RichOS Bridle Leather.jpg', 'bytes': len(data), 'sha256': hashlib.sha256(data).hexdigest(), 'pixels': size.strip(),
                 'said': (said.get('value') or said.get('title') or '')[:160], 'copy': 'saved-bridle-leather.jpg'}
+
+    def spend(self):
+        """Token spend is a screen above the gallery, and Settings is reachable over it: "Your
+        openings" pressed there must show the gallery, with Token spend gone from under it."""
+        self.quit_from_menu()
+        self.start()
+        self.to_home()
+        self.settings()
+        self.ax('click', '--id', 'set-spend-open', '--first')
+        self.until(lambda: self.node('--id', 'spend-back'), 30, 'Token spend did not open')
+        frame = self.shot('spend-open')
+        self.settings()
+        self.ax('click', '--id', 'openings-open', '--first')
+        self.until(lambda: self.node('--id', 'openings-page'), 30, 'Your openings did not open over Token spend')
+        time.sleep(1)
+        if self.node('--id', 'spend-back'):
+            raise StepFailed('Token spend is still up with the gallery open: the gallery is under it')
+        return {'frame_before': frame, 'frame_after': self.shot('gallery-over-spend'), 'token_spend_gone': True}
 
 
 def main():

@@ -588,7 +588,26 @@ async function main() {
     assertEqual(over.reason + " / " + over.splash + " / " + over.top, "your-openings / 0 / opg-back", "why the held splash left, what is left of it, and what is on top where Back is");
     assertEqual(held.__errors.length, 0, "page errors: " + held.__errors.join("; "));
     await held.__ctx.close();
-    return "Back and Escape close it; Enter and Space reach nothing under it; a newly earned opening appears on the next open, and by itself while the spend is still being counted; a held splash is let go when the gallery opens";
+
+    // TOKEN SPEND IS A SCREEN ABOVE THIS PAGE, and Settings is reachable over it: opened from
+    // there, the gallery sat under it (the review of 408e628f9). It steps aside now.
+    const spend = await open(browser);
+    await leaveSplash(spend);
+    await spend.waitForFunction(() => window.RichSettings && window.RichOpeningsPage && window.RichSpend);
+    await spend.evaluate(() => window.RichSpend.open());
+    await spend.waitForFunction(() => window.RichSpend.isOpen());
+    await spend.evaluate(() => window.RichSettings.openMenu());
+    await spend.click("#openings-open");
+    await spend.waitForFunction(() => window.RichOpeningsPage.isOpen());
+    const under = await spend.evaluate(() => {
+      const b = document.querySelector("#openings-page .opg-back").getBoundingClientRect();
+      const top = document.elementFromPoint(b.x + b.width / 2, b.y + b.height / 2);
+      return [window.RichSpend.isOpen(), document.body.classList.contains("spend-open"), top ? top.className : null, document.activeElement.className].join(" / ");
+    });
+    assertEqual(under, "false / false / opg-back / opg-back", "Token spend still open, its body class, what is on top where Back is, and where the focus is");
+    assertEqual(spend.__errors.length, 0, "page errors: " + spend.__errors.join("; "));
+    await spend.__ctx.close();
+    return "Back and Escape close it; Enter and Space reach nothing under it; a newly earned opening appears on the next open, and by itself while the spend is still being counted; a held splash and Token spend give way when the gallery opens";
   });
 
   await run.check("13  Save image asks the shell for that opening's picture and says where it went; his company's line is saved", async () => {
