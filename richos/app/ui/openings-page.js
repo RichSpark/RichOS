@@ -365,6 +365,10 @@
   function onKey(e) {
     if (!page || page.hidden) return;
     if (window.RichSplash && window.RichSplash.isUp && window.RichSplash.isUp()) return; // the opening's own keys
+    // Settings is reachable over this page, and while its panel is up the keys are its own:
+    // Escape closes the panel, not the page under it (as Home leaves them, `home.js`).
+    var menu = document.getElementById("set-menu");
+    if (menu && !menu.hidden) return;
     if (e.key === "Escape" && !e.metaKey && !e.ctrlKey && !e.altKey) {
       e.preventDefault();
       e.stopPropagation();
@@ -387,16 +391,51 @@
     page.querySelector(".opg-back").focus({ preventScroll: true });
     refresh();
   }
-  function close() {
-    if (!page) return;
+  // `keepFocus === true` when a sheet takes this page's place: the focus belongs to the sheet.
+  function close(keepFocus) {
+    if (!page || page.hidden) return;
     page.hidden = true;
     clearTimeout(again);
     again = null;
     document.body.classList.remove("openings-open");
+    if (keepFocus === true) return;
     // Back to the settings button: the control he opened Settings with, which is still there.
     var gear = document.getElementById("set-btn");
     if (gear && gear.focus) gear.focus({ preventScroll: true });
     else if (opener && opener.focus && opener.isConnected) opener.focus({ preventScroll: true });
+  }
+
+  // A SHEET OPENED OVER THIS PAGE TAKES ITS PLACE (the review of aae1474f9). Settings stays
+  // above this page and its rows still work, but the sheets they open live on the desk (an
+  // `.overlay`, z-index 60 or 160), so one opened while this page was up sat under it and the
+  // press looked dead. The same rule as Token spend's `giveWayToSheet` (spend.js) and Home's
+  // `giveWayToOpenDeskSheet` (home.js), for every sheet at once: an `.overlay` that stops being
+  // hidden closes this page, and the sheet gets the focus its own open() could not give it.
+  var FOCUSABLE = "button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])";
+  function giveWayToSheet(records) {
+    if (!page || page.hidden) return;
+    for (var i = 0; i < records.length; i++) {
+      var r = records[i];
+      var nodes = r.type === "attributes" ? [r.target] : Array.prototype.slice.call(r.addedNodes);
+      for (var k = 0; k < nodes.length; k++) {
+        var n = nodes[k];
+        if (!(n instanceof Element) || !n.classList.contains("overlay") || n.hidden || page.contains(n)) continue;
+        close(true);
+        if (!n.contains(document.activeElement)) {
+          var all = n.querySelectorAll(FOCUSABLE);
+          for (var f = 0; f < all.length; f++) {
+            if (all[f].offsetParent !== null) {
+              all[f].focus();
+              break;
+            }
+          }
+        }
+        return;
+      }
+    }
+  }
+  if (typeof MutationObserver === "function") {
+    new MutationObserver(giveWayToSheet).observe(document.body, { attributes: true, attributeFilter: ["hidden"], childList: true, subtree: true });
   }
 
   window.addEventListener("keydown", onKey, true);

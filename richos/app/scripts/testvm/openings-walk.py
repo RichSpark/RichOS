@@ -38,6 +38,8 @@ THE STEPS, in order (each is a real press on the app's own window or a read of i
             copied out as evidence
   spend     Token spend opened from Settings, then Settings, "Your openings" over it: the gallery
             is on the screen and Token spend is gone from under it
+  sheet     with the gallery up, Settings, "Connected folders (repositories)": the gallery gives
+            way to the sheet that row opens
 
 Evidence: --out/report.json (every step's result), frames of the guest's screen, the app's own log
 lines quoted in the report. Exit 0 when every step passed. It quits the app only from the app's
@@ -68,7 +70,7 @@ _spec.loader.exec_module(standard)
 StepFailed = standard.StepFailed
 run = standard.run
 
-STEPS = ['first', 'history', 'gallery', 'play', 'pick', 'daily', 'sound', 'save', 'spend']
+STEPS = ['first', 'history', 'gallery', 'play', 'pick', 'daily', 'sound', 'save', 'spend', 'sheet']
 DAY = 86400
 # What 430 days with Rich earns by the catalog's own rules (ui/openings-catalog.js): 3, 6 and 12
 # months, and the year's edition; with the two every user starts with, in the catalog's order.
@@ -407,6 +409,22 @@ class Walk(standard.Walk):
         if self.node('--id', 'spend-back'):
             raise StepFailed('Token spend is still up with the gallery open: the gallery is under it')
         return {'frame_before': frame, 'frame_after': self.shot('gallery-over-spend'), 'token_spend_gone': True}
+
+    def sheet(self):
+        """The other way round: with the gallery up, Settings, "Connected folders (repositories)".
+        Its sheet lives under the gallery, so the gallery must give way to it."""
+        self.open_gallery()
+        self.ax('click', '--id', 'set-btn', '--first')
+        self.until(lambda: self.node('--id', 'set-repositories-open'), 30, 'the Settings panel did not open over the gallery')
+        self.ax('click', '--id', 'set-repositories-open', '--first')
+        self.until(lambda: self.has('Connected project folders'), 30, 'the Connected folders sheet did not open')
+        # By what is on the screen: WebKit keeps an empty group for the hidden page in the
+        # accessibility tree (2026-11-15), so the page's own node says nothing; its Back button does.
+        try:
+            self.until(lambda: not self.has('Back to RichOS'), 20, 'the gallery is still up')
+        except StepFailed:
+            raise StepFailed('the gallery is still up after Connected folders was pressed: its sheet is under the gallery')
+        return {'frame': self.shot('sheet-over-gallery'), 'gallery_gone': True}
 
 
 def main():

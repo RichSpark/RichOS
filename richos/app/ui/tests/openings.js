@@ -607,7 +607,38 @@ async function main() {
     assertEqual(under, "false / false / opg-back / opg-back", "Token spend still open, its body class, what is on top where Back is, and where the focus is");
     assertEqual(spend.__errors.length, 0, "page errors: " + spend.__errors.join("; "));
     await spend.__ctx.close();
-    return "Back and Escape close it; Enter and Space reach nothing under it; a newly earned opening appears on the next open, and by itself while the spend is still being counted; a held splash and Token spend give way when the gallery opens";
+
+    // AND THE OTHER WAY ROUND (the review of aae1474f9): with the gallery up, Settings is still
+    // reachable over it. A sheet one of its rows opens lives under this page, so the page gives
+    // way to it, whichever sheet it is; and Escape pressed in Settings closes Settings, not the
+    // page under it.
+    const way = await openGallery(browser);
+    await way.evaluate(() => window.RichSettings.openMenu());
+    await way.keyboard.press("Escape");
+    await way.waitForFunction(() => document.getElementById("set-menu").hidden);
+    assertEqual(await way.evaluate(() => window.RichOpeningsPage.isOpen()), true, "the gallery after Escape was pressed in Settings");
+    await way.evaluate(() => window.RichSettings.openMenu());
+    await way.click("#set-repositories-open");
+    await way.waitForFunction(() => !window.RichOpeningsPage.isOpen());
+    // Home was under the gallery and gives way to the same sheet by its own rule; it leaves
+    // over a moment, so the sheet is on top once Home has gone.
+    const onTop = () => {
+      const up = Array.from(document.querySelectorAll(".overlay")).filter((o) => !o.hidden);
+      if (up.length !== 1) return false;
+      const panel = up[0].querySelector(".overlay-panel") || up[0];
+      const b = panel.getBoundingClientRect();
+      const top = document.elementFromPoint(b.x + b.width / 2, b.y + 12);
+      return !!top && up[0].contains(top);
+    };
+    await way.waitForFunction(onTop);
+    const sheet = await way.evaluate(() => {
+      const up = Array.from(document.querySelectorAll(".overlay")).filter((o) => !o.hidden);
+      return [up.length, up.length && up[0].contains(document.activeElement), document.body.classList.contains("openings-open")].join(" / ");
+    });
+    assertEqual(sheet, "1 / true / false", "sheets up, the focus inside it, the gallery's body class");
+    assertEqual(way.__errors.length, 0, "page errors: " + way.__errors.join("; "));
+    await way.__ctx.close();
+    return "Back and Escape close it; Enter and Space reach nothing under it; a newly earned opening appears on the next open, and by itself while the spend is still being counted; a held splash and Token spend give way when the gallery opens; the gallery gives way to a sheet opened from Settings and leaves Settings its Escape";
   });
 
   await run.check("13  Save image asks the shell for that opening's picture and says where it went; his company's line is saved", async () => {
