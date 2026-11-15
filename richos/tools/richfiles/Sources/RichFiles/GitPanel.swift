@@ -445,10 +445,11 @@ public struct RichFilesGitPanel: View {
                                 .padding(5)
                                 .id(hunk.id)
                             ForEach(hunk.rows) { row in
+                                let endsDiffer = row.before?.ending != row.after?.ending && row.before != nil && row.after != nil
                                 HStack(alignment: .top, spacing: 0) {
-                                    sourceLine(row.before, changed: row.changed, before: true, width: (size.size.width - 1) / 2)
+                                    sourceLine(row.before, changed: row.changed, before: true, width: (size.size.width - 1) / 2, showEnding: endsDiffer)
                                     verticalRule
-                                    sourceLine(row.after, changed: row.changed, before: false, width: (size.size.width - 1) / 2)
+                                    sourceLine(row.after, changed: row.changed, before: false, width: (size.size.width - 1) / 2, showEnding: endsDiffer)
                                 }
                             }
                         }
@@ -458,29 +459,41 @@ public struct RichFilesGitPanel: View {
         }
     }
 
-    private func sourceLine(_ line: GitDiffHunk.Line?, changed: Bool, before: Bool, width: CGFloat) -> some View {
+    private func sourceLine(_ line: GitDiffHunk.Line?, changed: Bool, before: Bool, width: CGFloat, showEnding: Bool) -> some View {
         let color = before ? palette.danger : palette.signal
+        let ending: String? = line.flatMap { value in
+            if showEnding || value.ending == .none || value.ending == .cr { return value.ending.rawValue }
+            return nil
+        }
+        let lineNumber = line?.number.map { String($0) } ?? ""
+        let readout: String
+        if let line {
+            let number = lineNumber.isEmpty ? "" : "Line " + lineNumber + ". "
+            let status = changed ? (before ? "Removed. " : "Added. ") : ""
+            readout = number + status + line.text + (ending.map { ". " + $0 } ?? "")
+        } else {
+            readout = "Blank"
+        }
         return HStack(alignment: .top, spacing: 8) {
-            Text(line?.number.map(String.init) ?? "")
+            Text(verbatim: lineNumber)
                 .foregroundStyle(palette.hint)
                 .frame(minWidth: 36, alignment: .trailing)
             Text(changed && line != nil ? (before ? "−" : "+") : " ")
                 .foregroundStyle(color)
                 .accessibilityHidden(true)
-            Text(verbatim: line?.text ?? "")
-                .textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(verbatim: line?.text ?? "")
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let ending { Text(ending).foregroundStyle(palette.hint) }
+            }
         }
         .font(.system(size: 16 * textSize.scale, design: .monospaced))
         .padding(.horizontal, 5).padding(.vertical, 2)
         .frame(width: max(1, width), alignment: .leading)
         .background(changed && line != nil ? color.opacity(0.13) : Color.clear)
         .accessibilityLabel(before ? "Earlier version" : "Later version")
-        .accessibilityValue(line.map {
-            let number = $0.number.map { "Line \($0). " } ?? ""
-            let status = changed ? (before ? "Removed. " : "Added. ") : ""
-            return number + status + $0.text
-        } ?? "Blank")
+        .accessibilityValue(Text(verbatim: readout))
     }
 
     private func grouped(_ files: [GitChangedFile]) -> [(key: String, value: [GitChangedFile])] {

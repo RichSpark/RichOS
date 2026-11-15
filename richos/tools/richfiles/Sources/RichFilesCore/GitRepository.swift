@@ -83,8 +83,27 @@ public struct GitChangedFile: Identifiable, Sendable {
 
 public struct GitDiffHunk: Identifiable, Sendable {
     public struct Line: Sendable {
+        public enum Ending: String, Sendable {
+            case lf = "LF", crlf = "CRLF", cr = "CR without LF", none = "No final newline"
+        }
         public let number: Int?
         public let text: String
+        public fileprivate(set) var ending: Ending
+
+        fileprivate init(number: Int, scalars: String.UnicodeScalarView.SubSequence) {
+            self.number = number
+            if scalars.last == "\r" {
+                text = String(scalars.dropLast())
+                ending = .crlf
+            } else {
+                text = String(scalars)
+                ending = .lf
+            }
+        }
+
+        fileprivate mutating func markMissingLineFeed() {
+            ending = ending == .crlf ? .cr : .none
+        }
     }
 
     public struct Row: Identifiable, Sendable {
@@ -509,10 +528,14 @@ private enum GitPatch {
 
     static func singleSide(_ text: String, added: Bool) throws -> [GitDiffHunk] {
         guard !text.isEmpty else { return [] }
-        let lines = text.dropFinalLineFeed().split(separator: "\n", omittingEmptySubsequences: false)
+        let endsWithLineFeed = text.unicodeScalars.last == "\n"
+        let scalars = text.unicodeScalars
+        let content = endsWithLineFeed ? scalars.dropLast() : scalars[...]
+        let lines = content.split(separator: "\n", omittingEmptySubsequences: false)
         guard lines.count <= maximumLines else { throw GitReadError.tooLarge }
         let rows = lines.enumerated().map { offset, text in
-            let line = GitDiffHunk.Line(number: offset + 1, text: String(text))
+            var line = GitDiffHunk.Line(number: offset + 1, scalars: text)
+            if !endsWithLineFeed && offset == lines.count - 1 { line.markMissingLineFeed() }
             return GitDiffHunk.Row(id: offset, before: added ? nil : line, after: added ? line : nil, changed: true)
         }
         return [GitDiffHunk(id: 0, rows: rows)]
@@ -527,6 +550,7 @@ private enum GitPatch {
         var new = 0
         var inHunk = false
         var lineCount = 0
+        var lastSign: Unicode.Scalar?
 
         func flushChanges() {
             for index in 0..<max(removed.count, added.count) {
@@ -538,12 +562,14 @@ private enum GitPatch {
             added.removeAll(keepingCapacity: true)
         }
 
-        for line in patch.split(separator: "\n", omittingEmptySubsequences: false) {
-            if line.hasPrefix("@@ ") {
+        // String's Character iteration groups CR+LF into one character. Git
+        // delimits patch records by LF and can leave CR in a source line.
+        for line in patch.unicodeScalars.split(separator: "\n", omittingEmptySubsequences: false) {
+            if line.starts(with: "@@ ".unicodeScalars) {
                 flushChanges()
                 if inHunk { hunks.append(GitDiffHunk(id: hunks.count, rows: rows)) }
                 rows = []
-                let header = line.split(separator: " ")
+                let header = String(line).split(separator: " ")
                 guard header.count >= 4, header[1].hasPrefix("-"), header[2].hasPrefix("+"),
                       let startOld = Int(header[1].dropFirst().prefix(while: { $0 != "," })),
                       let startNew = Int(header[2].dropFirst().prefix(while: { $0 != "," })) else {
@@ -552,30 +578,39 @@ private enum GitPatch {
                 old = startOld
                 new = startNew
                 inHunk = true
+                lastSign = nil
             } else if inHunk, let sign = line.first {
                 lineCount += 1
                 guard lineCount <= maximumLines else { throw GitReadError.tooLarge }
-                let text = String(line.dropFirst())
                 switch sign {
                 case " ":
                     flushChanges()
                     rows.append(GitDiffHunk.Row(id: rows.count,
-                                                before: .init(number: old, text: text),
-                                                after: .init(number: new, text: text), changed: false))
+                                                before: .init(number: old, scalars: line.dropFirst()),
+                                                after: .init(number: new, scalars: line.dropFirst()), changed: false))
                     old += 1
                     new += 1
                 case "-":
-                    removed.append(.init(number: old, text: text))
+                    removed.append(.init(number: old, scalars: line.dropFirst()))
                     old += 1
                 case "+":
-                    added.append(.init(number: new, text: text))
+                    added.append(.init(number: new, scalars: line.dropFirst()))
                     new += 1
                 case "\\":
-                    // Git's missing-final-newline note carries no line number.
+                    if lastSign == "-", !removed.isEmpty { removed[removed.count - 1].markMissingLineFeed() }
+                    else if lastSign == "+", !added.isEmpty { added[added.count - 1].markMissingLineFeed() }
+                    else if lastSign == " ", let row = rows.popLast() {
+                        var before = row.before
+                        var after = row.after
+                        before?.markMissingLineFeed()
+                        after?.markMissingLineFeed()
+                        rows.append(GitDiffHunk.Row(id: row.id, before: before, after: after, changed: false))
+                    }
                     continue
                 default:
                     throw GitReadError.unreadable
                 }
+                lastSign = sign
             }
         }
         flushChanges()
