@@ -70,6 +70,10 @@ COOKIE = 'richos_walk_session=signed-in'
 SIGNED_IN = 'Ada Walker, signed-in view: works on accessible browsers at Example Works.'
 SIGNED_OUT = 'Sign in to see this profile.'
 HIDDEN = 'This hidden sentence must never be read.'
+# A code sample whose spacing is part of the program: a one-space indent (on its first line
+# too), two spaces and a space at the end inside a string, a line ending in a space inside a
+# string of several lines, and two empty lines in a row.
+CODE = ' if ready:\n  say("a  b ")\n done()\nmessage = """first \n\n\nlast"""'
 
 
 def sentences(n=400):
@@ -135,6 +139,8 @@ class Site(http.server.BaseHTTPRequestHandler):
             if COOKIE not in (self.headers.get('Cookie') or ''):
                 return self.send('<!doctype html><title>Sign in</title><h1>Sign in</h1><p>%s</p>' % STORE_SIGNED_OUT)
             return self.send(STORE)
+        if path == '/code':
+            return self.send('<!doctype html><title>Code</title><h1>Code</h1><pre><code>%s</code></pre><p>End.</p>' % CODE)
         if path == '/links':
             return self.send('<!doctype html><title>Links</title><h1>Links</h1>'
                              '<p><a href="/profile" target="_blank">Profile in a new tab</a></p>')

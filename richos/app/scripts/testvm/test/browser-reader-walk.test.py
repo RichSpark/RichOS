@@ -128,6 +128,7 @@ class LocalSite(unittest.TestCase):
             self.assertNotIn('>' + site.STORE_HIDDEN, signed)
             self.assertIn('<div id="p" hidden></div>', signed)
             self.assertIn('target="_blank">Profile in a new tab', get('/links'))
+            self.assertIn('<pre><code>' + walk.CODE + '</code></pre>', get('/code'))
         finally:
             server.shutdown()
             server.server_close()

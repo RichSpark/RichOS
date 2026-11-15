@@ -23,9 +23,10 @@ accordions (one with a code sample, whose lines and indents must be kept), a tab
 a "More" link, a page that loads more as it scrolls, a web app, a page that sends a signed-out
 visitor to its sign-in page, and a very long page in German at an address with a letter outside
 ASCII in it (Chrome offers to translate it). Each has a question whose answer is on
-the page, some only after a press or a scroll. Two more are the local site's: the page only a
-signed-in browser is shown, and a link that opens in a new tab (the reader follows it there, and
-closes both tabs at the end). They are other people's sites and can change: a FAIL
+the page, some only after a press or a scroll. Three more are the local site's: the page only a
+signed-in browser is shown, a code sample whose spacing is part of the program (it reads
+character for character as written), and a link that opens in a new tab (the reader follows it
+there, and closes both tabs at the end). They are other people's sites and can change: a FAIL
 names the page and what was missing, and the tool's whole answer is kept beside the report.
 
   site           browser-page-guest.py's local site in the guest (the signed-in case)
@@ -72,6 +73,8 @@ PORT = 18765
 TOOLS = ['open_page', 'press', 'scroll_down', 'next_part', 'close_page']
 SIGNED_IN = 'Ada Walker, signed-in view: works on accessible browsers at Example Works.'
 SIGNED_OUT = 'Sign in to see this profile.'
+# The local site's code sample (browser-page-guest.py's CODE): spacing that is part of the program.
+CODE = ' if ready:\n  say("a  b ")\n done()\nmessage = """first \n\n\nlast"""'
 BROWSERS = {
     'safari': {'bundle': 'com.apple.Safari', 'app': '/Applications/Safari.app'},
     # `first_run`: the file a Chromium browser writes once its first-run screens are done. The
@@ -366,6 +369,9 @@ class Walk:
         pages = [p for p in PAGES if self.a.pages.search(p['name'])] + [
             {'name': 'a page only a signed-in browser is shown', 'steps': [
                 {'do': 'open', 'url': f'{self.base}/profile', 'expect': [SIGNED_IN], 'absent': [SIGNED_OUT]}]},
+            # A code sample reads character for character as written, between the lines around it.
+            {'name': 'a code sample whose spacing is part of the program', 'steps': [
+                {'do': 'open', 'url': f'{self.base}/code', 'expect': ['# Code\n' + CODE + '\nEnd.']}]},
             # Last, so the closing that follows has two tabs of the reader's own to close.
             {'name': 'a link that opens in a new tab', 'steps': [
                 {'do': 'open', 'url': f'{self.base}/links', 'expect': ['Profile in a new tab']},
@@ -455,7 +461,7 @@ def main():
     p.add_argument('--exe', type=Path, required=True, help='the richos-tauri executable under test')
     p.add_argument('--expect-sha', default='')
     p.add_argument('--steps', default=','.join(STEPS))
-    p.add_argument('--pages', default='', type=re.compile, help='walk only the pages of PAGES whose name matches (the two local pages are always walked)')
+    p.add_argument('--pages', default='', type=re.compile, help='walk only the pages of PAGES whose name matches (the local pages are always walked)')
     a = p.parse_args()
     steps = a.steps.split(',')
     unknown = [s for s in steps if s not in STEPS]
