@@ -496,8 +496,8 @@ public struct RichFilesGitPanel: View {
         .frame(width: max(1, width), alignment: .leading)
         .background(changed && line != nil ? color.opacity(0.13) : Color.clear)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(before ? "Earlier version" : "Later version")
-        .accessibilityValue(Text(verbatim: readout))
+        .accessibilityLabel(Text(verbatim: (before ? "Earlier version. " : "Later version. ") + readout))
+        .accessibilityAddTraits(.isStaticText)
     }
 
     private func grouped(_ files: [GitChangedFile]) -> [(key: String, value: [GitChangedFile])] {
