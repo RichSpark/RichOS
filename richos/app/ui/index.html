@@ -30,6 +30,7 @@
     <!-- The opening screen. Render-blocking on purpose: the composition has to be part
          of the window's first paint, not something that arrives after it. -->
     <link rel="stylesheet" href="splash.css" />
+    <link rel="stylesheet" href="openings.css" />
     <!-- The home screen — the surface after the curtain. Render-blocking for the same reason
          splash.css is: its composition is part of the window's first paint. Everything in it
          is scoped under `#home`, so it declares nothing that reaches the app UI, and it names
@@ -80,6 +81,12 @@
          `pointer-events: none` for its whole life. The app boots underneath it and the
          curtain leaves the moment `main.js` reports it usable. -->
     <script src="splash-library.js"></script>
+    <!-- The openings (round 74): the materials, the catalog and what they add to the splash.
+         All three are data or definitions; none awaits anything. They load before splash.js,
+         which asks them what to draw. -->
+    <script src="splash-materials.js"></script>
+    <script src="openings-catalog.js"></script>
+    <script src="openings.js"></script>
     <script src="splash.js"></script>
 
     <!-- THE SETTINGS BUTTON, MOUNTED HERE AND NOT PER-SURFACE.
@@ -391,14 +398,16 @@
             <p class="popover-hint" id="user-name-hint">Shown at the bottom of the navigation rail, with your initials.</p>
           </div>
 
-          <!-- THE SPLASH SCREEN'S OFF SWITCH (CEO 2026-10-06, feedback item 7): "remove from
-               quick settings because ideally I don't want them to turn it off". With one
-               Settings there is no quick tier, so round 27 keeps it away from the first things
-               the panel shows: in the band across its foot. The title names the SUBJECT and the
-               label names the ACT. -->
+          <!-- THE SPLASH SCREEN'S SOUND, AND THE WAY INTO "YOUR OPENINGS" (CEO, 2026-11-14).
+               This row was the splash screen's off switch. It is the sound's switch now, in the
+               same place ("that same switch can be replaced with the switch for switching off the
+               sound in the splash screen"), on unless he turns it off; the splash screen itself
+               has no switch any more ("the splash screen is now needed for the illusion of a
+               super-fast app launch"). The title names the SUBJECT and the label names the ACT. -->
           <div data-settings-part="splash">
             <p class="popover-title">Splash screen</p>
-            <label class="popover-option"><input type="checkbox" id="splash-enabled" /> Show it when RichOS starts</label>
+            <label class="popover-option"><input type="checkbox" id="splash-sound" /> Play its sound</label>
+            <button type="button" class="openings-open-btn" id="openings-open">Your openings</button>
           </div>
         </div>
 
@@ -1698,6 +1707,8 @@
     <script src="richpass.js"></script>
     <!-- The RichPass page (round 58), reached from the navigation rail. -->
     <script src="richpass-page.js"></script>
+    <!-- Your openings (round 74): the gallery, reached from Settings. -->
+    <script src="openings-page.js"></script>
     <script src="richfiles-page.js"></script>
     <!-- "Let Codex review your team's work" (round 20.2): its Settings row below Technical view,
          registered once the app answers `codex_reviews_status`. -->

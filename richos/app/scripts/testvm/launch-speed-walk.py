@@ -35,6 +35,12 @@ through LaunchServices), as a regular launch (an unattended one builds its windo
                   then start 2, whose quit before it picked the other splash (#2) and drew its
                   opening, then start 3 (#1 again): both judged, so every splash today's rule can
                   pick is timed at least --runs times;
+  day-change      a user of "one of mine, a different one each day" (round 74, the CEO's order of
+                  2026-11-14): the first start of a new day, after an ordinary quit the day before.
+                  That quit drew the next day's opening beside its own, so this start plays pictures
+                  like any other. One home, set to that way of starting; before each judged launch
+                  its record of the last such day is made a day older, which is what a night does.
+                  --runs times, his two openings in turn;
   fallbacks       reported once each, not judged (the plan's section 9): the first start after an
                   install, and the first start after an update that changed the splash's own files
                   (the saved opening's fingerprint made to differ, which is what such an update does);
@@ -321,7 +327,31 @@ def guest_limit(rows, label='dictionary:calibration'):
 
 
 # The guest's plans, in the order they run (each its own probe and folder).
-PLANS = ('dictionary', 'fresh', 'switch', 'checks', 'after')
+PLANS = ('dictionary', 'fresh', 'switch', 'daily', 'checks', 'after')
+# The two openings every user has from the first start (ui/openings-catalog.js), in the
+# catalog's order: what "a different one each day" turns between in a new home.
+DAILY_TURN = ('opening/ruled-standard', 'opening/midnight-suede')
+
+
+def day_change_plan(richos, home, owns, runs, config):
+    """THE FIRST START OF A NEW DAY for a user of "one of mine, a different one each day". Pure:
+    the steps, from `richos` (the walk's step maker) and the home's settings file.
+
+    The first start makes the home and gives him the two openings. The second is set to start
+    that way, with the last such day long ago on the second opening, so it shows the first (from
+    the page: nothing was drawn for it) and its quit draws that one and the next day's. Then each
+    judged launch: the last such day made a day older, the start, which must show the OTHER
+    opening than the launch before it, and the quit, which draws the two again."""
+    def settings(change):
+        return ('python3 -c ' + shlex.quote(
+            'import json,sys; p=sys.argv[1]; c=json.load(open(p)); ' + change + '; json.dump(c, open(p, "w"))')
+            + ' ' + shlex.quote(config))
+    start_daily = settings('c["opening_pick"]="daily"; c["opening_daily"]=[0, "%s"]' % DAILY_TURN[1].split('/')[1])
+    a_night = settings('c["opening_daily"][0]-=1')
+    return ([richos('day-change:prep', home, owns), richos('day-change:prep', home, owns, before=start_daily)]
+            + [richos('day-change:judged', home, owns, before=a_night, expect_splash=DAILY_TURN[(i + 1) % 2])
+               for i in range(runs)])
+
 
 
 def bmp_pixels(jpg):
@@ -550,6 +580,16 @@ def main():
             said.append(run_plan('switch', switch_plan))
         except Exception as error:  # a route that cannot be set up is missing evidence, never the end of the walk
             facts.setdefault("route_errors", {})['rule-switch'] = str(error)[:500]
+    if not a.only_checks:
+        try:
+            home = payload + '/home-day-change'
+            g('rm -rf ' + shlex.quote(home) + ' && cp -cRp ' + shlex.quote(fixture) + ' ' + shlex.quote(home)
+              + ' && rm -f ' + shlex.quote(home + '/' + launches_json))
+            said.append(run_plan('daily', day_change_plan(
+                richos, home, fresh, a.runs, home + '/Library/Application Support/com.richos.app/config.json')))
+            g('rm -rf ' + shlex.quote(home))
+        except Exception as error:  # a route that cannot be set up is missing evidence, never the end of the walk
+            facts.setdefault("route_errors", {})['day-change'] = str(error)[:500]
     if a.checks or a.only_checks:
         ledger = homes['checks'] + '/Library/Application Support/com.richos.app/conversation-ledger.jsonl'
         said.append(run_plan('checks', [
@@ -627,7 +667,7 @@ def main():
             ran = json.loads(probe.read_text())['results']
             results += ran
             rows += [measure(r, events) for r in ran if not r['label'].startswith('checks')]
-    planned = {"ordinary": a.runs, "cold": a.runs, "rule-switch": 2 * a.runs}
+    planned = {"ordinary": a.runs, "cold": a.runs, "rule-switch": 2 * a.runs, "day-change": a.runs}
     if a.previous_app:
         # An older copy from before the saved pick existed saves nothing at its quit, so the first
         # start after it hands over has no opening to play: that route is then reported, and says

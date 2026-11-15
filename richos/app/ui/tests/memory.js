@@ -390,7 +390,7 @@ async function main() {
     // question was still owed and the home screen gets out of the way of any sheet on the desk
     // (`home.js` `giveWayToOpenDeskSheet`). A relaunch opens on the home screen every time, so
     // the question waits for him to go in, and is asked then.
-    const relaunch = { kind: "fresh", ordinal: 2, splashEnabled: true };
+    const relaunch = { kind: "fresh", ordinal: 2 };
     const page = await openApp(browser, { memory: "none", chosenEntity: "northwind" }, null, { stayHome: true, launch: relaunch });
     await page.waitForFunction(() => (window.__calls || []).some((c) => c.cmd === "memory_status"), null, { timeout: 30000 });
     await pastTheQuestion(page);
@@ -427,7 +427,7 @@ async function main() {
     // Second review rv-20261015T074838Z-1c744187-1e06, finding 2: the setup sheet (an update that
     // needs a different engine is one) and the company question, after "Not now" to the memory
     // question, still took a relaunch off the home screen.
-    const relaunch = { kind: "fresh", ordinal: 2, splashEnabled: true };
+    const relaunch = { kind: "fresh", ordinal: 2 };
     const cases = [
       { what: "the setup sheet", preset: { setup: "missing-both", memory: "ready", chosenEntity: "northwind" },
         sheet: "#setup-sheet", opts: {} },
@@ -436,7 +436,7 @@ async function main() {
       // A restart after a run that did not end cleanly carries no ordinal and is a relaunch too
       // (seen in the test VM: a relaunch stopped by its pid came back as one).
       { what: "the memory question after a crash-restart", preset: { memory: "none", chosenEntity: "northwind" },
-        sheet: "#memory-setup", opts: { launch: { kind: "crash-restart", ordinal: null, splashEnabled: true } } },
+        sheet: "#memory-setup", opts: { launch: { kind: "crash-restart", ordinal: null } } },
     ];
     const seen = [];
     for (const c of cases) {

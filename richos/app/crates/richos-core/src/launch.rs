@@ -313,6 +313,18 @@ pub struct SplashFacts {
     /// Which start the pick is for ([`LaunchStore::next_start_ordinal`]); `None` when the
     /// launch record could not be read.
     pub start: Option<u64>,
+    /// THE USER'S OWN PICK (round 74, "Your openings"): an opening's id, `"daily"` for one of
+    /// his a different one each day, or `None` for the rule below (`ConfigStore::opening_pick`).
+    pub pick: Option<String>,
+    /// The openings that are his, as catalog ids, in the catalog's own order
+    /// (`openings::earned_ids`). A pick outside this list is not honored.
+    pub earned: Vec<String>,
+    /// The local day the pick is for, as days since 1970-01-01 (`openings::local_day`); what
+    /// "a different one each day" counts by. `None` when nobody could say.
+    pub day: Option<i64>,
+    /// "A different one each day": the opening the last such day opened on, and that day
+    /// (`ConfigStore::opening_daily`). `None` before the first one.
+    pub daily: Option<(i64, String)>,
 }
 
 /// THE ONE PLACE THE RULES LIVE. `catalog` is the splash ids in the library's own order
@@ -327,7 +339,32 @@ pub struct SplashFacts {
 /// of one gives that one every time. It moved here from `ui/splash.js`'s `choose()`, which
 /// stays as the page's own fallback where the shell said nothing (a plain browser, the test
 /// harness) and must give the same answer for the same start.
+///
+/// BEFORE THAT RULE, THE USER'S OWN PICK (the CEO, 2026-11-14, on round 74's "Your openings"
+/// gallery with "Make it my opening": "yes"; on "One of mine, a different one each day" as a
+/// second way to start: "yes"). An opening he picked and has earned starts RichOS from then
+/// on. With `"daily"`, the openings he has take turns in their own order, one a day
+/// (`openings::daily`): the same day always opens on the same one, a later day on the one
+/// after it, and it is never a dice roll. An opening is the
+/// catalog entry `opening/<id>`; a pick that is not his, or not in the catalog, is no pick and
+/// the rule above stands, so nothing changes for a user who never opens the gallery.
 pub fn pick_splash<'a>(catalog: &'a [String], facts: &SplashFacts) -> Option<&'a str> {
+    let entry = |id: &str| {
+        let wanted = crate::openings::key(id);
+        catalog.iter().find(|c| **c == wanted).map(String::as_str)
+    };
+    let own = match facts.pick.as_deref() {
+        Some(crate::openings::DAILY) => {
+            let mine: Vec<String> = facts.earned.iter().filter(|id| entry(id).is_some()).cloned().collect();
+            let last = facts.daily.as_ref().map(|(day, id)| (*day, id.as_str()));
+            facts.day.and_then(|day| crate::openings::daily(&mine, day, last)).and_then(entry)
+        }
+        Some(id) if facts.earned.iter().any(|e| e == id) => entry(id),
+        _ => None,
+    };
+    if own.is_some() {
+        return own;
+    }
     match catalog.len() {
         0 => None,
         1 => Some(catalog[0].as_str()),
@@ -667,6 +704,18 @@ impl LaunchStore {
         self.persist()
     }
 
+    /// Every reward that has fired and when: the openings that are the user's
+    /// (`openings::KEY_PREFIX`) and the versions this install has run. Empty when the record
+    /// could not be read.
+    pub fn rewards_fired(&self) -> &BTreeMap<String, u64> {
+        static NONE: BTreeMap<String, u64> = BTreeMap::new();
+        if self.readable {
+            &self.record.rewards_fired
+        } else {
+            &NONE
+        }
+    }
+
     /// When a named reward fired, or `None` if it never has.
     pub fn reward_fired_at(&self, key: &str) -> Option<u64> {
         if !self.readable {
@@ -686,6 +735,27 @@ impl LaunchStore {
         self.record.rewards_fired.insert(key.to_string(), now_millis);
         self.persist()?;
         Ok(true)
+    }
+
+    /// Record several rewards at once, in one write (the openings a start or a quit finds
+    /// earned, `src-tauri/src/openings.rs`). The same rule as [`LaunchStore::note_reward_fired`]:
+    /// the first firing wins. Returns how many were new.
+    pub fn note_rewards_fired(&mut self, fired: &[(String, u64)]) -> io::Result<usize> {
+        if !self.readable {
+            return Ok(0);
+        }
+        let mut wrote = 0;
+        for (key, at) in fired {
+            if key.is_empty() || self.record.rewards_fired.contains_key(key) {
+                continue;
+            }
+            self.record.rewards_fired.insert(key.clone(), *at);
+            wrote += 1;
+        }
+        if wrote > 0 {
+            self.persist()?;
+        }
+        Ok(wrote)
     }
 
     /// The schema version of the record in memory.
@@ -724,7 +794,7 @@ mod splash_rule_tests {
     #[test]
     fn start_one_shows_the_first_start_two_the_second_and_every_later_start_the_first() {
         let catalog = ids(3);
-        let pick = |start| pick_splash(&catalog, &SplashFacts { start });
+        let pick = |start| pick_splash(&catalog, &SplashFacts { start, ..SplashFacts::default() });
         assert_eq!(pick(Some(1)), Some("s1"));
         assert_eq!(pick(Some(2)), Some("s2"));
         for later in 3..40 {
@@ -735,8 +805,95 @@ mod splash_rule_tests {
 
     #[test]
     fn a_library_of_one_gives_that_one_and_an_empty_library_gives_nothing() {
-        assert_eq!(pick_splash(&ids(1), &SplashFacts { start: Some(2) }), Some("s1"));
-        assert_eq!(pick_splash(&[], &SplashFacts { start: Some(1) }), None);
+        assert_eq!(pick_splash(&ids(1), &SplashFacts { start: Some(2), ..SplashFacts::default() }), Some("s1"));
+        assert_eq!(pick_splash(&[], &SplashFacts { start: Some(1), ..SplashFacts::default() }), None);
+    }
+
+    fn with_openings() -> Vec<String> {
+        ["s1", "s2", "opening/ruled-standard", "opening/midnight-suede", "opening/power-100", "opening/material-leather"]
+            .into_iter()
+            .map(String::from)
+            .collect()
+    }
+
+    fn mine(ids: &[&str]) -> Vec<String> {
+        ids.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn the_opening_he_picked_starts_richos_and_only_if_it_is_his() {
+        let catalog = with_openings();
+        let earned = mine(&["ruled-standard", "midnight-suede", "power-100"]);
+        let facts = |pick: Option<&str>, start| SplashFacts { start, pick: pick.map(String::from), earned: earned.clone(), day: Some(20_000), daily: None };
+        // No pick: the rule of 2026-09-01, untouched by the openings being in the catalog.
+        assert_eq!(pick_splash(&catalog, &facts(None, Some(1))), Some("s1"));
+        assert_eq!(pick_splash(&catalog, &facts(None, Some(2))), Some("s2"));
+        assert_eq!(pick_splash(&catalog, &facts(None, Some(3))), Some("s1"));
+        // His pick, on every start, the second included.
+        for start in [Some(1), Some(2), Some(3), Some(400), None] {
+            assert_eq!(pick_splash(&catalog, &facts(Some("power-100"), start)), Some("opening/power-100"), "start {start:?}");
+        }
+        // One he has not earned, and one this build's catalog does not have: the rule stands.
+        assert_eq!(pick_splash(&catalog, &facts(Some("material-leather"), Some(3))), Some("s1"));
+        assert_eq!(pick_splash(&catalog, &facts(Some("power-1m"), Some(2))), Some("s2"));
+        let gone = SplashFacts { earned: mine(&["dropped-in-an-update"]), ..facts(Some("dropped-in-an-update"), Some(3)) };
+        assert_eq!(pick_splash(&catalog, &gone), Some("s1"));
+    }
+
+    #[test]
+    fn one_of_his_a_different_one_each_day_is_the_calendar_and_never_a_draw() {
+        let catalog = with_openings();
+        let earned = mine(&["ruled-standard", "midnight-suede", "power-100"]);
+        let on = |day| {
+            pick_splash(&catalog, &SplashFacts { start: Some(9), pick: Some("daily".into()), earned: earned.clone(), day, daily: None })
+        };
+        // Three days in a row are his three openings in their own order, then round again.
+        let run: Vec<_> = (30_000..30_006).map(|d| on(Some(d)).unwrap()).collect();
+        assert_eq!(
+            run,
+            [
+                "opening/ruled-standard", "opening/midnight-suede", "opening/power-100",
+                "opening/ruled-standard", "opening/midnight-suede", "opening/power-100",
+            ]
+        );
+        // The same day is the same opening however often it is asked.
+        assert_eq!(on(Some(30_001)), on(Some(30_001)));
+        // Never one he does not have.
+        for day in 0..200 {
+            assert_ne!(on(Some(day)), Some("opening/material-leather"));
+        }
+        // A day nobody could name, or nothing earned: the rule stands.
+        assert_eq!(on(None), Some("s1"));
+        let nothing = SplashFacts { start: Some(2), pick: Some("daily".into()), earned: Vec::new(), day: Some(30_000), daily: None };
+        assert_eq!(pick_splash(&catalog, &nothing), Some("s2"));
+    }
+
+    #[test]
+    fn a_later_day_opens_on_the_one_after_the_last_however_many_days_went_by() {
+        // The quit draws the next day's opening ahead, so it has to know which one that is
+        // whenever the next day comes: after a night, a weekend or a month.
+        let catalog = with_openings();
+        let earned = mine(&["ruled-standard", "midnight-suede", "power-100"]);
+        let on = |day, last: Option<(i64, &str)>| {
+            pick_splash(
+                &catalog,
+                &SplashFacts {
+                    start: Some(9),
+                    pick: Some("daily".into()),
+                    earned: earned.clone(),
+                    day: Some(day),
+                    daily: last.map(|(d, id)| (d, id.to_string())),
+                },
+            )
+        };
+        let last = Some((30_000, "midnight-suede"));
+        assert_eq!(on(30_000, last), Some("opening/midnight-suede"), "the same day, the same one");
+        for later in [30_001, 30_003, 30_031] {
+            assert_eq!(on(later, last), Some("opening/power-100"), "day {later}");
+        }
+        assert_eq!(on(30_001, Some((30_000, "power-100"))), Some("opening/ruled-standard"), "round again after the last");
+        // The last one is no longer his (or was never in the catalog): the calendar picks.
+        assert_eq!(on(30_001, Some((30_000, "material-leather"))), on(30_001, None));
     }
 
     #[test]

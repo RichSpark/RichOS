@@ -205,5 +205,25 @@ stuck = walk.check_results([{'label': 'checks:failing-step', 'events': [{'what':
                              {'what': 'STILL RUNNING after the alert'}], 'lines': []}])
 check('an app still running after its alert fails the check', stuck[0]['pass'] is False, stuck)
 
+# THE DAY-CHANGE ROUTE (round 74, "one of mine, a different one each day"): the first start of a
+# new day is judged like every other, on the opening the day before's quit drew for it.
+steps = walk.day_change_plan(lambda label, home, owns, **extra: dict(label=label, home=home, **extra),
+                             '/h', ['/Applications/RichOS.app'], 4, '/h/config.json')
+judged = [s for s in steps if s['label'] == 'day-change:judged']
+check('the day-change route: two starts to set it up, then every judged start a day after the last',
+      [s['label'] for s in steps[:2]] == ['day-change:prep'] * 2 and 'before' not in steps[0]
+      and '"opening_pick"]="daily"' in steps[1]['before'] and len(judged) == 4
+      and all('c["opening_daily"][0]-=1' in s['before'] and '/h/config.json' in s['before'] for s in judged), steps)
+check('each judged start must show the other opening than the one before it',
+      [s['expect_splash'] for s in judged] == ['opening/midnight-suede', 'opening/ruled-standard'] * 2, judged)
+day = [{'label': 'day-change:judged', 'splash': 300, 'splash_id': 'opening/midnight-suede'} for _ in range(20)]
+check('a day-change start that drew its splash in the page refuses the route on its own',
+      walk.verdict(fast + day[:19] + [{'label': 'day-change:judged', 'splash': 1726}] * 2,
+                   {'ordinary': 20, 'day-change': 20})['routes_over'] == ['day-change'])
+check('a day-change route that was planned and not launched refuses',
+      walk.verdict(fast, {'ordinary': 20, 'day-change': 20})['refused'] is True)
+check('the day-change route within the limit passes with the rest',
+      walk.verdict(fast + day, {'ordinary': 20, 'day-change': 20})['refused'] is False)
+
 print('%d failure(s)' % len(failures))
 sys.exit(1 if failures else 0)

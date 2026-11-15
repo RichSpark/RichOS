@@ -1,0 +1,605 @@
+/* THE OPENINGS: what round 74 adds to the opening screen, and the gallery (the CEO's order of
+ * 2026-11-14; richos-hq design/mockups/rounds/round-74).
+ *
+ * `splash.css` is unchanged but for one line (the lamp reads `--ro-lx` / `--ro-ly`). Everything
+ * here hangs off classes `openings.js` adds, so with that file absent none of it applies.
+ *
+ * ALWAYS DARK. The opening screen is (CEO §63), and the gallery shows those screens as they
+ * are, so it is too: every color below is written out and none reads the app's theme. There
+ * is therefore one set of contrast numbers, not two; `tests/openings.js` computes them. The one
+ * thing here that follows the app's theme is the "Your openings" button in Settings.
+ */
+
+/* ------------------------------------------------------------------------------------------
+   1. The light that follows his pointer
+------------------------------------------------------------------------------------------ */
+.ro-pool {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  border-radius: inherit;
+  pointer-events: none;
+  mix-blend-mode: screen;
+  background: radial-gradient(440px circle at var(--ro-px, 40%) var(--ro-py, 30%), rgba(255, 232, 190, 0.09), rgba(255, 232, 190, 0) 72%);
+}
+.ro-glint {
+  pointer-events: none;
+}
+.ro-bar-glint {
+  position: absolute;
+  inset: -2px 0;
+  pointer-events: none;
+  background: radial-gradient(110px 12px at var(--ro-bx, 50%) 50%, rgba(255, 250, 236, 0.95), rgba(255, 244, 214, 0) 100%);
+}
+
+/* ------------------------------------------------------------------------------------------
+   2. The milestone number, as the hero
+------------------------------------------------------------------------------------------ */
+.splash--figure .splash-logo {
+  width: clamp(112px, 19.5vh, 184px);
+}
+.splash--figure .splash-wordmark {
+  width: clamp(260px, 28vw, 400px);
+  margin-top: clamp(16px, 3.4vh, 34px);
+}
+.splash--figure .splash-plinth {
+  padding-top: clamp(28px, 4.6vh, 52px);
+  padding-bottom: clamp(26px, 4.2vh, 46px);
+}
+.splash--figure .splash-rule {
+  margin-top: clamp(14px, 2.6vh, 26px);
+}
+.ro-figure-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin-top: clamp(12px, 2.6vh, 26px);
+  animation-delay: 0.42s;
+}
+.ro-figure {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  font-family: "Newsreader", serif;
+  font-size: clamp(54px, 9.6vh, 88px);
+  line-height: 1.06;
+  letter-spacing: 0.005em;
+  white-space: nowrap;
+  /* Struck gold: lit from above, darker at the foot. The darkest stop is 4.16:1 on the mat. */
+  color: #d2b066;
+  background: linear-gradient(178deg, #f6e6b4 10%, #d2b066 48%, #a07f3a 94%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  transform-origin: 50% 60%;
+}
+/* Written under `.ro-figure` so each relative size names what it is relative to. */
+.ro-figure .ro-figure-unit {
+  font-size: 0.6em;
+  margin: 0.1em 0.08em 0 0;
+}
+.ro-figure .ro-figure-tail {
+  font-size: 0.52em;
+  margin: 0.14em 0 0 0.05em;
+}
+/* HOURS: a wheel for each digit. The strip is a solid gold, not the clipped gradient: a moving
+   child under `background-clip: text` is not repainted reliably by every engine. */
+.ro-wheel {
+  --ro-wheel: 1.06em;
+  display: inline-block;
+  height: var(--ro-wheel);
+  overflow: hidden;
+}
+.ro-wheel-strip {
+  display: block;
+  white-space: pre;
+  line-height: var(--ro-wheel);
+  -webkit-text-fill-color: #dcbf7c;
+  animation: ro-roll 2s cubic-bezier(0.16, 0.84, 0.24, 1) 0.6s both;
+}
+@keyframes ro-roll {
+  from { transform: translateY(0); }
+  to { transform: translateY(var(--ro-roll-to)); }
+}
+.ro-caption {
+  margin-top: clamp(4px, 1vh, 10px);
+  font-family: "Newsreader", serif;
+  font-style: italic;
+  font-size: clamp(20px, 2.9vh, 26px);
+  letter-spacing: 0.01em;
+  color: #dfe4ee;
+  white-space: nowrap;
+}
+
+/* ------------------------------------------------------------------------------------------
+   3. His company's line, the seal, the held line
+------------------------------------------------------------------------------------------ */
+.ro-company {
+  margin-top: 12px;
+  padding-left: 0.26em; /* the tracking's own trailing space, given back so the line is centered */
+  font-size: 16px;
+  letter-spacing: 0.26em;
+  text-transform: uppercase;
+  color: #c2a35c;
+  white-space: nowrap;
+}
+.ro-seal {
+  position: absolute;
+  right: -30px;
+  bottom: -24px;
+  z-index: 3;
+  width: clamp(76px, 11.5vh, 104px);
+  transform: rotate(-8deg);
+  filter: drop-shadow(0 6px 10px rgba(0, 0, 0, 0.55));
+  animation: ro-seal 0.42s cubic-bezier(0.2, 1.25, 0.3, 1) both;
+}
+.ro-seal-svg {
+  width: 100%;
+  height: auto;
+}
+@keyframes ro-seal {
+  from { opacity: 0; transform: scale(1.55) rotate(-20deg); }
+  to { opacity: 1; transform: rotate(-8deg); }
+}
+.ro-collector {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: clamp(14px, 3.4vh, 34px);
+  z-index: 6;
+  display: flex;
+  justify-content: center;
+  gap: 0.7em;
+  font-size: 16px;
+  letter-spacing: 0.08em;
+  color: #b7c2d9;
+  /* Shown the instant the screen is held, with no fade: holding pauses every animation on the
+     splash where it stands (`splash.js` `pauseNow`), and a fade begun by the hold itself would
+     be paused at its first frame. */
+  opacity: 0;
+  pointer-events: none;
+}
+.ro-collector-no {
+  color: #c2a35c;
+}
+.ro-collector-dot {
+  color: #8fa3c6;
+}
+.splash--paused .ro-collector,
+.splash--card .ro-collector {
+  opacity: 1;
+}
+
+/* ------------------------------------------------------------------------------------------
+   4. The landing
+------------------------------------------------------------------------------------------ */
+.ro-fx {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+/* The light the landing throws back on the marks, and the bar keeping its glow afterwards. */
+.splash--landed .splash-logo,
+.splash--landed .splash-wordmark {
+  animation: ro-lit 0.72s ease-out both;
+}
+@keyframes ro-lit {
+  0% { filter: brightness(1); }
+  20% { filter: brightness(1.24); }
+  100% { filter: brightness(1); }
+}
+.splash-bar {
+  transition: filter 0.3s ease;
+}
+.splash--landed .splash-bar {
+  filter: drop-shadow(0 0 7px rgba(214, 182, 110, 0.5));
+}
+/* STRUCK: the top rungs. The frame blazes once and the number is stamped. */
+.splash--struck.splash--landed .splash-plinth::after {
+  animation: ro-struck 0.74s ease-out both;
+}
+@keyframes ro-struck {
+  0% { box-shadow: 0 0 0 1px rgba(246, 226, 170, 0.95), 0 0 30px rgba(232, 200, 120, 0.6); }
+  100% { box-shadow: 0 0 0 0 rgba(246, 226, 170, 0), 0 0 0 rgba(232, 200, 120, 0); }
+}
+.splash--struck.splash--landed .ro-figure {
+  animation: ro-stamp 0.5s cubic-bezier(0.2, 0.9, 0.3, 1) both;
+}
+@keyframes ro-stamp {
+  from { transform: scale(1.075); }
+  to { transform: none; }
+}
+
+/* Settled (the screen leaving, or a still), and no motion for anyone who asked for none. */
+.splash--settled .ro-wheel-strip,
+.splash--settled .ro-seal,
+.splash--settled .ro-figure,
+.splash--settled .splash-logo,
+.splash--settled .splash-wordmark,
+.splash--settled .splash-plinth::after {
+  animation: none !important;
+}
+.splash--settled .ro-wheel-strip {
+  transform: translateY(var(--ro-roll-to));
+}
+@media (prefers-reduced-motion: reduce) {
+  .splash .ro-wheel-strip,
+  .splash .ro-seal,
+  .splash .ro-figure,
+  .splash .splash-logo,
+  .splash .splash-wordmark,
+  .splash .splash-plinth::after {
+    animation: none !important;
+  }
+  .splash .ro-wheel-strip {
+    transform: translateY(var(--ro-roll-to));
+  }
+}
+/* Held means held, for everything this file animates too. `splash.css` says it with one class
+   of weight; the shorthands above come later and would otherwise set their animations running. */
+#splash.splash--paused *,
+#splash.splash--paused *::after {
+  animation-play-state: paused;
+}
+
+/* ------------------------------------------------------------------------------------------
+   5. The handover into the home screen
+------------------------------------------------------------------------------------------ */
+.ro-handover {
+  position: fixed;
+  z-index: 210;
+  height: 2px;
+  border-radius: 1px;
+  background: #c2a35c;
+  box-shadow: 0 0 10px rgba(194, 163, 92, 0.5), 0 0 2px rgba(194, 163, 92, 0.9);
+  transform-origin: 0 50%;
+  pointer-events: none;
+}
+#home-enter.ro-arrived {
+  animation: ro-arrived 0.9s ease-out;
+}
+@keyframes ro-arrived {
+  0% { box-shadow: 0 0 0 0 rgba(232, 200, 120, 0); }
+  18% { box-shadow: 0 0 24px 3px rgba(232, 200, 120, 0.6); }
+  100% { box-shadow: 0 0 0 0 rgba(232, 200, 120, 0); }
+}
+
+/* ------------------------------------------------------------------------------------------
+   6. Your openings: the gallery
+
+   A page of the app, so its type is in rem and follows the user's text size like every other
+   page (16px = 1rem at 100%). The opening screen's own additions above are in px, like the
+   line `splash.css` sets: that screen is one fixed composition.
+------------------------------------------------------------------------------------------ */
+.opg-page {
+  position: fixed;
+  inset: 0;
+  z-index: 150; /* over the whole shell (its highest is 70), under the curtain (200) */
+  display: grid;
+  grid-template-columns: minmax(320px, 400px) 1fr;
+  background-color: #0c1322;
+  background-image: radial-gradient(120% 90% at 30% 20%, rgba(34, 48, 84, 0.55) 0%, rgba(12, 19, 34, 0) 60%);
+  color: #dfe4ee;
+  font-family: var(--font);
+  font-size: 1rem;
+  -webkit-font-smoothing: antialiased;
+}
+.opg-page[hidden] {
+  display: none;
+}
+.opg-side {
+  padding: 44px 36px 36px 48px;
+  overflow-y: auto;
+  border-right: 1px solid rgba(76, 96, 135, 0.28);
+}
+.opg-back {
+  appearance: none;
+  background: none;
+  border: 1px solid #8fa3c6;
+  border-radius: 999px;
+  padding: 8px 18px;
+  font: inherit;
+  color: #dfe4ee;
+  cursor: pointer;
+}
+.opg-back:hover {
+  border-color: #c2a35c;
+  color: #fff;
+}
+.opg-title {
+  margin: 44px 0 0;
+  font-family: "Newsreader", serif;
+  font-weight: 400;
+  font-size: 2.875rem;
+  line-height: 1.05;
+  letter-spacing: -0.005em;
+  color: #eef1f7;
+}
+.opg-lede {
+  margin: 16px 0 0;
+  font-size: 1.125rem;
+  line-height: 1.5;
+  color: #b7c2d9;
+}
+.opg-set {
+  margin-top: 34px;
+  padding-top: 6px;
+  border-top: 1px solid rgba(76, 96, 135, 0.28);
+}
+.opg-set-title {
+  display: block;
+  margin: 24px 0 10px;
+  font-size: 0.875rem; /* a label over its control: the 14px tier */
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: #a9b6d0;
+}
+.opg-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 0;
+  font-size: 1rem;
+  color: #dfe4ee;
+  cursor: pointer;
+}
+.opg-option input {
+  appearance: none;
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  border: 1.5px solid #8fa3c6;
+  border-radius: 50%;
+  background: transparent;
+  cursor: pointer;
+}
+.opg-option input[type="checkbox"] {
+  border-radius: 4px;
+}
+.opg-option input:checked {
+  border-color: #c2a35c;
+  background: radial-gradient(circle, #c2a35c 0 42%, transparent 46%);
+}
+.opg-option input[type="checkbox"]:checked {
+  background: #c2a35c
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 18 18'%3E%3Cpath d='M4 9.4l3.2 3.2L14 5.6' fill='none' stroke='%230c1322' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")
+    center / 16px no-repeat;
+}
+.opg-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  border: 1px solid #8fa3c6;
+  border-radius: 6px;
+  background: rgba(20, 30, 52, 0.8);
+  font: inherit;
+  color: #eef1f7;
+}
+.opg-input::placeholder {
+  color: #9fb0cf;
+}
+.opg-hint {
+  margin: 8px 0 0;
+  font-size: 0.875rem; /* a hint under its field: the 14px tier */
+  line-height: 1.45;
+  color: #a9b6d0;
+}
+.opg-live {
+  min-height: 24px;
+  margin: 22px 0 0;
+  font-size: 1rem;
+  color: #d9bd7a;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+.opg-live--on {
+  opacity: 1;
+}
+.opg-page :focus-visible {
+  outline: 2px solid #e2c98c;
+  outline-offset: 3px;
+}
+
+.opg-wall {
+  overflow-y: auto;
+  padding: 44px 72px 80px 44px; /* the right side leaves the settings button its corner */
+}
+.opg-section + .opg-section {
+  margin-top: 46px;
+}
+.opg-section-title {
+  margin: 0 0 18px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  font-weight: 500;
+  font-size: 0.875rem; /* a section label: the 14px tier; the cards under it carry the content */
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: #c2a35c;
+}
+.opg-section-title::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(to right, rgba(194, 163, 92, 0.4), rgba(194, 163, 92, 0));
+}
+.opg-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(264px, 1fr));
+  gap: 30px 26px;
+}
+.opg-card {
+  min-width: 0;
+}
+.opg-poster {
+  position: relative;
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  overflow: hidden;
+  background: #0c1322;
+  box-shadow: 0 0 0 1px rgba(98, 120, 164, 0.5), 0 18px 34px -18px rgba(0, 0, 0, 0.8);
+  cursor: pointer;
+  transition: box-shadow 0.18s ease, transform 0.18s ease;
+}
+.opg-poster img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+button.opg-poster:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 0 0 1px rgba(194, 163, 92, 0.75), 0 24px 40px -18px rgba(0, 0, 0, 0.85);
+}
+.opg-card--current .opg-poster {
+  box-shadow: 0 0 0 2px #c2a35c, 0 0 28px -6px rgba(194, 163, 92, 0.55), 0 18px 34px -18px rgba(0, 0, 0, 0.8);
+}
+.opg-play-glyph {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 54px;
+  height: 54px;
+  margin: -27px 0 0 -27px;
+  border-radius: 50%;
+  background: rgba(12, 19, 34, 0.78);
+  box-shadow: 0 0 0 1.5px #c2a35c;
+  opacity: 0;
+  transition: opacity 0.16s ease;
+}
+.opg-play-glyph::after {
+  content: "";
+  position: absolute;
+  left: 21px;
+  top: 16px;
+  border-style: solid;
+  border-width: 11px 0 11px 17px;
+  border-color: transparent transparent transparent #e2c98c;
+}
+button.opg-poster:hover .opg-play-glyph,
+button.opg-poster:focus-visible .opg-play-glyph {
+  opacity: 1;
+}
+.opg-tag {
+  position: absolute;
+  left: 10px;
+  top: 10px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: #c2a35c;
+  font-size: 0.875rem; /* a tag on a picture: the 14px tier */
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: #0c1322;
+}
+.opg-tag:empty {
+  display: none;
+}
+.opg-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-top: 14px;
+}
+.opg-no {
+  flex: 0 0 auto;
+  font-size: 1rem;
+  letter-spacing: 0.06em;
+  color: #c2a35c;
+}
+.opg-name {
+  font-family: "Newsreader", serif;
+  font-size: 1.375rem;
+  line-height: 1.2;
+  color: #eef1f7;
+}
+.opg-what,
+.opg-when {
+  margin: 4px 0 0;
+  font-size: 1rem;
+  line-height: 1.4;
+  color: #b7c2d9;
+}
+.opg-when {
+  color: #a9b6d0;
+}
+.opg-acts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 16px;
+  margin-top: 12px;
+}
+.opg-btn {
+  appearance: none;
+  padding: 6px 0;
+  border: 0;
+  border-bottom: 1px solid transparent;
+  background: none;
+  font: inherit;
+  font-size: 1rem;
+  color: #d9bd7a;
+  text-decoration: none;
+  cursor: pointer;
+}
+.opg-btn:hover {
+  border-bottom-color: #d9bd7a;
+}
+.opg-btn--play {
+  padding: 6px 18px;
+  border: 1px solid #c2a35c;
+  border-radius: 999px;
+  color: #eef1f7;
+}
+.opg-btn--play:hover {
+  background: #c2a35c;
+  border-color: #c2a35c;
+  color: #0c1322;
+}
+.opg-btn:disabled {
+  color: #b7c2d9;
+  cursor: default;
+  border-bottom-color: transparent;
+}
+.opg-poster--sealed {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: default;
+  background: repeating-linear-gradient(135deg, rgba(76, 96, 135, 0.1) 0 1px, transparent 1px 9px), #101930;
+  box-shadow: 0 0 0 1px rgba(98, 120, 164, 0.3);
+}
+.opg-sealed-seal {
+  width: 34%;
+  opacity: 0.5;
+  filter: saturate(0.2) drop-shadow(0 6px 10px rgba(0, 0, 0, 0.5));
+}
+.opg-card--sealed .opg-name {
+  color: #b7c2d9;
+}
+
+/* The entry in Settings, beside the splash screen's own switch. It lives in the app's own
+   popover, so unlike the page it reads the app's theme. */
+.openings-open-btn {
+  appearance: none;
+  margin-top: 8px;
+  padding: 7px 16px;
+  border: 1px solid var(--gold);
+  border-radius: 999px;
+  background: none;
+  font: inherit;
+  color: var(--ink);
+  cursor: pointer;
+}
+.openings-open-btn:hover {
+  background: var(--gold-soft);
+}

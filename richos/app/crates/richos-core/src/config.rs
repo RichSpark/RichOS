@@ -14,9 +14,11 @@
 //!     interrupt you?" Quiet / Balanced / Only when it's urgent). Default = Quiet
 //!     (per the CEO decision: the acceptable failure mode is "too quiet," never
 //!     "annoying"). Survives restart.
-//!   - `splash_enabled` — the opening screen's off switch. It lives HERE, beside the
-//!     assertiveness dial, because it is the same kind of thing: a durable CEO
-//!     preference about how the product behaves toward him, not view state.
+//!   - `opening_sound`, `opening_pick`, `opening_company` — the opening screen's settings
+//!     (round 74): whether its sound plays (on unless he switches it off), which opening
+//!     RichOS starts with (one he picked, or one of his each day) and his company's line
+//!     on it. They live HERE, beside the assertiveness dial, because they are the same kind
+//!     of thing: a durable CEO preference about how the product behaves toward him.
 //!   - `techy_default` + `techy_entities` + `techy_threads` — the techy-mode toggle
 //!     (`richos-hq/docs/plans/richos-techy-mode-2026-08-26.md` §3.1), THREE TIERS since
 //!     2026-09-18. Rendering only: routing and retention run ALWAYS (§3.2), which is the
@@ -27,16 +29,12 @@
 //!     point-in-time preference about how the product behaves toward him. It was two
 //!     `const`s in `journal.rs` until 2026-08-30; see the §7.2 note below.
 //!
-//! WHY THE SWITCH IS NOT OPTIONAL, stated where the field is rather than in a design
-//! doc nobody reads at the call site: the splash's failure mode is SILENT. Nobody
-//! writes in to say a splash screen was beneath them — they switch it off, and if
-//! there is nothing to switch, they resent it quietly and we learn nothing
-//! (`docs/design/richos-splash-micro-game-2026-08-30.md` §7, richos-hq). So the
-//! switch is the instrument, and `splash_first_shown_at` / `splash_disabled_at` are
-//! the two timestamps that make §7's primary metric — time-to-disable — actually
-//! derivable rather than gestured at. They are MEASUREMENT, never display: §5 of the
-//! same document bans every counter, streak and score from the CEO's screen, and
-//! nothing reads these two fields back to him.
+//! THE OPENING SCREEN HAS NO OFF SWITCH (CEO, 2026-11-14: "We now also need to remove the
+//! settings toggle for disabling the splash screen. Because the splash screen is now needed
+//! for the illusion of a super-fast app launch."). `splash_enabled` and `splash_disabled_at`
+//! are gone from this file; a config written by an older build that still carries them is
+//! read without them, so a user who had switched the screen off sees it again.
+//! `splash_first_shown_at` stays: MEASUREMENT, never display.
 //!
 //! ## Why the toggle is here and not a ledger event (§3.1)
 //! It is mutable point-in-time PREFERENCE, which is exactly what this file's first
@@ -359,11 +357,14 @@ pub fn initials_from(name: &str) -> Option<String> {
 /// two sides can never drift into showing two different defaults.
 pub const COMPANY_NAME_FALLBACK: &str = "My Company";
 
-/// The splash's default, as a named function because `#[serde(default)]` on a `bool`
-/// means `false` and that is the wrong answer here: a config file written before the
-/// splash existed must read as ENABLED, not as "the CEO turned it off". An absent field
-/// is an absent OPINION, and the product's opinion is on.
-fn splash_default() -> bool {
+/// The longest company line the opening carries (round 74: the field's own limit).
+pub const OPENING_COMPANY_MAX: usize = 32;
+
+/// The opening sound's default, as a named function because `#[serde(default)]` on a `bool`
+/// means `false` and that is the wrong answer here: a config file written before the sound
+/// existed must read as ON (CEO, 2026-11-14: "on by default with the option to turn off in
+/// settings"). An absent field is an absent OPINION, and the product's opinion is on.
+fn opening_sound_default() -> bool {
     true
 }
 
@@ -420,19 +421,26 @@ struct StoredConfig {
     company_name: Option<String>,
     #[serde(default)]
     assertiveness: Assertiveness,
-    /// The opening screen's off switch. Default on; an older config file with no such
-    /// key reads as on (see `splash_default`).
-    #[serde(default = "splash_default")]
-    splash_enabled: bool,
+    /// Whether the opening screen's sound plays. Default on; an older config file with no
+    /// such key reads as on (see `opening_sound_default`).
+    #[serde(default = "opening_sound_default")]
+    opening_sound: bool,
+    /// Which opening RichOS starts with: an opening's id, `"daily"` (one of his, a different
+    /// one each day), or absent (the app's own rule: #1, then #2, then #1).
+    #[serde(default)]
+    opening_pick: Option<String>,
+    /// "A different one each day": the day (days since 1970-01-01, where he is) the last such
+    /// start was on, and the opening it showed. What a later day's opening follows.
+    #[serde(default)]
+    opening_daily: Option<(i64, String)>,
+    /// His company's name as one line on the opening, or absent for none.
+    #[serde(default)]
+    opening_company: Option<String>,
     /// When the splash was first shown to this CEO, in epoch millis. Written ONCE, by
     /// the surface itself, and never again — it is the zero point time-to-disable is
     /// measured from.
     #[serde(default)]
     splash_first_shown_at: Option<u64>,
-    /// When he last switched it OFF, in epoch millis. Cleared when he switches it back
-    /// on, so it never reports a disable that was reversed.
-    #[serde(default)]
-    splash_disabled_at: Option<u64>,
     /// §3.1: the global default. `false`, so a fresh install's conversation surface is
     /// the calm one and Urban's v1 direction needs no amendment (§3.3).
     #[serde(default)]
@@ -592,9 +600,11 @@ impl Default for StoredConfig {
             schema_version: CONFIG_SCHEMA_VERSION,
             company_name: None,
             assertiveness: Assertiveness::default(),
-            splash_enabled: splash_default(),
+            opening_sound: opening_sound_default(),
+            opening_pick: None,
+            opening_daily: None,
+            opening_company: None,
             splash_first_shown_at: None,
-            splash_disabled_at: None,
             techy_default: false,
             techy_threads: BTreeMap::new(),
             techy_entities: BTreeMap::new(),
@@ -971,38 +981,73 @@ impl ConfigStore {
     }
 
     // -----------------------------------------------------------------------------------
-    // The splash's off switch, and the two timestamps that make it measurable
+    // The opening screen's settings (round 74), and when it was first shown
     // -----------------------------------------------------------------------------------
 
-    /// Whether the opening screen shows at launch. Default on.
-    pub fn splash_enabled(&self) -> bool {
-        self.config.splash_enabled
+    /// Whether the opening screen's sound plays. Default on.
+    pub fn opening_sound(&self) -> bool {
+        self.config.opening_sound
     }
 
-    /// Switch the opening screen on or off. Switching OFF stamps `splash_disabled_at`;
-    /// switching back ON clears it, because a disable that was reversed is not a disable
-    /// and reporting it as one would overstate the only metric this field exists to feed.
-    ///
-    /// Setting it to the value it already holds is not a change and does not restamp —
-    /// otherwise a UI that writes the setting on every launch would keep moving the
-    /// timestamp forward and time-to-disable would measure nothing.
-    pub fn set_splash_enabled(&mut self, enabled: bool, now_millis: u64) -> io::Result<()> {
-        if self.config.splash_enabled == enabled {
+    pub fn set_opening_sound(&mut self, on: bool) -> io::Result<()> {
+        if self.config.opening_sound == on {
             return Ok(());
         }
-        self.config.splash_enabled = enabled;
-        self.config.splash_disabled_at = if enabled { None } else { Some(now_millis) };
+        self.config.opening_sound = on;
+        self.persist()
+    }
+
+    /// Which opening RichOS starts with: an opening's id, `"daily"`, or `None` for the app's
+    /// own rule. Whether the id names an opening he has is the reader's question
+    /// (`richos_core::openings`), asked at every pick, so a pick that stops being valid falls
+    /// back to the rule without this file knowing the catalog.
+    pub fn opening_pick(&self) -> Option<&str> {
+        self.config.opening_pick.as_deref()
+    }
+
+    pub fn set_opening_pick(&mut self, pick: Option<&str>) -> io::Result<()> {
+        let pick = pick.map(str::trim).filter(|p| !p.is_empty()).map(str::to_string);
+        if self.config.opening_pick == pick {
+            return Ok(());
+        }
+        self.config.opening_pick = pick;
+        self.persist()
+    }
+
+    /// "A different one each day": the last such day and the opening it showed
+    /// (`openings::daily` reads it).
+    pub fn opening_daily(&self) -> Option<(i64, &str)> {
+        self.config.opening_daily.as_ref().map(|(day, id)| (*day, id.as_str()))
+    }
+
+    /// Written when a start shows the day's opening and at the quit; nothing when unchanged.
+    pub fn set_opening_daily(&mut self, day: i64, id: &str) -> io::Result<()> {
+        if self.opening_daily() == Some((day, id)) {
+            return Ok(());
+        }
+        self.config.opening_daily = Some((day, id.to_string()));
+        self.persist()
+    }
+
+    /// His company's line on the opening, or `None`.
+    pub fn opening_company(&self) -> Option<&str> {
+        self.config.opening_company.as_deref()
+    }
+
+    /// One line, at most [`OPENING_COMPANY_MAX`] characters; empty clears it.
+    pub fn set_opening_company(&mut self, name: &str) -> io::Result<()> {
+        let line: String = name.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(OPENING_COMPANY_MAX).collect();
+        let line = if line.is_empty() { None } else { Some(line) };
+        if self.config.opening_company == line {
+            return Ok(());
+        }
+        self.config.opening_company = line;
         self.persist()
     }
 
     /// The first time the splash was shown, epoch millis, or `None` if it never has been.
     pub fn splash_first_shown_at(&self) -> Option<u64> {
         self.config.splash_first_shown_at
-    }
-
-    /// When he switched it off, epoch millis, or `None` if it is on (or never was off).
-    pub fn splash_disabled_at(&self) -> Option<u64> {
-        self.config.splash_disabled_at
     }
 
     /// Record that the splash has now been shown at least once. Idempotent: the FIRST
@@ -2146,64 +2191,73 @@ mod tests {
     }
 
     #[test]
-    fn the_splash_is_on_by_default_and_an_absent_key_is_not_an_opinion() {
+    fn the_opening_sound_is_on_by_default_and_an_absent_key_is_not_an_opinion() {
         // Two different "no value" cases have to give the same answer, and the second is
         // the one a `#[serde(default)]` bool gets wrong: a config file written before the
-        // splash existed has no key at all, and reading that as `false` would silently
-        // disable a surface for every CEO who already had a config.json.
-        let path = tmp_path("splash-default");
+        // sound existed has no key at all, and reading that as `false` would silence it for
+        // every CEO who already had a config.json.
+        let path = tmp_path("opening-sound-default");
         let fresh = ConfigStore::open(&path).unwrap();
-        assert!(fresh.splash_enabled(), "a brand-new store shows the splash");
+        assert!(fresh.opening_sound(), "a brand-new store plays the sound");
         assert_eq!(fresh.splash_first_shown_at(), None);
-        assert_eq!(fresh.splash_disabled_at(), None);
+        assert_eq!((fresh.opening_pick(), fresh.opening_company()), (None, None));
 
-        let older = tmp_path("splash-older-config");
+        let older = tmp_path("opening-sound-older-config");
         std::fs::write(&older, r#"{"company_name":"Acme","assertiveness":"balanced"}"#).unwrap();
         let store = ConfigStore::open(&older).unwrap();
-        assert!(store.splash_enabled(), "a pre-splash config file reads as ON, not off");
+        assert!(store.opening_sound(), "a config file from before the sound reads as ON, not off");
         assert_eq!(store.company_name(), Some("Acme"));
         assert_eq!(store.assertiveness(), Assertiveness::Balanced);
         let _ = std::fs::remove_file(&older);
     }
 
+    /// CEO, 2026-11-14: "We now also need to remove the settings toggle for disabling the splash
+    /// screen. Because the splash screen is now needed for the illusion of a super-fast app
+    /// launch." A user who had switched it off sees it again: the old keys are read past, there
+    /// is nothing in this store that can say "off", and the next write drops them.
     #[test]
-    fn switching_the_splash_off_survives_restart_and_stamps_when() {
-        let path = tmp_path("splash-off");
+    fn a_config_that_had_the_opening_screen_switched_off_no_longer_says_so() {
+        let path = tmp_path("splash-was-off");
+        std::fs::write(
+            &path,
+            r#"{"company_name":"Acme","splash_enabled":false,"splash_disabled_at":1700000000000,"splash_first_shown_at":1690000000000}"#,
+        )
+        .unwrap();
+        let mut store = ConfigStore::open(&path).unwrap();
+        assert_eq!(store.company_name(), Some("Acme"), "the rest of his settings are read as before");
+        assert_eq!(store.splash_first_shown_at(), Some(1_690_000_000_000));
+        assert!(store.opening_sound(), "the switch that replaced it is the sound's, and it is on");
+        store.set_opening_sound(false).unwrap();
+        let on_disk: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(on_disk.get("splash_enabled"), None, "the off switch is not written back");
+        assert_eq!(on_disk.get("splash_disabled_at"), None);
+        assert_eq!(on_disk.get("opening_sound").and_then(|v| v.as_bool()), Some(false));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn the_opening_settings_survive_restart() {
+        let path = tmp_path("opening-settings");
         {
             let mut store = ConfigStore::open(&path).unwrap();
-            store.set_splash_enabled(false, 1_700_000_000_000).unwrap();
+            store.set_opening_sound(false).unwrap();
+            store.set_opening_pick(Some("power-100k")).unwrap();
+            store.set_opening_company("  Acme   Robotics, a company with a very long name indeed  ").unwrap();
         }
-        let reopened = ConfigStore::open(&path).unwrap();
-        assert!(!reopened.splash_enabled(), "off stays off across a relaunch");
-        assert_eq!(reopened.splash_disabled_at(), Some(1_700_000_000_000));
-        let _ = std::fs::remove_file(&path);
-    }
-
-    #[test]
-    fn a_reversed_disable_is_not_reported_as_a_disable() {
-        // Time-to-disable is the whole point of the timestamp. A CEO who switched it off,
-        // looked, and switched it back on has NOT disabled the surface, and leaving the
-        // stamp behind would count him as though he had.
-        let path = tmp_path("splash-reversed");
-        let mut store = ConfigStore::open(&path).unwrap();
-        store.set_splash_enabled(false, 1_700_000_000_000).unwrap();
-        assert_eq!(store.splash_disabled_at(), Some(1_700_000_000_000));
-        store.set_splash_enabled(true, 1_700_000_060_000).unwrap();
-        assert!(store.splash_enabled());
-        assert_eq!(store.splash_disabled_at(), None);
-        let _ = std::fs::remove_file(&path);
-    }
-
-    #[test]
-    fn setting_the_switch_to_what_it_already_is_never_moves_the_clock() {
-        // The UI syncs this preference on every launch. If an idempotent write restamped,
-        // the disable timestamp would walk forward with every relaunch and measure the
-        // last launch rather than the decision.
-        let path = tmp_path("splash-idempotent");
-        let mut store = ConfigStore::open(&path).unwrap();
-        store.set_splash_enabled(false, 1_700_000_000_000).unwrap();
-        store.set_splash_enabled(false, 1_799_999_999_999).unwrap();
-        assert_eq!(store.splash_disabled_at(), Some(1_700_000_000_000));
+        let mut reopened = ConfigStore::open(&path).unwrap();
+        assert!(!reopened.opening_sound(), "off stays off across a relaunch");
+        assert_eq!(reopened.opening_pick(), Some("power-100k"));
+        assert_eq!(reopened.opening_company(), Some("Acme Robotics, a company with a "), "one line, 32 characters");
+        reopened.set_opening_pick(Some("daily")).unwrap();
+        assert_eq!(reopened.opening_pick(), Some("daily"));
+        assert_eq!(reopened.opening_daily(), None);
+        reopened.set_opening_daily(20_772, "midnight-suede").unwrap();
+        assert_eq!(ConfigStore::open(&path).unwrap().opening_daily(), Some((20_772, "midnight-suede")));
+        reopened.set_opening_pick(None).unwrap();
+        reopened.set_opening_company("   ").unwrap();
+        reopened.set_opening_sound(true).unwrap();
+        let again = ConfigStore::open(&path).unwrap();
+        assert_eq!((again.opening_pick(), again.opening_company(), again.opening_sound()), (None, None, true));
         let _ = std::fs::remove_file(&path);
     }
 
@@ -2327,7 +2381,7 @@ mod tests {
         // ...while the fields whose worst case is a lost preference still take their
         // defaults, exactly as they did before.
         assert_eq!(store.assertiveness(), Assertiveness::Quiet);
-        assert!(store.splash_enabled());
+        assert!(store.opening_sound());
         let _ = std::fs::remove_file(&path);
     }
 
@@ -2338,9 +2392,8 @@ mod tests {
         let store = ConfigStore::open(&path).unwrap();
         assert_eq!(store.assertiveness(), Assertiveness::Quiet);
         assert_eq!(store.company_name(), None);
-        // And the splash degrades to ON, not off — a corrupt preferences file must not be
-        // able to silently remove a surface.
-        assert!(store.splash_enabled());
+        // And the opening's sound degrades to its default, on.
+        assert!(store.opening_sound());
         let _ = std::fs::remove_file(&path);
     }
 
@@ -2365,7 +2418,7 @@ mod tests {
 
     #[test]
     fn a_config_written_before_theming_existed_reads_as_system() {
-        // The `splash_enabled` lesson, applied, with §63's answer rather than §15's: an
+        // The absent-key lesson (`opening_sound_default`), applied, with §63's answer rather than §15's: an
         // ABSENT key is an absent OPINION, and an absent opinion about lighting belongs to
         // the operating system. A file from before this field existed must not read as "the
         // CEO chose light" NOR as "the CEO chose dark" — nobody chose, and §63 is what an
@@ -2869,7 +2922,7 @@ mod tests {
             let mut store = ConfigStore::open(&path).unwrap();
             store.set_font_scale(120).unwrap();
             store.set_company_name("Booster Labs").unwrap();
-            store.set_splash_enabled(false, 1).unwrap();
+            store.set_opening_sound(false).unwrap();
         }
         // The newer build comes back and finds its own values where it left them.
         let on_disk: serde_json::Value =
@@ -2879,7 +2932,7 @@ mod tests {
         // And the older build's own work is there too.
         assert_eq!(on_disk.get("font_scale").and_then(|v| v.as_u64()), Some(120));
         assert_eq!(on_disk.get("company_name").and_then(|v| v.as_str()), Some("Booster Labs"));
-        assert_eq!(on_disk.get("splash_enabled").and_then(|v| v.as_bool()), Some(false));
+        assert_eq!(on_disk.get("opening_sound").and_then(|v| v.as_bool()), Some(false));
         let _ = std::fs::remove_file(&path);
     }
 
@@ -2932,7 +2985,7 @@ mod tests {
 
     /// **Hunt part 1 v3, finding 38.** A refused change leaves memory as it was, so an
     /// identical retry is refused too instead of finding "already set" and answering `Ok`
-    /// about a preference that was never written. Theme, type size and splash skip an
+    /// about a preference that was never written. Theme, type size and the opening's sound skip an
     /// unchanged value, which is where the false success came from.
     #[test]
     fn a_refused_change_is_refused_again_on_an_identical_retry_and_memory_keeps_the_old_value() {
@@ -2945,8 +2998,8 @@ mod tests {
         assert!(store.set_theme(Theme::Light).is_err(), "the identical retry reported 'saved'");
         assert!(store.set_font_scale(120).is_err());
         assert!(store.set_font_scale(120).is_err(), "the identical type-size retry reported 'saved'");
-        assert!(store.set_splash_enabled(false, 1).is_err());
-        assert!(store.set_splash_enabled(false, 2).is_err(), "the identical splash retry reported 'saved'");
+        assert!(store.set_opening_sound(false).is_err());
+        assert!(store.set_opening_sound(false).is_err(), "the identical sound retry reported 'saved'");
         assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
         assert_eq!(ConfigStore::open(&path).unwrap().theme(), Theme::System);
         drop(std::fs::remove_file(&path));

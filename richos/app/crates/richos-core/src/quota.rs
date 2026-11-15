@@ -1734,6 +1734,13 @@ impl Service {
         }
     }
 
+    /// Dollars of AI power harnessed, all time, AS ALREADY COUNTED: `None` until the whole
+    /// history has been read once. It starts no read and waits for none, so the quit may ask
+    /// (the openings a user has earned, `src-tauri/src/openings.rs`).
+    pub fn spend_all_time_counted(&self) -> Option<f64> {
+        self.spend.ready().then(|| self.spend.totals(0).cost)
+    }
+
     /// The spend screen's live line: the agents working at the shell's last count, the latest
     /// request, and how many have been counted ever (more than the snapshot's: Refresh's dot).
     pub fn spend_live(&self) -> crate::spend::ledger::SpendLive {

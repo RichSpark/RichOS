@@ -1971,6 +1971,10 @@ t "home standard walk: the fictional SwearMeter history (a count per month, none
   PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/home-standard-walk.test.py" >"$TMP/home-standard-walk.log" 2>&1; ok $? "$(cat "$TMP/home-standard-walk.log")"
 t_done
 
+t "openings walk: the opening a day expects (the guest's local day), what 430 days earn by the catalog, argument refusals"
+  PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/openings-walk.test.py" >"$TMP/openings-walk.log" 2>&1; ok $? "$(cat "$TMP/openings-walk.log")"
+t_done
+
 t "no-grant reader: RichOS's Accessibility requests and macOS's request window, one line each, from the TCC log"
   PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/no-grant-reader.test.py" >"$TMP/no-grant-reader.log" 2>&1; ok $? "$(cat "$TMP/no-grant-reader.log")"
 t_done

@@ -644,7 +644,7 @@ fn configuration(scope: &Scope, ctx: &Context, budget: &mut u64) -> Item {
         format!("Technical view, default for conversations: {}", onoff(v["techy_default"].as_bool())),
         format!("Theme: {}", v["theme"].as_str().unwrap_or("not set (follows the Mac)")),
         format!("Text size: {}%", v["font_scale"].as_u64().unwrap_or(100)),
-        format!("Opening screen: {}", onoff(v["splash_enabled"].as_bool().or(Some(true)))),
+        format!("Splash screen sound: {}", onoff(v["opening_sound"].as_bool().or(Some(true)))),
         "These are the settings as they are now. They do not show what they were when the problem happened.".to_string(),
     ];
     item.summary = "Current settings (not a history).".into();
