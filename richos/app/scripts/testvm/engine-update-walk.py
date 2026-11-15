@@ -30,8 +30,11 @@ STEPS, in the guest, never on the host's screen (CEO ruling §65):
              ("There's a bit of setting up to do first.") is never on screen, read by the
              accessibility tree every second and by OCR on a frame every few seconds. 15 s after
              going in, while the install still runs, a message is sent with real keys and ONE
-             Return, never sent again, and must be answered (TurnCompleted with Rich's text) BEFORE the install ends: he never waits
-             on it. After the install the window must ask voice again (a new `[richos] voice:`
+             Return, never sent again, and must be answered (TurnCompleted with Rich's text); it
+             must go to the model BEFORE the install ends (the app's own log, in order: the
+             "visible input sent to the model" line before the install's done line), so he never
+             waits on it. An install already over at the send is reported, and the message must
+             still be answered. After the install the window must ask voice again (a new `[richos] voice:`
              line within 15 s), so Talk to Rich works with no relaunch. The stamp then carries
              --next-sha256 (photographed)
 
@@ -70,6 +73,7 @@ STARTED = '[richos] engine update: the installed engine is an earlier build'
 DONE = "[richos] engine update: this build's engine is installed and in use"
 FAILED = '[richos] engine update FAILED'
 REPLY_WORDS = 'Reply with one word: received.'
+TO_MODEL = 'reply timing: visible input sent to the model'  # native.rs, once per turn sent
 SWAPPED = '[richos] setup: engine '
 
 
@@ -87,6 +91,14 @@ def stamp_digest(text):
     m = re.search(r'^sha256\s+([0-9a-fA-F]{64})\s*$', text, re.M)
     return m.group(1).lower() if m else ''
 
+
+
+def sent_before_done(log):
+    """Whether, in this stretch of the app's log, a turn went to the model (TO_MODEL) before the
+    install's done line, or with the install not yet done at all: the message was not held."""
+    to_model = log.find(TO_MODEL)
+    done = log.find(DONE)
+    return to_model >= 0 and (done < 0 or to_model < done)
 
 class EngineUpdateWalk(new_user.NewUserWalk):
     def __init__(self, a):
@@ -195,19 +207,28 @@ class EngineUpdateWalk(new_user.NewUserWalk):
             # a sheet that comes up on going in (a build without this change: 12.6 s) is seen
             # first.
             elif entered is not None and reply is None and time.monotonic() - began >= entered + 15:
-                if DONE in text:
-                    raise StepFailed('the install finished before the walk could send a message during it')
+                # An install that is over before the send leaves nothing to wait on: the message is
+                # still sent and must be answered, and the report says the install was already done
+                # (an install can end inside the 15 s).
+                done_before_send = DONE in text
+                offset = len(text)
                 sent = time.monotonic()
                 outcome, _ = self.send(REPLY_WORDS, 'reply-during-update', self.a.turn_within)
                 after = self.read_log(self.next_log)
+                # HELD OR NOT is read from the app's own log, in its order: the turn went to the
+                # model (TO_MODEL, printed when the input is sent) before or after the install's
+                # done line. A turn sent during the install whose answer simply takes longer than
+                # the rest of the install was not held.
                 reply = {'sent_at_s': round(sent - began, 1), 'seconds': round(time.monotonic() - sent, 1),
                          'received': self.received(REPLY_WORDS), 'outcome': outcome,
-                         'install_done_when_answered': DONE in after}
+                         'install_done_before_send': done_before_send,
+                         'install_done_when_answered': DONE in after,
+                         'sent_to_model_before_install_done': not done_before_send and sent_before_done(after[offset:])}
                 (self.out / 'next.log').write_text(after)
                 if not outcome or outcome.get('state') != 'completed' or not outcome.get('rich_wrote'):
                     raise StepFailed('the message sent during the install was not answered: ' + json.dumps(reply))
-                if reply['install_done_when_answered']:
-                    raise StepFailed('the message was answered only after the install ended: ' + json.dumps(reply))
+                if not done_before_send and reply['install_done_when_answered'] and not reply['sent_to_model_before_install_done']:
+                    raise StepFailed('the message went to the model only after the install ended (held): ' + json.dumps(reply))
                 continue
             n += 1
             # A frame every fourth read (OCR costs seconds); the tree every read.
