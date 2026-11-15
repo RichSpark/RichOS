@@ -2,6 +2,19 @@
 
 What changed in each RichOS nightly build from 1.2.1-nightly.20261019.67 on, newest first; stable versions are in the [changelog](CHANGELOG.md).
 
+## 1.3.4-nightly.20261115.101
+
+[GitHub release](https://github.com/RichSpark/RichOS/releases/tag/v1.3.4-nightly.20261115.101)
+
+- Added Make a video on every screen besides the home screen, at the top right of Settings: it records RichOS as you use it, text you highlight included, with or without your voice and the mouse pointer until you press the red Stop beside the settings button, then lets you watch it and save it as a video file
+- Added a Git tab to the Output panel: it shows the history of the repositories connected to the chat's company, either just the changes Rich's team made from this chat or the whole history, with each change shown before and after side by side; View Changes on a text file the team changed opens it the same way
+- Added a Git button to RichFiles that opens the same history and side-by-side changes for the repository of the folder you are in
+- Added Filter by filename above the list of a chat's files in the Output panel
+- Added Rich's team reading any website in the browser you are already signed in to, such as your store's admin or a report behind your sign-in: it opens the page in the background, presses only what shows more of the page, such as a tab or a closed panel, never anything that sends, saves, buys, deletes or posts and closes only the tabs it opened
+- Fixed RichCleaner's own window not closing with its red close button; Escape now closes it too
+- Fixed turning on your voice in Make a video making RichOS think a call had started and offer to take notes
+- [technical] Added the Git view's timings to RichDoctor's reports, alongside RichFiles' other timings
+
 ## 1.3.3-nightly.20261115.100
 
 [GitHub release](https://github.com/RichSpark/RichOS/releases/tag/v1.3.3-nightly.20261115.100)
