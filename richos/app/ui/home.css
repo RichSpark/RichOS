@@ -1574,3 +1574,739 @@ body.home-open {
 /* ROUND 72: over a picture read from his repositories the "learned from" line is not shown. The
    engine names a teammate at random for each source, which over his own data is a made-up event. */
 #home.home-from-repos #home-ticker { display: none; }
+
+/* =============================================================================================
+   THE STAGES (round 75, CEO 2026-11-14; `home-growth.js`): the invitation, "See it finished", the
+   distance line and its card, the two presses, the sentence under the core, the caption and the
+   replay's counter. The numbers in the comments are the design's sections. The home screen is
+   always dark, so one theme; the ratios are measured in `tests/home-growth.js`.
+   ============================================================================================= */
+
+/* 2.1: the invitation under the first-run banner (first launch only) */
+.grow-invite {
+  display: block;
+  margin: 4px 0 0;
+  font-style: italic;
+  color: var(--t1);
+}
+#home.grow-on .grow-invite { display: none; }
+
+/* 2.3: "Example", on the app's own banner, for as long as the example is lit */
+.grow-example-word,
+.grow-example-bar { display: none; }
+#home.grow-finished .grow-example-word {
+  display: block;
+  margin: 0 0 6px;
+  font-family: var(--caps);
+  font-size: 18px;
+  font-weight: 500;
+  letter-spacing: 0.26em;
+  text-transform: uppercase;
+  color: var(--gold);
+}
+#home.grow-finished .grow-example-bar {
+  display: block;
+  height: 2px;
+  margin-top: 12px;
+  background: var(--gold);
+  transform-origin: right center;
+}
+.grow-example-bar.run { animation: grow-drain 10s linear forwards; }
+@keyframes grow-drain {
+  from { transform: scaleX(1); }
+  to { transform: scaleX(0); }
+}
+
+/* 3.3: the distance line, under the brand line */
+#home.grow-on #home-signals { top: calc(168px + 40px + var(--home-top-inset)); }
+.grow-distance {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  margin: 10px 0 0 -11px;
+  padding: 5px 11px 6px;
+  border: 1px solid transparent;
+  border-radius: 17px;
+  background: none;
+  font-family: var(--serif);
+  font-size: 18px;
+  line-height: 1.2;
+  letter-spacing: 0.005em;
+  color: var(--t2);
+  pointer-events: auto;
+  cursor: pointer;
+  transition: border-color 0.2s ease, color 0.2s ease;
+}
+.grow-distance[hidden] { display: none; }
+.grow-distance b {
+  font-weight: 500;
+  color: var(--t1);
+  font-variant-numeric: lining-nums tabular-nums;
+}
+.grow-distance .chev {
+  margin-left: 3px;
+  color: var(--gold);
+  font-size: 20px;
+  line-height: 1;
+}
+.grow-distance:hover,
+.grow-distance[aria-expanded="true"] {
+  border-color: rgba(194, 163, 92, 0.75);
+  color: var(--t1);
+}
+.grow-distance:focus-visible {
+  outline: 2px solid var(--gold);
+  outline-offset: 2px;
+}
+
+/* the card behind it */
+.grow-card {
+  position: absolute;
+  left: 23px;
+  top: 220px;
+  width: 520px;
+  z-index: 12;
+  padding: 22px 26px 22px;
+  border-radius: 16px;
+  border: 1px solid #5d7098;
+  background: rgba(12, 19, 34, 0.975);
+  box-shadow: 0 22px 70px rgba(0, 0, 0, 0.6);
+}
+.grow-card[hidden] { display: none; }
+.grow-card h2 {
+  margin: 0 0 12px;
+  font-family: var(--serif);
+  font-weight: 400;
+  font-size: 24px;
+  line-height: 1.25;
+  color: var(--t1);
+}
+.grow-card ol {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.grow-card li {
+  display: flex;
+  align-items: baseline;
+  gap: 13px;
+  padding: 6px 0;
+}
+.grow-card .mark {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  border: 1.5px solid #8091b3;
+  transform: translateY(-1px);
+}
+.grow-card li.reached .mark {
+  border-color: #f2e2bc;
+  background: #f2e2bc;
+  box-shadow: 0 0 10px 2px rgba(242, 226, 188, 0.55);
+}
+.grow-card li.next .mark { border-color: var(--gold); }
+.grow-card .tx {
+  font-family: var(--serif);
+  font-size: 17px;
+  line-height: 1.4;
+  color: var(--t2);
+}
+.grow-card .tx b {
+  font-weight: 500;
+  color: var(--t1);
+}
+.grow-card li.ahead .tx,
+.grow-card li.ahead .tx b { color: var(--t3); }
+.grow-card li.next .tx b { color: var(--gold); }
+.grow-card .grows {
+  margin: 14px 0 0;
+  padding-top: 14px;
+  border-top: 1px solid rgba(93, 112, 152, 0.6);
+  font-family: var(--serif);
+  font-size: 16px;
+  line-height: 1.55;
+  color: var(--t2);
+}
+
+/* 2.3 and 3.5: the two presses */
+.grow-press {
+  flex: none;
+  margin-left: 12px;
+  padding: 6px 14px 7px;
+  border-radius: 16px;
+  border: 1px solid rgba(194, 163, 92, 0.75);
+  background: rgba(12, 19, 34, 0.9);
+  color: var(--t1);
+  font-family: var(--sans);
+  font-size: 16px;
+  font-weight: 400;
+  line-height: 1.15;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  pointer-events: auto;
+  cursor: pointer;
+  transition: background 0.2s ease, border-color 0.2s ease;
+}
+.grow-press:hover { background: #30302e; border-color: var(--gold); } /* the gold at a fifth over the ground, solid, so the label never stands on the picture */
+.grow-press:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+.grow-press:disabled { opacity: 0.45; cursor: default; }
+.grow-press[hidden] { display: none; }
+#home-legend .row { min-height: 31px; }
+.grow-solo {
+  position: absolute;
+  left: 34px;
+  bottom: 34px;
+  z-index: 5;
+  margin: 0;
+  box-shadow: 0 0 14px 6px rgba(12, 19, 34, 0.8), 0 0 34px 18px rgba(12, 19, 34, 0.5);
+  display: none;
+}
+.grow-solo.on { display: block; }
+
+/* 2.2 and 3.6: the sentence under the core */
+#home.grow-moment-on #home-ghost-note { display: none; }
+.grow-moment {
+  position: absolute;
+  left: 50%;
+  top: 60%;
+  transform: translate(-50%, 0);
+  width: 720px;
+  max-width: calc(100vw - 80px);
+  box-sizing: border-box;
+  padding: 14px 30px 16px;
+  border-radius: 18px;
+  text-align: center;
+  z-index: 6;
+  background: rgba(12, 19, 34, 0.9);
+  box-shadow: 0 0 14px 6px rgba(12, 19, 34, 0.8), 0 0 34px 18px rgba(12, 19, 34, 0.5);
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.9s ease, visibility 0s linear 0.9s;
+}
+.grow-moment.on {
+  opacity: 1;
+  visibility: visible;
+  transition: opacity 0.9s ease;
+}
+.grow-moment p { margin: 0; }
+.grow-moment .title {
+  font-family: var(--caps);
+  font-size: 16px;
+  font-weight: 500;
+  letter-spacing: 0.26em;
+  text-transform: uppercase;
+  color: var(--gold);
+}
+.grow-moment .title:empty { display: none; }
+.grow-moment .line {
+  margin-top: 8px;
+  font-family: var(--serif);
+  font-size: 26px;
+  line-height: 1.4;
+  letter-spacing: 0.004em;
+  color: var(--t1);
+}
+.grow-moment .title:empty + .line { margin-top: 0; }
+.grow-moment .offer { margin: 12px 0 0; }
+.grow-moment .next {
+  font-family: var(--serif);
+  font-style: italic;
+  font-size: 17px;
+  line-height: 1.4;
+  color: var(--t2);
+}
+.grow-moment .next:empty { display: none; }
+.grow-moment .next:not(:empty) { margin-top: 10px; }
+#home.grow-replaying .grow-moment { opacity: 0; visibility: hidden; }
+
+/* 3.4 and 4.3: the caption, where "Newest" stands */
+#home.grow-caption-on #home-arrived,
+#home.grow-replaying #home-arrived { display: none; }
+.grow-caption {
+  position: absolute;
+  right: 22px;
+  bottom: 22px;
+  max-width: 520px;
+  padding: 12px;
+  border-radius: 10px;
+  background: rgba(12, 19, 34, 0.9);
+  box-shadow: 0 0 14px 6px rgba(12, 19, 34, 0.8), 0 0 34px 18px rgba(12, 19, 34, 0.5);
+  z-index: 5;
+  text-align: right;
+  pointer-events: none;
+  user-select: none;
+  font-family: var(--serif);
+  font-size: 17px;
+  line-height: 1.4;
+  color: var(--t1);
+  opacity: 0;
+  transition: opacity 0.6s ease;
+}
+.grow-caption.on { opacity: 1; }
+
+/* 3.5: the replay's counter and its last frame */
+.grow-replay {
+  position: absolute;
+  left: 50%;
+  bottom: 112px; /* clear of the legend's two lines, which stay up: a recording keeps "Example, not yours" */
+  transform: translate(-50%, 0);
+  min-width: 300px;
+  padding: 14px 30px 16px;
+  border-radius: 18px;
+  text-align: center;
+  white-space: nowrap;
+  z-index: 6;
+  background: rgba(12, 19, 34, 0.9);
+  box-shadow: 0 0 14px 6px rgba(12, 19, 34, 0.8), 0 0 34px 18px rgba(12, 19, 34, 0.5);
+  pointer-events: none;
+  user-select: none;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.5s ease, visibility 0s linear 0.5s;
+}
+.grow-replay.on {
+  opacity: 1;
+  visibility: visible;
+  transition: opacity 0.5s ease;
+}
+.grow-replay .stage {
+  min-height: 20px;
+  font-family: var(--caps);
+  font-size: 16px;
+  font-weight: 500;
+  letter-spacing: 0.26em;
+  text-transform: uppercase;
+  color: var(--gold);
+}
+.grow-replay .line {
+  margin-top: 4px;
+  font-family: var(--serif);
+  font-size: 24px;
+  line-height: 1.3;
+  color: var(--t1);
+  font-variant-numeric: lining-nums tabular-nums;
+  transition: font-size 0.5s ease;
+}
+.grow-replay.last .stage { display: none; }
+.grow-replay.last .line { margin-top: 0; font-size: 34px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .grow-example-bar.run { animation: none; }
+}
+
+/* The legend's plate is feathered on every side: with his river running behind it, its straight
+   edges read as a box cut out of the picture. The text and the two presses stand on the full
+   plate (0.9 of the ground, as in the app); only the margin around them falls away. */
+#home.grow-on #home-legend {
+  padding-right: 20px;
+  background: none;
+  box-shadow: none;
+}
+#home.grow-on #home-legend::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  inset: -34px -96px -30px -30px;
+  background: rgba(12, 19, 34, 0.9);
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 30px, #000 calc(100% - 96px), transparent),
+    linear-gradient(to bottom, transparent, #000 34px, #000 calc(100% - 30px), transparent);
+  mask-image: linear-gradient(to right, transparent, #000 30px, #000 calc(100% - 96px), transparent),
+    linear-gradient(to bottom, transparent, #000 34px, #000 calc(100% - 30px), transparent);
+  -webkit-mask-composite: source-in;
+  mask-composite: intersect;
+  pointer-events: none;
+}
+
+/* =============================================================================================
+   MAKE A VIDEO (round 77, CEO 2026-11-14; `home-video.js`): one button, top right, that opens
+   three choices; the count; the sheet with the video he made. The home screen is always dark, so
+   one theme; the ratios are measured in `tests/home-video.js`.
+   ============================================================================================= */
+
+#home {
+  --hv-red: #ff6b5e;
+  --hv-edge: #5d7098;
+  --hv-plate: rgba(12, 19, 34, 0.94);
+}
+
+/* ---- shared pieces ------------------------------------------------------------------------- */
+
+/* the red light: on the button only while it records, and it beats */
+.hv-light {
+  flex: none;
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--hv-red);
+}
+#home.hv-rec .hv-make .hv-light {
+  animation: hv-beat 1.2s ease-in-out infinite;
+}
+@keyframes hv-beat {
+  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(255, 107, 94, 0.55); }
+  50% { opacity: 0.55; box-shadow: 0 0 0 7px rgba(255, 107, 94, 0); }
+}
+
+.hv-ico {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.hv-ico path.f { fill: currentColor; stroke-width: 1; }
+
+/* five bars that move with his voice */
+.hv-level {
+  display: none;
+  align-items: flex-end;
+  gap: 3px;
+  height: 18px;
+}
+#home.hv-mic-on .hv-level { display: inline-flex; }
+.hv-level i {
+  display: block;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--hv-edge);
+  transition: background 0.08s linear;
+}
+.hv-level i:nth-child(1) { height: 6px; }
+.hv-level i:nth-child(2) { height: 9px; }
+.hv-level i:nth-child(3) { height: 12px; }
+.hv-level i:nth-child(4) { height: 15px; }
+.hv-level i:nth-child(5) { height: 18px; }
+.hv-level i.on { background: var(--gold); }
+
+.hv-make:focus-visible,
+.hv-panel button:focus-visible,
+.hv-sheet button:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+
+/* plain and main buttons */
+.hv-plain,
+.hv-main {
+  height: 40px;
+  padding: 0 18px;
+  border-radius: 20px;
+  border: 1px solid var(--hv-edge);
+  background: var(--hv-plate);
+  color: var(--t1);
+  font-family: var(--sans);
+  font-size: 16px;
+  line-height: 1;
+  white-space: nowrap;
+  pointer-events: auto;
+  cursor: pointer;
+  transition: border-color 0.2s ease, background 0.2s ease;
+}
+.hv-plain:hover { border-color: var(--gold); background: #30302e; }
+.hv-main {
+  border-color: var(--gold);
+  background: var(--gold);
+  color: #0c1322;
+  font-weight: 600;
+}
+.hv-main:hover { background: #d3b671; border-color: #d3b671; }
+.hv-main[hidden],
+.hv-plain[hidden] { display: none; }
+
+.hv-time {
+  font-variant-numeric: tabular-nums;
+  color: var(--t1);
+}
+
+/* the count */
+.hv-count {
+  position: absolute;
+  left: 50%;
+  top: 45%;
+  transform: translate(-50%, -50%);
+  z-index: 15;
+  text-align: center;
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+}
+.hv-count.on { opacity: 1; visibility: visible; }
+.hv-count .n {
+  font-family: var(--serif);
+  font-weight: 300;
+  font-size: 190px;
+  line-height: 1;
+  color: var(--t1);
+  font-variant-numeric: lining-nums;
+  width: 320px;
+  height: 320px;
+  margin: 0 auto -50px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(circle, rgba(12, 19, 34, 0.92) 0%, rgba(12, 19, 34, 0.8) 38%, rgba(12, 19, 34, 0) 70%);
+}
+.hv-count .n.beat { animation: hv-count 0.8s cubic-bezier(0.2, 0.7, 0.2, 1) both; }
+@keyframes hv-count {
+  from { transform: scale(1.35); opacity: 0; }
+  30% { opacity: 1; }
+  to { transform: scale(1); opacity: 1; }
+}
+.hv-count .l {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
+  padding: 10px 22px 12px;
+  border-radius: 18px;
+  background: rgba(12, 19, 34, 0.9);
+  box-shadow: 0 0 14px 6px rgba(12, 19, 34, 0.8), 0 0 34px 18px rgba(12, 19, 34, 0.5);
+  font-family: var(--serif);
+  font-size: 20px;
+  line-height: 1.3;
+  color: var(--t1);
+}
+.hv-count .voice {
+  display: none;
+  align-items: center;
+  gap: 9px;
+  font-family: var(--sans);
+  font-size: 16px;
+  color: var(--t1);
+}
+.hv-count .voice .hv-ico { color: var(--gold); }
+#home.hv-mic-on .hv-count .voice { display: inline-flex; }
+
+/* the sheet: the video he just made, and what to do with it */
+.hv-sheet {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(5, 8, 16, 0.8);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+  pointer-events: auto;
+  animation: hv-in 0.3s ease both;
+}
+.hv-sheet[hidden] { display: none; }
+@keyframes hv-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.hv-sheet .card {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  width: min(880px, calc(100vw - 80px));
+  padding: 22px 22px 22px;
+  border-radius: 20px;
+  border: 1px solid var(--hv-edge);
+  background: #0c1322;
+  box-shadow: 0 30px 90px rgba(0, 0, 0, 0.7);
+}
+.hv-sheet video {
+  display: block;
+  width: 100%;
+  max-height: calc(100vh - 290px);
+  border-radius: 12px;
+  background: #060a14;
+  object-fit: contain;
+}
+.hv-sheet video[hidden] { display: none; }
+.hv-sheet.square .card { width: min(620px, calc(100vw - 80px)); }
+.hv-sheet.tall .card {
+  flex-direction: row;
+  align-items: center;
+  gap: 30px;
+  width: auto;
+  max-width: calc(100vw - 80px);
+}
+.hv-sheet.tall video {
+  width: auto;
+  height: calc(100vh - 150px);
+  max-height: 760px;
+}
+.hv-sheet.tall .side { width: 380px; padding-right: 14px; }
+.hv-sheet .side { padding: 0 6px 2px; }
+.hv-sheet h2 {
+  margin: 0;
+  font-family: var(--serif);
+  font-weight: 400;
+  font-size: 28px;
+  line-height: 1.25;
+  color: var(--t1);
+  font-variant-numeric: lining-nums;
+}
+.hv-sheet .meta,
+.hv-sheet .saved,
+.hv-sheet .none {
+  margin: 6px 0 0;
+  font-family: var(--sans);
+  font-size: 16px;
+  line-height: 1.45;
+  color: var(--t2);
+  font-variant-numeric: tabular-nums;
+}
+.hv-sheet .saved { color: var(--gold); overflow-wrap: anywhere; }
+.hv-sheet .saved[hidden],
+.hv-sheet .none[hidden] { display: none; }
+.hv-sheet .none { padding: 60px 30px; text-align: center; }
+.hv-sheet .row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 18px;
+}
+.hv-sheet .row button { height: 44px; padding: 0 22px; border-radius: 22px; }
+
+/* ---- the button, top right --------------------------------------------------------------------- */
+
+.hv-make {
+  position: absolute;
+  top: 18px;
+  right: 70px; /* the settings button is 40px wide, 18px from the edge */
+  z-index: 14;
+  display: none; /* there once the picture has a memory of his (`#home.hv-on`) */
+  align-items: center;
+  gap: 9px;
+  height: 40px;
+  padding: 0 17px 0 13px;
+  border-radius: 20px;
+  border: 1px solid var(--hv-edge);
+  background: var(--hv-plate);
+  color: var(--t1);
+  font-family: var(--sans);
+  font-size: 16px;
+  line-height: 1;
+  white-space: nowrap;
+  pointer-events: auto;
+  cursor: pointer;
+  transition: border-color 0.2s ease, background 0.2s ease;
+}
+#home.hv-on .hv-make { display: inline-flex; }
+.hv-make .hv-ico { color: var(--gold); }
+.hv-make:hover,
+.hv-make[aria-expanded="true"] { border-color: var(--gold); background: #30302e; }
+/* red only while it records: the light, the time, Stop */
+.hv-make .hv-light,
+#home .hv-make:not(.going) .hv-level { display: none; }
+.hv-make.going { border-color: var(--hv-red); padding-left: 15px; }
+.hv-make.going .hv-ico { display: none; }
+.hv-make.going .hv-light { display: inline-block; }
+#home.hv-mic-on .hv-make.going .hv-level { display: inline-flex; }
+.hv-make .hv-time:empty { display: none; }
+
+/* ---- the three choices, opening out of the button ------------------------------------------------ */
+
+.hv-panel {
+  position: absolute;
+  top: 66px;
+  right: 18px;
+  z-index: 14;
+  width: 452px;
+  box-sizing: border-box;
+  padding: 18px 18px 18px;
+  border-radius: 18px;
+  border: 1px solid var(--hv-edge);
+  background: rgba(12, 19, 34, 0.975);
+  box-shadow: 0 22px 70px rgba(0, 0, 0, 0.6);
+  pointer-events: auto;
+  transform-origin: calc(100% - 120px) 0;
+  animation: hv-open 0.24s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+.hv-panel[hidden] { display: none; }
+@keyframes hv-open {
+  from { opacity: 0; transform: translateY(-10px) scale(0.92, 0.6); }
+  to { opacity: 1; transform: none; }
+}
+.hv-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 48px;
+}
+.hv-row + .hv-row,
+.hv-panel .says + .hv-row,
+.hv-mic-note + .hv-row { margin-top: 12px; padding-top: 12px; border-top: 1px solid rgba(93, 112, 152, 0.35); }
+.hv-row .lab {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-family: var(--sans);
+  font-size: 17px;
+  line-height: 1.2;
+  color: var(--t1);
+  white-space: nowrap;
+}
+.hv-row .lab .hv-ico { color: var(--gold); }
+.hv-row .lab .hv-level { margin-left: 4px; }
+.hv-panel .says,
+.hv-panel .hv-mic-note {
+  margin: 8px 0 0 32px;
+  font-family: var(--serif);
+  font-size: 16px;
+  line-height: 1.45;
+  color: var(--t2);
+}
+.hv-panel .hv-mic-note { color: var(--t1); }
+.hv-panel .hv-mic-note[hidden] { display: none; }
+.hv-seg {
+  flex: none;
+  display: inline-flex;
+  padding: 3px;
+  border-radius: 16px;
+  border: 1px solid var(--hv-edge);
+}
+.hv-seg button {
+  min-width: 74px;
+  height: 40px;
+  padding: 0 15px;
+  border-radius: 12px;
+  border: 0;
+  background: none;
+  font-family: var(--sans);
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+.hv-seg button b { font-size: 16px; font-weight: 500; line-height: 1.2; color: var(--t1); white-space: nowrap; }
+.hv-seg button:hover { background: #30302e; }
+.hv-seg button[aria-pressed="true"] { background: var(--gold); }
+.hv-seg button[aria-pressed="true"] b { color: #0c1322; font-weight: 600; }
+.hv-go {
+  display: block;
+  width: 100%;
+  height: 48px;
+  margin-top: 18px;
+  border-radius: 24px;
+  font-size: 17px;
+}
+
+/* while the film is recorded the screen shows what the file gets: the picture, whose it is, the
+   legend's two lines and the film's own caption */
+#home.hv-rec-film #home-entities,
+#home.hv-rec-film #home-signals,
+#home.hv-rec-film #home-switch,
+#home.hv-rec-film #home-live,
+#home.hv-rec-film #home-distance,
+#home.hv-rec-film .grow-press,
+#home.hv-rec-film #home-arrived,
+#home.hv-rec-film .grow-caption,
+#home.hv-rec-film .grow-card {
+  opacity: 0 !important;
+  pointer-events: none !important;
+  transition: opacity 0.35s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hv-count .n.beat,
+  .hv-panel,
+  #home.hv-rec .hv-make .hv-light { animation: none; }
+}

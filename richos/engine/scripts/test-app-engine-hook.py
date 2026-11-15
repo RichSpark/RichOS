@@ -81,6 +81,33 @@ class DesktopHooks(unittest.TestCase):
         again = self.hook("UserPromptSubmit", prompt="And now?")
         self.assertEqual((again.returncode, again.stdout.strip()), (0, ""))
 
+    def test_richs_next_turn_opens_with_a_home_picture_stage_reached_once_and_stus_never(self):
+        """CEO 2026-11-14: a hook notifies Rich when a milestone is reached. The app writes the
+        notice file; Rich's next turn opens with the fact, once; Stu's turn leaves it for Rich."""
+        notice = self.root / "state" / "home-stage-notice.json"
+        notice.parent.mkdir(parents=True, exist_ok=True)
+        notice.write_text(json.dumps({"stage": 4, "name": "The River", "count": 1312}))
+        (self.root / "state/evidence/fictional-session").mkdir(parents=True)
+        binding = self.root / "state/evidence/fictional-session/binding.json"
+        binding.write_text('{"role": "stu"}')
+        stu = self.hook("UserPromptSubmit", prompt="Carry on.")
+        self.assertEqual((stu.returncode, stu.stdout.strip()), (0, ""), stu.stderr)
+        self.assertTrue(notice.exists(), "Stu's turn took Rich's notice")
+        binding.write_text('{"role": "rich"}')
+        result = self.hook("UserPromptSubmit", prompt="Good morning.")
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        answer = json.loads(result.stdout)["hookSpecificOutput"]
+        self.assertEqual(answer["hookEventName"], "UserPromptSubmit")
+        self.assertEqual(answer["additionalContext"], "HOME PICTURE STAGE REACHED: the user's loro picture on the "
+                         "home screen reached stage 4 of 6, \"The River\", at 1,312 memories.")
+        self.assertFalse(notice.exists(), "the notice was not taken")
+        again = self.hook("UserPromptSubmit", prompt="And now?")
+        self.assertEqual((again.returncode, again.stdout.strip()), (0, ""))
+        # a file that is not a notice says nothing and is not an error
+        notice.write_text('{"stage": 9, "name": "", "count": -1}')
+        bad = self.hook("UserPromptSubmit", prompt="Hello?")
+        self.assertEqual((bad.returncode, bad.stdout.strip()), (0, ""), bad.stderr)
+
     def test_a_reply_holding_work_reaches_the_lead_at_the_apps_turn_end_and_records_nothing(self):
         """Orchestration reliability R1 on the app host: the deferral check is report only,
         and reaches Rich as Stop additionalContext, in one JSON answer."""

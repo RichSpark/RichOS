@@ -66,7 +66,7 @@
 # ========================================================================================
 
 @shell   richos/app/ui/index.html richos/app/ui/main.js richos/app/ui/authored-input.js richos/app/ui/style.css richos/app/ui/attachments.js richos/app/ui/output-panel.js richos/app/ui/suite-tools.js richos/app/ui/suite-tools.css
-@home    richos/app/ui/home.js richos/app/ui/home.css richos/app/ui/swearmeter.js richos/app/ui/home/field-engine.js richos/app/ui/home/field-ghost.js richos/app/ui/home/field-prep.js richos/app/ui/home/field-ref.js
+@home    richos/app/ui/home.js richos/app/ui/home-growth.js richos/app/ui/home-video.js richos/app/ui/home.css richos/app/ui/swearmeter.js richos/app/ui/home/field-engine.js richos/app/ui/home/field-ghost.js richos/app/ui/home/field-prep.js richos/app/ui/home/field-ref.js
 @splash  richos/app/ui/splash.js richos/app/ui/splash-library.js richos/app/ui/splash.css richos/app/ui/theme-boot.js
 @phone   richos/app/ui/phone.js richos/app/ui/qr.js
 
@@ -167,6 +167,8 @@ home-fit.js             @shell @home
 home-team.js            @shell @home richos/app/ui/mock.js richos/app/ui/home/field-data.js richos/app/ui/splash.js richos/app/ui/theme-boot.js
 home-frame-pass.js      richos/app/ui/home/field-engine.js
 home-ghost.js           @shell @home richos/app/ui/mock.js richos/app/ui/home/field-data.js richos/app/ui/splash.js richos/app/ui/theme-boot.js
+home-growth.js          @shell @home richos/app/ui/mock.js richos/app/ui/home/field-data.js richos/app/ui/splash.js richos/app/ui/theme-boot.js
+home-video.js           @shell @home richos/app/ui/mock.js richos/app/ui/home/field-data.js richos/app/ui/splash.js richos/app/ui/theme-boot.js richos/app/ui/settings-button.js
 home-standard.js        @shell @home richos/app/ui/mock.js richos/app/ui/home/field-data.js richos/app/ui/splash.js richos/app/ui/theme-boot.js richos/app/ui/settings-button.js
 home.js               @shell @home richos/app/ui/mock.js richos/app/ui/home/field-data.js richos/app/ui/splash.js richos/app/ui/settings-button.js richos/app/ui/theme-boot.js richos/app/ui/tests/fixtures/slow-round-trips-preload.js
 ticker-wrap.js          @shell @home
