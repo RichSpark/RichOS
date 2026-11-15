@@ -73,6 +73,18 @@ check('the app\'s line is read into its four times',
       walk.ready_line(line))
 check('a build that writes no such line reads as None, never as zeros', walk.ready_line('[richos] launch: fresh\n') is None)
 
+# What typing cost: the longest time the window did not change while keys were arriving.
+shots = []
+for n in range(80):
+    at = n * 100
+    shots.append((at, 'held' if 3000 <= at <= 3400 else 'p%d' % n))
+check('the longest time the window stood still between two moments, and when it began',
+      walk.longest_still(shots, 1000, 7000) == {'ms': 400, 'began_ms': 3000}, walk.longest_still(shots, 1000, 7000))
+check('a stall outside the typing is not counted', walk.longest_still(shots, 4000, 7000) == {'ms': 0, 'began_ms': 4000},
+      walk.longest_still(shots, 4000, 7000))
+check('a window in which nothing was being drawn gives no answer, never a clean zero',
+      walk.longest_still([(n * 100, 'same') for n in range(80)], 1000, 7000) is None)
+
 r = subprocess.run([sys.executable, '-B', str(WALK), 'no-such-vm', '--out', '/nonexistent', '--expect-sha', 'x',
                     '--steps', 'identity,second-open'], capture_output=True, text=True)
 check('an unknown step is refused before anything is driven', r.returncode == 2 and 'second-open' in r.stderr, r.stderr[-300:])

@@ -24,6 +24,13 @@ STEPS (in the guest, never on the host's screen, CEO section 65; the guest has n
                  multiple app restarts"
   after-purge    (optional, a diagnosis) the app quit, the guest's file cache emptied (`sudo purge`), the app
                  started again, then the same click: an open whose files all come from the disk again
+  typed-open     (optional) the first click after typing that never pauses, a user's ordinary minute: the
+                 app started again, and then, in the guest and on one clock, the real pointer presses Talk
+                 to Rich on the home screen, a key is typed every --key-ms for --typed-seconds with the
+                 window photographed throughout, and the RichFiles icon is clicked right after the last
+                 key. Reported like the other timed steps, with what the typing cost: the longest time the
+                 window did not change while keys were arriving. Run it with identity and first-run only
+                 and the click is also the first one ever
   home-still     (optional) what getting RichFiles ready costs the start: the app quit from its own menu and
                  started again, and the home screen's moving picture watched from outside for --still-seconds
                  (frame-rate.swift, in the guest: the picture's frames in each second and the longest pause
@@ -58,8 +65,8 @@ QA = HERE.parent / 'qa'
 sys.path.insert(0, str(QA / 'lib'))
 
 STEPS = ['identity', 'first-run', 'first-open', 'again', 'after-restart']
-OPTIONAL = ['after-purge', 'home-still']
-TIMED = ('first-open', 'again', 'after-restart', 'after-purge')
+OPTIONAL = ['after-purge', 'typed-open', 'home-still']
+TIMED = ('first-open', 'again', 'after-restart', 'after-purge', 'typed-open')
 # The app's own line when it has loaded RichFiles and built its pane ahead of a click
 # (src-tauri/src/richfiles_pane.rs); a build from before that writes none.
 READY = re.compile(r'RichFiles ready before its first click: library (\d+) ms on a background thread, '
@@ -103,7 +110,72 @@ def ready_line(log):
     return {k: int(v) for k, v in zip(keys, found.groups()) if v is not None}
 
 
+def longest_still(frames, since, until):
+    """The longest time the window did not change between two moments, from a capture's frames in
+    order: (when the frame was begun, in ms on one clock; its digest). A stretch runs from the first
+    frame that showed a picture to the last that still showed it, so it is the least the window
+    stood still for. Returns its length and when it began, or None when the window changed fewer
+    than five times in all (nothing was being drawn that a stall could be seen in)."""
+    inside = [f for f in frames if since <= f[0] <= until]
+    if len({digest for _, digest in inside}) < 5:
+        return None
+    best, start = (0, inside[0][0]), 0
+    for i in range(1, len(inside) + 1):
+        if i == len(inside) or inside[i][1] != inside[start][1]:
+            if inside[i - 1][0] - inside[start][0] > best[0]:
+                best = (inside[i - 1][0] - inside[start][0], inside[start][0])
+            start = i
+    return {'ms': round(best[0]), 'began_ms': round(best[1])}
+
+
+def type_in_guest(argv):
+    """Runs INSIDE the guest (the walk copies this file in): press the point given (Talk to Rich) with
+    the real pointer, then type the letter a every KEY_MS for SECONDS, and print when each happened
+    on the guest's clock. One process, so the press and the keys are on one clock.
+      richfiles-open-walk.py --type-in-guest X,Y SECONDS KEY_MS"""
+    import ctypes
+
+    class Point(ctypes.Structure):
+        _fields_ = [('x', ctypes.c_double), ('y', ctypes.c_double)]
+    x, y = map(float, argv[0].split(','))
+    seconds, key_ms = float(argv[1]), float(argv[2])
+    cg = ctypes.CDLL('/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics')
+    cf = ctypes.CDLL('/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation')
+    cg.CGPreflightPostEventAccess.restype = ctypes.c_bool
+    if not cg.CGPreflightPostEventAccess():
+        print('no permission to post events; nothing was pressed or typed', file=sys.stderr)
+        return 2
+    cg.CGEventCreateMouseEvent.argtypes = [ctypes.c_void_p, ctypes.c_uint32, Point, ctypes.c_uint32]
+    cg.CGEventCreateMouseEvent.restype = ctypes.c_void_p
+    cg.CGEventCreateKeyboardEvent.argtypes = [ctypes.c_void_p, ctypes.c_uint16, ctypes.c_bool]
+    cg.CGEventCreateKeyboardEvent.restype = ctypes.c_void_p
+    cg.CGEventPost.argtypes = [ctypes.c_uint32, ctypes.c_void_p]
+    cf.CFRelease.argtypes = [ctypes.c_void_p]
+
+    def post(event):
+        cg.CGEventPost(0, event)
+        cf.CFRelease(event)
+    time.sleep(0.3)
+    pressed = time.time()
+    for kind in (1, 2):  # left button down, up
+        post(cg.CGEventCreateMouseEvent(None, kind, Point(x, y), 0))
+    # The first key comes before the app can have built anything after the press, so whatever it
+    # builds from here on, it builds under typing: the hardest case for the typing.
+    time.sleep(0.15)
+    first, last, keys = time.time(), None, 0
+    while time.time() - first < seconds:
+        for down in (True, False):
+            post(cg.CGEventCreateKeyboardEvent(None, 0, down))  # the letter a
+        last, keys = time.time(), keys + 1
+        time.sleep(key_ms / 1000)
+    print(json.dumps({'pressed_ms': round(pressed * 1000), 'first_key_ms': round(first * 1000),
+                      'last_key_ms': round(last * 1000), 'keys': keys}))
+    return 0
+
+
 def main():
+    if sys.argv[1:2] == ['--type-in-guest']:
+        return type_in_guest(sys.argv[2:])
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('vm')
     p.add_argument('--out', type=Path, required=True)
@@ -111,6 +183,8 @@ def main():
     p.add_argument('--steps', default=','.join(STEPS))
     p.add_argument('--seconds', type=float, default=8.0, help='how long each click is photographed (default 8)')
     p.add_argument('--limit-ms', type=float, help='fail a timed step whose click-to-visible upper bound is over this')
+    p.add_argument('--typed-seconds', type=float, default=7.0, help='typed-open: how long keys are typed before the click (default 7)')
+    p.add_argument('--key-ms', type=float, default=120.0, help='typed-open: one key every this many ms (default 120)')
     p.add_argument('--still-seconds', type=int, default=16, help='home-still: how many seconds of the start are watched (default 16, at most 20)')
     p.add_argument('--diagnose', choices=('sample', 'disk'),
                    help="across the first click: sample the app's process, or record every read from the guest's disk")
@@ -165,11 +239,14 @@ def main():
                 time.sleep(1)
             raise StepFailed('the RichFiles rail icon never came on screen within %d s %s' % (seconds, last))
 
-        def timed_open(self, label):
-            self.script('tell application "RichOS" to activate')
-            time.sleep(1)
-            self.to_conversation()
-            icon = self.geometry('nr-richfiles')
+        def timed_open(self, label, icon=None, talk=None):
+            """One click on the RichFiles icon, timed. With `talk` (typed-open) the app is on the home
+            screen: the guest first presses that point and types, and the icon is where `icon` says."""
+            if not talk:
+                self.script('tell application "RichOS" to activate')
+                time.sleep(1)
+                self.to_conversation()
+                icon = self.geometry('nr-richfiles')
             window = next((n for n in self.ax('find', '--role', 'AXWindow', '--first') if n.get('role') == 'AXWindow'), None)
             if not icon or not window:
                 raise StepFailed('no RichFiles rail icon or no window to photograph: %r %r' % (icon, window))
@@ -188,9 +265,16 @@ def main():
                              p=pid, s=int(a.seconds) + 4, f=shlex.quote(remote + '/' + kept))
                 guest(self.vm, 'nohup sh -c {w} >/dev/null 2>&1 &'.format(w=shlex.quote(watch)), 30)
                 time.sleep(1.5)
-            ev['capture'] = guest(self.vm, shlex.join(
+            capture = shlex.join(
                 ['python3', remote + '/timeline.py', 'capture', frames, str(a.seconds), '--region', region,
-                 '--native-click', '%d,%d' % (x, y), '--baseline', '1.5']), int(a.seconds) + 90).strip()
+                 '--native-click', '%d,%d' % (x, y), '--baseline', str(a.typed_seconds + 0.7 if talk else 1.5)])
+            if talk:
+                # The typist and the camera start together; the click comes right after the last key.
+                command([HERE / 'guest.sh', self.vm, '--push', Path(__file__).resolve(), remote + '/richfiles-open-walk.py'], 120)
+                capture = '(python3 {w} --type-in-guest {t} {s} {k} > {o} 2>&1 &); {c}'.format(
+                    w=shlex.quote(remote + '/richfiles-open-walk.py'), t='%d,%d' % talk, s=a.typed_seconds, k=a.key_ms,
+                    o=shlex.quote(frames + '.typing.json'), c=capture)
+            ev['capture'] = guest(self.vm, capture, int(a.seconds + a.typed_seconds) + 90).strip()
             if kept and label == 'first-open':
                 time.sleep(4)
                 guest(self.vm, '/usr/bin/log show --last 25s --style compact > {f} 2>&1 || true'.format(
@@ -233,10 +317,26 @@ def main():
             ready_at = (ev['made_ready'] or {}).get('ready_ms_after_start')
             ev['ready_before_the_click'] = (ready_at < ev['click_ms_after_start']
                                             if ready_at is not None and 'click_ms_after_start' in ev else None)
+            if talk:
+                # What was typed, on the process's own clock, and what the typing cost: the longest
+                # time the window did not change while keys were arriving.
+                typed = json.loads(guest(self.vm, 'cat ' + shlex.quote(frames + '.typing.json'), 60))
+                if not (born and clicked):
+                    raise StepFailed('the app wrote no launch line with its start time: ' + log[-400:])
+                start = int(born.group(1))
+                digest = {f['number']: f['sha256'] for f in record['frames']}
+                begun = [l.split('\t') for l in (local / 'meta.tsv').read_text().splitlines() if l.startswith('frame\t')]
+                shots = [(float(t), digest[int(n)]) for _, n, t in begun if int(n) in digest]
+                still = longest_still(shots, typed['first_key_ms'], typed['last_key_ms'])
+                ev['typed'] = {'keys': typed['keys'], 'left_home_ms_after_start': typed['pressed_ms'] - start,
+                               'from_ms_after_start': typed['first_key_ms'] - start, 'to_ms_after_start': typed['last_key_ms'] - start,
+                               'click_ms_after_last_key': round(float(clicked.group(1)) - typed['last_key_ms']),
+                               'longest_still_while_typing': still and {'ms': still['ms'], 'began_ms_after_start': still['began_ms'] - start}}
             self.facts[label] = ev
             self.save()
-            print('%s: RichFiles on screen between %.0f and %.0f ms after the click, %s ms after the app started; made ready: %s'
-                  % (label, ev['low_ms'], ev['high_ms'], ev.get('click_ms_after_start'), json.dumps(ev['made_ready'])), flush=True)
+            print('%s: RichFiles on screen between %.0f and %.0f ms after the click, %s ms after the app started; made ready: %s%s'
+                  % (label, ev['low_ms'], ev['high_ms'], ev.get('click_ms_after_start'), json.dumps(ev['made_ready']),
+                     '; typed: ' + json.dumps(ev['typed']) if talk else ''), flush=True)
             if a.limit_ms is not None and ev['high_ms'] > a.limit_ms and not (a.diagnose == 'sample' and label == 'first-open'):
                 raise StepFailed('RichFiles took up to %.0f ms to appear, over the %.0f ms limit: %s'
                                  % (ev['high_ms'], a.limit_ms, json.dumps(ev)))
@@ -254,6 +354,28 @@ def main():
             started = relaunch.relaunch(self.vm)
             self.log = started.get('log')
             ev = self.timed_open('after-restart')
+            ev['relaunched_pid'] = started.get('pid')
+            return ev
+
+        def typed_open(self):
+            # Where the icon is, read on the conversation screen: after the restart the app is on the
+            # home screen, where the rail is covered, and it stays there until the guest presses.
+            self.script('tell application "RichOS" to activate')
+            time.sleep(1)
+            self.to_conversation()
+            icon = self.geometry('nr-richfiles')
+            started = relaunch.relaunch(self.vm)
+            self.log = started.get('log')
+            up = time.monotonic()
+            self.wait_for('Talk to Rich', seconds=90)
+            talk = self.node('Talk to Rich', 'AXButton')
+            # The app says it is usable some seconds after its window is up; a user is on the home
+            # screen at least that long.
+            time.sleep(max(0, 15 - (time.monotonic() - up)))
+            if not icon:
+                raise StepFailed('the RichFiles rail icon was not on the conversation screen')
+            ev = self.timed_open('typed-open', icon=icon,
+                                 talk=(round(talk['x'] + talk['w'] / 2), round(talk['y'] + talk['h'] / 2)))
             ev['relaunched_pid'] = started.get('pid')
             return ev
 
