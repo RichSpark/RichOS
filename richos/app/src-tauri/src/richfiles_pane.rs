@@ -68,12 +68,13 @@ pub async fn richfiles_place_pane(window: WebviewWindow, bounds: PaneBounds) -> 
 /// ever the library and the system frameworks it brings in were read from the disk as well
 /// (`scripts/testvm/richfiles-open-walk.py` measures it). Here the library is loaded on a
 /// background thread and the pane is then built, hidden, on the main thread, so the first click
-/// only shows it. Building the pane holds the window still for a fraction of a second, so the
-/// page asks for this at the first quiet moment once the app is usable (`ui/richfiles-page.js`):
-/// never on the launch path and never over the opening screen or the home screen, whose pictures
-/// move. The line this writes says how long each half took and when.
+/// only shows it. The page asks twice (`ui/richfiles-page.js`), never on the launch path: for
+/// the library alone (`pane` false) as soon as the opening screen has left, since a background
+/// thread holds nothing up; and for the pane, which holds the window still for a fraction of a
+/// second, a moment after the home screen has left too, whose picture moves.
+/// The line this writes says how long each half took and when.
 #[richos_command::command]
-pub async fn richfiles_prepare_pane(window: WebviewWindow) -> Result<(), String> {
+pub async fn richfiles_prepare_pane(window: WebviewWindow, pane: bool) -> Result<(), String> {
     if window.label() != "main" {
         return Err("RichFiles could not reach the window.".to_owned());
     }
@@ -84,11 +85,12 @@ pub async fn richfiles_prepare_pane(window: WebviewWindow) -> Result<(), String>
             crate::launch_timing::process_started_ms().map_or(0, |start| now.saturating_sub(start))
         };
         let asked = since_start();
-        let started = std::time::Instant::now();
-        tauri::async_runtime::spawn_blocking(mac::load_ahead)
+        let library = tauri::async_runtime::spawn_blocking(mac::load_ahead)
             .await
             .map_err(|_| "RichFiles could not load from this installation.".to_owned())??;
-        let library = started.elapsed();
+        if !pane {
+            return Ok(());
+        }
         let (send, receive) = tokio::sync::oneshot::channel();
         window
             .with_webview(move |webview| {
@@ -97,19 +99,21 @@ pub async fn richfiles_prepare_pane(window: WebviewWindow) -> Result<(), String>
                 let _ignored = send.send((result, began.elapsed()));
             })
             .map_err(|_| "RichFiles could not reach the window.".to_owned())?;
-        let (result, pane) = receive.await.map_err(|_| "The RichOS window closed.".to_owned())?;
+        let (result, built) = receive.await.map_err(|_| "The RichOS window closed.".to_owned())?;
         result?;
         eprintln!(
-            "[richos] RichFiles ready before its first click: library {} ms on a background thread, pane {} ms on the main thread, \
+            "[richos] RichFiles ready before its first click: library {library} ms on a background thread, pane {} ms on the main thread, \
              asked {asked} ms and ready {} ms after the process started",
-            library.as_millis(),
-            pane.as_millis(),
+            built.as_millis(),
             since_start()
         );
         Ok(())
     }
     #[cfg(not(target_os = "macos"))]
-    Err("RichFiles requires macOS.".to_owned())
+    {
+        let _unused = pane;
+        Err("RichFiles requires macOS.".to_owned())
+    }
 }
 
 #[richos_command::command]
@@ -393,6 +397,8 @@ mod mac {
     }
 
     static BRIDGE: OnceLock<Result<Bridge, &'static str>> = OnceLock::new();
+    /// How long loading the library took, in ms, whoever asked for it first.
+    static LOADED_IN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
     fn library_path() -> Option<PathBuf> {
         let executable = std::env::current_exe().ok()?;
@@ -406,6 +412,13 @@ mod mac {
     }
 
     fn load() -> Result<Bridge, &'static str> {
+        let began = std::time::Instant::now();
+        let bridge = open();
+        LOADED_IN.store(began.elapsed().as_millis() as u64, std::sync::atomic::Ordering::Relaxed);
+        bridge
+    }
+
+    fn open() -> Result<Bridge, &'static str> {
         let path = library_path().ok_or("This build does not contain RichFiles.")?;
         let filename = CString::new(path.as_os_str().as_bytes())
             .map_err(|_| "Invalid RichFiles bundle path.")?;
@@ -437,10 +450,11 @@ mod mac {
         })
     }
 
-    /// The library loaded, from any thread: a click that comes while this runs waits for it in
-    /// `place` and loads nothing twice.
-    pub fn load_ahead() -> Result<(), String> {
-        BRIDGE.get_or_init(load).as_ref().map(|_| ()).map_err(|message| (*message).to_owned())
+    /// The library loaded, from any thread, and how long that took in ms: a click that comes
+    /// while this runs waits for it in `place` and loads nothing twice.
+    pub fn load_ahead() -> Result<u64, String> {
+        BRIDGE.get_or_init(load).as_ref().map_err(|message| (*message).to_owned())?;
+        Ok(LOADED_IN.load(std::sync::atomic::Ordering::Relaxed))
     }
 
     /// The pane built and laid out, hidden, on the main thread with the live WKWebView pointer.

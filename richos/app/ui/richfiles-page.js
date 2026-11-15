@@ -101,33 +101,43 @@
   // have before the user click on the RichFiles icon for the first time."
   //
   // The first click used to load RichFiles and build its pane while the window stood still. The
-  // shell now does both ahead of it (`richfiles_prepare_pane`), asked once, at the first quiet
-  // moment after `main.js` says the app is usable, so none of it is on the launch path.
+  // shell now does both ahead of it (`richfiles_prepare_pane`), after `main.js` says the app is
+  // usable, so none of it is on the launch path, and in two steps:
   //
-  // A QUIET MOMENT, because building the pane holds the window still for a fraction of a second
-  // (the same work the first click used to wait for): the opening screen and the home screen
-  // have left, since their pictures move and would be seen to stop, and no key was pressed and
-  // nothing was clicked or scrolled for QUIET_MS, so it does not land on his typing. The rail is
-  // only on screen once both have left, so this is always before the icon can be clicked. A
-  // click that comes first is served as before.
-  const QUIET_MS = 1000;
+  // THE LIBRARY, as soon as the opening screen has left. It loads on a background thread and
+  // holds nothing up, so it waits for nothing else.
+  //
+  // THE PANE, which holds the window still for a fraction of a second while it is built (the
+  // same work the first click used to wait for). So it waits for the home screen to leave as
+  // well, since that picture moves and would be seen to stop, and is built SETTLE_MS after it
+  // has: the home screen's own fade is over, nothing on the conversation screen is moving, and
+  // a hand that pressed its way here has not reached the keys yet. It does not wait for typing
+  // to stop, so typing cannot put it off. The rail is only on screen once both screens have
+  // left, so this is always ahead of the first possible click on the icon. A click that comes
+  // first is served as before.
+  const SETTLE_MS = 300;
   let usable = false;
   let offered = false;
+  let loaded = false;
   let prepared = false;
-  let lastInput = 0;
-  const quiet = () => !window.RichSplash?.isUp?.() && !window.RichHome?.isOpen?.()
-    && performance.now() - lastInput >= QUIET_MS;
+  let clear = null; // when the opening screen and the home screen were first seen gone
   function prepare() {
     if (prepared || !usable || !offered) return;
-    if (!quiet()) {
-      setTimeout(prepare, 250);
-      return;
+    if (!window.RichSplash?.isUp?.()) {
+      if (!loaded) {
+        loaded = true;
+        bridge.invoke("richfiles_prepare_pane", { pane: false }).catch(() => {});
+      }
+      const now = performance.now();
+      if (window.RichHome?.isOpen?.()) clear = null;
+      else if (clear === null) clear = now;
+      if (clear !== null && now - clear >= SETTLE_MS) {
+        prepared = true;
+        bridge.invoke("richfiles_prepare_pane", { pane: true }).catch(() => {});
+        return;
+      }
     }
-    prepared = true;
-    bridge.invoke("richfiles_prepare_pane", {}).catch(() => {});
-  }
-  for (const type of ["keydown", "pointerdown", "wheel"]) {
-    window.addEventListener(type, () => { lastInput = performance.now(); }, { capture: true, passive: true });
+    setTimeout(prepare, 100);
   }
   window.RichFilesReady = { start() { usable = true; prepare(); } };
   if (window.__richosRichFilesReady) window.RichFilesReady.start();
