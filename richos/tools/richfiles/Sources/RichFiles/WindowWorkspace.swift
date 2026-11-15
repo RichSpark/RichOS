@@ -202,6 +202,7 @@ struct WindowBrowserView: View {
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { notice in
             if let window = notice.object as? NSWindow, window.windowNumber == nativeWindowNumber {
                 receiveFolderOpen()
+                workspace.git.refreshOnWindowFocus()
             }
         }
         .onReceive(Publishers.Merge3(

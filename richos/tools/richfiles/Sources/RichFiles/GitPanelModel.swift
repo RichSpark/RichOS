@@ -225,6 +225,13 @@ public final class GitPanelModel: ObservableObject {
         loadHistory(newTip: true, preferredCommit: commit?.id, preferredFile: selectedFile?.path)
     }
 
+    func refreshOnWindowFocus() {
+        // Initial window focus can arrive while a handoff is still restoring its selection.
+        guard open, !loading, !fileLoading,
+              commit == nil || comparison != nil || detailMessage != nil else { return }
+        refresh()
+    }
+
     func loadMore() {
         guard hasMore, !loading else { return }
         loadHistory(newTip: false, nextPage: true)
