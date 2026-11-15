@@ -1263,8 +1263,10 @@ fn tell_the_phone_the_threads(app: &AppHandle) {
 }
 
 #[richos_command::command]
-fn switch_thread(state: State<AppState>, thread_id: String) -> Result<(), String> {
-    switch_thread_in(&state.spine, &state.reader, &state.control, &thread_id)
+fn switch_thread(app: tauri::AppHandle, state: State<AppState>, thread_id: String) -> Result<(), String> {
+    switch_thread_in(&state.spine, &state.reader, &state.control, &thread_id)?;
+    richfiles_pane::active_git_chat_changed(&app);
+    Ok(())
 }
 
 fn switch_thread_in(spine: &Mutex<Spine>, reader: &SpineReader, control: &TurnControl,
@@ -4208,6 +4210,7 @@ fn main() {
             system_resources,
             richfiles_pane::richfiles_pane_available, richfiles_pane::richfiles_place_pane,
             richfiles_pane::richfiles_request_pending, richfiles_pane::richfiles_accept_request,
+            richfiles_pane::output_git_open, richfiles_pane::output_git_place, richfiles_pane::richfiles_git_chat,
             question_host::answer_question, question_host::question_shown, question_host::open_question_counts,
             claude_quota,
             claude_quota_activity,

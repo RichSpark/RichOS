@@ -80,6 +80,7 @@
     sourcePassage: null,
     /// The row kept selected when the file view steps back to the list (§6.4).
     selected: null,
+    filenameFilter: "",
     /// When the read in flight started, so *Looking…* waits its 150 ms whenever it is drawn.
     loadingSince: 0,
     /// Where focus goes when the panel closes: the button that opened it, or "conversation".
@@ -89,6 +90,128 @@
   };
 
   const el = (id) => document.getElementById(id);
+
+  const git = { available: false, active: false, ready: false, ticket: 0, frame: 0,
+    width: 840, previousWidth: null, previousFull: false, top: 0, opener: null, file: null,
+    size: null, appearance: null, overlays: null };
+
+  function gitBounds(visible) {
+    const hidden = { left: 0, top: 0, width: 0, height: 0, visible: false };
+    if (!visible || el("outpanel").hidden || el("app")?.inert || window.RichDismiss?.question?.()) return hidden;
+    const body = el("op-body").getBoundingClientRect();
+    const open = window.RichDismiss?.open?.() || [];
+    if (open.some((node) => {
+      if (node === el("outpanel")) return false;
+      const popup = node.getBoundingClientRect();
+      return body.left < popup.right && popup.left < body.right && body.top < popup.bottom && popup.top < body.bottom;
+    })) return hidden;
+    const right = Math.min(window.innerWidth, body.right);
+    const bottom = Math.min(window.innerHeight, body.bottom);
+    const left = Math.max(0, body.left);
+    const top = Math.max(0, body.top);
+    if (right <= left || bottom <= top) return hidden;
+    return { left: left / window.innerWidth, top: top / window.innerHeight,
+      width: Math.max(0, right - left) / window.innerWidth,
+      height: Math.max(0, bottom - top) / window.innerHeight, visible };
+  }
+
+  function gitDark() { return document.documentElement.dataset.theme !== "light"; }
+
+  function placeGit() {
+    if (!git.ready || !git.active || git.frame) return;
+    git.frame = window.requestAnimationFrame(() => {
+      git.frame = 0;
+      if (git.ready && git.active) bridge.invoke("output_git_place", { bounds: gitBounds(true), dark: gitDark(), close: false }).catch(() => {});
+    });
+  }
+
+  function paintGitTabs() {
+    const tabs = el("op-git-tabs");
+    tabs.hidden = !git.available;
+    el("op-git-files")?.setAttribute("aria-pressed", String(!git.active));
+    el("op-git-open")?.setAttribute("aria-pressed", String(git.active));
+    const filesTab = el("op-git-files");
+    if (filesTab) filesTab.textContent = state.list?.count ? "Files " + state.list.count.toLocaleString() : "Files";
+    el("op-filename-filter").hidden = !git.available || git.active || state.view !== "list" || !state.list?.files.length;
+  }
+
+  async function openGit(file, opener, refresh = false) {
+    if (!state.open || !state.thread || !git.available) return;
+    closeMenu({ focus: false });
+    const body = el("op-body");
+    if (!git.active) {
+      git.top = body.scrollTop;
+      git.opener = opener;
+      git.previousWidth = pull.split;
+      git.previousFull = pull.full;
+      git.active = true;
+      body.classList.add("op-native-git");
+      pull.split = git.width;
+      if (pull.full) ctx.moveComposer?.(null);
+      pullPaint({ instant: true });
+      body.setAttribute("aria-busy", "true");
+      paintGitTabs();
+      git.size?.observe(body);
+      git.appearance?.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+      git.overlays?.observe(document.body, { subtree: true, attributes: true, attributeFilter: ["hidden", "inert", "open"] });
+    }
+    if (file) git.file = file;
+    const ticket = ++git.ticket;
+    const threadId = state.thread;
+    await new Promise((resolve) => window.requestAnimationFrame(resolve));
+    if (ticket !== git.ticket) return;
+    try {
+      await bridge.invoke("output_git_open", { bounds: gitBounds(true), dark: gitDark(),
+        outputId: file || null, threadId, refresh });
+      if (ticket !== git.ticket) {
+        if (!git.active) await bridge.invoke("output_git_place", { bounds: gitBounds(false), dark: gitDark(), close: true });
+        return;
+      }
+      git.ready = true;
+      body.removeAttribute("aria-busy");
+      placeGit();
+    } catch (e) {
+      if (ticket !== git.ticket) return;
+      closeGit(true);
+      notice(said(e));
+    }
+  }
+
+  function closeGit(restoreFocus = false) {
+    if (!git.active) return;
+    git.ticket += 1;
+    git.active = false;
+    git.ready = false;
+    git.size?.disconnect();
+    git.appearance?.disconnect();
+    git.overlays?.disconnect();
+    git.width = pull.split;
+    const body = el("op-body");
+    body.classList.remove("op-native-git");
+    body.removeAttribute("aria-busy");
+    bridge.invoke("output_git_place", { bounds: gitBounds(false), dark: gitDark(), close: true }).catch(() => {});
+    pullSetFull(git.previousFull, { width: git.previousWidth, instant: true, quiet: true, restoreComposer: true });
+    paintGitTabs();
+    body.scrollTop = git.top;
+    if (restoreFocus) {
+      if (git.opener?.isConnected) git.opener.focus({ preventScroll: true });
+      else el("op-git-files")?.focus({ preventScroll: true });
+    }
+    git.file = null;
+  }
+
+  function compareAvailable(file) {
+    return git.available && state.list?.gitCandidates.includes(file.id);
+  }
+
+  function compareButton(file, className) {
+    const button = node("button", className, "View Changes");
+    button.type = "button";
+    button.dataset.act = "git-compare";
+    button.setAttribute("aria-label", "View Changes for " + file.name);
+    button.addEventListener("click", () => openGit(file.id, button));
+    return button;
+  }
 
   function node(tag, cls, text) {
     const n = document.createElement(tag);
@@ -254,7 +377,7 @@
       if (ctx.announce) ctx.announce(filesWord(state.list.count) + " from this thread");
     }
     if (ctx.onLinksChanged) ctx.onLinksChanged();
-    if (!state.open || state.view === "media") return;
+    if (!state.open || git.active || state.view === "media") return;
     // Redrawn under him: focus stays on the same control of the same file (D6's re-read can land
     // a few milliseconds after the panel put focus on its first row).
     const anchor = focusAnchor();
@@ -332,6 +455,7 @@
     const filesIn = Array.isArray(out.files) ? out.files : [];
     return {
       files: filesIn,
+      gitCandidates: Array.isArray(out.gitCandidates) ? out.gitCandidates : [],
       count: typeof out.count === "number" ? out.count : filesIn.length,
       missing: typeof out.missing === "number" ? out.missing : filesIn.filter((f) => !f.exists).length,
     };
@@ -484,7 +608,10 @@
         filesWord(n) + " from this thread" + (missing ? " · " + missing + " no longer where " + (missing === 1 ? "it was" : "they were") + " written" : ""),
         "Everything written here, newest first."
       );
-      for (const g of groupsOf(state.list.files)) {
+      const filter = state.filenameFilter.trim().toLocaleLowerCase();
+      const matching = filter ? state.list.files.filter((file) => file.name.toLocaleLowerCase().includes(filter)) : state.list.files;
+      if (!matching.length) view.appendChild(node("p", "op-state-line op-looking", "No matching filenames."));
+      for (const g of groupsOf(matching)) {
         const section = node("section", "og");
         section.dataset.group = g.key;
         if (g.turnId) section.dataset.turn = g.turnId;
@@ -496,6 +623,7 @@
     }
     body.textContent = "";
     body.appendChild(view);
+    paintGitTabs();
   }
 
   function showList(opts) {
@@ -587,6 +715,7 @@
     // S6's Open in <app> / ▾ / Show in Finder / Save a copy… / ⋯ and S5's Preview | Source.
     const tools = node("div", "of-tools");
     if (hooks.fileTools) hooks.fileTools(f, tools);
+    if (compareAvailable(f)) tools.appendChild(compareButton(f, "of-tool"));
     if (f.exists) sourceSwitch(f, tools);
     if (tools.childNodes.length) view.appendChild(tools);
 
@@ -613,6 +742,7 @@
     body.textContent = "";
     body.appendChild(view);
     body.scrollTop = scroll;
+    paintGitTabs();
     if (opts.keepFocus) return;
     const target = opts.focusStep === "prev" ? prev : opts.focusStep === "next" ? next : back;
     // A SOURCE PASSAGE TO LAND ON TAKES FOCUS ONE TASK LATER. An accessibility press (VoiceOver,
@@ -1078,6 +1208,7 @@
     box.id = "op-viewer";
     view.appendChild(box);
     body.replaceChildren(view);
+    paintGitTabs();
     viewPreview(file, box);
     el("op-close")?.focus({ preventScroll: true });
   }
@@ -1154,6 +1285,7 @@
       panel.classList.add("is-opening");
     }
     paintButtons();
+    if (git.active) closeGit();
     if (opts.media) showMedia(opts.media);
     else if (opts.file) showFile(opts.file, opts);
     else showList(opts);
@@ -1173,6 +1305,7 @@
     const wasOpen = state.open || !panel.hidden;
     // A menu first, without taking focus: the panel is about to hide under it (S6).
     closeMenu({ focus: false });
+    closeGit();
     // Closing brings the WHOLE conversation back and clears *open completely* (§9.4), before
     // the panel hides: the composer goes home first, so focus can return to it.
     pullReset();
@@ -1207,6 +1340,7 @@
     // A menu first (S6, §6.8): a submenu back to its menu, a menu closed. It is the topmost
     // layer, so it goes before the floating composer's words.
     if (closeMenu({ step: true })) return;
+    if (git.active) { closeGit(true); return; }
     // From the floating composer with words in it, Escape clears the words first (§6.8).
     if (pullEscape()) return;
     if (state.open && state.view === "file" && state.file) {
@@ -1298,6 +1432,10 @@
       paintButtons();
       return;
     }
+    closeGit();
+    if (bridge) bridge.invoke("richfiles_git_chat", {}).catch(() => {});
+    state.filenameFilter = "";
+    el("op-filename-filter").value = "";
     clearMedia();
     if (state.view === "media") el("op-body").replaceChildren();
     state.thread = next;
@@ -1345,6 +1483,10 @@
   function init(options) {
     bridge = options.bridge;
     ctx = options;
+    try {
+      const previous = Number(localStorage.getItem("richos-output-git-width"));
+      if (previous >= PANEL_MIN) git.width = pullClamp(previous);
+    } catch (_e) { /* The in-window width is still available. */ }
     if (!watchChromeLane()) {
       // `settings-button.js` mounts the cluster on its own schedule; look again once it has.
       let tries = 0;
@@ -1363,6 +1505,31 @@
       if (!payload || payload.threadId !== state.thread) return;
       load({ arrival: true });
     });
+    const tabs = el("op-git-tabs");
+    const fileTab = node("button", "op-git-tab", "Files");
+    const gitTab = node("button", "op-git-tab", "Git");
+    fileTab.id = "op-git-files";
+    gitTab.id = "op-git-open";
+    fileTab.type = gitTab.type = "button";
+    fileTab.addEventListener("click", () => closeGit(true));
+    gitTab.addEventListener("click", () => { if (!git.active) openGit(null, gitTab); });
+    tabs.append(fileTab, gitTab);
+    const filter = el("op-filename-filter");
+    filter.placeholder = "Filter by filename";
+    filter.setAttribute("aria-label", filter.placeholder);
+    filter.addEventListener("input", () => {
+      state.filenameFilter = filter.value;
+      if (state.view === "list" && !git.active) render();
+    });
+    bridge.invoke("richfiles_pane_available", {}).then((available) => {
+      git.available = available === true;
+      paintGitTabs();
+    }).catch(() => {});
+    if (typeof ResizeObserver === "function") git.size = new ResizeObserver(placeGit);
+    if (typeof MutationObserver === "function") {
+      git.appearance = new MutationObserver(placeGit);
+      git.overlays = new MutationObserver(placeGit);
+    }
     pullInit();
     paintButtons();
   }
@@ -1485,6 +1652,7 @@
       pull.full ? "Open completely" : w >= max ? w + " pixels, at the stop; pull on to open it completely" : w + " pixels"
     );
     pullPaintPill();
+    placeGit();
   }
 
   /// ‹ and the thread's own name at the head of the panel, only while it is open completely.
@@ -1528,7 +1696,7 @@
     // The class first, so the composer lands in a home that is laid out: the field measures
     // its height in its new width (measured into `display: none`, it came out one line short).
     document.body.classList.toggle("panel-full", on);
-    if (changed && ctx.moveComposer) ctx.moveComposer(on ? el("op-float") : null);
+    if (ctx.moveComposer && (changed || opts.restoreComposer)) ctx.moveComposer(on && !git.active ? el("op-float") : null);
     pullPaint({ instant: !!opts.instant });
     if (!changed) return;
     if (!opts.instant) pullSettle();
@@ -1545,6 +1713,11 @@
 
   /// Write the split width; render what the store accepted (nav.rs floors it at 320px).
   function pullPersist() {
+    if (git.active) {
+      git.width = pull.split;
+      try { localStorage.setItem("richos-output-git-width", String(git.width)); } catch (_e) { /* In-window width still applies. */ }
+      return;
+    }
     window.clearTimeout(pull.persistTimer);
     pull.persistTimer = window.setTimeout(async () => {
       if (!bridge) return;
@@ -1999,6 +2172,7 @@
     const b = blockers(f, d);
     const items = [];
     if (withPreview) items.push({ id: "preview", icon: "eye", label: "Preview", act: () => showFile(f.id) });
+    if (compareAvailable(f)) items.push({ id: "git-compare", icon: "eye", label: "View Changes", act: () => openGit(f.id) });
     items.push({ id: "open", icon: "open", label: openLabel(d), disabled: b.open, act: () => openFileInApp(f) });
     // §5.4's degraded mode: no app list, no *Open with…*.
     if (otherApps(d).length) {
@@ -2249,6 +2423,7 @@
     acts.appendChild(more);
     wrap.appendChild(row);
     wrap.appendChild(acts);
+    if (compareAvailable(f)) wrap.appendChild(compareButton(f, "op-row-compare"));
     // The app's name, once asked: on the first hover or focus, never for every row at once.
     const learn = () => detailOf(f.id).then((d) => open.isConnected && paintRowOpen(f, open, d));
     wrap.addEventListener("pointerenter", learn);
@@ -2436,6 +2611,15 @@
     toggle,
     escape,
     syncScrim,
+    nativeGitClosed: () => closeGit(true),
+    nativeGitRefresh: () => openGit(null, null, true),
+    nativeGitUnavailable() {
+      const id = git.file;
+      if (!git.active || !id) return;
+      closeGit(true);
+      showFile(id);
+      notice("No verified earlier version to compare.");
+    },
     isOpen: () => state.open && !el("outpanel").hidden,
     links,
     hooks,

@@ -2,7 +2,7 @@ import Darwin
 import Foundation
 
 enum RichFilesDiagnostics {
-    enum Operation: String, Codable, Sendable { case listing, copy, move, recovery }
+    enum Operation: String, Codable, Sendable { case listing, copy, move, recovery, gitHistory, gitComparison }
     enum Outcome: String, Codable, Sendable {
         case complete, issues, unavailable, interrupted
         case cancelled = "canceled"

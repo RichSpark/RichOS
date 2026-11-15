@@ -6,6 +6,8 @@ import UniformTypeIdentifiers
 public enum RichFilesInstallation {
     static let preferences = UserDefaults(suiteName: "app.richos.richfiles") ?? .standard
 
+    public static var gitPreferences: UserDefaults { preferences }
+
     public static var embeddedApplication: URL {
         Bundle.main.bundleURL.appendingPathComponent("Contents/Applications/RichFiles.app", isDirectory: true)
     }

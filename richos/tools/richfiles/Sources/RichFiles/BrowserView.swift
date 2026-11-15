@@ -18,6 +18,7 @@ private extension FocusedValues {
 struct BrowserView: View {
     @ObservedObject private var model: BrowserModel
     @ObservedObject private var workspace: WindowWorkspace
+    @ObservedObject private var git: GitPanelModel
     @ObservedObject private var actions: BrowserActions
     @Environment(\.openWindow) private var openWindow
     @Environment(\.colorScheme) private var scheme
@@ -36,6 +37,7 @@ struct BrowserView: View {
     @AppStorage("richfiles.inspectorVisible") private var inspectorVisible = false
     @FocusState private var focus: FocusTarget?
     @FocusedValue(\.browserControl) private var controlFocused
+    @FocusedValue(\.gitPanelFocus) private var gitPanelFocused
     @State private var editingAddress = false
     @State private var address = ""
     @State private var suggestions: [URL] = []
@@ -80,6 +82,7 @@ struct BrowserView: View {
          hostSwitchTitle: String?, switchHost: @escaping () -> Void, sessionChanged: @escaping () -> Void) {
         self.model = model
         self.workspace = workspace
+        git = workspace.git
         self.side = side
         self.windowSize = windowSize
         self.actions = actions
@@ -145,7 +148,7 @@ struct BrowserView: View {
         .font(BrowserTypography.reading(16 * textSize.scale))
         .background(palette.pane)
         .accessibilityIdentifier(side == .primary ? "richfiles-primary-pane" : "richfiles-secondary-pane")
-        .background(KeyboardBridge(windowsKeys: windowsKeys, acceptsInput: acceptsKeyboard,
+        .background(KeyboardBridge(windowsKeys: windowsKeys, acceptsInput: { acceptsKeyboard() && gitPanelFocused != true },
                                    controlFocused: controlFocused == true,
                                    shortcuts: BrowserShortcut.load(shortcutData),
                                    activate: { workspace.select(side) },
@@ -511,6 +514,9 @@ struct BrowserView: View {
                     .disabled(model.selected.count != 1 || actions.busy)
                 barButton("Move to Trash", "trash", showTitle: labeled, visibleTitle: "Trash") { _ = perform(.trash) }
                     .disabled(model.selected.isEmpty || actions.busy)
+                barButton("Git", "point.3.connected.trianglepath.dotted", showTitle: labeled, selected: git.open) {
+                    git.toggle(at: model.folder)
+                }
                 Menu { folderMenu } label: { barLabel("This Folder", "folder", labeled) }
                     .accessibilityLabel("Current folder actions")
                 Menu {
@@ -1218,6 +1224,10 @@ struct BrowserView: View {
                 if !sizes.isEmpty { Text(formattedBytes(sizes.reduce(0, safeAdd))) }
             }
             if model.currentVolume?.isReadOnly == true { Text("Read-only") }
+            if let repository = git.repository {
+                Label(repository.name, systemImage: "point.3.connected.trianglepath.dotted")
+                    .lineLimit(1).help(repository.root.path)
+            }
             Spacer(minLength: 4)
             if let undo = actions.undoName {
                 Button("Undo " + undo) { actions.undo() }

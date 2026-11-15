@@ -545,6 +545,15 @@ def landed_files(repo, before, landed):
     return [name for name in result.stdout.split("\0") if name]
 
 
+def witness_git_review(scope, repo, branch, before, after, reviewed):
+    try:
+        evidence = load("richos_app_evidence", ENGINE / "scripts/lib/app-evidence.py")
+        evidence.append_land_marker(state() / "evidence", scope["binding"]["session_id"],
+                                    repo, branch, before, after, reviewed)
+    except Exception:  # noqa: BLE001 -- history never rolls back a successful Git update
+        print("RichOS output: the Git integration marker could not be recorded.", file=sys.stderr)
+
+
 def witness_land(scope, worker, targets, plan):
     """WITNESS (d), THE LAND (Output side panel PRD §4.1 (d), slice S2b). A worker writes in its
     own worktree, which cleanup deletes minutes after this; the landed copy in the connected
@@ -2648,7 +2657,9 @@ def integrate(scope_path,scope,args):
                             # (an earlier attempt's WIP) is not merged, and its cleanup stays pending.
                             W.merge_and_land(worker["workspace_ref"],me=scope["binding"]["session_id"],
                                              message="Merge reviewed work of %s\n\n%s" % (worker["name"],reviewed_by),
-                                             only={r:plan[r]["commit"] for r in pending})
+                                             only={r:plan[r]["commit"] for r in pending},
+                                             on_merge=lambda repo, branch, before, after, reviewed:
+                                             witness_git_review(scope, repo, branch, before, after, reviewed))
                 except W.SpecError as error:
                     refused=str(error)
                 finally:

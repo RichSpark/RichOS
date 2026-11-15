@@ -1035,6 +1035,21 @@ module.exports = [
   {s: "from this thread", c: "FRAGMENT", why: "Follows `N files` (or `1 file`) in the panel's title, the buttons' names and the count announcement."},
   {s: "no longer where", c: "FRAGMENT", why: "Part of the panel title's `· N no longer where it was written` (or `they were`), when any recorded file is missing. INFORMATIONAL as a whole."},
   {s: "has produced a file yet. The moment Rich or the team writes one, it is listed here and the count on the Output button says so.", c: "FRAGMENT", why: "The tail of the empty sentence, after `Nothing in <thread>`. INFORMATIONAL as a whole: it says when the list will fill and asks nothing."},
+  // ---- GIT IN OUTPUT (Git view PRD v5) --------------------------------------------------------
+  {s: "Filter by filename", c: "CONTROL", why: "Accessible name and placeholder for the Files search input (#op-filename-filter)."},
+  {s: "View Changes for", c: "FRAGMENT", why: "Accessible name prefix for the View Changes button. The recorded filename completes the label."},
+  {s: "No matching filenames.", c: "INFORMATIONAL", why: "Reports that the current filename filter matches no rows. The filter stays visible."},
+  {s: "No verified earlier version to compare.", c: "INFORMATIONAL", why: "The ordinary file preview stays open when the earlier version cannot be verified."},
+  {s: "Choose a chat to open Git.", c: "ACTIONABLE", control: ".nav-thread", fixture: null, why: "The Git command has no active chat binding. The chat rail supplies the thread selection."},
+  {s: "Git is unavailable for this chat.", c: "INFORMATIONAL", why: "The active chat has no Git context available. Output returns to Files."},
+  {s: "This chat has no connected company.", c: "INFORMATIONAL", why: "There is no connected company to supply repositories for the active chat."},
+  {s: "The active chat changed.", c: "INFORMATIONAL", why: "The request belonged to a chat the user has left."},
+  {s: "This chat’s Git record is too large to display.", c: "INFORMATIONAL", why: "The bounded Git request returns to the existing Files view."},
+  {s: "Git could not read the active chat.", c: "INFORMATIONAL", why: "Reports a failed Git context load in the Output notice."},
+  {s: "Git could not appear in this window.", c: "INFORMATIONAL", why: "Reports a native panel placement failure. Output returns to Files."},
+  {s: "Git could not reach the window.", c: "INFORMATIONAL", why: "Reports a failed handoff to the desktop window."},
+  {s: "Git could not use that window area.", c: "INFORMATIONAL", why: "Reports an unavailable panel area after the desktop shell rejected its bounds."},
+  {s: "The Git view requires macOS.", c: "NOT-RENDERED", why: "Defensive non-macOS command response. The shell hides the Git entry when the native pane is unavailable."},
   // ---- THE OUTPUT PANEL'S PREVIEWS (Output side panel PRD §7, slice S5; `output-panel.js`) -------
   // `tests/output.js` renders every one of these. The §6.7 sentences the viewer shows verbatim from
   // `output_preview` are the shell's rows (`MISSING`, `LINKED`, `NOT_A_FILE` below, and the

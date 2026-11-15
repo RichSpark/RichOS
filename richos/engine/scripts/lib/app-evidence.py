@@ -281,7 +281,23 @@ def _session_folder(state_root, session):
         yield folder
 
 
-COMMIT = re.compile(r"[0-9a-f]{40,64}")
+COMMIT = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})")
+
+
+def append_land_marker(state_root, session_id, repo, branch, before, after, reviewed):
+    """One marker in the same session evidence as file writes, even for a land with no files."""
+    if not all(isinstance(oid, str) and COMMIT.fullmatch(oid) for oid in (before, after, reviewed)):
+        raise ValueError("A land marker needs three Git object IDs")
+    root = Path(repo).resolve(strict=True)
+    identity = root.stat()
+    administrative = (root / ".git").lstat()
+    marker = {"before": before, "reviewed": reviewed, "branch": branch,
+              "device": identity.st_dev, "inode": identity.st_ino,
+              "gitDevice": administrative.st_dev, "gitInode": administrative.st_ino}
+    with _session_folder(state_root, session_id) as folder:
+        append(folder / WRITES_FILE, {"schema": 1, "session_id": session_id,
+               "path": str(root), "commit": after, "at": now_ms(), "source": "land-marker",
+               "land_marker": marker})
 
 
 def append_land_rows(state_root, session_id, rows):

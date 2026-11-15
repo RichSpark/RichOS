@@ -6785,7 +6785,7 @@ def _release_carried_waits(chain, deadline=None):
         event("wait-ended", key=other["key"], landed=names, not_landed=out)
 
 
-def merge_and_land(ref, me="", message="", only=None):
+def merge_and_land(ref, me="", message="", only=None, on_merge=None):
     """`workspaces.sh merge <name>`: THE MERGE AND THE LAND ARE ONE COMMAND
     (2026-10-04). The lead merged with `git merge --no-ff` and then had to
     remember a separate `workspaces.sh land`; for four teammates he did not,
@@ -6877,9 +6877,15 @@ def merge_and_land(ref, me="", message="", only=None):
                     raise SpecError("git merge of %s into %s of %s failed (exit %d):\n%s\n%s"
                                     % (b, target, main, r.returncode, (r.stdout + r.stderr).strip()[-3000:],
                                        _abort_own_merge(main, before, t)))
+                after = branch_tip_read(main, target)[0] if on_merge else None
             else:
-                _merge_in_temporary_checkout(main, target, args, b, offered)
+                before, after = _merge_in_temporary_checkout(main, target, args, b, offered,
+                                                              record=on_merge is not None)
             merged.append((repo, b))
+            if on_merge and after:
+                rc, parents, _ = git(main, "show", "-s", "--format=%P", after)
+                if rc == 0 and parents.split() == [before, t]:
+                    on_merge(repo, target, before, after, t)
             event("merged", key=rec["key"], repo=repo, branch=b, into=target)
         return merged, land(rec["key"], me, keep_ignored=True)
     except SpecError as e:
@@ -6919,7 +6925,7 @@ def _merges_in_main_checkout(main, target, b):
     return False
 
 
-def _merge_in_temporary_checkout(main, target, args, b, author_runs=()):
+def _merge_in_temporary_checkout(main, target, args, b, author_runs=(), record=False):
     """Runs `git merge` (with git's own hooks and checks) in a temporary
     checkout of `target` in the engine's state location, then removes that
     checkout. A refused merge commits nothing, so `target` has not moved; the
@@ -6947,10 +6953,14 @@ def _merge_in_temporary_checkout(main, target, args, b, author_runs=()):
         _remove_temporary_checkout(main, path)
         raise SpecError("cannot merge %s: a temporary checkout of %s could not be made (exit %d); no merge was "
                         "attempted in this repository:\n%s" % (b, target, rc, (out + err).strip()[-2000:]))
+    before = branch_tip_read(path, target)[0] if record else None
+    after = None
     try:
         # git's own checks (pre-merge-commit) run here and may take minutes.
         r = subprocess.run(["git", "-C", path] + args, capture_output=True, text=True,
                            env=_land_env(target, author_runs))
+        if record and r.returncode == 0:
+            after = branch_tip_read(path, target)[0]
     finally:
         left = _remove_temporary_checkout(main, path)
     if r.returncode != 0:
@@ -6959,6 +6969,7 @@ def _merge_in_temporary_checkout(main, target, args, b, author_runs=()):
                                     "\n" + left if left else ""))
     if left:
         sys.stderr.write(left + "\n")
+    return before, after
 
 
 def _remove_temporary_checkout(main, path):

@@ -66,7 +66,7 @@ enum WorkspaceHandoff {
         throw HandoffError.noReply
     }
 
-    static func accept(_ id: UUID, for target: Target, into workspace: WindowWorkspace) throws {
+    static func accept(_ id: UUID, for target: Target, into workspace: WindowWorkspace, chat: String? = nil) throws {
         let folder = try ticketFolder(create: false)
         let request = ticketURL(id, in: folder)
         let reply = ackURL(id, in: folder)
@@ -75,7 +75,7 @@ enum WorkspaceHandoff {
         guard ticket.id == id, ticket.target == target, ticket.expires > Date(),
               ticket.expires.timeIntervalSinceNow <= 20,
               !FileManager.default.fileExists(atPath: reply.path) else { throw HandoffError.invalid }
-        let restored = target == .docked ? workspace.acceptDockedSession(ticket.workspace)
+        let restored = target == .docked ? workspace.acceptDockedSession(ticket.workspace, chat: chat)
             : workspace.restoreSession(ticket.workspace)
         guard restored else { throw HandoffError.invalid }
         try writePrivate(Data(id.uuidString.utf8), to: reply)
@@ -150,6 +150,7 @@ enum WorkspaceHandoff {
 public final class RichFilesDockTarget {
     private weak var workspace: WindowWorkspace?
     private weak var actions: BrowserActions?
+    private var currentChat: String?
 
     public init() {}
 
@@ -165,7 +166,23 @@ public final class RichFilesDockTarget {
     public func accept(_ id: UUID) async throws {
         let workspace = try await attachedWorkspace()
         guard actions?.busy == false else { throw WorkspaceHandoff.HandoffError.busy }
-        try WorkspaceHandoff.accept(id, for: .docked, into: workspace)
+        try WorkspaceHandoff.accept(id, for: .docked, into: workspace, chat: currentChat)
+    }
+
+    public func chatChanged(_ thread: String?) {
+        currentChat = thread
+        workspace?.git.chatChanged(to: thread)
+    }
+
+    public func showGit(_ snapshot: GitPanelSnapshot) async throws {
+        let workspace = try await attachedWorkspace()
+        guard snapshot.threadId == currentChat else { return }
+        let root = snapshot.repository.url
+        let active = workspace.activeModel
+        active.openFolder(root)
+        // The browser validates the destination asynchronously. Git reads its
+        // pinned root immediately and follows the browser once navigation lands.
+        workspace.git.startSnapshot(snapshot, folder: active.folder, currentChat: currentChat, docked: true)
     }
 
     // The webview can become visible before SwiftUI appears.

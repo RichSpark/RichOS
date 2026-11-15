@@ -717,7 +717,7 @@ fn richfiles_timing(scope: &Scope, ctx: &Context, budget: &mut u64) -> Item {
         let confirmed = record["confirmed"].as_u64()?;
         if id.len() != 36 || !id.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-')
             || build.len() > 40 || !build.bytes().all(|b| b.is_ascii_alphanumeric() || b".-+".contains(&b))
-            || !matches!(operation, "listing" | "copy" | "move" | "recovery")
+            || !matches!(operation, "listing" | "copy" | "move" | "recovery" | "gitHistory" | "gitComparison")
             || !matches!(outcome, "complete" | "issues" | "canceled" | "unavailable" | "interrupted")
             || confirmed > total {
             return None;
