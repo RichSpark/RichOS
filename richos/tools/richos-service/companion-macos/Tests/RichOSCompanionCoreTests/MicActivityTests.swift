@@ -87,6 +87,20 @@ final class MicActivityTests: XCTestCase {
         XCTAssertEqual(changes, [.started(p(45, "com.google.Chrome.helper", input: true))])
     }
 
+    /// Issue #19: "Make a video" turns the microphone on in RichOS's webview, and WebKit records it
+    /// in its media process, whose pid and bundle id are not the app's. macOS holds RichOS
+    /// responsible for it, so it is RichOS's own microphone use, never a call. Safari's media
+    /// process (same bundle id, Safari responsible) on a call still is one.
+    func testTheAppsOwnWebviewMicrophoneIsNotACall() {
+        let app: Int32 = 500, safari: Int32 = 600
+        var t = MicActivityTracker(filter: MicActivityFilter(pids: [app], bundleIds: ["com.richos.app"]))
+        let richosVideo = AudioProcess(pid: 701, bundleId: "com.apple.WebKit.GPU", runningInput: true, runningOutput: false, responsiblePid: app)
+        let safariCall = AudioProcess(pid: 702, bundleId: "com.apple.WebKit.GPU", runningInput: true, runningOutput: false, responsiblePid: safari)
+        let zoom = AudioProcess(pid: 703, bundleId: "us.zoom.xos", runningInput: true, runningOutput: false, responsiblePid: 703)
+        XCTAssertEqual(t.update([richosVideo], at: 0), [], "the video's microphone prompts nothing")
+        XCTAssertEqual(t.update([richosVideo, safariCall, zoom], at: 1_000), [.started(safariCall), .started(zoom)])
+    }
+
     func testChangesAreOrderedStoppedThenStartedByPid() {
         var t = MicActivityTracker(filter: MicActivityFilter())
         _ = t.update([p(5, "a", input: true), p(3, "b", input: true)], at: 0)

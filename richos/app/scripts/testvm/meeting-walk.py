@@ -21,6 +21,12 @@ STEPS (steps in the guest, never on the host's screen):
   audio        BlackHole installed, default input set, microphone/system-audio grants written the way
                tccd records a person's Allow (the guest image has SIP off; never on a host)
   first-run    a company is added (folders-walk.py's own first run)
+  own-mic      RichOS's own microphone is never a call (issue #19): a company and a team seeded the
+               way home-video-walk.py seeds them, the app relaunched with the real microphone, then
+               on the home screen, Make a video, Microphone On (the webview's own getUserMedia into BlackHole 2ch): the companion's
+               `watch --trace` shows the process running input and the process macOS holds
+               responsible for it (the app), and after 20 s the app has shown no prompt; Off and
+               Escape put the microphone and the choices away again
   prompt       another process starts using the microphone: the app offers Take Notes at the top right;
                nothing records until it is pressed (no capture process, no session folder)
   record       Take Notes pressed: "Recording meeting"; speech played into the microphone
@@ -45,7 +51,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 LAB = Path('/Volumes/E1TB/caches/richos-mac-call-lab')
-STEPS = ['identity', 'companion', 'audio', 'first-run', 'prompt', 'record', 'stop', 'settings', 'retry']
+STEPS = ['identity', 'companion', 'audio', 'first-run', 'own-mic', 'prompt', 'record', 'stop', 'settings', 'retry']
 LABDIR = '/Users/admin/lab'
 
 
@@ -205,6 +211,78 @@ def build_walk(folders, guest):
             if 'mic-user' not in res['compile'] or 'No such file' in res['compile']:
                 raise StepFailed('mic-user did not compile: ' + res['compile'])
             return res
+
+        def own_mic(self):
+            """Issue #19: "Make a video" with the microphone on showed "Call detected". The webview
+            records in WebKit's media process, not the app's pid or bundle id; the watcher now leaves
+            out every process macOS holds RichOS responsible for."""
+            # Make a video is on the home screen once the picture has his memories and a team
+            # (home-video.js onCount): home-video-walk.py's own seed step, then a relaunch with the
+            # real microphone (that walk's launches carry RICHOS_VIDEO_INPUT_TONE=1).
+            spec = importlib.util.spec_from_file_location('home_video_walk', HERE / 'home-video-walk.py')
+            hv = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(hv)
+            (self.out / 'own-mic-seed').mkdir(parents=True, exist_ok=True)
+            seeder = hv.Walk(self.vm, self.out / 'own-mic-seed', 40)
+            try:
+                seeded = seeder.seed()
+                launched = seeder.launch('with the real microphone')
+            except hv.StepFailed as exc:
+                raise StepFailed('seeding the home screen: ' + str(exc)[:1500])
+            self.applog = self.g('ls -t ' + shlex.quote(self.payload) + '/relaunch-*.log | head -1').strip()
+            app_pid = (Path(os.environ.get('TESTVM_ROOT', str(Path.home() / '.richos-testvm'))) / 'run' / self.vm / 'app.pid').read_text().strip()
+            try:
+                seeder.until(lambda: seeder.node('--id', 'home-video'), 60, 'Make a video is not on the home screen')
+            except hv.StepFailed as exc:
+                self.shot('own-mic-no-button.png')
+                raise StepFailed(str(exc) + ' (seeded: ' + json.dumps(seeded)[:600] + ')')
+            if not self.wait_log('meeting notes: companion', 30):
+                raise StepFailed('the relaunched app log ' + self.applog + ' has no "meeting notes: companion" line')
+            prompts, in_use = self.log_has('ShowPrompt'), self.log_has('microphone in use')
+            self.ax('click', '--id', 'home-video', '--first')
+            end = time.monotonic() + 15
+            while time.monotonic() < end and not self.nodes('--title', 'Start recording', '--role', 'AXButton'):
+                time.sleep(1)
+            self.ax('click', '--title', 'On', '--role', 'AXCheckBox', '--first')
+            time.sleep(4)
+            app = self.facts.get('companion', {}).get('app', '')
+            # Measurement, with the companion that shipped in the bundle: every process Core Audio
+            # lists, whether it runs input, and who macOS holds responsible for it.
+            trace = self.g(f'(sleep 3 | {shlex.quote(app)}/Contents/MacOS/richos-companion watch --trace) 2>&1 | grep trace | head -1 || true')
+            try:
+                listed = json.loads(trace)['processes']
+            except (ValueError, KeyError):
+                listed = []
+            inputs = [p for p in listed if p.get('in')]
+            self.shot('own-mic-on.png')
+            time.sleep(20)
+            ev = {'launched': launched, 'app_log': self.applog, 'app_pid': app_pid, 'running_input': inputs,
+                  'mic_on_choice': [n.get('value') for n in self.nodes('--title', 'On', '--role', 'AXCheckBox')],
+                  'prompts_before': prompts, 'prompts_after': self.log_has('ShowPrompt'),
+                  'mic_in_use_lines_before': in_use, 'mic_in_use_lines_after': self.log_has('microphone in use'),
+                  'call_detected_on_screen': self.text_on_screen('Call detected')}
+            self.shot('own-mic-20s.png')
+            self.meeting_log('own-mic-meeting-log.txt')
+            # the way out: the microphone off, the choices closed
+            self.ax('click', '--title', 'Off', '--role', 'AXCheckBox', '--first')
+            time.sleep(1)
+            self.close_settings()  # Escape
+            time.sleep(3)
+            after = self.g(f'(sleep 3 | {shlex.quote(app)}/Contents/MacOS/richos-companion watch --trace) 2>&1 | grep trace | head -1 || true')
+            try:
+                ev['running_input_after_off'] = [p for p in json.loads(after)['processes'] if p.get('in')]
+            except (ValueError, KeyError):
+                ev['running_input_after_off'] = None
+            ev['choices_closed'] = not self.nodes('--title', 'Start recording', '--role', 'AXButton')
+            self.facts['own_mic'] = ev
+            self.save()
+            ours = [p for p in inputs if str(p.get('responsible')) == app_pid]
+            if not ours:
+                raise StepFailed('no process RichOS is responsible for was running input with the microphone On, '
+                                 'so this proves nothing: ' + json.dumps(ev)[:2000])
+            if ev['prompts_after'] > prompts or ev['mic_in_use_lines_after'] > in_use or ev['call_detected_on_screen']:
+                raise StepFailed("RichOS's own microphone was taken for a call: " + json.dumps(ev)[:2000])
+            return ev
 
         def prompt(self):
             before_sessions = self.sessions()
