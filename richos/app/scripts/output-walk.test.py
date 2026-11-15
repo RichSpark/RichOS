@@ -312,6 +312,47 @@ class OutputWalkTests(unittest.TestCase):
         only_scratch = self.links_fixture("").scratch_links(["/private/tmp/rv1/x.zip"], listed, note)
         self.assertIn("only the scratch set holds", only_scratch[0])
 
+    # --- the Git view and the filename filter ---------------------------------------------------
+    def nodes_walk(self, nodes):
+        """A walk whose finds answer from `nodes`, as a guest's tree gives them; the
+        panel is everything right of x 1140."""
+        walk = object.__new__(output.OutputWalk)
+        walk.out, walk.vm = self.out, "vm"
+        walk.find_all = lambda title, role=None, contains=True, by="--title": [
+            n for n in nodes if (role is None or n.get("role") == role)
+            and any(title in str(n.get(k) or "") for k in (("value",) if by == "--value" else ("title", "desc")))]
+        walk.in_panel = lambda found: [n for n in found if n["x"] >= 1140]
+        walk.wait_words = lambda words, seconds=30: True
+        walk.shot = lambda name: None
+        return walk
+
+    @staticmethod
+    def version_line(before, text, x, y):
+        said = ("Earlier version. Line 2. Removed. " if before else "Later version. Line 2. Added. ") + text
+        return {"role": "AXStaticText", "desc": "text", "value": said, "x": x, "y": y, "w": 419, "h": 23}
+
+    def test_filter_rows_are_the_panels_file_rows_once_each(self):
+        # With "black" typed: the row, its Open and its More actions, and a file link in the
+        # conversation left of the panel, which is no row of the panel.
+        walk = self.nodes_walk([
+            {"role": "AXButton", "title": "filter-black.txt ~/Acme/", "x": 1158},
+            {"role": "AXButton", "title": "Open filter-black.txt", "x": 1470},
+            {"role": "AXButton", "title": "More actions for filter-black.txt", "x": 1500},
+            {"role": "AXButton", "title": "filter-white.txt", "x": 445},
+        ])
+        self.assertEqual(walk.panel_rows("filter-"), ["filter-black.txt"])
+
+    @patch.object(output.time, "sleep")
+    def test_side_by_side_passes_level_versions_left_to_right_and_refuses_otherwise(self, _sleep):
+        level = [self.version_line(True, output.GIT_BEFORE, 701, 516), self.version_line(False, output.GIT_AFTER, 1121, 516)]
+        self.assertEqual(self.nodes_walk(level).side_by_side(Mock(), "git")["earlier"]["x"], 701)
+        stacked = [self.version_line(True, output.GIT_BEFORE, 701, 516), self.version_line(False, output.GIT_AFTER, 701, 545)]
+        with self.assertRaises(output.StepFailed):
+            self.nodes_walk(stacked).side_by_side(Mock(), "git")
+        unchanged = [self.version_line(True, "Green tea: $4", 701, 490), self.version_line(False, "Green tea: $4", 1121, 490)]
+        with patch.object(output, "command", return_value="tree"), self.assertRaises(output.StepFailed):
+            self.nodes_walk(unchanged).side_by_side(Mock(), "git")
+
 
 if __name__ == "__main__":
     unittest.main()

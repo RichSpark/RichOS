@@ -1,0 +1,601 @@
+{
+  "vm": "walk-2f8ddeff1dac",
+  "expect_sha": "368fc13f45749ba421bf3002520a2d9527cb574c",
+  "steps": [
+    {
+      "step": "site",
+      "evidence": {
+        "url": "http://127.0.0.1:18765",
+        "plain_fetch_profile": "<!doctype html><title>Profile</title><h1>Profile</h1><p>Sign in to see this profile.</p>"
+      },
+      "outcome": "PASS",
+      "seconds": 0.9
+    },
+    {
+      "step": "chrome",
+      "evidence": {
+        "installed_chrome": true
+      },
+      "outcome": "PASS",
+      "seconds": 45.4
+    },
+    {
+      "step": "tool",
+      "evidence": {
+        "tools": [
+          "open_page",
+          "press",
+          "scroll_down",
+          "next_part",
+          "close_page"
+        ],
+        "server_exit": 0,
+        "exe": {
+          "pushed": "bundle",
+          "bundle": "RichOS.app",
+          "exe": "/Users/admin/testvm/walk-2f8ddeff1dac/bundle/RichOS.app/Contents/MacOS/richos-tauri",
+          "codesign": "signature-valid"
+        }
+      },
+      "outcome": "PASS",
+      "seconds": 15.7
+    },
+    {
+      "step": "read-safari",
+      "evidence": {
+        "browser": "safari",
+        "default": {
+          "bundle": "com.apple.Safari",
+          "before": "com.apple.safari",
+          "set": {},
+          "pressed": null,
+          "after": "com.apple.safari"
+        },
+        "pages": [
+          {
+            "page": "long article, and a link followed",
+            "outcome": "PASS",
+            "seconds": 7.9,
+            "address": "https://en.wikipedia.org/wiki/Assistive_technology",
+            "characters": 122164,
+            "notes": [
+              "The page is long: this is part 1 of 3. next_part gives the following part."
+            ]
+          },
+          {
+            "page": "accordion (W3C pattern): a closed panel opened",
+            "outcome": "PASS",
+            "seconds": 5.2,
+            "address": "https://www.w3.org/WAI/ARIA/apg/patterns/accordion/examples/accordion/",
+            "characters": 12333,
+            "notes": null
+          },
+          {
+            "page": "accordion (Bootstrap): a closed panel opened",
+            "outcome": "PASS",
+            "seconds": 6.0,
+            "address": "https://getbootstrap.com/docs/5.3/components/accordion/",
+            "characters": 31628,
+            "notes": null
+          },
+          {
+            "page": "tab list (W3C pattern): another tab shown",
+            "outcome": "PASS",
+            "seconds": 4.8,
+            "address": "https://www.w3.org/WAI/ARIA/apg/patterns/tabs/examples/tabs-automatic/",
+            "characters": 13387,
+            "notes": null
+          },
+          {
+            "page": "table of links, and its \"More\"",
+            "outcome": "PASS",
+            "seconds": 5.4,
+            "address": "https://news.ycombinator.com/?p=2",
+            "characters": 15153,
+            "notes": null
+          },
+          {
+            "page": "a page that loads more as it scrolls",
+            "outcome": "PASS",
+            "seconds": 6.3,
+            "address": "https://infinite-scroll.com/demo/full-page/",
+            "characters": 6111,
+            "notes": null
+          },
+          {
+            "page": "web app (a GitHub repository), and a link followed",
+            "outcome": "PASS",
+            "seconds": 8.8,
+            "address": "https://github.com/rust-lang/rust/issues",
+            "characters": 19693,
+            "notes": null
+          },
+          {
+            "page": "a page that sends a signed-out visitor to its sign-in page",
+            "outcome": "PASS",
+            "seconds": 2.8,
+            "address": "https://github.com/login?return_to=https%3A%2F%2Fgithub.com%2Fsettings%2Fprofile",
+            "characters": 948,
+            "notes": [
+              "The browser ended at https://github.com/login?return_to=https%3A%2F%2Fgithub.com%2Fsettings%2Fprofile rather than the address asked for; the site sent it there, which can be its sign-in page."
+            ]
+          },
+          {
+            "page": "an address with a letter outside ASCII, on a page the browser offers to translate",
+            "outcome": "PASS",
+            "seconds": 10.6,
+            "address": "https://de.wikipedia.org/wiki/M%C3%BCnchen",
+            "characters": 453362,
+            "notes": [
+              "The page is long: this is part 1 of 8. next_part gives the following part."
+            ]
+          },
+          {
+            "page": "a page only a signed-in browser is shown",
+            "outcome": "PASS",
+            "seconds": 5.5,
+            "address": "http://127.0.0.1:18765/profile",
+            "characters": 84,
+            "notes": [
+              "Safari exposed only 84 characters of text for this page. It may be drawn as a picture, be empty, want a sign-in or still be loading (scroll_down reads it again); this is everything that could be read."
+            ]
+          },
+          {
+            "page": "a code sample whose spacing is part of the program",
+            "outcome": "PASS",
+            "seconds": 5.3,
+            "address": "http://127.0.0.1:18765/code",
+            "characters": 75,
+            "notes": [
+              "Safari exposed only 75 characters of text for this page. It may be drawn as a picture, be empty, want a sign-in or still be loading (scroll_down reads it again); this is everything that could be read."
+            ]
+          },
+          {
+            "page": "a link that opens in a new tab",
+            "outcome": "PASS",
+            "seconds": 10.5,
+            "address": "http://127.0.0.1:18765/profile",
+            "characters": 84,
+            "notes": [
+              "Safari exposed only 84 characters of text for this page. It may be drawn as a picture, be empty, want a sign-in or still be loading (scroll_down reads it again); this is everything that could be read."
+            ]
+          }
+        ],
+        "closed": "The tab RichOS opened in Safari is closed.",
+        "server_exit": 0,
+        "passed": 12,
+        "of": 12
+      },
+      "outcome": "PASS",
+      "seconds": 90.8
+    },
+    {
+      "step": "read-chrome",
+      "evidence": {
+        "browser": "chrome",
+        "default": {
+          "bundle": "com.google.Chrome",
+          "before": "com.apple.safari",
+          "set": {
+            "http": 0,
+            "https": -54
+          },
+          "pressed": "Use \u201cChrome\u201d",
+          "after": "com.google.chrome"
+        },
+        "pages": [
+          {
+            "page": "long article, and a link followed",
+            "outcome": "PASS",
+            "seconds": 8.4,
+            "address": "https://en.wikipedia.org/wiki/Assistive_technology",
+            "characters": 124751,
+            "notes": [
+              "The page is long: this is part 1 of 3. next_part gives the following part."
+            ]
+          },
+          {
+            "page": "accordion (W3C pattern): a closed panel opened",
+            "outcome": "PASS",
+            "seconds": 7.1,
+            "address": "https://www.w3.org/WAI/ARIA/apg/patterns/accordion/examples/accordion/",
+            "characters": 11610,
+            "notes": null
+          },
+          {
+            "page": "accordion (Bootstrap): a closed panel opened",
+            "outcome": "PASS",
+            "seconds": 7.5,
+            "address": "https://getbootstrap.com/docs/5.3/components/accordion/",
+            "characters": 31514,
+            "notes": null
+          },
+          {
+            "page": "tab list (W3C pattern): another tab shown",
+            "outcome": "PASS",
+            "seconds": 6.9,
+            "address": "https://www.w3.org/WAI/ARIA/apg/patterns/tabs/examples/tabs-automatic/",
+            "characters": 13379,
+            "notes": null
+          },
+          {
+            "page": "table of links, and its \"More\"",
+            "outcome": "PASS",
+            "seconds": 7.1,
+            "address": "https://news.ycombinator.com/?p=2",
+            "characters": 15046,
+            "notes": null
+          },
+          {
+            "page": "a page that loads more as it scrolls",
+            "outcome": "PASS",
+            "seconds": 6.7,
+            "address": "https://infinite-scroll.com/demo/full-page/",
+            "characters": 6068,
+            "notes": null
+          },
+          {
+            "page": "web app (a GitHub repository), and a link followed",
+            "outcome": "PASS",
+            "seconds": 8.5,
+            "address": "https://github.com/rust-lang/rust/issues",
+            "characters": 20170,
+            "notes": null
+          },
+          {
+            "page": "a page that sends a signed-out visitor to its sign-in page",
+            "outcome": "PASS",
+            "seconds": 4.6,
+            "address": "https://github.com/login?return_to=https%3A%2F%2Fgithub.com%2Fsettings%2Fprofile",
+            "characters": 948,
+            "notes": [
+              "The browser ended at https://github.com/login?return_to=https%3A%2F%2Fgithub.com%2Fsettings%2Fprofile rather than the address asked for; the site sent it there, which can be its sign-in page."
+            ]
+          },
+          {
+            "page": "an address with a letter outside ASCII, on a page the browser offers to translate",
+            "outcome": "PASS",
+            "seconds": 9.8,
+            "address": "https://de.wikipedia.org/wiki/M%C3%BCnchen",
+            "characters": 465975,
+            "notes": [
+              "The page is long: this is part 1 of 8. next_part gives the following part."
+            ]
+          },
+          {
+            "page": "a page only a signed-in browser is shown",
+            "outcome": "PASS",
+            "seconds": 7.7,
+            "address": "http://127.0.0.1:18765/profile",
+            "characters": 84,
+            "notes": [
+              "Google Chrome exposed only 84 characters of text for this page. It may be drawn as a picture, be empty, want a sign-in or still be loading (scroll_down reads it again); this is everything that could be read."
+            ]
+          },
+          {
+            "page": "a code sample whose spacing is part of the program",
+            "outcome": "PASS",
+            "seconds": 7.6,
+            "address": "http://127.0.0.1:18765/code",
+            "characters": 75,
+            "notes": [
+              "Google Chrome exposed only 75 characters of text for this page. It may be drawn as a picture, be empty, want a sign-in or still be loading (scroll_down reads it again); this is everything that could be read."
+            ]
+          },
+          {
+            "page": "a link that opens in a new tab",
+            "outcome": "PASS",
+            "seconds": 12.9,
+            "address": "http://127.0.0.1:18765/profile",
+            "characters": 84,
+            "notes": [
+              "Google Chrome exposed only 84 characters of text for this page. It may be drawn as a picture, be empty, want a sign-in or still be loading (scroll_down reads it again); this is everything that could be read."
+            ]
+          }
+        ],
+        "closed": "The tab RichOS opened in Google Chrome is closed.",
+        "server_exit": 0,
+        "passed": 12,
+        "of": 12
+      },
+      "outcome": "PASS",
+      "seconds": 101.8
+    },
+    {
+      "step": "states-safari",
+      "evidence": {
+        "browser": "safari",
+        "page": "https://github.com/rust-lang/rust",
+        "states": [
+          {
+            "state": "minimized",
+            "reached": true,
+            "put": {
+              "running": true,
+              "hidden": false,
+              "windows": [
+                {
+                  "title": "Walk article",
+                  "minimized": true
+                }
+              ]
+            },
+            "errors": [],
+            "first open": {
+              "outcome": "read",
+              "seconds": 4.4,
+              "characters": 17508,
+              "closed": {
+                "closed": "The tab RichOS opened in Safari is closed."
+              },
+              "notes": [
+                "Safari had no window on screen (it was hidden or its windows were minimized), so RichOS brought one back to read the page. It is left showing."
+              ]
+            },
+            "left": {
+              "running": true,
+              "hidden": false,
+              "windows": [
+                {
+                  "title": "Walk article",
+                  "minimized": false
+                }
+              ]
+            }
+          },
+          {
+            "state": "hidden",
+            "reached": true,
+            "put": {
+              "running": true,
+              "hidden": true,
+              "windows": [
+                {
+                  "title": "Walk article",
+                  "minimized": false
+                }
+              ]
+            },
+            "errors": [],
+            "first open": {
+              "outcome": "read",
+              "seconds": 3.9,
+              "characters": 17508,
+              "closed": {
+                "closed": "The tab RichOS opened in Safari is closed."
+              },
+              "notes": [
+                "Safari had no window on screen (it was hidden or its windows were minimized), so RichOS brought one back to read the page. It is left showing."
+              ]
+            },
+            "left": {
+              "running": true,
+              "hidden": false,
+              "windows": [
+                {
+                  "title": "Walk article",
+                  "minimized": false
+                }
+              ]
+            }
+          },
+          {
+            "state": "no-windows",
+            "reached": true,
+            "put": {
+              "running": true,
+              "hidden": false,
+              "windows": []
+            },
+            "errors": [],
+            "first open": {
+              "outcome": "read",
+              "seconds": 3.0,
+              "characters": 17508,
+              "closed": {
+                "closed": "RichOS could not be sure that the tab showing the page in Safari was one it opened itself (the browser showed the page in a tab that was already there or its tabs could not be counted), so the tab is left as it is."
+              },
+              "notes": null
+            },
+            "left": {
+              "running": true,
+              "hidden": false,
+              "windows": [
+                {
+                  "title": "GitHub - rust-lang/rust: Empowering everyone to build reliable and efficient software. \u00b7 GitHub",
+                  "minimized": false
+                }
+              ]
+            }
+          },
+          {
+            "state": "not-running",
+            "reached": true,
+            "put": {
+              "running": false,
+              "windows": []
+            },
+            "errors": [],
+            "first open": {
+              "outcome": "read",
+              "seconds": 5.7,
+              "characters": 17485,
+              "closed": {
+                "closed": "RichOS could not be sure that the tab showing the page in Safari was one it opened itself (the browser showed the page in a tab that was already there or its tabs could not be counted), so the tab is left as it is."
+              },
+              "notes": null
+            },
+            "left": {
+              "running": true,
+              "hidden": false,
+              "windows": [
+                {
+                  "title": "GitHub - rust-lang/rust: Empowering everyone to build reliable and efficient software. \u00b7 GitHub",
+                  "minimized": false
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "outcome": "PASS",
+      "seconds": 66.4
+    },
+    {
+      "step": "states-chrome",
+      "evidence": {
+        "browser": "chrome",
+        "page": "https://github.com/rust-lang/rust",
+        "states": [
+          {
+            "state": "minimized",
+            "reached": true,
+            "put": {
+              "running": true,
+              "hidden": false,
+              "windows": [
+                {
+                  "title": "Walk article - Google Chrome",
+                  "minimized": true
+                }
+              ]
+            },
+            "errors": [],
+            "first open": {
+              "outcome": "read",
+              "seconds": 4.5,
+              "characters": 18039,
+              "closed": {
+                "closed": "The tab RichOS opened in Google Chrome is closed."
+              },
+              "notes": [
+                "Google Chrome had no window on screen (it was hidden or its windows were minimized), so RichOS brought one back to read the page. It is left showing."
+              ]
+            },
+            "left": {
+              "running": true,
+              "hidden": false,
+              "windows": [
+                {
+                  "title": "Walk article - Google Chrome",
+                  "minimized": false
+                }
+              ]
+            }
+          },
+          {
+            "state": "hidden",
+            "reached": true,
+            "put": {
+              "running": true,
+              "hidden": true,
+              "windows": [
+                {
+                  "title": "Walk article - Google Chrome",
+                  "minimized": false
+                }
+              ]
+            },
+            "errors": [],
+            "first open": {
+              "outcome": "read",
+              "seconds": 4.6,
+              "characters": 18039,
+              "closed": {
+                "closed": "The tab RichOS opened in Google Chrome is closed."
+              },
+              "notes": [
+                "Google Chrome had no window on screen (it was hidden or its windows were minimized), so RichOS brought one back to read the page. It is left showing."
+              ]
+            },
+            "left": {
+              "running": true,
+              "hidden": false,
+              "windows": [
+                {
+                  "title": "Walk article - Google Chrome",
+                  "minimized": false
+                }
+              ]
+            }
+          },
+          {
+            "state": "no-windows",
+            "reached": true,
+            "put": {
+              "running": true,
+              "hidden": false,
+              "windows": []
+            },
+            "errors": [],
+            "first open": {
+              "outcome": "read",
+              "seconds": 4.6,
+              "characters": 18039,
+              "closed": {
+                "closed": "The tab RichOS opened in Google Chrome is closed."
+              },
+              "notes": null
+            },
+            "left": {
+              "running": true,
+              "hidden": false,
+              "windows": []
+            }
+          },
+          {
+            "state": "not-running",
+            "reached": true,
+            "put": {
+              "running": false,
+              "windows": []
+            },
+            "errors": [],
+            "first open": {
+              "outcome": "not read",
+              "seconds": 22.7,
+              "characters": 0,
+              "closed": {
+                "closed": "No page was open."
+              },
+              "notes": null,
+              "problems": [
+                "the tool refused: Google Chrome was asked to open https://github.com/rust-lang/rust, but RichOS could not tell which tab shows it (the browser may have just started and restored its earlier windows, or sent the page somewhere else at that moment), so nothing was read: another tab could be private. Opening the page again usually works now that the browser is running. (It showed 0 tabs before the open and 2 after.)"
+              ],
+              "answer": "Google Chrome was asked to open https://github.com/rust-lang/rust, but RichOS could not tell which tab shows it (the browser may have just started and restored its earlier windows, or sent the page somewhere else at that moment), so nothing was read: another tab could be private. Opening the page again usually works now that the browser is running. (It showed 0 tabs before the open and 2 after.)"
+            },
+            "second open": {
+              "outcome": "read",
+              "seconds": 3.5,
+              "characters": 18039,
+              "closed": {
+                "closed": "The tab RichOS opened in Google Chrome is closed."
+              },
+              "notes": null
+            },
+            "left": {
+              "running": true,
+              "hidden": false,
+              "windows": [
+                {
+                  "title": "What's New - Google Chrome",
+                  "minimized": false
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "outcome": "PASS",
+      "seconds": 92.1
+    },
+    {
+      "step": "cleanup",
+      "evidence": {
+        "server_pid_stopped": "957"
+      },
+      "outcome": "PASS",
+      "seconds": 0.3
+    }
+  ]
+}
