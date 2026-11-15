@@ -120,6 +120,9 @@ pub mod onboarding_tools;
 pub mod openings;
 pub mod onboarding_loro;
 pub mod linkedin_tools;
+/// Any website in the user's own signed-in browser: the page with its controls numbered, and
+/// one press at a time chosen by the teammate.
+pub mod browser_tools;
 pub mod provision;
 pub mod questions;
 pub mod question_work;

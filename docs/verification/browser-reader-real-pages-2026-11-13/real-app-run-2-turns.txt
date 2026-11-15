@@ -1,0 +1,27 @@
+[
+  {
+    "state": "completed",
+    "reply": "I read your store admin page in your browser (Safari):\n\n- **Orders this week: 214**\n- **Ships from: Rotterdam.** It goes out within two days.\n\nThe shipping details were in a collapsed section. I opened it to read them, then closed the tab.",
+    "closed_at_ms": 1794576941297,
+    "turn": "turn_dfe4faade8e14a39936e40e052e688d6",
+    "waited_s": 300.0,
+    "seconds": 57.29773510742187,
+    "n": 1,
+    "kind": "say",
+    "text": "Our store's admin page is at http://127.0.0.1:18765/store and I'm already signed in there in my browser. Please have someone on the team read that page in my browser and tell me two things: how many orders we had this week, and where the store ships from.",
+    "sent_at_ms": 1794576883999.265,
+    "failure": null
+  },
+  {
+    "waited_s": 900.0,
+    "turn": null,
+    "state": "none",
+    "reply": "",
+    "seconds": null,
+    "n": 2,
+    "kind": "wait_for_rich",
+    "text": 900,
+    "sent_at_ms": 1794576942421.982,
+    "failure": "no turn started within 900 s of the wait_for_rich"
+  }
+]

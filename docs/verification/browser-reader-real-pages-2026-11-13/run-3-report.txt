@@ -1,0 +1,552 @@
+{
+  "vm": "walk-2e5aefcd5886",
+  "expect_sha": "230c19a49",
+  "steps": [
+    {
+      "step": "site",
+      "evidence": {
+        "url": "http://127.0.0.1:18765",
+        "plain_fetch_profile": "<!doctype html><title>Profile</title><h1>Profile</h1><p>Sign in to see this profile.</p>"
+      },
+      "outcome": "PASS",
+      "seconds": 0.9
+    },
+    {
+      "step": "chrome",
+      "evidence": {
+        "installed_chrome": true
+      },
+      "outcome": "PASS",
+      "seconds": 39.2
+    },
+    {
+      "step": "firefox",
+      "evidence": {
+        "installed": true,
+        "version": "160.0"
+      },
+      "outcome": "PASS",
+      "seconds": 27.1
+    },
+    {
+      "step": "brave",
+      "evidence": {
+        "installed": true,
+        "version": "157.1.99.57"
+      },
+      "outcome": "PASS",
+      "seconds": 55.2
+    },
+    {
+      "step": "tool",
+      "evidence": {
+        "tools": [
+          "open_page",
+          "press",
+          "scroll_down",
+          "next_part",
+          "close_page"
+        ],
+        "server_exit": 0
+      },
+      "outcome": "PASS",
+      "seconds": 1.2
+    },
+    {
+      "step": "read-safari",
+      "evidence": {
+        "browser": "safari",
+        "default": {
+          "step": {
+            "do": "press",
+            "kind": "link",
+            "name": "^Profile in a new tab$"
+          },
+          "item": "3202 link \"Profile in a new tab\"",
+          "error": false,
+          "answer": {
+            "browser": "Safari",
+            "address": "http://127.0.0.1:18765/profile",
+            "title": "Profile",
+            "page": "# Profile\nAda Walker, signed-in view: works on accessible browsers at Example Works.",
+            "notes": [
+              "Safari exposed only 84 characters of text for this page. It may be drawn as a picture, be empty, want a sign-in or still be loading (scroll_down reads it again); this is everything that could be read."
+            ],
+            "pressed": "3202 link \"Profile in a new tab\""
+          },
+          "seconds": 2.1
+        },
+        "pages": [
+          {
+            "page": "long article, and a link followed",
+            "outcome": "PASS",
+            "seconds": 6.6,
+            "address": "https://en.wikipedia.org/wiki/Assistive_technology",
+            "characters": 122463,
+            "notes": [
+              "The page is long: this is part 1 of 3. next_part gives the following part."
+            ]
+          },
+          {
+            "page": "accordion (W3C pattern): a closed panel opened",
+            "outcome": "PASS",
+            "seconds": 5.0,
+            "address": "https://www.w3.org/WAI/ARIA/apg/patterns/accordion/examples/accordion/",
+            "characters": 10682,
+            "notes": null
+          },
+          {
+            "page": "accordion (Bootstrap): a closed panel opened",
+            "outcome": "PASS",
+            "seconds": 5.3,
+            "address": "https://getbootstrap.com/docs/5.3/components/accordion/",
+            "characters": 31669,
+            "notes": null
+          },
+          {
+            "page": "tab list (W3C pattern): another tab shown",
+            "outcome": "PASS",
+            "seconds": 4.9,
+            "address": "https://www.w3.org/WAI/ARIA/apg/patterns/tabs/examples/tabs-automatic/",
+            "characters": 12907,
+            "notes": null
+          },
+          {
+            "page": "table of links, and its \"More\"",
+            "outcome": "PASS",
+            "seconds": 5.8,
+            "address": "https://news.ycombinator.com/?p=2",
+            "characters": 14709,
+            "notes": null
+          },
+          {
+            "page": "a page that loads more as it scrolls",
+            "outcome": "PASS",
+            "seconds": 6.2,
+            "address": "https://infinite-scroll.com/demo/full-page/",
+            "characters": 6158,
+            "notes": null
+          },
+          {
+            "page": "web app (a GitHub repository), and a link followed",
+            "outcome": "PASS",
+            "seconds": 8.3,
+            "address": "https://github.com/rust-lang/rust/issues",
+            "characters": 18849,
+            "notes": null
+          },
+          {
+            "page": "a page that sends a signed-out visitor to its sign-in page",
+            "outcome": "PASS",
+            "seconds": 2.5,
+            "address": "https://github.com/login?return_to=https%3A%2F%2Fgithub.com%2Fsettings%2Fprofile",
+            "characters": 948,
+            "notes": [
+              "The browser ended at https://github.com/login?return_to=https%3A%2F%2Fgithub.com%2Fsettings%2Fprofile rather than the address asked for; the site sent it there, which can be its sign-in page."
+            ]
+          },
+          {
+            "page": "a page only a signed-in browser is shown",
+            "outcome": "PASS",
+            "seconds": 2.5,
+            "address": "http://127.0.0.1:18765/profile",
+            "characters": 84,
+            "notes": [
+              "Safari exposed only 84 characters of text for this page. It may be drawn as a picture, be empty, want a sign-in or still be loading (scroll_down reads it again); this is everything that could be read."
+            ]
+          },
+          {
+            "page": "a link that opens in a new tab",
+            "outcome": "PASS",
+            "seconds": 4.3,
+            "address": "http://127.0.0.1:18765/profile",
+            "characters": 84,
+            "notes": [
+              "Safari exposed only 84 characters of text for this page. It may be drawn as a picture, be empty, want a sign-in or still be loading (scroll_down reads it again); this is everything that could be read."
+            ]
+          }
+        ],
+        "closed": "The tab RichOS opened in Safari is closed.",
+        "server_exit": 0,
+        "passed": 10,
+        "of": 10
+      },
+      "outcome": "PASS",
+      "seconds": 63.0
+    },
+    {
+      "step": "read-chrome",
+      "evidence": {
+        "browser": "chrome",
+        "default": {
+          "step": {
+            "do": "press",
+            "kind": "link",
+            "name": "^Profile in a new tab$"
+          },
+          "item": "3252 link \"Profile in a new tab\"",
+          "error": false,
+          "answer": {
+            "browser": "Google Chrome",
+            "address": "http://127.0.0.1:18765/profile",
+            "title": "Profile",
+            "page": "# Profile\nAda Walker, signed-in view: works on accessible browsers at Example Works.",
+            "notes": [
+              "Google Chrome exposed only 84 characters of text for this page. It may be drawn as a picture, be empty, want a sign-in or still be loading (scroll_down reads it again); this is everything that could be read."
+            ],
+            "pressed": "3252 link \"Profile in a new tab\""
+          },
+          "seconds": 2.1
+        },
+        "pages": [
+          {
+            "page": "long article, and a link followed",
+            "outcome": "PASS",
+            "seconds": 8.5,
+            "address": "https://en.wikipedia.org/wiki/Assistive_technology",
+            "characters": 127782,
+            "notes": [
+              "The page is long: this is part 1 of 3. next_part gives the following part."
+            ]
+          },
+          {
+            "page": "accordion (W3C pattern): a closed panel opened",
+            "outcome": "PASS",
+            "seconds": 7.3,
+            "address": "https://www.w3.org/WAI/ARIA/apg/patterns/accordion/examples/accordion/",
+            "characters": 9958,
+            "notes": null
+          },
+          {
+            "page": "accordion (Bootstrap): a closed panel opened",
+            "outcome": "PASS",
+            "seconds": 7.7,
+            "address": "https://getbootstrap.com/docs/5.3/components/accordion/",
+            "characters": 31575,
+            "notes": null
+          },
+          {
+            "page": "tab list (W3C pattern): another tab shown",
+            "outcome": "PASS",
+            "seconds": 6.9,
+            "address": "https://www.w3.org/WAI/ARIA/apg/patterns/tabs/examples/tabs-automatic/",
+            "characters": 12946,
+            "notes": null
+          },
+          {
+            "page": "table of links, and its \"More\"",
+            "outcome": "PASS",
+            "seconds": 7.7,
+            "address": "https://news.ycombinator.com/?p=2",
+            "characters": 14602,
+            "notes": null
+          },
+          {
+            "page": "a page that loads more as it scrolls",
+            "outcome": "PASS",
+            "seconds": 6.7,
+            "address": "https://infinite-scroll.com/demo/full-page/",
+            "characters": 6115,
+            "notes": null
+          },
+          {
+            "page": "web app (a GitHub repository), and a link followed",
+            "outcome": "PASS",
+            "seconds": 8.8,
+            "address": "https://github.com/rust-lang/rust/issues",
+            "characters": 19347,
+            "notes": null
+          },
+          {
+            "page": "a page that sends a signed-out visitor to its sign-in page",
+            "outcome": "PASS",
+            "seconds": 4.4,
+            "address": "https://github.com/login?return_to=https%3A%2F%2Fgithub.com%2Fsettings%2Fprofile",
+            "characters": 948,
+            "notes": [
+              "The browser ended at https://github.com/login?return_to=https%3A%2F%2Fgithub.com%2Fsettings%2Fprofile rather than the address asked for; the site sent it there, which can be its sign-in page."
+            ]
+          },
+          {
+            "page": "a page only a signed-in browser is shown",
+            "outcome": "PASS",
+            "seconds": 4.6,
+            "address": "http://127.0.0.1:18765/profile",
+            "characters": 84,
+            "notes": [
+              "Google Chrome exposed only 84 characters of text for this page. It may be drawn as a picture, be empty, want a sign-in or still be loading (scroll_down reads it again); this is everything that could be read."
+            ]
+          },
+          {
+            "page": "a link that opens in a new tab",
+            "outcome": "PASS",
+            "seconds": 6.5,
+            "address": "http://127.0.0.1:18765/profile",
+            "characters": 84,
+            "notes": [
+              "Google Chrome exposed only 84 characters of text for this page. It may be drawn as a picture, be empty, want a sign-in or still be loading (scroll_down reads it again); this is everything that could be read."
+            ]
+          }
+        ],
+        "closed": "The tab RichOS opened in Google Chrome is closed.",
+        "server_exit": 0,
+        "passed": 10,
+        "of": 10
+      },
+      "outcome": "PASS",
+      "seconds": 76.2
+    },
+    {
+      "step": "read-firefox",
+      "evidence": {
+        "browser": "firefox",
+        "default": {
+          "step": {
+            "do": "press",
+            "kind": "link",
+            "name": "^Profile in a new tab$"
+          },
+          "item": "3235 link \"Profile in a new tab\"",
+          "error": false,
+          "answer": {
+            "browser": "Firefox",
+            "address": "http://127.0.0.1:18765/profile",
+            "title": "Profile",
+            "page": "# Profile\nAda Walker, signed-in view: works on accessible browsers at Example Works.",
+            "notes": [
+              "Firefox exposed only 84 characters of text for this page. It may be drawn as a picture, be empty, want a sign-in or still be loading (scroll_down reads it again); this is everything that could be read."
+            ],
+            "pressed": "3235 link \"Profile in a new tab\""
+          },
+          "seconds": 2.1
+        },
+        "pages": [
+          {
+            "page": "long article, and a link followed",
+            "outcome": "PASS",
+            "seconds": 9.1,
+            "address": "https://en.wikipedia.org/wiki/Assistive_technology",
+            "characters": 124413,
+            "notes": [
+              "The page is long: this is part 1 of 3. next_part gives the following part."
+            ]
+          },
+          {
+            "page": "accordion (W3C pattern): a closed panel opened",
+            "outcome": "PASS",
+            "seconds": 6.1,
+            "address": "https://www.w3.org/WAI/ARIA/apg/patterns/accordion/examples/accordion/",
+            "characters": 10550,
+            "notes": null
+          },
+          {
+            "page": "accordion (Bootstrap): a closed panel opened",
+            "outcome": "PASS",
+            "seconds": 6.6,
+            "address": "https://getbootstrap.com/docs/5.3/components/accordion/",
+            "characters": 31496,
+            "notes": null
+          },
+          {
+            "page": "tab list (W3C pattern): another tab shown",
+            "outcome": "PASS",
+            "seconds": 5.9,
+            "address": "https://www.w3.org/WAI/ARIA/apg/patterns/tabs/examples/tabs-automatic/",
+            "characters": 12828,
+            "notes": null
+          },
+          {
+            "page": "table of links, and its \"More\"",
+            "outcome": "PASS",
+            "seconds": 6.0,
+            "address": "https://news.ycombinator.com/?p=2",
+            "characters": 14618,
+            "notes": null
+          },
+          {
+            "page": "a page that loads more as it scrolls",
+            "outcome": "PASS",
+            "seconds": 5.6,
+            "address": "https://infinite-scroll.com/demo/full-page/",
+            "characters": 6152,
+            "notes": null
+          },
+          {
+            "page": "web app (a GitHub repository), and a link followed",
+            "outcome": "PASS",
+            "seconds": 7.3,
+            "address": "https://github.com/rust-lang/rust/issues",
+            "characters": 17407,
+            "notes": null
+          },
+          {
+            "page": "a page that sends a signed-out visitor to its sign-in page",
+            "outcome": "PASS",
+            "seconds": 3.5,
+            "address": "https://github.com/login?return_to=https%3A%2F%2Fgithub.com%2Fsettings%2Fprofile",
+            "characters": 948,
+            "notes": [
+              "The browser ended at https://github.com/login?return_to=https%3A%2F%2Fgithub.com%2Fsettings%2Fprofile rather than the address asked for; the site sent it there, which can be its sign-in page."
+            ]
+          },
+          {
+            "page": "a page only a signed-in browser is shown",
+            "outcome": "PASS",
+            "seconds": 3.6,
+            "address": "http://127.0.0.1:18765/profile",
+            "characters": 84,
+            "notes": [
+              "Firefox exposed only 84 characters of text for this page. It may be drawn as a picture, be empty, want a sign-in or still be loading (scroll_down reads it again); this is everything that could be read."
+            ]
+          },
+          {
+            "page": "a link that opens in a new tab",
+            "outcome": "PASS",
+            "seconds": 5.7,
+            "address": "http://127.0.0.1:18765/profile",
+            "characters": 84,
+            "notes": [
+              "Firefox exposed only 84 characters of text for this page. It may be drawn as a picture, be empty, want a sign-in or still be loading (scroll_down reads it again); this is everything that could be read."
+            ]
+          }
+        ],
+        "closed": "The tab RichOS opened in Firefox is closed.",
+        "server_exit": 0,
+        "passed": 10,
+        "of": 10
+      },
+      "outcome": "PASS",
+      "seconds": 66.1
+    },
+    {
+      "step": "read-brave",
+      "evidence": {
+        "browser": "brave",
+        "default": {
+          "step": {
+            "do": "press",
+            "kind": "link",
+            "name": "^Profile in a new tab$"
+          },
+          "item": "3227 link \"Profile in a new tab\"",
+          "error": false,
+          "answer": {
+            "browser": "Brave Browser",
+            "address": "http://127.0.0.1:18765/profile",
+            "title": "Profile",
+            "page": "# Profile\nAda Walker, signed-in view: works on accessible browsers at Example Works.",
+            "notes": [
+              "Brave Browser exposed only 84 characters of text for this page. It may be drawn as a picture, be empty, want a sign-in or still be loading (scroll_down reads it again); this is everything that could be read."
+            ],
+            "pressed": "3227 link \"Profile in a new tab\""
+          },
+          "seconds": 2.1
+        },
+        "pages": [
+          {
+            "page": "long article, and a link followed",
+            "outcome": "PASS",
+            "seconds": 10.2,
+            "address": "https://en.wikipedia.org/wiki/Assistive_technology",
+            "characters": 125018,
+            "notes": [
+              "The page is long: this is part 1 of 3. next_part gives the following part."
+            ]
+          },
+          {
+            "page": "accordion (W3C pattern): a closed panel opened",
+            "outcome": "PASS",
+            "seconds": 7.3,
+            "address": "https://www.w3.org/WAI/ARIA/apg/patterns/accordion/examples/accordion/",
+            "characters": 9958,
+            "notes": null
+          },
+          {
+            "page": "accordion (Bootstrap): a closed panel opened",
+            "outcome": "PASS",
+            "seconds": 7.9,
+            "address": "https://getbootstrap.com/docs/5.3/components/accordion/",
+            "characters": 31009,
+            "notes": null
+          },
+          {
+            "page": "tab list (W3C pattern): another tab shown",
+            "outcome": "PASS",
+            "seconds": 7.1,
+            "address": "https://www.w3.org/WAI/ARIA/apg/patterns/tabs/examples/tabs-automatic/",
+            "characters": 12946,
+            "notes": null
+          },
+          {
+            "page": "table of links, and its \"More\"",
+            "outcome": "PASS",
+            "seconds": 7.1,
+            "address": "https://news.ycombinator.com/?p=2",
+            "characters": 14511,
+            "notes": null
+          },
+          {
+            "page": "a page that loads more as it scrolls",
+            "outcome": "PASS",
+            "seconds": 6.9,
+            "address": "https://infinite-scroll.com/demo/full-page/",
+            "characters": 5839,
+            "notes": null
+          },
+          {
+            "page": "web app (a GitHub repository), and a link followed",
+            "outcome": "PASS",
+            "seconds": 8.7,
+            "address": "https://github.com/rust-lang/rust/issues",
+            "characters": 19347,
+            "notes": null
+          },
+          {
+            "page": "a page that sends a signed-out visitor to its sign-in page",
+            "outcome": "PASS",
+            "seconds": 4.5,
+            "address": "https://github.com/login?return_to=https%3A%2F%2Fgithub.com%2Fsettings%2Fprofile",
+            "characters": 948,
+            "notes": [
+              "The browser ended at https://github.com/login?return_to=https%3A%2F%2Fgithub.com%2Fsettings%2Fprofile rather than the address asked for; the site sent it there, which can be its sign-in page."
+            ]
+          },
+          {
+            "page": "a page only a signed-in browser is shown",
+            "outcome": "PASS",
+            "seconds": 4.4,
+            "address": "http://127.0.0.1:18765/profile",
+            "characters": 84,
+            "notes": [
+              "Brave Browser exposed only 84 characters of text for this page. It may be drawn as a picture, be empty, want a sign-in or still be loading (scroll_down reads it again); this is everything that could be read."
+            ]
+          },
+          {
+            "page": "a link that opens in a new tab",
+            "outcome": "PASS",
+            "seconds": 6.7,
+            "address": "http://127.0.0.1:18765/profile",
+            "characters": 84,
+            "notes": [
+              "Brave Browser exposed only 84 characters of text for this page. It may be drawn as a picture, be empty, want a sign-in or still be loading (scroll_down reads it again); this is everything that could be read."
+            ]
+          }
+        ],
+        "closed": "The tab RichOS opened in Brave Browser is closed.",
+        "server_exit": 0,
+        "passed": 10,
+        "of": 10
+      },
+      "outcome": "PASS",
+      "seconds": 78.2
+    },
+    {
+      "step": "cleanup",
+      "evidence": {
+        "server_pid_stopped": "968"
+      },
+      "outcome": "PASS",
+      "seconds": 0.2
+    }
+  ]
+}
