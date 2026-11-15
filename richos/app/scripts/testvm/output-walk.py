@@ -187,6 +187,30 @@ WHAT IT DOES, in the guest, never on the host's screen (CEO ruling §65):
                changed, with how long the renewal took (ms). Evidence: shelf-observed.json,
                shelf-story.json, shelf-app.log.
 
+  THE GIT VIEW (2026-11-15): the Output panel's Git tab and RichFiles' Git button, which
+  host the same native view (`tools/richfiles/Sources/RichFiles/GitPanel.swift`), and the panel's
+  filename filter. After identity, first-run, connect and panel, in the same run:
+    --steps identity,first-run,connect,panel,repo-history,filter,richfiles-history
+  repo-history   the Acme repository is given two commits of its own (GIT_FILE: a price changed on
+                 line 2), as a user's repository has history from before. The Output panel's Git
+                 tab is pressed; the view's full-history button ("All on <branch>"); the newer
+                 commit; its changed file. PASS when the history lists both commits and the
+                 comparison shows line 2's earlier text and later text side by side (the two lines
+                 level, the earlier one left of the later one). Close Git brings the file list back.
+                 Frames git-1-tabs.png, git-2-history.png, git-3-side-by-side-<theme>.png, both
+                 themes. Evidence: repo-history-observed.json.
+  filter         typed: a shell command writes three files (FILTER_FILES) in the Acme folder. With
+                 them listed, "Filter by filename" is typed into: "black" leaves only
+                 filter-black.txt, "zzz" says "No matching filenames.", cleared, every file is back.
+                 Frames filter-1-all.png, filter-2-black.png, filter-3-none.png. Evidence:
+                 filter-observed.json.
+  richfiles-history  panel-check.md's More actions, Show in RichFiles: RichFiles opens in the Acme
+                 folder; its Git button opens the same view for that folder (under the folder, at
+                 its least height: its divider is dragged up with the real mouse); the newer commit
+                 and its file show the same two lines side by side. Frames richfiles-git-1-folder.png,
+                 richfiles-git-2-history.png, richfiles-git-3-side-by-side.png. Evidence:
+                 richfiles-history-observed.json.
+
 Exit 0 when every step passes. Every app instance is quit by run-walk.py's stop.sh (CEO §54).
 """
 import argparse
@@ -214,10 +238,23 @@ command = command_walk.command
 STEPS = ['identity', 'first-run', 'connect', 'tools', 'pdf', 'backend-worker', 'front-desk-worker', 'open-reveal', 'panel',
          'md-view', 'previews', 'save-copy', 'attach', 'pull',
          'empty', 'csv', 'buttons', 'link', 'actions', 'missing', 'menus', 'overlap', 'job-question', 'scroll', 'wrote',
-         'theme-flash', 'sidebar', 'scratch', 'labels', 'named', 'consult', 'shelf', 'rich-file']
+         'theme-flash', 'sidebar', 'scratch', 'labels', 'named', 'consult', 'shelf', 'rich-file',
+         'repo-history', 'filter', 'richfiles-history']
 # The candidate walk's steps: never in the default list, which runs the witness checks.
 CANDIDATE_STEPS = ('empty', 'csv', 'buttons', 'link', 'actions', 'missing', 'menus', 'overlap', 'job-question', 'scroll',
-                   'wrote', 'theme-flash', 'sidebar', 'scratch', 'labels')
+                   'wrote', 'theme-flash', 'sidebar', 'scratch', 'labels', 'repo-history', 'filter', 'richfiles-history')
+# The Git view's file: its own two commits in the Acme repository, the second changing line 2 only.
+GIT_FILE = 'tea-prices.md'
+GIT_FIRST = ('Add the tea prices', 'Green tea: $4\\nBlack tea: $5\\n')
+GIT_SECOND = ('Raise the black tea price', 'Green tea: $4\\nBlack tea: $6\\n')
+GIT_BEFORE, GIT_AFTER = 'Black tea: $5', 'Black tea: $6'
+# The filter step's three files, written by one shell command so they reach the record together.
+FILTER_FILES = ('filter-green.txt', 'filter-black.txt', 'filter-white.txt')
+FILTER_TASK = ('Please run this harmless test command for me yourself with your shell tool, in my Acme folder, '
+               "and tell me when it has finished: for t in green black white; do printf '%s tea\\n' \"$t\" > "
+               'filter-$t.txt; done')
+# VERBATIM from output-panel.js: the list's line when the filter matches nothing.
+NO_MATCH = 'No matching filenames.'
 # The scroll step's files: enough rows that the Output list overflows the window at the split.
 SCROLL_COUNT = 30
 SCROLL_NAME = re.compile(r'^scroll-\d\d\.txt$')
@@ -2729,6 +2766,242 @@ class OutputWalk(command_walk.CommandWalk):
         self.shot('sidebar-shown-again.png')
         if failures:
             raise StepFailed('; '.join(failures))
+        return evidence
+
+    # --- the Git view: the Output panel's Git tab, the filename filter, RichFiles' Git button -----
+    def click_words(self, words, roles=('AXButton', 'AXStaticText')):
+        """Press what shows `words`: an AXButton named for them (SwiftUI names a plain button by
+        its texts), pressed by that whole name, else a REAL click at the center of the first static
+        text carrying them (a SwiftUI row's texts may be its only named nodes). Returns how."""
+        for role in roles:
+            hits = self.find_all(words, role=role)
+            if not hits and role == 'AXStaticText':
+                hits = self.texts(words)
+            if hits:
+                n = hits[0]
+                name = n.get('title') or n.get('desc')
+                if role == 'AXButton' and name:
+                    # A button is pressed by its whole name, as VoiceOver presses it: a row the
+                    # view has scrolled below its edge is pressed all the same.
+                    self.ax('click', '--title', name, '--role', 'AXButton', '--first')
+                else:
+                    self.drag((n['x'] + n['w'] / 2, n['y'] + n['h'] / 2), (n['x'] + n['w'] / 2, n['y'] + n['h'] / 2))
+                return {'role': role, 'node': {k: n.get(k) for k in ('title', 'desc', 'value', 'x', 'y', 'w', 'h')}}
+        raise StepFailed('nothing on screen shows "%s"' % words)
+
+    def wait_words(self, words, seconds=30):
+        """Wait until some node, of any role, carries `words` in its title, description or value."""
+        end = time.monotonic() + seconds
+        while time.monotonic() < end:
+            if self.find_all(words) or self.texts(words):
+                return True
+            time.sleep(1.5)
+        return False
+
+    def side_by_side(self, note, stem):
+        """The comparison of GIT_FILE's newer commit: line 2's earlier and later text, each a
+        static text the view labels "Earlier version. …" / "Later version. …". PASS needs both,
+        level (within 6 px), the earlier left of the later."""
+        if not self.wait_words('Read-only comparison', 30) and not self.wait_words('Earlier version.', 10):
+            self.shot(stem + '-no-comparison.png')
+            raise StepFailed('no comparison opened for %s' % GIT_FILE)
+        time.sleep(1.5)
+        self.shot(stem + '-3-comparison.png')
+
+        def said(n):
+            return ' '.join(str(n.get(k) or '') for k in ('title', 'desc', 'value'))
+        found = self.find_all('version.') + self.find_all('version.', by='--value')
+        before = [n for n in found if 'Earlier version.' in said(n) and GIT_BEFORE in said(n)]
+        after = [n for n in found if 'Later version.' in said(n) and GIT_AFTER in said(n)]
+        keep = lambda ns: [{k: n.get(k) for k in ('role', 'title', 'desc', 'value', 'x', 'y', 'w', 'h')} for n in ns]  # noqa: E731
+        note(**{stem + '_earlier': keep(before), stem + '_later': keep(after), stem + '_version_nodes': keep(found)[:12]})
+        if not before or not after:
+            (self.out / (stem + '-comparison.tree.txt')).write_text(command([HERE / 'ax.sh', self.vm, 'tree'], 120))
+            raise StepFailed('the comparison does not show "%s" and "%s": earlier %s, later %s'
+                             % (GIT_BEFORE, GIT_AFTER, keep(before), keep(after)))
+        b, a = before[0], after[0]
+        if abs(b['y'] - a['y']) > 6 or not b['x'] + b['w'] <= a['x'] + 2:
+            raise StepFailed('the two versions are not side by side: earlier %s, later %s' % (keep([b]), keep([a])))
+        return {'earlier': keep([b])[0], 'later': keep([a])[0]}
+
+    def git_history(self, note, stem):
+        """The view open: its full history, both of GIT_FILE's commits listed, the newer pressed and
+        then its file; returns the side-by-side reading."""
+        full = self.find_all('All on ', role='AXButton') or self.find_all('Repository history', role='AXButton')
+        note(**{stem + '_full_history_button': [n.get('title') or n.get('desc') for n in full]})
+        if full:
+            self.click_words(full[0].get('title') or full[0].get('desc'), roles=('AXButton',))
+        if not self.wait_words(GIT_SECOND[0], 30):
+            self.shot(stem + '-2-history.png')
+            raise StepFailed('the history does not list "%s"' % GIT_SECOND[0])
+        time.sleep(1)
+        self.shot(stem + '-2-history.png')
+        listed = {title: bool(self.find_all(title) or self.texts(title)) for title, _ in (GIT_FIRST, GIT_SECOND)}
+        note(**{stem + '_listed': listed})
+        if not all(listed.values()):
+            raise StepFailed('the history lists %s' % listed)
+        note(**{stem + '_pressed_commit': self.click_words(GIT_SECOND[0])})
+        # The changed file in the view's own list ("tea-prices.md, Modified"), never the folder
+        # listing beside it, which RichFiles also shows by that name.
+        if not self.wait_words(GIT_FILE + ', Modified', 10):
+            raise StepFailed('the commit "%s" lists no "%s, Modified"' % (GIT_SECOND[0], GIT_FILE))
+        note(**{stem + '_pressed_file': self.click_words(GIT_FILE + ', Modified', roles=('AXButton',))})
+        return True
+
+    def repo_history(self):
+        evidence, note = self.observed('repo-history')
+        c = shlex.quote(self.company)
+        commit = 'git -c user.name=QA -c user.email=qa@example.invalid commit -q -m '
+        guest(self.vm, ('cd {c} && printf {one} > {f} && git add {f} && {commit}{m1} && printf {two} > {f} '
+                        '&& {commit}{m2} {f} && git log --oneline -3').format(
+            c=c, f=GIT_FILE, commit=commit, one=shlex.quote(GIT_FIRST[1]), two=shlex.quote(GIT_SECOND[1]),
+            m1=shlex.quote(GIT_FIRST[0]), m2=shlex.quote(GIT_SECOND[0])), 60)
+        note(log=guest(self.vm, 'cd %s && git log --oneline -4 && git branch --show-current' % c, 30).strip().splitlines())
+        note(connected_folders_sheet=self.close_connected_sheet())
+        self.open_panel()
+        self.to_list()
+        time.sleep(1.5)
+        tab = [n for n in self.find_all('op-git-open', contains=False, by='--id') if not n.get('hidden')]
+        note(git_tab=[{k: n.get(k) for k in ('role', 'title', 'desc', 'x', 'y', 'w', 'h')} for n in tab])
+        if not tab:
+            self.shot('git-1-no-tab.png')
+            raise StepFailed('the Output panel has no Git tab')
+        self.shot('git-1-tabs.png')
+        self.ax('click', '--id', 'op-git-open', '--first')
+        if not self.wait_words('Git history', 30) and not self.wait_words('Close Git', 10):
+            self.shot('git-1-not-open.png')
+            raise StepFailed('the Git tab opened no Git view')
+        time.sleep(2)
+        self.git_history(note, 'git')
+        reading = self.side_by_side(note, 'git')
+        note(side_by_side=reading, shots=self.flip_theme('git-3-side-by-side'))
+        self.click_words('Close Git', roles=('AXButton',))
+        time.sleep(2)
+        back = bool(self.find_all('panel-check.md', role='AXButton'))
+        note(files_back_after_close=back)
+        if not back:
+            self.shot('git-4-after-close.png')
+            raise StepFailed('Close Git did not bring the file list back')
+        return evidence
+
+    def close_connected_sheet(self):
+        """The Connected folders sheet closed by its own Close (exact title, in the dialog) when a
+        step before left it open: `connect_folder` presses the first button whose name CONTAINS
+        "Close", and with the Output panel in the tree that can be another control (a candidate
+        walk found the sheet still up, every click outside it held by the modal sheet). Returns
+        what it found and whether the sheet is gone after one press."""
+        if not self.texts('Connected project folders'):
+            return 'not open'
+        self.ax('click', '--title', 'Close', '--role', 'AXButton', '--in', 'dialog', '--first')
+        time.sleep(1.5)
+        if self.texts('Connected project folders'):
+            self.shot('connected-folders-sheet-stays.png')
+            raise StepFailed("the Connected folders sheet stayed open after its own Close was pressed")
+        return 'was open; its Close closed it'
+
+    def panel_rows(self, prefix):
+        """The file rows the open panel lists whose name starts with `prefix`: a row is the button
+        named "<file> <folder>" ("filter-black.txt ~/Acme/"); its Open and More actions are not rows."""
+        names = set()
+        for n in self.in_panel(self.find_all(prefix, role='AXButton')):
+            m = re.match(r'(' + re.escape(prefix) + r'[\w.-]*\.(?:txt|md)) ~/', n.get('title') or n.get('desc') or '')
+            if m:
+                names.add(m.group(1))
+        return sorted(names)
+
+    def filter(self):
+        evidence, note = self.observed('filter')
+        turn, sent = self.send(FILTER_TASK)
+        end = time.monotonic() + self.a.within
+        names = set()
+        while time.monotonic() < end:
+            names = {Path(k).name for k in project(self.record())} & set(FILTER_FILES)
+            if len(names) == len(FILTER_FILES):
+                break
+            self.approve_pending(sent)
+            time.sleep(5)
+        note(turn=turn, turn_story=self.turn_story(turn), recorded=sorted(names))
+        if len(names) < len(FILTER_FILES):
+            raise StepFailed('%d of %d filter files reached the record' % (len(names), len(FILTER_FILES)))
+        self.close_panel()
+        self.open_panel()
+        self.to_list()
+        time.sleep(2)
+        note(connected_folders_sheet=self.close_connected_sheet())
+        if not self.find_all('Filter by filename', role='AXTextField'):
+            self.shot('filter-no-field.png')
+            raise StepFailed('no "Filter by filename" field above the files')
+        all_rows = self.panel_rows('filter-') + self.panel_rows('panel-check')
+        self.shot('filter-1-all.png')
+        self.type_into('black', '--role', 'AXTextField', '--title', 'Filter by filename')
+        time.sleep(1.5)
+        black = self.panel_rows('filter-') + self.panel_rows('panel-check')
+        self.shot('filter-2-black.png')
+        self.type_into('zzz', '--role', 'AXTextField', '--title', 'Filter by filename')
+        time.sleep(1.5)
+        none = self.panel_rows('filter-') + self.panel_rows('panel-check')
+        said = bool(self.texts(NO_MATCH))
+        self.shot('filter-3-none.png')
+        self.keys('tell application "System Events" to keystroke "a" using command down')
+        self.keys('tell application "System Events" to key code 51')
+        time.sleep(1.5)
+        cleared = self.panel_rows('filter-') + self.panel_rows('panel-check')
+        note(all=all_rows, black=black, zzz=none, no_match_said=said, cleared=cleared)
+        problems = []
+        if not set(FILTER_FILES) <= set(all_rows):
+            problems.append('before filtering the list is %s' % all_rows)
+        if black != ['filter-black.txt']:
+            problems.append('"black" leaves %s' % black)
+        if none or not said:
+            problems.append('"zzz" leaves %s and %s "%s"' % (none, 'says' if said else 'does not say', NO_MATCH))
+        if sorted(cleared) != sorted(all_rows):
+            problems.append('cleared, the list is %s, not %s' % (cleared, all_rows))
+        if problems:
+            raise StepFailed('; '.join(problems))
+        return evidence
+
+    def richfiles_history(self):
+        evidence, note = self.observed('richfiles-history')
+        note(connected_folders_sheet=self.close_connected_sheet())
+        self.open_panel()
+        self.to_list()
+        time.sleep(1.5)
+        menus = [n for n in self.find_all('More actions for panel-check.md', role='AXPopUpButton')]
+        if not menus:
+            menus = self.find_all('More actions for panel-check.md')
+        if not menus:
+            raise StepFailed('panel-check.md has no More actions menu')
+        self.click_words(menus[0].get('title') or menus[0].get('desc'), roles=(menus[0].get('role') or 'AXButton',))
+        time.sleep(1.5)
+        if not self.wait_words('Show in RichFiles', 10):
+            self.shot('richfiles-git-no-item.png')
+            raise StepFailed('the menu has no Show in RichFiles')
+        self.ax('click', '--title', 'Show in RichFiles', '--first', '--contains')
+        time.sleep(5)
+        self.close_panel()
+        self.shot('richfiles-git-1-folder.png')
+        bar = [n for n in self.find_all('Git', contains=False) if n.get('role') in ('AXButton', 'AXCheckBox', 'AXRadioButton')]
+        note(git_buttons=[{k: n.get(k) for k in ('title', 'desc', 'x', 'y')} for n in bar],
+             folder_shows=[GIT_FILE in (n.get('title') or n.get('value') or '') for n in self.find_all(GIT_FILE)][:3])
+        if not bar:
+            raise StepFailed('RichFiles shows no Git button')
+        b = bar[0]
+        self.drag((b['x'] + b['w'] / 2, b['y'] + b['h'] / 2), (b['x'] + b['w'] / 2, b['y'] + b['h'] / 2))
+        if not self.wait_words('Close Git', 20):
+            self.shot('richfiles-git-not-open.png')
+            raise StepFailed("RichFiles' Git button opened no Git view")
+        time.sleep(2)
+        # The view opens under the folder at its least height; its divider is dragged up with the
+        # real mouse, as a user makes room for the comparison.
+        head = (self.find_all('All on ', role='AXButton') or self.find_all('Close Git'))[:1]
+        if head:
+            x, y = head[0]['x'] + 300, head[0]['y'] - 12
+            note(divider_dragged=self.drag((x, y), (x, y - 330)), panel_head_before=head[0]['y'],
+                 panel_head_after=[n['y'] for n in self.find_all('Close Git')][:1])
+            time.sleep(1.5)
+        self.git_history(note, 'richfiles-git')
+        note(side_by_side=self.side_by_side(note, 'richfiles-git'))
+        self.shot('richfiles-git-3-side-by-side.png')
         return evidence
 
     def open_reveal(self):
