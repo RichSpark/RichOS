@@ -40,6 +40,24 @@ extern "C" {
     fn AXUIElementPerformAction(element: *const c_void, action: *const c_void) -> i32;
     fn AXUIElementCopyAttributeNames(element: *const c_void, names: *mut *const c_void) -> i32;
     fn AXUIElementSetAttributeValue(element: *const c_void, attribute: *const c_void, value: *const c_void) -> i32;
+    fn AXUIElementCopyParameterizedAttributeValue(element: *const c_void, attribute: *const c_void, parameter: *const c_void,
+        value: *mut *const c_void) -> i32;
+}
+
+/// The element's answer to a question that takes a parameter.
+fn ask(element: &Element, name: &'static str, parameter: &Element) -> Option<Element> {
+    let name = CFString::from_static_string(name);
+    let mut value: *const c_void = std::ptr::null();
+    // SAFETY: a live element, a CFString name, a live parameter and an out-parameter; a value
+    // returned is +1 (the Copy rule) and wrapped under the create rule exactly once.
+    let error = unsafe {
+        AXUIElementCopyParameterizedAttributeValue(element.as_CFTypeRef(), name.as_CFTypeRef(), parameter.as_CFTypeRef(), &mut value)
+    };
+    if value.is_null() {
+        return None;
+    }
+    let value = unsafe { Element::wrap_under_create_rule(value) };
+    (error == 0).then_some(value)
 }
 
 /// Whether the element's boolean attribute is true.
@@ -156,6 +174,15 @@ impl AxNode for Ax {
             return Vec::new();
         }
         children(&self.el).into_iter().map(|el| Ax { el, clock: self.clock.clone() }).collect()
+    }
+    fn shown_text(&self) -> Option<String> {
+        if self.clock.over() {
+            return None;
+        }
+        // What VoiceOver asks a web page for: the range of text the element covers, then that
+        // range's text. WebKit, Chromium and Firefox all answer both.
+        let range = ask(&self.el, "AXTextMarkerRangeForUIElement", &self.el)?;
+        ask(&self.el, "AXStringForTextMarkerRange", &range)?.downcast::<CFString>().map(|s| s.to_string())
     }
 }
 

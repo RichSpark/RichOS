@@ -141,6 +141,9 @@ pub trait AxNode: Clone {
     /// `AXExpanded`, when the element says.
     fn expanded(&self) -> Option<bool>;
     fn children(&self) -> Vec<Self>;
+    /// The text the element shows, spacing and line breaks included, as the browser gives it
+    /// to a screen reader for the element as a whole (`AXStringForTextMarkerRange`).
+    fn shown_text(&self) -> Option<String>;
 }
 
 /// One thing a page shows, in page order.
@@ -284,6 +287,22 @@ fn controls_under<N: AxNode>(node: &N) -> Vec<(N, Item)> {
 /// image descriptions, and whatever else an element without children displays. A page embedded
 /// in the page (`AXWebArea`: an admin app's frame) is walked too. Never a password field's
 /// value. Every other element is a container: its children are walked, and it ends a line.
+/// **Code reads as the page shows it.** A highlighted code sample comes as one piece per
+/// token, and Safari and Firefox leave out the spacing between two of them (guest walks of
+/// 2026-11-13), so the pieces alone cannot say whether a space was there. The text a browser
+/// gives a screen reader for the code element as a whole has every space and line break, so
+/// that is what is read: for a code or preformatted element whose children are all text, and
+/// only when it is the same characters as the pieces, spacing aside. Anything else (a browser
+/// that gives no such text, a sample with a link in it) is read piece by piece as before.
+fn code_as_shown<N: AxNode>(el: &N, subrole: Option<&str>, kids: &[N]) -> Option<String> {
+    if !matches!(subrole, Some("AXCodeStyleGroup" | "AXPreformattedStyleGroup")) || kids.iter().any(|k| k.role() != "AXStaticText") {
+        return None;
+    }
+    let pieces: String = kids.iter().filter_map(|k| k.value_text()).collect();
+    let unspaced = |s: &str| s.chars().filter(|c| !c.is_whitespace()).collect::<String>();
+    el.shown_text().filter(|shown| unspaced(shown) == unspaced(&pieces))
+}
+
 pub fn walk<N: AxNode>(area: &N) -> Walked<N> {
     /// An element to visit: how deep it is, the part of the page it sits in, and whether it
     /// sits in a tab list.
@@ -410,6 +429,10 @@ pub fn walk<N: AxNode>(area: &N) -> Walked<N> {
                 } else {
                     out.walked.items.push(Item::Break);
                     stack.push(Step::After(Item::Break));
+                }
+                if let Some(shown) = code_as_shown(&el, subrole.as_deref(), &kids) {
+                    out.push(Item::Text(shown), &place, kids.last());
+                    continue;
                 }
                 let in_tabs = in_tabs || role == "AXTabGroup";
                 stack.extend(kids.into_iter().rev().map(|k| Step::Visit(k, depth + 1, place.clone(), in_tabs)));
@@ -771,8 +794,8 @@ impl Line {
     /// space between two runs as a piece of its own, Safari and Firefox leave it out, so
     /// joining pieces as they come read `class="accordion"id="accordionExample"` and `•In` in
     /// those two. The price is a space the page did not write inside a token its styling
-    /// splits (`< div class = "accordion" >`, `3 rd`); a missing space between two words
-    /// would cost the reader a name or a figure.
+    /// splits (`3 rd`); a missing space between two words would cost the reader a name or a
+    /// figure. A code sample does not pay it: [`code_as_shown`].
     fn text(&mut self, piece: &str) {
         let Some(starts) = piece.chars().next() else { return };
         let ends = self.text.chars().last();
@@ -2080,6 +2103,7 @@ mod tests {
         number: Option<f64>,
         url: Option<&'static str>,
         expanded: Option<bool>,
+        shown: Option<&'static str>,
         kids: Vec<Node>,
     }
 
@@ -2093,6 +2117,7 @@ mod tests {
         fn url(&self) -> Option<String> { self.url.map(Into::into) }
         fn expanded(&self) -> Option<bool> { self.expanded }
         fn children(&self) -> Vec<Self> { self.kids.clone() }
+        fn shown_text(&self) -> Option<String> { self.shown.map(Into::into) }
     }
 
     fn el(role: &'static str, kids: Vec<Node>) -> Node {
@@ -2187,6 +2212,31 @@ mod tests {
         assert!(empty.last.is_none());
         assert!(!has_content(&Snapshot { items: empty.items.clone(), ..Snapshot::default() }));
         assert_eq!(render("https://shop.example/", &empty.items, 1).0, "");
+    }
+
+    /// A highlighted code sample is one piece per token. Safari and Firefox leave out the
+    /// spacing between two tokens, so the sample is read from the text its element shows as a
+    /// whole, which has it; only when that text is the same characters as the pieces.
+    #[test]
+    fn code_reads_as_the_page_shows_it() {
+        let code = |pieces: Vec<Node>, shown| Node { subrole: Some("AXCodeStyleGroup"), shown, ..el("AXGroup", pieces) };
+        let read = |code: Node| render("https://docs.example/", &walk(&el("AXWebArea", vec![el("AXGroup", vec![code])])).items, 1).0;
+        let as_shown = "<div class=\"accordion\" id=\"accordionExample\">\n  <h2 class=\"accordion-header\">\n    Item #1";
+        // Safari and Firefox: no spacing between the tokens of a line.
+        let bare = || vec![text("<div"), text("class="), text("\"accordion\""), text("id="), text("\"accordionExample\""), text(">"),
+            text("<h2"), text("class="), text("\"accordion-header\""), text(">"), text("Item #1")];
+        assert_eq!(read(code(bare(), Some(as_shown))), as_shown);
+        // Chrome, Brave and Edge: the spacing is a piece of its own, and a token split by its
+        // styling gets no space the page did not write.
+        let spaced = vec![text("<"), text("div"), text(" "), text("class"), text("="), text("\"accordion\""), text(" "),
+            text("id="), text("\"accordionExample\""), text(">"), text("\n  "), text("<h2"), text(" "), text("class="),
+            text("\"accordion-header\""), text(">"), text("\n    Item #1")];
+        assert_eq!(read(code(spaced, Some(as_shown))), as_shown);
+        // A browser that gives no such text, or one that is not the sample's own characters:
+        // the pieces, a space between two of them, as before.
+        let pieces = "<div class= \"accordion\" id= \"accordionExample\" > <h2 class= \"accordion-header\" > Item #1";
+        assert_eq!(read(code(bare(), None)), pieces);
+        assert_eq!(read(code(bare(), Some("Copy to clipboard"))), pieces);
     }
 
     fn frames(lines: &[Value]) -> Receiver<(Vec<u8>, bool)> {

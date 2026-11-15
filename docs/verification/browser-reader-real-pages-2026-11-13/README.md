@@ -152,10 +152,22 @@ In every run, a reader that could not tell which tab was its own read nothing an
 
 ## Limits
 
-- **A token split by its styling gets spaces the page did not write**: a highlighted code
-  sample reads `< div class = "accordion" >` and `3<sup>rd</sup>` reads `3 rd`. Run 4 is why:
-  two of five browsers do not say whether a space was there and a missing space would cost a
-  name or a figure. Its lines and indents are kept.
+- **A token split by its styling gets a space the page did not write**: `3<sup>rd</sup>`
+  reads `3 rd`. Run 4 is why: two of five browsers do not say whether a space was there and a
+  missing space would cost a name or a figure. **A code sample reads as the page shows it**
+  (since 2026-11-15): the reader takes the text the browser gives a screen reader for the code
+  element as a whole, which has every space and line break. Measured that day in a guest on the
+  Bootstrap page, in Safari and in Firefox (the two that leave the spacing out): both read
+  `<div class="accordion" id="accordionExample">` and the lines under it with their indents.
+  A sample with a link inside it is still read piece by piece.
+- **A page read in a Safari that was not running or had no window, stays open in its window**
+  (since 2026-11-15; before, that window was closed). Safari shows no tab bar for a window with
+  one tab, so the reader knows the page only by its window and a window a starting browser
+  shows can hold the tabs it restored: it is never closed. The answer says the tab is left.
+  The table above was measured before this: its two Safari cells "No window open" and "Not
+  running" now read "read, window left open and said" (measured 2026-11-15, same guest).
+  `run-10-report.txt` is that day's walk: the Bootstrap page in Safari and Firefox and Safari
+  in the four states.
 - **A browser started by the read itself** can refuse the first open (it restored its earlier
   tabs or put another tab in front). The refusal says to open the page again and that works.
 - **A page drawn as a picture** gives almost no text. The reader says how little it got; it

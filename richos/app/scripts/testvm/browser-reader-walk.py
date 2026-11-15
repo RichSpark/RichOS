@@ -126,9 +126,11 @@ PAGES = [
         {'do': 'press', 'name': '^Billing Address', 'gains': ['Zip Code']}]},
     {'name': 'accordion (Bootstrap): a closed panel opened', 'steps': [
         # Its code sample keeps its lines and their indents (the button's label is on a line of
-        # its own, eight spaces in), in every browser.
+        # its own, eight spaces in) and reads as the page shows it, no space added inside a
+        # tag, in every browser.
         {'do': 'open', 'url': 'https://getbootstrap.com/docs/5.3/components/accordion/',
-         'expect': ['Accordion Item #2', '\n        Accordion Item #1\n']},
+         'expect': ['Accordion Item #2', '\n        Accordion Item #1\n', '<div class="accordion" id="accordionExample">\n'],
+         'absent': ['< div', 'class= "']},
         {'do': 'press', 'name': '^Accordion Item #2$', 'gains': ['second item’s accordion body']}]},
     {'name': 'tab list (W3C pattern): another tab shown', 'steps': [
         {'do': 'open', 'url': 'https://www.w3.org/WAI/ARIA/apg/patterns/tabs/examples/tabs-automatic/',
