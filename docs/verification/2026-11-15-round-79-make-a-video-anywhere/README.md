@@ -1,8 +1,8 @@
 # Round 79, "Make a video" anywhere in the app, on the real app (2026-11-15)
 
 The CEO's order: "Get someone on Fable to build round 79." This is the check of branch
-`cc/echo2-fable-r79build1`: the app built from `ffded7fea`, the branch with main merged in
-(`branch-bundle.sh`, engine 1.2.0 pinned as nightly 100 pins it, bundle sha256 `146e7076…469dd6`),
+`cc/echo2-fable-r79build1`: the app built from `6a809434c`, the branch with main merged in
+(`branch-bundle.sh`, engine 1.2.0 pinned as nightly 100 pins it, bundle sha256 `f8983235…05a850`),
 run in a fresh test VM guest by
 `run-walk.py` and driven by `richos/app/scripts/testvm/video-anywhere-walk.py`. Nothing ran on the
 host's screen. No sound was played and no microphone was opened: the guest has no sound device and
@@ -19,21 +19,22 @@ made in the page.
 | A line highlighted | On the RichPass page the real mouse is dragged over "Safer Than Any Password Manager"; the recording goes on | `guest-6-highlighted.jpg` |
 | Settings while it records | The heading of Settings holds the same red Stop with the same time; Escape closes Settings and the recording goes on | `guest-7-in-settings.jpg` |
 | The home screen | Still recording; Stop stands where the home screen's own "Make a video" stands, which is out of its way | `guest-8-home.jpg` |
-| Stop, the sheet | "Your video", "1:24 · with your voice · with the mouse pointer · 1,400 × 836 · 0.1 MB", over the home screen, which stays, under the settings button | `guest-9-sheet.jpg` |
-| Save video | The Mac's own save window, then "Saved to Documents as RichOS-2026-11-15-at-14.33.19.mp4"; Done puts the home screen's own button back | `guest-10-anywhere-saved.jpg` |
-| The saved file | In the guest at `/Users/admin/Documents/RichOS-2026-11-15-at-14.33.19.mp4`, 106,431 bytes (the app's log names the same path and size). Read back on the host: AAC, 48 kHz, mean volume −27.6 dB (the tone, not silence), decodes with no error, 10.03 s | `walk-report.json.txt` |
+| Stop, the sheet | "Your video", "0:35 · with your voice · with the mouse pointer · 1,400 × 836 · 0.1 MB", over the home screen, which stays, under the settings button | `guest-9-sheet.jpg` |
+| Save video | The Mac's own save window, then "Saved to Documents as RichOS-2026-11-15-at-15.57.23.mp4"; Done puts the home screen's own button back | `guest-10-anywhere-saved.jpg` |
+| The saved file | In the guest at `/Users/admin/Documents/RichOS-2026-11-15-at-15.57.23.mp4`, 133,176 bytes (the app's log names the same path and size). Read back on the host: AAC, 48 kHz, mean volume −27.5 dB (the tone, not silence), decodes with no error, 11.67 s | `walk-report.json.txt` |
 
-`run-walk.py` quit the app by its pid (2147), stopped the VM and deleted the clone. The same walk
-passed before the merge on the app built from `50b60fe63` (pid 1668; 28.91 s of sound for 42 s).
+`run-walk.py` quit the app by its pid (2241), stopped the VM and deleted the clone. The same walk
+passed on the app built from `50b60fe63`, before the merge (pid 1668; 28.91 s of sound for 42 s),
+and from `ffded7fea` (pid 2147; 10.03 s for 84 s).
 
 ## What the guest cannot show and where it is shown instead
 
 **The picture in the file and the whole length of the sound.** The guest has no hardware H.264
 encoder and the webview's recorder then writes the sound and no picture
 (`docs/verification/2026-11-14-round-77-make-a-video`). In a guest the sound also ends before the
-recording does: 10.03 s of sound for the 84 s above and in three earlier guests 28.91 s for a
-recording of 42 s, 10.03 s for one of 48 s and 10.03 s for one of 27 s in which nothing was
-pressed. Why it ends early there is not established.
+recording does: 11.67 s of sound for the 35 s above and in four earlier guests 10.03 s for a
+recording of 84 s, 28.91 s for one of 42 s, 10.03 s for one of 48 s and 10.03 s for one of 27 s
+in which nothing was pressed. Why it ends early there is not established.
 
 The picture and the length are proved on this Mac's own hardware, with no window, no screen and no
 sound, by `richos/app/ui/tests/video-anywhere.js`: the same `video-anywhere.js` records in headless
@@ -46,6 +47,7 @@ are read back with ffprobe and ffmpeg.
 | The mouse pointer; the recorder's own red Stop | The arrow is in the frame where the mouse was; the red button is 388 pixels in the window and 0 in the file |
 | A line of the conversation, highlighted | 12,035 of 15,666 pixels of the line's box in the highlight color while selected, 193 before |
 | A draft of four lines with the highlight on the last; an address broken over lines | Each third of both boxes has the ink the window has, within 8 pixels (2,355 against 2,356 in the first third of the address); the highlight is in the lower half of the message box (2,790 pixels) and not the upper (33) |
+| The Output panel and the worker details opened during a recording (a new user's guest has neither a file nor a worker to open) | The conversation's Output button is 28px clear of the red Stop, the Output panel's close button 22px, the worker details' close button 19px; a press on each close button closes the pane and the recording goes on |
 | A recording longer than ten seconds | 12.1 s in the file for 0:12 on the sheet; a recording of 30 s gave 30.10 s of H.264 and 30.12 s of AAC |
 
 `host-file-frame-highlight-light.jpg` and `host-file-frame-highlight-dark.jpg` are frames taken out
