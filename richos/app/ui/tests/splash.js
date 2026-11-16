@@ -67,7 +67,7 @@ function rendererConst(name) {
 }
 const CEILING_GRACE_MS = rendererConst("CEILING_GRACE_MS");
 const FADE_MS = rendererConst("FADE_MS");
-/// `removeSelf` is scheduled `FADE_MS + 40` after the yield (`splash.js`), so this is the whole
+/// The curtain is removed `FADE_MS + 40` after the yield (`splash.js`), so this is the whole
 /// distance from "the ceiling fires" to "the node is off the page".
 const REMOVE_AFTER_YIELD_MS = FADE_MS + 40;
 
@@ -3360,18 +3360,58 @@ async function main() {
       window.__native.finish(true);
       await Promise.resolve();
       const style = document.querySelector(".ro-handover")?.style;
-      return { animated: window.__native.animated, covered: window.loroCovered(), width: parseFloat(style?.width) };
+      return {
+        animated: window.__native.animated,
+        covered: window.loroCovered(),
+        width: parseFloat(style?.width),
+        preparing: window.__native.calls.includes("splash_did_finish"),
+      };
     });
     assertEqual({ animated: fading.animated, covered: fading.covered }, { animated: true, covered: true }, "Home must stay covered during the native fade");
+    assertEqual(fading.preparing, false, "the next pack is prepared before the native fade ends");
     assert(Math.abs(fading.width - 658 * 1200 / 852) < 0.1, "the live gold line must start at the movie's scaled width: " + fading.width);
     const cleared = await page.evaluate(async () => {
       window.__native.clear();
       await Promise.resolve();
-      return window.loroCovered();
+      return {
+        covered: window.loroCovered(),
+        prepareCalls: window.__native.calls.filter(cmd => cmd === "splash_did_finish").length,
+      };
     });
-    assertEqual(cleared, false, "Home stayed covered after the native layer was removed");
+    assertEqual(cleared, { covered: false, prepareCalls: 1 }, "the completed native fade reveals Home and prepares the next pack once");
     await page.__ctx.close();
     return "The renderer completes the authored sequence and acknowledges the fade before Home starts";
+  });
+
+  await run.check("30  a saved opening without a local video plays through before preparing its pack", async () => {
+    for (const [id, seconds] of [["opening/material-leather", 3], ["opening/edition-year", 5]]) {
+      const page = await launch(browser, {
+        virtualTime: true,
+        initArg: id,
+        init: (openingId) => {
+          window.__RICHOS_LAUNCH__ = { kind: "fresh", splash: { id: openingId, native: false } };
+          window.__splashPrepareCalls = 0;
+          window.__TAURI_INTERNALS__ = {
+            invoke(cmd) {
+              if (cmd === "splash_did_finish") window.__splashPrepareCalls++;
+              return Promise.resolve(null);
+            },
+          };
+        },
+      });
+      const playing = await page.evaluate(() => {
+        const splash = window.RichSplash;
+        splash.yieldNow("app-ready");
+        return { id: splash.state.variationId, seconds: splash.state.seconds, reason: splash.state.reason };
+      });
+      assertEqual(playing, { id, seconds, reason: null }, "the web fallback starts the saved opening at its authored duration");
+      await page.clock.runFor(seconds * 1000 - 1);
+      assertEqual(await page.evaluate(() => [window.loroCovered(), window.__splashPrepareCalls]), [true, 0], "Home or the download started before the opening reached its end");
+      await page.clock.runFor(REMOVE_AFTER_YIELD_MS + 1);
+      assertEqual(await page.evaluate(() => [window.loroCovered(), window.__splashPrepareCalls]), [false, 1], "the completed fallback fade reveals Home and prepares the next pack once");
+      await page.__ctx.close();
+    }
+    return "The 3- and 5-second saved openings play in full before Home and the download";
   });
 
   await browser.close();

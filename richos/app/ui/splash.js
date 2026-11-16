@@ -1243,6 +1243,16 @@
     }
   }
 
+  function afterFade() {
+    var finishedLaunch = !replaying && !drawing();
+    state.native = false;
+    removeSelf();
+    var shell = window.__TAURI_INTERNALS__;
+    if (finishedLaunch && shell && typeof shell.invoke === "function") {
+      Promise.resolve(shell.invoke("splash_did_finish")).catch(function () {});
+    }
+  }
+
   // -------------------------------------------------------------------------------------
   // ROUND 85: NOTHING THE USER DOES CHANGES THE SCREEN
   // -------------------------------------------------------------------------------------
@@ -1325,12 +1335,9 @@
     }
     node.classList.add("splash--yielding");
     if (state.native) {
-      Promise.resolve(window.__TAURI_INTERNALS__.invoke("splash_native_dismiss", { animated: true })).then(function () {
-        state.native = false;
-        removeSelf();
-      });
+      Promise.resolve(window.__TAURI_INTERNALS__.invoke("splash_native_dismiss", { animated: true })).then(afterFade);
     } else {
-      setTimeout(removeSelf, FADE_MS + 40);
+      setTimeout(afterFade, FADE_MS + 40);
     }
     // Drop the always-dark clamp as the curtain goes, not after it has gone: the fade is
     // the app arriving, and the control crossing over with it is the same "one system, two

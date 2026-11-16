@@ -2845,21 +2845,11 @@ fn main() {
                 .then(|| openings::splash_facts(&launch_store, &opening_settings, start_ordinal, launch_now))
                 .and_then(|facts| splash_pick::pick_for(&facts));
             #[cfg(target_os = "macos")]
-            let (splash, pack) = match splash {
-                Some(entry) if splash_player::reduce_motion() => (Some(entry), None),
-                Some(entry) => {
-                    let available = splash_player::locate(app.handle(), &data_dir, &entry, opening_settings.sound);
-                    if available.is_some() || entry.pack_id() == Some("ruled-standard") {
-                        (Some(entry), available)
-                    } else {
-                        let fallback = splash_pick::default_entry();
-                        let available = fallback.as_ref().and_then(|entry|
-                            splash_player::locate(app.handle(), &data_dir, entry, opening_settings.sound));
-                        if available.is_some() { (fallback, available) } else { (Some(entry), None) }
-                    }
-                }
-                None => (None, None),
-            };
+            // A saved choice may predate downloaded packs. The page can play that same
+            // opening in full while the launch is still independent of the network.
+            let pack = splash.as_ref()
+                .filter(|_| !splash_player::reduce_motion())
+                .and_then(|entry| splash_player::locate(app.handle(), &data_dir, entry, opening_settings.sound));
             #[cfg(target_os = "macos")]
             let native_bar = pack.as_ref().and_then(|pack| pack.bar);
             #[cfg(not(target_os = "macos"))]
@@ -4235,6 +4225,7 @@ fn main() {
             first_frame_painted,
             splash_native_finished,
             splash_native_dismiss,
+            splash_did_finish,
             system_resources,
             richfiles_pane::richfiles_pane_available, richfiles_pane::richfiles_place_pane,
             richfiles_pane::richfiles_preload,
@@ -4807,16 +4798,19 @@ async fn splash_native_finished() -> bool {
 #[richos_command::command]
 async fn splash_native_dismiss(app: AppHandle, animated: bool) {
     #[cfg(target_os = "macos")]
-    {
-        splash_player::dismiss(&app, animated).await;
-        if animated {
-            tauri::async_runtime::spawn(async move {
-                prepare_future_splash(&app).await;
-            });
-        }
-    }
+    splash_player::dismiss(&app, animated).await;
     #[cfg(not(target_os = "macos"))]
     let _ = (app, animated);
+}
+
+#[richos_command::command]
+fn splash_did_finish(app: AppHandle) {
+    #[cfg(target_os = "macos")]
+    tauri::async_runtime::spawn(async move {
+        prepare_future_splash(&app).await;
+    });
+    #[cfg(not(target_os = "macos"))]
+    let _ = app;
 }
 
 #[cfg(target_os = "macos")]

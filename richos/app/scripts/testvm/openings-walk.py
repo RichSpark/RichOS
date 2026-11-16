@@ -25,6 +25,8 @@ THE STEPS, in order (each is a real press on the app's own window or a read of i
             ladder has more, and no name of an opening that is not his
   play      Play on a material and on the year's edition: the opening covers the window and leaves
             by itself; the gallery is there again
+  missing_pack  An older profile's saved picks with no downloaded videos play their own opening.
+            The app downloads the video after playback and uses it on the next launch.
   pick      "Make it my opening" downloads Bridle Leather; after quitting from the menu, the next
             start plays the verified native pack
   daily     "One of mine, a different one each day" plays today's native pack on the next start.
@@ -69,6 +71,7 @@ StepFailed = standard.StepFailed
 run = standard.run
 
 STEPS = ['first', 'history', 'gallery', 'play', 'pick', 'daily', 'sound', 'save', 'spend', 'sheet']
+OPTIONAL_STEPS = ['missing_pack']
 DAY = 86400
 # What 430 days with Rich earns by the catalog's own rules (ui/openings-catalog.js): 3, 6 and 12
 # months, and the year's edition; with the two every user starts with, in the catalog's order.
@@ -278,6 +281,36 @@ class Walk(standard.Walk):
             raise StepFailed('the next start did not use the native pack for his opening: ' + line)
         return {'frame': frame, 'launch_line': line, 'start_frame': start_frame}
 
+    def missing_pack(self):
+        manifest_path = HERE.parent.parent / 'native' / 'splash' / 'packs.json'
+        manifest = json.loads(manifest_path.read_text())
+        results = {}
+        for opening in ('material-slate', 'edition-year'):
+            self.to_home()
+            self.quit_from_menu()
+            video = shlex.quote(self.data_dir() + '/splash-packs-v2/' + opening + '.mp4')
+            if guest(self.vm, 'test ! -e ' + video + ' && echo absent || echo present') != 'absent':
+                raise StepFailed(opening + ' already has a video, so this is not a migration fixture')
+            config = self.read_json('config.json')
+            config['opening_pick'] = opening
+            self.write_json('config.json', config)
+            fallback = self.start()
+            if 'opening/' + opening + ' (web animation)' not in fallback:
+                raise StepFailed('the start substituted another opening for ' + opening + ': ' + fallback)
+            digest = self.until(
+                lambda: guest(self.vm, 'shasum -a 256 ' + video + ' 2>/dev/null | cut -d " " -f1') or None,
+                45, 'no video was prepared after ' + opening,
+            )
+            if digest != manifest[opening]['sha256']:
+                raise StepFailed(opening + ' downloaded a video with the wrong SHA-256')
+            self.to_home()
+            self.quit_from_menu()
+            native = self.start()
+            if 'opening/' + opening + ' (native pack)' not in native:
+                raise StepFailed('the next start did not use the local video for ' + opening + ': ' + native)
+            results[opening] = {'first_launch': fallback, 'sha256': digest, 'next_launch': native}
+        return results
+
     def expected_daily(self):
         """Today's opening by the rule: the local day number, modulo how many he has, in catalog order."""
         return daily_opening(int(guest(self.vm, 'date +%s')), guest(self.vm, 'date +%z'), HIS)
@@ -413,7 +446,7 @@ def main():
     p.add_argument('--steps', default=','.join(STEPS))
     a = p.parse_args()
     steps = [s for s in a.steps.split(',') if s]
-    unknown = [s for s in steps if s not in STEPS]
+    unknown = [s for s in steps if s not in STEPS and s not in OPTIONAL_STEPS]
     if unknown:
         p.error('unknown step(s): ' + ', '.join(unknown))
     a.out.mkdir(parents=True, exist_ok=True)

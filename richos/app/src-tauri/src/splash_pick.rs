@@ -96,10 +96,6 @@ impl Entry {
     }
 }
 
-pub fn default_entry() -> Option<Entry> {
-    catalog().into_iter().next()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
