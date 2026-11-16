@@ -642,21 +642,33 @@ impl EcsBridge {
     /// The same bind, receipt synchronization and brief, through an engine that
     /// advertises prepare-turn. This saves three interpreter launches per reply.
     pub fn prepare_turn(&self, entity: &str, thread: &str, session: &str, turn: &str,
-        seat: Option<&str>) -> Result<(Binding, String, Result<Value, EcsError>), EcsError> {
+        seat: Option<&str>, held_brief_revision: Option<&str>) -> Result<PreparedTurn, EcsError> {
         let result = self.request("prepare-turn", Self::seated(seat, json!({
             "scope": {"entity_id":entity,"thread_id":thread,"session_id":session,"turn_id":turn,"audience":"ceo"},
             "source_ref":format!("ledger:{thread}:{turn}"), "request_id":format!("{session}:{turn}"),
-            "budget_chars":6000
+            "budget_chars":6000, "held_brief_revision":held_brief_revision
         })))?;
         let binding = serde_json::from_value(result["binding"].clone()).map_err(|e| EcsError(e.to_string()))?;
-        let text = result["text"].as_str().ok_or_else(|| EcsError("missing continuity brief".into()))?;
+        let brief_revision = result["brief_revision"].as_str().map(str::to_owned);
+        let brief = match result["text"].as_str() {
+            Some(text) => continuity_brief(text),
+            None if held_brief_revision.is_some() && held_brief_revision == brief_revision.as_deref() => String::new(),
+            None => return Err(EcsError("missing continuity brief".into())),
+        };
         let receipts = match result["receipt_error"].as_str() {
             Some(error) => Err(EcsError(error.into())),
             None if result["receipts"].is_object() => Ok(result["receipts"].clone()),
             None => return Err(EcsError("missing receipt synchronization result".into())),
         };
-        Ok((binding, continuity_brief(text), receipts))
+        Ok(PreparedTurn { binding, brief, brief_revision, receipts })
     }
+}
+
+pub struct PreparedTurn {
+    pub binding: Binding,
+    pub brief: String,
+    pub brief_revision: Option<String>,
+    pub receipts: Result<Value, EcsError>,
 }
 
 fn continuity_brief(text: &str) -> String {

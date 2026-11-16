@@ -89,6 +89,36 @@ class AppProtocolTests(unittest.TestCase):
         self.assertEqual(EventStore(self.store).current_context()["revision"], before)
         self.assertEqual(self.call("inspect", query={"item_id": "manual"})["item"]["status"], "active")
 
+    def test_live_brief_only_renders_changed_scoped_state_and_never_journals_a_snapshot(self):
+        def turn(number, held=None):
+            turn_id = f"turn-{number}"
+            return self.call("prepare-turn",
+                scope={**{k: v for k, v in self.binding.items() if k != "revision"}, "turn_id": turn_id},
+                source_ref=f"ledger:thread-a:{turn_id}", request_id=f"session-a:{turn_id}",
+                held_brief_revision=held)
+
+        first = turn(2)
+        self.assertIn("ECS CURRENT CONTINUITY", first["text"])
+        unchanged = turn(3, first["brief_revision"])
+        self.assertIsNone(unchanged["text"])
+        self.assertEqual(unchanged["brief_revision"], first["brief_revision"])
+        self.binding = unchanged["binding"]
+        self.assertTrue(self.checkpoint([{"verb": "commitment", "fields": {
+            "id": "manual", "title": "Draft the depot manual"}}])["accepted"])
+        changed = turn(4, first["brief_revision"])
+        self.assertIn("Draft the depot manual", changed["text"])
+        self.assertNotEqual(changed["brief_revision"], first["brief_revision"])
+        with sqlite3.connect(self.store / "ecs.sqlite3") as conn:
+            counts = dict(conn.execute(
+                "SELECT event_type, COUNT(*) FROM ecs_events GROUP BY event_type"
+            ))
+            for registration in ("entity.registered", "thread.created", "session.observed"):
+                self.assertEqual(counts[registration], 1)
+            self.assertEqual(counts["thread.activated"], 4)
+            self.assertEqual(conn.execute(
+                "SELECT COUNT(*) FROM ecs_events WHERE event_type='checkpoint.compiled'"
+            ).fetchone()[0], 0)
+
     def test_prepared_turn_discloses_a_receipt_failure_and_still_fences_the_brief(self):
         fields = {"protocol": 1, "command": "prepare-turn",
             "scope": {k: v for k, v in self.binding.items() if k != "revision"},
@@ -211,13 +241,29 @@ class AppProtocolTests(unittest.TestCase):
         for status in ("ready", "skipped"):
             notice = dict(thread_id="thread-a", item_id=status, state=status, evidence="inbox:rich:10")
             self.call("waiting-noticed", entity_id="unrelated", **notice, ok=False)
-            self.assertTrue(self.call("waiting-noticed", entity_id="depot", **notice)["changed"])
-            self.assertFalse(self.call("waiting-noticed", entity_id="depot", **notice)["changed"])
+            self.assertEqual(self.call("waiting-noticed", entity_id="depot", **notice),
+                             {"changed": True, "deliver": True})
+            self.assertEqual(self.call("waiting-noticed", entity_id="depot", **notice),
+                             {"changed": False, "deliver": True})
+            self.assertFalse(self.call("waiting-noticed", entity_id="depot",
+                                       **{**notice, "evidence": "inbox:rich:20"})["deliver"])
         self.assertEqual(self.call("waiting-work")["items"], [])
         ready = self.call("inspect", seat=seat, query={"item_id": "ready"})["item"]
         skipped = self.call("inspect", seat=seat, query={"item_id": "skipped"})["item"]
         self.assertEqual((ready["status"], ready["reply_owed"]), ("active", 1))
         self.assertEqual((skipped["status"], skipped["evidence_ref"]), ("blocked", "waiting-skipped:inbox:rich:10"))
+        for item in ("ready", "skipped"):
+            self.assertTrue(self.call("link-reply", seat=seat, item_id=item)["linked"])
+        delivery = dict(entity_id="depot", thread_id="thread-a", turn_id="turn-1", reply_sha256="0" * 64)
+        self.assertEqual(self.call("answer-delivered", **delivery)["delivered"], 2)
+        self.assertEqual(self.call("answer-delivered", **delivery)["delivered"], 0)
+        ready = self.call("inspect", seat=seat, query={"item_id": "ready"})["item"]
+        skipped = self.call("inspect", seat=seat, query={"item_id": "skipped"})["item"]
+        self.assertEqual((ready["status"], ready["reply_owed"]), ("completed", 0))
+        self.assertEqual((skipped["status"], skipped["reply_owed"], skipped["evidence_ref"]),
+                         ("blocked", 0, "waiting-skipped:inbox:rich:10"))
+        self.assertFalse(self.call("waiting-noticed", entity_id="depot", thread_id="thread-a",
+                                   item_id="ready", state="ready", evidence="inbox:rich:10")["deliver"])
 
     def test_linked_reply_remains_owed_until_the_host_records_its_delivery(self):
         self.binding = self.call("bind", seat="ceo-thread:thread-a",
@@ -323,6 +369,38 @@ class AppProtocolTests(unittest.TestCase):
                                 request_id="update-claim", ok=False)
         self.assertIn("verification receipt", error["message"])
         self.assertEqual(self.call("inspect", query={"item_id": "work"})["item"]["status"], "active")
+
+    def test_offline_handover_reads_existing_scope_without_creating_or_migrating_state(self):
+        self.assertTrue(self.checkpoint([{"verb": "commitment", "fields": {
+            "id": "carry-forward", "title": "Finish the depot manual"}}])["accepted"])
+        before = {path.name: (path.stat().st_mode, path.read_bytes()) for path in self.store.iterdir()}
+        request = dict(entity_id="depot", thread_id="thread-a", query={"section": "commitment"})
+        handover = self.call("handover", **request)
+        self.assertEqual([row["item_id"] for row in handover["records"]], ["carry-forward"])
+        self.assertEqual(self.call("handover", **{**request, "entity_id": "other"}, ok=False)["kind"], "ScopeError")
+        self.assertEqual(before, {path.name: (path.stat().st_mode, path.read_bytes()) for path in self.store.iterdir()})
+        absent = self.root / "missing"
+        with self.assertRaisesRegex(ScopeError, "unavailable"):
+            execute(absent, {"protocol": 1, "command": "handover", **request})
+        self.assertFalse(absent.exists())
+
+    def test_offline_handover_recovers_committed_wal_without_modifying_app_files(self):
+        # A process loss can leave a committed change only in WAL. The inspector
+        # must see it without recovering the live database or writing its SHM.
+        from contextlib import closing
+        with closing(sqlite3.connect(self.store / "ecs.sqlite3")) as keeper:
+            keeper.execute("PRAGMA journal_mode=WAL")
+            self.assertTrue(self.checkpoint([{"verb": "commitment", "fields": {
+                "id": "wal-only", "title": "Recover the committed work"}}])["accepted"])
+            self.assertGreater((self.store / "ecs.sqlite3-wal").stat().st_size, 0)
+            before = {path.name: path.read_bytes() for path in self.store.iterdir()}
+            view = self.call("handover", entity_id="depot", thread_id="thread-a", query={"item_id": "wal-only"})
+            self.assertEqual(view["item"]["item_id"], "wal-only")
+            self.assertEqual(before, {path.name: path.read_bytes() for path in self.store.iterdir()})
+            keeper.execute("DELETE FROM schema_migrations WHERE version = (SELECT MAX(version) FROM schema_migrations)")
+            keeper.commit()
+            error = self.call("handover", entity_id="depot", thread_id="thread-a", ok=False)
+            self.assertIn("schema differ", error["message"])
 
     def test_hello_is_read_only_and_no_implicit_state_root_is_accepted(self):
         absent = self.root / "absent"

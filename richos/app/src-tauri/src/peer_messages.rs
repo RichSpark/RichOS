@@ -39,13 +39,18 @@ pub(crate) fn wake_waiting(state_root: &std::path::Path) -> std::io::Result<()> 
     std::fs::write(waiting_signal(state_root), [])
 }
 
+fn waiting_bridge(state: &AppState) -> Result<richos_core::ecs::EcsBridge, String> {
+    let engine = state.engine_dir.lock().map_err(|_| "engine unavailable")?.clone();
+    let runtime = richos_core::runtime::verify_engine(&engine).map_err(|error| error.to_string())?;
+    richos_core::ecs::EcsBridge::new(&runtime.python, &engine, &state.data_dir.join("ecs"))
+        .map_err(|error| error.to_string())
+}
+
 fn reconcile_waiting(app: &AppHandle) -> Result<(), String> {
     let state = app.state::<AppState>();
     let ecs = state.data_dir.join("ecs");
     if !ecs.join("ecs.sqlite3").is_file() { return Ok(()); }
-    let engine = state.engine_dir.lock().map_err(|_| "engine unavailable")?.clone();
-    let runtime = richos_core::runtime::verify_engine(&engine).map_err(|e| e.to_string())?;
-    let bridge = richos_core::ecs::EcsBridge::new(&runtime.python, &engine, &ecs).map_err(|e| e.to_string())?;
+    let bridge = waiting_bridge(&state)?;
     let hello = bridge.request("hello", json!({})).map_err(|e| e.to_string())?;
     if !hello["commands"].as_array().is_some_and(|commands| commands.iter().any(|command| command == "waiting-work")) {
         return Ok(());
@@ -93,42 +98,20 @@ fn reconcile_waiting(app: &AppHandle) -> Result<(), String> {
             Some(instruction)
         } else { None };
         let status = if skipped { "skipped" } else { "ready" };
-        let mut work = None;
-        if let Some(instruction) = original.as_ref().filter(|_| item["launch"] == true) {
-            let Some(action) = item["next_action"].as_str() else {
+        let mut action = None;
+        if original.is_some() && item["launch"] == true {
+            let Some(next) = item["next_action"].as_str() else {
                 eprintln!("[richos] waiting work {id} has no authorized next action");
                 continue;
             };
-            let row = richos_core::assignment::register_waiting(&scope.state_root, &richos_core::assignment::Registration {
-                entity_id: entity.into(), thread_id: thread.into(), obligation_id: id.into(),
-                instruction_ledger_ref: instruction.ledger_ref.clone(), instruction_sha256: instruction.sha256.clone(),
-                title: action.into(), repositories: Vec::new(), needs_screen: false,
-            });
-            let row = match row {
-                Ok(row) => row,
-                Err(error) => { eprintln!("[richos] waiting work {id} remains held: {error}"); continue; }
-            };
-            work = Some(session_tools::WorkReference { assignment_id: row.id, obligation_id: id.into() });
+            action = Some(next);
         }
-        let saved = session_tools::observe_waiting(&scope, json!({
+        if let Err(error) = session_tools::observe_waiting(&scope, json!({
             "event": "waiting_condition", "input_id": format!("{id}:{status}"),
             "obligation_id": id, "status": status, "conditions": conditions,
-            "assignment_id": work.as_ref().map(|row| &row.assignment_id),
-        }), original.filter(|_| work.is_some()), work);
-        let through = match saved {
-            Ok(through) => through,
-            Err(error) => { eprintln!("[richos] waiting notice {id} remains pending: {error}"); continue; }
-        };
-        let mut evidence = format!("inbox:rich:{through}");
-        if let Some(reason) = conditions.iter().find(|condition| condition["state"] == "skipped")
-            .and_then(|condition| condition["reason"].as_str()) {
-            evidence.push(' ');
-            evidence.push_str(reason);
-        }
-        if let Err(error) = bridge.request("waiting-noticed", json!({
-            "entity_id": entity, "thread_id": thread, "item_id": id, "state": status, "evidence": evidence,
-        })) {
-            eprintln!("[richos] waiting notice {id} remains to be reconciled: {error}");
+            "next_action": action,
+        }), original.filter(|_| action.is_some())) {
+            eprintln!("[richos] waiting notice {id} remains pending: {error}");
         }
     }
     Ok(())
@@ -154,10 +137,57 @@ fn waiting_condition_satisfied(scope: &StatusToolScope, observation: &Value, ins
     }
 }
 
+fn record_waiting_notice(state: &AppState, scope: &StatusToolScope, message: &mut session_tools::Message,
+    through: u64) -> Result<bool, String> {
+    let mut facts: Value = serde_json::from_str(&message.text).map_err(|error| error.to_string())?;
+    let unverified = "the engine did not verify this waiting notice";
+    let id = facts["obligation_id"].as_str().ok_or(unverified)?;
+    let mut evidence = format!("inbox:rich:{through}");
+    if let Some(reason) = facts["conditions"].as_array().into_iter().flatten()
+        .find(|condition| condition["state"] == "skipped").and_then(|condition| condition["reason"].as_str()) {
+        evidence.push(' ');
+        evidence.push_str(reason);
+    }
+    let recorded = waiting_bridge(state)?.request("waiting-noticed", json!({
+        "entity_id": scope.entity_id, "thread_id": scope.thread_id, "item_id": id,
+        "state": facts["status"], "evidence": evidence,
+    })).map_err(|error| error.to_string())?;
+    if !recorded["deliver"].as_bool().ok_or(unverified)? { return Ok(false); }
+    if let Some(action) = facts["next_action"].as_str() {
+        // The durable inbox can retry this exact registration after a crash.
+        let instruction = message.instruction.as_ref().ok_or(unverified)?;
+        let row = richos_core::assignment::register_waiting(&scope.state_root, &richos_core::assignment::Registration {
+            entity_id: scope.entity_id.clone(), thread_id: scope.thread_id.clone(), obligation_id: id.into(),
+            instruction_ledger_ref: instruction.ledger_ref.clone(), instruction_sha256: instruction.sha256.clone(),
+            title: action.into(), repositories: Vec::new(), needs_screen: false,
+        }).map_err(|error| error.to_string())?;
+        message.work = Some(session_tools::WorkReference { assignment_id: row.id.clone(), obligation_id: id.into() });
+        facts["assignment_id"] = json!(row.id);
+        message.text = facts.to_string();
+    }
+    Ok(true)
+}
+
 fn drain_inboxes(app:&AppHandle,state:&AppState,thread:&str,binding:&richos_core::entity::ThreadBinding,scope:&StatusToolScope)->Result<(),String> {
         if session_tools::terminal_handover_active(scope) { return Ok(()); }
         let mut delivered=false;
-        while let Some((message,through))=session_tools::pending(scope,"rich")? {
+        let mut after = 0;
+        let mut deferred = None;
+        while let Some((mut message,through))=session_tools::pending_after(scope,"rich",after)? {
+            after = through;
+            // The existing durable inbox is the retry boundary. ECS must apply
+            // its verified state before Rich can act on or answer this input.
+            if message.from == "ecs-waiting" {
+                match record_waiting_notice(state, scope, &mut message, through) {
+                    Ok(true) => {}
+                    Ok(false) => { session_tools::acknowledge(scope,"rich",through)?; continue; }
+                    Err(error) => {
+                        // The durable cursor can accept later independent inputs without losing this one.
+                        deferred.get_or_insert(error);
+                        continue;
+                    }
+                }
+            }
             state.control.submit_agent_message(thread,Some(binding.entity_id().clone()),
                 &serde_json::to_string(&message).map_err(|e|e.to_string())?,&message.from,
                 &format!("peer:{}:{}:{through}",scope.entity_id,scope.thread_id)).map_err(|e|e.to_string())?;
@@ -171,7 +201,7 @@ fn drain_inboxes(app:&AppHandle,state:&AppState,thread:&str,binding:&richos_core
         }
         if delivered {crate::dispatch_incoming_messages(app,thread)?;}
         if session_tools::pending(scope,"stu")?.is_some() {state.work.wake_messages(binding);}
-        Ok(())
+        deferred.map_or(Ok(()), Err)
 }
 
 

@@ -204,10 +204,9 @@ pub(crate) fn observe_work_status(scope:&StatusToolScope,facts:Value)->Result<()
 }
 
 /// Verified waiting-work evidence uses the receiving conversation's ordinary inbox.
-pub fn observe_waiting(scope: &StatusToolScope, facts: Value, instruction: Option<crate::ecs::UserInstruction>,
-    work: Option<WorkReference>) -> Result<u64, String> {
+pub fn observe_waiting(scope: &StatusToolScope, facts: Value, instruction: Option<crate::ecs::UserInstruction>) -> Result<u64, String> {
     append_record(scope, "rich", &mut Message { bridge: None, handoff: false, from: "ecs-waiting".into(),
-        text: facts.to_string(), instruction, work }, false, None).map(|(through, _)| through)
+        text: facts.to_string(), instruction, work: None }, false, None).map(|(through, _)| through)
 }
 
 /// One of Stu's workers, or an automatic turn of his own, met an overload: its wait is over, or
@@ -240,11 +239,11 @@ fn sync_inbox_parents(scope:&StatusToolScope,role:&str)->Result<(),String> {
     Ok(())
 }
 
-// A filesystem notification can precede the writer's fsync. Bridge observations
+// A filesystem notification can precede the writer's fsync. Bridge and waiting-work observations
 // cannot reach an actor until the existing writer lock is released and the
 // exact retained row/directories are synced. A busy owner never blocks others.
-fn synced_bridge_input(file:&std::fs::File,scope:&StatusToolScope,role:&str,message:&Message)->Result<(),String> {
-    if message.bridge.is_none() {return Ok(())}
+fn sync_observation(file:&std::fs::File,scope:&StatusToolScope,role:&str,message:&Message)->Result<(),String> {
+    if message.bridge.is_none() && message.from != "ecs-waiting" {return Ok(())}
     #[cfg(unix)] {
         use std::os::fd::AsRawFd;
         // lock-busy: hold this input; the existing peer receiver retries while other chats progress.
@@ -551,8 +550,8 @@ fn retain_legacy_handoffs(scope:&StatusToolScope)->Result<(),String> {
     })
 }
 
-/// Read unfinished input in durable order, skipping only what this live connection took.
-pub(crate) fn pending_after(scope:&StatusToolScope,role:&str,after:u64)->Result<Option<(Message,u64)>,String> {
+/// Read unfinished input in durable order after this receiver's current scan position.
+pub fn pending_after(scope:&StatusToolScope,role:&str,after:u64)->Result<Option<(Message,u64)>,String> {
     let path=inbox(scope,role)?;let mut cursor=cursor_state(&path)?;
     if role=="stu" && cursor["handoffs_retained"]!=true && path.is_file() {
         retain_legacy_handoffs(scope)?;
@@ -584,7 +583,7 @@ pub(crate) fn pending_after(scope:&StatusToolScope,role:&str,after:u64)->Result<
         if count==0 || !line.ends_with('\n'){return Ok(None)}through+=count as u64;
         if cursor["accepted"].get(through.to_string()).is_some() && cursor["active"].get(format!("peer:{through}")).is_none(){continue}
         let message:Message=serde_json::from_str(&line).map_err(|e|e.to_string())?;
-        synced_bridge_input(reader.get_ref(),scope,role,&message)?;
+        sync_observation(reader.get_ref(),scope,role,&message)?;
         if role=="stu" && message.handoff && handoff_finished(scope,&message)?{acknowledge(scope,role,through)?;continue}
         return Ok(Some((message,through)))
     }
@@ -916,6 +915,26 @@ mod tests {
         assert_eq!(message.text,"Already durably saved ordinary peer input");
         assert_eq!(through,length);
         assert!(!wrote_cursor,"reading a new inbox must not create migration state");
+    }
+
+    #[test]
+    fn rich_can_accept_a_later_owner_result_while_a_waiting_notice_is_pending() {
+        let root = std::env::temp_dir().join(format!("richos-waiting-inbox-{}", uuid::Uuid::new_v4()));
+        let scope = StatusToolScope {
+            version: 1, state_root: root.clone(), entity_id: "company".into(), thread_id: "thread".into(),
+        };
+        let held = observe_waiting(&scope, json!({"input_id":"keep-waiting:ready"}), None).unwrap();
+        observe_work_status(&scope, json!({"input_id":"independent-owner-result"})).unwrap();
+        let (notice, first) = pending(&scope, "rich").unwrap().unwrap();
+        assert_eq!((notice.from.as_str(), first), ("ecs-waiting", held));
+        let (owner, later) = pending_after(&scope, "rich", held).unwrap().unwrap();
+        assert_eq!(owner.from, "work-status");
+        acknowledge(&scope, "rich", later).unwrap();
+        assert_eq!(pending(&scope, "rich").unwrap().unwrap().1, held);
+        assert!(pending_after(&scope, "rich", held).unwrap().is_none());
+        acknowledge(&scope, "rich", held).unwrap();
+        assert!(pending(&scope, "rich").unwrap().is_none());
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

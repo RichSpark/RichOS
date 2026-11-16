@@ -2769,7 +2769,7 @@ impl NativeClient {
         // blocks went with it, so the next input carries them in full again.
         if ty == "system" && (msg.get("subtype").and_then(Value::as_str) == Some("compact_boundary")
             || crate::machinery::compaction_phase(&msg) == Some(crate::machinery::CompactionPhase::MadeRoom)) {
-            state.lock().unwrap().given_context.forget();
+            state.lock().unwrap().given_context.compacted();
         }
         // Every assistant message's tokens, whichever turn it belongs to and whoever said it
         // (a helper's nested frames too, a background helper's included), and from each
@@ -2988,7 +2988,16 @@ impl NativeClient {
                 *guard = waiting;
                 (ready, guard.is_empty())
             };
-            let api_error = state.lock().unwrap().api_error.take();
+            let api_error = {
+                let mut reader = state.lock().unwrap();
+                if !ready.is_empty() {
+                    let delivered = native_result(&msg).is_ok_and(|reason| {
+                        !matches!(reason.as_str(), STOP_REASON_CANCELLED | STOP_REASON_DISCARDED | STOP_REASON_REFUSED | "refusal")
+                    });
+                    reader.given_context.finish_turn(delivered);
+                }
+                reader.api_error.take()
+            };
             let carried_by_api_error = msg.get("terminal_reason").and_then(Value::as_str) == Some(TERMINAL_REASON_API_ERROR);
             // Between turns only with no input still awaited; written before the reply is
             // delivered, so whoever sees the reply sees the signal. A turn an API failure ended
@@ -4380,14 +4389,13 @@ pub fn resolve_claude_bin_checked() -> Result<std::path::PathBuf, NativeError> {
 
 type ScopePreparation = Box<dyn FnOnce() -> Result<Option<PreparedContext>, CognitionError> + Send>;
 
-/// One input's host context from its scope preparation, kept in two parts because they are
-/// given differently ([`crate::given_context`]): the executive-continuity block once per
-/// session and after a compaction, the records after it (Loro receipts, open questions) when
-/// they changed.
+/// One input's scoped continuity and other host records.
 #[derive(Default)]
 struct PreparedContext {
     continuity: String,
+    brief_revision: Option<String>,
     records: String,
+    standing_instructions: Option<String>,
     current_recording: bool,
 }
 
@@ -4403,6 +4411,7 @@ struct NativeTurnScope {
     engine_profile: Option<crate::engine_profile::EngineProfile>,
     seat: Option<String>,
     prepare_turn_supported: bool,
+    reader_state: Arc<Mutex<ReaderState>>,
 }
 impl NativeTurnScope {
     fn prepare_question_scope(&self,entity:&str,thread:&str,turn:&str,asker:&str,method:&str)->Result<(),CognitionError> {
@@ -4437,19 +4446,30 @@ impl NativeTurnScope {
                     binding.entity_id().as_str(),binding.thread_id(),&i.ledger_ref,&i.sha256).is_ok()))
         };
 
+        let continuity_started = std::time::Instant::now();
         let seat = self.seat.clone();
         let Some((bridge, path)) = &self.continuity else {
             return Ok(None);
         };
-        let (scope, brief, receipts) = if self.prepare_turn_supported {
-            bridge.prepare_turn(binding.entity_id().as_str(), binding.thread_id(), &self.session_id, turn, seat.as_deref())
+        let (held, needs_standing_instructions) = {
+            let state = self.reader_state.lock().unwrap();
+            (state.given_context.brief_revision().map(str::to_owned), state.given_context.needs_standing_instructions())
+        };
+        let crate::ecs::PreparedTurn { binding: scope, brief, brief_revision, receipts } = if self.prepare_turn_supported {
+            bridge.prepare_turn(binding.entity_id().as_str(), binding.thread_id(), &self.session_id, turn,
+                seat.as_deref(), held.as_deref())
                 .map_err(|e| CognitionError::Io(e.to_string()))?
         } else {
             let scope=bridge.bind(binding.entity_id().as_str(),binding.thread_id(),&self.session_id,turn,seat.as_deref(),"ceo")
                 .map_err(|e|CognitionError::Io(e.to_string()))?;
             let receipts=bridge.request("sync-loro-receipts",crate::ecs::seated_request(seat.as_deref(),json!({"binding":scope})));
             let brief=bridge.brief(&scope,seat.as_deref()).map_err(|e|CognitionError::Io(e.to_string()))?;
-            (scope,brief,receipts)
+            crate::ecs::PreparedTurn { binding: scope, brief, brief_revision: None, receipts }
+        };
+        let outcome = match (brief_revision.is_some(), brief.is_empty()) {
+            (true, true) => "held",
+            (true, false) => "changed",
+            _ => "legacy",
         };
         let mut records = String::new();
         match receipts {
@@ -4479,6 +4499,8 @@ impl NativeTurnScope {
             for_tools.actions_allowed = false;
             crate::ecs::write_scope(tools_path, &for_tools).map_err(|e| CognitionError::Io(e.to_string()))?;
         }
+        eprintln!("[richos] ECS prepare-turn outcome={outcome} local_ms={}",
+            continuity_started.elapsed().as_millis());
         if let (Some(path), Some(state_root),Some(instruction)) = (&self.assignments_scope, &profile_state,&user_instruction) {
             crate::assignment_tools::write_scope(path, &crate::assignment_tools::AssignmentToolScope {
                 version: 1,
@@ -4515,7 +4537,13 @@ impl NativeTurnScope {
                 .map_err(CognitionError::Io)?.into_iter().filter(|q|q.state==crate::questions::State::Open || !q.delivered).map(|q|q.public_value()).collect();
             if !questions.is_empty() { records.push_str(&json!({"event":"question_records","questions":questions}).to_string()); }
         }
-        Ok(Some(PreparedContext { continuity: brief, records, current_recording }))
+        let standing_instructions = self.engine_profile.as_ref().and_then(|profile| profile.user.folder.as_ref())
+            .filter(|_| needs_standing_instructions).and_then(|folder| match crate::your_instructions::read(folder) {
+                Ok(text) => Some(format!("\nThe following are the user's current standing instructions. This copy replaces any earlier copy of their instructions.\n{}\n",
+                    json!({"standing_instructions": text}))),
+                Err(error) => { eprintln!("[richos] standing instructions could not be refreshed: {error}"); None }
+            });
+        Ok(Some(PreparedContext { continuity: brief, brief_revision, records, standing_instructions, current_recording }))
     }
 }
 
@@ -4929,6 +4957,7 @@ impl Cognition for NativeCognition {
             assignments_scope: self.assignments_scope.clone(), status_scope: self.status_scope.clone(),
             continuity: self.continuity.clone(), continuity_tools_scope: self.continuity_tools_scope.clone(),
             engine_profile: self.engine_profile.clone(), seat, prepare_turn_supported: self.prepare_turn_supported,
+            reader_state: self.client.reader_state.clone(),
         };
         let (binding, turn, original_turn, text) = (binding.clone(), turn.to_string(), original_turn.to_string(), input.text.to_owned());
         let crate::cognition::WorkTurnInput { source, live_meeting_at, .. } = input;
@@ -5177,7 +5206,10 @@ impl Cognition for NativeCognition {
             // input really gives (a later refusal of its batch forgets them all, in `dispatch`).
             let mut context_data={
                 let mut state=reader_state.lock().unwrap();
-                let mut context=state.given_context.once("executive-continuity",&prepared.continuity);
+                let mut context=state.given_context.continuity(prepared.brief_revision, prepared.continuity);
+                if let Some(instructions) = &prepared.standing_instructions {
+                    context.push_str(&state.given_context.standing_instructions(instructions));
+                }
                 context.push_str(&state.given_context.when_changed("records",&prepared.records));
                 if let Some(company)=&company { context.push_str(&state.given_context.when_changed("company material from the host",company)); }
                 context
@@ -6245,10 +6277,15 @@ while True:
         ask("first-question-marker");
         // The question scope's grandparent is the store's folder's parent (`prepare_question_scope`).
         std::fs::create_dir_all(root.join("scopes")).unwrap();
+        let central = root.join("central");
+        crate::your_instructions::save(&central, "Old rule marker.").unwrap();
         let start=|scope:&str| {
             let mut cognition=NativeCognition::start(&script,root,&doctrine_fixture(),&skills_fixture()).unwrap();
             let bridge=crate::ecs::EcsBridge::new(&python,&engine,&root.join("ecs-state")).unwrap();
             cognition.continuity=Some((bridge,root.join(scope)));
+            let mut profile = fixture_profile(root);
+            profile.user.folder = Some(central.clone());
+            cognition.engine_profile = Some(profile);
             cognition.client.reader_state.lock().unwrap().question_scope=Some(root.join("scopes").join(format!("questions-{scope}")));
             cognition
         };
@@ -6284,13 +6321,29 @@ while True:
         let quiet=turn(&mut rich,"quiet-notice",crate::ledger::Source::Internal);
         assert!(none(&quiet),"an unchanged record was given again: {quiet}");
 
+        // A scoped ECS change is delivered on the next visible input without the other blocks.
+        let (bridge, scope_path) = rich.continuity.as_ref().unwrap();
+        let scope: crate::ecs::ToolScope = serde_json::from_slice(&std::fs::read(scope_path).unwrap()).unwrap();
+        let changed = bridge.request("checkpoint", crate::ecs::seated_request(scope.seat.as_deref(),
+            json!({"binding":scope.binding,"request_id":"fixture-change","checkpoint":{"statements":[{
+                "verb":"commitment","fields":{"id":"live-change","title":"live-commitment-marker"}
+            }]}}))).unwrap();
+        assert_eq!(changed["accepted"], true);
+        let changed = turn(&mut rich,"first-after-live-change",crate::ledger::Source::Text);
+        assert!(changed.contains("live-commitment-marker"), "changed brief was missing: {changed}");
+        assert!(!changed.contains("question_records") && !changed.contains("company-notes-end-marker"));
+        assert!(none(&turn(&mut rich,"unchanged-again",crate::ledger::Source::Text)));
+
         // The provider compacts while taking this notice in: its own copy and every earlier one
         // are summarized away, so the next input carries the full blocks again, once.
+        crate::your_instructions::save(&central, "Current rule marker.").unwrap();
         turn(&mut rich,"notice-that-compacts",crate::ledger::Source::Internal);
         let after=turn(&mut rich,"after-compaction",crate::ledger::Source::Internal);
         assert!(full(&after),"the first input after a compaction lacks the full blocks: {after}");
+        assert!(after.contains("Current rule marker.") && !after.contains("Old rule marker."));
         let next=turn(&mut rich,"next-notice",crate::ledger::Source::Internal);
         assert!(none(&next),"host context was given twice after one compaction: {next}");
+        assert!(!next.contains("Current rule marker."));
 
         // A new session (a rotation, or the app started again) holds no earlier copy.
         drop(rich);
@@ -10022,7 +10075,7 @@ printf '%s\n' '{"type":"result","subtype":"success","stop_reason":"end_turn","qu
 read -r prompt
 ours=$(printf '%s' "$prompt" | sed -n 's/.*"uuid":"\([0-9a-fA-F-]*\)".*/\1/p')
 test -n "$ours" || exit 9
-printf '%s\n' '{"type":"result","subtype":"success","stop_reason":"end_turn","queued_turn_count":0,"result":"old platform result"}'
+printf '%s\n' '{"type":"result","subtype":"success","stop_reason":"refusal","queued_turn_count":0,"result":"old platform result"}'
 sleep 0.2
 printf '%s\n' "{\"type\":\"command_lifecycle\",\"command_uuid\":\"$ours\",\"state\":\"started\"}"
 printf '%s\n' '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"actual answer"}}}'
@@ -10030,6 +10083,9 @@ printf '%s\n' '{"type":"result","subtype":"success","stop_reason":"end_turn","qu
 read -r keep_alive
 "#);
         let client = NativeClient::spawn(&script, Path::new("/tmp"), &doctrine_fixture(), &skills_fixture()).unwrap();
+        assert_eq!(client.reader_state.lock().unwrap().given_context
+            .continuity(Some("first brief".into()), "context from the first turn".into()),
+            "context from the first turn");
         client.prompt("first", &mut |_| {}).unwrap();
         let mut said = String::new();
         let reason = client
@@ -10041,6 +10097,8 @@ read -r keep_alive
             .unwrap();
         assert_eq!(reason, "end_turn");
         assert_eq!(said, "actual answer", "an earlier turn's result ended this prompt before its own answer");
+        assert_eq!(client.reader_state.lock().unwrap().given_context.brief_revision(), Some("first brief"),
+            "a platform-owned refusal erased the retained ECS context");
         // The earlier result is retained on the between-turn lane rather than dropped (§1.4 G5).
         assert!(
             client.between.lock().unwrap().queue.iter().any(|i| matches!(i,

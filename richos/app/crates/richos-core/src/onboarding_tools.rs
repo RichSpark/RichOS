@@ -286,7 +286,7 @@ pub fn call_in(scope_path: &Path, cards: Option<&Path>, name: &str, arguments: V
             Ok(json!({"status":"saved","rules":rules,
                 "path":crate::your_instructions::path(&scope.central_root),
                 "shown": if card.is_some() { "The user sees these rules as a card under your reply, with a button that opens their instructions." } else { "Saved. No card could be shown in this conversation." },
-                "appliesFrom":"the user's next new conversation"}))
+                "appliesFrom":"the next new conversation or after Rich's current conversation compacts"}))
         }
         SAVE_PERSON_TOOL_NAME => {
             let args: SavePersonArguments = serde_json::from_value(arguments).map_err(|_| {
