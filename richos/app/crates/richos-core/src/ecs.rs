@@ -230,6 +230,9 @@ pub mod closed_by {
     pub const TURN_START_FAILED: &str = "turn-start-failed";
     /// The scope was written for an input whose turn has not started yet.
     pub const NOT_STARTED: &str = "not-started";
+    /// The app's own keep-alive message is running ("Keep chat alive", `chat_cache.rs`): the
+    /// grant is closed for it and put back when it ends ([`super::reopen_after_keep_alive`]).
+    pub const KEEP_ALIVE: &str = "keep-alive";
 }
 
 impl GrantClosed {
@@ -272,6 +275,31 @@ pub fn set_actions_allowed(path: &Path, allowed: bool) -> Result<(), EcsError> {
     let mut scope: ToolScope = serde_json::from_slice(&bytes).map_err(|e| EcsError(e.to_string()))?;
     scope.actions_allowed = allowed;
     scope.closed = if allowed { None } else { GrantClosed::now(closed_by::TURN_END) };
+    write_scope(path, &scope)
+}
+
+/// **Close an OPEN turn grant for the app's own keep-alive message** (`chat_cache.rs`), and say
+/// whether this call closed it. Stu's standing grant stays open between his turns; the
+/// keep-alive is not a turn of his, so it runs under none. A grant already closed (a Stop, a
+/// turn's end) is left exactly as it is, with its own reason. The caller holds the lock a Stop
+/// revokes under, as for [`write_next_scope`].
+pub fn close_for_keep_alive(path: &Path) -> Result<bool, EcsError> {
+    let bytes = std::fs::read(path).map_err(|e| EcsError(e.to_string()))?;
+    let mut scope: ToolScope = serde_json::from_slice(&bytes).map_err(|e| EcsError(e.to_string()))?;
+    if !scope.actions_allowed { return Ok(false); }
+    scope.actions_allowed = false;
+    scope.closed = GrantClosed::now(closed_by::KEEP_ALIVE);
+    write_scope(path, &scope).map(|()| true)
+}
+
+/// **Put back the grant [`close_for_keep_alive`] closed, and only that one.** A grant somebody
+/// else closed meanwhile (a Stop during the keep-alive) carries their reason and stays closed.
+pub fn reopen_after_keep_alive(path: &Path) -> Result<(), EcsError> {
+    let bytes = std::fs::read(path).map_err(|e| EcsError(e.to_string()))?;
+    let mut scope: ToolScope = serde_json::from_slice(&bytes).map_err(|e| EcsError(e.to_string()))?;
+    if scope.actions_allowed || scope.closed.as_ref().is_none_or(|closed| closed.by != closed_by::KEEP_ALIVE) { return Ok(()); }
+    scope.actions_allowed = true;
+    scope.closed = None;
     write_scope(path, &scope)
 }
 

@@ -487,6 +487,12 @@ richos/app/
                               its desk, and each released hold lets it go; a retired
                               conversation's next message spawns a desk on the thread's own
                               session and is answered with what was said before
+    tests/keep_chat_alive_tests.rs for "Keep chat alive" (CEO 2026-11-16, round 83; the
+                              rule for WHEN is `chat_cache::heartbeat_due`, tested beside it):
+                              a keep-alive goes to the chat's own session and is no turn in
+                              the ledger and no line in the chat; a chat with a turn running
+                              gets none; a chat whose session has ended is resumed for it; a
+                              chat that does not exist is refused, never created
     tests/two_conversations_at_once_tests.rs against the REAL delivered engine for
                               his per-thread ECS cursor: two conversations hold turns open at
                               once and BOTH check point, with the identical sequence on the
