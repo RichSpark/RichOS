@@ -13,6 +13,7 @@ or unreadable store is distinct from an empty result. The Rust bridge applies a
 | `current` | Host reads the current binding for compare-and-set activation |
 | `bind` | Host binds entity, thread, session, turn and audience with expected revision |
 | `checkpoint` | Persist typed operational statements with a stable request ID |
+| `handover` | Inspect a named local app scope while the app is stopped. Read-only and refuses a schema mismatch |
 | `receipt` | Read a previous checkpoint receipt in the same entity and thread |
 | `brief` | Bounded continuity text, counts and an inspection route |
 | `inspect` | Scoped paginated records with sequence fencing |
@@ -20,7 +21,7 @@ or unreadable store is distinct from an empty result. The Rust bridge applies a
 | `import-preview` | Read-only neutral envelope validation and mapping preview |
 | `import-apply` | Fenced application with durable partial receipts |
 | `seats` | Host reads every seat there is, so orphans can be reconciled |
-| `release-seat` | Host releases one worker seat, or one of his orphaned thread seats, fenced on that seat's revision |
+| `release-seat` | Host releases one worker seat or one of his orphaned thread seats, fenced on that seat's revision |
 
 After binding, commands other than the read-only preview carry the exact
 `binding` object returned by `bind`: entity_id, thread_id, session_id, turn_id,
@@ -32,14 +33,14 @@ A previous successful binding receipt cannot reactivate a superseded scope.
 
 The active context is a **cursor**, not a store: it answers which entity, thread,
 session and turn one principal is in right now, while the records themselves are
-keyed by entity and thread. It is one row per seat, and the conversation rewrites
+keyed by entity and thread. It is one row per seat and the conversation rewrites
 its own row at the start of every turn. A caller whose binding was frozen before
 that turn is therefore stale against the conversation's cursor and current
 against its own.
 
 So a request may name a `seat`. An absent seat is the conversation's own cursor
 and every call shape that predates seats is unchanged. A named seat is fenced
-against that seat's row, and the events a command appends carry the fenced row's
+against that seat's row and the events a command appends carry the fenced row's
 own person, so a background record can never land on the conversation's cursor by
 default.
 
@@ -52,7 +53,7 @@ The CEO's own seat is **one per conversation thread**, for the same reason. He c
 run any number of conversation threads at once and each one holds its own front
 desk, so N front desks on the one `ceo-default` row is that collision with the CEO
 on both sides of it: thread B's bind upserts thread A's cursor while A's turn is
-open, and A's next checkpoint, brief or inspect is refused with "stale app
+open and A's next checkpoint, brief or inspect is refused with "stale app
 binding" — which is not a retryable race and dead-letters the turn.
 
 A thread's seat is **derived**, `ceo-thread:<thread_id>`, so the app and the engine
@@ -63,7 +64,7 @@ means the single legacy cursor, so a client that never names a seat is unaffecte
 **Whether a call is his is answered positively**, by re-deriving the seat from the
 row's own thread and requiring the `ceo` audience — never by comparing a person
 against the `ceo-default` literal. A CEO-shaped seat that does not name the thread
-it binds is refused, and the `ceo` audience is refused to every other seat, so a
+it binds is refused and the `ceo` audience is refused to every other seat, so a
 work seat cannot reach his continuity or his `ceo_private` records by naming itself
 well.
 
@@ -73,14 +74,14 @@ well.
   person; binding them under a seat is refused as a re-registration.
 - `checkpoint`, `receipt` and `brief` are the conversation's and are refused on a
   seat that is not one of his. They read and write that seat's cursor by
-  construction, and an allow-list on tool names cannot see whose seat is calling.
+  construction and an allow-list on tool names cannot see whose seat is calling.
 - `inspect` on a seat reads that seat's cursor and that seat's audience. A seat
   bound `worker` sees only worker records.
 - `seats` and `release-seat` are the host's, refused to any seat that is not one
   of his. A seat with no assignment behind it is a defect and is reconciled where
-  receipts are; a release is an event, so it survives a projection rebuild, and
+  receipts are; a release is an event, so it survives a projection rebuild and
   only a worker seat or one of his thread seats can be released at all —
-  `ceo-default` never, and no seat can release itself.
+  `ceo-default` never and no seat can release itself.
 - Releasing one of his thread seats requires the revision the seat was enumerated
   at. Whether a conversation thread still exists is the app's knowledge; what the
   store can prove is movement, so a seat that has bound a turn since the

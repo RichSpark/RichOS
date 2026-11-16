@@ -1,13 +1,16 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 """Explicit app scope over the vendor-neutral ECS store. No cwd inference."""
+from contextlib import closing
 from dataclasses import asdict
 import hashlib
 import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sqlite3
+import tempfile
 
 from ecs_core import (CEO_SEAT_PREFIX, EventStore, PERSON_ID, ScopeError, ValidationError,
                       ECSError, canonical_json, ceo_seat, is_ceo_row)
@@ -272,6 +275,56 @@ def bind(store, request, seat=None):
     return {"binding": binding_of(current)}
 
 
+def handover(store, request):
+    """Inspect one authorized local scope while the app is stopped."""
+    entity = required(request, "entity_id")
+    thread = required(request, "thread_id")
+    person = ceo_seat(thread)
+    wal = store.db_path.with_name(store.db_path.name + "-wal")
+
+    def fingerprint(path):
+        try:
+            meta = path.stat()
+        except FileNotFoundError:
+            return None
+        return meta.st_dev, meta.st_ino, meta.st_size, meta.st_mtime_ns, meta.st_ctime_ns
+
+    original = fingerprint(store.db_path), fingerprint(wal)
+    if original[0] is None:
+        raise ScopeError("app ECS store is unavailable")
+    query = request.get("query", {})
+    if not isinstance(query, dict) or set(query) - {"section", "offset", "limit", "sequence", "item_id", "query", "include_closed"}:
+        raise ValidationError("unsupported inspection fields")
+
+    def inspect(db, *, immutable):
+        uri = db.as_uri() + "?mode=ro"
+        if immutable:
+            uri += "&immutable=1"
+        with closing(sqlite3.connect(uri, uri=True, timeout=1)) as conn:
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA query_only = ON")
+            conn.execute("BEGIN")
+            known = {int(file.name.split("_", 1)[0]): file.name
+                     for file in store.migrations_dir.glob("[0-9][0-9][0-9]_*.sql")}
+            if not known or dict(conn.execute("SELECT version, name FROM schema_migrations")) != known:
+                raise ValidationError("installed ECS engine and app store schema differ")
+            return inspect_records(store, person_id=person, connection=conn, scope=(entity, thread), **query)
+
+    if original[1] and original[1][2]:
+        # SQLite can write or create the WAL index even when the database is
+        # opened mode=ro. Read a disposable snapshot after a crash left a WAL.
+        with tempfile.TemporaryDirectory(prefix="richos-ecs-handover-") as directory:
+            copy = Path(directory) / store.db_path.name
+            shutil.copyfile(store.db_path, copy)
+            shutil.copyfile(wal, copy.with_name(wal.name))
+            result = inspect(copy, immutable=False)
+    else:
+        result = inspect(store.db_path, immutable=True)
+    if original != (fingerprint(store.db_path), fingerprint(wal)):
+        raise ScopeError("app ECS changed during handover; stop the app and retry")
+    return result
+
+
 def execute(state_root, request, *, store=None):
     if not isinstance(request, dict) or type(request.get("protocol")) is not int or request.get("protocol") != PROTOCOL_VERSION:
         raise ValidationError("unsupported ECS app protocol")
@@ -292,7 +345,7 @@ def execute(state_root, request, *, store=None):
                 "migration_digest": identity.hexdigest(), "state_root": str(root),
                 "ceo_thread_seats": True, "ceo_seat_prefix": CEO_SEAT_PREFIX,
                 "live_brief_revision": True,
-                "commands": ["current", "bind", "prepare-turn", "checkpoint", "receipt", "brief", "inspect", "observe", "verified-work", "observation-receipt", "import-preview", "import-apply", "sync-loro-receipts", "complete-obligation", "operator-complete", "seats", "release-seat", "answer-complete"]}
+                "commands": ["current", "bind", "prepare-turn", "checkpoint", "receipt", "brief", "inspect", "observe", "verified-work", "observation-receipt", "import-preview", "import-apply", "sync-loro-receipts", "complete-obligation", "operator-complete", "seats", "release-seat", "answer-complete", "handover"]}
     if command == "prepare-turn":
         # The front desk's existing four requests, in one Python invocation. Keep
         # their handlers, revision fences, order and receipt-error behavior.
@@ -324,6 +377,8 @@ def execute(state_root, request, *, store=None):
         from import_records import preview
         return preview(root, request.get("envelope"), request.get("target"))
     store = store if store is not None else EventStore(root)
+    if command == "handover":
+        return handover(store, request)
     seat = seat_of(request)
     if command == "current":
         current = store.current_context() if seat is None else store.current_context(seat)

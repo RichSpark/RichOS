@@ -10043,7 +10043,7 @@
     },
     "ecs/core/ecs_inspect.py#load": {
       "source": "ecs/core/ecs_inspect.py",
-      "sha256": "9987e141ac6b4c2a445f72eef76454053dd849cf1252b3ea2002a9decd24293c",
+      "sha256": "c7fb85effb40b8f96a07ebde2b1e85f125746997d882c509f4b484c10a1c6e3b",
       "evidence": "Module-load imports and initializers reviewed: stdlib/core and literal SECTIONS. No inspect function or store construction runs.",
       "keys": [],
       "edges": [
@@ -10054,7 +10054,7 @@
     },
     "ecs/adapters/app.py#load": {
       "source": "ecs/adapters/app.py",
-      "sha256": "1b1e335a6e4b0b3cc64c38c3c56ecb1fdaa674c2486a5187f75673f0df9b0c2a",
+      "sha256": "52c8d0e11f0214cce599c64e6804eeb6a04ecd7c44e4b91da932d5905054bc17",
       "evidence": "Module-load imports and initializers reviewed: stdlib/core/checkpoint/inspect, constants and definitions. No adapter entrypoint runs. Renewed 2026-10-14: prepare-turn invokes the existing current, bind, receipt-sync and brief handlers in the same process. New fixed private tests cover idempotent binding, concurrent seats, receipt failure and the final stale-binding fence; no additional dynamic import target.",
       "keys": [],
       "edges": [
@@ -13355,7 +13355,7 @@
     },
     "ecs/core/ecs_inspect.py": {
       "source": "ecs/core/ecs_inspect.py",
-      "sha256": "9987e141ac6b4c2a445f72eef76454053dd849cf1252b3ea2002a9decd24293c",
+      "sha256": "c7fb85effb40b8f96a07ebde2b1e85f125746997d882c509f4b484c10a1c6e3b",
       "evidence": "Stdlib store/parser/renderer: explicit SQLite/JSON and text inputs, fixed SQL migrations, no shell execution, engine config read or imports beyond the bound ECS core modules.",
       "keys": [],
       "edges": [
@@ -13373,7 +13373,7 @@
     },
     "ecs/adapters/app.py#answer-operator-fixture": {
       "source": "ecs/adapters/app.py",
-      "sha256": "1b1e335a6e4b0b3cc64c38c3c56ecb1fdaa674c2486a5187f75673f0df9b0c2a",
+      "sha256": "52c8d0e11f0214cce599c64e6804eeb6a04ecd7c44e4b91da932d5905054bc17",
       "evidence": "Only bind/checkpoint/observe(started)/hello/answer-complete/operator-complete from named completion fixtures. Git ancestry uses fixed git commands. Does not enter complete-obligation or verified-work, the only dynamic Mega Lander imports. No config lookup. Renewed 2026-10-14: prepare-turn invokes the existing current, bind, receipt-sync and brief handlers in the same process. New fixed private tests cover idempotent binding, concurrent seats, receipt failure and the final stale-binding fence; no additional dynamic import target.",
       "keys": [],
       "edges": [
@@ -13390,7 +13390,7 @@
     },
     "ecs/bin/ecs#answer-operator-fixture": {
       "source": "ecs/bin/ecs",
-      "sha256": "11a8455cb410e8de5cae5fa02a5275183b347be4ccd709be962bc35c96ad825f",
+      "sha256": "a827932a6cbc8fda6d0e6ce50f840652915503cd97d15c7d5f176e56496ccba0",
       "evidence": "Fixed CLI parses bounded JSON and dispatches to app adapter. Named fixture supplies private state root and only qualified commands.",
       "keys": [],
       "edges": [
@@ -13412,7 +13412,7 @@
     },
     "ecs/tests/test_app.py#answer-operator": {
       "source": "ecs/tests/test_app.py",
-      "sha256": "e847c511f6f182bbc4002c132e354f72c11476bd17eacbaaf4b97e9e717b2b4d",
+      "sha256": "40c70ea72d36b710b780de59f5c57afd03997856a1c2c56a3b047fe8e3658323",
       "evidence": "Only AnswerCompleteTests/OperatorCompleteTests and inherited WorkSeatTests call/bind/rows/observe helpers run. Private SQLite and Git fixtures, fixed CLI requests, host-only MCP refusal controls. No complete-obligation/verified-work command or other test class runs. Renewed 2026-10-09 (second review slice 4): one AppProtocolTests case writes a private scope carrying about 96 KB of literal user words and calls checkpoint, then an oversized one. Renewed 2026-10-14: prepare-turn invokes the existing current, bind, receipt-sync and brief handlers in the same process. New fixed private tests cover idempotent binding, concurrent seats, receipt failure and the final stale-binding fence; no additional dynamic import target.",
       "keys": [],
       "edges": [
@@ -14465,7 +14465,7 @@
     },
     "ecs/adapters/app.py#desktop-work-fixtures": {
       "source": "ecs/adapters/app.py",
-      "sha256": "1b1e335a6e4b0b3cc64c38c3c56ecb1fdaa674c2486a5187f75673f0df9b0c2a",
+      "sha256": "52c8d0e11f0214cce599c64e6804eeb6a04ecd7c44e4b91da932d5905054bc17",
       "evidence": "Finite desktop fixture requests: bind/checkpoint/brief/inspect/observe/verified-work/observation-receipt/seats/release-seat/complete-obligation. Reached dynamic imports return to the bound Mega Lander app for receipt verification. Import-preview/import-apply/sync-loro-receipts are not invoked. Core uses private SQLite/JSON and fixed SQL; no config value is sourced. Renewed 2026-10-14: prepare-turn invokes the existing current, bind, receipt-sync and brief handlers in the same process. New fixed private tests cover idempotent binding, concurrent seats, receipt failure and the final stale-binding fence; no additional dynamic import target.",
       "keys": [],
       "edges": [
@@ -15819,7 +15819,7 @@
     },
     "ecs/adapters/app.py#discovery-fixtures": {
       "source": "ecs/adapters/app.py",
-      "sha256": "1b1e335a6e4b0b3cc64c38c3c56ecb1fdaa674c2486a5187f75673f0df9b0c2a",
+      "sha256": "52c8d0e11f0214cce599c64e6804eeb6a04ecd7c44e4b91da932d5905054bc17",
       "keys": [],
       "edges": [
         {
@@ -15875,7 +15875,7 @@
     },
     "ecs/bin/ecs#discovery-fixtures": {
       "source": "ecs/bin/ecs",
-      "sha256": "11a8455cb410e8de5cae5fa02a5275183b347be4ccd709be962bc35c96ad825f",
+      "sha256": "a827932a6cbc8fda6d0e6ce50f840652915503cd97d15c7d5f176e56496ccba0",
       "keys": [],
       "edges": [
         {
@@ -15897,7 +15897,7 @@
     },
     "ecs/tests/test_app.py": {
       "source": "ecs/tests/test_app.py",
-      "sha256": "e847c511f6f182bbc4002c132e354f72c11476bd17eacbaaf4b97e9e717b2b4d",
+      "sha256": "40c70ea72d36b710b780de59f5c57afd03997856a1c2c56a3b047fe8e3658323",
       "keys": [],
       "edges": [
         {
@@ -15957,7 +15957,7 @@
     },
     "ecs/tests/run.test.sh": {
       "source": "ecs/tests/run.test.sh",
-      "sha256": "561125f1386f6166b7a9f2f794990eba4cbe5664c67d8345652ae61c3bb77283",
+      "sha256": "a59c2ef49d94b61fb89b68258401647db9284edbd4958419110aa47a23f7a3a6",
       "keys": [],
       "edges": [
         {

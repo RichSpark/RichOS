@@ -208,6 +208,38 @@ class AppProtocolTests(unittest.TestCase):
         self.assertIn("verification receipt", error["message"])
         self.assertEqual(self.call("inspect", query={"item_id": "work"})["item"]["status"], "active")
 
+    def test_offline_handover_reads_existing_scope_without_creating_or_migrating_state(self):
+        self.assertTrue(self.checkpoint([{"verb": "commitment", "fields": {
+            "id": "carry-forward", "title": "Finish the depot manual"}}])["accepted"])
+        before = {path.name: (path.stat().st_mode, path.read_bytes()) for path in self.store.iterdir()}
+        request = dict(entity_id="depot", thread_id="thread-a", query={"section": "commitment"})
+        handover = self.call("handover", **request)
+        self.assertEqual([row["item_id"] for row in handover["records"]], ["carry-forward"])
+        self.assertEqual(self.call("handover", **{**request, "entity_id": "other"}, ok=False)["kind"], "ScopeError")
+        self.assertEqual(before, {path.name: (path.stat().st_mode, path.read_bytes()) for path in self.store.iterdir()})
+        absent = self.root / "missing"
+        with self.assertRaisesRegex(ScopeError, "unavailable"):
+            execute(absent, {"protocol": 1, "command": "handover", **request})
+        self.assertFalse(absent.exists())
+
+    def test_offline_handover_recovers_committed_wal_without_modifying_app_files(self):
+        # A process loss can leave a committed change only in WAL. The inspector
+        # must see it without recovering the live database or writing its SHM.
+        from contextlib import closing
+        with closing(sqlite3.connect(self.store / "ecs.sqlite3")) as keeper:
+            keeper.execute("PRAGMA journal_mode=WAL")
+            self.assertTrue(self.checkpoint([{"verb": "commitment", "fields": {
+                "id": "wal-only", "title": "Recover the committed work"}}])["accepted"])
+            self.assertGreater((self.store / "ecs.sqlite3-wal").stat().st_size, 0)
+            before = {path.name: path.read_bytes() for path in self.store.iterdir()}
+            view = self.call("handover", entity_id="depot", thread_id="thread-a", query={"item_id": "wal-only"})
+            self.assertEqual(view["item"]["item_id"], "wal-only")
+            self.assertEqual(before, {path.name: path.read_bytes() for path in self.store.iterdir()})
+            keeper.execute("DELETE FROM schema_migrations WHERE version = (SELECT MAX(version) FROM schema_migrations)")
+            keeper.commit()
+            error = self.call("handover", entity_id="depot", thread_id="thread-a", ok=False)
+            self.assertIn("schema differ", error["message"])
+
     def test_hello_is_read_only_and_no_implicit_state_root_is_accepted(self):
         absent = self.root / "absent"
         self.assertEqual(execute(absent, {"protocol": 1, "command": "hello"})["protocol"], 1)
