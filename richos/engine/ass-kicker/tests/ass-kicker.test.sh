@@ -740,6 +740,54 @@ if [ "$RC" -eq 0 ] && ! printf '%s' "$OUT" | grep -q 'RECORD ALERT'; then
     ok "R68. after a verified company-notes save, 'saved your answers in the notes' is not private memory: no alert"
 else bad "R68. answers in the notes" "rc=$RC out=$(printf '%s' "$OUT" | head -c 300)"; fi
 
+# The ECS adapter must prove the item in this conversation and its actual turn receipt.
+if PYTHONDONTWRITEBYTECODE=1 python3 - "$ENGINE_ROOT" "$SANDBOX" <<'PYECS'
+import importlib.util, json, os, sys
+from pathlib import Path
+import subprocess
+engine, fixture = map(Path, sys.argv[1:])
+spec = importlib.util.spec_from_file_location("ass_kicker", engine / "ass-kicker/ass-kicker.py")
+guard = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(guard)
+state = fixture / "ecs-save-state"
+scope_file = fixture / "ecs-save-scope.json"
+os.environ["RICHOS_APP_SCOPE"] = str(scope_file)
+def request(command, **fields):
+    raw = subprocess.check_output(
+        [sys.executable, str(engine / "ecs/bin/ecs"), "--state-root", str(state)],
+        input=json.dumps(dict(protocol=1, command=command, **fields)), text=True)
+    return json.loads(raw)["result"]
+scope = dict(entity_id="fixture", thread_id="conversation", session_id="session",
+             turn_id="turn", audience="ceo")
+binding = request("bind", scope=scope, request_id="bind", source_ref="ledger:conversation:turn")["binding"]
+scope_file.write_text(json.dumps(dict(version=1, actions_allowed=True, binding=binding,
+                                      bridge={"state_root": str(state)})))
+first = request("checkpoint", binding=binding, request_id="actual",
+    checkpoint={"statements": [{"verb":"commitment","fields":{"id":"finish-guide",
+        "title":"Finish the guide","next":"Send it after publication"}}]})
+assert first["accepted"]
+partial = request("checkpoint", binding=binding, request_id="partial",
+    checkpoint={"statements": [{"verb":"commitment","fields":{"id":"draft-guide",
+        "title":"Draft the guide","next":"Draft once the owner responds"}},
+        {"verb":"update","fields":{"id":"missing","title":"Refuses this statement"}}]})
+assert not partial["accepted"]
+writes = dict(targets=[], traffic="", committed=False, record_script=False)
+lookup = guard.ecs_record_lookup({"session_id": "session"})
+def verdict(reply):
+    claims = guard.record_claims(reply)
+    assert claims, reply
+    return guard.judge_record_claims(claims, writes, reply, ecs_lookup=lookup)
+assert not verdict("I saved the follow-up in ECS item `finish-guide`.")
+assert not verdict("I added it to the follow-up list, ECS item `finish-guide`.")
+assert verdict("I saved the follow-up in ECS item `made-up`.")
+assert verdict("I saved the follow-up in ECS item `draft-guide`.")
+assert verdict("I saved your standing rule in ECS item `finish-guide`.")
+assert verdict("I noted it in my private notes, ECS item `finish-guide`.")
+assert guard.ecs_record_lookup({"session_id": "different-session"}) is None
+PYECS
+then ok "ECS save claims require a scoped item and accepted current-turn receipt"
+else bad "ECS save claims" "scope or receipt assertion failed"; fi
+
 # R69-R73: the one rule (a confirmed app save, no memory/ECS write, no file the turn did not write).
 for pair in \
     "R69|I've saved your company notes, including 37signals.com/about as your website." \
