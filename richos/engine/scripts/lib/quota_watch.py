@@ -140,11 +140,13 @@ separate processes:
                to that lead (host_child.py).
 
   A get_usage failure (timeout, refusal) is retried every 60 s instead of
-  every 300 s. With no usable reading, the watcher stays quiet through a
-  retry and alerts once if quota remains unknown for a full poll interval.
-  For a known five-hour window it can also alert after a failed retry if
-  the measured rise could already have crossed the threshold (see
-  outage_verdict). Actual crossings and releases are handled every poll.
+  every 300 s. Once the live source has been unavailable for one poll
+  interval, the watcher alerts if it has no usable reading. A fallback is
+  checked when its freshness expires, and a new status-line render does not
+  end the live-source outage or rearm its alert. For a known five-hour window
+  a failed retry can also alert if the measured rise could already have
+  crossed the threshold (see outage_verdict). Actual crossings and releases
+  are handled every poll.
 
 HIGH SPEED (ruling §108, 2026-10-04, richos-hq 1d027daa and addendum 56f17efd).
 His words: "The 93% rule is sufficient for regular work. But when the token
@@ -1808,10 +1810,14 @@ def _poll_loop(a, out, alive, health=None):
             # measured in this window, before and apart from any pause message.
             out.wake("FAST", _capture(_emit_fast, a, r, speed, now, w), now)
             fast_alerted = r["resets_at"]
+        verdict, why = rule_verdict(r, a.threshold, a.stale, now)
+        if verdict != "unknown":
+            blind_since = None
+            if outage is None:
+                blind_woken = False
         weekly_text = io.StringIO()
         with contextlib.redirect_stdout(weekly_text):
-            weekly_blocked, weekly_event = quota_weekly.handle(a, r, now, w, reset_status,
-                lambda: rule_verdict(r, a.threshold, a.stale, now)[0])
+            weekly_blocked, weekly_event = quota_weekly.handle(a, r, now, w, reset_status, lambda: verdict)
         if weekly_event:
             text = weekly_text.getvalue()
             # The key names the weekly WINDOW as well as the headline and the workers
@@ -1864,7 +1870,6 @@ def _poll_loop(a, out, alive, health=None):
                 released = window_end
         if window_end is None and r["state"] == "ok" and not r["ended"]:
             window_end = r["resets_at"]
-        verdict, why = rule_verdict(r, a.threshold, a.stale, now)
         print("%s  %s" % (_dt.datetime.fromtimestamp(now, _dt.timezone.utc).strftime("%H:%M:%SZ"),
                           describe(r, a.threshold, now) + ("  [UNKNOWN: %s]" % why if verdict == "unknown" and r["state"] == "ok" else "")),
               flush=True)
@@ -1916,7 +1921,8 @@ def _poll_loop(a, out, alive, health=None):
                 if blind_since is None:
                     blind_since = now
                 stale = r["state"] == "ok" and not r["ended"]
-                wake = now - blind_since >= a.poll
+                unavailable_since = outage["at"] if outage is not None else blind_since
+                wake = now - unavailable_since >= a.poll
                 outage_detail = None
                 if in_outage:
                     reading = {"used": r["used"], "resets_at": r["resets_at"], "taken": now - int(r["age"] or 0)}
@@ -1931,8 +1937,6 @@ def _poll_loop(a, out, alive, health=None):
                 if wake and not blind_woken and (not w["known"] or w["working"]):
                     out.wake("STALE" if stale else "UNKNOWN", _capture(_emit_blind, a, r, w, why, outage_detail), now)
                     blind_woken = True
-            else:
-                blind_since, blind_woken = None, False
         sleep_for = a.fast_poll if fast or expected else a.poll
         if window_end is not None:
             sleep_for = max(1, min(sleep_for, window_end - now))
@@ -1944,6 +1948,10 @@ def _poll_loop(a, out, alive, health=None):
         if retry:
             # "retried at the next poll, or sooner" (2026-09-28).
             sleep_for = max(1, min(sleep_for, _retry_seconds(a)))
+            if verdict == "below" and r.get("source") == "the status line" and r["age"] is not None:
+                # Recheck as soon as this fallback becomes older than one poll.
+                expires_in = math.floor(a.stale - r["age"]) + 1
+                sleep_for = max(1, min(sleep_for, expires_in))
         _poll_completed(health)
         # Counted from the START of this poll, so the polls are 300 s apart
         # and not 300 s plus however long get_usage took (20 s on a timeout).

@@ -105,6 +105,57 @@ def replay(case, payload, work, engine, fake):
                 lead_woken=lead_woken, via_get_usage="via get_usage" in text)
 
 
+def replay_fallback(payload, work, engine):
+    """Replay a live-source outage with two independent status-line renders."""
+    work.mkdir(parents=True, exist_ok=True)
+    origin = int(time.time())
+    elapsed = 0
+    lines, events = io.StringIO(), io.StringIO()
+    polls, blind = [], []
+    threshold_at = None
+    renders = [(0, 91), (720, 92), (1500, 93)]
+
+    def render(at, used):
+        payload.write_text(json.dumps({"rate_limits": {"five_hour": {
+            "used_percentage": used, "resets_at": origin + 7200}}}))
+        os.utime(payload, (origin + at, origin + at))
+
+    def sleep(seconds):
+        nonlocal elapsed, threshold_at
+        polls.append(elapsed)
+        text = events.getvalue()
+        events.seek(0)
+        events.truncate()
+        if re.search(r"^QUOTA-(STALE|UNKNOWN)", text, re.M):
+            blind.append(elapsed)
+        match = re.search(r"^QUOTA-THRESHOLD (\d+)%", text, re.M)
+        if match:
+            threshold_at = [elapsed, int(match[1])]
+            raise EndOfReplay
+        for at, used in renders:
+            if elapsed < at <= elapsed + seconds:
+                render(at, used)
+        elapsed += seconds
+        if elapsed > 1800:
+            raise EndOfReplay
+
+    watch.time = SimpleNamespace(time=lambda: origin + elapsed, sleep=sleep)
+    # The suite supplies an unavailable CLI, so this drives the real fallback reader.
+    render(*renders[0])
+    args = SimpleNamespace(threshold=93, threshold_problem="", config="fixture",
+                           payload=str(payload), engine_root=str(engine), poll=300,
+                           stale=300, until_reset=False, command="quota-watch.sh",
+                           fast_poll=60, hold=60)
+    try:
+        rc = watch.poll_loop(args, watch.Out(lines=lines, events=events))
+        raise AssertionError("the poll loop returned (%r) instead of polling on" % (rc,))
+    except EndOfReplay:
+        pass
+    (work / "transcript.log").write_text(lines.getvalue())
+    return dict(blind=blind, threshold_at=threshold_at,
+                max_gap=max(b - a for a, b in zip(polls, polls[1:])))
+
+
 # Ruling §108. Seconds after the watcher's poll phase, and the five-hour value.
 # r05: 2026-09-29, 15 Fable workers, the lead's transcript (session 30e3850f).
 # The watcher's monitor started with the session at 18:28:05Z and polled at
@@ -236,6 +287,9 @@ if __name__ == "__main__":
                 out["phases"].append(dict(start=start, wake_at=d["wake_at"], value=d["value"], at_hold=d["at_hold"],
                                           early=d["early"]))
         print(json.dumps(out))
+        raise SystemExit(0)
+    if case == "r03":
+        print(json.dumps(replay_fallback(Path(payload), Path(work), Path(engine))))
         raise SystemExit(0)
     if case not in ("r01", "r02", "r04"):
         raise SystemExit("unknown replay")

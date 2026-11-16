@@ -134,8 +134,8 @@ mutant near-reset-exits-as-pause "Q17" "$L" \
     "--once would tell a caller to pause inside the last 20 minutes."
 
 mutant watch-ignores-exception "W10" "$L" \
-    '        verdict, why = rule_verdict(r, a.threshold, a.stale, now){NL}        print("%s  %s"' \
-    '        verdict, why = classify(r, a.threshold, a.stale){NL}        print("%s  %s"' \
+    '        verdict, why = rule_verdict(r, a.threshold, a.stale, now){NL}        if verdict != "unknown":' \
+    '        verdict, why = classify(r, a.threshold, a.stale){NL}        if verdict != "unknown":' \
     "--once would say no pause while the watcher woke the lead to pause anyway."
 
 mutant release-never-fires "E05" "$L" \
@@ -199,9 +199,19 @@ mutant watch-reads-file-only "R04" "$L" \
 
 # 9. RETRY A TRANSIENT FAILURE BEFORE WAKING THE LEAD.
 mutant outage-wakes-on-first-unknown "N07" "$L" \
-    '                wake = now - blind_since >= a.poll' \
-    '                wake = stale or now - blind_since >= a.poll' \
+    '                wake = now - unavailable_since >= a.poll' \
+    '                wake = stale or now - unavailable_since >= a.poll' \
     "A single timeout on a weekly-only account would wake the lead over an old fallback."
+
+mutant fallback-expiry-ignored "R03" "$L" \
+    'sleep_for = max(1, min(sleep_for, expires_in))' \
+    'pass' \
+    "A fallback could pass its freshness limit without a check at the boundary."
+
+mutant fallback-render-rearms-outage "R03" "$L" \
+    '            if outage is None:{NL}                blind_woken = False' \
+    '            blind_woken = False' \
+    "A temporary fallback render would rearm the same live-source outage alert."
 
 # 10. THE POLLING NEVER STOPS (2026-09-28). The watcher exited at the 14:30Z
 #     reset and on a get_usage timeout at 15:32Z, and nothing polled until it

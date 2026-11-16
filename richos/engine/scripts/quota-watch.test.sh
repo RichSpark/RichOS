@@ -948,6 +948,22 @@ sys.exit(0 if ok else 1)' 2>/dev/null; echo $?)" "report=$(cat "$SB/r02.report")
 
 fi
 
+# The live source stays down. Ordinary status-line renders still supply
+# readings, but they must not reset the outage alert or the retry schedule.
+if wants "R03"; then
+replay r03
+R03="$(tail -1 "$SB/r03.report")"
+check "R03  fallback-only outage alerts once at expiry and catches the next reported threshold crossing within one retry" \
+    "$(printf '%s' "$R03" | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+crossed = d["threshold_at"]
+ok = (d["blind"] == [301] and d["max_gap"] <= 60 and crossed is not None
+      and 1500 <= crossed[0] <= 1560 and crossed[1] == 93)
+sys.exit(0 if ok else 1)' 2>/dev/null; echo $?)" "report=$(cat "$SB/r03.report")"
+
+fi
+
 # A fallback that is still current can age out without asking the lead to
 # speak. The next reading will come from another automatic attempt.
 if wants "W12"; then
