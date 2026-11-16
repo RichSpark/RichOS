@@ -583,19 +583,17 @@ async function main() {
     return "179 drawn, then 186 on the same launch: \"7 new since this morning\"";
   });
 
-  await run.check("a cold open under 400 draws his lights in the order he earned them, and from 400 they are simply there", async () => {
-    const page = await openApp(browser, { homeTeam: TEAM, homeField: field(186) }, seenAt(186, 3));
-    await page.waitForFunction("!!window.RichHomeGrowth.state().active", null, { timeout: 60000 });
-    assertEqual(await page.evaluate(() => window.VARIANT.count), 0, "the picture does not start empty under 400");
-    await arrived(page);
-    await countIs(page, 186);
-    const order = await page.evaluate(() => { const lo = window.__loro; let last = -1; for (let r = 0; r < 186; r++) { const d = lo.D.createdDay[lo.arrival[r]]; if (d < last) return false; last = d; } return true; });
-    assert(order, "the lights do not arrive in the order of their days");
-    await page.close();
-    const big = await openApp(browser, { homeTeam: TEAM, homeField: field(480) }, seenAt(480, 4));
-    assertEqual(await big.evaluate(() => window.VARIANT.count), 480, "480 lights are made to arrive at every open");
-    await big.close();
-    return "186: from none, in day order; 480: there from the first frame";
+  await run.check("returning lights are present from the start of the Home bloom", async () => {
+    for (const [count, stage] of [[186, 3], [480, 4]]) {
+      const page = await openApp(browser, { homeTeam: TEAM, homeField: field(count) }, seenAt(count, stage));
+      await page.waitForFunction("!!window.RichHomeGrowth.state().active", null, { timeout: 60000 });
+      assertEqual(await page.evaluate(() => window.VARIANT.count), count, "the picture starts with all existing lights");
+      await arrived(page);
+      await countIs(page, count);
+      assertEqual(await page.evaluate(() => window.__loro.entrance.state), "done", "growth runs after the entrance");
+      await page.close();
+    }
+    return "186 and 480 lights both assemble with the picture";
   });
 
   // ---- 4.3 -------------------------------------------------------------------------------------

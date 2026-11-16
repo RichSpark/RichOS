@@ -139,7 +139,7 @@ mod tests {
         "richos_core::search_tools::run_stdio", "richos_core::status_tools::run_stdio",
         // The saved pick and its opening's first picture (Sage's plan 2026-11-14, "the splash the
         // rules picked is playing within 380 ms of the click", section 5 item 5).
-        "splash_pick::for_launch", "splash_opening::reduce_motion", "splash_opening::show", "first_frame::color",
+        "splash_pick::pick_for", "splash_pick::parse_hex", "splash_player::reduce_motion", "splash_player::locate", "splash_player::prepare", "splash_player::show", "splash_player::did_not_attach", "first_frame::color",
         // WHAT THE PICK AND THE SPLASH'S OWN PAGE READ (round 74, the CEO's order of 2026-11-14):
         // his settings for the opening, what he has earned by this start (one write, only when
         // something is new), the facts the pick reads, and the record the page draws his opening
@@ -220,9 +220,9 @@ mod tests {
         // then the commit, are what make the first frame the splash's own.
         let before_commit = &main[hook..commit];
         assert!(before_commit.contains(".background_color(match window_splash {")
-            && before_commit.contains("first_frame::color(pick.ground)")
+            && before_commit.contains("first_frame::color(splash_pick::parse_hex(&pick.ground)")
             && before_commit.contains("first_frame::ground("));
-        assert!(before_commit.contains("splash_opening::show(&window, &o)"), "the opening's first picture goes in before the commit");
+        assert!(before_commit.contains("splash_player::show(&window, pack)"), "the native layer goes in before the window commit");
     }
 
     #[test]

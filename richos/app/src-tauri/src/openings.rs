@@ -11,7 +11,6 @@
 //!   `window.__RICHOS_LAUNCH__`: which openings are his and since when, and his three settings.
 use richos_core::launch::{LaunchStore, SplashFacts};
 use richos_core::openings::{self, Catalog, Facts};
-use std::collections::BTreeMap;
 use std::sync::OnceLock;
 
 /// The catalog the page draws from, compiled in (`ui/openings-catalog.js`, data).
@@ -122,28 +121,23 @@ pub fn today(launch: &LaunchStore, settings: &Settings, now_ms: u64) -> Option<(
     openings::daily(&mine, day, last).map(|id| (day, id.to_string()))
 }
 
-/// The facts for THE NEXT DAY'S pick, from today's: a day on, with today's opening as the last.
-pub fn later_day_facts(facts: &SplashFacts, today: &(i64, String)) -> SplashFacts {
-    SplashFacts { day: Some(today.0 + 1), daily: Some(today.clone()), ..facts.clone() }
-}
-
-/// THE FACTS A PICKED SPLASH SHOWS (`splash_pick::Saved::facts`): what is drawn on it that is
-/// not in its own files, so an opening drawn at quit is used only while they still hold. His
-/// company's line is on every opening; the version is on the one that shows it.
-pub fn shown_facts(entry_id: &str, settings: &Settings, version: &str) -> BTreeMap<String, String> {
-    let mut facts = BTreeMap::new();
-    if let Some(company) = &settings.company {
-        facts.insert("company".to_string(), company.clone());
+/// Which local videos a choice needs before the next fresh launch.
+#[cfg(any(target_os = "macos", test))]
+pub fn playback_packs(launch: &LaunchStore, settings: &Settings, now_ms: u64) -> Vec<String> {
+    let Some(pick) = settings.pick.as_deref() else { return Vec::new() };
+    if pick != openings::DAILY {
+        return vec![pick.to_string()];
     }
-    let shows_version = entry_id
-        .strip_prefix(openings::KEY_PREFIX)
-        .and_then(|id| catalog().get(id))
-        .and_then(|o| o.figure.as_deref())
-        .is_some_and(|figure| figure.contains("{version}"));
-    if shows_version {
-        facts.insert("version".to_string(), version.to_string());
-    }
-    facts
+    let Some((day, current)) = today(launch, settings, now_ms) else { return Vec::new() };
+    let mut facts = splash_facts(launch, settings, launch.next_start_ordinal(), now_ms);
+    facts.day = Some(day + 1);
+    facts.daily = Some((day, current.clone()));
+    let next = crate::splash_pick::pick_for(&facts)
+        .and_then(|entry| entry.pack_id().map(str::to_string))
+        .filter(|id| id != &current);
+    let mut packs = vec![current];
+    packs.extend(next);
+    packs
 }
 
 /// The record as the page reads it: a plain object. `earned` maps an opening's id to the local
@@ -266,7 +260,7 @@ mod tests {
 
     #[test]
     fn the_pick_reads_his_setting_what_he_has_and_the_day() {
-        let (dir, mut launch) = store("facts", FIRST);
+        let (_dir, mut launch) = store("facts", FIRST);
         sync(&mut launch, Some(150.0), "1.4.0", FIRST);
         let settings = Settings { pick: Some("power-100".into()), sound: true, company: Some("Acme".into()), daily: None };
         let facts = splash_facts(&launch, &settings, Some(7), FIRST);
@@ -274,16 +268,11 @@ mod tests {
         assert_eq!(facts.pick.as_deref(), Some("power-100"));
         assert_eq!(facts.earned, ["ruled-standard", "midnight-suede", "power-100"]);
         assert_eq!(facts.day, Some(openings::local_day(FIRST, local_offset_minutes(FIRST))));
-        // What is drawn on the splash that its files do not hold.
-        assert_eq!(shown_facts("opening/power-100", &settings, "1.4.0").into_iter().collect::<Vec<_>>(), [("company".to_string(), "Acme".to_string())]);
-        assert_eq!(shown_facts("opening/edition-update", &settings, "1.4.0").get("version").map(String::as_str), Some("1.4.0"));
-        assert!(shown_facts("round-11/v1", &Settings::default(), "1.4.0").is_empty());
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
-    fn a_different_one_each_day_says_todays_and_the_next_days_for_the_quit_to_draw_both() {
-        let (dir, mut launch) = store("daily", FIRST);
+    fn a_daily_choice_prepares_today_and_the_next_day_before_it_is_saved() {
+        let (_dir, mut launch) = store("daily", FIRST);
         sync(&mut launch, Some(150.0), "1.4.0", FIRST);
         let day = openings::local_day(FIRST, local_offset_minutes(FIRST));
         let his = ["ruled-standard", "midnight-suede", "power-100"];
@@ -299,18 +288,10 @@ mod tests {
         assert_eq!(today(&launch, &daily(Some((day, "midnight-suede"))), FIRST), Some((day, "midnight-suede".to_string())));
         // Left on Friday, back on Monday: the one after Friday's.
         assert_eq!(today(&launch, &daily(Some((day - 3, "midnight-suede"))), FIRST), Some((day, "power-100".to_string())));
-        // What the quit draws beside today's: the pick for any later day.
         let settings = daily(Some((day, "midnight-suede")));
         let facts = splash_facts(&launch, &settings, Some(7), FIRST);
         let ids: Vec<String> = his.iter().map(|id| openings::key(id)).collect();
         assert_eq!(richos_core::launch::pick_splash(&ids, &facts), Some("opening/midnight-suede"));
-        let later = later_day_facts(&facts, &(day, "midnight-suede".to_string()));
-        assert_eq!(richos_core::launch::pick_splash(&ids, &later), Some("opening/power-100"));
-        // The page is told today's, so the gallery marks the one the start showed.
-        assert_eq!(record(&launch, &settings, "1.4.0", FIRST)["today"], "midnight-suede");
-        // Not his way of starting: nothing to say, nothing to draw ahead.
-        assert_eq!(today(&launch, &Settings { pick: Some("power-100".into()), ..settings.clone() }, FIRST), None);
-        assert!(record(&launch, &Settings::default(), "1.4.0", FIRST)["today"].is_null());
-        std::fs::remove_dir_all(&dir).ok();
+        assert_eq!(playback_packs(&launch, &settings, FIRST), ["midnight-suede", "power-100"]);
     }
 }

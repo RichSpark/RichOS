@@ -67,7 +67,7 @@ function rendererConst(name) {
 }
 const CEILING_GRACE_MS = rendererConst("CEILING_GRACE_MS");
 const FADE_MS = rendererConst("FADE_MS");
-/// `removeSelf` is scheduled `FADE_MS + 40` after the yield (`splash.js`), so this is the whole
+/// The curtain is removed `FADE_MS + 40` after the yield (`splash.js`), so this is the whole
 /// distance from "the ceiling fires" to "the node is off the page".
 const REMOVE_AFTER_YIELD_MS = FADE_MS + 40;
 
@@ -134,7 +134,8 @@ const HOLD_OPEN = () => {
     get: () => sp,
     set: (x) => {
       sp = x;
-      x.yieldNow = function () {};
+      const yieldNow = x.yieldNow;
+      x.yieldNow = function (reason) { if (reason !== "app-ready") yieldNow(reason); };
     },
   });
 };
@@ -1308,7 +1309,7 @@ async function main() {
       assert(r.logo === 2, v.id + ": the mark has " + r.logo + " paths");
       assert(r.wordmark === 7, v.id + ": the wordmark has " + r.wordmark + " paths");
       assert(r.signal === 2, v.id + ": " + r.signal + " gold paths");
-      assertEqual(r.glints, r.signal, v.id + ": one glint over each gold path");
+      assertEqual(r.glints, 0, v.id + ": gold paths carry no pointer glint");
       drawn.push(v.id);
       await page.__ctx.close();
     }
@@ -1442,19 +1443,11 @@ async function main() {
       "splash-plinth", "splash-sheen", "splash-material", "splash-logo", "splash-wordmark",
       "splash-ink", "splash-signal", "splash-foot", "splash-rule", "splash-line",
       "splash--strike-fill", "splash--strike-bloom", "splash--settled", "splash--yielding",
-      // CEO §62's hold. It is on the composition's own root while the space key is holding
-      // the screen, and it is what `splash.css` pauses every animation in the composition
-      // through — so it is a class this surface is made of, and the checks below drive it.
-      "splash--paused",
       // The loading bar, added in round 11. Three names for the whole mechanism: the track,
       // a layer on it, and the wrapper a leading-edge layer rides in. Everything else about
       // a bar — which layer progresses, which one flares — is a `data-role`, not a class,
       // precisely so this list does not have to grow with the vocabulary.
       "splash-bar", "splash-bar-layer", "splash-bar-lead",
-      // Round 74 (the CEO's order of 2026-11-14), on every opening: the pool of light on the
-      // mat, a glint over each gold path and on the bar, and the line that names the opening,
-      // shown only while the space key holds the screen. The landing adds one class.
-      "ro-pool", "ro-glint", "ro-bar-glint", "ro-collector", "ro-collector-no", "ro-collector-dot",
       "splash--landed",
     ]);
     // EVERY entry, not one. This check used to inspect v6 alone, which was enough when the
@@ -1479,12 +1472,8 @@ async function main() {
       return {
         classes: Array.from(new Set(classes)),
         tags: Array.from(new Set(tags)),
-        // The text on the running screen. The held line (`ro-collector`) is not on it: it is
-        // at opacity 0 until the space key holds the screen, and is read on its own below.
         text: Array.from(n.querySelectorAll(".splash-line")).map((l) => l.innerText).join(" ").replace(/\s+/g, " ").trim(),
         every: (n.innerText || "").replace(/\s+/g, " ").trim(),
-        held: (n.querySelector(".ro-collector") || { innerText: "" }).innerText.replace(/\s+/g, " ").trim(),
-        heldOpacity: n.querySelector(".ro-collector") ? getComputedStyle(n.querySelector(".ro-collector")).opacity : null,
         buttons: n.querySelectorAll("button, a, input, [role=button]").length,
         // §15's type floor, on the only text this surface has. The CEO set the size himself:
         // 18px. It was 12px, which is below the 16px minimum for text meant to be read.
@@ -1496,9 +1485,7 @@ async function main() {
     assertEqual(stray, [], v.id + ": elements the composition is not made of");
     assertEqual(r.buttons, 0, v.id + ": the study's five clickable chips came across");
     assertEqual(r.text, "The Operating System for the AI-Enabled CEO", v.id + ": the only text on the running surface");
-    assertEqual(r.every.replace(r.held, "").trim(), r.text, v.id + ": text on the surface that is neither the line nor the held line");
-    assert(/^No\. \d+ · /.test(r.held), v.id + ": the held line does not name the opening: " + r.held);
-    assertEqual(r.heldOpacity, "0", v.id + ": the held line shows on a screen nobody is holding");
+    assertEqual(r.every, r.text, v.id + ": extra text on the playing splash");
     assertEqual(r.lineSize, "18px", v.id + ": the CEO set the tagline at 18px");
     // NO CANVAS ANYWHERE ON THIS SURFACE, and this is not tidiness. `tests/contrast.js`
     // check 14 asserts zero canvas elements on every walked surface so that a green contrast
@@ -1515,34 +1502,28 @@ async function main() {
     return `${swept.length} entries swept, ${r.classes.length} class names on the last, all from the composition · tags: ${r.tags.join(", ")} · 0 canvas · text: "${r.text}" at ${r.lineSize}`;
   });
 
-  await run.check("7  nothing here can catch his hand", async () => {
-    // §5.5 refuses anything clickable, dismissible or delaying on this surface. The way
-    // that is kept true is not "we did not add a button" — it is that the whole curtain is
-    // click-through, so the live app underneath is reachable from the first frame even
-    // while the composition is still on screen.
+  await run.check("7  pointer and keys leave the splash playing and never reach Home", async () => {
     const page = await launch(browser, { hold: true });
-    const r = await page.evaluate(() => {
-      const n = document.getElementById("splash");
-      const pe = [];
-      const walk = (el) => {
-        pe.push(getComputedStyle(el).pointerEvents);
-        for (const c of el.children) walk(c);
-      };
-      walk(n);
-      const cx = Math.round(innerWidth / 2);
-      const cy = Math.round(innerHeight / 2);
-      const hit = document.elementFromPoint(cx, cy);
+    await stillUp(page, "input test");
+    const seen = await page.evaluate(() => {
+      const root = document.getElementById("splash");
+      const settings = document.querySelector(".settings");
+      let escaped = 0;
+      document.addEventListener("keydown", () => escaped++);
+      document.addEventListener("click", () => escaped++);
+      for (const key of [" ", "Escape", "Enter", "a"]) {
+        root.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
+      }
+      root.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+      const hit = document.elementFromPoint(innerWidth / 2, innerHeight / 2);
       return {
-        distinct: Array.from(new Set(pe)),
-        nodes: pe.length,
-        hitInsideSplash: !!(hit && n.contains(hit)),
-        hitTag: hit ? hit.tagName.toLowerCase() + (hit.id ? "#" + hit.id : "") : "nothing",
+        escaped, blocked: root.contains(hit), reason: window.RichSplash.state.reason,
+        settings: settings && getComputedStyle(settings).display,
       };
     });
-    assertEqual(r.distinct, ["none"], "some part of the curtain is not click-through");
-    assert(!r.hitInsideSplash, "a click in the middle of the screen lands on the splash");
+    assertEqual(seen, { escaped: 0, blocked: true, reason: null, settings: "none" }, "input or Settings on the opening");
     await page.__ctx.close();
-    return `${r.nodes} nodes, all pointer-events:none · a click at centre reaches ${r.hitTag}`;
+    return "Input stays on the curtain and the launch continues on its clock";
   });
 
   // ---- the honest states ------------------------------------------------------------------
@@ -1633,52 +1614,18 @@ async function main() {
       );
     }
     assert(before.foot < 1, "mid-ceremony the last stage of the settle has not landed yet (" + before.foot + ")");
-    // His first keystroke is one of the three things that make the surface yield.
-    //
-    // THE PINNED READING IS TAKEN INSIDE THE KEYSTROKE, NOT A ROUND TRIP AFTER IT — 2026-09-10.
-    // This was `await page.keyboard.press("a"); await page.evaluate(read)`, and on run
-    // 34471797325 (main, dc6b7965) it went red with `TypeError: null is not an object
-    // (evaluating 'n.querySelector')`: `#splash` was already gone. `yieldNow` pins the
-    // composition synchronously and then removes the whole node `FADE_MS + 40` = 220 ms later
-    // (splash.js, `setTimeout(removeSelf, FADE_MS + 40)`), and a second harness round trip on a
-    // contended runner is not guaranteed to land inside 220 ms — the comment above this call
-    // records one arriving 2,000 ms late. The product was right; the reading was late.
-    //
-    // So the reading is scheduled where it cannot be late, the same move this check made for
-    // its 300 ms sample: a capture-phase `keydown` listener on `window`, registered now and so
-    // AFTER the one `splash.js` registered at start, which the DOM fires in registration order
-    // on the same target and phase. It therefore runs in the same dispatch, immediately after
-    // `yieldNow` has pinned, before any timer can remove the node. Every assertion below is
-    // unchanged; only the instant they read is.
-    // `read` is installed as page source (the same serialization `page.evaluate(read)` used),
-    // because it has to run inside the listener rather than as its own evaluate call.
     await page.evaluate("window.__readPinned = " + read.toString());
-    await page.evaluate(() => {
-      window.__pinnedAtYield = null;
-      window.addEventListener(
-        "keydown",
-        () => {
-          if (window.__pinnedAtYield !== null) return;
-          window.__pinnedAtYield = document.getElementById("splash") ? window.__readPinned() : { gone: true };
-        },
-        true
-      );
+    await stillUp(page, "the completion half of check 8");
+    const after = await page.evaluate(() => {
+      window.RichSplash.yieldNow("acceptance-suite");
+      return window.__readPinned();
     });
-    await stillUp(page, "the keystroke half of check 8");
-    await page.keyboard.press("a");
-    await page.waitForFunction(() => window.__pinnedAtYield !== null, null, { timeout: 20000 });
-    const after = await page.evaluate(() => window.__pinnedAtYield);
-    assert(
-      !after.gone,
-      "the curtain was gone before the keystroke reached it — this check fell behind the surface, " +
-        "which is a harness fault, not a product one"
-    );
     assert(after.settled, "the surface did not pin itself on the way out");
     assertEqual(after.foot, 1, "pinning left a stage of the settle half-risen");
     assertEqual(after.fill, after.track, "the bar was left standing at a fraction on the way out");
-    assertEqual(after.reason, "first-input", "what made it yield");
+    assertEqual(after.reason, "acceptance-suite", "what made it yield");
     await page.__ctx.close();
-    return `${v.id}: at ${before.at}ms a 0px bar and a stage at opacity ${before.foot.toFixed(2)}; on his first keystroke the bar is ${after.fill}px of ${after.track}px and the settle is landed, then gone`;
+    return `${v.id}: at ${before.at}ms a 0px bar and a stage at opacity ${before.foot.toFixed(2)}; on completion the bar is ${after.fill}px of ${after.track}px and the settle is landed, then gone`;
   });
 
   await run.check("9  an unusable library is a normal launch, never a half-drawn frame", async () => {
@@ -2120,59 +2067,6 @@ async function main() {
     );
   });
 
-  await run.check("12c  the hold never catches his hand, and never defers the failsafe", async () => {
-    // THE TWO THINGS A DURATION COULD BREAK, and they are the two this surface must not
-    // break. §5.5 forbids anything on it that is delaying, so his first keystroke has to win
-    // against the hold; and a ceiling that could itself be deferred is not a failsafe.
-    // THE KEYSTROKE HAS TO LAND INSIDE THE HOLD, and it used to be assumed rather than
-    // established. This waited for the rail and typed; on the first public runner that took
-    // longer than the whole 3,000 ms hold, so the curtain had already left on "held" and the
-    // check demanded "first-input" of a surface that was no longer there. It went red over
-    // the harness being slow.
-    //
-    // Two changes, and neither loosens anything. The wait is now on the EVENT that makes the
-    // hold real — `main.js` calling `yieldNow("app-ready")`, which is when a hold gets
-    // scheduled at all, and pressing before it would prove nothing about the hold. And the
-    // screen is asked for five seconds, through the token the product already honours, so a
-    // slow machine still has room to get a hand in. The landing is then PROVED rather than
-    // hoped for: if the key arrived after the hold was served, this fails and says so, which
-    // is what stops the fix from becoming a check that cannot fail.
-    const typed = await launch(browser, { seconds: 5, init: MARK_READY });
-    await typed.waitForFunction(() => window.__readyAt != null, null, { timeout: 20000 });
-    await typed.keyboard.press("a");
-    await typed.waitForFunction(() => window.__curtain.goneAt !== null, null, { timeout: 20000 });
-    const hand = await typed.evaluate(() => ({
-      reason: window.RichSplash.state.reason,
-      hold: window.RichSplash.state.seconds * 1000,
-      keyInto: Math.round(window.__curtain.firstKeyAt - window.__curtain.shownAt),
-      byHand: Math.round(window.__curtain.goneAt - window.__curtain.firstKeyAt),
-    }));
-    assert(
-      hand.keyInto < hand.hold,
-      "the keystroke landed " + hand.keyInto + "ms in, past the " + hand.hold + "ms hold — this machine was too slow to " +
-        "put a hand inside the ceremony, so nothing about the hold was tested"
-    );
-    assertEqual(hand.reason, "first-input", "his keystroke was swallowed by the hold and reported as something else");
-    // The fade is 180ms and the node leaves 40ms after it, so anything near half a second is
-    // the hold having caught his hand rather than the curtain simply leaving.
-    assert(hand.byHand < 500, "his hand waited " + hand.byHand + "ms on a " + hand.hold + "ms hold — the hold caught it");
-    await typed.__ctx.close();
-
-    // And with app-ready muted entirely, the ceiling still clears it — check 10 proves the
-    // timing; this proves the HOLD did not quietly become the thing that clears it, which
-    // would leave a hung boot showing the curtain forever.
-    const hung = await launch(browser, { hold: true });
-    await hung.waitForFunction(() => window.__curtain.goneAt !== null, null, { timeout: 20000 });
-    assertEqual(
-      await hung.evaluate(() => window.RichSplash.state.reason),
-      "ceiling",
-      "with app-ready muted the curtain must still leave on its own ceiling"
-    );
-    await hung.__ctx.close();
-    return "his key landed " + hand.keyInto + "ms into a " + hand.hold + "ms hold and cleared the curtain in " +
-      hand.byHand + "ms; the ceiling still fires with app-ready muted";
-  });
-
   await run.check("13  the splash asks the LAUNCH for nothing — counted, so the answer is the same on every machine", async () => {
     // THE CEO'S CONSTRAINT: the splash must never delay launch by a frame. This check used to
     // hold it to 16.7ms of wall clock and was RED on every public `ui-suite-ci` run — the
@@ -2582,46 +2476,21 @@ async function main() {
     await atCurtain(page, 300);
     await stillUp(page, "the relief reading");
     const before = await page.evaluate(() => getComputedStyle(document.querySelector("#splash .splash-signal")).filter);
-    // THE PINNED READING IS TAKEN INSIDE THE KEYSTROKE, NOT A ROUND TRIP AFTER IT (hunt part 2,
-    // finding 29). This was `press("a")` then `page.evaluate(read)`, the sequence check 8
-    // dropped on 2026-09-10 (see the long comment there): `yieldNow` pins synchronously and
-    // removes `#splash` 220 ms later (`FADE_MS + 40`), so a second round trip on a contended
-    // runner reads `null` and throws on healthy product behavior. A capture-phase `keydown`
-    // listener on `window`, registered now and so after the one `splash.js` registered, runs
-    // in the same dispatch immediately after the pin, before any timer can remove the node.
-    await page.evaluate(() => {
-      window.__reliefAtYield = null;
-      window.addEventListener(
-        "keydown",
-        () => {
-          if (window.__reliefAtYield !== null) return;
-          const n = document.getElementById("splash");
-          window.__reliefAtYield = n
-            ? {
-                settled: n.classList.contains("splash--settled"),
-                signal: getComputedStyle(n.querySelector(".splash-signal")).filter,
-                ink: getComputedStyle(n.querySelector(".splash-ink")).filter,
-              }
-            : { gone: true };
-        },
-        true
-      );
+    const after = await page.evaluate(() => {
+      window.RichSplash.yieldNow("acceptance-suite");
+      const n = document.getElementById("splash");
+      return {
+        settled: n.classList.contains("splash--settled"),
+        signal: getComputedStyle(n.querySelector(".splash-signal")).filter,
+        ink: getComputedStyle(n.querySelector(".splash-ink")).filter,
+      };
     });
-    await page.keyboard.press("a");
-    // load-bound: a hang guard on a fact the keystroke itself produces; it decides no verdict
-    await page.waitForFunction(() => window.__reliefAtYield !== null, null, { timeout: 20000 });
-    const after = await page.evaluate(() => window.__reliefAtYield);
-    assert(
-      !after.gone,
-      "the curtain was gone before the keystroke reached it — this check fell behind the surface, " +
-        "which is a harness fault, not a product one"
-    );
     assert(after.settled, "the surface did not pin itself on the way out");
     assert(before.indexOf("richos-splash-relief") >= 0, "the relief was not on the gold to begin with");
     assert(after.signal.indexOf("richos-splash-relief") >= 0, "pinning the composition flattened the gold's relief");
     assert(after.ink.indexOf("richos-splash-relief") >= 0, "pinning the composition flattened the ink's relief");
     await page.__ctx.close();
-    return `${host} + the mark fixture: relief on the gold at 300ms and still on it after his first keystroke (${after.signal})`;
+    return `${host} + the mark fixture: relief on the gold at 300ms and still on it after the curtain yields (${after.signal})`;
   });
 
   await run.check("18  every version the round added is photographed by the SHIPPING renderer, beside its study", async () => {
@@ -2852,17 +2721,7 @@ async function main() {
       0,
       "a listener that could wake the animation"
     );
-    // THREE CALL SITES SINCE CEO §62, AND EACH IS HELD TO THE FUNCTION IT BELONGS IN — which
-    // is a stronger statement than the count this used to make, not a weaker one. A count alone
-    // would have been satisfied by a third site anywhere in the file, including the `focus`
-    // listener leg 1 exists to refuse.
-    //
-    //   start()    begins the single pass
-    //   tick()     continues it
-    //   unpause()  picks up a pass the SPACE KEY HELD — §62, 2026-09-19. It cannot start a
-    //              second pass: it is reachable only from a held screen, it is guarded by
-    //              `!state.barStopped` (a finished pass is never re-entered), and it adds
-    //              nothing to `state.barPasses`, which legs 2 and 3 below measure.
+    // Match each frame request to the playback or paint-report function that owns it.
     const fns = [];
     const fnRe = /function\s+([A-Za-z0-9_$]+)\s*\(/g;
     let mf;
@@ -2875,10 +2734,6 @@ async function main() {
       for (const f of fns) if (f.at < mr.index) owner = f.name;
       rafOwners.push(owner);
     }
-    //   release()  picks up a pass HELD AT A MOMENT (Sage's plan 2026-11-14, the page joining the
-    //              splash's opening), under the same `!state.barStopped` guard as unpause.
-    // The other frames in the file never paint the bar: they wait two frames before the page
-    // reports it has painted (`reportPainted`, and `takeOver` once it has joined the opening).
     const tickOwners = [];
     const otherOwners = [];
     rafRe.lastIndex = 0;
@@ -2889,10 +2744,10 @@ async function main() {
     }
     assertEqual(
       tickOwners.slice().sort(),
-      ["release", "replay", "start", "tick", "unpause"],
-      "the bar's frame loop — one to start the pass, one to continue it, one each to pick up a held one, and the gallery's Play starting its own"
+      ["recover", "replay", "start", "tick"],
+      "frame requests for the normal start, the retry, the gallery preview and the bar itself"
     );
-    assert(otherOwners.every((o) => o === "reportPainted" || o === "takeOver"),
+    assert(otherOwners.every((o) => o === "reportPainted"),
       "a frame that is not the bar's loop and not a report of the page's paint: " + JSON.stringify(otherOwners) + " (all: " + JSON.stringify(rafOwners) + ")");
     // And the strip has to have left something to read, or all four assertions above are
     // vacuous — the failure mode a negative check dies of.
@@ -3294,506 +3149,22 @@ async function main() {
     );
   });
 
-  // ---- 25. THE SPACE KEY — CEO §62 -------------------------------------------------------
-  //
-  // *"The splash screen is one of those rare cases where the screen should NOT have a settings
-  // button ... Hitting the space key while the splash screen is shown should 'pause' the splash
-  // screen ... Hitting the space key a second time would 'resume' it i.e. switch to home screen.
-  // AND: while the splash screen is 'paused', THAT'S when the settings button should show up."*
-  //
-  // Six checks, one per sentence of the ruling, plus the contrast floor on the control the
-  // ruling puts on this surface. They are numbered 25-25g because they are one feature, and the
-  // ruling is quoted at each of them rather than condensed: a check that paraphrases a ruling is
-  // a check somebody can satisfy without doing what was asked.
-
-  await run.check("25  the running screen has NO settings button, and the button arrives with the fade", async () => {
+  await run.check("25  Settings becomes available as the curtain fades", async () => {
     const page = await launch(browser, { hold: true });
-    await stillUp(page, "25");
-    const during = await page.evaluate(() => {
-      const wrap = document.querySelector(".settings");
-      const btn = document.getElementById("set-btn");
-      if (!wrap || !btn) return { mounted: false };
-      const r = btn.getBoundingClientRect();
-      const h = document.elementFromPoint(innerWidth - 38, 38);
-      return {
-        mounted: true,
-        display: getComputedStyle(wrap).display,
-        box: Math.round(r.width) + "x" + Math.round(r.height),
-        hitAtItsOwnCorner: h ? h.tagName.toLowerCase() + (h.id ? "#" + h.id : "") : "nothing",
-      };
-    });
-    // THE NEGATIVE CONTROL FIRST. "No settings button" is the same reading as "settings-button.js
-    // never ran", and this check would pass for that wrong reason for the rest of its life.
-    assert(during.mounted, "settings-button.js did not mount at all — this check would have passed for the wrong reason");
-    assertEqual(during.display, "none", "§62: the running opening screen must not carry a settings button");
-    assertEqual(during.box, "0x0", "the button is hidden by paint rather than by layout — it still occupies its 40x40");
-    assert(
-      !/set-btn/.test(during.hitAtItsOwnCorner),
-      "the button is still hit-testable where it used to be: a control that is invisible and clickable is " +
-        "worse than a visible one — the hit at its own corner found " + during.hitAtItsOwnCorner
-    );
-
-    // THE HANDOVER, SAMPLED IN THE TICK IT HAPPENS IN. The button comes back as the curtain
-    // STARTS to fade, not 220ms later when the node is removed — the same instant, and the same
-    // reasoning, as the always-dark clamp being dropped "as the curtain goes, not after it has
-    // gone". A real keystroke crosses a process boundary and the harness cannot be inside the
-    // page at the instant it lands, so this one is dispatched from inside the page: the same
-    // window-capture listener, the same code path, read synchronously in the same tick. The REAL
-    // keystroke is what check 12c and check 25e drive; this is about a 220 ms window.
+    await stillUp(page, "Settings reveal");
     const handover = await page.evaluate(() => {
-      window.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true }));
-      const n = document.getElementById("splash");
-      return {
-        present: !!n,
-        yielding: !!(n && n.classList.contains("splash--yielding")),
-        display: getComputedStyle(document.querySelector(".settings")).display,
-        reason: window.RichSplash.state.reason,
-      };
+      const settings = document.querySelector(".settings");
+      const hidden = getComputedStyle(settings).display === "none";
+      window.RichSplash.yieldNow("acceptance-suite");
+      const fading = document.getElementById("splash").classList.contains("splash--yielding");
+      return { hidden, fading, shown: getComputedStyle(settings).display !== "none" };
     });
-    assert(handover.present && handover.yielding, "the curtain did not begin to fade on that keystroke");
-    assertEqual(handover.reason, "first-input", "an ordinary key stopped dismissing the opening screen");
-    assert(handover.display !== "none", "the button is still hidden while the curtain is fading — it arrives 220ms late");
+    assertEqual(handover, { hidden: true, fading: true, shown: true }, "Settings reveal");
     await page.waitForFunction(() => !document.getElementById("splash"), null, { timeout: 30000 });
-    assert(await page.locator("#set-btn").isVisible(), "the button never came back after the curtain left");
-    const said = noErrors(page, "25");
+    assert(await page.locator("#set-btn").isVisible(), "Settings is unavailable after the fade");
     await page.__ctx.close();
-    return "mounted and display:none while it ran (0x0 box, its own corner hits " + during.hitAtItsOwnCorner +
-      "), display:" + handover.display + " in the same tick the fade began, visible after" + said;
+    return "Settings is hidden during play and available during the fade";
   });
-
-  await run.check("25b  space HOLDS it — past the instant it would have left, with everything stopped where it stood", async () => {
-    // *"stop it from automatically switching from splash screen to home screen"*, and the same
-    // day's amendment: *"if the animation on the splash screen can be easily paused ... then sure
-    // the animation should pause when hitting the space key."*
-    //
-    // A FIVE-SECOND SCREEN, ASKED FOR THROUGH THE PRODUCT'S OWN `seconds` TOKEN, for the reason
-    // this file's `CURTAIN_CLOCK` comment gives: the keystroke has to land inside the ceremony on
-    // a machine that may be 2,000 ms behind, and stretching the harness's window is what the
-    // token is for. Nothing about the DEFAULT is touched — check 25f holds that.
-    const page = await launch(browser, { seconds: 5 });
-    await stillUp(page, "25b");
-    await page.keyboard.press("Space");
-    // TWO FRAMES BEFORE THE FIRST READING, and the reason is measured rather than defensive.
-    // `Animation.pause()` on an animation whose `startTime` is still PENDING — the bar track's
-    // fade is created ~20 ms after the composition's own animations — reports a `currentTime`
-    // taken from the timeline until the pending play resolves, and then settles to the hold
-    // time. Sampled in the same millisecond as the keystroke, that one animation reads 106 and
-    // then 86, which is a pause resolving and not a screen that moved: run 2026-09-19,
-    // `expected [106,106,106,106,106] / actual [106,106,106,106,86]`. Both readings below are
-    // taken after the pause has settled, so "did anything advance" is the only question left in
-    // them. `requestAnimationFrame` still fires while the screen is held — the page is not
-    // frozen, its clock is.
-    await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
-    const held = await page.evaluate(() => {
-      const n = document.getElementById("splash");
-      const fill = n.querySelector('.splash-bar [data-role="progress"]');
-      return {
-        present: !!n,
-        paused: window.RichSplash.state.paused,
-        pauses: window.RichSplash.state.pauses,
-        reason: window.RichSplash.state.reason,
-        seconds: window.RichSplash.state.seconds,
-        klass: n.classList.contains("splash--paused"),
-        at: Math.round(performance.now() - window.__curtain.shownAt),
-        fill: fill ? Math.round(fill.getBoundingClientRect().width * 100) / 100 : null,
-        // Every animation on the composition, named by what it animates and by the frame it is
-        // stopped on. KEYED, not positional: `getAnimations` makes no promise this suite should
-        // depend on about order, and a comparison by position would report a re-ordering as
-        // motion.
-        anims: n.getAnimations({ subtree: true }).map((a) => ({
-          key: (a.animationName || "bar-track-fade") + "@" +
-            (a.effect && a.effect.target ? a.effect.target.className : "?"),
-          state: a.playState,
-          t: a.currentTime === null ? null : Math.round(a.currentTime),
-        })),
-      };
-    });
-    assert(held.present, "the curtain was gone before the space key landed — a harness fault, not a product one");
-    assert(held.paused, "space did not hold the screen");
-    // AND THE KEYSTROKE DID NOTHING ELSE, which is what `preventDefault` + `stopPropagation`
-    // are there for and is invisible from the curtain alone. The app behind this curtain is
-    // live and focused from its first frame: `main.js` focuses the composer, and the home
-    // screen's own door (`#home-enter`, "Talk to Rich") is a focusable button — a space that
-    // was not consumed would have paused the opening screen AND typed a character, or pressed
-    // the door behind it. The home screen still being open is that claim, measured.
-    assert(
-      await page.evaluate(() => !!(window.RichHome && window.RichHome.isOpen())),
-      "the space that held the opening screen also went through to the app behind it — the home screen is gone"
-    );
-    assertEqual(held.pauses, 1, "one press, one hold");
-    assertEqual(held.reason, null, "space DISMISSED the screen instead of holding it");
-    assert(held.klass, "the composition is not carrying `splash--paused`, so `splash.css` cannot have stopped anything");
-    assert(held.anims.length > 0, "no animations were running at all, so 'they stopped' proves nothing");
-    assertEqual(
-      Array.from(new Set(held.anims.map((a) => a.state))),
-      ["paused"],
-      "an animation on the composition is still running while the screen is held: " + JSON.stringify(held.anims)
-    );
-
-    // THE INSTANT IT WOULD OTHERWISE HAVE BEEN OFF THE GLASS, derived from the product's own
-    // numbers rather than typed: the hold this screen asked for, the ceiling's grace over it, the
-    // fade, and the 40 ms `removeSelf` waits past that. A full second beyond it puts the sample
-    // unambiguously past the failsafe on any machine.
-    const hold = held.seconds * 1000;
-    const wouldBeGone = hold + CEILING_GRACE_MS + REMOVE_AFTER_YIELD_MS;
-    await atCurtain(page, wouldBeGone + 1000);
-    const after = await page.evaluate(() => {
-      const n = document.getElementById("splash");
-      const fill = n ? n.querySelector('.splash-bar [data-role="progress"]') : null;
-      return {
-        present: !!n,
-        paused: window.RichSplash.state.paused,
-        reason: window.RichSplash.state.reason,
-        deferred: window.RichSplash.state.deferred,
-        at: Math.round(performance.now() - window.__curtain.shownAt),
-        fill: fill ? Math.round(fill.getBoundingClientRect().width * 100) / 100 : null,
-        anims: n
-          ? n.getAnimations({ subtree: true }).map((a) =>
-              (a.animationName || "bar-track-fade") + "@" +
-              (a.effect && a.effect.target ? a.effect.target.className : "?") + "=" +
-              (a.currentTime === null ? "null" : Math.round(a.currentTime))
-            )
-          : null,
-      };
-    });
-    assert(
-      after.present,
-      "the screen left anyway at " + after.at + "ms (reason " + after.reason + "), " +
-        (after.at - wouldBeGone) + "ms past the " + wouldBeGone + "ms it would have gone at unheld"
-    );
-    assertEqual(after.reason, null, "something took the curtain down while it was held: " + after.reason);
-    assert(after.paused, "the hold came off by itself");
-    // THE APP ASKED AND WAS REFUSED, which is the half that says the hold is doing work rather
-    // than the app being slow: `main.js` calls `yieldNow("app-ready")` the moment the shell is
-    // usable, which on this machine is well inside a second.
-    assertEqual(
-      after.deferred,
-      "app-ready",
-      "nothing was ever refused, so this walk never proved the automatic switch was held — deferred: " + after.deferred
-    );
-    assertEqual(after.fill, held.fill, "the loading bar kept running while the screen was held");
-    assertEqual(
-      after.anims.slice().sort(),
-      held.anims.map((a) => a.key + "=" + a.t).sort(),
-      "an animation advanced while the screen was held"
-    );
-    const said = noErrors(page, "25b");
-    await page.__ctx.close();
-    return "held at " + held.at + "ms of a " + hold + "ms screen · sampled again at " + after.at + "ms, " +
-      (after.at - wouldBeGone) + "ms past the " + wouldBeGone + "ms it would have left at · " +
-      held.anims.length + " animation(s) all paused, bar frozen at " + held.fill + "px · main.js's app-ready was " +
-      "refused and recorded" + said;
-  });
-
-  await run.check("25c  the SECOND space resumes it — i.e. switches to the home screen", async () => {
-    // *"Hitting the space key a second time would 'resume' it i.e. switch to home screen."* Both
-    // halves of that sentence are asserted: the hold comes off, AND the screen he lands on is the
-    // home screen, which is the surface `#home` has been since the CEO moved the landing surface.
-    const page = await launch(browser, { seconds: 5 });
-    await stillUp(page, "25c");
-    await page.keyboard.press("Space");
-    const held = await splashState(page);
-    assert(held.state.paused, "the first press did not hold it, so the second proves nothing");
-    // THE RESUME READING IS TAKEN INSIDE THE KEYSTROKE, NOT A ROUND TRIP AFTER IT (recheck R29,
-    // the same correction check 17 carries and for the same reason). `yieldNow` removes
-    // `#splash` FADE_MS + 40 = 220 ms after the key, so a second `page.evaluate` on a contended
-    // runner finds the node gone and reports "the curtain is not fading" over a correct
-    // removal. A capture-phase `keydown` listener registered now, and so after the one
-    // `splash.js` registered, runs in the same dispatch right after the resume took effect.
-    await page.evaluate(() => {
-      window.__resumeAtKey = null;
-      window.addEventListener(
-        "keydown",
-        () => {
-          if (window.__resumeAtKey !== null) return;
-          const n = document.getElementById("splash");
-          window.__resumeAtKey = {
-            paused: window.RichSplash.state.paused,
-            reason: window.RichSplash.state.reason,
-            pausedMs: window.RichSplash.state.pausedMs,
-            yielding: !!(n && n.classList.contains("splash--yielding")),
-            settled: !!(n && n.classList.contains("splash--settled")),
-            klass: !!(n && n.classList.contains("splash--paused")),
-          };
-        },
-        true
-      );
-    });
-    await page.keyboard.press("Space");
-    // load-bound: a hang guard on a fact the keystroke itself produces; it decides no verdict
-    await page.waitForFunction(() => window.__resumeAtKey !== null, null, { timeout: 20000 });
-    const going = await page.evaluate(() => window.__resumeAtKey);
-    assertEqual(going.reason, "resume", "the second space did not take the screen down: reason " + going.reason);
-    assertEqual(going.paused, false, "the hold is still on after the resume");
-    assertEqual(going.klass, false, "the composition is still carrying `splash--paused` on its way out");
-    assert(going.yielding, "the curtain is not fading");
-    assert(going.settled, "the composition was not pinned on its way out — a resumed screen must still show a finished mark");
-    assert(going.pausedMs > 0, "the surface reports it was never held, which cannot be true of a resumed screen");
-    await page.waitForFunction(() => !document.getElementById("splash"), null, { timeout: 30000 });
-    const landed = await page.evaluate(() => ({
-      home: !!(window.RichHome && window.RichHome.isOpen()),
-      settings: getComputedStyle(document.querySelector(".settings")).display,
-    }));
-    assert(landed.home, "the resume did not land on the home screen");
-    assert(landed.settings !== "none", "the settings button is still hidden on the home screen");
-    const said = noErrors(page, "25c");
-    await page.__ctx.close();
-    return "held for " + going.pausedMs + "ms, second press yielded with reason `resume`, pinned and faded, " +
-      "landed on the home screen with the settings button back" + said;
-  });
-
-  await run.check("25d  while it is HELD the settings button is there, and using it does not take the screen down", async () => {
-    // *"while the splash screen is 'paused', THAT'S when the settings button should show up on
-    // the splash screen. Because that's the only time it would make sense."*
-    //
-    // AND §15's FLOOR IS WHAT IT IS THERE FOR: *"the very least that settings button always
-    // provides is a quick access to the 'Bust a bug' button"*, and "reporting a bug must never
-    // require navigating away from the screen the bug is on". So the whole path is walked — the
-    // control, the menu, and the one row the ruling guarantees — with the curtain asserted up
-    // after each step.
-    const page = await launch(browser, { hold: true, seconds: 5 });
-    await stillUp(page, "25d");
-    await page.keyboard.press("Space");
-    assert((await splashState(page)).state.paused, "the screen was not held, so this is not §62's state");
-    const shown = await page.evaluate(() => {
-      const btn = document.getElementById("set-btn");
-      const r = btn.getBoundingClientRect();
-      const h = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
-      return {
-        display: getComputedStyle(document.querySelector(".settings")).display,
-        box: Math.round(r.width) + "x" + Math.round(r.height),
-        hit: h && h.closest(".settings") ? "ON-TOP" : "COVERED by " + (h ? h.tagName.toLowerCase() : "nothing"),
-      };
-    });
-    assert(shown.display !== "none", "§62: the button must show up while the screen is held");
-    assertEqual(shown.box, "40x40", "the button is there but has no box");
-    assertEqual(shown.hit, "ON-TOP", "the curtain is painted over the button that is supposed to be on it");
-    await page.click("#set-btn");
-    await page.waitForSelector("#set-menu", { state: "visible" });
-    const openedMenu = await splashState(page);
-    assert(openedMenu.present, "opening the menu lifted the curtain");
-    assertEqual(openedMenu.state.reason, null, "opening the menu counted as first input: " + openedMenu.state.reason);
-    assert(openedMenu.state.paused, "opening the menu took the hold off");
-    assert(await page.locator("#bug-btn").isVisible(), "§15's floor is missing from the held screen's menu");
-    await page.click("#bug-btn");
-    // Round 21 (CEO §115): the button opens the report itself, so what is waited for is Rich's
-    // first question, in the Rich panel, not a notice.
-    await page.waitForSelector("#bugdock-msgs .bug-rich", { state: "attached" });
-    const asked = await page.evaluate(() =>
-      document.querySelector("#bugdock-msgs .bug-rich .tl-prose").textContent.trim());
-    assert(asked.startsWith("What went wrong?"), "Bust a bug did not open the report: " + JSON.stringify(asked));
-    const afterBug = await splashState(page);
-    assert(afterBug.present, "reporting a bug navigated away from the screen the bug is on");
-    assertEqual(afterBug.state.reason, null, "Bust a bug took the curtain down: " + afterBug.state.reason);
-    assert(afterBug.state.paused, "Bust a bug took the hold off");
-    // A SPACE PRESSED INSIDE THE MENU IS THE MENU'S. The exemption is the whole `.settings`
-    // wrapper, so the row that has focus answers the key and this surface never sees it — which
-    // is the difference between "space resumes" and "space cannot be used to operate the menu".
-    await page.evaluate(() => document.getElementById("set-btn").focus());
-    await page.keyboard.press("Space");
-    const afterSpaceInMenu = await splashState(page);
-    assert(afterSpaceInMenu.present, "a space pressed on the settings control resumed the screen out from under him");
-    assert(afterSpaceInMenu.state.paused, "a space pressed on the settings control took the hold off");
-    // ...and an ordinary click anywhere else still dismisses, exactly as it did before §62.
-    // Left of the Settings panel: since round 27 the one panel spans the window's width less
-    // 330px (950px of this 1280px window, from x 315), so the old (700, 500) lands on it.
-    await page.mouse.click(150, 500);
-    const dismissed = await page
-      .waitForFunction(() => !document.getElementById("splash"), null, { timeout: 30000 })
-      .then(() => true)
-      .catch(() => false);
-    assert(dismissed, "the first-input dismissal is otherwise UNCHANGED — the exception is exactly one control wide");
-    const said = noErrors(page, "25d");
-    await page.__ctx.close();
-    return "held: button " + shown.box + " " + shown.hit + " · menu opened, Bust a bug pressed (the report opened), space pressed on the " +
-      "control itself — the curtain survived all three and stayed held · a click elsewhere still dismissed it" + said;
-  });
-
-  await run.check("25e  every OTHER key and the pointer still dismiss it — held or not", async () => {
-    // §5.5 forbids anything on this surface that is delaying, and §62 did not change that: the
-    // space key is the only key with a different meaning, and a hold he cannot get out of with
-    // the next keystroke would be exactly the thing the ruling before it forbids.
-    const legs = [];
-    for (const leg of [
-      { name: "running · a key", hold: false, act: async (p) => p.keyboard.press("a") },
-      { name: "running · a pointer", hold: false, act: async (p) => p.mouse.click(700, 500) },
-      { name: "held · a key", hold: true, act: async (p) => p.keyboard.press("a") },
-      { name: "held · a pointer", hold: true, act: async (p) => p.mouse.click(700, 500) },
-      // A MODIFIED SPACE IS NOT THIS SURFACE'S CONTROL. ⌘-space is Spotlight and ⌃-space is a
-      // system shortcut; neither is "he pressed the space bar", so both take the path every
-      // other key has always taken.
-      { name: "running · ⌘space", hold: false, act: async (p) => p.keyboard.press("Meta+Space") },
-    ]) {
-      const page = await launch(browser, { seconds: 5 });
-      await stillUp(page, "25e " + leg.name);
-      if (leg.hold) {
-        await page.keyboard.press("Space");
-        assert((await splashState(page)).state.paused, leg.name + ": the screen was not held first");
-      }
-      await leg.act(page);
-      const after = await splashState(page);
-      assertEqual(after.state.reason, "first-input", leg.name + ": the screen did not dismiss on first input");
-      assertEqual(after.state.paused, false, leg.name + ": it dismissed but is still reporting itself held");
-      const gone = await page
-        .waitForFunction(() => !document.getElementById("splash"), null, { timeout: 30000 })
-        .then(() => true)
-        .catch(() => false);
-      assert(gone, leg.name + ": it decided to go and then did not");
-      legs.push(leg.name);
-      await page.__ctx.close();
-    }
-    return legs.length + " legs, every one dismissed on first input with reason `first-input`: " + legs.join(" · ");
-  });
-
-  await run.check("25f  nothing about the screen's own timing moved", async () => {
-    // The numbers are the CEO's and this slice does not touch them: *"3 SECONDS. Unless I say
-    // otherwise"*, up to five for a screen that asks. Read from the shipped renderer, never
-    // typed here — and the four of them are the whole schedule: the hold, its ceiling, the fade,
-    // and the maximum a screen may ask for.
-    const page = await launch(browser, {});
-    const numbers = await page.evaluate(() => ({
-      seconds: window.RichSplash.SPLASH_SECONDS,
-      max: window.RichSplash.MAX_SPLASH_SECONDS,
-    }));
-    assertEqual(numbers.seconds, 3, "the CEO's three seconds moved");
-    assertEqual(numbers.max, 5, "the five-second ceiling moved");
-    assertEqual(CEILING_GRACE_MS, 1000, "the ceiling's grace over the hold moved");
-    assertEqual(FADE_MS, 180, "the fade moved");
-    // AND A LAUNCH NOBODY TOUCHES IS THE LAUNCH IT ALWAYS WAS. The hold itself is measured
-    // end-to-end by check 12b and is deliberately not re-measured here; what this holds is that
-    // an untouched launch reports the default, was never held, refused nobody, and left on its
-    // own — the four readings §62's machinery could have broken without 12b noticing.
-    await page.waitForFunction(() => !document.getElementById("splash"), null, { timeout: 30000 });
-    const after = await page.evaluate(() => ({
-      state: JSON.parse(JSON.stringify(window.RichSplash.state)),
-      life: Math.round(window.__curtain.goneAt - window.__curtain.shownAt),
-    }));
-    assertEqual(after.state.seconds, 3, "an untouched launch did not get the CEO's three seconds");
-    assertEqual(after.state.pauses, 0, "an untouched launch reports having been held");
-    assertEqual(after.state.pausedMs, 0, "an untouched launch reports time spent held");
-    assertEqual(after.state.deferred, null, "an untouched launch refused a caller it should have let through");
-    assert(after.state.reason !== null, "it never left at all");
-    const said = noErrors(page, "25f");
-    await page.__ctx.close();
-    return "3s default / 5s maximum / " + CEILING_GRACE_MS + "ms grace / " + FADE_MS + "ms fade, all read from the " +
-      "shipped renderer · an untouched launch lived " + after.life + "ms and left with reason `" + after.state.reason +
-      "`, 0 holds, nothing deferred" + said;
-  });
-
-  await run.check("25g  WCAG AA on the control §62 puts on this screen — measured from the PIXELS, both themes", async () => {
-    // The settings button is a NON-TEXT INDICATOR and owes 3:1 (CLAUDE.md, "Contrast — WCAG AA,
-    // ALWAYS, BOTH THEMES"). It carries no text at rest: the "Settings" chip is `::after` on
-    // hover and is measured on `tests/contrast.js`'s `settings-tooltip` surface, which is where
-    // that text lives on every other screen too.
-    //
-    // MEASURED FROM THE RENDERED FRAME AND NOT FROM THE COMPUTED STYLE, for the reason
-    // `contrast-debt.json` already records about this surface: what is behind this button is
-    // `--splash-atmosphere`, a gradient, under a `mix-blend-mode: soft-light` lamp and a
-    // `mix-blend-mode: overlay` grain. No DOM walk can resolve that ground. `measureIndicatorCrop`
-    // is the same arithmetic the contrast suite proves against WebAIM's published values.
-    //
-    // TWO CROPS, because the control has two boundaries and one ratio cannot carry both: the
-    // button against the mat it floats on, and the glyph against the button's own fill.
-    const { measureIndicatorCrop, parseCssColor, contrastRatio, round2 } = require("./lib/contrast");
-    const out = [];
-    for (const theme of ["dark", "light"]) {
-      // NO `noCeiling` HERE, DELIBERATELY, and check 10b is why: the disarm is check 5's
-      // photograph's opt-in and it stays that narrow. This walk needs no disarm — the space
-      // key clears the ceiling itself, which is the whole of what §62 asked for.
-      const page = await launch(browser, {
-        hold: true,
-        seconds: 5,
-        init: (t) => {
-          try {
-            window.localStorage.setItem("richos-theme", t);
-            window.localStorage.setItem("richos-mock-config", JSON.stringify({ theme: t, font_scale: 100, user_name: null }));
-          } catch (_e) {
-            /* storage unavailable: theme-boot falls back to the shipped default */
-          }
-        },
-        initArg: theme,
-      });
-      await stillUp(page, "25g " + theme);
-      await page.keyboard.press("Space");
-      const held = await page.evaluate(() => ({
-        paused: window.RichSplash.state.paused,
-        // §15's ONE PERMANENT EXCEPTION is in force on this surface, which is why both themes
-        // measure the same control: the opening screen is always dark, whatever he chose.
-        resolved: document.documentElement.getAttribute("data-theme"),
-        pref: window.RichTheme.theme(),
-        box: (() => {
-          const r = document.getElementById("set-btn").getBoundingClientRect();
-          return { x: r.left, y: r.top, width: r.width, height: r.height };
-        })(),
-        // The control's OWN BOUNDARY, which is what "non-text indicator" means for a button
-        // and is the one value on this surface that is exactly computable: `--chrome-edge` is
-        // an opaque hex, so it composites with nothing. The ground it is measured against is
-        // still taken from the pixels below, because the mat is not computable at all.
-        edge: getComputedStyle(document.getElementById("set-btn")).borderTopColor,
-      }));
-      assert(held.paused, theme + ": the screen was not held, so the button is not on it");
-      assertEqual(held.resolved, "dark", theme + ": §15's always-dark clamp is not in force on the opening screen");
-      assertEqual(held.pref, theme, theme + ": the clamp overwrote his preference instead of clamping it");
-      // The control against its ground: the button's own box plus a 3px skirt of whatever is
-      // behind it, which is what `measureIndicatorCrop` resolves the ground from.
-      const b = held.box;
-      const control = await page.screenshot({
-        clip: { x: Math.max(0, b.x - 3), y: Math.max(0, b.y - 3), width: b.width + 6, height: b.height + 6 },
-      });
-      // The glyph against the button's own fill: the inner box, which is the 20px icon and a
-      // ring of the fill around it, and nothing of the mat outside the border.
-      const glyph = await page.screenshot({
-        clip: { x: b.x + 8, y: b.y + 8, width: b.width - 16, height: b.height - 16 },
-      });
-      const onMat = measureIndicatorCrop(control, 3);
-      const onFill = measureIndicatorCrop(glyph, 3);
-      assert(!onMat.unresolvable, theme + ": the control against the mat is unresolvable: " + onMat.unresolvable);
-      assert(!onFill.unresolvable, theme + ": the glyph against the fill is unresolvable: " + onFill.unresolvable);
-      assert(
-        onMat.ratio >= 3,
-        theme + ": the settings button against the opening screen's mat is " + onMat.ratio + ":1 against a 3:1 floor " +
-          "(ink " + onMat.ink + " on ground " + onMat.ground + ")"
-      );
-      assert(
-        onFill.ratio >= 3,
-        theme + ": the settings glyph against the button's own fill is " + onFill.ratio + ":1 against a 3:1 floor " +
-          "(ink " + onFill.ink + " on ground " + onFill.ground + ")"
-      );
-      // THE BOUNDARY ITSELF, which the crop above cannot single out: `measureIndicatorCrop`
-      // reports the value FURTHEST in luminance from the ground, and on this control that is
-      // the gold glyph rather than the edge around it. The edge is the thing that says "there
-      // is a control here" on a screen where it is the only one, so it is measured by name —
-      // its own opaque color against the ground the pixels resolved.
-      // `rgbOf` because `measureIndicatorCrop` reports a ground as `#rrggbb` and `parseCssColor`
-      // takes `rgb()` notation and returns null for anything else — the safe direction, and one
-      // this caller has to respect rather than feed a null into the arithmetic.
-      const edgeColor = parseCssColor(held.edge);
-      const groundColor = parseCssColor(rgbOf(onMat.ground));
-      assert(edgeColor && groundColor, theme + ": the boundary or its ground would not parse: " + held.edge + " on " + onMat.ground);
-      const edge = round2(contrastRatio(edgeColor, groundColor));
-      assert(
-        edge >= 3,
-        theme + ": the settings button's own boundary is " + edge + ":1 against a 3:1 floor (" + held.edge +
-          " on " + onMat.ground + ")"
-      );
-      out.push(theme + ": " + onMat.ratio + ":1 on the mat (" + onMat.ink + " on " + onMat.ground + "), " +
-        edge + ":1 boundary (" + held.edge + " on " + onMat.ground + "), " +
-        onFill.ratio + ":1 glyph on fill (" + onFill.ink + " on " + onFill.ground + ")");
-      // The evidence, once: the held screen with the control §62 puts on it. Taken on the DARK
-      // walk only — the two are the same picture by the clamp above, and a second copy of one
-      // picture is a second file to keep in step.
-      if (theme === "dark") {
-        const s = await shot(page, "splash-25-held-with-settings", { fullPage: false });
-        out.push("evidence " + path.basename(s.file));
-      }
-      noErrors(page, "25g " + theme);
-      await page.__ctx.close();
-    }
-    return out.join(" · ");
-  });
-
-  // ---- THE OPENING: picked at quit, drawn ahead, played at the click (Sage's plan 2026-11-14,
-  //      "the splash the rules picked is playing within 380 ms of the click", sections 1, 2, 6) ----
 
   await run.check("26  the shell's pick decides the splash; the page's own rule is only its fallback", async () => {
     const out = [];
@@ -3850,7 +3221,7 @@ async function main() {
     };
   };
 
-  await run.check("27  every entry can be HELD at a moment, and STARTED from one", async () => {
+  await run.check("27  the frame exporter can seek each design in either direction", async () => {
     const out = [];
     for (const entry of libraryFromDisk().variations.concat(OPENING_SAMPLE)) {
       const anOpening = entry.id.indexOf("opening/") === 0;
@@ -3881,39 +3252,7 @@ async function main() {
       assertEqual(held.back.fill, held.a.fill, entry.id + ": holding an earlier moment after a later one draws the earlier one");
       noErrors(page, "27 held " + entry.id);
       await page.__ctx.close();
-      // Started from a moment, in the app's own page: it runs on from there, and the hold is
-      // counted from the splash's first frame.
-      // (`force` narrows the library to one entry; an opening is not in the library, so it is
-      // asked for the way the shell asks: as the picked splash.)
-      const app = anOpening
-        ? await launch(browser, { hold: true, initArg: entry.id, init: (id) => { window.__RICHOS_LAUNCH__ = Object.freeze({ kind: "fresh", ordinal: 5, splash: Object.freeze({ id, opening: false }) }); } })
-        : await launch(browser, { hold: true, force: entry.id });
-      await app.waitForFunction(() => window.RichSplash && window.RichSplash.state.shown, null, { timeout: 60000 });
-      assertEqual(await app.evaluate(() => window.RichSplash.state.variationId), entry.id, "the entry that was asked for is the one started");
-      const started = await app.evaluate(async () => {
-        window.RichSplash.holdAt(400);
-        const t0 = performance.now();
-        window.RichSplash.release();
-        const anims = document.getAnimations().filter((a) => a.effect && a.effect.target && a.effect.target.closest && a.effect.target.closest("#splash"));
-        // Each animation now runs from 400 ms as of the release: its start is the release instant
-        // less 400 ms, on the page's own clock (its reading between frames is the last frame's,
-        // so the start is what is held to, not a reading).
-        const starts = anims.map((a) => Number(a.startTime) - (t0 - 400));
-        await new Promise((r) => setTimeout(r, 300));
-        return {
-          ran: performance.now() - t0,
-          moment: window.RichSplash.moment(),
-          running: anims.every((a) => a.playState === "running" || a.playState === "finished"),
-          startOff: Math.max(...starts.map(Math.abs)),
-          heldAt: window.RichSplash.state.heldAt,
-        };
-      });
-      assert(started.heldAt === null && started.running, entry.id + ": released, everything runs: " + JSON.stringify(started));
-      assert(Math.abs(started.moment - (400 + started.ran)) < 40 && started.startOff < 2,
-        entry.id + ": it runs on from 400 ms, not from the start: " + JSON.stringify(started));
-      noErrors(app, "27 started " + entry.id);
-      await app.__ctx.close();
-      out.push(entry.id + " held at 500/950/500, started from 400 (at " + Math.round(started.moment) + " ms after " + Math.round(started.ran) + " ms)");
+      out.push(entry.id + " exported at 500, 950 and 500 ms");
     }
     return out.join(" · ");
   });
@@ -3966,111 +3305,6 @@ async function main() {
       });
     };
   };
-
-  /// Pixels of a decoded PNG, `o` = offset of (x, y).
-  const pngAt = (img, x, y) => (y * img.width + x) * img.channels;
-
-  await run.check("28  the opening's pictures ARE the running splash — every entry, its first second, three window sizes", async () => {
-    // THE PER-ENTRY CHECK OF SECTION 6. The opening the shell plays is its first picture (the whole
-    // page held at 0) with, at each later moment, only the changing part (`openingRegion`) held at
-    // that moment laid over it. That composite, built here from the opening page exactly as the
-    // shell builds it, is compared with the same splash RUNNING in the app's own head (28b), stopped
-    // where it stands at the same moment. A splash added to the library later is held to the same
-    // check with no change here.
-    //
-    // THE ALLOWED DIFFERENCE, set from the first run and stated: no channel off by more than
-    // MAX_LEVEL anywhere, at most MAX_FRACTION of the pixels off at all. Measured on the first run:
-    // see this check's detail line, which prints the worst of each.
-    const MAX_LEVEL = 24;
-    const MAX_FRACTION = 0.002;
-    const conf = JSON.parse(fs.readFileSync(path.resolve(UI_DIR, "..", "src-tauri", "tauri.conf.json"), "utf8")).app.windows[0];
-    const sizes = [
-      { width: conf.minWidth, height: conf.minHeight },
-      { width: 1280, height: 800 },
-      { width: conf.width, height: conf.height },
-    ];
-    // Asked for; each is stopped where the page has got to when the harness gets its turn (a
-    // little later), and the opening is compared at exactly that moment. The last is asked for
-    // early enough that a slow turn still lands inside the opening's second.
-    const MOMENTS = [30, 220, 430, 620, 800];
-    const { decode } = require("./lib/png");
-    let worstLevel = 0;
-    let worstFraction = 0;
-    const skipped = [];
-    const out = [];
-    for (const entry of libraryFromDisk().variations.concat(OPENING_SAMPLE)) {
-      const anOpening = entry.id.indexOf("opening/") === 0;
-      // The library's own at three window sizes; each sampled opening at one.
-      for (const viewport of anOpening ? [sizes[1]] : sizes) {
-        const opening = await openingPage(viewport, entry.id, null, anOpening ? HIS_OPENINGS : null);
-        assertEqual(await opening.evaluate(() => window.RichSplash.state.variationId), entry.id, "the opening page drew the entry that was asked for");
-        const region = await opening.evaluate(() => window.RichSplash.openingRegion(1000));
-        assert(Array.isArray(region) && region[2] > 0 && region[3] > 0, entry.id + ": a changing part to draw: " + JSON.stringify(region));
-        await opening.evaluate(() => window.RichSplash.holdAt(0));
-        const first = decode(await opening.screenshot());
-        // THE RUNNING SPLASH, in the same page RUNNING (no draw mode): the app's own head and the
-        // same two scripts first in the body (28b holds that to `index.html`), with nothing else on
-        // the page to hold its main thread, so each moment is stopped where it is asked for. (In
-        // `index.html` the app's own boot shares that thread during the splash's first second and
-        // carried a stop asked for at 430 ms to 1,048 ms on a loaded host.) Its own ceiling stays
-        // armed (check 10b): five moments of its first second are over well inside four seconds.
-        const app = await openingPage(viewport, entry.id, { draw: false, splash: { id: entry.id, opening: false } }, anOpening ? [FREEZER, HIS_OPENINGS] : FREEZER);
-        await app.evaluate(() => document.fonts.ready);
-        let compared = 0;
-        for (const m of MOMENTS) {
-          const frozen = await app.evaluate((ms) => window.__freezer.freezeAt(ms), m);
-          if (frozen.moment >= 1000) {
-            // A busy page got there after the opening's second: nothing of the opening to compare.
-            skipped.push(entry.id + " " + viewport.width + "x" + viewport.height + " asked " + m + " got " + Math.round(frozen.moment));
-            await app.evaluate(() => window.__freezer.thaw());
-            continue;
-          }
-          compared++;
-          // Two frames, so the bar is painted by its own tick at the frozen moment.
-          await app.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
-          const runningPng = await app.screenshot();
-          const running = decode(runningPng);
-          await opening.evaluate((ms) => window.RichSplash.holdAt(ms), frozen.moment);
-          const heldPng = await opening.screenshot();
-          const held = decode(heldPng);
-          // The opening's frame: the first picture, with the changing part at this moment over it.
-          const dpr = running.width / viewport.width;
-          const [rx, ry, rw, rh] = region.map((v) => Math.round(v * dpr));
-          let off = 0;
-          let worst = 0;
-          for (let y = 0; y < running.height; y++) {
-            for (let x = 0; x < running.width; x++) {
-              const inside = x >= rx && x < rx + rw && y >= ry && y < ry + rh;
-              const src = inside ? held : first;
-              const a = pngAt(running, x, y);
-              const b = pngAt(src, x, y);
-              let d = 0;
-              for (let c = 0; c < 3; c++) d = Math.max(d, Math.abs(running.data[a + c] - src.data[b + c]));
-              if (d > 0) off++;
-              if (d > worst) worst = d;
-            }
-          }
-          const fraction = off / (running.width * running.height);
-          worstLevel = Math.max(worstLevel, worst);
-          worstFraction = Math.max(worstFraction, fraction);
-          assert(worst <= MAX_LEVEL && fraction <= MAX_FRACTION,
-            entry.id + " at " + viewport.width + "x" + viewport.height + ", " + frozen.moment.toFixed(1) + " ms: the opening's frame is off the running splash by up to " +
-            worst + " levels on " + (fraction * 100).toFixed(3) + "% of the pixels (allowed " + MAX_LEVEL + " on " + (MAX_FRACTION * 100) + "%)");
-          await app.evaluate(() => window.__freezer.thaw());
-        }
-        assert(compared >= 3, entry.id + " at " + viewport.width + "x" + viewport.height + ": only " + compared +
-          " of " + MOMENTS.length + " moments landed inside the opening's second (" + skipped.join("; ") + "), a harness fault");
-        noErrors(app, "28 " + entry.id);
-        noErrors(opening, "28 opening " + entry.id);
-        await app.__ctx.close();
-        await opening.__ctx.close();
-        out.push(entry.id + " " + viewport.width + "x" + viewport.height + " part " + region.join(","));
-      }
-    }
-    return "worst " + worstLevel + " levels, " + (worstFraction * 100).toFixed(4) + "% of pixels · " +
-      (skipped.length ? "past the second, not compared: " + skipped.join("; ") + " · " : "") + out.join(" · ");
-  });
-
   await run.check("28b  the page the opening is drawn in is the app's own: the same head, the splash first in the body", async () => {
     const tags = (file) => {
       const html = fs.readFileSync(path.join(UI_DIR, file), "utf8").replace(/<!--[\s\S]*?-->/g, "");
@@ -4093,62 +3327,91 @@ async function main() {
     return opening.head.length + " head tags identical; body opens with " + opening.body.join(", ");
   });
 
-  await run.check("29  the page JOINS the opening where it has reached, reports it, and its hold counts from the first frame", async () => {
-    const out = [];
-    const id = libraryFromDisk().variations[1].id;
-    // `elapsed` ms since the opening's first picture reached the glass, an opening `length` ms
-    // long, and how long the shell takes to take the pictures down.
-    for (const [elapsed, length, takeDown] of [[400, 1000, 0], [1800, 1000, 300]]) {
-      const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
-      const page = await newPage(ctx);
-      await page.addInitScript((o) => {
-        window.__RICHOS_LAUNCH__ = Object.freeze({ kind: "fresh", ordinal: 2, splash: Object.freeze({ id: o.id, opening: true }) });
-        const calls = (window.__calls = []);
+  await run.check("29  the native player owns the whole splash and Home waits through its fade", async () => {
+    const page = await launch(browser, {
+      virtualTime: true,
+      viewport: { width: 1920, height: 1200 },
+      init: () => {
+        window.__RICHOS_LAUNCH__ = { kind: "fresh", splash: { id: "round-11/v1", native: true, bar: [371, 712.75, 658, 2] } };
+        window.__native = { calls: [] };
         window.__TAURI_INTERNALS__ = {
-          invoke: (cmd, args) => {
-            calls.push({ cmd, args: args || null, at: performance.now(), moment: window.RichSplash ? window.RichSplash.moment() : null });
-            // The opening's first picture reached the glass `elapsed` ms before the page asked.
-            if (cmd === "splash_take_over") return Promise.resolve({ firstFrameMs: Date.now() - o.elapsed, openingMs: o.length });
-            if (cmd === "first_frame_painted") return new Promise((r) => setTimeout(() => { calls.push({ cmd: "down", at: performance.now(), moment: window.RichSplash.moment() }); r(null); }, o.takeDown));
+          invoke(cmd, args) {
+            window.__native.calls.push(cmd);
+            if (cmd === "splash_native_finished") {
+              return new Promise(resolve => { window.__native.finish = resolve; });
+            }
+            if (cmd === "splash_native_dismiss") {
+              window.__native.animated = args.animated;
+              return new Promise(resolve => { window.__native.clear = resolve; });
+            }
             return Promise.resolve(null);
-          },
+          }
         };
-      }, { id, elapsed, length, takeDown });
-      await page.goto("file://" + path.join(UI_DIR, "splash-opening.html"));
-      await page.waitForFunction(() => (window.__calls || []).some((c) => c.cmd === "down"), null, { timeout: 60000 });
-      // Running on for a fifth of a second past where it joined, by its own clock.
-      await page.waitForFunction(() => window.RichSplash.state.heldAt === null && window.RichSplash.state.joinedAt !== null && window.RichSplash.moment() >= window.RichSplash.state.joinedAt + 200, null, { timeout: 60000 });
-      const seen = await page.evaluate(() => ({
-        calls: window.__calls,
-        state: JSON.parse(JSON.stringify(window.RichSplash.state)),
-        moment: window.RichSplash.moment(),
-        now: performance.now(),
-      }));
-      const report = seen.calls.find((c) => c.cmd === "first_frame_painted");
-      const down = seen.calls.find((c) => c.cmd === "down");
-      assert(seen.state.opening === true && seen.state.pickedBy === "shell", "the page knows the opening is up: " + JSON.stringify(seen.state));
-      assert(seen.calls[0].cmd === "splash_take_over", "the page asks where the opening has reached first: " + JSON.stringify(seen.calls.map((c) => c.cmd)));
-      const want = Math.min(elapsed, length);
-      assert(Math.abs(seen.state.joinedAt - want) <= 120, "joined at " + seen.state.joinedAt + " ms, the opening was at " + want);
-      assertEqual(report.args && report.args.moment, seen.state.joinedAt, "the report names the moment it joined at");
-      if (elapsed >= length) {
-        // Past the opening's end: held at its last picture until the pictures are down, then on.
-        assert(Math.abs(down.moment - length) < 1, "held at the opening's last picture until it came down: " + down.moment);
       }
-      // After the take-down it runs: on from where it joined, by the time that has passed since.
-      const runningFor = seen.now - (elapsed >= length ? down.at : report.at);
-      assert(seen.state.heldAt === null && seen.moment > seen.state.joinedAt + runningFor - 120,
-        "it runs on from the joined moment: at " + Math.round(seen.moment) + " ms, " + Math.round(runningFor) + " ms after " + seen.state.joinedAt);
-      noErrors(page, "29");
-      // The hold counts from the first frame: no app-ready here, so the ceiling takes it down at
-      // its seconds plus the grace, counted from the moment he first saw the splash.
-      await page.waitForFunction(() => window.RichSplash.state.reason !== null, null, { timeout: 60000 });
-      const gone = await page.evaluate(() => ({ reason: window.RichSplash.state.reason, moment: window.RichSplash.moment() }));
-      assertEqual(gone.reason, "ceiling", "how it left");
-      await ctx.close();
-      out.push("elapsed " + elapsed + "/" + length + " ms: joined at " + seen.state.joinedAt + ", running at " + Math.round(seen.moment) + ", left by the ceiling");
+    });
+    await page.clock.runFor(7000);
+    const playing = await page.evaluate(() => {
+      const splash = document.getElementById("splash");
+      window.RichSplash.yieldNow("app-ready");
+      return { hidden: getComputedStyle(splash).visibility, held: window.RichSplash.state.heldAt, reason: window.RichSplash.state.reason, covered: window.loroCovered() };
+    });
+    assertEqual(playing, { hidden: "hidden", held: 0, reason: null, covered: true }, "the web copy joins or interrupts the native sequence");
+    const fading = await page.evaluate(async () => {
+      window.__native.finish(true);
+      await Promise.resolve();
+      const style = document.querySelector(".ro-handover")?.style;
+      return {
+        animated: window.__native.animated,
+        covered: window.loroCovered(),
+        width: parseFloat(style?.width),
+        preparing: window.__native.calls.includes("splash_did_finish"),
+      };
+    });
+    assertEqual({ animated: fading.animated, covered: fading.covered }, { animated: true, covered: true }, "Home must stay covered during the native fade");
+    assertEqual(fading.preparing, false, "the next pack is prepared before the native fade ends");
+    assert(Math.abs(fading.width - 658 * 1200 / 852) < 0.1, "the live gold line must start at the movie's scaled width: " + fading.width);
+    const cleared = await page.evaluate(async () => {
+      window.__native.clear();
+      await Promise.resolve();
+      return {
+        covered: window.loroCovered(),
+        prepareCalls: window.__native.calls.filter(cmd => cmd === "splash_did_finish").length,
+      };
+    });
+    assertEqual(cleared, { covered: false, prepareCalls: 1 }, "the completed native fade reveals Home and prepares the next pack once");
+    await page.__ctx.close();
+    return "The renderer completes the authored sequence and acknowledges the fade before Home starts";
+  });
+
+  await run.check("30  a saved opening without a local video plays through before preparing its pack", async () => {
+    for (const [id, seconds] of [["opening/material-leather", 3], ["opening/edition-year", 5]]) {
+      const page = await launch(browser, {
+        virtualTime: true,
+        initArg: id,
+        init: (openingId) => {
+          window.__RICHOS_LAUNCH__ = { kind: "fresh", splash: { id: openingId, native: false } };
+          window.__splashPrepareCalls = 0;
+          window.__TAURI_INTERNALS__ = {
+            invoke(cmd) {
+              if (cmd === "splash_did_finish") window.__splashPrepareCalls++;
+              return Promise.resolve(null);
+            },
+          };
+        },
+      });
+      const playing = await page.evaluate(() => {
+        const splash = window.RichSplash;
+        splash.yieldNow("app-ready");
+        return { id: splash.state.variationId, seconds: splash.state.seconds, reason: splash.state.reason };
+      });
+      assertEqual(playing, { id, seconds, reason: null }, "the web fallback starts the saved opening at its authored duration");
+      await page.clock.runFor(seconds * 1000 - 1);
+      assertEqual(await page.evaluate(() => [window.loroCovered(), window.__splashPrepareCalls]), [true, 0], "Home or the download started before the opening reached its end");
+      await page.clock.runFor(REMOVE_AFTER_YIELD_MS + 1);
+      assertEqual(await page.evaluate(() => [window.loroCovered(), window.__splashPrepareCalls]), [false, 1], "the completed fallback fade reveals Home and prepares the next pack once");
+      await page.__ctx.close();
     }
-    return out.join(" · ");
+    return "The 3- and 5-second saved openings play in full before Home and the download";
   });
 
   await browser.close();

@@ -55,6 +55,15 @@ opened = walk.measure({'label': 'rule-switch:judged', 'pid': 501, 't_open': t_op
 check("with its opening used, the judged moment is the opening's first picture on the glass, plus the allowance",
       opened.get('splash') == 245 + A and opened.get('splash_from') == "the splash's opening on the glass"
       and opened.get('splash_id') == 'round-11/v2' and opened.get('opening') == 30 and opened.get('joined_ms') == 165, opened)
+native_line = line.replace('; splash shown;', '; splash shown, round-11/v2 (native pack);')
+native_anchor = '[richos] native splash: frame zero scheduled 188 ms after process start'
+native_run = {'label': 'ordinary:judged', 'pid': 501, 't_open': t_open,
+              'lines': [{'t': 0, 'text': native_anchor}, {'t': 0, 'text': native_line}]}
+native = walk.measure(native_run, events)
+check('a native launch is timed from frame zero rather than the window or WebView',
+      native.get('splash') == 268 + A and native.get('native_frame_zero') == 268, native)
+no_anchor = walk.measure({**native_run, 'lines': native_run['lines'][1:]}, events)
+check('a native candidate without a clock report supplies no timing verdict', 'splash' not in no_anchor, no_anchor)
 fell_back_line = line.replace('; splash shown;', '; splash shown, round-11/v1 (picked by the rules at this start), its '
                               'opening not used: nothing was saved at the last quit (the first start after an install '
                               'or an update);')
@@ -387,8 +396,8 @@ check('the day-change route within the limit passes with the rest',
 usual = sum(len(steps) for steps in fast_plans.values())
 _, _, worst_plans = walk_in_fake_guest(lambda label, n: 9000 if label.endswith(':judged') else 300, PREVIOUS)
 worst = sum(len(steps) for steps in worst_plans.values())
-check('a walk launches 40 times when every route passes at five, at most 138 when every route goes on to twenty',
-      (usual, worst) == (40, 138), (usual, worst))
+check('a walk launches 39 times when every route passes at five, at most 137 when every route goes on to twenty',
+      (usual, worst) == (39, 137), (usual, worst))
 
 print('%d failure(s)' % len(failures))
 sys.exit(1 if failures else 0)

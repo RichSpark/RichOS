@@ -35,7 +35,7 @@ const ghostAt = (objects) => 0.155 * Math.max(0, Math.min(1, 1 - objects / 2500)
 /// The round's own legend line, verbatim (`v2/v2.js`).
 const LEGEND = "Example, not yours · a finished loro, dimmed, for scale";
 
-async function openApp(browser, preset) {
+async function openApp(browser, preset, { holdFieldAnswer = false } = {}) {
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   const errors = [];
   page.on("pageerror", (e) => errors.push(String(e)));
@@ -44,9 +44,22 @@ async function openApp(browser, preset) {
   });
   page.__errors = errors;
   await page.addInitScript(SEED_THEME, "dark");
-  await page.addInitScript((v) => {
-    window.__RICHOS_MOCK_PRESET__ = v;
-  }, preset);
+  await page.addInitScript(({ mockPreset, hold }) => {
+    window.__RICHOS_MOCK_PRESET__ = mockPreset;
+    if (!hold) return;
+    const fieldAnswer = new Promise(resolve => { window.releaseHomeFieldAnswer = resolve; });
+    Object.defineProperty(window, "RichBridge", {
+      configurable: true,
+      set(bridge) {
+        const invoke = bridge.invoke.bind(bridge);
+        bridge.invoke = (cmd, ...args) => {
+          if (cmd === "home_field_data") return fieldAnswer.then(() => invoke(cmd, ...args));
+          return invoke(cmd, ...args);
+        };
+        Object.defineProperty(window, "RichBridge", { value: bridge, configurable: true, writable: true });
+      },
+    });
+  }, { mockPreset: preset, hold: holdFieldAnswer });
   await page.goto(APP);
   await page.waitForFunction("typeof window.RichHome === 'object' && typeof window.RichTimeline === 'object'", null, { timeout: 60000 });
   await page.evaluate(() => window.RichSplash && window.RichSplash.yieldNow("acceptance-suite"));
@@ -57,7 +70,7 @@ async function openApp(browser, preset) {
     .then(() => true, () => false);
   if (up) {
     // The bloom is the picture drawing itself in; the frame is judged after it.
-    await page.waitForFunction("window.__loro.blooming === false", null, { timeout: 60000 });
+    await page.waitForFunction("window.__loro?.blooming === false", null, { timeout: 60000 });
     await page.waitForTimeout(700);
   }
   return page;
@@ -321,15 +334,15 @@ async function main() {
   // the screen having waited, and the example's light follows his count as if they had been there.
   // --------------------------------------------------------------------------------------
   await run.check("his records come back after the ceiling: they are drawn when ready, in front of the example", async () => {
-    // THE ANSWER COMES AT 12 s, NOT 9.5 s. The screen is read for the first time when `openApp`
-    // returns, 700 ms after the picture has drawn itself in, and that has to be before the answer.
-    // Measured from `startField` on 2026-11-14 (three launches each): the picture is drawn in at
-    // 8,711 to 8,723 ms on main and at 8,799 to 8,810 ms with round 73's picture, so the first read
-    // is at about 9,417 ms and 9,503 ms. An answer at 9,500 ms left main 83 ms and round 73 none:
-    // the check then failed with a count of 300, or with no picture at the moment of the swap.
-    const page = await openApp(browser, { homeTeam: TEAM, homeWorking: [TEAM[0]], homeField: { objects: 300, records: 900 }, homeFieldDelayMs: 12000 });
+    // Keep the original call pending until Home hits its own timeout and draws the example.
+    const page = await openApp(
+      browser,
+      { homeTeam: TEAM, homeWorking: [TEAM[0]], homeField: { objects: 300, records: 900 } },
+      { holdFieldAnswer: true }
+    );
     const early = await factsOf(page);
     assertEqual(early.count, 0, "the screen waited for the compile (or counted records nobody had read)");
+    await page.evaluate(() => window.releaseHomeFieldAnswer());
     const came = await page
       .waitForFunction("window.__loro && window.__loro.COUNT === 300 && window.__loro.blooming === false", null, { timeout: 40000 })
       .then(() => true, () => false);

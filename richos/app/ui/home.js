@@ -1808,6 +1808,11 @@ window.RichHome = (function () {
   function rebuildGhostNow(records) {
     if (!root || !state.team || state.field !== "live") return Promise.resolve(false);
     if (window.__loro && window.__loro.pause) window.__loro.pause();
+    // ROUND 84: the picture drawn in its place takes the launch entrance where this one leaves it. A
+    // finished entrance stays finished (his first hire never replays the launch), and one still
+    // running carries on from the same second.
+    var ent = window.__loro && window.__loro.entrance;
+    window.loroEntranceCarry = ent ? { state: ent.state, clock: ent.clock } : null;
     delete window.__loro;
     delete window.__loroFailed;
     ["#home-gl", "#home-overlay"].forEach(function (sel) {
@@ -2045,6 +2050,19 @@ window.RichHome = (function () {
     } catch (e) {
       return false;
     }
+  }
+
+  /// ROUND 84: IS THE PICTURE COVERED? `home/field-engine.js` asks on every frame until its launch
+  /// entrance has started, and holds the picture at its opening state for as long as the answer is
+  /// yes. Covered means the opening curtain is still on the glass, its fade included (`splash.js`
+  /// takes its node out of the document when the fade is over), or the app UI is in front of this
+  /// screen. So the bloom starts on the first frame the picture is drawn with nothing over it, and a
+  /// user who leaves this screen under the curtain sees it start when he first comes back.
+  function fieldCovered() {
+    if (!state.open) return true;
+    // this screen's own fade in (`show()`), for a user who comes to it for the first time by the logo
+    if (root && root.classList.contains("home-leaving")) return true;
+    return !!document.getElementById("splash");
   }
 
   /// Take the CEO to the regular app UI.
@@ -2487,6 +2505,15 @@ window.RichHome = (function () {
     // FIRST IN THE BODY, like the curtain, so the composition is in the window's first paint
     // rather than something that arrives after the shell has been parsed.
     document.body.insertBefore(root, document.body.firstChild);
+
+    // ROUND 84: the two hooks of the launch entrance, in place before the engine is loaded.
+    // `state.entrance` is "held" until the picture is first seen, "running" while the lights travel
+    // out from the core, "done" once the last one has landed.
+    state.entrance = "held";
+    window.loroCovered = fieldCovered;
+    window.onLoroEntrance = function (s) {
+      state.entrance = s;
+    };
 
     // -------------------------------------------------------------------------------------
     // A WINDOW COMING BACK IS NOT A LAUNCH — audit-9 row 3.

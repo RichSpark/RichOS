@@ -2314,7 +2314,7 @@ async function main() {
 
   await run.check("7.hidden  unpainted click-through layers do not obscure text; a visible veil stays unproven", async () => {
     const page = await openApp(browser, "light");
-    const cases = await page.evaluate((script) => {
+    const { cases, layers } = await page.evaluate((script) => {
       eval(script);
       const host = document.createElement("div");
       host.style.cssText = "position:fixed;left:20px;top:300px;width:180px;height:70px;z-index:99999;background:white";
@@ -2330,13 +2330,28 @@ async function main() {
           unproven: Object.values(out.unresolvable).some((v) => v.path === "p#hidden-ghost-target"),
           obscured: Object.values(out.obscured).some((v) => v.path === "p#hidden-ghost-target") });
       }
+      const cover = document.createElement("div");
+      cover.id = "opaque-ghost-parent";
+      cover.style.cssText = host.style.cssText;
+      cover.style.zIndex = "100000";
+      const inside = host.firstElementChild.cloneNode(true);
+      inside.id = "behind-decoration";
+      cover.append(inside, veil);
+      document.body.appendChild(cover);
+      const out = window.__contrastProbe({ surface: "opaque-ghost-parent", theme: "light" });
+      const layers = {
+        behindCover: out.obscured["p#hidden-ghost-target"]?.by,
+        behindDecoration: Object.values(out.unresolvable).some((v) => v.path === "p#behind-decoration"),
+      };
+      cover.remove();
       host.remove();
-      return results;
+      return { cases: results, layers };
     }, C.pageScript());
     for (const c of cases.slice(0, 3)) assertEqual([c.measured, c.unproven, c.obscured], [true, false, false], c.kind + " has no painted layer");
     assertEqual([cases[3].measured, cases[3].unproven], [false, true], "the visible click-through veil is still unproven");
+    assertEqual(layers, { behindCover: "div#opaque-ghost-parent", behindDecoration: true }, "an opaque parent hides text below it and its veil still covers text inside");
     await page.close();
-    return "display:none, visibility:hidden and zero opacity leave text measurable; the visible veil is refused";
+    return "unpainted veils leave text measurable; a visible veil is unproven; its opaque parent hides the text behind it";
   });
 
   await run.check("8  a faint veil is measured THROUGH; only an aria-modal claim excuses", async () => {

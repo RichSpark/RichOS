@@ -121,7 +121,6 @@ const {
   assert,
   assertEqual,
   SEED_THEME,
-  HOLD_CURTAIN,
   UI_DIR,
 } = require("./lib/harness");
 
@@ -285,32 +284,6 @@ async function openHome(browser, viewport, theme) {
   return page;
 }
 
-/// THE OPENING SCREEN, HELD — CEO §62's one state in which this button is on that surface at
-/// all. `HOLD_CURTAIN` is the harness's own helper: it mutes the exported `yieldNow` and takes
-/// the single timer `start()` arms, which is the ceiling, so the curtain stays up for as long as
-/// the check needs rather than for the 3s it ships with. The space key is then the product's own
-/// path into `splash--paused`, pressed exactly once.
-///
-/// WHY THE PAUSED CLASS IS ASSERTED HERE: `splash.css` keys BOTH the button's presence and its
-/// inset on `#splash.splash--paused ~ .settings`. A page that was not actually held would have
-/// no button to measure and the failure would read as a missing element rather than as a hold
-/// that did not take.
-async function openHeldSplash(browser, viewport, theme) {
-  const page = await preparedPage(browser, viewport, theme, null, HOLD_CURTAIN);
-  await page.waitForSelector("#splash", { timeout: 15000 });
-  await page.keyboard.press("Space");
-  await page.waitForFunction(
-    () => {
-      const n = document.getElementById("splash");
-      return !!n && n.classList.contains("splash--paused");
-    },
-    null,
-    { timeout: 10000 }
-  );
-  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
-  return page;
-}
-
 /// The three surfaces, in one table, so every check below runs on all of them by construction
 /// rather than by three copies of itself. `header` says whether there is a 52px bar in FRONT of
 /// the app for the button to be centered in — the home screen and the held curtain are drawn
@@ -319,7 +292,6 @@ async function openHeldSplash(browser, viewport, theme) {
 const SURFACES = [
   { name: "a thread", open: openApp, inset: CENTERED, header: true },
   { name: "the home screen", open: openHome, inset: CORNER, header: false },
-  { name: "the held opening screen", open: openHeldSplash, inset: CORNER, header: false },
 ];
 
 /// The two derived boxes, read after their own entry animations have landed rather than during
