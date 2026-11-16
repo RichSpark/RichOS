@@ -103,12 +103,19 @@ async function main() {
       const box = document.getElementById("kca").getBoundingClientRect();
       const crumb = document.getElementById("scope-crumb").getBoundingClientRect();
       const header = document.getElementById("stage-header").getBoundingClientRect();
-      return { label: document.querySelector("#kca .kca-word").textContent, rightOfName: box.left >= crumb.right,
+      return { label: document.querySelector("#kca .kca-said").textContent, rightOfName: box.left >= crumb.right,
         inHeader: box.top >= header.top && box.bottom <= header.bottom + 1,
         px: parseFloat(getComputedStyle(document.querySelector("#kca .kca-word")).fontSize),
+        held: document.querySelector("#kca .kca-hold").textContent,
+        holdShows: getComputedStyle(document.querySelector("#kca .kca-hold")).visibility,
+        holdSaid: document.querySelector("#kca .kca-hold").getAttribute("aria-hidden"),
         info: document.getElementById("kca-info").getAttribute("aria-label") };
     });
     assertEqual(place.label, "Keep chat alive", "the label");
+    // the hidden bold copy that holds the label's width says the label's own words, and is
+    // neither seen nor read out
+    assertEqual(place.held, place.label, "the words of the copy that holds the label's width");
+    assertEqual([place.holdShows, place.holdSaid], ["hidden", "true"], "the copy that holds the label's width is seen or read out");
     assert(place.rightOfName && place.inHeader, "the checkbox is not in the header right of the chat's name: " + JSON.stringify(place));
     assert(place.px >= 16, "the label is " + place.px + "px, under 16px");
     assertEqual(place.info, "About Keep chat alive", "the info icon's name");

@@ -53,7 +53,9 @@ body.page-open .kca-lead {
 }
 
 /* The label goes to 600 when checked (the house checkbox does): a hidden bold copy holds the
-   width, so checking never nudges the ⓘ sideways. */
+   width, so checking never nudges the ⓘ sideways. The copy is an element of its own in the
+   label (keep-alive.js), never text a stylesheet renders: that would be text on screen no
+   contrast walk can measure (contrast.js 11b). */
 .kca-check {
   padding: 6px 4px 6px 2px;
   border-radius: 8px;
@@ -61,8 +63,7 @@ body.page-open .kca-lead {
 .kca-word {
   display: inline-grid;
 }
-.kca-word::after {
-  content: attr(data-w);
+.kca-hold {
   font-weight: 600;
   visibility: hidden;
   height: 0;

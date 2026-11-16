@@ -48,7 +48,7 @@
     root.innerHTML =
       '<label class="srch-check kca-check" for="kca-box">' +
       '<input type="checkbox" id="kca-box" aria-describedby="kca-tip" />' +
-      '<span class="kca-word" data-w="Keep chat alive">Keep chat alive</span>' +
+      '<span class="kca-word"><span class="kca-said">Keep chat alive</span><span class="kca-hold" aria-hidden="true">Keep chat alive</span></span>' +
       "</label>" +
       '<span class="cx-info-wrap kca-info-wrap" id="kca-info-wrap">' +
       '<button class="cx-info kca-info" id="kca-info" type="button" aria-label="About Keep chat alive" ' +

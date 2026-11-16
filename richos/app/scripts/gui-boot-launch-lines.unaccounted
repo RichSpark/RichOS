@@ -576,3 +576,18 @@
 [richos] openings: the image of {} was not saved ({})
 [richos] openings: what was earned could not be saved ({})
 [richos] openings: today's opening could not be written down ({})
+#
+# Keep chat alive and the context meter (round 83). A healthy boot prints none of these: a
+# keep-alive is sent only once a chat whose box is checked has been idle for 55 minutes, and
+# the rest are failures.
+[richos] chat readings were not saved to {}: {}
+[richos] keep chat alive: Rich's session of {} answered in {} ms{}
+[richos] keep chat alive: Rich's session of {} was not reached: {}
+[richos] keep chat alive: could not start its clock, no chat is kept alive: {}
+[richos] keep chat alive: the grant at {} was not put back: {}
+[richos] keep chat alive: the keep-alive could not be started: {}
+[richos] keep chat alive: the team's session of {} answered in {} ms
+[richos] keep chat alive: the team's session of {} was not reached: {}
+[richos] keep chat alive: the team's session of {} was not resumed: {}
+[richos] keep chat alive: {} is not idle; nothing was sent
+[richos] queued input after a keep-alive: {}
