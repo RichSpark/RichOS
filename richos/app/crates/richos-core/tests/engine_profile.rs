@@ -1002,7 +1002,10 @@ fn rich_and_stu_start_from_the_users_own_copies_which_the_app_never_writes_again
     std::os::unix::fs::symlink(&elsewhere, folder.join(RICH)).unwrap();
     let profile = prepare_for_user(&linked, &folder);
     assert_eq!(std::fs::read_to_string(&elsewhere).unwrap(), "Kept elsewhere.\n");
-    assert_eq!(std::fs::read_to_string(profile.standing_plugin(&shipped).join("agents").join(RICH)).unwrap(), "Kept elsewhere.\n");
+    let loaded = std::fs::read_to_string(profile.standing_plugin(&shipped).join("agents").join(RICH)).unwrap();
+    assert!(loaded.starts_with("Kept elsewhere.\n"));
+    assert_eq!(loaded.matches("## Executive continuity").count(), 1);
+    assert!(loaded.contains("mcp__richos_continuity__link-reply"));
 }
 
 /// **The user's instructions.md reaches both agents** (second review

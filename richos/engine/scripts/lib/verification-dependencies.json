@@ -13407,7 +13407,7 @@
     },
     "ecs/adapters/mcp.py#reject-host-verbs": {
       "source": "ecs/adapters/mcp.py",
-      "sha256": "45b6d56bdc68a65b4a30efa1883a5576139210b860b54b5dfc2ceb4ddc5f2d11",
+      "sha256": "f5beae8fb0a20dbfe6f21961373da7f8274622c8a3cd7178c9efe8a4f44ee3a3",
       "evidence": "Initialization imports app adapter; fixture calls answer/operator-complete which are refused as unknown tools before execute. Scope JSON is read as data. Renewed 2026-10-09 (second review slice 4): only the scope's size bound changed, 16 KiB to 256 KiB.",
       "keys": [],
       "edges": [
@@ -15905,7 +15905,7 @@
     },
     "ecs/adapters/mcp.py#discovery-fixtures": {
       "source": "ecs/adapters/mcp.py",
-      "sha256": "45b6d56bdc68a65b4a30efa1883a5576139210b860b54b5dfc2ceb4ddc5f2d11",
+      "sha256": "f5beae8fb0a20dbfe6f21961373da7f8274622c8a3cd7178c9efe8a4f44ee3a3",
       "keys": [],
       "edges": [
         {
@@ -16964,7 +16964,7 @@
     },
     "ecs/adapters/mcp.py#work-transport-serve": {
       "source": "ecs/adapters/mcp.py",
-      "sha256": "45b6d56bdc68a65b4a30efa1883a5576139210b860b54b5dfc2ceb4ddc5f2d11",
+      "sha256": "f5beae8fb0a20dbfe6f21961373da7f8274622c8a3cd7178c9efe8a4f44ee3a3",
       "evidence": "app.test.py test_any_brief_the_limit_accepts_gets_through_the_transport loads the module and runs serve in process over in-memory byte lines, with the work tools and mega-lander app.call as handler; no server process is launched. Its request line bound is what the brief limit must fit inside.",
       "keys": [],
       "edges": [

@@ -9,8 +9,8 @@
 //!
 //! - [`RICH`] and [`STU`]: Rich's and Stu's instructions. On first run the app copies its
 //!   shipped `rich.md` and `stu.md` here ([`provision`]); from then on every session of Rich
-//!   and Stu starts from these copies ([`standing_plugin`]), never from the shipped ones. The
-//!   user's files ARE what runs. When a new version ships improved ones, a copy the user never
+//!   and Stu starts from these copies ([`standing_plugin`]). The generated Rich definition also
+//!   carries the continuity section read from the currently installed engine. A copy the user never
 //!   changed is updated, and a changed one only when the user says OK
 //!   (`instructions_update.rs`).
 //! - [`INSTRUCTIONS`]: the user's own standing instructions, created empty on first run.
@@ -86,7 +86,8 @@ pub fn provision(folder: &Path, shipped: &Path) -> Result<Vec<&'static str>, Run
 
 /// **The plugin Rich and Stu start from**: the shipped plugin's manifest and skills, with
 /// `agents/rich.md` and `agents/stu.md` taken from the user's own copies, written to `root` for
-/// one session. Read at every session start, so an edit is in the next session. A copy the
+/// one session. Rich's shipped continuity guidance is included in the generated copy. User files
+/// are read at every session start, so an edit is in the next session. A copy the
 /// user removed falls back to the shipped file for that session.
 pub fn standing_plugin(folder: &Path, shipped: &Path, root: &Path) -> Result<PathBuf, RuntimeError> {
     let copy = |from: &Path, to: &str| -> Result<(), RuntimeError> {
@@ -117,17 +118,43 @@ pub fn standing_plugin(folder: &Path, shipped: &Path, root: &Path) -> Result<Pat
             folder.join(INSTRUCTIONS).display()));
     for name in [RICH, STU] {
         let mine = folder.join(name);
-        let from = if mine.is_file() { mine } else { shipped.join("agents").join(name) };
+        let custom = mine.is_file();
+        let from = if custom { mine } else { shipped.join("agents").join(name) };
         copy(&from, &format!("agents/{name}"))?;
-        configure_memory(&root.join("agents").join(name))?;
+        let definition = root.join("agents").join(name);
+        configure_memory(&definition)?;
+        if name == RICH && custom {
+            add_continuity_to_custom_rich(shipped, &definition)?;
+        }
         if let Some(own) = &own {
             use std::io::Write;
-            std::fs::OpenOptions::new().append(true).open(root.join("agents").join(name))
+            std::fs::OpenOptions::new().append(true).open(&definition)
                 .and_then(|mut file| file.write_all(own.as_bytes()))
                 .map_err(|e| RuntimeError(format!("the user's instructions could not be added to {name}: {e}")))?;
         }
     }
     Ok(root.to_path_buf())
+}
+
+/// Older user copies keep their own wording. The generated lease also needs
+/// the current host instructions for capturing and delivering executive work.
+fn add_continuity_to_custom_rich(shipped: &Path, definition: &Path) -> Result<(), RuntimeError> {
+    use std::io::Write;
+    const START: &str = "\n## Executive continuity\n";
+    let Some(standard) = read_optional(&shipped.join("agents").join(RICH))? else { return Ok(()) };
+    let Some((_, remainder)) = standard.split_once(START) else { return Ok(()) };
+    let body = remainder.split("\n## ").next().unwrap_or_default().trim_end();
+    if body.is_empty() {
+        return Ok(());
+    }
+    let section = format!("{START}{body}");
+    let copy = std::fs::read_to_string(definition).map_err(|e| RuntimeError(e.to_string()))?;
+    if !copy.contains(&section) {
+        std::fs::OpenOptions::new().append(true).open(definition)
+            .and_then(|mut file| writeln!(file, "\n{section}"))
+            .map_err(|e| RuntimeError(e.to_string()))?;
+    }
+    Ok(())
 }
 
 /// Memory stays on in ordinary release builds until the continuity evidence is approved.
