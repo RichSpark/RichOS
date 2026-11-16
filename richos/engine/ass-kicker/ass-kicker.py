@@ -1557,7 +1557,68 @@ def existing_record(window, repos):
     return "unverified", shas[0], why
 
 
-def judge_record_claims(claims, writes, raw, repos=(), cited_out=None):
+# An explicit identifier in the same claim supplies a scoped lookup.
+ECS_ITEM_ID = re.compile(r"\bECS item `([A-Za-z0-9][A-Za-z0-9_.:@/-]{0,255})`", re.I)
+
+
+def ecs_record_lookup(payload):
+    """Use the app's own active binding and real checkpoint receipt."""
+    from pathlib import Path
+    import subprocess
+
+    scope_path = os.environ.get("RICHOS_APP_SCOPE")
+    if not scope_path:
+        return None
+    path = Path(scope_path)
+    try:
+        if not path.is_absolute() or path.stat().st_size > 256 * 1024:
+            return None
+        scope = json.loads(path.read_bytes())
+        binding = scope["binding"]
+        if (scope.get("version") != 1 or scope.get("actions_allowed") is not True
+                or binding["session_id"] != payload.get("session_id")):
+            return None
+        root = scope["bridge"]["state_root"]
+        adapter = Path(__file__).resolve().parents[1] / "ecs" / "bin" / "ecs"
+    except (OSError, KeyError, TypeError, ValueError):
+        return None
+
+    def lookup(command, **fields):
+        request = {"protocol": 1, "command": command, "binding": binding, **fields}
+        if scope.get("seat") is not None:
+            request["seat"] = scope["seat"]
+        result = subprocess.run(
+            [sys.executable, str(adapter), "--state-root", root],
+            input=json.dumps(request), text=True, capture_output=True, timeout=2,
+            env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+        )
+        return json.loads(result.stdout)["result"] if result.returncode == 0 else {}
+
+    def backed(item_id):
+        try:
+            item = lookup("inspect", query={"item_id": item_id}).get("item", {})
+            if (item.get("item_type") not in {"commitment", "open_loop"}
+                    or item.get("thread_id") != binding["thread_id"]
+                    or item.get("entity_id") != binding["entity_id"]
+                    or item.get("status") not in {"active", "accepted", "pending", "blocked"}
+                    or not item.get("next_action")):
+                return False
+            prefix = "structured-checkpoint:" + binding["session_id"] + ":" + binding["turn_id"] + ":"
+            source = item.get("source_ref") or ""
+            if not source.startswith(prefix):
+                return False
+            receipt = lookup("receipt", session_id=binding["session_id"], turn_id=binding["turn_id"],
+                             request_id=source[len(prefix):])
+            return receipt.get("accepted") is True and any(
+                row.get("record_id") == item_id and row.get("status") != "rejected"
+                for row in receipt.get("outcomes") or [])
+        except (OSError, subprocess.SubprocessError, KeyError, TypeError, ValueError):
+            return False
+
+    return backed
+
+
+def judge_record_claims(claims, writes, raw, repos=(), cited_out=None, ecs_lookup=None):
     """[(sentence, code, problem)] for every claim this turn does not back.
     code is one of: nothing, private, where, sha, state, followup, unverified.
     Pure but for `repos`: claims from record_claims(), writes from turn_writes(),
@@ -1603,6 +1664,13 @@ def judge_record_claims(claims, writes, raw, repos=(), cited_out=None):
         return not LOCATION_RE.search(rest)
 
     for kind, sentence in claims:
+        if (ecs_lookup and not RULE_NOUN_RE.search(sentence)
+                and not NOTES_POINTER_RE.search(sentence) and not PRIVATE_NOTES_RE.search(sentence)):
+            claim = raw_window(raw, sentence)
+            ids = ECS_ITEM_ID.findall(claim)
+            if (ids and not LOCATION_RE.search(ECS_ITEM_ID.sub("", claim))
+                    and all(ecs_lookup(item_id) for item_id in dict.fromkeys(ids))):
+                continue
         if app_backed(sentence):
             continue
         if kind == "note":
@@ -1750,7 +1818,8 @@ def record_claim_verdict(payload, message):
         return v
     v["written"] = writes["targets"]
     cited = []
-    v["failing"] = judge_record_claims(claims, writes, message, _record_repos(cwd), cited)
+    ecs_lookup = ecs_record_lookup(payload) if ECS_ITEM_ID.search(message) else None
+    v["failing"] = judge_record_claims(claims, writes, message, _record_repos(cwd), cited, ecs_lookup)
     if cited:
         v["cited"] = cited
     if v["failing"]:
