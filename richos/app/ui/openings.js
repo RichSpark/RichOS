@@ -6,8 +6,7 @@
 //
 //   1. WHICH OPENING        `pick()`      the user's own pick, or one of his each day
 //   2. WHAT IS ON IT        `dress()`     the milestone number, his company's line, the seal,
-//                                         the line shown while the screen is held, and the
-//                                         light that follows his pointer
+//                                         and the line a saved image carries
 //   3. THE LANDING          `landed()`    the bar lands 0.8 s before the screen's time is up,
 //                                         so the flare, the sparks and the sound happen inside it
 //   4. THE SOUND            `sound`       two notes; the second lands with the bar
@@ -22,21 +21,26 @@
 // has and since when, and his three settings (his pick, the sound, his company's line). A page
 // with no shell behind it (a plain browser) has no record: nothing is his, and nothing sounds.
 //
-// NOTHING HERE DELAYS THE APP. It awaits nothing and reads no file; the curtain is still
-// `pointer-events: none`; a throw anywhere in `dress()` is caught by `splash.js` and the screen
-// is drawn without the additions.
+// NOTHING HERE DELAYS THE APP. It awaits nothing and reads no file; a throw anywhere in
+// `dress()` is caught by `splash.js` and the screen is drawn without the additions.
+//
+// ROUND 85 (the CEO, 2026-11-16; richos-hq design/mockups/rounds/round-85): NOTHING HERE ANSWERS
+// THE POINTER. "The spotlight effect makes it look less premium and must be removed from all
+// splash screens in general." The light that followed the pointer is gone, all three parts of
+// it: the lamp that moved (and drifted when left alone), the warm pool on the mat, and the
+// glint on the gold of both marks and the bar. The lamp is where `splash.css` draws it, at
+// rest, on every opening. This file listens to nothing the user does.
 //
 // IT COSTS A FRAME NOTHING IT DID NOT COST BEFORE. Where things rest in the window is read
 // once (`geometry()`, from layout offsets, which no stage still rising changes) and again only
-// when the window is resized: no frame measures the layout, and a frame writes a value only
-// when it changed. The sound file is asked for a second into the splash, never while the app
-// is starting.
+// when the window is resized: no frame measures the layout. The sound file is asked for a
+// second into the splash, never while the app is starting.
 //
 // EVERYTHING HERE STANDS AT A MOMENT. The shell draws the first second of the picked opening
 // when the app quits, as pictures of this code held still at one moment after another in a page
 // nobody sees, and the next start's page joins them where they have reached (`splash.js`, HELD
-// AT A MOMENT). So what this file paints is a function of the splash's own clock (`paint(t)`),
-// never of the wall clock, and nothing it adds moves the lamp during that first second.
+// AT A MOMENT). So what this file paints is a function of the splash's own clock (`paint(t)`)
+// and of nothing else.
 
 "use strict";
 
@@ -62,8 +66,6 @@
   var SOUND_LEAD_MS = 130;
   var LAND_EARLY_MS = 800;
   var HANDOVER_MS = 460;
-  // The lamp rests for the opening the shell draws ahead (its first second), then drifts.
-  var DRIFT_AFTER_MS = 1000;
   // The sound's file is asked for this long into the splash: after the launch, a second before
   // the earliest landing needs it (3000 - 800 - 130 = 2070).
   var SOUND_LOAD_AT_MS = 1000;
@@ -115,11 +117,11 @@
   function captionOf(o) {
     return o.caption || (FAMILIES[o.family] && FAMILIES[o.family].caption) || "";
   }
-  /// What the gallery and the held screen call it: "No. 7 · Struck".
+  /// What the gallery and a saved image call it: "No. 7 · Struck".
   function title(o) {
     return o.name;
   }
-  /// The second half of the held line: when, or since when.
+  /// The second half of a saved image's line: when, or since when.
   function provenance(o) {
     var on = earnedOn(o);
     if (!on) return "";
@@ -323,7 +325,7 @@
   var live = null; // everything about the screen that is up right now
 
   /// `splash.js` `build()` calls this with the finished composition, before it is on screen.
-  /// `api` is `{ elapsed(), paused(), held(), hold, silent }`.
+  /// `api` is `{ elapsed(), held(), hold, silent }`.
   function dress(root, entry, api) {
     var o = openingOf(entry);
     if (!o) return;
@@ -341,8 +343,7 @@
     live = {
       root: root, o: o, fam: fam, api: api, plinth: plinth,
       landAt: api.hold - LAND_EARLY_MS, landed: false, settled: false, soundDue: null, soundGrand: numbered,
-      glints: [], count: null, fx: null, lamp: { x: 0.4, y: 0.4, tx: 0.4, ty: 0.4, moved: null },
-      geo: null, wrote: {}
+      count: null, fx: null, bar: root.querySelector(".splash-bar"), geo: null
     };
 
     // 1. THE NUMBER, as the hero: the size of $50,000 Tally on every milestone.
@@ -398,8 +399,9 @@
       plinth.style.setProperty("--ro-land", live.landAt + "ms");
     }
 
-    // 4. THE LINE SHOWN WHILE THE SCREEN IS HELD (the space key, CEO §62): what this opening is
-    //    called and when it became his. It tells him there are others.
+    // 4. THE LINE A SAVED IMAGE CARRIES ("Save image" in the gallery): what this opening is
+    //    called and when it became his. ROUND 85: the splash itself never shows it; there is no
+    //    held screen any more.
     var line = el("div", "ro-collector");
     line.appendChild(el("span", "ro-collector-no", "No. " + number(o)));
     line.appendChild(el("span", "ro-collector-dot", "·"));
@@ -411,51 +413,19 @@
     }
     root.appendChild(line);
 
-    // 5. THE LIGHT THAT FOLLOWS HIS POINTER. Three things answer it: the lamp on the ground, a
-    //    warm pool on the mat, and a glint that crosses the gold of both marks and the bar.
-    var pool = el("div", "ro-pool");
-    plinth.insertBefore(pool, plinth.firstChild);
-    live.pool = pool;
-    var svgs = root.querySelectorAll(".splash-logo, .splash-wordmark");
-    for (var i = 0; i < svgs.length; i++) {
-      var svg = svgs[i];
-      var defs = svg.querySelector("defs") || svg.insertBefore(svgEl("defs", {}), svg.firstChild);
-      var vbw = svg.viewBox.baseVal.width;
-      var grad = svgEl("radialGradient", { id: "ro-glint-" + i, gradientUnits: "userSpaceOnUse", cx: "-9999", cy: "-9999", r: String(vbw) });
-      [["0", "rgba(255,247,226,0.9)"], ["0.4", "rgba(255,238,196,0.3)"], ["1", "rgba(255,238,196,0)"]].forEach(function (st) {
-        var stop = svgEl("stop", { offset: st[0] });
-        stop.setAttribute("style", "stop-color:" + st[1]);
-        grad.appendChild(stop);
-      });
-      defs.appendChild(grad);
-      var signals = svg.querySelectorAll(".splash-signal");
-      for (var j = 0; j < signals.length; j++) {
-        var over = svgEl("path", { d: signals[j].getAttribute("d"), class: "ro-glint", fill: "url(#ro-glint-" + i + ")" });
-        svg.appendChild(over);
-      }
-      live.glints.push({ svg: svg, grad: grad, vbw: vbw, id: "g" + i });
-    }
-    var fills = root.querySelectorAll('.splash-bar-layer[data-role="progress"]');
-    if (fills.length) {
-      var fill = fills[fills.length - 1];
-      var g = el("div", "ro-bar-glint");
-      fill.style.setProperty("overflow", "hidden");
-      fill.appendChild(g);
-      live.barGlint = { track: root.querySelector(".splash-bar"), node: g };
-    }
+    // ROUND 85: section 5, the light that followed his pointer, is removed.
 
-    // 6. THE PARTICLES: sparks thrown by the landing, or a light for every job.
+    // 5. THE PARTICLES: sparks thrown by the landing, or a light for every job.
     if (numbered && (fam.fx === "sparks" || fam.fx === "lights" || o.struck)) {
       var canvas = el("canvas", "ro-fx");
       root.appendChild(canvas);
       live.fx = makeFx(canvas, live);
     }
 
-    // 7. THE SOUND. Its file is made ready a second in (`frame()`), so the notes are on time
+    // 6. THE SOUND. Its file is made ready a second in (`frame()`), so the notes are on time
     //    and the launch fetched nothing for them. Never in the page nobody sees.
     if (!api.silent && sound.on()) live.soundDue = live.landAt - SOUND_LEAD_MS;
 
-    window.addEventListener("pointermove", onMove, true);
     window.addEventListener("resize", onResize, true);
     // The layout can change with no resize: the line's face arriving after the first frame
     // moves the plinth's edges. Either tells `geometry()` to measure again, once.
@@ -470,13 +440,6 @@
       /* the first measure stands */
     }
     live.raf = requestAnimationFrame(frame);
-  }
-
-  function onMove(e) {
-    if (!live) return;
-    live.lamp.tx = e.clientX / window.innerWidth;
-    live.lamp.ty = e.clientY / window.innerHeight;
-    live.lamp.moved = performance.now();
   }
 
   function onResize() {
@@ -494,32 +457,18 @@
     return { left: left, top: top, right: left + node.offsetWidth, bottom: top + node.offsetHeight, width: node.offsetWidth, height: node.offsetHeight };
   }
 
-  /// WHERE EVERYTHING THE LIGHT TOUCHES RESTS, read once and again after a resize. Each mark is
-  /// the only thing in its rising wrapper, which is as wide as the mark; a margin above the
-  /// mark is inside the wrapper.
+  /// WHERE THE PLINTH AND THE BAR REST, read once and again after a resize: what the particles
+  /// are laid out around and thrown from, and where the handover starts.
   function geometry() {
     // A held moment is painted for a picture, not for a frame: it measures afresh, so the
     // picture never stands on a layout the page has since changed (a face arriving).
     if (live.api.held && live.api.held()) live.geo = null;
     if (live.geo) return live.geo;
     if (!live.root.isConnected) return null;
-    var geo = { plinth: restRect(live.plinth), marks: [], bar: live.barGlint && live.barGlint.track ? restRect(live.barGlint.track) : null };
-    for (var i = 0; i < live.glints.length; i++) {
-      var svg = live.glints[i].svg;
-      var wrap = restRect(svg.parentNode);
-      var above = parseFloat(getComputedStyle(svg).marginTop) || 0;
-      geo.marks.push({ left: wrap.left, top: wrap.top + above, width: wrap.width });
-    }
+    var geo = { plinth: restRect(live.plinth), bar: live.bar ? restRect(live.bar) : null };
     if (!geo.bar) geo.bar = geo.plinth;
     live.geo = geo;
     return geo;
-  }
-
-  /// Write a value only when it is not the one already there.
-  function put(key, value, write) {
-    if (live.wrote[key] === value) return;
-    live.wrote[key] = value;
-    write(value);
   }
 
   /// The state every moving thing is going to, drawn at once: the frame the screen is pinned to
@@ -533,66 +482,11 @@
     paint(live.api.elapsed());
   }
 
-  /// Where the lamp rests when nobody is moving it, `t` ms after the first frame. It stays put
-  /// for the opening's first second (the part drawn ahead), then drifts, slowly, so a hands-off
-  /// recording still breathes.
-  function driftAt(t) {
-    if (reduceMotion() || !(t > DRIFT_AFTER_MS)) return { x: 0.4, y: 0.4 };
-    var s = (t - DRIFT_AFTER_MS) / 1000;
-    var a = Math.min(1, s / 0.8);
-    a = a * a * (3 - 2 * a);
-    return { x: 0.4 + a * 0.2 * Math.sin(s * 0.42), y: 0.4 + a * 0.07 * Math.sin(s * 0.63) };
-  }
-
   /// EVERYTHING THIS FILE PAINTS, AS IT STANDS `t` MS AFTER THE FIRST FRAME. `splash.js` calls
-  /// it for a held moment (`paintMoment`); the running screen calls it from each frame. The
-  /// only thing in it that is not a function of `t` is his pointer.
+  /// it for a held moment (`paintMoment`); the running screen calls it from each frame. All of
+  /// it is a function of `t` (ROUND 85: the pointer was the one thing that was not).
   function paint(t) {
     if (!live) return;
-    var L = live.lamp;
-    var rest = driftAt(t);
-    var held = live.api.held && live.api.held();
-    if (L.moved === null || held) {
-      // Nobody has moved it (or the moment is held for a picture): exactly where it rests.
-      L.x = rest.x;
-      L.y = rest.y;
-    } else {
-      var idle = performance.now() - L.moved > 1400;
-      if (idle) {
-        L.tx = rest.x;
-        L.ty = rest.y;
-      }
-      var ease = idle ? 0.03 : 0.14;
-      L.x += (L.tx - L.x) * ease;
-      L.y += (L.ty - L.y) * ease;
-    }
-    var geo = geometry();
-    if (geo) {
-      var px = L.x * window.innerWidth, py = L.y * window.innerHeight;
-      var root = live.root, pool = live.pool;
-      put("lx", (L.x * 100).toFixed(2) + "%", function (v) { root.style.setProperty("--ro-lx", v); });
-      put("ly", (L.y * 100).toFixed(2) + "%", function (v) { root.style.setProperty("--ro-ly", v); });
-      put("px", (px - geo.plinth.left).toFixed(1) + "px", function (v) { pool.style.setProperty("--ro-px", v); });
-      put("py", (py - geo.plinth.top).toFixed(1) + "px", function (v) { pool.style.setProperty("--ro-py", v); });
-      live.glints.forEach(function (g, i) {
-        var r = geo.marks[i];
-        if (!r || !r.width) return;
-        var k = g.vbw / r.width;
-        put(g.id, ((px - r.left) * k).toFixed(1) + " " + ((py - r.top) * k).toFixed(1) + " " + (170 * k).toFixed(1), function (v) {
-          var p = v.split(" ");
-          g.grad.setAttribute("cx", p[0]);
-          g.grad.setAttribute("cy", p[1]);
-          g.grad.setAttribute("r", p[2]);
-        });
-      });
-      if (live.barGlint) {
-        var glint = live.barGlint.node;
-        put("bx", (px - geo.bar.left).toFixed(1) + "px", function (v) { glint.style.setProperty("--ro-bx", v); });
-        // The bar is thin and far from most of the screen: it glints when the light is near it.
-        var d = Math.abs(py - (geo.bar.top + geo.bar.height / 2));
-        put("bo", Math.max(0.25, 1 - d / 420).toFixed(3), function (v) { glint.style.setProperty("opacity", v); });
-      }
-    }
 
     // The number, counting up. It is whole by 3.0 s (the CEO's own change to round 30's v2).
     if (live.count) {
@@ -621,7 +515,7 @@
         live.soundAsked = true;
         if (!sound.prepare(live.soundGrand)) live.soundDue = null;
       }
-      if (live.soundDue !== null && t >= live.soundDue && !live.api.paused()) {
+      if (live.soundDue !== null && t >= live.soundDue) {
         live.soundDue = null;
         sound.play();
       }
@@ -632,7 +526,6 @@
   function stop() {
     if (!live) return;
     if (live.raf) cancelAnimationFrame(live.raf);
-    window.removeEventListener("pointermove", onMove, true);
     window.removeEventListener("resize", onResize, true);
     if (live.watch) live.watch.disconnect();
     sound._el = null;
@@ -718,7 +611,7 @@
         var y = cy + Math.sin(a) * d * H * 0.62;
         if (x < 6 || x > W - 6 || y < 6 || y > H - 6) continue;
         if (x > p.left - 14 && x < p.right + 14 && y > p.top - 14 && y < p.bottom + 14) continue;
-        // Nothing behind the held line at the foot: it has to read on a clean ground.
+        // Nothing behind a saved image's line at the foot: it has to read on a clean ground.
         if (y > H - 78 && Math.abs(x - cx) < 400) continue;
         lights.push({ x: x, y: y, r: 1.6 + rand() * 3.4 + (rand() < 0.06 ? 4 : 0), a: 0.35 + rand() * 0.6, w: 0.6 + rand() * 1.8, ph: rand() * 6.28, order: 0, d: Math.hypot(x - cx, y - cy) });
       }

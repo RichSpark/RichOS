@@ -1,36 +1,20 @@
 /* THE OPENINGS: what round 74 adds to the opening screen, and the gallery (the CEO's order of
  * 2026-11-14; richos-hq design/mockups/rounds/round-74).
  *
- * `splash.css` is unchanged but for one line (the lamp reads `--ro-lx` / `--ro-ly`). Everything
- * here hangs off classes `openings.js` adds, so with that file absent none of it applies.
+ * Everything here hangs off classes `openings.js` adds, so with that file absent none of it
+ * applies.
+ *
+ * ROUND 85 (the CEO, 2026-11-16; richos-hq design/mockups/rounds/round-85): section 1, "The
+ * light that follows his pointer", is removed whole (the warm pool on the mat and the glint on
+ * the gold and the bar), and the splash is never held, so nothing here is keyed on a held
+ * screen. "The spotlight effect makes it look less premium and must be removed from all splash
+ * screens in general."
  *
  * ALWAYS DARK. The opening screen is (CEO §63), and the gallery shows those screens as they
  * are, so it is too: every color below is written out and none reads the app's theme. There
  * is therefore one set of contrast numbers, not two; `tests/openings.js` computes them. The one
  * thing here that follows the app's theme is the "Your openings" button in Settings.
  */
-
-/* ------------------------------------------------------------------------------------------
-   1. The light that follows his pointer
------------------------------------------------------------------------------------------- */
-.ro-pool {
-  position: absolute;
-  inset: 0;
-  z-index: 1;
-  border-radius: inherit;
-  pointer-events: none;
-  mix-blend-mode: screen;
-  background: radial-gradient(440px circle at var(--ro-px, 40%) var(--ro-py, 30%), rgba(255, 232, 190, 0.09), rgba(255, 232, 190, 0) 72%);
-}
-.ro-glint {
-  pointer-events: none;
-}
-.ro-bar-glint {
-  position: absolute;
-  inset: -2px 0;
-  pointer-events: none;
-  background: radial-gradient(110px 12px at var(--ro-bx, 50%) 50%, rgba(255, 250, 236, 0.95), rgba(255, 244, 214, 0) 100%);
-}
 
 /* ------------------------------------------------------------------------------------------
    2. The milestone number, as the hero
@@ -112,7 +96,7 @@
 }
 
 /* ------------------------------------------------------------------------------------------
-   3. His company's line, the seal, the held line
+   3. His company's line, the seal, the line on a saved image
 ------------------------------------------------------------------------------------------ */
 .ro-company {
   margin-top: 12px;
@@ -122,6 +106,12 @@
   text-transform: uppercase;
   color: #c2a35c;
   white-space: nowrap;
+}
+/* ROUND 85: Honed Slate is the one mat light enough that the line above fell under 4.5:1 on it
+   (4.22:1 on its lightest veins, measured by the round's `audit/contrast.py`). The app's lighter
+   gold holds there. */
+.splash[data-opening="material-slate"] .ro-company {
+  color: #d9bd7a;
 }
 .ro-seal {
   position: absolute;
@@ -153,9 +143,8 @@
   font-size: 16px;
   letter-spacing: 0.08em;
   color: #b7c2d9;
-  /* Shown the instant the screen is held, with no fade: holding pauses every animation on the
-     splash where it stands (`splash.js` `pauseNow`), and a fade begun by the hold itself would
-     be paused at its first frame. */
+  /* Only on a saved image ("Save image" in the gallery). ROUND 85: never on a splash, which
+     is no longer held. */
   opacity: 0;
   pointer-events: none;
 }
@@ -165,7 +154,6 @@
 .ro-collector-dot {
   color: #8fa3c6;
 }
-.splash--paused .ro-collector,
 .splash--card .ro-collector {
   opacity: 1;
 }
@@ -238,13 +226,6 @@
     transform: translateY(var(--ro-roll-to));
   }
 }
-/* Held means held, for everything this file animates too. `splash.css` says it with one class
-   of weight; the shorthands above come later and would otherwise set their animations running. */
-#splash.splash--paused *,
-#splash.splash--paused *::after {
-  animation-play-state: paused;
-}
-
 /* ------------------------------------------------------------------------------------------
    5. The handover into the home screen
 ------------------------------------------------------------------------------------------ */

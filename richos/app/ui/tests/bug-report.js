@@ -89,7 +89,7 @@
 
 const path = require("path");
 const fs = require("fs");
-const { loadPlaywright, createRun, assert, assertEqual, UI_DIR, leaveHome, bootSettled, shellSettled, openThread, HOLD_CURTAIN } = require("./lib/harness");
+const { loadPlaywright, createRun, assert, assertEqual, UI_DIR, leaveHome, bootSettled, shellSettled, openThread } = require("./lib/harness");
 const contrast = require("./lib/contrast");
 const coverings = require("./lib/overlays");
 const PNG = require("./lib/png");
@@ -1060,7 +1060,7 @@ async function main() {
   // (`elementFromPoint` at the middle of Rich's question and of the box the answer is typed in),
   // and the answer is TYPED, key by key, because the opening screen consumes the space key and
   // takes itself down on the first other one, and the home screen pulls focus back to its door.
-  async function openCovered(where) {
+  async function openCovered() {
     const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, locale: "en-US" });
     page.setDefaultTimeout(30000);
     page.on("pageerror", (e) => errors.push(String(e)));
@@ -1069,18 +1069,11 @@ async function main() {
       localStorage.setItem("richos-mock-config", JSON.stringify({ theme: "dark", font_scale: 100 }));
       window.__RICHOS_MOCK_PRESET__ = { bugWriteMs: 300 };
     });
-    if (where === "held") await page.addInitScript(HOLD_CURTAIN);
     await page.goto("file://" + path.join(UI_DIR, "index.html"));
-    if (where === "held") {
-      await page.waitForSelector("#splash");
-      await page.keyboard.press("Space");
-      await page.waitForFunction(() => document.getElementById("splash").classList.contains("splash--paused"));
-    } else {
-      await page.waitForFunction(() => typeof window.RichHome === "object" && !!window.RichSplash);
-      await page.evaluate(() => window.RichSplash.yieldNow("bug-report-suite"));
-      await page.waitForFunction(() => !document.getElementById("splash"));
-      await page.waitForFunction(() => window.RichHome.isOpen() && document.body.classList.contains("home-open"));
-    }
+    await page.waitForFunction(() => typeof window.RichHome === "object" && !!window.RichSplash);
+    await page.evaluate(() => window.RichSplash.yieldNow("bug-report-suite"));
+    await page.waitForFunction(() => !document.getElementById("splash"));
+    await page.waitForFunction(() => window.RichHome.isOpen() && document.body.classList.contains("home-open"));
     // `init()` focuses the composer at its very end: let it, so what is measured below is the
     // report's own focus and not a race with boot.
     await bootSettled(page);
@@ -1089,19 +1082,12 @@ async function main() {
   }
   /// Is the screen the report was opened on still the one behind it?
   const behind = (page, where) =>
-    page.evaluate((w) => {
-      if (w === "held") {
-        const s = document.getElementById("splash");
-        return !!s && s.classList.contains("splash--paused") && !(window.RichSplash.state || {}).reason;
-      }
-      return window.RichHome.isOpen();
-    }, where);
+    page.evaluate(() => window.RichHome.isOpen());
   for (const [where, name, label] of [
-    ["held", "the held opening screen", "· the opening screen"],
     ["home", "the home screen", "· the home screen"],
   ]) {
     await run.check(`Bust a bug on ${name}: the report is on top of it and can be answered at once`, async () => {
-      const page = await openCovered(where);
+      const page = await openCovered();
       await bustABug(page);
       await page.waitForSelector("#bugdock-msgs .bug-rich", { state: "attached" });
       // The report's own entrance only: a HELD opening screen's animations are paused, and their

@@ -7,7 +7,8 @@
 // shows.
 //
 //   Play                 runs that opening full screen, exactly as it ran: `RichSplash.replay`.
-//                        A click or a key takes it away, the space key holds it, as at launch.
+//                        ROUND 85: from start to finish, whatever the pointer and the keys do,
+//                        as at launch; then he is back here.
 //   Make it my opening   RichOS starts with that one from now on (`set_opening_pick`; the pick
 //                        for the next start is made when the app quits).
 //   Save image           the finished frame with its name and date, drawn now by the shell and
@@ -364,7 +365,7 @@
 
   function onKey(e) {
     if (!page || page.hidden) return;
-    if (window.RichSplash && window.RichSplash.isUp && window.RichSplash.isUp()) return; // the opening's own keys
+    if (window.RichSplash && window.RichSplash.isUp && window.RichSplash.isUp()) return; // an opening is playing
     // Settings is reachable over this page, and while its panel is up the keys are its own:
     // Escape closes the panel, not the page under it (as Home leaves them, `home.js`).
     var menu = document.getElementById("set-menu");
@@ -382,9 +383,7 @@
     opener = document.activeElement;
     // It was opened from the Settings panel, which would otherwise stay up over this page.
     if (window.RichSettings && window.RichSettings.close) window.RichSettings.close(false);
-    // And from a splash HELD with the space key, whose settings button is how he got here: the
-    // held splash is above every page, so it is let go now, or it would cover this one for good.
-    if (window.RichSplash && window.RichSplash.isUp && window.RichSplash.isUp()) window.RichSplash.yieldNow("your-openings");
+    // ROUND 85: a splash is never held, so this page is never opened over one.
     page.hidden = false;
     document.body.classList.add("openings-open");
     fill();

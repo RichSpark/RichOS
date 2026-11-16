@@ -6,11 +6,13 @@
  * here are the ones that are the same in every approved composition and therefore are not
  * variation at all: the mark's proportions, the centring, and the stacking order.
  *
- * POINTER-EVENTS: NONE, EVERYWHERE, DELIBERATELY. The app underneath is live from its first
- * frame and this is a curtain in front of it, not a door in front of it. A splash that can
- * swallow the CEO's first click has cost him the thing he opened the app for — and there is
- * nothing here to click by design (`richos-splash-micro-game-2026-08-30.md` §5.5: nothing
- * clickable, dismissible or delaying).
+ * ROUND 85 (the CEO, 2026-11-16; richos-hq design/mockups/rounds/round-85): "We no longer need
+ * any interactivity in splash screens i.e. each splash screen shall play from start to finish
+ * regardless of what the user might do with their mouse." So the curtain TAKES the pointer for
+ * the time it is up: a click lands on it and does nothing, and nothing under it is pressed by a
+ * hand that cannot see it. It lets go as it starts to fade (`splash--yielding`). Its layers are
+ * still `pointer-events: none`; there is still nothing here to click. Until this round the
+ * curtain itself was `pointer-events: none` and the first click sent it away.
  *
  * z-index 200 clears the whole shell: the highest thing in `style.css` is 70.
  */
@@ -19,7 +21,10 @@
   position: fixed;
   inset: 0;
   z-index: 200;
-  pointer-events: none;
+  pointer-events: auto; /* ROUND 85 */
+  cursor: default;
+  -webkit-user-select: none;
+  user-select: none;
   overflow: hidden;
   background-color: var(--splash-ground);
   background-image: var(--splash-atmosphere);
@@ -38,13 +43,15 @@
  * and on a timer as well, because `transitionend` does not fire if the element is never
  * composited (a launch that completes while the window is still hidden). */
 .splash.splash--yielding {
+  pointer-events: none; /* ROUND 85: the app is reachable as it arrives */
   opacity: 0;
   transition: opacity var(--splash-fade) linear;
 }
 
 /* Layers, in the mockups' own order: the lamp under the vignette under the grain. The lamp
  * is STATIC. In the studies it tracked the pointer; a splash has no pointer, so it is drawn
- * at the rest position those studies open at. */
+ * at the rest position those studies open at. ROUND 85: static again, as it was before round
+ * 74 let it follow the pointer (`--ro-lx` / `--ro-ly` are gone). */
 .splash-lamp,
 .splash-vignette,
 .splash-grain {
@@ -55,7 +62,7 @@
 .splash-lamp {
   z-index: 3;
   mix-blend-mode: soft-light;
-  background: radial-gradient(var(--splash-lamp-radius) circle at var(--ro-lx, 40%) var(--ro-ly, 40%), var(--splash-lamp), rgba(0, 0, 0, 0) var(--splash-lamp-stop));
+  background: radial-gradient(var(--splash-lamp-radius) circle at 40% 40%, var(--splash-lamp), rgba(0, 0, 0, 0) var(--splash-lamp-stop));
 }
 .splash-vignette {
   z-index: 2;
@@ -276,44 +283,11 @@
   width: var(--splash-rule-width);
 }
 
-/* HELD — the space key, and the CEO's own amendment to §62 the same day it was given:
- * *"if the animation on the splash screen can be easily paused without adding too much
- * complexity, then sure the animation should pause when hitting the space key."*
+/* THE SETTINGS BUTTON IS NOT ON THIS SCREEN (CEO §62: "The splash screen is one of those rare
+ * cases where the screen should NOT have a settings button").
  *
- * It can, and this is the whole of it for the composition: every moving thing in this file
- * is a CSS animation, so one declaration stops all six of them (four `splash-rise` stages,
- * the strike and the rule) exactly where they stand — mid-rise, half-struck, a rule drawn
- * part of the way across — and `animation-play-state: running` puts them back on the frame
- * they were stopped at rather than at the beginning. The descendant selector is deliberately
- * `*`: a stage added to this composition later is held by this rule without anyone
- * remembering to add it, which is the opposite of a list that goes stale.
- *
- * The other two kinds of motion are held where THEY live, because this property cannot reach
- * either: the loading bar is painted from `splash.js`'s own `requestAnimationFrame` tick and
- * stops because its clock stops, and the bar track's fade is a Web-Animations animation,
- * which `animation-play-state` has no authority over — `splash.js` holds that one through
- * the handle `buildBar` keeps on it.
- *
- * NOT `animation: none`. That is what `splash--settled` does, and it means something else:
- * settled CANCELS the ceremony and pins every element to where it was going. Held keeps the
- * unfinished frame on the glass, which is the point of looking at it. */
-.splash--paused,
-.splash--paused * {
-  animation-play-state: paused;
-}
-
-/* THE SETTINGS BUTTON IS NOT ON THIS SCREEN — except while he is holding it (CEO §62).
- *
- * *"The splash screen is one of those rare cases where the screen should NOT have a settings
- * button (because it's only there for 3 seconds by default and 5 seconds in some cases in
- * the future) ... while the splash screen is 'paused', THAT'S when the settings button should
- * show up on the splash screen. Because that's the only time it would make sense."*
- *
- * THE ONE DECLARED EXCEPTION TO §15's "always everywhere on every page", and it is his. It
- * is written here, and not in `style.css` where the button lives, for the reason this file's
- * off-switch chrome is written here: the feature brings its own furniture and takes it away
- * with it. Nothing in `settings-button.js` or `style.css` is touched, and nothing in them
- * has to know this screen exists.
+ * ROUND 85: never, now. Until this round the space key held the screen and the button showed
+ * while it was held; the splash is no longer held, so that state and its rules are gone.
  *
  * WHY A SIBLING SELECTOR AND NOT A CLASS ON `<body>`. The button's absence is keyed on the
  * curtain's OWN PRESENCE — `settings-button.js` mounts `.settings` against `document.body`
@@ -330,47 +304,8 @@
  *
  * `display: none` and not `opacity: 0`: a control that is invisible but hit-testable is the
  * defect this is preventing, not the thing it is doing. */
-#splash:not(.splash--paused):not(.splash--yielding) ~ .settings {
+#splash:not(.splash--yielding) ~ .settings {
   display: none;
-}
-
-/* AND WHERE IT SITS WHILE IT IS THERE — CEO, 2026-09-19, the same day he centered it on the
- * regular screens, with a before-and-after pair of his own screenshots of the HOME screen
- * (`docs/briefs/assets/ceo-2026-09-18-home-settings-button-before.png` and
- * `ceo-2026-09-19-home-settings-button-after.png` in `richos-hq`):
- *
- *   *"Obviously changes to the settings button position on regular screens must have messed up
- *    that button's position on the home screen (and probably also on the splash screen when
- *    paused). The before position of the settings button on the home screen was good and
- *    correct. The current position is messed up and wrong."*
- *
- * HE SAID "PROBABLY", AND IT WAS MEASURED RATHER THAN ASSUMED: on `529dd6ec`, with the curtain
- * held by the space key, `#set-btn` read `top 6, right 15` at 1024x700 and 1400x950 in both
- * themes — the same 12px rise the home screen got, on a surface that likewise has no 52px
- * header for it to be centered in. So it is the same defect and it takes the same fix.
- *
- * `top: 6px` IS DERIVED FROM `#stage-header`, WHICH IS NOT ON THIS SCREEN. That is the whole
- * of the reasoning: (52 - 40) / 2 = 6 centers the button in the app's header bar, and this
- * surface is a full-bleed composition with no bar, so the number it hands this screen is
- * arithmetic about something that is not here.
- *
- * WHY THIS IS TWO SELECTORS AND NOT A CLASS ON `<body>` — the same reason the rule above it is
- * a sibling selector, quoted from its own note: *"A class on `<body>` would be bookkeeping that
- * can be left behind by a throw, a crash mid-ceremony, or a yield that never ran; this cannot
- * be, because the moment the node is gone the selector has nothing to match."* A button stuck
- * at the wrong inset because a class outlived its screen is the smaller cousin of a button
- * hidden forever, and it is prevented the same way. `#bug-toast` is named beside `.settings`
- * rather than inheriting from it because `settings-button.js` appends it to `<body>`, so it is
- * this button's SIBLING; both are appended after `splash.js` inserts `#splash` as the body's
- * first child, which is what makes `~` reach both.
- *
- * `.setmenu` is inside `.settings` and inherits, so the menu's `max-height` — which `style.css`
- * derives from `--settings-top` — follows onto this screen without a third selector. Measured
- * held: anchor 66, bound `100vh - 84`. */
-#splash.splash--paused ~ .settings,
-#splash.splash--paused ~ #bug-toast {
-  --settings-top: 18px;
-  --settings-right: 18px;
 }
 
 /* §18's stance, and the studies' own: no motion for anyone who has asked for none. The
