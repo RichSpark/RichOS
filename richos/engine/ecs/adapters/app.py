@@ -356,6 +356,9 @@ def execute(state_root, request, *, store=None):
         if type(budget) is not int or not 900 <= budget <= 24000:
             raise ValidationError("brief budget must be between 900 and 24000 characters")
         store = EventStore(root)
+        seat = seat_of(request)
+        if seat is not None and seat != ceo_seat(required(scope, "thread_id")):
+            raise ScopeError("turn preparation belongs to the conversation's own seat")
         current = execute(root, {**request, "command": "current"}, store=store)["binding"]
         if current is not None and all(current.get(k) == v for k, v in scope.items()) and set(scope) == set(BINDING_FIELDS) - {"revision"}:
             binding = current
@@ -371,6 +374,8 @@ def execute(state_root, request, *, store=None):
             # in the brief; a bind or brief failure still refuses the turn.
             receipt_error = str(error)
         context = fenced(store, binding, seat_of(request))
+        if not is_ceo_row(context):
+            raise ScopeError("turn preparation belongs to the conversation's own seat")
         brief = store.live_brief(context, budget_chars=budget, held_revision=request.get("held_brief_revision"))
         return {"binding": binding, **brief, "receipts": receipts, "receipt_error": receipt_error}
     if command == "import-preview":

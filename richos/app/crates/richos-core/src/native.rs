@@ -2960,7 +2960,7 @@ impl NativeClient {
                 }
             }
             let context_delivered = native_result(&msg).is_ok_and(|reason| {
-                !matches!(reason.as_str(), STOP_REASON_CANCELLED | STOP_REASON_DISCARDED | STOP_REASON_REFUSED)
+                !matches!(reason.as_str(), STOP_REASON_CANCELLED | STOP_REASON_DISCARDED | STOP_REASON_REFUSED | "refusal")
             });
             state.lock().unwrap().given_context.finish_turn(context_delivered);
             // ---- WHOSE TURN DOES THIS END? (see [`PendingTurn`]) -----------------------
@@ -4411,6 +4411,7 @@ impl NativeTurnScope {
                     binding.entity_id().as_str(),binding.thread_id(),&i.ledger_ref,&i.sha256).is_ok()))
         } else {None};
 
+        let continuity_started = std::time::Instant::now();
         let seat = self.seat.clone();
         let Some((bridge, path)) = &self.continuity else {
             return Ok(None);
@@ -4427,6 +4428,13 @@ impl NativeTurnScope {
             let brief=bridge.brief(&scope,seat.as_deref()).map_err(|e|CognitionError::Io(e.to_string()))?;
             crate::ecs::PreparedTurn { binding: scope, brief, brief_revision: None, receipts }
         };
+        let outcome = match (brief_revision.is_some(), brief.is_empty()) {
+            (true, true) => "held",
+            (true, false) => "changed",
+            _ => "legacy",
+        };
+        eprintln!("[richos] ECS prepare-turn outcome={outcome} local_ms={}",
+            continuity_started.elapsed().as_millis());
         let mut records = String::new();
         match receipts {
             Ok(receipts) if receipts["receipts"].as_array().is_some_and(|rows|!rows.is_empty()) => {
@@ -6078,6 +6086,19 @@ while True:
             "a changed record brought the other blocks back: {asked}");
         let quiet=turn(&mut rich,"quiet-notice",crate::ledger::Source::Internal);
         assert!(none(&quiet),"an unchanged record was given again: {quiet}");
+
+        // A scoped ECS change is delivered on the next visible input without the other blocks.
+        let (bridge, scope_path) = rich.continuity.as_ref().unwrap();
+        let scope: crate::ecs::ToolScope = serde_json::from_slice(&std::fs::read(scope_path).unwrap()).unwrap();
+        let changed = bridge.request("checkpoint", crate::ecs::seated_request(scope.seat.as_deref(),
+            json!({"binding":scope.binding,"request_id":"fixture-change","checkpoint":{"statements":[{
+                "verb":"commitment","fields":{"id":"live-change","title":"live-commitment-marker"}
+            }]}}))).unwrap();
+        assert_eq!(changed["accepted"], true);
+        let changed = turn(&mut rich,"first-after-live-change",crate::ledger::Source::Text);
+        assert!(changed.contains("live-commitment-marker"), "changed brief was missing: {changed}");
+        assert!(!changed.contains("question_records") && !changed.contains("company-notes-end-marker"));
+        assert!(none(&turn(&mut rich,"unchanged-again",crate::ledger::Source::Text)));
 
         // The provider compacts while taking this notice in: its own copy and every earlier one
         // are summarized away, so the next input carries the full blocks again, once.

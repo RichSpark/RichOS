@@ -33,7 +33,8 @@ impl GivenContext {
                 self.brief_revision = Some(revision);
             }
         } else {
-            self.forget();
+            self.brief_revision = None;
+            self.pending_brief_revision = None;
         }
     }
 
