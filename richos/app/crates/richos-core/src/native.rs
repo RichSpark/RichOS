@@ -4444,8 +4444,6 @@ impl NativeTurnScope {
             (true, false) => "changed",
             _ => "legacy",
         };
-        eprintln!("[richos] ECS prepare-turn outcome={outcome} local_ms={}",
-            continuity_started.elapsed().as_millis());
         let mut records = String::new();
         match receipts {
             Ok(receipts) if receipts["receipts"].as_array().is_some_and(|rows|!rows.is_empty()) => {
@@ -4474,6 +4472,8 @@ impl NativeTurnScope {
             for_tools.actions_allowed = false;
             crate::ecs::write_scope(tools_path, &for_tools).map_err(|e| CognitionError::Io(e.to_string()))?;
         }
+        eprintln!("[richos] ECS prepare-turn outcome={outcome} local_ms={}",
+            continuity_started.elapsed().as_millis());
         if let (Some(path), Some(state_root),Some(instruction)) = (&self.assignments_scope, &profile_state,&user_instruction) {
             crate::assignment_tools::write_scope(path, &crate::assignment_tools::AssignmentToolScope {
                 version: 1,

@@ -10054,7 +10054,7 @@
     },
     "ecs/adapters/app.py#load": {
       "source": "ecs/adapters/app.py",
-      "sha256": "e4e401a1ed12170d64a23b07d5089fe6a8ef7ec27e8f14da8cc0194843c40288",
+      "sha256": "5a19fef0d598c550df6dcc5fde60536762c6313ebbffe6bdd72762c9ee098dfd",
       "evidence": "Module-load imports and initializers reviewed: stdlib/core/checkpoint/inspect, constants and definitions. No adapter entrypoint runs. Renewed 2026-10-14: prepare-turn invokes the existing current, bind, receipt-sync and brief handlers in the same process. New fixed private tests cover idempotent binding, concurrent seats, receipt failure and the final stale-binding fence; no additional dynamic import target.",
       "keys": [],
       "edges": [
@@ -13376,7 +13376,7 @@
     },
     "ecs/adapters/app.py#answer-operator-fixture": {
       "source": "ecs/adapters/app.py",
-      "sha256": "e4e401a1ed12170d64a23b07d5089fe6a8ef7ec27e8f14da8cc0194843c40288",
+      "sha256": "5a19fef0d598c550df6dcc5fde60536762c6313ebbffe6bdd72762c9ee098dfd",
       "evidence": "Only bind/checkpoint/observe(started)/hello/answer-complete/operator-complete from named completion fixtures. Git ancestry uses fixed git commands. Does not enter complete-obligation or verified-work, the only dynamic Mega Lander imports. No config lookup. Renewed 2026-10-14: prepare-turn invokes the existing current, bind, receipt-sync and brief handlers in the same process. New fixed private tests cover idempotent binding, concurrent seats, receipt failure and the final stale-binding fence; no additional dynamic import target.",
       "keys": [],
       "edges": [
@@ -14474,7 +14474,7 @@
     },
     "ecs/adapters/app.py#desktop-work-fixtures": {
       "source": "ecs/adapters/app.py",
-      "sha256": "e4e401a1ed12170d64a23b07d5089fe6a8ef7ec27e8f14da8cc0194843c40288",
+      "sha256": "5a19fef0d598c550df6dcc5fde60536762c6313ebbffe6bdd72762c9ee098dfd",
       "evidence": "Finite desktop fixture requests: bind/checkpoint/brief/inspect/observe/verified-work/observation-receipt/seats/release-seat/complete-obligation. Reached dynamic imports return to the bound Mega Lander app for receipt verification. Import-preview/import-apply/sync-loro-receipts are not invoked. Core uses private SQLite/JSON and fixed SQL; no config value is sourced. Renewed 2026-10-14: prepare-turn invokes the existing current, bind, receipt-sync and brief handlers in the same process. New fixed private tests cover idempotent binding, concurrent seats, receipt failure and the final stale-binding fence; no additional dynamic import target.",
       "keys": [],
       "edges": [
@@ -15831,7 +15831,7 @@
     },
     "ecs/adapters/app.py#discovery-fixtures": {
       "source": "ecs/adapters/app.py",
-      "sha256": "e4e401a1ed12170d64a23b07d5089fe6a8ef7ec27e8f14da8cc0194843c40288",
+      "sha256": "5a19fef0d598c550df6dcc5fde60536762c6313ebbffe6bdd72762c9ee098dfd",
       "keys": [],
       "edges": [
         {
@@ -17762,7 +17762,7 @@
     },
     "ecs/adapters/publication.py": {
       "source": "ecs/adapters/publication.py",
-      "sha256": "705894280e4f9db591de2a5f5f630227bba4b7010e54fe95892deb2ea50177ef",
+      "sha256": "48c156bbf2c048fddd2d53984e17d806cb76282ec7b818976ee91056b9f6645b",
       "keys": [],
       "edges": [],
       "evidence": "The imported module only defines the release reader. Tests inject fixed JSON or replace the reader before a request. Production reads bounded nightly assets and the channel history from GitHub."

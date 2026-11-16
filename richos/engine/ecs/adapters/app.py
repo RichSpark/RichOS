@@ -7,14 +7,10 @@ import json
 import os
 from pathlib import Path
 import re
-import shutil
-import subprocess
 import sqlite3
-import tempfile
 
 from ecs_core import (CEO_SEAT_PREFIX, EventStore, PERSON_ID, ScopeError, ValidationError,
                       ECSError, canonical_json, ceo_seat, is_ceo_row)
-from ecs_checkpoint import checkpoint, checkpoint_receipt
 from ecs_inspect import inspect_records
 from publication import publication_fact, served_version
 
@@ -64,6 +60,8 @@ _OPERATOR_ANSWER_LIMIT = 262144
 
 
 def _operator_git_verified(repo, branch, commit):
+    import subprocess
+
     if ".." in branch.split("/") or branch.endswith((".lock", "/")) or "//" in branch:
         raise ValidationError(f"the land in {repo} could not be confirmed: {branch!r} is not a branch name")
     env = {**os.environ, "GIT_OPTIONAL_LOCKS": "0", "LC_ALL": "C"}
@@ -320,6 +318,9 @@ def handover(store, request):
     if original[1] and original[1][2]:
         # SQLite can write or create the WAL index even when the database is
         # opened mode=ro. Read a disposable snapshot after a crash left a WAL.
+        import shutil
+        import tempfile
+
         with tempfile.TemporaryDirectory(prefix="richos-ecs-handover-") as directory:
             copy = Path(directory) / store.db_path.name
             shutil.copyfile(store.db_path, copy)
@@ -606,23 +607,23 @@ def execute(state_root, request, *, store=None):
         seat = seat_of(request)
         if seat is not None and seat != ceo_seat(required(scope, "thread_id")):
             raise ScopeError("turn preparation belongs to the conversation's own seat")
-        current = execute(root, {**request, "command": "current"}, store=store)["binding"]
+        active = store.current_context(seat or PERSON_ID)
+        current = binding_of(active) if active is not None else None
         if current is not None and all(current.get(k) == v for k, v in scope.items()) and set(scope) == set(BINDING_FIELDS) - {"revision"}:
             binding = current
         else:
             binding = bind(store, {**request,
                 "expected_revision": current["revision"] if current else None}, seat, previous=current)["binding"]
-        fields = {**request, "binding": binding}
-        receipts, receipt_error = None, None
-        try:
-            receipts = execute(root, {**fields, "command": "sync-loro-receipts"}, store=store)
-        except (ECSError, ValueError, TypeError, OSError, sqlite3.Error) as error:
-            # As on the old app path, failed receipt synchronization is disclosed
-            # in the brief; a bind or brief failure still refuses the turn.
-            receipt_error = str(error)
-        context = fenced(store, binding, seat_of(request))
+        context = fenced(store, binding, seat)
         if not is_ceo_row(context):
             raise ScopeError("turn preparation belongs to the conversation's own seat")
+        receipts, receipt_error = None, None
+        try:
+            from loro_receipts import synchronize
+            receipts = synchronize(store, binding, context["person_id"])
+        except (ECSError, ValueError, TypeError, OSError, sqlite3.Error) as error:
+            # The app discloses receipt errors but refuses invalid bindings and briefs.
+            receipt_error = str(error)
         brief = store.live_brief(context, budget_chars=budget, held_revision=request.get("held_brief_revision"))
         return {"binding": binding, **brief, "receipts": receipts, "receipt_error": receipt_error}
     if command == "import-preview":
@@ -675,6 +676,8 @@ def execute(state_root, request, *, store=None):
         return apply(root, request.get("envelope"), binding, seat=seat,
                      person_id=context["person_id"])
     elif command == "checkpoint":
+        from ecs_checkpoint import checkpoint, checkpoint_receipt
+
         document = request.get("checkpoint")
         if not isinstance(document, dict):
             raise ValidationError("checkpoint must be an object")
@@ -728,6 +731,8 @@ def execute(state_root, request, *, store=None):
             update_obligation(store, context, item, f"link:{turn}:{item_id}", reply_turn=turn)
         result = {"linked": True, "obligation_id": item_id, "reply_turn": turn}
     elif command == "receipt":
+        from ecs_checkpoint import checkpoint_receipt
+
         result = checkpoint_receipt(store, session=required(request, "session_id"),
                                     turn=required(request, "turn_id"), request_id=required(request, "request_id"),
                                     person_id=context["person_id"])
