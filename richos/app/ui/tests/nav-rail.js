@@ -226,8 +226,7 @@ async function loadRichFilesPage(sourcePath, { available, readyFirst }) {
   const trace = [];
   const timers = [];
   const frames = [];
-  const listeners = {};
-  const screen = { opening: true, home: true, now: 5000 };
+  const screen = { opening: true };
   let hooks;
   const nodes = {
     "nr-richfiles": { hidden: true },
@@ -237,15 +236,15 @@ async function loadRichFilesPage(sourcePath, { available, readyFirst }) {
     "richfiles-loading": { hidden: true },
   };
   const window = {
-    addEventListener(type, handler) { listeners[type] = handler; },
+    addEventListener() {},
+    removeEventListener() {},
     RichSplash: { isUp: () => screen.opening },
-    RichHome: { isOpen: () => screen.home },
     RichNavRail: { registerPage(_name, registered) { hooks = registered; }, showPage(name) { trace.push("show " + name); } },
     RichBridge: {
       async invoke(command, args) {
         if (command === "richfiles_pane_available") return available;
         if (command === "richfiles_request_pending") return false;
-        if (command === "richfiles_prepare_pane") { trace.push(args.pane === true ? "pane" : "library"); return; }
+        if (command === "richfiles_preload") { trace.push("library"); return; }
         if (command === "richfiles_place_pane") { trace.push("place visible=" + args.bounds.visible); return; }
         throw new Error("Unexpected command " + command);
       },
@@ -253,118 +252,50 @@ async function loadRichFilesPage(sourcePath, { available, readyFirst }) {
     },
   };
   if (readyFirst) window.__richosRichFilesReady = true;
-  class Observer { observe() {} }
+  class Observer { observe() {} disconnect() {} }
   vm.runInNewContext(fs.readFileSync(sourcePath, "utf8"), {
     window, innerWidth: 1000, innerHeight: 700,
-    document: { getElementById: (id) => nodes[id], body: { classList: { add() {} } } },
+    document: { getElementById: (id) => nodes[id], body: { classList: { add() {}, remove() {} } } },
     ResizeObserver: Observer, MutationObserver: Observer,
-    performance: { now: () => screen.now },
     requestAnimationFrame(callback) { frames.push(callback); return frames.length; },
     setTimeout(callback) { timers.push(callback); return timers.length; },
   }, { filename: sourcePath });
   await new Promise(setImmediate);
   // Time passes, then every waiting timer runs.
-  const later = async (ms) => {
-    screen.now += ms;
+  const later = async () => {
     for (const timer of timers.splice(0)) timer();
     await new Promise(setImmediate);
   };
-  const prepared = () => trace.filter((t) => t === "library" || t === "pane");
+  const prepared = () => trace.filter((t) => t === "library");
   // One frame is drawn: every waiting animation-frame callback runs.
   const frame = async () => {
     for (const callback of frames.splice(0)) callback();
     await new Promise(setImmediate);
   };
   const placed = () => trace.filter((t) => t.startsWith("place"));
-  return { prepared, placed, frame, loading: nodes["richfiles-loading"], screen, later, usable: () => window.RichFilesReady.start(), input: (type) => listeners[type]?.(), show: () => hooks.show() };
+  return { prepared, placed, frame, loading: nodes["richfiles-loading"], screen, later, usable: () => window.RichFilesReady.start(), show: () => hooks.show(), hide: () => hooks.hide() };
 }
 
-/// RichFiles is made ready before the first click on its icon (the CEO, 2026-11-15: "whatever
-/// indexing or loading needs to be done to make RichFiles appear instantly after nav rail button
-/// click can and should be done in those few seconds that we are almost always guaranteed to
-/// have before the user click on the RichFiles icon for the first time"). `richfiles-page.js`
-/// alone, against a shell that records what it is asked and a clock the check moves:
-///   the library is asked for once the app is usable and the opening screen has left, whatever
-///   else is on screen;
-///   the pane is asked for a moment after the home screen has left too;
-///   neither is asked for after RichFiles has been shown, or in a build without RichFiles.
-async function verifyRichFilesMadeReady(sourcePath) {
-  const load = (options) => loadRichFilesPage(sourcePath, options);
-  const first = await load({ available: true, readyFirst: false });
-  assertEqual(first.prepared(), [], "nothing is prepared before the app is usable");
+async function verifyRichFilesPreload(sourcePath) {
+  const first = await loadRichFilesPage(sourcePath, { available: true, readyFirst: false });
+  assertEqual(first.prepared(), [], "no library load before the app is usable");
   first.usable();
-  await first.later(3000);
-  assertEqual(first.prepared(), [], "nothing is prepared while the opening screen is up");
+  await first.later();
+  assertEqual(first.prepared(), [], "no library load while the opening is up");
   first.screen.opening = false;
-  await first.later(100);
-  assertEqual(first.prepared(), ["library"], "the library is asked for once the opening screen has left, on the home screen");
-  await first.later(5000);
-  assertEqual(first.prepared(), ["library"], "the pane is not built while the home screen is up: its picture moves");
-  first.screen.home = false;
-  await first.later(100);
-  await first.later(100);
-  assertEqual(first.prepared(), ["library"], "the pane is not built while the home screen is still fading out");
-  await first.later(300);
-  assertEqual(first.prepared(), ["library", "pane"], "the pane is built a moment after the home screen has left, with no click on the RichFiles icon");
+  await first.later();
   first.usable();
-  await first.later(5000);
-  assertEqual(first.prepared(), ["library", "pane"], "each is asked for once");
+  await first.later();
+  assertEqual(first.prepared(), ["library"], "the library loads once after the opening");
+  assertEqual(first.placed(), [], "no native pane is placed without a request");
 
-  // Back on the home screen before the moment has passed: it starts again when it is left again.
-  const back = await load({ available: true, readyFirst: true });
-  back.screen.opening = false;
-  back.screen.home = false;
-  await back.later(100);
-  back.screen.home = true;
-  await back.later(6000);
-  assertEqual(back.prepared(), ["library"], "the pane is not built on a home screen that came back");
-  back.screen.home = false;
-  await back.later(100);
-  await back.later(400);
-  assertEqual(back.prepared(), ["library", "pane"], "and is built a moment after it is left again");
-
-  // A click on the icon that comes first shows RichFiles as before; nothing is left to prepare.
-  const shown = await load({ available: true, readyFirst: true });
-  shown.screen.opening = false;
-  shown.screen.home = false;
-  shown.show();
-  await shown.later(5000);
-  assertEqual(shown.prepared(), [], "RichFiles that was shown first is not prepared afterwards");
-
-  // A build without RichFiles has nothing to prepare.
-  const none = await load({ available: false, readyFirst: true });
+  const none = await loadRichFilesPage(sourcePath, { available: false, readyFirst: true });
   none.screen.opening = false;
-  none.screen.home = false;
-  await none.later(5000);
-  assertEqual(none.prepared(), [], "a build without RichFiles prepares nothing");
-  return "the library once the opening screen has left; the pane a moment after the home screen has left, typing or not";
+  await none.later();
+  assertEqual(none.prepared(), [], "a build without RichFiles preloads nothing");
+  return "one library warmup after the opening and no background pane build";
 }
 
-/// TYPING DOES NOT PUT IT OFF (review rv-20261115T224451Z-bcd92e58-536e): five seconds on the home
-/// screen, then six seconds of typing in the chat that never pauses, then the click on the
-/// RichFiles icon. The pane was built under the typing, so the click finds RichFiles prepared.
-async function verifyRichFilesMadeReadyUnderTyping(sourcePath) {
-  const load = (options) => loadRichFilesPage(sourcePath, options);
-  const typing = await load({ available: true, readyFirst: true });
-  typing.screen.opening = false;
-  await typing.later(5000);
-  typing.screen.home = false;
-  for (let key = 0; key < 60; key++) {
-    typing.input("keydown");
-    await typing.later(100);
-    if (key === 9) assertEqual(typing.prepared(), ["library", "pane"], "one second into typing that never pauses, the pane is built");
-  }
-  typing.show();
-  assertEqual(typing.prepared(), ["library", "pane"], "after six seconds of typing the click finds RichFiles prepared, once");
-
-  return "prepared one second into six seconds of typing that never pauses; the click found it ready";
-}
-
-/// A CLICK NEVER LOOKS DEAD (the CEO, 2026-11-15: "when technically not possible to eliminate the
-/// wait, then at least show a basic FUCKING LOADING SCREEN!!!"). A click on the icon that comes
-/// before RichFiles is ready puts the loading line on screen at once, and the shell, whose loading
-/// and building holds the window still, is asked only after the line has been drawn. A click on
-/// RichFiles that is ready shows no loading line and asks the shell at once.
 async function verifyRichFilesEarlyClick(sourcePath) {
   const early = await loadRichFilesPage(sourcePath, { available: true, readyFirst: false });
   assertEqual([early.prepared(), early.loading.hidden], [[], true], "nothing is prepared yet and no loading line is up");
@@ -377,23 +308,26 @@ async function verifyRichFilesEarlyClick(sourcePath) {
   assertEqual(early.placed(), ["place visible=true"], "then the shell is asked");
   assertEqual(early.loading.hidden, true, "the loading line leaves when RichFiles is on screen");
 
-  const ready = await loadRichFilesPage(sourcePath, { available: true, readyFirst: true });
-  ready.screen.opening = false;
-  ready.screen.home = false;
-  await ready.later(100);
-  await ready.later(400);
-  assertEqual(ready.prepared(), ["library", "pane"], "RichFiles was made ready ahead of the click");
-  ready.show();
-  assertEqual(ready.loading.hidden, true, "RichFiles that is ready shows no loading line");
-  await ready.frame();
-  assertEqual(ready.placed(), ["place visible=true"], "and the shell is asked in the click's own frame");
-  return "an early click: the loading line at once, the shell asked two frames later; a click on ready RichFiles: no loading line";
+  early.hide();
+  await new Promise(setImmediate);
+  early.show();
+  assertEqual(early.loading.hidden, true, "reopening the existing pane needs no loading state");
+  await early.frame();
+  assertEqual(early.placed(), ["place visible=true", "place visible=false", "place visible=true"],
+    "reopening asks for placement without waiting for a loading frame");
+
+  const canceled = await loadRichFilesPage(sourcePath, { available: true, readyFirst: false });
+  canceled.show();
+  await canceled.frame();
+  canceled.hide();
+  for (let i = 0; i < 4; i++) await canceled.frame();
+  assertEqual(canceled.placed().filter((t) => t === "place visible=true"), [],
+    "leaving the page before the loading frame finishes does not build the pane");
+  return "first click paints feedback, closing during that paint cancels placement and reopening is immediate";
 }
 
-/// The same in the real shell: `main.js` tells the RichFiles page when the app is usable; on the
-/// home screen the page asks the shell for the library only, and for the pane once the home screen
-/// has been left, with no click on the RichFiles icon.
-async function verifyRichFilesMadeReadyInShell(browser) {
+/// Verify the startup callback and native command order in the full web UI.
+async function verifyRichFilesPreloadInShell(browser) {
   const context = await newContext(browser, "dark", {});
   const page = await context.newPage();
   try {
@@ -406,9 +340,9 @@ async function verifyRichFilesMadeReadyInShell(browser) {
           bridge.invoke = async (command, args, options) => {
             if (command === "richfiles_pane_available") return true;
             if (command === "richfiles_request_pending") return false;
-            if (command === "richfiles_prepare_pane" || command === "richfiles_place_pane") {
+            if (command === "richfiles_preload" || command === "richfiles_place_pane") {
               window.__richFilesAsked.push({
-                command, pane: args && typeof args.pane === "boolean" ? args.pane : null,
+                command,
                 visible: args && args.bounds ? args.bounds.visible : null,
                 openingUp: !!(window.RichSplash && window.RichSplash.isUp()),
                 homeUp: !!(window.RichHome && window.RichHome.isOpen()),
@@ -424,22 +358,17 @@ async function verifyRichFilesMadeReadyInShell(browser) {
     });
     await page.goto(APP);
     await shellSettled(page);
-    await page.waitForFunction(() => window.RichHome.isOpen() && window.__richFilesAsked.some((a) => a.command === "richfiles_prepare_pane"),
+    await page.waitForFunction(() => window.RichHome.isOpen() && window.__richFilesAsked.some((a) => a.command === "richfiles_preload"),
       null, { timeout: 30000 });
-    // Many times longer than the pane waits once the home screen has left.
-    // load-bound: an absence. Under any load the pane is not asked for on the home screen, so a slower host cannot fail this; the rule itself is proved on a clock the check above controls.
-    await page.waitForTimeout(4000);
     const onHome = await page.evaluate(() => window.__richFilesAsked);
-    assertEqual(onHome, [{ command: "richfiles_prepare_pane", pane: false, visible: null, openingUp: false, homeUp: true, pageHidden: true }],
-      "on the home screen the library is asked for, once, and the pane is not");
+    assertEqual(onHome, [{ command: "richfiles_preload", visible: null, openingUp: false, homeUp: true, pageHidden: true }],
+      "on the home screen the library is asked for once and the pane remains hidden");
     await leaveHome(page);
-    await page.waitForFunction(() => window.__richFilesAsked.some((a) => a.pane === true), null, { timeout: 30000 });
-    const asked = await page.evaluate(() => window.__richFilesAsked);
-    assertEqual(asked.filter((a) => a.pane === true),
-      [{ command: "richfiles_prepare_pane", pane: true, visible: null, openingUp: false, homeUp: false, pageHidden: true }],
-      "the pane is asked for once, with the opening and home screens gone and the RichFiles page still hidden");
-    assertEqual(asked.filter((a) => a.visible === true), [], "nothing showed RichFiles: its icon was not clicked");
-    return "the library asked for on the home screen, the pane once after it was left, the RichFiles page hidden";
+    await page.locator("#nr-richfiles").click();
+    await page.waitForFunction(() => window.__richFilesAsked.some((a) => a.visible === true), null, { timeout: 30000 });
+    const commands = await page.evaluate(() => window.__richFilesAsked.map((a) => a.command));
+    assertEqual(commands, ["richfiles_preload", "richfiles_place_pane"], "only the user click makes the native pane visible");
+    return "the full shell preloads on Home and opens the native pane on request";
   } finally {
     await context.close();
   }
@@ -449,16 +378,14 @@ async function main() {
   const run = createRun("The navigation rail (round 58, version A): items, selection, the moved square and initials, contrast");
   await run.check("RichFiles accepts a cold dock request queued while its listener starts", () =>
     verifyRichFilesColdDock(path.join(UI_DIR, "richfiles-page.js")));
-  await run.check("RichFiles is made ready before the first click: a moment after the home screen has left", () =>
-    verifyRichFilesMadeReady(path.join(UI_DIR, "richfiles-page.js")));
+  await run.check("RichFiles warms the library once after launch without building the pane", () =>
+    verifyRichFilesPreload(path.join(UI_DIR, "richfiles-page.js")));
   await run.check("RichFiles: a click before it is ready shows the loading line at once, and the shell is asked after it is drawn", () =>
     verifyRichFilesEarlyClick(path.join(UI_DIR, "richfiles-page.js")));
-  await run.check("RichFiles is made ready under typing that never pauses: six seconds of it, then the click", () =>
-    verifyRichFilesMadeReadyUnderTyping(path.join(UI_DIR, "richfiles-page.js")));
   const { webkit } = loadPlaywright();
   const browser = await webkit.launch();
   const report = [];
-  await run.check("RichFiles is made ready before the first click, in the real shell", () => verifyRichFilesMadeReadyInShell(browser));
+  await run.check("The full shell warms RichFiles and opens the pane on request", () => verifyRichFilesPreloadInShell(browser));
 
   for (const theme of ["dark", "light"]) {
     const context = await newContext(browser, theme, { preset: { dictation: true } });
@@ -818,7 +745,7 @@ async function main() {
                 if (command === "richfiles_pane_available") return true;
                 if (command === "richfiles_request_pending") return false;
                 // RichFiles is never ready here, and never arrives: the loading line stays to be looked at.
-                if (command === "richfiles_prepare_pane") return new Promise(() => {});
+                if (command === "richfiles_preload") return new Promise(() => {});
                 if (command === "richfiles_place_pane") {
                   if (!args.bounds.visible) return;
                   window.__richFilesPlaced.push({ loadingUp: !document.getElementById("richfiles-loading").hidden });

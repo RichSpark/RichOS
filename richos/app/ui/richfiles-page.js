@@ -16,7 +16,7 @@
   let waiting = false;
   let again = false;
   let showRequested = false;
-  // RichFiles' pane exists: it was built ahead of the click, or a click has shown it.
+  // The native pane has been shown before and can be reused.
   let ready = false;
   // Two frames on: what the page changed has been drawn.
   const painted = () => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)));
@@ -46,18 +46,19 @@
 
   async function refresh() {
     if (waiting) { again = true; return; }
-    const next = bounds();
-    const key = JSON.stringify(next);
+    let next = bounds();
+    let key = JSON.stringify(next);
     if (key === last && (!next.visible || !showRequested)) return;
     waiting = true;
     try {
       if (key !== last) {
-        // A CLICK NEVER LOOKS DEAD (the CEO, 2026-11-15: "when technically not possible to
-        // eliminate the wait, then at least show a basic FUCKING LOADING SCREEN!!!"). A click that
-        // comes before RichFiles is ready makes the shell load and build it, which holds the
-        // window still until it is done. So the loading line (`show`) is drawn first, and only
-        // then is the shell asked.
-        if (next.visible && !ready) await painted();
+        // Paint the loading state before AppKit can spend time building the first view.
+        if (next.visible && !ready) {
+          await painted();
+          next = bounds();
+          if (!next.visible) { again = true; return; }
+          key = JSON.stringify(next);
+        }
         await bridge.invoke("richfiles_place_pane", { bounds: next });
         last = key;
         if (next.visible) {
@@ -85,7 +86,7 @@
   const size = new ResizeObserver(schedule);
   const overlays = new MutationObserver(schedule);
   function show() {
-    prepared = true; // showing it builds it: nothing is left to make ready
+    preloaded = true; // placement also loads the library if needed
     loading.hidden = ready;
     page.hidden = false;
     document.body.classList.add("page-open");
@@ -113,49 +114,20 @@
     schedule();
   }
 
-  // RICHFILES IS MADE READY BEFORE THE FIRST CLICK ON ITS ICON. The CEO, 2026-11-15: "whatever
-  // indexing or loading needs to be done to make RichFiles appear instantly after nav rail button
-  // click can and should be done in those few seconds that we are almost always guaranteed to
-  // have before the user click on the RichFiles icon for the first time."
-  //
-  // The first click used to load RichFiles and build its pane while the window stood still. The
-  // shell now does both ahead of it (`richfiles_prepare_pane`), after `main.js` says the app is
-  // usable, so none of it is on the launch path, and in two steps:
-  //
-  // THE LIBRARY, as soon as the opening screen has left. It loads on a background thread and
-  // holds nothing up, so it waits for nothing else.
-  //
-  // THE PANE, which holds the window still for a fraction of a second while it is built (the
-  // same work the first click used to wait for). So it waits for the home screen to leave as
-  // well, since that picture moves and would be seen to stop, and is built SETTLE_MS after it
-  // has: the home screen's own fade is over, nothing on the conversation screen is moving, and
-  // a hand that pressed its way here has not reached the keys yet. It does not wait for typing
-  // to stop, so typing cannot put it off. The rail is only on screen once both screens have
-  // left, so this is always ahead of the first possible click on the icon. A click that comes
-  // first is served as before.
-  const SETTLE_MS = 300;
+  // Warm the library once the opening is gone. The SwiftUI view must be built on the
+  // window thread; doing that in advance can freeze chat even when RichFiles is never opened.
   let usable = false;
   let offered = false;
-  let loaded = false;
-  let prepared = false;
-  let clear = null; // when the opening screen and the home screen were first seen gone
+  let preloaded = false;
+  let openingTimer = 0;
   function prepare() {
-    if (prepared || !usable || !offered) return;
-    if (!window.RichSplash?.isUp?.()) {
-      if (!loaded) {
-        loaded = true;
-        bridge.invoke("richfiles_prepare_pane", { pane: false }).catch(() => {});
-      }
-      const now = performance.now();
-      if (window.RichHome?.isOpen?.()) clear = null;
-      else if (clear === null) clear = now;
-      if (clear !== null && now - clear >= SETTLE_MS) {
-        prepared = true;
-        bridge.invoke("richfiles_prepare_pane", { pane: true }).then(() => { ready = true; }).catch(() => {});
-        return;
-      }
+    if (preloaded || !usable || !offered) return;
+    if (window.RichSplash?.isUp?.()) {
+      if (!openingTimer) openingTimer = setTimeout(() => { openingTimer = 0; prepare(); }, 100);
+      return;
     }
-    setTimeout(prepare, 100);
+    preloaded = true;
+    bridge.invoke("richfiles_preload", {}).catch(() => {});
   }
   window.RichFilesReady = { start() { usable = true; prepare(); } };
   if (window.__richosRichFilesReady) window.RichFilesReady.start();

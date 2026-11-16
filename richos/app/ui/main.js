@@ -11414,8 +11414,7 @@ async function init() {
   // itself when it does.
   if (window.RichResources) window.RichResources.start();
   else window.__richosResourcesReady = true;
-  // RichFiles is loaded and its pane built ahead of the first click on its rail icon only from
-  // here (`richfiles-page.js`), so that work is never on the launch path either.
+  // Warm the RichFiles library after the app is usable. Its native view opens only on request.
   if (window.RichFilesReady) window.RichFilesReady.start();
   else window.__richosRichFilesReady = true;
   // The correction badge, read at launch and LAST. A proposal the CEO has not answered

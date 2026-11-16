@@ -80,13 +80,12 @@ late = dict(record, action={'kind': 'native-click', 'before_ns': 10 * MS, 'after
 check('a capture with no complete frame before the click is refused',
       'no frame was complete before the click' in refusal(late, {n: files for n in range(40)}))
 
-# The app's own line about getting RichFiles ready ahead of a click.
-line = ('[richos] launch: fresh\n[richos] RichFiles ready before its first click: library 412 ms on a background thread, '
-        'pane 388 ms on the main thread, asked 5210 ms and ready 6015 ms after the process started\n')
-check('the app\'s line is read into its four times',
-      walk.ready_line(line) == {'library_ms': 412, 'pane_ms': 388, 'asked_ms_after_start': 5210, 'ready_ms_after_start': 6015},
-      walk.ready_line(line))
-check('a build that writes no such line reads as None, never as zeros', walk.ready_line('[richos] launch: fresh\n') is None)
+line = '[richos] RichFiles library: loaded in 412 ms at 6015 ms after process start'
+check('the library log states its outcome, duration and completion time',
+      walk.library_line(line) == {'outcome': 'loaded', 'duration_ms': 412, 'finished_ms_after_start': 6015})
+check('an unavailable library does not read as loaded',
+      walk.library_line(line.replace('loaded', 'unavailable'))['outcome'] == 'unavailable')
+check('a build that writes no such line reads as None', walk.library_line('[richos] launch: fresh') is None)
 
 # What typing cost: the longest time the window did not change while keys were arriving.
 shots = []

@@ -35,20 +35,18 @@ STEPS (in the guest, never on the host's screen, CEO section 65; the guest has n
                  show a basic FUCKING LOADING SCREEN!!!"): the app started again and, seconds in, before it
                  has said it is usable, the guest presses Talk to Rich and clicks the RichFiles icon 0.4 s
                  later. Reported: the click to the loading line on screen, and the click to RichFiles on
-                 screen. It fails when RichFiles had been made ready before the click after all (then it
-                 was not an early click) or when no frame shows the loading line
+                 screen. It fails when no frame shows the loading line
   home-still     (optional) what getting RichFiles ready costs the start: the app quit from its own menu and
                  started again, and the home screen's moving picture watched from outside for --still-seconds
                  (frame-rate.swift, in the guest: the picture's frames in each second and the longest pause
                  between two of them). The seconds are listed by when they began after the process started,
-                 beside the app's own line saying when it loaded RichFiles and built its pane. Run it on the
+                 beside the app's own line saying when its RichFiles library load ended. Run it on the
                  build before the change too: the pauses are the result, not a pass mark.
 
 Each timed step reports the click-to-visible interval as two bounds in milliseconds: RichFiles was not on
 screen in the frame that began `low` ms after the click and was on screen in the frame that ended `high`
 ms after it. `high` is the number to quote. `--limit-ms N` fails a timed step whose `high` is over N.
-Each also reads the app's own line about getting RichFiles ready ahead of a click (how long its library
-and its pane took, and when after the process started) and says whether that was before the click.
+Each also reads the app's own line about getting RichFiles ready ahead of a click (how long the library load took and when it ended) and says whether that was before the click.
 `--diagnose sample` also samples the app's process across the first click (`sample`, saved as
 first-open.sample.txt); `--diagnose disk` records every read from the guest's disk across it (`fs_usage`,
 first-open.disk.txt). Both keep the guest's system log for those seconds. A sampled click is slower, so its
@@ -73,10 +71,8 @@ sys.path.insert(0, str(QA / 'lib'))
 STEPS = ['identity', 'first-run', 'first-open', 'again', 'after-restart']
 OPTIONAL = ['after-purge', 'typed-open', 'early-open', 'home-still']
 TIMED = ('first-open', 'again', 'after-restart', 'after-purge', 'typed-open', 'early-open')
-# The app's own line when it has loaded RichFiles and built its pane ahead of a click
-# (src-tauri/src/richfiles_pane.rs); a build from before that writes none.
-READY = re.compile(r'RichFiles ready before its first click: library (\d+) ms on a background thread, '
-                   r'pane (\d+) ms on the main thread(?:, asked (\d+) ms and ready (\d+) ms after the process started)?')
+# The load outcome from src-tauri/src/richfiles_pane.rs. Older builds write none.
+LIBRARY = re.compile(r'RichFiles library: (loaded|unavailable) in (\d+) ms at (\d+) ms after process start')
 # RichFiles' own words, which no other screen of the app shows: its sidebar's headings and first
 # row, its Workspaces button and the Details view's date column
 # (tools/richfiles/Sources/RichFiles/BrowserView.swift). Several, and "This Mac" with or without its
@@ -115,13 +111,13 @@ def visible_bounds(record, readings, words=WORDS):
             'frames': len(frames), 'click_window_ms': round((action['after_ns'] - action['before_ns']) / 1e6, 1)}
 
 
-def ready_line(log):
-    """What the app's log says about getting RichFiles ready ahead of a click, or None."""
-    found = READY.search(log or '')
-    if not found:
+def library_line(log):
+    """The app's own library load outcome and duration, or None."""
+    found = LIBRARY.search(log or '')
+    if found is None:
         return None
-    keys = ('library_ms', 'pane_ms', 'asked_ms_after_start', 'ready_ms_after_start')
-    return {k: int(v) for k, v in zip(keys, found.groups()) if v is not None}
+    outcome, duration, finished = found.groups()
+    return {'outcome': outcome, 'duration_ms': int(duration), 'finished_ms_after_start': int(finished)}
 
 
 def longest_still(frames, since, until):
@@ -329,16 +325,16 @@ def main():
                 ev['loading_line'] = {'low_ms': line['low_ms'], 'high_ms': line['high_ms']}
             except ValueError:
                 ev['loading_line'] = None
-            # Whether the app had RichFiles ready when the click came, by its own line and the
+            # Whether the library was loaded when the click came, by its own line and the
             # click's moment on the same clock (the guest's), both counted from the process's start.
             log = self.app_log()
             born = re.search(r'process started at (\d+)', log)
             clicked = re.search(r'^t_action_before\t([0-9.]+)', (local / 'meta.tsv').read_text(), re.M)
-            ev['made_ready'] = ready_line(log)
+            ev['library_load'] = library_line(log)
             if born and clicked:
                 ev['click_ms_after_start'] = round(float(clicked.group(1)) - int(born.group(1)))
-            ready_at = (ev['made_ready'] or {}).get('ready_ms_after_start')
-            ev['ready_before_the_click'] = (ready_at < ev['click_ms_after_start']
+            ready_at = (ev['library_load'] or {}).get('finished_ms_after_start')
+            ev['library_loaded_before_click'] = (ev['library_load']['outcome'] == 'loaded' and ready_at < ev['click_ms_after_start']
                                             if ready_at is not None and 'click_ms_after_start' in ev else None)
             if talk:
                 # What was typed, on the process's own clock, and what the typing cost: the longest
@@ -357,8 +353,8 @@ def main():
                                'longest_still_while_typing': still and {'ms': still['ms'], 'began_ms_after_start': still['began_ms'] - start}}
             self.facts[label] = ev
             self.save()
-            print('%s: RichFiles on screen between %.0f and %.0f ms after the click, %s ms after the app started; made ready: %s%s'
-                  % (label, ev['low_ms'], ev['high_ms'], ev.get('click_ms_after_start'), json.dumps(ev['made_ready']),
+            print('%s: RichFiles on screen between %.0f and %.0f ms after the click, %s ms after the app started; library: %s%s'
+                  % (label, ev['low_ms'], ev['high_ms'], ev.get('click_ms_after_start'), json.dumps(ev['library_load']),
                      '; typed: ' + json.dumps(ev['typed']) if talk else ''), flush=True)
             if ev['loading_line']:
                 print('%s: the loading line on screen between %.0f and %.0f ms after the click'
@@ -401,8 +397,6 @@ def main():
             ev = self.timed_open('early-open', icon=icon, typed=0,
                                  talk=(round(talk['x'] + talk['w'] / 2), round(talk['y'] + talk['h'] / 2)))
             ev['relaunched_pid'] = started.get('pid')
-            if ev.get('ready_before_the_click'):
-                raise StepFailed('not an early click: RichFiles had been made ready before it: ' + json.dumps(ev))
             if not ev['loading_line']:
                 raise StepFailed('no frame shows the loading line between the click and RichFiles: ' + json.dumps(ev))
             return ev
@@ -481,13 +475,13 @@ def main():
                         'pause_began_ms': round(r['longest_gap_began_ms'] - born) if r['longest_gap_began_ms'] else None}
                        for r in report['samples']]
             ev = {'launch': kind.group(1) if kind else None, 'relaunched_pid': started.get('pid'),
-                  'made_ready': ready_line(log), 'seconds': seconds,
+                  'made_ready': library_line(log), 'seconds': seconds,
                   'longest_pause': max(seconds, key=lambda r: r['longest_pause_ms'])}
             self.facts['home-still'] = ev
             self.save()
             print('home-still: a %s start; made ready: %s; the longest pause of the picture: %d ms, begun %s ms after the start; '
                   'by second (from ms: frames, longest pause): %s' % (
-                      ev['launch'], json.dumps(ev['made_ready']), ev['longest_pause']['longest_pause_ms'],
+                      ev['launch'], json.dumps(ev['library_load']), ev['longest_pause']['longest_pause_ms'],
                       ev['longest_pause']['pause_began_ms'],
                       ', '.join('%d: %d, %d' % (r['from_ms'], r['picture_frames'], r['longest_pause_ms']) for r in seconds)),
                   flush=True)
