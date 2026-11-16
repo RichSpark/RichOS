@@ -1558,7 +1558,77 @@ def existing_record(window, repos):
 
 
 # An explicit identifier in the same claim supplies a scoped lookup.
-ECS_ITEM_ID = re.compile(r"\bECS item `([A-Za-z0-9][A-Za-z0-9_.:@/-]{0,255})`", re.I)
+_ECS_ID = r"`[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,255}`"
+_ECS_SEPARATOR = r"(?:,\s*(?:and\b)?|\band\b|[&/])"
+ECS_ITEM_ID = re.compile(rf"\bECS items? ({_ECS_ID}(?:\s*{_ECS_SEPARATOR}\s*{_ECS_ID})*)", re.I)
+
+
+def ecs_claim_windows(raw):
+    """Keep each ECS citation with the save claim that names it."""
+    claims = {}
+    for line in FENCE_RE.sub(" ", raw).splitlines():
+        if not clean_keep_lists(line).strip():
+            continue
+        marker = LIST_LINE_RE.match(line)
+        if marker:
+            line = line[marker.end():]
+        line = SQUOTE_RE.sub(" ", DQUOTE_RE.sub(" ", line))
+        for part in SENTENCE_SPLIT_RE.split(line):
+            key = clean_keep_lists(part).strip()[:300]
+            if key:
+                claims.setdefault(key, []).append(part)
+    return claims
+
+
+def terminal_ecs_lookup(payload):
+    """Read the terminal's scoped checkpoint and live item from its existing journal."""
+    from contextlib import closing
+    from pathlib import Path
+    import sqlite3
+
+    session = payload.get("session_id")
+    if not isinstance(session, str) or not session:
+        return None
+    override = os.environ.get("ECS_HOME")
+    root = Path(override).expanduser().resolve() if override else (
+        Path.home() / "Library" / "Application Support" / "RichOS" / "ecs" / "v1"
+    )
+    path = root / "ecs.sqlite3"
+    if not path.is_file():
+        return None
+
+    def backed(item_id):
+        try:
+            with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, timeout=0.5)) as conn:
+                row = conn.execute(
+                    "SELECT i.source_ref, c.turn_id, c.entity_id, c.thread_id FROM ecs_continuity_items i "
+                    "JOIN ecs_active_context c ON c.person_id=i.person_id AND c.entity_id=i.entity_id AND c.thread_id=i.thread_id "
+                    "WHERE i.item_id=? AND c.session_id=? AND i.item_type IN ('commitment','open_loop') "
+                    "AND i.status IN ('active','accepted','pending','blocked') AND length(trim(i.next_action))>0 "
+                    "AND (i.visibility='worker' OR c.audience='ceo' OR (i.visibility='rich' AND c.audience='rich'))",
+                    (item_id, session),
+                ).fetchone()
+                if row is None or not row[1]:
+                    return False
+                source, turn, entity, thread = row
+                prefix = f"structured-checkpoint:{session}:{turn}:"
+                if not source.startswith(prefix):
+                    return False
+                event = conn.execute(
+                    "SELECT payload_json FROM ecs_events WHERE idempotency_key=? AND entity_id=? AND thread_id=? "
+                    "AND session_id=? AND source_ref=? AND event_type='turn.checkpointed'",
+                    (f"checkpoint:{session}:{turn}:{source[len(prefix):]}", entity, thread, session, source),
+                ).fetchone()
+            if event is None:
+                return False
+            receipt = json.loads(event[0])
+            return receipt.get("rejected") == 0 and any(
+                row.get("record_id") == item_id and row.get("status") != "rejected"
+                for row in receipt.get("outcomes") or [])
+        except (OSError, sqlite3.Error, KeyError, TypeError, ValueError):
+            return False
+
+    return backed
 
 
 def ecs_record_lookup(payload):
@@ -1568,7 +1638,7 @@ def ecs_record_lookup(payload):
 
     scope_path = os.environ.get("RICHOS_APP_SCOPE")
     if not scope_path:
-        return None
+        return terminal_ecs_lookup(payload)
     path = Path(scope_path)
     try:
         if not path.is_absolute() or path.stat().st_size > 256 * 1024:
@@ -1605,6 +1675,8 @@ def ecs_record_lookup(payload):
                 return False
             prefix = "structured-checkpoint:" + binding["session_id"] + ":" + binding["turn_id"] + ":"
             source = item.get("source_ref") or ""
+            if not source.startswith(prefix) and item.get("condition_json"):
+                source = json.loads(item["condition_json"])["source_ref"]
             if not source.startswith(prefix):
                 return False
             receipt = lookup("receipt", session_id=binding["session_id"], turn_id=binding["turn_id"],
@@ -1663,12 +1735,15 @@ def judge_record_claims(claims, writes, raw, repos=(), cited_out=None, ecs_looku
             rest = re.sub(re.escape(p) + "|" + re.escape(os.path.basename(p)), " ", rest, flags=re.I)
         return not LOCATION_RE.search(rest)
 
+    ecs_windows = ecs_claim_windows(raw) if ecs_lookup else {}
     for kind, sentence in claims:
         if (ecs_lookup and not RULE_NOUN_RE.search(sentence)
                 and not NOTES_POINTER_RE.search(sentence) and not PRIVATE_NOTES_RE.search(sentence)):
-            claim = raw_window(raw, sentence)
-            ids = ECS_ITEM_ID.findall(claim)
-            if (ids and not LOCATION_RE.search(ECS_ITEM_ID.sub("", claim))
+            windows = ecs_windows.get(sentence, [])
+            ids = [value[1:-1] for claim in windows for group in ECS_ITEM_ID.findall(claim)
+                   for value in re.findall(_ECS_ID, group)]
+            if (ids and all(ECS_ITEM_ID.search(claim) and not LOCATION_RE.search(ECS_ITEM_ID.sub("", claim))
+                            for claim in windows)
                     and all(ecs_lookup(item_id) for item_id in dict.fromkeys(ids))):
                 continue
         if app_backed(sentence):
