@@ -2759,7 +2759,7 @@ impl NativeClient {
         // blocks went with it, so the next input carries them in full again.
         if ty == "system" && (msg.get("subtype").and_then(Value::as_str) == Some("compact_boundary")
             || crate::machinery::compaction_phase(&msg) == Some(crate::machinery::CompactionPhase::MadeRoom)) {
-            state.lock().unwrap().given_context.forget();
+            state.lock().unwrap().given_context.compacted();
         }
         // Every assistant message's tokens, whichever turn it belongs to and whoever said it
         // (a helper's nested frames too, a background helper's included), and from each
@@ -4363,6 +4363,7 @@ struct PreparedContext {
     continuity: String,
     brief_revision: Option<String>,
     records: String,
+    standing_instructions: Option<String>,
     current_recording: bool,
 }
 
@@ -4416,7 +4417,10 @@ impl NativeTurnScope {
         let Some((bridge, path)) = &self.continuity else {
             return Ok(None);
         };
-        let held = self.reader_state.lock().unwrap().given_context.brief_revision().map(str::to_owned);
+        let (held, needs_standing_instructions) = {
+            let state = self.reader_state.lock().unwrap();
+            (state.given_context.brief_revision().map(str::to_owned), state.given_context.needs_standing_instructions())
+        };
         let crate::ecs::PreparedTurn { binding: scope, brief, brief_revision, receipts } = if self.prepare_turn_supported {
             bridge.prepare_turn(binding.entity_id().as_str(), binding.thread_id(), &self.session_id, turn,
                 seat.as_deref(), held.as_deref())
@@ -4496,7 +4500,13 @@ impl NativeTurnScope {
                 .map_err(CognitionError::Io)?.into_iter().filter(|q|q.state==crate::questions::State::Open || !q.delivered).map(|q|q.public_value()).collect();
             if !questions.is_empty() { records.push_str(&json!({"event":"question_records","questions":questions}).to_string()); }
         }
-        Ok(Some(PreparedContext { continuity: brief, brief_revision, records, current_recording }))
+        let standing_instructions = self.engine_profile.as_ref().and_then(|profile| profile.user.folder.as_ref())
+            .filter(|_| needs_standing_instructions).and_then(|folder| match crate::your_instructions::read(folder) {
+                Ok(text) => Some(format!("\nThe following are the user's current standing instructions. This copy replaces any earlier copy of their instructions.\n{}\n",
+                    json!({"standing_instructions": text}))),
+                Err(error) => { eprintln!("[richos] standing instructions could not be refreshed: {error}"); None }
+            });
+        Ok(Some(PreparedContext { continuity: brief, brief_revision, records, standing_instructions, current_recording }))
     }
 }
 
@@ -5120,6 +5130,9 @@ impl Cognition for NativeCognition {
             let mut context_data={
                 let mut state=reader_state.lock().unwrap();
                 let mut context=state.given_context.continuity(prepared.brief_revision, prepared.continuity);
+                if let Some(instructions) = &prepared.standing_instructions {
+                    context.push_str(&state.given_context.standing_instructions(instructions));
+                }
                 context.push_str(&state.given_context.when_changed("records",&prepared.records));
                 if let Some(company)=&company { context.push_str(&state.given_context.when_changed("company material from the host",company)); }
                 context
@@ -6048,10 +6061,15 @@ while True:
         ask("first-question-marker");
         // The question scope's grandparent is the store's folder's parent (`prepare_question_scope`).
         std::fs::create_dir_all(root.join("scopes")).unwrap();
+        let central = root.join("central");
+        crate::your_instructions::save(&central, "Old rule marker.").unwrap();
         let start=|scope:&str| {
             let mut cognition=NativeCognition::start(&script,root,&doctrine_fixture(),&skills_fixture()).unwrap();
             let bridge=crate::ecs::EcsBridge::new(&python,&engine,&root.join("ecs-state")).unwrap();
             cognition.continuity=Some((bridge,root.join(scope)));
+            let mut profile = fixture_profile(root);
+            profile.user.folder = Some(central.clone());
+            cognition.engine_profile = Some(profile);
             cognition.client.reader_state.lock().unwrap().question_scope=Some(root.join("scopes").join(format!("questions-{scope}")));
             cognition
         };
@@ -6102,11 +6120,14 @@ while True:
 
         // The provider compacts while taking this notice in: its own copy and every earlier one
         // are summarized away, so the next input carries the full blocks again, once.
+        crate::your_instructions::save(&central, "Current rule marker.").unwrap();
         turn(&mut rich,"notice-that-compacts",crate::ledger::Source::Internal);
         let after=turn(&mut rich,"after-compaction",crate::ledger::Source::Internal);
         assert!(full(&after),"the first input after a compaction lacks the full blocks: {after}");
+        assert!(after.contains("Current rule marker.") && !after.contains("Old rule marker."));
         let next=turn(&mut rich,"next-notice",crate::ledger::Source::Internal);
         assert!(none(&next),"host context was given twice after one compaction: {next}");
+        assert!(!next.contains("Current rule marker."));
 
         // A new session (a rotation, or the app started again) holds no earlier copy.
         drop(rich);

@@ -11313,9 +11313,8 @@ fn your_instructions_read() -> Result<serde_json::Value, String> {
     Ok(serde_json::json!({"path": path, "shown": shown, "exists": path.exists(), "text": richos_core::your_instructions::read(&folder)?}))
 }
 
-/// The sheet saves the whole text as the user types. It applies from the user's next new
-/// conversation: an open one keeps the instructions it started with (the CEO's default,
-/// 2026-10-21).
+/// The sheet saves the whole text as the user types. A new conversation and Rich's next
+/// prompt after compaction read the current file.
 #[richos_command::command]
 fn your_instructions_save(text: String) -> Result<(), String> {
     let folder = richos_core::company::install_central_root().ok_or("there is no home folder")?;

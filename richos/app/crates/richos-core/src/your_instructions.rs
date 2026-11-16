@@ -5,11 +5,8 @@
 //!
 //! The file is `<central folder>/instructions.md` ([`crate::user_settings::INSTRUCTIONS`]), the
 //! one `user_settings::standing_plugin` appends in full to Rich's and Stu's definitions at every
-//! session start. Claude Code keeps the instructions a conversation started with, so an edit is
-//! followed from the user's next NEW conversation, not in one already open (measured; the CEO's
-//! "OK" of 2026-10-21 12:17:30Z to that default, rather than reloading open conversations). This
-//! module never decides what Rich does with the words: it reads and writes the file he already
-//! follows, and nothing else.
+//! session start. Rich's existing prompt hook refreshes the authorized file after compaction.
+//! This module handles the file and its save receipts.
 //!
 //! Three writers, one file:
 //!
@@ -237,7 +234,7 @@ pub fn items(root: &Path, entity_id: &str, thread_id: &str) -> Vec<Value> {
 /// The tool's entry in the onboarding server's list.
 pub fn tool() -> Value {
     json!({"name": TOOL,
-        "description": "Save how the user wants you to work: their standing instructions, which you and Stu follow in full in every company, starting with the user's next new conversation. Each rule is one short line in the user's own words. The rules are added at the end of the user's instructions file, after everything already in it and the user sees them as a card under your reply. Use it for the interview's question about how they want you to work and whenever they give you a new standing instruction. Never use Write, Edit or a shell for this file.",
+        "description": "Save how the user wants you to work: their standing instructions, which you and Stu follow in full in every company, starting with the user's next new conversation. Rich also refreshes these instructions after the current conversation compacts. Each rule is one short line in the user's own words. The rules are added at the end of the user's instructions file, after everything already in it and the user sees them as a card under your reply. Use it for the interview's question about how they want you to work and whenever they give you a new standing instruction. Never use Write, Edit or a shell for this file.",
         "inputSchema": {"type": "object", "properties": {
             "rules": {"type": "array", "minItems": 1, "maxItems": MAX_RULES,
                 "items": {"type": "string", "minLength": 1, "maxLength": MAX_RULE_CHARS},

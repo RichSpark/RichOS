@@ -5,12 +5,15 @@
 
 use std::collections::HashMap;
 
+const STANDING_INSTRUCTIONS: &str = "standing-instructions";
+
 /// The blocks given in full on this session since it started or last compacted, by name.
 #[derive(Debug, Default)]
 pub struct GivenContext {
     given: HashMap<String, String>,
     brief_revision: Option<String>,
     pending_brief_revision: Option<String>,
+    compacted: bool,
 }
 
 impl GivenContext {
@@ -35,7 +38,21 @@ impl GivenContext {
         } else {
             self.brief_revision = None;
             self.pending_brief_revision = None;
+            self.given.remove(STANDING_INSTRUCTIONS);
         }
+    }
+
+    pub fn compacted(&mut self) {
+        self.forget();
+        self.compacted = true;
+    }
+
+    pub fn needs_standing_instructions(&self) -> bool {
+        self.compacted && !self.given.contains_key(STANDING_INSTRUCTIONS)
+    }
+
+    pub fn standing_instructions(&mut self, context: &str) -> String {
+        self.once(STANDING_INSTRUCTIONS, context)
     }
 
     /// The block `name` the first time on this session (or after a compaction), and nothing
