@@ -86,6 +86,9 @@ pub fn answer(
         surface,
         (state.control.take_input_order(), AnswerOrigin::Direct),
     )?;
+    if let Err(error) = crate::peer_messages::wake_waiting(&state.data_dir.join("engine-state")) {
+        eprintln!("[richos] waiting-work check could not be requested: {error}");
+    }
     state.swearmeter.publish_current();
     if let Some(q) = &result.question {
         result.question = store.waiting_for_turn(
