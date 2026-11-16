@@ -333,7 +333,7 @@ print(json.dumps({"type":"result","api_error_status":429,"is_error":True}), flus
             runtime:crate::runtime::EngineRuntime {root:PathBuf::from("/usr"),python:PathBuf::from("/usr/bin/python3"),
                 node:PathBuf::from("/usr/bin/false"),git:PathBuf::from("/usr/bin/git"),versions:Default::default()},
             work_scope:None, search_binding:None, codex_root:root.join("codex-coordination"),
-            claude_account:None,token_sink:None,speech_model:None,meetings_corpus:None,live_meeting_reader:None,
+            claude_account:None,token_sink:None,chat_readings:None,speech_model:None,meetings_corpus:None,live_meeting_reader:None,
             lease_models:Default::default(),machine_settings:Default::default(),
         };
         (root,bin,profile,skills)

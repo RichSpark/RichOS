@@ -169,6 +169,10 @@ pub struct EngineProfile {
     /// **Where this lease's token use goes** (`quota::Service::token_sink`), counted under
     /// `claude_account`. Set by the shell beside it; `None` everywhere else.
     pub token_sink: Option<std::sync::Arc<crate::quota::tokens::Sink>>,
+    /// **Where this lease's context size and cache clock go** (`chat_cache::Readings`), kept
+    /// under the chat the lease is scoped to. Set by the shell beside the token sink; `None`
+    /// everywhere else, and then nothing is read.
+    pub chat_readings: Option<std::sync::Arc<crate::chat_cache::Readings>>,
     /// **The speech model the video skill transcribes with** (media-tools plan section 3). Set
     /// by the shell through [`speech_model_for_video`]: the pinned large-v3-turbo-q5_0 that setup
     /// installs for transcription when it is installed and verified (the CEO, 2026-10-07: "Both,
@@ -755,7 +759,7 @@ impl EngineProfile {
         write(&plugin.join("spawn-preflight.json"),
               &json!({"hooks":{"PreToolUse":[{"matcher":"Agent","hooks":preflight}]}}).to_string())?;
         let profile = Self { engine, coordination, plugin, state, runtime, work_scope: None, search_binding: None, codex_root:crate::codex_bridge::root(),
-                  claude_account: None, token_sink: None, speech_model: None, meetings_corpus: None, live_meeting_reader: None,
+                  claude_account: None, token_sink: None, chat_readings: None, speech_model: None, meetings_corpus: None, live_meeting_reader: None,
                   lease_models: crate::config::lease_models_from_config(&data), machine_settings, user };
         write(&profile.plugin.join(COMMANDS_ENV), &profile.commands_env())?;
         Ok(profile)

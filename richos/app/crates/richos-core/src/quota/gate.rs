@@ -171,6 +171,7 @@ fn closed_sentence(by: &str) -> String {
         TURN_END => "the end of the turn".into(),
         TURN_START_FAILED => "a turn that could not start".into(),
         NOT_STARTED => "the app, which has written it for an input whose turn has not started yet".into(),
+        KEEP_ALIVE => "the app, for the moment its own keep-alive message takes".into(),
         other => format!("an unrecognized cause ({other})"),
     }
 }

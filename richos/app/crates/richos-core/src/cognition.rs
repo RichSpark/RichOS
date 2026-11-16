@@ -373,6 +373,17 @@ pub trait Cognition: Send {
     /// This session's control handle remains available while its prompt is running.
     fn cancel_handle(&self) -> Option<Arc<dyn TurnCancel>> { None }
 
+    /// **The app's own keep-alive message, for "Keep chat alive"** (`chat_cache.rs`): one
+    /// technical message that renews this session's provider cache and is nothing else. It is
+    /// never a turn of the user's: no turn grant is open while it runs (a grant that was open is
+    /// closed for it and put back after), so the engine refuses it every tool and does not judge
+    /// its end, and its reply is the caller's to drop. The caller sends it only between turns.
+    ///
+    /// The default refuses: a lease that cannot send one is never kept alive.
+    fn keep_chat_alive(&mut self) -> Result<PendingReply, CognitionError> {
+        Err(CognitionError::Protocol("This connection cannot be kept alive.".into()))
+    }
+
     /// Take everything the backing session emitted while NO turn was in flight (techy-mode
     /// §1.5, gap #1): session-start traffic, and whatever arrives after a prompt response
     /// has already been returned.

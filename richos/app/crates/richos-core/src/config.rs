@@ -554,6 +554,11 @@ struct StoredConfig {
     /// Display only. Local counting is always active.
     #[serde(default)]
     show_swearmeter: bool,
+    /// **The context meter** (CEO, 2026-11-16, round 83): "a "context meter" switch (somewhere
+    /// at the bottom of the settings, off by default)". Display only: the sizes are read
+    /// whether or not they are shown (`chat_cache.rs`). An absent key reads as off.
+    #[serde(default)]
+    show_context_meter: bool,
     /// How the Mac resources square is drawn. An absent value reads as Ink,
     /// including on installations from before the square existed.
     ///
@@ -619,6 +624,7 @@ impl Default for StoredConfig {
             stu_model: ModelChoice::default(),
             oxford_comma: false,
             show_swearmeter: false,
+            show_context_meter: false,
             resources_view: None,
             cleaner_on: false,
             cleaner_inbox_first: false,
@@ -1184,6 +1190,14 @@ impl ConfigStore {
 
     pub fn set_show_swearmeter(&mut self, show: bool) -> io::Result<()> {
         self.config.show_swearmeter = show;
+        self.persist()
+    }
+
+    /// Whether each chat shows its context meter. Off until the user switches it on.
+    pub fn show_context_meter(&self) -> bool { self.config.show_context_meter }
+
+    pub fn set_show_context_meter(&mut self, show: bool) -> io::Result<()> {
+        self.config.show_context_meter = show;
         self.persist()
     }
 

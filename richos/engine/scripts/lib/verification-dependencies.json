@@ -17279,7 +17279,7 @@
     },
     "scripts/lib/scope_closure.py": {
       "source": "scripts/lib/scope_closure.py",
-      "sha256": "f223254996d238698af8256dcf0bf04201ba96d5a579cef769d70280ebc3f346",
+      "sha256": "0f5ad0619ce349735eb9a37c6ee85f864d7c29ce5c06f8a2ad9b84c40568aae3",
       "evidence": "Added 2026-10-29 (zach-opus-d459fd6091fe, P1-A): turns an app scope's `closed` record (richos-core ecs.rs GrantClosed) and binding into one sentence naming which work, who closed its grant and when. Standard-library imports only (time); reads nothing but the dict it is given. No configuration key, environment variable, file or subprocess.",
       "keys": [],
       "edges": []

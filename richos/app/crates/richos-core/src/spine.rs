@@ -533,6 +533,59 @@ pub fn prime_front_desk_without_the_spine(
     prime_front_desk_with(&mut &*spine, thread)
 }
 
+/// **What sending Rich's session its keep-alive message came to** ("Keep chat alive",
+/// `chat_cache.rs`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum KeptAlive {
+    /// The message was sent and answered. `spawned`: the chat's session had ended (retired,
+    /// pushed out, or the app was relaunched) and was resumed for it.
+    Sent { millis: u64, spawned: bool },
+    /// A turn, a preparation or waiting input holds this chat: it is not idle, and whatever
+    /// holds it makes the request that renews the cache.
+    Busy,
+    /// It could not be sent. Nothing is retried here; the next check decides again.
+    NotSent(String),
+}
+
+/// The keep-alive is a preparation of its own, shaped like [`prime_front_desk_with`]: claimed
+/// under the same marker, so a message the user sends meanwhile is saved and delivered the
+/// moment it ends, and run with the shared state released. Its reply is dropped here: it is
+/// never recorded in the ledger, never shown and never spoken.
+fn keep_front_desk_alive_with(state:&mut impl PreparationState,thread:&str)->KeptAlive {
+    let begun=state.state(|s| {
+        if s.thread_is_running(thread) {return Err(KeptAlive::Busy)}
+        if s.control.pending_intake().iter().any(|record|s.intake_is_for(record,thread)) {return Err(KeptAlive::Busy)}
+        let binding=s.ledger.thread_binding(thread).map_err(|e|KeptAlive::NotSent(e.to_string()))?;
+        let plan=s.select_connection(&binding).map_err(|e|KeptAlive::NotSent(e.to_string()))?;
+        plan.control.begin_front_desk_prime();
+        let desk=s.resident.entry(thread.into()).or_default().lease.clone();
+        Ok((plan,desk))
+    });
+    let (plan,desk)=match begun {Ok(value)=>value,Err(verdict)=>return verdict};
+    let started=std::time::Instant::now();
+    // A reply of its own on the lease's account, over when it returns (as a priming is).
+    let keeping=format!("keep-alive:{thread}");
+    let result=prepare_connection(state,&plan,&desk,&keeping).and_then(|spawned| {
+        let reply=desk.lock().unwrap().as_mut().ok_or(SpineError::NoLease)?.keep_chat_alive()?;
+        reply.wait(&mut |_| {})?;
+        Ok(spawned)
+    });
+    state.state(|s| {
+        if let Some(quota)=s.quota_service() {quota.accounts.turn_ended(&keeping);}
+        plan.control.end_front_desk_prime();
+        if let Err(error)=s.poll_intake() {eprintln!("[richos] queued input after a keep-alive: {error}");}
+    });
+    match result {Ok(spawned)=>KeptAlive::Sent{millis:started.elapsed().as_millis() as u64,spawned},Err(error)=>KeptAlive::NotSent(error.to_string())}
+}
+/// Send Rich's session of `thread` its keep-alive message without holding shared state across
+/// the provider's reply.
+pub fn keep_front_desk_alive_without_the_spine(
+    spine: &std::sync::Mutex<Spine>,
+    thread: &str,
+) -> KeptAlive {
+    keep_front_desk_alive_with(&mut &*spine, thread)
+}
+
 pub struct Spine {
     ledger: Ledger,
     reader: Option<crate::read_view::SpineReader>,
@@ -3678,6 +3731,11 @@ impl Spine {
     /// so native startup, handoff and priming never hold shared conversation state.
     pub fn prime_front_desk(&mut self,thread_id:&str)->FrontDeskReady {
         prime_front_desk_with(&mut &mut *self,thread_id)
+    }
+
+    /// Synchronous headless entry. The desktop uses keep_front_desk_alive_without_the_spine.
+    pub fn keep_front_desk_alive(&mut self,thread_id:&str)->KeptAlive {
+        keep_front_desk_alive_with(&mut &mut *self,thread_id)
     }
 
     pub fn queue_depth(&self) -> usize {

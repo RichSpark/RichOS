@@ -196,6 +196,10 @@ pub struct WorkHost {
     /// the update gate's five-second poll reads only what changed since the last one.
     receipts: Mutex<crate::work_status::ReceiptIndex>,
     handoffs: Mutex<crate::session_tools::HandoffIndex>,
+    /// "Keep chat alive" (`chat_cache.rs`): every chat's readings and which chats are kept.
+    /// `None` until the shell sets it ([`Self::set_keep_alive`]), and then no session of Stu's
+    /// is ever sent a keep-alive.
+    keep_alive: Mutex<Option<(Arc<crate::chat_cache::Readings>, crate::chat_cache::Kept)>>,
 }
 impl WorkHost {
     pub fn new(
@@ -218,10 +222,54 @@ impl WorkHost {
             retry_clock: Mutex::new(Arc::new(crate::upstream::SystemRetryClock)),
             receipts: Mutex::new(Default::default()),
             handoffs: Mutex::new(Default::default()),
+            keep_alive: Mutex::new(None),
         })
     }
     pub fn set_retry_clock(&self, clock: Arc<dyn crate::upstream::RetryClock>) {
         *self.retry_clock.lock().unwrap() = clock;
+    }
+
+    /// Where the readings of every chat's sessions are, and which chats the user keeps alive.
+    pub fn set_keep_alive(&self, readings: Arc<crate::chat_cache::Readings>, kept: crate::chat_cache::Kept) {
+        *self.keep_alive.lock().unwrap() = Some((readings, kept));
+    }
+
+    /// **The shell's look at one kept chat** ("Keep chat alive"): when Stu's session of it is
+    /// due a keep-alive, its back end is made sure to exist and woken, and sends it at its own
+    /// next boundary ([`Self::run`]). A chat whose team session is not due gets nothing: no back
+    /// end is started for a chat that never had team work.
+    pub fn keep_team_alive(self: &Arc<Self>, binding: &ThreadBinding) {
+        let Some((readings, kept)) = self.keep_alive.lock().unwrap().clone() else { return };
+        let thread = binding.thread_id();
+        if !kept(thread) || !crate::chat_cache::heartbeat_due(&readings.chat(thread).team, crate::util::now_millis()) { return; }
+        self.remember_binding(binding);
+        if let Some(backend) = self.backend(thread) { backend.wake.notify_all(); }
+    }
+
+    /// Is a keep-alive due on Stu's session of `thread` now, and is it this look's to send?
+    fn keep_alive_claimed(&self, thread: &str) -> bool {
+        let Some((readings, kept)) = self.keep_alive.lock().unwrap().clone() else { return false };
+        kept(thread) && readings.claim_heartbeat(thread, crate::chat_cache::Seat::Team, crate::util::now_millis())
+    }
+
+    /// **Stu's session is sent its keep-alive message**, on the back end's own thread, between
+    /// his turns: the lease is held for it exactly as for a message, so nothing else of the
+    /// app's reaches him meanwhile. A session that has ended is resumed for it, the way his next
+    /// message would resume it. Its reply is dropped; it is no input of his inbox, no attempt
+    /// and no job, and whatever comes of it nothing is retried here.
+    fn keep_alive(self: &Arc<Self>, backend: &Arc<Backend>, binding: &ThreadBinding) {
+        let thread = binding.thread_id();
+        if let Err(error) = self.ensure_lease(backend, binding) {
+            eprintln!("[richos] keep chat alive: the team's session of {thread} was not resumed: {error}");
+            return;
+        }
+        let started = std::time::Instant::now();
+        let mut guard = backend.lease.lock().unwrap();
+        let Some(lease) = guard.as_mut() else { return };
+        match lease.keep_chat_alive().and_then(|reply| reply.wait(&mut |_| {})) {
+            Ok(_) => eprintln!("[richos] keep chat alive: the team's session of {thread} answered in {} ms", started.elapsed().as_millis()),
+            Err(error) => eprintln!("[richos] keep chat alive: the team's session of {thread} was not reached: {error}"),
+        }
     }
 
     fn overload_wait(&self, backend: &Backend, binding: &ThreadBinding, result: &Result<String, String>) -> Option<std::time::Duration> {
@@ -1830,6 +1878,8 @@ impl WorkHost {
             Answer(ThreadBinding, crate::questions::Delivery),
             /// A boundary of Stu's work, or the idle check: is he on the account in use?
             Move(ThreadBinding, bool),
+            /// "Keep chat alive": his session has been idle for 55 minutes.
+            KeepAlive(ThreadBinding),
         }
         loop {
             let live_session = backend.lease.lock().unwrap().as_ref().map(|lease| lease.session_id().to_string());
@@ -1879,6 +1929,12 @@ impl WorkHost {
                             Ok(None) => {}
                             Err(error) => eprintln!("[richos] operator inbox: {error}"),
                         }
+                        // "Keep chat alive": nothing is waiting for him and no turn of his own
+                        // is running, so a keep-alive that is due goes now (`chat_cache.rs`).
+                        if !inner.automatic_turn && self.keep_alive_claimed(binding.thread_id()) {
+                            inner.processing = true;
+                            break Next::KeepAlive(binding);
+                        }
                     }
                     let (woken, waited) = backend.wake.wait_timeout(inner, ACCOUNT_CHECK_EVERY).unwrap();
                     inner = woken;
@@ -1888,6 +1944,13 @@ impl WorkHost {
                 }
             };
             let result = match next {
+                Next::KeepAlive(binding) => {
+                    self.keep_alive(&backend, &binding);
+                    // Not a turn of his: nothing completed, nothing to settle or sweep.
+                    backend.inner.lock().unwrap().processing = false;
+                    backend.wake.notify_all();
+                    continue;
+                }
                 Next::Move(binding, at_turn_end) => {
                     self.move_to_account_in_use(&backend, &binding, at_turn_end);
                     // An automatic turn's end (the only `at_turn_end`) is a turn's end too
