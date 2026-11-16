@@ -96,8 +96,14 @@
     );
   }
 
+  var choosing = false;
   function setPick(pick, said) {
-    return save("set_opening_pick", { pick: pick }, said);
+    if (choosing) return;
+    choosing = true;
+    say("Preparing your opening…");
+    return save("set_opening_pick", { pick: pick }, said).finally(function () {
+      choosing = false;
+    });
   }
 
   /// THE SOUND SWITCH, for both places that show it (this page and the Settings row).
@@ -323,7 +329,7 @@
     sl.appendChild(el("span", null, "Two quiet notes as the bar lands"));
     set.appendChild(sl);
 
-    var cl = el("label", "opg-set-title", "Your company on the opening");
+    var cl = el("label", "opg-set-title", "Your company on saved images");
     cl.setAttribute("for", "opg-company");
     set.appendChild(cl);
     var ci = el("input", "opg-input");
@@ -349,7 +355,7 @@
     });
     ci.addEventListener("change", function () { if (companyTimer !== null) saveCompany(); });
     set.appendChild(ci);
-    var hint = el("p", "opg-hint", "One line in gold under ours, on every opening. Leave it empty for none.");
+    var hint = el("p", "opg-hint", "Adds your company name under ours in saved images. Leave it empty to omit it.");
     hint.id = "opg-company-hint";
     set.appendChild(hint);
     side.appendChild(set);

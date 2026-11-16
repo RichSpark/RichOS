@@ -25,13 +25,11 @@ THE STEPS, in order (each is a real press on the app's own window or a read of i
             ladder has more, and no name of an opening that is not his
   play      Play on a material and on the year's edition: the opening covers the window and leaves
             by itself; the gallery is there again
-  pick      "Make it my opening" on Bridle Leather; the app quit from its own menu, which picks that
-            opening for the next start and draws its first second; the next start plays it, from
-            the pictures drawn at the quit
-  daily     "One of mine, a different one each day": the quit picks today's and draws it, and
-            draws the next day's beside it; the next start plays today's; with the guest's clock
-            a day on, the start after plays the next one of his from the pictures drawn the day
-            before, and the start after that plays the same one again
+  pick      "Make it my opening" downloads Bridle Leather; after quitting from the menu, the next
+            start plays the verified native pack
+  daily     "One of mine, a different one each day" plays today's native pack on the next start.
+            Advancing the guest's clock a day plays the next opening, and another start that day
+            plays the same one again.
   sound     the Settings switch "Play its sound" is on; pressed, it is off in the settings file,
             and still off, in Settings and in the gallery, after the app is started again
   save      Save image on a card: a picture of that opening in the guest's Downloads folder,
@@ -125,7 +123,7 @@ class Walk(standard.Walk):
         return [line for line in text.splitlines() if line.strip()]
 
     def launch_line(self):
-        """The app's own account of this start: which splash, and whether its saved opening played."""
+        """The app's own account of this start: which splash and which player it used."""
         return self.until(lambda: (self.log_lines(r'launch timing:') or [None])[-1], 90, 'the app wrote no launch line')
 
     def earned(self):
@@ -133,8 +131,7 @@ class Walk(standard.Walk):
         return sorted(k[len('opening/'):] for k in rewards if k.startswith('opening/'))
 
     def quit_from_menu(self):
-        """The app's own Quit, through its menu (never a keystroke, never a signal): the quit that
-        picks the next start's splash and draws its opening. Returns what the app said of it."""
+        """Quit with the app's menu and wait for that instance to leave."""
         pid = self.pid()
         script = ('tell application "System Events" to tell (first process whose unix id is %s) '
                   'to click menu item "Quit RichOS" of menu 1 of menu bar item 2 of menu bar 1' % pid)
@@ -145,9 +142,6 @@ class Walk(standard.Walk):
             time.sleep(0.2)
         else:
             raise StepFailed('the app (pid ' + pid + ') was still running 20 s after its own Quit')
-        # Every line of this quit (this instance's log): a user of "a different one each day" gets
-        # two, the next start's opening and a later day's.
-        return ' | '.join(self.log_lines(r'splash at quit:') or ['(no splash-at-quit line)'])
 
     def start(self):
         """Start the app again as LaunchServices starts it, with the same fixture home."""
@@ -277,18 +271,12 @@ class Walk(standard.Walk):
         self.until(lambda: self.read_json('config.json').get('opening_pick') == 'material-leather', 20, 'the pick was not saved as material-leather')
         self.until(lambda: self.has('Bridle Leather is your opening now'), 15, 'the page did not say the pick was made')
         frame = self.shot('picked-leather')
-        said = self.quit_from_menu()
-        if 'opening/material-leather' not in said:
-            raise StepFailed('the quit did not pick his opening for the next start: ' + said)
-        saved = self.read_json('splash-next.json')
-        guest(self.vm, 'true')
+        self.quit_from_menu()
         line = self.start()
         start_frame = self.shot('start-leather')
-        if 'opening/material-leather (picked at the last quit)' not in line:
-            raise StepFailed('the next start did not show his opening: ' + line)
-        return {'frame': frame, 'quit': said, 'saved_pick': {k: saved.get(k) for k in ('id', 'start', 'seconds', 'facts')},
-                'opening_drawn_at_quit': saved.get('opening') is not None, 'launch_line': line,
-                'opening_used': 'its opening used' in line, 'start_frame': start_frame}
+        if 'opening/material-leather (native pack)' not in line:
+            raise StepFailed('the next start did not use the native pack for his opening: ' + line)
+        return {'frame': frame, 'launch_line': line, 'start_frame': start_frame}
 
     def expected_daily(self):
         """Today's opening by the rule: the local day number, modulo how many he has, in catalog order."""
@@ -300,36 +288,27 @@ class Walk(standard.Walk):
         self.until(lambda: self.read_json('config.json').get('opening_pick') == 'daily', 20, 'the daily way to start was not saved')
         frame = self.shot('daily')
         day, today = self.expected_daily()
-        said = self.quit_from_menu()
-        if 'the next start shows opening/' + today not in said:
-            raise StepFailed('day %d: the quit picked something other than %s: %s' % (day, today, said))
+        self.quit_from_menu()
         line = self.start()
-        if 'opening/' + today + ' (picked at the last quit)' not in line:
+        if 'opening/' + today + ' (native pack)' not in line:
             raise StepFailed('day %d: the start did not show %s: %s' % (day, today, line))
-        out = {'frame': frame, 'day': day, 'today': today, 'quit': said, 'launch_line': line, 'opening_used': 'its opening used' in line}
-        # The next day: the guest's own clock, a day on (the clone is deleted after this walk).
+        out = {'frame': frame, 'day': day, 'today': today, 'launch_line': line}
         self.to_home()
         self.quit_from_menu()
         guest(self.vm, 'sudo systemsetup -setusingnetworktime off >/dev/null 2>&1; sudo date "$(date -v+1d +%m%d%H%M%Y.%S)" >/dev/null', 60)
         day2, _ = self.expected_daily()
         tomorrow = HIS[(HIS.index(today) + 1) % len(HIS)]
         if day2 != day + 1:
-            raise StepFailed('the guest\'s clock did not move a day on: day %d then %d' % (day, day2))
-        if 'a start on a later day shows opening/' + tomorrow not in said or 'its opening was drawn' not in said.split('later day')[1]:
-            raise StepFailed('the quit on day %d did not draw the next day\'s opening (%s): %s' % (day, tomorrow, said))
-        line2 = self.start()
-        frame2 = self.shot('daily-next-day')
-        # THE FIRST START OF A NEW DAY PLAYS ITS PICTURES like any other: the quit the day before
-        # drew this day's opening beside its own.
-        if 'opening/' + tomorrow + ' (picked at the last quit)' not in line2 or 'its opening used' not in line2:
-            raise StepFailed('day %d: the start did not play %s from the pictures drawn the day before: %s' % (day2, tomorrow, line2))
-        self.to_home()
-        said3 = self.quit_from_menu()
-        line3 = self.start()
-        if 'opening/' + tomorrow + ' (picked at the last quit)' not in line3:
-            raise StepFailed('day %d, started again: not %s from the quit\'s pick: %s' % (day2, tomorrow, line3))
-        out['next_day'] = {'day': day2, 'opening': tomorrow, 'launch_line': line2, 'frame': frame2,
-                           'second_start': {'quit': said3, 'launch_line': line3, 'opening_used': 'its opening used' in line3}}
+            raise StepFailed('the guest clock did not move a day on')
+        for retried in [False, True]:
+            line = self.start()
+            if 'opening/' + tomorrow + ' (native pack)' not in line:
+                raise StepFailed('day %d: the start did not use the pack for %s: %s' % (day2, tomorrow, line))
+            if not retried:
+                frame = self.shot('daily-next-day')
+                self.to_home()
+                self.quit_from_menu()
+        out['next_day'] = {'day': day2, 'opening': tomorrow, 'launch_line': line, 'frame': frame}
         return out
 
     def sound(self):

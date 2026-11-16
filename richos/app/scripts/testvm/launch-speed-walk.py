@@ -7,8 +7,8 @@ maximum allowed p95 time for the RichOS app to start showing the splash screen. 
 to it." (380 ms was Dictionary's slowest measured Dock launch on his Mac, Echo's audit: 287, 305,
 318, 318, 328 and 380 ms; Dictionary is not launched beside the app.)
 Every launch is timed from the launch request to the splash playing, plus ALLOWANCE_MS for the
-Dock's own part of a click and the screen's next refresh: the splash's opening on the glass (the
-app's launch line, "first frame" with "its opening used", Sage's plan 2026-11-14 "the splash the
+Dock's own part of a click and the screen's next refresh: the native splash's authored frame zero (the
+player's clock), or the earlier launch line for older builds (Sage's plan 2026-11-14 "the splash the
 rules picked is playing within 380 ms of the click", section 6), or, when the opening was not used,
 the page's own splash painted and playing ("page took over").
 
@@ -32,18 +32,15 @@ through LaunchServices), as a regular launch (an unattended one builds its windo
                   and quit so its helper puts the candidate in place at quit, then the candidate
                   launched: that launch is judged, --runs times;
   rule-switch     the plan's route 5, fresh homes: the first start (no saved pick, reported),
-                  then start 2, whose quit before it picked the other splash (#2) and drew its
-                  opening, then start 3 (#1 again): both judged, --runs judged starts in all, so
+                  then start 2, which picks the other splash (#2), then start 3 (#1 again):
+                  both judged, --runs judged starts in all, so
                   every splash today's rule can pick is timed;
   day-change      a user of "one of mine, a different one each day" (round 74, the CEO's order of
                   2026-11-14): the first start of a new day, after an ordinary quit the day before.
-                  That quit drew the next day's opening beside its own, so this start plays pictures
-                  like any other. One home, set to that way of starting; before each judged launch
+                  Both starter packs are local. One home, set to that way of starting; before each judged launch
                   its record of the last such day is made a day older, which is what a night does.
                   --runs times, his two openings in turn;
-  fallbacks       reported once each, not judged (the plan's section 9): the first start after an
-                  install, and the first start after an update that changed the splash's own files
-                  (the saved opening's fingerprint made to differ, which is what such an update does);
+  first install   one fresh install launch, reported alongside the timed routes;
   checks          with --checks: a start-up step made to fail (its conversation record unreadable),
                   which must end in the start-up alert and the exit; a quit from the app's own menu
                   during start-up; then a normal launch of the same home.
@@ -158,6 +155,7 @@ APP_FIELDS = {
     'engine': re.compile(r'engine check (.*?); process started at'),
     'started': re.compile(r'process started at (\d+)'),
     # Which splash, and whether its opening played (Sage's plan 2026-11-14, section 6).
+    'native': re.compile(r'splash shown, \S+ \((native pack)\)'),
     'splash_id': re.compile(r'splash shown, (\S+) \('),
     'opening': re.compile(r'its opening used \((\d+) later pictures\)'),
     'opening_not': re.compile(r'its opening not used: (.*?)(?:, the page joined it at \d+ ms)?; update put in place'),
@@ -194,9 +192,9 @@ def utc_offset(text):
 
 def measure(run, events):
     """Milliseconds after `open` was started, for one launch. Pure over its inputs. The judged
-    moment, `splash`, is the page's splash playing ("page took over" in the app's launch line), plus
-    ALLOWANCE_MS. A build with no
-    launch line (one from before it) falls back to WebKit's document loaded, its page's splash."""
+    moment, `splash`, is the system's scheduled native frame zero plus ALLOWANCE_MS. Older builds
+    use their opening, their page's first paint or WebKit's document load, depending on the
+    evidence that build provides."""
     t0 = run['t_open']
     row = {'label': run['label'], 'pid': run['pid']}
     mine = [(t, msg) for t, _proc, pid, msg in events if pid == run['pid']]
@@ -205,9 +203,12 @@ def measure(run, events):
         if hit is not None:
             row[key] = round((hit - t0) * 1000)
     app = None
+    native = None
     for entry in run.get('lines', []):
         if LAUNCH_LINE in entry['text']:
             app = app_line(entry['text']) or app
+        if match := re.search(r'native splash: frame zero scheduled (\d+) ms after process start', entry['text']):
+            native = int(match.group(1))
     if app:
         started = int(app['started']) / 1000
         row['process_start'] = round((started - t0) * 1000)
@@ -217,6 +218,8 @@ def measure(run, events):
         row['bundle_check'] = app['bundle']
         row['engine_check'] = app['engine']
         row['splash_id'] = app['splash_id']
+        if app['native'] and native is not None:
+            row['native_frame_zero'] = round((started + native / 1000 - t0) * 1000)
         row['opening'] = int(app['opening']) if app['opening'] else None
         row['opening_not_used'] = app['opening_not']
         row['joined_ms'] = int(app['joined']) if app['joined'] else None
@@ -233,7 +236,13 @@ def measure(run, events):
     # 2026-11-14 "the splash the rules picked is playing within 380 ms of the click"); without the
     # opening, the page's own splash painted and playing ("page took over"). The window's ground
     # color alone does not count.
-    if row.get('opening') is not None and 'first_frame' in row:
+    if 'native_frame_zero' in row:
+        row['splash'] = row['native_frame_zero'] + ALLOWANCE_MS
+        row['splash_from'] = "the native splash's authored frame zero"
+    elif app and app['native']:
+        # A native player that never reported a clock provides no timing evidence.
+        return row
+    elif row.get('opening') is not None and 'first_frame' in row:
         row['splash'], row['splash_from'] = row['first_frame'] + ALLOWANCE_MS, "the splash's opening on the glass"
     elif 'page_took_over' in row:
         row['splash'], row['splash_from'] = row['page_took_over'] + ALLOWANCE_MS, "the page's splash playing"
@@ -577,10 +586,6 @@ def main():
                 .strip() or 0)
     facts['fixture_starts'] = prior
 
-    splash_record = homes['fresh'] + '/Library/Application Support/com.richos.app/splash-next.json'
-    changed_files = ('python3 -c ' + shlex.quote(
-        'import json,sys; p=sys.argv[1]; r=json.load(open(p)); r["opening"]["fingerprint"]="0"; '
-        'json.dump(r, open(p, "w"))') + ' ' + shlex.quote(splash_record))
     # Every start of the fresh home, counted as it is planned: the splash each judged start must
     # show follows from its count (the home's first start is the fixture's count plus one).
     fresh_starts = [prior]
@@ -626,13 +631,10 @@ def main():
     if not a.only_checks:
         # Its very first launch (the first start after an install: reported), then the first launch
         # after a cold start, --runs times, each after the disk cache is flushed, then --runs ordinary
-        # launches; then one ordinary launch photographed twice, a quarter of a second apart (the
-        # splash, and playing: reported), and the first start after an update that changed the
-        # splash's own files (reported).
+        # launches, followed by one ordinary launch photographed twice during playback.
         said.append(run_plan('fresh', [at_fresh('fresh:first', frame_at=1.0)] + cold_starts(a.runs)
                              + ordinary_starts(a.runs)
-                             + [at_fresh('ordinary:frames', frames_at=[0.45, 0.70]),
-                                at_fresh('changed-splash-files:first', before=changed_files)]))
+                             + [at_fresh('ordinary:frames', frames_at=[0.45, 0.70])]))
         more.update({'cold': cold_starts, 'ordinary': ordinary_starts})
         try:
             said.append(run_plan('switch', switch_starts(a.runs)))

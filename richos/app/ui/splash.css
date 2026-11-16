@@ -337,3 +337,6 @@
 .popover-rule + .popover-title {
   margin-top: 0;
 }
+
+/* The native layer supplies the picture. This node gates Home and carries bar geometry. */
+.splash--native { visibility: hidden; }

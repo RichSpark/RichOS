@@ -172,31 +172,33 @@
 /* The light the landing throws back on the marks, and the bar keeping its glow afterwards. */
 .splash--landed .splash-logo,
 .splash--landed .splash-wordmark {
-  animation: ro-lit 0.72s ease-out both;
+  animation: ro-land-lit 0.72s ease-out both;
 }
-@keyframes ro-lit {
+@keyframes ro-land-lit {
   0% { filter: brightness(1); }
   20% { filter: brightness(1.24); }
   100% { filter: brightness(1); }
 }
-.splash-bar {
-  transition: filter 0.3s ease;
-}
 .splash--landed .splash-bar {
   filter: drop-shadow(0 0 7px rgba(214, 182, 110, 0.5));
+  animation: ro-land-glow 0.3s ease both;
+}
+@keyframes ro-land-glow {
+  from { filter: none; }
+  to { filter: drop-shadow(0 0 7px rgba(214, 182, 110, 0.5)); }
 }
 /* STRUCK: the top rungs. The frame blazes once and the number is stamped. */
 .splash--struck.splash--landed .splash-plinth::after {
-  animation: ro-struck 0.74s ease-out both;
+  animation: ro-land-struck 0.74s ease-out both;
 }
-@keyframes ro-struck {
+@keyframes ro-land-struck {
   0% { box-shadow: 0 0 0 1px rgba(246, 226, 170, 0.95), 0 0 30px rgba(232, 200, 120, 0.6); }
   100% { box-shadow: 0 0 0 0 rgba(246, 226, 170, 0), 0 0 0 rgba(232, 200, 120, 0); }
 }
 .splash--struck.splash--landed .ro-figure {
-  animation: ro-stamp 0.5s cubic-bezier(0.2, 0.9, 0.3, 1) both;
+  animation: ro-land-stamp 0.5s cubic-bezier(0.2, 0.9, 0.3, 1) both;
 }
-@keyframes ro-stamp {
+@keyframes ro-land-stamp {
   from { transform: scale(1.075); }
   to { transform: none; }
 }
@@ -205,6 +207,7 @@
 .splash--settled .ro-wheel-strip,
 .splash--settled .ro-seal,
 .splash--settled .ro-figure,
+.splash--settled .splash-bar,
 .splash--settled .splash-logo,
 .splash--settled .splash-wordmark,
 .splash--settled .splash-plinth::after {
@@ -217,6 +220,7 @@
   .splash .ro-wheel-strip,
   .splash .ro-seal,
   .splash .ro-figure,
+  .splash .splash-bar,
   .splash .splash-logo,
   .splash .splash-wordmark,
   .splash .splash-plinth::after {

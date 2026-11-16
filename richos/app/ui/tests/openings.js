@@ -186,7 +186,7 @@ async function main() {
     for (const [what, opts] of [
       ["switched off", { record: { sound: false } }],
       ["no record (a plain browser)", { record: null }],
-      ["the page drawn at quit", { record: { sound: true }, launch: { kind: "fresh", ordinal: null, draw: true, splash: { id: "round-11/v1" } }, url: "file://" + path.join(UI_DIR, "splash-opening.html") }],
+      ["the frame export page", { record: { sound: true }, launch: { kind: "fresh", ordinal: null, draw: true, splash: { id: "round-11/v1" } }, url: "file://" + path.join(UI_DIR, "splash-opening.html") }],
     ]) {
       page = await open(browser, Object.assign({ virtualTime: true }, opts));
       await page.clock.runFor(3500);
@@ -280,31 +280,33 @@ async function main() {
         variation: n.dataset.variation,
         figure: !!n.querySelector(".ro-figure"),
         caption: n.querySelector(".ro-caption").textContent,
-        company: n.querySelector(".ro-company").textContent,
-        collector: n.querySelector(".ro-collector").textContent,
+        company: !!n.querySelector(".ro-company"),
+        collector: !!n.querySelector(".ro-collector"),
         above: Number(getComputedStyle(n).zIndex) > Number(getComputedStyle(document.getElementById("openings-page")).zIndex),
       };
     });
     assertEqual(up.opening, "power-100k", "the opening that was asked for");
     assert(up.figure, "its number is on it");
     assertEqual(up.caption, "in AI power harnessed", "its line");
-    assertEqual(up.company, "Acme Robotics", "his company's line, under ours");
-    assertEqual(up.collector, "No. 7·Struck·Earned September 2, 2026", "the held line");
+    assertEqual(up.company, false, "the playback carries only shared artwork");
+    assertEqual(up.collector, false, "the preview omits the personal collector line");
     assert(up.above, "the opening plays above the gallery");
-    // The number counts up: whole by 3.0 s. Held at moments, so this reads the page, not a clock.
-    const counted = await page.evaluate(() => {
-      const at = (ms) => { window.RichSplash.holdAt(ms); return document.querySelector("#splash .ro-figure-num").textContent; };
-      const r = [at(0), at(600), at(1500), at(3000), at(4200)];
-      window.RichSplash.release();
-      return r;
-    });
-    assertEqual(counted[0] + " " + counted[1], "0 0", "it starts at nothing");
-    assert(Number(counted[2].replace(/,/g, "")) > 0 && Number(counted[2].replace(/,/g, "")) < 100000, "it is counting at 1.5 s: " + counted[2]);
-    assertEqual(counted[3] + " " + counted[4], "100,000 100,000", "it is whole by 3.0 s and stays");
     await page.keyboard.press("Space");
     await page.mouse.click(700, 80);
     assert(await page.evaluate(() => window.RichSplash.isUp()), "input ended the preview");
     await page.waitForFunction(() => !window.RichSplash.isUp());
+    const artwork = await open(browser, {
+      launch: { kind: "fresh", draw: true, splash: { id: "opening/power-100k" } },
+      url: "file://" + path.join(UI_DIR, "splash-opening.html"),
+    });
+    const counted = await artwork.evaluate(() => [0, 600, 1500, 3000, 4200].map((ms) => {
+      window.RichSplash.holdAt(ms);
+      return document.querySelector("#splash .ro-figure-num").textContent;
+    }));
+    await artwork.__ctx.close();
+    assertEqual(counted[0] + " " + counted[1], "0 0", "it starts at nothing");
+    assert(Number(counted[2].replace(/,/g, "")) > 0 && Number(counted[2].replace(/,/g, "")) < 100000, "it is counting at 1.5 s: " + counted[2]);
+    assertEqual(counted[3] + " " + counted[4], "100,000 100,000", "it is whole by 3.0 s and stays");
     const after = await page.evaluate(() => ({
       open: window.RichOpeningsPage.isOpen(),
       focus: document.activeElement.className + "@" + (document.activeElement.closest(".opg-card") || { dataset: {} }).dataset.opening,
@@ -491,18 +493,28 @@ async function main() {
         for (let i = 3; i < d.length; i += 4) { if (d[i]) lit++; total += d[i]; }
         return lit + ":" + total;
       };
-      const at = (ms) => { window.RichSplash.holdAt(ms); return { lights: sum(), n: document.querySelector("#splash .ro-figure-num").textContent }; };
+      const at = (ms) => {
+        window.RichSplash.holdAt(ms);
+        const animation = document.getAnimations().find((a) => a.animationName === "ro-land-lit");
+        return { lights: sum(), n: document.querySelector("#splash .ro-figure-num").textContent,
+          landed: document.getElementById("splash").classList.contains("splash--landed"),
+          glow: animation ? [animation.playState, animation.currentTime] : null };
+      };
       const a = at(900), b = at(300), c = at(900), end = at(4200);
-      return { a, b, c, end, region: window.RichSplash.openingRegion(1000), w: innerWidth, h: innerHeight };
+      const glow = at(4380), rewound = at(300), repeated = at(4380);
+      return { a, b, c, end, glow, rewound, repeated };
     });
     assertEqual(JSON.stringify(r.a), JSON.stringify(r.c), "0.9 s, held twice with another moment between");
     assertEqual(r.b.lights, "0:0", "before 0.6 s no light is on");
     assert(r.a.lights !== "0:0", "at 0.9 s no light has come on");
     assertEqual(r.end.n, "500", "the number is whole at the landing");
     assert(Number(r.end.lights.split(":")[0]) > Number(r.a.lights.split(":")[0]), "more lights are on at the landing than at 0.9 s");
-    assertEqual(JSON.stringify(r.region), JSON.stringify([0, 0, r.w, r.h]), "the part the drawn-ahead opening covers is the whole page, since the lights are everywhere");
+    assert(r.end.landed, "the gold bar's landing appears at 4.2 s");
+    assertEqual(r.glow.glow, ["paused", 180], "the film includes the light thrown back from the landing");
+    assertEqual(r.rewound, r.b, "seeking before the landing clears its effects");
+    assertEqual(r.repeated, r.glow, "seeking to the landing again paints the same frame");
     await page.__ctx.close();
-    return "0.9 s: " + r.a.lights + " (lit pixels:alpha) twice; landing: " + r.end.lights + "; region " + JSON.stringify(r.region);
+    return "0.9 s: " + r.a.lights + " (lit pixels:alpha) twice; landing: " + r.end.lights;
   });
 
   await run.check("12  every way in has its way out, and the home screen's keys stay off while the gallery covers it", async () => {
@@ -609,17 +621,15 @@ async function main() {
     await page.fill("#opg-company", "Acme Robotics");
     await page.waitForFunction(() => window.__RICHOS_MOCK__.openingsRecord().company === "Acme Robotics");
     assertEqual(await page.evaluate(() => document.getElementById("opg-company").maxLength), 32, "the line's limit");
-    // The line is on the next opening he plays.
-    await page.click('.opg-card[data-opening="ruled-standard"] .opg-btn--play');
-    await page.waitForFunction(() => window.RichSplash.isUp());
-    assertEqual(await page.evaluate(() => document.querySelector("#splash .ro-company").textContent), "Acme Robotics", "his company's line on the opening");
-    const sizes = await page.evaluate(() => [parseFloat(getComputedStyle(document.querySelector("#splash .ro-company")).fontSize), parseFloat(getComputedStyle(document.querySelector("#splash .splash-line")).fontSize)]);
-    assert(sizes[0] <= sizes[1], "his company's line is larger than ours: " + sizes.join(" vs "));
-    await page.keyboard.press("Escape");
-    await page.waitForFunction(() => !window.RichSplash.isUp());
-    assert(await page.evaluate(() => window.RichOpeningsPage.isOpen()), "Escape over a playing opening closed the gallery too");
+    const card = await open(browser, {
+      launch: { kind: "fresh", draw: true, card: true, splash: { id: "opening/ruled-standard" } },
+      url: "file://" + path.join(UI_DIR, "splash-opening.html"),
+      record: { company: "Acme Robotics" },
+    });
+    assertEqual(await card.locator("#splash .ro-company").textContent(), "Acme Robotics", "the company line stays on the saved image");
+    await card.__ctx.close();
     await page.__ctx.close();
-    return "save_opening_image power-100k; company line saved and drawn";
+    return "Save image keeps the company line and playback uses the shared design";
   });
 
   await run.check("14  the handover: a landed bar leaves the splash for Talk to Rich; one cut short does not", async () => {

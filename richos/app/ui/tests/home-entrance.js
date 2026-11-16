@@ -221,6 +221,22 @@ async function main() {
         }
       });
     }
+    await run.check("the system's Reduce Motion setting reveals the settled field", async () => {
+      const ctx = await browser.newContext({ reducedMotion: "reduce" });
+      try {
+        await ctx.addInitScript(PROBE);
+        await ctx.addInitScript(SILENT_AUDIO);
+        const page = await ctx.newPage();
+        await page.goto("file://" + path.join(UI_DIR, "index.html"));
+        await page.waitForFunction(() => window.__entranceProbe.rows.some((r) => r.drawn && r.open && !r.cov), null, { timeout: 60000 });
+        const first = await page.evaluate(() => window.__entranceProbe.rows.find((r) => r.drawn && r.open && !r.cov));
+        assertEqual(first.st, "done", "Reduce Motion must show the assembled field on the first uncovered frame");
+        assert(first.landed > 0.99, "the settled field was not drawn");
+        return "the field is settled on reveal without playing the bloom";
+      } finally {
+        await ctx.close();
+      }
+    });
   } finally {
     await browser.close();
   }

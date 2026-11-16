@@ -385,7 +385,7 @@
     }
 
     // 2. HIS COMPANY'S LINE, struck in gold under ours. Optional; ours stays the largest.
-    if (record.company) foot.appendChild(el("div", "ro-company", record.company));
+    if (api.card && record.company) foot.appendChild(el("div", "ro-company", record.company));
 
     // 3. THE SEAL of a rare edition, on the corner of the plinth like a seal on a deed.
     if (fam.fx === "seal") {
@@ -402,16 +402,18 @@
     // 4. THE LINE A SAVED IMAGE CARRIES ("Save image" in the gallery): what this opening is
     //    called and when it became his. ROUND 85: the splash itself never shows it; there is no
     //    held screen any more.
-    var line = el("div", "ro-collector");
-    line.appendChild(el("span", "ro-collector-no", "No. " + number(o)));
-    line.appendChild(el("span", "ro-collector-dot", "·"));
-    line.appendChild(el("span", null, title(o)));
-    var prov = provenance(o);
-    if (prov) {
+    if (api.card) {
+      var line = el("div", "ro-collector");
+      line.appendChild(el("span", "ro-collector-no", "No. " + number(o)));
       line.appendChild(el("span", "ro-collector-dot", "·"));
-      line.appendChild(el("span", null, prov));
+      line.appendChild(el("span", null, title(o)));
+      var prov = provenance(o);
+      if (prov) {
+        line.appendChild(el("span", "ro-collector-dot", "·"));
+        line.appendChild(el("span", null, prov));
+      }
+      root.appendChild(line);
     }
-    root.appendChild(line);
 
     // ROUND 85: section 5, the light that followed his pointer, is removed.
 
@@ -439,7 +441,7 @@
     } catch (_e) {
       /* the first measure stands */
     }
-    live.raf = requestAnimationFrame(frame);
+    if (!api.native && !api.drawing) live.raf = requestAnimationFrame(frame);
   }
 
   function onResize() {
@@ -539,28 +541,30 @@
     live.root.classList.add("splash--landed");
     if (live.fx) live.fx.land(live.api.elapsed());
   }
+
+  function seekLanding(t) {
+    if (!live || live.settled) return null;
+    live.landed = t >= live.landAt;
+    live.root.classList.toggle("splash--landed", live.landed);
+    if (live.fx) live.fx.seek(t);
+    return live.landed ? live.landAt : null;
+  }
   /// How long before the screen's time is up the bar lands. `splash.js` reads it.
   function landEarly() {
     return LAND_EARLY_MS;
   }
-  /// What this file paints from the clock rather than with an animation, for the part of the
-  /// page the drawn-ahead opening covers (`splash.js` `openingRegion`): the lights' canvas,
-  /// which is lit from 0.6 s. The sparks' canvas is empty until the landing.
-  function movers() {
-    return live && live.fx && live.fam.fx === "lights" ? [live.fx.canvas] : [];
-  }
-
   // ---------------------------------------------------------------------------------------
   // The particles
   // ---------------------------------------------------------------------------------------
 
   function makeFx(canvas, L) {
     var ctx = canvas.getContext("2d");
-    var dpr = Math.min(2, window.devicePixelRatio || 1);
+    var dpr = Math.min(2, L.api.exportScale || window.devicePixelRatio || 1);
     var W = 0, H = 0;
     var rand = seeded(7400 + number(L.o));
     var rank = L.o.rank || 0;
     var lights = null, lightsFor = "", sparks = [], ring = null, landedAt = null, settled = false;
+    var lastSeek = -1;
     var kind = L.fam.fx;
 
     // One soft gold point, drawn once and stamped.
@@ -635,6 +639,22 @@
         }
       }
       if (L.o.struck) ring = { at: t };
+    }
+    function seek(t) {
+      if (t < L.landAt || landedAt === null || t < lastSeek) {
+        landedAt = null;
+        sparks = [];
+        ring = null;
+        if (t >= L.landAt) {
+          rand = seeded(7400 + number(L.o));
+          if (kind === "lights") {
+            size();
+            seedLights();
+          }
+          land(L.landAt);
+        }
+      }
+      lastSeek = t;
     }
     function draw(t) {
       size();
@@ -720,6 +740,7 @@
       canvas: canvas,
       draw: draw,
       land: land,
+      seek: seek,
       settle: function () { settled = true; sparks = []; ring = null; }
     };
   }
@@ -727,6 +748,20 @@
   // ---------------------------------------------------------------------------------------
   // The handover into the home screen
   // ---------------------------------------------------------------------------------------
+
+  function movieBar() {
+    var splash = window.__RICHOS_LAUNCH__ && window.__RICHOS_LAUNCH__.splash;
+    var bar = splash && splash.bar;
+    if (!Array.isArray(bar) || bar.length !== 4) return null;
+    // The native layer fills the content view and crops equally on opposite edges.
+    var scale = Math.max(window.innerWidth / 1400, window.innerHeight / 852);
+    return {
+      left: (window.innerWidth - 1400 * scale) / 2 + bar[0] * scale,
+      top: (window.innerHeight - 852 * scale) / 2 + bar[1] * scale,
+      width: bar[2] * scale,
+      height: bar[3] * scale
+    };
+  }
 
   /// `splash.js` `yieldNow()` calls this as the curtain starts to fade. The landed bar leaves
   /// the curtain, crosses to Talk to Rich and becomes its gold edge, so the cut between the two
@@ -739,7 +774,8 @@
       // curtain is not measured again on its way out.
       var geo = live && live.root === root ? geometry() : null;
       if (!geo || !geo.bar || !door) return;
-      var a = geo.bar, b = door.getBoundingClientRect();
+      var a = (live.api.native && movieBar()) || geo.bar;
+      var b = door.getBoundingClientRect();
       if (!a.width || !b.width || b.bottom <= 0 || b.top >= window.innerHeight) return;
       var line = el("div", "ro-handover");
       line.style.setProperty("left", a.left + "px");
@@ -798,8 +834,8 @@
     paint: paint,
     settle: settle,
     landed: landed,
+    seekLanding: seekLanding,
     landEarly: landEarly,
-    movers: movers,
     handover: handover,
     stop: stop,
     sound: sound

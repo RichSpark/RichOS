@@ -38,7 +38,13 @@
       "icons/icon.ico"
     ],
     "resources": {
-      "../../../docs/legal/THIRD-PARTY-NOTICES.md": "THIRD-PARTY-NOTICES.md"
+      "../../../docs/legal/THIRD-PARTY-NOTICES.md": "THIRD-PARTY-NOTICES.md",
+      "../native/splash/starter/ruled-standard.mp4": "Splash/ruled-standard.mp4",
+      "../native/splash/starter/ruled-standard.bar.json": "Splash/ruled-standard.bar.json",
+      "../native/splash/starter/midnight-suede.mp4": "Splash/midnight-suede.mp4",
+      "../native/splash/starter/midnight-suede.bar.json": "Splash/midnight-suede.bar.json",
+      "../ui/assets/sounds/two-note.wav": "Splash/two-note.wav",
+      "../ui/assets/sounds/two-note-grand.wav": "Splash/two-note-grand.wav"
     },
     "category": "Productivity",
     "shortDescription": "Talk to Rich.",

@@ -341,6 +341,16 @@ function entranceEnd() {
 let bloomEnd = 0; for (let i = 0; i < N; i++) bloomEnd = Math.max(bloomEnd, (D.delay[i] + D.dur[i]) * V.bloom);
 let blooming = true, geomDirty = true;
 
+function finishEntrance(now) {
+  blooming = false;
+  nAlpha.fill(1);
+  pos.set(D.home);
+  ENT.state = 'done';
+  ENT.doneAt = now;
+  entranceSignal();
+}
+
+
 // ---------------- WebGL ----------------
 function shader(type, src) { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s) + '\n' + src); return s; }
 function program(vs, fs) { const p = gl.createProgram(); gl.attachShader(p, shader(gl.VERTEX_SHADER, vs)); gl.attachShader(p, shader(gl.FRAGMENT_SHADER, fs)); gl.linkProgram(p); if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p)); return p; }
@@ -1357,8 +1367,16 @@ function frame() {
       ENT.heldFrames++;
       if (ENT.heldFrames > 3 && ENT.heldFrames % 12 && !quietDirty && !fboDirty && !gateBusy) { rafId = running ? requestAnimationFrame(frame) : 0; return; }
     } else {
-      ENT.state = 'running'; ENT.clock = 0; ENT.revealedAt = now; bloomEnd = entranceEnd();
-      entranceSignal();
+      ENT.revealedAt = now;
+      bloomEnd = entranceEnd();
+      if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+        ENT.clock = bloomEnd;
+        finishEntrance(now);
+        geomDirty = true;
+      } else {
+        ENT.state = 'running';
+        entranceSignal();
+      }
     }
   } else ENT.clock += dt;
   const t = ENT.clock;
@@ -1384,8 +1402,8 @@ function frame() {
   if (blooming) {
     moved = stepBloom(t);
     if (ENT.state === 'running' && t > bloomEnd + 0.05) { // ROUND 84: only a running entrance can end; a held one has not begun
-      blooming = false; for (let i = 0; i < N; i++) { nAlpha[i] = 1; pos[i * 2] = D.home[i * 2]; pos[i * 2 + 1] = D.home[i * 2 + 1]; } moved = true;
-      ENT.state = 'done'; ENT.doneAt = now; entranceSignal();
+      finishEntrance(now);
+      moved = true;
     }
   }
   else {

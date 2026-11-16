@@ -442,10 +442,12 @@ declare_rules() {
   # The late full read of the bundle and the engine, 60 s after the page (late_check.rs).
   routine '^\[richos\] late check: the (updated bundle|engine runtime).s every byte matches its (receipt|delivery) \([0-9]+ ms\)$' \
     'the late background check confirming what was written; a confirmation, not a finding'
-  # The splash's saved opening, played at launch (splash_opening.rs): on a busy Mac some runs of its
-  # pictures reach Core Animation after their moment and are skipped. A measurement, not a failure.
-  routine '^\[richos\] splash: [0-9]+ run\(s\) of the opening.s pictures reached Core Animation after their moment$' \
-    'the splash opening counting the runs it skipped on a busy Mac; a measurement, not a finding'
+  routine '^\[richos\] native splash: frame zero scheduled [0-9]+ ms after process start$' \
+    'the authored splash clock began'
+  routine '^\[richos\] native splash: (reached authored endpoint|fade complete)$' \
+    'the authored timeline and the Home reveal completed'
+  routine '^\[richos\] native splash: [0-9]+ frames, [0-9]+ dropped, [0-9]+ corrupted$' \
+    'the native renderer reported frame counts for the completed splash'
   # The optional RichFiles library warmup, after the app is usable.
   routine '^\[richos\] RichFiles library: loaded in [0-9]+ ms at [0-9]+ ms after process start$' \
     'RichFiles library load completed; duration and time since startup'

@@ -20,7 +20,7 @@ Identity is the lockfile, not a date. Regenerate after any dependency change and
 | `richos/app/crates/richdoctor/Cargo.lock` | `richos/app/crates/richdoctor` | `ee8c8bceae45287dbf73047a46133219d6d89a721c44c7ece676e738c24f8492` |
 | `richos/app/crates/richos-devtools/Cargo.lock` | `richos/app/crates/richos-devtools` | `6c65c04d1dd1fd3a1241bd481140e306e211ad1f05676536d292854f63b5a3ab` |
 | `richos/app/crates/richos-user-update/Cargo.lock` | `richos/app/crates/richos-user-update` | `118ddf8fa6c5ef1494cfa3a8e12aa7b29fc5ef973ef1253f897f8e0f2674b68c` |
-| `richos/app/src-tauri/Cargo.lock` | `richos/app/src-tauri` | `33f45989782cbd6a51a8e7b5242a45bf339c1b914c268932f141175b6971cc0a` |
+| `richos/app/src-tauri/Cargo.lock` | `richos/app/src-tauri` | `11e08edce41d371e22c08c8fe5e3dec38ad54bdd65b952639d98431efac3b735` |
 | `richos/mobile/conformance/verifier/Cargo.lock` | `richos/mobile/conformance/verifier` | `8036e74423f9ef07b0d595dca1b305e4319f85a9ba03b56ffc54c1433034f2f6` |
 | `richos/tools/native-claude-stdio/Cargo.lock` | `richos/tools/native-claude-stdio` | `3f99c5fc84319ab96697e7c2086644362f6d472ebd7825425753e52e0a43380e` |
 | `richos/tools/richfiles/archive/Cargo.lock` | `richos/tools/richfiles/archive` | `9abfc715f8ad400827fb993025c80d012dee7b71fe06792ffd09feb95c82c36f` |

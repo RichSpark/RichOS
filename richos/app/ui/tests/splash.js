@@ -1309,7 +1309,7 @@ async function main() {
       assert(r.logo === 2, v.id + ": the mark has " + r.logo + " paths");
       assert(r.wordmark === 7, v.id + ": the wordmark has " + r.wordmark + " paths");
       assert(r.signal === 2, v.id + ": " + r.signal + " gold paths");
-      assertEqual(r.glints, r.signal, v.id + ": one glint over each gold path");
+      assertEqual(r.glints, 0, v.id + ": gold paths carry no pointer glint");
       drawn.push(v.id);
       await page.__ctx.close();
     }
@@ -1448,7 +1448,6 @@ async function main() {
       // a bar — which layer progresses, which one flares — is a `data-role`, not a class,
       // precisely so this list does not have to grow with the vocabulary.
       "splash-bar", "splash-bar-layer", "splash-bar-lead",
-      "ro-collector", "ro-collector-no", "ro-collector-dot",
       "splash--landed",
     ]);
     // EVERY entry, not one. This check used to inspect v6 alone, which was enough when the
@@ -1473,12 +1472,8 @@ async function main() {
       return {
         classes: Array.from(new Set(classes)),
         tags: Array.from(new Set(tags)),
-        // The text on the running screen. The held line (`ro-collector`) is not on it: it is
-        // at opacity 0 until the space key holds the screen, and is read on its own below.
         text: Array.from(n.querySelectorAll(".splash-line")).map((l) => l.innerText).join(" ").replace(/\s+/g, " ").trim(),
         every: (n.innerText || "").replace(/\s+/g, " ").trim(),
-        held: (n.querySelector(".ro-collector") || { innerText: "" }).innerText.replace(/\s+/g, " ").trim(),
-        heldOpacity: n.querySelector(".ro-collector") ? getComputedStyle(n.querySelector(".ro-collector")).opacity : null,
         buttons: n.querySelectorAll("button, a, input, [role=button]").length,
         // §15's type floor, on the only text this surface has. The CEO set the size himself:
         // 18px. It was 12px, which is below the 16px minimum for text meant to be read.
@@ -1490,9 +1485,7 @@ async function main() {
     assertEqual(stray, [], v.id + ": elements the composition is not made of");
     assertEqual(r.buttons, 0, v.id + ": the study's five clickable chips came across");
     assertEqual(r.text, "The Operating System for the AI-Enabled CEO", v.id + ": the only text on the running surface");
-    assertEqual(r.every.replace(r.held, "").trim(), r.text, v.id + ": text on the surface that is neither the line nor the held line");
-    assert(/^No\. \d+ · /.test(r.held), v.id + ": the held line does not name the opening: " + r.held);
-    assertEqual(r.heldOpacity, "0", v.id + ": the held line shows on a screen nobody is holding");
+    assertEqual(r.every, r.text, v.id + ": extra text on the playing splash");
     assertEqual(r.lineSize, "18px", v.id + ": the CEO set the tagline at 18px");
     // NO CANVAS ANYWHERE ON THIS SURFACE, and this is not tidiness. `tests/contrast.js`
     // check 14 asserts zero canvas elements on every walked surface so that a green contrast
@@ -2728,17 +2721,7 @@ async function main() {
       0,
       "a listener that could wake the animation"
     );
-    // THREE CALL SITES SINCE CEO §62, AND EACH IS HELD TO THE FUNCTION IT BELONGS IN — which
-    // is a stronger statement than the count this used to make, not a weaker one. A count alone
-    // would have been satisfied by a third site anywhere in the file, including the `focus`
-    // listener leg 1 exists to refuse.
-    //
-    //   start()    begins the single pass
-    //   tick()     continues it
-    //   unpause()  picks up a pass the SPACE KEY HELD — §62, 2026-09-19. It cannot start a
-    //              second pass: it is reachable only from a held screen, it is guarded by
-    //              `!state.barStopped` (a finished pass is never re-entered), and it adds
-    //              nothing to `state.barPasses`, which legs 2 and 3 below measure.
+    // Match each frame request to the playback or paint-report function that owns it.
     const fns = [];
     const fnRe = /function\s+([A-Za-z0-9_$]+)\s*\(/g;
     let mf;
@@ -2751,10 +2734,6 @@ async function main() {
       for (const f of fns) if (f.at < mr.index) owner = f.name;
       rafOwners.push(owner);
     }
-    //   release()  picks up a pass HELD AT A MOMENT (Sage's plan 2026-11-14, the page joining the
-    //              splash's opening), under the same `!state.barStopped` guard as unpause.
-    // The other frames in the file never paint the bar: they wait two frames before the page
-    // reports it has painted (`reportPainted`, and `takeOver` once it has joined the opening).
     const tickOwners = [];
     const otherOwners = [];
     rafRe.lastIndex = 0;
@@ -2765,10 +2744,10 @@ async function main() {
     }
     assertEqual(
       tickOwners.slice().sort(),
-      ["release", "replay", "start", "tick", "unpause"],
-      "the bar's frame loop — one to start the pass, one to continue it, one each to pick up a held one, and the gallery's Play starting its own"
+      ["recover", "replay", "start", "tick"],
+      "frame requests for the normal start, the retry, the gallery preview and the bar itself"
     );
-    assert(otherOwners.every((o) => o === "reportPainted" || o === "takeOver"),
+    assert(otherOwners.every((o) => o === "reportPainted"),
       "a frame that is not the bar's loop and not a report of the page's paint: " + JSON.stringify(otherOwners) + " (all: " + JSON.stringify(rafOwners) + ")");
     // And the strip has to have left something to read, or all four assertions above are
     // vacuous — the failure mode a negative check dies of.
@@ -3242,7 +3221,7 @@ async function main() {
     };
   };
 
-  await run.check("27  every entry can be HELD at a moment, and STARTED from one", async () => {
+  await run.check("27  the frame exporter can seek each design in either direction", async () => {
     const out = [];
     for (const entry of libraryFromDisk().variations.concat(OPENING_SAMPLE)) {
       const anOpening = entry.id.indexOf("opening/") === 0;
@@ -3273,39 +3252,7 @@ async function main() {
       assertEqual(held.back.fill, held.a.fill, entry.id + ": holding an earlier moment after a later one draws the earlier one");
       noErrors(page, "27 held " + entry.id);
       await page.__ctx.close();
-      // Started from a moment, in the app's own page: it runs on from there, and the hold is
-      // counted from the splash's first frame.
-      // (`force` narrows the library to one entry; an opening is not in the library, so it is
-      // asked for the way the shell asks: as the picked splash.)
-      const app = anOpening
-        ? await launch(browser, { hold: true, initArg: entry.id, init: (id) => { window.__RICHOS_LAUNCH__ = Object.freeze({ kind: "fresh", ordinal: 5, splash: Object.freeze({ id, opening: false }) }); } })
-        : await launch(browser, { hold: true, force: entry.id });
-      await app.waitForFunction(() => window.RichSplash && window.RichSplash.state.shown, null, { timeout: 60000 });
-      assertEqual(await app.evaluate(() => window.RichSplash.state.variationId), entry.id, "the entry that was asked for is the one started");
-      const started = await app.evaluate(async () => {
-        window.RichSplash.holdAt(400);
-        const t0 = performance.now();
-        window.RichSplash.release();
-        const anims = document.getAnimations().filter((a) => a.effect && a.effect.target && a.effect.target.closest && a.effect.target.closest("#splash"));
-        // Each animation now runs from 400 ms as of the release: its start is the release instant
-        // less 400 ms, on the page's own clock (its reading between frames is the last frame's,
-        // so the start is what is held to, not a reading).
-        const starts = anims.map((a) => Number(a.startTime) - (t0 - 400));
-        await new Promise((r) => setTimeout(r, 300));
-        return {
-          ran: performance.now() - t0,
-          moment: window.RichSplash.moment(),
-          running: anims.every((a) => a.playState === "running" || a.playState === "finished"),
-          startOff: Math.max(...starts.map(Math.abs)),
-          heldAt: window.RichSplash.state.heldAt,
-        };
-      });
-      assert(started.heldAt === null && started.running, entry.id + ": released, everything runs: " + JSON.stringify(started));
-      assert(Math.abs(started.moment - (400 + started.ran)) < 40 && started.startOff < 2,
-        entry.id + ": it runs on from 400 ms, not from the start: " + JSON.stringify(started));
-      noErrors(app, "27 started " + entry.id);
-      await app.__ctx.close();
-      out.push(entry.id + " held at 500/950/500, started from 400 (at " + Math.round(started.moment) + " ms after " + Math.round(started.ran) + " ms)");
+      out.push(entry.id + " exported at 500, 950 and 500 ms");
     }
     return out.join(" · ");
   });
@@ -3358,111 +3305,6 @@ async function main() {
       });
     };
   };
-
-  /// Pixels of a decoded PNG, `o` = offset of (x, y).
-  const pngAt = (img, x, y) => (y * img.width + x) * img.channels;
-
-  await run.check("28  the opening's pictures ARE the running splash — every entry, its first second, three window sizes", async () => {
-    // THE PER-ENTRY CHECK OF SECTION 6. The opening the shell plays is its first picture (the whole
-    // page held at 0) with, at each later moment, only the changing part (`openingRegion`) held at
-    // that moment laid over it. That composite, built here from the opening page exactly as the
-    // shell builds it, is compared with the same splash RUNNING in the app's own head (28b), stopped
-    // where it stands at the same moment. A splash added to the library later is held to the same
-    // check with no change here.
-    //
-    // THE ALLOWED DIFFERENCE, set from the first run and stated: no channel off by more than
-    // MAX_LEVEL anywhere, at most MAX_FRACTION of the pixels off at all. Measured on the first run:
-    // see this check's detail line, which prints the worst of each.
-    const MAX_LEVEL = 24;
-    const MAX_FRACTION = 0.002;
-    const conf = JSON.parse(fs.readFileSync(path.resolve(UI_DIR, "..", "src-tauri", "tauri.conf.json"), "utf8")).app.windows[0];
-    const sizes = [
-      { width: conf.minWidth, height: conf.minHeight },
-      { width: 1280, height: 800 },
-      { width: conf.width, height: conf.height },
-    ];
-    // Asked for; each is stopped where the page has got to when the harness gets its turn (a
-    // little later), and the opening is compared at exactly that moment. The last is asked for
-    // early enough that a slow turn still lands inside the opening's second.
-    const MOMENTS = [30, 220, 430, 620, 800];
-    const { decode } = require("./lib/png");
-    let worstLevel = 0;
-    let worstFraction = 0;
-    const skipped = [];
-    const out = [];
-    for (const entry of libraryFromDisk().variations.concat(OPENING_SAMPLE)) {
-      const anOpening = entry.id.indexOf("opening/") === 0;
-      // The library's own at three window sizes; each sampled opening at one.
-      for (const viewport of anOpening ? [sizes[1]] : sizes) {
-        const opening = await openingPage(viewport, entry.id, null, anOpening ? HIS_OPENINGS : null);
-        assertEqual(await opening.evaluate(() => window.RichSplash.state.variationId), entry.id, "the opening page drew the entry that was asked for");
-        const region = await opening.evaluate(() => window.RichSplash.openingRegion(1000));
-        assert(Array.isArray(region) && region[2] > 0 && region[3] > 0, entry.id + ": a changing part to draw: " + JSON.stringify(region));
-        await opening.evaluate(() => window.RichSplash.holdAt(0));
-        const first = decode(await opening.screenshot());
-        // THE RUNNING SPLASH, in the same page RUNNING (no draw mode): the app's own head and the
-        // same two scripts first in the body (28b holds that to `index.html`), with nothing else on
-        // the page to hold its main thread, so each moment is stopped where it is asked for. (In
-        // `index.html` the app's own boot shares that thread during the splash's first second and
-        // carried a stop asked for at 430 ms to 1,048 ms on a loaded host.) Its own ceiling stays
-        // armed (check 10b): five moments of its first second are over well inside four seconds.
-        const app = await openingPage(viewport, entry.id, { draw: false, splash: { id: entry.id, opening: false } }, anOpening ? [FREEZER, HIS_OPENINGS] : FREEZER);
-        await app.evaluate(() => document.fonts.ready);
-        let compared = 0;
-        for (const m of MOMENTS) {
-          const frozen = await app.evaluate((ms) => window.__freezer.freezeAt(ms), m);
-          if (frozen.moment >= 1000) {
-            // A busy page got there after the opening's second: nothing of the opening to compare.
-            skipped.push(entry.id + " " + viewport.width + "x" + viewport.height + " asked " + m + " got " + Math.round(frozen.moment));
-            await app.evaluate(() => window.__freezer.thaw());
-            continue;
-          }
-          compared++;
-          // Two frames, so the bar is painted by its own tick at the frozen moment.
-          await app.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
-          const runningPng = await app.screenshot();
-          const running = decode(runningPng);
-          await opening.evaluate((ms) => window.RichSplash.holdAt(ms), frozen.moment);
-          const heldPng = await opening.screenshot();
-          const held = decode(heldPng);
-          // The opening's frame: the first picture, with the changing part at this moment over it.
-          const dpr = running.width / viewport.width;
-          const [rx, ry, rw, rh] = region.map((v) => Math.round(v * dpr));
-          let off = 0;
-          let worst = 0;
-          for (let y = 0; y < running.height; y++) {
-            for (let x = 0; x < running.width; x++) {
-              const inside = x >= rx && x < rx + rw && y >= ry && y < ry + rh;
-              const src = inside ? held : first;
-              const a = pngAt(running, x, y);
-              const b = pngAt(src, x, y);
-              let d = 0;
-              for (let c = 0; c < 3; c++) d = Math.max(d, Math.abs(running.data[a + c] - src.data[b + c]));
-              if (d > 0) off++;
-              if (d > worst) worst = d;
-            }
-          }
-          const fraction = off / (running.width * running.height);
-          worstLevel = Math.max(worstLevel, worst);
-          worstFraction = Math.max(worstFraction, fraction);
-          assert(worst <= MAX_LEVEL && fraction <= MAX_FRACTION,
-            entry.id + " at " + viewport.width + "x" + viewport.height + ", " + frozen.moment.toFixed(1) + " ms: the opening's frame is off the running splash by up to " +
-            worst + " levels on " + (fraction * 100).toFixed(3) + "% of the pixels (allowed " + MAX_LEVEL + " on " + (MAX_FRACTION * 100) + "%)");
-          await app.evaluate(() => window.__freezer.thaw());
-        }
-        assert(compared >= 3, entry.id + " at " + viewport.width + "x" + viewport.height + ": only " + compared +
-          " of " + MOMENTS.length + " moments landed inside the opening's second (" + skipped.join("; ") + "), a harness fault");
-        noErrors(app, "28 " + entry.id);
-        noErrors(opening, "28 opening " + entry.id);
-        await app.__ctx.close();
-        await opening.__ctx.close();
-        out.push(entry.id + " " + viewport.width + "x" + viewport.height + " part " + region.join(","));
-      }
-    }
-    return "worst " + worstLevel + " levels, " + (worstFraction * 100).toFixed(4) + "% of pixels · " +
-      (skipped.length ? "past the second, not compared: " + skipped.join("; ") + " · " : "") + out.join(" · ");
-  });
-
   await run.check("28b  the page the opening is drawn in is the app's own: the same head, the splash first in the body", async () => {
     const tags = (file) => {
       const html = fs.readFileSync(path.join(UI_DIR, file), "utf8").replace(/<!--[\s\S]*?-->/g, "");
@@ -3485,62 +3327,51 @@ async function main() {
     return opening.head.length + " head tags identical; body opens with " + opening.body.join(", ");
   });
 
-  await run.check("29  the page JOINS the opening where it has reached, reports it, and its hold counts from the first frame", async () => {
-    const out = [];
-    const id = libraryFromDisk().variations[1].id;
-    // `elapsed` ms since the opening's first picture reached the glass, an opening `length` ms
-    // long, and how long the shell takes to take the pictures down.
-    for (const [elapsed, length, takeDown] of [[400, 1000, 0], [1800, 1000, 300]]) {
-      const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
-      const page = await newPage(ctx);
-      await page.addInitScript((o) => {
-        window.__RICHOS_LAUNCH__ = Object.freeze({ kind: "fresh", ordinal: 2, splash: Object.freeze({ id: o.id, opening: true }) });
-        const calls = (window.__calls = []);
+  await run.check("29  the native player owns the whole splash and Home waits through its fade", async () => {
+    const page = await launch(browser, {
+      virtualTime: true,
+      viewport: { width: 1920, height: 1200 },
+      init: () => {
+        window.__RICHOS_LAUNCH__ = { kind: "fresh", splash: { id: "round-11/v1", native: true, bar: [371, 712.75, 658, 2] } };
+        window.__native = { calls: [] };
         window.__TAURI_INTERNALS__ = {
-          invoke: (cmd, args) => {
-            calls.push({ cmd, args: args || null, at: performance.now(), moment: window.RichSplash ? window.RichSplash.moment() : null });
-            // The opening's first picture reached the glass `elapsed` ms before the page asked.
-            if (cmd === "splash_take_over") return Promise.resolve({ firstFrameMs: Date.now() - o.elapsed, openingMs: o.length });
-            if (cmd === "first_frame_painted") return new Promise((r) => setTimeout(() => { calls.push({ cmd: "down", at: performance.now(), moment: window.RichSplash.moment() }); r(null); }, o.takeDown));
+          invoke(cmd, args) {
+            window.__native.calls.push(cmd);
+            if (cmd === "splash_native_finished") {
+              return new Promise(resolve => { window.__native.finish = resolve; });
+            }
+            if (cmd === "splash_native_dismiss") {
+              window.__native.animated = args.animated;
+              return new Promise(resolve => { window.__native.clear = resolve; });
+            }
             return Promise.resolve(null);
-          },
+          }
         };
-      }, { id, elapsed, length, takeDown });
-      await page.goto("file://" + path.join(UI_DIR, "splash-opening.html"));
-      await page.waitForFunction(() => (window.__calls || []).some((c) => c.cmd === "down"), null, { timeout: 60000 });
-      // Running on for a fifth of a second past where it joined, by its own clock.
-      await page.waitForFunction(() => window.RichSplash.state.heldAt === null && window.RichSplash.state.joinedAt !== null && window.RichSplash.moment() >= window.RichSplash.state.joinedAt + 200, null, { timeout: 60000 });
-      const seen = await page.evaluate(() => ({
-        calls: window.__calls,
-        state: JSON.parse(JSON.stringify(window.RichSplash.state)),
-        moment: window.RichSplash.moment(),
-        now: performance.now(),
-      }));
-      const report = seen.calls.find((c) => c.cmd === "first_frame_painted");
-      const down = seen.calls.find((c) => c.cmd === "down");
-      assert(seen.state.opening === true && seen.state.pickedBy === "shell", "the page knows the opening is up: " + JSON.stringify(seen.state));
-      assert(seen.calls[0].cmd === "splash_take_over", "the page asks where the opening has reached first: " + JSON.stringify(seen.calls.map((c) => c.cmd)));
-      const want = Math.min(elapsed, length);
-      assert(Math.abs(seen.state.joinedAt - want) <= 120, "joined at " + seen.state.joinedAt + " ms, the opening was at " + want);
-      assertEqual(report.args && report.args.moment, seen.state.joinedAt, "the report names the moment it joined at");
-      if (elapsed >= length) {
-        // Past the opening's end: held at its last picture until the pictures are down, then on.
-        assert(Math.abs(down.moment - length) < 1, "held at the opening's last picture until it came down: " + down.moment);
       }
-      // After the take-down it runs: on from where it joined, by the time that has passed since.
-      const runningFor = seen.now - (elapsed >= length ? down.at : report.at);
-      assert(seen.state.heldAt === null && seen.moment > seen.state.joinedAt + runningFor - 120,
-        "it runs on from the joined moment: at " + Math.round(seen.moment) + " ms, " + Math.round(runningFor) + " ms after " + seen.state.joinedAt);
-      noErrors(page, "29");
-      // The hold counts from the first frame: no app-ready here, so the ceiling takes it down at
-      // its seconds plus the grace, counted from the moment he first saw the splash.
-      await page.waitForFunction(() => window.RichSplash.state.reason !== null, null, { timeout: 60000 });
-      const gone = await page.evaluate(() => ({ reason: window.RichSplash.state.reason, moment: window.RichSplash.moment() }));
-      assertEqual(gone.reason, "ceiling", "how it left");
-      await ctx.close();
-      out.push("elapsed " + elapsed + "/" + length + " ms: joined at " + seen.state.joinedAt + ", running at " + Math.round(seen.moment) + ", left by the ceiling");
-    }
-    return out.join(" · ");
+    });
+    await page.clock.runFor(7000);
+    const playing = await page.evaluate(() => {
+      const splash = document.getElementById("splash");
+      window.RichSplash.yieldNow("app-ready");
+      return { hidden: getComputedStyle(splash).visibility, held: window.RichSplash.state.heldAt, reason: window.RichSplash.state.reason, covered: window.loroCovered() };
+    });
+    assertEqual(playing, { hidden: "hidden", held: 0, reason: null, covered: true }, "the web copy joins or interrupts the native sequence");
+    const fading = await page.evaluate(async () => {
+      window.__native.finish(true);
+      await Promise.resolve();
+      const style = document.querySelector(".ro-handover")?.style;
+      return { animated: window.__native.animated, covered: window.loroCovered(), width: parseFloat(style?.width) };
+    });
+    assertEqual({ animated: fading.animated, covered: fading.covered }, { animated: true, covered: true }, "Home must stay covered during the native fade");
+    assert(Math.abs(fading.width - 658 * 1200 / 852) < 0.1, "the live gold line must start at the movie's scaled width: " + fading.width);
+    const cleared = await page.evaluate(async () => {
+      window.__native.clear();
+      await Promise.resolve();
+      return window.loroCovered();
+    });
+    assertEqual(cleared, false, "Home stayed covered after the native layer was removed");
+    await page.__ctx.close();
+    return "The renderer completes the authored sequence and acknowledges the fade before Home starts";
   });
 
   await browser.close();

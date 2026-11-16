@@ -30,13 +30,8 @@ struct Marks {
     splash: Option<bool>,
     report: crate::update_startup::LaunchReport,
     engine: Option<String>,
-    /// The splash this start shows, whether it was the pick saved at the last quit, and its
-    /// opening: `Ok(later pictures)` when it played, `Err(why not)`.
     splash_id: Option<String>,
-    splash_saved: bool,
-    opening: Option<Result<usize, String>>,
-    /// The moment of the splash the page joined the opening at, ms after the first frame.
-    joined: Option<f64>,
+    native_splash: bool,
     written: bool,
 }
 
@@ -114,20 +109,20 @@ pub fn note_engine_check(files_read: Option<usize>, millis: u64) {
     with(|m| m.engine = Some(said));
 }
 
-/// Which splash this start shows and whether its opening played (Sage's plan 2026-11-14, "the
-/// splash the rules picked is playing within 380 ms of the click", section 6, "The app's launch
-/// line": "which splash, whether its opening was used and, if not, why").
-pub fn note_splash(id: &str, saved: bool, opening: Result<usize, String>) {
+/// Which splash was selected and whether its native player was attached.
+pub fn note_splash(id: &str, native: bool) {
     with(|m| {
         m.splash_id = Some(id.to_string());
-        m.splash_saved = saved;
-        m.opening = Some(opening);
+        m.native_splash = native;
     });
 }
 
-/// The page joined the opening at this moment of the splash.
-pub fn note_joined(moment: f64) {
-    with(|m| m.joined = Some(moment));
+/// The video clock is anchored on the host clock and begins at the next refresh.
+pub fn note_native_splash_started(anchor_ms: f64) {
+    if let Some(start) = process_started_ms() {
+        let elapsed = anchor_ms.round() as u64;
+        eprintln!("[richos] native splash: frame zero scheduled {} ms after process start", elapsed.saturating_sub(start));
+    }
 }
 
 /// The start-up hook has finished.
@@ -171,14 +166,8 @@ fn line(m: &Marks, started: Option<u64>) -> String {
     };
     let splash = match &m.splash_id {
         Some(id) => {
-            let picked = if m.splash_saved { "picked at the last quit" } else { "picked by the rules at this start" };
-            let opening = match &m.opening {
-                Some(Ok(n)) => format!("its opening used ({n} later pictures)"),
-                Some(Err(why)) => format!("its opening not used: {why}"),
-                None => "its opening not used: not known".to_string(),
-            };
-            let joined = m.joined.map(|v| format!(", the page joined it at {v:.0} ms")).unwrap_or_default();
-            format!("splash shown, {id} ({picked}), {opening}{joined}")
+            let player = if m.native_splash { "native pack" } else { "web animation" };
+            format!("splash shown, {id} ({player})")
         }
         None if m.splash == Some(true) => "splash shown".to_string(),
         None => "no splash".to_string(),
@@ -223,9 +212,7 @@ mod tests {
             },
             engine: Some("none (trusted as verified when it was written), 3 ms".into()),
             splash_id: None,
-            splash_saved: false,
-            opening: None,
-            joined: None,
+            native_splash: false,
             written: false,
         };
         assert_eq!(
@@ -239,18 +226,12 @@ mod tests {
         assert!(line(&old, None).contains("after a hand-over from an older copy that does not report its own"));
         let opened = Marks {
             splash_id: Some("round-11/v2".into()),
-            splash_saved: true,
-            opening: Some(Ok(30)),
-            joined: Some(412.4),
+            native_splash: true,
             ..m.clone()
         };
-        assert!(line(&opened, None).contains(
-            "; splash shown, round-11/v2 (picked at the last quit), its opening used (30 later pictures), the page joined it at 412 ms; "
-        ));
-        let fell_back = Marks { splash_saved: false, opening: Some(Err("nothing was saved at the last quit".into())), joined: None, ..opened };
-        assert!(line(&fell_back, None).contains(
-            "; splash shown, round-11/v2 (picked by the rules at this start), its opening not used: nothing was saved at the last quit; "
-        ));
+        assert!(line(&opened, None).contains("; splash shown, round-11/v2 (native pack); "));
+        let fallback = Marks { native_splash: false, ..opened };
+        assert!(line(&fallback, None).contains("; splash shown, round-11/v2 (web animation); "));
         let ceiling = Marks { page: None, splash: Some(false), engine: None, ..m };
         let text = line(&ceiling, None);
         assert!(text.contains("page took over: not reported"), "{text}");
