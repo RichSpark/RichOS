@@ -109,6 +109,12 @@ class AppProtocolTests(unittest.TestCase):
         self.assertIn("Draft the depot manual", changed["text"])
         self.assertNotEqual(changed["brief_revision"], first["brief_revision"])
         with sqlite3.connect(self.store / "ecs.sqlite3") as conn:
+            counts = dict(conn.execute(
+                "SELECT event_type, COUNT(*) FROM ecs_events GROUP BY event_type"
+            ))
+            for registration in ("entity.registered", "thread.created", "session.observed"):
+                self.assertEqual(counts[registration], 1)
+            self.assertEqual(counts["thread.activated"], 4)
             self.assertEqual(conn.execute(
                 "SELECT COUNT(*) FROM ecs_events WHERE event_type='checkpoint.compiled'"
             ).fetchone()[0], 0)

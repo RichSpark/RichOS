@@ -227,7 +227,7 @@ def fenced(store, binding, seat):
     return fence(store, binding) if seat is None else fence(store, binding, seat)
 
 
-def bind(store, request, seat=None):
+def bind(store, request, seat=None, *, previous=None):
     scope = request.get("scope", {})
     if set(scope) != set(BINDING_FIELDS) - {"revision"}:
         raise ScopeError("bind requires explicit entity, thread, session, turn and audience")
@@ -259,6 +259,8 @@ def bind(store, request, seat=None):
     # is where right now, which is what a seat is, so only it carries the seat.
     # Carrying the seat on all four raises "entity ... is already registered
     # differently" (ecs_core.py:726-737) before the second seat exists at all.
+    same_session = previous is not None and all(previous[key] == scope[key] for key in
+                                               ("entity_id", "thread_id", "session_id"))
     for suffix, event, payload in (
         ("entity", "entity.registered", {"display_name": entity, "canonical_root": owner,
                                          "git_common_dir": owner, "status": "active"}),
@@ -266,6 +268,10 @@ def bind(store, request, seat=None):
         ("session", "session.observed", {"vendor": "richos-app", "status": "active"}),
         ("active", "thread.activated", {"audience": scope["audience"], "turn_id": scope["turn_id"]}),
     ):
+        if same_session and suffix != "active":
+            # The existing binding attests these registrations. This turn
+            # changes only the seat's cursor, still fenced by its revision.
+            continue
         store.append(event, **common, payload=payload,
                      person_id=PERSON_ID if suffix != "active" or seat is None else seat,
                      expected_revision=expected if suffix == "active" else None,
@@ -596,8 +602,8 @@ def execute(state_root, request, *, store=None):
         if current is not None and all(current.get(k) == v for k, v in scope.items()) and set(scope) == set(BINDING_FIELDS) - {"revision"}:
             binding = current
         else:
-            binding = execute(root, {**request, "command": "bind",
-                "expected_revision": current["revision"] if current else None}, store=store)["binding"]
+            binding = bind(store, {**request,
+                "expected_revision": current["revision"] if current else None}, seat, previous=current)["binding"]
         fields = {**request, "binding": binding}
         receipts, receipt_error = None, None
         try:
