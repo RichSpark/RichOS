@@ -550,8 +550,8 @@ fn retain_legacy_handoffs(scope:&StatusToolScope)->Result<(),String> {
     })
 }
 
-/// Read unfinished input in durable order, skipping only what this live connection took.
-pub(crate) fn pending_after(scope:&StatusToolScope,role:&str,after:u64)->Result<Option<(Message,u64)>,String> {
+/// Read unfinished input in durable order after this receiver's current scan position.
+pub fn pending_after(scope:&StatusToolScope,role:&str,after:u64)->Result<Option<(Message,u64)>,String> {
     let path=inbox(scope,role)?;let mut cursor=cursor_state(&path)?;
     if role=="stu" && cursor["handoffs_retained"]!=true && path.is_file() {
         retain_legacy_handoffs(scope)?;
@@ -915,6 +915,26 @@ mod tests {
         assert_eq!(message.text,"Already durably saved ordinary peer input");
         assert_eq!(through,length);
         assert!(!wrote_cursor,"reading a new inbox must not create migration state");
+    }
+
+    #[test]
+    fn rich_can_accept_a_later_owner_result_while_a_waiting_notice_is_pending() {
+        let root = std::env::temp_dir().join(format!("richos-waiting-inbox-{}", uuid::Uuid::new_v4()));
+        let scope = StatusToolScope {
+            version: 1, state_root: root.clone(), entity_id: "company".into(), thread_id: "thread".into(),
+        };
+        let held = observe_waiting(&scope, json!({"input_id":"keep-waiting:ready"}), None).unwrap();
+        observe_work_status(&scope, json!({"input_id":"independent-owner-result"})).unwrap();
+        let (notice, first) = pending(&scope, "rich").unwrap().unwrap();
+        assert_eq!((notice.from.as_str(), first), ("ecs-waiting", held));
+        let (owner, later) = pending_after(&scope, "rich", held).unwrap().unwrap();
+        assert_eq!(owner.from, "work-status");
+        acknowledge(&scope, "rich", later).unwrap();
+        assert_eq!(pending(&scope, "rich").unwrap().unwrap().1, held);
+        assert!(pending_after(&scope, "rich", held).unwrap().is_none());
+        acknowledge(&scope, "rich", held).unwrap();
+        assert!(pending(&scope, "rich").unwrap().is_none());
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
