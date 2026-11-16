@@ -320,6 +320,17 @@ mod tests {
         assert!(readings.claim_heartbeat("thr_a", Seat::Rich, at + (59 + 55) * MINUTE));
     }
 
+    /// The engine's hook knows the app's keep-alive message by the tag that opens it, and gives
+    /// that turn no notice meant for a real one (`engine/scripts/app-engine-hook.py`,
+    /// `keep_alive`). The two files must name the same tag, and the message must open with it.
+    #[test]
+    fn the_engines_hook_knows_the_keep_alive_message_by_the_tag_that_opens_it() {
+        let hook = Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(3).unwrap().join("engine/scripts/app-engine-hook.py");
+        let source = std::fs::read_to_string(&hook).unwrap_or_else(|e| panic!("{}: {e}", hook.display()));
+        assert!(source.contains(&format!("KEEP_ALIVE_TAG = \"{KEEP_ALIVE_TAG}\"")), "the hook names another tag than {KEEP_ALIVE_TAG}");
+        assert!(KEEP_ALIVE_TEXT.starts_with(KEEP_ALIVE_TAG), "the keep-alive message does not open with its tag");
+    }
+
     #[test]
     fn a_result_says_which_cache_lifetime_its_turn_wrote_under() {
         let hour = serde_json::json!({"usage": {"cache_creation": {"ephemeral_1h_input_tokens": 17, "ephemeral_5m_input_tokens": 0}}});

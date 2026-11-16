@@ -234,6 +234,22 @@ def mid_job_notice(work, active, payload, root, emit):
     return True
 
 
+# What opens the app's own keep-alive message (richos-core chat_cache.rs KEEP_ALIVE_TAG, which a
+# test there holds equal to this line).
+KEEP_ALIVE_TAG = "<richos-keep-alive>"
+
+
+def keep_alive(payload):
+    """THE APP'S KEEP-ALIVE MESSAGE IS HOST MACHINERY, NOT A TURN OF THE LEAD'S ("Keep chat
+    alive", CEO 2026-11-16): one technical message the app sends a session that has been idle
+    for 55 minutes, to renew its provider cache, answered with one word and never shown. A
+    notice waiting for the lead's next turn (due work, a home picture stage) is said once, so it
+    is not said into this one: it stays for the next real turn. The app sends it with the turn
+    grant closed, so every tool is refused and its end is not judged, as for any context-only
+    turn."""
+    return str(payload.get("prompt") or "").startswith(KEEP_ALIVE_TAG)
+
+
 def home_stage_notice(root, payload):
     """A STAGE OF THE HOME PICTURE WAS REACHED (CEO 2026-11-14: "a hook that automatically
     notifies Rich when a milestone is reached"). The app writes <state>/home-stage-notice.json
@@ -334,7 +350,7 @@ def handle(payload):
         return
     ws = [sys.executable, str(ENGINE / "mega-lander/workspaces.py"), "--entity", str(coordination)]
     work = load("richos_desktop_work", ENGINE / "mega-lander/app.py")
-    if event == "UserPromptSubmit":
+    if event == "UserPromptSubmit" and not keep_alive(payload):
         held_work_context(work, root, payload, also=home_stage_notice(root, payload))
     if event == "PreToolUse":
         refuse_the_leads_own_read(work, root, payload)
