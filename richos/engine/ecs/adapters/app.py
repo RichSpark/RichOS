@@ -493,8 +493,15 @@ def update_obligation(store, context, item, key, *, closing=False, **fields):
                  payload={"item_id": item["item_id"], **fields})
 
 
+def has_verified_skip(item):
+    return (item["condition_json"] and item["status"] == "blocked"
+            and (item["evidence_ref"] or "").startswith("waiting-skipped:"))
+
+
 def awaits_owner(store, item):
     if item["status"] not in OPERATOR_OPEN:
+        return False
+    if has_verified_skip(item):
         return False
     if item["condition_json"]:
         if item["status"] == "blocked" or json.loads(item["condition_json"]).get("launch") is True:
@@ -531,7 +538,7 @@ def answer_delivered(store, request):
         if item["reply_owed"] and item["reply_turn"] == ref and not awaits_owner(store, item):
             key = f"delivered:{ref}:{link['item_id']}"
             fields = {"reply_owed": 0, "reply_evidence": f"{ref}#{digest}"}
-            if item["status"] in OPERATOR_OPEN:
+            if item["status"] in OPERATOR_OPEN and not has_verified_skip(item):
                 update_obligation(store, context, item, key, closing=True, status="completed",
                              evidence_ref=fields["reply_evidence"], **fields)
             else:
@@ -552,16 +559,17 @@ def waiting_noticed(store, request):
     state = required(request, "state")
     if state not in {"ready", "skipped"}:
         raise ValidationError("unknown waiting notice state")
-    if item["status"] != "blocked" or (item["evidence_ref"] or "").startswith("waiting-skipped:"):
-        return {"changed": False}
     evidence = required(request, "evidence")
     if len(evidence) > 1024:
         raise ValidationError("waiting notice evidence is too long")
     fields = {"evidence_ref": f"waiting-{state}:{evidence}"}
+    if item["status"] != "blocked" or has_verified_skip(item):
+        return {"changed": False, "deliver": item["status"] in {"active", "blocked"}
+                and item["evidence_ref"] == fields["evidence_ref"]}
     if state == "ready":
         fields["status"] = "active"
     update_obligation(store, context, item, f"waiting:{entity}:{thread}:{item_id}:{state}", **fields)
-    return {"changed": True}
+    return {"changed": True, "deliver": True}
 
 
 def execute(state_root, request, *, store=None):

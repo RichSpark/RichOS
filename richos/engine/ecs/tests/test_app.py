@@ -241,13 +241,29 @@ class AppProtocolTests(unittest.TestCase):
         for status in ("ready", "skipped"):
             notice = dict(thread_id="thread-a", item_id=status, state=status, evidence="inbox:rich:10")
             self.call("waiting-noticed", entity_id="unrelated", **notice, ok=False)
-            self.assertTrue(self.call("waiting-noticed", entity_id="depot", **notice)["changed"])
-            self.assertFalse(self.call("waiting-noticed", entity_id="depot", **notice)["changed"])
+            self.assertEqual(self.call("waiting-noticed", entity_id="depot", **notice),
+                             {"changed": True, "deliver": True})
+            self.assertEqual(self.call("waiting-noticed", entity_id="depot", **notice),
+                             {"changed": False, "deliver": True})
+            self.assertFalse(self.call("waiting-noticed", entity_id="depot",
+                                       **{**notice, "evidence": "inbox:rich:20"})["deliver"])
         self.assertEqual(self.call("waiting-work")["items"], [])
         ready = self.call("inspect", seat=seat, query={"item_id": "ready"})["item"]
         skipped = self.call("inspect", seat=seat, query={"item_id": "skipped"})["item"]
         self.assertEqual((ready["status"], ready["reply_owed"]), ("active", 1))
         self.assertEqual((skipped["status"], skipped["evidence_ref"]), ("blocked", "waiting-skipped:inbox:rich:10"))
+        for item in ("ready", "skipped"):
+            self.assertTrue(self.call("link-reply", seat=seat, item_id=item)["linked"])
+        delivery = dict(entity_id="depot", thread_id="thread-a", turn_id="turn-1", reply_sha256="0" * 64)
+        self.assertEqual(self.call("answer-delivered", **delivery)["delivered"], 2)
+        self.assertEqual(self.call("answer-delivered", **delivery)["delivered"], 0)
+        ready = self.call("inspect", seat=seat, query={"item_id": "ready"})["item"]
+        skipped = self.call("inspect", seat=seat, query={"item_id": "skipped"})["item"]
+        self.assertEqual((ready["status"], ready["reply_owed"]), ("completed", 0))
+        self.assertEqual((skipped["status"], skipped["reply_owed"], skipped["evidence_ref"]),
+                         ("blocked", 0, "waiting-skipped:inbox:rich:10"))
+        self.assertFalse(self.call("waiting-noticed", entity_id="depot", thread_id="thread-a",
+                                   item_id="ready", state="ready", evidence="inbox:rich:10")["deliver"])
 
     def test_linked_reply_remains_owed_until_the_host_records_its_delivery(self):
         self.binding = self.call("bind", seat="ceo-thread:thread-a",
