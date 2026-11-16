@@ -971,9 +971,7 @@ impl EngineProfile {
     /// `settings.json` beside the engine plugin's, which Claude Code runs together, and the
     /// user's commit attribution (`user_settings::ATTRIBUTION`).
     pub fn lease_settings(&self) -> serde_json::Value {
-        // Auto-memory on (build plan item 10); where Rich and Stu keep it is their definitions'
-        // `memory:` scope (`user_settings::MEMORY_SCOPE`), in the coordination folder.
-        let mut settings = json!({"autoMemoryEnabled":true,
+        let mut settings = json!({"autoMemoryEnabled":crate::user_settings::AUTO_MEMORY_ENABLED,
             "claudeMdExcludes":["**/CLAUDE.md", "**/CLAUDE.local.md", "**/.claude/rules/**"]});
         if let Some(hooks) = &self.user.settings.hooks { settings["hooks"] = hooks.clone(); }
         for (key, value) in &self.user.settings.attribution { settings[key] = value.clone(); }
@@ -1075,10 +1073,14 @@ impl EngineProfile {
                 Err(err) => eprintln!("[richos] could not load meeting history instructions: {err}"),
             }
         }
+        if crate::user_settings::AUTO_MEMORY_ENABLED {
+            command.env_remove("CLAUDE_CODE_DISABLE_AUTO_MEMORY");
+        } else {
+            command.env("CLAUDE_CODE_DISABLE_AUTO_MEMORY", "1");
+        }
         command.arg("--plugin-dir").arg(&self.plugin)
             .args(["--permission-mode", "bypassPermissions"])
             .arg("--settings").arg(self.lease_settings().to_string())
-            .env_remove("CLAUDE_CODE_DISABLE_AUTO_MEMORY")
             .env("PATH", self.lease_path()).env_remove("CLAUDECODE")
             .env("CLAUDE_ENV_FILE", self.plugin.join(COMMANDS_ENV))
             // The app's own tools run the app's Python whatever an agent's PATH finds first
