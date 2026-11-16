@@ -1840,15 +1840,20 @@ impl WorkHost {
                     if inner.closing {
                         return;
                     }
+                    // Back ends also wake at turn and account boundaries. Leave pending
+                    // input queued while the terminal owns this conversation.
+                    let binding = inner.binding.clone().filter(|binding| {
+                        !crate::session_tools::terminal_handover_active(&self.message_scope(binding))
+                    });
                     // During an automatic turn of Stu's too (review
                     // rv-20261019T030516Z-0a1a8728-e798, finding 1): he is told there that the
                     // switch is coming, and the renewal never ends a running turn.
-                    if let (Some(binding), Some(at_turn_end)) = (inner.binding.clone(), inner.move_check) {
+                    if let (Some(binding), Some(at_turn_end)) = (binding.clone(), inner.move_check) {
                         inner.move_check = None;
                         inner.processing = true;
                         break Next::Move(binding, at_turn_end);
                     }
-                    if let Some(binding) = inner.binding.clone() {
+                    if let Some(binding) = binding {
                         if let Some(answer) = crate::question_work::pending(&self.state)
                             .unwrap_or_default()
                             .into_iter()
