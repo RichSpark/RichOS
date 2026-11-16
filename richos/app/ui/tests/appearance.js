@@ -1126,9 +1126,10 @@ async function main() {
       // The optional SwearMeter display follows the existing controls so storage-removal
       // feedback keeps its place; its switch never gates counting (SwearMeter V3).
       // Terminal setup is the last row of "Working with Rich" and Your name in Git sits directly
-      // under Connected folders (round 41, CEO 2026-10-25).
+      // under Connected folders (round 41, CEO 2026-10-25). The Context meter switch is the
+      // last row of "How it looks" (round 83 screen 1, CEO 2026-11-16).
       [
-        "Theme", "Text size", "Oxford comma: OFF", "Technical view", "Claude Code quota", "Keep the stored output", "Show SwearMeter",
+        "Theme", "Text size", "Oxford comma: OFF", "Technical view", "Claude Code quota", "Keep the stored output", "Show SwearMeter", "Context meter",
         "Your instructions", "Search folders", "Rich's model", "How much should Rich interrupt you?", "Use Rich from your phone", "RichPass", "Terminal setup",
         "Company", "Home screen", "Token spend", "Let Codex review your team’s work", "Start meeting notes", "Claude accounts",
         "Connected folders (repositories)", "Your name in Git", "Memory folder", "Updates",
@@ -1436,9 +1437,11 @@ async function main() {
     // none below 1rem, so it needs no px declaration either.
     // `suite-tools.css` (round 70, the five tools on a first install) sizes every line in `rem`,
     // so it needs no px declaration; the walk below holds it to the same floor as the rest.
+    // `context-meter.css` and `keep-alive.css` (round 83) each declare one font-size, `1rem`, so
+    // neither needs a px declaration.
     assertEqual(
       SOURCES.styleSources(),
-      ["fonts/fonts.css", "style.css", "cleaner.css", "search-folder-settings.css", "speckle.css", "splash.css", "openings.css", "home.css", "instructions-update.css", "terminal-and-git.css", "suite-tools.css", "video-anywhere.css", "dictation-overlay.css", "meeting-panel.css"],
+      ["fonts/fonts.css", "style.css", "cleaner.css", "search-folder-settings.css", "speckle.css", "splash.css", "openings.css", "home.css", "instructions-update.css", "terminal-and-git.css", "suite-tools.css", "video-anywhere.css", "context-meter.css", "keep-alive.css", "dictation-overlay.css", "meeting-panel.css"],
       "the shipped windows have a different set of stylesheets from the declared list"
     );
     // THE TWO DERIVATIONS ARE JOINED, the way `lib/harness.js` joins its two PNG decoders: a

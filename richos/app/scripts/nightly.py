@@ -908,6 +908,31 @@ def serve_channel_manifest(manifest):
                 str(path))
 
 
+
+def record_served_nightly(info, manifest):
+    """Keep proof on the release that the rolling channel actually served."""
+    with tempfile.TemporaryDirectory(prefix="richos-nightly-served-") as tmp:
+        marker = Path(tmp) / "published.json"
+        marker.write_text(json_text(manifest))
+        verify_served_asset(ENDPOINT, marker)
+        try:
+            execute("gh", "release", "upload", info["tag"], "--repo", REPO, str(marker))
+        except subprocess.CalledProcessError:
+            # A retry after the first upload verifies the same immutable evidence.
+            verify_served_asset(f"https://github.com/{REPO}/releases/download/{info['tag']}/{marker.name}", marker)
+
+
+def wake_local_waiting_work():
+    """Wake an existing local app inbox after the verified publication boundary."""
+    messages = (Path.home() / "Library/Application Support/com.richos.app/engine-state/messages")
+    if not messages.is_dir():
+        return
+    try:
+        (messages / "reconcile-waiting.json").touch()
+    except OSError as error:
+        print(f"Could not wake the local app waiting-work check: {error}", file=sys.stderr, flush=True)
+
+
 def _candidate_files(out, recorded=()):
     """Hash candidate files, preserving checks for every previously recorded file."""
     files = {}
@@ -1653,6 +1678,8 @@ def finish(info, out):
               f"  {STABLE_ENDPOINT}", flush=True)
         return
     channel_commit = promote(info, manifest)
+    record_served_nightly(info, manifest)
+    wake_local_waiting_work()
     print(f"Published {info['tag']}; {CHANNEL_REF} at {channel_commit}, serving\n"
           f"  {ENDPOINT}", flush=True)
 

@@ -9,6 +9,8 @@
 mod richpass_host;
 mod question_host;
 mod swearmeter_host;
+/// The context meter and "Keep chat alive" (CEO, 2026-11-16, round 83), for the window.
+mod chat_cache_host;
 mod peer_messages;
 mod activation;
 mod lifecycle;
@@ -656,6 +658,9 @@ struct EngineLeaseFactory {
     #[cfg(target_os = "macos")]
     app: AppHandle,
     quota: Arc<richos_core::quota::Service>,
+    /// Where each lease writes its chat's context size and cache clock (`chat_cache.rs`): the
+    /// SAME store `AppState::chat_readings` reads.
+    chat_readings: Arc<richos_core::chat_cache::Readings>,
     claude_bin: Arc<Mutex<PathBuf>>,
     engine_dir: Arc<Mutex<PathBuf>>,
     /// Where RichOS keeps its own files — `app_data_dir()`, the same directory the ledger,
@@ -795,6 +800,7 @@ impl LeaseFactory for EngineLeaseFactory {
         // Fill-first: the work lease runs under the Claude account in use now.
         profile.claude_account = Some(self.quota.lease_account());
         profile.token_sink = Some(self.quota.token_sink()); // what the lease spends, counted on that account
+        profile.chat_readings = Some(Arc::clone(&self.chat_readings)); // its chat's context size and cache clock
         profile.speech_model = speech_model_for_rich();
         let bridge = richos_core::ecs::EcsBridge::new(&runtime.python, &dir, &self.data_dir.join("ecs"))
             .map_err(|e| CognitionError::Io(e.to_string()))?;
@@ -883,6 +889,7 @@ impl EngineLeaseFactory {
         // Fill-first: the conversation lease runs under the Claude account in use now.
         profile.claude_account = Some(self.quota.lease_account());
         profile.token_sink = Some(self.quota.token_sink()); // what the lease spends, counted on that account
+        profile.chat_readings = Some(Arc::clone(&self.chat_readings)); // its chat's context size and cache clock
         profile.speech_model = speech_model_for_rich();
         let bridge = richos_core::ecs::EcsBridge::new(&runtime.python, &dir, &self.data_dir.join("ecs"))
             .map_err(|e| CognitionError::Io(e.to_string()))?;
@@ -901,6 +908,10 @@ impl EngineLeaseFactory {
 struct AppState {
     swearmeter: swearmeter_host::Service,
     quota: Arc<richos_core::quota::Service>,
+    /// **Each chat's context size and cache clock** (`richos_core::chat_cache`): the context
+    /// meter's figures and what "Keep chat alive" decides on. The leases write it from their own
+    /// reader threads; it has its own lock and is read without the spine's.
+    chat_readings: Arc<richos_core::chat_cache::Readings>,
 
     /// **The second compute lease and the actor that owns it** — the background-work spec
     /// §2.1's work host.
@@ -1532,6 +1543,9 @@ fn retire_idle_sessions(state: &AppState) {
     // observations that cannot be read are `work_gate`'s `Unknown`, which waits.
     let held = |binding: &richos_core::entity::ThreadBinding| {
         questions.pending_for_thread(binding.entity_id().as_str(), binding.thread_id()).unwrap_or(true)
+            // "Keep chat alive": a kept chat's session stays, so its keep-alive reaches a
+            // session that is already open instead of resuming one.
+            || chat_cache_host::holds_session(state, binding.thread_id())
             || state.control.for_thread(binding.thread_id()).lease_session().is_some_and(|session| {
                 let view = richos_core::app_workers::status(&engine_state, Some(&session));
                 !richos_core::work_gate::workers(&view).0.permits_action()
@@ -3591,10 +3605,20 @@ fn main() {
                 resolution.source,
                 Some(engine::EngineSource::EnvEngineDir) | Some(engine::EngineSource::EnvEngineRoot)
             );
+            // THE CONTEXT METER AND "KEEP CHAT ALIVE" (CEO, 2026-11-16, round 83): what each
+            // chat's two sessions say about their context size and their last request, kept
+            // beside the ledger so a chat shows its last size after a relaunch. Every lease
+            // writes here; a change in a chat's size goes to the window as it happens.
+            let chat_readings = richos_core::chat_cache::Readings::open(&data_dir.join("chat-readings.json"));
+            {
+                let app = app.handle().clone();
+                chat_readings.set_observer(Arc::new(move |thread, chat| chat_cache_host::publish(&app, thread, chat)));
+            }
             let lease_factory = || EngineLeaseFactory {
                 #[cfg(target_os = "macos")]
                 app: app.handle().clone(),
                 quota: quota.clone(),
+                chat_readings: Arc::clone(&chat_readings),
 
                 claude_bin: Arc::clone(&claude_bin_cell),
                 engine_dir: Arc::clone(&engine_cell),
@@ -3618,6 +3642,9 @@ fn main() {
                 Arc::new(WorkNotice { app: app.handle().clone() }),
             );
             work.set_quota(quota.clone());
+            // "Keep chat alive" reaches Stu's sessions through the same readings, for the chats
+            // whose box is checked (`chat_cache_host.rs`).
+            work.set_keep_alive(Arc::clone(&chat_readings), chat_cache_host::kept(app.handle().clone()));
             // The back end's written files — its own, its workers', its commands' — reach the
             // assignment's thread's output list after every back-end turn (PRD §4.1 (b)).
             work.set_output_store(output_store.clone());
@@ -3981,6 +4008,7 @@ fn main() {
             app.manage(AppState {
                 swearmeter: swearmeter_host::Service::new(app.handle().clone(), spine.reader(), control.clone(), card_counts, card_source_seen),
                 quota: quota.clone(),
+                chat_readings,
 
                 work,
                 quit_confirmed: std::sync::atomic::AtomicBool::new(false),
@@ -4061,6 +4089,8 @@ fn main() {
             // selected thread's immutable company scope. Reader snapshots stay available.
             ready_selected_front_desk(app.handle());
             spawn_idle_session_retirement(app.handle().clone());
+            // "Keep chat alive": the clock that looks at the chats whose box is checked.
+            chat_cache_host::start(app.handle().clone());
             // The composer's attachments, in the SAME app-data directory the phone's
             // attachment desk writes to (`phone/attachments.rs`). No I/O until a file arrives.
             let attachments_home = app.state::<AppState>().data_dir.clone();
@@ -4492,6 +4522,12 @@ fn main() {
             swearmeter_host::get_swearmeter,
             swearmeter_host::set_swearmeter_visible,
             swearmeter_host::retry_swearmeter,
+            // --- the context meter and Keep chat alive (CEO 2026-11-16, round 83) — appended ---
+            chat_cache_host::get_context_meter,
+            chat_cache_host::set_context_meter,
+            chat_cache_host::chat_context,
+            chat_cache_host::get_keep_chat_alive,
+            chat_cache_host::set_keep_chat_alive,
             get_resources_view,
             set_resources_view,
             // --- improved Rich and Stu instructions reach every user (CEO 2026-10-22) — appended ---

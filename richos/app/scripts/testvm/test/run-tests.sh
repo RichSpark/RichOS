@@ -2005,6 +2005,10 @@ t "conversation walk: steps, turn matching, app notices never hold a step, actor
   PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/conversation-walk.test.py" >"$TMP/conversation-walk.log" 2>&1; ok $? "$(cat "$TMP/conversation-walk.log")"
 t_done
 
+t "keep-alive walk: the meter's words, a transcript's last request, a keep-alive that was one word and one that was more"
+  PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/keep-alive-walk.test.py" >"$TMP/keep-alive-walk.log" 2>&1; ok $? "$(cat "$TMP/keep-alive-walk.log")"
+t_done
+
 t "release lines walk: a dictation judged against the words said (a run of 3 missing, words added at the end), argument refusals"
   PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/release-lines-walk.test.py" >"$TMP/release-lines-walk.log" 2>&1; ok $? "$(cat "$TMP/release-lines-walk.log")"
 t_done

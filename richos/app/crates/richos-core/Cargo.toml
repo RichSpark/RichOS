@@ -38,6 +38,7 @@ rusqlite = { version = "=0.32.1", default-features = false }
 libc = "0.2"
 
 [features]
+ecs-memory-off = []
 # The crash matrix's abort points for his answers to a work job (`work_host`'s, and its one
 # `work_fault`), compiled only into the `work_walk` build the VM crash matrix hands the guest. No
 # product build enables it; without it every point is an empty inline function.

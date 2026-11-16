@@ -169,6 +169,10 @@ pub struct EngineProfile {
     /// **Where this lease's token use goes** (`quota::Service::token_sink`), counted under
     /// `claude_account`. Set by the shell beside it; `None` everywhere else.
     pub token_sink: Option<std::sync::Arc<crate::quota::tokens::Sink>>,
+    /// **Where this lease's context size and cache clock go** (`chat_cache::Readings`), kept
+    /// under the chat the lease is scoped to. Set by the shell beside the token sink; `None`
+    /// everywhere else, and then nothing is read.
+    pub chat_readings: Option<std::sync::Arc<crate::chat_cache::Readings>>,
     /// **The speech model the video skill transcribes with** (media-tools plan section 3). Set
     /// by the shell through [`speech_model_for_video`]: the pinned large-v3-turbo-q5_0 that setup
     /// installs for transcription when it is installed and verified (the CEO, 2026-10-07: "Both,
@@ -755,7 +759,7 @@ impl EngineProfile {
         write(&plugin.join("spawn-preflight.json"),
               &json!({"hooks":{"PreToolUse":[{"matcher":"Agent","hooks":preflight}]}}).to_string())?;
         let profile = Self { engine, coordination, plugin, state, runtime, work_scope: None, search_binding: None, codex_root:crate::codex_bridge::root(),
-                  claude_account: None, token_sink: None, speech_model: None, meetings_corpus: None, live_meeting_reader: None,
+                  claude_account: None, token_sink: None, chat_readings: None, speech_model: None, meetings_corpus: None, live_meeting_reader: None,
                   lease_models: crate::config::lease_models_from_config(&data), machine_settings, user };
         write(&profile.plugin.join(COMMANDS_ENV), &profile.commands_env())?;
         Ok(profile)
@@ -967,9 +971,7 @@ impl EngineProfile {
     /// `settings.json` beside the engine plugin's, which Claude Code runs together, and the
     /// user's commit attribution (`user_settings::ATTRIBUTION`).
     pub fn lease_settings(&self) -> serde_json::Value {
-        // Auto-memory on (build plan item 10); where Rich and Stu keep it is their definitions'
-        // `memory:` scope (`user_settings::MEMORY_SCOPE`), in the coordination folder.
-        let mut settings = json!({"autoMemoryEnabled":true,
+        let mut settings = json!({"autoMemoryEnabled":crate::user_settings::AUTO_MEMORY_ENABLED,
             "claudeMdExcludes":["**/CLAUDE.md", "**/CLAUDE.local.md", "**/.claude/rules/**"]});
         if let Some(hooks) = &self.user.settings.hooks { settings["hooks"] = hooks.clone(); }
         for (key, value) in &self.user.settings.attribution { settings[key] = value.clone(); }
@@ -1071,10 +1073,14 @@ impl EngineProfile {
                 Err(err) => eprintln!("[richos] could not load meeting history instructions: {err}"),
             }
         }
+        if crate::user_settings::AUTO_MEMORY_ENABLED {
+            command.env_remove("CLAUDE_CODE_DISABLE_AUTO_MEMORY");
+        } else {
+            command.env("CLAUDE_CODE_DISABLE_AUTO_MEMORY", "1");
+        }
         command.arg("--plugin-dir").arg(&self.plugin)
             .args(["--permission-mode", "bypassPermissions"])
             .arg("--settings").arg(self.lease_settings().to_string())
-            .env_remove("CLAUDE_CODE_DISABLE_AUTO_MEMORY")
             .env("PATH", self.lease_path()).env_remove("CLAUDECODE")
             .env("CLAUDE_ENV_FILE", self.plugin.join(COMMANDS_ENV))
             // The app's own tools run the app's Python whatever an agent's PATH finds first

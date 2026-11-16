@@ -115,6 +115,11 @@ pub const SCOPE_LIMIT: u64 = 256 * 1024;
 pub const INSTRUCTION_TEXT_LIMIT: usize = 128 * 1024;
 
 impl UserInstruction {
+    pub fn matches_text(&self, text: &str) -> bool {
+        use sha2::Digest;
+        format!("{:x}", sha2::Sha256::digest(text.as_bytes())) == self.sha256
+    }
+
     /// The scope's record of one user turn: its reference, its hash, and its words when they
     /// fit ([`INSTRUCTION_TEXT_LIMIT`]). `text` must be the verified words the hash was or will
     /// be taken of; `sha256` is passed in so a caller that already holds the attested digest
@@ -225,6 +230,9 @@ pub mod closed_by {
     pub const TURN_START_FAILED: &str = "turn-start-failed";
     /// The scope was written for an input whose turn has not started yet.
     pub const NOT_STARTED: &str = "not-started";
+    /// The app's own keep-alive message is running ("Keep chat alive", `chat_cache.rs`): the
+    /// grant is closed for it and put back when it ends ([`super::reopen_after_keep_alive`]).
+    pub const KEEP_ALIVE: &str = "keep-alive";
 }
 
 impl GrantClosed {
@@ -267,6 +275,31 @@ pub fn set_actions_allowed(path: &Path, allowed: bool) -> Result<(), EcsError> {
     let mut scope: ToolScope = serde_json::from_slice(&bytes).map_err(|e| EcsError(e.to_string()))?;
     scope.actions_allowed = allowed;
     scope.closed = if allowed { None } else { GrantClosed::now(closed_by::TURN_END) };
+    write_scope(path, &scope)
+}
+
+/// **Close an OPEN turn grant for the app's own keep-alive message** (`chat_cache.rs`), and say
+/// whether this call closed it. Stu's standing grant stays open between his turns; the
+/// keep-alive is not a turn of his, so it runs under none. A grant already closed (a Stop, a
+/// turn's end) is left exactly as it is, with its own reason. The caller holds the lock a Stop
+/// revokes under, as for [`write_next_scope`].
+pub fn close_for_keep_alive(path: &Path) -> Result<bool, EcsError> {
+    let bytes = std::fs::read(path).map_err(|e| EcsError(e.to_string()))?;
+    let mut scope: ToolScope = serde_json::from_slice(&bytes).map_err(|e| EcsError(e.to_string()))?;
+    if !scope.actions_allowed { return Ok(false); }
+    scope.actions_allowed = false;
+    scope.closed = GrantClosed::now(closed_by::KEEP_ALIVE);
+    write_scope(path, &scope).map(|()| true)
+}
+
+/// **Put back the grant [`close_for_keep_alive`] closed, and only that one.** A grant somebody
+/// else closed meanwhile (a Stop during the keep-alive) carries their reason and stays closed.
+pub fn reopen_after_keep_alive(path: &Path) -> Result<(), EcsError> {
+    let bytes = std::fs::read(path).map_err(|e| EcsError(e.to_string()))?;
+    let mut scope: ToolScope = serde_json::from_slice(&bytes).map_err(|e| EcsError(e.to_string()))?;
+    if scope.actions_allowed || scope.closed.as_ref().is_none_or(|closed| closed.by != closed_by::KEEP_ALIVE) { return Ok(()); }
+    scope.actions_allowed = true;
+    scope.closed = None;
     write_scope(path, &scope)
 }
 
@@ -355,6 +388,22 @@ impl EcsBridge {
             }
         }
         Ok(Self { python: python.into(), component, state_root: state_root.into() })
+    }
+
+    /// The host calls this only for a completed turn from its authoritative ledger.
+    pub fn delivered_reply(&self, turn: &crate::ledger::Turn) -> Result<(), EcsError> {
+        use sha2::Digest;
+        if turn.state != crate::ledger::TurnState::Completed || turn.quarantined
+            || turn.assistant_text.trim().is_empty() || turn.source == crate::ledger::Source::Internal
+            || turn.stop_reason.as_deref() != Some("end_turn")
+        {
+            return Ok(());
+        }
+        let Some(entity) = turn.entity_id.as_ref() else { return Ok(()) };
+        self.request("answer-delivered", json!({
+            "entity_id": entity.as_str(), "thread_id": turn.thread_id, "turn_id": turn.id,
+            "reply_sha256": format!("{:x}", sha2::Sha256::digest(turn.assistant_text.as_bytes())),
+        })).map(|_| ())
     }
 
     /// Each invocation has a deadline and bounded output. Failure is distinct from

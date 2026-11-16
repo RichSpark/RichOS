@@ -1518,6 +1518,10 @@ struct ReaderState {
     /// quota service can see what the app's own Rich and teammates spend. `None` without an
     /// engine profile that names both.
     token_sink: Option<(String, std::sync::Arc<crate::quota::tokens::Sink>)>,
+    /// **Where this lease's context size and cache clock go** (`chat_cache.rs`: the context
+    /// meter and "Keep chat alive"), under the chat it is scoped to. `None` for a lease no chat
+    /// owns, and then nothing is read.
+    chat_meter: Option<crate::chat_cache::LeaseMeter>,
     /// This lease's running token count, so each `result` adds what the frames never showed.
     token_tally: crate::quota::tokens::Tally,
     /// The host context blocks this session's model still holds a full copy of
@@ -1798,6 +1802,7 @@ impl Default for ReaderState {
             held_continuation: None,
             streamed_usage: None,
             token_sink: None,
+            chat_meter: None,
             token_tally: Default::default(),
             given_context: Default::default(),
         }
@@ -2422,6 +2427,11 @@ impl NativeClient {
         state.lock().unwrap().question_scope = onboarding.map(|(_,_,path,_)|crate::question_tools::path(path));
         state.lock().unwrap().token_sink = profile
             .and_then(|p| Some((p.claude_account.as_ref()?.id.clone(), p.token_sink.clone()?)));
+        state.lock().unwrap().chat_meter = profile.and_then(|p| {
+            let (_, thread) = p.work_scope.as_ref()?;
+            let seat = match role { LeaseRole::Conversation => crate::chat_cache::Seat::Rich, LeaseRole::Work => crate::chat_cache::Seat::Team };
+            Some(p.chat_readings.as_ref()?.lease(thread, seat))
+        });
         state.lock().unwrap().hold_records = profile.map(|p| (p.state.join("agent-hold").join("held"), session_id.clone()));
         // **The reader is told which lease it is on, from the same pure function that set the
         // environment** — not from a second opinion about the role. See
@@ -2959,6 +2969,12 @@ impl NativeClient {
                     }
                 }
             }
+            // The context meter and the keep-alive clock: the window, and the cache lifetime
+            // this turn wrote under (`chat_cache.rs`). Told with the reader's state released.
+            let metered = { let st = state.lock().unwrap(); st.chat_meter.clone().map(|meter| (meter, st.context_window)) };
+            if let Some((meter, window)) = metered {
+                meter.turn_ended(window, crate::chat_cache::lifetime_of(&msg));
+            }
             // ---- WHOSE TURN DOES THIS END? (see [`PendingTurn`]) -----------------------
             //
             // The one question this branch used not to ask. A `result` the child reports
@@ -3090,6 +3106,11 @@ impl NativeClient {
             let ev_ty = ev.get("type").and_then(|v| v.as_str()).unwrap_or("");
             if ev_ty == "message_start" {
                 text_deltas.store(0, Ordering::SeqCst);
+                // The lead's own reply has begun, so the lead made a model request: the cache
+                // clock of this chat's session starts again here (`chat_cache.rs`). A helper's
+                // frames never reach this line (the nested-agent return above).
+                let meter = state.lock().unwrap().chat_meter.clone();
+                if let Some(meter) = meter { meter.requested(crate::util::now_millis()); }
             }
             if ev_ty == "content_block_delta"
                 && ev.get("delta").and_then(|d| d.get("type")).and_then(|v| v.as_str()) == Some("text_delta")
@@ -3104,6 +3125,12 @@ impl NativeClient {
             // (caveat C3). The raw frame is routed too, immediately after, so nothing about
             // the derivation costs us the bytes it was derived from.
             if ev_ty == "message_delta" {
+                // The context meter's figure: this request's context size, whether or not the
+                // window is known yet (it arrives with the lease's first `result`).
+                if let Some(used) = ev.get("usage").and_then(tokens_in_context) {
+                    let meter = state.lock().unwrap().chat_meter.clone();
+                    if let Some(meter) = meter { meter.context(used); }
+                }
                 if let (Some(usage), Some(size)) = (ev.get("usage"), state.lock().unwrap().context_window) {
                     if let Some(used) = tokens_in_context(usage) {
                         Self::route(
@@ -4398,15 +4425,17 @@ impl NativeTurnScope {
         self.prepare_question_scope(binding.entity_id().as_str(),binding.thread_id(),turn,"front_desk",
             if source==crate::ledger::Source::Jam {"spoken"}else{"typed"})?;
         let profile_state = self.engine_profile.as_ref().map(|p| p.state.clone());
+        let agent = (source == crate::ledger::Source::Agent)
+            .then(|| serde_json::from_str::<crate::session_tools::Message>(text).ok()).flatten();
         let user_instruction=if matches!(source,crate::ledger::Source::Text|crate::ledger::Source::Jam) {
             use sha2::Digest;
             Some(crate::ecs::UserInstruction::with_text(format!("ledger:{}:{original_turn}",binding.thread_id()),
                 format!("{:x}",sha2::Sha256::digest(text.as_bytes())),Some(text)))
-        } else if source==crate::ledger::Source::Agent {
-            serde_json::from_str::<crate::session_tools::Message>(text).ok().and_then(|m|m.instruction)
+        } else {
+            agent.as_ref().and_then(|message|message.instruction.clone())
                 .filter(|i|profile_state.as_ref().is_some_and(|state|crate::work_host::verified_instruction(state,
                     binding.entity_id().as_str(),binding.thread_id(),&i.ledger_ref,&i.sha256).is_ok()))
-        } else {None};
+        };
 
         let seat = self.seat.clone();
         let Some((bridge, path)) = &self.continuity else {
@@ -4468,7 +4497,10 @@ impl NativeTurnScope {
             let status=crate::status_tools::StatusToolScope {version:1,state_root:state_root.clone(),
                 entity_id:binding.entity_id().to_string(),thread_id:binding.thread_id().to_string()};
             crate::status_tools::write_scope(status_path,&status).map_err(CognitionError::Io)?;
-            crate::session_tools::bind_with_assignments(status_path,&status,&self.session_id,"rich",user_instruction.clone(),self.assignments_scope.as_deref()).map_err(CognitionError::Io)?;
+            let waiting_notice = agent.as_ref().filter(|message| message.from == "ecs-waiting");
+            crate::session_tools::bind_with_assignments(status_path,&status,&self.session_id,"rich",
+                user_instruction.clone(),self.assignments_scope.as_deref(), waiting_notice)
+                .map_err(CognitionError::Io)?;
             drop(std::fs::remove_file(crate::status_tools::live_meeting_path(status_path)));
             let source = if self.role == LeaseRole::Conversation && matches!(source, crate::ledger::Source::Text | crate::ledger::Source::Jam) {
                 live_meeting_at.and_then(|at| self.engine_profile.as_ref().and_then(|profile| profile.read_live_meeting(binding, at)))
@@ -4868,6 +4900,10 @@ impl Cognition for NativeCognition {
         Ok(())
     }
 
+    fn continuity_bridge(&self) -> Option<crate::ecs::EcsBridge> {
+        self.continuity.as_ref().map(|(bridge, _)| bridge.clone())
+    }
+
     fn requires_thread_isolation(&self) -> bool { self.continuity.is_some() }
     fn worker_status(&self) -> Option<crate::worker_status::WorkerStatusView> {
         self.client.cancel_handle().worker_status()
@@ -5059,6 +5095,42 @@ impl Cognition for NativeCognition {
 
     fn prompt(&mut self, text: &str, on_item: &mut dyn FnMut(TurnItem)) -> Result<String, CognitionError> {
         self.enqueue_prompt(text, Box::new(|| Ok(())))?.wait(on_item)
+    }
+
+    /// **"Keep chat alive"'s one message** (`chat_cache.rs`). It is written to the child as
+    /// plain input with no preparation, so nothing of a turn happens for it: no grant is opened,
+    /// no host context is given, no request is classified. The work lease's standing grant is
+    /// closed for as long as it runs and put back after, under the lock a Stop revokes under, so
+    /// a Stop that lands meanwhile stays a Stop (`ecs::reopen_after_keep_alive`).
+    fn keep_chat_alive(&mut self) -> Result<crate::cognition::PendingReply, CognitionError> {
+        if self.has_pending_input() {
+            return Err(CognitionError::Protocol("This connection has input waiting; it is not idle.".into()));
+        }
+        let operation = self.client.operation_cancel.clone();
+        let closed: Vec<std::path::PathBuf> = {
+            let _stop = operation.lock().unwrap();
+            self.client.action_grants.iter()
+                .filter_map(|grant| match grant { ActionGrant::Continuity(path) => Some(path.clone()), _ => None })
+                .filter(|path| path.exists() && crate::ecs::close_for_keep_alive(path).unwrap_or(false))
+                .collect()
+        };
+        let reopen = move || {
+            let _stop = operation.lock().unwrap();
+            for path in &closed {
+                if let Err(error) = crate::ecs::reopen_after_keep_alive(path) {
+                    eprintln!("[richos] keep chat alive: the grant at {} was not put back: {error}", path.display());
+                }
+            }
+        };
+        let reply = match self.client.enqueue_prepared(crate::chat_cache::KEEP_ALIVE_TEXT, None, None) {
+            Ok(reply) => reply,
+            Err(error) => { reopen(); return Err(error.into()); }
+        };
+        Ok(crate::cognition::PendingReply::new(move |on_item| {
+            let ended = reply.wait(on_item).map_err(CognitionError::from);
+            reopen();
+            ended
+        }))
     }
 
     fn enqueue_prompt(&mut self, text: &str, started: Box<dyn FnOnce() -> Result<(), String> + Send>) -> Result<crate::cognition::PendingReply, CognitionError> {
@@ -5427,6 +5499,145 @@ printf '%s\n' '{"type":"result","stop_reason":"end_turn"}'
         assert!((windows[0].used_percent - 2.).abs() < 1e-9);
         assert_eq!((windows[1].id.as_str(), windows[1].resets_at), ("seven_day", Some(1_789_016_400_000)));
         assert!((windows[1].used_percent - 58.).abs() < 1e-9, "0.58 x 100 in f64 is 57.99999999999999");
+    }
+
+    /// A stand-in `claude` for the context meter and the keep-alive: after the handshake it
+    /// answers every user message with the frames in `turn.json` (a list), and writes each
+    /// message it was given to `received.jsonl` with what the scope file named in `scope-path`
+    /// said at that moment.
+    const ANSWERS_FROM_A_FILE: &str = r#"
+import json,pathlib,sys
+here=pathlib.Path(sys.argv[0]).parent
+def send(v): print(json.dumps(v),flush=True)
+init=json.loads(sys.stdin.readline())
+send({"type":"control_response","response":{"subtype":"success","request_id":init["request_id"],"response":{}}})
+while True:
+    line=sys.stdin.readline()
+    if not line: raise SystemExit(0)
+    v=json.loads(line)
+    if v.get("type")!="user": continue
+    scope=None
+    if (here/"scope-path").exists():
+        scope=json.loads(pathlib.Path((here/"scope-path").read_text()).read_text())
+    with (here/"received.jsonl").open("a") as f:
+        f.write(json.dumps({"text":v["message"]["content"][0]["text"],"scope":scope})+"\n")
+    for frame in json.loads((here/"turn.json").read_text()): send(frame)
+"#;
+
+    fn answers_from_a_file(name: &str, turn: Value) -> std::path::PathBuf {
+        let script = write_script(name, "exec python3 -u \"$(dirname \"$0\")/provider.py\"\n");
+        let root = script.parent().unwrap();
+        std::fs::write(root.join("provider.py"), ANSWERS_FROM_A_FILE).unwrap();
+        std::fs::write(root.join("turn.json"), turn.to_string()).unwrap();
+        script
+    }
+
+    /// **THE CONTEXT METER'S FIGURE** (CEO, 2026-11-16, round 83: "the context window of Rich
+    /// and Stu visible in each thread like so: "50% 500k/1000k"", the numbers "each
+    /// conversation's real context size"). The turn below is the two-request turn
+    /// `scripts/qa/context-figure-probe.py` measured on Claude Code 2.1.325: the lead's requests
+    /// held 32,293 and then 32,381 tokens, Claude Code's own `get_context_usage` answered 32,381
+    /// after it, and the turn's `result.usage` adds the two up to 64,674. A helper's request in
+    /// between is its own context, not the chat's. The chat reads 32,381 of 1,000,000, on the
+    /// one-hour cache, with the time of the lead's last request.
+    #[test]
+    fn a_chats_context_size_is_its_leads_last_request_and_never_the_turns_sum_or_a_helpers() {
+        let request = |parent: Value, input: u64, read: u64, created: u64| {
+            let usage = json!({"input_tokens":input,"cache_read_input_tokens":read,"cache_creation_input_tokens":created,"output_tokens":20});
+            [json!({"type":"stream_event","parent_tool_use_id":parent,"event":{"type":"message_start","message":{"usage":usage}}}),
+             json!({"type":"stream_event","parent_tool_use_id":parent,"event":{"type":"message_delta","delta":{},"usage":usage}})]
+        };
+        let mut turn = vec![json!({"type":"system","subtype":"init","model":"claude-opus-5-5","tools":[],"plugins":[]})];
+        turn.extend(request(Value::Null, 3, 30_248, 2_042));
+        turn.extend(request(json!("toolu_helper"), 9, 0, 900_000));
+        turn.extend(request(Value::Null, 3, 32_290, 88));
+        turn.push(json!({"type":"result","subtype":"success","is_error":false,"stop_reason":"end_turn",
+            "usage":{"input_tokens":6,"cache_read_input_tokens":62_538,"cache_creation_input_tokens":2_130,"output_tokens":40,
+                "cache_creation":{"ephemeral_1h_input_tokens":2_130,"ephemeral_5m_input_tokens":0}},
+            "modelUsage":{"claude-opus-5-5":{"contextWindow":1_000_000}}}));
+        let script = answers_from_a_file("context-meter", Value::Array(turn));
+        let root = script.parent().unwrap();
+        let readings = crate::chat_cache::Readings::in_memory();
+        let mut cognition = NativeCognition::start(&script, root, &doctrine_fixture(), &skills_fixture()).unwrap();
+        cognition.client.reader_state.lock().unwrap().chat_meter = Some(readings.lease("thr_meter", crate::chat_cache::Seat::Rich));
+        let before = crate::util::now_millis();
+        cognition.prompt("hello", &mut |_| {}).unwrap();
+
+        let chat = readings.chat("thr_meter");
+        assert_eq!(chat.rich.used, Some(32_381), "the chat's size is the lead's last request (64,674 is the turn's sum, 900,009 the helper's)");
+        assert_eq!(chat.rich.size, Some(1_000_000));
+        assert_eq!(chat.rich.one_hour, Some(true), "the turn wrote under the one-hour cache");
+        assert!(chat.rich.last_request_ms.is_some_and(|at| at >= before), "the lead's request was not timed");
+        assert_eq!(chat.team, crate::chat_cache::Reading::default(), "Rich's session wrote the team's reading");
+    }
+
+    /// **KEEP CHAT ALIVE, at the session** (CEO, 2026-11-16, round 83). The keep-alive message
+    /// is the app's own: it reaches the provider as plain input, it runs under no turn grant
+    /// (the engine's hook then refuses it every tool and does not judge its end), and the grant
+    /// it found open is open again afterwards. A grant somebody else closed stays closed: one
+    /// already closed at a turn's end, and one a Stop closes while the keep-alive runs.
+    #[test]
+    fn the_keep_alive_message_runs_under_no_grant_and_puts_back_only_the_grant_it_closed() {
+        use crate::ledger::Ledger;
+        let request = json!({"input_tokens":3,"cache_read_input_tokens":135_726,"cache_creation_input_tokens":17,"output_tokens":4});
+        let script = answers_from_a_file("keep-alive", json!([
+            {"type":"stream_event","parent_tool_use_id":null,"event":{"type":"message_start","message":{"usage":request}}},
+            {"type":"stream_event","parent_tool_use_id":null,"event":{"type":"message_delta","delta":{},"usage":request}},
+            {"type":"result","subtype":"success","is_error":false,"stop_reason":"end_turn","result":"ok",
+             "usage":{"cache_creation":{"ephemeral_1h_input_tokens":17,"ephemeral_5m_input_tokens":0}}}]));
+        let root = script.parent().unwrap();
+        let python = std::process::Command::new("python3").args(["-c","import sys;print(sys.executable)"]).output().unwrap();
+        let bridge = crate::ecs::EcsBridge::new(Path::new(String::from_utf8_lossy(&python.stdout).trim()),
+            &Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(3).unwrap().join("engine"), &root.join("ecs")).unwrap();
+        let mut cognition = NativeCognition::start_with_continuity(&script, root, root, &skills_fixture(), &script, bridge.clone(), None).unwrap();
+        let mut ledger = Ledger::open(root.join("conversation-ledger.jsonl")).unwrap();
+        let entity = crate::entity::EntityId::parse("company").unwrap();
+        let thread = ledger.create_thread("work", &entity).unwrap();
+        let binding = ledger.thread_binding(&thread).unwrap();
+        bridge.bind(entity.as_str(), &thread, "fixture-rich", "opening", crate::ecs::ceo_seat(&thread).as_deref(), "ceo").unwrap();
+        let path = cognition.continuity.as_ref().unwrap().1.clone();
+        std::fs::write(root.join("scope-path"), path.to_string_lossy().as_bytes()).unwrap();
+        let read = || -> crate::ecs::ToolScope { serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap() };
+        let received = || -> Vec<Value> {
+            std::fs::read_to_string(root.join("received.jsonl")).unwrap_or_default().lines().map(|line| serde_json::from_str(line).unwrap()).collect()
+        };
+        let readings = crate::chat_cache::Readings::in_memory();
+        cognition.client.reader_state.lock().unwrap().chat_meter = Some(readings.lease(&thread, crate::chat_cache::Seat::Team));
+
+        // The standing grant of a session with work under way: written for a message, then open.
+        let notice = crate::session_tools::Message { bridge: None, handoff: false, from: "stall-watch".into(), text: "a notice".into(), instruction: None, work: None };
+        cognition.prepare_agent_message(&binding, "peer:1", &notice).unwrap();
+        crate::ecs::set_actions_allowed(&path, true).unwrap();
+
+        let ended = cognition.keep_chat_alive().unwrap().wait(&mut |_| {}).unwrap();
+        assert_eq!(ended, "end_turn");
+        let given = received();
+        assert_eq!(given.len(), 1, "one message, and only the keep-alive");
+        assert_eq!(given[0]["text"], crate::chat_cache::KEEP_ALIVE_TEXT);
+        assert!(crate::chat_cache::KEEP_ALIVE_TEXT.starts_with(crate::chat_cache::KEEP_ALIVE_TAG));
+        assert_eq!(given[0]["scope"]["actions_allowed"], false, "the keep-alive ran under an open turn grant");
+        assert_eq!(given[0]["scope"]["closed"]["by"], crate::ecs::closed_by::KEEP_ALIVE);
+        let after = read();
+        assert!(after.actions_allowed && after.closed.is_none(), "the standing grant was not put back");
+        let chat = readings.chat(&thread);
+        assert_eq!((chat.team.used, chat.team.one_hour), (Some(135_746), Some(true)), "the keep-alive's own request is the session's newest reading");
+        assert!(chat.team.last_request_ms.is_some(), "the cache clock did not start again at the keep-alive");
+
+        // A grant already closed when it is sent stays closed, with its own reason.
+        crate::ecs::set_actions_allowed(&path, false).unwrap();
+        cognition.keep_chat_alive().unwrap().wait(&mut |_| {}).unwrap();
+        let closed = read();
+        assert!(!closed.actions_allowed, "a keep-alive opened a grant a turn's end had closed");
+        assert_eq!(closed.closed.map(|c| c.by), Some(crate::ecs::closed_by::TURN_END.to_string()));
+
+        // A Stop while it runs stays a Stop.
+        crate::ecs::set_actions_allowed(&path, true).unwrap();
+        assert!(crate::ecs::close_for_keep_alive(&path).unwrap());
+        crate::ecs::revoke(&path).unwrap();
+        crate::ecs::reopen_after_keep_alive(&path).unwrap();
+        let stopped = read();
+        assert!(!stopped.actions_allowed, "the keep-alive's end reopened a grant the user's Stop had closed");
+        assert_eq!(stopped.closed.map(|c| c.by), Some(crate::ecs::closed_by::STOP.to_string()));
     }
 
     /// **The CEO, 2026-10-07: the switch point rests on the tokens the app's own teammates
@@ -6118,7 +6329,7 @@ while True:
             codex_root: root.join("codex-coordination"),
             user: Default::default(),
 
-            claude_account: None, token_sink: None, speech_model: None, meetings_corpus: None, live_meeting_reader: None, lease_models: Default::default(), machine_settings: Default::default(),
+            claude_account: None, token_sink: None, chat_readings: None, speech_model: None, meetings_corpus: None, live_meeting_reader: None, lease_models: Default::default(), machine_settings: Default::default(),
         }
     }
 
@@ -9484,7 +9695,7 @@ read -r keep_alive
             cognition.engine_profile = Some(crate::engine_profile::EngineProfile {
                 engine: root.clone(), coordination: root.clone(), plugin: root.clone(), state: root.clone(), user: Default::default(),
                 runtime: crate::runtime::EngineRuntime {root: root.clone(), python:"/usr/bin/python3".into(), node:"/usr/bin/false".into(), git:"/usr/bin/git".into(),versions:BTreeMap::new()},
-                codex_root:root.join("codex-coordination"), work_scope:None, search_binding: None, claude_account: None, token_sink: None, speech_model: None, meetings_corpus: None, live_meeting_reader: None, lease_models: Default::default(), machine_settings: Default::default()
+                codex_root:root.join("codex-coordination"), work_scope:None, search_binding: None, claude_account: None, token_sink: None, chat_readings: None, speech_model: None, meetings_corpus: None, live_meeting_reader: None, lease_models: Default::default(), machine_settings: Default::default()
             });
             let result = cognition.prompt("Synthetic audit turn", &mut |_| {});
             let provider_alive = cognition.client.child.try_wait().unwrap().is_none();

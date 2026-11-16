@@ -68,6 +68,9 @@ pub mod belief;
 /// Bust a bug (CEO §115, round 21): what is private and its stand-ins, Rich's write-up, the
 /// issue word for word, and the reports on this Mac that wait to be sent. Opens no connection.
 pub mod bug_report;
+/// The context meter and "Keep chat alive" (CEO, 2026-11-16, round 83): each chat's context
+/// size and cache clock, read off its two sessions' own streams.
+pub mod chat_cache;
 pub mod claude_accounts;
 pub mod cognition;
 pub mod company;

@@ -606,6 +606,28 @@ const FIXTURES = {
   "swearmeter-preference-refused": browser => openSwearMeterFailure(browser, "preference"),
   "swearmeter-retry-refused": browser => openSwearMeterFailure(browser, "retry"),
   "swearmeter-card-unavailable": browser => openSwearMeterFailure(browser, "card"),
+  // Round 83: the context meter's switch, and a chat's Keep chat alive box, when the choice
+  // could not be saved. Each is put back and says so beside the control that tries again.
+  async "context-meter-refused"(browser) {
+    const page = await openApp(browser);
+    await page.click("#set-btn");
+    await page.waitForSelector("#set-ctxmeter");
+    await page.evaluate(() => { window.__overrides.set_context_meter = {reject:true,value:"Fixture disk refused the preference"}; });
+    await page.click("#set-ctxmeter");
+    await page.waitForFunction(() => document.getElementById("bug-toast").textContent.includes("The context meter setting could not be saved."));
+    await page.waitForFunction(() => !document.getElementById("set-ctxmeter").checked);
+    return page;
+  },
+  async "keep-alive-refused"(browser) {
+    const page = await openApp(browser);
+    await page.evaluate(() => openThread("general"));
+    await page.waitForFunction(() => window.RichKeepAlive.state().thread === "general" && window.RichKeepAlive.state().visible);
+    await page.evaluate(() => { window.__overrides.set_keep_chat_alive = {reject:true,value:"Fixture disk refused the choice"}; });
+    await page.click("#kca .kca-check");
+    await page.waitForFunction(() => document.getElementById("bug-toast").textContent.includes("That could not be saved, so Keep chat alive is as it was."));
+    await page.waitForFunction(() => !document.getElementById("kca-box").checked);
+    return page;
+  },
   async "resources-keyboard"(browser) {
     const page = await openApp(browser);
     await page.keyboard.press("Tab");
@@ -1532,6 +1554,7 @@ const FIXTURES = {
 /// left as an unexplained asymmetry.
 const TEXT_RENDERING_FIXTURES = new Set([
   "swearmeter-preference-refused", "swearmeter-retry-refused", "swearmeter-card-unavailable",
+  "context-meter-refused", "keep-alive-refused",
   "resources-keyboard",
   "question-edit", "question-saved", "question-retry", "question-deleted", "question-storage",
   "connect-setup", "connect-setup-unreadable", "connect-helper-missing", "connect-history-full",

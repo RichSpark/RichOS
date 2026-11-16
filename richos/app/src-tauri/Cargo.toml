@@ -43,6 +43,7 @@ license = "AGPL-3.0-only"
 # default features that enable `tauri/custom-protocol` and passes `--no-default-features`
 # (`rust.rs:435-451`). A deliberate dev build by hand is `--no-default-features`.
 [features]
+ecs-memory-off = ["richos-core/ecs-memory-off"]
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]
 

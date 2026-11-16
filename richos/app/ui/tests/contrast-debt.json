@@ -54,6 +54,14 @@
       "why": "Bust a bug's Rich panel (round 21), COVERED SOMEWHERE ELSE: it exists only while a bug report is in progress beside a window, which no surface driver here starts. tests/bug-report.js opens it beside Corrections with a report card in it and measures every text node (4.5:1, and the 16px floor outside the declared 14px tier) and every indicator (3:1) in both themes."
     },
     {
+      "id": "ctx-meter",
+      "why": "The context meter in a chat's header (round 83), off until its switch in Settings is on, is measured in both themes by tests/context-meter.js: each readout's name, percent and tokens against the header at 4.5:1, the gauge at 3:1, and the card's title, names, figures and note against the card at 4.5:1, from the computed colors. No surface driver here switches the meter on."
+    },
+    {
+      "id": "kca-tip",
+      "why": "What the info icon beside Keep chat alive shows (round 83) is measured in both themes by tests/keep-alive.js: its heading and every line of its words against the card at 4.5:1, with the label, the box's edge and the icon beside it, from the computed colors. It opens only on the icon's hover, focus or press, which that suite drives and no surface driver here does."
+    },
+    {
       "id": "bug-subtip",
       "why": "The tooltip that says what a stand-in on a bug report replaced (round 21), COVERED SOMEWHERE ELSE: it is shown only while a stand-in is pointed at or focused on a report card. tests/bug-report.js shows it by hover and measures it with the card in both themes."
     }

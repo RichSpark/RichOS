@@ -29,6 +29,14 @@
 [richos] Codex watch: not watching yet, the engine is not verified ({})
 [richos] Codex watch: the watcher could not start ({})
 [richos] Haiku's conversation title was not saved ({})
+[richos] ECS reply remains owed: {}
+[richos] waiting notice {} remains pending: {}
+[richos] waiting notice {} remains to be reconciled: {}
+[richos] waiting work {} has no authorized next action
+[richos] waiting work {} has no readable original order
+[richos] waiting work {} remains held: {}
+[richos] waiting-work check could not be requested: {}
+[richos] waiting-work evidence unavailable: {}
 [richos] a spoken answer went to the bug report, not to the conversation
 [richos] claude accounts: the adding could not be recorded ({})
 [richos] companies: adopting {} added during the turn
@@ -567,3 +575,18 @@
 [richos] openings: today's opening could not be written down ({})
 [richos] native splash: renderer failed
 [richos] splash assets: pack download failed
+#
+# Keep chat alive and the context meter (round 83). A healthy boot prints none of these: a
+# keep-alive is sent only once a chat whose box is checked has been idle for 55 minutes, and
+# the rest are failures.
+[richos] chat readings were not saved to {}: {}
+[richos] keep chat alive: Rich's session of {} answered in {} ms{}
+[richos] keep chat alive: Rich's session of {} was not reached: {}
+[richos] keep chat alive: could not start its clock, no chat is kept alive: {}
+[richos] keep chat alive: the grant at {} was not put back: {}
+[richos] keep chat alive: the keep-alive could not be started: {}
+[richos] keep chat alive: the team's session of {} answered in {} ms
+[richos] keep chat alive: the team's session of {} was not reached: {}
+[richos] keep chat alive: the team's session of {} was not resumed: {}
+[richos] keep chat alive: {} is not idle; nothing was sent
+[richos] queued input after a keep-alive: {}

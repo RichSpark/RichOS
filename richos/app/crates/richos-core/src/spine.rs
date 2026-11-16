@@ -197,6 +197,7 @@ struct Delivery {
     response:Option<crate::cognition::PendingReply>,
     session_id:Option<String>,
     account:Option<String>,
+    reply_linked: bool,
 }
 
 fn enqueue_delivery(delivery: &mut Delivery) -> Result<(), CognitionError> {
@@ -531,6 +532,59 @@ pub fn prime_front_desk_without_the_spine(
     thread: &str,
 ) -> FrontDeskReady {
     prime_front_desk_with(&mut &*spine, thread)
+}
+
+/// **What sending Rich's session its keep-alive message came to** ("Keep chat alive",
+/// `chat_cache.rs`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum KeptAlive {
+    /// The message was sent and answered. `spawned`: the chat's session had ended (retired,
+    /// pushed out, or the app was relaunched) and was resumed for it.
+    Sent { millis: u64, spawned: bool },
+    /// A turn, a preparation or waiting input holds this chat: it is not idle, and whatever
+    /// holds it makes the request that renews the cache.
+    Busy,
+    /// It could not be sent. Nothing is retried here; the next check decides again.
+    NotSent(String),
+}
+
+/// The keep-alive is a preparation of its own, shaped like [`prime_front_desk_with`]: claimed
+/// under the same marker, so a message the user sends meanwhile is saved and delivered the
+/// moment it ends, and run with the shared state released. Its reply is dropped here: it is
+/// never recorded in the ledger, never shown and never spoken.
+fn keep_front_desk_alive_with(state:&mut impl PreparationState,thread:&str)->KeptAlive {
+    let begun=state.state(|s| {
+        if s.thread_is_running(thread) {return Err(KeptAlive::Busy)}
+        if s.control.pending_intake().iter().any(|record|s.intake_is_for(record,thread)) {return Err(KeptAlive::Busy)}
+        let binding=s.ledger.thread_binding(thread).map_err(|e|KeptAlive::NotSent(e.to_string()))?;
+        let plan=s.select_connection(&binding).map_err(|e|KeptAlive::NotSent(e.to_string()))?;
+        plan.control.begin_front_desk_prime();
+        let desk=s.resident.entry(thread.into()).or_default().lease.clone();
+        Ok((plan,desk))
+    });
+    let (plan,desk)=match begun {Ok(value)=>value,Err(verdict)=>return verdict};
+    let started=std::time::Instant::now();
+    // A reply of its own on the lease's account, over when it returns (as a priming is).
+    let keeping=format!("keep-alive:{thread}");
+    let result=prepare_connection(state,&plan,&desk,&keeping).and_then(|spawned| {
+        let reply=desk.lock().unwrap().as_mut().ok_or(SpineError::NoLease)?.keep_chat_alive()?;
+        reply.wait(&mut |_| {})?;
+        Ok(spawned)
+    });
+    state.state(|s| {
+        if let Some(quota)=s.quota_service() {quota.accounts.turn_ended(&keeping);}
+        plan.control.end_front_desk_prime();
+        if let Err(error)=s.poll_intake() {eprintln!("[richos] queued input after a keep-alive: {error}");}
+    });
+    match result {Ok(spawned)=>KeptAlive::Sent{millis:started.elapsed().as_millis() as u64,spawned},Err(error)=>KeptAlive::NotSent(error.to_string())}
+}
+/// Send Rich's session of `thread` its keep-alive message without holding shared state across
+/// the provider's reply.
+pub fn keep_front_desk_alive_without_the_spine(
+    spine: &std::sync::Mutex<Spine>,
+    thread: &str,
+) -> KeptAlive {
+    keep_front_desk_alive_with(&mut &*spine, thread)
 }
 
 pub struct Spine {
@@ -2395,7 +2449,7 @@ impl Spine {
         self.turn_in_progress=false;
         Ok(Delivery {turn_id:turn_id.into(),binding:binding.clone(),text:text.into(),allow_recovery,
             connection:Some(connection),retry_wait:None,internal_turn,live_turn,persist_err:None,stopped_before_prompt,preparation_failed,
-            preparation_stop,preparation,session_id,lease,usage:None,response:None,account:None})
+            preparation_stop,preparation,session_id,lease,usage:None,response:None,account:None,reply_linked:false})
     }
 
     fn capture_delivery_item(&mut self,delivery:&mut Delivery,item:TurnItem) {
@@ -2446,6 +2500,9 @@ impl Spine {
                 }
                 TurnItem::Machinery(record) => {
                     let record = record.stamp(thread_id, Some(turn_id), internal_turn);
+                    if record.title == "mcp__richos_continuity__link-reply" && record.parent_tool_use_id.is_none() {
+                        delivery.reply_linked = true;
+                    }
                     // THE ONE machinery record that is read rather than merely retained.
                     // Everything else in this family is routed for later interpretation;
                     // this pair decides when Rich rotates, so it is consumed here, live.
@@ -2495,6 +2552,19 @@ impl Spine {
                     }
                 }
             }
+    }
+
+    fn close_delivered_continuity_reply(&self, delivery: &Delivery) {
+        if !delivery.reply_linked { return; }
+        let bridge = delivery.lease.lock().ok().and_then(|lease| lease.as_ref()?.continuity_bridge());
+        let turn = self.ledger.turn(&delivery.turn_id).cloned();
+        if let (Some(bridge), Some(turn)) = (bridge, turn) {
+            std::thread::spawn(move || {
+                if let Err(error) = bridge.delivered_reply(&turn) {
+                    eprintln!("[richos] ECS reply remains owed: {error}");
+                }
+            });
+        }
     }
 
     fn finish_delivery(&mut self,mut delivery:Delivery,stop:Result<String,CognitionError>)->Result<(),SpineError> {
@@ -2625,6 +2695,7 @@ impl Spine {
                 self.finish_stopped_turn(turn_id, binding, &claim)?;
             } else {
                 self.finish_completed_turn_the_stop_missed(turn_id, binding, &claim, lease_reported.unwrap())?;
+                self.close_delivered_continuity_reply(&delivery);
             }
             // Native marks a stopped production connection closed. The normal opener
             // reaps and resumes it on the next explicit input without clearing newer handles.
@@ -2699,6 +2770,7 @@ impl Spine {
                 // and it is still `null` for a turn whose start was never recorded.
                 self.emit_live(self.turn_status_event(binding, turn_id, TurnStatus::Completed, None));
                 self.emit_live(self.thread_summary_event(binding, turn_id, ThreadStatus::Idle));
+                self.close_delivered_continuity_reply(&delivery);
                 Ok(())
             }
             Err(e) => {
@@ -3678,6 +3750,11 @@ impl Spine {
     /// so native startup, handoff and priming never hold shared conversation state.
     pub fn prime_front_desk(&mut self,thread_id:&str)->FrontDeskReady {
         prime_front_desk_with(&mut &mut *self,thread_id)
+    }
+
+    /// Synchronous headless entry. The desktop uses keep_front_desk_alive_without_the_spine.
+    pub fn keep_front_desk_alive(&mut self,thread_id:&str)->KeptAlive {
+        keep_front_desk_alive_with(&mut &mut *self,thread_id)
     }
 
     pub fn queue_depth(&self) -> usize {

@@ -18,6 +18,7 @@ CLOSED_BY = {
     "turn-end": "the end of the turn",
     "turn-start-failed": "a turn that could not start",
     "not-started": "the app, which has written it for an input whose turn has not started yet",
+    "keep-alive": "the app, for the moment its own keep-alive message takes",
 }
 
 

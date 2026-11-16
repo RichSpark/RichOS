@@ -877,6 +877,17 @@ receiving updates. `set_swearmeter_visible` persists only display preference and
 never rebuilds a total. An explicit `retry_swearmeter` may reread unavailable card
 history. Conversation and intake coverage gaps remain qualified until recovery.
 
+### Context meter updates
+
+`rich://context-meter` (`chat_cache_host::EVENT_CONTEXT_METER`) publishes one chat's
+context figures whenever one of its two sessions' own streams changes them. Its payload
+is `threadId` and, for `rich` (Rich talking with the user) and `team` (Rich directing the
+team), `used` (the tokens in the context at that session's last model request) and
+`size` (the model's window); each is `null` until that session has said it. It carries
+no message text. `chat_context` returns the same shape for one chat as last read, kept
+across relaunches. The figures are published whether or not the meter is shown;
+`get_context_meter` and `set_context_meter` read and save only the display preference.
+
 
 ## RichPass file protection
 

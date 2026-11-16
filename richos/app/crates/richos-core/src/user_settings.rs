@@ -119,7 +119,7 @@ pub fn standing_plugin(folder: &Path, shipped: &Path, root: &Path) -> Result<Pat
         let mine = folder.join(name);
         let from = if mine.is_file() { mine } else { shipped.join("agents").join(name) };
         copy(&from, &format!("agents/{name}"))?;
-        with_memory(&root.join("agents").join(name))?;
+        configure_memory(&root.join("agents").join(name))?;
         if let Some(own) = &own {
             use std::io::Write;
             std::fs::OpenOptions::new().append(true).open(root.join("agents").join(name))
@@ -130,22 +130,36 @@ pub fn standing_plugin(folder: &Path, shipped: &Path, root: &Path) -> Result<Pat
     Ok(root.to_path_buf())
 }
 
-/// **Rich's and Stu's auto-memory** (build plan item 10). Each runs as a plugin agent
-/// (`--agent`), and for an agent Claude Code keeps memory by its definition's `memory:` scope,
-/// not by `autoMemoryDirectory` (measured 2026-10-21 on 2.1.305 with a lease-shaped session:
-/// with `autoMemoryDirectory` alone the folder stayed empty; with `memory: project` a memory was
-/// written to `<working folder>/.claude/agent-memory/<agent>/` and a new session recalled it).
-/// A lease's working folder is the coordination folder in the app's data, so `project` is one
-/// folder whichever Claude account the lease runs on. A definition that names its own scope
-/// keeps it; one with none gets `project`.
+/// Memory stays on in ordinary release builds until the continuity evidence is approved.
+/// Before that cutover, the normal app supports a memory-off candidate for engineering proof.
+pub const AUTO_MEMORY_ENABLED: bool = !cfg!(feature = "ecs-memory-off");
 pub const MEMORY_SCOPE: &str = "memory: project";
 
-fn with_memory(definition: &Path) -> Result<(), RuntimeError> {
+fn configure_memory(definition: &Path) -> Result<(), RuntimeError> {
     let text = std::fs::read_to_string(definition).map_err(|e| RuntimeError(e.to_string()))?;
-    let Some(rest) = text.strip_prefix("---\n") else { return Ok(()) };
-    let Some(end) = rest.find("\n---") else { return Ok(()) };
-    if rest[..end].lines().any(|line| line.trim_start().starts_with("memory:")) { return Ok(()) }
-    std::fs::write(definition, format!("---\n{MEMORY_SCOPE}\n{rest}")).map_err(|e| RuntimeError(e.to_string()))
+    let Some((opening, rest)) = text.split_once('\n') else { return Ok(()) };
+    if opening.trim_end() != "---" { return Ok(()); }
+    let mut kept = String::new();
+    let mut consumed = 0;
+    let mut dropping = false;
+    let mut had_memory = false;
+    for line in rest.split_inclusive('\n') {
+        if line.trim_end() == "---" { break; }
+        consumed += line.len();
+        if !line.starts_with([' ', '\t']) {
+            dropping = line.split_once(':').is_some_and(|(key, _)| {
+                matches!(key.trim_end(), "memory" | "'memory'" | "\"memory\"")
+            });
+            had_memory |= dropping;
+        }
+        if !dropping { kept.push_str(line); }
+    }
+    let updated = match (AUTO_MEMORY_ENABLED, had_memory) {
+        (true, false) => format!("{opening}\n{MEMORY_SCOPE}\n{rest}"),
+        (false, true) => format!("{opening}\n{kept}{}", &rest[consumed..]),
+        _ => return Ok(()),
+    };
+    std::fs::write(definition, updated).map_err(|e| RuntimeError(e.to_string()))
 }
 
 /// A file's text, or `None` when it is not there.

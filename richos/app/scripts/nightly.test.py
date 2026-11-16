@@ -133,7 +133,7 @@ class GitFixture(unittest.TestCase):
         # tag, `promote` ran no external command at all, which is why these defaults did
         # not exist and why six tests reached for the operator's real `gh` when it did.
         for name, result in (("verify_repository_rules", None), ("succeeds", True),
-                             ("execute", None)):
+                             ("execute", None), ("wake_local_waiting_work", None)):
             patcher = patch.object(n, name, return_value=result)
             setattr(self, f"stub_{name}", patcher.start())
             self.addCleanup(patcher.stop)
@@ -525,11 +525,15 @@ class GitTests(GitFixture):
         self.assertTrue(manifest_upload[-1].endswith("/latest.json"))
         self.assertLess(calls.index(manifest_upload),
                         next(i for i, c in enumerate(calls) if c[0] == "bash" and c[2] == "verify-assets"))
-        # Last call of the whole publish: the rolling channel release's asset, replaced.
-        self.assertEqual(calls[-1][:6], ("gh", "release", "upload", n.CHANNEL_TAG,
-                                         "--repo", n.REPO))
-        self.assertIn("--clobber", calls[-1])
-        self.assertTrue(calls[-1][-1].endswith("/latest.json"))
+        channel_upload, publication_proof = calls[-2:]
+        self.assertEqual(channel_upload[:6], ("gh", "release", "upload", n.CHANNEL_TAG,
+                                              "--repo", n.REPO))
+        self.assertIn("--clobber", channel_upload)
+        self.assertTrue(channel_upload[-1].endswith("/latest.json"))
+        self.assertEqual(publication_proof[:4], ("gh", "release", "upload", info["tag"]))
+        self.assertTrue(publication_proof[-1].endswith("/published.json"))
+        self.assertEqual(self.asset_bytes[info["tag"], "published.json"],
+                         self.asset_bytes[n.CHANNEL_TAG, "latest.json"])
         oid, current = n.channel()
         self.assertEqual(current, info)
         self.assertEqual(json.loads(n.git("show", f"{oid}:latest.json")), self.manifest(info))
@@ -669,7 +673,7 @@ class GitTests(GitFixture):
             n.finish(info, out)
         prepare.assert_not_called()
         uploads = [c for c in calls if c[:4] == ("gh", "release", "upload", info["tag"])]
-        self.assertEqual([Path(c[-1]).name for c in uploads], ["latest.json"])
+        self.assertEqual([Path(c[-1]).name for c in uploads], ["latest.json", "published.json"])
         self.assertEqual([c[2] for c in calls if c[0] == "bash"], ["verify-assets"])
         self.assertEqual(n._candidate_files(out), before)
         self.assertEqual(n.candidate_refs(), {1: info["build_commit"]})
@@ -946,6 +950,17 @@ class GitTests(GitFixture):
             n.finish(info, out)
         self.assertEqual([c[2] for c in calls if c[0] == "bash"], ["verify-assets"])
         self.assertEqual(n.channel()[1], info)
+
+    def test_served_proof_requires_the_channel_to_be_read_back(self):
+        info = self.reserve()
+        manifest = self.manifest(info)
+        with self.assertRaisesRegex(ValueError, "published asset differs"):
+            n.record_served_nightly(info, manifest)
+        self.assertNotIn((info["tag"], "published.json"), self.asset_bytes)
+        n.promote(info, manifest)
+        n.record_served_nightly(info, manifest)
+        self.assertEqual(self.asset_bytes[info["tag"], "published.json"],
+                         self.asset_bytes[n.CHANNEL_TAG, "latest.json"])
 
     def test_the_rolling_channel_release_is_created_once_then_only_replaced(self):
         """`--verify-tag` is why the create can only run after the tag has moved."""

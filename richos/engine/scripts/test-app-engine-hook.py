@@ -108,6 +108,25 @@ class DesktopHooks(unittest.TestCase):
         bad = self.hook("UserPromptSubmit", prompt="Hello?")
         self.assertEqual((bad.returncode, bad.stdout.strip()), (0, ""), bad.stderr)
 
+    def test_the_apps_keep_alive_message_takes_no_notice_meant_for_richs_next_turn(self):
+        """Keep chat alive (CEO 2026-11-16): the app's own keep-alive message is not a turn of
+        Rich's. Due work and a home picture stage waiting for his next turn are said once, so
+        neither is said into it; his next real turn still opens with both."""
+        self._wait_on_file()
+        notice = self.root / "state" / "home-stage-notice.json"
+        notice.parent.mkdir(parents=True, exist_ok=True)
+        notice.write_text(json.dumps({"stage": 4, "name": "The River", "count": 1312}))
+        kept = self.hook("UserPromptSubmit", prompt="<richos-keep-alive>The RichOS app sent this by itself to keep "
+                         "this chat ready.</richos-keep-alive>")
+        self.assertEqual((kept.returncode, kept.stdout.strip()), (0, ""), kept.stderr)
+        self.assertTrue(notice.exists(), "the keep-alive took the notice of Rich's next turn")
+        result = self.hook("UserPromptSubmit", prompt="Good morning.")
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        context = json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("STALL WATCH NOT ACTIVE", context)
+        self.assertIn("HOME PICTURE STAGE REACHED", context)
+        self.assertFalse(notice.exists(), "the notice was not taken by the real turn")
+
     def test_a_reply_holding_work_reaches_the_lead_at_the_apps_turn_end_and_records_nothing(self):
         """Orchestration reliability R1 on the app host: the deferral check is report only,
         and reaches Rich as Stop additionalContext, in one JSON answer."""

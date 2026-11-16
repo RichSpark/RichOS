@@ -99,13 +99,14 @@ EVENT_PAYLOAD_FIELDS = {
     },
     "continuity.item_opened": {
         "item_id", "item_type", "title", "details", "owner", "beneficiary",
-        "next_action", "due_at", "rank", "status", "visibility",
+        "next_action", "due_at", "rank", "status", "visibility", "condition_json", "reply_owed",
     },
     "continuity.item_updated": {
         "item_id", "title", "details", "owner", "beneficiary", "next_action",
-        "due_at", "rank", "status", "visibility", "evidence_ref",
+        "due_at", "rank", "status", "visibility", "evidence_ref", "condition_json",
+        "reply_owed", "reply_turn", "reply_evidence",
     },
-    "continuity.item_closed": {"item_id", "status", "evidence_ref"},
+    "continuity.item_closed": {"item_id", "status", "evidence_ref", "reply_owed", "reply_evidence"},
     "continuity.item_superseded": {"item_id", "replacement_id", "evidence_ref"},
     "work_unit.upserted": {
         "work_unit_id", "authority", "external_id", "title", "owner", "status",
@@ -1003,8 +1004,8 @@ class EventStore:
             INSERT INTO ecs_continuity_items(
                 item_id, item_type, person_id, entity_id, thread_id, title, details,
                 owner, beneficiary, next_action, due_at, rank, status, visibility,
-                source_ref, evidence_ref, created_at, updated_at, revision
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+                source_ref, evidence_ref, created_at, updated_at, revision, condition_json, reply_owed
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
             """,
             (
                 item_id, item_type, event["person_id"], entity_id, event["thread_id"],
@@ -1012,7 +1013,7 @@ class EventStore:
                 p.get("beneficiary"), p.get("next_action"), p.get("due_at"),
                 p.get("rank"), p.get("status", "active"),
                 visibility, event["source_ref"], None,
-                event["occurred_at"], event["occurred_at"],
+                event["occurred_at"], event["occurred_at"], p.get("condition_json"), int(p.get("reply_owed", 0)),
             ),
         )
 
@@ -1058,9 +1059,17 @@ class EventStore:
         revision = self._expect(row, event["expected_revision"], f"continuity item {item_id}")
         allowed = {
             "title", "details", "owner", "beneficiary", "next_action", "due_at",
-            "rank", "status", "visibility", "evidence_ref",
+            "rank", "status", "visibility", "evidence_ref", "condition_json", "reply_owed", "reply_turn", "reply_evidence",
         }
         changes = {k: v for k, v in p.items() if k in allowed}
+        if "condition_json" in changes and (row["status"] != "pending" or row["condition_json"]
+                or changes.get("status") != "blocked" or event["actor_kind"] != "rich"
+                or not event["source_ref"].startswith("structured-checkpoint:")):
+            raise ValidationError("a waiting condition must keep its original confirmed order")
+        if (row["condition_json"] and row["status"] == "blocked" and not closing
+                and event["actor_kind"] == "rich"
+                and (changes.get("status", "blocked") != "blocked" or "evidence_ref" in changes)):
+            raise ValidationError("the original owner must verify a waiting condition before work can proceed")
         if "visibility" in changes:
             self._require_visibility_allowed(event["active_context"], changes["visibility"])
         if closing:
@@ -1068,6 +1077,8 @@ class EventStore:
             if status not in {"completed", "cancelled", "rejected", "superseded"}:
                 raise ValidationError("close status must be terminal")
             changes["status"] = status
+            if status != "completed":
+                changes["reply_owed"] = 0
             if status == "completed" and not changes.get("evidence_ref"):
                 raise ValidationError("completed continuity item requires evidence_ref")
         elif "status" in changes and changes["status"] not in OPENABLE_ITEM_STATUSES:
@@ -2183,7 +2194,7 @@ class EventStore:
         items = conn.execute(
             f"""
             SELECT * FROM ecs_continuity_items
-            WHERE entity_id=? AND status IN ({placeholders})
+            WHERE entity_id=? AND (status IN ({placeholders}) OR (status='completed' AND reply_owed=1))
               AND (thread_id IS NULL OR thread_id=?)
               AND visibility IN ({visibility_placeholders})
             ORDER BY CASE WHEN rank IS NULL THEN 2147483647 ELSE rank END,
@@ -2765,6 +2776,10 @@ def _item_line(row: sqlite3.Row) -> str:
     for name in ("details", "owner", "beneficiary", "next_action", "due_at", "evidence_ref"):
         if row[name]:
             fields.append(f"{name}={_data(row[name])}")
+    if row["reply_owed"]:
+        fields.append("reply_owed=true")
+    if row["condition_json"] and row["status"] == "blocked":
+        fields.append(f"waiting_condition={_data(row['condition_json'])}")
     fields.extend((f"revision={row['revision']}", f"source={_data(row['source_ref'])}"))
     return " | ".join(fields)
 
