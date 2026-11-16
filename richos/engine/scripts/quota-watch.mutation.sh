@@ -52,9 +52,6 @@ mutant unknown-exits-zero "Q04" "$L" \
     'return {"below": 0, "at-or-above": 1, "near-reset": 3}.get(verdict, 0)' \
     "A missing or unreadable payload would exit exactly like a healthy reading below the threshold."
 
-# Targets Q08, the direct case. R01 no longer depends on it: since the fallback
-# is refreshed before it turns one poll old (W12), R01's lead is woken by
-# QUOTA-REFRESH before the reading can go stale.
 mutant stale-read-as-fresh "Q08" "$L" \
     'if r["age"] is not None and r["age"] > stale_after:' \
     'if False:' \
@@ -69,11 +66,6 @@ mutant stale-bound-three-polls "Q16" "$L" \
     'a.stale = _env_int("QUOTA_WATCH_STALE_SECONDS", a.poll)' \
     'a.stale = _env_int("QUOTA_WATCH_STALE_SECONDS", 3 * a.poll)' \
     "A reading two polls old would pass as current, which is how the 93% crossing went unseen."
-
-mutant stale-wakes-nobody "W05" "$L" \
-    'stale = r["state"] == "ok" and not r["ended"]' \
-    'stale = False' \
-    "A stale reading would wait out a further poll on the watcher's own clock before telling the lead to refresh."
 
 # 4. HIS "every 5 minutes".
 mutant poll-not-five-minutes "W09" "$L" \
@@ -108,8 +100,8 @@ mutant fires-with-nothing-working "W03" "$L" \
     "After the lead paused everybody, restarting the watcher would wake it again at once, forever, until the reset."
 
 mutant blind-wake-with-nothing-working "W06" "$L" \
-    '                    if w["known"] and not w["working"]:{NL}                        print("  the reading is unknown but nothing' \
-    '                    if False:{NL}                        print("  the reading is unknown but nothing' \
+    'if wake and not blind_woken and (not w["known"] or w["working"]):' \
+    'if wake and not blind_woken:' \
     "A quiet session would be woken for a stale reading when there is no spend it could hide."
 
 # 7. HIS 2026-09-25 UPDATE (ruling §87). At or above the threshold, no pause
@@ -205,27 +197,11 @@ mutant watch-reads-file-only "R04" "$L" \
     '        r = read_reading(a.payload, now){NL}        w = workers(a.engine_root)' \
     "Every poll after the first would read the status-line file: the 07:57Z/08:07Z miss again."
 
-# 9. THE FALLBACK IS REFRESHED BEFORE IT TURNS ONE POLL OLD (the pause fired at
-#    95%, not 93%, on 2026-09-25: a 300 s poll first saw the file stale ~600 s on).
-mutant refresh-never "W12" "$L" \
-    '                if r["age"] >= at:{NL}                    w = workers' \
-    '                if False:{NL}                    w = workers' \
-    "An idle lead would be woken only once the reading was already a poll old: every 10 minutes."
-
-mutant refresh-at-the-bound "W12" "$L" \
-    '    return stale_after - min(REFRESH_AHEAD_SECONDS, stale_after // 10)' \
-    '    return stale_after' \
-    "The lead would be woken as the reading turns 300 s old, so its reply lands after it."
-
-mutant refresh-not-scheduled "W12" "$L" \
-    '            sleep_for = max(1, min(sleep_for, int(math.ceil(refresh_in))))' \
-    '            pass' \
-    "The poll would come a full interval later, past the refresh point, and see the reading stale."
-
-mutant refresh-with-nothing-working "W13" "$L" \
-    '                    if w["known"] and not w["working"]:{NL}                        print("  the reading is about to turn' \
-    '                    if False:{NL}                        print("  the reading is about to turn' \
-    "A quiet session would be woken every 5 minutes to refresh a number that nothing is spending."
+# 9. RETRY A TRANSIENT FAILURE BEFORE WAKING THE LEAD.
+mutant outage-wakes-on-first-unknown "N07" "$L" \
+    '                wake = now - blind_since >= a.poll' \
+    '                wake = stale or now - blind_since >= a.poll' \
+    "A single timeout on a weekly-only account would wake the lead over an old fallback."
 
 # 10. THE POLLING NEVER STOPS (2026-09-28). The watcher exited at the 14:30Z
 #     reset and on a get_usage timeout at 15:32Z, and nothing polled until it
@@ -240,10 +216,10 @@ mutant polling-stops-at-threshold "N03" "$L" \
     '                        threshold_named[window_end] = set(w["working"]) if w["known"] else set(){NL}                        return 0' \
     "The watcher would end at the pause, and nothing would poll for the release or the reset."
 
-mutant stale-wakes-every-poll "N06" "$L" \
-    '                    elif not blind_woken:{NL}                        out.wake("STALE" if stale' \
-    '                    elif True:{NL}                        out.wake("STALE" if stale' \
-    "A watcher that no longer exits would wake the lead at every poll of a stale reading."
+mutant stale-wakes-every-poll "N08" "$L" \
+    'if wake and not blind_woken and (not w["known"] or w["working"]):' \
+    'if wake and (not w["known"] or w["working"]):' \
+    "Every retry in the same outage would wake the lead again."
 
 mutant outage-wakes-at-once "N02" "$L" \
     '    if reach >= a.threshold:' \
@@ -269,11 +245,6 @@ mutant outage-reason-unkept "N02" "$L" \
     '        r["why"] += " (%s)" % "; ".join(timing' \
     '        r["why"] += "" and " (%s)" % "; ".join(timing' \
     "The next timeout would again leave no record of which request hung or what claude said."
-
-mutant refresh-not-re-read "R03" "$L" \
-    '            sleep_for = max(1, min(sleep_for, REFRESH_AHEAD_SECONDS, a.stale // 10))' \
-    '            pass' \
-    "After a refresh the watcher would read the status line a whole poll later, and the next refresh would come as it turns one poll old."
 
 # 11. HIGH SPEED, ruling §108 (2026-10-04): the 15 Fable workers of 2026-09-29
 #     took the five-hour window from 93% past 100% between two 5-minute checks.
