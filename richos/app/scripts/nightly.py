@@ -907,15 +907,19 @@ def serve_channel_manifest(manifest):
         execute("gh", "release", "upload", CHANNEL_TAG, "--repo", REPO, "--clobber",
                 str(path))
 
-        observed = Path(tmp) / "observed"
-        observed.mkdir()
-        execute("gh", "release", "download", CHANNEL_TAG, "--repo", REPO, "--pattern", "latest.json",
-                "--dir", str(observed))
-        if json.loads((observed / "latest.json").read_text()) != manifest:
-            raise ValueError("the update channel did not serve the published manifest")
+
+
+def record_served_nightly(info, manifest):
+    """Keep proof on the release that the rolling channel actually served."""
+    with tempfile.TemporaryDirectory(prefix="richos-nightly-served-") as tmp:
         marker = Path(tmp) / "published.json"
-        marker.write_bytes(path.read_bytes())
-        execute("gh", "release", "upload", "v" + manifest["version"], "--repo", REPO, "--clobber", str(marker))
+        marker.write_text(json_text(manifest))
+        verify_served_asset(ENDPOINT, marker)
+        try:
+            execute("gh", "release", "upload", info["tag"], "--repo", REPO, str(marker))
+        except subprocess.CalledProcessError:
+            # A retry after the first upload verifies the same immutable evidence.
+            verify_served_asset(f"https://github.com/{REPO}/releases/download/{info['tag']}/{marker.name}", marker)
 
 
 def wake_local_waiting_work():
@@ -1674,6 +1678,7 @@ def finish(info, out):
               f"  {STABLE_ENDPOINT}", flush=True)
         return
     channel_commit = promote(info, manifest)
+    record_served_nightly(info, manifest)
     wake_local_waiting_work()
     print(f"Published {info['tag']}; {CHANNEL_REF} at {channel_commit}, serving\n"
           f"  {ENDPOINT}", flush=True)
