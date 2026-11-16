@@ -436,14 +436,25 @@ def update_obligation(store, context, item, key, *, closing=False, **fields):
                  payload={"item_id": item["item_id"], **fields})
 
 
-def awaits_owner(item):
+def awaits_owner(store, item):
     if item["status"] not in OPERATOR_OPEN:
         return False
-    if ":assignment-obligation:" in item["source_ref"]:
-        return True
     if item["condition_json"]:
-        return item["status"] == "blocked" or json.loads(item["condition_json"]).get("launch") is True
-    return False
+        if item["status"] == "blocked" or json.loads(item["condition_json"]).get("launch") is True:
+            return True
+    # A progress update changes the projection's source. The opening event
+    # remains the evidence that the work owner must settle this obligation.
+    suffix = ":assignment-obligation:" + item["item_id"]
+    conn = store.connect()
+    try:
+        return conn.execute(
+            "SELECT 1 FROM ecs_events WHERE entity_id=? AND thread_id=? AND event_type='continuity.item_opened' "
+            "AND source_ref LIKE 'structured-checkpoint:%' AND substr(source_ref, -?)=? "
+            "AND json_extract(payload_json, '$.item_id')=? LIMIT 1",
+            (item["entity_id"], item["thread_id"], len(suffix), suffix, item["item_id"]),
+        ).fetchone() is not None
+    finally:
+        conn.close()
 
 
 def answer_delivered(store, request):
@@ -460,7 +471,7 @@ def answer_delivered(store, request):
     delivered = 0
     for link in pending:
         item = inspect_records(store, person_id=seat, item_id=link["item_id"])["item"]
-        if item["reply_owed"] and item["reply_turn"] == ref and not awaits_owner(item):
+        if item["reply_owed"] and item["reply_turn"] == ref and not awaits_owner(store, item):
             key = f"delivered:{ref}:{link['item_id']}"
             fields = {"reply_owed": 0, "reply_evidence": f"{ref}#{digest}"}
             if item["status"] in OPERATOR_OPEN:
@@ -635,7 +646,7 @@ def execute(state_root, request):
         item = inspect_records(store, person_id=context["person_id"], item_id=item_id)["item"]
         if not item["reply_owed"] or item["thread_id"] != context["thread_id"]:
             raise ScopeError("no reply is owed on this obligation in this conversation")
-        if awaits_owner(item):
+        if awaits_owner(store, item):
             raise ValidationError("the owner has not verified completion of this work")
         turn = f"ledger:{context['thread_id']}:{context['turn_id']}"
         if item["reply_turn"] != turn:

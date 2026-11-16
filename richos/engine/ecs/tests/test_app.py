@@ -257,6 +257,10 @@ class AppProtocolTests(unittest.TestCase):
                            {"verb": "open_loop", "fields": {"id": "watch-owner", "title": "Watch the owner"}}]})
         self.assertEqual(self.call("link-reply", seat=seat, item_id="run-checks", ok=False)["kind"], "ValidationError")
         self.assertEqual(self.call("link-reply", seat=seat, item_id="watch-owner", ok=False)["kind"], "ScopeError")
+        self.assertTrue(self.call("checkpoint", seat=seat, request_id="progress-note", checkpoint={
+            "statements": [{"verb": "update", "fields": {"id": "run-checks", "details": "Stu is running the checks"}}],
+        })["accepted"])
+        self.assertEqual(self.call("link-reply", seat=seat, item_id="run-checks", ok=False)["kind"], "ValidationError")
         self.call("answer-complete", seat=seat, obligation_id="run-checks", answer_text="The checks passed.",
                   source_ref="ledger:thread-a:turn-1")
         self.assertTrue(self.call("link-reply", seat=seat, item_id="run-checks")["linked"])
