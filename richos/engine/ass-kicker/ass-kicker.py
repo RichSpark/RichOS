@@ -1668,8 +1668,8 @@ def judge_record_claims(claims, writes, raw, repos=(), cited_out=None, ecs_looku
                 and not NOTES_POINTER_RE.search(sentence) and not PRIVATE_NOTES_RE.search(sentence)):
             claim = raw_window(raw, sentence)
             ids = ECS_ITEM_ID.findall(claim)
-            if (len(ids) == 1 and not LOCATION_RE.search(ECS_ITEM_ID.sub("", claim))
-                    and ecs_lookup(ids[0])):
+            if (ids and not LOCATION_RE.search(ECS_ITEM_ID.sub("", claim))
+                    and all(ecs_lookup(item_id) for item_id in dict.fromkeys(ids))):
                 continue
         if app_backed(sentence):
             continue

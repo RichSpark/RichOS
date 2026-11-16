@@ -783,6 +783,12 @@ assert verdict("I saved the follow-up in ECS item `made-up`.")
 assert verdict("I saved the follow-up in ECS item `draft-guide`.")
 assert verdict("I saved your standing rule in ECS item `finish-guide`.")
 assert verdict("I noted it in my private notes, ECS item `finish-guide`.")
+other = request("checkpoint", binding=binding, request_id="other",
+    checkpoint={"statements": [{"verb":"commitment","fields":{"id":"check-guide",
+        "title":"Check the guide","next":"Read the published version"}}]})
+assert other["accepted"]
+assert not verdict("I saved the follow-ups in ECS item `finish-guide` and ECS item `check-guide`.")
+assert verdict("I saved the follow-ups in ECS item `finish-guide` and ECS item `missing-guide`.")
 assert guard.ecs_record_lookup({"session_id": "different-session"}) is None
 PYECS
 then ok "ECS save claims require a scoped item and accepted current-turn receipt"
