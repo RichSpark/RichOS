@@ -1559,7 +1559,8 @@ def existing_record(window, repos):
 
 # An explicit identifier in the same claim supplies a scoped lookup.
 _ECS_ID = r"`[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,255}`"
-ECS_ITEM_ID = re.compile(rf"\bECS items? ({_ECS_ID}(?:\s*(?:,|\band\b)\s*{_ECS_ID})*)", re.I)
+_ECS_SEPARATOR = r"(?:,\s*(?:and\b)?|\band\b|[&/])"
+ECS_ITEM_ID = re.compile(rf"\bECS items? ({_ECS_ID}(?:\s*{_ECS_SEPARATOR}\s*{_ECS_ID})*)", re.I)
 
 
 def ecs_claim_windows(raw):
