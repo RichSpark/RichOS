@@ -248,8 +248,6 @@ def _item_payload(fields: dict[str, str], *, opening: bool) -> dict[str, Any]:
         if column is None:
             raise ValidationError(f"unknown item field {key!r}")
         payload[column] = value
-    if not opening and ({"condition_json", "reply_owed"} & payload.keys()):
-        raise ValidationError("a waiting condition keeps its original order; replace it with authorization")
     if "rank" in payload:
         payload["rank"] = _int_or_none(payload["rank"], "rank")
     if opening:

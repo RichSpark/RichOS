@@ -277,7 +277,7 @@ def bind(store, request, seat=None):
 _RELEASE = re.compile(r"[1-9][0-9]*|v?(?:0|[1-9][0-9]*)[.](?:0|[1-9][0-9]*)[.](?:0|[1-9][0-9]*)-nightly[.][0-9]{8}[.][1-9][0-9]*")
 
 
-def prepare_waiting_checkpoint(store, document, context, instruction, request_id):
+def prepare_waiting_checkpoint(store, document, context, instruction, request_id, reply_owed):
     """Bind real waiting work to the original visible input and its scope."""
     prefix = f"ledger:{context['thread_id']}:{context['turn_id']}"
     if (not isinstance(instruction, dict) or instruction.get("ledger_ref") != prefix
@@ -289,7 +289,7 @@ def prepare_waiting_checkpoint(store, document, context, instruction, request_id
     if type(launch) is not bool:
         raise ValidationError("launch must be true or false")
     if (not isinstance(values, list) or len(values) != 1 or not isinstance(values[0], dict)
-            or values[0].get("verb") not in {"commitment", "open_loop"}
+            or values[0].get("verb") not in {"commitment", "open_loop", "update"}
             or not isinstance(waits, list) or not 1 <= len(waits) <= 8):
         raise ValidationError("record one waiting obligation with one to eight conditions")
     fields = values[0].get("fields")
@@ -311,19 +311,24 @@ def prepare_waiting_checkpoint(store, document, context, instruction, request_id
                     or (wait["release"] != "published" and not _RELEASE.fullmatch(wait["release"]))):
                 raise ValidationError("an installation condition needs a named release or its paired publication")
         elif kind in {"assignment", "question"}:
-            if set(wait) != {"kind", "id"} or not isinstance(wait["id"], str) or not 1 <= len(wait["id"]) <= 120:
+            owner_thread = wait.get("thread_id", context["thread_id"])
+            if (set(wait) - {"kind", "id", "thread_id"} or not isinstance(wait.get("id"), str)
+                    or not 1 <= len(wait["id"]) <= 120
+                    or not isinstance(owner_thread, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", owner_thread)):
                 raise ValidationError("a work or decision condition needs the owner's record ID")
         else:
             raise ValidationError("unknown waiting condition")
     if any(w["kind"] == "installation" and w["release"] == "published" for w in waits):
         if sum(w["kind"] == "publication" for w in waits) != 1:
             raise ValidationError("an installation paired to a publication needs exactly one publication condition")
+    fields = {**fields, "reply_owed": "0" if reply_owed is False else "1"}
+    document = {**document, "statements": [{**values[0], "fields": fields}]}
     digest = hashlib.sha256(canonical_json(document).encode()).hexdigest()
     source = f"structured-checkpoint:{context['session_id']}:{context['turn_id']}:{request_id}"
     conn = store.connect()
     try:
         prior = conn.execute(
-            "SELECT condition_json FROM ecs_continuity_items WHERE item_id=? AND entity_id=? AND thread_id=?",
+            "SELECT status, condition_json FROM ecs_continuity_items WHERE item_id=? AND entity_id=? AND thread_id=?",
             (fields["id"], context["entity_id"], context["thread_id"]),
         ).fetchone()
     finally:
@@ -333,6 +338,8 @@ def prepare_waiting_checkpoint(store, document, context, instruction, request_id
         if condition["request_sha256"] != digest:
             raise ValidationError("waiting checkpoint request ID reused with different content")
     else:
+        if values[0]["verb"] == "update" and (not prior or prior["status"] != "pending" or condition):
+            raise ValidationError("only a pending item can take up a confirmed waiting order")
         waits = [dict(wait) for wait in waits]
         baseline = None
         for wait in waits:
@@ -350,6 +357,12 @@ def prepare_waiting_checkpoint(store, document, context, instruction, request_id
         **values[0],
         "fields": {**fields, "status": "blocked", "condition_json": canonical_json(condition)},
     }]}
+
+
+def wake_waiting(state_root):
+    messages = Path(state_root) / "messages"
+    if messages.is_dir():
+        (messages / "reconcile-waiting.json").touch()
 
 
 def waiting_work(store):
@@ -423,6 +436,16 @@ def update_obligation(store, context, item, key, *, closing=False, **fields):
                  payload={"item_id": item["item_id"], **fields})
 
 
+def awaits_owner(item):
+    if item["status"] not in OPERATOR_OPEN:
+        return False
+    if ":assignment-obligation:" in item["source_ref"]:
+        return True
+    if item["condition_json"]:
+        return item["status"] == "blocked" or json.loads(item["condition_json"]).get("launch") is True
+    return False
+
+
 def answer_delivered(store, request):
     entity, thread, turn = (required(request, field) for field in ("entity_id", "thread_id", "turn_id"))
     digest = required(request, "reply_sha256")
@@ -434,9 +457,10 @@ def answer_delivered(store, request):
         raise ScopeError("cannot record delivery outside its conversation")
     ref = f"ledger:{thread}:{turn}"
     pending = pending_replies(store, entity, thread, ref)
+    delivered = 0
     for link in pending:
         item = inspect_records(store, person_id=seat, item_id=link["item_id"])["item"]
-        if item["reply_owed"] and item["reply_turn"] == ref:
+        if item["reply_owed"] and item["reply_turn"] == ref and not awaits_owner(item):
             key = f"delivered:{ref}:{link['item_id']}"
             fields = {"reply_owed": 0, "reply_evidence": f"{ref}#{digest}"}
             if item["status"] in OPERATOR_OPEN:
@@ -444,7 +468,8 @@ def answer_delivered(store, request):
                              evidence_ref=fields["reply_evidence"], **fields)
             else:
                 update_obligation(store, context, item, key, **fields)
-    return {"delivered": len(pending)}
+            delivered += 1
+    return {"delivered": delivered}
 
 
 def waiting_noticed(store, request):
@@ -567,6 +592,9 @@ def execute(state_root, request):
         document = request.get("checkpoint")
         if not isinstance(document, dict):
             raise ValidationError("checkpoint must be an object")
+        owed = document.get("reply_owed")
+        if "reply_owed" in document and type(owed) is not bool:
+            raise ValidationError("reply_owed must be true or false")
         # A model-authored checkpoint cannot certify external work. Cancellation
         # or rejection is still an explicit operational transition. Verified
         # completion must arrive through an app authority adapter.
@@ -586,17 +614,19 @@ def execute(state_root, request):
                 canonical_json(document).encode()).hexdigest():
             return checkpoint_receipt(store, session=context["session_id"], turn=context["turn_id"],
                                       request_id=request_id, person_id=context["person_id"])
+        document = {key: value for key, value in document.items() if key != "reply_owed"}
         statements = document.get("statements")
         if isinstance(statements, list):
             document = {**document, "statements": [
-                {**statement, "fields": {**statement["fields"], "reply_owed": "1"}}
+                {**statement, "fields": {**statement["fields"], "reply_owed": str(int(
+                    owed if owed is not None else statement["verb"] == "commitment"))}}
                 if isinstance(statement, dict) and statement.get("verb") in {"commitment", "open_loop"}
                 and isinstance(statement.get("fields"), dict) else statement
                 for statement in statements
             ]}
         if "wait_for" in document:
             document = prepare_waiting_checkpoint(store, document, context, request.get("instruction"),
-                                                  required(request, "request_id"))
+                                                  required(request, "request_id"), owed)
         result = checkpoint(store, document, session=context["session_id"], turn=context["turn_id"],
                             revision=context["revision"], request_id=required(request, "request_id"),
                             person_id=context["person_id"])
@@ -605,6 +635,8 @@ def execute(state_root, request):
         item = inspect_records(store, person_id=context["person_id"], item_id=item_id)["item"]
         if not item["reply_owed"] or item["thread_id"] != context["thread_id"]:
             raise ScopeError("no reply is owed on this obligation in this conversation")
+        if awaits_owner(item):
+            raise ValidationError("the owner has not verified completion of this work")
         turn = f"ledger:{context['thread_id']}:{context['turn_id']}"
         if item["reply_turn"] != turn:
             update_obligation(store, context, item, f"link:{turn}:{item_id}", reply_turn=turn)

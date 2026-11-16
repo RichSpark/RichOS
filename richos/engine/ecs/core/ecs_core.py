@@ -103,7 +103,7 @@ EVENT_PAYLOAD_FIELDS = {
     },
     "continuity.item_updated": {
         "item_id", "title", "details", "owner", "beneficiary", "next_action",
-        "due_at", "rank", "status", "visibility", "evidence_ref",
+        "due_at", "rank", "status", "visibility", "evidence_ref", "condition_json",
         "reply_owed", "reply_turn", "reply_evidence",
     },
     "continuity.item_closed": {"item_id", "status", "evidence_ref", "reply_owed", "reply_evidence"},
@@ -1059,11 +1059,15 @@ class EventStore:
         revision = self._expect(row, event["expected_revision"], f"continuity item {item_id}")
         allowed = {
             "title", "details", "owner", "beneficiary", "next_action", "due_at",
-            "rank", "status", "visibility", "evidence_ref", "reply_owed", "reply_turn", "reply_evidence",
+            "rank", "status", "visibility", "evidence_ref", "condition_json", "reply_owed", "reply_turn", "reply_evidence",
         }
         changes = {k: v for k, v in p.items() if k in allowed}
+        if "condition_json" in changes and (row["status"] != "pending" or row["condition_json"]
+                or changes.get("status") != "blocked" or event["actor_kind"] != "rich"
+                or not event["source_ref"].startswith("structured-checkpoint:")):
+            raise ValidationError("a waiting condition must keep its original confirmed order")
         if (row["condition_json"] and row["status"] == "blocked" and not closing
-                and event["actor_kind"] == "extractor"
+                and event["actor_kind"] == "rich"
                 and (changes.get("status", "blocked") != "blocked" or "evidence_ref" in changes)):
             raise ValidationError("the original owner must verify a waiting condition before work can proceed")
         if "visibility" in changes:

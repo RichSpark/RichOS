@@ -30,10 +30,13 @@ fn drain(app:&AppHandle)->Result<(),String> {
 // are never used as release evidence.
 const WAITING_WAKEUP: &str = "reconcile-waiting.json";
 
+fn waiting_signal(state_root: &std::path::Path) -> std::path::PathBuf {
+    state_root.join("messages").join(WAITING_WAKEUP)
+}
+
 pub(crate) fn wake_waiting(state_root: &std::path::Path) -> std::io::Result<()> {
-    let root = state_root.join("messages");
-    std::fs::create_dir_all(&root)?;
-    std::fs::write(root.join(WAITING_WAKEUP), [])
+    std::fs::create_dir_all(state_root.join("messages"))?;
+    std::fs::write(waiting_signal(state_root), [])
 }
 
 fn reconcile_waiting(app: &AppHandle) -> Result<(), String> {
@@ -76,8 +79,10 @@ fn reconcile_waiting(app: &AppHandle) -> Result<(), String> {
         let ready = conditions.iter().all(|condition| waiting_condition_satisfied(&scope, condition, &installed));
         if (!ready && !skipped) || conditions.is_empty() { continue; }
         let original = if ready && !skipped {
-            let instruction: richos_core::ecs::UserInstruction = serde_json::from_value(item["instruction"].clone())
-                .map_err(|e| e.to_string())?;
+            let Ok(instruction) = serde_json::from_value::<richos_core::ecs::UserInstruction>(item["instruction"].clone()) else {
+                eprintln!("[richos] waiting work {id} has no readable original order");
+                continue;
+            };
             let prefix = format!("ledger:{thread}:");
             let turn = instruction.ledger_ref.strip_prefix(&prefix).and_then(|turn| view.ledger().turn(turn));
             if !turn.is_some_and(|turn| turn.entity_id.as_ref().is_some_and(|id| id.as_str() == entity)
@@ -90,7 +95,10 @@ fn reconcile_waiting(app: &AppHandle) -> Result<(), String> {
         let status = if skipped { "skipped" } else { "ready" };
         let mut work = None;
         if let Some(instruction) = original.as_ref().filter(|_| item["launch"] == true) {
-            let action = item["next_action"].as_str().ok_or("missing authorized next action")?;
+            let Some(action) = item["next_action"].as_str() else {
+                eprintln!("[richos] waiting work {id} has no authorized next action");
+                continue;
+            };
             let row = richos_core::assignment::register_waiting(&scope.state_root, &richos_core::assignment::Registration {
                 entity_id: entity.into(), thread_id: thread.into(), obligation_id: id.into(),
                 instruction_ledger_ref: instruction.ledger_ref.clone(), instruction_sha256: instruction.sha256.clone(),
@@ -129,6 +137,7 @@ fn reconcile_waiting(app: &AppHandle) -> Result<(), String> {
 fn waiting_condition_satisfied(scope: &StatusToolScope, observation: &Value, installed: &str) -> bool {
     let condition = &observation["condition"];
     let id = condition["id"].as_str().unwrap_or_default();
+    let owner_thread = condition["thread_id"].as_str().unwrap_or(&scope.thread_id);
     match condition["kind"].as_str() {
         Some("publication") => observation["state"] == "ready",
         Some("installation") => condition["release"].as_str().is_some_and(|release| {
@@ -137,9 +146,9 @@ fn waiting_condition_satisfied(scope: &StatusToolScope, observation: &Value, ins
                     .and_then(|(_, value)| value.parse::<u64>().ok()) == Some(counter)
             })
         }),
-        Some("assignment") => richos_core::assignment::read(&scope.state_root, &scope.entity_id, &scope.thread_id, id)
+        Some("assignment") => richos_core::assignment::read(&scope.state_root, &scope.entity_id, owner_thread, id)
             .is_ok_and(|assignment| assignment.state == richos_core::assignment::AssignmentState::Settled),
-        Some("question") => richos_core::questions::Store::new(&scope.state_root).list(&scope.entity_id, &scope.thread_id)
+        Some("question") => richos_core::questions::Store::new(&scope.state_root).list(&scope.entity_id, owner_thread)
             .is_ok_and(|questions| questions.iter().any(|q| q.id == id && q.state == richos_core::questions::State::Answered)),
         _ => false,
     }
@@ -213,37 +222,77 @@ pub fn start(app:AppHandle)->Result<(),Box<dyn std::error::Error>> {
     // Keep the kernel watch alive with the application, not a detached polling process.
     app.manage(Watch {_watcher:Mutex::new(watcher)});
     std::thread::Builder::new().name("richos-peer-input".into()).spawn(move || {
-        // Drain before waiting, including input saved before a restart or watch registration.
-        let mut said=None;
-        let signal = root.join(WAITING_WAKEUP);
-        let mut seen = None;
-        loop {
-            let revision = std::fs::metadata(&signal).and_then(|file| file.modified()).ok();
-            if seen != Some(revision) {
-                seen = Some(revision);
-                let handle = app.clone();
-                tauri::async_runtime::spawn_blocking(move || {
-                    if let Err(error) = reconcile_waiting(&handle) {
-                        eprintln!("[richos] waiting-work evidence unavailable: {error}");
-                    }
-                });
-            }
-            match drain(&app) {
-                Ok(())=>{said=None;if rx.recv().is_err() {return}},
-                Err(error)=>{
-                    if said.as_ref()!=Some(&error) {eprintln!("[richos] peer input remains on disk: {error}");said=Some(error);}
+        receive_until_closed(&root, rx, || drain(&app), || {
+            let handle = app.clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                if let Err(error) = reconcile_waiting(&handle) {
+                    eprintln!("[richos] waiting-work evidence unavailable: {error}");
+                }
+            });
+        });
+    })?;
+    Ok(())
+}
 
-                    if matches!(rx.recv_timeout(std::time::Duration::from_secs(5)),Err(mpsc::RecvTimeoutError::Disconnected)) {return}
+fn receive_until_closed(root: &std::path::Path, rx: mpsc::Receiver<()>, mut drain: impl FnMut() -> Result<(), String>,
+    mut reconcile: impl FnMut(),
+) {
+    // Check on startup, then use the same watched path that every owner wakes.
+    let signal = waiting_signal(root);
+    let mut seen = None;
+    let mut said = None;
+    loop {
+        let revision = std::fs::metadata(&signal).and_then(|file| file.modified()).ok();
+        if seen != Some(revision) {
+            seen = Some(revision);
+            reconcile();
+        }
+        match drain() {
+            Ok(()) => { said = None; if rx.recv().is_err() { return; } }
+            Err(error) => {
+                if said.as_ref() != Some(&error) {
+                    eprintln!("[richos] peer input remains on disk: {error}");
+                    said = Some(error);
+                }
+                if matches!(rx.recv_timeout(std::time::Duration::from_secs(5)), Err(mpsc::RecvTimeoutError::Disconnected)) {
+                    return;
                 }
             }
         }
-    })?;
-    Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn an_owner_wakes_the_running_receiver_after_startup() {
+        use std::time::Duration;
+        let root = std::env::temp_dir().join(format!("richos-waiting-watch-{}-{}", std::process::id(), richos_core::util::now_millis()));
+        std::fs::create_dir_all(root.join("messages")).unwrap();
+        let (wake, receiver) = mpsc::sync_channel(1);
+        let watcher = watch(&root, wake).unwrap();
+        let (proof, seen) = mpsc::channel();
+        let result = std::thread::scope(|threads| {
+            threads.spawn(|| receive_until_closed(&root, receiver, || Ok(()), || { proof.send(()).unwrap(); }));
+            // load-bound: the message is the proof. This only limits a dead kernel watch.
+            let observed = || seen.recv_timeout(Duration::from_secs(30));
+            let result = (|| {
+                observed()?;
+                std::fs::write(root.join("messages/reconcile-waiting.json"), b"from publisher").unwrap();
+                observed()?;
+                wake_waiting(&root).unwrap();
+                observed()?;
+                wake_waiting(&root).unwrap();
+                observed()
+            })();
+            drop(watcher);
+            result
+        });
+        std::fs::remove_dir_all(&root).unwrap();
+        result.expect("startup, the publisher and the app must each wake the same running receiver");
+    }
+
     #[test]
     fn dropped_notifications_request_a_drain_without_paths() {
         let (tx,rx)=mpsc::sync_channel(1);

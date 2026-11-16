@@ -247,6 +247,22 @@ class AppProtocolTests(unittest.TestCase):
         from mcp import TOOLS
         self.assertNotIn("answer-delivered", {tool["name"] for tool in TOOLS})
 
+    def test_a_partial_reply_cannot_settle_assigned_work(self):
+        seat = "ceo-thread:thread-a"
+        self.binding = self.call("bind", seat=seat, request_id="owner-scope",
+            scope={"entity_id": "depot", "thread_id": "thread-a", "session_id": "session-a",
+                   "turn_id": "turn-1", "audience": "ceo"}, source_ref="ledger:thread-a:turn-1")["binding"]
+        self.call("checkpoint", seat=seat, request_id="assignment-obligation:run-checks", checkpoint={
+            "statements": [{"verb": "commitment", "fields": {"id": "run-checks", "title": "Run the checks"}},
+                           {"verb": "open_loop", "fields": {"id": "watch-owner", "title": "Watch the owner"}}]})
+        self.assertEqual(self.call("link-reply", seat=seat, item_id="run-checks", ok=False)["kind"], "ValidationError")
+        self.assertEqual(self.call("link-reply", seat=seat, item_id="watch-owner", ok=False)["kind"], "ScopeError")
+        self.call("answer-complete", seat=seat, obligation_id="run-checks", answer_text="The checks passed.",
+                  source_ref="ledger:thread-a:turn-1")
+        self.assertTrue(self.call("link-reply", seat=seat, item_id="run-checks")["linked"])
+        self.assertEqual(self.call("answer-delivered", entity_id="depot", thread_id="thread-a",
+            turn_id="turn-1", reply_sha256="0" * 64)["delivered"], 1)
+
     def test_stale_and_cross_entity_bindings_are_rejected(self):
         old = self.binding
         self.binding = self.bind("studio", "thread-b", "session-b", "turn-2", old["revision"])
