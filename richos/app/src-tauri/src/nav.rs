@@ -100,6 +100,10 @@ pub struct NavState {
     /// 2026-10-19). Shown in place of the provisional title, and never over a title the user
     /// set himself: [`NavState::display_title`] puts his rename first.
     pub auto_titles: BTreeMap<String, String>,
+    /// Thread ids whose "Keep chat alive" box is checked (CEO, 2026-11-16, round 83: "in every
+    /// chat but off by default"). Absent = off, so every chat starts unchecked and each keeps
+    /// its own. Read by whatever keeps a chat's cache warm (`richos_core::chat_cache`).
+    pub keep_alive_threads: Vec<String>,
 }
 
 impl NavState {
@@ -126,6 +130,7 @@ impl Default for NavState {
             archived_threads: Vec::new(),
             renamed_threads: BTreeMap::new(),
             auto_titles: BTreeMap::new(),
+            keep_alive_threads: Vec::new(),
         }
     }
 }
@@ -265,6 +270,13 @@ impl NavStore {
         let before = self.state.archived_threads.clone();
         set_membership(&mut self.state.archived_threads, thread_id, archived);
         self.persist().inspect_err(|_| self.state.archived_threads = before)
+    }
+
+    /// One chat's "Keep chat alive" box. A refused save leaves the box as saved, not as asked.
+    pub fn set_thread_kept_alive(&mut self, thread_id: &str, kept: bool) -> std::io::Result<()> {
+        let before = self.state.keep_alive_threads.clone();
+        set_membership(&mut self.state.keep_alive_threads, thread_id, kept);
+        self.persist().inspect_err(|_| self.state.keep_alive_threads = before)
     }
 
     /// An empty/blank title CLEARS the override rather than storing a blank one, so the
@@ -459,6 +471,25 @@ mod tests {
         store.set_thread_archived("thr_b", true).unwrap();
         assert_eq!(store.state().archived_threads, vec!["thr_b".to_string()]);
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// KEEP CHAT ALIVE (CEO, 2026-11-16, round 83): "in every chat but off by default". Each
+    /// chat keeps its own box, the choice survives a relaunch, and a file from before the box
+    /// existed reads every chat as unchecked.
+    #[test]
+    fn keep_chat_alive_is_off_in_every_chat_until_its_own_box_is_checked_and_survives_a_relaunch() {
+        let path = tmp_path("keep-alive");
+        std::fs::write(&path, r#"{"sidebar_width":355.0,"pinned_threads":["thr_a"]}"#).unwrap();
+        let mut store = NavStore::open(&path);
+        assert!(store.state().keep_alive_threads.is_empty(), "a chat is kept alive before anybody checked its box");
+        store.set_thread_kept_alive("thr_a", true).unwrap();
+        store.set_thread_kept_alive("thr_a", true).unwrap();
+        assert_eq!(store.state().keep_alive_threads, vec!["thr_a".to_string()], "checked once, and only that chat");
+        assert_eq!(NavStore::open(&path).state().keep_alive_threads, vec!["thr_a".to_string()], "the choice did not survive a relaunch");
+        store.set_thread_kept_alive("thr_a", false).unwrap();
+        assert!(NavStore::open(&path).state().keep_alive_threads.is_empty(), "unchecking was not saved");
+        assert_eq!(store.state().pinned_threads, vec!["thr_a".to_string()], "the box changed something else");
+        std::fs::remove_file(&path).expect("the test's own file is removable");
     }
 
     #[test]
