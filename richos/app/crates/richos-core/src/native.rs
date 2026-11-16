@@ -4425,15 +4425,17 @@ impl NativeTurnScope {
         self.prepare_question_scope(binding.entity_id().as_str(),binding.thread_id(),turn,"front_desk",
             if source==crate::ledger::Source::Jam {"spoken"}else{"typed"})?;
         let profile_state = self.engine_profile.as_ref().map(|p| p.state.clone());
+        let agent = (source == crate::ledger::Source::Agent)
+            .then(|| serde_json::from_str::<crate::session_tools::Message>(text).ok()).flatten();
         let user_instruction=if matches!(source,crate::ledger::Source::Text|crate::ledger::Source::Jam) {
             use sha2::Digest;
             Some(crate::ecs::UserInstruction::with_text(format!("ledger:{}:{original_turn}",binding.thread_id()),
                 format!("{:x}",sha2::Sha256::digest(text.as_bytes())),Some(text)))
-        } else if source==crate::ledger::Source::Agent {
-            serde_json::from_str::<crate::session_tools::Message>(text).ok().and_then(|m|m.instruction)
+        } else {
+            agent.as_ref().and_then(|message|message.instruction.clone())
                 .filter(|i|profile_state.as_ref().is_some_and(|state|crate::work_host::verified_instruction(state,
                     binding.entity_id().as_str(),binding.thread_id(),&i.ledger_ref,&i.sha256).is_ok()))
-        } else {None};
+        };
 
         let seat = self.seat.clone();
         let Some((bridge, path)) = &self.continuity else {
@@ -4495,7 +4497,10 @@ impl NativeTurnScope {
             let status=crate::status_tools::StatusToolScope {version:1,state_root:state_root.clone(),
                 entity_id:binding.entity_id().to_string(),thread_id:binding.thread_id().to_string()};
             crate::status_tools::write_scope(status_path,&status).map_err(CognitionError::Io)?;
-            crate::session_tools::bind_with_assignments(status_path,&status,&self.session_id,"rich",user_instruction.clone(),self.assignments_scope.as_deref()).map_err(CognitionError::Io)?;
+            let waiting_notice = agent.as_ref().filter(|message| message.from == "ecs-waiting");
+            crate::session_tools::bind_with_assignments(status_path,&status,&self.session_id,"rich",
+                user_instruction.clone(),self.assignments_scope.as_deref(), waiting_notice)
+                .map_err(CognitionError::Io)?;
             drop(std::fs::remove_file(crate::status_tools::live_meeting_path(status_path)));
             let source = if self.role == LeaseRole::Conversation && matches!(source, crate::ledger::Source::Text | crate::ledger::Source::Jam) {
                 live_meeting_at.and_then(|at| self.engine_profile.as_ref().and_then(|profile| profile.read_live_meeting(binding, at)))
@@ -4893,6 +4898,10 @@ impl Cognition for NativeCognition {
     fn set_input_channel(&mut self, channel: Option<&str>) -> Result<(), CognitionError> {
         self.pending_channel = channel.map(str::to_string);
         Ok(())
+    }
+
+    fn continuity_bridge(&self) -> Option<crate::ecs::EcsBridge> {
+        self.continuity.as_ref().map(|(bridge, _)| bridge.clone())
     }
 
     fn requires_thread_isolation(&self) -> bool { self.continuity.is_some() }

@@ -13,6 +13,7 @@ from ecs_core import (CEO_SEAT_PREFIX, EventStore, PERSON_ID, ScopeError, Valida
                       ECSError, canonical_json, ceo_seat, is_ceo_row)
 from ecs_checkpoint import checkpoint, checkpoint_receipt
 from ecs_inspect import inspect_records
+from publication import publication_fact, served_version
 
 PROTOCOL_VERSION = 1
 BINDING_FIELDS = ("entity_id", "thread_id", "session_id", "turn_id", "audience", "revision")
@@ -37,7 +38,7 @@ BINDING_FIELDS = ("entity_id", "thread_id", "session_id", "turn_id", "audience",
 # whether a person equals the PERSON_ID literal: they ask is_ceo_row, which
 # re-derives the seat from the row's own thread and requires the ceo audience. A
 # work seat named after an assignment answers no, whatever audience it asks for.
-CONVERSATION_ONLY = ("checkpoint", "receipt", "brief")
+CONVERSATION_ONLY = ("checkpoint", "receipt", "brief", "link-reply")
 # Enumerating and releasing seats is the HOST's reconciliation, never a background
 # lease's: a lease that could release seats could release another lease's.
 HOST_ONLY = ("seats", "release-seat")
@@ -272,6 +273,240 @@ def bind(store, request, seat=None):
     return {"binding": binding_of(current)}
 
 
+
+_RELEASE = re.compile(r"[1-9][0-9]*|v?(?:0|[1-9][0-9]*)[.](?:0|[1-9][0-9]*)[.](?:0|[1-9][0-9]*)-nightly[.][0-9]{8}[.][1-9][0-9]*")
+
+
+def prepare_waiting_checkpoint(store, document, context, instruction, request_id, reply_owed):
+    """Bind real waiting work to the original visible input and its scope."""
+    prefix = f"ledger:{context['thread_id']}:{context['turn_id']}"
+    if (not isinstance(instruction, dict) or instruction.get("ledger_ref") != prefix
+            or not re.fullmatch(r"[0-9a-f]{64}", str(instruction.get("sha256", "")))):
+        raise ScopeError("waiting work requires its original visible user order")
+    values = document.get("statements")
+    waits = document["wait_for"]
+    launch = document.get("launch", False)
+    if type(launch) is not bool:
+        raise ValidationError("launch must be true or false")
+    if (not isinstance(values, list) or len(values) != 1 or not isinstance(values[0], dict)
+            or values[0].get("verb") not in {"commitment", "open_loop", "update"}
+            or not isinstance(waits, list) or not 1 <= len(waits) <= 8):
+        raise ValidationError("record one waiting obligation with one to eight conditions")
+    fields = values[0].get("fields")
+    if not isinstance(fields, dict) or not fields.get("id") or not fields.get("next"):
+        raise ValidationError("a waiting obligation needs a stable ID and the next action")
+    for wait in waits:
+        if not isinstance(wait, dict):
+            raise ValidationError("use a typed waiting condition")
+        kind = wait.get("kind")
+        if kind == "publication":
+            if (set(wait) != {"kind", "channel", "match", "release"}
+                    or wait["channel"] != "nightly" or wait["match"] not in {"exact", "later"}
+                    or not isinstance(wait["release"], str)
+                    or (not _RELEASE.fullmatch(wait["release"])
+                        and (wait["release"], wait["match"]) != ("current", "later"))):
+                raise ValidationError("a publication condition needs its channel, release and comparison")
+        elif kind == "installation":
+            if (set(wait) != {"kind", "release"} or not isinstance(wait["release"], str)
+                    or (wait["release"] != "published" and not _RELEASE.fullmatch(wait["release"]))):
+                raise ValidationError("an installation condition needs a named release or its paired publication")
+        elif kind in {"assignment", "question"}:
+            owner_thread = wait.get("thread_id", context["thread_id"])
+            if (set(wait) - {"kind", "id", "thread_id"} or not isinstance(wait.get("id"), str)
+                    or not 1 <= len(wait["id"]) <= 120
+                    or not isinstance(owner_thread, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", owner_thread)):
+                raise ValidationError("a work or decision condition needs the owner's record ID")
+        else:
+            raise ValidationError("unknown waiting condition")
+    if any(w["kind"] == "installation" and w["release"] == "published" for w in waits):
+        if sum(w["kind"] == "publication" for w in waits) != 1:
+            raise ValidationError("an installation paired to a publication needs exactly one publication condition")
+    fields = {**fields, "reply_owed": "0" if reply_owed is False else "1"}
+    document = {**document, "statements": [{**values[0], "fields": fields}]}
+    digest = hashlib.sha256(canonical_json(document).encode()).hexdigest()
+    source = f"structured-checkpoint:{context['session_id']}:{context['turn_id']}:{request_id}"
+    conn = store.connect()
+    try:
+        prior = conn.execute(
+            "SELECT status, condition_json FROM ecs_continuity_items WHERE item_id=? AND entity_id=? AND thread_id=?",
+            (fields["id"], context["entity_id"], context["thread_id"]),
+        ).fetchone()
+    finally:
+        conn.close()
+    condition = json.loads(prior["condition_json"]) if prior and prior["condition_json"] else {}
+    if condition.get("source_ref") == source:
+        if condition["request_sha256"] != digest:
+            raise ValidationError("waiting checkpoint request ID reused with different content")
+    else:
+        if values[0]["verb"] == "update" and (not prior or prior["status"] != "pending" or condition):
+            raise ValidationError("only a pending item can take up a confirmed waiting order")
+        waits = [dict(wait) for wait in waits]
+        baseline = None
+        for wait in waits:
+            if wait.get("release") == "current":
+                baseline = baseline or served_version()
+                wait["release"] = baseline
+        condition = {
+            "instruction": {"ledger_ref": prefix, "sha256": instruction["sha256"]},
+            "all": waits,
+            "request_sha256": digest,
+            "source_ref": source,
+            "launch": launch,
+        }
+    return {**{key: val for key, val in document.items() if key not in {"wait_for", "launch"}}, "statements": [{
+        **values[0],
+        "fields": {**fields, "status": "blocked", "condition_json": canonical_json(condition)},
+    }]}
+
+
+def wake_waiting(state_root):
+    messages = Path(state_root) / "messages"
+    if messages.is_dir():
+        (messages / "reconcile-waiting.json").touch()
+
+
+def waiting_work(store):
+    """Read the conditions owned elsewhere without scanning turn history."""
+    conn = store.connect()
+    try:
+        rows = [dict(row) for row in conn.execute(
+            "SELECT item_id, entity_id, thread_id, title, next_action, condition_json FROM ecs_continuity_items "
+            "WHERE condition_json IS NOT NULL AND status='blocked' AND thread_id IS NOT NULL "
+            "AND coalesce(evidence_ref,'') NOT LIKE 'waiting-skipped:%'"
+        )]
+    finally:
+        conn.close()
+    if not rows:
+        return {"items": []}
+    channel_failed = False
+    served = None
+    facts = {}
+    for row in rows:
+        condition = json.loads(row.pop("condition_json"))
+        row["instruction"] = condition["instruction"]
+        row["launch"] = condition.get("launch", False)
+        observations = []
+        for wait in condition["all"]:
+            if wait["kind"] != "publication":
+                observations.append({"condition": wait, "state": "waiting"})
+                continue
+            key = (wait["match"], wait["release"])
+            if key not in facts:
+                try:
+                    if channel_failed:
+                        raise ValueError("channel unavailable")
+                    served = served or served_version()
+                    facts[key] = publication_fact(wait, served)
+                except (OSError, ValueError, TypeError, KeyError):
+                    channel_failed = served is None
+                    facts[key] = {"state": "waiting", "reason": "The publication source is unavailable."}
+            observations.append({"condition": wait, **facts[key]})
+        row["conditions"] = observations
+        publication = next((o.get("publication") for o in observations
+                            if o["condition"]["kind"] == "publication" and o["state"] == "ready"), None)
+        for observation in observations:
+            wait = observation["condition"]
+            if wait["kind"] == "installation" and wait["release"] == "published":
+                observation["condition"] = {**wait, "release": publication}
+    return {"items": rows}
+
+
+def pending_replies(store, entity=None, thread=None, turn=None):
+    sql = ("SELECT item_id, entity_id, thread_id, reply_turn FROM ecs_continuity_items "
+           "WHERE reply_owed=1 AND reply_turn IS NOT NULL")
+    params = ()
+    if entity is not None:
+        sql += " AND entity_id=? AND thread_id=? AND reply_turn=?"
+        params = (entity, thread, turn)
+    conn = store.connect()
+    try:
+        return [dict(row) for row in conn.execute(sql, params)]
+    finally:
+        conn.close()
+
+
+def update_obligation(store, context, item, key, *, closing=False, **fields):
+    event = "continuity.item_closed" if closing else "continuity.item_updated"
+    store.append(event, entity_id=context["entity_id"],
+                 thread_id=context["thread_id"], session_id=context["session_id"],
+                 person_id=context["person_id"], active_context_revision=context["revision"],
+                 actor_kind="app", actor_id="richos-app-v1", source_ref=item["source_ref"],
+                 expected_revision=item["revision"],
+                 idempotency_key="reply:" + hashlib.sha256(key.encode()).hexdigest(),
+                 payload={"item_id": item["item_id"], **fields})
+
+
+def awaits_owner(store, item):
+    if item["status"] not in OPERATOR_OPEN:
+        return False
+    if item["condition_json"]:
+        if item["status"] == "blocked" or json.loads(item["condition_json"]).get("launch") is True:
+            return True
+    # A progress update changes the projection's source. The opening event
+    # remains the evidence that the work owner must settle this obligation.
+    suffix = ":assignment-obligation:" + item["item_id"]
+    conn = store.connect()
+    try:
+        return conn.execute(
+            "SELECT 1 FROM ecs_events WHERE entity_id=? AND thread_id=? AND event_type='continuity.item_opened' "
+            "AND source_ref LIKE 'structured-checkpoint:%' AND substr(source_ref, -?)=? "
+            "AND json_extract(payload_json, '$.item_id')=? LIMIT 1",
+            (item["entity_id"], item["thread_id"], len(suffix), suffix, item["item_id"]),
+        ).fetchone() is not None
+    finally:
+        conn.close()
+
+
+def answer_delivered(store, request):
+    entity, thread, turn = (required(request, field) for field in ("entity_id", "thread_id", "turn_id"))
+    digest = required(request, "reply_sha256")
+    if not re.fullmatch("[0-9a-f]{64}", digest):
+        raise ValidationError("the delivered reply needs its ledger digest")
+    seat = ceo_seat(thread)
+    context = store.current_context(seat)
+    if context is None or not is_ceo_row(context) or context["entity_id"] != entity:
+        raise ScopeError("cannot record delivery outside its conversation")
+    ref = f"ledger:{thread}:{turn}"
+    pending = pending_replies(store, entity, thread, ref)
+    delivered = 0
+    for link in pending:
+        item = inspect_records(store, person_id=seat, item_id=link["item_id"])["item"]
+        if item["reply_owed"] and item["reply_turn"] == ref and not awaits_owner(store, item):
+            key = f"delivered:{ref}:{link['item_id']}"
+            fields = {"reply_owed": 0, "reply_evidence": f"{ref}#{digest}"}
+            if item["status"] in OPERATOR_OPEN:
+                update_obligation(store, context, item, key, closing=True, status="completed",
+                             evidence_ref=fields["reply_evidence"], **fields)
+            else:
+                update_obligation(store, context, item, key, **fields)
+            delivered += 1
+    return {"delivered": delivered}
+
+
+def waiting_noticed(store, request):
+    entity, thread, item_id = (required(request, field) for field in ("entity_id", "thread_id", "item_id"))
+    seat = ceo_seat(thread)
+    context = store.current_context(seat)
+    if context is None or not is_ceo_row(context) or context["entity_id"] != entity:
+        raise ScopeError("the waiting notice must keep its own conversation")
+    item = inspect_records(store, person_id=seat, item_id=item_id)["item"]
+    if item["thread_id"] != thread or not item["condition_json"]:
+        raise ScopeError("the waiting notice must refer to a scoped condition")
+    state = required(request, "state")
+    if state not in {"ready", "skipped"}:
+        raise ValidationError("unknown waiting notice state")
+    if item["status"] != "blocked" or (item["evidence_ref"] or "").startswith("waiting-skipped:"):
+        return {"changed": False}
+    evidence = required(request, "evidence")
+    if len(evidence) > 1024:
+        raise ValidationError("waiting notice evidence is too long")
+    fields = {"evidence_ref": f"waiting-{state}:{evidence}"}
+    if state == "ready":
+        fields["status"] = "active"
+    update_obligation(store, context, item, f"waiting:{entity}:{thread}:{item_id}:{state}", **fields)
+    return {"changed": True}
+
+
 def execute(state_root, request):
     if not isinstance(request, dict) or type(request.get("protocol")) is not int or request.get("protocol") != PROTOCOL_VERSION:
         raise ValidationError("unsupported ECS app protocol")
@@ -291,7 +526,7 @@ def execute(state_root, request):
         return {"protocol": PROTOCOL_VERSION, "event_schema": 1,
                 "migration_digest": identity.hexdigest(), "state_root": str(root),
                 "ceo_thread_seats": True, "ceo_seat_prefix": CEO_SEAT_PREFIX,
-                "commands": ["current", "bind", "prepare-turn", "checkpoint", "receipt", "brief", "inspect", "observe", "verified-work", "observation-receipt", "import-preview", "import-apply", "sync-loro-receipts", "complete-obligation", "operator-complete", "seats", "release-seat", "answer-complete"]}
+                "commands": ["current", "bind", "prepare-turn", "checkpoint", "receipt", "brief", "inspect", "observe", "verified-work", "observation-receipt", "import-preview", "import-apply", "sync-loro-receipts", "complete-obligation", "operator-complete", "seats", "release-seat", "answer-complete", "waiting-work", "waiting-noticed", "pending-replies", "answer-delivered"]}
     if command == "prepare-turn":
         # The front desk's existing four requests, in one Python invocation. Keep
         # their handlers, revision fences, order and receipt-error behavior.
@@ -322,6 +557,17 @@ def execute(state_root, request):
         return preview(root, request.get("envelope"), request.get("target"))
     store = EventStore(root)
     seat = seat_of(request)
+    if command in {"waiting-work", "waiting-noticed", "pending-replies", "answer-delivered"}:
+        if not store.db_path.is_file():
+            return {"items": []}
+        store.initialize()
+        if command == "waiting-work":
+            return waiting_work(store)
+        if command == "waiting-noticed":
+            return waiting_noticed(store, request)
+        if command == "pending-replies":
+            return {"items": pending_replies(store)}
+        return answer_delivered(store, request)
     if command == "current":
         current = store.current_context() if seat is None else store.current_context(seat)
         return {"binding": binding_of(current) if current is not None else None}
@@ -357,20 +603,55 @@ def execute(state_root, request):
         document = request.get("checkpoint")
         if not isinstance(document, dict):
             raise ValidationError("checkpoint must be an object")
+        owed = document.get("reply_owed")
+        if "reply_owed" in document and type(owed) is not bool:
+            raise ValidationError("reply_owed must be true or false")
         # A model-authored checkpoint cannot certify external work. Cancellation
         # or rejection is still an explicit operational transition. Verified
         # completion must arrive through an app authority adapter.
         for statement in document.get("statements", []):
             if isinstance(statement, dict):
                 fields = statement.get("fields", {})
+                if isinstance(fields, dict) and ({"condition_json", "reply_owed"} & fields.keys()):
+                    raise ValidationError("use the checkpoint's typed wait_for field")
                 if isinstance(fields,dict) and fields.get("class") == "wiki_loro":
                     raise ValidationError("durable knowledge corrections must use the app's Loro proposal/confirmation desk; ECS consumes its writer receipt")
                 if isinstance(fields, dict) and (fields.get("status") == "completed" or
                         (statement.get("verb") == "close" and "status" not in fields)):
                     raise ValidationError("completion needs an app verification receipt, not a checkpoint claim")
+        request_id = required(request, "request_id")
+        prior = store.existing_event(f"checkpoint:{context['session_id']}:{context['turn_id']}:{request_id}")
+        if prior and json.loads(prior["payload_json"])["request_sha256"] == hashlib.sha256(
+                canonical_json(document).encode()).hexdigest():
+            return checkpoint_receipt(store, session=context["session_id"], turn=context["turn_id"],
+                                      request_id=request_id, person_id=context["person_id"])
+        document = {key: value for key, value in document.items() if key != "reply_owed"}
+        statements = document.get("statements")
+        if isinstance(statements, list):
+            document = {**document, "statements": [
+                {**statement, "fields": {**statement["fields"], "reply_owed": str(int(
+                    owed if owed is not None else statement["verb"] == "commitment"))}}
+                if isinstance(statement, dict) and statement.get("verb") in {"commitment", "open_loop"}
+                and isinstance(statement.get("fields"), dict) else statement
+                for statement in statements
+            ]}
+        if "wait_for" in document:
+            document = prepare_waiting_checkpoint(store, document, context, request.get("instruction"),
+                                                  required(request, "request_id"), owed)
         result = checkpoint(store, document, session=context["session_id"], turn=context["turn_id"],
                             revision=context["revision"], request_id=required(request, "request_id"),
                             person_id=context["person_id"])
+    elif command == "link-reply":
+        item_id = required(request, "item_id")
+        item = inspect_records(store, person_id=context["person_id"], item_id=item_id)["item"]
+        if not item["reply_owed"] or item["thread_id"] != context["thread_id"]:
+            raise ScopeError("no reply is owed on this obligation in this conversation")
+        if awaits_owner(store, item):
+            raise ValidationError("the owner has not verified completion of this work")
+        turn = f"ledger:{context['thread_id']}:{context['turn_id']}"
+        if item["reply_turn"] != turn:
+            update_obligation(store, context, item, f"link:{turn}:{item_id}", reply_turn=turn)
+        result = {"linked": True, "obligation_id": item_id, "reply_turn": turn}
     elif command == "receipt":
         result = checkpoint_receipt(store, session=required(request, "session_id"),
                                     turn=required(request, "turn_id"), request_id=required(request, "request_id"),

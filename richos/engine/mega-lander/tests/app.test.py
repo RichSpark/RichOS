@@ -73,6 +73,7 @@ class DesktopWork(unittest.TestCase):
 
     def test_independent_stu_closes_reviewed_work_and_an_answer_on_their_own_records(self):
         words={"fixture-task":"Create the fictional result without publication.","answer-task":"What is five plus five?"}
+        messages=self.root/"engine-state/messages";messages.mkdir(parents=True)
         identity=json.dumps(["depot","thread-a"],separators=(",", ":"))
         root=self.root/"engine-state/assignments"/hashlib.sha256(identity.encode()).hexdigest();root.mkdir(parents=True)
         rows=[]
@@ -97,11 +98,13 @@ class DesktopWork(unittest.TestCase):
         result=self.call("complete",{"obligation_id":"fixture-task","worker_ids":[pair["worker_id"]]})
         self.assertTrue(result["obligation_closed"])
         self.assertFalse(result["published"])
+        self.assertEqual([p.name for p in messages.iterdir()], ["reconcile-waiting.json"])
         answer=self.call("complete",{"obligation_id":"answer-task","answer":"Five plus five is ten."})
         self.assertTrue(answer["obligation_closed"])
         for obligation in words:
             self.assertEqual(json.loads((root/(obligation+".json")).read_text())["state"],"settled")
-        self.assertFalse((self.root/"engine-state/messages").exists(),"operational completion manufactured a peer report")
+        self.assertEqual([p.name for p in messages.iterdir()], ["reconcile-waiting.json"],
+                         "completion must wake waiting work without manufacturing a peer report")
 
     def test_selected_assignment_keeps_its_original_request_after_another_peer_input(self):
         words="Create the original result. Keep it private."

@@ -29,6 +29,14 @@
 [richos] Codex watch: not watching yet, the engine is not verified ({})
 [richos] Codex watch: the watcher could not start ({})
 [richos] Haiku's conversation title was not saved ({})
+[richos] ECS reply remains owed: {}
+[richos] waiting notice {} remains pending: {}
+[richos] waiting notice {} remains to be reconciled: {}
+[richos] waiting work {} has no authorized next action
+[richos] waiting work {} has no readable original order
+[richos] waiting work {} remains held: {}
+[richos] waiting-work check could not be requested: {}
+[richos] waiting-work evidence unavailable: {}
 [richos] a spoken answer went to the bug report, not to the conversation
 [richos] claude accounts: the adding could not be recorded ({})
 [richos] companies: adopting {} added during the turn

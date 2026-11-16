@@ -572,6 +572,9 @@ fn now_millis() -> u64 {
 
 /// Ask the endpoint what it has. Never installs, never downloads a byte of payload.
 pub async fn check(app: &AppHandle) -> UpdateView {
+    if let Err(error) = crate::peer_messages::wake_waiting(&app.state::<crate::AppState>().data_dir.join("engine-state")) {
+        eprintln!("[richos] waiting-work check could not be requested: {error}");
+    }
     let state = app.state::<Updates>();
     let Some(_operation) = UpdateOperation::acquire(&state.operation) else {
         return state.snapshot();

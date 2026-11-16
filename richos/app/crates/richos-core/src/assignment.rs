@@ -556,6 +556,11 @@ pub fn register_kind(
     request: &Registration,
     kind: AssignmentKind,
 ) -> Result<Receipt, AssignmentError> {
+    let _lock = lock_updates(state, &request.entity_id, &request.thread_id)?;
+    register_locked(state, request, kind)
+}
+
+fn register_locked(state: &Path, request: &Registration, kind: AssignmentKind) -> Result<Receipt, AssignmentError> {
     if !usable_identity(&request.thread_id) {
         return Err(AssignmentError("this conversation cannot be identified".into()));
     }
@@ -759,6 +764,42 @@ pub fn read(state: &Path, entity: &str, thread: &str, id: &str) -> Result<Assign
 ///
 /// Movement timestamps belong to primary reports and controls. Notice delivery has
 /// its own timestamp and never changes when a job last progressed.
+#[cfg(unix)]
+fn lock_updates(state: &Path, entity: &str, thread: &str) -> Result<std::fs::File, AssignmentError> {
+    use std::os::{fd::AsRawFd, unix::fs::OpenOptionsExt};
+    let root = folder(state, entity, thread)?;
+    std::fs::create_dir_all(&root).map_err(|e| AssignmentError(e.to_string()))?;
+    let file = std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(false)
+        .mode(0o600).custom_flags(libc::O_NOFOLLOW).open(root.join(".updates.lock"))
+        .map_err(|e| AssignmentError(e.to_string()))?;
+    // SAFETY: the descriptor belongs to this guard and closes after the update.
+    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } != 0 {
+        return Err(AssignmentError(std::io::Error::last_os_error().to_string()));
+    }
+    Ok(file)
+}
+
+#[cfg(not(unix))]
+fn lock_updates(_state: &Path, _entity: &str, _thread: &str) -> Result<std::sync::MutexGuard<'static, ()>, AssignmentError> {
+    static UPDATES: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    Ok(UPDATES.lock().unwrap())
+}
+
+/// Reuse the assignment attached to a ready obligation on every notice or restart.
+pub fn register_waiting(state: &Path, request: &Registration) -> Result<Receipt, AssignmentError> {
+    let _lock = lock_updates(state, &request.entity_id, &request.thread_id)?;
+    let saved = read_all(state, &request.entity_id, &request.thread_id)?;
+    if let Some(row) = saved.into_iter().find(|row| row.obligation_id == request.obligation_id) {
+        if row.instruction_ledger_ref != request.instruction_ledger_ref
+            || row.instruction_sha256 != request.instruction_sha256
+        {
+            return Err(AssignmentError("the existing assignment belongs to a different order".into()));
+        }
+        return Ok(Receipt { id: row.id, title: row.title, kind: row.kind });
+    }
+    register_locked(state, request, AssignmentKind::Task)
+}
+
 fn update(
     state: &Path,
     entity: &str,
@@ -767,24 +808,7 @@ fn update(
     change: impl FnOnce(&mut Assignment),
 ) -> Result<Assignment, AssignmentError> {
     // Atomic replacement alone cannot prevent two writers losing one another's updates.
-    #[cfg(unix)]
-    let _lock = {
-        use std::os::{fd::AsRawFd, unix::fs::OpenOptionsExt};
-        let root = folder(state, entity, thread)?;
-        let file = std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(false)
-            .mode(0o600).custom_flags(libc::O_NOFOLLOW).open(root.join(".updates.lock"))
-            .map_err(|e| AssignmentError(e.to_string()))?;
-        // SAFETY: the descriptor belongs to this guard and closes after the update.
-        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } != 0 {
-            return Err(AssignmentError(std::io::Error::last_os_error().to_string()));
-        }
-        file
-    };
-    #[cfg(not(unix))]
-    let _lock = {
-        static UPDATES: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        UPDATES.lock().unwrap()
-    };
+    let _lock = lock_updates(state, entity, thread)?;
     let mut record = read(state, entity, thread, id)?;
     change(&mut record);
     write(&folder(state, entity, thread)?.join(format!("{id}.json")), &record)?;
@@ -1386,6 +1410,20 @@ mod tests {
         assert_eq!(saved.notices.len(), 40);
         assert!(saved.notices.iter().all(|notice| notice.delivered_at_ms.is_some()));
         assert_eq!(saved.state, AssignmentState::Running);
+        std::fs::remove_dir_all(state).unwrap();
+    }
+
+    #[test]
+    fn a_waiting_assignment_keeps_one_identity_after_retry_and_settlement() {
+        let state = root();
+        let mut request = registration();
+        let first = register_waiting(&state, &request).unwrap();
+        assert_eq!(register_waiting(&state, &request).unwrap().id, first.id);
+        advance(&state, "depot", "thread-one", &first.id, AssignmentState::Settled, "Delivered.").unwrap();
+        assert_eq!(register_waiting(&state, &request).unwrap().id, first.id);
+        assert_eq!(read_all(&state, "depot", "thread-one").unwrap().len(), 1);
+        request.instruction_sha256 = "b".repeat(64);
+        assert!(register_waiting(&state, &request).is_err());
         std::fs::remove_dir_all(state).unwrap();
     }
 

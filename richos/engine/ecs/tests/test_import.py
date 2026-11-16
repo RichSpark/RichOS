@@ -100,6 +100,34 @@ class NeutralImportTests(unittest.TestCase):
         with store.connect() as conn:
             self.assertEqual(conn.execute("SELECT count(*) FROM ecs_events WHERE event_type='continuity.item_opened'").fetchone()[0], 1)
 
+    def test_a_confirmed_waiting_order_uses_the_imported_item(self):
+        binding = self.bind()
+        imported = execute(self.root, {"protocol": 1, "command": "import-apply", "binding": binding,
+                                      "envelope": self.envelope})
+        item_id = imported["items"][0]["target_id"]
+        self.assertEqual(execute(self.root, {"protocol": 1, "command": "waiting-work"})["items"], [])
+        checkpoint = {"protocol": 1, "command": "checkpoint", "binding": binding,
+            "request_id": "confirm-continue", "checkpoint": {"launch": True,
+                "wait_for": [{"kind": "assignment", "thread_id": "other-thread", "id": "owner-job"}],
+                "statements": [{"verb": "update", "fields": {"id": item_id, "next": "Send the reviewed manual"}}]}}
+        from ecs_core import ScopeError
+        with self.assertRaises(ScopeError):
+            execute(self.root, checkpoint)
+        checkpoint["instruction"] = {"ledger_ref": "ledger:thread-a:import-turn", "sha256": "0" * 64}
+        receipt = execute(self.root, checkpoint)
+        self.assertTrue(receipt["accepted"], receipt)
+        self.assertTrue(execute(self.root, checkpoint)["duplicate"])
+        rows = execute(self.root, {"protocol": 1, "command": "waiting-work"})["items"]
+        self.assertEqual([(r["item_id"], r["thread_id"], r["launch"]) for r in rows], [(item_id, "thread-a", True)])
+        self.assertEqual(rows[0]["conditions"][0]["condition"]["thread_id"], "other-thread")
+        records = execute(self.root, {"protocol": 1, "command": "inspect", "binding": binding,
+                  "query": {"section": "open_loop"}})["records"]
+        self.assertEqual([(r["item_id"], r["status"], r["reply_owed"]) for r in records], [(item_id, "blocked", 1)])
+        unsolicited = execute(self.root, {"protocol": 1, "command": "checkpoint", "binding": binding,
+            "request_id": "claim-unverified", "checkpoint": {"statements": [{"verb": "update",
+                "fields": {"id": item_id, "status": "active"}}]}})
+        self.assertFalse(unsolicited["accepted"])
+
     def test_changes_and_cross_scope_mappings_conflict(self):
         binding = self.bind()
         import_records.apply(self.root, self.envelope, binding)

@@ -311,6 +311,8 @@ pub trait Cognition: Send {
     fn prepare_work_turn(&mut self, _binding: &crate::entity::ThreadBinding, _turn: &str, _original_turn: &str,
         _input: WorkTurnInput<'_>, _on_item: &mut dyn FnMut(TurnItem)) -> Result<(), CognitionError> { Ok(()) }
 
+    fn continuity_bridge(&self) -> Option<crate::ecs::EcsBridge> { None }
+
     /// The host's current visible conversation, separate from instructions and hidden context.
     fn set_conversation_context(&mut self, _context: &str) {}
 

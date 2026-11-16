@@ -4,6 +4,7 @@ use richos_core::read_view::SpineView;
 use notify::Watcher;
 use richos_core::{session_tools, status_tools::StatusToolScope};
 use std::sync::{mpsc, Mutex};
+use serde_json::{json, Value};
 use tauri::{AppHandle, Manager};
 
 struct Watch {_watcher:Mutex<notify::RecommendedWatcher>}
@@ -25,13 +26,147 @@ fn drain(app:&AppHandle)->Result<(),String> {
     if held.is_empty() {Ok(())} else {Err(held.join("; "))}
 }
 
+// This file is only a wakeup from the existing publication owner. Its contents
+// are never used as release evidence.
+const WAITING_WAKEUP: &str = "reconcile-waiting.json";
+
+fn waiting_signal(state_root: &std::path::Path) -> std::path::PathBuf {
+    state_root.join("messages").join(WAITING_WAKEUP)
+}
+
+pub(crate) fn wake_waiting(state_root: &std::path::Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(state_root.join("messages"))?;
+    std::fs::write(waiting_signal(state_root), [])
+}
+
+fn reconcile_waiting(app: &AppHandle) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let ecs = state.data_dir.join("ecs");
+    if !ecs.join("ecs.sqlite3").is_file() { return Ok(()); }
+    let engine = state.engine_dir.lock().map_err(|_| "engine unavailable")?.clone();
+    let runtime = richos_core::runtime::verify_engine(&engine).map_err(|e| e.to_string())?;
+    let bridge = richos_core::ecs::EcsBridge::new(&runtime.python, &engine, &ecs).map_err(|e| e.to_string())?;
+    let hello = bridge.request("hello", json!({})).map_err(|e| e.to_string())?;
+    if !hello["commands"].as_array().is_some_and(|commands| commands.iter().any(|command| command == "waiting-work")) {
+        return Ok(());
+    }
+    let view = state.reader.snapshot();
+    let pending = bridge.request("pending-replies", json!({})).map_err(|e| e.to_string())?;
+    for reply in pending["items"].as_array().into_iter().flatten() {
+        let (Some(thread), Some(entity), Some(reference)) = (
+            reply["thread_id"].as_str(), reply["entity_id"].as_str(), reply["reply_turn"].as_str(),
+        ) else { continue };
+        let prefix = format!("ledger:{thread}:");
+        let Some(turn) = reference.strip_prefix(&prefix).and_then(|id| view.ledger().turn(id)) else { continue };
+        if turn.thread_id == thread && turn.entity_id.as_ref().is_some_and(|id| id.as_str() == entity) {
+            if let Err(error) = bridge.delivered_reply(turn) {
+                eprintln!("[richos] ECS reply remains owed: {error}");
+            }
+        }
+    }
+    let result = bridge.request("waiting-work", json!({})).map_err(|e| e.to_string())?;
+    let installed = app.package_info().version.to_string();
+    for item in result["items"].as_array().ok_or("missing waiting conditions")? {
+        let (Some(entity), Some(thread), Some(id), Some(conditions)) = (
+            item["entity_id"].as_str(), item["thread_id"].as_str(), item["item_id"].as_str(), item["conditions"].as_array(),
+        ) else { continue };
+        let Ok(binding) = view.ledger().thread_binding(thread) else { continue };
+        if binding.entity_id().as_str() != entity { continue; }
+        let scope = StatusToolScope { version: 1, state_root: state.data_dir.join("engine-state"),
+            entity_id: entity.into(), thread_id: thread.into() };
+        if session_tools::terminal_handover_active(&scope) { continue; }
+        let skipped = conditions.iter().any(|condition| condition["state"] == "skipped");
+        let ready = conditions.iter().all(|condition| waiting_condition_satisfied(&scope, condition, &installed));
+        if (!ready && !skipped) || conditions.is_empty() { continue; }
+        let original = if ready && !skipped {
+            let Ok(instruction) = serde_json::from_value::<richos_core::ecs::UserInstruction>(item["instruction"].clone()) else {
+                eprintln!("[richos] waiting work {id} has no readable original order");
+                continue;
+            };
+            let prefix = format!("ledger:{thread}:");
+            let turn = instruction.ledger_ref.strip_prefix(&prefix).and_then(|turn| view.ledger().turn(turn));
+            if !turn.is_some_and(|turn| turn.entity_id.as_ref().is_some_and(|id| id.as_str() == entity)
+                && !turn.quarantined && turn.thread_id == thread
+                && matches!(turn.source, richos_core::ledger::Source::Text | richos_core::ledger::Source::Jam)
+                && instruction.matches_text(&turn.user_text))
+            { continue; }
+            Some(instruction)
+        } else { None };
+        let status = if skipped { "skipped" } else { "ready" };
+        let mut work = None;
+        if let Some(instruction) = original.as_ref().filter(|_| item["launch"] == true) {
+            let Some(action) = item["next_action"].as_str() else {
+                eprintln!("[richos] waiting work {id} has no authorized next action");
+                continue;
+            };
+            let row = richos_core::assignment::register_waiting(&scope.state_root, &richos_core::assignment::Registration {
+                entity_id: entity.into(), thread_id: thread.into(), obligation_id: id.into(),
+                instruction_ledger_ref: instruction.ledger_ref.clone(), instruction_sha256: instruction.sha256.clone(),
+                title: action.into(), repositories: Vec::new(), needs_screen: false,
+            });
+            let row = match row {
+                Ok(row) => row,
+                Err(error) => { eprintln!("[richos] waiting work {id} remains held: {error}"); continue; }
+            };
+            work = Some(session_tools::WorkReference { assignment_id: row.id, obligation_id: id.into() });
+        }
+        let saved = session_tools::observe_waiting(&scope, json!({
+            "event": "waiting_condition", "input_id": format!("{id}:{status}"),
+            "obligation_id": id, "status": status, "conditions": conditions,
+            "assignment_id": work.as_ref().map(|row| &row.assignment_id),
+        }), original.filter(|_| work.is_some()), work);
+        let through = match saved {
+            Ok(through) => through,
+            Err(error) => { eprintln!("[richos] waiting notice {id} remains pending: {error}"); continue; }
+        };
+        let mut evidence = format!("inbox:rich:{through}");
+        if let Some(reason) = conditions.iter().find(|condition| condition["state"] == "skipped")
+            .and_then(|condition| condition["reason"].as_str()) {
+            evidence.push(' ');
+            evidence.push_str(reason);
+        }
+        if let Err(error) = bridge.request("waiting-noticed", json!({
+            "entity_id": entity, "thread_id": thread, "item_id": id, "state": status, "evidence": evidence,
+        })) {
+            eprintln!("[richos] waiting notice {id} remains to be reconciled: {error}");
+        }
+    }
+    Ok(())
+}
+
+fn waiting_condition_satisfied(scope: &StatusToolScope, observation: &Value, installed: &str) -> bool {
+    let condition = &observation["condition"];
+    let id = condition["id"].as_str().unwrap_or_default();
+    let owner_thread = condition["thread_id"].as_str().unwrap_or(&scope.thread_id);
+    match condition["kind"].as_str() {
+        Some("publication") => observation["state"] == "ready",
+        Some("installation") => condition["release"].as_str().is_some_and(|release| {
+            release.strip_prefix('v').unwrap_or(release) == installed || release.parse::<u64>().is_ok_and(|counter| {
+                installed.split_once("-nightly.").and_then(|(_, serial)| serial.split_once('.'))
+                    .and_then(|(_, value)| value.parse::<u64>().ok()) == Some(counter)
+            })
+        }),
+        Some("assignment") => richos_core::assignment::read(&scope.state_root, &scope.entity_id, owner_thread, id)
+            .is_ok_and(|assignment| assignment.state == richos_core::assignment::AssignmentState::Settled),
+        Some("question") => richos_core::questions::Store::new(&scope.state_root).list(&scope.entity_id, owner_thread)
+            .is_ok_and(|questions| questions.iter().any(|q| q.id == id && q.state == richos_core::questions::State::Answered)),
+        _ => false,
+    }
+}
+
 fn drain_inboxes(app:&AppHandle,state:&AppState,thread:&str,binding:&richos_core::entity::ThreadBinding,scope:&StatusToolScope)->Result<(),String> {
+        if session_tools::terminal_handover_active(scope) { return Ok(()); }
         let mut delivered=false;
         while let Some((message,through))=session_tools::pending(scope,"rich")? {
             state.control.submit_agent_message(thread,Some(binding.entity_id().clone()),
                 &serde_json::to_string(&message).map_err(|e|e.to_string())?,&message.from,
                 &format!("peer:{}:{}:{through}",scope.entity_id,scope.thread_id)).map_err(|e|e.to_string())?;
             session_tools::acknowledge(scope,"rich",through)?;
+            if message.from == "work-status" {
+                if let Err(error) = wake_waiting(&scope.state_root) {
+                    eprintln!("[richos] waiting-work check could not be requested: {error}");
+                }
+            }
             delivered=true;
         }
         if delivered {crate::dispatch_incoming_messages(app,thread)?;}
@@ -87,25 +222,77 @@ pub fn start(app:AppHandle)->Result<(),Box<dyn std::error::Error>> {
     // Keep the kernel watch alive with the application, not a detached polling process.
     app.manage(Watch {_watcher:Mutex::new(watcher)});
     std::thread::Builder::new().name("richos-peer-input".into()).spawn(move || {
-        // Drain before waiting, including input saved before a restart or watch registration.
-        let mut said=None;
-        loop {
-            match drain(&app) {
-                Ok(())=>{said=None;if rx.recv().is_err() {return}},
-                Err(error)=>{
-                    if said.as_ref()!=Some(&error) {eprintln!("[richos] peer input remains on disk: {error}");said=Some(error);}
+        receive_until_closed(&root, rx, || drain(&app), || {
+            let handle = app.clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                if let Err(error) = reconcile_waiting(&handle) {
+                    eprintln!("[richos] waiting-work evidence unavailable: {error}");
+                }
+            });
+        });
+    })?;
+    Ok(())
+}
 
-                    if matches!(rx.recv_timeout(std::time::Duration::from_secs(5)),Err(mpsc::RecvTimeoutError::Disconnected)) {return}
+fn receive_until_closed(root: &std::path::Path, rx: mpsc::Receiver<()>, mut drain: impl FnMut() -> Result<(), String>,
+    mut reconcile: impl FnMut(),
+) {
+    // Check on startup, then use the same watched path that every owner wakes.
+    let signal = waiting_signal(root);
+    let mut seen = None;
+    let mut said = None;
+    loop {
+        let revision = std::fs::metadata(&signal).and_then(|file| file.modified()).ok();
+        if seen != Some(revision) {
+            seen = Some(revision);
+            reconcile();
+        }
+        match drain() {
+            Ok(()) => { said = None; if rx.recv().is_err() { return; } }
+            Err(error) => {
+                if said.as_ref() != Some(&error) {
+                    eprintln!("[richos] peer input remains on disk: {error}");
+                    said = Some(error);
+                }
+                if matches!(rx.recv_timeout(std::time::Duration::from_secs(5)), Err(mpsc::RecvTimeoutError::Disconnected)) {
+                    return;
                 }
             }
         }
-    })?;
-    Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn an_owner_wakes_the_running_receiver_after_startup() {
+        use std::time::Duration;
+        let root = std::env::temp_dir().join(format!("richos-waiting-watch-{}-{}", std::process::id(), richos_core::util::now_millis()));
+        std::fs::create_dir_all(root.join("messages")).unwrap();
+        let (wake, receiver) = mpsc::sync_channel(1);
+        let watcher = watch(&root, wake).unwrap();
+        let (proof, seen) = mpsc::channel();
+        let result = std::thread::scope(|threads| {
+            threads.spawn(|| receive_until_closed(&root, receiver, || Ok(()), || { proof.send(()).unwrap(); }));
+            // load-bound: the message is the proof. This only limits a dead kernel watch.
+            let observed = || seen.recv_timeout(Duration::from_secs(30));
+            let result = (|| {
+                observed()?;
+                std::fs::write(root.join("messages/reconcile-waiting.json"), b"from publisher").unwrap();
+                observed()?;
+                wake_waiting(&root).unwrap();
+                observed()?;
+                wake_waiting(&root).unwrap();
+                observed()
+            })();
+            drop(watcher);
+            result
+        });
+        std::fs::remove_dir_all(&root).unwrap();
+        result.expect("startup, the publisher and the app must each wake the same running receiver");
+    }
+
     #[test]
     fn dropped_notifications_request_a_drain_without_paths() {
         let (tx,rx)=mpsc::sync_channel(1);
