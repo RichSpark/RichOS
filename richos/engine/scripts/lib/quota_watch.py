@@ -74,9 +74,8 @@ Why it is first: the status-line file below re-renders only when the lead
 speaks, so an idle lead left the reading 10 minutes old at the 91%/95%
 readings of 07:57Z and 08:07Z. get_usage is fresh at every poll. When it
 fails (no `claude`, a timeout, an error, no subscription limits reported, or
-an answer this file cannot read), the watcher says why and falls back to the
-status-line file, where every rule below still applies, including waking the
-lead to refresh it.
+an unreadable answer), the watcher logs why, checks the status-line fallback
+and retries independently of the conversation.
 
 THE FALLBACK READING (design notes: richos-hq/docs/plans/budget-self-management-2026-09-10.md)
   ~/.claude/statusline-payload.json -> rate_limits.five_hour.used_percentage and
@@ -88,28 +87,11 @@ THE FALLBACK READING (design notes: richos-hq/docs/plans/budget-self-management-
   OWN state and is never rounded to "plenty left". The file only refreshes when
   a status line renders, so its AGE is checked on EVERY poll.
 
-  HOW THE RULE FAILED ON 2026-09-25, AND WHY STALE IS ONE POLL. The lead's own
-  one-off watcher read five_hour stuck at 56% from 00:43Z to 01:08Z, at 71%
-  from 01:13Z to 01:33Z and at 89% from 01:53Z to 02:13Z, then 100% at 02:18Z.
-  The lead was idle waiting on teammates, its status line did not render, the
-  payload did not refresh, and the 93% crossing was never seen. The threshold
-  was right; the reading was old. So a reading older than ONE poll interval is
-  UNKNOWN — never the current value — and the watcher wakes the lead with
-  QUOTA-STALE, because the lead's own reply is what re-renders the status line
-  (the host runs it when "a new assistant message arrives"). The replay of
-  that log is quota-watch.test.sh case R01.
-
-  WHAT ELSE REFRESHES IT, checked 2026-09-25: only ~/.claude/statusline.sh
-  writes the file (grep over ~/.claude's scripts and settings, and this engine,
-  which only reads it). The host runs that script at session start, on a new
-  assistant message, after /compact, on a permission or vim mode change, when a
-  rate-limit window's resets_at passes, and on an optional statusLine
-  `refreshInterval` timer (code.claude.com/docs/en/statusline, "When it
-  updates"; not set on this machine). Teammate activity is not on that list.
-  A refreshInterval would re-render while the lead is idle, but whether the
-  host's rate_limits figure moves with teammates' API responses is NOT
-  verified, and a re-render that rewrites an old figure would make the file's
-  age a false freshness signal. So nothing here depends on it.
+  The fallback only provides a snapshot. In the 2026-09-25 incident the lead
+  was idle while quota reached 100%, and the fallback missed the crossing.
+  A reading older than one poll is UNKNOWN unless it already proves a
+  crossing. The lead's status line may refresh on a reply, but the watcher
+  never asks for a reply. It keeps trying the live source.
 
   Within one window usage only grows, so a STALE reading at or above the
   threshold is still at or above it: it is reported as "at least", and the
@@ -158,13 +140,13 @@ separate processes:
                to that lead (host_child.py).
 
   A get_usage failure (timeout, refusal) is retried every 60 s instead of
-  every 300 s, and it wakes nobody by itself. Once get_usage has answered in
-  this run, an outage wakes the lead only when the threshold could have been
-  crossed unseen: when the freshest reading plus the fastest rise this watcher
-  has measured over the time since it was taken reaches the threshold, or when
-  the freshest reading is two polls old, whichever comes first (the rule's own
-  resolution is one poll; two polls means a check he ordered has been missed,
-  and the measured rise is not a guarantee). See outage_verdict().
+  every 300 s. Once the live source has been unavailable for one poll
+  interval, the watcher alerts if it has no usable reading. A fallback is
+  checked when its freshness expires, and a new status-line render does not
+  end the live-source outage or rearm its alert. For a known five-hour window
+  a failed retry can also alert if the measured rise could already have
+  crossed the threshold (see outage_verdict). Actual crossings and releases
+  are handled every poll.
 
 HIGH SPEED (ruling §108, 2026-10-04, richos-hq 1d027daa and addendum 56f17efd).
 His words: "The 93% rule is sufficient for regular work. But when the token
@@ -223,7 +205,7 @@ EXIT CODES
             pause; a hold in place releases)
   --status  the same codes as --once
   --watch   0 after printing the next wake-up (QUOTA-THRESHOLD, QUOTA-RELEASE,
-            WINDOW-RESET, QUOTA-REFRESH, QUOTA-STALE, QUOTA-UNKNOWN or a weekly
+            WINDOW-RESET, QUOTA-STALE, QUOTA-UNKNOWN or a weekly
             one), or at once when the session's monitor already delivers them;
             2 when it cannot watch at all. The poller does not stop with it.
   --monitor runs for the whole session; 2 when it cannot watch at all
@@ -318,18 +300,6 @@ def speed_settings(a):
     if getattr(a, "hold", None) is None:
         a.hold = min(HOLD_SECONDS, a.poll // 5)
     return a
-
-# WAKE THE LEAD BEFORE THE READING TURNS ONE POLL OLD (2026-09-25, measured).
-# The lead read 91% at 07:57Z and 95% at 08:07Z: the pause fired at 95, not 93.
-# A reading is current up to one poll (300 s) old, so a loop that polls every
-# 300 s first saw it as stale at its SECOND poll, about 600 s after the render.
-# With the lead idle, only the lead's reply re-renders the payload, so the
-# effective refresh was every 10 minutes against his "Keep it consistent at 5
-# minutes". Below the threshold, with a worker running, the watcher wakes the
-# lead (QUOTA-REFRESH) this many seconds BEFORE the reading turns one poll old,
-# and schedules its poll for that moment. A tenth of the bound when the bound
-# is shorter (the suite's accelerated clock).
-REFRESH_AHEAD_SECONDS = 30
 
 # get_usage: one control request's bound (the desktop's DEADLINE) and the
 # largest frame read (its MAX_FRAME). The environment override is for the test
@@ -1023,7 +993,7 @@ def classify(r, threshold, stale_after):
         return "unknown", r["why"]
     if not has_five(r):
         # Nothing five-hour to cross. Old is still old: a stale reading proves nothing about the
-        # week either, and a refresh is what keeps the weekly 99% from going unseen.
+        # week either. The watcher retries the live probe to check for the weekly threshold.
         if r["age"] is not None and r["age"] > stale_after:
             return "unknown", "the reading is stale: %s old, and a stale reading proves nothing" % span(r["age"])
         return "below", ""
@@ -1362,28 +1332,6 @@ def _emit_switch_release(a, left, r, verdict, now, w):
     print(KEEPS_POLLING + " From here it follows %s's own window and reset." % now_on)
 
 
-def refresh_point(stale_after):
-    """The age at which a below-threshold reading is refreshed: before it turns
-    one poll old, never at or after."""
-    return stale_after - min(REFRESH_AHEAD_SECONDS, stale_after // 10)
-
-
-def _emit_refresh(a, r, w, at):
-    print("QUOTA-REFRESH: the reading is %d s old and stops counting as current at %d s (one poll); refresh it now"
-          % (int(r["age"] or 0), a.stale))
-    if r.get("fallback_why"):
-        print("  The reading comes from the status-line file, because %s." % r["fallback_why"])
-    print("  Last value: %s. The CEO's rule (%s) checks every 5 minutes, so the"
-          % ("%s%%, below the threshold %s%%" % (fmt_pct(r["used"]), fmt_pct(a.threshold)) if has_five(r)
-             else quota_weekly.describe(r, int(time.time())), RULING))
-    print("  watcher wakes you at %d s, before the reading ages past one poll, not a poll after it." % at)
-    print("  %s" % worker_line(w))
-    print("  REFRESH THE READING: reply once, in this turn. The payload is rewritten only when your")
-    print("  status line renders, and it renders when a new assistant message of yours arrives;")
-    print("  teammates' work does not render it.")
-    print(KEEPS_POLLING)
-
-
 def _emit_blind(a, r, w, why, outage=None):
     stale = r["state"] == "ok" and not r.get("ended")
     if outage is not None:
@@ -1404,10 +1352,7 @@ def _emit_blind(a, r, w, why, outage=None):
         print("QUOTA-UNKNOWN: %s" % (why or r["why"]))
     print("  The watcher cannot tell whether the threshold was crossed.")
     print("  %s" % worker_line(w))
-    print("  REFRESH THE READING: reply once, in this turn. The payload is rewritten only when your")
-    print("  status line renders, and it renders when a new assistant message of yours arrives;")
-    print("  teammates' work does not render it.")
-    print(KEEPS_POLLING + " get_usage is tried again every %d s while it fails." % _retry_seconds(a))
+    print("  The watcher continues checking automatically.")
 
 
 def _hms(epoch):
@@ -1752,9 +1697,7 @@ def _poll_loop(a, out, alive, health=None):
         return 2
     window_end = None
     blind_since = None
-    refresh_in = None
     blind_woken = False          # one QUOTA-STALE/UNKNOWN per blind episode
-    refreshed_for = None         # one QUOTA-REFRESH per status-line render
     threshold_named = {}         # window -> the working names already told to pause
     released = None              # the window whose hold release was announced
     reset_done = None            # the window whose reset was announced
@@ -1784,7 +1727,6 @@ def _poll_loop(a, out, alive, health=None):
         r = read_source(a, now)
         w = workers(a.engine_root)
         retry = False
-        asked_refresh = False
         who = r.get("account") if isinstance(r.get("account"), dict) and r["account"].get("id") else None
         if who is not None and bound is not None and who["id"] != bound["id"]:
             # A SWITCH: every timer and dedupe above was the account left's. They are cleared and
@@ -1793,7 +1735,7 @@ def _poll_loop(a, out, alive, health=None):
                   % (bound["label"], who["label"]), flush=True)
             if window_end is not None:
                 left_held = bound
-            window_end = released = reset_done = fast_alerted = refreshed_for = app_window = None
+            window_end = released = reset_done = fast_alerted = app_window = None
             threshold_named, weekly_seen, history, last_gu, outage = {}, set(), [], None, None
             blind_since, blind_woken = None, False
         if who is not None:
@@ -1868,10 +1810,14 @@ def _poll_loop(a, out, alive, health=None):
             # measured in this window, before and apart from any pause message.
             out.wake("FAST", _capture(_emit_fast, a, r, speed, now, w), now)
             fast_alerted = r["resets_at"]
+        verdict, why = rule_verdict(r, a.threshold, a.stale, now)
+        if verdict != "unknown":
+            blind_since = None
+            if outage is None:
+                blind_woken = False
         weekly_text = io.StringIO()
         with contextlib.redirect_stdout(weekly_text):
-            weekly_blocked, weekly_event = quota_weekly.handle(a, r, now, w, reset_status,
-                lambda: rule_verdict(r, a.threshold, a.stale, now)[0])
+            weekly_blocked, weekly_event = quota_weekly.handle(a, r, now, w, reset_status, lambda: verdict)
         if weekly_event:
             text = weekly_text.getvalue()
             # The key names the weekly WINDOW as well as the headline and the workers
@@ -1889,7 +1835,8 @@ def _poll_loop(a, out, alive, health=None):
         if weekly_blocked:
             print(quota_weekly.describe(r, now), flush=True)
             _poll_completed(health)
-            _nap(a.poll, alive)
+            interval = _retry_seconds(a) if retry else a.poll
+            _nap(max(1, interval - int(time.time() - now)), alive)
             continue
         if window_end is not None and not has_five(r) and classify(r, a.threshold, a.stale)[0] == "below":
             # THE FIVE-HOUR WINDOW WENT AWAY (second review rv-20261031T192316Z-d2322984-98af): a
@@ -1913,7 +1860,6 @@ def _poll_loop(a, out, alive, health=None):
                 reset_done = window_end
             a.until_reset = False
             window_end = None
-            blind_since, blind_woken = None, False
         if window_end is not None and in_last_twenty(window_end, now) and released != window_end:
             # His 2026-09-25 update: a hold in place releases inside the last
             # 20 minutes. Only when somebody is held (or the registry cannot
@@ -1924,7 +1870,6 @@ def _poll_loop(a, out, alive, health=None):
                 released = window_end
         if window_end is None and r["state"] == "ok" and not r["ended"]:
             window_end = r["resets_at"]
-        verdict, why = rule_verdict(r, a.threshold, a.stale, now)
         print("%s  %s" % (_dt.datetime.fromtimestamp(now, _dt.timezone.utc).strftime("%H:%M:%SZ"),
                           describe(r, a.threshold, now) + ("  [UNKNOWN: %s]" % why if verdict == "unknown" and r["state"] == "ok" else "")),
               flush=True)
@@ -1953,12 +1898,10 @@ def _poll_loop(a, out, alive, health=None):
                     if verdict == "near-reset":
                         released = window_end  # this window's own release has now been told
             left_held = None
-        # A get_usage OUTAGE: it answered earlier in this window and fails now.
-        # Its last reading, or the status-line file when that is fresher, is
-        # the reading; the 2026-09-25 status-line rules (wake to refresh before
-        # one poll) apply only when get_usage has not answered in this window.
+        # The speed-based outage verdict needs a five-hour measurement. A
+        # weekly-only, missing or ended reading uses the same unknown timer.
         in_outage = (outage is not None and last_gu is not None and last_gu["resets_at"] > now
-                     and r["state"] == "ok" and not r["ended"])
+                     and has_five(r) and not r["ended"])
         if not a.until_reset:
             if verdict == "near-reset":
                 print("  at or above the threshold, but %s" % why, flush=True)
@@ -1974,56 +1917,26 @@ def _poll_loop(a, out, alive, health=None):
                     else:
                         print("  at or above the threshold; the lead was told for this window at the first crossing",
                               flush=True)
-            if verdict == "unknown" and in_outage:
-                # A get_usage OUTAGE, not a blind watcher: retried every
-                # RETRY_SECONDS, and the lead is woken only when the threshold
-                # could have been crossed unseen (outage_verdict).
-                reading = {"used": r["used"], "resets_at": r["resets_at"], "taken": now - int(r["age"] or 0)}
-                wake, owhy = outage_verdict(a, reading, history, now)
-                w = workers(a.engine_root)
-                if not wake:
-                    print("  get_usage is not answering; %s; trying again in %d s" % (owhy, _retry_seconds(a)),
-                          flush=True)
-                elif w["known"] and not w["working"]:
-                    print("  the reading is unknown but nothing is working: no spend it could hide", flush=True)
-                elif not blind_woken:
-                    out.wake("STALE", _capture(_emit_blind, a, r, w, why,
-                                               {"at": outage["at"], "why": owhy,
-                                                "fallback_why": outage["fallback_why"]}), now)
-                    blind_woken = asked_refresh = True
-            elif verdict == "unknown":
+            if verdict == "unknown":
                 if blind_since is None:
                     blind_since = now
-                # A STALE reading (older than one poll) is blind NOW: it is the
-                # 2026-09-25 failure, and waiting another poll on it is how the
-                # 93% crossing went unseen. Any other unknown (missing,
-                # malformed, a window that has ended) counts from this
-                # watcher's own clock, so a payload that has not yet
-                # re-rendered after a reset gets one poll to do so.
                 stale = r["state"] == "ok" and not r["ended"]
-                if stale or now - blind_since >= a.stale:
-                    w = workers(a.engine_root)
-                    if w["known"] and not w["working"]:
-                        print("  the reading is unknown but nothing is working: no spend it could hide", flush=True)
-                    elif not blind_woken:
-                        out.wake("STALE" if stale else "UNKNOWN", _capture(_emit_blind, a, r, w, why), now)
-                        blind_woken = asked_refresh = True
-            else:
-                blind_since = None
-                blind_woken = False
-            if verdict == "below" and r["age"] is not None and r.get("source") == "the status line" and not in_outage:
-                at = refresh_point(a.stale)
-                if r["age"] >= at:
-                    w = workers(a.engine_root)
-                    if w["known"] and not w["working"]:
-                        print("  the reading is about to turn one poll old, but nothing is working: no refresh needed",
+                unavailable_since = outage["at"] if outage is not None else blind_since
+                wake = now - unavailable_since >= a.poll
+                outage_detail = None
+                if in_outage:
+                    reading = {"used": r["used"], "resets_at": r["resets_at"], "taken": now - int(r["age"] or 0)}
+                    wake, owhy = outage_verdict(a, reading, history, now)
+                    # A missed probe alone never wakes the lead. Give the
+                    # live source its first automatic retry even at high speed.
+                    wake = wake and now > outage["at"]
+                    outage_detail = {**outage, "why": owhy}
+                    if not wake:
+                        print("  get_usage is not answering; %s; trying again in %d s" % (owhy, _retry_seconds(a)),
                               flush=True)
-                    elif refreshed_for != int(now - r["age"]):
-                        out.wake("REFRESH", _capture(_emit_refresh, a, r, w, at), now)
-                        refreshed_for = int(now - r["age"])
-                        asked_refresh = True
-                else:
-                    refresh_in = at - r["age"]
+                if wake and not blind_woken and (not w["known"] or w["working"]):
+                    out.wake("STALE" if stale else "UNKNOWN", _capture(_emit_blind, a, r, w, why, outage_detail), now)
+                    blind_woken = True
         sleep_for = a.fast_poll if fast or expected else a.poll
         if window_end is not None:
             sleep_for = max(1, min(sleep_for, window_end - now))
@@ -2032,20 +1945,13 @@ def _poll_loop(a, out, alive, health=None):
             to_release = window_end - now - (RESET_EXEMPTION_SECONDS - 1)
             if to_release > 0:
                 sleep_for = max(1, min(sleep_for, to_release))
-        if refresh_in is not None:
-            # Poll again when the reading reaches the refresh point, not a full
-            # poll later (the 07:57Z/08:07Z defect above).
-            sleep_for = max(1, min(sleep_for, int(math.ceil(refresh_in))))
-            refresh_in = None
         if retry:
             # "retried at the next poll, or sooner" (2026-09-28).
             sleep_for = max(1, min(sleep_for, _retry_seconds(a)))
-        if asked_refresh:
-            # The lead was asked to refresh the status line: read it again
-            # shortly, so the next refresh point is scheduled from the new
-            # render and not a whole poll after it (until 2026-09-28 the lead
-            # restarted the watcher, which re-read at once).
-            sleep_for = max(1, min(sleep_for, REFRESH_AHEAD_SECONDS, a.stale // 10))
+            if verdict == "below" and r.get("source") == "the status line" and r["age"] is not None:
+                # Recheck as soon as this fallback becomes older than one poll.
+                expires_in = math.floor(a.stale - r["age"]) + 1
+                sleep_for = max(1, min(sleep_for, expires_in))
         _poll_completed(health)
         # Counted from the START of this poll, so the polls are 300 s apart
         # and not 300 s plus however long get_usage took (20 s on a timeout).

@@ -47,17 +47,11 @@
 #                          and their names (the hold releases there)
 #         WINDOW-RESET     the window turned over: the exact resume message and
 #                          the names of the agents paused for the quota
-#         QUOTA-REFRESH    get_usage failed, and the status-line reading will
-#                          turn one poll old before the next check: the lead's
-#                          reply refreshes it (woken at 270 s, not after 300)
-#         QUOTA-STALE      get_usage failed and the status-line reading is
-#                          older than one poll while a worker runs: its value
-#                          is not the current one; the lead's turn refreshes it.
-#                          Once get_usage has answered in this window, a failure
-#                          is retried every 60 s and wakes the lead only when
-#                          the threshold could have been crossed unseen
-#         QUOTA-UNKNOWN    the reading has been missing or malformed for one
-#                          poll while a worker runs, so the watcher is blind
+#         QUOTA-STALE      quota is still unknown after automatic retries,
+#                          and the most recent usable reading is stale
+#         QUOTA-UNKNOWN    no usable reading after one full poll interval
+#       get_usage failures are retried automatically every 60 s. Valid quota
+#       events still fire from the fallback when it proves the crossing.
 #       --until-reset never fires the threshold: for a window in which the
 #       lead has already decided (paused, or chose to keep working). It wakes
 #       at the hold's release when agents are paused for the quota, and at
