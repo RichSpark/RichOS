@@ -1804,7 +1804,6 @@ setCount(V.count !== undefined ? V.count : N, false);
 }
 $('#home-loading').classList.add('gone');
 rafId = requestAnimationFrame(frame);
-if (typeof window.onLoroReady === 'function') setTimeout(() => window.onLoroReady(window.__loro), 0);
 // READ-ONLY, FOR `tests/home.js` ONLY. Calling `ingest()` from outside (the line above) does
 // NOT reset this field's own idle-learning clock (`lastIngest`/`nextIngestGap`, line 593/838) —
 // only the scheduler's own auto-fire does that — so a driven line and an auto-fired one can
@@ -1826,6 +1825,12 @@ window.__loro = { growth: { get X() { const o = {}; KEYS.forEach((key, j) => { o
   entrance: { get state() { return ENT.state; }, get clock() { return ENT.clock; }, get end() { return bloomEnd; }, get revealedAt() { return ENT.revealedAt; }, get doneAt() { return ENT.doneAt; },
     get heldFrames() { return ENT.heldFrames; }, lit: (i) => nAlpha[i], ember: EMBER, coreUp: CORE_UP, riverAt: RIVER_AT, riverRun: RIVER_RUN, riverFar: RIVER_FAR },
   get motionFrames() { return motionFrames; }, get frames() { return frames; }, pushWave, get activeList() { return activeList; } };
+const readyApi = window.__loro;
+const onReady = window.onLoroReady;
+if (typeof onReady === 'function') setTimeout(() => {
+  // A late corpus can rebuild the field before this notification runs.
+  if (window.__loro === readyApi) onReady(readyApi);
+}, 0);
 })().catch((e) => {
   // THE HONEST FAILURE NEEDS SOMEWHERE TO LAND. Every throw above is inside this async
   // IIFE — `WebGL unavailable` at the context, a shader that will not compile, a program
