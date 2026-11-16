@@ -425,6 +425,9 @@ sys.dont_write_bytecode = True
 # wherever the unchanged source lands, still checked against it, never rewritten. Run by the
 # runtime's own interpreter, so the magic number is its own. Arguments: the runtime directory,
 # then caches to compile again from their sources, and sources (`.py`) to give a cache.
+# Short-lived engine commands repeatedly import the same standard library modules.
+# Compile only their actual import set so the installed runtime does not recompile
+# those modules on every prompt. The imports are standard library in isolated mode.
 #
 # THE NAME COMPILED INTO EACH CACHE IS ITS SOURCE'S PATH INSIDE THE RUNTIME (`dfile`), never the
 # build directory (2026-11-01: without it every cache carried this Mac's
@@ -433,9 +436,15 @@ sys.dont_write_bytecode = True
 # (`_imp._fix_co_filename`), so nothing reads it; the build directory's random name also made the
 # runtime's bytes differ on every build.
 RECOMPILE_CHECKED_HASH = (
-    "import importlib.util, os, py_compile, sys\n"
+    "import importlib.util, json, os, py_compile, sys\n"
     "root = sys.argv[1]\n"
-    "for name in sys.argv[2:]:\n"
+    "stdlib = os.path.join(root, 'python', 'lib', f'python{sys.version_info.major}.{sys.version_info.minor}')\n"
+    "for module in json.loads(sys.argv[2]):\n"
+    "    importlib.import_module(module)\n"
+    "sources = {name for module in tuple(sys.modules.values())\n"
+    "           if isinstance(name := getattr(module, '__file__', None), str)\n"
+    "           and name.startswith(stdlib + os.sep) and name.endswith('.py')}\n"
+    "for name in sorted(set(sys.argv[3:]) | sources):\n"
     "    source, cache = (name, importlib.util.cache_from_source(name)) if name.endswith('.py') else \\\n"
     "        (importlib.util.source_from_cache(name), name)\n"
     "    if os.path.isfile(source):\n"
@@ -444,7 +453,7 @@ RECOMPILE_CHECKED_HASH = (
     "                           optimize=level, invalidation_mode=py_compile.PycInvalidationMode.CHECKED_HASH)\n")
 
 
-def prepare_python_bytecode(runtime):
+def prepare_python_bytecode(runtime, warm_imports=()):
     """sitecustomize.py turns bytecode writing off for every Python of this runtime, and the
     delivered caches become hash-checked so relocation does not make them stale (above)."""
     stdlib = sorted((runtime / "python/lib").glob("python3.*/os.py"))
@@ -457,7 +466,7 @@ def prepare_python_bytecode(runtime):
     (library / "sitecustomize.py").write_text(SITECUSTOMIZE)
     caches = sorted(str(p) for p in (runtime / "python").rglob("*.pyc") if p.parent.name == "__pycache__")
     subprocess.run([str(runtime / "python/bin/python3"), "-I", "-B", "-c", RECOMPILE_CHECKED_HASH,
-                    str(runtime), *caches, str(library / "sitecustomize.py")],
+                    str(runtime), json.dumps(warm_imports), *caches, str(library / "sitecustomize.py")],
                    env={"PATH": "/usr/bin:/bin", "HOME": str(runtime)}, check=True)
 
 
@@ -545,7 +554,7 @@ def build(destination):
                 raise
             shutil.copyfile(git_source / "COPYING", runtime / "sources/GIT-COPYING")
         prepare_runtime_launchers(runtime, manifest)
-        prepare_python_bytecode(runtime)
+        prepare_python_bytecode(runtime, manifest.get("python_warm_imports", ()))
         scripts = script_entries(runtime / "bin")
         if scripts:
             raise RuntimeError("runtime/bin must hold only Mach-O executables (a #! script there leaks "

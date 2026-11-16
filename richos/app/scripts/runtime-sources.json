@@ -1,6 +1,7 @@
 {
   "schema": 1,
   "platform": "aarch64-apple-darwin",
+  "python_warm_imports": ["argparse", "dataclasses", "datetime", "hashlib", "json", "pathlib", "sqlite3", "uuid"],
   "sources": {
     "python": {
       "version": "3.13.15+20260901",

@@ -1331,29 +1331,10 @@ def turn_writes(tm, transcript, prompt_id, cwd):
     like any other. The read happens only on a turn that made a claim."""
     if tm is None:
         return None, "turn-manifest.py could not be loaded"
-    calls, results, _examined, err = tm.read_turn(transcript, prompt_id)
+    inputs = {}
+    calls, results, _examined, err = tm.read_turn(transcript, prompt_id, tool_inputs=inputs)
     if err:
         return None, err
-    ids = {tid for tid, name in calls if name in WRITE_TOOLS or name in ("Bash", APP_REPORT)}
-    inputs = {}
-    if ids:
-        try:
-            with open(transcript, encoding="utf-8", errors="replace") as fh:
-                for line in fh:
-                    if "tool_use" not in line:
-                        continue
-                    try:
-                        rec = json.loads(line)
-                    except Exception:
-                        continue
-                    content = (rec.get("message") or {}).get("content")
-                    if not isinstance(content, list):
-                        continue
-                    for b in content:
-                        if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("id") in ids:
-                            inputs[b["id"]] = b.get("input") if isinstance(b.get("input"), dict) else {}
-        except OSError as exc:
-            return None, "the transcript could not be read (%s)" % exc
     w = {"targets": [], "committed": False, "record_script": False, "record_tokens": [],
          "ecs": False, "traffic": "", "app_saved": []}
     traffic = []
