@@ -171,12 +171,22 @@ fn record_waiting_notice(state: &AppState, scope: &StatusToolScope, message: &mu
 fn drain_inboxes(app:&AppHandle,state:&AppState,thread:&str,binding:&richos_core::entity::ThreadBinding,scope:&StatusToolScope)->Result<(),String> {
         if session_tools::terminal_handover_active(scope) { return Ok(()); }
         let mut delivered=false;
-        while let Some((mut message,through))=session_tools::pending(scope,"rich")? {
+        let mut after = 0;
+        let mut deferred = None;
+        while let Some((mut message,through))=session_tools::pending_after(scope,"rich",after)? {
+            after = through;
             // The existing durable inbox is the retry boundary. ECS must apply
             // its verified state before Rich can act on or answer this input.
-            if message.from == "ecs-waiting" && !record_waiting_notice(state, scope, &mut message, through)? {
-                session_tools::acknowledge(scope,"rich",through)?;
-                continue;
+            if message.from == "ecs-waiting" {
+                match record_waiting_notice(state, scope, &mut message, through) {
+                    Ok(true) => {}
+                    Ok(false) => { session_tools::acknowledge(scope,"rich",through)?; continue; }
+                    Err(error) => {
+                        // The durable cursor can accept later independent inputs without losing this one.
+                        deferred.get_or_insert(error);
+                        continue;
+                    }
+                }
             }
             state.control.submit_agent_message(thread,Some(binding.entity_id().clone()),
                 &serde_json::to_string(&message).map_err(|e|e.to_string())?,&message.from,
@@ -191,7 +201,7 @@ fn drain_inboxes(app:&AppHandle,state:&AppState,thread:&str,binding:&richos_core
         }
         if delivered {crate::dispatch_incoming_messages(app,thread)?;}
         if session_tools::pending(scope,"stu")?.is_some() {state.work.wake_messages(binding);}
-        Ok(())
+        deferred.map_or(Ok(()), Err)
 }
 
 
