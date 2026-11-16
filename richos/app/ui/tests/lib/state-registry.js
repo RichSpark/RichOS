@@ -6171,7 +6171,6 @@ module.exports = [
   {s: "No search text was provided", c: "NOT-RENDERED", why: "The native RichFinder Service returns this to macOS for a missing pasteboard."},
   {s: "Open RichFinder in the main RichOS window", c: "NOT-RENDERED", why: "The quiet Service query command rejects a call from another window. The web shell never displays its error."},
   {s: "RichFiles could not appear in this window.", c: "INFORMATIONAL", why: "The rail reports that the native view could not be placed in its window."},
-  {s: "RichFiles could not be made ready in this window.", c: "NOT-RENDERED", why: "The page asks for RichFiles to be built ahead of a click and drops a refusal; a click then builds it as before and reports its own failure."},
   {s: "RichFiles could not load from this installation.", c: "INFORMATIONAL", why: "The rail reports a failure to load the bundled browser library."},
   {s: "RichFiles could not open this workspace.", c: "NOT-RENDERED", why: "The native handoff callback logs the error after the web command has returned."},
   {s: "RichFiles could not reach the window.", c: "INFORMATIONAL", why: "The rail reports that macOS could not deliver a request to its window."},
