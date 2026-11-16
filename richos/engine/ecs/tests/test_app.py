@@ -151,6 +151,146 @@ class AppProtocolTests(unittest.TestCase):
         error = self.call('brief', seat='ceo-thread:second', binding=first, ok=False)
         self.assertEqual(error['kind'], 'ScopeError')
 
+    def test_waiting_checkpoint_is_bound_to_the_original_user_order(self):
+        checkpoint = {"wait_for": [{"kind": "publication", "channel": "nightly",
+                                   "match": "exact", "release": "101"}],
+                      "statements": [{"verb": "commitment",
+                                     "fields": {"id": "ship-manual", "title": "Ship the depot manual",
+                                                "next": "Send the manual after publication"}}]}
+        request = dict(request_id="wait-1", checkpoint=checkpoint)
+        self.assertEqual(self.call("checkpoint", **request, ok=False)["kind"], "ScopeError")
+        instruction = {"ledger_ref": "ledger:thread-a:turn-1", "sha256": "a" * 64,
+                       "text": "Fixture user instruction"}
+        receipt = self.call("checkpoint", **request, instruction=instruction)
+        self.assertTrue(receipt["accepted"])
+        self.assertTrue(self.call("checkpoint", **request, instruction=instruction)["duplicate"])
+        item = self.call("inspect", query={"item_id": "ship-manual"})["item"]
+        self.assertEqual(item["status"], "blocked")
+        condition = json.loads(item["condition_json"])
+        self.assertEqual(condition["instruction"], {"ledger_ref": "ledger:thread-a:turn-1", "sha256": "a" * 64})
+        self.assertEqual(condition["all"], checkpoint["wait_for"])
+        forged = {"statements": [{"verb": "commitment", "fields": {
+            "id": "forged", "title": "Forged source", "condition_json": item["condition_json"]}}]}
+        self.assertEqual(self.call("checkpoint", request_id="forged", checkpoint=forged,
+                                   ok=False)["kind"], "ValidationError")
+
+    def test_next_publication_keeps_the_baseline_first_seen_at_acceptance(self):
+        doc = {"wait_for": [{"kind": "publication", "channel": "nightly",
+                            "match": "later", "release": "current"}],
+               "statements": [{"verb": "commitment", "fields": {
+                   "id": "next-depot", "title": "Run the depot check", "next": "Run when published"}}]}
+        request = {"protocol": 1, "command": "checkpoint", "binding": self.binding,
+                   "request_id": "same", "checkpoint": doc,
+                   "instruction": {"ledger_ref": "ledger:thread-a:turn-1", "sha256": "a" * 64}}
+        with patch("app.served_version", return_value="1.3.4-nightly.20261116.101") as read:
+            self.assertTrue(execute(self.store, request)["accepted"])
+        read.assert_called_once()
+        with patch("app.served_version", side_effect=RuntimeError("should use first baseline")):
+            self.assertTrue(execute(self.store, request)["duplicate"])
+        item = self.call("inspect", query={"item_id": "next-depot"})["item"]
+        self.assertEqual(json.loads(item["condition_json"])["all"][0]["release"], "1.3.4-nightly.20261116.101")
+
+    def test_a_named_nightly_can_be_late_skipped_or_unconfirmed(self):
+        from publication import ASSETS, publication_fact
+        older = "1.3.4-nightly.20261116.101"
+        current = "1.3.4-nightly.20261116.103"
+        abandoned = "1.3.4-nightly.20261116.102"
+        current_history = [{"commit": {"message": f"Publish v{tag}"}} for tag in (current, older)]
+        condition = {"match": "exact", "release": "102"}
+        self.assertEqual(publication_fact(condition, current, lambda _: current_history)["state"], "skipped")
+        self.assertEqual(publication_fact(condition, current,
+            lambda url: None if url.endswith("published.json") else [
+                {"commit": {"message": f"Publish v{tag}"}} for tag in (current, abandoned, older)
+            ])["state"], "waiting")
+        found = publication_fact({**condition, "release": older}, current, lambda url: {
+            "version": older, "platforms": {"darwin-aarch64": {
+                "signature": "fixture", "url": f"{ASSETS}/v{older}/RichOS.app.tar.gz"}}
+        } if url.endswith("published.json") else current_history)
+        self.assertEqual(found, {"state": "ready", "publication": older})
+        with self.assertRaises(ValueError):
+            publication_fact(condition, current, lambda _: None)
+
+    def test_waiting_notice_keeps_its_scope_and_does_not_reset_on_restart(self):
+        seat = "ceo-thread:thread-a"
+        self.binding = self.call("bind", seat=seat,
+            scope={"entity_id": "depot", "thread_id": "thread-a", "session_id": "session-a",
+                   "turn_id": "turn-1", "audience": "ceo"}, request_id="scoped-1",
+            source_ref="ledger:thread-a:turn-1")["binding"]
+        instruction = {"ledger_ref": "ledger:thread-a:turn-1", "sha256": "a" * 64}
+        version = "1.3.4-nightly.20261116.103"
+        for item, target in [("ready", "103"), ("skipped", "102")]:
+            self.call("checkpoint", seat=seat, instruction=instruction, request_id=item,
+                checkpoint={"wait_for": [
+                    {"kind": "publication", "channel": "nightly", "match": "exact", "release": target},
+                    {"kind": "installation", "release": "published"},
+                ], "statements": [{"verb": "commitment", "fields": {
+                    "id": item, "title": "Check the nightly", "next": "Check the installed build"}}]})
+        def publication(wait, served):
+            return {"state": "ready", "publication": served} if wait["release"] == "103" else {"state": "skipped"}
+        with patch("app.served_version", return_value=version), patch("app.publication_fact", side_effect=publication):
+            rows = {row["item_id"]: row for row in execute(self.store,
+                    {"protocol": 1, "command": "waiting-work"})["items"]}
+        self.assertEqual(rows["ready"]["conditions"][1]["condition"]["release"], version)
+        self.assertIsNone(rows["skipped"]["conditions"][1]["condition"]["release"])
+        for status in ("ready", "skipped"):
+            notice = dict(thread_id="thread-a", item_id=status, state=status, evidence="inbox:rich:10")
+            self.call("waiting-noticed", entity_id="unrelated", **notice, ok=False)
+            self.assertTrue(self.call("waiting-noticed", entity_id="depot", **notice)["changed"])
+            self.assertFalse(self.call("waiting-noticed", entity_id="depot", **notice)["changed"])
+        self.assertEqual(self.call("waiting-work")["items"], [])
+        ready = self.call("inspect", seat=seat, query={"item_id": "ready"})["item"]
+        skipped = self.call("inspect", seat=seat, query={"item_id": "skipped"})["item"]
+        self.assertEqual((ready["status"], ready["reply_owed"]), ("active", 1))
+        self.assertEqual((skipped["status"], skipped["evidence_ref"]), ("blocked", "waiting-skipped:inbox:rich:10"))
+
+    def test_linked_reply_remains_owed_until_the_host_records_its_delivery(self):
+        self.binding = self.call("bind", seat="ceo-thread:thread-a",
+            scope={"entity_id":"depot", "thread_id":"thread-a", "session_id":"session-a",
+                   "turn_id":"turn-1", "audience":"ceo"}, request_id="scoped-1",
+            source_ref="ledger:thread-a:turn-1")["binding"]
+        receipt = self.call("checkpoint", seat="ceo-thread:thread-a", request_id="owed",
+            checkpoint={"statements":[{"verb":"commitment", "fields":{
+                "id":"report-work", "title":"Report the result when it is ready"}}]})
+        self.assertTrue(receipt["accepted"])
+        self.assertTrue(self.call("link-reply", seat="ceo-thread:thread-a", item_id="report-work")["linked"])
+        item = lambda: self.call("inspect", seat="ceo-thread:thread-a",
+                                 query={"item_id":"report-work"})["item"]
+        self.assertEqual((item()["status"], item()["reply_owed"]), ("active", 1))
+        self.assertEqual(len(self.call("pending-replies")["items"]), 1)
+        digest = "0" * 64
+        self.call("answer-delivered", entity_id="studio", thread_id="thread-a", turn_id="turn-1",
+                  reply_sha256=digest, ok=False)
+        self.assertEqual(self.call("answer-delivered", entity_id="depot", thread_id="thread-a",
+                                  turn_id="different-turn", reply_sha256=digest)["delivered"], 0)
+        self.assertEqual(item()["reply_owed"], 1)
+        delivered = dict(entity_id="depot", thread_id="thread-a", turn_id="turn-1", reply_sha256=digest)
+        self.assertEqual(self.call("answer-delivered", **delivered)["delivered"], 1)
+        self.assertEqual(self.call("answer-delivered", **delivered)["delivered"], 0)
+        self.assertEqual((item()["status"], item()["reply_owed"]), ("completed", 0))
+        self.assertEqual(self.call("pending-replies")["items"], [])
+        from mcp import TOOLS
+        self.assertNotIn("answer-delivered", {tool["name"] for tool in TOOLS})
+
+    def test_a_partial_reply_cannot_settle_assigned_work(self):
+        seat = "ceo-thread:thread-a"
+        self.binding = self.call("bind", seat=seat, request_id="owner-scope",
+            scope={"entity_id": "depot", "thread_id": "thread-a", "session_id": "session-a",
+                   "turn_id": "turn-1", "audience": "ceo"}, source_ref="ledger:thread-a:turn-1")["binding"]
+        self.call("checkpoint", seat=seat, request_id="assignment-obligation:run-checks", checkpoint={
+            "statements": [{"verb": "commitment", "fields": {"id": "run-checks", "title": "Run the checks"}},
+                           {"verb": "open_loop", "fields": {"id": "watch-owner", "title": "Watch the owner"}}]})
+        self.assertEqual(self.call("link-reply", seat=seat, item_id="run-checks", ok=False)["kind"], "ValidationError")
+        self.assertEqual(self.call("link-reply", seat=seat, item_id="watch-owner", ok=False)["kind"], "ScopeError")
+        self.assertTrue(self.call("checkpoint", seat=seat, request_id="progress-note", checkpoint={
+            "statements": [{"verb": "update", "fields": {"id": "run-checks", "details": "Stu is running the checks"}}],
+        })["accepted"])
+        self.assertEqual(self.call("link-reply", seat=seat, item_id="run-checks", ok=False)["kind"], "ValidationError")
+        self.call("answer-complete", seat=seat, obligation_id="run-checks", answer_text="The checks passed.",
+                  source_ref="ledger:thread-a:turn-1")
+        self.assertTrue(self.call("link-reply", seat=seat, item_id="run-checks")["linked"])
+        self.assertEqual(self.call("answer-delivered", entity_id="depot", thread_id="thread-a",
+            turn_id="turn-1", reply_sha256="0" * 64)["delivered"], 1)
+
     def test_stale_and_cross_entity_bindings_are_rejected(self):
         old = self.binding
         self.binding = self.bind("studio", "thread-b", "session-b", "turn-2", old["revision"])
@@ -250,14 +390,15 @@ class AppProtocolTests(unittest.TestCase):
     def test_upgrade_backs_up_readable_state_and_downgrade_is_refused(self):
         migrations = self.root / "migration-copy"
         shutil.copytree(COMPONENT / "migrations", migrations)
+        latest = max(int(file.name.split("_", 1)[0]) for file in migrations.glob("*.sql"))
         store = EventStore(self.store)
         store.migrations_dir = migrations
-        (migrations / "008_fixture.sql").write_text("CREATE TABLE fixture_upgrade(value TEXT);")
+        (migrations / f"{latest + 1:03}_fixture.sql").write_text("CREATE TABLE fixture_upgrade(value TEXT);")
         store.initialize()
         backups = list((self.store / "backups").glob("*.sqlite3"))
         self.assertEqual(len(backups), 1)
         with sqlite3.connect(backups[0]) as previous:
-            self.assertEqual(previous.execute("SELECT max(version) FROM schema_migrations").fetchone()[0], 7)
+            self.assertEqual(previous.execute("SELECT max(version) FROM schema_migrations").fetchone()[0], latest)
             self.assertGreater(previous.execute("SELECT count(*) FROM ecs_events").fetchone()[0], 0)
         with self.assertRaisesRegex(ValidationError, "downgrade refused"):
             EventStore(self.store).initialize()
@@ -271,14 +412,15 @@ class AppProtocolTests(unittest.TestCase):
     def test_failed_migration_keeps_old_schema_and_backup(self):
         migrations = self.root / "broken-migrations"
         shutil.copytree(COMPONENT / "migrations", migrations)
-        (migrations / "008_broken.sql").write_text("CREATE TABLE rolled_back(value TEXT); INVALID SQL;")
+        latest = max(int(file.name.split("_", 1)[0]) for file in migrations.glob("*.sql"))
+        (migrations / f"{latest + 1:03}_broken.sql").write_text("CREATE TABLE rolled_back(value TEXT); INVALID SQL;")
         store = EventStore(self.store)
         store.migrations_dir = migrations
         with self.assertRaises(sqlite3.Error):
             store.initialize()
         with store.connect() as conn:
             self.assertIsNone(conn.execute("SELECT name FROM sqlite_master WHERE name='rolled_back'").fetchone())
-            self.assertEqual(conn.execute("SELECT max(version) FROM schema_migrations").fetchone()[0], 7)
+            self.assertEqual(conn.execute("SELECT max(version) FROM schema_migrations").fetchone()[0], latest)
         self.assertEqual(len(list((self.store / "backups").glob("*.sqlite3"))), 1)
         EventStore(self.store).initialize()
 

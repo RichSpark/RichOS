@@ -17,6 +17,8 @@ pub struct Session {
     pub instruction: Option<crate::ecs::UserInstruction>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assignments_scope: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub waiting_assignment: Option<WorkReference>,
 }
 
 fn component(text: &str) -> bool {
@@ -25,21 +27,24 @@ fn component(text: &str) -> bool {
 }
 
 pub fn bind(scope_path: &Path, scope: &StatusToolScope, session: &str, role: &str, instruction: Option<crate::ecs::UserInstruction>) -> Result<(), String> {
-    bind_with_assignments(scope_path,scope,session,role,instruction,None)
+    bind_with_assignments(scope_path,scope,session,role,instruction,None,None)
 }
 
 pub(crate) fn bind_with_assignments(scope_path: &Path, scope: &StatusToolScope, session: &str, role: &str,
-    instruction: Option<crate::ecs::UserInstruction>, assignments: Option<&Path>) -> Result<(), String> {
+    instruction: Option<crate::ecs::UserInstruction>, assignments: Option<&Path>,
+    waiting_notice: Option<&Message>) -> Result<(), String> {
     if !component(session) || !matches!(role, "rich" | "stu") {
         return Err("Invalid native session binding".into());
     }
-    let instruction=if role == "stu" {None} else {instruction.or_else(||std::fs::read(scope_path.with_extension("session.json")).ok()
+    let instruction=if role == "stu" {None} else if waiting_notice.is_some() {instruction}
+        else {instruction.or_else(||std::fs::read(scope_path.with_extension("session.json")).ok()
         .and_then(|bytes|serde_json::from_slice::<Session>(&bytes).ok())
         .filter(|old|old.session_id==session && old.role==role && old.entity_id==scope.entity_id && old.thread_id==scope.thread_id)
         .and_then(|old|old.instruction))};
     let record = Session {session_id:session.into(), role:role.into(),
         entity_id:scope.entity_id.clone(), thread_id:scope.thread_id.clone(),instruction,
-        assignments_scope:assignments.filter(|_|role=="rich").map(Path::to_path_buf)};
+        assignments_scope:assignments.filter(|_|role=="rich").map(Path::to_path_buf),
+        waiting_assignment:waiting_notice.and_then(|message|message.work.clone())};
     let text = serde_json::to_string(&record).map_err(|e|e.to_string())?;
     let folder=scope.state_root.join("evidence").join(session);
     std::fs::create_dir_all(&folder).map_err(|e|e.to_string())?;
@@ -158,6 +163,16 @@ pub fn inbox(scope: &StatusToolScope, role: &str) -> Result<PathBuf,String> {
     Ok(scope.state_root.join("messages").join(&scope.entity_id).join(&scope.thread_id).join(format!("{role}.jsonl")))
 }
 
+/// The terminal handover owns this conversation's pending work until reconciliation.
+pub fn terminal_handover_active(scope: &StatusToolScope) -> bool {
+    let Ok(inbox) = inbox(scope, "rich") else { return true };
+    let Some(folder) = inbox.parent() else { return true };
+    match std::fs::symlink_metadata(folder.join("terminal-handover.json")) {
+        Ok(_) => true,
+        Err(error) => error.kind() != std::io::ErrorKind::NotFound,
+    }
+}
+
 pub fn send(scope_path: &Path, scope: &StatusToolScope, args:Value) -> Result<Value,String> {
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
@@ -186,6 +201,13 @@ pub(crate) fn observe_codex(scope:&StatusToolScope,text:&str)->Result<(),String>
 
 pub(crate) fn observe_work_status(scope:&StatusToolScope,facts:Value)->Result<(),String> {
     append(scope,"rich",&Message {bridge:None,handoff:false,from:"work-status".into(),text:facts.to_string(),instruction:None,work:None})
+}
+
+/// Verified waiting-work evidence uses the receiving conversation's ordinary inbox.
+pub fn observe_waiting(scope: &StatusToolScope, facts: Value, instruction: Option<crate::ecs::UserInstruction>,
+    work: Option<WorkReference>) -> Result<u64, String> {
+    append_record(scope, "rich", &mut Message { bridge: None, handoff: false, from: "ecs-waiting".into(),
+        text: facts.to_string(), instruction, work }, false, None).map(|(through, _)| through)
 }
 
 /// One of Stu's workers, or an automatic turn of his own, met an overload: its wait is over, or
@@ -288,6 +310,7 @@ pub fn delegate(scope_path:&Path,scope:&StatusToolScope,args:Value)->Result<Valu
 
 pub(crate) fn delegate_with(scope_path:&Path,scope:&StatusToolScope,args:Value,
     opener:&dyn crate::assignment_tools::ObligationOpener)->Result<Value,String> {
+    if terminal_handover_active(scope) { return Err("The terminal owns this conversation's work until handover completes".into()); }
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
     struct Args {text:String}
@@ -298,7 +321,8 @@ pub(crate) fn delegate_with(scope_path:&Path,scope:&StatusToolScope,args:Value,
     let mut instruction=sender.instruction.ok_or("No original user request is bound to this turn")?;
     let text=crate::work_host::verified_instruction(&scope.state_root,&scope.entity_id,&scope.thread_id,&instruction.ledger_ref,&instruction.sha256).map_err(str::to_string)?;
     instruction=crate::ecs::UserInstruction::with_text(instruction.ledger_ref,instruction.sha256,Some(&text));
-    let mut message=Message {bridge:None,handoff:true,from:"rich".into(),text:args.text,instruction:Some(instruction),work:None};
+    let mut message=Message {bridge:None,handoff:true,from:"rich".into(),text:args.text,
+        instruction:Some(instruction),work:sender.waiting_assignment};
     let (through,already_saved)=append_record(scope,"stu",&mut message,true,Some((sender.assignments_scope.as_deref(),opener)))?;
     Ok(json!({"saved":true,"to":"stu","through":through,"already_saved":already_saved,
         "work":message.work,"instruction_ledger_ref":message.instruction.unwrap().ledger_ref}))
@@ -307,21 +331,28 @@ pub(crate) fn delegate_with(scope_path:&Path,scope:&StatusToolScope,args:Value,
 pub fn saved_handoff(scope:&StatusToolScope,instruction:&crate::ecs::UserInstruction)->Result<Option<(Message,u64)>,String> {
     let path=inbox(scope,"stu")?;
     let file=match read_inbox(&path) {Ok(file)=>file,Err(e) if e.kind()==std::io::ErrorKind::NotFound=>return Ok(None),Err(e)=>return Err(e.to_string())};
-    find_handoff(&mut BufReader::new(file),instruction)
+    find_handoff(&mut BufReader::new(file),instruction,None)
 }
 
-fn find_handoff(reader:&mut impl BufRead,instruction:&crate::ecs::UserInstruction)->Result<Option<(Message,u64)>,String> {
+fn find_handoff(reader:&mut impl BufRead,instruction:&crate::ecs::UserInstruction,
+    work: Option<&WorkReference>)->Result<Option<(Message,u64)>,String> {
     find_record(reader,|message| {
-        if !message.handoff || message.instruction.as_ref().is_none_or(|i|i.ledger_ref!=instruction.ledger_ref) {return Ok(false)}
+        if !message.handoff || message.instruction.as_ref().is_none_or(|i|i.ledger_ref!=instruction.ledger_ref)
+            || work.is_some_and(|work| message.work.as_ref()!=Some(work)) {return Ok(false)}
         if message.instruction.as_ref().unwrap().sha256!=instruction.sha256 {return Err("Saved handoff disagrees with the original request".into())}
         Ok(true)
     })
 }
 
-fn work_failure_input(message:&Message)->Option<String> {
-    if message.from!="work-status" {return None}
-    let facts:Value=serde_json::from_str(&message.text).ok()?;
-    (facts["event"]=="upstream_turn").then(||facts["input_id"].as_str().map(str::to_string)).flatten()
+fn reported_input(message: &Message) -> Option<(&str, String)> {
+    let expected = match message.from.as_str() {
+        "work-status" => "upstream_turn",
+        "ecs-waiting" => "waiting_condition",
+        _ => return None,
+    };
+    let facts: Value = serde_json::from_str(&message.text).ok()?;
+    if facts["event"] != expected { return None; }
+    Some((expected, facts["input_id"].as_str()?.to_owned()))
 }
 
 fn find_record(reader:&mut impl BufRead,mut matches:impl FnMut(&Message)->Result<bool,String>)->Result<Option<(Message,u64)>,String> {
@@ -368,15 +399,20 @@ fn locked_inbox(scope:&StatusToolScope,role:&str,nonblocking:bool)->Result<std::
 
 pub(crate) fn work_reference(scope:&StatusToolScope,message:&Message)->Result<Option<WorkReference>,String> {
     let Some(instruction)=message.instruction.as_ref().filter(|_|message.handoff) else {return Ok(None)};
+    if let Some(reference)=message.work.as_ref() {
+        let row=crate::assignment::read(&scope.state_root,&scope.entity_id,&scope.thread_id,
+            &reference.assignment_id).map_err(|e|e.to_string())?;
+        if row.obligation_id!=reference.obligation_id || row.instruction_ledger_ref!=instruction.ledger_ref
+            || row.instruction_sha256!=instruction.sha256 {
+            return Err("The handoff's work record disagrees with its original request".into());
+        }
+        return Ok(Some(reference.clone()));
+    }
     let matches:Vec<_>=crate::assignment::read_all(&scope.state_root,&scope.entity_id,&scope.thread_id)
         .map_err(|e|e.to_string())?.into_iter().filter(|r|r.instruction_ledger_ref==instruction.ledger_ref
             && r.instruction_sha256==instruction.sha256).collect();
     if matches.len()>1 {return Err("This request has more than one operational record; inspect it before continuing".into())}
-    let found=matches.first().map(|r|WorkReference {assignment_id:r.id.clone(),obligation_id:r.obligation_id.clone()});
-    if message.work.as_ref().is_some_and(|given|Some(given)!=found.as_ref()) {
-        return Err("The handoff's work record disagrees with its original request".into())
-    }
-    Ok(found)
+    Ok(matches.first().map(|r|WorkReference {assignment_id:r.id.clone(),obligation_id:r.obligation_id.clone()}))
 }
 
 fn record_handoff(scope:&StatusToolScope,message:&mut Message,path:Option<&Path>,
@@ -434,15 +470,15 @@ fn append_record(scope:&StatusToolScope,role:&str,message:&mut Message,unique:bo
     }
     // Retries and restarts report one failed logical input, using the inbox itself.
     // Scan acknowledged records too: Rich having read a failure cannot make it new.
-    if let Some(input)=work_failure_input(message) {
+    if let Some(input)=reported_input(message) {
         file.seek(SeekFrom::Start(0)).map_err(|e|e.to_string())?;
-        if let Some((_,through))=find_record(&mut BufReader::new(&mut file),|saved|Ok(work_failure_input(saved).as_ref()==Some(&input)))? {
+        if let Some((_,through))=find_record(&mut BufReader::new(&mut file),|saved|Ok(reported_input(saved).as_ref()==Some(&input)))? {
             return Ok((through,true))
         }
     }
     if unique {
         file.seek(SeekFrom::Start(0)).map_err(|e|e.to_string())?;
-        if let Some((mut saved,through))=find_handoff(&mut BufReader::new(&mut file),message.instruction.as_ref().ok_or("Handoff has no request")?)? {
+        if let Some((mut saved,through))=find_handoff(&mut BufReader::new(&mut file),message.instruction.as_ref().ok_or("Handoff has no request")?,message.work.as_ref())? {
             if let Some((path,opener))=recording {record_handoff(scope,&mut saved,path,opener)?;}
             message.work=saved.work;
             file.sync_all().map_err(|e|e.to_string())?;return Ok((through,true))
@@ -979,7 +1015,7 @@ mod tests {
         let scope=StatusToolScope {version:1,state_root:root.join("engine-state"),entity_id:entity.to_string(),thread_id:thread};
         let path=root.join("status.json");let assignments=root.join("assignments.json");
         recording(&assignments,&scope,&instruction);
-        bind_with_assignments(&path,&scope,"native-rich","rich",Some(instruction.clone()),Some(&assignments)).unwrap();
+        bind_with_assignments(&path,&scope,"native-rich","rich",Some(instruction.clone()),Some(&assignments),None).unwrap();
         let opened=Opened::default();
         let barrier=std::sync::Arc::new(std::sync::Barrier::new(3));
         let results=std::thread::scope(|threads| {
@@ -1012,7 +1048,7 @@ mod tests {
         let next=ledger.record_prompt_received(&binding,original,Source::Text).unwrap();
         let next_instruction=crate::ecs::UserInstruction::with_text(format!("ledger:{}:{next}",scope.thread_id),instruction.sha256.clone(),Some(original));
         recording(&assignments,&scope,&next_instruction);
-        bind_with_assignments(&path,&scope,"rich-after-crash","rich",Some(next_instruction),Some(&assignments)).unwrap();
+        bind_with_assignments(&path,&scope,"rich-after-crash","rich",Some(next_instruction),Some(&assignments),None).unwrap();
         let next=delegate_with(&path,&scope,json!({"text":"The user asked again"}),&opened).unwrap();assert_ne!(next["through"],through);
         assert_eq!(opened.0.load(std::sync::atomic::Ordering::SeqCst),2);
         bind(&path,&scope,"native-stu","stu",Some(instruction.clone())).unwrap();assert!(delegate(&path,&scope,json!({"text":"wrong role"})).is_err());

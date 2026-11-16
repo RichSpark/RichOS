@@ -1409,12 +1409,11 @@ fn the_login_environment_is_the_login_shells_and_a_slow_shell_times_out() {
 // AUTO-MEMORY — build plan 2026-10-21, item 10
 // =======================================================================================
 
-/// Rich and Stu keep auto-memory as the user's terminal does, in one folder in the app's data,
-/// and it is the same folder on every Claude account, so a switch keeps what they remembered.
+/// Lease settings and agent definitions agree with the build's memory policy on each account.
 #[test]
-fn auto_memory_is_on_in_one_folder_whichever_claude_account_the_lease_runs_on() {
+fn the_builds_memory_policy_applies_to_both_agents_and_accounts() {
     use richos_core::claude_accounts::Account;
-    use richos_core::user_settings::{MEMORY_SCOPE, RICH, STU};
+    use richos_core::user_settings::{AUTO_MEMORY_ENABLED, MEMORY_SCOPE, RICH, STU};
     let f = Scratch::new();
     let folder = f.0.join("central");
     let mut profile = prepare_for_user(&f, &folder);
@@ -1431,8 +1430,9 @@ fn auto_memory_is_on_in_one_folder_whichever_claude_account_the_lease_runs_on() 
                     Account { id: "2".into(), label: "Work".into(), folder: Some(f.0.join("claude-accounts/2")) }] {
         profile.claude_account = Some(account);
         let (settings, disabled) = lease(&profile);
-        assert_eq!(settings["autoMemoryEnabled"], true);
-        assert_eq!(disabled, Some(None), "an inherited switch-off is removed");
+        assert_eq!(settings["autoMemoryEnabled"], AUTO_MEMORY_ENABLED);
+        let expected = if AUTO_MEMORY_ENABLED { None } else { Some("1".into()) };
+        assert_eq!(disabled, Some(expected));
     }
     // Rich and Stu run as plugin agents, whose memory is their definition's scope: `project`,
     // under the lease's working folder (the coordination folder), the same on every account.
@@ -1440,15 +1440,17 @@ fn auto_memory_is_on_in_one_folder_whichever_claude_account_the_lease_runs_on() 
     for name in [RICH, STU] {
         let loaded = std::fs::read_to_string(profile.standing_plugin(&shipped).join("agents").join(name)).unwrap();
         let front = loaded.split("\n---").next().unwrap();
-        assert!(front.lines().any(|l| l == MEMORY_SCOPE), "{name} has no memory scope: {front}");
+        assert_eq!(front.lines().any(|l| l == MEMORY_SCOPE), AUTO_MEMORY_ENABLED);
         assert!(!std::fs::read_to_string(folder.join(name)).unwrap().contains(MEMORY_SCOPE), "the user's own {name} was written");
     }
-    // A user who names a scope keeps it.
+    // The generated plugin obeys the build policy and the source definition stays intact.
     let mine = std::fs::read_to_string(folder.join(RICH)).unwrap().replacen("---\n", "---\nmemory: user\n", 1);
     std::fs::write(folder.join(RICH), &mine).unwrap();
     let next = prepare_for_user(&f, &folder);
     let loaded = std::fs::read_to_string(next.standing_plugin(&shipped).join("agents").join(RICH)).unwrap();
-    assert!(loaded.starts_with(&mine), "the user's own memory scope was changed");
+    let expected = if AUTO_MEMORY_ENABLED { mine.clone() } else { mine.replacen("memory: user\n", "", 1) };
+    assert!(loaded.starts_with(&expected));
+    assert_eq!(std::fs::read_to_string(folder.join(RICH)).unwrap(), mine);
 }
 
 // =======================================================================================

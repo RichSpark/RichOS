@@ -115,6 +115,11 @@ pub const SCOPE_LIMIT: u64 = 256 * 1024;
 pub const INSTRUCTION_TEXT_LIMIT: usize = 128 * 1024;
 
 impl UserInstruction {
+    pub fn matches_text(&self, text: &str) -> bool {
+        use sha2::Digest;
+        format!("{:x}", sha2::Sha256::digest(text.as_bytes())) == self.sha256
+    }
+
     /// The scope's record of one user turn: its reference, its hash, and its words when they
     /// fit ([`INSTRUCTION_TEXT_LIMIT`]). `text` must be the verified words the hash was or will
     /// be taken of; `sha256` is passed in so a caller that already holds the attested digest
@@ -355,6 +360,22 @@ impl EcsBridge {
             }
         }
         Ok(Self { python: python.into(), component, state_root: state_root.into() })
+    }
+
+    /// The host calls this only for a completed turn from its authoritative ledger.
+    pub fn delivered_reply(&self, turn: &crate::ledger::Turn) -> Result<(), EcsError> {
+        use sha2::Digest;
+        if turn.state != crate::ledger::TurnState::Completed || turn.quarantined
+            || turn.assistant_text.trim().is_empty() || turn.source == crate::ledger::Source::Internal
+            || turn.stop_reason.as_deref() != Some("end_turn")
+        {
+            return Ok(());
+        }
+        let Some(entity) = turn.entity_id.as_ref() else { return Ok(()) };
+        self.request("answer-delivered", json!({
+            "entity_id": entity.as_str(), "thread_id": turn.thread_id, "turn_id": turn.id,
+            "reply_sha256": format!("{:x}", sha2::Sha256::digest(turn.assistant_text.as_bytes())),
+        })).map(|_| ())
     }
 
     /// Each invocation has a deadline and bounded output. Failure is distinct from

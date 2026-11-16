@@ -235,6 +235,11 @@ def report_assignment(scope, obligation, status, detail, observed_start=False):
         record.update(state=status, detail=detail, updated_at_ms=int(time.time()*1000),
                       work_session=scope["binding"]["session_id"])
         save(path, record)
+    if status == "settled":
+        try:
+            ECS.wake_waiting(state())
+        except OSError as error:
+            print(f"Waiting-work notification remains pending: {error}", file=sys.stderr)
     return {"recorded":True, "state":status}
 
 
