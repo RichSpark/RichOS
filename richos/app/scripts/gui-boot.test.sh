@@ -446,6 +446,10 @@ declare_rules() {
   # pictures reach Core Animation after their moment and are skipped. A measurement, not a failure.
   routine '^\[richos\] splash: [0-9]+ run\(s\) of the opening.s pictures reached Core Animation after their moment$' \
     'the splash opening counting the runs it skipped on a busy Mac; a measurement, not a finding'
+  # RichFiles loaded and its pane built ahead of the first click on its rail icon (richfiles_pane.rs),
+  # once the home screen has been left: how long each half took and when. A measurement.
+  routine '^\[richos\] RichFiles ready before its first click: library [0-9]+ ms on a background thread, pane [0-9]+ ms on the main thread, asked [0-9]+ ms and ready [0-9]+ ms after the process started$' \
+    'RichFiles made ready ahead of a click; two durations and two moments, no claim that anything was found'
 
   # A FACT ABOUT A FILE: how many companies are in it, where it is, and which of the three
   # load outcomes produced it. It asserts nothing was verified — the verification is the
