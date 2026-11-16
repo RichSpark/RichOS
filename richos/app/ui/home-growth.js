@@ -55,8 +55,6 @@ window.RichHomeGrowth = (function () {
 
   /// "See it finished" holds the example up this long.
   var FINISHED_MS = 10000;
-  /// Under this many memories every open draws his lights in the order they were earned (3.4).
-  var COLD_OPEN_MAX = 400;
   /// More new lights than this arrive together, not one by one.
   var ONE_BY_ONE_MAX = 60;
 
@@ -206,8 +204,7 @@ window.RichHomeGrowth = (function () {
       newCount = N - st.look.count;
       lookedAt = Number(st.look.at) || 0;
       startCount = st.look.count;
-    } else if (N <= COLD_OPEN_MAX) {
-      startCount = 0; // a cold open: his lights arrive in the order he earned them
+
     }
     // A moment that switches a piece on while he watches holds the levels from the first frame:
     // the count may already be past the threshold when the picture comes up (295 to 320).
@@ -396,7 +393,7 @@ window.RichHomeGrowth = (function () {
     paintDistance(count);
     var legendOn = api.ghostLevel > 0.004 && hasExample();
     el.growSolo.classList.toggle("on", !legendOn && (count > 0 || replaying));
-    el.grow.disabled = count === 0 && !replaying;
+    el.grow.disabled = el.growSolo.disabled = (!replaying && count === 0) || (api.entrance && api.entrance.state !== "done");
     if (!hold && stageOf(count) !== shownStage) setStage(stageOf(count), shownStage < 0 ? 0.01 : 0.8);
     placeMoment();
   }
@@ -574,7 +571,7 @@ window.RichHomeGrowth = (function () {
   function growPressed() {
     if (finishedOn) endFinished();
     if (replaying) return void endReplay(true);
-    if (!lo || !lo.growth || N === 0) return;
+    if (!lo || !lo.growth || N === 0 || (lo.entrance && lo.entrance.state !== "done")) return;
     if (handoverOn) endHandover();
     // a crossing in flight ends here: he has seen it, and the look ahead lets go of the example
     if (hold) save({ stage: stageOf(N) });
@@ -738,8 +735,9 @@ window.RichHomeGrowth = (function () {
   function arrive() {
     arriveTimer = 0;
     if (arrived || !active || !lo || !lo.growth || window.__loro !== lo) return;
-    if (curtainUp() || !(window.RichHome && window.RichHome.isOpen())) return void (arriveTimer = setTimeout(arrive, 120));
+    if ((lo.entrance && lo.entrance.state !== "done") || curtainUp() || !(window.RichHome && window.RichHome.isOpen())) return void (arriveTimer = setTimeout(arrive, 120));
     arrived = true;
+    onCount(lo.COUNT, lo.stats, lo);
     var now = Date.now();
     var st = load();
     if (scene !== "handover") weekly(now);
@@ -756,10 +754,7 @@ window.RichHomeGrowth = (function () {
     if (scene === "handover") return void playHandover();
     if (scene === "crossed") return void playCrossed();
     if (scene === "home") return void playHome();
-    // a cold open under 400: his lights arrive in the order he earned them, about a second and a half
-    if (lo.COUNT < N) later(350, function () {
-      lo.setCount(N, true);
-    });
+
   }
   function tellRich(stage) {
     var bridge = window.RichBridge;
