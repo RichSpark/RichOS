@@ -556,6 +556,11 @@ pub fn register_kind(
     request: &Registration,
     kind: AssignmentKind,
 ) -> Result<Receipt, AssignmentError> {
+    let _lock = lock_updates(state, &request.entity_id, &request.thread_id)?;
+    register_locked(state, request, kind)
+}
+
+fn register_locked(state: &Path, request: &Registration, kind: AssignmentKind) -> Result<Receipt, AssignmentError> {
     if !usable_identity(&request.thread_id) {
         return Err(AssignmentError("this conversation cannot be identified".into()));
     }
@@ -763,6 +768,7 @@ pub fn read(state: &Path, entity: &str, thread: &str, id: &str) -> Result<Assign
 fn lock_updates(state: &Path, entity: &str, thread: &str) -> Result<std::fs::File, AssignmentError> {
     use std::os::{fd::AsRawFd, unix::fs::OpenOptionsExt};
     let root = folder(state, entity, thread)?;
+    std::fs::create_dir_all(&root).map_err(|e| AssignmentError(e.to_string()))?;
     let file = std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(false)
         .mode(0o600).custom_flags(libc::O_NOFOLLOW).open(root.join(".updates.lock"))
         .map_err(|e| AssignmentError(e.to_string()))?;
@@ -791,7 +797,7 @@ pub fn register_waiting(state: &Path, request: &Registration) -> Result<Receipt,
         }
         return Ok(Receipt { id: row.id, title: row.title, kind: row.kind });
     }
-    register(state, request)
+    register_locked(state, request, AssignmentKind::Task)
 }
 
 fn update(
@@ -1404,6 +1410,20 @@ mod tests {
         assert_eq!(saved.notices.len(), 40);
         assert!(saved.notices.iter().all(|notice| notice.delivered_at_ms.is_some()));
         assert_eq!(saved.state, AssignmentState::Running);
+        std::fs::remove_dir_all(state).unwrap();
+    }
+
+    #[test]
+    fn a_waiting_assignment_keeps_one_identity_after_retry_and_settlement() {
+        let state = root();
+        let mut request = registration();
+        let first = register_waiting(&state, &request).unwrap();
+        assert_eq!(register_waiting(&state, &request).unwrap().id, first.id);
+        advance(&state, "depot", "thread-one", &first.id, AssignmentState::Settled, "Delivered.").unwrap();
+        assert_eq!(register_waiting(&state, &request).unwrap().id, first.id);
+        assert_eq!(read_all(&state, "depot", "thread-one").unwrap().len(), 1);
+        request.instruction_sha256 = "b".repeat(64);
+        assert!(register_waiting(&state, &request).is_err());
         std::fs::remove_dir_all(state).unwrap();
     }
 

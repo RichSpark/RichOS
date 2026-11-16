@@ -186,6 +186,39 @@ class AppProtocolTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             publication_fact(condition, current, lambda _: None)
 
+    def test_waiting_notice_keeps_its_scope_and_does_not_reset_on_restart(self):
+        seat = "ceo-thread:thread-a"
+        self.binding = self.call("bind", seat=seat,
+            scope={"entity_id": "depot", "thread_id": "thread-a", "session_id": "session-a",
+                   "turn_id": "turn-1", "audience": "ceo"}, request_id="scoped-1",
+            source_ref="ledger:thread-a:turn-1")["binding"]
+        instruction = {"ledger_ref": "ledger:thread-a:turn-1", "sha256": "a" * 64}
+        version = "1.3.4-nightly.20261116.103"
+        for item, target in [("ready", "103"), ("skipped", "102")]:
+            self.call("checkpoint", seat=seat, instruction=instruction, request_id=item,
+                checkpoint={"wait_for": [
+                    {"kind": "publication", "channel": "nightly", "match": "exact", "release": target},
+                    {"kind": "installation", "release": "published"},
+                ], "statements": [{"verb": "commitment", "fields": {
+                    "id": item, "title": "Check the nightly", "next": "Check the installed build"}}]})
+        def publication(wait, served):
+            return {"state": "ready", "publication": served} if wait["release"] == "103" else {"state": "skipped"}
+        with patch("app.served_version", return_value=version), patch("app.publication_fact", side_effect=publication):
+            rows = {row["item_id"]: row for row in execute(self.store,
+                    {"protocol": 1, "command": "waiting-work"})["items"]}
+        self.assertEqual(rows["ready"]["conditions"][1]["condition"]["release"], version)
+        self.assertIsNone(rows["skipped"]["conditions"][1]["condition"]["release"])
+        for status in ("ready", "skipped"):
+            notice = dict(thread_id="thread-a", item_id=status, state=status, evidence="inbox:rich:10")
+            self.call("waiting-noticed", entity_id="unrelated", **notice, ok=False)
+            self.assertTrue(self.call("waiting-noticed", entity_id="depot", **notice)["changed"])
+            self.assertFalse(self.call("waiting-noticed", entity_id="depot", **notice)["changed"])
+        self.assertEqual(self.call("waiting-work")["items"], [])
+        ready = self.call("inspect", seat=seat, query={"item_id": "ready"})["item"]
+        skipped = self.call("inspect", seat=seat, query={"item_id": "skipped"})["item"]
+        self.assertEqual((ready["status"], ready["reply_owed"]), ("active", 1))
+        self.assertEqual((skipped["status"], skipped["evidence_ref"]), ("blocked", "waiting-skipped:inbox:rich:10"))
+
     def test_linked_reply_remains_owed_until_the_host_records_its_delivery(self):
         self.binding = self.call("bind", seat="ceo-thread:thread-a",
             scope={"entity_id":"depot", "thread_id":"thread-a", "session_id":"session-a",

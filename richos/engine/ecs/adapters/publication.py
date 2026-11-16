@@ -3,6 +3,7 @@
 
 import json
 import re
+import sys
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
@@ -100,3 +101,15 @@ def publication_fact(condition, served, fetch=read):
             return {"state": "skipped", "publication": served,
                     "reason": "The channel advanced without publishing the named release."}
     return {"state": "waiting", "reason": "The available channel history does not settle the named release."}
+
+
+if __name__ == "__main__":
+    # The terminal backup uses the installed engine's verifier without opening app state.
+    request = json.loads(sys.stdin.buffer.read(4096))
+    served = served_version()
+    result = {"current": served}
+    if request:
+        if set(request) != {"match", "release"} or request["match"] not in {"exact", "later"}:
+            raise ValueError("invalid publication query")
+        result.update(publication_fact(request, served))
+    print(json.dumps(result))

@@ -62,6 +62,7 @@ fn reconcile_waiting(app: &AppHandle) -> Result<(), String> {
         }
     }
     let result = bridge.request("waiting-work", json!({})).map_err(|e| e.to_string())?;
+    let installed = app.package_info().version.to_string();
     for item in result["items"].as_array().ok_or("missing waiting conditions")? {
         let (Some(entity), Some(thread), Some(id), Some(conditions)) = (
             item["entity_id"].as_str(), item["thread_id"].as_str(), item["item_id"].as_str(), item["conditions"].as_array(),
@@ -70,8 +71,9 @@ fn reconcile_waiting(app: &AppHandle) -> Result<(), String> {
         if binding.entity_id().as_str() != entity { continue; }
         let scope = StatusToolScope { version: 1, state_root: state.data_dir.join("engine-state"),
             entity_id: entity.into(), thread_id: thread.into() };
+        if session_tools::terminal_handover_active(&scope) { continue; }
         let skipped = conditions.iter().any(|condition| condition["state"] == "skipped");
-        let ready = conditions.iter().all(|condition| waiting_condition_satisfied(&scope, condition));
+        let ready = conditions.iter().all(|condition| waiting_condition_satisfied(&scope, condition, &installed));
         if (!ready && !skipped) || conditions.is_empty() { continue; }
         let original = if ready && !skipped {
             let instruction: richos_core::ecs::UserInstruction = serde_json::from_value(item["instruction"].clone())
@@ -86,30 +88,55 @@ fn reconcile_waiting(app: &AppHandle) -> Result<(), String> {
             Some(instruction)
         } else { None };
         let status = if skipped { "skipped" } else { "ready" };
-        let mut assignment_id = None;
+        let mut work = None;
         if let Some(instruction) = original.as_ref().filter(|_| item["launch"] == true) {
             let action = item["next_action"].as_str().ok_or("missing authorized next action")?;
             let row = richos_core::assignment::register_waiting(&scope.state_root, &richos_core::assignment::Registration {
                 entity_id: entity.into(), thread_id: thread.into(), obligation_id: id.into(),
                 instruction_ledger_ref: instruction.ledger_ref.clone(), instruction_sha256: instruction.sha256.clone(),
                 title: action.into(), repositories: Vec::new(), needs_screen: false,
-            }).map_err(|e| e.to_string())?;
-            assignment_id = Some(row.id);
+            });
+            let row = match row {
+                Ok(row) => row,
+                Err(error) => { eprintln!("[richos] waiting work {id} remains held: {error}"); continue; }
+            };
+            work = Some(session_tools::WorkReference { assignment_id: row.id, obligation_id: id.into() });
         }
-        session_tools::observe_waiting(&scope, json!({
+        let saved = session_tools::observe_waiting(&scope, json!({
             "event": "waiting_condition", "input_id": format!("{id}:{status}"),
             "obligation_id": id, "status": status, "conditions": conditions,
-            "assignment_id": assignment_id,
-        }), original.filter(|_| assignment_id.is_some()))?;
+            "assignment_id": work.as_ref().map(|row| &row.assignment_id),
+        }), original.filter(|_| work.is_some()), work);
+        let through = match saved {
+            Ok(through) => through,
+            Err(error) => { eprintln!("[richos] waiting notice {id} remains pending: {error}"); continue; }
+        };
+        let mut evidence = format!("inbox:rich:{through}");
+        if let Some(reason) = conditions.iter().find(|condition| condition["state"] == "skipped")
+            .and_then(|condition| condition["reason"].as_str()) {
+            evidence.push(' ');
+            evidence.push_str(reason);
+        }
+        if let Err(error) = bridge.request("waiting-noticed", json!({
+            "entity_id": entity, "thread_id": thread, "item_id": id, "state": status, "evidence": evidence,
+        })) {
+            eprintln!("[richos] waiting notice {id} remains to be reconciled: {error}");
+        }
     }
     Ok(())
 }
 
-fn waiting_condition_satisfied(scope: &StatusToolScope, observation: &Value) -> bool {
+fn waiting_condition_satisfied(scope: &StatusToolScope, observation: &Value, installed: &str) -> bool {
     let condition = &observation["condition"];
     let id = condition["id"].as_str().unwrap_or_default();
     match condition["kind"].as_str() {
         Some("publication") => observation["state"] == "ready",
+        Some("installation") => condition["release"].as_str().is_some_and(|release| {
+            release.strip_prefix('v').unwrap_or(release) == installed || release.parse::<u64>().is_ok_and(|counter| {
+                installed.split_once("-nightly.").and_then(|(_, serial)| serial.split_once('.'))
+                    .and_then(|(_, value)| value.parse::<u64>().ok()) == Some(counter)
+            })
+        }),
         Some("assignment") => richos_core::assignment::read(&scope.state_root, &scope.entity_id, &scope.thread_id, id)
             .is_ok_and(|assignment| assignment.state == richos_core::assignment::AssignmentState::Settled),
         Some("question") => richos_core::questions::Store::new(&scope.state_root).list(&scope.entity_id, &scope.thread_id)
@@ -119,6 +146,7 @@ fn waiting_condition_satisfied(scope: &StatusToolScope, observation: &Value) -> 
 }
 
 fn drain_inboxes(app:&AppHandle,state:&AppState,thread:&str,binding:&richos_core::entity::ThreadBinding,scope:&StatusToolScope)->Result<(),String> {
+        if session_tools::terminal_handover_active(scope) { return Ok(()); }
         let mut delivered=false;
         while let Some((message,through))=session_tools::pending(scope,"rich")? {
             state.control.submit_agent_message(thread,Some(binding.entity_id().clone()),

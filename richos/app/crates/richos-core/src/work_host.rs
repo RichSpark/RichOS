@@ -997,6 +997,7 @@ impl WorkHost {
     }
 
     pub fn wake_messages(self: &Arc<Self>, binding: &ThreadBinding) {
+        if crate::session_tools::terminal_handover_active(&self.message_scope(binding)) { return; }
         let Some(backend) = self.backend_for(binding.thread_id()) else {
             return;
         };
@@ -1985,6 +1986,9 @@ impl WorkHost {
         }
         self.question_answer_instruction(delivery)?;
         crate::question_work::enqueue(&self.state, delivery)?;
+        if crate::session_tools::terminal_handover_active(&self.message_scope(binding)) {
+            return Ok(format!("work-input:{}", delivery.id));
+        }
         let backend = self
             .backend_for(binding.thread_id())
             .ok_or("RichOS is closing")?;

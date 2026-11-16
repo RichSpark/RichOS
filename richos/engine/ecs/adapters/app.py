@@ -306,24 +306,30 @@ def prepare_waiting_checkpoint(store, document, context, instruction, request_id
                     or (not _RELEASE.fullmatch(wait["release"])
                         and (wait["release"], wait["match"]) != ("current", "later"))):
                 raise ValidationError("a publication condition needs its channel, release and comparison")
+        elif kind == "installation":
+            if (set(wait) != {"kind", "release"} or not isinstance(wait["release"], str)
+                    or (wait["release"] != "published" and not _RELEASE.fullmatch(wait["release"]))):
+                raise ValidationError("an installation condition needs a named release or its paired publication")
         elif kind in {"assignment", "question"}:
             if set(wait) != {"kind", "id"} or not isinstance(wait["id"], str) or not 1 <= len(wait["id"]) <= 120:
                 raise ValidationError("a work or decision condition needs the owner's record ID")
         else:
             raise ValidationError("unknown waiting condition")
+    if any(w["kind"] == "installation" and w["release"] == "published" for w in waits):
+        if sum(w["kind"] == "publication" for w in waits) != 1:
+            raise ValidationError("an installation paired to a publication needs exactly one publication condition")
     digest = hashlib.sha256(canonical_json(document).encode()).hexdigest()
     source = f"structured-checkpoint:{context['session_id']}:{context['turn_id']}:{request_id}"
     conn = store.connect()
     try:
         prior = conn.execute(
-            "SELECT condition_json FROM ecs_continuity_items WHERE item_id=? AND entity_id=? "
-            "AND thread_id=? AND source_ref=?",
-            (fields["id"], context["entity_id"], context["thread_id"], source),
+            "SELECT condition_json FROM ecs_continuity_items WHERE item_id=? AND entity_id=? AND thread_id=?",
+            (fields["id"], context["entity_id"], context["thread_id"]),
         ).fetchone()
     finally:
         conn.close()
-    if prior and prior["condition_json"]:
-        condition = json.loads(prior["condition_json"])
+    condition = json.loads(prior["condition_json"]) if prior and prior["condition_json"] else {}
+    if condition.get("source_ref") == source:
         if condition["request_sha256"] != digest:
             raise ValidationError("waiting checkpoint request ID reused with different content")
     else:
@@ -337,6 +343,7 @@ def prepare_waiting_checkpoint(store, document, context, instruction, request_id
             "instruction": {"ledger_ref": prefix, "sha256": instruction["sha256"]},
             "all": waits,
             "request_sha256": digest,
+            "source_ref": source,
             "launch": launch,
         }
     return {**{key: val for key, val in document.items() if key not in {"wait_for", "launch"}}, "statements": [{
@@ -351,8 +358,8 @@ def waiting_work(store):
     try:
         rows = [dict(row) for row in conn.execute(
             "SELECT item_id, entity_id, thread_id, title, next_action, condition_json FROM ecs_continuity_items "
-            "WHERE condition_json IS NOT NULL AND status IN ('active', 'accepted', 'blocked', 'pending') "
-            "AND thread_id IS NOT NULL"
+            "WHERE condition_json IS NOT NULL AND status='blocked' AND thread_id IS NOT NULL "
+            "AND coalesce(evidence_ref,'') NOT LIKE 'waiting-skipped:%'"
         )]
     finally:
         conn.close()
@@ -382,6 +389,12 @@ def waiting_work(store):
                     facts[key] = {"state": "waiting", "reason": "The publication source is unavailable."}
             observations.append({"condition": wait, **facts[key]})
         row["conditions"] = observations
+        publication = next((o.get("publication") for o in observations
+                            if o["condition"]["kind"] == "publication" and o["state"] == "ready"), None)
+        for observation in observations:
+            wait = observation["condition"]
+            if wait["kind"] == "installation" and wait["release"] == "published":
+                observation["condition"] = {**wait, "release": publication}
     return {"items": rows}
 
 
@@ -399,7 +412,7 @@ def pending_replies(store, entity=None, thread=None, turn=None):
         conn.close()
 
 
-def update_reply(store, context, item, key, *, closing=False, **fields):
+def update_obligation(store, context, item, key, *, closing=False, **fields):
     event = "continuity.item_closed" if closing else "continuity.item_updated"
     store.append(event, entity_id=context["entity_id"],
                  thread_id=context["thread_id"], session_id=context["session_id"],
@@ -427,11 +440,35 @@ def answer_delivered(store, request):
             key = f"delivered:{ref}:{link['item_id']}"
             fields = {"reply_owed": 0, "reply_evidence": f"{ref}#{digest}"}
             if item["status"] in OPERATOR_OPEN:
-                update_reply(store, context, item, key, closing=True, status="completed",
+                update_obligation(store, context, item, key, closing=True, status="completed",
                              evidence_ref=fields["reply_evidence"], **fields)
             else:
-                update_reply(store, context, item, key, **fields)
+                update_obligation(store, context, item, key, **fields)
     return {"delivered": len(pending)}
+
+
+def waiting_noticed(store, request):
+    entity, thread, item_id = (required(request, field) for field in ("entity_id", "thread_id", "item_id"))
+    seat = ceo_seat(thread)
+    context = store.current_context(seat)
+    if context is None or not is_ceo_row(context) or context["entity_id"] != entity:
+        raise ScopeError("the waiting notice must keep its own conversation")
+    item = inspect_records(store, person_id=seat, item_id=item_id)["item"]
+    if item["thread_id"] != thread or not item["condition_json"]:
+        raise ScopeError("the waiting notice must refer to a scoped condition")
+    state = required(request, "state")
+    if state not in {"ready", "skipped"}:
+        raise ValidationError("unknown waiting notice state")
+    if item["status"] != "blocked" or (item["evidence_ref"] or "").startswith("waiting-skipped:"):
+        return {"changed": False}
+    evidence = required(request, "evidence")
+    if len(evidence) > 1024:
+        raise ValidationError("waiting notice evidence is too long")
+    fields = {"evidence_ref": f"waiting-{state}:{evidence}"}
+    if state == "ready":
+        fields["status"] = "active"
+    update_obligation(store, context, item, f"waiting:{entity}:{thread}:{item_id}:{state}", **fields)
+    return {"changed": True}
 
 
 def execute(state_root, request):
@@ -453,7 +490,7 @@ def execute(state_root, request):
         return {"protocol": PROTOCOL_VERSION, "event_schema": 1,
                 "migration_digest": identity.hexdigest(), "state_root": str(root),
                 "ceo_thread_seats": True, "ceo_seat_prefix": CEO_SEAT_PREFIX,
-                "commands": ["current", "bind", "prepare-turn", "checkpoint", "receipt", "brief", "inspect", "observe", "verified-work", "observation-receipt", "import-preview", "import-apply", "sync-loro-receipts", "complete-obligation", "operator-complete", "seats", "release-seat", "answer-complete", "waiting-work", "pending-replies", "answer-delivered"]}
+                "commands": ["current", "bind", "prepare-turn", "checkpoint", "receipt", "brief", "inspect", "observe", "verified-work", "observation-receipt", "import-preview", "import-apply", "sync-loro-receipts", "complete-obligation", "operator-complete", "seats", "release-seat", "answer-complete", "waiting-work", "waiting-noticed", "pending-replies", "answer-delivered"]}
     if command == "prepare-turn":
         # The front desk's existing four requests, in one Python invocation. Keep
         # their handlers, revision fences, order and receipt-error behavior.
@@ -484,12 +521,14 @@ def execute(state_root, request):
         return preview(root, request.get("envelope"), request.get("target"))
     store = EventStore(root)
     seat = seat_of(request)
-    if command in {"waiting-work", "pending-replies", "answer-delivered"}:
+    if command in {"waiting-work", "waiting-noticed", "pending-replies", "answer-delivered"}:
         if not store.db_path.is_file():
             return {"items": []}
         store.initialize()
         if command == "waiting-work":
             return waiting_work(store)
+        if command == "waiting-noticed":
+            return waiting_noticed(store, request)
         if command == "pending-replies":
             return {"items": pending_replies(store)}
         return answer_delivered(store, request)
@@ -568,7 +607,7 @@ def execute(state_root, request):
             raise ScopeError("no reply is owed on this obligation in this conversation")
         turn = f"ledger:{context['thread_id']}:{context['turn_id']}"
         if item["reply_turn"] != turn:
-            update_reply(store, context, item, f"link:{turn}:{item_id}", reply_turn=turn)
+            update_obligation(store, context, item, f"link:{turn}:{item_id}", reply_turn=turn)
         result = {"linked": True, "obligation_id": item_id, "reply_turn": turn}
     elif command == "receipt":
         result = checkpoint_receipt(store, session=required(request, "session_id"),

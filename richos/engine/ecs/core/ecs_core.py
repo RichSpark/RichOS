@@ -1062,6 +1062,10 @@ class EventStore:
             "rank", "status", "visibility", "evidence_ref", "reply_owed", "reply_turn", "reply_evidence",
         }
         changes = {k: v for k, v in p.items() if k in allowed}
+        if (row["condition_json"] and row["status"] == "blocked" and not closing
+                and event["actor_kind"] == "extractor"
+                and (changes.get("status", "blocked") != "blocked" or "evidence_ref" in changes)):
+            raise ValidationError("the original owner must verify a waiting condition before work can proceed")
         if "visibility" in changes:
             self._require_visibility_allowed(event["active_context"], changes["visibility"])
         if closing:
@@ -2770,7 +2774,7 @@ def _item_line(row: sqlite3.Row) -> str:
             fields.append(f"{name}={_data(row[name])}")
     if row["reply_owed"]:
         fields.append("reply_owed=true")
-    if row["condition_json"]:
+    if row["condition_json"] and row["status"] == "blocked":
         fields.append(f"waiting_condition={_data(row['condition_json'])}")
     fields.extend((f"revision={row['revision']}", f"source={_data(row['source_ref'])}"))
     return " | ".join(fields)
