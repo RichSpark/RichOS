@@ -1,31 +1,7 @@
-//! **Host context is given the terminal's way: at session start and after a compaction, not
-//! with every input.**
+//! Host context held by one provider conversation.
 //!
-//! Every input to a lease (his message, a watcher notice, a message from another agent) goes
-//! through the `richos-input-context` prompt hook, which can add host context: the
-//! executive-continuity block, the Loro receipts and open questions, and the company material.
-//! The terminal lead gets its continuity block when its session starts and after a compaction;
-//! its per-prompt hook records and adds nothing (femcboost `scripts/ecs/claude_adapter.py`, no
-//! `additionalContext`). The app gave the block in full once and then, on every later input, a
-//! note or a line difference of it, with the receipts and open questions in full every time:
-//! about 1.3M cost units in 37 hours of his use (richos-hq
-//! `docs/research/2026-10-31-app-terminal-differences.md` finding 6).
-//!
-//! So a block is given once per conversation the model can see, and the rest only when what
-//! it says changed:
-//!
-//! - [`GivenContext::once`] — the continuity block. The engine stamps every copy with when it
-//!   was compiled and the input's sequence number, so it is never byte-identical twice and
-//!   "when it changed" would be every input. As in the terminal, it is given again only after
-//!   the model lost its copy.
-//! - [`GivenContext::when_changed`] — the records (Loro receipts, open questions) and the
-//!   company material: given in full when they differ from the copy the model holds, nothing
-//!   otherwise.
-//!
-//! What this remembers is what the model can still see. A compaction replaces the
-//! conversation with a summary and every earlier copy goes with it, so the reader forgets
-//! everything at the provider's `compact_boundary` and the next input carries every block
-//! again. A new or resumed session is a new client and starts with nothing remembered.
+//! Live ECS briefs follow the revision of the scoped projections. Other host records follow
+//! their text. After compaction or a refused delivery the next prompt sends a fresh copy.
 
 use std::collections::HashMap;
 
@@ -33,9 +9,34 @@ use std::collections::HashMap;
 #[derive(Debug, Default)]
 pub struct GivenContext {
     given: HashMap<String, String>,
+    brief_revision: Option<String>,
+    pending_brief_revision: Option<String>,
 }
 
 impl GivenContext {
+    pub fn brief_revision(&self) -> Option<&str> {
+        self.brief_revision.as_deref()
+    }
+
+    pub fn continuity(&mut self, revision: Option<String>, text: String) -> String {
+        if let Some(revision) = revision {
+            self.pending_brief_revision = Some(revision);
+            text
+        } else {
+            self.once("executive-continuity", &text)
+        }
+    }
+
+    pub fn finish_turn(&mut self, delivered: bool) {
+        if delivered {
+            if let Some(revision) = self.pending_brief_revision.take() {
+                self.brief_revision = Some(revision);
+            }
+        } else {
+            self.forget();
+        }
+    }
+
     /// The block `name` the first time on this session (or after a compaction), and nothing
     /// again until [`GivenContext::forget`], whatever its text says by then.
     ///
@@ -68,6 +69,8 @@ impl GivenContext {
     /// and then not delivered. The next input gets every block in full.
     pub fn forget(&mut self) {
         self.given.clear();
+        self.brief_revision = None;
+        self.pending_brief_revision = None;
     }
 }
 
@@ -114,6 +117,24 @@ mod tests {
         given.forget();
         assert_eq!(given.once("executive-continuity", &first), first);
         assert_eq!(given.when_changed("company", "notes"), "notes");
+    }
+
+    #[test]
+    fn scoped_revision_is_reused_after_delivery_and_forgotten_after_failure_or_compaction() {
+        let mut given = GivenContext::default();
+        assert_eq!(given.continuity(Some("first".into()), "live".into()), "live");
+        assert_eq!(given.brief_revision(), None);
+        given.finish_turn(true);
+        assert_eq!(given.brief_revision(), Some("first"));
+        assert_eq!(given.continuity(Some("first".into()), String::new()), "");
+        given.finish_turn(true);
+        assert_eq!(given.continuity(Some("second".into()), "changed".into()), "changed");
+        given.finish_turn(false);
+        assert_eq!(given.brief_revision(), None);
+        given.continuity(Some("second".into()), "changed".into());
+        given.finish_turn(true);
+        given.forget();
+        assert_eq!(given.brief_revision(), None);
     }
 
     #[test]

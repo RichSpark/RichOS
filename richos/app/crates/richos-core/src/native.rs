@@ -2959,6 +2959,10 @@ impl NativeClient {
                     }
                 }
             }
+            let context_delivered = native_result(&msg).is_ok_and(|reason| {
+                !matches!(reason.as_str(), STOP_REASON_CANCELLED | STOP_REASON_DISCARDED | STOP_REASON_REFUSED)
+            });
+            state.lock().unwrap().given_context.finish_turn(context_delivered);
             // ---- WHOSE TURN DOES THIS END? (see [`PendingTurn`]) -----------------------
             //
             // The one question this branch used not to ask. A `result` the child reports
@@ -4353,13 +4357,11 @@ pub fn resolve_claude_bin_checked() -> Result<std::path::PathBuf, NativeError> {
 
 type ScopePreparation = Box<dyn FnOnce() -> Result<Option<PreparedContext>, CognitionError> + Send>;
 
-/// One input's host context from its scope preparation, kept in two parts because they are
-/// given differently ([`crate::given_context`]): the executive-continuity block once per
-/// session and after a compaction, the records after it (Loro receipts, open questions) when
-/// they changed.
+/// One input's scoped continuity and other host records.
 #[derive(Default)]
 struct PreparedContext {
     continuity: String,
+    brief_revision: Option<String>,
     records: String,
     current_recording: bool,
 }
@@ -4376,6 +4378,7 @@ struct NativeTurnScope {
     engine_profile: Option<crate::engine_profile::EngineProfile>,
     seat: Option<String>,
     prepare_turn_supported: bool,
+    reader_state: Arc<Mutex<ReaderState>>,
 }
 impl NativeTurnScope {
     fn prepare_question_scope(&self,entity:&str,thread:&str,turn:&str,asker:&str,method:&str)->Result<(),CognitionError> {
@@ -4412,15 +4415,17 @@ impl NativeTurnScope {
         let Some((bridge, path)) = &self.continuity else {
             return Ok(None);
         };
-        let (scope, brief, receipts) = if self.prepare_turn_supported {
-            bridge.prepare_turn(binding.entity_id().as_str(), binding.thread_id(), &self.session_id, turn, seat.as_deref())
+        let held = self.reader_state.lock().unwrap().given_context.brief_revision().map(str::to_owned);
+        let crate::ecs::PreparedTurn { binding: scope, brief, brief_revision, receipts } = if self.prepare_turn_supported {
+            bridge.prepare_turn(binding.entity_id().as_str(), binding.thread_id(), &self.session_id, turn,
+                seat.as_deref(), held.as_deref())
                 .map_err(|e| CognitionError::Io(e.to_string()))?
         } else {
             let scope=bridge.bind(binding.entity_id().as_str(),binding.thread_id(),&self.session_id,turn,seat.as_deref(),"ceo")
                 .map_err(|e|CognitionError::Io(e.to_string()))?;
             let receipts=bridge.request("sync-loro-receipts",crate::ecs::seated_request(seat.as_deref(),json!({"binding":scope})));
             let brief=bridge.brief(&scope,seat.as_deref()).map_err(|e|CognitionError::Io(e.to_string()))?;
-            (scope,brief,receipts)
+            crate::ecs::PreparedTurn { binding: scope, brief, brief_revision: None, receipts }
         };
         let mut records = String::new();
         match receipts {
@@ -4483,7 +4488,7 @@ impl NativeTurnScope {
                 .map_err(CognitionError::Io)?.into_iter().filter(|q|q.state==crate::questions::State::Open || !q.delivered).map(|q|q.public_value()).collect();
             if !questions.is_empty() { records.push_str(&json!({"event":"question_records","questions":questions}).to_string()); }
         }
-        Ok(Some(PreparedContext { continuity: brief, records, current_recording }))
+        Ok(Some(PreparedContext { continuity: brief, brief_revision, records, current_recording }))
     }
 }
 
@@ -4893,6 +4898,7 @@ impl Cognition for NativeCognition {
             assignments_scope: self.assignments_scope.clone(), status_scope: self.status_scope.clone(),
             continuity: self.continuity.clone(), continuity_tools_scope: self.continuity_tools_scope.clone(),
             engine_profile: self.engine_profile.clone(), seat, prepare_turn_supported: self.prepare_turn_supported,
+            reader_state: self.client.reader_state.clone(),
         };
         let (binding, turn, original_turn, text) = (binding.clone(), turn.to_string(), original_turn.to_string(), input.text.to_owned());
         let crate::cognition::WorkTurnInput { source, live_meeting_at, .. } = input;
@@ -5105,7 +5111,7 @@ impl Cognition for NativeCognition {
             // input really gives (a later refusal of its batch forgets them all, in `dispatch`).
             let mut context_data={
                 let mut state=reader_state.lock().unwrap();
-                let mut context=state.given_context.once("executive-continuity",&prepared.continuity);
+                let mut context=state.given_context.continuity(prepared.brief_revision, prepared.continuity);
                 context.push_str(&state.given_context.when_changed("records",&prepared.records));
                 if let Some(company)=&company { context.push_str(&state.given_context.when_changed("company material from the host",company)); }
                 context

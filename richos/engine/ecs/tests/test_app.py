@@ -89,6 +89,30 @@ class AppProtocolTests(unittest.TestCase):
         self.assertEqual(EventStore(self.store).current_context()["revision"], before)
         self.assertEqual(self.call("inspect", query={"item_id": "manual"})["item"]["status"], "active")
 
+    def test_live_brief_only_renders_changed_scoped_state_and_never_journals_a_snapshot(self):
+        def turn(number, held=None):
+            turn_id = f"turn-{number}"
+            return self.call("prepare-turn",
+                scope={**{k: v for k, v in self.binding.items() if k != "revision"}, "turn_id": turn_id},
+                source_ref=f"ledger:thread-a:{turn_id}", request_id=f"session-a:{turn_id}",
+                held_brief_revision=held)
+
+        first = turn(2)
+        self.assertIn("ECS CURRENT CONTINUITY", first["text"])
+        unchanged = turn(3, first["brief_revision"])
+        self.assertIsNone(unchanged["text"])
+        self.assertEqual(unchanged["brief_revision"], first["brief_revision"])
+        self.binding = unchanged["binding"]
+        self.assertTrue(self.checkpoint([{"verb": "commitment", "fields": {
+            "id": "manual", "title": "Draft the depot manual"}}])["accepted"])
+        changed = turn(4, first["brief_revision"])
+        self.assertIn("Draft the depot manual", changed["text"])
+        self.assertNotEqual(changed["brief_revision"], first["brief_revision"])
+        with sqlite3.connect(self.store / "ecs.sqlite3") as conn:
+            self.assertEqual(conn.execute(
+                "SELECT COUNT(*) FROM ecs_events WHERE event_type='checkpoint.compiled'"
+            ).fetchone()[0], 0)
+
     def test_prepared_turn_discloses_a_receipt_failure_and_still_fences_the_brief(self):
         fields = {"protocol": 1, "command": "prepare-turn",
             "scope": {k: v for k, v in self.binding.items() if k != "revision"},

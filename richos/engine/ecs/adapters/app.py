@@ -272,7 +272,7 @@ def bind(store, request, seat=None):
     return {"binding": binding_of(current)}
 
 
-def execute(state_root, request):
+def execute(state_root, request, *, store=None):
     if not isinstance(request, dict) or type(request.get("protocol")) is not int or request.get("protocol") != PROTOCOL_VERSION:
         raise ValidationError("unsupported ECS app protocol")
     command = required(request, "command")
@@ -291,6 +291,7 @@ def execute(state_root, request):
         return {"protocol": PROTOCOL_VERSION, "event_schema": 1,
                 "migration_digest": identity.hexdigest(), "state_root": str(root),
                 "ceo_thread_seats": True, "ceo_seat_prefix": CEO_SEAT_PREFIX,
+                "live_brief_revision": True,
                 "commands": ["current", "bind", "prepare-turn", "checkpoint", "receipt", "brief", "inspect", "observe", "verified-work", "observation-receipt", "import-preview", "import-apply", "sync-loro-receipts", "complete-obligation", "operator-complete", "seats", "release-seat", "answer-complete"]}
     if command == "prepare-turn":
         # The front desk's existing four requests, in one Python invocation. Keep
@@ -301,26 +302,28 @@ def execute(state_root, request):
         budget = request.get("budget_chars", 6000)
         if type(budget) is not int or not 900 <= budget <= 24000:
             raise ValidationError("brief budget must be between 900 and 24000 characters")
-        current = execute(root, {**request, "command": "current"})["binding"]
+        store = EventStore(root)
+        current = execute(root, {**request, "command": "current"}, store=store)["binding"]
         if current is not None and all(current.get(k) == v for k, v in scope.items()) and set(scope) == set(BINDING_FIELDS) - {"revision"}:
             binding = current
         else:
             binding = execute(root, {**request, "command": "bind",
-                "expected_revision": current["revision"] if current else None})["binding"]
+                "expected_revision": current["revision"] if current else None}, store=store)["binding"]
         fields = {**request, "binding": binding}
         receipts, receipt_error = None, None
         try:
-            receipts = execute(root, {**fields, "command": "sync-loro-receipts"})
+            receipts = execute(root, {**fields, "command": "sync-loro-receipts"}, store=store)
         except (ECSError, ValueError, TypeError, OSError, sqlite3.Error) as error:
             # As on the old app path, failed receipt synchronization is disclosed
             # in the brief; a bind or brief failure still refuses the turn.
             receipt_error = str(error)
-        brief = execute(root, {**fields, "command": "brief"})["text"]
-        return {"binding": binding, "text": brief, "receipts": receipts, "receipt_error": receipt_error}
+        context = fenced(store, binding, seat_of(request))
+        brief = store.live_brief(context, budget_chars=budget, held_revision=request.get("held_brief_revision"))
+        return {"binding": binding, **brief, "receipts": receipts, "receipt_error": receipt_error}
     if command == "import-preview":
         from import_records import preview
         return preview(root, request.get("envelope"), request.get("target"))
-    store = EventStore(root)
+    store = store if store is not None else EventStore(root)
     seat = seat_of(request)
     if command == "current":
         current = store.current_context() if seat is None else store.current_context(seat)
