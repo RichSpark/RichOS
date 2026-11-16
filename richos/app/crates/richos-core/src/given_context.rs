@@ -36,9 +36,7 @@ impl GivenContext {
                 self.brief_revision = Some(revision);
             }
         } else {
-            self.brief_revision = None;
-            self.pending_brief_revision = None;
-            self.given.remove(STANDING_INSTRUCTIONS);
+            self.forget();
         }
     }
 

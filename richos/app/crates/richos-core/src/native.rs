@@ -2959,10 +2959,6 @@ impl NativeClient {
                     }
                 }
             }
-            let context_delivered = native_result(&msg).is_ok_and(|reason| {
-                !matches!(reason.as_str(), STOP_REASON_CANCELLED | STOP_REASON_DISCARDED | STOP_REASON_REFUSED | "refusal")
-            });
-            state.lock().unwrap().given_context.finish_turn(context_delivered);
             // ---- WHOSE TURN DOES THIS END? (see [`PendingTurn`]) -----------------------
             //
             // The one question this branch used not to ask. A `result` the child reports
@@ -2976,7 +2972,16 @@ impl NativeClient {
                 *guard = waiting;
                 (ready, guard.is_empty())
             };
-            let api_error = state.lock().unwrap().api_error.take();
+            let api_error = {
+                let mut reader = state.lock().unwrap();
+                if !ready.is_empty() {
+                    let delivered = native_result(&msg).is_ok_and(|reason| {
+                        !matches!(reason.as_str(), STOP_REASON_CANCELLED | STOP_REASON_DISCARDED | STOP_REASON_REFUSED | "refusal")
+                    });
+                    reader.given_context.finish_turn(delivered);
+                }
+                reader.api_error.take()
+            };
             let carried_by_api_error = msg.get("terminal_reason").and_then(Value::as_str) == Some(TERMINAL_REASON_API_ERROR);
             // Between turns only with no input still awaited; written before the reply is
             // delivered, so whoever sees the reply sees the signal. A turn an API failure ended
@@ -9868,7 +9873,7 @@ printf '%s\n' '{"type":"result","subtype":"success","stop_reason":"end_turn","qu
 read -r prompt
 ours=$(printf '%s' "$prompt" | sed -n 's/.*"uuid":"\([0-9a-fA-F-]*\)".*/\1/p')
 test -n "$ours" || exit 9
-printf '%s\n' '{"type":"result","subtype":"success","stop_reason":"end_turn","queued_turn_count":0,"result":"old platform result"}'
+printf '%s\n' '{"type":"result","subtype":"success","stop_reason":"refusal","queued_turn_count":0,"result":"old platform result"}'
 sleep 0.2
 printf '%s\n' "{\"type\":\"command_lifecycle\",\"command_uuid\":\"$ours\",\"state\":\"started\"}"
 printf '%s\n' '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"actual answer"}}}'
@@ -9876,6 +9881,9 @@ printf '%s\n' '{"type":"result","subtype":"success","stop_reason":"end_turn","qu
 read -r keep_alive
 "#);
         let client = NativeClient::spawn(&script, Path::new("/tmp"), &doctrine_fixture(), &skills_fixture()).unwrap();
+        assert_eq!(client.reader_state.lock().unwrap().given_context
+            .continuity(Some("first brief".into()), "context from the first turn".into()),
+            "context from the first turn");
         client.prompt("first", &mut |_| {}).unwrap();
         let mut said = String::new();
         let reason = client
@@ -9887,6 +9895,8 @@ read -r keep_alive
             .unwrap();
         assert_eq!(reason, "end_turn");
         assert_eq!(said, "actual answer", "an earlier turn's result ended this prompt before its own answer");
+        assert_eq!(client.reader_state.lock().unwrap().given_context.brief_revision(), Some("first brief"),
+            "a platform-owned refusal erased the retained ECS context");
         // The earlier result is retained on the between-turn lane rather than dropped (§1.4 G5).
         assert!(
             client.between.lock().unwrap().queue.iter().any(|i| matches!(i,
