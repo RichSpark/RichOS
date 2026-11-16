@@ -608,7 +608,10 @@
         <section id="richfiles-page" class="richfiles-page" hidden aria-labelledby="richfiles-title">
           <header><h1 id="richfiles-title">RichFiles</h1></header>
           <p id="richfiles-pane-error" role="status" hidden></p>
-          <div id="richfiles-pane"></div>
+          <!-- A click that comes before RichFiles is ready never looks dead: this line is on screen
+               at once and RichFiles covers it when it is (`richfiles-page.js`). The look is the
+               search list's own loading row. -->
+          <div id="richfiles-pane"><p id="richfiles-loading" class="srch-loading is-fetching" role="status" hidden><i aria-hidden="true"></i>Opening RichFiles…</p></div>
         </section>
 
         <!-- RichPass page from the navigation rail. Copy and title mark follow round 65.1. -->

@@ -16,6 +16,10 @@
 // each complete frame moved by DELTA or more (0, 1-7, 8-63, 64-511, 512-4095, 4096+), so the line
 // between a picture frame and an unrelated one can be read off the data. The display's refresh
 // (60 in the guest, provision-guest.sh pins it) caps both. Nothing is injected into the app.
+// Each sample also carries the longest time the picture went without a new frame
+// (`longest_gap_ms`), when that gap began (`longest_gap_began_ms`, on the guest's clock in ms since
+// 1970) and when the sample began (`began_ms`): a rate over a span hides one long pause in it, and a
+// pause is what something else holding up the app looks like.
 //
 // Usage: frame-rate <pid> <seconds per sample> <samples> [<pause seconds between samples>
 //                   [<region as x,y,w,h fractions of the window>]]
@@ -63,6 +67,9 @@ final class Counter: NSObject, SCStreamOutput {
     var idle = 0
     var moved: [Int] = [0, 0, 0, 0, 0, 0]   // complete frames by pixels moved: 0, 1-7, 8-63, 64-511, 512-4095, 4096+
     var previous: [UInt8] = []
+    var lastPicture: Double? = nil          // when the last picture frame arrived, in ms since 1970
+    var longestGap = 0.0
+    var longestGapBegan = 0.0
     func stream(_ stream: SCStream, didOutputSampleBuffer buffer: CMSampleBuffer, of type: SCStreamOutputType) {
         guard type == .screen,
               let attachments = CMSampleBufferGetSampleAttachmentsArray(buffer, createIfNecessary: false) as? [[SCStreamFrameInfo: Any]],
@@ -72,7 +79,12 @@ final class Counter: NSObject, SCStreamOutput {
         let (strong, weak) = regionChanged(image)
         lock.lock()
         complete += 1
-        if Double(strong) >= MIN_CHANGED_SHARE * Double(regionPixels) { picture += 1 }
+        if Double(strong) >= MIN_CHANGED_SHARE * Double(regionPixels) {
+            picture += 1
+            let now = Date().timeIntervalSince1970 * 1000
+            if let last = lastPicture, now - last > longestGap { longestGap = now - last; longestGapBegan = last }
+            lastPicture = now
+        }
         if weak > 0 { faint += 1 }
         let bucket = strong == 0 ? 0 : strong < 8 ? 1 : strong < 64 ? 2 : strong < 512 ? 3 : strong < 4096 ? 4 : 5
         moved[bucket] += 1
@@ -112,10 +124,15 @@ final class Counter: NSObject, SCStreamOutput {
         }
         return (strong, weak)
     }
-    func take() -> (Int, Int, Int, Int, [Int]) {
+    func take() -> (Int, Int, Int, Int, [Int], Double, Double) {
         lock.lock(); defer { lock.unlock() }
-        let out = (complete, picture, faint, idle, moved)
+        // A picture that has not drawn since its last frame is in a gap that is still open.
+        let now = Date().timeIntervalSince1970 * 1000
+        if let last = lastPicture, now - last > longestGap { longestGap = now - last; longestGapBegan = last }
+        let out = (complete, picture, faint, idle, moved, longestGap, longestGapBegan)
         complete = 0; picture = 0; faint = 0; idle = 0; moved = [0, 0, 0, 0, 0, 0]
+        longestGap = 0; longestGapBegan = 0
+        if lastPicture != nil { lastPicture = now }
         return out
     }
 }
@@ -153,9 +170,11 @@ Task {
         _ = counter.take()
         let began = Date()
         try? await Task.sleep(nanoseconds: UInt64(span * 1e9))
-        let (complete, picture, faint, idle, moved) = counter.take()
+        let (complete, picture, faint, idle, moved, gap, gapBegan) = counter.take()
         let seconds = Date().timeIntervalSince(began)
         rows.append(["complete": complete, "picture": picture, "any_change": faint, "moved_histogram": moved, "idle": idle,
+                     "began_ms": (began.timeIntervalSince1970 * 1000).rounded(),
+                     "longest_gap_ms": gap.rounded(), "longest_gap_began_ms": gapBegan.rounded(),
                      "seconds": (seconds * 1000).rounded() / 1000,
                      "window_fps": (Double(complete) / seconds * 10).rounded() / 10,
                      "fps": (Double(picture) / seconds * 10).rounded() / 10])

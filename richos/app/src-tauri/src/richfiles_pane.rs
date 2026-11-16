@@ -43,6 +43,10 @@ pub async fn richfiles_place_pane(window: WebviewWindow, bounds: PaneBounds) -> 
     }
     #[cfg(target_os = "macos")]
     {
+        if bounds.visible {
+            // A click can beat preload. Join the same load off the window thread.
+            mac::load_in_background().await?;
+        }
         let (send, receive) = tokio::sync::oneshot::channel();
         window
             .with_webview(move |webview| {
@@ -53,6 +57,20 @@ pub async fn richfiles_place_pane(window: WebviewWindow, bounds: PaneBounds) -> 
         receive
             .await
             .map_err(|_| "The RichOS window closed.".to_owned())?
+    }
+    #[cfg(not(target_os = "macos"))]
+    Err("RichFiles requires macOS.".to_owned())
+}
+
+/// Warm the bundled library without opening a pane or putting work on AppKit's thread.
+#[richos_command::command]
+pub async fn richfiles_preload(window: WebviewWindow) -> Result<(), String> {
+    if window.label() != "main" {
+        return Err("RichFiles could not reach the window.".to_owned());
+    }
+    #[cfg(target_os = "macos")]
+    {
+        mac::load_in_background().await
     }
     #[cfg(not(target_os = "macos"))]
     Err("RichFiles requires macOS.".to_owned())
@@ -350,6 +368,20 @@ mod mac {
     }
 
     fn load() -> Result<Bridge, &'static str> {
+        let began = std::time::Instant::now();
+        let bridge = open();
+        let elapsed = began.elapsed().as_millis();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_millis() as u64);
+        let since_start = crate::launch_timing::process_started_ms()
+            .map_or(0, |start| now.saturating_sub(start));
+        let outcome = if bridge.is_ok() { "loaded" } else { "unavailable" };
+        eprintln!("[richos] RichFiles library: {outcome} in {elapsed} ms at {since_start} ms after process start");
+        bridge
+    }
+
+    fn open() -> Result<Bridge, &'static str> {
         let path = library_path().ok_or("This build does not contain RichFiles.")?;
         let filename = CString::new(path.as_os_str().as_bytes())
             .map_err(|_| "Invalid RichFiles bundle path.")?;
@@ -377,6 +409,18 @@ mod mac {
             place_git: unsafe { std::mem::transmute::<*mut c_void, PlaceGit>(git) },
             git_chat: unsafe { std::mem::transmute::<*mut c_void, Accept>(git_chat) },
         })
+    }
+
+    pub async fn load_in_background() -> Result<(), String> {
+        fn loaded() -> Result<(), String> {
+            BRIDGE.get_or_init(load).as_ref().map(|_| ()).map_err(|message| (*message).to_owned())
+        }
+        if BRIDGE.get().is_some() {
+            return loaded();
+        }
+        tauri::async_runtime::spawn_blocking(loaded)
+            .await
+            .map_err(|_| "RichFiles could not load from this installation.".to_owned())?
     }
 
     pub fn place_git(webview: *mut c_void, bounds: &PaneBounds, dark: bool, context: Option<Vec<u8>>, mode: i32) -> Result<(), String> {

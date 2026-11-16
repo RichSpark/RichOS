@@ -4438,6 +4438,9 @@
         }
         case "richfiles_pane_available":
           return window.__RICHOS_MOCK_PRESET__?.gitView === true;
+        // RichFiles made ready ahead of its first click: the mock has no native pane to build.
+        case "richfiles_preload":
+          return null;
         // One file's preview (output side-panel PRD §5.4, §7, slice S5), by its output id.
         case "output_preview":
           return outputPreviewOf(args.outputId ?? args.output_id);

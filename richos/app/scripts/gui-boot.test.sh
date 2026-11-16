@@ -446,6 +446,9 @@ declare_rules() {
   # pictures reach Core Animation after their moment and are skipped. A measurement, not a failure.
   routine '^\[richos\] splash: [0-9]+ run\(s\) of the opening.s pictures reached Core Animation after their moment$' \
     'the splash opening counting the runs it skipped on a busy Mac; a measurement, not a finding'
+  # The optional RichFiles library warmup, after the app is usable.
+  routine '^\[richos\] RichFiles library: loaded in [0-9]+ ms at [0-9]+ ms after process start$' \
+    'RichFiles library load completed; duration and time since startup'
 
   # A FACT ABOUT A FILE: how many companies are in it, where it is, and which of the three
   # load outcomes produced it. It asserts nothing was verified — the verification is the

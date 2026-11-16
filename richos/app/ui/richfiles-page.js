@@ -7,7 +7,8 @@
   const page = document.getElementById("richfiles-page");
   const pane = document.getElementById("richfiles-pane");
   const error = document.getElementById("richfiles-pane-error");
-  if (!bridge || !rail || !button || !page || !pane || !error) return;
+  const loading = document.getElementById("richfiles-loading");
+  if (!bridge || !rail || !button || !page || !pane || !error || !loading) return;
 
   const hiddenBounds = { left: 0, top: 0, width: 0, height: 0, visible: false };
   let last = "";
@@ -15,6 +16,10 @@
   let waiting = false;
   let again = false;
   let showRequested = false;
+  // The native pane has been shown before and can be reused.
+  let ready = false;
+  // Two frames on: what the page changed has been drawn.
+  const painted = () => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)));
 
   function intersects(first, second) {
     return first.left < second.right && second.left < first.right
@@ -41,14 +46,25 @@
 
   async function refresh() {
     if (waiting) { again = true; return; }
-    const next = bounds();
-    const key = JSON.stringify(next);
+    let next = bounds();
+    let key = JSON.stringify(next);
     if (key === last && (!next.visible || !showRequested)) return;
     waiting = true;
     try {
       if (key !== last) {
+        // Paint the loading state before AppKit can spend time building the first view.
+        if (next.visible && !ready) {
+          await painted();
+          next = bounds();
+          if (!next.visible) { again = true; return; }
+          key = JSON.stringify(next);
+        }
         await bridge.invoke("richfiles_place_pane", { bounds: next });
         last = key;
+        if (next.visible) {
+          ready = true;
+          loading.hidden = true;
+        }
       }
       if (next.visible && showRequested) {
         showRequested = false;
@@ -56,6 +72,7 @@
       }
       error.hidden = true;
     } catch (reason) {
+      loading.hidden = true;
       if (!page.hidden) {
         error.textContent = String(reason);
         error.hidden = false;
@@ -69,6 +86,8 @@
   const size = new ResizeObserver(schedule);
   const overlays = new MutationObserver(schedule);
   function show() {
+    preloaded = true; // placement also loads the library if needed
+    loading.hidden = ready;
     page.hidden = false;
     document.body.classList.add("page-open");
     size.observe(pane);
@@ -78,6 +97,7 @@
   }
 
   function hide() {
+    loading.hidden = true;
     page.hidden = true;
     document.body.classList.remove("page-open");
     size.disconnect();
@@ -94,11 +114,31 @@
     schedule();
   }
 
+  // Warm the library once the opening is gone. The SwiftUI view must be built on the
+  // window thread; doing that in advance can freeze chat even when RichFiles is never opened.
+  let usable = false;
+  let offered = false;
+  let preloaded = false;
+  let openingTimer = 0;
+  function prepare() {
+    if (preloaded || !usable || !offered) return;
+    if (window.RichSplash?.isUp?.()) {
+      if (!openingTimer) openingTimer = setTimeout(() => { openingTimer = 0; prepare(); }, 100);
+      return;
+    }
+    preloaded = true;
+    bridge.invoke("richfiles_preload", {}).catch(() => {});
+  }
+  window.RichFilesReady = { start() { usable = true; prepare(); } };
+  if (window.__richosRichFilesReady) window.RichFilesReady.start();
+
   bridge.invoke("richfiles_pane_available", {}).then(async (available) => {
     if (available !== true) return;
     rail.registerPage("richfiles", { show, hide });
     button.hidden = false;
     window.RichFilesPage = { available: true };
+    offered = true;
+    prepare();
     try {
       await bridge.listen?.("rich://richfiles-show", requestPane);
     } catch {
