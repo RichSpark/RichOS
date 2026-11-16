@@ -759,6 +759,41 @@ pub fn read(state: &Path, entity: &str, thread: &str, id: &str) -> Result<Assign
 ///
 /// Movement timestamps belong to primary reports and controls. Notice delivery has
 /// its own timestamp and never changes when a job last progressed.
+#[cfg(unix)]
+fn lock_updates(state: &Path, entity: &str, thread: &str) -> Result<std::fs::File, AssignmentError> {
+    use std::os::{fd::AsRawFd, unix::fs::OpenOptionsExt};
+    let root = folder(state, entity, thread)?;
+    let file = std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(false)
+        .mode(0o600).custom_flags(libc::O_NOFOLLOW).open(root.join(".updates.lock"))
+        .map_err(|e| AssignmentError(e.to_string()))?;
+    // SAFETY: the descriptor belongs to this guard and closes after the update.
+    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } != 0 {
+        return Err(AssignmentError(std::io::Error::last_os_error().to_string()));
+    }
+    Ok(file)
+}
+
+#[cfg(not(unix))]
+fn lock_updates(_state: &Path, _entity: &str, _thread: &str) -> Result<std::sync::MutexGuard<'static, ()>, AssignmentError> {
+    static UPDATES: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    Ok(UPDATES.lock().unwrap())
+}
+
+/// Reuse the assignment attached to a ready obligation on every notice or restart.
+pub fn register_waiting(state: &Path, request: &Registration) -> Result<Receipt, AssignmentError> {
+    let _lock = lock_updates(state, &request.entity_id, &request.thread_id)?;
+    let saved = read_all(state, &request.entity_id, &request.thread_id)?;
+    if let Some(row) = saved.into_iter().find(|row| row.obligation_id == request.obligation_id) {
+        if row.instruction_ledger_ref != request.instruction_ledger_ref
+            || row.instruction_sha256 != request.instruction_sha256
+        {
+            return Err(AssignmentError("the existing assignment belongs to a different order".into()));
+        }
+        return Ok(Receipt { id: row.id, title: row.title, kind: row.kind });
+    }
+    register(state, request)
+}
+
 fn update(
     state: &Path,
     entity: &str,
@@ -767,24 +802,7 @@ fn update(
     change: impl FnOnce(&mut Assignment),
 ) -> Result<Assignment, AssignmentError> {
     // Atomic replacement alone cannot prevent two writers losing one another's updates.
-    #[cfg(unix)]
-    let _lock = {
-        use std::os::{fd::AsRawFd, unix::fs::OpenOptionsExt};
-        let root = folder(state, entity, thread)?;
-        let file = std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(false)
-            .mode(0o600).custom_flags(libc::O_NOFOLLOW).open(root.join(".updates.lock"))
-            .map_err(|e| AssignmentError(e.to_string()))?;
-        // SAFETY: the descriptor belongs to this guard and closes after the update.
-        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } != 0 {
-            return Err(AssignmentError(std::io::Error::last_os_error().to_string()));
-        }
-        file
-    };
-    #[cfg(not(unix))]
-    let _lock = {
-        static UPDATES: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        UPDATES.lock().unwrap()
-    };
+    let _lock = lock_updates(state, entity, thread)?;
     let mut record = read(state, entity, thread, id)?;
     change(&mut record);
     write(&folder(state, entity, thread)?.join(format!("{id}.json")), &record)?;

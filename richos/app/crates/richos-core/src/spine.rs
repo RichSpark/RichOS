@@ -197,6 +197,7 @@ struct Delivery {
     response:Option<crate::cognition::PendingReply>,
     session_id:Option<String>,
     account:Option<String>,
+    reply_linked: bool,
 }
 
 fn enqueue_delivery(delivery: &mut Delivery) -> Result<(), CognitionError> {
@@ -2395,7 +2396,7 @@ impl Spine {
         self.turn_in_progress=false;
         Ok(Delivery {turn_id:turn_id.into(),binding:binding.clone(),text:text.into(),allow_recovery,
             connection:Some(connection),retry_wait:None,internal_turn,live_turn,persist_err:None,stopped_before_prompt,preparation_failed,
-            preparation_stop,preparation,session_id,lease,usage:None,response:None,account:None})
+            preparation_stop,preparation,session_id,lease,usage:None,response:None,account:None,reply_linked:false})
     }
 
     fn capture_delivery_item(&mut self,delivery:&mut Delivery,item:TurnItem) {
@@ -2446,6 +2447,9 @@ impl Spine {
                 }
                 TurnItem::Machinery(record) => {
                     let record = record.stamp(thread_id, Some(turn_id), internal_turn);
+                    if record.title == "mcp__richos_continuity__link-reply" && record.parent_tool_use_id.is_none() {
+                        delivery.reply_linked = true;
+                    }
                     // THE ONE machinery record that is read rather than merely retained.
                     // Everything else in this family is routed for later interpretation;
                     // this pair decides when Rich rotates, so it is consumed here, live.
@@ -2495,6 +2499,19 @@ impl Spine {
                     }
                 }
             }
+    }
+
+    fn close_delivered_continuity_reply(&self, delivery: &Delivery) {
+        if !delivery.reply_linked { return; }
+        let bridge = delivery.lease.lock().ok().and_then(|lease| lease.as_ref()?.continuity_bridge());
+        let turn = self.ledger.turn(&delivery.turn_id).cloned();
+        if let (Some(bridge), Some(turn)) = (bridge, turn) {
+            std::thread::spawn(move || {
+                if let Err(error) = bridge.delivered_reply(&turn) {
+                    eprintln!("[richos] ECS reply remains owed: {error}");
+                }
+            });
+        }
     }
 
     fn finish_delivery(&mut self,mut delivery:Delivery,stop:Result<String,CognitionError>)->Result<(),SpineError> {
@@ -2625,6 +2642,7 @@ impl Spine {
                 self.finish_stopped_turn(turn_id, binding, &claim)?;
             } else {
                 self.finish_completed_turn_the_stop_missed(turn_id, binding, &claim, lease_reported.unwrap())?;
+                self.close_delivered_continuity_reply(&delivery);
             }
             // Native marks a stopped production connection closed. The normal opener
             // reaps and resumes it on the next explicit input without clearing newer handles.
@@ -2699,6 +2717,7 @@ impl Spine {
                 // and it is still `null` for a turn whose start was never recorded.
                 self.emit_live(self.turn_status_event(binding, turn_id, TurnStatus::Completed, None));
                 self.emit_live(self.thread_summary_event(binding, turn_id, ThreadStatus::Idle));
+                self.close_delivered_continuity_reply(&delivery);
                 Ok(())
             }
             Err(e) => {

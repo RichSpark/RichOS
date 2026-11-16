@@ -188,6 +188,12 @@ pub(crate) fn observe_work_status(scope:&StatusToolScope,facts:Value)->Result<()
     append(scope,"rich",&Message {bridge:None,handoff:false,from:"work-status".into(),text:facts.to_string(),instruction:None,work:None})
 }
 
+/// Verified waiting-work evidence uses the receiving conversation's ordinary inbox.
+pub fn observe_waiting(scope: &StatusToolScope, facts: Value, instruction: Option<crate::ecs::UserInstruction>) -> Result<(), String> {
+    append(scope, "rich", &Message { bridge: None, handoff: false, from: "ecs-waiting".into(),
+        text: facts.to_string(), instruction, work: None })
+}
+
 /// One of Stu's workers, or an automatic turn of his own, met an overload: its wait is over, or
 /// its retries are used up (`work_host.rs` observe_worker, observe_automatic_turn). A host
 /// observation, like the stall watch's.
@@ -318,10 +324,15 @@ fn find_handoff(reader:&mut impl BufRead,instruction:&crate::ecs::UserInstructio
     })
 }
 
-fn work_failure_input(message:&Message)->Option<String> {
-    if message.from!="work-status" {return None}
-    let facts:Value=serde_json::from_str(&message.text).ok()?;
-    (facts["event"]=="upstream_turn").then(||facts["input_id"].as_str().map(str::to_string)).flatten()
+fn reported_input(message: &Message) -> Option<(&str, String)> {
+    let expected = match message.from.as_str() {
+        "work-status" => "upstream_turn",
+        "ecs-waiting" => "waiting_condition",
+        _ => return None,
+    };
+    let facts: Value = serde_json::from_str(&message.text).ok()?;
+    if facts["event"] != expected { return None; }
+    Some((expected, facts["input_id"].as_str()?.to_owned()))
 }
 
 fn find_record(reader:&mut impl BufRead,mut matches:impl FnMut(&Message)->Result<bool,String>)->Result<Option<(Message,u64)>,String> {
@@ -434,9 +445,9 @@ fn append_record(scope:&StatusToolScope,role:&str,message:&mut Message,unique:bo
     }
     // Retries and restarts report one failed logical input, using the inbox itself.
     // Scan acknowledged records too: Rich having read a failure cannot make it new.
-    if let Some(input)=work_failure_input(message) {
+    if let Some(input)=reported_input(message) {
         file.seek(SeekFrom::Start(0)).map_err(|e|e.to_string())?;
-        if let Some((_,through))=find_record(&mut BufReader::new(&mut file),|saved|Ok(work_failure_input(saved).as_ref()==Some(&input)))? {
+        if let Some((_,through))=find_record(&mut BufReader::new(&mut file),|saved|Ok(reported_input(saved).as_ref()==Some(&input)))? {
             return Ok((through,true))
         }
     }

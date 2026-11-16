@@ -4868,6 +4868,10 @@ impl Cognition for NativeCognition {
         Ok(())
     }
 
+    fn continuity_bridge(&self) -> Option<crate::ecs::EcsBridge> {
+        self.continuity.as_ref().map(|(bridge, _)| bridge.clone())
+    }
+
     fn requires_thread_isolation(&self) -> bool { self.continuity.is_some() }
     fn worker_status(&self) -> Option<crate::worker_status::WorkerStatusView> {
         self.client.cancel_handle().worker_status()

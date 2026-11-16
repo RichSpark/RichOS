@@ -60,6 +60,7 @@ ITEM_FIELDS = {
     "beneficiary": "beneficiary", "next": "next_action", "next_action": "next_action",
     "due": "due_at", "due_at": "due_at", "rank": "rank", "status": "status",
     "visibility": "visibility", "evidence": "evidence_ref", "evidence_ref": "evidence_ref",
+    "condition_json": "condition_json", "reply_owed": "reply_owed",
 }
 DELEGATED_FIELDS = {"task", "title", "owner", "authority"}
 CORRECTION_FIELDS = {
@@ -247,6 +248,8 @@ def _item_payload(fields: dict[str, str], *, opening: bool) -> dict[str, Any]:
         if column is None:
             raise ValidationError(f"unknown item field {key!r}")
         payload[column] = value
+    if not opening and ({"condition_json", "reply_owed"} & payload.keys()):
+        raise ValidationError("a waiting condition keeps its original order; replace it with authorization")
     if "rank" in payload:
         payload["rank"] = _int_or_none(payload["rank"], "rank")
     if opening:

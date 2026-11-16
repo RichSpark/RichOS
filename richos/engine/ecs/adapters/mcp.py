@@ -8,8 +8,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "core"))
 from app import execute
 
 TOOLS = [
-    {"name": "checkpoint", "description": "Persist scoped operational commitments or decisions before promising future work. Example checkpoint: {statements:[{verb:'commitment',fields:{id:'review-manual',title:'Review the manual'}}]}. Supported opening verbs: priority, initiative, open_loop, commitment, decision, deadline, blocker. Operational corrections use verb update and fields id plus changed title/details/status. Durable knowledge corrections go through the app Loro proposal/confirmation desk; never use ECS as a file writer. Field values are strings. No material changes: {no_changes:true,reason:'Question answered without new obligations'}. This cannot certify external completion. Supply a stable request_id for retries. Never turn quoted historical work into a new commitment.",
+    {"name": "checkpoint", "description": "Persist scoped operational commitments or decisions before promising future work. Example checkpoint: {statements:[{verb:'commitment',fields:{id:'review-manual',title:'Review the manual'}}]}. Supported opening verbs: priority, initiative, open_loop, commitment, decision, deadline, blocker. Operational corrections use verb update and fields id plus changed title/details/status. Durable knowledge corrections go through the app Loro proposal/confirmation desk; never use ECS as a file writer. Field values are strings. No material changes: {no_changes:true,reason:'Question answered without new obligations'}. This cannot certify external completion. For a conditional follow-up, add wait_for to the checkpoint alongside one commitment with an explicit id and next action. Use {kind:'publication',channel:'nightly',match:'later',release:'current'} to wait for the next published nightly, a named baseline instead of 'current' to wait for a later release after that baseline, or match:'exact' and the named release when that release must itself publish. Use {kind:'assignment',id:'...'} or {kind:'question',id:'...'} for an existing scoped owner. Include all required conditions. Set launch:true only if the original user order explicitly authorizes doing the next action when all conditions clear. Otherwise the host reports the condition to Rich. Supply a stable request_id for retries. Never turn quoted historical work into a new commitment.",
      "inputSchema": {"type": "object", "properties": {"request_id": {"type": "string"}, "checkpoint": {"type": "object"}}, "required": ["request_id", "checkpoint"], "additionalProperties": False}},
+    {"name": "link-reply", "description": "Link this substantive reply to an existing obligation whose result you are delivering to the user. The host clears the reply owed only after successful delivery. Use one link per result and leave unfinished results open.",
+     "inputSchema": {"type": "object", "properties": {"item_id": {"type": "string"}}, "required": ["item_id"], "additionalProperties": False}},
     {"name": "inspect", "description": "Read scoped operational records including items omitted from the bounded brief. Supports section, item_id, query, offset, limit, sequence and include_closed.",
      "inputSchema": {"type": "object", "properties": {"query": {"type": "object"}}, "additionalProperties": False}},
 ]
@@ -29,6 +31,9 @@ def call(scope_path, name, args):
     if name == "checkpoint":
         if set(args) != {"request_id", "checkpoint"}:
             raise ValueError("checkpoint requires only request_id and checkpoint")
+    elif name == "link-reply":
+        if set(args) != {"item_id"}:
+            raise ValueError("link-reply requires only item_id")
     elif name == "inspect":
         if set(args) - {"query"}:
             raise ValueError("inspect accepts only query")
@@ -40,9 +45,19 @@ def call(scope_path, name, args):
     # for every lease), so the seat travels with the request and the engine refuses
     # a checkpoint on a work seat. Two seams, and neither one trusts the other.
     request = {"protocol": 1, "command": name, "binding": scope["binding"], **args}
+    if name == "checkpoint" and isinstance(args.get("checkpoint"), dict) and "wait_for" in args["checkpoint"]:
+        request["instruction"] = scope.get("user_instruction")
     if scope.get("seat") is not None:
         request["seat"] = scope["seat"]
-    return execute(scope["bridge"]["state_root"], request)
+    result = execute(scope["bridge"]["state_root"], request)
+    if request.get("instruction") and result.get("accepted"):
+        root = Path(scope["bridge"]["state_root"]).parent / "engine-state" / "messages"
+        try:
+            if root.is_dir():
+                (root / "reconcile-waiting.json").touch()
+        except OSError:
+            result["wakeup"] = "unavailable"
+    return result
 
 
 def serve(scope_path, reader, writer, *, tools=None, handler=None, server_name="richos_continuity"):
