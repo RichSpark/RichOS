@@ -3820,17 +3820,12 @@ fn main() {
                 _ => {}
             }
 
-            // Apply any stop request that outlived the process. The window is one line
-            // wide — request fsync'd, process dies, terminal event never written — and
-            // without this the turn is `in_flight` forever and crash-replay would re-run
-            // work the CEO explicitly stopped.
+            // Restore durable Stops before any recovered message is submitted. Reconciliation
+            // queues accepted inputs locally. A provider reply must never hold the window's thread.
+            spine.detach_conversation_io();
             if let Err(e) = spine.reconcile_intake() {
                 eprintln!("[richos] intake reconciliation at boot: {e}");
             }
-            // What it ran — a phone message that outlived the last process — ended here, so
-            // the work those turns wrote down starts here (`adopt_at_the_turn_boundary`). The
-            // recovery above has already settled every assignment the LAST process left, so
-            // only what these turns registered can be adopted (spec §6.3: nothing restarts).
             adopt_at_the_turn_boundary(&mut spine, &work);
 
             // THE CORRECTION DESK (open-items 3.5). Its log sits beside the ledger and the
@@ -3982,7 +3977,6 @@ fn main() {
                 }
             };
 
-            spine.detach_conversation_io();
             app.manage(AppState {
                 swearmeter: swearmeter_host::Service::new(app.handle().clone(), spine.reader(), control.clone(), card_counts, card_source_seen),
                 quota: quota.clone(),
@@ -4051,6 +4045,8 @@ fn main() {
             rich_files_host::start(app.handle().clone());
             #[cfg(target_os = "macos")]
             {app.manage(Arc::new(writing_host::Host::default()));cleaner_host::start(app.handle())?;cleaner_service::register(app.handle())?;}
+            let intake_app = app.handle().clone();
+            first_frame::after_page(app.handle(), move || start_incoming_drain(intake_app));
             git_name_host::start(app.handle().clone());
             peer_messages::start(app.handle().clone())?;
             // After an update, this build's own engine, installed by the app itself (the flag
@@ -5082,13 +5078,18 @@ fn take_work_notices(
     Ok(Vec::new())
 }
 
+fn start_incoming_drain(app: AppHandle) {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        if let Err(error) = drain_incoming_messages(&state.spine, &state.work) {
+            eprintln!("[richos] incoming message: {error}");
+        }
+    });
+}
+
 /// All asynchronous incoming messages use the same turn, stream and phone delivery.
 fn dispatch_incoming_messages(app: &AppHandle, _thread_id: &str) -> Result<(), String> {
-    let app=app.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let state=app.state::<AppState>();
-        if let Err(error)=drain_incoming_messages(&state.spine,&state.work) { eprintln!("[richos] incoming message: {error}"); }
-    });
+    start_incoming_drain(app.clone());
     Ok(())
 }
 
