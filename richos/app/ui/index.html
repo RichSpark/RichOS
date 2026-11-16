@@ -47,6 +47,10 @@
     <!-- Make a video, anywhere in the app (round 79): the button in the heading of Settings, its
          two choices, the count, the red Stop beside the settings button and the sheet. -->
     <link rel="stylesheet" href="video-anywhere.css" />
+    <!-- The context meter (round 80): the two readouts in each chat's header and their card. -->
+    <link rel="stylesheet" href="context-meter.css" />
+    <!-- Keep chat alive (rounds 81 to 83): the checkbox in each chat's header, beside the meter. -->
+    <link rel="stylesheet" href="keep-alive.css" />
     <!-- THE MARK'S GOLD, PER THEME.
 
          The wordmark below is two-tone by the approved treatment (round-8.1/v0 for dark,
@@ -1739,6 +1743,12 @@
     <!-- Make a video, anywhere in the app (round 79): the button in the heading of Settings. AFTER
          home-video.js, whose microphone, icons and save window it uses, and settings-button.js. -->
     <script src="video-anywhere.js"></script>
+    <!-- The context meter (round 80): its switch's host and the two readouts in each chat. AFTER
+         settings-button.js and output-panel.js, whose Output button says a chat is open. -->
+    <script src="context-meter.js"></script>
+    <!-- Keep chat alive (rounds 81 to 83): the checkbox and its info icon in every chat's header.
+         AFTER context-meter.js, whose meter it makes room for. -->
+    <script src="keep-alive.js"></script>
     <!-- THE SPECKLED GROUND (CEO, 2026-09-29): the design system's engine, copied byte for byte
          from richos-hq design/system/, and the app's one call to it. LAST, and it builds nothing
          until an idle moment after `load`, while the curtain and the home screen still cover the

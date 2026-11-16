@@ -90,6 +90,9 @@
 #   US1-US4 usage-shape: a get_usage answer RichOS's reader gets no figures from (rate_limits
 #           null) exits 1 naming the rule; a readable one exits 0; no binary and a
 #           claude that never answers are refused, against a scripted claude
+#   CF1-CF4 context-figure-probe: a claude whose own context figure equals its last request's
+#           exits 0 with the three turns' rows; one whose figure is its turn's sum exits 1; one
+#           that gives no figure and a missing binary exit 2, against a scripted claude
 #   LR1-LR5 lease-retention-probe: a lease that keeps everything while the default control
 #           sweeps exits 0; a lease that deletes exits 1; no sweep anywhere exits 2; no binary
 #           is refused; a lease start that dies before system/init exits 2, against a
@@ -103,7 +106,7 @@
 #
 # run-tests: no-host-screen: its only capture/keystroke references are the strings it asserts those two tools REFUSE to act on, and its frames are committed PNG fixtures
 # run-tests: inputs richos/app/scripts/qa.test.sh richos/app/scripts/qa richos/mobile/conformance/vectors/fingerprint.json richos/mobile/native-ios/UITests/PhysicalDeviceTests.swift
-# run-tests: covers richos/app/scripts/qa/usage-shape.sh richos/app/scripts/qa/lease-retention-probe.py richos/app/scripts/qa/stop-probe.py richos/app/scripts/qa/pair-words.py richos/app/scripts/qa/contrast.py richos/app/scripts/qa/frame.py richos/app/scripts/qa/lib/qaimg.py richos/app/scripts/qa/lib/qaocr.py richos/app/scripts/qa/ocr-find.py richos/app/scripts/qa/ocr-find.sh richos/app/scripts/qa/ocr-gate.sh richos/app/scripts/qa/ocr-read.py richos/app/scripts/qa/ocr-watch.sh richos/app/scripts/qa/redact.py richos/app/scripts/qa/timeline.py richos/app/scripts/qa/timeline-bounds.test.py richos/app/scripts/qa/wait-for.sh richos/app/scripts/qa/phone-client.mjs richos/app/scripts/qa/flake-rate.sh richos/app/scripts/qa/phone-android.py richos/app/scripts/qa/lab-ledger.py richos/app/scripts/qa/lab-pause.py richos/app/scripts/qa/step-mark.py richos/app/scripts/qa/ledger-timeline.py richos/app/scripts/qa/native-transcript.py richos/app/scripts/qa/hidden-send-try.py richos/app/scripts/qa/tunnel-requests.py richos/app/scripts/qa/fixtures/make-fixtures.py richos/app/scripts/qa/phone-ios.py richos/app/scripts/qa/stall-run.py richos/app/scripts/qa/under-load.py richos/app/scripts/qa/busy-sample.py richos/app/scripts/qa/lib/busy-sample/sitecustomize.py richos/app/scripts/qa/slow-shutdown.py richos/app/scripts/qa/ocr-cache.test.py richos/app/scripts/qa/child-lifetime.test.py richos/app/scripts/qa/trust-reading.test.py richos/app/scripts/qa/crash-reading.test.py richos/app/scripts/qa/device-launch.test.py richos/app/scripts/qa/lab-pause.test.py richos/app/scripts/qa/tunnel-requests.test.py richos/app/scripts/qa/wait-turn.py richos/app/scripts/qa/wait-turn.test.py richos/app/scripts/qa/rich-reply-probe.py richos/app/scripts/qa/rich-reply-probe.test.py richos/app/scripts/qa/routing-probe.py richos/app/scripts/qa/routing-probe.test.py richos/app/scripts/qa/phone-ios-run.test.py richos/app/scripts/qa/speech-wav.py richos/mobile/native-ios/UITests/PhysicalDeviceTests.swift
+# run-tests: covers richos/app/scripts/qa/usage-shape.sh richos/app/scripts/qa/context-figure-probe.py richos/app/scripts/qa/lease-retention-probe.py richos/app/scripts/qa/stop-probe.py richos/app/scripts/qa/pair-words.py richos/app/scripts/qa/contrast.py richos/app/scripts/qa/frame.py richos/app/scripts/qa/lib/qaimg.py richos/app/scripts/qa/lib/qaocr.py richos/app/scripts/qa/ocr-find.py richos/app/scripts/qa/ocr-find.sh richos/app/scripts/qa/ocr-gate.sh richos/app/scripts/qa/ocr-read.py richos/app/scripts/qa/ocr-watch.sh richos/app/scripts/qa/redact.py richos/app/scripts/qa/timeline.py richos/app/scripts/qa/timeline-bounds.test.py richos/app/scripts/qa/wait-for.sh richos/app/scripts/qa/phone-client.mjs richos/app/scripts/qa/flake-rate.sh richos/app/scripts/qa/phone-android.py richos/app/scripts/qa/lab-ledger.py richos/app/scripts/qa/lab-pause.py richos/app/scripts/qa/step-mark.py richos/app/scripts/qa/ledger-timeline.py richos/app/scripts/qa/native-transcript.py richos/app/scripts/qa/hidden-send-try.py richos/app/scripts/qa/tunnel-requests.py richos/app/scripts/qa/fixtures/make-fixtures.py richos/app/scripts/qa/phone-ios.py richos/app/scripts/qa/stall-run.py richos/app/scripts/qa/under-load.py richos/app/scripts/qa/busy-sample.py richos/app/scripts/qa/lib/busy-sample/sitecustomize.py richos/app/scripts/qa/slow-shutdown.py richos/app/scripts/qa/ocr-cache.test.py richos/app/scripts/qa/child-lifetime.test.py richos/app/scripts/qa/trust-reading.test.py richos/app/scripts/qa/crash-reading.test.py richos/app/scripts/qa/device-launch.test.py richos/app/scripts/qa/lab-pause.test.py richos/app/scripts/qa/tunnel-requests.test.py richos/app/scripts/qa/wait-turn.py richos/app/scripts/qa/wait-turn.test.py richos/app/scripts/qa/rich-reply-probe.py richos/app/scripts/qa/rich-reply-probe.test.py richos/app/scripts/qa/routing-probe.py richos/app/scripts/qa/routing-probe.test.py richos/app/scripts/qa/phone-ios-run.test.py richos/app/scripts/qa/speech-wav.py richos/mobile/native-ios/UITests/PhysicalDeviceTests.swift
 set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -152,7 +155,7 @@ python3 -c 'import PIL' >/dev/null 2>&1 && HAVE_PIL=1
 echo ""
 echo "=== H. every tool answers for itself ==="
 for t in contrast.py frame.py redact.py timeline.py ocr-gate.sh ocr-find.sh \
-         ocr-watch.sh wait-for.sh phone-client.mjs flake-rate.sh phone-android.py lab-ledger.py lab-pause.py step-mark.py ledger-timeline.py wait-turn.py rich-reply-probe.py routing-probe.py native-transcript.py hidden-send-try.py phone-ios.py pair-words.py usage-shape.sh lease-retention-probe.py stop-probe.py speech-wav.py fixtures/make-fixtures.py; do
+         ocr-watch.sh wait-for.sh phone-client.mjs flake-rate.sh phone-android.py lab-ledger.py lab-pause.py step-mark.py ledger-timeline.py wait-turn.py rich-reply-probe.py routing-probe.py native-transcript.py hidden-send-try.py phone-ios.py pair-words.py usage-shape.sh context-figure-probe.py lease-retention-probe.py stop-probe.py speech-wav.py fixtures/make-fixtures.py; do
   if [ ! -x "$QA/$t" ]; then
     bad "H $t is executable" "not present or not executable at $QA/$t"
     continue
@@ -1680,6 +1683,43 @@ run "$US" --claude "$TMP/no-such-claude" --wait 2
 expect "US3 no claude binary is refused, exit 2" 2 "no claude to ask"
 export FAKE_SILENT=1; run "$US" --claude "$TMP/fake-usage-claude" --wait 2; unset FAKE_SILENT FAKE_USAGE
 expect "US4 a claude that never answers get_usage is refused, exit 2" 2 "no get_usage response"
+
+echo "=== CF. context-figure-probe: which figure on the stream is a conversation's context size? ==="
+CF="$QA/context-figure-probe.py"
+# A scripted claude: every turn is two model requests (30,000 then 32,000 tokens of context) and
+# a result that adds them up (62,000). It answers get_context_usage with the last request's
+# figure, with the turn's sum when FAKE_CONTEXT=sum, or not at all when FAKE_CONTEXT=silent.
+cat > "$TMP/fake-context-claude" <<'FAKE'
+#!/usr/bin/env python3
+import json, os, sys
+def send(v): print(json.dumps(v), flush=True)
+def usage(read): return {"input_tokens": 3, "cache_read_input_tokens": read, "cache_creation_input_tokens": 997, "output_tokens": 5}
+for line in sys.stdin:
+    v = json.loads(line)
+    request = v.get("request") or {}
+    if request.get("subtype") == "initialize":
+        send({"type": "control_response", "response": {"subtype": "success", "request_id": v["request_id"], "response": {}}})
+    elif request.get("subtype") == "get_context_usage":
+        said = os.environ.get("FAKE_CONTEXT", "last")
+        if said != "silent":
+            send({"type": "control_response", "response": {"subtype": "success", "request_id": v["request_id"],
+                  "response": {"totalTokens": 62000 if said == "sum" else 32000}}})
+    elif v.get("type") == "user":
+        for read in (29000, 31000):
+            send({"type": "stream_event", "parent_tool_use_id": None, "event": {"type": "message_start", "message": {}}})
+            send({"type": "stream_event", "parent_tool_use_id": None, "event": {"type": "message_delta", "usage": usage(read)}})
+        send({"type": "result", "subtype": "success", "usage": {"input_tokens": 6, "cache_read_input_tokens": 60000, "cache_creation_input_tokens": 1994},
+              "modelUsage": {"scripted": {"contextWindow": 1000000}}})
+FAKE
+chmod 755 "$TMP/fake-context-claude"
+run "$CF" --claude "$TMP/fake-context-claude" --cwd "$TMP/cf-cwd" --words 5 --wait 5
+expect "CF1 a claude whose own figure is its last request's: exit 0, the two-request turn's row" 0 "$(printf 'tool\t2\t32000\t62000\t32000\t1000000')"
+export FAKE_CONTEXT=sum; run "$CF" --claude "$TMP/fake-context-claude" --cwd "$TMP/cf-cwd" --words 5 --wait 5
+expect "CF2 a claude whose own figure is the turn's sum: exit 1, said as NOT the size" 1 "verdict: the lead's last request is NOT the context size Claude Code reports"
+export FAKE_CONTEXT=silent; run "$CF" --claude "$TMP/fake-context-claude" --cwd "$TMP/cf-cwd" --words 5 --wait 2; unset FAKE_CONTEXT
+expect "CF3 a claude that gives no context figure: exit 2, nothing to compare" 2 "verdict: no figure to compare"
+run "$CF" --claude "$TMP/no-such-claude" --cwd "$TMP/cf-cwd"
+expect "CF4 no claude binary is refused, exit 2" 2 "no claude to ask"
 
 echo "=== LR. lease-retention-probe: does a lease-shaped claude start delete old transcripts? ==="
 LR="$QA/lease-retention-probe.py"

@@ -59,7 +59,15 @@ function runFixture(mode, ledger, extra) {
   delete env.RICHOS_TEST_RESULTS_ROOT; // the runner's folder for THIS check is not the child's
   if (ledger) env.RICHOS_UI_TESTS_LEDGER = ledger;
   Object.assign(env, extra || {});
-  const r = spawnSync(process.execPath, [FIXTURE, mode], { env, encoding: "utf8", timeout: 60000 });
+  // `--no-concurrent-recompilation`: the child lives a fifth of a second and ends in
+  // `process.exit()`. When the checkout has a hundred or more changed pictures (a commit or a
+  // merge that rewrites them), its two tracked-tree snapshots read enough bytes to reach V8's
+  // collection limit and get hot enough to be compiled on a worker thread just as it exits.
+  // Node 26.10.0 then hangs: the worker waits for a collection only the main thread can run,
+  // and the main thread waits in exit to join the worker (sampled 2026-11-16, every second
+  // run, each one a 60-second wait and a `null` exit code here). Compiled on the main thread,
+  // there is no worker to join.
+  const r = spawnSync(process.execPath, ["--no-concurrent-recompilation", FIXTURE, mode], { env, encoding: "utf8", timeout: 60000 });
   return { code: r.status, out: (r.stdout || "") + (r.stderr || "") };
 }
 

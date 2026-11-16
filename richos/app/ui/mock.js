@@ -229,7 +229,8 @@
     // `rich_model`/`stu_model` stand in for config.rs's §119 pair: absent reads as Opus.
     // `oxford_comma` stands in for config.rs's Oxford comma setting: absent reads as off (CEO, 2026-10-19).
     // `resources_view` stands in for config.rs's resources square view: absent reads as Ink (round 47).
-    const fresh = { theme: "system", font_scale: 100, user_name: null, rich_model: "opus", stu_model: "opus", oxford_comma: false, show_swearmeter: false, resources_view: "ink" };
+    // `show_context_meter` stands in for config.rs's context meter switch: absent reads as off (CEO, 2026-11-16).
+    const fresh = { theme: "system", font_scale: 100, user_name: null, rich_model: "opus", stu_model: "opus", oxford_comma: false, show_swearmeter: false, show_context_meter: false, resources_view: "ink" };
     try {
       const raw = window.localStorage.getItem(MOCK_CONFIG_KEY);
       if (!raw) return fresh;
@@ -242,6 +243,7 @@
         stu_model: parsed.stu_model === "fable" ? "fable" : "opus",
         oxford_comma: parsed.oxford_comma === true,
         show_swearmeter: parsed.show_swearmeter === true,
+        show_context_meter: parsed.show_context_meter === true,
         resources_view: parsed.resources_view === "readout" ? "readout" : "ink",
       };
     } catch (e) {
@@ -485,7 +487,30 @@
     pinned_threads: [],
     archived_threads: [],
     renamed_threads: {},
+    // nav.rs `keep_alive_threads`: the chats whose "Keep chat alive" box is checked. None at first.
+    keep_alive_threads: [],
   };
+
+  // THE CONTEXT METER'S FIGURES (chat_cache.rs's stand-in): each chat's two sessions, as the
+  // tokens in the context at the session's last request and the model's window. Made up here;
+  // "general" carries the CEO's own example, 50% 500k/1000k. A chat not listed has made no
+  // request yet. A reply grows Rich's figure, the way a turn does.
+  const MOCK_WINDOW = 1000000;
+  const contextFigures = {
+    general: [500000, 212000],
+    acme: [318400, 644900],
+    hiring: [87200, 41300],
+  };
+  function contextOf(threadId) {
+    const f = contextFigures[threadId];
+    const side = (used) => (f ? { used, size: MOCK_WINDOW } : { used: null, size: null });
+    return { threadId, rich: side(f ? f[0] : null), team: side(f ? f[1] : null) };
+  }
+  function growContext(threadId, by) {
+    const f = contextFigures[threadId] || (contextFigures[threadId] = [11600, 0]);
+    f[0] = Math.min(MOCK_WINDOW, f[0] + by);
+    emit("rich://context-meter", contextOf(threadId));
+  }
 
   // THE OUTPUT PANEL'S SPLIT WIDTH SURVIVES A RELOAD, as `navigation.json` survives a relaunch
   // (output side-panel PRD §9.5). Its own key, beside the sidebar's below; "open completely" is
@@ -2339,6 +2364,7 @@
         emit("rich://message-completed", Object.assign({}, fence, {
           messageId, phase: "unknown", text, visibility: "ceo", at: endedAt,
         }));
+        growContext(threadId, 3800 + Math.round(text.length * 0.3));
         emit("rich://turn-completed", { threadId, turnId, stopReason: "end_turn", at: endedAt });
         emit("rich://turn-status", Object.assign({}, fence, {
           status: "completed", startedAt, activeDurationMs: endedAt - startedAt, visibility: "ceo", at: endedAt,
@@ -3692,6 +3718,20 @@
           return null;
         case "retry_swearmeter":
           return { detector_version: 1, count: 0, unknown_card_inputs: 0, unknown_message_inputs: 0, incomplete_history: false, available: true, revision: 1, periods: { last_30_days: 0, months: [], undated: 0 } };
+        // The context meter (round 80) and Keep chat alive (rounds 81 to 83).
+        case "get_context_meter":
+          return mockConfig.show_context_meter;
+        case "set_context_meter":
+          mockConfig.show_context_meter = args.show === true;
+          persistMockConfig();
+          return null;
+        case "chat_context":
+          return contextOf(args.threadId ?? args.thread_id);
+        case "get_keep_chat_alive":
+          return navPrefs.keep_alive_threads.includes(args.threadId ?? args.thread_id);
+        case "set_keep_chat_alive":
+          setMembership(navPrefs.keep_alive_threads, args.threadId ?? args.thread_id, !!args.kept);
+          return null;
         case "get_appearance":
           return { theme: mockConfig.theme, font_scale: mockConfig.font_scale, oxford_comma: mockConfig.oxford_comma };
         case "set_oxford_comma":

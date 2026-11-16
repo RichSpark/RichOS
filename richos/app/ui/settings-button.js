@@ -32,6 +32,7 @@ window.RichSettings = (function () {
   var durable = null; // { saveTheme(pref), saveScale(pct) }
   var techy = null; // { read(), write(on) }
   var swearmeter = null;
+  var contextMeter = null; // { read(), write(on) }: the context meter in each chat (CEO, 2026-11-16)
   var oxford = null; // { read(), write(on) }: the Oxford comma in what Claude writes (CEO, 2026-10-19)
   var bug = null; // { open() } — what "Bust a bug" actually opens, when that exists
   var updates = null; // { render(container), onOpen() } — the update surface fills its own row
@@ -258,6 +259,26 @@ window.RichSettings = (function () {
     hint.textContent = "Counts matching words locally in your submitted text, voice transcripts and typed card answers, including quoted text. Counting continues while hidden.";
     block.appendChild(hint);
     input.addEventListener("change", function () { swearmeter.write(input.checked); });
+    return block;
+  }
+
+  // THE CONTEXT METER (CEO, 2026-11-16, round 80): "a "context meter" switch (somewhere at the
+  // bottom of the settings, off by default)". The last setting of this column, under Show
+  // SwearMeter; `context-meter.js` is its host and draws the meter itself.
+  function buildContextMeter() {
+    var block = elem("div", "", { id: "set-ctxmeter-block" });
+    var row = elem("div", "set-row");
+    var label = elem("label", "set-name", { for: "set-ctxmeter" });
+    label.textContent = "Context meter";
+    var input = elem("input", "set-switch", { type: "checkbox", id: "set-ctxmeter", "aria-describedby": "ctxmeter-hint" });
+    row.appendChild(label);
+    row.appendChild(input);
+    block.appendChild(row);
+    var hint = elem("p", "popover-hint", { id: "ctxmeter-hint" });
+    hint.textContent = "Shows how full Rich’s context window is at the top of each chat, for when he talks with you and when he directs your team.";
+    block.appendChild(hint);
+    input.checked = !!contextMeter.read();
+    input.addEventListener("change", function () { contextMeter.write(input.checked); });
     return block;
   }
 
@@ -560,6 +581,8 @@ window.RichSettings = (function () {
     }
     // Keep existing storage choices and their removal feedback in their original positions.
     if (swearmeter) { look.push(divider()); look.push(buildSwearMeter()); }
+    // The context meter: the bottom of the column, where the switches that show something extra are.
+    if (contextMeter) { look.push(divider()); look.push(buildContextMeter()); }
     addColumn(cols, "set-group-look", "How it looks", look);
 
     // ---- COLUMN 2: working with Rich ------------------------------------------------------
@@ -794,6 +817,8 @@ window.RichSettings = (function () {
       if (oxLabel) oxLabel.textContent = oxfordLabel(ox.checked);
     }
     if (swearmeter) swearmeter.paint();
+    var ctx = menuEl.querySelector("#set-ctxmeter");
+    if (ctx && contextMeter) ctx.checked = !!contextMeter.read();
     var quotaRow = menuEl.querySelector("#set-quota-open");
     if (quotaRow) { quotaRow.hidden = !(techy && techy.read()); if (quota.paint) quota.paint(); }
     if (accounts && accounts.paint && menuEl.querySelector("#set-accounts-open")) accounts.paint();
@@ -1174,6 +1199,13 @@ window.RichSettings = (function () {
      *  (the opening screen) carries no switch it cannot save. */
     registerSwearMeter: function (host) {
       swearmeter = host;
+      rebuild();
+    },
+
+    /** THE CONTEXT METER (CEO, 2026-11-16): `host.read()` is whether each chat shows it,
+     *  `host.write(on)` saves the choice. Registering is what makes the row exist. */
+    registerContextMeter: function (host) {
+      contextMeter = host || null;
       rebuild();
     },
 

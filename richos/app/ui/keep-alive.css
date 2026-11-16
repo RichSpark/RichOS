@@ -1,0 +1,179 @@
+/* KEEP CHAT ALIVE (CEO, 2026-11-16; rounds 81 to 83). The checkbox in every chat's header and its ⓘ.
+   `keep-alive.js` builds it. Everything is the app's own: the checkbox is the house checkbox
+   (`.srch-check`, the search panel's: indicator-grade border, gold when checked, the label going to
+   ink and 600), the ⓘ and its words are Settings' (`.cx-info`, `.cx-tip`, the Codex review row's).
+   This file only places them in the header and adds the small motions.
+
+   Text is 16px (§15: anything meant to be read). Ratios are measured in both themes by
+   `tests/keep-alive.js`. */
+
+.kca {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  height: 36px;
+  margin-left: 10px;
+  padding-left: 16px;
+  white-space: nowrap;
+}
+.kca[hidden] {
+  display: none !important;
+}
+/* A page that takes the stage (RichPass, RichFiles) is not a chat: no checkbox, as its own rule
+   takes the chat's name and Output away (style.css, `body.page-open`). The whole lead group
+   goes, so the page's own name stands exactly where it stands without this file. */
+body.page-open .kca-lead {
+  display: none !important;
+}
+/* the thin rule between the chat's name and its one control: decoration, the gap carries it */
+.kca::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 1px;
+  height: 18px;
+  margin-top: -9px;
+  background: var(--line-soft);
+}
+.kca.kca-in {
+  animation: kca-in 0.42s cubic-bezier(0.2, 0.8, 0.25, 1) both;
+}
+@keyframes kca-in {
+  from {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* The label goes to 600 when checked (the house checkbox does): a hidden bold copy holds the
+   width, so checking never nudges the ⓘ sideways. The copy is an element of its own in the
+   label (keep-alive.js), never text a stylesheet renders: that would be text on screen no
+   contrast walk can measure (contrast.js 11b). */
+.kca-check {
+  padding: 6px 4px 6px 2px;
+  border-radius: 8px;
+}
+.kca-word {
+  display: inline-grid;
+}
+.kca-hold {
+  font-weight: 600;
+  visibility: hidden;
+  height: 0;
+  overflow: hidden;
+}
+
+/* Checked: the tick draws in and one gold ring goes out from the box, once. */
+.kca.kca-ping .kca-check > input[type="checkbox"]:checked {
+  animation: kca-ring 0.9s cubic-bezier(0.2, 0.7, 0.3, 1) both;
+}
+.kca.kca-ping .kca-check > input[type="checkbox"]:checked::after {
+  animation: kca-tick 0.24s cubic-bezier(0.3, 1.4, 0.5, 1) both;
+}
+@keyframes kca-ring {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--gold) 60%, transparent);
+  }
+  100% {
+    box-shadow: 0 0 0 11px color-mix(in srgb, var(--gold) 0%, transparent);
+  }
+}
+@keyframes kca-tick {
+  from {
+    transform: rotate(45deg) scale(0.2);
+    opacity: 0;
+  }
+  to {
+    transform: rotate(45deg) scale(1);
+    opacity: 1;
+  }
+}
+
+/* The ⓘ: Settings' own, sat on the label's middle. */
+.kca-info-wrap {
+  display: inline-flex;
+}
+.kca-info {
+  vertical-align: middle;
+  margin: 0;
+}
+
+/* Its words: Settings' card, opened downward under the ⓘ, over the chat. */
+.kca-tip {
+  top: calc(100% + 8px);
+  left: 6px;
+  z-index: 40;
+  width: 380px;
+  white-space: normal;
+}
+.kca-tip .kca-tip-head {
+  margin: 0 0 6px;
+  font-size: 1rem;
+  line-height: 1.4;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+/* THE LEAD GROUP: the chat's name, then its checkbox. It is the one thing in the header's left half,
+   and it may shrink (the chat's name elides last, as the app's own crumb does). */
+.kca-lead {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+/* TOGETHER WITH THE CONTEXT METER, AND IN A NARROWER CHAT (round 82).
+   The CEO, 2026-11-16, after round 81: "the context meter doesn't look the same in round 81 as in
+   round 80." So the meter is never changed here: at every header width it takes its own form
+   (`context-meter.css`: gauges and one row from 900px inside, figures in one row from 780px, the
+   two readouts one above the other below that). Only the things around it give way, in a fixed
+   order, picked by `keep-alive.js` from what actually fits (the chat's name, the meter's figures
+   and the window all vary, so it measures instead of guessing a width):
+
+     1. one row: the chat's name, the checkbox, the meter, Output
+     2. one row without the header's Output (meter on only; the same Output stays beside the
+        message box, and ⌘⇧O, as the meter already does below 600px). At 1440 x 900 with the meter
+        on this is the header: the checkbox beside the meter, gauges and all
+     3. the checkbox under the chat's name, Output back
+     4. the checkbox under the chat's name, without the header's Output (meter on only)
+
+   Past the last step the chat's name shortens with an ellipsis, as the app's crumb already does. */
+#stage-header.kca-under .kca-lead {
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+}
+#stage-header.kca-under .kca {
+  height: 22px;
+  margin-left: -2px;
+  padding-left: 0;
+}
+#stage-header.kca-under .kca::before {
+  display: none;
+}
+#stage-header.kca-under .kca-check {
+  padding-top: 0;
+  padding-bottom: 0;
+}
+#stage-header.kca-under .scope-crumb {
+  line-height: 1.3;
+  max-width: 100%;
+}
+#stage-header.kca-noout #out-top {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .kca.kca-in,
+  .kca.kca-ping .kca-check > input[type="checkbox"]:checked,
+  .kca.kca-ping .kca-check > input[type="checkbox"]:checked::after {
+    animation: none;
+  }
+}

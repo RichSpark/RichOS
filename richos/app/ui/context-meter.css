@@ -1,0 +1,218 @@
+/* THE CONTEXT METER (CEO, 2026-11-16; round 80, carried by round 83). The two readouts in a chat's
+   header and the card their hover opens; the switch in Settings is the panel's own `.set-row` /
+   `.set-switch` / `.popover-hint` and needs nothing here. `context-meter.js` builds the meter.
+
+   A READOUT, NOT A BUTTON: no border, no plate, so it never reads as one more thing to press beside
+   Output. Text is 16px (§15: anything meant to be read). Ink and soft ink are the header's own;
+   the gauge's fill is `--gold-text`, an indicator, measured at 3:1 or better on the header in both
+   themes; its track is decoration (the text says the amount). */
+
+.ctx-meter {
+  --cm-track: color-mix(in srgb, var(--ink) 14%, transparent);
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 14px;
+  height: 36px;
+  margin-left: auto;
+  padding: 0 6px;
+  border-radius: 10px;
+  font-size: 1rem;
+  line-height: 1;
+  white-space: nowrap;
+  flex-shrink: 0;
+  cursor: default;
+  outline: none;
+}
+.ctx-meter[hidden] {
+  display: none !important;
+}
+/* A page that takes the stage (RichPass, RichFiles) is not a chat: no meter, as its own rule
+   takes the chat's name and Output away (style.css, `body.page-open`). */
+body.page-open .ctx-meter {
+  display: none !important;
+}
+.ctx-meter:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+/* After the technical-view badge (which takes the free space itself), sit beside it. */
+#techy-chip:not([hidden]) ~ .ctx-meter,
+#mn-paused-chip:not([hidden]) ~ .ctx-meter {
+  margin-left: 8px;
+}
+/* Output follows the meter instead of splitting the free space with it. */
+.ctx-meter:not([hidden]) ~ #out-top {
+  margin-left: 10px;
+}
+
+.ctx-meter.cm-in {
+  animation: cm-in 0.5s cubic-bezier(0.2, 0.8, 0.25, 1) both;
+}
+@keyframes cm-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.cm-read {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+/* A small gauge between the name and the figures: the fill is the indicator (`--gold-text`), the
+   track is decoration (the text carries the amount). */
+.cm-bar {
+  position: relative;
+  width: 34px;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--cm-track);
+  overflow: hidden;
+  flex-shrink: 0;
+}
+.cm-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 0;
+  border-radius: 3px;
+  background: var(--gold-text);
+}
+.cm-who {
+  color: var(--ink-soft);
+  font-weight: 500;
+}
+.cm-pct {
+  color: var(--ink);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  min-width: 2.6ch;
+  text-align: right;
+}
+.cm-tok {
+  color: var(--ink-soft);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.005em;
+}
+.cm-sep {
+  width: 1px;
+  height: 18px;
+  background: var(--line-soft);
+}
+
+/* The card: the exact figures, and the one sentence that says what a drop means. */
+.ctx-card {
+  position: absolute;
+  top: calc(100% + 10px);
+  right: 0;
+  z-index: 40;
+  width: 480px;
+  padding: 14px 16px 14px;
+  /* the card's edge is the app's control boundary (`.out-btn`'s), 3:1 or better on the chat */
+  --cm-edge: rgba(223, 228, 238, 0.46);
+  border: 1px solid var(--cm-edge);
+  border-radius: 12px;
+  background: var(--surface-raised);
+  box-shadow: 0 22px 50px -22px var(--shadow-strong);
+  white-space: normal;
+  line-height: 1.4;
+  animation: cm-card 0.16s ease-out both;
+}
+:root[data-theme="light"] .ctx-card {
+  --cm-edge: #4c6087;
+}
+.ctx-card[hidden] {
+  display: none;
+}
+@keyframes cm-card {
+  from {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.cc-title {
+  margin: 0 0 8px;
+  color: var(--ink);
+  font-weight: 600;
+}
+.cc-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 6px 0;
+  border-top: 1px solid var(--line-soft);
+}
+.cc-who {
+  color: var(--ink-soft);
+  white-space: nowrap;
+}
+.cc-fig {
+  color: var(--ink);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.cc-note {
+  margin: 8px 0 0;
+  padding-top: 10px;
+  border-top: 1px solid var(--line-soft);
+  color: var(--ink-soft);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ctx-meter.cm-in,
+  .ctx-card {
+    animation: none;
+  }
+}
+
+/* A NARROWER CHAT (a smaller window, or the output panel open beside it). The header's own inside
+   width decides, so the sidebar and the output panel count, not only the window. The chat's name
+   is never the thing that gives way. First the gauges go (the figures stay, in his format); then
+   the two readouts stand one above the other, names, percents and tokens in columns, inside the
+   header's 52px; last, in the narrowest header, the header's Output button gives the meter its
+   room, as it already does for the technical-view badge below 1180px: the same control stays one
+   press away beside the message box (`#out-bottom`, and ⌘⇧O). */
+/* The widths are the header's inside (its padding and the settings button's lane taken off):
+   986px at 1440 with the sidebar open, 570px at the 1024 minimum. Under 900px the header is
+   `cm-compact`, under 780px also `cm-stacked`, under 600px also `cm-tight`.
+
+   `context-meter.js` measures that width and sets the three classes. The mockup asked the same
+   question with a container query on the header; in the app, making the header a size container
+   changed how the conversation holds its place when a row of the technical view is opened
+   (measured 2026-11-16 with tests/techy.js's check 14: the conversation came to rest 61px away
+   from where it rests on main, with that one declaration and nothing else added). The header's
+   own layout is therefore left exactly as it is on main, and the forms are the same. */
+#stage-header.cm-compact .cm-bar {
+  display: none;
+}
+#stage-header.cm-compact .ctx-meter {
+  gap: 12px;
+}
+#stage-header.cm-stacked .ctx-meter {
+  display: inline-grid;
+  grid-template-columns: auto auto auto;
+  align-content: center;
+  column-gap: 7px;
+  row-gap: 1px;
+  height: 44px;
+  line-height: 1.2;
+}
+#stage-header.cm-stacked .cm-read {
+  display: contents;
+}
+#stage-header.cm-stacked .cm-sep {
+  display: none;
+}
+#stage-header.cm-tight .ctx-meter:not([hidden]) ~ #out-top {
+  display: none;
+}
