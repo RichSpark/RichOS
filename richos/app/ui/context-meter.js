@@ -31,6 +31,8 @@
 
   // The window the figures are drawn against until a session's first result names its own.
   var DEFAULT_WINDOW = 1000000;
+  // What a readout says for a session that has made no request the app has seen.
+  var UNREAD = "not read yet";
 
   var on = false;
   var current = null; // the thread on screen
@@ -45,8 +47,11 @@
   function full(n) {
     return Math.round(n).toLocaleString("en-US");
   }
+  // A side whose session has made no request the app has seen has no figure: `used` is null and
+  // the readout says "not read yet", never a made-up 0 (a long chat from before the meter
+  // existed is not empty, it is not read yet; its figure comes with its next reply).
   function side(raw) {
-    var used = raw && typeof raw.used === "number" ? raw.used : 0;
+    var used = raw && typeof raw.used === "number" ? raw.used : null;
     var size = raw && typeof raw.size === "number" && raw.size > 0 ? raw.size : DEFAULT_WINDOW;
     return [used, size];
   }
@@ -55,7 +60,7 @@
     figures[payload.threadId] = [side(payload.rich), side(payload.team)];
   }
   function target(id) {
-    return figures[id] || [[0, DEFAULT_WINDOW], [0, DEFAULT_WINDOW]];
+    return figures[id] || [[null, DEFAULT_WINDOW], [null, DEFAULT_WINDOW]];
   }
 
   // ---- the meter in the chat's header ------------------------------------------------------
@@ -143,24 +148,24 @@
     var reads = meter.querySelectorAll(".cm-read");
     var t = current ? target(current) : target(null);
     for (var i = 0; i < 2; i++) {
+      var unread = t[i][0] === null;
       var n = shown[i] || 0;
       var size = t[i][1];
-      reads[i].querySelector(".cm-pct").textContent = Math.round((n / size) * 100) + "%";
-      reads[i].querySelector(".cm-tok").textContent = k(n) + "/" + k(size);
-      reads[i].querySelector(".cm-fill").style.width = Math.max(0, Math.min(100, (n / size) * 100)) + "%";
+      reads[i].querySelector(".cm-pct").textContent = unread ? "" : Math.round((n / size) * 100) + "%";
+      reads[i].querySelector(".cm-tok").textContent = unread ? UNREAD : k(n) + "/" + k(size);
+      reads[i].querySelector(".cm-fill").style.width = unread ? "0%" : Math.max(0, Math.min(100, (n / size) * 100)) + "%";
     }
-    meter.setAttribute(
-      "aria-label",
-      "Context window. Rich, talking with you: " + Math.round((t[0][0] / t[0][1]) * 100) + "%, " + k(t[0][0]) + " of " + k(t[0][1]) +
-        ". Rich, directing your team: " + Math.round((t[1][0] / t[1][1]) * 100) + "%, " + k(t[1][0]) + " of " + k(t[1][1]) + "."
-    );
+    function said(x) {
+      return x[0] === null ? UNREAD : Math.round((x[0] / x[1]) * 100) + "%, " + k(x[0]) + " of " + k(x[1]);
+    }
+    meter.setAttribute("aria-label", "Context window. Rich, talking with you: " + said(t[0]) + ". Rich, directing your team: " + said(t[1]) + ".");
     if (!card.hidden) paintCard();
   }
   function paintCard() {
     var t = current ? target(current) : target(null);
     var rows = card.querySelectorAll(".cc-row");
     for (var i = 0; i < 2; i++) {
-      rows[i].querySelector(".cc-fig").textContent = full(t[i][0]) + " of " + full(t[i][1]) + " tokens";
+      rows[i].querySelector(".cc-fig").textContent = t[i][0] === null ? "Not read yet" : full(t[i][0]) + " of " + full(t[i][1]) + " tokens";
     }
   }
 
@@ -177,7 +182,7 @@
     function step(now) {
       var f = ms ? Math.min(1, (now - t0) / ms) : 1;
       var e = 1 - Math.pow(1 - f, 3);
-      for (var i = 0; i < 2; i++) shown[i] = (from[i] || 0) + (to[i] - (from[i] || 0)) * e;
+      for (var i = 0; i < 2; i++) shown[i] = to[i] === null ? null : (from[i] || 0) + (to[i] - (from[i] || 0)) * e;
       paintReadouts();
       if (f < 1) raf = requestAnimationFrame(step);
     }
@@ -306,7 +311,7 @@
         text: meter ? Array.prototype.map.call(meter.querySelectorAll(".cm-read"), function (r) {
           return Array.prototype.map.call(r.querySelectorAll(".cm-who, .cm-pct, .cm-tok"), function (part) {
             return part.textContent;
-          }).join(" ");
+          }).filter(Boolean).join(" ");
         }) : [],
       };
     },

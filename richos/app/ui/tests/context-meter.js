@@ -171,7 +171,7 @@ async function main() {
     assertEqual(await page.locator("#ctx-card").isVisible(), false, "Escape left the card open");
   });
 
-  await run.check("each chat has its own figures: its own window, and 0 for a session that has made no request", async () => {
+  await run.check("each chat has its own figures: its own window, and \"not read yet\", never a made-up 0, for a session with no reading", async () => {
     await page.evaluate(() => openThread("acme"));
     await awaitSettled(page);
     await page.waitForFunction(() => window.RichContextMeter.state().thread === "acme");
@@ -181,7 +181,22 @@ async function main() {
     await awaitSettled(page);
     await page.waitForFunction(() => window.RichContextMeter.state().thread === "hiring");
     await flushFrames(page);
-    assertEqual((await meter(page)).text, ["Rich 0% 0k/1000k", "Team 0% 0k/1000k"], "a chat whose sessions have made no request");
+    // A long chat from before the meter existed has no reading until its next reply. It is not
+    // empty, so it is not shown as 0% (second review of 7224adeda, 2026-11-16).
+    assertEqual((await meter(page)).text, ["Rich not read yet", "Team not read yet"], "a chat whose sessions have not been read yet");
+    assertEqual(
+      await page.locator("#ctx-meter").getAttribute("aria-label"),
+      "Context window. Rich, talking with you: not read yet. Rich, directing your team: not read yet.",
+      "what the meter says of a chat not read yet"
+    );
+    assertEqual(await page.evaluate(() => Array.from(document.querySelectorAll("#ctx-meter .cm-fill"), (f) => f.style.width)), ["0%", "0%"], "the gauges of a chat not read yet");
+    await page.locator("#ctx-meter").focus();
+    assertEqual(
+      await page.evaluate(() => Array.from(document.querySelectorAll("#ctx-card .cc-fig"), (f) => f.textContent)),
+      ["Not read yet", "Not read yet"],
+      "the card of a chat not read yet"
+    );
+    await page.keyboard.press("Escape");
     // a page that takes the stage over the chat (RichPass) is not a chat: no meter
     await page.click("#nr-pass");
     await page.waitForSelector("#page-crumb:not([hidden])");
