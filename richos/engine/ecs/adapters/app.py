@@ -1,17 +1,16 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 """Explicit app scope over the vendor-neutral ECS store. No cwd inference."""
+from contextlib import closing
 from dataclasses import asdict
 import hashlib
 import json
 import os
 from pathlib import Path
 import re
-import subprocess
 import sqlite3
 
 from ecs_core import (CEO_SEAT_PREFIX, EventStore, PERSON_ID, ScopeError, ValidationError,
                       ECSError, canonical_json, ceo_seat, is_ceo_row)
-from ecs_checkpoint import checkpoint, checkpoint_receipt
 from ecs_inspect import inspect_records
 from publication import publication_fact, served_version
 
@@ -61,6 +60,8 @@ _OPERATOR_ANSWER_LIMIT = 262144
 
 
 def _operator_git_verified(repo, branch, commit):
+    import subprocess
+
     if ".." in branch.split("/") or branch.endswith((".lock", "/")) or "//" in branch:
         raise ValidationError(f"the land in {repo} could not be confirmed: {branch!r} is not a branch name")
     env = {**os.environ, "GIT_OPTIONAL_LOCKS": "0", "LC_ALL": "C"}
@@ -224,7 +225,7 @@ def fenced(store, binding, seat):
     return fence(store, binding) if seat is None else fence(store, binding, seat)
 
 
-def bind(store, request, seat=None):
+def bind(store, request, seat=None, *, previous=None):
     scope = request.get("scope", {})
     if set(scope) != set(BINDING_FIELDS) - {"revision"}:
         raise ScopeError("bind requires explicit entity, thread, session, turn and audience")
@@ -256,6 +257,8 @@ def bind(store, request, seat=None):
     # is where right now, which is what a seat is, so only it carries the seat.
     # Carrying the seat on all four raises "entity ... is already registered
     # differently" (ecs_core.py:726-737) before the second seat exists at all.
+    same_session = previous is not None and all(previous[key] == scope[key] for key in
+                                               ("entity_id", "thread_id", "session_id"))
     for suffix, event, payload in (
         ("entity", "entity.registered", {"display_name": entity, "canonical_root": owner,
                                          "git_common_dir": owner, "status": "active"}),
@@ -263,6 +266,10 @@ def bind(store, request, seat=None):
         ("session", "session.observed", {"vendor": "richos-app", "status": "active"}),
         ("active", "thread.activated", {"audience": scope["audience"], "turn_id": scope["turn_id"]}),
     ):
+        if same_session and suffix != "active":
+            # The existing binding attests these registrations. This turn
+            # changes only the seat's cursor, still fenced by its revision.
+            continue
         store.append(event, **common, payload=payload,
                      person_id=PERSON_ID if suffix != "active" or seat is None else seat,
                      expected_revision=expected if suffix == "active" else None,
@@ -273,6 +280,57 @@ def bind(store, request, seat=None):
     return {"binding": binding_of(current)}
 
 
+def handover(store, request):
+    """Inspect one authorized local scope while the app is stopped."""
+    entity = required(request, "entity_id")
+    thread = required(request, "thread_id")
+    person = ceo_seat(thread)
+    wal = store.db_path.with_name(store.db_path.name + "-wal")
+
+    def fingerprint(path):
+        try:
+            meta = path.stat()
+        except FileNotFoundError:
+            return None
+        return meta.st_dev, meta.st_ino, meta.st_size, meta.st_mtime_ns, meta.st_ctime_ns
+
+    original = fingerprint(store.db_path), fingerprint(wal)
+    if original[0] is None:
+        raise ScopeError("app ECS store is unavailable")
+    query = request.get("query", {})
+    if not isinstance(query, dict) or set(query) - {"section", "offset", "limit", "sequence", "item_id", "query", "include_closed"}:
+        raise ValidationError("unsupported inspection fields")
+
+    def inspect(db, *, immutable):
+        uri = db.as_uri() + "?mode=ro"
+        if immutable:
+            uri += "&immutable=1"
+        with closing(sqlite3.connect(uri, uri=True, timeout=1)) as conn:
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA query_only = ON")
+            conn.execute("BEGIN")
+            known = {int(file.name.split("_", 1)[0]): file.name
+                     for file in store.migrations_dir.glob("[0-9][0-9][0-9]_*.sql")}
+            if not known or dict(conn.execute("SELECT version, name FROM schema_migrations")) != known:
+                raise ValidationError("installed ECS engine and app store schema differ")
+            return inspect_records(store, person_id=person, connection=conn, scope=(entity, thread), **query)
+
+    if original[1] and original[1][2]:
+        # SQLite can write or create the WAL index even when the database is
+        # opened mode=ro. Read a disposable snapshot after a crash left a WAL.
+        import shutil
+        import tempfile
+
+        with tempfile.TemporaryDirectory(prefix="richos-ecs-handover-") as directory:
+            copy = Path(directory) / store.db_path.name
+            shutil.copyfile(store.db_path, copy)
+            shutil.copyfile(wal, copy.with_name(wal.name))
+            result = inspect(copy, immutable=False)
+    else:
+        result = inspect(store.db_path, immutable=True)
+    if original != (fingerprint(store.db_path), fingerprint(wal)):
+        raise ScopeError("app ECS changed during handover; stop the app and retry")
+    return result
 
 _RELEASE = re.compile(r"[1-9][0-9]*|v?(?:0|[1-9][0-9]*)[.](?:0|[1-9][0-9]*)[.](?:0|[1-9][0-9]*)-nightly[.][0-9]{8}[.][1-9][0-9]*")
 
@@ -436,8 +494,15 @@ def update_obligation(store, context, item, key, *, closing=False, **fields):
                  payload={"item_id": item["item_id"], **fields})
 
 
+def has_verified_skip(item):
+    return (item["condition_json"] and item["status"] == "blocked"
+            and (item["evidence_ref"] or "").startswith("waiting-skipped:"))
+
+
 def awaits_owner(store, item):
     if item["status"] not in OPERATOR_OPEN:
+        return False
+    if has_verified_skip(item):
         return False
     if item["condition_json"]:
         if item["status"] == "blocked" or json.loads(item["condition_json"]).get("launch") is True:
@@ -474,7 +539,7 @@ def answer_delivered(store, request):
         if item["reply_owed"] and item["reply_turn"] == ref and not awaits_owner(store, item):
             key = f"delivered:{ref}:{link['item_id']}"
             fields = {"reply_owed": 0, "reply_evidence": f"{ref}#{digest}"}
-            if item["status"] in OPERATOR_OPEN:
+            if item["status"] in OPERATOR_OPEN and not has_verified_skip(item):
                 update_obligation(store, context, item, key, closing=True, status="completed",
                              evidence_ref=fields["reply_evidence"], **fields)
             else:
@@ -495,19 +560,20 @@ def waiting_noticed(store, request):
     state = required(request, "state")
     if state not in {"ready", "skipped"}:
         raise ValidationError("unknown waiting notice state")
-    if item["status"] != "blocked" or (item["evidence_ref"] or "").startswith("waiting-skipped:"):
-        return {"changed": False}
     evidence = required(request, "evidence")
     if len(evidence) > 1024:
         raise ValidationError("waiting notice evidence is too long")
     fields = {"evidence_ref": f"waiting-{state}:{evidence}"}
+    if item["status"] != "blocked" or has_verified_skip(item):
+        return {"changed": False, "deliver": item["status"] in {"active", "blocked"}
+                and item["evidence_ref"] == fields["evidence_ref"]}
     if state == "ready":
         fields["status"] = "active"
     update_obligation(store, context, item, f"waiting:{entity}:{thread}:{item_id}:{state}", **fields)
-    return {"changed": True}
+    return {"changed": True, "deliver": True}
 
 
-def execute(state_root, request):
+def execute(state_root, request, *, store=None):
     if not isinstance(request, dict) or type(request.get("protocol")) is not int or request.get("protocol") != PROTOCOL_VERSION:
         raise ValidationError("unsupported ECS app protocol")
     command = required(request, "command")
@@ -526,7 +592,8 @@ def execute(state_root, request):
         return {"protocol": PROTOCOL_VERSION, "event_schema": 1,
                 "migration_digest": identity.hexdigest(), "state_root": str(root),
                 "ceo_thread_seats": True, "ceo_seat_prefix": CEO_SEAT_PREFIX,
-                "commands": ["current", "bind", "prepare-turn", "checkpoint", "receipt", "brief", "inspect", "observe", "verified-work", "observation-receipt", "import-preview", "import-apply", "sync-loro-receipts", "complete-obligation", "operator-complete", "seats", "release-seat", "answer-complete", "waiting-work", "waiting-noticed", "pending-replies", "answer-delivered"]}
+                "live_brief_revision": True,
+                "commands": ["current", "bind", "prepare-turn", "checkpoint", "receipt", "brief", "inspect", "observe", "verified-work", "observation-receipt", "import-preview", "import-apply", "sync-loro-receipts", "complete-obligation", "operator-complete", "seats", "release-seat", "answer-complete", "waiting-work", "waiting-noticed", "pending-replies", "answer-delivered", "handover"]}
     if command == "prepare-turn":
         # The front desk's existing four requests, in one Python invocation. Keep
         # their handlers, revision fences, order and receipt-error behavior.
@@ -536,26 +603,35 @@ def execute(state_root, request):
         budget = request.get("budget_chars", 6000)
         if type(budget) is not int or not 900 <= budget <= 24000:
             raise ValidationError("brief budget must be between 900 and 24000 characters")
-        current = execute(root, {**request, "command": "current"})["binding"]
+        store = EventStore(root)
+        seat = seat_of(request)
+        if seat is not None and seat != ceo_seat(required(scope, "thread_id")):
+            raise ScopeError("turn preparation belongs to the conversation's own seat")
+        active = store.current_context(seat or PERSON_ID)
+        current = binding_of(active) if active is not None else None
         if current is not None and all(current.get(k) == v for k, v in scope.items()) and set(scope) == set(BINDING_FIELDS) - {"revision"}:
             binding = current
         else:
-            binding = execute(root, {**request, "command": "bind",
-                "expected_revision": current["revision"] if current else None})["binding"]
-        fields = {**request, "binding": binding}
+            binding = bind(store, {**request,
+                "expected_revision": current["revision"] if current else None}, seat, previous=current)["binding"]
+        context = fenced(store, binding, seat)
+        if not is_ceo_row(context):
+            raise ScopeError("turn preparation belongs to the conversation's own seat")
         receipts, receipt_error = None, None
         try:
-            receipts = execute(root, {**fields, "command": "sync-loro-receipts"})
+            from loro_receipts import synchronize
+            receipts = synchronize(store, binding, context["person_id"])
         except (ECSError, ValueError, TypeError, OSError, sqlite3.Error) as error:
-            # As on the old app path, failed receipt synchronization is disclosed
-            # in the brief; a bind or brief failure still refuses the turn.
+            # The app discloses receipt errors but refuses invalid bindings and briefs.
             receipt_error = str(error)
-        brief = execute(root, {**fields, "command": "brief"})["text"]
-        return {"binding": binding, "text": brief, "receipts": receipts, "receipt_error": receipt_error}
+        brief = store.live_brief(context, budget_chars=budget, held_revision=request.get("held_brief_revision"))
+        return {"binding": binding, **brief, "receipts": receipts, "receipt_error": receipt_error}
     if command == "import-preview":
         from import_records import preview
         return preview(root, request.get("envelope"), request.get("target"))
-    store = EventStore(root)
+    store = store if store is not None else EventStore(root)
+    if command == "handover":
+        return handover(store, request)
     seat = seat_of(request)
     if command in {"waiting-work", "waiting-noticed", "pending-replies", "answer-delivered"}:
         if not store.db_path.is_file():
@@ -600,6 +676,8 @@ def execute(state_root, request):
         return apply(root, request.get("envelope"), binding, seat=seat,
                      person_id=context["person_id"])
     elif command == "checkpoint":
+        from ecs_checkpoint import checkpoint, checkpoint_receipt
+
         document = request.get("checkpoint")
         if not isinstance(document, dict):
             raise ValidationError("checkpoint must be an object")
@@ -653,6 +731,8 @@ def execute(state_root, request):
             update_obligation(store, context, item, f"link:{turn}:{item_id}", reply_turn=turn)
         result = {"linked": True, "obligation_id": item_id, "reply_turn": turn}
     elif command == "receipt":
+        from ecs_checkpoint import checkpoint_receipt
+
         result = checkpoint_receipt(store, session=required(request, "session_id"),
                                     turn=required(request, "turn_id"), request_id=required(request, "request_id"),
                                     person_id=context["person_id"])

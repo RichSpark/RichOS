@@ -14,25 +14,34 @@ SECTIONS = (
 def inspect_records(store: EventStore, *, section: str | None = None,
                     offset: int = 0, limit: int = 20, sequence: int | None = None,
                     item_id: str | None = None, query: str | None = None, include_closed: bool = False,
-                    person_id: str = PERSON_ID) -> dict:
+                    person_id: str = PERSON_ID, connection=None,
+                    scope: tuple[str, str] | None = None) -> dict:
     if section is not None and section not in SECTIONS:
         raise ValidationError("unknown inspection section")
     if offset < 0 or not 1 <= limit <= 100:
         raise ValidationError("offset must be non-negative and limit must be between 1 and 100")
     if include_closed and section not in CONTINUITY_ITEM_TYPES | {"work", "actions"}:
         raise ValidationError("include_closed requires a continuity item, work or actions section")
-    conn = store.connect()
+    conn = connection if connection is not None else store.connect()
     try:
-        conn.execute("BEGIN")
+        if connection is None:
+            conn.execute("BEGIN")
         # A background inspection reads its OWN cursor and its own audience. The
         # audience decides visibility below, and a work seat binds audience "worker",
         # which sees only worker records -- a background lease has no business
         # reading the CEO's private ones. With one shared row that narrowing is
         # impossible, which is one of the things the seat buys.
         context = conn.execute("SELECT * FROM ecs_active_context WHERE person_id=?", (person_id,)).fetchone()
-        if context is None:
-            raise ScopeError("no active context; nothing to inspect")
-        entity, thread = context["entity_id"], context["thread_id"]
+        if scope is None:
+            if context is None:
+                raise ScopeError("no active context; nothing to inspect")
+            entity, thread = context["entity_id"], context["thread_id"]
+        else:
+            entity, thread = scope
+            store._require_thread(conn, entity, thread)
+            if context is None or (context["entity_id"], context["thread_id"], context["audience"]) != (
+                    entity, thread, "ceo"):
+                context = {"session_id": None, "turn_id": None, "revision": None, "audience": "ceo"}
         visibility = {"worker": ("worker",), "rich": ("worker", "rich"),
                       "ceo": ("worker", "rich", "ceo_private")}[context["audience"]]
         observed = conn.execute(
@@ -84,4 +93,5 @@ def inspect_records(store: EventStore, *, section: str | None = None,
                           next_offset=offset + limit if offset + limit < len(records) else None)
         return result
     finally:
-        conn.close()
+        if connection is None:
+            conn.close()

@@ -4,8 +4,6 @@
 import json
 import re
 import sys
-from urllib.error import HTTPError
-from urllib.request import Request, urlopen
 
 
 REPO = "RichSpark/RichOS"
@@ -34,6 +32,9 @@ def later(version, reference):
 
 
 def read(url):
+    from urllib.error import HTTPError
+    from urllib.request import Request, urlopen
+
     request = Request(url, headers={"User-Agent": "RichOS", "Accept": "application/json"})
     try:
         with urlopen(request, timeout=5) as response:

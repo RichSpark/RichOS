@@ -240,11 +240,12 @@ def turn_start_offset(path, prompt_id, chunk=4 * 1024 * 1024):
         return 0
 
 
-def read_turn(path, prompt_id):
+def read_turn(path, prompt_id, *, tool_inputs=None):
     """Return (calls, results, records_examined, error).
 
     calls   [(tool_use_id, tool_name)] in file order, THIS TURN ONLY
     results {tool_use_id: result_block} for results seen in the same window
+    tool_inputs  if supplied, filled with inputs from that same window
     records_examined  how many JSONL records were actually parsed. The suite
             asserts this is non-zero, so a manifest cannot pass its own tests
             by rendering an empty transcript convincingly. This session found
@@ -304,6 +305,8 @@ def read_turn(path, prompt_id):
                         continue
                     if b.get("type") == "tool_use":
                         calls.append((b.get("id"), b.get("name") or "?"))
+                        if tool_inputs is not None:
+                            tool_inputs[b.get("id")] = b["input"] if isinstance(b.get("input"), dict) else {}
                     elif b.get("type") == "tool_result":
                         tid = b.get("tool_use_id")
                         if tid is not None:

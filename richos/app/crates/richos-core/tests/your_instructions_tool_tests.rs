@@ -70,7 +70,7 @@ fn a_save_in_a_visible_turn_adds_the_rules_to_the_users_file_and_leaves_a_card_f
     fs::write(f.central.join("instructions.md"), "Write in plain English.\n").unwrap();
     let answer = f.save(json!(["Ask me before spending more than $500 on anything.", "- Mornings are for deep work."])).unwrap();
     assert_eq!(answer["status"], "saved");
-    assert_eq!(answer["appliesFrom"], "the user's next new conversation");
+    assert_eq!(answer["appliesFrom"], "the next new conversation or after Rich's current conversation compacts");
     assert_eq!(
         fs::read_to_string(f.central.join("instructions.md")).unwrap(),
         "Write in plain English.\n- Ask me before spending more than $500 on anything.\n- Mornings are for deep work.\n",

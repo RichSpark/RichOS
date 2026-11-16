@@ -204,10 +204,9 @@ pub(crate) fn observe_work_status(scope:&StatusToolScope,facts:Value)->Result<()
 }
 
 /// Verified waiting-work evidence uses the receiving conversation's ordinary inbox.
-pub fn observe_waiting(scope: &StatusToolScope, facts: Value, instruction: Option<crate::ecs::UserInstruction>,
-    work: Option<WorkReference>) -> Result<u64, String> {
+pub fn observe_waiting(scope: &StatusToolScope, facts: Value, instruction: Option<crate::ecs::UserInstruction>) -> Result<u64, String> {
     append_record(scope, "rich", &mut Message { bridge: None, handoff: false, from: "ecs-waiting".into(),
-        text: facts.to_string(), instruction, work }, false, None).map(|(through, _)| through)
+        text: facts.to_string(), instruction, work: None }, false, None).map(|(through, _)| through)
 }
 
 /// One of Stu's workers, or an automatic turn of his own, met an overload: its wait is over, or
@@ -240,11 +239,11 @@ fn sync_inbox_parents(scope:&StatusToolScope,role:&str)->Result<(),String> {
     Ok(())
 }
 
-// A filesystem notification can precede the writer's fsync. Bridge observations
+// A filesystem notification can precede the writer's fsync. Bridge and waiting-work observations
 // cannot reach an actor until the existing writer lock is released and the
 // exact retained row/directories are synced. A busy owner never blocks others.
-fn synced_bridge_input(file:&std::fs::File,scope:&StatusToolScope,role:&str,message:&Message)->Result<(),String> {
-    if message.bridge.is_none() {return Ok(())}
+fn sync_observation(file:&std::fs::File,scope:&StatusToolScope,role:&str,message:&Message)->Result<(),String> {
+    if message.bridge.is_none() && message.from != "ecs-waiting" {return Ok(())}
     #[cfg(unix)] {
         use std::os::fd::AsRawFd;
         // lock-busy: hold this input; the existing peer receiver retries while other chats progress.
@@ -584,7 +583,7 @@ pub(crate) fn pending_after(scope:&StatusToolScope,role:&str,after:u64)->Result<
         if count==0 || !line.ends_with('\n'){return Ok(None)}through+=count as u64;
         if cursor["accepted"].get(through.to_string()).is_some() && cursor["active"].get(format!("peer:{through}")).is_none(){continue}
         let message:Message=serde_json::from_str(&line).map_err(|e|e.to_string())?;
-        synced_bridge_input(reader.get_ref(),scope,role,&message)?;
+        sync_observation(reader.get_ref(),scope,role,&message)?;
         if role=="stu" && message.handoff && handoff_finished(scope,&message)?{acknowledge(scope,role,through)?;continue}
         return Ok(Some((message,through)))
     }

@@ -919,10 +919,13 @@ fn a_codex_session_exposes_only_its_permanent_conversations_channels() {
 // THE USER'S OWN SETTINGS FILES — CEO ruling §138; build plan 2026-10-21, item 0
 // =======================================================================================
 
-/// The user's copy as a session loads it: with the memory scope the app adds when the copy
-/// names none (`user_settings::MEMORY_SCOPE`).
+/// How the build loads a custom definition without its own memory scope.
 fn as_loaded(copy: &str) -> String {
-    copy.replacen("---\n", &format!("---\n{}\n", richos_core::user_settings::MEMORY_SCOPE), 1)
+    if richos_core::user_settings::AUTO_MEMORY_ENABLED {
+        copy.replacen("---\n", &format!("---\n{}\n", richos_core::user_settings::MEMORY_SCOPE), 1)
+    } else {
+        copy.to_owned()
+    }
 }
 
 fn prepare_for_user(f: &Scratch, folder: &Path) -> EngineProfile {
@@ -999,7 +1002,10 @@ fn rich_and_stu_start_from_the_users_own_copies_which_the_app_never_writes_again
     std::os::unix::fs::symlink(&elsewhere, folder.join(RICH)).unwrap();
     let profile = prepare_for_user(&linked, &folder);
     assert_eq!(std::fs::read_to_string(&elsewhere).unwrap(), "Kept elsewhere.\n");
-    assert_eq!(std::fs::read_to_string(profile.standing_plugin(&shipped).join("agents").join(RICH)).unwrap(), "Kept elsewhere.\n");
+    let loaded = std::fs::read_to_string(profile.standing_plugin(&shipped).join("agents").join(RICH)).unwrap();
+    assert!(loaded.starts_with("Kept elsewhere.\n"));
+    assert_eq!(loaded.matches("## Executive continuity").count(), 1);
+    assert!(loaded.contains("mcp__richos_continuity__link-reply"));
 }
 
 /// **The user's instructions.md reaches both agents** (second review
