@@ -475,11 +475,11 @@ def main():
                         'pause_began_ms': round(r['longest_gap_began_ms'] - born) if r['longest_gap_began_ms'] else None}
                        for r in report['samples']]
             ev = {'launch': kind.group(1) if kind else None, 'relaunched_pid': started.get('pid'),
-                  'made_ready': library_line(log), 'seconds': seconds,
+                  'library_load': library_line(log), 'seconds': seconds,
                   'longest_pause': max(seconds, key=lambda r: r['longest_pause_ms'])}
             self.facts['home-still'] = ev
             self.save()
-            print('home-still: a %s start; made ready: %s; the longest pause of the picture: %d ms, begun %s ms after the start; '
+            print('home-still: a %s start; library: %s; the longest pause of the picture: %d ms, begun %s ms after the start; '
                   'by second (from ms: frames, longest pause): %s' % (
                       ev['launch'], json.dumps(ev['library_load']), ev['longest_pause']['longest_pause_ms'],
                       ev['longest_pause']['pause_began_ms'],
