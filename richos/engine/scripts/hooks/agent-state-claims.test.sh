@@ -112,7 +112,7 @@ PY
 }
 : > "$TRANSCRIPT"
 emit_spawn "zach-opus-g1" "$ID_LIVE"     "toolu_live"
-emit_spawn "clark-opus-d1" "$ID_ABSENT"  "toolu_absent"
+emit_spawn "clark-opus-high-d1" "$ID_ABSENT"  "toolu_absent"
 emit_spawn "mark-sonnet-p3" "$ID_STALE"  "toolu_stale"
 emit_spawn "ace-sonnet-u9" "$ID_UNLOCKED" "toolu_unlk"
 
@@ -296,8 +296,8 @@ printf '%s' "$E1" | grep -q "^zach-opus-g1	table-row$" \
 E2="$(extract 'mark-sonnet-p3 completed and replied exactly P3-RAN as instructed.')"
 printf '%s' "$E2" | grep -q "^mark-sonnet-p3	adjacent$" \
     && ok "E2 T2 ADJACENT predicate" || bad "E2 adjacent" "got: $E2"
-E3="$(extract 'A fifth, `clark-opus-d1` (the licensing research), finished and has dropped off.')"
-printf '%s' "$E3" | grep -q "^clark-opus-d1	appositive$" \
+E3="$(extract 'A fifth, `clark-opus-high-d1` (the licensing research), finished and has dropped off.')"
+printf '%s' "$E3" | grep -q "^clark-opus-high-d1	appositive$" \
     && ok "E3 T2b APPOSITIVE" || bad "E3 appositive" "got: $E3"
 
 # --- and the refusals, each of which is a measured decision ---
@@ -356,7 +356,7 @@ silent_on() { # <label> <message>
 silent_on "a TRUE claim: the agent really is not alive (stale lock)" \
           "mark-sonnet-p3 completed and replied exactly P3-RAN."
 silent_on "a TRUE claim: the agent's worktree is gone entirely" \
-          "A fifth, \`clark-opus-d1\` (the licensing research), finished and dropped off."
+          "A fifth, \`clark-opus-high-d1\` (the licensing research), finished and dropped off."
 silent_on "a TRUE claim about a terminal agent INSIDE A LIVING SESSION: the registry records it finished (point 11), so its session's held lock contradicts nothing" \
           "\`zach-opus-fin\` is finished and its work is on its branch."
 silent_on "a name that cannot be joined to any agent id" \

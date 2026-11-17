@@ -139,9 +139,11 @@ def _identity_module():
 
 IDENTITY = _identity_module()
 
-# Tokens that carry no identity: the model alias in <role>-<model>-<id> names,
-# and dates in hand-rolled worktree names. Stripped before name matching.
-_NOISE_TOKENS = {"fable", "opus", "sonnet", "haiku", "wt", "worktree", "agent"}
+# Tokens that carry no identity: the model alias and the effort word in
+# <role>-<model>-<effort>-<id> names, and dates in hand-rolled worktree names.
+# Stripped before name matching.
+_NOISE_TOKENS = {"fable", "opus", "sonnet", "haiku", "low", "medium", "high", "xhigh", "max",
+                 "wt", "worktree", "agent"}
 _DATE_RE = re.compile(r"^\d{4}-?\d{2}-?\d{2}$")
 _SHA_RE = re.compile(r"\b[0-9a-f]{7,40}\b")
 _NATIVE_ID_RE = re.compile(r"^a(?P<name>[a-z0-9][a-z0-9-]*?)-[0-9a-f]{12,}$")

@@ -1,6 +1,6 @@
 ---
 name: bootstrap-interview
-description: First-session orchestrator skill — interviews the CEO conversationally to fill CLAUDE.md and orchestration.config, staff the initial domain roster via Dean, and seed confirmed knowledge in a private Loro corpus, in one guided ~20-minute session. Use on first session with a fresh, un-adopted copy of this engine, or whenever CLAUDE.md/orchestration.config still carry unfilled sample content.
+description: First-session orchestrator skill — interviews the CEO conversationally to fill CLAUDE.md and orchestration.config, staff the initial domain roster via Dean and seed confirmed knowledge in a private Loro corpus, in one guided ~20-minute session. Use on first session with a fresh, un-adopted copy of this engine or whenever CLAUDE.md/orchestration.config still carry unfilled sample content.
 ---
 
 # Bootstrap Interview
@@ -12,20 +12,20 @@ first time you're operating in a freshly copied/cloned engine, before you do
 anything else — or any time you detect `CLAUDE.md` or `orchestration.config`
 still carry unfilled sample content (Stage 0 tells you how to check).
 
-## The promise, and the discipline that protects it
+## The promise and the discipline that protects it
 
 The promise is: **the CEO answers questions for about 20 minutes and ends
 with a staffed company** — a filled `CLAUDE.md`, a filled
-`orchestration.config`, real named teammates registered and spawnable, and a
+`orchestration.config`, real named teammates registered and spawnable and a
 the private Loro corpus that already contains what the CEO said. That promise is fragile
-in two opposite directions, and both are non-negotiable:
+in two opposite directions and both are non-negotiable:
 
-- **Too shallow, and everything downstream is under-filled** — Dean can't
-  staff a role he has no domain context for, and the wiki's first pages are
+- **Too shallow and everything downstream is under-filled** — Dean can't
+  staff a role he has no domain context for and the wiki's first pages are
   thin.
-- **Too deep, and the 20-minute promise breaks** — this is a conversation,
+- **Too deep and the 20-minute promise breaks** — this is a conversation,
   not a deposition. Ask naturally, follow the stages below as a checklist
-  in your own head, not a script to read verbatim, and move on the moment a
+  in your own head, not a script to read verbatim and move on the moment a
   stage has enough to work with. Short sessions are fine — this is
   **resumable** (see "Resumability" below); a CEO who has to stop after
   Stage 2 can pick back up later without redoing anything.
@@ -40,8 +40,8 @@ than it is. A confidently-wrong `CLAUDE.md` is worse than an honest TODO.
 ## Prefer voice?
 
 Answering by typing isn't required. Built-in OS dictation works today, needs
-nothing from this engine, and turns this into a spoken conversation: **macOS**
-Dictation (press the mic key, or Edit menu → Start Dictation) or **Windows**
+nothing from this engine and turns this into a spoken conversation: **macOS**
+Dictation (press the mic key or Edit menu → Start Dictation) or **Windows**
 voice typing (`Win+H`). Either dictates straight into the chat with the
 orchestrator, so the live interview below just becomes a spoken one.
 
@@ -58,7 +58,7 @@ yourself is orchestrator self-administration, not product/feature work — the
 same class of bounded exception as running the land sequence or maintaining
 the private Loro corpus (see `CLAUDE.md`'s Core Guardrail — this is the third of the
 three reserved exceptions to "never carry out work directly"). You do NOT
-delegate the interview, the `CLAUDE.md`/`orchestration.config` fill, or the
+delegate the interview, the `CLAUDE.md`/`orchestration.config` fill or the
 wiki-seeding to a teammate. You DO delegate the actual role instantiation to
 Dean (Stage G3) — staffing has always been Dean's job, interview or not.
 
@@ -98,25 +98,25 @@ Four outcomes:
 1. **Nothing above** → fresh start, Stage 1 (live interview).
 2. **A transcript found** → **Transcript mode** (below) — skip the live
    interview, extract answers from the file instead.
-3. **Partial signal** (some TODOs filled, some agents staffed, or a progress
+3. **Partial signal** (some TODOs filled, some agents staffed or a progress
    file exists, no transcript) → resume: tell the CEO plainly what's already
    done, confirm before continuing, pick up at the first incomplete stage.
 4. **Fully bootstrapped already** (zero TODOs, config filled, roles staffed,
-   wiki has real pages) → this skill has nothing left to do; say so, and
+   wiki has real pages) → this skill has nothing left to do; say so and
    point to Dean directly for adding a *new* role later — that's ordinary
    staffing, not re-bootstrapping.
 
 ## Transcript mode — when the interview already happened elsewhere
 
-**Prefer voice, or already talked this through with another assistant?** The
+**Prefer voice or already talked this through with another assistant?** The
 CEO doesn't have to run the live interview with the orchestrator at all.
 `skills/bootstrap-interview/references/portable-interview-prompt.md` is a
 self-contained prompt the CEO can paste into any voice or chat assistant
 (Claude, ChatGPT, a phone voice app) to have the *same* conversation there —
-by voice if they prefer (macOS Dictation, Windows `Win+H`, or a voice-mode
+by voice if they prefer (macOS Dictation, Windows `Win+H` or a voice-mode
 assistant), then export the transcript and drop it in
 `ceo-inbox/for-wiki/`. See "Prefer voice?" further down for the two OS
-dictation options — those work today, need nothing from this engine, and are
+dictation options — those work today, need nothing from this engine and are
 worth mentioning to the CEO even outside the portable-prompt path.
 
 When Stage 0 finds a transcript (its content contains the literal marker
@@ -131,7 +131,7 @@ instructions):
    transcript actually says onto each stage; don't assume a stage was
    covered just because the transcript is long.
 3. **Unanswered stays TODO, exactly as in a live interview.** If the
-   transcript never touched a stage, or the CEO's answer there was itself
+   transcript never touched a stage or the CEO's answer there was itself
    "not sure yet," that stage's `CLAUDE.md`/`orchestration.config` block
    stays an explicit TODO — extraction never fabricates an answer the
    transcript doesn't actually contain, any more than a live interview would.
@@ -153,7 +153,7 @@ Each stage lists what you need by the end of it — not a fixed question list.
 
 ### Stage 1 — Product & domain
 What is this, in one or two sentences? Who is it for? What's the core
-promise/category? Is there an existing name, or still deciding? (Feeds
+promise/category? Is there an existing name or still deciding? (Feeds
 `CLAUDE.md`'s intro and a confirmed vision page in the selected private company corpus.)
 
 ### Stage 2 — Users & surfaces
@@ -182,11 +182,11 @@ device QA only matter if there's more than one native platform to keep in
 parity), a copywriter, marketing, domain advisors, a domain expert. Don't
 recite all 16 templates as a checklist question — infer likely roles from
 Stages 1-3 and confirm/adjust with the CEO, e.g. "sounds like you'll want a
-backend engineer, a frontend engineer, and the three mandatory QA roles to
-start — anything else, or does that cover it?" For each confirmed role,
+backend engineer, a frontend engineer and the three mandatory QA roles to
+start — anything else or does that cover it?" For each confirmed role,
 capture enough for Dean/Clark to work with: the role, anything specific
 about this domain that shapes the persona (e.g. "backend engineer, this is a
-Node/Postgres API"), and whether it's needed now vs. later.
+Node/Postgres API") and whether it's needed now vs. later.
 
 ### Stage 5 — Quality bar & hard rules
 State plainly that the QA pipeline ships with proven default bars (10/10
@@ -215,7 +215,7 @@ worth recording as the wiki's first precedent.
 Copy `CLAUDE.md.template` to `CLAUDE.md` if it doesn't exist yet. The template
 carries **ten** `<!-- TODO (adopter) -->` blocks — enumerate and resolve **every
 one** (a "finished" `CLAUDE.md` with a live TODO comment still sitting in it is
-the F3 trap). Each block has a definite resolution: fill it, delete it, or
+the F3 trap). Each block has a definite resolution: fill it, delete it or
 explicitly defer it — never leave it silent. Walk the full set:
 
 1. **Surfaces map** — fill from Stage 2; or, for a single-surface product,
@@ -259,7 +259,7 @@ otherwise leave them blank (per the file's own instructions — blank is a
 valid, intentional answer, not an omission). Leave
 `READONLY_ALLOWLIST`/`CREATOR_TEAMMATE`/`ARTIFACT_*` at
 their shipped defaults unless the interview surfaced a reason to change
-them — these are platform-generic, not domain-specific, and shouldn't be
+them — these are platform-generic, not domain-specific and shouldn't be
 touched without cause. Leave `ENABLE_QA_INSTALL_FRESH_GATE=0` unless the CEO
 described exactly the device/install-fresh pipeline that gate is for.
 
@@ -268,7 +268,8 @@ described exactly the device/install-fresh pipeline that gate is for.
 Compile the confirmed roles from Stage 4 into one packet: for each role, the
 template it maps to (`.claude/agents/templates/<template>.md`) and the
 domain context captured for it. Spawn Dean (`subagent_type: dean`, a proper
-truthful `<role>-<model>-<identifier>` name, `isolation: "worktree"` — Dean
+truthful `<role>-<model>-<effort>-<identifier>` name with the matching `effort`,
+`isolation: "worktree"` — Dean
 writes files) with a single task
 covering the whole batch: instantiate each confirmed role from its template
 into a real named `.claude/agents/<slug>.md` + `team/<name>.md`, update
@@ -296,7 +297,7 @@ named teammates). Nobody else owns it, so once Dean's roster has landed and the
 QA roles have real names, **you** fill that block yourself here — the QA-pipeline
 names must match the QA roles Dean just staffed. This closes the F4 sequencing
 gap: the block that needed names G1 didn't have yet is completed the moment the
-names exist. Keep the bars, the loop-back rule, and the CEO-sees-nothing-before-
+names exist. Keep the bars, the loop-back rule and the CEO-sees-nothing-before-
 signoff rule exactly as shipped.
 
 ### G4 — Seed confirmed knowledge through Loro
@@ -334,7 +335,7 @@ that repository instead. Never use `--force` to replace existing commitments.
 The initializer creates the declaration, renders `CEO-TODOs.md` and links it
 from the root README. Resolve any reported lint failure before continuing.
 
-Run, in order, and show the CEO the real output, not a paraphrase:
+Run, in order and show the CEO the real output, not a paraphrase:
 
 ```bash
 scripts/hooks/install.sh
@@ -347,7 +348,7 @@ Present the green summary plainly: hooks wired (committed
 A–Q confirmed (`contract-integrity-probe.sh` — Layer N's git-tracked check may
 read `⚠ … not yet git-tracked` if you haven't committed the adoption yet; that
 warning is fine, a hard `✗ N` is not — commit `settings.local.json`, force-adding
-past any global-gitignore rule with `git add -f` if the probe says so), and the
+past any global-gitignore rule with `git add -f` if the probe says so) and the
 full 7-beat enforcement loop passing (`scripts/demo.sh`, README's "60-second
 proof"). If anything fails, stop and fix it before declaring the session done —
 never report "bootstrapped" over a red verification pass.
@@ -360,13 +361,13 @@ never report "bootstrapped" over a red verification pass.
   value is either a real, confirmed answer or a deliberate, stated "leave at
   default."
 - At least the roles confirmed in Stage 4 are registered as real named
-  `.claude/agents/<slug>.md` + `team/<name>.md` pairs, and `CLAUDE.md`'s Team
+  `.claude/agents/<slug>.md` + `team/<name>.md` pairs and `CLAUDE.md`'s Team
   Directory + `team/ROSTER.md` list them.
 - Confirmed Loro records or pages exist in the selected private corpus with actual source references and writer receipts; declined or unanswered content remains unwritten.
 - `install.sh` + `contract-integrity-probe.sh` + `scripts/demo.sh` all ran
   green in this same session.
 - The repository carries a `.ceo-todos`, `CEO-TODOs.md` exists at its root and
-  is named in the first lines of `README.md`, and `scripts/ceo-todos-lint.sh`
+  is named in the first lines of `README.md` and `scripts/ceo-todos-lint.sh`
   ran clean in this same session. A shipped TODOs mechanism with no declaration
   is enforcement that can never fire — "installed" is not the same as "on".
 

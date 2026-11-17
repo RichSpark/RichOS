@@ -75,7 +75,7 @@ payload() { # <event> <json-object> -> the object with hook_event_name
     python3 -c 'import json,sys; d=json.loads(sys.argv[2]); d["hook_event_name"]=sys.argv[1]; print(json.dumps(d))' "$1" "$2"
 }
 spawn_payload() { # <name> <prompt>
-    python3 -c 'import json,sys; print(json.dumps({"hook_event_name":"PreToolUse","session_id":sys.argv[1],"tool_use_id":"tu-"+sys.argv[2],"tool_name":"Agent","cwd":sys.argv[4],"tool_input":{"name":sys.argv[2],"subagent_type":"zach","isolation":"worktree","prompt":sys.argv[3]}}))' "$CUR_SID" "$1" "$2" "$ENT"
+    python3 -c 'import json,sys; print(json.dumps({"hook_event_name":"PreToolUse","session_id":sys.argv[1],"tool_use_id":"tu-"+sys.argv[2],"tool_name":"Agent","cwd":sys.argv[4],"tool_input":{"name":sys.argv[2],"effort":"high","subagent_type":"zach","isolation":"worktree","prompt":sys.argv[3]}}))' "$CUR_SID" "$1" "$2" "$ENT"
 }
 # The platform: a native workspace, its SubagentStart, and the Agent result.
 platform_spawn() { # <name> <agent-id>
@@ -127,9 +127,9 @@ RICHOS_SESSION_ID="$CUR_SID" "$WS" integration --repo "$OTHER" --branch main \
     --why "the end-to-end run's body of work" >>"$T/integration.out" 2>&1
 check "E1.1 SessionStart recorded the session with its process identity" \
     "grep -q '\"pid_start\"' '$CLAUDE_CONFIG_DIR/state/workspaces/sessions/sess-e2e-one-1111.json'"
-spawn "zach-opus-e1" "build it"; rc=$?
+spawn "zach-opus-high-e1" "build it"; rc=$?
 check "E1.2 the spawn guard registered the spawn (exit 0)" "[ $rc -eq 0 ]" "$(cat "$T/spawn.err")"
-platform_spawn "zach-opus-e1" "ae1e1e1e1e1e1e1e1"
+platform_spawn "zach-opus-high-e1" "ae1e1e1e1e1e1e1e1"
 NP1="$ENT/.claude/worktrees/agent-ae1e1e1e1e1e1e1e1"
 barrier "ae1e1e1e1e1e1e1e1" Edit; rc=$?
 check "E1.3 the registered worker may write (lock-out passes)" "[ $rc -eq 0 ]" "$(cat "$T/barrier.err")"
@@ -139,8 +139,8 @@ barrier "ae1e1e1e1e1e1e1e1" Read; rc=$?
 check "E1.4 finished: the lock-out refuses every tool, Read included (point 9)" "[ $rc -eq 2 ]"
 stop_gate; rc=$?
 check "E1.5 while it is pending the turn ends and the lead is told, by name (R2)" \
-    "[ $rc -eq 0 ] && grep -q 'zach-opus-e1' '$T/stop.out'" "rc=$rc $(cat "$T/stop.out" "$T/stop.err")"
-spawn "zach-opus-e1b" "unrelated new work"; rc=$?
+    "[ $rc -eq 0 ] && grep -q 'zach-opus-high-e1' '$T/stop.out'" "rc=$rc $(cat "$T/stop.out" "$T/stop.err")"
+spawn "zach-opus-high-e1b" "unrelated new work"; rc=$?
 check "E1.6 unrelated work starts while finished work stays pending (point 5, amended 2026-09-30)" \
     "[ $rc -eq 0 ] && [ -e '$NP1' ]" "rc=$rc $(cat "$T/spawn.err")"
 git -C "$ENT" merge -q --no-edit "worktree-agent-ae1e1e1e1e1e1e1e1"
@@ -152,15 +152,15 @@ barrier "ae1e1e1e1e1e1e1e1" Write; rc=$?
 check "E1.10 restarted after its workspace is gone: still refused (point 9)" "[ $rc -eq 2 ]"
 
 echo "=== E2 the same, discarded ==="
-spawn "zach-opus-e2" "try something"; rc=$?
+spawn "zach-opus-high-e2" "try something"; rc=$?
 check "E2.1 spawn registered" "[ $rc -eq 0 ]" "$(cat "$T/spawn.err")"
-platform_spawn "zach-opus-e2" "ae2e2e2e2e2e2e2e2"
+platform_spawn "zach-opus-high-e2" "ae2e2e2e2e2e2e2e2"
 NP2="$ENT/.claude/worktrees/agent-ae2e2e2e2e2e2e2e2"
 commit_in "$NP2" e2.txt
 subagent_stop "ae2e2e2e2e2e2e2e2"
 stop_gate; rc=$?
-check "E2.2 pending: the turn ends and the lead is told" "[ $rc -eq 0 ] && grep -q 'zach-opus-e2' '$T/stop.out'" "rc=$rc $(cat "$T/stop.out")"
-RICHOS_SESSION_ID="$CUR_SID" "$WS" discard zach-opus-e2 --reason "the reviewer rejected the approach" \
+check "E2.2 pending: the turn ends and the lead is told" "[ $rc -eq 0 ] && grep -q 'zach-opus-high-e2' '$T/stop.out'" "rc=$rc $(cat "$T/stop.out")"
+RICHOS_SESSION_ID="$CUR_SID" "$WS" discard zach-opus-high-e2 --reason "the reviewer rejected the approach" \
     --not-ceo-ordered "an internal experiment, not the CEO's order" >"$T/discard.out" 2>&1; rc=$?
 check "E2.3 discarded with its reason recorded" "[ $rc -eq 0 ]" "$(cat "$T/discard.out")"
 check "E2.4 its workspace and branch are gone" "[ ! -e '$NP2' ] && ! has_branch '$ENT' worktree-agent-ae2e2e2e2e2e2e2e2"
@@ -171,24 +171,24 @@ stop_gate; rc=$?
 check "E2.7 nothing pending: the turn may end" "[ $rc -eq 0 ]" "$(cat "$T/stop.err")"
 
 echo "=== E3 a cross-repository agent with two workspaces ==="
-RICHOS_SESSION_ID="$CUR_SID" bash "$ENGINE/mega-lander/create-teammate-worktree.sh" "$OTHER" zach-opus-e3 >"$T/create.out" 2>&1; rc=$?
-CC3="$T/other-wt/zach-opus-e3"
+RICHOS_SESSION_ID="$CUR_SID" bash "$ENGINE/mega-lander/create-teammate-worktree.sh" "$OTHER" zach-opus-high-e3 >"$T/create.out" 2>&1; rc=$?
+CC3="$T/other-wt/zach-opus-high-e3"
 check "E3.1 create-teammate-worktree.sh registered and created a cc/ workspace (point 1)" \
-    "[ $rc -eq 0 ] && has_branch '$OTHER' cc/zach-opus-e3 && [ -d '$CC3' ]" "$(cat "$T/create.out")"
-spawn "zach-opus-e3" "$(printf 'edit the other repository\ncross-repo-worktree: %s\n' "$CC3")"; rc=$?
+    "[ $rc -eq 0 ] && has_branch '$OTHER' cc/zach-opus-high-e3 && [ -d '$CC3' ]" "$(cat "$T/create.out")"
+spawn "zach-opus-high-e3" "$(printf 'edit the other repository\ncross-repo-worktree: %s\n' "$CC3")"; rc=$?
 check "E3.2 the spawn naming its cc/ workspace is registered" "[ $rc -eq 0 ]" "$(cat "$T/spawn.err")"
-platform_spawn "zach-opus-e3" "ae3e3e3e3e3e3e3e3"
+platform_spawn "zach-opus-high-e3" "ae3e3e3e3e3e3e3e3"
 NP3="$ENT/.claude/worktrees/agent-ae3e3e3e3e3e3e3e3"
 commit_in "$CC3" e3.txt
 subagent_stop "ae3e3e3e3e3e3e3e3"
-git -C "$OTHER" merge -q --no-edit cc/zach-opus-e3
+git -C "$OTHER" merge -q --no-edit cc/zach-opus-high-e3
 stop_gate; rc=$?
 check "E3.3 merged: landed on its own" "[ $rc -eq 0 ]" "$(cat "$T/stop.err")"
 check "E3.4 BOTH workspaces are gone (point 10)" "[ ! -e '$CC3' ] && [ ! -e '$NP3' ] && ! listed '$OTHER' '$CC3' && ! listed '$ENT' '$NP3'"
-check "E3.5 BOTH branches are gone (point 10)" "! has_branch '$OTHER' cc/zach-opus-e3 && ! has_branch '$ENT' worktree-agent-ae3e3e3e3e3e3e3e3"
+check "E3.5 BOTH branches are gone (point 10)" "! has_branch '$OTHER' cc/zach-opus-high-e3 && ! has_branch '$ENT' worktree-agent-ae3e3e3e3e3e3e3e3"
 git -C "$OTHER" worktree add -q "$T/rogue" -b cc/rogue      # made raw: registered by nothing
 commit_in "$T/rogue" rogue.txt                                 # ...with work in it, so it is not landed by itself
-spawn "zach-opus-e3x" "$(printf 'x\ncross-repo-worktree: %s/rogue\n' "$T")"; rc=$?
+spawn "zach-opus-high-e3x" "$(printf 'x\ncross-repo-worktree: %s/rogue\n' "$T")"; rc=$?
 check "E3.6 a spawn naming an unregistered workspace does not happen (point 3)" \
     "[ $rc -eq 2 ] && grep -q 'could not be registered' '$T/spawn.err'" "$(cat "$T/spawn.err")"
 stop_gate; rc=$?
@@ -207,36 +207,36 @@ echo "=== E5 ONE agent with workspaces in TWO other repositories ==="
 THIRD="$T/third"; new_repo "$THIRD"
 RICHOS_SESSION_ID="$CUR_SID" "$WS" integration --repo "$THIRD" --branch main \
     --why "the end-to-end run's body of work" >>"$T/integration.out" 2>&1
-RICHOS_SESSION_ID="$CUR_SID" bash "$ENGINE/mega-lander/create-teammate-worktree.sh" "$OTHER" zach-opus-e7 >"$T/create7a.out" 2>&1; rc1=$?
-RICHOS_SESSION_ID="$CUR_SID" bash "$ENGINE/mega-lander/create-teammate-worktree.sh" "$THIRD" zach-opus-e7 >"$T/create7b.out" 2>&1; rc2=$?
-CC7A="$T/other-wt/zach-opus-e7"
-CC7B="$T/third-wt/zach-opus-e7"
+RICHOS_SESSION_ID="$CUR_SID" bash "$ENGINE/mega-lander/create-teammate-worktree.sh" "$OTHER" zach-opus-high-e7 >"$T/create7a.out" 2>&1; rc1=$?
+RICHOS_SESSION_ID="$CUR_SID" bash "$ENGINE/mega-lander/create-teammate-worktree.sh" "$THIRD" zach-opus-high-e7 >"$T/create7b.out" 2>&1; rc2=$?
+CC7A="$T/other-wt/zach-opus-high-e7"
+CC7B="$T/third-wt/zach-opus-high-e7"
 check "E7.1 two repositories, ONE name: both cc/ workspaces are created and registered (points 1, 3)" \
-    "[ $rc1 -eq 0 ] && [ $rc2 -eq 0 ] && [ -d '$CC7A' ] && [ -d '$CC7B' ] && has_branch '$OTHER' cc/zach-opus-e7 && has_branch '$THIRD' cc/zach-opus-e7" \
+    "[ $rc1 -eq 0 ] && [ $rc2 -eq 0 ] && [ -d '$CC7A' ] && [ -d '$CC7B' ] && has_branch '$OTHER' cc/zach-opus-high-e7 && has_branch '$THIRD' cc/zach-opus-high-e7" \
     "$(cat "$T/create7a.out" "$T/create7b.out")"
 REC7="$CLAUDE_CONFIG_DIR/state/workspaces/agents/$CUR_SID--zach-opus-e7.json"
 check "E7.2 and both are on the ONE agent's record" \
     "[ \"\$(python3 -c 'import json,sys; print(len([w for w in json.load(open(sys.argv[1]))[\"workspaces\"] if not w.get(\"deleted_at\")]))' '$REC7')\" = 2 ]" \
     "$(cat "$REC7" 2>/dev/null | tr '\n' ' ' | cut -c1-300)"
-spawn "zach-opus-e7" "$(printf 'edit both repositories\ncross-repo-worktree: %s\ncross-repo-worktree: %s\n' "$CC7A" "$CC7B")"; rc=$?
+spawn "zach-opus-high-e7" "$(printf 'edit both repositories\ncross-repo-worktree: %s\ncross-repo-worktree: %s\n' "$CC7A" "$CC7B")"; rc=$?
 check "E7.3 a spawn naming BOTH registered workspaces is registered (clause 4c reads every marker line)" \
     "[ $rc -eq 0 ]" "$(cat "$T/spawn.err")"
 # NEGATIVE, with its first line REGISTERED so the refusal can only be about the
 # second: one real workspace for this name, one made by hand in another
 # repository. Nothing about a payload's FIRST marker line excuses its second.
-RICHOS_SESSION_ID="$CUR_SID" bash "$ENGINE/mega-lander/create-teammate-worktree.sh" "$OTHER" zach-opus-e7x >"$T/create7x.out" 2>&1; rc=$?
-CC7X="$T/other-wt/zach-opus-e7x"
+RICHOS_SESSION_ID="$CUR_SID" bash "$ENGINE/mega-lander/create-teammate-worktree.sh" "$OTHER" zach-opus-high-e7x >"$T/create7x.out" 2>&1; rc=$?
+CC7X="$T/other-wt/zach-opus-high-e7x"
 check "E7.4a POSITIVE CONTROL: the first of the two workspaces IS registered and created" \
     "[ $rc -eq 0 ] && [ -d '$CC7X' ]" "$(cat "$T/create7x.out")"
 git -C "$THIRD" worktree add -q "$T/rogue2" -b cc/rogue2      # made raw: registered by nothing
 commit_in "$T/rogue2" rogue2.txt                              # ...with work in it, so it is not landed by itself
-spawn "zach-opus-e7x" "$(printf 'x\ncross-repo-worktree: %s\ncross-repo-worktree: %s\n' "$CC7X" "$T/rogue2")"; rc=$?
+spawn "zach-opus-high-e7x" "$(printf 'x\ncross-repo-worktree: %s\ncross-repo-worktree: %s\n' "$CC7X" "$T/rogue2")"; rc=$?
 check "E7.4 NEGATIVE: a payload whose SECOND marker line names an unregistered workspace does not happen, and the refusal names THAT path (point 3)" \
     "[ $rc -ne 0 ] && grep -q 'rogue2' '$T/spawn.err'" "$(cat "$T/spawn.err")"
-RICHOS_SESSION_ID="$CUR_SID" "$WS" withdraw-cc --name zach-opus-e7x \
+RICHOS_SESSION_ID="$CUR_SID" "$WS" withdraw-cc --name zach-opus-high-e7x \
     --why "its spawn was refused for the workspace it did not register" >"$T/withdraw7.out" 2>&1; rc=$?
 check "E7.4b the registered half of that refused spawn is withdrawn: nothing left behind (point 3)" \
-    "[ $rc -eq 0 ] && [ ! -e '$CC7X' ] && ! has_branch '$OTHER' cc/zach-opus-e7x" "$(cat "$T/withdraw7.out")"
+    "[ $rc -eq 0 ] && [ ! -e '$CC7X' ] && ! has_branch '$OTHER' cc/zach-opus-high-e7x" "$(cat "$T/withdraw7.out")"
 stop_gate; rc=$?
 check "E7.4c the hand-made one is finished work of an ended session the lead is told about (point 3)" \
     "[ $rc -eq 0 ] && grep -q 'orphan-rogue2' '$T/stop.out'" "rc=$rc $(cat "$T/stop.out" "$T/stop.err")"
@@ -244,24 +244,24 @@ RICHOS_SESSION_ID="$CUR_SID" "$WS" discard orphan-rogue2 --reason "made by hand 
     --not-ceo-ordered "a test fixture made by this demonstration" >"$T/discard7.out" 2>&1; rc=$?
 check "E7.4d and it is discarded: workspace and branch gone" \
     "[ $rc -eq 0 ] && [ ! -e '$T/rogue2' ] && ! has_branch '$THIRD' cc/rogue2" "$(cat "$T/discard7.out")"
-platform_spawn "zach-opus-e7" "ae7e7e7e7e7e7e7e7"
+platform_spawn "zach-opus-high-e7" "ae7e7e7e7e7e7e7e7"
 NP7="$ENT/.claude/worktrees/agent-ae7e7e7e7e7e7e7e7"
 commit_in "$CC7A" e7a.txt; commit_in "$CC7B" e7b.txt; commit_in "$NP7" e7n.txt
 subagent_stop "ae7e7e7e7e7e7e7e7"
-git -C "$OTHER" merge -q --no-edit cc/zach-opus-e7
-git -C "$THIRD" merge -q --no-edit cc/zach-opus-e7
+git -C "$OTHER" merge -q --no-edit cc/zach-opus-high-e7
+git -C "$THIRD" merge -q --no-edit cc/zach-opus-high-e7
 git -C "$ENT" merge -q --no-edit "worktree-agent-ae7e7e7e7e7e7e7e7"
 stop_gate; rc=$?
 check "E7.5 landed as ONE (exit $rc)" "[ $rc -eq 0 ]" "$(cat "$T/stop.err")"
 check "E7.6 ALL THREE workspaces are gone — none is left behind (point 10)" \
     "[ ! -e '$CC7A' ] && [ ! -e '$CC7B' ] && [ ! -e '$NP7' ] && ! listed '$OTHER' '$CC7A' && ! listed '$THIRD' '$CC7B' && ! listed '$ENT' '$NP7'"
 check "E7.7 and all three branches are gone, in all three repositories (point 10)" \
-    "! has_branch '$OTHER' cc/zach-opus-e7 && ! has_branch '$THIRD' cc/zach-opus-e7 && ! has_branch '$ENT' worktree-agent-ae7e7e7e7e7e7e7e7"
+    "! has_branch '$OTHER' cc/zach-opus-high-e7 && ! has_branch '$THIRD' cc/zach-opus-high-e7 && ! has_branch '$ENT' worktree-agent-ae7e7e7e7e7e7e7e7"
 
 echo "=== E4 a session that ends mid-work ==="
-spawn "zach-opus-e4" "long work"; rc=$?
+spawn "zach-opus-high-e4" "long work"; rc=$?
 check "E4.1 spawn registered" "[ $rc -eq 0 ]" "$(cat "$T/spawn.err")"
-platform_spawn "zach-opus-e4" "ae4e4e4e4e4e4e4e4"
+platform_spawn "zach-opus-high-e4" "ae4e4e4e4e4e4e4e4"
 NP4="$ENT/.claude/worktrees/agent-ae4e4e4e4e4e4e4e4"
 commit_in "$NP4" e4.txt
 printf 'half-written\n' > "$NP4/draft.txt"
@@ -270,14 +270,14 @@ kill "$OLD_PID"
 while kill -0 "$OLD_PID" 2>/dev/null; do sleep 0.1; done      # the process no longer exists
 start_session "sess-e2e-two-2222"
 check "E4.2 the next session is told first (point 5)" \
-    "grep -q 'zach-opus-e4' '$T/last-start.json' && grep -q 'DUE WORK' '$T/last-start.json'" "$(cat "$T/last-start.json" "$T/last-start.err")"
+    "grep -q 'zach-opus-high-e4' '$T/last-start.json' && grep -q 'DUE WORK' '$T/last-start.json'" "$(cat "$T/last-start.json" "$T/last-start.err")"
 barrier "ae4e4e4e4e4e4e4e4" Bash; rc=$?
 check "E4.3 its agent cannot outlive the session: locked out (points 9, 12)" "[ $rc -eq 2 ]" "$(cat "$T/barrier.err")"
-spawn "zach-opus-e4b" "unrelated"; rc=$?
+spawn "zach-opus-high-e4b" "unrelated"; rc=$?
 check "E4.4 unrelated work starts while the previous session stays unresolved" "[ $rc -eq 0 ] && [ -e '$NP4/draft.txt' ]"
 stop_gate; rc=$?
-check "E4.5 its turn ends and the lead is told again" "[ $rc -eq 0 ] && grep -q 'zach-opus-e4' '$T/stop.out'" "rc=$rc $(cat "$T/stop.out")"
-RICHOS_SESSION_ID="$CUR_SID" "$WS" land zach-opus-e4 >"$T/land.out" 2>&1; rc=$?
+check "E4.5 its turn ends and the lead is told again" "[ $rc -eq 0 ] && grep -q 'zach-opus-high-e4' '$T/stop.out'" "rc=$rc $(cat "$T/stop.out")"
+RICHOS_SESSION_ID="$CUR_SID" "$WS" land zach-opus-high-e4 >"$T/land.out" 2>&1; rc=$?
 # Unmerged AND uncommitted: refused, and the file is kept. Which reason speaks
 # first is not point 8's business: since 25b2b68ff (hunt part 4, finding 13)
 # work that plainly is not merged is refused before anything is stopped, so the
@@ -289,12 +289,12 @@ check "E4.6a unmerged work with an uncommitted file is refused and the file is k
 # the ONLY thing between this work and its deletion. A land that ignored it
 # would succeed here and delete draft.txt with the workspace.
 git -C "$ENT" merge -q --no-edit "worktree-agent-ae4e4e4e4e4e4e4e4"
-RICHOS_SESSION_ID="$CUR_SID" "$WS" land zach-opus-e4 >"$T/land.out" 2>&1; rc=$?
+RICHOS_SESSION_ID="$CUR_SID" "$WS" land zach-opus-high-e4 >"$T/land.out" 2>&1; rc=$?
 check "E4.6 an uncommitted file refuses the land (point 8)" "[ $rc -eq 2 ] && grep -q 'uncommitted' '$T/land.out' && [ -e '$NP4/draft.txt' ]" \
     "rc=$rc draft=$([ -e "$NP4/draft.txt" ] && echo kept || echo GONE) $(cat "$T/land.out")"
 git -C "$NP4" add draft.txt && git -C "$NP4" commit -q -m "what it left"
 git -C "$ENT" merge -q --no-edit "worktree-agent-ae4e4e4e4e4e4e4e4"
-RICHOS_SESSION_ID="$CUR_SID" "$WS" land zach-opus-e4 >"$T/land.out" 2>&1; rc=$?
+RICHOS_SESSION_ID="$CUR_SID" "$WS" land zach-opus-high-e4 >"$T/land.out" 2>&1; rc=$?
 check "E4.7 committed and merged: landed by the next session" "[ $rc -eq 0 ]" "$(cat "$T/land.out")"
 check "E4.8 its workspace and branch are gone" "[ ! -e '$NP4' ] && ! has_branch '$ENT' worktree-agent-ae4e4e4e4e4e4e4e4"
 MAINLOG="$(git -C "$ENT" log --format=%s)"
@@ -304,9 +304,9 @@ stop_gate; rc=$?
 check "E4.10 nothing pending: the turn may end" "[ $rc -eq 0 ]" "$(cat "$T/stop.err")"
 
 echo "=== E6 the pair of events: refs created inside one tool call ==="
-spawn "zach-opus-e6" "make something"; rc=$?
+spawn "zach-opus-high-e6" "make something"; rc=$?
 check "E6.1 spawn registered" "[ $rc -eq 0 ]" "$(cat "$T/spawn.err")"
-platform_spawn "zach-opus-e6" "ae6e6e6e6e6e6e6e6"
+platform_spawn "zach-opus-high-e6" "ae6e6e6e6e6e6e6e6"
 NP6="$ENT/.claude/worktrees/agent-ae6e6e6e6e6e6e6e6"
 # ONE tool call: the lock-out opens it, the agent commits on a side branch,
 # switches away and leaves a plain branch behind, and the catch-all PostToolUse
@@ -323,12 +323,12 @@ check "E6.2 both refs it created are recorded against it (points 3, 10)" \
     "grep -q 'e6-side' '$REC6' && grep -q 'e6-spare' '$REC6'" "$(head -40 "$REC6" 2>/dev/null) $(cat "$T/observe.err")"
 subagent_stop "ae6e6e6e6e6e6e6e6"
 git -C "$ENT" merge -q --no-edit "worktree-agent-ae6e6e6e6e6e6e6e6"   # its OWN branch is in
-RICHOS_SESSION_ID="$CUR_SID" "$WS" land zach-opus-e6 >"$T/land6.out" 2>&1; rc=$?
+RICHOS_SESSION_ID="$CUR_SID" "$WS" land zach-opus-high-e6 >"$T/land6.out" 2>&1; rc=$?
 check "E6.3 the land is held by the work it left on a side branch, by name (points 5, 8)" \
     "[ $rc -eq 2 ] && grep -q 'e6-side' '$T/land6.out'" "$(cat "$T/land6.out")"
 stop_gate; rc=$?
 check "E6.4 so it stays due and the lead is told at the turn end (point 5)" \
-    "[ $rc -eq 0 ] && grep -q 'zach-opus-e6' '$T/stop.out'" "rc=$rc $(cat "$T/stop.out" "$T/stop.err")"
+    "[ $rc -eq 0 ] && grep -q 'zach-opus-high-e6' '$T/stop.out'" "rc=$rc $(cat "$T/stop.out" "$T/stop.err")"
 git -C "$ENT" merge -q --no-edit e6-side
 stop_gate; rc=$?
 check "E6.5 merged: nothing it produced was lost, and it lands on its own" "[ $rc -eq 0 ]" "$(cat "$T/stop.err")"

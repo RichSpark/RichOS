@@ -566,7 +566,7 @@ def role_act_claims(message, roles):
 # ARM 1b — FIRST-PERSON DISPATCH
 # --------------------------------------------------------------------------
 
-AGENT_NAME = r"[a-z][a-z0-9]{1,15}-(?:fable|opus|sonnet|haiku)-[a-z0-9]{1,12}"
+AGENT_NAME = r"[a-z][a-z0-9]{1,15}-(?:fable|opus|sonnet|haiku)-(?:(?:low|medium|high|xhigh|max)-)?[a-z0-9]{1,12}"
 DISPATCH_VERB = r"(?:dispatch|spawn|launch|brief|re-?spawn|send\s+in|kick\s+off|start|fire\s+up|bring\s+in)"
 DISPATCH_GERUND = (r"(?:dispatching|spawning|launching|briefing|re-?spawning|sending\s+in|"
                    r"kicking\s+off|starting|firing\s+up|bringing\s+in)")

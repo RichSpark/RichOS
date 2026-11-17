@@ -296,7 +296,7 @@ def normalize_tokens(text):
     s = re.sub(r"https?://\S+", " ", s)
     s = re.sub(r"[/~][\w./~+-]{3,}", " ", s)                       # paths
     s = re.sub(r"\b[0-9a-f]{7,}\b", " ", s)                        # shas / ids
-    s = re.sub(r"\b[a-z]+-(?:opus|sonnet|fable|haiku)-[a-z0-9]+\b", " ", s)
+    s = re.sub(r"\b[a-z]+-(?:opus|sonnet|fable|haiku)-(?:(?:low|medium|high|xhigh|max)-)?[a-z0-9]+\b", " ", s)
     s = re.sub(r"\bagent-[a-z0-9]{6,}\b", " ", s)
     s = re.sub(r"\b\d+\b", " ", s)
     s = re.sub(r"[^a-z]+", " ", s)

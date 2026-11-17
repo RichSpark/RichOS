@@ -2,27 +2,27 @@
 
 **What this is:** an illustrative, narrated trace of one realistic feature
 through this engine's *actual* doctrine and mechanics — every step cites the
-real file/hook/doctrine section that governs it, and the hook messages quoted
+real file/hook/doctrine section that governs it and the hook messages quoted
 below are the real ones these hooks actually print.
 
 **What this is NOT:** a captured transcript of a real session. No live agents
-ran this; the exact commit SHAs, teammate names, and timestamps below are
+ran this; the exact commit SHAs, teammate names and timestamps below are
 illustrative, chosen to make the story concrete rather than abstract. The
 **runnable counterpart** of the enforcement beats — the parts of this story
 that are real hooks and real git mechanics, not narration — is
 `scripts/demo.sh` (README's "60-second proof"): run it and you'll watch the
 isolation guard block a bad spawn, the write-guard block a direct edit, a
 real worktree/commit/merge, a planted defect get rejected, the fix get
-re-verified, and the integrity probe confirm the wiring — unattended, in
+re-verified and the integrity probe confirm the wiring — unattended, in
 about a minute, against a throwaway sample. This document tells the fuller
 story `demo.sh` can't (it's plain bash, not live agents): the full four-step
-QA pipeline, a wiki consultation, and a real FIX-FIRST bounce with a design
+QA pipeline, a wiki consultation and a real FIX-FIRST bounce with a design
 gatekeeper signoff at the end.
 
 The feature: **add a bulk CSV export button to a fictional "Orders" list
 screen** — the same illustrative feature already used in
 `qa-audits/EXAMPLE_AUDIT.md` and `ui-ux-signoffs/EXAMPLE_SIGNOFF.md`, so this
-walkthrough, that audit, and that signoff read as one continuous story
+walkthrough, that audit and that signoff read as one continuous story
 instead of three disconnected samples.
 
 ---
@@ -75,7 +75,8 @@ engineer"). It spawns a named teammate with the `Agent` tool, exactly per
   "tool_name": "Agent",
   "tool_input": {
     "subagent_type": "backend-engineer",
-    "name": "be-sonnet-1",
+    "name": "be-sonnet-high-1",
+    "effort": "high",
     "isolation": "worktree",
     "prompt": "Add a bulk CSV export button to the Orders list. Export every row matching the active filter (not just the current page), with a collision-safe file name. Commit on your worktree branch when done; do not merge, push, or deploy. If I message you that main moved under you, acknowledge it durably — I cannot rely on a reply reaching me: scripts/inflight-ack.sh --sha <sha> --impact <conflict|stale-record|grew-scope|none> --detail \"<your own words>\" --paths \"<paths or none>\"."
   }
@@ -84,16 +85,18 @@ engineer"). It spawns a named teammate with the `Agent` tool, exactly per
 
 The `be` role token isn't arbitrary — Dean picks it per `team/NAMING.md`'s
 mnemonic roster convention (short, distinctive, mnemonic where natural); the
-full `<role>-<model>-<identifier>` shape around it is guard-enforced, with the
-`<model>` token kept truthful to what the instance actually boots on.
+full `<role>-<model>-<effort>-<identifier>` shape around it is guard-enforced, with the
+`<model>` token kept truthful to what the instance actually boots on and the
+`<effort>` word to the level it is started at.
 
-Four things are non-negotiable here, per doctrine, and the guards enforce
+Four things are non-negotiable here, per doctrine and the guards enforce
 all four:
 
 - **`isolation: "worktree"`** — every file-writing teammate spawn requires
   one (`CLAUDE.md` → Git Worktree Isolation).
-- **A well-formed, truthful `<role>-<model>-<identifier>` name** — never bare,
-  never reused, and the `<model>` token must name the model the instance boots on.
+- **A well-formed, truthful `<role>-<model>-<effort>-<identifier>` name** — never bare,
+  never reused, the `<model>` token must name the model the instance boots on and
+  the `<effort>` word the level it is started at.
 - **The whole task in the spawn prompt** — the mailbox is lossy, so the
   prompt has to be self-contained (`CLAUDE.md` → How to Delegate).
 - **The in-flight ack contract in the prompt** — a worktree is a snapshot, so a
@@ -122,7 +125,7 @@ for a spawn missing `isolation`:
 ```
 
 The spawn above is compliant, so `guard-worktree-isolation.sh` →
-`guard-definition-drift.sh` → `verify-agent-prompt.sh` all pass (exit 0), and
+`guard-definition-drift.sh` → `verify-agent-prompt.sh` all pass (exit 0) and
 the harness lands the new teammate in a real, dedicated git worktree:
 `.claude/worktrees/agent-<id>/` on branch `worktree-<id>` — this is what
 `isolation: "worktree"` *produces*, not just a config flag
@@ -134,9 +137,9 @@ message quoted above, matching `scripts/demo.sh` Beat 1).*
 
 ---
 
-## Step 2 — the engineer builds, and the commit is the handoff
+## Step 2 — the engineer builds and the commit is the handoff
 
-`be-sonnet-1` works inside its worktree: adds the export endpoint
+`be-sonnet-high-1` works inside its worktree: adds the export endpoint
 (queries the full filtered result set server-side, not just the rendered
 page) and the button. It never touches the shared main checkout — if it
 tried, `guard-main-checkout-writes.sh` would block the write with its own
@@ -156,9 +159,9 @@ $ git -C .claude/worktrees/agent-eng1 commit -m "Add bulk CSV export to Orders l
 ```
 
 Per `skills/using-git-worktrees/SKILL.md`: **the commit is the handoff** —
-no message required, and none trusted if one arrives. The teammate goes idle;
+no message required and none trusted if one arrives. The teammate goes idle;
 the `TeammateIdle` hook appends a durable line to
-`idle-events.jsonl` (session team dir), and `TaskCompleted` does the same to
+`idle-events.jsonl` (session team dir) and `TaskCompleted` does the same to
 `task-events.jsonl`. The orchestrator never waits on or trusts a chat
 message — it reads **ground truth**:
 
@@ -209,7 +212,7 @@ automation QA teammate (`isolation: "worktree"`, same spawn discipline as
 Step 1). This run, every automated check passes cleanly: column order
 matches the spec, the full filtered result set exports (not just the current
 page), a 12,000-row synthetic export completes without timeout, the
-file-name is collision-safe, and — per the doctrine's "pair a positive-shape
+file-name is collision-safe and — per the doctrine's "pair a positive-shape
 probe" rule — the permission-denied test is paired with a positive
 authorized-success test, not left as a negative-only check. Audit committed
 to `qa-audits/`.
@@ -245,13 +248,13 @@ doctrine: "audit screenshots must cover the FULL scroll depth").
 
 **FIX-FIRST bounce:** per `CLAUDE.md` → QA Pipeline, *"any failure at any
 step loops back to step 1"* — no partial credit, no shipping around a failed
-gate. The orchestrator re-spawns `be-sonnet-1` (or the same teammate,
+gate. The orchestrator re-spawns `be-sonnet-high-1` (or the same teammate,
 resumed) with the defect: add a visible in-progress state for large exports.
 The engineer commits the fix on its worktree branch; the orchestrator lands
 it through the same single-writer sequence as Step 3.
 
 **Re-verification, not trust:** functional QA re-runs against the new
-commit — never against the original failing one, and never taking the
+commit — never against the original failing one and never taking the
 engineer's word for it (the same discipline `qa-audits/EXAMPLE_AUDIT.md`
 demonstrates for its own two defects). This time the large-export progress
 state shows correctly. **PASS.**
@@ -268,12 +271,12 @@ real target surface, **≥9/10 REQUIRED, with every gap below 10 documented in
 the committed signoff file** (`CLAUDE.md` → QA Pipeline). The gatekeeper
 reviews the whole feature live — the same discipline
 `ui-ux-signoffs/EXAMPLE_SIGNOFF.md` (this exact fictional feature) models in
-full: a verification-mode disclosure, a first-glance verdict, and a
+full: a verification-mode disclosure, a first-glance verdict and a
 "Documented gaps" section instead of a silent score.
 
 The gatekeeper confirms the large-export progress state now works (the fix
 from Step 5), the underlying data correctness from Step 4's automation pass
-holds, empty/error states are handled, and navigation is never trapped. But
+holds, empty/error states are handled and navigation is never trapped. But
 during this broader pass it notices something functional QA's narrower check
 didn't cover: **a *fast* export (small result set) completes with no visible
 success acknowledgment at all** — a real but minor trust gap, distinct from
@@ -285,7 +288,7 @@ The gatekeeper's actual committed verdict (`ui-ux-signoffs/EXAMPLE_SIGNOFF.md`):
 
 > **Score: 9/10 — GO.** Held back the 10th point for the missing success
 > acknowledgment on fast exports — a real, if minor, trust gap. It does not
-> block release: the feature is correct, discoverable, and recoverable in
+> block release: the feature is correct, discoverable and recoverable in
 > every state that matters. **Recommendation: ship this feature.** The
 > documented gap above should be scheduled as a small follow-up, not looped
 > back to the engineer as a blocking fix.
@@ -321,7 +324,7 @@ ECS and do not become knowledge corrections.
 | In this document | In `scripts/demo.sh` |
 |---|---|
 | The full four-step QA pipeline (automation → functional → gatekeeper), a wiki consultation, a design signoff with a documented gap | A single scripted "QA check," narrated as a stand-in for a live QA agent's verdict (its own `[NARRATED SIMULATION]` labeling) |
-| Illustrative teammate names, SHAs, and hook output reproduced from the real source | The literal hook binaries and real git mechanics, run live, right now, on your machine |
+| Illustrative teammate names, SHAs and hook output reproduced from the real source | The literal hook binaries and real git mechanics, run live, right now, on your machine |
 | A story you read | A verdict you watch happen — `0`/`2` exit codes, real refusals, a real merge, a real probe pass |
 
 Run `scripts/demo.sh` for the runnable proof of the mechanics this document

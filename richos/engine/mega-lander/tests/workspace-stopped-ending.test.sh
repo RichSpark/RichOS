@@ -108,7 +108,7 @@ start_session() {
     payload SessionStart "{\"session_id\":\"$1\",\"cwd\":\"$ENT\"}" | bash "$HOOKS/workspace-lifecycle.sh" >/dev/null 2>&1
 }
 spawn() { # <name> <prompt> -> rc of the spawn guard
-    python3 -c 'import json,sys; print(json.dumps({"hook_event_name":"PreToolUse","session_id":sys.argv[1],"tool_use_id":"tu-"+sys.argv[2],"tool_name":"Agent","cwd":sys.argv[4],"tool_input":{"name":sys.argv[2],"subagent_type":"zach","isolation":"worktree","prompt":sys.argv[3]}}))' "$CUR_SID" "$1" "$2" "$ENT" \
+    python3 -c 'import json,sys; print(json.dumps({"hook_event_name":"PreToolUse","session_id":sys.argv[1],"tool_use_id":"tu-"+sys.argv[2],"tool_name":"Agent","cwd":sys.argv[4],"tool_input":{"name":sys.argv[2],"effort":"high","subagent_type":"zach","isolation":"worktree","prompt":sys.argv[3]}}))' "$CUR_SID" "$1" "$2" "$ENT" \
         | bash "$HOOKS/guard-worktree-isolation.sh" >/dev/null 2>"$T/spawn.err"
 }
 platform_spawn() { # <name> <agent-id>: the native workspace, SubagentStart, and the Agent result
@@ -155,33 +155,33 @@ ws integration --repo "$OTHER" --branch main --why "the stopped-ending suite, ot
 
 # ===========================================================================
 begin S1 "An agent the platform STOPPED is finished automatically, and its workspaces and branches are deleted with nobody marking anything by hand (point 11 -> points 5, 4, 7, 10)"
-RICHOS_SESSION_ID="$CUR_SID" bash "$CREATE" "$OTHER" zach-opus-s1 >/dev/null 2>&1
-CC1="$T/other-wt/zach-opus-s1"
-spawn "zach-opus-s1" "$(printf 'read a page\ncross-repo-worktree: %s\n' "$CC1")"
-platform_spawn "zach-opus-s1" "as1s1s1s1s1s1s1s1"
+RICHOS_SESSION_ID="$CUR_SID" bash "$CREATE" "$OTHER" zach-opus-high-s1 >/dev/null 2>&1
+CC1="$T/other-wt/zach-opus-high-s1"
+spawn "zach-opus-high-s1" "$(printf 'read a page\ncross-repo-worktree: %s\n' "$CC1")"
+platform_spawn "zach-opus-high-s1" "as1s1s1s1s1s1s1s1"
 NAT1="$ENT/.claude/worktrees/agent-as1s1s1s1s1s1s1s1"
 sub "S1.1 both of its workspaces exist and are registered before the stop (point 10)" \
-    "[ -d '$CC1' ] && [ -d '$NAT1' ] && [ -n \"\$(agent_rec zach-opus-s1)\" ]" \
-    "cc=$CC1 native=$NAT1 rec=$(agent_rec zach-opus-s1)"
+    "[ -d '$CC1' ] && [ -d '$NAT1' ] && [ -n \"\$(agent_rec zach-opus-high-s1)\" ]" \
+    "cc=$CC1 native=$NAT1 rec=$(agent_rec zach-opus-high-s1)"
 sub "S1.2 while it is running it is not finished: nothing is pending and the turn may end" \
     "stop_gate" "$(cat "$T/stop.err" 2>/dev/null)"
 
 # The CEO stops it. No SubagentStop, no TaskStop, no `workspaces.sh stop`.
-platform_stops "zach-opus-s1" "as1s1s1s1s1s1s1s1"
-STOP_MARKED="$(ls "$STORE"/agents/*zach-opus-s1.json 2>/dev/null | head -1)"
+platform_stops "zach-opus-high-s1" "as1s1s1s1s1s1s1s1"
+STOP_MARKED="$(ls "$STORE"/agents/*zach-opus-high-s1.json 2>/dev/null | head -1)"
 sub "S1.3 the kill itself writes NOTHING to the state store: the record still has no end" \
     "[ -z \"\$(jget '$STOP_MARKED' end.signal)\" ]" "end=$(jget "$STOP_MARKED" end.signal)"
 
 stop_gate; GATE_RC=$?
 sub "S1.4 the very next automatic moment (the turn-end gate) takes it: rc=0, nothing left pending" \
-    "[ $GATE_RC -eq 0 ] && ! grep -q 'zach-opus-s1' '$T/stop.err'" "rc=$GATE_RC err=$(cat "$T/stop.err")"
+    "[ $GATE_RC -eq 0 ] && ! grep -q 'zach-opus-high-s1' '$T/stop.err'" "rc=$GATE_RC err=$(cat "$T/stop.err")"
 sub "S1.5 its cc/ workspace and its native workspace are both GONE (points 4, 10)" \
     "[ ! -d '$CC1' ] && [ ! -d '$NAT1' ] && ! listed '$OTHER' '$CC1' && ! listed '$ENT' '$NAT1'" \
     "cc=$( [ -d "$CC1" ] && echo present || echo gone) native=$( [ -d "$NAT1" ] && echo present || echo gone)"
 sub "S1.6 both branches are GONE (point 4)" \
-    "! has_branch '$OTHER' cc/zach-opus-s1 && ! has_branch '$ENT' worktree-agent-as1s1s1s1s1s1s1s1" \
+    "! has_branch '$OTHER' cc/zach-opus-high-s1 && ! has_branch '$ENT' worktree-agent-as1s1s1s1s1s1s1s1" \
     "$(git -C "$OTHER" branch --format='%(refname:short)' | tr '\n' ' ')"
-D1="$(done_rec zach-opus-s1)"
+D1="$(done_rec zach-opus-high-s1)"
 sub "S1.7 the recorded ending names the platform's own signal, not a person" \
     "[ \"\$(jget '$D1' end.signal)\" = stopped ] && [ \"\$(jget '$D1' end.source)\" = stoppedByUser ]" \
     "signal=$(jget "$D1" end.signal) source=$(jget "$D1" end.source) detail=$(jget "$D1" end.detail)"
@@ -191,20 +191,20 @@ verdict
 
 # ===========================================================================
 begin S2 "A stopped agent whose work is NOT in the branch it integrates on is pending, not deleted: the lead is told at each turn end until it is shelved and discarded"
-RICHOS_SESSION_ID="$CUR_SID" bash "$CREATE" "$OTHER" zach-opus-s2 >/dev/null 2>&1
-CC2="$T/other-wt/zach-opus-s2"
-spawn "zach-opus-s2" "$(printf 'write a page\ncross-repo-worktree: %s\n' "$CC2")"
-platform_spawn "zach-opus-s2" "as2s2s2s2s2s2s2s2"
+RICHOS_SESSION_ID="$CUR_SID" bash "$CREATE" "$OTHER" zach-opus-high-s2 >/dev/null 2>&1
+CC2="$T/other-wt/zach-opus-high-s2"
+spawn "zach-opus-high-s2" "$(printf 'write a page\ncross-repo-worktree: %s\n' "$CC2")"
+platform_spawn "zach-opus-high-s2" "as2s2s2s2s2s2s2s2"
 commit_in "$CC2" note.txt
-platform_stops "zach-opus-s2" "as2s2s2s2s2s2s2s2"
+platform_stops "zach-opus-high-s2" "as2s2s2s2s2s2s2s2"
 stop_gate; GATE_RC=$?
 sub "S2.1 the turn ends and the lead is told, by name (R2)" \
-    "[ $GATE_RC -eq 0 ] && grep -q 'zach-opus-s2' '$T/stop.out'" "rc=$GATE_RC out=$(head -c 400 "$T/stop.out") err=$(head -c 400 "$T/stop.err")"
+    "[ $GATE_RC -eq 0 ] && grep -q 'zach-opus-high-s2' '$T/stop.out'" "rc=$GATE_RC out=$(head -c 400 "$T/stop.out") err=$(head -c 400 "$T/stop.err")"
 sub "S2.2 the reason given is the stop, quoted from the platform's record (point 11)" \
     "grep -qi 'stopped' '$T/stop.out'" "$(grep -i stopped "$T/stop.out" | head -2)"
 sub "S2.3 its committed work is still there: nothing finished is discarded on its own (point 7)" \
     "[ -d '$CC2' ] && [ -f '$CC2/note.txt' ]" "cc2=$CC2"
-ws discard zach-opus-s2 --reason "the stopped-ending suite: this work was not wanted" \
+ws discard zach-opus-high-s2 --reason "the stopped-ending suite: this work was not wanted" \
     --not-ceo-ordered "the suite spawned it, not the CEO" >"$T/discard.out" 2>&1; DRC=$?
 sub "S2.4 Rich's discard is accepted for a stopped agent (it is finished), and deletes both workspaces" \
     "[ $DRC -eq 0 ] && [ ! -d '$CC2' ] && [ ! -d '$ENT/.claude/worktrees/agent-as2s2s2s2s2s2s2s2' ]" \
@@ -214,25 +214,25 @@ verdict
 
 # ===========================================================================
 begin S3 "The flag is the whole of it: a running agent is never finished by this path, and a PAUSED agent that is stopped is (point 11)"
-RICHOS_SESSION_ID="$CUR_SID" bash "$CREATE" "$OTHER" zach-opus-s3 >/dev/null 2>&1
-CC3="$T/other-wt/zach-opus-s3"
-spawn "zach-opus-s3" "$(printf 'keep working\ncross-repo-worktree: %s\n' "$CC3")"
-platform_spawn "zach-opus-s3" "as3s3s3s3s3s3s3s3"
+RICHOS_SESSION_ID="$CUR_SID" bash "$CREATE" "$OTHER" zach-opus-high-s3 >/dev/null 2>&1
+CC3="$T/other-wt/zach-opus-high-s3"
+spawn "zach-opus-high-s3" "$(printf 'keep working\ncross-repo-worktree: %s\n' "$CC3")"
+platform_spawn "zach-opus-high-s3" "as3s3s3s3s3s3s3s3"
 # A per-agent record exists for it, WITHOUT the flag: the ordinary running case.
 mkdir -p "$CLAUDE_CONFIG_DIR/projects/-tmp-entity/$CUR_SID/subagents"
-python3 -c 'import json,sys; json.dump({"agentType":"zach","name":"zach-opus-s3","spawnDepth":1}, open(sys.argv[1],"w"))' \
+python3 -c 'import json,sys; json.dump({"agentType":"zach","name":"zach-opus-high-s3","spawnDepth":1}, open(sys.argv[1],"w"))' \
     "$CLAUDE_CONFIG_DIR/projects/-tmp-entity/$CUR_SID/subagents/agent-as3s3s3s3s3s3s3s3.meta.json"
 stop_gate; GATE_RC=$?
-R3="$(agent_rec zach-opus-s3)"
+R3="$(agent_rec zach-opus-high-s3)"
 sub "S3.1 a record with no stop flag leaves the agent running: no end, workspaces untouched" \
     "[ $GATE_RC -eq 0 ] && [ -z \"\$(jget '$R3' end.signal)\" ] && [ -d '$CC3' ]" \
     "rc=$GATE_RC end=$(jget "$R3" end.signal)"
-ws pause zach-opus-s3 --until "the CEO's answer" >/dev/null 2>&1
+ws pause zach-opus-high-s3 --until "the CEO's answer" >/dev/null 2>&1
 sub "S3.2 Rich's pause holds while it is paused: still not finished, still not deleted" \
     "stop_gate && [ -d '$CC3' ]" "$(cat "$T/stop.err")"
-platform_stops "zach-opus-s3" "as3s3s3s3s3s3s3s3"
+platform_stops "zach-opus-high-s3" "as3s3s3s3s3s3s3s3"
 stop_gate >/dev/null 2>&1
-D3="$(done_rec zach-opus-s3)"
+D3="$(done_rec zach-opus-high-s3)"
 sub "S3.3 a pause ends when the agent is stopped: it is finished and its workspaces go (point 11)" \
     "[ -n '$D3' ] && [ \"\$(jget '$D3' end.signal)\" = stopped ] && [ ! -d '$CC3' ]" \
     "done=$D3 signal=$(jget "$D3" end.signal) cc3=$( [ -d "$CC3" ] && echo present || echo gone)"
@@ -240,15 +240,15 @@ verdict
 
 # ===========================================================================
 begin S4 "A stopped agent the platform RESTARTS is refused every tool before anything has looked at it (point 11 -> point 9)"
-RICHOS_SESSION_ID="$CUR_SID" bash "$CREATE" "$OTHER" zach-opus-s4 >/dev/null 2>&1
-CC4="$T/other-wt/zach-opus-s4"
-spawn "zach-opus-s4" "$(printf 'work then be stopped\ncross-repo-worktree: %s\n' "$CC4")"
-platform_spawn "zach-opus-s4" "as4s4s4s4s4s4s4s4"
+RICHOS_SESSION_ID="$CUR_SID" bash "$CREATE" "$OTHER" zach-opus-high-s4 >/dev/null 2>&1
+CC4="$T/other-wt/zach-opus-high-s4"
+spawn "zach-opus-high-s4" "$(printf 'work then be stopped\ncross-repo-worktree: %s\n' "$CC4")"
+platform_spawn "zach-opus-high-s4" "as4s4s4s4s4s4s4s4"
 barrier "as4s4s4s4s4s4s4s4" Edit; R1=$?
 sub "S4.1 before the stop it writes like any registered worker" "[ $R1 -eq 0 ]" "rc=$R1 $(cat "$T/barrier.err")"
 # Stopped, and the FIRST thing that happens next is the platform restarting it:
 # no gate, no command, nobody noticing.
-platform_stops "zach-opus-s4" "as4s4s4s4s4s4s4s4"
+platform_stops "zach-opus-high-s4" "as4s4s4s4s4s4s4s4"
 barrier "as4s4s4s4s4s4s4s4" Edit; R2=$?
 sub "S4.2 restarted after the stop, its very next tool call is REFUSED (point 9)" \
     "[ $R2 -ne 0 ] && grep -qi 'finished' '$T/barrier.err'" "rc=$R2 $(cat "$T/barrier.err" | head -c 300)"
@@ -261,14 +261,14 @@ verdict
 
 # ===========================================================================
 begin S5 "A message to a stopped agent is refused rather than restarting it (point 11 -> point 9)"
-RICHOS_SESSION_ID="$CUR_SID" bash "$CREATE" "$OTHER" zach-opus-s5 >/dev/null 2>&1
-CC5="$T/other-wt/zach-opus-s5"
-spawn "zach-opus-s5" "$(printf 'be messaged\ncross-repo-worktree: %s\n' "$CC5")"
-platform_spawn "zach-opus-s5" "as5s5s5s5s5s5s5s5"
-resume_guard "zach-opus-s5" "carry on"; M1=$?
+RICHOS_SESSION_ID="$CUR_SID" bash "$CREATE" "$OTHER" zach-opus-high-s5 >/dev/null 2>&1
+CC5="$T/other-wt/zach-opus-high-s5"
+spawn "zach-opus-high-s5" "$(printf 'be messaged\ncross-repo-worktree: %s\n' "$CC5")"
+platform_spawn "zach-opus-high-s5" "as5s5s5s5s5s5s5s5"
+resume_guard "zach-opus-high-s5" "carry on"; M1=$?
 sub "S5.1 while it runs, a message to it is allowed" "[ $M1 -eq 0 ]" "rc=$M1 $(cat "$T/resume.err" | head -c 200)"
-platform_stops "zach-opus-s5" "as5s5s5s5s5s5s5s5"
-resume_guard "zach-opus-s5" "carry on"; M2=$?
+platform_stops "zach-opus-high-s5" "as5s5s5s5s5s5s5s5"
+resume_guard "zach-opus-high-s5" "carry on"; M2=$?
 sub "S5.2 once stopped, the same message is REFUSED as finished work" \
     "[ $M2 -ne 0 ] && grep -qi 'finished' '$T/resume.err'" "rc=$M2 $(cat "$T/resume.err" | head -c 300)"
 verdict

@@ -779,7 +779,7 @@ narrate 'Someone (or an over-eager orchestrator) tries to spawn an "engineer" to
 narrate 'fix a bug directly, forgetting isolation: "worktree". Watch what happens:'
 label_real "guard-worktree-isolation.sh (the same hook that runs on every real Agent spawn)"
 
-BAD_SPAWN_PAYLOAD='{"tool_name":"Agent","tool_input":{"subagent_type":"engineer","name":"engineer-sonnet-1","prompt":"Fix the greeting bug in app/greeting.py."},"session_id":"demo0000-0000-4000-8000-000000000000"}'
+BAD_SPAWN_PAYLOAD='{"tool_name":"Agent","tool_input":{"subagent_type":"engineer","name":"engineer-sonnet-high-1","effort":"high","prompt":"Fix the greeting bug in app/greeting.py."},"session_id":"demo0000-0000-4000-8000-000000000000"}'
 set +e
 BEAT1_OUT="$(printf '%s' "$BAD_SPAWN_PAYLOAD" | "$SAMPLE_ROOT/scripts/hooks/guard-worktree-isolation.sh" 2>&1)"
 BEAT1_RC=$?
@@ -838,13 +838,13 @@ fi
 # ---------------------------------------------------------------------------
 heading "Beat 3 — the same guard lets a correctly-isolated spawn through"
 narrate 'This time the spawn does it right: isolation: "worktree", a proper'
-narrate 'truthful "<role>-<model>-<identifier>" name, and the ack contract that'
+narrate 'truthful "<role>-<model>-<effort>-<identifier>" name, and the ack contract that'
 narrate 'tells this teammate how to acknowledge a land that moves main under it.'
 narrate 'It should sail through the full PreToolUse[Agent]'
 narrate 'chain untouched:'
 label_real "guard-worktree-isolation.sh -> guard-definition-drift.sh -> verify-agent-prompt.sh (the real chain, in the real order)"
 
-GOOD_SPAWN_PAYLOAD='{"tool_name":"Agent","tool_input":{"subagent_type":"engineer","name":"engineer-sonnet-1","isolation":"worktree","prompt":"Fix the greeting bug in app/greeting.py. If I message you that main moved under you, acknowledge it durably with scripts/inflight-ack.sh --sha <sha> --impact <kind> --detail \"...\" --paths \"...\" — I cannot rely on a reply reaching me."},"session_id":"demo0000-0000-4000-8000-000000000000","tool_use_id":"toolu_demo_beat3"}'
+GOOD_SPAWN_PAYLOAD='{"tool_name":"Agent","tool_input":{"subagent_type":"engineer","name":"engineer-sonnet-high-1","effort":"high","isolation":"worktree","prompt":"Fix the greeting bug in app/greeting.py. If I message you that main moved under you, acknowledge it durably with scripts/inflight-ack.sh --sha <sha> --impact <kind> --detail \"...\" --paths \"...\" — I cannot rely on a reply reaching me."},"session_id":"demo0000-0000-4000-8000-000000000000","tool_use_id":"toolu_demo_beat3"}'
 BEAT3_OK=1
 for hook in guard-worktree-isolation.sh guard-definition-drift.sh verify-agent-prompt.sh; do
     set +e

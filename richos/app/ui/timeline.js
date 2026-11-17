@@ -568,11 +568,12 @@
   }
 
   /// **A teammate is shown by its name** (proto-teammate shelf plan §7): the engine starts a
-  /// named teammate as `<teammate>-<model>-<id>` (`mark-sonnet-1a2b3c4d5e6f`), the shape
-  /// `teammate-name.sh` enforces, and a person reads "Mark". Anything not of that shape is
+  /// named teammate as `<teammate>-<model>-<effort>-<id>` (`mark-sonnet-high-1a2b3c4d5e6f`), the
+  /// shape `teammate-name.sh` enforces, and a person reads "Mark". A name recorded before the
+  /// effort word (`mark-sonnet-1a2b3c4d5e6f`) reads the same. Anything not of either shape is
   /// shown as it came; the Output panel's "by …" uses this same function.
   function teammateName(raw) {
-    const m = /^([a-z][a-z0-9]{1,15})-[a-z]+-[a-z0-9]{1,12}$/.exec(raw || "");
+    const m = /^([a-z][a-z0-9]{1,15})-[a-z]+-(?:(?:low|medium|high|xhigh|max)-)?[a-z0-9]{1,12}$/.exec(raw || "");
     return m ? m[1].charAt(0).toUpperCase() + m[1].slice(1) : raw;
   }
 

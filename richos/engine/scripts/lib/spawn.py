@@ -783,10 +783,12 @@ USAGE = """usage: spawn.sh <teammate-name> --repo <repo> [--repo <repo> ...]
        spawn.sh <teammate-name> --next-name [--type <subagent-type>] [--taken <name> ...]
                 [--registry <dir> ...]
 
-  <teammate-name>      <role>-<model>-<identifier>, e.g. zach-opus-spawn1, or only
-                       <model>-<identifier>, and the role is --type. THE FIRST NAME
-                       IS NUMBERED HERE: with an active zach the teammate starts as
-                       zach2-opus-spawn1, with zach and zach2 active as zach3-...;
+  <teammate-name>      <role>-<model>-<effort>-<identifier>, e.g.
+                       zach-opus-high-spawn1, or only <model>-<effort>-<identifier>,
+                       and the role is --type. The effort word is the --effort level
+                       (CEO, 2026-11-17). THE FIRST NAME IS NUMBERED HERE: with an
+                       active zach the teammate starts as zach2-opus-high-spawn1,
+                       with zach and zach2 active as zach3-...;
                        the lowest number no active zach holds, none for the first
                        (CEO, 2026-10-21). A number given by hand is replaced.
   --next-name          print the name this teammate would get and do nothing else;
@@ -801,8 +803,10 @@ USAGE = """usage: spawn.sh <teammate-name> --repo <repo> [--repo <repo> ...]
   --type <t>           the subagent_type the definition is registered under
   --brief <file>       the brief, as a file; `-` reads stdin
   --effort <level>     the teammate's effort: low, medium, high, xhigh or max
-                       (the levels Claude Code 2.1.292 accepts). Omitted, the
-                       payload has no effort key.
+                       (the levels Claude Code 2.1.292 accepts). It is the effort
+                       word in the name, and may be left out: the name's word is
+                       then the level. The spawn guard refuses a name whose word
+                       is another level, and a name with no effort word.
   --integration <b>    the branch this body of work integrates on; needed only
                        where the answer is a human's to give, and the refusal
                        says so when it is. With several --repo, scope it:
@@ -882,9 +886,15 @@ def parse_args(argv):
         raise Refusal("--effort must be one of %s" % ", ".join(EFFORT_LEVELS))
     if args["audience"] not in (APP, OPERATOR):
         raise Refusal("--audience must be %s or %s" % (APP, OPERATOR))
-    if args["name"].count("-") == 1 and args["type"]:
-        # Only <model>-<identifier>: the first name is the teammate type's.
+    parts = args["name"].split("-")
+    if args["type"] and (len(parts) == 2 or (len(parts) == 3 and parts[1] in EFFORT_LEVELS)):
+        # Only <model>-<effort>-<identifier> (or, as recorded before the effort word,
+        # <model>-<identifier>): the first name is the teammate type's.
         args["name"] = args["type"].split(":")[-1] + "-" + args["name"]
+    parts = args["name"].split("-")
+    if not args["effort"] and len(parts) == 4 and parts[2] in EFFORT_LEVELS:
+        # The name already says the level: the teammate is started at it.
+        args["effort"] = parts[2]
     return args
 
 

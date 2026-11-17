@@ -20,7 +20,7 @@
 # A point with no R- mutant SAYS SO in the report rather than passing quietly:
 # points 1 and 2 have no mechanical incident anywhere in the three records
 # (lifecycle-failure-record-2026-09-{10,11,12}.md) — the four pre-spec
-# `zach-opus-dor*` trees are excluded by the CEO's own second sentence of point
+# `zach-opus-high-dor*` trees are excluded by the CEO's own second sentence of point
 # 1 and are not a failure of this code, and no codex/ workspace has ever been
 # touched — so both carry S- mutants only. The count per point is printed by
 # the measurement report from the PASS lines below.
@@ -86,7 +86,7 @@ mutant S-p02-cc-copy-not-required "C2.4 " "$C" \
 mutant S-p02-library-codex-guard-removed "C2.8 " "$W" \
     '    if b.startswith(CODEX_PREFIX):{NL}        return None, "branch %s is codex/; never touched (point 2)" % b' \
     '    if False:{NL}        return None, "branch %s is codex/; never touched (point 2)" % b' \
-    "SPEC-DERIVED (point 2 negated, 'Landing never deletes anything codex/'; constructed by frank-fable-c7 as F20, certification-frank-round6-2026-09-12.md §2.3, which showed round 6's byte-identity was proved by never aiming a deleter at codex/): the library's own branch deleter, aimed at a codex/ ref on an agent's record, would delete it."
+    "SPEC-DERIVED (point 2 negated, 'Landing never deletes anything codex/'; constructed by frank-fable-high-c7 as F20, certification-frank-round6-2026-09-12.md §2.3, which showed round 6's byte-identity was proved by never aiming a deleter at codex/): the library's own branch deleter, aimed at a codex/ ref on an agent's record, would delete it."
 
 # --- point 2, round 8 (item 3): the record now holds a mechanical incident for this point.
 mutant R-p02-codex-deleter-passes-the-guard "C2.13" "$G" \
@@ -108,7 +108,7 @@ mutant S-p02-codex-tips-not-snapshotted "C2.11" "$W" \
 mutant S-p02-agent-writes-inside-codex-pass-the-lock-out "C2.12" "$W" \
     '        cx = _codex_workspace_of(fp, str(payload.get("cwd") or "")){NL}        if cx:' \
     '        cx = _codex_workspace_of(fp, str(payload.get("cwd") or "")){NL}        if False:' \
-    "SPEC-DERIVED (point 2 negated, 'An agent never works inside a codex/ workspace'; measured passing on the base by sage-fable-b3, brief-audit-sage-round8 §4 with a registered agent): a registered agent's Edit or Write aimed inside a codex/ workspace would pass the only hook that sees it."
+    "SPEC-DERIVED (point 2 negated, 'An agent never works inside a codex/ workspace'; measured passing on the base by sage-fable-high-b3, brief-audit-sage-round8 §4 with a registered agent): a registered agent's Edit or Write aimed inside a codex/ workspace would pass the only hook that sees it."
 mutant S-p02-agent-commands-inside-codex-pass-the-guard "C2.14" "$G" \
     'if AGENT:{NL}    for how, p in _codex_workspace_paths(scan, str(d.get("cwd") or "")):' \
     'if False:{NL}    for how, p in _codex_workspace_paths(scan, str(d.get("cwd") or "")):' \
@@ -140,11 +140,11 @@ mutant R-p03-unregistered-branch-never-listed "C3.8 " "$W" \
 mutant R-p04-branch-left-after-land "C4.3 " "$W" \
     '    if branches and not held:{NL}        for repo, b in _branch_targets([rec]):' \
     '    if False:{NL}        for repo, b in _branch_targets([rec]):' \
-    "RECORDED [lifecycle-failure-record-2026-09-12.md §2c, 2026-09-12: 'git branch --contains 6fd5aef8' returned cc/frank-opus-c6, cc/sage-opus-c6, cc/zach-opus-g4 after their workspaces were cut and left; and the same record's addendum §A2: 22 cc/ branches deleted by hand today, none by the system]: a land would delete the workspace and leave the branch."
+    "RECORDED [lifecycle-failure-record-2026-09-12.md §2c, 2026-09-12: 'git branch --contains 6fd5aef8' returned cc/frank-opus-high-c6, cc/sage-opus-high-c6, cc/zach-opus-high-g4 after their workspaces were cut and left; and the same record's addendum §A2: 22 cc/ branches deleted by hand today, none by the system]: a land would delete the workspace and leave the branch."
 mutant R-p04-quarantine-instead-of-delete "C4.4 " "$W" \
     '            rc, _o, err = git(main, "worktree", "remove", "--force", "--force", path, timeout=_bounded(deadline, 300))' \
     '            rc, _o, err = git(main, "worktree", "move", path, os.path.join(os.path.dirname(path), ".richos-retired-" + os.path.basename(path)), timeout=_bounded(deadline, 300))' \
-    "RECORDED [lifecycle-failure-record-2026-09-12.md addendum §A4, 2026-09-12 16:12Z and 16:13Z: the running engine's removal path renamed cc/sage-opus-c6 and cc/frank-opus-c6 into richos-wt/.richos-retired/ and both are still registered git worktrees; brief-audit-frank-round6 P7; brief-audit-sage-round6 §4.4]: a land would quarantine the workspace instead of deleting it."
+    "RECORDED [lifecycle-failure-record-2026-09-12.md addendum §A4, 2026-09-12 16:12Z and 16:13Z: the running engine's removal path renamed cc/sage-opus-high-c6 and cc/frank-opus-high-c6 into richos-wt/.richos-retired/ and both are still registered git worktrees; brief-audit-frank-round6 P7; brief-audit-sage-round6 §4.4]: a land would quarantine the workspace instead of deleting it."
 mutant S-p04-no-automatic-land "C4.1 " "$W" \
     '        if auto and not _past(deadline):{NL}            try:{NL}                res = land(rec["key"], me, auto=True, deadline=deadline)' \
     '        if False:{NL}            try:{NL}                res = land(rec["key"], me, auto=True, deadline=deadline)' \
@@ -152,7 +152,7 @@ mutant S-p04-no-automatic-land "C4.1 " "$W" \
 mutant S-p04-quarantine-under-another-name "C4.4 " "$W" \
     '            rc, _o, err = git(main, "worktree", "remove", "--force", "--force", path, timeout=_bounded(deadline, 300))' \
     '            rc, _o, err = git(main, "worktree", "move", path, os.path.join(os.path.dirname(path), ".parked-" + os.path.basename(path)), timeout=_bounded(deadline, 300)); (entry and entry.get("branch") and git(main, "branch", "-m", entry["branch"], "parked/" + os.path.basename(path)))' \
-    "SPEC-DERIVED (point 4 negated, 'the workspace AND the branch are deleted'; constructed by frank-fable-c7 as F4, certification-frank-round6-2026-09-12.md §2.2, against which every round-6 sub-assertion of check 4 stayed green): a land would park the workspace under a name the old directory grep could not see, on a parked/ branch, and report it deleted."
+    "SPEC-DERIVED (point 4 negated, 'the workspace AND the branch are deleted'; constructed by frank-fable-high-c7 as F4, certification-frank-round6-2026-09-12.md §2.2, against which every round-6 sub-assertion of check 4 stayed green): a land would park the workspace under a name the old directory grep could not see, on a parked/ branch, and report it deleted."
 
 # --- point 5 ---------------------------------------------------------------
 # The answer allowance's mutants (S-p05-answer-allowance-unlimited and the six that defined whose
@@ -219,11 +219,11 @@ mutant R-p07-discard-without-any-reason "C7.6 " "$W" \
 mutant S-p07-attestation-not-required "C7.7 " "$W" \
     '    if not ordered and not (ceo_word or "").strip() and len((not_ceo_ordered or "").strip()) < 10:' \
     '    if False:' \
-    "SPEC-DERIVED (point 7 negated, 'never discarded without his word' — its mechanism for work the prompt did not mark; constructed by frank-fable-c7 as F2): a discard saying neither --ceo-word nor --not-ceo-ordered would be accepted."
+    "SPEC-DERIVED (point 7 negated, 'never discarded without his word' — its mechanism for work the prompt did not mark; constructed by frank-fable-high-c7 as F2): a discard saying neither --ceo-word nor --not-ceo-ordered would be accepted."
 mutant S-p07-continuing-start-deletes-nothing "C7.8 " "$W" \
     '    for old_key in rec.get("continues") or []:{NL}        old = load_agent(old_key)' \
     '    for old_key in []:{NL}        old = load_agent(old_key)' \
-    "SPEC-DERIVED (point 7 negated, 'the old workspaces are deleted when the new agent starts'; constructed by frank-fable-b2 as F30): a continuing agent's start would delete nothing of the agent it continues."
+    "SPEC-DERIVED (point 7 negated, 'the old workspaces are deleted when the new agent starts'; constructed by frank-fable-high-b2 as F30): a continuing agent's start would delete nothing of the agent it continues."
 mutant S-p07-continued-work-not-landed-with-the-new "C7.9 " "$W" \
     '        for k in r.get("continues") or []:{NL}            o = load_agent(k)' \
     '        for k in []:{NL}            o = load_agent(k)' \
@@ -233,15 +233,15 @@ mutant S-p07-continued-work-not-landed-with-the-new "C7.9 " "$W" \
 mutant R-p08-ignored-needed-files-landed "C8.3 " "$W" \
     '            if ignored and not ignored_ok:' \
     '            if False:' \
-    "RECORDED [lifecycle-failure-record-2026-09-10.md §3b.2, 2026-09-10: an ignored nested repository under a 'disposable' path deleted with no copy taken; scripts/inflight-ack.sh header, 2026-09-05: echo-opus-529's three gitignored acks deleted with its unchanged worktree]: a workspace with ignored files it needs would be landed and the files lost."
+    "RECORDED [lifecycle-failure-record-2026-09-10.md §3b.2, 2026-09-10: an ignored nested repository under a 'disposable' path deleted with no copy taken; scripts/inflight-ack.sh header, 2026-09-05: echo-opus-high-529's three gitignored acks deleted with its unchanged worktree]: a workspace with ignored files it needs would be landed and the files lost."
 mutant S-p08-same-name-is-same-file "C8.8 " "$W" \
     'def _same_file(a, b, deadline=None):{NL}    """Byte-identical?' \
     'def _same_file(a, b, deadline=None):{NL}    return True{NL}    """Byte-identical?' \
-    "SPEC-DERIVED (point 8 negated, 'Deletion therefore never loses anything that was meant to land'; constructed by frank-fable-b3 as F-A, brief-audit-frank-round8 §5, which survived the round-7 fourteen): an ignored file the main checkout has under the same NAME with different bytes would be deleted by a land that reports success."
+    "SPEC-DERIVED (point 8 negated, 'Deletion therefore never loses anything that was meant to land'; constructed by frank-fable-high-b3 as F-A, brief-audit-frank-round8 §5, which survived the round-7 fourteen): an ignored file the main checkout has under the same NAME with different bytes would be deleted by a land that reports success."
 mutant S-p08-same-size-is-same-file "C8.8 " "$W" \
     '        return _file_digest(a, deadline) == _file_digest(b, deadline)' \
     '        return True' \
-    "SPEC-DERIVED (point 8 negated; constructed by frank-fable-b3 as F-H, brief-audit-frank-round8 §5, and the reason C8.8's two files are the same SIZE): same size would mean identical, so a rotated key of equal length would be deleted by a land that reports success."
+    "SPEC-DERIVED (point 8 negated; constructed by frank-fable-high-b3 as F-H, brief-audit-frank-round8 §5, and the reason C8.8's two files are the same SIZE): same size would mean identical, so a rotated key of equal length would be deleted by a land that reports success."
 mutant S-p08-uncommitted-landed "C8.1 " "$W" \
     '            if dirty:{NL}                problems.append("%s has %d uncommitted entr%s (%s)" % (' \
     '            if False:{NL}                problems.append("%s has %d uncommitted entr%s (%s)" % (' \
@@ -259,7 +259,7 @@ mutant R-p09-finished-agent-not-locked-out "C9.1 " "$W" \
 mutant S-p09-sigkill-escalation-removed "C9.6 " "$W" \
     '    for p in alive:{NL}        try:{NL}            os.kill(p, signal.SIGKILL)' \
     '    for p in []:{NL}        try:{NL}            os.kill(p, signal.SIGKILL)' \
-    "SPEC-DERIVED (point 9 negated, 'every process it started is stopped before its workspaces are deleted'; constructed by frank-fable-b3 as F-G, brief-audit-frank-round8 §5, which survived the round-7 fourteen because C9's holder dies on TERM): a process that ignores SIGTERM would outlive the deletion of its workspace."
+    "SPEC-DERIVED (point 9 negated, 'every process it started is stopped before its workspaces are deleted'; constructed by frank-fable-high-b3 as F-G, brief-audit-frank-round8 §5, which survived the round-7 fourteen because C9's holder dies on TERM): a process that ignores SIGTERM would outlive the deletion of its workspace."
 mutant R-p09-processes-not-stopped "C9.3 " "$W" \
     'def stop_processes(paths, deadline=None):' \
     'def stop_processes(paths, deadline=None):{NL}    return {"stopped": [], "survivors": []}' \
@@ -269,7 +269,7 @@ mutant R-p09-processes-not-stopped "C9.3 " "$W" \
 mutant R-p10-cc-workspace-left-behind "C10.2 " "$W" \
     '        for w in workspaces:{NL}            # Point 3: the branches the agent created are its branches too, and' \
     '        for w in [w for w in workspaces if w.get("kind") != "cc"]:{NL}            # Point 3: the branches the agent created are its branches too, and' \
-    "RECORDED [lifecycle-failure-record-2026-09-12.md addendum §A4, 2026-09-12: for sage-opus-c6 and frank-opus-c6 the native workspaces and branches are gone and the cc/ halves remain as quarantines; lifecycle-failure-record-2026-09-10.md §3.4: zero of 15,882 finish rows ever named a cross-repository workspace]: a land would delete the native workspace and leave the cc/ one."
+    "RECORDED [lifecycle-failure-record-2026-09-12.md addendum §A4, 2026-09-12: for sage-opus-high-c6 and frank-opus-high-c6 the native workspaces and branches are gone and the cc/ halves remain as quarantines; lifecycle-failure-record-2026-09-10.md §3.4: zero of 15,882 finish rows ever named a cross-repository workspace]: a land would delete the native workspace and leave the cc/ one."
 mutant S-p10-cc-branch-kept "C10.3 " "$W" \
     '            if w.get("branch_deleted_at") or not w.get("branch"):{NL}                continue{NL}            if (w.get("repo"), w["branch"]) not in out:' \
     '            if w.get("branch_deleted_at") or not w.get("branch") or w.get("kind") == "cc":{NL}                continue{NL}            if (w.get("repo"), w["branch"]) not in out:' \
@@ -277,7 +277,7 @@ mutant S-p10-cc-branch-kept "C10.3 " "$W" \
 mutant R-p10-only-the-first-workspace-deleted "C10.10" "$W" \
     '        if not _delete(r, [w for w in live_workspaces(r) if w.get("path")], branches=True, why=why,' \
     '        if not _delete(r, [w for w in live_workspaces(r) if w.get("path")][:1], branches=True, why=why,' \
-    "RECORDED [the workspace registry's own events.jsonl on this machine, 2026-09-17: four teammates (norm-opus-wire1/wireguide1, norm-opus-secret1/secret1hq, norm-opus-multiacct1, norm-opus-ms1) needed a workspace in a SECOND repository and were given a second NAME, because spawn.sh took one --repo; norm-opus-wireguide1's workspace and its branch cc/norm-opus-wireguide1 were left behind by a land that named only norm-opus-wire1, and the CEO found the stray himself]: a land would delete the FIRST of an agent's workspaces and leave the rest — the exact shape point 10 forbids, now that one name can hold workspaces in several repositories."
+    "RECORDED [the workspace registry's own events.jsonl on this machine, 2026-09-17: four teammates (norm-opus-high-wire1/wireguide1, norm-opus-high-secret1/secret1hq, norm-opus-high-multiacct1, norm-opus-high-ms1) needed a workspace in a SECOND repository and were given a second NAME, because spawn.sh took one --repo; norm-opus-high-wireguide1's workspace and its branch cc/norm-opus-high-wireguide1 were left behind by a land that named only norm-opus-high-wire1, and the CEO found the stray himself]: a land would delete the FIRST of an agent's workspaces and leave the rest — the exact shape point 10 forbids, now that one name can hold workspaces in several repositories."
 
 mutant R-p03-ref-after-the-last-post-left-behind "C10.7 " "$W" \
     '    if all_open and latest and isinstance(latest.get("repos"), dict):{NL}        priors.append(latest)' \
@@ -316,11 +316,11 @@ mutant S-p11-nameless-pause-not-pending "C11.5 " "$W" \
 mutant S-p11-handed-in-finishes-before-the-run-ends "C11.8 " "$W" \
     '    end = rec.get("end"){NL}    if end:{NL}        if end.get("signal") == "stopped":' \
     '    if rec.get("handed_in"):{NL}        return True, False, "handed in"{NL}    end = rec.get("end"){NL}    if end:{NL}        if end.get("signal") == "stopped":' \
-    "SPEC-DERIVED (point 11 negated, \"'Finished' means the agent's run has ended\"; constructed by frank-fable-b3 as F-F, brief-audit-frank-round8 §5, which survived the round-7 fourteen because C11.7 handed in and ended back to back): an agent that handed in its work would be locked out and landable while its run is still going."
+    "SPEC-DERIVED (point 11 negated, \"'Finished' means the agent's run has ended\"; constructed by frank-fable-high-b3 as F-F, brief-audit-frank-round8 §5, which survived the round-7 fourteen because C11.7 handed in and ended back to back): an agent that handed in its work would be locked out and landable while its run is still going."
 mutant S-p11-handed-in-then-ended-not-finished "C11.7 " "$W" \
     '        if rec.get("handed_in"):{NL}            return True, False, "it ended after handing in its work (point 11)"' \
     '        if False:{NL}            return True, False, "it ended after handing in its work (point 11)"' \
-    "SPEC-DERIVED (point 11 negated, 'An agent that ends after handing in its work is finished even if a pause was sent'; constructed by frank-fable-c7 as F26): an agent that handed in, was paused, and then ended would read paused, keep its tools and never be pending."
+    "SPEC-DERIVED (point 11 negated, 'An agent that ends after handing in its work is finished even if a pause was sent'; constructed by frank-fable-high-c7 as F26): an agent that handed in, was paused, and then ended would read paused, keep its tools and never be pending."
 
 # --- point 12 --------------------------------------------------------------
 mutant R-p12-ended-session-agents-not-finished "C12.4 " "$W" \
@@ -346,11 +346,11 @@ mutant S-p12-next-session-does-not-take-over "C12.4 " "$W" \
 mutant S-p12-live-sessions-agents-claimed "C12.7 " "$W" \
     '    if owner and not rec.get("orphan"):' \
     '    if False:' \
-    "SPEC-DERIVED (point 12 negated, 'While two sessions run at once, each handles only the agents it started'; constructed by frank-fable-c7 as F10): a running session would claim, list and try to land another RUNNING session's finished agents."
+    "SPEC-DERIVED (point 12 negated, 'While two sessions run at once, each handles only the agents it started'; constructed by frank-fable-high-c7 as F10): a running session would claim, list and try to land another RUNNING session's finished agents."
 mutant S-p12-recorded-end-ignored "C12.9 " "$W" \
     '    if rec and rec.get("ended_at"):' \
     '    if False:' \
-    "SPEC-DERIVED (point 12 negated, 'A session has ended when it recorded its end'; constructed by frank-fable-b2): a session that recorded its end would count as running for as long as its process number stayed alive, and its agents would never be finished."
+    "SPEC-DERIVED (point 12 negated, 'A session has ended when it recorded its end'; constructed by frank-fable-high-b2): a session that recorded its end would count as running for as long as its process number stayed alive, and its agents would never be finished."
 
 # --- point 13 --------------------------------------------------------------
 mutant R-p13-failed-deletion-not-retried "C13.3 " "$W" \

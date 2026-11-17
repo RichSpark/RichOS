@@ -4057,7 +4057,7 @@ class PublishedReportTests(unittest.TestCase):
         self.assertIn("then immediately run nightly-local.py publish --run", row["question"])
         self.assertIn("Keep this job open", row["question"])
         self.assertIn("remove its entry and record through the normal gate", row["question"])
-        self.assertIn("--type newt --model opus --brief", row["question"])
+        self.assertIn("--type newt --model opus --effort high --brief", row["question"])
         self.assertIn("while QA walks it", row["question"])
         self.assertIn("After QA READY", row["question"])
         self.assertEqual([args[0] for args in self.started], [str(m.ESCALATE)])
@@ -4119,10 +4119,10 @@ class PublishedReportTests(unittest.TestCase):
             self.prepare()
             self.prepare(channel="stable")
         nightly, stable = self.rows()
-        self.assertIn("newt-opus-", nightly["question"])
-        self.assertIn("--type newt --model opus", nightly["question"])
-        self.assertIn("newt-opus-", stable["question"])
-        self.assertIn("--type newt --model opus", stable["question"])
+        self.assertIn("newt-opus-high-", nightly["question"])
+        self.assertIn("--type newt --model opus --effort high", nightly["question"])
+        self.assertIn("newt-opus-high-", stable["question"])
+        self.assertIn("--type newt --model opus --effort high", stable["question"])
         for row, model in ((nightly, "opus"), (stable, "opus")):
             # The question quotes the command so it runs from a checkout path containing
             # a space; parse it as a shell would instead of matching raw text.
@@ -4130,7 +4130,12 @@ class PublishedReportTests(unittest.TestCase):
             argv = shlex.split(command)
             self.assertEqual(Path(argv[0]).name, "spawn.sh")
             name = argv[1]
-            self.assertRegex(name, r"^[a-z][a-z0-9]{1,15}-%s-[a-z0-9]{1,12}$" % model)
+            # The name is the spawn guard's shape, <role>-<model>-<effort>-<identifier>, and
+            # its model and effort words are the ones the command itself names.
+            effort = argv[argv.index("--effort") + 1]
+            self.assertEqual(argv[argv.index("--model") + 1], model)
+            self.assertIn(effort, ("low", "medium", "high", "xhigh", "max"))
+            self.assertRegex(name, r"^[a-z][a-z0-9]{1,15}-%s-%s-[a-z0-9]{1,12}$" % (model, effort))
         for identity, tag in (("b", self.TAG), ("c", "v1.2.1")):
             brief = self.root / "state/changelogs" / (identity * 40) / "brief.md"
             text = brief.read_text()
@@ -4175,9 +4180,9 @@ class PublishedReportTests(unittest.TestCase):
         self.assertEqual(row["title"], "v1.2.1 published; bump main's next release version.")
         self.assertIn("next-version-worker-brief.md", row["question"])
         self.assertIn("already published", row["question"])
-        self.assertIn("zach-sonnet-nv121 ", row["question"] + " ")
-        self.assertRegex(row["question"], r"zach-sonnet-[a-z0-9]{1,12} --repo")
-        self.assertIn("--repo richos --type zach --model sonnet --brief", row["question"])
+        self.assertIn("zach-sonnet-high-nv121 ", row["question"] + " ")
+        self.assertRegex(row["question"], r"zach-sonnet-high-[a-z0-9]{1,12} --repo")
+        self.assertIn("--repo richos --type zach --model sonnet --effort high --brief", row["question"])
         brief = self.runner.state / "next-versions/v1-2-1/next-version-worker-brief.md"
         self.assertIn(shlex.quote(str(brief)), row["question"])
         self.assertIn("v1.2.1 is a published stable release", brief.read_text())

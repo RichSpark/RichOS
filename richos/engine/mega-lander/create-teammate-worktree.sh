@@ -15,7 +15,7 @@
 #       non-native workspace not named cc/ is refused."             (point 3)
 #
 # WHAT IT DOES, in order — and it stops at the first refusal:
-#   1. Refuses a name that is not <role>-<model>-<identifier> (the spawn
+#   1. Refuses a name that is not <role>-<model>-<effort>-<identifier> (the spawn
 #      contract), a path that already exists, a branch that already exists,
 #      and a base that is a codex/ branch (point 2: an agent works from a copy
 #      in its own cc/ workspace, never inside a codex/ one).
@@ -55,7 +55,7 @@
 #       [--base <ref>] [--session <id>] [--integration <branch>]
 #
 #   <repo>            any path inside the target repository
-#   <teammate-name>   the name the spawn will carry, e.g. echo-opus-bt2
+#   <teammate-name>   the name the spawn will carry, e.g. echo-opus-high-bt2
 #   --dir <path>      where to put it; default <main>-wt/<name> beside the
 #                     main checkout (the convention this machine already uses)
 #   --base <ref>      branch point; default the main checkout's HEAD. To

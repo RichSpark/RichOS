@@ -58,17 +58,17 @@ class OutputWalkTests(unittest.TestCase):
 
     def test_named_passes_only_for_the_seeded_teammate_shown_by_its_name(self):
         """Slice 2 of the proto-teammate shelf plan: named's verdict, offline."""
-        mark = {"name": "mark-sonnet-0123456789ab", "subagent_type": "richos-app-engine:mark", "model": "sonnet"}
-        frank = {"name": "frank-opus-ba9876543210", "subagent_type": "richos-app-engine:frank", "model": "opus"}
+        mark = {"name": "mark-sonnet-high-0123456789ab", "subagent_type": "richos-app-engine:mark", "model": "sonnet", "effort": "high"}
+        frank = {"name": "frank-opus-xhigh-ba9876543210", "subagent_type": "richos-app-engine:frank", "model": "opus", "effort": "xhigh"}
         landed = [{"workerName": mark["name"], "source": "land"}, {"workerName": mark["name"], "source": "command"}]
         self.assertEqual(output.named_verdict("mark", [mark, frank], landed, ["by Mark"], ["Mark, Ended"]), [])
         # The guest reads the line inside the row button's own name.
         self.assertEqual(output.named_verdict("mark", [mark], landed, ["notes.zip ~/Acme/ by Mark"], []), [])
         # What main does: the generic worker on the fixed sonnet, its agent name on the label.
-        generic = {"name": "worker-sonnet-0123456789ab", "subagent_type": "richos-app-engine:worker", "model": "sonnet"}
+        generic = {"name": "worker-sonnet-high-0123456789ab", "subagent_type": "richos-app-engine:worker", "model": "sonnet", "effort": "high"}
         failures = output.named_verdict("mark", [generic], [{"workerName": generic["name"], "source": "land"}],
-                                        ["by worker-sonnet-0123456789ab"], [])
-        self.assertTrue(any("not <teammate>-<model>-<id12>" in f for f in failures), failures)
+                                        ["by worker-sonnet-high-0123456789ab"], [])
+        self.assertTrue(any("not <teammate>-<model>-<effort>-<id12>" in f for f in failures), failures)
         self.assertTrue(any("never started" in f for f in failures), failures)
         self.assertTrue(any("does not say 'by Mark'" in f for f in failures), failures)
         self.assertTrue(any("engine's agent name" in f for f in failures), failures)
@@ -76,16 +76,24 @@ class OutputWalkTests(unittest.TestCase):
         wrong = dict(frank, model="sonnet", subagent_type="richos-app-engine:worker")
         failures = output.named_verdict("mark", [mark, wrong], landed, ["by Mark"], [])
         self.assertEqual(len(failures), 2, failures)
+        # Started at another effort level than its name says, or with none named.
+        for level in ("low", None):
+            failures = output.named_verdict("mark", [dict(mark, effort=level)], landed, ["by Mark"], [])
+            self.assertEqual(failures, [f"{mark['name']} was started at effort {level!r}, not the level its name says"])
+        # A name with no effort word, as the back end made them before, is not a named start.
+        old = dict(mark, name="mark-sonnet-" + "0123456789ab")
+        failures = output.named_verdict("mark", [old], [{"workerName": old["name"], "source": "land"}], ["by Mark"], [])
+        self.assertTrue(any("not <teammate>-<model>-<effort>-<id12>" in f for f in failures), failures)
         # Another teammate landed the files.
         failures = output.named_verdict("mark", [mark], [{"workerName": frank["name"], "source": "land"}], ["by Mark"], [])
         self.assertTrue(any("not mark's" in f for f in failures), failures)
 
     def test_consult_passes_only_for_clarks_answer_read_back_with_no_workspace(self):
         """Slice 3 of the proto-teammate shelf plan: consult's verdict, offline."""
-        name = "clark-sonnet-0123456789ab"
+        name = "clark-sonnet-high-0123456789ab"
         receipt = {"name": name, "request": {"role": "consult", "teammate": "clark", "repo": None, "repos": []},
                    "consult_answer": {"answered": True, "message_sha256": "ab" * 32}}
-        spawn = {"name": name, "subagent_type": "richos-app-engine:clark", "model": "sonnet",
+        spawn = {"name": name, "subagent_type": "richos-app-engine:clark", "model": "sonnet", "effort": "high",
                  "prompt": "# Your duty in this assignment: consult\n\nWhich was first?"}
         inspects = [json.dumps({"records": [{"consult_answer": {"message_sha256": "ab" * 32}}]})]
         settled = [{"state": "settled", "detail": "answered"}]
@@ -111,13 +119,13 @@ class OutputWalkTests(unittest.TestCase):
         """Slice 5 of the proto-teammate shelf plan: the end-to-end walk's verdict, offline."""
         shelf = ["mark", "norm", "sage"]
         job = [{"state": "settled", "obligation_id": "obl-1"}]
-        mark = "mark-sonnet-0123456789ab"
+        mark = "mark-sonnet-high-0123456789ab"
         receipts = [
-            {"name": "dean-sonnet-aaaaaaaaaaaa", "request": {"role": "consult", "teammate": "dean", "obligation_id": "obl-1"}},
+            {"name": "dean-sonnet-high-aaaaaaaaaaaa", "request": {"role": "consult", "teammate": "dean", "obligation_id": "obl-1"}},
             {"name": mark, "request": {"role": "worker", "teammate": "mark", "obligation_id": "obl-1"}},
-            {"name": "frank-opus-bbbbbbbbbbbb", "request": {"role": "reviewer", "teammate": "frank", "obligation_id": "obl-1"}},
+            {"name": "frank-opus-xhigh-bbbbbbbbbbbb", "request": {"role": "reviewer", "teammate": "frank", "obligation_id": "obl-1"}},
         ]
-        spawns = [{"name": mark, "subagent_type": "richos-app-engine:mark", "model": "sonnet"}]
+        spawns = [{"name": mark, "subagent_type": "richos-app-engine:mark", "model": "sonnet", "effort": "high"}]
         lands = [{"workerName": mark, "source": "land"}]
         line = output.SHELF_LINE
         self.assertEqual(output.shelf_verdict(shelf, ["mark"], receipts, spawns, lands, line, [4200], job), [])
@@ -138,7 +146,7 @@ class OutputWalkTests(unittest.TestCase):
             (["mark"], receipts, [], lands, line, [4200], job, "never started"),
             (["mark"], receipts, spawns, lands, line, [4200], job + job, "not one assignment"),
             (["mark"], receipts[:2], spawns, lands, line, [4200], job, "nobody reviewed"),
-            (["mark"], receipts, spawns, [{"workerName": "frank-opus-bbbbbbbbbbbb"}], line, [4200], job, "not landed"),
+            (["mark"], receipts, spawns, [{"workerName": "frank-opus-xhigh-bbbbbbbbbbbb"}], line, [4200], job, "not landed"),
             (["mark"], receipts, spawns, lands, line, [], job, "never renewed"),
         ]
         for saved, r, s, l, rb, ms, a, said in cases:

@@ -470,12 +470,15 @@ else
     MODEL_SRC="the '${SUBAGENT_TYPE}' agent definition's own model: frontmatter"
     RECONSIDER="override this spawn with  model: \"${CEILING}\""
 fi
+# The rename keeps everything after the model part, which is
+# <effort>-<identifier> in a name of today's shape.
 NAME_ROLE="${NAME%%-*}"
-NAME_ID="${NAME##*-}"
-if [ -n "$NAME" ] && [ "$NAME_ROLE" != "$NAME" ]; then
+NAME_AFTER_ROLE="${NAME#*-}"
+NAME_ID="${NAME_AFTER_ROLE#*-}"
+if [ -n "$NAME" ] && [ "$NAME_ROLE" != "$NAME" ] && [ "$NAME_ID" != "$NAME_AFTER_ROLE" ]; then
     RENAME="${NAME_ROLE}-${CEILING}-${NAME_ID}"
 else
-    RENAME="<role>-${CEILING}-<identifier>"
+    RENAME="<role>-${CEILING}-<effort>-<identifier>"
 fi
 
 {

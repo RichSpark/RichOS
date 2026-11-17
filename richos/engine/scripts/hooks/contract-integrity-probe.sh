@@ -768,13 +768,13 @@ MT_Q_EOF
                 --session mt-canary-0000 integration --repo "$MT_SB/entity" --branch main \
                 --why "the model-tier canary's body of work" >/dev/null 2>&1 || MT_SB_OK=0
             mt_spawn() { # <name> <model>
-                printf '{"tool_name":"Agent","cwd":"%s","session_id":"mt-canary-0000","tool_use_id":"mt-canary-tu","tool_input":{"subagent_type":"mtjudge","name":"%s","isolation":"worktree","model":"%s","prompt":"canary"}}' \
+                printf '{"tool_name":"Agent","cwd":"%s","session_id":"mt-canary-0000","tool_use_id":"mt-canary-tu","tool_input":{"subagent_type":"mtjudge","name":"%s","effort":"high","isolation":"worktree","model":"%s","prompt":"canary"}}' \
                     "$MT_SB/entity" "$1" "$2"
             }
             set +e
-            MT_DOWN_ERR="$(printf '%s' "$(mt_spawn mtjudge-sonnet-1 sonnet)" | mt_env bash "$MT_GUARD" 2>&1 >/dev/null)"
+            MT_DOWN_ERR="$(printf '%s' "$(mt_spawn mtjudge-sonnet-high-1 sonnet)" | mt_env bash "$MT_GUARD" 2>&1 >/dev/null)"
             MT_DOWN_RC=$?
-            MT_UP_OUT="$(printf '%s' "$(mt_spawn mtjudge-fable-1 fable)" | mt_env bash "$MT_GUARD" 2>&1)"
+            MT_UP_OUT="$(printf '%s' "$(mt_spawn mtjudge-fable-high-1 fable)" | mt_env bash "$MT_GUARD" 2>&1)"
             MT_UP_RC=$?
             set -e
             kill "$MT_SESS_PID" 2>/dev/null || true
@@ -2071,7 +2071,7 @@ PY
     BR9_SESS_PID="$(sh -c 'sleep 600 >/dev/null 2>&1 & echo $!')"
 
     br9_spawn() { # <name> <isolation-json-or-empty>
-        printf '{"tool_name":"Agent","cwd":"%s","session_id":"br9-canary-0000","tool_use_id":"br9-canary-tu","tool_input":{"subagent_type":"probeteammate","name":"%s","prompt":"canary"%s}}' \
+        printf '{"tool_name":"Agent","cwd":"%s","session_id":"br9-canary-0000","tool_use_id":"br9-canary-tu","tool_input":{"subagent_type":"probeteammate","name":"%s","effort":"high","prompt":"canary"%s}}' \
             "$BR9_SB/entity" "$1" "$2"
     }
     br9_run() { # <payload> -> sets BR9_RC
@@ -2099,13 +2099,13 @@ PY
         BR9_PROBLEMS="$BR9_PROBLEMS [no orchestration.config at $REPO_ROOT — this repository has not adopted the engine, so nothing here is enforcing anything]"
     fi
 
-    br9_run "$(br9_spawn 'probeteammate-opus-canary' ',"isolation":"worktree"')"
+    br9_run "$(br9_spawn 'probeteammate-opus-high-canary' ',"isolation":"worktree"')"
     [ "$BR9_RC" -eq 0 ] || BR9_PROBLEMS="$BR9_PROBLEMS [a well-formed isolated spawn was REFUSED (rc=$BR9_RC) — a guard that blocks everything blocks nothing usefully]"
 
-    br9_run "$(br9_spawn 'probeteammate-opus-canary2' '')"
+    br9_run "$(br9_spawn 'probeteammate-opus-high-canary2' '')"
     [ "$BR9_RC" -eq 2 ] || BR9_PROBLEMS="$BR9_PROBLEMS [a spawn with NO isolation was ALLOWED (rc=$BR9_RC) — the worktree-isolation contract is not being enforced]"
 
-    br9_run "$(br9_spawn 'probeteammate-sonnet-canary3' ',"isolation":"worktree"')"
+    br9_run "$(br9_spawn 'probeteammate-sonnet-high-canary3' ',"isolation":"worktree"')"
     [ "$BR9_RC" -eq 2 ] || BR9_PROBLEMS="$BR9_PROBLEMS [an UNTRUTHFUL model token was ALLOWED (rc=$BR9_RC) — the guard did not read the entity's roster, so it is not governing this repository]"
 
     kill "$BR9_SESS_PID" 2>/dev/null || true
@@ -3844,11 +3844,11 @@ if [ "$Q_OK" -eq 1 ] && command -v git >/dev/null 2>&1 && command -v mktemp >/de
             q_env python3 "$ENGINE_ROOT/mega-lander/workspaces.py" --entity "$Q_ENT" \
                 --session probe-ws-0001 integration --repo "$Q_ENT" --branch main \
                 --why "the integrity probe's workspace canary" >/dev/null 2>&1 || Q_SB=0
-            q_hook guard-worktree-isolation.sh "{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"probe-ws-0001\",\"tool_use_id\":\"tu-probe\",\"tool_name\":\"Agent\",\"cwd\":\"$Q_ENT\",\"tool_input\":{\"name\":\"zach-opus-probe\",\"subagent_type\":\"zach\",\"isolation\":\"worktree\",\"prompt\":\"probe\"}}"
+            q_hook guard-worktree-isolation.sh "{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"probe-ws-0001\",\"tool_use_id\":\"tu-probe\",\"tool_name\":\"Agent\",\"cwd\":\"$Q_ENT\",\"tool_input\":{\"name\":\"zach-opus-high-probe\",\"effort\":\"high\",\"subagent_type\":\"zach\",\"isolation\":\"worktree\",\"prompt\":\"probe\"}}"
             [ "$Q_RC" -eq 0 ] || Q_PROBLEMS="$Q_PROBLEMS [a well-formed spawn was not registered: exit $Q_RC: $(head -c 300 "$Q_DIR/err" | tr '\n' ' ')]"
             git -C "$Q_ENT" worktree add -q "$Q_NP" -b "worktree-agent-$Q_AID" >/dev/null 2>&1 || Q_SB=0
             q_hook workspace-lifecycle.sh "{\"hook_event_name\":\"SubagentStart\",\"session_id\":\"probe-ws-0001\",\"agent_id\":\"$Q_AID\",\"agent_type\":\"zach\",\"cwd\":\"$Q_NP\"}"
-            q_hook workspace-lifecycle.sh "{\"hook_event_name\":\"PostToolUse\",\"session_id\":\"probe-ws-0001\",\"tool_use_id\":\"tu-probe\",\"tool_name\":\"Agent\",\"cwd\":\"$Q_ENT\",\"tool_input\":{\"name\":\"zach-opus-probe\"},\"tool_response\":{\"agentId\":\"$Q_AID\"}}"
+            q_hook workspace-lifecycle.sh "{\"hook_event_name\":\"PostToolUse\",\"session_id\":\"probe-ws-0001\",\"tool_use_id\":\"tu-probe\",\"tool_name\":\"Agent\",\"cwd\":\"$Q_ENT\",\"tool_input\":{\"name\":\"zach-opus-high-probe\"},\"tool_response\":{\"agentId\":\"$Q_AID\"}}"
             printf 'work\n' >"$Q_NP/work.txt"
             q_env git -C "$Q_NP" add work.txt >/dev/null 2>&1 && q_env git -C "$Q_NP" commit -q -m work >/dev/null 2>&1 || Q_SB=0
             q_hook workspace-lifecycle.sh "{\"hook_event_name\":\"SubagentStop\",\"session_id\":\"probe-ws-0001\",\"agent_id\":\"$Q_AID\",\"cwd\":\"$Q_ENT\"}"
@@ -3858,7 +3858,7 @@ if [ "$Q_OK" -eq 1 ] && command -v git >/dev/null 2>&1 && command -v mktemp >/de
             # is never refused; with no healthy watcher here, the finished work is told to the
             # lead at the turn end, by name, through its model input.
             q_hook guard-workspace-gate.sh "{\"hook_event_name\":\"Stop\",\"session_id\":\"probe-ws-0001\",\"cwd\":\"$Q_ENT\"}"
-            { [ "$Q_RC" -eq 0 ] && grep -q '"additionalContext"' "$Q_DIR/out" && grep -q 'zach-opus-probe' "$Q_DIR/out"; } \
+            { [ "$Q_RC" -eq 0 ] && grep -q '"additionalContext"' "$Q_DIR/out" && grep -q 'zach-opus-high-probe' "$Q_DIR/out"; } \
                 || Q_PROBLEMS="$Q_PROBLEMS [point 5: finished work neither landed nor discarded was not told to the lead at the turn end (exit $Q_RC)]"
             q_env git -C "$Q_ENT" merge -q --no-edit "worktree-agent-$Q_AID" >/dev/null 2>&1 || Q_SB=0
             q_hook guard-workspace-gate.sh "{\"hook_event_name\":\"Stop\",\"session_id\":\"probe-ws-0001\",\"cwd\":\"$Q_ENT\"}"

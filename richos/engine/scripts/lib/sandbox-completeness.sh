@@ -127,7 +127,7 @@ _sc_payloads() {
     printf '{"tool_name":"Read","cwd":"%s","tool_input":{"file_path":"%s/README.md"}}\n' "$root" "$root"
     printf '{"tool_name":"Write","cwd":"%s","tool_input":{"file_path":"%s/docs/note.md","content":"A short line of ordinary prose."}}\n' "$root" "$root"
     printf '{"tool_name":"Bash","cwd":"%s","tool_input":{"command":"git commit -m \\"a change\\""}}\n' "$root"
-    printf '{"tool_name":"Agent","cwd":"%s","tool_input":{"subagent_type":"reed","name":"reed-sonnet-sc1","prompt":"read a file","isolation":"worktree"}}\n' "$root"
+    printf '{"tool_name":"Agent","cwd":"%s","tool_input":{"subagent_type":"reed","name":"reed-sonnet-high-sc1","effort":"high","prompt":"read a file","isolation":"worktree"}}\n' "$root"
     printf '{"tool_name":"SendMessage","cwd":"%s","tool_input":{"to":"main","message":"status"}}\n' "$root"
     printf '{"cwd":"%s","hook_event_name":"SessionStart"}\n' "$root"
 }

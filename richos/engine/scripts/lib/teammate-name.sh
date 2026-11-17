@@ -27,7 +27,8 @@
 # multi-repository fix landed beside it).
 #
 # So there is now exactly one shape rule, here, and it is the STRICTER of the
-# two — the creator's. Both `guard-worktree-isolation.sh` and
+# two — the creator's, with the effort word added to it on 2026-11-17 (see
+# "THE FOURTH PART" below). Both `guard-worktree-isolation.sh` and
 # `mega-lander/create-teammate-worktree.sh` source this file directly and call
 # `teammate_name_check`.
 #
@@ -54,27 +55,64 @@
 # ALLOWED_MODELS is known; each caller keeps deciding what ALLOWED_MODELS is
 # for itself.
 
-# teammate_name_re <allowed-models> — prints the anchored ERE a name must
-# match: lower-case only, role 2-16 chars, model the middle of EXACTLY three
-# dash-joined parts (one of <allowed-models>), identifier 1-12 chars.
+# ===========================================================================
+# THE FOURTH PART: THE EFFORT LEVEL (CEO, 2026-11-17)
+# ===========================================================================
+# A name is <role>-<model>-<effort>-<identifier>, the effort as the plain word:
+# zach-fable-medium-effortfield1, echo2-sonnet-high-video4. The model part stays
+# where it was, so every reader of it keeps working. The effort word is checked
+# the way the model is: the guard refuses a name whose word is not the level the
+# agent is started at, so a level is always named.
+#
+# The longest name this allows is 16+1+6+1+6+1+12 = 43 characters (the longest
+# alias and level are six letters each); Claude Code allows 64.
+#
+# NAMES RECORDED BEFORE THIS (finished agents, the ledger of used names, review
+# records) HAVE THREE PARTS AND STAY READABLE. This file is the rule for a NEW
+# name only, asked by the guard and the creator. What reads names that already
+# exist takes both shapes: scripts/lib/teammate-identity.py, the claim guards
+# (guard-unresolved-claims.py, guard-agent-state-claims.py), the ass-kicker and
+# the app's display name (ui/timeline.js, richos-core timeline.rs). The registry,
+# the ledger of used names, the stop script and the review watcher compare names
+# whole and never take one apart.
+
+# The levels Claude Code accepts for an agent's effort.
+TEAMMATE_EFFORT_LEVELS="low medium high xhigh max"
+
+# teammate_name_re <allowed-models> — prints the anchored ERE a NEW name must
+# match: lower-case only, role 2-16 chars, model the second of EXACTLY four
+# dash-joined parts (one of <allowed-models>), effort the third (one of
+# TEAMMATE_EFFORT_LEVELS), identifier 1-12 chars.
 teammate_name_re() {
   local allowed="$1"
-  printf '^[a-z][a-z0-9]{1,15}-(%s)-[a-z0-9]{1,12}$' "$(printf '%s' "$allowed" | tr ' ' '|')"
+  printf '^[a-z][a-z0-9]{1,15}-(%s)-(%s)-[a-z0-9]{1,12}$' \
+    "$(printf '%s' "$allowed" | tr ' ' '|')" "$(printf '%s' "$TEAMMATE_EFFORT_LEVELS" | tr ' ' '|')"
+}
+
+# teammate_name_effort <name> — prints the effort word of a four-part name, and
+# nothing for any other name (a three-part recorded name carries none).
+teammate_name_effort() {
+  local name="$1" rest third level
+  case "$name" in *-*-*-*-*) return 0 ;; *-*-*-*) ;; *) return 0 ;; esac
+  rest="${name#*-}"; rest="${rest#*-}"; third="${rest%%-*}"
+  for level in $TEAMMATE_EFFORT_LEVELS; do
+    if [ "$third" = "$level" ]; then printf '%s' "$third"; return 0; fi
+  done
+  return 0
 }
 
 # teammate_name_check <name> <allowed-models> — exit 0 and nothing printed if
-# NAME satisfies the shared rule; exit 1 and the refusal message on stdout
-# otherwise. THE MESSAGE IS THE CREATOR'S EXACT WORDING
-# (mega-lander/create-teammate-worktree.sh point 1) — every reader that
-# refuses on this rule refuses in these words, so a name refused by one reader
-# reads identically when another reader refuses it too.
+# NAME satisfies the shared rule for a new name; exit 1 and the refusal message
+# on stdout otherwise. Every reader that refuses on this rule refuses in these
+# words, so a name refused by one reader reads identically when another reader
+# refuses it too.
 teammate_name_check() {
   local name="$1" allowed="$2"
   if printf '%s' "$name" | grep -qE "$(teammate_name_re "$allowed")"; then
     return 0
   fi
-  printf "'%s' is not a teammate name of the form <role>-<model>-<identifier> (model one of: %s)." \
-    "$name" "$allowed"
+  printf "'%s' is not a teammate name of the form <role>-<model>-<effort>-<identifier> (model one of: %s; effort one of: %s)." \
+    "$name" "$allowed" "$TEAMMATE_EFFORT_LEVELS"
   return 1
 }
 

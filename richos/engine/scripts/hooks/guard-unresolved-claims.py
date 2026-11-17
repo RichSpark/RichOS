@@ -132,12 +132,13 @@ import time
 # extraction
 # --------------------------------------------------------------------------
 
-# <role>-<model>-<identifier>, where <model> is one of the four real aliases.
-# The middle token is what makes this unambiguous: no English sentence contains
-# "word-opus-word" by accident.
+# <role>-<model>-<effort>-<identifier>, where <model> is one of the four real
+# aliases, and the three-part <role>-<model>-<identifier> every name had before
+# 2026-11-17. The model token is what makes this unambiguous: no English
+# sentence contains "word-opus-word" by accident.
 AGENT_RE = re.compile(
     r"(?<![A-Za-z0-9_-])"
-    r"([a-z][a-z0-9]{1,15})-(fable|opus|sonnet|haiku)-([a-z0-9]{1,12})"
+    r"([a-z][a-z0-9]{1,15})-(fable|opus|sonnet|haiku)-(?:(?:low|medium|high|xhigh|max)-)?([a-z0-9]{1,12})"
     r"(?![A-Za-z0-9_-])"
 )
 
@@ -1688,7 +1689,7 @@ def main():
         out.append("  reading.")
         out.append("")
         out.append("  Make the dispatch now, or name the agent in the checkable form")
-        out.append("  (<role>-<model>-<identifier>) so the claim resolves against the")
+        out.append("  (<role>-<model>-<effort>-<identifier>) so the claim resolves against the")
         out.append("  roster instead of against a word.")
     for kind, sha, sentence, repo, ref in bad_states:
         out.append("")

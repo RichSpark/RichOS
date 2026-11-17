@@ -170,7 +170,7 @@ PAREN = re.compile(r"\((%s)\)" % ID_LIST)
 LETTER_ONLY = re.compile(r"^%s$" % LETTER_ID)
 NUM_ONLY = re.compile(r"^%s$" % NUM_ID)
 
-TEAMMATE = r"[a-z]+-(?:fable|opus|sonnet|haiku)-[a-z0-9]+"
+TEAMMATE = r"[a-z]+-(?:fable|opus|sonnet|haiku)-(?:(?:low|medium|high|xhigh|max)-)?[a-z0-9]+"
 # A continuity record said "routed to andy-opus-d02". A name inside quotation marks is
 # somebody's record being reported, not this brief's claim, and it is skipped.
 ROUTED = re.compile(r"\b(?:routed|assigned|handed|dispatched|delegated)\s+(?:over\s+)?to\s+"
