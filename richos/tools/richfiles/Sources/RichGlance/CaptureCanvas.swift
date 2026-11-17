@@ -4,12 +4,15 @@ import RichFilesCore
 @MainActor
 final class CaptureCanvas: NSView {
     private static let lensSize: CGFloat = 168
-    private static let rim: CGFloat = 4
-    private static let cell: CGFloat = 12
-    private static let clearance: CGFloat = 12
+    private static let rim: CGFloat = 2
+    private static let cell: CGFloat = 9
+    private static let clearance: CGFloat = 9
     private static let margin: CGFloat = 6
     private static let darkStroke = NSColor(srgbRed: 12 / 255, green: 19 / 255, blue: 34 / 255, alpha: 1)
     private static let lightStroke = NSColor(srgbRed: 253 / 255, green: 252 / 255, blue: 248 / 255, alpha: 1)
+    private static let guide = NSColor(srgbRed: 1, green: 193 / 255, blue: 26 / 255, alpha: 1)
+    private static let guideEdge = NSColor(srgbRed: 56 / 255, green: 30 / 255, blue: 4 / 255, alpha: 1)
+    private static let readoutSurface = NSColor(white: 0.14, alpha: 0.97)
     private static let gold = NSColor(srgbRed: 194 / 255, green: 163 / 255, blue: 92 / 255, alpha: 1)
     private static let blankCursor = NSCursor(image: NSImage(size: CGSize(width: 8, height: 8), flipped: false) { _ in true }, hotSpot: .zero)
     private var dark: Bool { effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua }
@@ -142,14 +145,19 @@ final class CaptureCanvas: NSView {
             context.setFillColor(Self.darkStroke.withAlphaComponent(0.5).cgColor)
             context.addPath(shade)
             context.drawPath(using: .eoFill)
-            for x in [box.minX, box.maxX] { vertical(x, box.minY, box.maxY, in: context) }
-            for y in [box.minY, box.maxY] { horizontal(y, box.minX, box.maxX, in: context) }
+            let line = 1 / (window?.backingScaleFactor ?? 1)
+            for start in stride(from: box.minY, to: box.maxY, by: 14) {
+                for x in [box.minX, box.maxX] { vertical(x, start, min(start + 9, box.maxY), in: context, thickness: line) }
+            }
+            for start in stride(from: box.minX, to: box.maxX, by: 14) {
+                for y in [box.minY, box.maxY] { horizontal(y, start, min(start + 9, box.maxX), in: context, thickness: line) }
+            }
         }
         crosshair(at: target, context: context)
         if selection.phase != .aiming { drawCorners(at: target, context: context) }
         let position = lensPlacement(around: target)
+        label(readout, in: position.label, size: 14, compact: true)
         if selection.showsLens { drawLens(in: position.lens, context: context) }
-        label(dimensions, in: position.label, size: 16)
         if let failure {
             let width = min(bounds.width - 2 * Self.margin, 675)
             label(failure, in: CGRect(x: (bounds.width - width) / 2, y: Self.margin, width: width, height: 34), size: 16)
@@ -177,8 +185,12 @@ final class CaptureCanvas: NSView {
     }
 
     private var dimensions: String {
-        guard let crop = selection.crop else { return "Display \(image.width) × \(image.height) px" }
-        return "Crop \(Int(crop.width)) × \(Int(crop.height)) px"
+        "\(selection.crop == nil ? "Display" : "Crop") \(readout)"
+    }
+
+    private var readout: String {
+        guard let crop = selection.crop else { return "\(image.width) × \(image.height) px" }
+        return "\(Int(crop.width)) × \(Int(crop.height)) px"
     }
 
     private func refresh() {
@@ -220,29 +232,32 @@ final class CaptureCanvas: NSView {
     private func lensPlacement(around center: CGPoint) -> (lens: CGRect, label: CGRect) {
         let size = Self.lensSize
         let outside = size + 2 * Self.rim
-        let labelWidth: CGFloat = selection.phase == .aiming ? 222 : 188
-        let labelHeight: CGFloat = 34
+        let labelWidth: CGFloat = selection.showsLens ? outside : 136
+        let labelHeight: CGFloat = 26
         let usable = bounds.insetBy(dx: Self.margin, dy: Self.margin)
-        let other = geometry.viewPoint(selection.active == .first ? selection.second : selection.first)
-        let side: CGFloat = selection.phase == .aiming || center.x <= other.x ? -1 : 1
-        let direction: CGFloat = selection.phase == .aiming || center.y >= other.y ? 1 : -1
-        let quadrants = [(side, direction), (-side, direction), (side, -direction), (-side, -direction)]
+        let quadrants: [(CGFloat, CGFloat)] = [(-1, 1), (1, 1), (-1, -1), (1, -1)]
+        let crop = selection.crop.map(geometry.viewRect)
+        var firstFit: (CGRect, CGRect)?
         for (x, y) in quadrants {
             let offset = outside / 2 + Self.clearance
             let position = CGPoint(x: center.x + x * offset, y: center.y + y * offset)
             let outer = CGRect(x: position.x - outside / 2, y: position.y - outside / 2, width: outside, height: outside)
             let pillX = min(max(usable.minX, position.x - labelWidth / 2), usable.maxX - labelWidth)
-            let pillY = y > 0 ? outer.maxY + 8 : outer.minY - 8 - labelHeight
+            let pillY = y > 0 ? outer.maxY - 4 : outer.minY + 4 - labelHeight
             let pill = selection.showsLens
                 ? CGRect(x: pillX, y: pillY, width: labelWidth, height: labelHeight)
                 : CGRect(x: x > 0 ? center.x + 16 : center.x - 16 - labelWidth,
                          y: y > 0 ? center.y + 16 : center.y - 16 - labelHeight, width: labelWidth, height: labelHeight)
             if usable.contains(pill) && (!selection.showsLens || usable.contains(outer)) {
-                return (outer.insetBy(dx: Self.rim, dy: Self.rim), pill)
+                let placement = (outer.insetBy(dx: Self.rim, dy: Self.rim), pill)
+                let occupied = selection.showsLens ? outer.union(pill) : pill
+                if crop?.intersects(occupied) != true { return placement }
+                if firstFit == nil { firstFit = placement }
             }
         }
+        if let firstFit { return firstFit }
         let lens = CGRect(x: usable.midX - size / 2, y: usable.minY + Self.rim, width: size, height: size)
-        return (lens, CGRect(x: usable.midX - labelWidth / 2, y: lens.maxY + 12, width: labelWidth, height: labelHeight))
+        return (lens, CGRect(x: usable.midX - labelWidth / 2, y: lens.maxY - 2, width: labelWidth, height: labelHeight))
     }
 
     private func actionPlacement(around box: CGRect, avoiding hud: (lens: CGRect, label: CGRect)) -> CGRect {
@@ -277,30 +292,35 @@ final class CaptureCanvas: NSView {
     }
 
     private func crosshair(at point: CGPoint, context: CGContext) {
-        let gap: CGFloat? = selection.phase == .aiming ? 7 : nil
-        for start in stride(from: 0 as CGFloat, to: bounds.height, by: 10) {
-            let stop = min(start + 6, bounds.height)
-            if let gap, stop > point.y - gap && start < point.y + gap { continue }
-            vertical(point.x, start, stop, in: context)
+        let line = 1 / (window?.backingScaleFactor ?? 1)
+        for start in stride(from: bounds.minY, to: bounds.maxY, by: 14) {
+            vertical(point.x, start, min(start + 9, bounds.maxY), in: context, thickness: line)
         }
-        for start in stride(from: 0 as CGFloat, to: bounds.width, by: 10) {
-            let stop = min(start + 6, bounds.width)
-            if let gap, stop > point.x - gap && start < point.x + gap { continue }
-            horizontal(point.y, start, stop, in: context)
+        for start in stride(from: bounds.minX, to: bounds.maxX, by: 14) {
+            horizontal(point.y, start, min(start + 9, bounds.maxX), in: context, thickness: line)
         }
+        vertical(point.x, point.y - 5, point.y + 5, in: context, thickness: line)
+        horizontal(point.y, point.x - 5, point.x + 5, in: context, thickness: line)
+        // The heavier ticks make each arm easy to find while keeping the intersection fine.
+        vertical(point.x, point.y - 80, point.y - 33, in: context, thickness: 1.5)
+        vertical(point.x, point.y + 33, point.y + 80, in: context, thickness: 1.5)
+        horizontal(point.y, point.x - 80, point.x - 33, in: context, thickness: 1.5)
+        horizontal(point.y, point.x + 33, point.x + 80, in: context, thickness: 1.5)
     }
 
-    private func vertical(_ x: CGFloat, _ top: CGFloat, _ bottom: CGFloat, in context: CGContext, thickness: CGFloat = 1) {
-        context.setFillColor(Self.darkStroke.cgColor)
-        context.fill(CGRect(x: x - thickness, y: top, width: thickness, height: bottom - top))
-        context.setFillColor(Self.lightStroke.cgColor)
+    private func vertical(_ x: CGFloat, _ top: CGFloat, _ bottom: CGFloat, in context: CGContext, thickness: CGFloat) {
+        let edge = min(thickness, 1 / (window?.backingScaleFactor ?? 1))
+        context.setFillColor(Self.guideEdge.withAlphaComponent(0.8).cgColor)
+        context.fill(CGRect(x: x - edge, y: top, width: edge, height: bottom - top))
+        context.setFillColor(Self.guide.cgColor)
         context.fill(CGRect(x: x, y: top, width: thickness, height: bottom - top))
     }
 
-    private func horizontal(_ y: CGFloat, _ left: CGFloat, _ right: CGFloat, in context: CGContext, thickness: CGFloat = 1) {
-        context.setFillColor(Self.darkStroke.cgColor)
-        context.fill(CGRect(x: left, y: y - thickness, width: right - left, height: thickness))
-        context.setFillColor(Self.lightStroke.cgColor)
+    private func horizontal(_ y: CGFloat, _ left: CGFloat, _ right: CGFloat, in context: CGContext, thickness: CGFloat) {
+        let edge = min(thickness, 1 / (window?.backingScaleFactor ?? 1))
+        context.setFillColor(Self.guideEdge.withAlphaComponent(0.8).cgColor)
+        context.fill(CGRect(x: left, y: y - edge, width: right - left, height: edge))
+        context.setFillColor(Self.guide.cgColor)
         context.fill(CGRect(x: left, y: y, width: right - left, height: thickness))
     }
 
@@ -332,7 +352,7 @@ final class CaptureCanvas: NSView {
         context.setLineWidth(2)
         context.strokePath()
         context.addPath(path)
-        context.setFillColor(Self.gold.cgColor)
+        context.setFillColor(Self.guide.cgColor)
         context.fillPath()
     }
 
@@ -364,12 +384,11 @@ final class CaptureCanvas: NSView {
         vertical(center.x, rect.minY, rect.maxY, in: context, thickness: 1.5)
         horizontal(center.y, rect.minX, rect.maxX, in: context, thickness: 1.5)
         context.restoreGState()
-        context.setStrokeColor(surface.cgColor)
+        context.setStrokeColor(Self.lightStroke.cgColor)
         context.setLineWidth(Self.rim)
         context.strokeEllipse(in: rect.insetBy(dx: -Self.rim / 2, dy: -Self.rim / 2))
-        context.setStrokeColor(border.cgColor)
+        context.setStrokeColor(Self.readoutSurface.cgColor)
         context.setLineWidth(1)
-        context.strokeEllipse(in: rect)
         context.strokeEllipse(in: rect.insetBy(dx: -Self.rim, dy: -Self.rim))
     }
 
@@ -415,11 +434,12 @@ final class CaptureCanvas: NSView {
         value <= 0.0031308 ? 12.92 * value : 1.055 * pow(value, 1 / 2.4) - 0.055
         }
 
-    private func label(_ title: String, in rect: CGRect, size: CGFloat) {
-        surface.setFill()
-        let pill = NSBezierPath(roundedRect: rect, xRadius: 17, yRadius: 17)
+    private func label(_ title: String, in rect: CGRect, size: CGFloat, compact: Bool = false) {
+        let radius: CGFloat = compact ? 6 : 17
+        (compact ? Self.readoutSurface : surface).setFill()
+        let pill = NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius)
         pill.fill()
-        border.setStroke()
+        (compact ? Self.guideEdge : border).setStroke()
         pill.lineWidth = 1
         pill.stroke()
         let paragraph = NSMutableParagraphStyle()
@@ -427,7 +447,7 @@ final class CaptureCanvas: NSView {
         let text = title as NSString
         let font = NSFont.monospacedDigitSystemFont(ofSize: size, weight: .semibold)
         let attributes: [NSAttributedString.Key: Any] = [
-            .foregroundColor: ink, .font: font, .paragraphStyle: paragraph
+            .foregroundColor: compact ? NSColor.white : ink, .font: font, .paragraphStyle: paragraph
         ]
         let height = text.size(withAttributes: attributes).height
         text.draw(in: CGRect(x: rect.minX + 4, y: rect.midY - height / 2, width: rect.width - 8, height: height), withAttributes: attributes)
