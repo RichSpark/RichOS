@@ -26,7 +26,7 @@
 #
 # Cases:
 #   H1-H9   every tool answers --help and exits 0
-#   C1-C9   contrast: the arithmetic, the spellings, the thresholds, refusals
+#   C1-C11  contrast: the arithmetic, the spellings, the thresholds, refusals, --edge
 #   P1-P3   the PNG layer: the no-Pillow decoder agrees with Pillow, round trip
 #   F1-F6   frame: pixels, extent, inset, motion, and mismatched sizes refused
 #   O1-O6   the OCR gate and the finder, including a blind reader and an
@@ -225,6 +225,23 @@ else
   bad "C9 a sub-floor artifact set the reported ratio" \
       "$(printf '%s' "$OUT" | tr '\n' ' ' | cut -c1-240)"
 fi
+
+# --edge: light text on a light picture, read only by the dark ring its shadow draws.
+python3 - "$QA/lib" "$TMP/edge-ring.png" "$TMP/edge-faint.png" "$TMP/edge-dark.png" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+import qaimg
+for path, ground, ring in ((sys.argv[2], (255, 255, 255), (0, 0, 0)),
+                           (sys.argv[3], (255, 255, 255), (150, 150, 150)),
+                           (sys.argv[4], (0, 0, 0), (0, 0, 0))):
+    img = qaimg.render_blocks(240, 80, ground, ring, (40, 20, 200, 60))
+    img.fill_box(50, 30, 190, 50, (255, 255, 255))
+    qaimg.save(img, path)
+PY
+run "$QA/contrast.py" "$TMP/edge-ring.png" --edge "$TMP/edge-dark.png" "ring:0,0,240,80"
+expect "C10 --edge: white text inside a black ring on a white picture passes" 0 "21.00:1"
+run "$QA/contrast.py" "$TMP/edge-faint.png" --edge "$TMP/edge-dark.png" "faint:0,0,240,80"
+expect "C11 --edge: a faint ring on a white picture fails at the ring's ratio" 1 "2.96:1"
 
 echo ""
 echo "=== P. the PNG layer ==="
