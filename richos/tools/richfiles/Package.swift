@@ -17,7 +17,7 @@ let package = Package(
         .executableTarget(name: "RichFilesApp", dependencies: ["RichFiles"]),
         .executableTarget(name: "RichGlance", dependencies: ["RichFilesCore"]),
         .target(name: "RichFilesRail", dependencies: ["RichFiles"]),
-        .testTarget(name: "RichFilesCoreTests", dependencies: ["RichFilesCore"]),
+        .testTarget(name: "RichFilesCoreTests", dependencies: ["RichFilesCore"], resources: [.copy("Fixtures/Glance")]),
         .testTarget(name: "RichFilesTests", dependencies: ["RichFiles", "RichFilesCore"])
     ]
 )

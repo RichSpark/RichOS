@@ -3,9 +3,54 @@ import Foundation
 import ImageIO
 import UniformTypeIdentifiers
 
+private enum GlanceFormat: String, CaseIterable {
+    case png = "public.png"
+    case jpeg = "public.jpeg"
+    case heic = "public.heic"
+    case heif = "public.heif"
+    case webp = "org.webmproject.webp"
+    case avif = "public.avif"
+    case gif = "com.compuserve.gif"
+    case tiff = "public.tiff"
+    case bmp = "com.microsoft.bmp"
+    case ico = "com.microsoft.ico"
+    case icns = "com.apple.icns"
+
+    private var extensions: [String] {
+        switch self {
+        case .png: ["png"]
+        case .jpeg: ["jpg", "jpeg", "jpe"]
+        case .heic: ["heic"]
+        case .heif: ["heif"]
+        case .webp: ["webp"]
+        case .avif: ["avif"]
+        case .gif: ["gif"]
+        case .tiff: ["tiff", "tif"]
+        case .bmp: ["bmp"]
+        case .ico: ["ico"]
+        case .icns: ["icns"]
+        }
+    }
+
+    private static let byExtension = Dictionary(uniqueKeysWithValues:
+        allCases.flatMap { format in format.extensions.map { ($0, format) } }
+    )
+
+    static func forFile(_ url: URL) -> Self? {
+        guard url.isFileURL else { return nil }
+        return byExtension[url.pathExtension.lowercased()]
+    }
+
+    func accepts(_ decoded: Self) -> Bool {
+        self == decoded || (self == .heic || self == .heif) && (decoded == .heic || decoded == .heif)
+    }
+}
+
 public enum GlanceFiles {
+    public static let contentTypes: [UTType] = GlanceFormat.allCases.compactMap { UTType($0.rawValue) }
+
     public static func supports(_ url: URL) -> Bool {
-        url.isFileURL && ["png", "jpg", "jpeg"].contains(url.pathExtension.lowercased())
+        GlanceFormat.forFile(url) != nil
     }
 
     public static func folder(containing file: URL) throws -> [URL] {
@@ -34,16 +79,46 @@ public struct GlanceImage {
 
     public let bitmap: CGImage
     public let size: CGSize
+    public let animation: GlanceAnimation?
 
     public static func decode(_ url: URL) throws -> Self {
         // Opening a directory, device or named pipe as an image must never block the decoder.
         guard (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else {
             throw Failure.unavailable
         }
-        guard GlanceFiles.supports(url),
+        guard let expected = GlanceFormat.forFile(url),
               let source = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary),
-              let kind = CGImageSourceGetType(source) as String?, [UTType.png.identifier, UTType.jpeg.identifier].contains(kind),
-              let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let kind = CGImageSourceGetType(source) as String?, let format = GlanceFormat(rawValue: kind),
+              expected.accepts(format), CGImageSourceGetCount(source) > 0 else { throw Failure.unreadable }
+
+        let index: Int
+        switch format {
+        case .heic, .heif: index = CGImageSourceGetPrimaryImageIndex(source)
+        case .ico, .icns: index = largestRepresentation(in: source)
+        default: index = 0
+        }
+        let animation = GlanceAnimation(source: source, format: format)
+        let first = try decodeFrame(in: source, at: index, pixelLimit: animation == nil ? 32_000_000 : GlanceAnimation.pixelLimit)
+        return Self(bitmap: first.bitmap, size: first.size, animation: animation)
+    }
+
+    private static func largestRepresentation(in source: CGImageSource) -> Int {
+        var largest = 0
+        var area = 0.0
+        for index in 0..<CGImageSourceGetCount(source) {
+            guard let props = CGImageSourceCopyPropertiesAtIndex(source, index, nil) as? [CFString: Any],
+                  let width = props[kCGImagePropertyPixelWidth] as? Double,
+                  let height = props[kCGImagePropertyPixelHeight] as? Double,
+                  (width * height).isFinite, width > 0, height > 0, width * height > area else { continue }
+            area = width * height
+            largest = index
+        }
+        return largest
+    }
+
+    fileprivate static func decodeFrame(in source: CGImageSource, at index: Int,
+                                        pixelLimit: Double) throws -> (bitmap: CGImage, size: CGSize) {
+        guard let props = CGImageSourceCopyPropertiesAtIndex(source, index, nil) as? [CFString: Any],
               let width = props[kCGImagePropertyPixelWidth] as? Double,
               let height = props[kCGImagePropertyPixelHeight] as? Double,
               width.isFinite, height.isFinite, width >= 1, height >= 1 else {
@@ -53,16 +128,78 @@ public struct GlanceImage {
         let size = (5...8).contains(orientation) ? CGSize(width: height, height: width) : CGSize(width: width, height: height)
         // Preserve normal screenshots at full resolution. Bound the decoded surface for very large files.
         let longest = max(width, height)
-        let reduction = min(1, 8192 / longest, sqrt(32_000_000 / width / height))
+        let reduction = min(1, 8192 / longest, sqrt(pixelLimit / width / height))
         let options: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceCreateThumbnailWithTransform: true,
             kCGImageSourceThumbnailMaxPixelSize: max(1, Int(longest * reduction)),
             kCGImageSourceShouldCacheImmediately: true
         ]
-        guard let bitmap = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary),
-              CGImageSourceGetStatusAtIndex(source, 0) == .statusComplete else { throw Failure.unreadable }
-        return Self(bitmap: bitmap, size: size)
+        guard let bitmap = CGImageSourceCreateThumbnailAtIndex(source, index, options as CFDictionary),
+              CGImageSourceGetStatusAtIndex(source, index) == .statusComplete else { throw Failure.unreadable }
+        return (bitmap, size)
+    }
+}
+
+/// Uses Image I/O's composited frames, including GIF disposal and WebP blends.
+/// The source is private and its reads after initialization are serialized by a lock.
+public struct GlanceAnimation: @unchecked Sendable {
+    private struct Keys {
+        let dictionary: CFString
+        let loop: CFString
+        let delay: CFString
+        let unclamped: CFString
+    }
+
+    fileprivate static let pixelLimit = 4_000_000.0
+    private let source: CGImageSource
+    private let sourceLock = NSLock()
+    private let keys: Keys
+    public let frameCount: Int
+    /// Image I/O reports total plays. Zero means loop indefinitely.
+    public let loopCount: Int
+    public let initialDuration: TimeInterval
+
+    fileprivate init?(source: CGImageSource, format: GlanceFormat) {
+        let count = CGImageSourceGetCount(source)
+        guard count > 1 else { return nil }
+        let keys: Keys
+        switch format {
+        case .gif:
+            keys = Keys(dictionary: kCGImagePropertyGIFDictionary, loop: kCGImagePropertyGIFLoopCount,
+                        delay: kCGImagePropertyGIFDelayTime, unclamped: kCGImagePropertyGIFUnclampedDelayTime)
+        case .webp:
+            keys = Keys(dictionary: kCGImagePropertyWebPDictionary, loop: kCGImagePropertyWebPLoopCount,
+                        delay: kCGImagePropertyWebPDelayTime, unclamped: kCGImagePropertyWebPUnclampedDelayTime)
+        default:
+            return nil
+        }
+        let container = CGImageSourceCopyProperties(source, nil) as? [CFString: Any]
+        let timing = container?[keys.dictionary] as? [CFString: Any]
+        self.source = source
+        self.keys = keys
+        frameCount = count
+        loopCount = max(0, timing?[keys.loop] as? Int ?? 1)
+        initialDuration = Self.duration(in: source, at: 0, keys: keys)
+    }
+
+    public func frame(at index: Int) throws -> (bitmap: CGImage, duration: TimeInterval) {
+        guard (0..<frameCount).contains(index) else { throw GlanceImage.Failure.unreadable }
+        return try sourceLock.withLock {
+            let frame = try GlanceImage.decodeFrame(in: source, at: index, pixelLimit: Self.pixelLimit)
+            return (frame.bitmap, Self.duration(in: source, at: index, keys: keys))
+        }
+    }
+
+    private static func duration(in source: CGImageSource, at index: Int, keys: Keys) -> TimeInterval {
+        let properties = CGImageSourceCopyPropertiesAtIndex(source, index, nil) as? [CFString: Any]
+        let timing = properties?[keys.dictionary] as? [CFString: Any]
+        for key in [keys.unclamped, keys.delay] {
+            if let seconds = timing?[key] as? Double, seconds.isFinite, seconds >= 0.02 {
+                return seconds
+            }
+        }
+        return 0.1
     }
 }
 
