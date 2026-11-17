@@ -323,7 +323,7 @@
              NOTES.md table puts it. Until then this holder is hidden, so a page with no
              shell behind it shows none of them. -->
         <div id="settings-parts" hidden>
-          <!-- RICH'S MODEL (§119): two rows, each Opus (the default) or Fable. Work keeps high effort.
+          <!-- RICH'S MODEL (§119): two rows, each Opus or Fable (Fable the default and an effort per model: ROUND 86).
                The app only ever names Rich (§110's addendum: Stu is never named in the app),
                so the rows are the two halves of Rich, named by what each does.
 
@@ -332,22 +332,48 @@
                there now need to be saved and implemented." A click here changes only what
                the panel shows; closing Settings writes both rows (`set_lease_models`) and
                says what is now true in one line. There is no confirm step. -->
+          <!-- ROUND 86: THE EFFORT LEVEL, UNDER EACH ROW'S MODEL (CEO 2026-11-17, "do the
+               mockups for the effort level. For both."). Each row gets a five-step effort
+               control (Claude Code's low, medium, high, xhigh, max) directly under its model.
+               EACH MODEL KEEPS ITS OWN EFFORT: the control belongs to the model shown above it,
+               so Opus and Fable can sit at different levels in the same row, and switching the
+               model brings back that model's level. The steps are built by main.js's ROUND 86
+               block into each `.ef-steps`. Held while open and saved on close, like the model. -->
           <section class="md" id="md" data-settings-part="model" aria-labelledby="md-title">
-            <p class="popover-title" id="md-title">Rich's model</p>
+            <p class="popover-title" id="md-title">Rich's model and effort</p>
+            <!-- ROUND 86.1 (CEO 2026-11-17): "communicate that the default effort levels that we
+                 have there are the recommended effort levels for nearly all kinds of work. And
+                 that increasing those effort levels is generally NOT recommended." Said once here,
+                 then by the "Recommended" marker under each model's default step. -->
+            <p class="ef-rec" id="ef-rec"><span class="ef-rec-icon" aria-hidden="true"><svg viewBox="0 0 16 16" width="16" height="16"><path d="M3.2 8.4 6.5 11.6 12.8 4.6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span><b>The defaults are the recommended levels for nearly all kinds of work.</b> Higher effort is not always better and raising it is generally not recommended.</span></p>
             <div class="md-row">
               <p class="md-who" id="md-rich-who"><span>When he <b>talks with you</b></span><span class="md-state" id="md-rich-state">default</span></p>
-              <div class="seg" id="md-rich" data-who="rich" data-v="opus" role="radiogroup" aria-labelledby="md-title md-rich-who">
+              <div class="seg" id="md-rich" data-who="rich" data-v="fable" role="radiogroup" aria-labelledby="md-title md-rich-who">
                 <span class="seg-thumb" aria-hidden="true"></span>
-                <button class="seg-opt" type="button" role="radio" data-v="opus" aria-checked="true">Opus</button>
-                <button class="seg-opt" type="button" role="radio" data-v="fable" aria-checked="false" tabindex="-1">Fable</button>
+                <button class="seg-opt" type="button" role="radio" data-v="opus" aria-checked="false" tabindex="-1">Opus</button>
+                <button class="seg-opt" type="button" role="radio" data-v="fable" aria-checked="true">Fable</button>
+              </div>
+              <div class="ef" id="ef-rich" data-who="rich" data-level="1">
+                <p class="ef-head"><span class="ef-label" id="ef-rich-label">Effort on <span class="ef-model">Fable</span></span><span class="ef-name" aria-hidden="true"></span></p>
+                <div class="ef-steps" role="radiogroup" aria-labelledby="md-rich-who ef-rich-label"></div>
+                <p class="ef-mark" aria-hidden="true"><span class="ef-mark-label">Recommended</span></p><!-- ROUND 86.1 -->
+                <p class="ef-ends" aria-hidden="true"><span>Faster replies</span><span>Deeper thinking</span></p>
+                <p class="ef-say" aria-live="polite"></p>
               </div>
             </div>
             <div class="md-row">
               <p class="md-who" id="md-stu-who"><span>When he <b>directs your team</b></span><span class="md-state" id="md-stu-state">default</span></p>
-              <div class="seg" id="md-stu" data-who="stu" data-v="opus" role="radiogroup" aria-labelledby="md-title md-stu-who">
+              <div class="seg" id="md-stu" data-who="stu" data-v="fable" role="radiogroup" aria-labelledby="md-title md-stu-who">
                 <span class="seg-thumb" aria-hidden="true"></span>
-                <button class="seg-opt" type="button" role="radio" data-v="opus" aria-checked="true">Opus · high effort</button>
-                <button class="seg-opt" type="button" role="radio" data-v="fable" aria-checked="false" tabindex="-1">Fable</button>
+                <button class="seg-opt" type="button" role="radio" data-v="opus" aria-checked="false" tabindex="-1">Opus</button>
+                <button class="seg-opt" type="button" role="radio" data-v="fable" aria-checked="true">Fable</button>
+              </div>
+              <div class="ef" id="ef-stu" data-who="stu" data-level="2">
+                <p class="ef-head"><span class="ef-label" id="ef-stu-label">Effort on <span class="ef-model">Fable</span></span><span class="ef-name" aria-hidden="true"></span></p>
+                <div class="ef-steps" role="radiogroup" aria-labelledby="md-stu-who ef-stu-label"></div>
+                <p class="ef-mark" aria-hidden="true"><span class="ef-mark-label">Recommended</span></p><!-- ROUND 86.1 -->
+                <p class="ef-ends" aria-hidden="true"><span>Faster work</span><span>More thorough</span></p>
+                <p class="ef-say" aria-live="polite"></p>
               </div>
             </div>
             <p class="md-note" id="md-note" aria-live="polite"></p>

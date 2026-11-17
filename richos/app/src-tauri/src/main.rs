@@ -4856,29 +4856,56 @@ fn set_assertiveness(state: State<AppState>, level: String) -> Result<(), String
     state.config.lock().unwrap().set_assertiveness(parsed).map_err(|e| e.to_string())
 }
 
-/// **Rich's model, as Preferences shows it** (§119; round 23): `{ "rich": "opus"|"fable",
-/// "stu": "opus"|"fable" }`. Rich is the conversation, Stu the team's back end, named in the
-/// app only by what each does (§110). A value another build wrote reads as Opus.
+/// **Rich's model and effort, as Settings shows them** (§119; rounds 23 and 86.1):
+/// `{ "rich": "opus"|"fable", "stu": "opus"|"fable", "effort": { "rich": { "opus": level,
+/// "fable": level }, "stu": { .. } } }`, a level being one of Claude Code's five. Rich is the
+/// conversation, Stu the team's back end, named in the app only by what each does (§110). A
+/// value another build wrote reads as the default: Fable, and that row's recommended level.
 #[richos_command::command]
 fn get_lease_models(state: State<AppState>) -> serde_json::Value {
-    let models = state.config.lock().unwrap().lease_models();
-    serde_json::json!({ "rich": models.rich.as_str(), "stu": models.stu.as_str() })
+    let config = state.config.lock().unwrap();
+    let (models, efforts) = (config.lease_models(), config.effort_choices());
+    serde_json::json!({ "rich": models.rich.as_str(), "stu": models.stu.as_str(), "effort": {
+        "rich": { "opus": efforts.rich_opus.as_str(), "fable": efforts.rich_fable.as_str() },
+        "stu": { "opus": efforts.stu_opus.as_str(), "fable": efforts.stu_fable.as_str() },
+    } })
 }
 
 /// **Both rows at once, as Preferences closes** (the CEO's addendum to §119: *"Closing the
 /// preferences panel IS the confirmation that the settings chosen there now need to be saved
-/// and implemented."*). Save both choices together, then apply native set_model controls
-/// to the existing Rich and Stu sessions. Each control returns the provider's confirmation.
-/// An unknown name refuses both choices before either is written.
+/// and implemented."*). Save both models and each row's effort on each model together (round
+/// 86.1; `effort` absent keeps the levels), with `chosen` naming the settings he pressed while
+/// Settings was open, by the file's key, so one pressed and left as it was is still written as
+/// his choice. Then apply the model and the level now in use to the existing Rich and Stu
+/// sessions. Each control returns the provider's confirmation.
+/// An unknown name refuses every choice before any is written.
 #[richos_command::command]
-fn set_lease_models(state: State<AppState>, rich: String, stu: String) -> Result<(), String> {
-    use richos_core::config::{LeaseModels, ModelChoice};
+fn set_lease_models(state: State<AppState>, rich: String, stu: String, effort: Option<serde_json::Value>, chosen: Option<Vec<String>>) -> Result<(), String> {
+    use richos_core::config::{EffortChoices, EffortLevel, LeaseModels, ModelChoice};
     let rich = ModelChoice::parse(&rich).ok_or_else(|| format!("unknown model: {rich}"))?;
     let stu = ModelChoice::parse(&stu).ok_or_else(|| format!("unknown model: {stu}"))?;
-    state.config.lock().unwrap().set_lease_models(LeaseModels { rich, stu }).map_err(|e| e.to_string())?;
-    let rich_result=state.control.set_model(rich);
-    let stu_result=state.work.set_model(stu);
-    rich_result.and(stu_result)
+    let models = LeaseModels { rich, stu };
+    let efforts = {
+        let mut config = state.config.lock().unwrap();
+        let mut efforts = config.effort_choices();
+        if let Some(sent) = effort.as_ref() {
+            for (who, model, slot) in [
+                ("rich", "opus", &mut efforts.rich_opus), ("rich", "fable", &mut efforts.rich_fable),
+                ("stu", "opus", &mut efforts.stu_opus), ("stu", "fable", &mut efforts.stu_fable),
+            ] {
+                let Some(level) = sent[who][model].as_str() else { continue };
+                *slot = EffortLevel::parse(level).ok_or_else(|| format!("unknown effort level: {level}"))?;
+            }
+        }
+        let pressed: Vec<&str> = chosen.iter().flatten().map(String::as_str).collect();
+        config.set_lease_choices(models, efforts, &pressed).map_err(|e| e.to_string())?;
+        EffortChoices::on(&efforts, models)
+    };
+    let results = [
+        state.control.set_model(rich), state.control.set_effort(efforts.rich),
+        state.work.set_model(stu), state.work.set_effort(efforts.stu),
+    ];
+    results.into_iter().collect()
 }
 
 /// UX §3.2 / architecture P3.2: the optional AI-worker drill-down.

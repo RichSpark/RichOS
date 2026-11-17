@@ -9,6 +9,14 @@
 //
 // CEO 2026-10-14 prioritizes instant replies over effort; the conversation now uses low effort.
 //
+// CEO 2026-11-17: "Fable at low effort might actually be a good new default for Rich in the
+// RichOS app. And for Stu, Fable at medium effort might be the best new default." So the row
+// marked "default" is Fable in both, and Opus is the option.
+//
+// CEO 2026-11-17, round 86.1 ("round-86.1 is good to go. Implement now."): an effort control of
+// five levels under each row, each model keeping its own level; the defaults are the recommended
+// levels (Fable at Low and Medium, Opus at Low and High); choosing Max opens a warning.
+//
 // WHAT THIS SUITE PROVES is the browser half, through the real renderer and mock.js's stand-in
 // for config.rs:
 //   1. the rows show the stored choice, first under "Working with Rich" in the one Settings
@@ -26,6 +34,12 @@
 //      themes, the chosen label sits inside its gold thumb and every setting in the panel stays
 //      inside its column and its own box (second review of d623a3f2: 1440 at 135% put a 176px
 //      "Opus · high effort" on a 158.68px thumb, its dark ink past the gold).
+//   7. the effort control: the recommended levels and their words, a preview under the pointer,
+//      a press, each model keeping its own level, the keyboard, and one save of everything on
+//      close;
+//   8. the Max warning: his words, the safe button focused, Escape and a press outside going
+//      back to the recommended level with Settings still open, "Use Max anyway" keeping Max,
+//      no second warning on a Max already chosen or saved, and the line on close.
 // The APPLYING half — the lease in use moves to the stored model at its next boundary — is
 // Rust: `the_model_he_chose_in_preferences_answers_his_next_reply`
 // (crates/richos-core/tests/rotation_tests.rs, his next reply) and
@@ -90,8 +104,67 @@ const calls = (page, cmd) => page.evaluate((c) => window.__calls.filter((x) => x
 const stored = (page) =>
   page.evaluate((key) => {
     const c = JSON.parse(window.localStorage.getItem(key) || "{}");
-    return { rich: c.rich_model || "opus", stu: c.stu_model || "opus" };
+    return { rich: c.rich_model || "fable", stu: c.stu_model || "fable" };
   }, STORE);
+/// The four levels the recommended ones are, as `set_lease_models` carries them.
+const RECOMMENDED = { rich: { opus: "low", fable: "low" }, stu: { opus: "high", fable: "medium" } };
+const withEffort = (effort) => ({ rich: { ...RECOMMENDED.rich, ...(effort.rich || {}) }, stu: { ...RECOMMENDED.stu, ...(effort.stu || {}) } });
+/// What one row's effort control shows.
+async function effort(page, who) {
+  return page.evaluate((w) => {
+    const ef = document.getElementById("ef-" + w);
+    const on = ef.querySelector('.ef-step[aria-checked="true"]');
+    const label = ef.querySelector(".ef-mark-label").getBoundingClientRect();
+    const def = ef.querySelector(".ef-step.is-default").getBoundingClientRect();
+    const mid = def.left + def.width / 2;
+    return {
+      level: on ? on.dataset.l : null,
+      head: ef.querySelector(".ef-head").textContent,
+      say: ef.querySelector(".ef-say").textContent,
+      steps: ef.querySelectorAll(".ef-step").length,
+      peek: ef.querySelectorAll(".ef-step.is-peek").length,
+      recommendedUnder: label.left <= mid && label.right >= mid ? ef.querySelector(".ef-step.is-default").dataset.l : "off",
+    };
+  }, who);
+}
+/// The Max warning while it is up, or null.
+async function warning(page) {
+  return page.evaluate(() => {
+    const w = document.querySelector(".efw");
+    if (!w || w.hidden || !w.classList.contains("is-open")) return null;
+    const text = (sel) => w.querySelector(sel).textContent;
+    return {
+      title: text(".efw-title"),
+      where: text(".efw-where"),
+      lead: text(".efw-lead"),
+      why: text(".efw-why"),
+      rec: text(".efw-rec-text"),
+      keep: text(".efw-keep"),
+      anyway: text(".efw-anyway"),
+      focus: document.activeElement ? document.activeElement.className : null,
+    };
+  });
+}
+const warningIs = (page, up) =>
+  page
+    .waitForFunction(
+      (want) => {
+        const w = document.querySelector(".efw");
+        return (!!w && !w.hidden && w.classList.contains("is-open")) === want;
+      },
+      up
+    )
+    .catch(() => {});
+const levelIs = (page, who, level) =>
+  page
+    .waitForFunction(
+      ([w, l]) => {
+        const on = document.querySelector(`#ef-${w} .ef-step[aria-checked="true"]`);
+        return !!on && on.dataset.l === l;
+      },
+      [who, level]
+    )
+    .catch(() => {});
 
 /// Round 27: Rich's model lives in the one Settings panel, opened by the button at top right.
 async function openPrefs(page) {
@@ -152,13 +225,13 @@ async function main() {
 
   // ---- 1. the rows show the stored choice ------------------------------------------------
   await run.check("1. the rows show the stored choice, first under Working with Rich, away from the first column", async () => {
-    // A fresh install: both on Opus, both marked default.
+    // A fresh install: both on Fable, both marked default (CEO 2026-11-17).
     const fresh = await openApp(browser);
     await openPrefs(fresh);
-    await rowsShow(fresh, { rich: "opus", stu: "opus" });
+    await rowsShow(fresh, { rich: "fable", stu: "fable" });
     const r0 = await rows(fresh);
-    assertEqual([r0.rich, r0.stu], [{ chosen: "opus", state: "default" }, { chosen: "opus", state: "default" }], "fresh install");
-    assert(r0.note.startsWith("Opus is the default for both."), "the line under the rows: " + r0.note);
+    assertEqual([r0.rich, r0.stu], [{ chosen: "fable", state: "default" }, { chosen: "fable", state: "default" }], "fresh install");
+    assertEqual(r0.note, "Fable is the default for both. Fable and higher effort both use up your Claude limits faster. Each model keeps its own effort.", "the line under the rows");
     // Round 27: first in the middle column, "Working with Rich", and never in the first column
     // of quick controls (§119: "in general settings, not in quick settings").
     const where = await fresh.evaluate(() => {
@@ -169,42 +242,42 @@ async function main() {
         column: [...col.parentElement.children].indexOf(col),
       };
     });
-    assertEqual(where, { group: "Working with Rich", firstTitle: "Rich's model", column: 1 }, "where Rich's model sits");
+    assertEqual(where, { group: "Working with Rich", firstTitle: "Rich's model and effort", column: 1 }, "where Rich's model sits");
     // The app only ever names Rich (§110): no "Stu" anywhere a person can read.
     const visible = await fresh.$eval("#set-menu", (n) => n.innerText);
     assert(!/\bStu\b/.test(visible), "Stu is named in Settings");
     await fresh.close();
 
-    // A stored choice of Fable for "talks with you" is what the row shows.
-    const page = await openApp(browser, { models: { rich: "fable" } });
+    // A stored choice of Opus for "talks with you" is what the row shows.
+    const page = await openApp(browser, { models: { rich: "opus" } });
     await openPrefs(page);
-    await rowsShow(page, { rich: "fable", stu: "opus" });
+    await rowsShow(page, { rich: "opus", stu: "fable" });
     const r = await rows(page);
-    assertEqual([r.rich, r.stu], [{ chosen: "fable", state: "" }, { chosen: "opus", state: "default" }], "stored rich=fable");
-    assert(r.note.startsWith("Rich talks with you on Fable."), "the line names the change first: " + r.note);
+    assertEqual([r.rich, r.stu], [{ chosen: "opus", state: "" }, { chosen: "fable", state: "default" }], "stored rich=opus");
+    assert(r.note.startsWith("Rich talks with you on Opus at low effort."), "the line names the change first: " + r.note);
     assertEqual(page.__errors, [], "no page errors");
     await page.close();
-    return "fresh: opus/opus default; stored fable: shown";
+    return "fresh: fable/fable default; stored opus: shown";
   });
 
   // ---- 2. changing a row while open changes nothing in use ------------------------------
   await run.check("2. a row changed while Settings is open changes nothing in use: no command, no write, no toast", async () => {
     const page = await openApp(browser);
     await openPrefs(page);
-    await rowsShow(page, { rich: "opus", stu: "opus" });
-    await page.click('#md-rich .seg-opt[data-v="fable"]');
+    await rowsShow(page, { rich: "fable", stu: "fable" });
+    await page.click('#md-rich .seg-opt[data-v="opus"]');
     // The keyboard is a second way in: the arrows move the team row's choice.
-    await page.focus('#md-stu .seg-opt[data-v="opus"]');
-    await page.keyboard.press("ArrowRight");
+    await page.focus('#md-stu .seg-opt[data-v="fable"]');
+    await page.keyboard.press("ArrowLeft");
     // A pick is synchronous (`pickModel`): once the rows show both, any command or write a
     // pick could make has already been made, so the negatives below wait on a fact, not a clock.
-    await rowsShow(page, { rich: "fable", stu: "fable" });
+    await rowsShow(page, { rich: "opus", stu: "opus" });
     const r = await rows(page);
-    assertEqual([r.rich.chosen, r.stu.chosen], ["fable", "fable"], "the popover shows both picks");
-    assert(r.note.startsWith("Rich is on Fable for both."), "and says what they would mean: " + r.note);
+    assertEqual([r.rich.chosen, r.stu.chosen], ["opus", "opus"], "the popover shows both picks");
+    assert(r.note.startsWith("Rich talks with you on Opus at low effort. Rich directs your team on Opus at high effort."), "and says what they would mean: " + r.note);
     assert(await isOpen(page), "Settings is still open");
     assertEqual(await calls(page, "set_lease_models"), [], "a command went out while Settings was open");
-    assertEqual(await stored(page), { rich: "opus", stu: "opus" }, "the store changed while Settings was open");
+    assertEqual(await stored(page), { rich: "fable", stu: "fable" }, "the store changed while Settings was open");
     assertEqual(await toastText(page), null, "a toast fired before Settings closed");
     await page.close();
     return "shown, not sent";
@@ -215,26 +288,26 @@ async function main() {
     // (a) the Settings button.
     const page = await openApp(browser);
     await openPrefs(page);
-    await rowsShow(page, { rich: "opus", stu: "opus" });
-    await page.click('#md-rich .seg-opt[data-v="fable"]');
+    await rowsShow(page, { rich: "fable", stu: "fable" });
+    await page.click('#md-rich .seg-opt[data-v="opus"]');
     await page.click("#set-btn");
-    await toastSays(page, "Rich now talks with you on Fable.");
+    await toastSays(page, "Rich now talks with you on Opus at low effort.");
     assertEqual(await isOpen(page), false, "the Settings button closed Settings");
     const sent = await calls(page, "set_lease_models");
-    assertEqual(sent.map((c) => c.args), [{ rich: "fable", stu: "opus" }], "one save, both rows, on close");
-    assertEqual(await stored(page), { rich: "fable", stu: "opus" }, "the store after close");
-    assertEqual(await toastText(page), "Rich now talks with you on Fable.", "the toast says what is now true");
+    assertEqual(sent.map((c) => c.args), [{ rich: "opus", stu: "fable", effort: RECOMMENDED, chosen: ["rich_model"] }], "one save, both rows and their levels, on close");
+    assertEqual(await stored(page), { rich: "opus", stu: "fable" }, "the store after close");
+    assertEqual(await toastText(page), "Rich now talks with you on Opus at low effort.", "the toast says what is now true");
 
-    // (b) Escape, both rows back to Opus at once: one save, one toast with both sentences.
+    // (b) Escape, both rows changed at once: one save, one toast with both sentences.
     await openPrefs(page);
-    await rowsShow(page, { rich: "fable", stu: "opus" });
-    await page.click('#md-rich .seg-opt[data-v="opus"]');
-    await page.click('#md-stu .seg-opt[data-v="fable"]');
+    await rowsShow(page, { rich: "opus", stu: "fable" });
+    await page.click('#md-rich .seg-opt[data-v="fable"]');
+    await page.click('#md-stu .seg-opt[data-v="opus"]');
     await page.keyboard.press("Escape");
-    const both = "Rich talks with you on Opus again, the default. Rich now directs your team on Fable.";
+    const both = "Rich talks with you on Fable at low effort again, the default. Rich now directs your team on Opus at high effort.";
     await toastSays(page, both);
     assertEqual(await isOpen(page), false, "Escape closed Settings");
-    assertEqual(await stored(page), { rich: "opus", stu: "fable" }, "the store after Escape");
+    assertEqual(await stored(page), { rich: "fable", stu: "opus" }, "the store after Escape");
     assertEqual(await toastText(page), both, "one toast, both changes");
 
     // (c) a click outside; and a choice flipped and flipped back saves nothing, says nothing.
@@ -244,9 +317,9 @@ async function main() {
       if (t) t.hidden = true;
     });
     await openPrefs(page);
-    await rowsShow(page, { rich: "opus", stu: "fable" });
-    await page.click('#md-rich .seg-opt[data-v="fable"]');
+    await rowsShow(page, { rich: "fable", stu: "opus" });
     await page.click('#md-rich .seg-opt[data-v="opus"]');
+    await page.click('#md-rich .seg-opt[data-v="fable"]');
     // Below the panel, which now spans the stage. Measured, not typed: with round 36's Your
     // instructions and round 41's Terminal setup both in the middle column the panel ends at
     // y=887 in this 900px window, so the old fixed y=880 landed inside it.
@@ -260,8 +333,29 @@ async function main() {
     // follows a sent save, so once the popover is hidden the negatives below are settled.
     await page.waitForSelector("#set-menu", { state: "hidden" }).catch(() => {});
     assertEqual(await isOpen(page), false, "a click outside closed Settings");
-    assertEqual(await calls(page, "set_lease_models"), [], "an unchanged choice was saved");
+    // Changed and set back before closing: nothing in use changed, so nothing is said, and
+    // the row he pressed is saved as his choice (CEO 2026-11-17: the settings can always tell
+    // what is what).
+    assertEqual((await calls(page, "set_lease_models")).map((c) => c.args),
+      [{ rich: "fable", stu: "opus", effort: RECOMMENDED, chosen: ["rich_model"] }], "the row pressed and set back was not saved as chosen");
     assertEqual(await toastText(page), null, "an unchanged choice was announced");
+    assertEqual(await page.evaluate((key) => JSON.parse(window.localStorage.getItem(key)).lease_chosen, STORE), ["rich_model", "stu_model"], "what the store holds as chosen");
+    // Opened and closed with nothing pressed: no save at all. And the default pressed where it
+    // already stands is a press: saved as chosen, said nowhere.
+    await page.evaluate(() => (window.__calls = []));
+    await openPrefs(page);
+    await rowsShow(page, { rich: "fable", stu: "opus" });
+    await page.keyboard.press("Escape");
+    await page.waitForSelector("#set-menu", { state: "hidden" }).catch(() => {});
+    assertEqual(await calls(page, "set_lease_models"), [], "Settings opened and closed untouched was saved");
+    await openPrefs(page);
+    await rowsShow(page, { rich: "fable", stu: "opus" });
+    await page.click("#ef-rich-low");
+    await page.keyboard.press("Escape");
+    await page.waitForSelector("#set-menu", { state: "hidden" }).catch(() => {});
+    assertEqual((await calls(page, "set_lease_models")).map((c) => c.args),
+      [{ rich: "fable", stu: "opus", effort: RECOMMENDED, chosen: ["rich_effort_fable"] }], "the default pressed where it stands was not saved as chosen");
+    assertEqual(await toastText(page), null, "a press that changed nothing was announced");
     assertEqual(page.__errors, [], "no page errors");
     await page.close();
     return "the button, Escape, outside click";
@@ -271,24 +365,24 @@ async function main() {
   await run.check("4. reopening Settings shows the saved choice, and so does the next launch", async () => {
     const page = await openApp(browser, { theme: "light" });
     await openPrefs(page);
-    await rowsShow(page, { rich: "opus", stu: "opus" });
-    await page.click('#md-stu .seg-opt[data-v="fable"]');
+    await rowsShow(page, { rich: "fable", stu: "fable" });
+    await page.click('#md-stu .seg-opt[data-v="opus"]');
     await page.click("#set-btn");
-    await toastSays(page, "Rich now directs your team on Fable.");
+    await toastSays(page, "Rich now directs your team on Opus at high effort.");
     await openPrefs(page);
-    await rowsShow(page, { rich: "opus", stu: "fable" });
+    await rowsShow(page, { rich: "fable", stu: "opus" });
     const r = await rows(page);
-    assertEqual([r.rich, r.stu], [{ chosen: "opus", state: "default" }, { chosen: "fable", state: "" }], "reopened");
-    assert(r.note.includes("Your teammates keep their own models."), "the team row's line: " + r.note);
+    assertEqual([r.rich, r.stu], [{ chosen: "fable", state: "default" }, { chosen: "opus", state: "" }], "reopened");
+    assert(r.note.startsWith("Rich directs your team on Opus at high effort."), "the team row's line: " + r.note);
 
     // The next launch reads the store, not the page's memory.
     await page.reload();
     await leaveHome(page);
     await page.waitForSelector(".nav-thread", { state: "attached" });
     await openPrefs(page);
-    await rowsShow(page, { rich: "opus", stu: "fable" });
+    await rowsShow(page, { rich: "fable", stu: "opus" });
     const after = await rows(page);
-    assertEqual([after.rich.chosen, after.stu.chosen], ["opus", "fable"], "after a relaunch");
+    assertEqual([after.rich.chosen, after.stu.chosen], ["fable", "opus"], "after a relaunch");
     assertEqual(page.__errors, [], "no page errors");
     await page.close();
     return "reopen and relaunch";
@@ -314,17 +408,17 @@ async function main() {
       };
     });
     await openPrefs(page);
-    await rowsShow(page, { rich: "opus", stu: "opus" });
-    await page.click('#md-rich .seg-opt[data-v="fable"]');
+    await rowsShow(page, { rich: "fable", stu: "fable" });
+    await page.click('#md-rich .seg-opt[data-v="opus"]');
     await page.click("#set-btn"); // close: the save starts and is held
     const readsBefore = await page.evaluate(() => window.__readsDone);
     await openPrefs(page); // reopen: its read starts while the save is held
     await page.evaluate(() => window.__releaseSave());
-    await toastSays(page, "Rich now talks with you on Fable.");
+    await toastSays(page, "Rich now talks with you on Opus at low effort.");
     await page.waitForFunction((n) => window.__readsDone > n, readsBefore).catch(() => {});
-    assertEqual(await stored(page), { rich: "fable", stu: "opus" }, "the save landed");
+    assertEqual(await stored(page), { rich: "opus", stu: "fable" }, "the save landed");
     const r = await rows(page);
-    assertEqual([r.rich.chosen, r.stu.chosen], ["fable", "opus"], "the reopened rows after the save and the read settled");
+    assertEqual([r.rich.chosen, r.stu.chosen], ["opus", "fable"], "the reopened rows after the save and the read settled");
     assertEqual(page.__errors, [], "no page errors");
     await page.close();
     return "read waited for the save";
@@ -341,7 +435,7 @@ async function main() {
       for (const width of widths) {
         const page = await openApp(browser, { theme, viewport: { width, height: 700 }, reducedMotion: "reduce" });
         await openPrefs(page);
-        await rowsShow(page, { rich: "opus", stu: "opus" });
+        await rowsShow(page, { rich: "fable", stu: "fable" });
         const steps = await page.evaluate(() => window.RichTheme.STEPS);
         for (const scale of steps) {
           for (const stu of ["opus", "fable"]) {
@@ -397,6 +491,173 @@ async function main() {
     }
     assertEqual(problems, [], "nothing in Settings leaves its place");
     return `${cases} cases: 2 themes x ${widths.length} widths x 7 Text sizes x both choices for the second row`;
+  });
+
+  // ---- 7. the effort control ------------------------------------------------------------------
+  await run.check("7. the effort control: recommended levels, a preview, a press, each model's own level, the keyboard, one save on close", async () => {
+    const page = await openApp(browser);
+    await openPrefs(page);
+    await rowsShow(page, { rich: "fable", stu: "fable" });
+    const [r0, s0] = [await effort(page, "rich"), await effort(page, "stu")];
+    assertEqual([r0.steps, s0.steps], [5, 5], "five levels under each row");
+    assertEqual([r0.level, s0.level], ["low", "medium"], "the defaults: Fable at Low when he talks, Fable at Medium for the team");
+    assertEqual([r0.head, s0.head], ["Effort on FableLow · recommended", "Effort on FableMedium · recommended"], "each default is named recommended");
+    assertEqual([r0.recommendedUnder, s0.recommendedUnder], ["low", "medium"], '"Recommended" sits under the default step');
+    assertEqual(
+      await page.$eval("#ef-rec", (n) => n.textContent),
+      "The defaults are the recommended levels for nearly all kinds of work. Higher effort is not always better and raising it is generally not recommended.",
+      "the line under the title"
+    );
+
+    // The pointer over a level previews it, with the caution first, and changes nothing.
+    await page.hover('#ef-rich .ef-step[data-l="xhigh"]');
+    await page.waitForFunction(() => document.querySelectorAll("#ef-rich .ef-step.is-peek").length === 3).catch(() => {});
+    const peek = await effort(page, "rich");
+    assertEqual([peek.level, peek.peek, peek.head], ["low", 3, "Effort on FableExtra high"], "a preview, Low still chosen");
+    assert(peek.say.startsWith("Generally not recommended. "), "a level above the recommended one leads with the caution: " + peek.say);
+    await page.mouse.move(20, 450);
+    await page.waitForFunction(() => document.querySelectorAll("#ef-rich .ef-step.is-peek").length === 0).catch(() => {});
+    assertEqual((await effort(page, "rich")).head, "Effort on FableLow · recommended", "the pointer away: the preview is gone");
+
+    // A press chooses; the row is no longer the default.
+    await page.click('#ef-rich .ef-step[data-l="xhigh"]');
+    await levelIs(page, "rich", "xhigh");
+    assertEqual([(await effort(page, "rich")).level, (await rows(page)).rich.state], ["xhigh", ""], "Extra high chosen");
+    // Each model keeps its own level.
+    await page.click('#md-rich .seg-opt[data-v="opus"]');
+    await levelIs(page, "rich", "low");
+    assertEqual((await effort(page, "rich")).head, "Effort on OpusLow · recommended for Opus", "Opus has its own level");
+    await page.click('#ef-rich .ef-step[data-l="medium"]');
+    await page.click('#md-rich .seg-opt[data-v="fable"]');
+    await levelIs(page, "rich", "xhigh");
+    assertEqual((await effort(page, "rich")).level, "xhigh", "Fable's Extra high came back");
+    // The keyboard on the team row: Home, then the arrow up one.
+    await page.focus('#ef-stu .ef-step[data-l="medium"]');
+    await page.keyboard.press("Home");
+    await levelIs(page, "stu", "low");
+    await page.keyboard.press("ArrowRight");
+    await page.keyboard.press("ArrowRight");
+    await levelIs(page, "stu", "high");
+    assertEqual(await page.evaluate(() => document.activeElement.dataset.l), "high", "the focus follows the chosen level");
+    const say = (await effort(page, "stu")).say;
+    assertEqual(say, "Generally not recommended. Careful work, checked as he goes.", "what High means for the team on Fable");
+
+    // A press that arrives as a click alone, with no pointer (VoiceOver's press): it chooses too.
+    await page.$eval("#ef-stu-low", (n) => n.click());
+    await levelIs(page, "stu", "low");
+    assertEqual((await effort(page, "stu")).level, "low", "a click with no pointer chose nothing");
+    await page.$eval("#ef-stu-high", (n) => n.click());
+    await levelIs(page, "stu", "high");
+
+    // Nothing has left the page; closing saves all of it once and says it in one line.
+    assertEqual(await calls(page, "set_lease_models"), [], "a command went out while Settings was open");
+    await page.click("#set-btn");
+    const line = "Rich now talks with you on Fable at extra high effort. Rich now directs your team on Fable at high effort.";
+    await toastSays(page, line);
+    assertEqual(await toastText(page), line, "the line on close");
+    const sent = await calls(page, "set_lease_models");
+    assertEqual(
+      sent.map((c) => c.args),
+      [{ rich: "fable", stu: "fable", effort: withEffort({ rich: { opus: "medium", fable: "xhigh" }, stu: { fable: "high" } }), chosen: ["rich_effort_fable", "rich_effort_opus", "rich_model", "stu_effort_fable"] }],
+      "one save: both models and each row's level on each model"
+    );
+    // Reopened, and after a relaunch.
+    await page.reload();
+    await leaveHome(page);
+    await page.waitForSelector(".nav-thread", { state: "attached" });
+    await openPrefs(page);
+    await levelIs(page, "stu", "high");
+    assertEqual([(await effort(page, "rich")).level, (await effort(page, "stu")).level], ["xhigh", "high"], "after a relaunch");
+    assertEqual(page.__errors, [], "no page errors");
+    await page.close();
+    return "preview, press, per-model levels, keyboard, one save";
+  });
+
+  // ---- 8. the Max warning ----------------------------------------------------------------------
+  await run.check("8. choosing Max opens the warning in his words; the safe ways go back to the recommended level; Max can be kept", async () => {
+    for (const theme of ["dark", "light"]) {
+      const page = await openApp(browser, { theme });
+      await openPrefs(page);
+      await rowsShow(page, { rich: "fable", stu: "fable" });
+      await page.click('#ef-rich .ef-step[data-l="max"]');
+      await warningIs(page, true);
+      assertEqual(
+        await warning(page),
+        {
+          title: "WARNING!",
+          where: "Effort on Fable, when he talks with you",
+          lead: "The Max effort level is NOT recommended for anything.",
+          why: "It has a strong tendency to yield less than great results and it does that at an extremely high cost.",
+          rec: "Low is the recommended level here, right for nearly all kinds of work.",
+          keep: "Use Low, the recommended level",
+          anyway: "Use Max anyway",
+          focus: "efw-keep",
+        },
+        theme + ": the warning"
+      );
+      assert(await isOpen(page), "Settings stays open under the warning");
+      const behind = await effort(page, "rich");
+      assertEqual([behind.level, behind.head], ["max", "Effort on FableMax · not recommended"], "behind it Max is named not recommended");
+      assert(behind.say.startsWith("Not recommended for anything. "), behind.say);
+      // Tab stays on the two buttons.
+      await page.keyboard.press("Tab");
+      const second = await page.evaluate(() => document.activeElement.className);
+      await page.keyboard.press("Tab");
+      assertEqual([second, await page.evaluate(() => document.activeElement.className)], ["efw-anyway", "efw-keep"], "Tab stays on the two buttons");
+      // Escape is the safe button, and it does not close Settings.
+      await page.keyboard.press("Escape");
+      await warningIs(page, false);
+      await levelIs(page, "rich", "low");
+      assertEqual([await warning(page), await isOpen(page), (await effort(page, "rich")).level], [null, true, "low"], "Escape: back to Low, Settings open");
+      // A press outside the card is the safe button too.
+      await page.click('#ef-rich .ef-step[data-l="max"]');
+      await warningIs(page, true);
+      await page.mouse.click(30, 30);
+      await warningIs(page, false);
+      await levelIs(page, "rich", "low");
+      assertEqual([await isOpen(page), (await effort(page, "rich")).level], [true, "low"], "a press outside: back to Low, Settings open");
+      // A click with no pointer on Max (VoiceOver's press) opens the warning too; Enter on the
+      // focused safe button goes back.
+      await page.$eval("#ef-rich-max", (n) => n.click());
+      await warningIs(page, true);
+      assertEqual((await warning(page)).focus, "efw-keep", "the warning after a click with no pointer");
+      await page.keyboard.press("Enter");
+      await warningIs(page, false);
+      await levelIs(page, "rich", "low");
+      assertEqual(await page.evaluate(() => document.activeElement.id), "ef-rich-low", "the focus goes back to the recommended step");
+      // The warning card never claims aria-modal (appearance.js 7c: WebKit would leave Settings
+      // out of the accessibility tree).
+      assertEqual(await page.$eval(".efw", (n) => [n.getAttribute("role"), n.getAttribute("aria-modal")]), ["alertdialog", null], "the warning's role");
+      // The team row on Opus names High, from the keyboard's End; "Use Max anyway" keeps Max.
+      await page.click('#md-stu .seg-opt[data-v="opus"]');
+      await levelIs(page, "stu", "high");
+      await page.focus('#ef-stu .ef-step[data-l="high"]');
+      await page.keyboard.press("End");
+      await warningIs(page, true);
+      const team = await warning(page);
+      assertEqual([team.where, team.keep], ["Effort on Opus, when he directs your team", "Use High, the recommended level"], "the team row on Opus");
+      await page.click(".efw-anyway");
+      await warningIs(page, false);
+      assertEqual([(await effort(page, "stu")).level, await isOpen(page)], ["max", true], "Max kept, Settings open");
+      // Max pressed while already chosen asks nothing again.
+      await page.click('#ef-stu .ef-step[data-l="max"]');
+      assertEqual(await warning(page), null, "a second warning on a Max already chosen");
+      assert((await rows(page)).note.startsWith("Rich directs your team on Opus at max effort, which is not recommended."), "the note names it");
+      // Nothing was saved until now; the close says it.
+      assertEqual(await calls(page, "set_lease_models"), [], "a command went out while Settings was open");
+      await page.keyboard.press("Escape");
+      const line = "Rich now directs your team on Opus at max effort, which is not recommended.";
+      await toastSays(page, line);
+      assertEqual(await toastText(page), line, "the line on close");
+      assertEqual((await calls(page, "set_lease_models")).map((c) => c.args), [{ rich: "fable", stu: "opus", effort: withEffort({ stu: { opus: "max" } }), chosen: ["rich_effort_fable", "stu_effort_opus", "stu_model"] }], "the save");
+      // A saved Max opens no warning when Settings opens.
+      await openPrefs(page);
+      await levelIs(page, "stu", "max");
+      assertEqual([(await effort(page, "stu")).level, await warning(page)], ["max", null], "a saved Max opened a warning");
+      assertEqual(page.__errors, [], "no page errors");
+      await page.close();
+    }
+    return "both themes: his words, Escape, outside, End, Use Max anyway, the line on close";
   });
 
   await browser.close();

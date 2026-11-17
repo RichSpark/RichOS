@@ -597,6 +597,10 @@ async function main() {
       const m = await p.evaluate(() => {
         const n = document.getElementById("set-phone-state");
         const row = document.getElementById("set-phone-open");
+        // Round 86.1 put an effort control under each model row above this one, so at this
+        // window's height the row is below the fold of its column: it is scrolled to, as a
+        // person would, and must then be whole inside the window.
+        row.scrollIntoView({ block: "center" });
         const cs = n ? getComputedStyle(n) : null;
         return {
           line: n ? n.textContent.trim() : null,

@@ -732,33 +732,29 @@ pub fn child_args(session_id: &str) -> Vec<String> {
     .collect()
 }
 
-/// The CEO's 2026-10-14 instruction prioritizes instant replies over effort level.
-/// The conversation only answers or hands work over; the work lease retains high effort.
-pub fn lease_effort(role: LeaseRole) -> &'static str {
-    match role {
-        LeaseRole::Conversation => "low",
-        LeaseRole::Work => "high",
-    }
-}
-
 /// **The flags that name the model and the effort for a lease of this role** — appended to
 /// every lease's vector by [`NativeClient::spawn_with_tools`], and the one function the tests
 /// assert on. Rich is the conversation lease and Stu the work lease (§110); each gets the
 /// model its stored setting names ([`crate::engine_profile::EngineProfile::lease_models`],
-/// read from `config.json` at every spawn). A lease spawned without an engine profile (the
-/// headless and test paths, which read no settings) gets the default, Opus.
+/// read from `config.json` at every spawn) and the effort chosen for that row on that model
+/// (`lease_efforts`, round 86.1; [`crate::config::EffortLevel::recommended`] when nobody
+/// chose). A lease spawned without an engine profile (the headless and test paths, which read
+/// no settings) gets the defaults: Fable, at low effort for the conversation and medium for
+/// the work.
 ///
 /// Until §119 the app passed neither flag, so both sessions ran on the CLI's own default for
 /// the account. Measured on `claude` 2.1.295 with the lease's `--setting-sources ''` on
 /// 2026-10-10: `--model opus --effort high` answered as `claude-opus-5-5`, and
-/// `--model fable --effort high` as `claude-fable-5-1`.
+/// `--model fable --effort high` as `claude-fable-5-1`. On 2.1.326 on 2026-11-17:
+/// `--model fable --effort medium` answered as `claude-fable-5-2`, recorded at effort medium.
 pub fn lease_model_args(role: LeaseRole, profile: Option<&crate::engine_profile::EngineProfile>) -> Vec<String> {
     let models = profile.map(|p| p.lease_models).unwrap_or_default();
-    let model = match role {
-        LeaseRole::Conversation => models.rich,
-        LeaseRole::Work => models.stu,
+    let efforts = profile.map(|p| p.lease_efforts).unwrap_or_default();
+    let (model, effort) = match role {
+        LeaseRole::Conversation => (models.rich, efforts.rich),
+        LeaseRole::Work => (models.stu, efforts.stu),
     };
-    vec!["--model".into(), model.cli_alias().into(), "--effort".into(), lease_effort(role).into()]
+    vec!["--model".into(), model.cli_alias().into(), "--effort".into(), effort.as_str().into()]
 }
 
 pub fn chat_child_args(session_id: &str, doctrine: &Path, skills: &Path) -> Vec<String> {
@@ -4010,21 +4006,37 @@ const STOP_TASK_REPLY_WAIT: Duration = Duration::from_secs(5);
 /// the answer is [`CommandStop::Unconfirmed`] — a stated unknown, never "stopped".
 const STOP_TASK_ENDING_WAIT: Duration = Duration::from_secs(5);
 
+impl NativeCancelHandle {
+    /// One control request, answered by the provider or refused by name.
+    fn confirmed_control(&self,what:&str,request:Value)->Result<(),String> {
+        let id=format!("richos_set_model_{}",self.next_id.fetch_add(1,Ordering::SeqCst));
+        let (tx,rx)=channel();self.pending.lock().unwrap().insert(id.clone(),tx);
+        let result=(|| {
+            NativeClient::write_line(&self.stdin,&json!({"type":"control_request","request_id":id,"request":request})).map_err(|error|error.to_string())?;
+            let response=rx.recv_timeout(HANDSHAKE_TIMEOUT).map_err(|error|format!("{what} was not confirmed: {error}"))?;
+            if response["response"]["subtype"]!="success" {return Err(format!("{what} refused: {}",response["response"]["error"]))}
+            Ok(())
+        })();
+        self.pending.lock().unwrap().remove(&id);result
+    }
+}
+
 impl TurnCancel for NativeCancelHandle {
     /// The flag [`NativeCognition`]'s own `is_closed` reads: the child's output closed.
     fn is_closed(&self) -> bool { self.reader_closed.load(Ordering::SeqCst) }
     fn set_model(&self,model:crate::config::ModelChoice)->Result<bool,String> {
         if self.reader_closed.load(Ordering::SeqCst) {return Ok(false)}
-        let id=format!("richos_set_model_{}",self.next_id.fetch_add(1,Ordering::SeqCst));
-        let (tx,rx)=channel();self.pending.lock().unwrap().insert(id.clone(),tx);
-        let result=(|| {
-            NativeClient::write_line(&self.stdin,&json!({"type":"control_request","request_id":id,
-                "request":{"subtype":"set_model","model":model.cli_alias()}})).map_err(|error|error.to_string())?;
-            let response=rx.recv_timeout(HANDSHAKE_TIMEOUT).map_err(|error|format!("Model change was not confirmed: {error}"))?;
-            if response["response"]["subtype"]!="success" {return Err(format!("Model change refused: {}",response["response"]["error"]))}
-            Ok(true)
-        })();
-        self.pending.lock().unwrap().remove(&id);result
+        self.confirmed_control("Model change",json!({"subtype":"set_model","model":model.cli_alias()}))?;
+        Ok(true)
+    }
+    /// The session keeps running, so the level it was started at is replaced on it. Measured
+    /// on `claude` 2.1.326 on 2026-11-17 (`scripts/qa/live-effort-probe.py`): a session started
+    /// with `--model fable --effort low` and sent this request recorded its next reply at
+    /// effort high, on the same model.
+    fn set_effort(&self,effort:crate::config::EffortLevel)->Result<bool,String> {
+        if self.reader_closed.load(Ordering::SeqCst) {return Ok(false)}
+        self.confirmed_control("Effort change",json!({"subtype":"apply_flag_settings","settings":{"effortLevel":effort.as_str()}}))?;
+        Ok(true)
     }
 
     fn worker_status(&self) -> Option<crate::worker_status::WorkerStatusView> {
@@ -6382,7 +6394,7 @@ while True:
             codex_root: root.join("codex-coordination"),
             user: Default::default(),
 
-            claude_account: None, token_sink: None, chat_readings: None, speech_model: None, meetings_corpus: None, live_meeting_reader: None, lease_models: Default::default(), machine_settings: Default::default(),
+            claude_account: None, token_sink: None, chat_readings: None, speech_model: None, meetings_corpus: None, live_meeting_reader: None, lease_models: Default::default(), lease_efforts: Default::default(), machine_settings: Default::default(),
         }
     }
 
@@ -7773,17 +7785,17 @@ printf '%s\n' '{"type":"system","subtype":"task_notification","task_id":"remaini
     }
 
     #[test]
-    fn conversation_starts_at_low_effort_and_work_keeps_high_effort() {
-        // CEO 2026-10-14: "Forget the effort level for now."
+    fn conversation_starts_on_fable_at_low_effort_and_work_on_fable_at_medium_effort() {
+        // CEO 2026-11-17: Fable at low effort for Rich, Fable at medium effort for Stu.
         // Read off the argument vector the child actually received, on a real
-        // `spawn_with_tools`, one per role. The per-role Fable setting is
-        // `each_role_keeps_its_model_with_low_effort_for_replies_and_high_for_work`
+        // `spawn_with_tools`, one per role. The per-role Opus setting is
+        // `each_role_defaults_to_fable_and_its_effort_follows_the_role_and_the_model`
         // (`tests/engine_profile.rs`), through the same `lease_model_args`.
         let handshake = "for a in \"$@\"; do printf '%s\\n' \"$a\"; done > \"$(dirname \"$0\")/argv\"\n\
              read -r line\n\
              printf '%s\\n' '{\"type\":\"control_response\",\"response\":{\"subtype\":\"success\",\"request_id\":\"req_init\",\"response\":{}}}'\n\
              sleep 5\n";
-        for (tag, role, effort) in [("models-desk", LeaseRole::Conversation, "low"), ("models-work", LeaseRole::Work, "high")] {
+        for (tag, role, effort) in [("models-desk", LeaseRole::Conversation, "low"), ("models-work", LeaseRole::Work, "medium")] {
             let script = write_script(tag, handshake);
             let _client = NativeClient::spawn_with_tools(
                 &script, Path::new("/tmp"),
@@ -7794,10 +7806,57 @@ printf '%s\n' '{"type":"system","subtype":"task_notification","task_id":"remaini
                 .lines().map(String::from).collect();
             let at = argv.iter().position(|a| a == "--model")
                 .unwrap_or_else(|| panic!("{role:?} was started without --model: {argv:?}"));
-            assert_eq!(&argv[at..at + 4], ["--model", "opus", "--effort", effort], "{role:?}: {argv:?}");
+            assert_eq!(&argv[at..at + 4], ["--model", "fable", "--effort", effort], "{role:?}: {argv:?}");
             assert_eq!(argv.iter().filter(|a| *a == "--model" || *a == "--effort").count(), 2,
                 "{role:?} names a model or an effort twice: {argv:?}");
         }
+    }
+
+    #[test]
+    fn a_model_and_a_level_chosen_while_a_session_runs_are_sent_to_it() {
+        // Settings is saved while the sessions run, so the model and the effort chosen there
+        // go to the running session: `set_model`, then the level that row has on that model
+        // (round 86.1; `set_lease_models` in src-tauri sends both). Measured on `claude`
+        // 2.1.326, 2026-11-17: a session started with `--model fable --effort medium`, sent
+        // `set_model opus` then `apply_flag_settings {effortLevel: high}`, recorded its next
+        // reply as claude-opus-5-5 at effort high; and `scripts/qa/live-effort-probe.py`,
+        // fable:low sent fable:high, recorded claude-fable-5-2 at effort high.
+        let script = write_script("work-model-effort", r#"
+exec python3 -u -c '
+import json,os,sys
+def read(): return json.loads(sys.stdin.readline())
+def send(row): print(json.dumps(row),flush=True)
+init=read()
+send({"type":"control_response","response":{"subtype":"success","request_id":init["request_id"],"response":{}}})
+seen=[]
+for _ in range(4):
+ row=read()
+ seen.append(row["request"])
+ open(os.path.join(os.path.dirname(sys.argv[1]),"controls"),"w").write(json.dumps(seen))
+ send({"type":"control_response","response":{"subtype":"success","request_id":row["request_id"]}})
+sys.stdin.readline()
+' "$0"
+"#);
+        let client = NativeClient::spawn_with_tools(
+            &script, Path::new("/tmp"),
+            Some((doctrine_fixture().as_path(), skills_fixture().as_path())),
+            None, None, None, None, None, LeaseRole::Work,
+        ).expect("the handshake should succeed");
+        use crate::config::{EffortLevel, ModelChoice};
+        assert!(client.cancel_handle().set_model(ModelChoice::Opus).unwrap());
+        assert!(client.cancel_handle().set_effort(EffortLevel::High).unwrap());
+        assert!(client.cancel_handle().set_model(ModelChoice::Fable).unwrap());
+        assert!(client.cancel_handle().set_effort(EffortLevel::Xhigh).unwrap());
+        // The child records each request before it answers it, and `set_model` returns only
+        // on the answer, so the record is complete here.
+        let controls = script.parent().unwrap().join("controls");
+        let seen: Value = serde_json::from_str(&std::fs::read_to_string(&controls).expect("the child recorded no controls")).unwrap();
+        assert_eq!(seen, json!([
+            {"subtype":"set_model","model":"opus"},
+            {"subtype":"apply_flag_settings","settings":{"effortLevel":"high"}},
+            {"subtype":"set_model","model":"fable"},
+            {"subtype":"apply_flag_settings","settings":{"effortLevel":"xhigh"}},
+        ]));
     }
 
     #[test]
@@ -9748,7 +9807,7 @@ read -r keep_alive
             cognition.engine_profile = Some(crate::engine_profile::EngineProfile {
                 engine: root.clone(), coordination: root.clone(), plugin: root.clone(), state: root.clone(), user: Default::default(),
                 runtime: crate::runtime::EngineRuntime {root: root.clone(), python:"/usr/bin/python3".into(), node:"/usr/bin/false".into(), git:"/usr/bin/git".into(),versions:BTreeMap::new()},
-                codex_root:root.join("codex-coordination"), work_scope:None, search_binding: None, claude_account: None, token_sink: None, chat_readings: None, speech_model: None, meetings_corpus: None, live_meeting_reader: None, lease_models: Default::default(), machine_settings: Default::default()
+                codex_root:root.join("codex-coordination"), work_scope:None, search_binding: None, claude_account: None, token_sink: None, chat_readings: None, speech_model: None, meetings_corpus: None, live_meeting_reader: None, lease_models: Default::default(), lease_efforts: Default::default(), machine_settings: Default::default()
             });
             let result = cognition.prompt("Synthetic audit turn", &mut |_| {});
             let provider_alive = cognition.client.child.try_wait().unwrap().is_none();

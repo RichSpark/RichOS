@@ -5760,7 +5760,7 @@ async function syncAssertivenessFromBackend() {
 // ---------------------------------------------------------------------------------------
 // RICH'S MODEL (CEO §119; round 23). Two rows: "talks with you" (the conversation, Rich) and
 // "directs your team" (the team's back end, Stu in the record, never named in the app, §110),
-// each Opus (the default) or Fable. Conversation effort prioritizes quick replies. Backed by `get_lease_models` /
+// each Opus or Fable (Fable the default since round 86), each with its own effort (round 86, below). Backed by `get_lease_models` /
 // `set_lease_models` (main.rs -> richos-core's config.rs).
 //
 // HELD WHILE PREFERENCES IS OPEN, SAVED AND APPLIED WHEN IT CLOSES. The CEO's addendum, his
@@ -5773,39 +5773,154 @@ async function syncAssertivenessFromBackend() {
 // next boundary — his next reply, the team's next job (`spine.rs`'s `MODEL_CHANGED`,
 // `work_host.rs`'s `renew_if_model_changed`) — because a lease is never swapped mid-turn.
 // ---------------------------------------------------------------------------------------
+// ROUND 86: THE EFFORT LEVEL (CEO 2026-11-17: "do the mockups for the effort level. For both.").
+// Until this round the effort was fixed in code by role (in `native.rs`: the
+// conversation at low, the work at high, on either model) and shown nowhere but the words
+// "Opus · high effort". Now each row carries a five-step effort control under its model, the
+// five levels Claude Code accepts. EACH MODEL KEEPS ITS OWN EFFORT, per row: the control
+// shown is the effort of the model chosen above it, so Opus and Fable can run at different
+// levels, and switching the model brings that model's level back.
+//
+// THE DEFAULTS (CEO 2026-11-17, decided: "Yeah, let's set those as default in the mockups now
+// and then implement those defaults as well."): Rich on Fable at low effort when he talks with
+// you, and on Fable at medium effort when he directs your team. Opus keeps today's levels as its
+// own (low and high), so choosing Opus in a row runs it exactly as the app does today. Until this
+// round both rows defaulted to Opus, low and high. The levels are stored per row and per model
+// (`config.rs`'s `EffortLevel`), each lease is started with its row's level (`--effort`), and a
+// level saved while a session runs is sent to it (`set_lease_models` in src-tauri).
+// Held while Settings is open and saved on close, exactly like the model.
 const MODEL_ROWS = [
-  ["rich", "md-rich", "md-rich-state"],
-  ["stu", "md-stu", "md-stu-state"],
+  ["rich", "md-rich", "md-rich-state", "ef-rich"],
+  ["stu", "md-stu", "md-stu-state", "ef-stu"],
 ];
-const MODEL_NOTE = {
-  "opus,opus":
-    "Opus is the default for both. Fable is more capable than Opus and uses up your Claude limits faster.",
-  "fable,opus":
-    "<strong>Rich talks with you on Fable.</strong> Fable is more capable than Opus and uses up your Claude limits faster.",
-  "opus,fable":
-    "<strong>Rich directs your team on Fable.</strong> Fable is more capable than Opus and uses up your Claude limits faster. Your teammates keep their own models.",
-  "fable,fable":
-    "<strong>Rich is on Fable for both.</strong> Fable is more capable than Opus and uses up your Claude limits faster, on every reply and every piece of work he directs.",
+const MODEL_NAME = { opus: "Opus", fable: "Fable" };
+const EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"];
+const EFFORT_NAME = { low: "Low", medium: "Medium", high: "High", xhigh: "Extra high", max: "Max" };
+const MODEL_DEFAULT = { rich: "fable", stu: "fable" };
+const EFFORT_DEFAULT = {
+  rich: { opus: "low", fable: "low" },
+  stu: { opus: "high", fable: "medium" },
 };
-const MODEL_TOAST = {
+// What each level means, in the row's own terms: replies for the conversation, work for the team.
+const EFFORT_SAY = {
   rich: {
-    fable: "Rich now talks with you on Fable.",
-    opus: "Rich talks with you on Opus again, the default.",
+    low: "His fastest replies. He thinks briefly before each one.",
+    medium: "Quick replies, with a little more thought behind them.",
+    high: "He thinks each reply through, so replies take longer.",
+    xhigh: "He thinks hard before every reply. Expect noticeable waits.",
+    // ROUND 86.1: Max no longer promises his deepest thinking (CEO 2026-11-17: "it has a strong
+    // tendency to yield less than great results and does that at an extremely high cost").
+    max: "The slowest replies, at an extremely high cost and often less than great results.",
   },
   stu: {
-    fable: "Rich now directs your team on Fable.",
-    opus: "Rich directs your team on Opus at high effort again, the default.",
+    low: "Work gets done fastest, with the least checking.",
+    medium: "Faster work, with some checking as he goes.",
+    high: "Careful work, checked as he goes.",
+    xhigh: "Extra care on hard work. Jobs take longer.",
+    max: "The slowest jobs, at an extremely high cost and often less than great results.",
   },
 };
-/// What is saved, as the store last said. The default until the first read answers.
-let modelSaved = { rich: "opus", stu: "opus" };
-/// What Preferences shows while it is open. Equal to `modelSaved` whenever it is closed.
-let modelDraft = { ...modelSaved };
-function modelValue(v) {
-  return v === "fable" ? "fable" : "opus";
+// ROUND 86.1: THE DEFAULTS ARE THE RECOMMENDED LEVELS, AND MAX IS WARNED AGAINST (CEO 2026-11-17:
+// "We need some way to communicate that the default effort levels that we have there are the
+// recommended effort levels for nearly all kinds of work. And that increasing those effort levels
+// is generally NOT recommended."). Each model's default level is named "recommended" (in the
+// heading, and by a marker under its step); a level above it says "Generally not recommended."
+// before what it means; Max says "Not recommended for anything." and choosing it opens a warning.
+const EFFORT_ABOVE = "Generally not recommended.";
+const EFFORT_MAX = "Not recommended for anything.";
+const ROW_DOES = { rich: "talks with you", stu: "directs your team" };
+const EFFORT_COST = "Fable and higher effort both use up your Claude limits faster. Each model keeps its own effort.";
+const EFFORT_TAIL = "Fable is more capable than Opus. " + EFFORT_COST;
+
+function effortCopy(e) {
+  const out = {};
+  for (const who of ["rich", "stu"]) {
+    out[who] = {};
+    for (const m of ["opus", "fable"]) {
+      const v = e && e[who] && e[who][m];
+      out[who][m] = EFFORT_LEVELS.includes(v) ? v : EFFORT_DEFAULT[who][m];
+    }
+  }
+  return out;
 }
-function paintModelRows(lit) {
-  for (const [who, segId, stateId] of MODEL_ROWS) {
+function choiceCopy(c) {
+  return { rich: c.rich, stu: c.stu, effort: effortCopy(c.effort) };
+}
+function effortWords(level) {
+  return EFFORT_NAME[level].toLowerCase() + " effort";
+}
+function rowIsDefault(c, who) {
+  const m = MODEL_DEFAULT[who];
+  return c[who] === m && c.effort[who][m] === EFFORT_DEFAULT[who][m];
+}
+/// What is saved, as the store last said. The default until the first read answers.
+let modelSaved = { rich: MODEL_DEFAULT.rich, stu: MODEL_DEFAULT.stu, effort: effortCopy(null) };
+/// What Settings shows while it is open. Equal to `modelSaved` whenever it is closed.
+let modelDraft = choiceCopy(modelSaved);
+/// THE SETTINGS HE PRESSED WHILE SETTINGS WAS OPEN, by the file's key (`rich_model`,
+/// `stu_effort_fable`): sent with the save as `chosen`. A value pressed and left as it was, or
+/// changed and set back before Settings closed, is his choice of that value, and the file
+/// records it as one (CEO 2026-11-17: "make sure that from now on, the settings can always tell
+/// what is what"). Without this, only a value that ended up different was ever saved. The
+/// pointer over a step is a preview, not a press.
+let modelPressed = new Set();
+/// A step the pointer is over, per row, shown as a preview until it is pressed.
+const effortPreview = { rich: null, stu: null };
+function modelValue(v, who) {
+  return v === "fable" || v === "opus" ? v : MODEL_DEFAULT[who];
+}
+
+function paintEffort(who, efId, rising) {
+  const ef = el(efId);
+  if (!ef) return;
+  const model = modelDraft[who];
+  const level = modelDraft.effort[who][model];
+  const idx = EFFORT_LEVELS.indexOf(level);
+  const def = EFFORT_DEFAULT[who][model];
+  const peek = effortPreview[who];
+  const shown = peek || level;
+  ef.dataset.level = String(idx + 1);
+  ef.dataset.model = model;
+  ef.classList.toggle("is-rising", !!rising);
+  ef.classList.toggle("is-peek", !!peek && peek !== level);
+  const modelEl = ef.querySelector(".ef-model");
+  if (modelEl.textContent !== MODEL_NAME[model]) {
+    modelEl.textContent = MODEL_NAME[model];
+    modelEl.classList.remove("is-new");
+    void modelEl.offsetWidth;
+    modelEl.classList.add("is-new");
+  }
+  // ROUND 86.1: the default level is the recommended one. "recommended" alone on the row's
+  // default model; on the other model it says whose it is.
+  const defWord = model === MODEL_DEFAULT[who] ? " · recommended" : ` · recommended for ${MODEL_NAME[model]}`;
+  const defIdx = EFFORT_LEVELS.indexOf(def);
+  const shownIdx = EFFORT_LEVELS.indexOf(shown);
+  ef.dataset.def = String(defIdx);
+  ef.dataset.shown = shownIdx > defIdx ? (shown === "max" ? "max" : "above") : shown === def ? "rec" : "below";
+  ef.querySelector(".ef-name").textContent = EFFORT_NAME[shown] + (shown === def ? defWord : shown === "max" ? " · not recommended" : "");
+  const say = ef.querySelector(".ef-say");
+  say.textContent = "";
+  if (shownIdx > defIdx) {
+    const warn = document.createElement("strong");
+    warn.className = "ef-caution";
+    warn.textContent = shown === "max" ? EFFORT_MAX : EFFORT_ABOVE;
+    say.append(warn, " ");
+  }
+  say.append(EFFORT_SAY[who][shown]);
+  const peekIdx = peek ? EFFORT_LEVELS.indexOf(peek) : -1;
+  ef.querySelectorAll(".ef-step").forEach((step, i) => {
+    const on = i === idx;
+    step.setAttribute("aria-checked", String(on));
+    step.tabIndex = on ? 0 : -1;
+    step.classList.toggle("is-filled", i <= idx);
+    step.classList.toggle("is-top", on);
+    step.classList.toggle("is-default", EFFORT_LEVELS[i] === def);
+    step.classList.toggle("is-peek", peekIdx >= 0 && i <= peekIdx && i > idx);
+    step.classList.toggle("is-drop", peekIdx >= 0 && i > peekIdx && i <= idx);
+  });
+}
+function paintModelRows(lit, rising) {
+  for (const [who, segId, stateId, efId] of MODEL_ROWS) {
     const seg = el(segId);
     if (!seg) continue;
     const v = modelDraft[who];
@@ -5815,25 +5930,162 @@ function paintModelRows(lit) {
       opt.setAttribute("aria-checked", String(on));
       opt.tabIndex = on ? 0 : -1;
     }
-    el(stateId).textContent = v === "opus" ? "default" : "";
+    el(stateId).textContent = rowIsDefault(modelDraft, who) ? "default" : "";
     if (lit === who && v === "fable") {
       seg.classList.remove("is-lit");
       void seg.offsetWidth;
       seg.classList.add("is-lit");
     }
+    paintEffort(who, efId, rising === who);
   }
-  const key = modelDraft.rich + "," + modelDraft.stu;
   const note = el("md-note");
   if (note) {
-    note.innerHTML = MODEL_NOTE[key];
-    note.classList.toggle("is-fable", key !== "opus,opus");
+    const moved = ["rich", "stu"].filter((who) => !rowIsDefault(modelDraft, who));
+    if (moved.length === 0) {
+      const both = MODEL_DEFAULT.rich === MODEL_DEFAULT.stu ? `${MODEL_NAME[MODEL_DEFAULT.rich]} is the default for both. ` : "";
+      note.textContent = both + (MODEL_DEFAULT.rich === "fable" ? EFFORT_COST : EFFORT_TAIL);
+    } else {
+      const lead = moved
+        .map((who) => {
+          const lvl = modelDraft.effort[who][modelDraft[who]];
+          return `Rich ${ROW_DOES[who]} on ${MODEL_NAME[modelDraft[who]]} at ${effortWords(lvl)}${lvl === "max" ? ", which is not recommended" : ""}.`; // ROUND 86.1
+        })
+        .join(" ");
+      const team = modelDraft.stu === "fable" ? " Your teammates keep their own models." : "";
+      note.innerHTML = `<strong>${lead}</strong> ${EFFORT_COST}${team}`;
+    }
+    note.classList.toggle("is-fable", moved.length > 0);
   }
 }
 function pickModel(who, v, focus) {
+  modelPressed.add(`${who}_model`);
   if (modelDraft[who] === v) return;
   modelDraft[who] = v;
+  effortPreview[who] = null;
   paintModelRows(who);
   if (focus) el(who === "rich" ? "md-rich" : "md-stu").querySelector(`[data-v="${v}"]`).focus();
+}
+function pickEffort(who, level, focus) {
+  const model = modelDraft[who];
+  const before = modelDraft.effort[who][model];
+  modelPressed.add(`${who}_effort_${model}`);
+  effortPreview[who] = null;
+  if (before === level) {
+    paintModelRows(null);
+    return;
+  }
+  modelDraft.effort[who][model] = level;
+  const rising = EFFORT_LEVELS.indexOf(level) > EFFORT_LEVELS.indexOf(before);
+  paintModelRows(null, rising ? who : null);
+  const ef = el(who === "rich" ? "ef-rich" : "ef-stu");
+  // ROUND 86.1: reaching Max no longer runs a pass of light across the steps (round 86 did): it
+  // is not a reward. The Max bar turns the warning color instead (style.css) and the warning opens.
+  if (focus) ef.querySelector(`.ef-step[data-l="${level}"]`).focus();
+}
+
+// ROUND 86.1: THE MAX WARNING (CEO 2026-11-17: "If the user selects the Max effort, show a warning
+// discouraging the user from picking that effort level because the Max effort level should never be
+// used for anything. So, maybe a popup with something like: 'WARNING! The Max effort level is NOT
+// recommended for anything. Because it has a strong tendency to yield less than great results and
+// does that at an extremely high cost!'"). It opens every time Max is newly chosen, by a press, at
+// the end of a drag, or from the keyboard. Its first button, which has the focus, goes back to that
+// model's recommended level; the second keeps Max. Escape and a press outside the card are the
+// first button, the safe one. It lives inside the Settings wrapper, so a press on it never closes
+// Settings, and nothing is saved until Settings closes, as with every choice there.
+// THE APP, NOT THE ROUND: the round's card claimed `aria-modal`. In the app's WebKit that leaves
+// Settings out of the accessibility tree while the focus is in the card (appearance.js check
+// 7c, which refuses it for every overlay), so it is an alertdialog without it; the Tab
+// handler below is what keeps the focus on its two buttons. And the role is on the wrapper,
+// which holds the veil as well as the card: the veil over the page is then the dialog's own, as
+// the app's other dialogs have it, which is what tells the contrast walk (and anything else
+// reading the roles) that the page under it is not being read while the warning is up.
+let maxWarn = null;
+function maxWarnDialog() {
+  if (maxWarn) return maxWarn;
+  const host = document.getElementById("settings") || document.body;
+  const wrap = document.createElement("div");
+  wrap.className = "efw";
+  wrap.setAttribute("role", "alertdialog");
+  wrap.setAttribute("aria-labelledby", "efw-title");
+  wrap.setAttribute("aria-describedby", "efw-body");
+  wrap.hidden = true;
+  wrap.innerHTML = `
+    <div class="efw-scrim"></div>
+    <div class="efw-card">
+      <div class="efw-top">
+        <span class="efw-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="26" height="26"><path d="M12 3.2 1.9 20.6h20.2L12 3.2Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M12 9.6v5.2" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><circle cx="12" cy="17.6" r="1.3" fill="currentColor"/></svg></span>
+        <h3 class="efw-title" id="efw-title">WARNING!</h3>
+        <span class="efw-where"></span>
+      </div>
+      <div class="efw-body" id="efw-body">
+        <p class="efw-lead">The Max effort level is <strong>NOT</strong> recommended for anything.</p>
+        <p class="efw-why">It has a strong tendency to yield less than great results and it does that at an extremely high cost.</p>
+        <p class="efw-rec"><span class="efw-check" aria-hidden="true"><svg viewBox="0 0 16 16" width="16" height="16"><path d="M3.2 8.4 6.5 11.6 12.8 4.6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="efw-rec-text"></span></p>
+      </div>
+      <div class="efw-actions">
+        <button type="button" class="efw-keep"></button>
+        <button type="button" class="efw-anyway">Use Max anyway</button>
+      </div>
+    </div>`;
+  host.appendChild(wrap);
+  const card = wrap.querySelector(".efw-card");
+  const keep = wrap.querySelector(".efw-keep");
+  const anyway = wrap.querySelector(".efw-anyway");
+  maxWarn = { wrap, card, keep, anyway, who: null, open: false };
+  const finish = (useMax) => {
+    if (!maxWarn.open) return;
+    const who = maxWarn.who;
+    maxWarn.open = false;
+    window.removeEventListener("keydown", onKey, true);
+    wrap.classList.remove("is-open");
+    wrap.classList.add("is-leaving");
+    setTimeout(() => {
+      wrap.hidden = true;
+      wrap.classList.remove("is-leaving");
+    }, 180);
+    const ef = el(who === "rich" ? "ef-rich" : "ef-stu");
+    ef.classList.remove("is-warned");
+    if (useMax) {
+      ef.querySelector('.ef-step[data-l="max"]').focus({ preventScroll: true });
+    } else {
+      pickEffort(who, EFFORT_DEFAULT[who][modelDraft[who]], true);
+    }
+  };
+  const onKey = (e) => {
+    if (!maxWarn.open) return;
+    if (e.key === "Escape") {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      finish(false);
+    } else if (e.key === "Tab") {
+      // Two buttons, and the focus stays on them while the warning is up.
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      (document.activeElement === keep ? anyway : keep).focus();
+    }
+  };
+  maxWarn.onKey = onKey;
+  keep.addEventListener("click", () => finish(false));
+  anyway.addEventListener("click", () => finish(true));
+  wrap.querySelector(".efw-scrim").addEventListener("click", () => finish(false));
+  return maxWarn;
+}
+function warnMax(who) {
+  const w = maxWarnDialog();
+  if (w.open) return;
+  const model = modelDraft[who];
+  const rec = EFFORT_NAME[EFFORT_DEFAULT[who][model]];
+  w.who = who;
+  w.wrap.querySelector(".efw-where").textContent = `Effort on ${MODEL_NAME[model]}, when he ${ROW_DOES[who]}`;
+  w.wrap.querySelector(".efw-rec-text").textContent = `${rec} is the recommended level here, right for nearly all kinds of work.`;
+  w.keep.textContent = `Use ${rec}, the recommended level`;
+  el(who === "rich" ? "ef-rich" : "ef-stu").classList.add("is-warned");
+  w.open = true;
+  w.wrap.hidden = false;
+  void w.wrap.offsetWidth;
+  w.wrap.classList.add("is-open");
+  window.addEventListener("keydown", w.onKey, true);
+  w.keep.focus({ preventScroll: true });
 }
 (function initModelRows() {
   for (const seg of document.querySelectorAll("#md .seg")) {
@@ -5849,6 +6101,104 @@ function pickModel(who, v, focus) {
       pickModel(who, back ? "opus" : "fable", true);
     });
   }
+  // ROUND 86: the five steps, each a bar a little taller than the last. Press one, or press and
+  // drag along them; the pointer over a step previews it (its name and what it means) before it
+  // is pressed. A radio group for the keyboard: the arrows step, Home and End go to the ends.
+  for (const ef of document.querySelectorAll("#md .ef")) {
+    const who = ef.dataset.who;
+    const steps = ef.querySelector(".ef-steps");
+    EFFORT_LEVELS.forEach((level, i) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "ef-step";
+      b.dataset.l = level;
+      b.id = `ef-${who}-${level}`;
+      b.style.setProperty("--i", String(i));
+      b.setAttribute("role", "radio");
+      b.setAttribute("aria-label", EFFORT_NAME[level]);
+      b.setAttribute("aria-checked", "false");
+      b.tabIndex = -1;
+      const bar = document.createElement("span");
+      bar.className = "ef-bar";
+      bar.setAttribute("aria-hidden", "true");
+      b.appendChild(bar);
+      // ROUND 86.1: Max carries a warning mark before anyone presses it, and says so to a screen reader.
+      if (level === "max") {
+        b.setAttribute("aria-label", "Max, not recommended");
+        const mark = document.createElement("span");
+        mark.className = "ef-max-mark";
+        mark.setAttribute("aria-hidden", "true");
+        mark.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18"><path d="M12 3.6 2.4 20.2h19.2L12 3.6Z" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"/><path d="M12 9.8v4.6" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/><circle cx="12" cy="17.3" r="1.35" fill="currentColor"/></svg>';
+        b.appendChild(mark);
+      }
+      // THE APP, NOT THE ROUND: a press that arrives as a click alone (VoiceOver's press on the
+      // step, or anything else that activates a control without a pointer) chooses the level
+      // too. The round's steps listened to the pointer and the keys only, so such a press did
+      // nothing. After a pointer press the level is already chosen and this changes nothing.
+      b.addEventListener("click", () => {
+        if (modelDraft.effort[who][modelDraft[who]] === level) return;
+        pickEffort(who, level, true);
+        if (level === "max") warnMax(who);
+      });
+      steps.appendChild(b);
+    });
+    const levelAt = (x) => {
+      const r = steps.getBoundingClientRect();
+      const i = Math.max(0, Math.min(4, Math.floor(((x - r.left) / r.width) * 5)));
+      return EFFORT_LEVELS[i];
+    };
+    let dragging = false;
+    // ROUND 86.1: the level the press started from, so the Max warning opens when the press
+    // ends on Max having started elsewhere (never in the middle of a drag).
+    let pressFrom = null;
+    steps.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0) return;
+      dragging = true;
+      pressFrom = modelDraft.effort[who][modelDraft[who]];
+      steps.setPointerCapture(e.pointerId);
+      pickEffort(who, levelAt(e.clientX), false);
+      e.preventDefault();
+      const top = steps.querySelector(".ef-step.is-top");
+      if (top) top.focus({ preventScroll: true });
+    });
+    steps.addEventListener("pointermove", (e) => {
+      const level = levelAt(e.clientX);
+      if (dragging) {
+        if (level !== modelDraft.effort[who][modelDraft[who]]) pickEffort(who, level, true);
+        return;
+      }
+      if (e.pointerType === "mouse" && effortPreview[who] !== level) {
+        effortPreview[who] = level;
+        paintModelRows(null);
+      }
+    });
+    const endDrag = (e) => {
+      const was = dragging;
+      dragging = false;
+      if (was && e.type === "pointerup" && pressFrom !== "max" && modelDraft.effort[who][modelDraft[who]] === "max") warnMax(who);
+      pressFrom = null;
+    };
+    steps.addEventListener("pointerup", endDrag);
+    steps.addEventListener("pointercancel", endDrag);
+    steps.addEventListener("pointerleave", () => {
+      if (dragging || !effortPreview[who]) return;
+      effortPreview[who] = null;
+      paintModelRows(null);
+    });
+    steps.addEventListener("keydown", (e) => {
+      const keys = ["ArrowLeft", "ArrowUp", "ArrowRight", "ArrowDown", "Home", "End"];
+      if (!keys.includes(e.key)) return;
+      e.preventDefault();
+      const cur = EFFORT_LEVELS.indexOf(modelDraft.effort[who][modelDraft[who]]);
+      let next = cur;
+      if (e.key === "Home") next = 0;
+      else if (e.key === "End") next = 4;
+      else if (e.key === "ArrowLeft" || e.key === "ArrowDown") next = Math.max(0, cur - 1);
+      else next = Math.min(4, cur + 1);
+      pickEffort(who, EFFORT_LEVELS[next], true);
+      if (next === 4 && cur !== 4) warnMax(who); // ROUND 86.1
+    });
+  }
   paintModelRows(null);
 })();
 /// The save the last close sent, until it settles. A read waits for it, so reopening
@@ -5856,43 +6206,69 @@ function pickModel(who, v, focus) {
 /// paint the old choice back (second review, rv-20261011T040418Z: "persisted=fable; reopened
 /// row=opus").
 let modelSaving = Promise.resolve();
+function sameChoice(a, b) {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
 /// Read the stored choice. Paints it only while nothing has been picked since Preferences
 /// opened, so a slow answer never overwrites a click.
 async function syncModelsFromBackend() {
   try {
     await modelSaving;
     const stored = await Bridge.invoke("get_lease_models");
-    const untouched = modelDraft.rich === modelSaved.rich && modelDraft.stu === modelSaved.stu;
-    modelSaved = { rich: modelValue(stored && stored.rich), stu: modelValue(stored && stored.stu) };
+    const untouched = sameChoice(modelDraft, modelSaved);
+    modelSaved = {
+      rich: modelValue(stored && stored.rich, "rich"),
+      stu: modelValue(stored && stored.stu, "stu"),
+      effort: effortCopy(stored && stored.effort),
+    };
     if (untouched || !settingsPanelOpen()) {
-      modelDraft = { ...modelSaved };
+      modelDraft = choiceCopy(modelSaved);
       paintModelRows(null);
     }
   } catch (_e) {
     // Unwired or unreadable: the rows keep what they show, which is the last known choice.
   }
 }
+/// One line per row whose model or effort now differs, in the row's words.
+function modelToast(next, before) {
+  const lines = [];
+  for (const who of ["rich", "stu"]) {
+    const m = next[who];
+    const was = before[who];
+    if (m === was && next.effort[who][m] === before.effort[who][was]) continue;
+    const pair = `on ${MODEL_NAME[m]} at ${effortWords(next.effort[who][m])}`;
+    // ROUND 86.1: a saved Max is named as not recommended in the line on close, too.
+    const notRec = next.effort[who][m] === "max" ? ", which is not recommended" : "";
+    lines.push(rowIsDefault(next, who) ? `Rich ${ROW_DOES[who]} ${pair} again, the default.` : `Rich now ${ROW_DOES[who]} ${pair}${notRec}.`);
+  }
+  if (lines.length === 0) lines.push("Rich's effort for the model he is not on is saved for when you switch to it.");
+  return lines.join(" ");
+}
 /// Preferences is closing: save and apply what it shows, and say what is now true. Nothing to
 /// do when it shows what is already saved, which is also the only case with no toast.
 function commitModelChoice() {
-  const next = { ...modelDraft };
-  const changed = ["rich", "stu"].filter((who) => next[who] !== modelSaved[who]);
-  if (changed.length === 0) return;
+  effortPreview.rich = effortPreview.stu = null;
+  const next = choiceCopy(modelDraft);
+  const chosen = [...modelPressed].sort();
+  modelPressed = new Set();
+  const moved = !sameChoice(next, modelSaved);
+  if (!moved && chosen.length === 0) return;
   const before = modelSaved;
   modelSaved = next;
-  modelSaving = Bridge.invoke("set_lease_models", { rich: next.rich, stu: next.stu })
+  modelSaving = Bridge.invoke("set_lease_models", { rich: next.rich, stu: next.stu, effort: next.effort, chosen })
     .then(() => {
-      if (window.RichSettings) window.RichSettings.toast(changed.map((who) => MODEL_TOAST[who][next[who]]).join(" "));
+      // Pressed and left as it was: saved as his choice, and nothing in use changed to announce.
+      if (moved && window.RichSettings) window.RichSettings.toast(modelToast(next, before));
     })
     .catch(() => {
       // Not saved: the leases keep the model they are on, and the rows go back to say so —
       // unless Preferences was reopened and a row picked since, which is a newer choice.
       modelSaved = before;
-      if (modelDraft.rich === next.rich && modelDraft.stu === next.stu) {
-        modelDraft = { ...before };
+      if (sameChoice(modelDraft, next)) {
+        modelDraft = choiceCopy(before);
         paintModelRows(null);
       }
-      if (window.RichSettings) window.RichSettings.toast("Rich's model could not be saved, so nothing changed.");
+      if (window.RichSettings) window.RichSettings.toast("Rich's model and effort could not be saved, so nothing changed.");
     });
 }
 
@@ -5907,7 +6283,8 @@ function settingsPanelOpen() {
 /// claim about a setting is worse than no claim. Each read is one command over a file of a few
 /// hundred bytes, on an explicit click.
 function onSettingsOpen() {
-  modelDraft = { ...modelSaved };
+  effortPreview.rich = effortPreview.stu = null;
+  modelDraft = choiceCopy(modelSaved);
   paintModelRows(null);
   syncRetentionFromBackend();
   syncModelsFromBackend();

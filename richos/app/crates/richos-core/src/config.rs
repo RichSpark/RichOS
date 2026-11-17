@@ -76,7 +76,7 @@
 use crate::entity::EntityId;
 use crate::journal::{RawRetention, RAW_MAX_TOTAL_BYTES, RAW_RETENTION_DAYS};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -215,24 +215,28 @@ impl Theme {
 /// *"Rich and Stu stay on Opus high effort in RichOS by default. But the user should have the
 /// option to switch one or both to Fable (in general settings, not in quick settings)."*
 ///
-/// One value per role, stored as `rich_model` and `stu_model` in `config.json`. The wire
-/// strings are the `claude` CLI's own model aliases (`--model opus`, `--model fable`), so the
-/// value goes to the child unchanged ([`ModelChoice::cli_alias`]). Effort is not a setting:
-/// his sentence fixes it at high for both, and `native.rs` passes `--effort high` either way.
+/// **And the default since 2026-11-17, his words:** *"Fable at low effort might actually be a
+/// good new default for Rich in the RichOS app. And for Stu, Fable at medium effort might be
+/// the best new default."* Opus is now the option.
 ///
-/// Before this, the app never named a model, so both sessions ran on whatever the CLI chose
+/// One value per role, stored as `rich_model` and `stu_model` in `config.json`, and only when
+/// the user chose it ([`ConfigStore::write`]). The wire strings are the `claude` CLI's own
+/// model aliases (`--model opus`, `--model fable`), so the value goes to the child unchanged
+/// ([`ModelChoice::cli_alias`]). The effort is its own setting, [`EffortLevel`].
+///
+/// Before §119, the app never named a model, so both sessions ran on whatever the CLI chose
 /// for the account (Clark's 2026-10-10 Haiku audit in the private record).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "kebab-case")]
 pub enum ModelChoice {
+    /// The option: his default for both roles until 2026-11-17.
+    Opus,
     /// His default for both roles.
     #[default]
-    Opus,
-    /// The option he named.
     Fable,
     /// **A model on disk this build has no name for** — same contract as
     /// [`Assertiveness::Unknown`]: never set, never sent to the child, never persisted as
-    /// itself. A session reads it as the default, Opus.
+    /// itself. A session reads it as the default, Fable.
     #[serde(other)]
     Unknown,
 }
@@ -244,14 +248,15 @@ impl ModelChoice {
             ModelChoice::Fable => "fable",
             // See `Assertiveness::as_str`: the default's wire string. The store resolves
             // `Unknown` before any caller sees it.
-            ModelChoice::Unknown => ModelChoice::Opus.as_str(),
+            ModelChoice::Unknown => ModelChoice::Fable.as_str(),
         }
     }
 
     /// The `--model` value the `claude` CLI is given. The aliases are the CLI's own
     /// (`claude --help`: "an alias for the latest model (e.g. 'fable', 'opus', or 'sonnet')").
     /// Measured on 2.1.295 with the lease's `--setting-sources ''` on 2026-10-10: `opus`
-    /// answered as `claude-opus-5-5` and `fable` as `claude-fable-5-1`.
+    /// answered as `claude-opus-5-5` and `fable` as `claude-fable-5-1`; on 2.1.326 on
+    /// 2026-11-17 `fable` answered as `claude-fable-5-2`.
     pub fn cli_alias(&self) -> &'static str {
         self.as_str()
     }
@@ -272,6 +277,106 @@ impl ModelChoice {
     }
 }
 
+/// **How hard one of the two sessions thinks**: the five levels the `claude` CLI's `--effort`
+/// takes (`claude --help` on 2.1.326: "low, medium, high, xhigh, max"), so the value goes to
+/// the child unchanged.
+///
+/// A setting since round 86.1 (CEO 2026-11-17: *"round-86.1 is good to go. Implement now."*):
+/// each row of Settings carries its own level for each model, and each model's default is the
+/// level his 2026-11-17 words name, shown there as "Recommended". Stored per row and per model
+/// (`rich_effort_fable` and its three siblings), and only when the user chose it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum EffortLevel {
+    Low,
+    Medium,
+    High,
+    Xhigh,
+    Max,
+    /// A level on disk this build has no name for: the same contract as
+    /// [`ModelChoice::Unknown`]. A session reads it as that row's default on that model.
+    #[serde(other)]
+    Unknown,
+}
+
+impl EffortLevel {
+    /// The `--effort` value, and the word the file and Settings use.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            EffortLevel::Low => "low",
+            EffortLevel::Medium => "medium",
+            EffortLevel::High => "high",
+            EffortLevel::Xhigh => "xhigh",
+            EffortLevel::Max => "max",
+            EffortLevel::Unknown => "unknown",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        [EffortLevel::Low, EffortLevel::Medium, EffortLevel::High, EffortLevel::Xhigh, EffortLevel::Max]
+            .into_iter()
+            .find(|level| level.as_str() == s)
+    }
+
+    /// **The recommended level**, which is the default. The conversation only answers or hands
+    /// work over, so it is at low effort on either model (CEO 2026-10-14: instant replies
+    /// before effort). The work is at medium effort on Fable (CEO 2026-11-17: *"for Stu, Fable
+    /// at medium effort might be the best new default"*) and keeps high effort on Opus (§119),
+    /// so a user who picks Opus for the work gets what Opus users had before.
+    pub fn recommended(work: bool, model: ModelChoice) -> Self {
+        match (work, model) {
+            (false, _) => EffortLevel::Low,
+            (true, ModelChoice::Opus) => EffortLevel::High,
+            (true, _) => EffortLevel::Medium,
+        }
+    }
+}
+
+/// The level of each row on each model, as Settings shows and saves them: each model keeps
+/// its own, so switching a row's model brings that model's level back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EffortChoices {
+    pub rich_opus: EffortLevel,
+    pub rich_fable: EffortLevel,
+    pub stu_opus: EffortLevel,
+    pub stu_fable: EffortLevel,
+}
+
+impl Default for EffortChoices {
+    fn default() -> Self {
+        EffortChoices {
+            rich_opus: EffortLevel::recommended(false, ModelChoice::Opus),
+            rich_fable: EffortLevel::recommended(false, ModelChoice::Fable),
+            stu_opus: EffortLevel::recommended(true, ModelChoice::Opus),
+            stu_fable: EffortLevel::recommended(true, ModelChoice::Fable),
+        }
+    }
+}
+
+impl EffortChoices {
+    /// The two levels in use on these models: what each session is started with.
+    pub fn on(&self, models: LeaseModels) -> LeaseEfforts {
+        LeaseEfforts {
+            rich: if models.rich == ModelChoice::Opus { self.rich_opus } else { self.rich_fable },
+            stu: if models.stu == ModelChoice::Opus { self.stu_opus } else { self.stu_fable },
+        }
+    }
+}
+
+/// The level each session runs at, on the model it is on: Rich's and Stu's `--effort`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LeaseEfforts {
+    pub rich: EffortLevel,
+    pub stu: EffortLevel,
+}
+
+impl Default for LeaseEfforts {
+    /// Nothing chosen: the default models at their recommended levels.
+    fn default() -> Self {
+        EffortChoices::default().on(LeaseModels::default())
+    }
+}
+
 /// The two stored choices together, as the spawn path reads them: Rich is the front desk
 /// (the conversation lease), Stu is the back end (the work lease, §110).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -282,13 +387,21 @@ pub struct LeaseModels {
 
 /// The models a data directory's `config.json` names, read fresh at every lease spawn so a
 /// change in settings reaches the next session that starts. An absent or unreadable file
-/// yields the default (Opus for both) rather than a failure, the same rule
+/// yields the default (Fable for both) rather than a failure, the same rule
 /// `doctrine::identity_from_config` follows: a preference is never a reason a session cannot
 /// start.
 pub fn lease_models_from_config(data_dir: &Path) -> LeaseModels {
     match ConfigStore::open(data_dir.join("config.json")) {
         Ok(c) => c.lease_models(),
         Err(_) => LeaseModels::default(),
+    }
+}
+
+/// The effort each session starts at, read with the models and by the same rule.
+pub fn lease_efforts_from_config(data_dir: &Path) -> LeaseEfforts {
+    match ConfigStore::open(data_dir.join("config.json")) {
+        Ok(c) => c.lease_efforts(),
+        Err(_) => LeaseEfforts::default(),
     }
 }
 
@@ -536,13 +649,30 @@ struct StoredConfig {
     /// a setting. Absence is an absent opinion, and the product's opinion is "show it".
     #[serde(default)]
     home_entity_hidden: BTreeMap<String, bool>,
-    /// §119: the model Rich's session (the front desk) starts on. Absent reads as Opus, his
+    /// §119: the model Rich's session (the front desk) starts on. Absent reads as Fable, his
     /// default; see [`ModelChoice`].
     #[serde(default)]
     rich_model: ModelChoice,
-    /// §119: the model Stu's session (the back end) starts on. Absent reads as Opus.
+    /// §119: the model Stu's session (the back end) starts on. Absent reads as Fable.
     #[serde(default)]
     stu_model: ModelChoice,
+    /// Round 86.1: the effort of each row on each model, [`EffortLevel`]. Absent reads as that
+    /// row's recommended level on that model, so the four are never written until chosen.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    rich_effort_opus: Option<EffortLevel>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    rich_effort_fable: Option<EffortLevel>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    stu_effort_opus: Option<EffortLevel>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    stu_effort_fable: Option<EffortLevel>,
+    /// **THIS FILE HOLDS ONLY WHAT THE USER CHOSE** (CEO, 2026-11-17: *"make sure that from
+    /// now on, the settings can always tell what is what"*). `true` in every file this build
+    /// writes; absent in every file written before it, where each save wrote every key with
+    /// its default, so a value there cannot say whether anyone picked it.
+    /// [`settle_file_from_before`] reads such a file once.
+    #[serde(default)]
+    only_chosen: bool,
     /// THE OXFORD COMMA IN WHAT CLAUDE WRITES FOR HIM (CEO, 2026-10-19): "make the Oxford comma
     /// linter switchable in settings. Default setting: Oxford comma off." `true` keeps the comma
     /// before and/or/nor in Rich's and Stu's replies and in the questions Claude writes; `false`
@@ -622,6 +752,11 @@ impl Default for StoredConfig {
             home_entity_hidden: BTreeMap::new(),
             rich_model: ModelChoice::default(),
             stu_model: ModelChoice::default(),
+            rich_effort_opus: None,
+            rich_effort_fable: None,
+            stu_effort_opus: None,
+            stu_effort_fable: None,
+            only_chosen: true,
             oxford_comma: false,
             show_swearmeter: false,
             show_context_meter: false,
@@ -826,6 +961,9 @@ pub struct ConfigStore {
     /// `None` when there was no file, or when the file could not be read at all — in which
     /// case nothing is written anyway.
     raw: Option<serde_json::Map<String, serde_json::Value>>,
+    /// **The settings the user chose**, by key: what the file holds, and so what the next
+    /// write keeps even where the value is the default's. See [`ConfigStore::write`].
+    chosen: BTreeSet<String>,
     /// False when the file on disk exists and this build could not read it. Every write is
     /// gated on this; see [`ConfigStore::persist`].
     readable: bool,
@@ -915,7 +1053,9 @@ impl ConfigStore {
                 ),
             },
         };
-        Ok(ConfigStore { path, saved: config.clone(), config, raw, readable, unreadable_reason: reason })
+        let mut config = config;
+        let chosen = settle_file_from_before(&mut config, raw.as_ref());
+        Ok(ConfigStore { path, saved: config.clone(), config, raw, chosen, readable, unreadable_reason: reason })
     }
 
     /// Whether the file on disk is one this build could read.
@@ -956,7 +1096,7 @@ impl ConfigStore {
     pub fn set_company_name(&mut self, name: &str) -> io::Result<()> {
         let trimmed = name.trim();
         self.config.company_name = if trimmed.is_empty() { None } else { Some(trimmed.to_string()) };
-        self.persist()
+        self.persist_choice(&["company_name"])
     }
 
     /// The dial's position. A value on disk this build has no name for answers with the
@@ -983,7 +1123,7 @@ impl ConfigStore {
             ));
         }
         self.config.assertiveness = level;
-        self.persist()
+        self.persist_choice(&["assertiveness"])
     }
 
     // -----------------------------------------------------------------------------------
@@ -996,11 +1136,11 @@ impl ConfigStore {
     }
 
     pub fn set_opening_sound(&mut self, on: bool) -> io::Result<()> {
-        if self.config.opening_sound == on {
+        if self.already_chosen("opening_sound", self.config.opening_sound == on) {
             return Ok(());
         }
         self.config.opening_sound = on;
-        self.persist()
+        self.persist_choice(&["opening_sound"])
     }
 
     /// Which opening RichOS starts with: an opening's id, `"daily"`, or `None` for the app's
@@ -1013,11 +1153,11 @@ impl ConfigStore {
 
     pub fn set_opening_pick(&mut self, pick: Option<&str>) -> io::Result<()> {
         let pick = pick.map(str::trim).filter(|p| !p.is_empty()).map(str::to_string);
-        if self.config.opening_pick == pick {
+        if self.already_chosen("opening_pick", self.config.opening_pick == pick) {
             return Ok(());
         }
         self.config.opening_pick = pick;
-        self.persist()
+        self.persist_choice(&["opening_pick"])
     }
 
     /// "A different one each day": the last such day and the opening it showed
@@ -1044,11 +1184,11 @@ impl ConfigStore {
     pub fn set_opening_company(&mut self, name: &str) -> io::Result<()> {
         let line: String = name.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(OPENING_COMPANY_MAX).collect();
         let line = if line.is_empty() { None } else { Some(line) };
-        if self.config.opening_company == line {
+        if self.already_chosen("opening_company", self.config.opening_company == line) {
             return Ok(());
         }
         self.config.opening_company = line;
-        self.persist()
+        self.persist_choice(&["opening_company"])
     }
 
     /// The first time the splash was shown, epoch millis, or `None` if it never has been.
@@ -1093,17 +1233,17 @@ impl ConfigStore {
                  setting this build can choose",
             ));
         }
-        if self.config.theme == theme {
+        if self.already_chosen("theme", self.config.theme == theme) {
             return Ok(());
         }
         self.config.theme = theme;
-        self.persist()
+        self.persist_choice(&["theme"])
     }
 
     // ---- §119: the model each session starts on ----------------------------------------
 
-    /// The model Rich's session starts on. Opus unless he chose Fable; a value this build has
-    /// no name for answers with Opus (see [`ConfigStore::assertiveness`] for the rule).
+    /// The model Rich's session starts on. Fable unless he chose Opus; a value this build has
+    /// no name for answers with Fable (see [`ConfigStore::assertiveness`] for the rule).
     pub fn rich_model(&self) -> ModelChoice {
         self.config.rich_model.resolved()
     }
@@ -1118,15 +1258,93 @@ impl ConfigStore {
         LeaseModels { rich: self.rich_model(), stu: self.stu_model() }
     }
 
+    /// Round 86.1: the level of each row on each model. One nobody chose, or one this build has
+    /// no name for, answers with that row's recommended level on that model.
+    pub fn effort_choices(&self) -> EffortChoices {
+        let or = |stored: Option<EffortLevel>, recommended: EffortLevel| match stored {
+            Some(EffortLevel::Unknown) | None => recommended,
+            Some(level) => level,
+        };
+        let recommended = EffortChoices::default();
+        EffortChoices {
+            rich_opus: or(self.config.rich_effort_opus, recommended.rich_opus),
+            rich_fable: or(self.config.rich_effort_fable, recommended.rich_fable),
+            stu_opus: or(self.config.stu_effort_opus, recommended.stu_opus),
+            stu_fable: or(self.config.stu_effort_fable, recommended.stu_fable),
+        }
+    }
+
+    /// The level each session is started with: its row's level on the model it is on.
+    pub fn lease_efforts(&self) -> LeaseEfforts {
+        self.effort_choices().on(self.lease_models())
+    }
+
+    /// **Both rows' models and all four levels in one write**, as Settings saves them when it
+    /// closes (round 86.1). Settings sends every value, so his choices are the ones that moved
+    /// and the ones he pressed (`pressed`, by the file's key: [`LEASE_CHOICE_KEYS`]). A value
+    /// pressed and left as it was, or changed and set back before Settings closed, is a choice
+    /// of that value and is written as one (CEO 2026-11-17: *"make sure that from now on, the
+    /// settings can always tell what is what"*). The rest stay as they were, chosen or not. A
+    /// name this build cannot choose, or a key that is not one of the six, refuses the whole
+    /// save.
+    pub fn set_lease_choices(&mut self, models: LeaseModels, efforts: EffortChoices, pressed: &[&str]) -> io::Result<()> {
+        if let Some(unknown) = pressed.iter().find(|key| !LEASE_CHOICE_KEYS.contains(key)) {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, format!("unknown setting: {unknown}")));
+        }
+        refuse_unknown_model(models.rich)?;
+        refuse_unknown_model(models.stu)?;
+        let now = self.effort_choices();
+        let levels = [
+            ("rich_effort_opus", efforts.rich_opus, now.rich_opus),
+            ("rich_effort_fable", efforts.rich_fable, now.rich_fable),
+            ("stu_effort_opus", efforts.stu_opus, now.stu_opus),
+            ("stu_effort_fable", efforts.stu_fable, now.stu_fable),
+        ];
+        if levels.iter().any(|(_, level, _)| *level == EffortLevel::Unknown) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "EffortLevel::Unknown is what a value written by another build reads as; it is not a \
+                 setting this build can choose",
+            ));
+        }
+        let mut picked = Vec::new();
+        if self.config.rich_model != models.rich || pressed.contains(&"rich_model") {
+            picked.push("rich_model");
+        }
+        if self.config.stu_model != models.stu || pressed.contains(&"stu_model") {
+            picked.push("stu_model");
+        }
+        self.config.rich_model = models.rich;
+        self.config.stu_model = models.stu;
+        for (key, level, was) in levels {
+            if level == was && !pressed.contains(&key) {
+                continue;
+            }
+            picked.push(key);
+            let slot = match key {
+                "rich_effort_opus" => &mut self.config.rich_effort_opus,
+                "rich_effort_fable" => &mut self.config.rich_effort_fable,
+                "stu_effort_opus" => &mut self.config.stu_effort_opus,
+                _ => &mut self.config.stu_effort_fable,
+            };
+            *slot = Some(level);
+        }
+        if picked.is_empty() {
+            return Ok(());
+        }
+        // One write; on failure `persist` puts every row back to what the file holds.
+        self.persist_choice(&picked)
+    }
+
     /// The general-settings row's write for Rich. Refuses [`ModelChoice::Unknown`] by name —
     /// see [`ConfigStore::set_assertiveness`]. Takes effect at the next session Rich starts.
     pub fn set_rich_model(&mut self, model: ModelChoice) -> io::Result<()> {
         refuse_unknown_model(model)?;
-        if self.config.rich_model == model {
+        if self.already_chosen("rich_model", self.config.rich_model == model) {
             return Ok(());
         }
         self.config.rich_model = model;
-        self.persist()
+        self.persist_choice(&["rich_model"])
     }
 
     /// **Both rows in one write**, as Preferences saves them when it closes (round 23). Either
@@ -1138,21 +1356,30 @@ impl ConfigStore {
         if self.config.rich_model == models.rich && self.config.stu_model == models.stu {
             return Ok(());
         }
+        // Settings sends both rows when either changed, so the row that moved is the one he
+        // chose; the other stays as it was, chosen or not.
+        let mut picked = Vec::new();
+        if self.config.rich_model != models.rich {
+            picked.push("rich_model");
+        }
+        if self.config.stu_model != models.stu {
+            picked.push("stu_model");
+        }
         self.config.rich_model = models.rich;
         self.config.stu_model = models.stu;
         // One write; on failure `persist` puts both back to what the file holds.
-        self.persist()
+        self.persist_choice(&picked)
     }
 
     /// The general-settings row's write for Stu, by the same rule as
     /// [`ConfigStore::set_rich_model`].
     pub fn set_stu_model(&mut self, model: ModelChoice) -> io::Result<()> {
         refuse_unknown_model(model)?;
-        if self.config.stu_model == model {
+        if self.already_chosen("stu_model", self.config.stu_model == model) {
             return Ok(());
         }
         self.config.stu_model = model;
-        self.persist()
+        self.persist_choice(&["stu_model"])
     }
 
     /// The font control's position, as a percentage of the 16px root. Always one of
@@ -1164,11 +1391,11 @@ impl ConfigStore {
 
     pub fn set_font_scale(&mut self, pct: u16) -> io::Result<()> {
         let snapped = snap_font_scale(pct);
-        if self.config.font_scale == snapped {
+        if self.already_chosen("font_scale", self.config.font_scale == snapped) {
             return Ok(());
         }
         self.config.font_scale = snapped;
-        self.persist()
+        self.persist_choice(&["font_scale"])
     }
 
     // ---- the Oxford comma in what Claude writes (CEO, 2026-10-19) -------------------
@@ -1179,18 +1406,18 @@ impl ConfigStore {
     }
 
     pub fn set_oxford_comma(&mut self, keep: bool) -> io::Result<()> {
-        if self.config.oxford_comma == keep {
+        if self.already_chosen("oxford_comma", self.config.oxford_comma == keep) {
             return Ok(());
         }
         self.config.oxford_comma = keep;
-        self.persist()
+        self.persist_choice(&["oxford_comma"])
     }
 
     pub fn show_swearmeter(&self) -> bool { self.config.show_swearmeter }
 
     pub fn set_show_swearmeter(&mut self, show: bool) -> io::Result<()> {
         self.config.show_swearmeter = show;
-        self.persist()
+        self.persist_choice(&["show_swearmeter"])
     }
 
     /// Whether each chat shows its context meter. Off until the user switches it on.
@@ -1198,7 +1425,7 @@ impl ConfigStore {
 
     pub fn set_show_context_meter(&mut self, show: bool) -> io::Result<()> {
         self.config.show_context_meter = show;
-        self.persist()
+        self.persist_choice(&["show_context_meter"])
     }
 
     // ---- the Mac resources square (round 47) ---------------------------------------
@@ -1206,7 +1433,7 @@ impl ConfigStore {
     /// `"ink"` or `"readout"`. Ink when nothing was chosen or the stored word is one this build
     /// does not draw.
     pub fn cleaner_inbox_first(&self)->bool {self.config.cleaner_inbox_first}
-    pub fn set_cleaner_inbox_first(&mut self,on:bool)->io::Result<()> {self.config.cleaner_inbox_first=on;self.persist()}
+    pub fn set_cleaner_inbox_first(&mut self,on:bool)->io::Result<()> {self.config.cleaner_inbox_first=on;self.persist_choice(&["cleaner_inbox_first"])}
 
     /// `None` means this installation has never saved a folder choice. The shell
     /// can still honor an explicitly configured pilot folder in that case. An unreadable
@@ -1231,7 +1458,7 @@ impl ConfigStore {
     pub fn set_cleaner(&mut self,on:bool,root:Option<String>)->io::Result<()> {
         self.config.cleaner_on=on;
         if let Some(root)=root{self.config.cleaner_root=Some(root);}
-        self.persist()
+        self.persist_choice(&["cleaner_on"])
     }
 
     pub fn resources_view(&self) -> &'static str {
@@ -1244,11 +1471,11 @@ impl ConfigStore {
         if !RESOURCES_VIEWS.contains(&view) {
             return Err(io::Error::new(io::ErrorKind::InvalidInput, format!("unknown resources view: {view}")));
         }
-        if self.config.resources_view.as_deref() == Some(view) {
+        if self.already_chosen("resources_view", self.config.resources_view.as_deref() == Some(view)) {
             return Ok(());
         }
         self.config.resources_view = Some(view.to_string());
-        self.persist()
+        self.persist_choice(&["resources_view"])
     }
 
     // ---- idle conversation sessions (follow-ups, decision 3) -----------------------
@@ -1259,11 +1486,11 @@ impl ConfigStore {
     }
 
     pub fn set_idle_session_minutes(&mut self, minutes: u32) -> io::Result<()> {
-        if self.config.idle_session_minutes == minutes {
+        if self.already_chosen("idle_session_minutes", self.config.idle_session_minutes == minutes) {
             return Ok(());
         }
         self.config.idle_session_minutes = minutes;
-        self.persist()
+        self.persist_choice(&["idle_session_minutes"])
     }
 
     // ---- the person at the foot of the rail ----------------------------------------
@@ -1281,7 +1508,7 @@ impl ConfigStore {
     pub fn set_user_name(&mut self, name: &str) -> io::Result<()> {
         let trimmed = name.trim();
         self.config.user_name = if trimmed.is_empty() { None } else { Some(trimmed.to_string()) };
-        self.persist()
+        self.persist_choice(&["user_name"])
     }
 
     /// His initials for the rail circle — `None` when the name is unset, never a guess.
@@ -1300,7 +1527,7 @@ impl ConfigStore {
     /// the CEO pinned are untouched, which is what makes a pin mean something.
     pub fn set_techy_default(&mut self, enabled: bool) -> io::Result<()> {
         self.config.techy_default = enabled;
-        self.persist()
+        self.persist_choice(&["techy_default"])
     }
 
     /// This thread's override, or `None` when it follows the default.
@@ -1409,8 +1636,10 @@ impl ConfigStore {
         entity_id: Option<&str>,
         enabled: bool,
     ) -> io::Result<TechyMode> {
+        let mut picked: &[&str] = &[];
         match scope {
             TechyScope::AllCompanies => {
+                picked = &["techy_default"];
                 self.config.techy_default = enabled;
                 if let Some(id) = entity_id {
                     self.config.techy_entities.remove(id);
@@ -1433,7 +1662,7 @@ impl ConfigStore {
         }
         // ONE persist for the whole application, not one per tier touched: a crash
         // between two writes would otherwise leave a scope half-applied on disk.
-        self.persist()?;
+        self.persist_choice(picked)?;
         Ok(self.techy_mode(thread_id, entity_id))
     }
 
@@ -1454,7 +1683,7 @@ impl ConfigStore {
     /// `{"age_days": 45}` is as settable as a click and `Custom` stays describable.
     pub fn set_raw_retention(&mut self, retention: RawRetention) -> io::Result<()> {
         self.config.raw_retention = retention;
-        self.persist()
+        self.persist_choice(&["raw_retention"])
     }
 
     /// Set the window from a menu entry. `Custom` has no window to write and is refused —
@@ -1579,16 +1808,45 @@ impl ConfigStore {
     /// The restore can only ever fire on a key that came off disk: `Unknown` has no other
     /// source. [`ConfigStore::set_theme`] and [`ConfigStore::set_assertiveness`] refuse it by
     /// name, so there is no path by which this build invents one.
-    fn persist(&mut self) -> io::Result<()> {
-        let result = self.write();
-        match result {
-            Ok(()) => self.saved = self.config.clone(),
-            Err(_) => self.config = self.saved.clone(),
-        }
-        result
+    /// Whether a setter has nothing to write: the value is already this one and the file
+    /// already holds it as a choice.
+    fn already_chosen(&self, key: &str, same: bool) -> bool {
+        same && self.chosen.contains(key)
     }
 
-    fn write(&self) -> io::Result<()> {
+    fn persist(&mut self) -> io::Result<()> {
+        self.persist_choice(&[])
+    }
+
+    /// [`ConfigStore::persist`] for a setter the user's own pick reaches: `keys` are the
+    /// settings that pick names, and they are written as chosen **even where the value is the
+    /// default's**. A person who picks "Forever" while Forever is the default has chosen it,
+    /// and keeps it when the default moves.
+    fn persist_choice(&mut self, keys: &[&str]) -> io::Result<()> {
+        match self.write(keys) {
+            Ok(written) => {
+                self.saved = self.config.clone();
+                self.chosen = written;
+                Ok(())
+            }
+            Err(e) => {
+                self.config = self.saved.clone();
+                Err(e)
+            }
+        }
+    }
+
+    /// **Writes only the settings the user chose, and answers with their keys** (CEO,
+    /// 2026-11-17: *"make sure that from now on, the settings can always tell what is what"*).
+    ///
+    /// A setting is written when the file already holds it, when the setter that got here was
+    /// called for it (`picked`), or when its value is not the default's; one nobody touched
+    /// stays out. So an absent key means "never chosen" and follows the
+    /// default wherever it moves, and a present key means "chosen" and stays, including one
+    /// chosen back to the value the default happens to have. Until this, every save wrote
+    /// every key, and on the day the model default moved from Opus to Fable a file holding
+    /// `"opus"` could not say whether anyone had picked it.
+    fn write(&self, picked: &[&str]) -> io::Result<BTreeSet<String>> {
         if !self.readable {
             // Not written, and SAID: an `Ok` here told the caller "saved" about a change that
             // is gone at the next launch (hunt part 1, finding 38).
@@ -1609,9 +1867,19 @@ impl ConfigStore {
                 }
             }
         }
+        let defaults = default_document();
+        if let Some(object) = document.as_object_mut() {
+            object.retain(|key, value| {
+                ALWAYS_WRITTEN.contains(&key.as_str())
+                    || self.chosen.contains(key)
+                    || picked.contains(&key.as_str())
+                    || defaults.get(key) != Some(value)
+            });
+        }
         let serialized = serde_json::to_string_pretty(&document)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-        fs::write(&self.path, serialized)
+        fs::write(&self.path, serialized)?;
+        Ok(document.as_object().map(|object| object.keys().cloned().collect()).unwrap_or_default())
     }
 
     /// Which keys currently hold an `Unknown` placeholder, and therefore have to be written
@@ -1636,8 +1904,71 @@ impl ConfigStore {
         if self.config.stu_model == ModelChoice::Unknown {
             keys.push("stu_model");
         }
+        for (key, level) in [
+            ("rich_effort_opus", self.config.rich_effort_opus),
+            ("rich_effort_fable", self.config.rich_effort_fable),
+            ("stu_effort_opus", self.config.stu_effort_opus),
+            ("stu_effort_fable", self.config.stu_effort_fable),
+        ] {
+            if level == Some(EffortLevel::Unknown) {
+                keys.push(key);
+            }
+        }
         keys
     }
+}
+
+/// The six settings Settings saves together: each row's model, and its effort on each model.
+pub const LEASE_CHOICE_KEYS: [&str; 6] =
+    ["rich_model", "stu_model", "rich_effort_opus", "rich_effort_fable", "stu_effort_opus", "stu_effort_fable"];
+
+/// The two keys that describe the file and not a choice: always written.
+const ALWAYS_WRITTEN: [&str; 2] = ["schema_version", "only_chosen"];
+
+/// Every setting at its default, as the file would spell it.
+fn default_document() -> serde_json::Map<String, serde_json::Value> {
+    match serde_json::to_value(StoredConfig::default()) {
+        Ok(serde_json::Value::Object(object)) => object,
+        _ => serde_json::Map::new(),
+    }
+}
+
+/// **Which settings in the file just read were chosen**, and the one-time reading of a file
+/// written before this build (`only_chosen` absent), where every save wrote every key:
+///
+/// - **A model of Opus moves to the new default** (the CEO's answer "A", 2026-11-17, to the
+///   question this file could not answer). Opus was the default, written into every file, so
+///   it cannot be told from a choice. A stored Fable was always a choice and stays one.
+/// - **A value that is not the default's was chosen and stays**; one that equals it is read
+///   as never chosen, which reads the same today.
+///
+/// Once: the next save writes `only_chosen`, and from then on a key in the file is a choice.
+fn settle_file_from_before(
+    config: &mut StoredConfig,
+    raw: Option<&serde_json::Map<String, serde_json::Value>>,
+) -> BTreeSet<String> {
+    let mut chosen: BTreeSet<String> = raw.map(|raw| raw.keys().cloned().collect()).unwrap_or_default();
+    if config.only_chosen {
+        return chosen;
+    }
+    config.only_chosen = true;
+    if config.rich_model == ModelChoice::Opus {
+        config.rich_model = ModelChoice::default();
+    }
+    if config.stu_model == ModelChoice::Opus {
+        config.stu_model = ModelChoice::default();
+    }
+    let defaults = default_document();
+    let read = match serde_json::to_value(&*config) {
+        Ok(serde_json::Value::Object(object)) => object,
+        _ => return chosen,
+    };
+    let was_opus = |key: &str| raw.and_then(|raw| raw.get(key)).and_then(|v| v.as_str()) == Some("opus");
+    chosen.retain(|key| match key.as_str() {
+        "rich_model" | "stu_model" => !was_opus(key),
+        _ => read.get(key) != defaults.get(key),
+    });
+    chosen
 }
 
 fn refuse_unknown_model(model: ModelChoice) -> io::Result<()> {
@@ -1693,28 +2024,198 @@ mod tests {
     }
 
     #[test]
-    fn each_session_s_model_defaults_to_opus_survives_restart_and_keeps_a_model_it_cannot_name() {
-        // §119: absent reads as Opus for both.
+    fn each_session_s_model_defaults_to_fable_survives_restart_and_keeps_a_model_it_cannot_name() {
+        // CEO 2026-11-17: Fable is the default for both. Absent reads as Fable.
         let path = tmp_path("models");
+        let fable = LeaseModels { rich: ModelChoice::Fable, stu: ModelChoice::Fable };
         let mut store = ConfigStore::open(&path).unwrap();
-        assert_eq!(store.lease_models(), LeaseModels { rich: ModelChoice::Opus, stu: ModelChoice::Opus });
-        store.set_stu_model(ModelChoice::Fable).unwrap();
+        assert_eq!(store.lease_models(), fable);
+        store.set_stu_model(ModelChoice::Opus).unwrap();
         assert!(store.set_rich_model(ModelChoice::Unknown).is_err(), "Unknown is never a choice");
         let reopened = ConfigStore::open(&path).unwrap();
-        assert_eq!(reopened.lease_models(), LeaseModels { rich: ModelChoice::Opus, stu: ModelChoice::Fable });
+        assert_eq!(reopened.lease_models(), LeaseModels { rich: ModelChoice::Fable, stu: ModelChoice::Opus });
         assert_eq!(lease_models_from_config(path.parent().unwrap().join("no-such-dir").as_path()),
-            LeaseModels::default(), "no file is the default, not a failure");
+            fable, "no file is the default, not a failure");
 
-        // A model a newer build wrote reads as Opus here and goes back out unchanged.
+        // A model a newer build wrote reads as the default here and goes back out unchanged.
         fs::remove_file(&path).ok();
         fs::write(&path, r#"{"rich_model":"fable-6","stu_model":"fable"}"#).unwrap();
         let mut store = ConfigStore::open(&path).unwrap();
-        assert_eq!(store.rich_model(), ModelChoice::Opus);
+        assert_eq!(store.rich_model(), ModelChoice::Fable);
         assert_eq!(store.stu_model(), ModelChoice::Fable);
         store.set_stu_model(ModelChoice::Opus).unwrap();
         let written: serde_json::Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(written["rich_model"], "fable-6");
         assert_eq!(written["stu_model"], "opus");
+        fs::remove_file(&path).ok();
+    }
+
+    fn on_disk(path: &Path) -> serde_json::Map<String, serde_json::Value> {
+        serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn a_model_is_written_only_when_it_was_chosen_and_an_opus_from_before_moves_once() {
+        // CEO 2026-11-17, his answer "A": until this build every saved setting wrote
+        // `"opus"` for both rows, chosen or not, so a file from before cannot say which it
+        // was. It moves to the new default once. From here a row is in the file only when
+        // the user picked it, so an Opus chosen from now on stays.
+        let fable = LeaseModels { rich: ModelChoice::Fable, stu: ModelChoice::Fable };
+
+        // Never chosen: saving something else writes no model.
+        let path = tmp_path("models-chosen");
+        let mut store = ConfigStore::open(&path).unwrap();
+        store.set_font_scale(120).unwrap();
+        assert!(!on_disk(&path).contains_key("rich_model"), "a model nobody chose was written: {:?}", on_disk(&path));
+        assert!(!on_disk(&path).contains_key("stu_model"), "a model nobody chose was written: {:?}", on_disk(&path));
+        // One row chosen, as Settings saves both on close: only that row is written, and kept.
+        store.set_lease_models(LeaseModels { rich: ModelChoice::Opus, stu: ModelChoice::Fable }).unwrap();
+        assert_eq!(on_disk(&path)["rich_model"], "opus");
+        assert!(!on_disk(&path).contains_key("stu_model"), "the row he did not touch was written");
+        assert_eq!(ConfigStore::open(&path).unwrap().lease_models(),
+            LeaseModels { rich: ModelChoice::Opus, stu: ModelChoice::Fable }, "an Opus chosen on this build did not stay");
+        fs::remove_file(&path).ok();
+
+        // A file from before: Opus moves to the default; a stored Fable was always a choice
+        // (Opus was the default then) and stays in the file as one.
+        for (before, rich_on_disk) in [
+            (r#"{"schema_version":1,"font_scale":120,"rich_model":"opus","stu_model":"opus"}"#, None),
+            (r#"{"rich_model":"fable","stu_model":"opus"}"#, Some("fable")),
+        ] {
+            fs::write(&path, before).unwrap();
+            let mut store = ConfigStore::open(&path).unwrap();
+            assert_eq!(store.lease_models(), fable, "{before}");
+            // Once: the next save records the move, and an Opus chosen after it stays.
+            store.set_font_scale(110).unwrap();
+            assert_eq!(on_disk(&path).get("rich_model").and_then(|v| v.as_str()), rich_on_disk, "{before}");
+            assert!(!on_disk(&path).contains_key("stu_model"), "{before}");
+            assert_eq!(ConfigStore::open(&path).unwrap().lease_models(), fable, "{before}");
+            store.set_stu_model(ModelChoice::Opus).unwrap();
+            assert_eq!(ConfigStore::open(&path).unwrap().stu_model(), ModelChoice::Opus, "moved twice: {before}");
+            fs::remove_file(&path).ok();
+        }
+    }
+
+    #[test]
+    fn the_file_holds_only_the_settings_that_were_chosen() {
+        // CEO 2026-11-17: "make sure that from now on, the settings can always tell what is
+        // what." A setting is in the file when the user chose it and absent when they never
+        // did, so a default can change later and reach exactly the people who never chose.
+        let keys = |path: &Path| -> Vec<String> {
+            let mut keys: Vec<String> = on_disk(path).keys().cloned().collect();
+            keys.sort();
+            keys
+        };
+        let path = tmp_path("only-chosen");
+        let mut store = ConfigStore::open(&path).unwrap();
+        store.set_font_scale(120).unwrap();
+        assert_eq!(keys(&path), ["font_scale", "only_chosen", "schema_version"]);
+        // Chosen back to the value the default happens to have: still a choice, still there,
+        // and still there after a restart and another save.
+        store.set_font_scale(FONT_SCALE_DEFAULT).unwrap();
+        assert_eq!(on_disk(&path)["font_scale"], FONT_SCALE_DEFAULT);
+        let mut store = ConfigStore::open(&path).unwrap();
+        store.set_theme(Theme::Dark).unwrap();
+        assert_eq!(keys(&path), ["font_scale", "only_chosen", "schema_version", "theme"]);
+        assert_eq!(on_disk(&path)["font_scale"], FONT_SCALE_DEFAULT);
+        fs::remove_file(&path).ok();
+
+        // A file from before this build holds every key, chosen or not. What differs from the
+        // default was chosen and stays; what equals it goes, and reads the same.
+        let mut before = serde_json::to_value(StoredConfig { theme: Theme::Dark, ..StoredConfig::default() }).unwrap();
+        before.as_object_mut().unwrap().remove("only_chosen");
+        before["rich_model"] = "opus".into();
+        before["stu_model"] = "opus".into();
+        assert!(before.as_object().unwrap().len() > 20, "the old file's shape: {before}");
+        fs::write(&path, before.to_string()).unwrap();
+        let mut store = ConfigStore::open(&path).unwrap();
+        assert_eq!(store.theme(), Theme::Dark);
+        store.set_font_scale(120).unwrap();
+        assert_eq!(keys(&path), ["font_scale", "only_chosen", "schema_version", "theme"]);
+        fs::remove_file(&path).ok();
+
+        // A pick of the value the default already has is a pick: written, and kept.
+        let mut store = ConfigStore::open(&path).unwrap();
+        store.set_theme(Theme::System).unwrap();
+        store.set_rich_model(ModelChoice::Fable).unwrap();
+        assert_eq!(keys(&path), ["only_chosen", "rich_model", "schema_version", "theme"]);
+        assert_eq!(on_disk(&path)["theme"], "system");
+        fs::remove_file(&path).ok();
+
+        // Every key a setter names is a field of the file, so none is marked under a wrong name.
+        let source = include_str!("config.rs");
+        let named: Vec<&str> = source.split("persist_choice(&[\"").skip(1).filter_map(|rest| rest.split('"').next()).collect();
+        assert!(named.len() > 15, "{named:?}");
+        for key in named {
+            assert!(source.contains(&format!("\n    {key}: ")), "a setter names {key}, which is no field of the file");
+        }
+
+        // What makes leaving a key out safe: an absent key reads as exactly the default.
+        let empty: StoredConfig = serde_json::from_str("{}").unwrap();
+        let mut fresh = serde_json::to_value(StoredConfig::default()).unwrap();
+        fresh["only_chosen"] = serde_json::Value::Bool(false);
+        assert_eq!(serde_json::to_value(empty).unwrap(), fresh);
+    }
+
+    #[test]
+    fn each_row_keeps_a_level_per_model_and_only_a_chosen_level_is_written() {
+        // Round 86.1 (CEO 2026-11-17): an effort control under each model row, each model
+        // keeping its own level. Defaults: Fable at low for the conversation and at medium for
+        // the work; Opus keeps low and high.
+        let path = tmp_path("efforts");
+        let mut store = ConfigStore::open(&path).unwrap();
+        let recommended = EffortChoices {
+            rich_opus: EffortLevel::Low, rich_fable: EffortLevel::Low,
+            stu_opus: EffortLevel::High, stu_fable: EffortLevel::Medium,
+        };
+        assert_eq!(store.effort_choices(), recommended);
+        assert_eq!(store.lease_efforts(), LeaseEfforts { rich: EffortLevel::Low, stu: EffortLevel::Medium });
+        assert_eq!(lease_efforts_from_config(path.parent().unwrap().join("no-such-dir").as_path()),
+            LeaseEfforts { rich: EffortLevel::Low, stu: EffortLevel::Medium }, "no file is the default");
+
+        // One level chosen, sent with everything else as Settings sends it: only it is written.
+        let fable = LeaseModels { rich: ModelChoice::Fable, stu: ModelChoice::Fable };
+        store.set_lease_choices(fable, EffortChoices { stu_fable: EffortLevel::Xhigh, ..recommended }, &[]).unwrap();
+        let mut keys: Vec<String> = on_disk(&path).keys().cloned().collect();
+        keys.sort();
+        assert_eq!(keys, ["only_chosen", "schema_version", "stu_effort_fable"]);
+        assert_eq!(on_disk(&path)["stu_effort_fable"], "xhigh");
+        let mut store = ConfigStore::open(&path).unwrap();
+        assert_eq!(store.lease_efforts(), LeaseEfforts { rich: EffortLevel::Low, stu: EffortLevel::Xhigh });
+
+        // The work moved to Opus: Opus's own level is in use, and Fable's is kept for the way back.
+        let opus_work = LeaseModels { rich: ModelChoice::Fable, stu: ModelChoice::Opus };
+        store.set_lease_choices(opus_work, store.effort_choices(), &[]).unwrap();
+        assert_eq!(store.lease_efforts(), LeaseEfforts { rich: EffortLevel::Low, stu: EffortLevel::High });
+        store.set_lease_choices(fable, store.effort_choices(), &[]).unwrap();
+        assert_eq!(ConfigStore::open(&path).unwrap().lease_efforts().stu, EffortLevel::Xhigh);
+
+        // Chosen back to the recommended level: a choice, written as one.
+        store.set_lease_choices(fable, recommended, &[]).unwrap();
+        assert_eq!(on_disk(&path)["stu_effort_fable"], "medium");
+        assert!(!on_disk(&path).contains_key("rich_effort_fable"), "a level nobody chose was written");
+
+        // Pressed and left as it was (the default pressed, or changed and set back before
+        // Settings closed): nothing moved, and it is still his choice, so it is written.
+        fs::remove_file(&path).ok();
+        let mut store = ConfigStore::open(&path).unwrap();
+        store.set_lease_choices(fable, recommended, &[]).unwrap();
+        assert!(!path.exists(), "a save in which nothing was pressed or moved wrote a file");
+        store.set_lease_choices(fable, recommended, &["rich_model", "stu_effort_fable"]).unwrap();
+        let mut keys: Vec<String> = on_disk(&path).keys().cloned().collect();
+        keys.sort();
+        assert_eq!(keys, ["only_chosen", "rich_model", "schema_version", "stu_effort_fable"]);
+        assert_eq!((on_disk(&path)["rich_model"].clone(), on_disk(&path)["stu_effort_fable"].clone()), ("fable".into(), "medium".into()));
+        assert!(store.set_lease_choices(fable, recommended, &["theme"]).is_err(), "a key that is not one of the six was accepted");
+
+        // A level a newer build wrote reads as the recommended one and goes back out unchanged.
+        fs::write(&path, r#"{"only_chosen":true,"rich_effort_fable":"ultra"}"#).unwrap();
+        let mut store = ConfigStore::open(&path).unwrap();
+        assert_eq!(store.effort_choices(), recommended);
+        store.set_font_scale(120).unwrap();
+        assert_eq!(on_disk(&path)["rich_effort_fable"], "ultra");
+        let unknown = EffortChoices { rich_opus: EffortLevel::Unknown, ..recommended };
+        assert!(store.set_lease_choices(fable, unknown, &[]).is_err(), "Unknown is never a choice");
         fs::remove_file(&path).ok();
     }
 
@@ -1724,11 +2225,11 @@ mod tests {
         // a write that fails leaves both as the file holds them, never one row moved alone.
         let path = tmp_path("models-pair");
         let mut store = ConfigStore::open(&path).unwrap();
-        let both = LeaseModels { rich: ModelChoice::Fable, stu: ModelChoice::Fable };
+        let both = LeaseModels { rich: ModelChoice::Opus, stu: ModelChoice::Opus };
         store.set_lease_models(both).unwrap();
         assert_eq!(ConfigStore::open(&path).unwrap().lease_models(), both);
 
-        let half_unknown = LeaseModels { rich: ModelChoice::Opus, stu: ModelChoice::Unknown };
+        let half_unknown = LeaseModels { rich: ModelChoice::Fable, stu: ModelChoice::Unknown };
         assert!(store.set_lease_models(half_unknown).is_err(), "Unknown is never a choice");
         assert_eq!(store.lease_models(), both, "the refused pair moved a row in memory");
         assert_eq!(ConfigStore::open(&path).unwrap().lease_models(), both, "the refused pair moved a row on disk");
@@ -1740,9 +2241,9 @@ mod tests {
         let blocked = dir.join("config.json");
         let mut store = ConfigStore::open(&blocked).unwrap();
         fs::create_dir_all(&blocked).unwrap();
-        let opus = LeaseModels { rich: ModelChoice::Opus, stu: ModelChoice::Opus };
+        let fable = LeaseModels { rich: ModelChoice::Fable, stu: ModelChoice::Fable };
         assert!(store.set_lease_models(both).is_err(), "a write onto a folder reported success");
-        assert_eq!(store.lease_models(), opus, "a failed write left a row moved in memory");
+        assert_eq!(store.lease_models(), fable, "a failed write left a row moved in memory");
         fs::remove_dir_all(&dir).ok();
     }
 

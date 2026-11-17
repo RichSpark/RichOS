@@ -984,6 +984,49 @@ const SURFACES = [
       await overlaySettled(p, "#set-menu");
     },
   },
+  // ROUND 86.1 (CEO 2026-11-17), RICH'S MODEL AND EFFORT. The `settings` walk above measures the
+  // section at its defaults, as far as the panel shows it without scrolling. These two bring the
+  // whole section into view and paint what the defaults never do: the warning color
+  // (`--attention`) on "Generally not recommended.", "Not recommended for anything." and
+  // "Max · not recommended", the note's bold sentence, and the warning card with its two buttons
+  // over the veiled panel.
+  {
+    name: "effort-above-and-max",
+    what: "Rich's model and effort with High on the conversation row and Max kept on the team row: the caution words and Max's name in the warning color, and the note naming it",
+    drive: async (p) => {
+      await p.click("#set-btn");
+      await p.waitForSelector("#set-menu:not([hidden])");
+      await overlaySettled(p, "#set-menu");
+      await p.evaluate(() => document.getElementById("md").scrollIntoView({ block: "start" }));
+      await p.click("#ef-rich-high");
+      // The team row and the note under it, in the middle of the panel: clear of the band
+      // across its foot, which would hide them from this walk.
+      await p.evaluate(() => document.getElementById("md-note").scrollIntoView({ block: "center" }));
+      await p.click("#ef-stu-max");
+      await p.waitForSelector(".efw.is-open");
+      await p.click(".efw-anyway");
+      await p.waitForSelector(".efw", { state: "hidden" });
+      await p.mouse.move(4, 4);
+      await p.waitForFunction(() => {
+        const name = (who) => document.querySelector(`#ef-${who} .ef-name`).textContent;
+        return name("stu") === "Max · not recommended" && name("rich") === "High";
+      });
+      await pageSettled(p);
+    },
+  },
+  {
+    name: "effort-max-warning",
+    what: "the warning card over Settings when Max is chosen: WARNING!, his sentence, the reason, the recommended line and the two buttons",
+    drive: async (p) => {
+      await p.click("#set-btn");
+      await p.waitForSelector("#set-menu:not([hidden])");
+      await overlaySettled(p, "#set-menu");
+      await p.evaluate(() => document.getElementById("md").scrollIntoView({ block: "start" }));
+      await p.click("#ef-rich-max");
+      await p.waitForSelector(".efw.is-open");
+      await overlaySettled(p, ".efw");
+    },
+  },
   // NO SEPARATE SURFACE FOR THE COMPANY RADIOS, and that is a measured decision rather than
   // an omission. One was written — it scrolled the group into view on the assumption that the
   // popover's `max-height: calc(100vh - 70px); overflow-y: auto` had pushed it out — and it
@@ -2187,6 +2230,31 @@ async function main() {
     assertEqual(r, ["p#t-normal@4.5"], "only the 14px/400 node may fail: 24px, 19px-bold and the declared indicator all clear 3.0");
     await page.close();
     return "3.03:1 fails at 14px/400 and passes at 24px, at 19px bold, and as a declared indicator";
+  });
+
+  await run.check("3b  off screen, a label is measured against the positioned sibling under it, not the track around it", async () => {
+    // The chosen half of a segmented control stands on a thumb that is its sibling. Scrolled out
+    // of view there is no hit test, and the ancestors alone are the control's track: dark ink on
+    // a dark track, 1.5:1, for a label that is 7.68:1 on its gold thumb. Two labels above the
+    // top of the window: one on a thumb (must pass), one beside it on the bare track (must fail,
+    // so the thumb is not being credited to a label it is not under).
+    const page = await openApp(browser, "dark");
+    const r = await page.evaluate(async (script) => {
+      eval(script);
+      const host = document.createElement("div");
+      host.style.cssText = "position:absolute;left:20px;top:-300px;width:200px;height:40px;background:#2e3544";
+      host.innerHTML =
+        '<span style="position:absolute;top:0;bottom:0;left:100px;width:100px;background:#c2a35c"></span>' +
+        '<b id="t-off-thumb" style="position:absolute;left:120px;top:8px;color:#0c1322;font-size:16px">on the thumb</b>' +
+        '<b id="t-off-track" style="position:absolute;left:4px;top:8px;color:#0c1322;font-size:16px">on the track</b>';
+      document.body.appendChild(host);
+      const out = window.__contrastProbe({ surface: "sibling-ground-fixture", theme: "dark" });
+      host.remove();
+      return Object.values(out.failures).map(function (f) { return f.selector; }).filter(function (s) { return s.indexOf("t-off-") >= 0; });
+    }, C.pageScript());
+    assertEqual(r, ["b#t-off-track"], "only the label on the bare track may fail");
+    await page.close();
+    return "above the window: the label on its thumb passes, the one on the bare track fails";
   });
 
   // ---- 4. a real failure is caught, by name ---------------------------------------------
