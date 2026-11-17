@@ -238,6 +238,41 @@ async function main() {
       assertEqual(seen, { none: 101, identical: 101, reencoded: 101 }, "the scrolled column recorded at the shutter");
       return "a new, an identical and a re-encoded scratch file all carry the shutter's state (scrollTop 101)";
     });
+
+    await run.check("10 a suite that never exits is stopped at its limit and recorded red, so it cannot use up the whole gate", async () => {
+      // Run 20261117T180249Z-3ac38bbc: rich-files.js (26 s alone) waited on an unbounded await
+      // in shard 3 until the build's 3300 s deadline killed the whole UI gate, so shard 3 wrote
+      // no receipts, seven suites never ran, and no solo retry was possible. run.js is copied
+      // into a directory of its own with one suite that never exits on its own (it gives up by
+      // itself after 45 s, so a run.js without the limit leaves nothing running for long).
+      const dir = fs.mkdtempSync(path.join(scratch, "limit-"));
+      fs.mkdirSync(path.join(dir, "lib"));
+      fs.copyFileSync(path.join(__dirname, "run.js"), path.join(dir, "run.js"));
+      for (const lib of ["ui-sources.js", "blocking-stdio.js"]) {
+        fs.copyFileSync(path.join(__dirname, "lib", lib), path.join(dir, "lib", lib));
+      }
+      fs.writeFileSync(
+        path.join(dir, "never-exits.js"),
+        '"use strict";\nsetInterval(() => {}, 1000);\nsetTimeout(() => process.exit(3), 45000);\n' +
+          'if (Date.now() < 0) run.check("never reached", async () => {});\n'
+      );
+      const receipts = path.join(dir, "receipts");
+      const started = Date.now();
+      const r = spawnSync(process.execPath, [path.join(dir, "run.js"), "--suite=never-exits.js", "--receipts=" + receipts], {
+        env: Object.assign({}, process.env, { GITHUB_SHA: "a".repeat(40), RICHOS_UI_SUITE_LIMIT_SECONDS: "2" }),
+        encoding: "utf8",
+        timeout: 30000,
+      });
+      const took = (Date.now() - started) / 1000;
+      const out = (r.stdout || "") + (r.stderr || "");
+      assert(!(r.error && r.error.code === "ETIMEDOUT"), `run.js was still waiting on the suite after 30 s (limit 2 s):\n${out}`);
+      assertEqual(r.status, 1, "run.js's exit code over a stopped suite");
+      const receipt = JSON.parse(fs.readFileSync(path.join(receipts, "never-exits.receipt.json"), "utf8"));
+      assertEqual(receipt.exit, 124, "the stopped suite's recorded exit");
+      assert(/no exit within its limit of 2 s/.test(receipt.stopped || ""), "the receipt does not say it was stopped: " + JSON.stringify(receipt));
+      assert(/STOPPED\s+never-exits\.js/.test(out), "the verdict does not name the stopped suite:\n" + out);
+      return `stopped after ${took.toFixed(1)} s; receipt exit 124, "${receipt.stopped}"`;
+    });
   } finally {
     fs.rmSync(scratch, { recursive: true, force: true });
     fs.rmSync(path.dirname(REFERENCE), { recursive: true, force: true });
