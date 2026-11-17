@@ -686,7 +686,7 @@ registered_teammate_worktree() {
 # does the thing that produced the refusal. ONE command first; the manual
 # route is still named because it is still accepted, and nothing about what
 # this guard blocks changed with the wording.
-HELPER_HINT="do all of it in ONE command —  <engine>/scripts/spawn.sh <teammate-name> --repo <repo> --type <subagent-type> --brief <file>  creates and REGISTERS the tree, assembles the payload, and evaluates every PreToolUse[Agent] guard from every surface BEFORE anything exists, reporting all failures together. By hand it is  <engine>/mega-lander/create-teammate-worktree.sh <repo> <teammate-name>  which creates, seeds .worktreeinclude, and REGISTERS the tree; then spawn with isolation:\"worktree\" and add the prompt line  cross-repo-worktree: <path>  (a cwd-only spawn is refused: it has no platform-owned lifecycle witness)."
+HELPER_HINT="do all of it in ONE command —  <engine>/scripts/spawn.sh <teammate-name> --repo <repo> --type <subagent-type> --brief <file>  creates and REGISTERS the tree, assembles the payload, and evaluates every PreToolUse[Agent] guard from every surface BEFORE anything exists, reporting all failures together. By hand it is  <engine>/mega-lander/create-teammate-worktree.sh <repo> <teammate-name>  which creates, seeds .worktreeinclude, and REGISTERS the tree; then spawn with isolation:\"worktree\" and add the prompt line  cross-repo-worktree: <path>  (a cwd-only spawn is refused: the native worktree on the call is what makes a named agent a subagent, the kind the lead is meant to start, and it keeps an agent that changes the session's own repository out of the main folder)."
 
 # A DRY EVALUATION'S *PLANNED* WORKSPACES (see clause 7g). scripts/spawn.sh
 # evaluates this guard BEFORE it creates anything, precisely so that a brief
@@ -725,7 +725,7 @@ PLANNED_EOF
 case "$ISOLATION" in
   worktree|remote)
     if [ -n "$SPAWN_CWD" ]; then
-      PROBLEMS+=("cwd and isolation are mutually exclusive — the Agent tool refuses the pair (got cwd='${SPAWN_CWD}' with isolation='${ISOLATION}'). For cross-repository work keep isolation and name the registered worktree on a 'cross-repo-worktree: <path>' prompt line (a cwd-only spawn is refused: it has no platform-owned lifecycle witness).")
+      PROBLEMS+=("cwd and isolation are mutually exclusive — the Agent tool refuses the pair (got cwd='${SPAWN_CWD}' with isolation='${ISOLATION}'). For cross-repository work keep isolation and name the registered worktree on a 'cross-repo-worktree: <path>' prompt line (a cwd-only spawn is refused: the native worktree on the call is what makes a named agent a subagent, the kind the lead is meant to start, and it keeps an agent that changes the session's own repository out of the main folder).")
     fi
     ;;
   *)

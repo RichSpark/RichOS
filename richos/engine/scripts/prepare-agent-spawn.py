@@ -80,7 +80,8 @@ def prepare(value, targets=None, *, native_isolation=True):
     if value.get("resume"):
         problems.append("this helper prepares new spawns; use the resume contract for an existing agent")
     if value.get("cwd"):
-        problems.append("cwd cannot carry a native lifecycle witness; use a registered cross-repo-worktree: prompt line")
+        problems.append("cwd is not accepted: the native worktree on the call is what makes a named agent a subagent, the kind the lead "
+                        "is meant to start, and the Agent tool refuses cwd beside it; use a registered cross-repo-worktree: prompt line")
     if value.get("isolation") not in (None, "worktree"):
         problems.append("this helper prepares isolation=worktree only; it will not override another isolation mode")
     if problems:

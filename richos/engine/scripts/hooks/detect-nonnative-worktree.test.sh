@@ -138,7 +138,20 @@ d = {"tool_name": "Agent", "tool_input": ti, "session_id": "deadbeef-0000-4000-8
 # is a structured object, not prose. Until this revision every fixture here
 # emitted prose, which is why 56 assertions passed while the binder bound
 # nothing on a real machine. Set RESP_PROSE=1 to exercise the prose fallback.
-if os.environ.get("RESP_ASYNC_NO_ID"):
+if os.environ.get("RESP_TEAMMATE"):
+    # Claude Code's answer when the named agent joined the team instead of
+    # launching as a subagent. Keys and values copied from a real result
+    # (reed-fable-effort2, 2026-11-16, Claude Code 2.1.326); only the name varies.
+    d["tool_response"] = {"status": "teammate_spawned", "prompt": "fixture",
+                          "agentId": "a%s-b832e422904676df" % name,
+                          "resolvedModel": "claude-fable-5-2",
+                          "teammate_id": "%s@session-deadbeef" % name,
+                          "agent_id": "a%s-b832e422904676df" % name,
+                          "agent_type": subagent, "model": "fable", "name": name, "color": "blue",
+                          "tmux_session_name": "in-process", "tmux_window_name": "in-process",
+                          "tmux_pane_id": "in-process", "team_name": "session-deadbeef",
+                          "is_splitpane": False, "plan_mode_required": False}
+elif os.environ.get("RESP_ASYNC_NO_ID"):
     # asynchronous, but the result carries no readable agentId: the binder-defect
     # shape that every real spawn hit on 2026-09-03 and no fixture reproduced.
     # Checked FIRST so a caller can request it while still naming an agent id.
@@ -348,6 +361,21 @@ rm -rf "$ROOT"
 ROOT="$(make_sandbox)"
 run_case "marker present, no isolation -> no (a) warning" clean "$ROOT" \
     "$(json_agent 'worker' 'worker-oneoff1' '' $'Do the task.\nmain-checkout-run: needs main checkout HEAD.')"
+rm -rf "$ROOT"
+
+# --- (k) WHICH KIND OF AGENT CLAUDE CODE SAYS IT STARTED --------------------
+# Every agent the lead starts is meant to be a subagent. Claude Code answers a
+# subagent launch with status async_launched and a team teammate with status
+# teammate_spawned plus a teammate_id. The hook reads that answer and reports a
+# named roster agent that came back as anything else. K1 is the control: the
+# subagent answer stays silent, so K2 cannot pass by the hook speaking always.
+ROOT="$(make_sandbox)"
+run_case "K1 a named roster agent answered as a subagent launch -> silent" clean "$ROOT" \
+    "$(json_agent 'dev' 'dev-kind1' 'worktree' 'Do the thing.')"
+K2_JSON="$(RESP_TEAMMATE=1 json_agent 'dev' 'dev-kind2' '' $'Do the task.\nmain-checkout-run: deliberate one-off main-checkout run.')"
+run_case "K2 a named roster agent answered as a team teammate -> reported" warn "$ROOT" "$K2_JSON"
+run_case_msg "K2 the report names the agent" "'dev-kind2'" "$ROOT" "$K2_JSON"
+run_case_msg "K2 the report names the status Claude Code returned" "teammate_spawned" "$ROOT" "$K2_JSON"
 rm -rf "$ROOT"
 
 # --- (b) a hand-rolled (non agent-<hex>) worktree present -> exit 2 warning ---
