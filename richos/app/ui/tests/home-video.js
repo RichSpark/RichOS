@@ -338,19 +338,43 @@ async function main() {
     assertEqual(await chosen(page, "Microphone"), "On", "the microphone is not on");
     assertEqual(await page.evaluate(() => window.__micAsked), 0, "a test run's made-up microphone asked for the real one");
     assert(await shown(page, "#home-video-choices .hv-row .hv-level"), "the bars that move with his voice are not beside Microphone");
+    // THE COUNT IS TIMED IN THE PAGE, on the page's own clock, from the "3" appearing to the
+    // recording starting, by a watcher that is told of each change as it is made. Until 2026-11-17
+    // this suite started a stopwatch of its own only after the readings below (a contrast reading
+    // among them), so a busy Mac shortened the count it measured ("the count took 1.5 s"), and it
+    // read the "3" a round trip after the count began.
+    await page.evaluate(() => {
+      const seen = (window.__count = { steps: [], at: [], rec: 0 });
+      const watcher = new MutationObserver(() => {
+        const state = window.RichHomeVideo.state().state;
+        const n = document.querySelector(".hv-count .n");
+        const t = n ? n.textContent.trim() : "";
+        if (state === "count" && t && seen.steps[seen.steps.length - 1] !== t) {
+          seen.steps.push(t);
+          seen.at.push(performance.now());
+        }
+        if (state === "rec" && seen.steps.length) {
+          seen.rec = performance.now();
+          watcher.disconnect();
+        }
+      });
+      watcher.observe(document.documentElement, { subtree: true, childList: true, characterData: true, attributes: true });
+    });
     await page.click("#home-video-choices .hv-go");
     await until(page, "count");
     // the count: three, two, one, 0.8 s each, with the microphone said
     assert(await shown(page, ".hv-count"), "the count is not on the screen");
-    assertEqual(await text(page, ".hv-count .n"), "3", "the count does not start at three");
     assertEqual(await text(page, ".hv-count .plain"), "Recording starts", "the count's line");
     assertEqual(await text(page, ".hv-count .voice"), "Your microphone is on", "the count does not say the microphone is on");
     assertEqual(await text(page, "#home-video .w"), "Cancel", "the button during the count");
     const countContrast = await clears(page, [".hv-count .n", ".hv-count .plain", ".hv-count .voice", "#home-video .w"]);
-    const t0 = Date.now();
     await until(page, "rec");
-    const counted = (Date.now() - t0) / 1000;
-    assert(counted > 1.6, "the count took " + counted.toFixed(1) + " s, not three steps of 0.8");
+    await page.waitForFunction(() => window.__count.rec > 0, null, { timeout: 60000 });
+    const count = await page.evaluate(() => window.__count);
+    assertEqual(count.steps, ["3", "2", "1"], "the count's steps, from three");
+    const counted = (count.rec - count.at[0]) / 1000;
+    // three steps of 0.8 s are 2.4 s; a timer is never early, and two steps would be 1.6 s
+    assert(counted > 2.3, "the count took " + counted.toFixed(2) + " s from the 3 to the recording, not three steps of 0.8");
     // while it records: red edge, the beating light, the time, Stop; the pointer moves over the picture
     await page.mouse.move(700, 620);
     await recorded(page, 1);

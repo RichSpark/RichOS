@@ -22,12 +22,16 @@ function run() {
     var f = se.processes.whose({ frontmost: true });
     return f.length ? f[0].unixId() : 0;
   }
-  var procs = se.processes.whose({ unixId: P.pid });
-  if (!procs.length) return error("noprocess", "no process with pid " + P.pid);
+  // P.app: a second app the walk itself opened in this guest (RichGlance, opened from RichFiles),
+  // named by its process name, held to the same frontmost rule as the app under test. The image
+  // viewer is its own process, never the pid run.sh recorded.
+  var procs = P.app ? se.processes.whose({ name: P.app }) : se.processes.whose({ unixId: P.pid });
+  if (!procs.length) return error("noprocess", P.app ? "no process named " + P.app : "no process with pid " + P.pid);
   var proc = procs[0];
+  var pid = P.app ? proc.unixId() : P.pid;
   proc.frontmost = true;
-  for (var i = 0; i < 20 && frontPid() !== P.pid; i++) delay(0.1);
-  if (frontPid() !== P.pid) return error("notfront", "refusing: the app under test is not frontmost, so nothing was dragged");
+  for (var i = 0; i < 20 && frontPid() !== pid; i++) delay(0.1);
+  if (frontPid() !== pid) return error("notfront", "refusing: the app under test is not frontmost, so nothing was dragged");
 
   // P.right: the RIGHT button (CGMouseButton 1). Given one point twice it is a real right-click,
   // a `contextmenu` event in the app (the Output panel row's menu, PRD §6.3).
@@ -37,6 +41,44 @@ function run() {
     $.CGEventPost(0, ev);
   }
   var pts = P.points;
+  // P.scroll: the pointer moves to the one point and the wheel turns P.scroll lines there, one
+  // line per event (negative is toward the user), with the Control key held when P.ctrl is set:
+  // Control-scroll is how RichGlance zooms. CGEventCreateScrollWheelEvent2 is the fixed-argument
+  // form (units 1 = lines); CGEventSetFlags holds Control on that event only, so no key is left
+  // down.
+  if (P.scroll) {
+    mouse(5, pts[0][0], pts[0][1]);
+    delay(0.25);
+    var dir = P.scroll > 0 ? 1 : -1;
+    for (var w = 0; w < Math.abs(P.scroll); w++) {
+      var wheel = $.CGEventCreateScrollWheelEvent2($(), 1, 1, dir, 0, 0);
+      if (P.ctrl) $.CGEventSetFlags(wheel, 0x40000);
+      $.CGEventPost(0, wheel);
+      delay(Math.max(P.pause, 0.05));
+    }
+    delay(0.3);
+    return out({ scrolled: true, lines: P.scroll, ctrl: !!P.ctrl, point: pts[0], pid: pid });
+  }
+  // P.double: a double-click on the one point, the way a hand opens a file: two left presses, the
+  // second carrying click state 2 (kCGMouseEventClickState, field 1), which is what AppKit reads
+  // as the second click. Two separate clicks a second apart are two single clicks (double-clicking
+  // an image in RichFiles needs this).
+  if (P.double) {
+    mouse(5, pts[0][0], pts[0][1]);
+    delay(0.25);
+    var presses = 0;
+    for (var c = 1; c <= 2; c++) {
+      [1, 2].forEach(function (type) {
+        var ev = $.CGEventCreateMouseEvent($(), type, { x: pts[0][0], y: pts[0][1] }, 0);
+        $.CGEventSetIntegerValueField(ev, 1, c);
+        $.CGEventPost(0, ev);
+        presses += 1;
+        delay(0.04);
+      });
+    }
+    delay(0.3);
+    return out({ doubled: true, point: pts[0], events: presses, pid: pid });
+  }
   // P.hover: the pointer only MOVES (CGEventType 5, no button) through the points, resting at each, the
   // way a hand hovers. A tooltip that must appear "at once" is shown by `mouseover`, which a drag with
   // the button held does not deliver. Added with the nightly 68 walk (the "+ New chat" tooltip).
@@ -55,7 +97,7 @@ function run() {
       }
       delay(P.rest);
     }
-    return out({ hovered: true, points: pts, moves: moved, pid: P.pid });
+    return out({ hovered: true, points: pts, moves: moved, pid: pid });
   }
   // 5 moved; left: 1 down, 6 dragged, 2 up; right: 3 down, 7 dragged, 4 up (CGEventType).
   var DOWN = P.right ? 3 : 1, DRAGGED = P.right ? 7 : 6, UP = P.right ? 4 : 2;
@@ -80,5 +122,5 @@ function run() {
   var last = pts[pts.length - 1];
   mouse(UP, last[0], last[1]);
   delay(0.3);
-  return out({ dragged: true, button: P.right ? "right" : "left", points: pts, moves: sent, pid: P.pid });
+  return out({ dragged: true, button: P.right ? "right" : "left", points: pts, moves: sent, pid: pid });
 }

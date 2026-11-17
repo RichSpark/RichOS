@@ -163,6 +163,33 @@ with tempfile.TemporaryDirectory(prefix='steps-walk-test-') as tmp:
           mod.problems([{'op': 'pointer', 'points': ['1,2'], 'hover': True, 'find': '--title X'}]))
     mod.run = lambda args, timeout=120: (seen.append(args) or (0, ''))
 
+    # A wheel turn in a second app the walk opened (Control-scroll zooms RichGlance,
+    # its own process): --scroll, --ctrl and --app reach pointer-drag.sh, and find looks in that app.
+    seen.clear()
+    mod.step_run('no-such-vm', {'op': 'pointer', 'points': ['840,520'], 'scroll': 5, 'ctrl': True, 'app': 'RichGlance'}, Path(tmp))
+    check('pointer with scroll, ctrl and app passes --scroll 5 --ctrl --app RichGlance on one point',
+          seen and seen[0][1:] == ['no-such-vm', '840,520', '--scroll', '5', '--ctrl', '--app', 'RichGlance'], seen)
+    seen.clear()
+    mod.run = fake_find
+    mod.step_run('no-such-vm', {'op': 'pointer', 'points': [], 'hover': True, 'app': 'RichGlance',
+                                'find': ['--title', 'Show RichCleaner Info']}, Path(tmp))
+    check('pointer with app and find asks ax.sh to look in that app', seen and seen[0][-2:] == ['--app', 'RichGlance'], seen)
+    mod.run = lambda args, timeout=120: (seen.append(args) or (0, ''))
+    seen.clear()
+    mod.step_run('no-such-vm', {'op': 'pointer', 'points': ['645,316'], 'double': True}, Path(tmp))
+    check('pointer with double passes --double on one point', seen and seen[0][1:] == ['no-such-vm', '645,316', '--double'], seen)
+    check('a one-point double step is valid', mod.problems([{'op': 'pointer', 'points': ['1,2'], 'double': True}]) == [],
+          mod.problems([{'op': 'pointer', 'points': ['1,2'], 'double': True}]))
+    for bad in ({'points': ['1,2', '1,2'], 'double': True}, {'points': ['1,2'], 'double': True, 'right': True}):
+        got = mod.problems([dict({'op': 'pointer'}, **bad)])
+        check('a pointer step %r is refused with a sentence' % (bad,), bool(got), got)
+    check('a one-point scroll step is valid', mod.problems([{'op': 'pointer', 'points': ['1,2'], 'scroll': -3}]) == [],
+          mod.problems([{'op': 'pointer', 'points': ['1,2'], 'scroll': -3}]))
+    for bad in ({'points': ['1,2', '1,2'], 'scroll': 3}, {'points': ['1,2'], 'scroll': 0, 'ctrl': True},
+                {'points': ['1,2'], 'scroll': 51}, {'points': ['1,2'], 'ctrl': True}, {'points': ['1,2'], 'scroll': '3'}):
+        got = mod.problems([dict({'op': 'pointer'}, **bad)])
+        check('a pointer step %r is refused with a sentence' % (bad,), bool(got), got)
+
     # openlink: the pairing address the Mac draws is opened on the guest's phone page, and an
     # address that never appears fails the step rather than opening nothing and passing.
     seen.clear()

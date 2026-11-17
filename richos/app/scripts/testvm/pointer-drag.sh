@@ -2,6 +2,17 @@
 # pointer-drag.sh — drag inside the app under test with the real mouse, the way a hand does.
 #
 #   testvm/pointer-drag.sh <vm> <x>,<y> <x>,<y> [<x>,<y> ...] [--step PX] [--pause S] [--rest S] [--right | --hover]
+#   testvm/pointer-drag.sh <vm> <x>,<y> --scroll LINES [--ctrl]
+#   testvm/pointer-drag.sh <vm> <x>,<y> --double
+#   ... [--app NAME]
+#
+#   --scroll LINES turns the wheel LINES lines (a whole number, -50..50, not 0; negative is toward
+#   the user) with the pointer resting on the one point; --ctrl holds Control on each wheel event,
+#   which is how RichGlance zooms. --app NAME sends the input to the guest process of that name (a
+#   second app the walk opened, such as RichGlance) instead of the app run.sh recorded, still only
+#   once it is frontmost. --double is a double-click on the one point (the second press carries
+#   click state 2, as a hand's does). All three exist because the image viewer is
+#   its own process and nothing in the toolkit could turn the wheel or double-click.
 #
 #   --hover presses no button at all: the pointer only moves through the points (one is enough) and
 #   rests on the last, the way a hand hovers, so a tooltip shown by `mouseover` can be looked at.
@@ -40,12 +51,12 @@ if [ "${TESTVM_AX_SUPERVISED:-}" != 1 ]; then
 fi
 . "$HERE/lib.sh"
 
-usage="usage: pointer-drag.sh <vm> <x>,<y> <x>,<y> [<x>,<y> ...] [--step PX] [--pause S] [--rest S] [--right | --hover]"
+usage="usage: pointer-drag.sh <vm> <x>,<y> <x>,<y> [<x>,<y> ...] [--step PX] [--pause S] [--rest S] [--right | --hover] | <vm> <x>,<y> --scroll LINES [--ctrl] | <vm> <x>,<y> --double; any with [--app NAME]"
 VM="${1:-}"
 [ -n "$VM" ] || die "$usage"
 shift
 POINTS=()
-STEP=8; PAUSE=0.02; REST=0.15; RIGHT=0; HOVER=0
+STEP=8; PAUSE=0.02; REST=0.15; RIGHT=0; HOVER=0; SCROLL=0; CTRL=0; APP=""; DOUBLE=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --step) STEP="${2:-}"; shift 2 ;;
@@ -53,12 +64,27 @@ while [ $# -gt 0 ]; do
     --rest) REST="${2:-}"; shift 2 ;;
     --right) RIGHT=1; shift ;;
     --hover) HOVER=1; shift ;;
+    --scroll) SCROLL="${2:-}"; shift 2 ;;
+    --ctrl) CTRL=1; shift ;;
+    --double) DOUBLE=1; shift ;;
+    --app) APP="${2:-}"; [ -n "$APP" ] || die "--app needs a process name — $usage"; shift 2 ;;
     *,*) POINTS+=("$1"); shift ;;
     *) die "unknown argument: $1 — $usage" ;;
   esac
 done
 [ "$HOVER" = 0 ] || [ "$RIGHT" = 0 ] || die "--hover moves with no button, so it cannot also be --right — $usage"
-if [ "$HOVER" = 1 ]; then
+case "$SCROLL" in
+  0) [ "$CTRL" = 0 ] || die "--ctrl holds Control on a wheel turn, so it needs --scroll — $usage" ;;
+  -[1-9]|-[1-4][0-9]|-50|[1-9]|[1-4][0-9]|50) ;;
+  *) die "--scroll takes a whole number of lines from -50 to 50, not 0 — $usage" ;;
+esac
+if [ "$DOUBLE" = 1 ]; then
+  [ "$SCROLL" = 0 ] && [ "$HOVER" = 0 ] && [ "$RIGHT" = 0 ] || die "--double is a left double-click, so it takes no --scroll, --hover or --right — $usage"
+  [ "${#POINTS[@]}" -eq 1 ] || die "a double-click is on exactly one point — $usage"
+elif [ "$SCROLL" != 0 ]; then
+  [ "$HOVER" = 0 ] && [ "$RIGHT" = 0 ] || die "--scroll turns the wheel with no button, so it cannot also be --hover or --right — $usage"
+  [ "${#POINTS[@]}" -eq 1 ] || die "a wheel turn rests on exactly one point — $usage"
+elif [ "$HOVER" = 1 ]; then
   [ "${#POINTS[@]}" -ge 1 ] || die "a hover needs at least one point — $usage"
 else
   [ "${#POINTS[@]}" -ge 2 ] || die "a drag needs at least two points — $usage"
@@ -72,7 +98,11 @@ if [ -z "${TESTVM_GUEST_EXEC:-}" ]; then
   require_vm_running "$VM"
 fi
 PID="$(cat "$TESTVM_RUN/$VM/app.pid" 2>/dev/null || true)"
-[ -n "$PID" ] || die "no app pid recorded for $VM — was it started by run.sh?"
+if [ -n "$APP" ]; then
+  PID="${PID:-0}"   # the named process is resolved in the guest; the recorded pid is not the target
+else
+  [ -n "$PID" ] || die "no app pid recorded for $VM — was it started by run.sh?"
+fi
 
 # The guest's own deadline, built exactly as hand-file.sh builds it.
 REMOTE_OSA="$(python3 - "$HERE/ax-deadline.py" "${TESTVM_AX_TIMEOUT:-30}" <<'DEADLINE'
@@ -91,7 +121,8 @@ DEADLINE
 )"
 
 # Every number is parsed here, so the guest program only ever receives JSON.
-PARAMS="$(PD_PID="$PID" PD_STEP="$STEP" PD_PAUSE="$PAUSE" PD_REST="$REST" PD_RIGHT="$RIGHT" PD_HOVER="$HOVER" python3 - "${POINTS[@]}" <<'PY'
+PARAMS="$(PD_PID="$PID" PD_STEP="$STEP" PD_PAUSE="$PAUSE" PD_REST="$REST" PD_RIGHT="$RIGHT" PD_HOVER="$HOVER" \
+           PD_SCROLL="$SCROLL" PD_CTRL="$CTRL" PD_APP="$APP" PD_DOUBLE="$DOUBLE" python3 - "${POINTS[@]}" <<'PY'
 import json, os, sys
 try:
     points = [[float(v) for v in p.split(',', 1)] for p in sys.argv[1:]]
@@ -102,7 +133,11 @@ except (ValueError, AssertionError):
 print("var DRAG_PARAMS = " + json.dumps({"pid": int(os.environ['PD_PID']), "points": points,
                                          "step": step, "pause": pause, "rest": rest,
                                          "right": os.environ['PD_RIGHT'] == '1',
-                                         "hover": os.environ['PD_HOVER'] == '1'}) + ";")
+                                         "hover": os.environ['PD_HOVER'] == '1',
+                                         "scroll": int(os.environ['PD_SCROLL']),
+                                         "ctrl": os.environ['PD_CTRL'] == '1',
+                                         "double": os.environ['PD_DOUBLE'] == '1',
+                                         "app": os.environ['PD_APP'] or None}) + ";")
 PY
 )"
 
@@ -110,5 +145,5 @@ PY
 { printf '%s\n' "$PARAMS"; cat "$HERE/pointer-drag.js"; } | ag "$REMOTE_OSA" 2>&1 | {
   answer="$(cat)"
   printf '%s\n' "$answer"
-  case "$answer" in *'"error"'*) exit 3 ;; *'"dragged"'*|*'"hovered"'*) exit 0 ;; *) exit 4 ;; esac
+  case "$answer" in *'"error"'*) exit 3 ;; *'"dragged"'*|*'"hovered"'*|*'"scrolled"'*|*'"doubled"'*) exit 0 ;; *) exit 4 ;; esac
 }
