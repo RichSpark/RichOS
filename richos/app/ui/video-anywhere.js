@@ -648,19 +648,15 @@ window.RichVideoAnywhere = (function () {
     cv.className = "rv-skip rv-canvas";
     cv.setAttribute("aria-hidden", "true");
     document.body.appendChild(cv);
-    var R = (rec = { cv: cv, cx: cv.getContext("2d", { alpha: false }), W: W, H: H, chunks: [], t0: performance.now(), last: 0, gap: 33, cost: 0, raf: 0, timer: 0, frames: 0, nodes: 0, now: 0, inHome: false, sel: null, voice: !!mic.stream, tone: !!mic.stream && mic.tone, pointer: opts.pointer, mr: null, mime: P.mimeType() });
+    var R = (rec = { cv: cv, cx: cv.getContext("2d", { alpha: false }), W: W, H: H, chunks: [], t0: performance.now(), last: 0, gap: 33, cost: 0, raf: 0, timer: 0, frames: 0, nodes: 0, now: 0, inHome: false, sel: null, voice: !!mic.stream, tone: !!mic.stream && mic.tone, pointer: opts.pointer, tape: null, mime: P.mimeType() });
     paintFrame(R);
     try {
-      var stream = cv.captureStream(30);
-      var tracks = stream.getVideoTracks();
+      var tracks = cv.captureStream(30).getVideoTracks();
       if (mic.stream) tracks = tracks.concat(mic.stream.getAudioTracks());
-      R.mr = new MediaRecorder(new MediaStream(tracks), R.mime ? { mimeType: R.mime, videoBitsPerSecond: 10000000 } : undefined);
-      R.mr.ondataavailable = function (e) {
-        if (e.data && e.data.size) R.chunks.push(e.data);
-      };
-      R.mr.start(); // one whole file at stop, never slices (`home-video.js`)
+      // asked for once a second while it records, never left alone until Stop (`home-video.js`, `tape`)
+      R.tape = P.tape(tracks, R.mime);
     } catch (e) {
-      R.mr = null; // no recorder in this webview: the sheet says so
+      R.tape = null; // no recorder in this webview: the sheet says so
     }
     var frame = function (now) {
       if (rec !== R) return;
@@ -696,31 +692,11 @@ window.RichVideoAnywhere = (function () {
     if (twin) twin.remove();
     twin = null;
     var out = { ms: performance.now() - R.t0, w: R.cv.width, h: R.cv.height, voice: R.voice, tone: R.tone, pointer: R.pointer, mime: R.mime, blob: null, frames: R.frames, cost: R.cost, nodes: R.nodes, at: new Date() };
-    if (!R.mr) return Promise.resolve(out);
-    return new Promise(function (done) {
-      var closed = false;
-      var close = function (how) {
-        if (closed) return;
-        closed = true;
-        out.ended = how; // "stopped" is a whole file
-        out.blob = new Blob(R.chunks, { type: (R.mime || "video/webm").split(";")[0] });
-        done(out);
-      };
-      R.mr.onstop = function () {
-        close("stopped");
-      };
-      R.mr.onerror = function () {
-        close("error");
-      };
-      // a recorder that never says it stopped: the sheet opens with what there is
-      setTimeout(function () {
-        close("timed out");
-      }, 5000);
-      try {
-        R.mr.stop();
-      } catch (e) {
-        close("error");
-      }
+    if (!R.tape) return Promise.resolve(out);
+    return R.tape.stop().then(function (how) {
+      out.ended = how; // "stopped" is a whole file
+      out.blob = new Blob(R.tape.chunks, { type: (R.mime || "video/webm").split(";")[0] });
+      return out;
     });
   }
 

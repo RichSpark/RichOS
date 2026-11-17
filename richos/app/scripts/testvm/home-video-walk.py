@@ -38,6 +38,12 @@ WHAT IT DOES, in the guest, never on the host's screen (CEO ruling 65):
           (frames 12-space-playing, 13-space-paused, 14-space-playing-again). Whether it plays is
           read from the player's own controls (Play or Pause) and its time moving or standing.
 
+  long    (not run unless named) Microphone On, "When I stop it", pointer Shown: a recording of 32 s
+          in which the real mouse rests on the picture, stopped, saved and read back: how long the
+          file is against how long the recording was (`whole`). On a machine with a hardware
+          H.264 encoder (--expect-picture) the file must run to the last second; a guest's file
+          is measured and reported, never failed for its length (the note below).
+
 READ BACK means: ffprobe's streams and length (AAC only with the microphone, and that sound is not
 silence), everything in the file decoded by ffmpeg with no error, the length against what the sheet
 said, and, where the file has a picture, frames taken out of it into --out for a person to look at.
@@ -47,7 +53,11 @@ given. The test VM guest has no hardware H.264 encoder (measured 2026-11-14 in a
 15.7.7: VideoToolbox answers -12903 when hardware is required), and the webview's recorder then
 writes the sound and no picture: with the microphone the saved file is AAC alone, without it there
 is no file and the sheet says "This Mac could not record the window…". Every Mac a user runs has
-the encoder. The picture in the file is proved on the host by ui/tests/home-video.js, which records
+the encoder. A GUEST'S FILE ALSO ENDS BEFORE THE RECORDING DOES, by 6 to 38 s in seven guests, and
+it did so both before and after the recorder was changed to ask for its file while it records
+(`ui/home-video.js`, `tape`): with no picture ever encoded, the webview's recorder stops writing
+the sound part-way. That the file is whole where there is an encoder is proved by
+ui/tests/video-whole.js, which makes a recording of half a minute in the Mac's own webview. The picture in the file is proved on the host by ui/tests/home-video.js, which records
 through the same code in headless WebKit and reads the H.264 back. What the guest proves is the
 button, the three choices, the count, Stop, the film ending by itself, the sheet and the Mac's save
 window, on the real app.
@@ -83,7 +93,7 @@ stages = load('loro_stages_walk', 'loro-stages-walk.py')
 standard = stages.standard  # the one copy of home-standard-walk.py: its StepFailed is the one raised and caught
 StepFailed, DATA = standard.StepFailed, standard.DATA
 
-STEPS = ['seed', 'button', 'voice', 'film', 'space']
+STEPS = ['seed', 'button', 'voice', 'film', 'space', 'long']
 TONE = {'RICHOS_VIDEO_INPUT_TONE': '1'}
 
 
@@ -327,6 +337,47 @@ class Walk(stages.Walk):
         self.press('--title', 'Done', '--role', 'AXButton')
         time.sleep(1.5)
         result['done_closed_the_sheet'] = not self.button('Record again')
+        return result
+
+    def whole(self, result, tag):
+        """How long the file is against how long the recording was. With --expect-picture (a
+        machine with a hardware H.264 encoder) a file that ends more than a second and a half
+        before the recording did fails: a recorder that loses what it recorded after the first
+        seconds hands back exactly that (`ui/home-video.js`, `tape`). A guest's file is sound
+        alone and ends early for the guest's own reason (this file's note), so there the two
+        lengths are reported and nothing is failed for them."""
+        facts = result['read_back']
+        result['seconds_in_the_file'] = facts['seconds']
+        result['seconds_missing_at_the_end'] = round(result['pressed_stop_after_s'] - facts['seconds'], 1)
+        if not facts['audio'] or facts['audio']['mean_volume_db'] is None or facts['audio']['mean_volume_db'] < -60:
+            raise StepFailed(tag + ': no sound in a video made with the microphone ' + json.dumps(facts))
+        if self.expect_picture and not facts['video']:
+            raise StepFailed(tag + ': no picture in the file ' + json.dumps(facts))
+        if self.expect_picture and result['seconds_missing_at_the_end'] > 1.5:
+            raise StepFailed('%s: the recording was stopped after %.1f s and the file ends at %.1f s ' % (tag, result['pressed_stop_after_s'], facts['seconds']) + json.dumps(facts))
+
+    def long(self):
+        """A recording of 32 s on the home screen, saved and read back: whole to the last second."""
+        self.to_home()
+        self.choose('On', 'When I stop it', 'Shown')
+        time.sleep(2)
+        self.press('--title', 'Start recording', '--role', 'AXButton')
+        self.until(self.recording, 20, 'the button never became Stop')
+        began = time.monotonic()
+        make = self.node('--id', 'home-video')
+        x, y = make['x'] - 420, make['y'] + 330
+        self.pointer('%d,%d' % (x, y), '%d,%d' % (x + 160, y + 90), hover=True)
+        time.sleep(max(0, 32 - (time.monotonic() - began)))
+        result = {'recording_frame': self.shot('15-long-recording')}
+        self.press('--id', 'home-video')
+        result['pressed_stop_after_s'] = round(time.monotonic() - began, 1)
+        if not self.to_the_sheet(30):
+            raise StepFailed('the sheet has no video to save: ' + str(self.words('could not record')))
+        result['sheet_says'] = self.words(' · with your voice · ')
+        result.update(self.save('16-long'))
+        self.whole(result, 'the home screen')
+        self.press('--title', 'Done', '--role', 'AXButton')
+        time.sleep(1.5)
         return result
 
     def film(self):
