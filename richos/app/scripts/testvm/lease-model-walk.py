@@ -108,6 +108,19 @@ class LeaseModelWalk(stu_reminder_walk.StuReminderWalk):
                 raise StepFailed('%s did not happen within %g s' % (what, seconds))
             time.sleep(every)
 
+    def ours(self, sent):
+        """The assignment registered after the job was sent, in whichever conversation it is.
+
+        After the relaunch the app is on its home screen, and the message typed there opens a
+        conversation of its own, so the job is not in the first-run conversation the walk has on
+        record (both runs of 2026-11-17 waited 20 minutes for an assignment "in" that one while
+        the window said "1 assignment running"). This walk's home holds no other work. The Git
+        name card the first save asks is answered here too, as a user may, since the wait for
+        the record is the only place this walk looks at the screen during the job."""
+        self.answer_git_name_card()
+        rows = [r for r in self.records() if r.get('registered_at_ms', 0) >= sent[0]]
+        return max(rows, key=lambda r: r.get('registered_at_ms', 0)) if rows else None
+
     def open_settings(self):
         if not self.present_id('ef-rich-low'):
             self.ax('click', '--id', 'set-btn', '--first')
@@ -201,13 +214,15 @@ class LeaseModelWalk(stu_reminder_walk.StuReminderWalk):
             rows = [r for r in found if r['role'] == role]
             if not rows:
                 problems.append('no running Claude Code process for %s' % role)
+            # Every process of the role must carry the flags; a conversation that is open and
+            # was never spoken in has a process and no answer, so one answering process is enough.
+            if rows and not any(r['transcript']['answers'] for r in rows):
+                problems.append('no %s session has an answer in its transcript' % role)
             for r in rows:
                 if (r['model'], r['effort']) != (model, effort):
                     problems.append('%s (pid %d) was started with --model %s --effort %s, not %s %s' % (
                         role, r['pid'], r['model'], r['effort'], model, effort))
                 answers = r['transcript']['answers']
-                if not answers:
-                    problems.append('%s (session %s) has no answer in its transcript' % (role, r['session']))
                 # A row that records no effort says nothing either way; one that records another does.
                 for key in answers:
                     if model not in key.split(' ')[0] or key.split(' effort=')[1] not in (effort, 'None'):
