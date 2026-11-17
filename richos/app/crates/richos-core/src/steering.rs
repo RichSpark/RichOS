@@ -843,6 +843,9 @@ pub trait TurnCancel: Send + Sync {
     /// Apply a native model setting without canceling or replacing this session.
     fn set_model(&self, _model:crate::config::ModelChoice)->Result<bool,String> {Ok(false)}
 
+    /// Apply an effort level to this running session, the same way (round 86.1).
+    fn set_effort(&self, _effort:crate::config::EffortLevel)->Result<bool,String> {Ok(false)}
+
     /// Worker facts from this live session's own task frames.
     fn worker_status(&self) -> Option<crate::worker_status::WorkerStatusView> { None }
 
@@ -1151,6 +1154,13 @@ impl TurnControl {
     pub fn set_model(&self,model:crate::config::ModelChoice)->Result<(),String> {
         let handles:Vec<_>=self.inner.conversations.lock().unwrap().values().filter_map(|state|state.cancel.clone()).collect();
         for handle in handles {handle.set_model(model)?;}
+        Ok(())
+    }
+
+    /// The effort of live Rich sessions, by the same rule.
+    pub fn set_effort(&self,effort:crate::config::EffortLevel)->Result<(),String> {
+        let handles:Vec<_>=self.inner.conversations.lock().unwrap().values().filter_map(|state|state.cancel.clone()).collect();
+        for handle in handles {handle.set_effort(effort)?;}
         Ok(())
     }
 

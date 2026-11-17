@@ -7482,6 +7482,507 @@ body.bp-narrow .tl-user-bubble {
   }
 }
 
+/* =========================================================================================
+   ROUND 86 — THE EFFORT LEVEL, UNDER EACH ROW'S MODEL (CEO 2026-11-17).
+   richos-hq design/mockups/rounds/round-86 (README.md) is the design; main.js's ROUND 86
+   block builds the steps and owns the choice.
+
+   Five steps, Low to Max, each bar a little taller than the last, so "more" reads before a
+   word is read. The chosen level and every step under it are the ruled gold; the steps above
+   it are an outlined empty well. The pointer over a step previews it (an outlined gold ring on
+   the steps it would add, stripes on the ones it would take away) and its name and meaning
+   replace the chosen one's until the pointer leaves; pressing or dragging chooses. A short tick
+   under one step marks that model's default. Rising, the gold climbs the steps one after
+   another; reaching Max, one pass of light runs across all five (the model track's own sheen).
+
+   Contrast, COMPUTED over the open panel in Chromium with WCAG's relative-luminance math
+   (`audit/contrast.mjs`, results in `audit/contrast.json`); the table is in README.md.
+   ========================================================================================= */
+:root {
+  --ef-well: rgba(223, 228, 238, 0.5);
+}
+:root[data-theme="light"] {
+  --ef-well: rgba(12, 19, 34, 0.5);
+}
+.ef {
+  margin: 12px 0 2px;
+}
+.ef-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 0 0 6px;
+  font-size: 1rem;
+  line-height: 1.4;
+  color: var(--ink);
+}
+.ef-model {
+  display: inline-block;
+  font-weight: 600;
+}
+.ef-model.is-new {
+  animation: ef-model-in 0.32s cubic-bezier(0.3, 1.35, 0.45, 1) 1;
+}
+@keyframes ef-model-in {
+  from {
+    transform: translateY(5px);
+  }
+}
+.ef-name {
+  font-weight: 600;
+  white-space: nowrap;
+}
+.ef.is-peek .ef-name,
+.ef.is-peek .ef-say {
+  color: var(--ink-soft);
+}
+.ef-steps {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 8px;
+  height: 58px;
+  padding-bottom: 9px;
+  touch-action: none;
+  cursor: pointer;
+  isolation: isolate;
+}
+.ef-step {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+.ef-bar {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: calc(24% + var(--i) * 19%);
+  border-radius: 7px 7px 4px 4px;
+  background: var(--gold-soft);
+  box-shadow: inset 0 0 0 1.5px var(--ef-well);
+  overflow: hidden;
+  transition: background-color 0.2s ease, box-shadow 0.2s ease;
+}
+.ef.is-rising .ef-bar {
+  transition-delay: calc(var(--i) * 45ms);
+}
+.ef-step.is-filled .ef-bar {
+  background: var(--gold);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.16), 0 6px 14px -9px rgba(0, 0, 0, 0.6);
+}
+.ef-step.is-top .ef-bar {
+  animation: ef-pop 0.42s cubic-bezier(0.3, 1.5, 0.45, 1) 1;
+  transform-origin: 50% 100%;
+}
+@keyframes ef-pop {
+  from {
+    transform: scaleY(0.86);
+  }
+}
+/* The preview: a gold ring on the steps the pointer would add, stripes on the ones it would
+   take away. */
+.ef-step.is-peek .ef-bar {
+  box-shadow: inset 0 0 0 2px var(--gold);
+}
+.ef-step.is-drop .ef-bar {
+  background: repeating-linear-gradient(135deg, var(--gold) 0 4px, var(--gold-soft) 4px 8px);
+}
+/* That model's default: a short tick under its step. */
+.ef-step.is-default::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: -9px;
+  width: 14px;
+  height: 3px;
+  margin-left: -7px;
+  border-radius: 2px;
+  background: var(--ink-soft);
+}
+.ef-step:focus-visible {
+  outline: none;
+}
+.ef-step:focus-visible .ef-bar {
+  outline: 2px solid var(--gold);
+  outline-offset: 2px;
+}
+.ef-step:hover .ef-bar {
+  transform: translateY(-1px);
+}
+/* Reaching Max: one pass of light across every lit step. */
+.ef-bar::after {
+  content: "";
+  position: absolute;
+  inset: -40% 0;
+  transform: translateX(-130%);
+  background: linear-gradient(105deg, transparent 30%, rgba(255, 250, 235, 0.42) 50%, transparent 70%);
+  pointer-events: none;
+}
+.ef.is-max .ef-step.is-filled .ef-bar::after {
+  animation: seg-sheen 0.8s cubic-bezier(0.4, 0, 0.2, 1) calc(0.22s + var(--i) * 70ms) 1;
+}
+.ef-ends {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 6px 0 0;
+  font-size: 1rem;
+  line-height: 1.4;
+  color: var(--ink-soft);
+}
+.ef-say {
+  min-height: 2.9em;
+  margin: 6px 0 0;
+  font-size: 1rem;
+  line-height: 1.45;
+  color: var(--ink);
+}
+.md-row + .md-row {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+@media (prefers-reduced-motion: reduce) {
+  .ef-bar,
+  .ef.is-rising .ef-bar {
+    transition: none;
+  }
+  .ef-step.is-top .ef-bar,
+  .ef-model.is-new,
+  .ef.is-max .ef-step.is-filled .ef-bar::after {
+    animation: none;
+  }
+}
+
+/* =========================================================================================
+   ROUND 86.1 — THE DEFAULTS ARE THE RECOMMENDED LEVELS; MAX IS WARNED AGAINST (CEO 2026-11-17).
+   richos-hq design/mockups/rounds/round-86.1 (README.md) is the design; main.js's ROUND 86.1
+   parts own the words and the warning.
+
+   - One line under the section's title: the defaults are the recommended levels for nearly all
+     kinds of work, and raising them is generally not recommended.
+   - Under each row's steps, "Recommended" under that model's default step (the tick above it).
+   - A level above the recommended one leads its meaning with "Generally not recommended." in the
+     warning color; Max leads with "Not recommended for anything."
+   - Max carries a warning mark in its empty well; chosen, its bar is the warning color, not gold.
+   - Choosing Max opens a warning card over Settings.
+
+   Contrast, COMPUTED (`audit/contrast.mjs`, results in `audit/contrast.json`); table in README.md.
+   ========================================================================================= */
+:root {
+  --ef-max-ink: #0c1322;
+  --efw-scrim: rgba(5, 9, 18, 0.62);
+}
+:root[data-theme="light"] {
+  --ef-max-ink: #fdfcf8;
+  --efw-scrim: rgba(12, 19, 34, 0.38);
+}
+.ef-rec {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  margin: 4px 0 14px;
+  padding: 11px 13px 12px;
+  border-radius: 10px;
+  background: var(--gold-soft);
+  font-size: 1rem;
+  line-height: 1.45;
+  color: var(--ink);
+}
+.ef-rec b {
+  font-weight: 600;
+}
+.ef-rec-icon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  margin-top: 0;
+  border-radius: 50%;
+  background: var(--gold);
+  color: var(--on-gold);
+}
+.ef-say {
+  min-height: 4.35em;
+}
+.ef-caution {
+  font-weight: 600;
+  color: var(--attention);
+}
+.ef.is-peek .ef-caution,
+.ef[data-shown="max"] .ef-name {
+  color: var(--attention);
+}
+/* "Recommended" under the default step: centered under it, held inside the row at either end. */
+.ef-mark {
+  position: relative;
+  height: 1.4em;
+  margin: 3px 0 8px;
+  font-size: 1rem;
+  line-height: 1.4;
+}
+.ef-mark-label {
+  position: absolute;
+  top: 0;
+  left: calc((100% - 32px) / 5 * (var(--d, 0) + 0.5) + 8px * var(--d, 0));
+  transform: translateX(-50%);
+  font-weight: 600;
+  color: var(--ink);
+  white-space: nowrap;
+  transition: left 0.28s cubic-bezier(0.3, 1.2, 0.45, 1);
+}
+.ef[data-def="0"] { --d: 0; }
+.ef[data-def="1"] { --d: 1; }
+.ef[data-def="2"] { --d: 2; }
+.ef[data-def="3"] { --d: 3; }
+.ef[data-def="4"] { --d: 4; }
+.ef[data-def="0"] .ef-mark-label {
+  left: 0;
+  transform: none;
+}
+.ef-step.is-default::after {
+  background: var(--ink);
+}
+/* Max: a warning mark in its well before it is chosen; chosen, the warning color. */
+.ef-max-mark {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  margin: -9px 0 0 -9px;
+  width: 18px;
+  height: 18px;
+  color: var(--attention);
+  pointer-events: none;
+  transition: color 0.2s ease;
+}
+.ef-max-mark svg {
+  display: block;
+}
+.ef-step[data-l="max"].is-filled .ef-bar {
+  background: var(--attention);
+}
+.ef-step[data-l="max"].is-filled .ef-max-mark {
+  color: var(--ef-max-ink);
+}
+.ef.is-warned .ef-step[data-l="max"] .ef-bar {
+  animation: ef-warn-pulse 1.6s ease-in-out infinite;
+}
+@keyframes ef-warn-pulse {
+  50% {
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--attention) 30%, transparent);
+  }
+}
+
+/* The warning card, over Settings (inside its wrapper, so a press on it never closes Settings). */
+.efw {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  font-family: var(--font);
+}
+.efw[hidden] {
+  display: none;
+}
+.efw-scrim {
+  position: absolute;
+  inset: 0;
+  background: var(--efw-scrim);
+  backdrop-filter: blur(3px) saturate(0.8);
+  -webkit-backdrop-filter: blur(3px) saturate(0.8);
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+.efw-card {
+  position: relative;
+  width: min(520px, calc(100vw - 48px));
+  padding: 26px 30px 26px;
+  border-radius: 16px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--attention) 22%, transparent), 0 40px 90px -30px var(--shadow-strong);
+  overflow: hidden;
+  opacity: 0;
+  transform: translateY(14px) scale(0.97);
+  transition: opacity 0.2s ease, transform 0.32s cubic-bezier(0.3, 1.35, 0.45, 1);
+}
+.efw-card::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 4px;
+  background: repeating-linear-gradient(135deg, var(--attention) 0 10px, transparent 10px 18px);
+}
+.efw.is-open .efw-scrim {
+  opacity: 1;
+}
+.efw.is-open .efw-card {
+  opacity: 1;
+  transform: none;
+}
+.efw.is-leaving .efw-scrim,
+.efw.is-leaving .efw-card {
+  opacity: 0;
+  transition-duration: 0.16s;
+}
+.efw-top {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  column-gap: 14px;
+  align-items: center;
+}
+.efw-icon {
+  grid-row: span 2;
+  display: grid;
+  place-items: center;
+  width: 52px;
+  height: 52px;
+  border-radius: 14px;
+  color: var(--attention);
+  background: color-mix(in srgb, var(--attention) 14%, transparent);
+  box-shadow: inset 0 0 0 1.5px var(--attention);
+}
+.efw.is-open .efw-icon svg {
+  animation: efw-nudge 0.5s cubic-bezier(0.36, 0.07, 0.19, 0.97) 0.18s 1;
+}
+@keyframes efw-nudge {
+  20%, 60% { transform: rotate(-9deg); }
+  40%, 80% { transform: rotate(9deg); }
+}
+.efw-title {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  line-height: 1.2;
+  color: var(--attention);
+}
+.efw-where {
+  font-size: 1rem;
+  line-height: 1.35;
+  color: var(--ink-soft);
+}
+.efw-body {
+  margin-top: 18px;
+}
+.efw-lead {
+  margin: 0;
+  font-family: var(--font-serif);
+  font-size: 1.75rem;
+  font-weight: 400;
+  line-height: 1.18;
+  letter-spacing: -0.005em;
+  color: var(--ink);
+}
+.efw-lead strong {
+  font-family: var(--font);
+  font-size: 0.86em;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--attention);
+}
+.efw-why {
+  margin: 12px 0 0;
+  font-size: 1.0625rem;
+  line-height: 1.5;
+  color: var(--ink);
+}
+.efw-rec {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  margin: 16px 0 0;
+  padding: 11px 13px;
+  border-radius: 10px;
+  background: var(--gold-soft);
+  font-size: 1rem;
+  line-height: 1.45;
+  color: var(--ink);
+}
+.efw-check {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--gold);
+  color: var(--on-gold);
+}
+.efw-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 22px;
+}
+.efw-actions button {
+  min-height: 44px;
+  padding: 0 20px;
+  border-radius: 999px;
+  font: 600 1rem/1 var(--font);
+  cursor: pointer;
+  transition: transform 0.12s ease, box-shadow 0.16s ease, background-color 0.16s ease;
+}
+.efw-keep {
+  flex: 1 1 auto;
+  border: 0;
+  background: var(--gold);
+  color: var(--on-gold);
+  box-shadow: 0 10px 22px -14px rgba(0, 0, 0, 0.7);
+}
+.efw-keep:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 14px 26px -14px rgba(0, 0, 0, 0.75), inset 0 0 0 999px rgba(255, 255, 255, 0.08);
+}
+.efw-anyway {
+  border: 1.5px solid var(--ink-soft);
+  background: transparent;
+  color: var(--ink);
+}
+.efw-anyway:hover {
+  border-color: var(--attention);
+  color: var(--ink);
+}
+.efw-actions button:active {
+  transform: translateY(1px);
+}
+.efw-actions button:focus-visible {
+  outline: 2px solid var(--gold);
+  outline-offset: 3px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .efw-card,
+  .efw-scrim,
+  .ef-mark-label {
+    transition: none;
+  }
+  .efw.is-open .efw-icon svg,
+  .ef.is-warned .ef-step[data-l="max"] .ef-bar {
+    animation: none;
+  }
+}
+/* THE APP, NOT THE ROUND: round 86.1 was drawn at 1440 by 900 at the default Text size. The app
+   goes down to 1024 by 700 and up to 150% Text size, where "High · recommended for Opus" beside
+   "Effort on Opus" is wider than the column (rich-model.js check 6: it left its column and the
+   panel scrolled 81px sideways). There the level's name moves under the label, and wraps if
+   the column is narrower than the name itself. At the round's size nothing moves. */
+.ef-head {
+  flex-wrap: wrap;
+}
+.ef-name {
+  white-space: normal;
+}
+
 /* A note INSIDE the raw pane: today only the truncation notice, which sits under the prefix
    it is about. A prefix that looks whole is worse than one that says it is not. */
 .tl-tech-note {

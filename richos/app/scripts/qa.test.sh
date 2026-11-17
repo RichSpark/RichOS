@@ -93,6 +93,9 @@
 #   CF1-CF4 context-figure-probe: a claude whose own context figure equals its last request's
 #           exits 0 with the three turns' rows; one whose figure is its turn's sum exits 1; one
 #           that gives no figure and a missing binary exit 2, against a scripted claude
+#   LE1-LE4 live-effort-probe: a claude that takes the model and effort sent to its running
+#           session exits 0 with both turns' rows; one that keeps its first effort exits 1; one
+#           that refuses the effort request and a missing binary exit 2, against a scripted claude
 #   LR1-LR5 lease-retention-probe: a lease that keeps everything while the default control
 #           sweeps exits 0; a lease that deletes exits 1; no sweep anywhere exits 2; no binary
 #           is refused; a lease start that dies before system/init exits 2, against a
@@ -106,7 +109,7 @@
 #
 # run-tests: no-host-screen: its only capture/keystroke references are the strings it asserts those two tools REFUSE to act on, and its frames are committed PNG fixtures
 # run-tests: inputs richos/app/scripts/qa.test.sh richos/app/scripts/qa richos/mobile/conformance/vectors/fingerprint.json richos/mobile/native-ios/UITests/PhysicalDeviceTests.swift
-# run-tests: covers richos/app/scripts/qa/usage-shape.sh richos/app/scripts/qa/context-figure-probe.py richos/app/scripts/qa/lease-retention-probe.py richos/app/scripts/qa/stop-probe.py richos/app/scripts/qa/pair-words.py richos/app/scripts/qa/contrast.py richos/app/scripts/qa/frame.py richos/app/scripts/qa/lib/qaimg.py richos/app/scripts/qa/lib/qaocr.py richos/app/scripts/qa/ocr-find.py richos/app/scripts/qa/ocr-find.sh richos/app/scripts/qa/ocr-gate.sh richos/app/scripts/qa/ocr-read.py richos/app/scripts/qa/ocr-watch.sh richos/app/scripts/qa/redact.py richos/app/scripts/qa/timeline.py richos/app/scripts/qa/timeline-bounds.test.py richos/app/scripts/qa/wait-for.sh richos/app/scripts/qa/phone-client.mjs richos/app/scripts/qa/flake-rate.sh richos/app/scripts/qa/phone-android.py richos/app/scripts/qa/lab-ledger.py richos/app/scripts/qa/lab-pause.py richos/app/scripts/qa/step-mark.py richos/app/scripts/qa/ledger-timeline.py richos/app/scripts/qa/native-transcript.py richos/app/scripts/qa/hidden-send-try.py richos/app/scripts/qa/tunnel-requests.py richos/app/scripts/qa/fixtures/make-fixtures.py richos/app/scripts/qa/phone-ios.py richos/app/scripts/qa/stall-run.py richos/app/scripts/qa/under-load.py richos/app/scripts/qa/busy-sample.py richos/app/scripts/qa/lib/busy-sample/sitecustomize.py richos/app/scripts/qa/slow-shutdown.py richos/app/scripts/qa/ocr-cache.test.py richos/app/scripts/qa/child-lifetime.test.py richos/app/scripts/qa/trust-reading.test.py richos/app/scripts/qa/crash-reading.test.py richos/app/scripts/qa/device-launch.test.py richos/app/scripts/qa/lab-pause.test.py richos/app/scripts/qa/tunnel-requests.test.py richos/app/scripts/qa/wait-turn.py richos/app/scripts/qa/wait-turn.test.py richos/app/scripts/qa/rich-reply-probe.py richos/app/scripts/qa/rich-reply-probe.test.py richos/app/scripts/qa/routing-probe.py richos/app/scripts/qa/routing-probe.test.py richos/app/scripts/qa/phone-ios-run.test.py richos/app/scripts/qa/speech-wav.py richos/mobile/native-ios/UITests/PhysicalDeviceTests.swift
+# run-tests: covers richos/app/scripts/qa/usage-shape.sh richos/app/scripts/qa/context-figure-probe.py richos/app/scripts/qa/live-effort-probe.py richos/app/scripts/qa/lease-retention-probe.py richos/app/scripts/qa/stop-probe.py richos/app/scripts/qa/pair-words.py richos/app/scripts/qa/contrast.py richos/app/scripts/qa/frame.py richos/app/scripts/qa/lib/qaimg.py richos/app/scripts/qa/lib/qaocr.py richos/app/scripts/qa/ocr-find.py richos/app/scripts/qa/ocr-find.sh richos/app/scripts/qa/ocr-gate.sh richos/app/scripts/qa/ocr-read.py richos/app/scripts/qa/ocr-watch.sh richos/app/scripts/qa/redact.py richos/app/scripts/qa/timeline.py richos/app/scripts/qa/timeline-bounds.test.py richos/app/scripts/qa/wait-for.sh richos/app/scripts/qa/phone-client.mjs richos/app/scripts/qa/flake-rate.sh richos/app/scripts/qa/phone-android.py richos/app/scripts/qa/lab-ledger.py richos/app/scripts/qa/lab-pause.py richos/app/scripts/qa/step-mark.py richos/app/scripts/qa/ledger-timeline.py richos/app/scripts/qa/native-transcript.py richos/app/scripts/qa/hidden-send-try.py richos/app/scripts/qa/tunnel-requests.py richos/app/scripts/qa/fixtures/make-fixtures.py richos/app/scripts/qa/phone-ios.py richos/app/scripts/qa/stall-run.py richos/app/scripts/qa/under-load.py richos/app/scripts/qa/busy-sample.py richos/app/scripts/qa/lib/busy-sample/sitecustomize.py richos/app/scripts/qa/slow-shutdown.py richos/app/scripts/qa/ocr-cache.test.py richos/app/scripts/qa/child-lifetime.test.py richos/app/scripts/qa/trust-reading.test.py richos/app/scripts/qa/crash-reading.test.py richos/app/scripts/qa/device-launch.test.py richos/app/scripts/qa/lab-pause.test.py richos/app/scripts/qa/tunnel-requests.test.py richos/app/scripts/qa/wait-turn.py richos/app/scripts/qa/wait-turn.test.py richos/app/scripts/qa/rich-reply-probe.py richos/app/scripts/qa/rich-reply-probe.test.py richos/app/scripts/qa/routing-probe.py richos/app/scripts/qa/routing-probe.test.py richos/app/scripts/qa/phone-ios-run.test.py richos/app/scripts/qa/speech-wav.py richos/mobile/native-ios/UITests/PhysicalDeviceTests.swift
 set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -155,7 +158,7 @@ python3 -c 'import PIL' >/dev/null 2>&1 && HAVE_PIL=1
 echo ""
 echo "=== H. every tool answers for itself ==="
 for t in contrast.py frame.py redact.py timeline.py ocr-gate.sh ocr-find.sh \
-         ocr-watch.sh wait-for.sh phone-client.mjs flake-rate.sh phone-android.py lab-ledger.py lab-pause.py step-mark.py ledger-timeline.py wait-turn.py rich-reply-probe.py routing-probe.py native-transcript.py hidden-send-try.py phone-ios.py pair-words.py usage-shape.sh context-figure-probe.py lease-retention-probe.py stop-probe.py speech-wav.py fixtures/make-fixtures.py; do
+         ocr-watch.sh wait-for.sh phone-client.mjs flake-rate.sh phone-android.py lab-ledger.py lab-pause.py step-mark.py ledger-timeline.py wait-turn.py rich-reply-probe.py routing-probe.py native-transcript.py hidden-send-try.py phone-ios.py pair-words.py usage-shape.sh context-figure-probe.py live-effort-probe.py lease-retention-probe.py stop-probe.py speech-wav.py fixtures/make-fixtures.py; do
   if [ ! -x "$QA/$t" ]; then
     bad "H $t is executable" "not present or not executable at $QA/$t"
     continue
@@ -1720,6 +1723,54 @@ export FAKE_CONTEXT=silent; run "$CF" --claude "$TMP/fake-context-claude" --cwd 
 expect "CF3 a claude that gives no context figure: exit 2, nothing to compare" 2 "verdict: no figure to compare"
 run "$CF" --claude "$TMP/no-such-claude" --cwd "$TMP/cf-cwd"
 expect "CF4 no claude binary is refused, exit 2" 2 "no claude to ask"
+
+echo "=== LE. live-effort-probe: does a running session take a new effort level and model? ==="
+LE="$QA/live-effort-probe.py"
+# A scripted claude: it starts at its --model and --effort, takes set_model and (unless
+# FAKE_EFFORT=stuck) apply_flag_settings' effortLevel, refuses the latter when FAKE_EFFORT=refuse,
+# and writes each turn's answer into its session's transcript under FAKE_PROJECTS, as Claude
+# Code does: the model's full name and the effort the turn ran at.
+cat > "$TMP/fake-effort-claude" <<'FAKE'
+#!/usr/bin/env python3
+import json, os, sys
+def send(v): print(json.dumps(v), flush=True)
+args = sys.argv[1:]
+flag = lambda name: args[args.index(name) + 1]
+model, effort, session = flag("--model"), flag("--effort"), flag("--session-id")
+folder = os.path.join(os.environ["FAKE_PROJECTS"], "scripted")
+os.makedirs(folder, exist_ok=True)
+said = os.environ.get("FAKE_EFFORT", "takes")
+for line in sys.stdin:
+    v = json.loads(line)
+    request = v.get("request") or {}
+    ok = {"type": "control_response", "response": {"subtype": "success", "request_id": v.get("request_id"), "response": {}}}
+    if request.get("subtype") == "initialize":
+        send(ok)
+    elif request.get("subtype") == "set_model":
+        model = request["model"]
+        send(ok)
+    elif request.get("subtype") == "apply_flag_settings":
+        if said == "refuse":
+            send({"type": "control_response", "response": {"subtype": "error", "request_id": v["request_id"], "error": "scripted refusal"}})
+            continue
+        if said != "stuck":
+            effort = request["settings"]["effortLevel"]
+        send(ok)
+    elif v.get("type") == "user":
+        with open(os.path.join(folder, session + ".jsonl"), "a") as out:
+            out.write(json.dumps({"type": "assistant", "effort": effort, "message": {"model": "claude-%s-9-9" % model}}) + "\n")
+        send({"type": "result", "subtype": "success"})
+FAKE
+chmod 755 "$TMP/fake-effort-claude"
+export FAKE_PROJECTS="$TMP/le-projects"
+run "$LE" --claude "$TMP/fake-effort-claude" --cwd "$TMP/le-cwd" --projects "$FAKE_PROJECTS" --from fable:low --to opus:high --wait 5
+expect "LE1 a session that takes the new model and effort: exit 0, the second turn's row" 0 "$(printf '2\topus:high\tclaude-opus-9-9\thigh')"
+export FAKE_EFFORT=stuck; run "$LE" --claude "$TMP/fake-effort-claude" --cwd "$TMP/le-cwd" --projects "$FAKE_PROJECTS" --from fable:low --to opus:high --wait 5
+expect "LE2 a session that keeps the effort it started at: exit 1, said as NOT answering at what was sent" 1 "verdict: the running session did NOT answer at what was sent"
+export FAKE_EFFORT=refuse; run "$LE" --claude "$TMP/fake-effort-claude" --cwd "$TMP/le-cwd" --projects "$FAKE_PROJECTS" --wait 5; unset FAKE_EFFORT
+expect "LE3 a refused effort request: exit 2, naming the request" 2 "control request apply_flag_settings was not confirmed"
+run "$LE" --claude "$TMP/no-such-claude" --cwd "$TMP/le-cwd" --projects "$FAKE_PROJECTS"; unset FAKE_PROJECTS
+expect "LE4 no claude binary is refused, exit 2" 2 "no claude to ask"
 
 echo "=== LR. lease-retention-probe: does a lease-shaped claude start delete old transcripts? ==="
 LR="$QA/lease-retention-probe.py"

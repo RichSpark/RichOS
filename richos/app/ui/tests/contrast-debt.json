@@ -473,6 +473,16 @@
       "checkedOverShell": 24,
       "consideredOverShell": 16,
       "//": "Measured with the shipping driver and contrast probe in light and dark on the integrated branch. Includes the paused-prompts chip and Preparing notice."
+    },
+    "effort-above-and-max": {
+      "checkedOverShell": 180,
+      "consideredOverShell": 142,
+      "//": "Round 86.1 (2026-11-17), measured with the shipping driver and contrast probe in light and dark: 256 of 1242 against the shell's 102 of 1100 in the same run."
+    },
+    "effort-max-warning": {
+      "checkedOverShell": 78,
+      "consideredOverShell": 142,
+      "//": "Round 86.1 (2026-11-17), measured with the shipping driver and contrast probe in light and dark: 92 of 1242 against the shell's 102 of 1100 in the same run. The page under the warning is behind the dialog's own veil in both themes, so it is filed obscured here and measured on effort-above-and-max and the other Settings walks; what is measured here is the card."
     }
   },
   "signatures": {}

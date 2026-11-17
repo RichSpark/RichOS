@@ -1744,10 +1744,20 @@ impl WorkHost {
         Ok(())
     }
     fn set_backend_model(backend:&Backend,model:crate::config::ModelChoice)->Result<(),String> {
-        let handle={let inner=backend.inner.lock().unwrap();inner.cancel.clone().or_else(||inner.peer_stopper.as_ref()
-            .filter(|(session,_)|inner.lease_session.as_ref()==Some(session)).map(|(_,handle)|handle.clone()))};
-        if let Some(handle)=handle {handle.set_model(model)?;}
+        if let Some(handle)=Self::backend_handle(backend) {handle.set_model(model)?;}
         Ok(())
+    }
+    /// The effort of the live work sessions, sent the way the model is (round 86.1).
+    pub fn set_effort(&self,effort:crate::config::EffortLevel)->Result<(),String> {
+        let backends:Vec<_>=self.backends.lock().unwrap().values().cloned().collect();
+        for backend in backends {
+            if let Some(handle)=Self::backend_handle(&backend) {handle.set_effort(effort)?;}
+        }
+        Ok(())
+    }
+    fn backend_handle(backend:&Backend)->Option<Arc<dyn TurnCancel>> {
+        let inner=backend.inner.lock().unwrap();inner.cancel.clone().or_else(||inner.peer_stopper.as_ref()
+            .filter(|(session,_)|inner.lease_session.as_ref()==Some(session)).map(|(_,handle)|handle.clone()))
     }
     /// Is Stu's lease on another account than the one in use? Two ids, no decision: the idle
     /// check's question ([`ACCOUNT_CHECK_EVERY`]).

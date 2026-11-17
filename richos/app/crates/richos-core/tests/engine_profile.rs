@@ -748,41 +748,56 @@ fn the_team_digest_moves_with_what_a_lease_registers_and_nothing_else() {
     assert_eq!(digest(), fresh, "retiring the teammate gives the stock team's digest again");
 }
 
-/// CEO 2026-10-14 prioritizes immediate replies over effort. Each role's flags come
-/// from the one function `spawn_with_tools` appends to the child's argument vector, given the
-/// profile every product lease is spawned with, which reads `config.json` in the data folder.
+/// CEO 2026-11-17: Rich defaults to Fable at low effort and Stu to Fable at medium effort.
+/// Rich's recommended level is low on either model (2026-10-14: immediate replies first) and
+/// Stu's on Opus is high (§119); a level chosen in Settings replaces it (round 86.1). Each role's flags come from the one function
+/// `spawn_with_tools` appends to the child's argument vector, given the profile every product
+/// lease is spawned with, which reads `config.json` in the data folder.
 #[test]
-fn each_role_keeps_its_model_with_low_effort_for_replies_and_high_for_work() {
+fn each_role_defaults_to_fable_and_its_effort_follows_the_role_and_the_model() {
     use richos_core::config::{ConfigStore, ModelChoice};
     use richos_core::native::lease_model_args;
     let rich_opus = ["--model", "opus", "--effort", "low"];
     let rich_fable = ["--model", "fable", "--effort", "low"];
     let stu_opus = ["--model", "opus", "--effort", "high"];
-    let stu_fable = ["--model", "fable", "--effort", "high"];
+    let stu_fable = ["--model", "fable", "--effort", "medium"];
     let f = Scratch::new();
 
-    // No setting written: both on Opus, with effort appropriate to their role.
+    // No setting written: both on Fable, low effort for replies and medium for work.
     let profile = prepare_fixture(&engine(), &f.0, f.runtime()).unwrap();
-    assert_eq!(lease_model_args(LeaseRole::Conversation, Some(&profile)), rich_opus, "Rich's default");
-    assert_eq!(lease_model_args(LeaseRole::Work, Some(&profile)), stu_opus, "Stu's default");
+    assert_eq!(lease_model_args(LeaseRole::Conversation, Some(&profile)), rich_fable, "Rich's default");
+    assert_eq!(lease_model_args(LeaseRole::Work, Some(&profile)), stu_fable, "Stu's default");
 
-    // Rich switched to Fable; Stu stays on Opus. Read at the next spawn's `prepare`.
-    ConfigStore::open(f.0.join("config.json")).unwrap().set_rich_model(ModelChoice::Fable).unwrap();
-    let profile = prepare_fixture(&engine(), &f.0, f.runtime()).unwrap();
-    assert_eq!(lease_model_args(LeaseRole::Conversation, Some(&profile)), rich_fable, "Rich set to Fable");
-    assert_eq!(lease_model_args(LeaseRole::Work, Some(&profile)), stu_opus, "Stu was not switched");
-
-    // Both on Fable.
-    ConfigStore::open(f.0.join("config.json")).unwrap().set_stu_model(ModelChoice::Fable).unwrap();
-    let profile = prepare_fixture(&engine(), &f.0, f.runtime()).unwrap();
-    assert_eq!(lease_model_args(LeaseRole::Conversation, Some(&profile)), rich_fable);
-    assert_eq!(lease_model_args(LeaseRole::Work, Some(&profile)), stu_fable, "Stu set to Fable");
-
-    // And back: Rich returned to Opus, Stu keeps Fable.
+    // Rich switched to Opus; Stu stays on Fable. Read at the next spawn's `prepare`.
     ConfigStore::open(f.0.join("config.json")).unwrap().set_rich_model(ModelChoice::Opus).unwrap();
     let profile = prepare_fixture(&engine(), &f.0, f.runtime()).unwrap();
-    assert_eq!(lease_model_args(LeaseRole::Conversation, Some(&profile)), rich_opus, "Rich switched back");
-    assert_eq!(lease_model_args(LeaseRole::Work, Some(&profile)), stu_fable);
+    assert_eq!(lease_model_args(LeaseRole::Conversation, Some(&profile)), rich_opus, "Rich set to Opus");
+    assert_eq!(lease_model_args(LeaseRole::Work, Some(&profile)), stu_fable, "Stu was not switched");
+
+    // Both on Opus: Stu gets what Opus users had before, high effort.
+    ConfigStore::open(f.0.join("config.json")).unwrap().set_stu_model(ModelChoice::Opus).unwrap();
+    let profile = prepare_fixture(&engine(), &f.0, f.runtime()).unwrap();
+    assert_eq!(lease_model_args(LeaseRole::Conversation, Some(&profile)), rich_opus);
+    assert_eq!(lease_model_args(LeaseRole::Work, Some(&profile)), stu_opus, "Stu set to Opus");
+
+    // And back: Rich returned to Fable, Stu keeps Opus.
+    ConfigStore::open(f.0.join("config.json")).unwrap().set_rich_model(ModelChoice::Fable).unwrap();
+    let profile = prepare_fixture(&engine(), &f.0, f.runtime()).unwrap();
+    assert_eq!(lease_model_args(LeaseRole::Conversation, Some(&profile)), rich_fable, "Rich switched back");
+    assert_eq!(lease_model_args(LeaseRole::Work, Some(&profile)), stu_opus);
+
+    // Round 86.1: a level chosen in Settings for a row on its model is what that row's process
+    // is started with, and the other model's level waits for the way back.
+    use richos_core::config::{EffortChoices, EffortLevel, LeaseModels};
+    let chosen = EffortChoices { rich_fable: EffortLevel::Medium, stu_opus: EffortLevel::Xhigh, stu_fable: EffortLevel::Max, ..EffortChoices::default() };
+    let models = LeaseModels { rich: ModelChoice::Fable, stu: ModelChoice::Opus };
+    ConfigStore::open(f.0.join("config.json")).unwrap().set_lease_choices(models, chosen, &[]).unwrap();
+    let profile = prepare_fixture(&engine(), &f.0, f.runtime()).unwrap();
+    assert_eq!(lease_model_args(LeaseRole::Conversation, Some(&profile)), ["--model", "fable", "--effort", "medium"]);
+    assert_eq!(lease_model_args(LeaseRole::Work, Some(&profile)), ["--model", "opus", "--effort", "xhigh"]);
+    ConfigStore::open(f.0.join("config.json")).unwrap().set_stu_model(ModelChoice::Fable).unwrap();
+    let profile = prepare_fixture(&engine(), &f.0, f.runtime()).unwrap();
+    assert_eq!(lease_model_args(LeaseRole::Work, Some(&profile)), ["--model", "fable", "--effort", "max"]);
 }
 
 #[test]
