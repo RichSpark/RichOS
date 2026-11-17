@@ -604,16 +604,39 @@ if (SUITE_ONLY) {
   console.log(`${SUITES.length} suite(s) discovered: ${SUITES.join(", ")}\n`);
 }
 
+// EVERY SUITE HAS A LIMIT OF ITS OWN, so one that never exits costs that limit, not the gate.
+// Run 20261117T180249Z-3ac38bbc: rich-files.js, 26 s alone, sat on an unbounded await in
+// shard 3 from about 18:34 until the build's 3300 s deadline killed the whole UI gate at 18:58.
+// Shard 3 wrote no receipts, seven suites never ran, and the build's solo retry of a red suite
+// never started, because it runs only after the sharded command returns. Stopped here, the
+// suite is red with exit 124 in its receipt, the shard goes on, and the retry gets its turn.
+// 900 s: the slowest suite measured is contrast.js at 662 s (2026-11-17 05:53Z run, all gates
+// running at once), and the longest shard is about 2,110 s, so a stopped suite plus its retry
+// still fits inside the gate's 3300 s. SIGKILL, because a suite stuck in a Playwright call may
+// not act on SIGTERM; its browser exits when the suite's end of the pipe closes.
+const SUITE_LIMIT_SECONDS = (() => {
+  const v = Number(process.env.RICHOS_UI_SUITE_LIMIT_SECONDS);
+  return Number.isFinite(v) && v > 0 ? v : 900;
+})();
 const exited = new Map();
 const seconds = new Map();
+const stopped = new Map();
 for (const suite of MINE) {
   const t0 = Date.now();
   const r = spawnSync(process.execPath, [path.join(__dirname, suite)], {
     stdio: "inherit",
     env: Object.assign({}, process.env, { RICHOS_UI_TESTS_LEDGER: ledgerFile }),
+    timeout: SUITE_LIMIT_SECONDS * 1000,
+    killSignal: "SIGKILL",
   });
   seconds.set(suite, (Date.now() - t0) / 1000);
-  exited.set(suite, r.status === null ? 1 : r.status);
+  if (r.error && r.error.code === "ETIMEDOUT") {
+    stopped.set(suite, `no exit within its limit of ${SUITE_LIMIT_SECONDS} s; run.js stopped it`);
+    console.log(`\n  STOPPED  ${suite}: ${stopped.get(suite)}\n`);
+    exited.set(suite, 124);
+  } else {
+    exited.set(suite, r.status === null ? 1 : r.status);
+  }
 }
 
 // ---------------------------------------------------------------------------------------
@@ -694,6 +717,13 @@ function gate(planned, data, opts) {
           `a suite that did not run cannot be counted as one that passed.`
       );
       console.log(`  NO RECEIPT      ${suite} (${declared} declared)`);
+      continue;
+    }
+
+    // STOPPED AT ITS LIMIT: red under its own name, so the build's solo retry picks it up.
+    if (entry.stopped) {
+      fault(suite, `${suite}: STOPPED, ${entry.stopped}. A suite that never exits has an await nothing bounds.`);
+      console.log(`  STOPPED         ${suite} — ${entry.stopped} (exit ${status})`);
       continue;
     }
 
@@ -1058,6 +1088,7 @@ function runCoverage(dir) {
       seconds: r.seconds,
       shard: r.shard,
       commit: r.commit,
+      stopped: r.stopped,
     });
   }
 
@@ -1162,6 +1193,7 @@ for (const suite of MINE) {
     records: bySuite.get(suite) || [],
     seconds: seconds.get(suite),
     shard: SHARD ? `${SHARD.index}/${SHARD.total}` : SUITE_ONLY ? "alone" : null,
+    stopped: stopped.get(suite),
   });
 }
 
@@ -1184,6 +1216,7 @@ if (RECEIPTS) {
           seconds: Number((d.seconds || 0).toFixed(1)),
           declared: DECLARED.get(suite),
           records: d.records,
+          ...(d.stopped ? { stopped: d.stopped } : {}),
         },
         null,
         2
