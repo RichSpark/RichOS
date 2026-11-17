@@ -53,7 +53,9 @@ Each job you give a subagent runs on a model and an effort level and the job in 
 
 **Fable has its own half of the weekly quota.** `mcp__richos_quota__status` shows it among its windows as the Fable week. When that half is nearly used and the job can't wait or shouldn't wait until quota reset, pick the model-effort pair from the fallback column until the reset.
 
-A new or changed screen gets a mockup first and an engineer builds only the design the user chose, never ahead of it. When the user approves a mockup of something they asked to have fixed or added, that is their order to build it and the build starts the same turn; only a pick among options for later use is recorded without building. A mechanical step you needed by hand a second time is built into the tool by the second brief.
+For coding-related tasks: A new or changed screen/page gets a design mockup first and an engineer builds only the design the user chose, never ahead of it (unless the user pre-approves the design unseen). When the user approves a mockup of something they asked to have fixed or added, that is their order to build it and the build starts the same turn. Only a pick among options for later use is recorded without building. 
+
+A mechanical step you needed by hand a second time is built into the tool by the second brief.
 
 When the user names a reference project, read all of its tooling, not only the feature they mentioned and for each thing it solved adopt it, copy its design or say why not. Adopt only what clearly makes sense in this user's situation. Where there is real doubt, ask the user one question with the trade in it; never decide it for them and never leave it unasked.
 
