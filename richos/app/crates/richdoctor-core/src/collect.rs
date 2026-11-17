@@ -717,7 +717,8 @@ fn richfiles_timing(scope: &Scope, ctx: &Context, budget: &mut u64) -> Item {
         let confirmed = record["confirmed"].as_u64()?;
         if id.len() != 36 || !id.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-')
             || build.len() > 40 || !build.bytes().all(|b| b.is_ascii_alphanumeric() || b".-+".contains(&b))
-            || !matches!(operation, "listing" | "copy" | "move" | "recovery" | "gitHistory" | "gitComparison")
+            || !matches!(operation, "listing" | "copy" | "move" | "recovery" | "gitHistory" | "gitComparison"
+                | "glanceDisplay" | "glanceDecode" | "glanceFolder" | "glancePreview")
             || !matches!(outcome, "complete" | "issues" | "canceled" | "unavailable" | "interrupted")
             || confirmed > total {
             return None;
@@ -948,12 +949,16 @@ mod tests {
             "confirmed": 290,
             "path": "/Users/person/Private/Customer names"
         });
-        write(&scope.logs_root().join("richfiles-timing.jsonl"), &record.to_string());
+        let mut glance = record.clone();
+        glance["operation"] = serde_json::json!("glanceDecode");
+        glance["outcome"] = serde_json::json!("issues");
+        write(&scope.logs_root().join("richfiles-timing.jsonl"), &format!("{record}\n{glance}"));
         let items = collect(Category::Configuration, &scope, &Context::default(), 0);
         let timing = items.iter().find(|item| item.source == "RichFiles timing log").unwrap();
         assert_eq!(timing.status, Status::Collected);
         assert_eq!(timing.coverage, Coverage::InWindow);
         assert!(timing.text.contains("outcome=canceled worker=145ms first_rows=32ms confirmed=290/300"));
+        assert!(timing.text.contains("operation=glanceDecode outcome=issues"));
         assert!(!timing.text.contains("Customer names"));
     }
 

@@ -1460,6 +1460,14 @@ struct BrowserView: View {
             }
             return
         }
+        if entries.count == 1 && first.kind == .regularFile && GlanceFiles.supports(first.url),
+           let viewer = RichFilesInstallation.glanceApplication {
+            Task {
+                do { _ = try await NSWorkspace.shared.open([first.url], withApplicationAt: viewer, configuration: .init()) }
+                catch { feedback = "RichGlance could not open this image. You can choose another app in Open With." }
+            }
+            return
+        }
         Task {
             for entry in entries {
                 if entry.kind == .directory { model.newTab(entry.url) }

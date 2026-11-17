@@ -8,12 +8,14 @@ let package = Package(
         .library(name: "RichFilesCore", targets: ["RichFilesCore"]),
         .library(name: "RichFilesBrowser", targets: ["RichFiles"]),
         .library(name: "RichFilesRail", type: .dynamic, targets: ["RichFilesRail"]),
-        .executable(name: "RichFiles", targets: ["RichFilesApp"])
+        .executable(name: "RichFiles", targets: ["RichFilesApp"]),
+        .executable(name: "RichGlance", targets: ["RichGlance"])
     ],
     targets: [
         .target(name: "RichFilesCore"),
         .target(name: "RichFiles", dependencies: ["RichFilesCore"]),
         .executableTarget(name: "RichFilesApp", dependencies: ["RichFiles"]),
+        .executableTarget(name: "RichGlance", dependencies: ["RichFilesCore"]),
         .target(name: "RichFilesRail", dependencies: ["RichFiles"]),
         .testTarget(name: "RichFilesCoreTests", dependencies: ["RichFilesCore"]),
         .testTarget(name: "RichFilesTests", dependencies: ["RichFiles", "RichFilesCore"])

@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key><string>en</string>
+    <key>CFBundleDisplayName</key><string>RichGlance</string>
+    <key>CFBundleExecutable</key><string>RichGlance</string>
+    <key>CFBundleIdentifier</key><string>app.richos.richglance</string>
+    <key>CFBundleIconFile</key><string>RichGlance.icns</string>
+    <key>CFBundleName</key><string>RichGlance</string>
+    <key>CFBundlePackageType</key><string>APPL</string>
+    <key>CFBundleShortVersionString</key><string>1.0.0</string>
+    <key>CFBundleVersion</key><string>1</string>
+    <key>LSApplicationCategoryType</key><string>public.app-category.photography</string>
+    <key>LSMinimumSystemVersion</key><string>13.0</string>
+    <key>LSMultipleInstancesProhibited</key><true/>
+    <key>CFBundleDocumentTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeName</key><string>PNG or JPEG Image</string>
+            <key>CFBundleTypeRole</key><string>Viewer</string>
+            <key>LSHandlerRank</key><string>Alternate</string>
+            <key>LSItemContentTypes</key><array><string>public.png</string><string>public.jpeg</string></array>
+        </dict>
+    </array>
+    <key>NSDesktopFolderUsageDescription</key>
+    <string>RichGlance needs access to show nearby images on your Desktop.</string>
+    <key>NSDocumentsFolderUsageDescription</key>
+    <string>RichGlance needs access to show nearby images in Documents.</string>
+    <key>NSDownloadsFolderUsageDescription</key>
+    <string>RichGlance needs access to show nearby images in Downloads.</string>
+    <key>NSNetworkVolumesUsageDescription</key>
+    <string>RichGlance needs access to show nearby images on network shares.</string>
+    <key>NSRemovableVolumesUsageDescription</key>
+    <string>RichGlance needs access to show nearby images on external drives.</string>
+</dict>
+</plist>

@@ -3,6 +3,11 @@ import RichFiles
 import SwiftUI
 import WebKit
 
+@_cdecl("richfiles_register_glance")
+public func registerRichGlance() {
+    RichFilesInstallation.registerGlance()
+}
+
 @_cdecl("richfiles_rail_place")
 public func placeRichFilesRail(_ webViewPointer: UnsafeMutableRawPointer?, _ left: Double, _ top: Double,
                                _ width: Double, _ height: Double, _ visible: Int32) -> Int32 {

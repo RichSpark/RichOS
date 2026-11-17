@@ -48,6 +48,7 @@ drop_build_machine_rpaths() {
   codesign --force --sign - "$binary"
 }
 python3 "$machine_lib/native-work.py" -- swift build "${swift_args[@]}" -c "$configuration" --product RichFiles
+python3 "$machine_lib/native-work.py" -- swift build "${swift_args[@]}" -c "$configuration" --product RichGlance
 if [ "$embedded" -eq 1 ]; then
   python3 "$machine_lib/native-work.py" -- swift build "${swift_args[@]}" -c "$configuration" --product RichFilesRail
   install -m 755 "$build/$configuration/libRichFilesRail.dylib" "$output/libRichFilesRail.dylib"
@@ -76,6 +77,17 @@ fi
 install -m 755 "$archive_executable" "$app/Contents/MacOS/richfiles-archive"
 install -m 644 "$package/Info.plist" "$app/Contents/Info.plist"
 install -m 644 "$package/Resources/RichFiles.icns" "$app/Contents/Resources/RichFiles.icns"
+glance="$app/Contents/Applications/RichGlance.app"
+mkdir -p "$glance/Contents/MacOS" "$glance/Contents/Resources"
+install -m 755 "$build/$configuration/RichGlance" "$glance/Contents/MacOS/RichGlance"
+install -m 644 "$package/RichGlance-Info.plist" "$glance/Contents/Info.plist"
+install -m 644 "$package/Resources/RichGlance.icns" "$glance/Contents/Resources/RichGlance.icns"
+/usr/libexec/PlistBuddy -c "Add :RichOSSourceRevision string $(git -C "$root" rev-parse HEAD)" "$glance/Contents/Info.plist"
+if [ "$embedded" -eq 1 ]; then
+  drop_build_machine_rpaths "$glance/Contents/MacOS/RichGlance"
+fi
+plutil -lint "$glance/Contents/Info.plist"
+codesign --force --sign - "$glance"
 plutil -lint "$app/Contents/Info.plist"
 codesign --force --sign - "$app/Contents/MacOS/richfiles-archive"
 codesign --force --sign - "$app"
