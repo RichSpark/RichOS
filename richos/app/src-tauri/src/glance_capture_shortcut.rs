@@ -75,6 +75,7 @@ pub fn restore(app: AppHandle) {
 #[cfg(target_os = "macos")]
 mod mac {
     use super::*;
+    use objc2::{class, msg_send, runtime::AnyObject};
     use ring::rand::{SecureRandom, SystemRandom};
     use std::cell::RefCell;
     use std::ffi::c_void;
@@ -231,8 +232,9 @@ mod mac {
             if state.hotkey.is_null() || state.active_id != id.id { return false; }
             if state.last_pressed.is_none_or(|last| last.elapsed() >= Duration::from_millis(250)) {
                 state.last_pressed = Some(Instant::now());
-                if std::thread::Builder::new().name("richglance-launch".into()).spawn(|| {
-                    if open_capture().is_err() { eprintln!("[RichGlance] capture shortcut could not launch"); }
+                let origin = frontmost_pid();
+                if std::thread::Builder::new().name("richglance-launch".into()).spawn(move || {
+                    if open_capture(origin).is_err() { eprintln!("[RichGlance] capture shortcut could not launch"); }
                 }).is_err() {
                     eprintln!("[RichGlance] could not start capture launcher");
                 }
@@ -240,6 +242,17 @@ mod mac {
             true
         });
         if opened { 0 } else { PASS }
+    }
+
+    // Look up the source before Launch Services or the permission dialog can take focus.
+    fn frontmost_pid() -> libc::pid_t {
+        // The Carbon handler runs on the main thread. These selectors use AppKit's
+        // object returns and NSRunningApplication's pid_t return type.
+        unsafe {
+            let workspace: *mut AnyObject = msg_send![class!(NSWorkspace), sharedWorkspace];
+            let origin: *mut AnyObject = msg_send![workspace, frontmostApplication];
+            if origin.is_null() { 0 } else { msg_send![origin, processIdentifier] }
+        }
     }
 
     fn application() -> Option<PathBuf> {
@@ -270,7 +283,7 @@ mod mac {
         result
     }
 
-    fn open_capture() -> std::io::Result<()> {
+    fn open_capture(origin: libc::pid_t) -> std::io::Result<()> {
         let app = application().ok_or_else(|| std::io::Error::other("RichGlance is unavailable"))?;
         let home = std::env::home_dir().ok_or_else(|| std::io::Error::other("home directory is unavailable"))?;
         let directory = home.join("Library/Application Support/app.richos.richglance/Capture Requests");
@@ -282,7 +295,12 @@ mod mac {
         discard_expired(&directory);
         let id = random_id()?;
         let path = directory.join(&id);
-        OpenOptions::new().write(true).create_new(true).mode(0o600).open(&path)?;
+        let mut ticket = OpenOptions::new().write(true).create_new(true).mode(0o600).open(&path)?;
+        if let Err(error) = write!(ticket, "{origin}") {
+            drop(fs::remove_file(path));
+            return Err(error);
+        }
+        drop(ticket);
         let url = format!("richglance-capture://request/{id}");
         let opened = std::process::Command::new("/usr/bin/open")
             .arg("-g").arg("-a").arg(app).arg(url).args(["--args", "--capture-request"]).status();

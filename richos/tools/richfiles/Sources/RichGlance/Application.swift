@@ -49,9 +49,13 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {
-        if urls.first(where: CaptureRequest.consume) != nil {
-            startCapture()
-        } else if let file = urls.first(where: GlanceFiles.supports) ?? urls.first(where: \.isFileURL) {
+        for url in urls {
+            if let request = CaptureRequest.consume(url) {
+                beginCapture(originPID: request.originPID)
+                return
+            }
+        }
+        if let file = urls.first(where: GlanceFiles.supports) ?? urls.first(where: \.isFileURL) {
             captureLaunch = false
             open(file)
         } else if captureLaunch, viewer == nil, capture == nil {
@@ -143,14 +147,20 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
     }
 
-    @objc private func startCapture() {
+    @objc private func startCapture() { beginCapture(originPID: nil) }
+
+    private func beginCapture(originPID: pid_t?) {
         if let capture {
             capture.revisitPermission()
             return
         }
         captureNotice?.orderOut(nil)
         captureNotice = nil
-        let origin = externalFrontmost
+        let shortcutOrigin = originPID.flatMap(NSRunningApplication.init(processIdentifier:))
+        let reliableOrigin = shortcutOrigin.flatMap { app in
+            app != .current && !app.isTerminated && app.activationPolicy == .regular ? app : nil
+        }
+        let origin = reliableOrigin ?? externalFrontmost
         let keyWindow = origin == nil && NSApp.isActive ? NSApp.keyWindow : nil
         let session = CaptureController(previousWindow: keyWindow === viewer?.window ? keyWindow : nil,
                                         previousApp: origin ?? previousApplication) { [weak self] message, display in
