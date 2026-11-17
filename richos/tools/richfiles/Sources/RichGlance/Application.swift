@@ -10,14 +10,15 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var returnTo: NSRunningApplication?
     private var viewer: Viewer?
     private var openingPanel: NSOpenPanel?
+    private var launchOrigin = Application.launchOrigin()
 
     static func main() {
-        let app = NSApplication.shared
         let delegate = Application()
+        let app = NSApplication.shared
         app.delegate = delegate
         app.setActivationPolicy(.regular)
         delegate.installMenu()
-        app.run()
+        withExtendedLifetime(delegate) { app.run() }
     }
 
     override init() {
@@ -46,32 +47,43 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        // Hand back foreground ownership before the last window disappears.
+        if NSApp.isActive, let origin = returnTo, !origin.isTerminated {
+            if #available(macOS 14, *) {
+                _ = origin.activate(from: .current, options: [])
+            } else {
+                _ = origin.activate(options: [])
+            }
+        }
+        return true
+    }
+
     func windowWillClose(_ notification: Notification) {
         viewer?.stop()
         viewer = nil
-        defer { returnTo = nil }
-        // Let the window server choose the next app when there was no reliable origin.
-        // Closing a window in the background must not pull another app to the front.
-        guard NSApp.isActive, let origin = returnTo, !origin.isTerminated else { return }
-        if #available(macOS 14, *) { NSApp.yieldActivation(to: origin) }
-        origin.activate(options: [])
+        returnTo = nil
     }
 
     private var externalFrontmost: NSRunningApplication? {
-        guard let front = workspace.frontmostApplication, front != .current else { return nil }
+        guard let front = workspace.frontmostApplication, front != .current,
+              front.activationPolicy == .regular else { return nil }
         return front
     }
 
     @objc private func applicationActivated(_ note: Notification) {
         guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
-              app != .current else { return }
+              app != .current, app.activationPolicy == .regular else { return }
         previousApplication = app
     }
 
     private func open(_ file: URL) {
-        if let origin = externalFrontmost ?? previousApplication, !origin.isTerminated {
+        let finder = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.finder").first
+        if let origin = [launchOrigin, externalFrontmost, previousApplication, finder]
+            .compactMap({ $0 }).first(where: { !$0.isTerminated }) {
             returnTo = origin
         }
+        launchOrigin = nil
         let viewer = self.viewer ?? Viewer()
         self.viewer = viewer
         openingPanel?.cancel(nil)
@@ -80,6 +92,14 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
         viewer.show()
         if #available(macOS 14, *) { NSApp.activate() }
         else { NSApp.activate(ignoringOtherApps: true) }
+    }
+
+    private static func launchOrigin() -> NSRunningApplication? {
+        let arguments = CommandLine.arguments
+        guard let flag = arguments.firstIndex(of: "--return-to"), arguments.indices.contains(flag + 1),
+              let pid = pid_t(arguments[flag + 1]), let origin = NSRunningApplication(processIdentifier: pid),
+              ["app.richos.richfiles", "com.richos.app"].contains(origin.bundleIdentifier ?? "") else { return nil }
+        return origin
     }
 
     @objc private func chooseImage() {

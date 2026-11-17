@@ -17,7 +17,7 @@ final class Viewer {
     let window: NSWindow
     private(set) var file: URL?
     private let canvas = Canvas()
-    private var folder: [URL] = []
+    private var folder: [URL]?
     private var folderRequest: Request?
     private var pendingStep = 0
     private var displayRequest: Request?
@@ -49,11 +49,13 @@ final class Viewer {
     }
 
     func open(_ file: URL) {
-        let request = Request()
         stopFolderScan()
-        folder = [file]
+        folder = nil
         pendingStep = 0
-        load(file, request: request)
+        load(file, request: Request())
+    }
+
+    private func scanFolder(from file: URL, request: Request) {
         folderRequest = request
         let work = DispatchWorkItem { [weak self] in
             let images = try? GlanceFiles.folder(containing: file)
@@ -61,8 +63,10 @@ final class Viewer {
                 guard let self, folderRequest?.id == request.id else { return }
                 folderRequest = nil
                 folderWork = nil
-                folder = images ?? [file]
-                request.record(.glanceFolder, images == nil ? .unavailable : .complete, total: folder.count)
+                let items = images ?? [file]
+                folder = items
+                request.record(.glanceFolder, images == nil ? .unavailable : .complete, total: items.count)
+                if images == nil { canvas.announce("Could not read this folder") }
                 let offset = pendingStep
                 pendingStep = 0
                 if offset != 0 { step(offset) }
@@ -92,11 +96,15 @@ final class Viewer {
     }
 
     private func step(_ direction: Int) {
-        if folderRequest != nil {
+        guard let file else { return }
+        guard let folder else {
+            // Wait for a navigation gesture before asking macOS for folder access.
+            // Opening one image does not require access to the rest of the Desktop.
             pendingStep += direction
+            if folderRequest == nil { scanFolder(from: file, request: Request()) }
             return
         }
-        guard let file, let index = folder.firstIndex(where: { $0.path == file.path }), folder.count > 1 else { return }
+        guard let index = folder.firstIndex(where: { $0.path == file.path }), folder.count > 1 else { return }
         let next = (index + direction % folder.count + folder.count) % folder.count
         if next != index { load(folder[next], request: Request(), position: "\(next + 1) of \(folder.count)") }
     }
