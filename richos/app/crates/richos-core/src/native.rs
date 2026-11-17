@@ -7849,8 +7849,8 @@ seen=[]
 for _ in range(4):
  row=read()
  seen.append(row["request"])
+ open(os.path.join(os.path.dirname(sys.argv[1]),"controls"),"w").write(json.dumps(seen))
  send({"type":"control_response","response":{"subtype":"success","request_id":row["request_id"]}})
-open(os.path.join(os.path.dirname(sys.argv[1]),"controls"),"w").write(json.dumps(seen))
 sys.stdin.readline()
 ' "$0"
 "#);
@@ -7861,9 +7861,9 @@ sys.stdin.readline()
         ).expect("the handshake should succeed");
         assert!(client.cancel_handle().set_model(crate::config::ModelChoice::Opus).unwrap());
         assert!(client.cancel_handle().set_model(crate::config::ModelChoice::Fable).unwrap());
+        // The child records each request before it answers it, and `set_model` returns only
+        // on the answer, so the record is complete here.
         let controls = script.parent().unwrap().join("controls");
-        let deadline = std::time::Instant::now() + Duration::from_secs(5);
-        while !controls.exists() && std::time::Instant::now() < deadline { std::thread::sleep(Duration::from_millis(20)); }
         let seen: Value = serde_json::from_str(&std::fs::read_to_string(&controls).expect("the child recorded no controls")).unwrap();
         assert_eq!(seen, json!([
             {"subtype":"set_model","model":"opus"},
