@@ -31,7 +31,7 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {
-        if let file = urls.first(where: GlanceFiles.supports) { open(file) }
+        if let file = urls.first(where: GlanceFiles.supports) ?? urls.first(where: \.isFileURL) { open(file) }
     }
 
     func applicationOpenUntitledFile(_ sender: NSApplication) -> Bool {
@@ -105,7 +105,7 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
     @objc private func chooseImage() {
         guard openingPanel == nil else { return }
         let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.png, .jpeg]
+        panel.allowedContentTypes = GlanceFiles.contentTypes
         panel.allowsMultipleSelection = false
         openingPanel = panel
         panel.begin { [weak self, weak panel] result in

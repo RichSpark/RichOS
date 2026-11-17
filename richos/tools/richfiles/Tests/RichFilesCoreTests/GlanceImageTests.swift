@@ -6,18 +6,60 @@ import XCTest
 @testable import RichFilesCore
 
 final class GlanceImageTests: XCTestCase {
+    func testDecodesNewImageTypesAndChoosesLargestIcon() throws {
+        let cases: [(String, CGSize)] = [
+            ("sample.avif", CGSize(width: 40, height: 24)),
+            ("sample.bmp", CGSize(width: 40, height: 24)),
+            ("sample.heic", CGSize(width: 40, height: 24)),
+            ("sample.icns", CGSize(width: 128, height: 128)),
+            ("sample.ico", CGSize(width: 64, height: 64)),
+            ("sample.jpe", CGSize(width: 40, height: 24)),
+            ("sample.tif", CGSize(width: 40, height: 24)),
+            ("still.webp", CGSize(width: 40, height: 24))
+        ]
+        for (name, size) in cases {
+            let image = try GlanceImage.decode(fixture(name))
+            XCTAssertEqual(image.size, size, name)
+            XCTAssertEqual(CGSize(width: image.bitmap.width, height: image.bitmap.height), size, name)
+        }
+        let heif = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".heif")
+        try FileManager.default.copyItem(at: fixture("sample.heic"), to: heif)
+        defer { try? FileManager.default.removeItem(at: heif) }
+        XCTAssertEqual(try GlanceImage.decode(heif).size, CGSize(width: 40, height: 24))
+    }
+
+    func testDocumentClaimsMatchTheOpenPanelAndExcludeSVG() throws {
+        let package = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+        let plist = try PropertyListSerialization.propertyList(
+            from: Data(contentsOf: package.appendingPathComponent("RichGlance-Info.plist")), format: nil
+        ) as? [String: Any]
+        let claims = try XCTUnwrap((plist?["CFBundleDocumentTypes"] as? [[String: Any]])?.first)
+        XCTAssertEqual(claims["CFBundleTypeRole"] as? String, "Viewer")
+        XCTAssertEqual(claims["LSHandlerRank"] as? String, "Alternate")
+        XCTAssertEqual(Set(try XCTUnwrap(claims["LSItemContentTypes"] as? [String])),
+                       Set(GlanceFiles.contentTypes.map(\.identifier)))
+        XCTAssertFalse(GlanceFiles.supports(URL(fileURLWithPath: "/example.svg")))
+    }
+
+    private func fixture(_ name: String) throws -> URL {
+        try XCTUnwrap(Bundle.module.url(forResource: name, withExtension: nil, subdirectory: "Glance"))
+    }
+
     func testFolderListsOnlyImmediateVisibleImagesInFilenameOrder() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
         defer { try? FileManager.default.removeItem(at: root) }
-        for name in ["Bravo.jpeg", "Zulu.JPG", "alpha.png", "notes.txt", ".hidden.png"] {
+        for name in ["Bravo.jpeg", "Zulu.JPG", "alpha.png", "c.HEIC", "d.WebP", "e.avif", "f.gif",
+                     "g.tiff", "h.bmp", "i.ico", "j.icns", "notes.txt", "vector.svg", ".hidden.png"] {
             try Data().write(to: root.appendingPathComponent(name))
         }
         try FileManager.default.createDirectory(at: root.appendingPathComponent("Folder.png"), withIntermediateDirectories: false)
         try FileManager.default.createSymbolicLink(at: root.appendingPathComponent("link.jpg"),
                                                    withDestinationURL: root.appendingPathComponent("Zulu.JPG"))
         let urls = try GlanceFiles.folder(containing: root.appendingPathComponent("Bravo.jpeg"))
-        XCTAssertEqual(urls.map(\.lastPathComponent), ["alpha.png", "Bravo.jpeg", "Zulu.JPG"])
+        XCTAssertEqual(urls.map(\.lastPathComponent), ["alpha.png", "Bravo.jpeg", "c.HEIC", "d.WebP", "e.avif",
+                                                        "f.gif", "g.tiff", "h.bmp", "i.ico", "j.icns", "Zulu.JPG"])
     }
 
     func testDecodesRotatedJPEGAndRefusesMislabeledImage() throws {

@@ -23,7 +23,7 @@ The script builds and ad hoc signs a development bundle. RichOS packaging uses t
 
 Core browsing and file operations work locally. The optional RichFinder and RichCleaner menu actions use the corresponding RichOS services when installed.
 
-RichGlance ships inside RichFiles as an optional viewer for PNG and JPEG images. RichFiles and Finder open images in the app chosen in macOS. Use **Open With** to try RichGlance on one file or choose it under **Get Info → Open with → Change All** in Finder for each image type you want it to open by default. RichFiles registers the viewer when first opened. RichGlance can open files while both RichFiles and RichOS are closed.
+RichGlance ships inside RichFiles as an optional viewer for PNG, JPEG (`.jpg`, `.jpeg` and `.jpe`), HEIC, HEIF, WebP, AVIF, GIF, TIFF, BMP, ICO and ICNS. RichFiles and Finder open images in the app chosen in macOS. Use **Open With** to try RichGlance on one file or choose it under **Get Info → Open with → Change All** in Finder for each image type you want it to open by default. RichFiles registers the viewer when first opened. RichGlance can open files while both RichFiles and RichOS are closed.
 
 In RichGlance, press Left or Right to cycle through images in that folder, Control and scroll to zoom, drag to pan and Escape to close. **File → Open in Preview** opens the current image for editing.
 

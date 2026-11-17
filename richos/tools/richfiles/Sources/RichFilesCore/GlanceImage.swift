@@ -3,9 +3,54 @@ import Foundation
 import ImageIO
 import UniformTypeIdentifiers
 
+private enum GlanceFormat: String, CaseIterable {
+    case png = "public.png"
+    case jpeg = "public.jpeg"
+    case heic = "public.heic"
+    case heif = "public.heif"
+    case webp = "org.webmproject.webp"
+    case avif = "public.avif"
+    case gif = "com.compuserve.gif"
+    case tiff = "public.tiff"
+    case bmp = "com.microsoft.bmp"
+    case ico = "com.microsoft.ico"
+    case icns = "com.apple.icns"
+
+    private var extensions: [String] {
+        switch self {
+        case .png: ["png"]
+        case .jpeg: ["jpg", "jpeg", "jpe"]
+        case .heic: ["heic"]
+        case .heif: ["heif"]
+        case .webp: ["webp"]
+        case .avif: ["avif"]
+        case .gif: ["gif"]
+        case .tiff: ["tiff", "tif"]
+        case .bmp: ["bmp"]
+        case .ico: ["ico"]
+        case .icns: ["icns"]
+        }
+    }
+
+    private static let byExtension = Dictionary(uniqueKeysWithValues:
+        allCases.flatMap { format in format.extensions.map { ($0, format) } }
+    )
+
+    static func forFile(_ url: URL) -> Self? {
+        guard url.isFileURL else { return nil }
+        return byExtension[url.pathExtension.lowercased()]
+    }
+
+    func accepts(_ decoded: Self) -> Bool {
+        self == decoded || (self == .heic || self == .heif) && (decoded == .heic || decoded == .heif)
+    }
+}
+
 public enum GlanceFiles {
+    public static let contentTypes: [UTType] = GlanceFormat.allCases.compactMap { UTType($0.rawValue) }
+
     public static func supports(_ url: URL) -> Bool {
-        url.isFileURL && ["png", "jpg", "jpeg"].contains(url.pathExtension.lowercased())
+        GlanceFormat.forFile(url) != nil
     }
 
     public static func folder(containing file: URL) throws -> [URL] {
@@ -40,10 +85,36 @@ public struct GlanceImage {
         guard (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else {
             throw Failure.unavailable
         }
-        guard GlanceFiles.supports(url),
+        guard let expected = GlanceFormat.forFile(url),
               let source = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary),
-              let kind = CGImageSourceGetType(source) as String?, [UTType.png.identifier, UTType.jpeg.identifier].contains(kind),
-              let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let kind = CGImageSourceGetType(source) as String?, let format = GlanceFormat(rawValue: kind),
+              expected.accepts(format), CGImageSourceGetCount(source) > 0 else { throw Failure.unreadable }
+
+        let index: Int
+        switch format {
+        case .heic, .heif: index = CGImageSourceGetPrimaryImageIndex(source)
+        case .ico, .icns: index = largestRepresentation(in: source)
+        default: index = 0
+        }
+        return try decodeFrame(in: source, at: index)
+    }
+
+    private static func largestRepresentation(in source: CGImageSource) -> Int {
+        var largest = 0
+        var area = 0.0
+        for index in 0..<CGImageSourceGetCount(source) {
+            guard let props = CGImageSourceCopyPropertiesAtIndex(source, index, nil) as? [CFString: Any],
+                  let width = props[kCGImagePropertyPixelWidth] as? Double,
+                  let height = props[kCGImagePropertyPixelHeight] as? Double,
+                  (width * height).isFinite, width > 0, height > 0, width * height > area else { continue }
+            area = width * height
+            largest = index
+        }
+        return largest
+    }
+
+    private static func decodeFrame(in source: CGImageSource, at index: Int) throws -> Self {
+        guard let props = CGImageSourceCopyPropertiesAtIndex(source, index, nil) as? [CFString: Any],
               let width = props[kCGImagePropertyPixelWidth] as? Double,
               let height = props[kCGImagePropertyPixelHeight] as? Double,
               width.isFinite, height.isFinite, width >= 1, height >= 1 else {
@@ -60,8 +131,8 @@ public struct GlanceImage {
             kCGImageSourceThumbnailMaxPixelSize: max(1, Int(longest * reduction)),
             kCGImageSourceShouldCacheImmediately: true
         ]
-        guard let bitmap = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary),
-              CGImageSourceGetStatusAtIndex(source, 0) == .statusComplete else { throw Failure.unreadable }
+        guard let bitmap = CGImageSourceCreateThumbnailAtIndex(source, index, options as CFDictionary),
+              CGImageSourceGetStatusAtIndex(source, index) == .statusComplete else { throw Failure.unreadable }
         return Self(bitmap: bitmap, size: size)
     }
 }
