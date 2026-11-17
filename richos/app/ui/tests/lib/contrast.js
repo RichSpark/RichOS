@@ -464,9 +464,39 @@ function probeBody(options) {
     let n = el;
     while (n && n.nodeType === 1) {
       chain.push(n);
+      // A SIBLING THAT IS THE GROUND. A segmented control's chosen label stands on a thumb that
+      // is its SIBLING, laid under it by position, so no ancestor paints what the label is read
+      // against. On screen the hit test finds the thumb; scrolled out of its panel there is no
+      // hit test, and the ancestors alone gave "Fable" in dark ink on the control's track, 1.5:1,
+      // for a label the `settings` walk measures at 7.68:1 on its gold thumb (2026-11-17, the
+      // `updates-failed` walk, once round 86.1 made the section tall enough to scroll that row
+      // out). Only for the text's own element, and only a positioned sibling that comes before
+      // it and covers its middle: the layer directly under it.
+      if (n === el) {
+        const under = positionedSiblingUnder(el);
+        if (under) chain.push(under);
+      }
       n = n.parentElement;
     }
     return { chain: chain, viaAncestors: true };
+  }
+
+  /// The absolutely positioned sibling before `el` whose box covers the middle of `el`'s, or
+  /// null: see `stackFor`'s ancestor path, the only caller.
+  function positionedSiblingUnder(el) {
+    const parent = el.parentElement;
+    if (!parent) return null;
+    const r = el.getBoundingClientRect();
+    const x = r.left + r.width / 2;
+    const y = r.top + r.height / 2;
+    let found = null;
+    for (const s of parent.children) {
+      if (s === el) break;
+      if (getComputedStyle(s).position !== "absolute") continue;
+      const b = s.getBoundingClientRect();
+      if (b.width > 0 && b.height > 0 && x >= b.left && x <= b.right && y >= b.top && y <= b.bottom) found = s;
+    }
+    return found;
   }
 
   function ghostOver(el, pt) {

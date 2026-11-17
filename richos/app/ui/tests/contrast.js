@@ -2189,6 +2189,31 @@ async function main() {
     return "3.03:1 fails at 14px/400 and passes at 24px, at 19px bold, and as a declared indicator";
   });
 
+  await run.check("3b  off screen, a label is measured against the positioned sibling under it, not the track around it", async () => {
+    // The chosen half of a segmented control stands on a thumb that is its sibling. Scrolled out
+    // of view there is no hit test, and the ancestors alone are the control's track: dark ink on
+    // a dark track, 1.5:1, for a label that is 7.68:1 on its gold thumb. Two labels above the
+    // top of the window: one on a thumb (must pass), one beside it on the bare track (must fail,
+    // so the thumb is not being credited to a label it is not under).
+    const page = await openApp(browser, "dark");
+    const r = await page.evaluate(async (script) => {
+      eval(script);
+      const host = document.createElement("div");
+      host.style.cssText = "position:absolute;left:20px;top:-300px;width:200px;height:40px;background:#2e3544";
+      host.innerHTML =
+        '<span style="position:absolute;top:0;bottom:0;left:100px;width:100px;background:#c2a35c"></span>' +
+        '<b id="t-off-thumb" style="position:absolute;left:120px;top:8px;color:#0c1322;font-size:16px">on the thumb</b>' +
+        '<b id="t-off-track" style="position:absolute;left:4px;top:8px;color:#0c1322;font-size:16px">on the track</b>';
+      document.body.appendChild(host);
+      const out = window.__contrastProbe({ surface: "sibling-ground-fixture", theme: "dark" });
+      host.remove();
+      return Object.values(out.failures).map(function (f) { return f.selector; }).filter(function (s) { return s.indexOf("t-off-") >= 0; });
+    }, C.pageScript());
+    assertEqual(r, ["b#t-off-track"], "only the label on the bare track may fail");
+    await page.close();
+    return "above the window: the label on its thumb passes, the one on the bare track fails";
+  });
+
   // ---- 4. a real failure is caught, by name ---------------------------------------------
 
   await run.check("4  a deliberately-introduced failure is caught and NAMED, not just counted", async () => {
