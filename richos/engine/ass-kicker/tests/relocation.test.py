@@ -33,7 +33,7 @@ class Relocation(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name).resolve()
         self.engine = self.root / "engine with spaces"
-        for directory in ("scripts", "mega-lander", "ass-kicker", "hooks", ".claude"):
+        for directory in ("scripts", "mega-lander", "ass-kicker", "ecs", "hooks", ".claude"):
             shutil.copytree(ENGINE / directory, self.engine / directory,
                             ignore=shutil.ignore_patterns("__pycache__", "*.sha256"))
         for filename in ("orchestration.config", "VERSION", ".gitignore"):

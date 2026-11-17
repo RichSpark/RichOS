@@ -35,7 +35,7 @@ def run(claude, timeout):
             subprocess.run(["git", "-C", str(repo), "config", "core.hooksPath", str(root / "nohooks")], check=True)
             subprocess.run(["git", "-C", str(repo), "-c", "user.name=Runtime Probe", "-c", "user.email=probe@example.invalid",
                             "-c", "commit.gpgSign=false", "commit", "-q", "--allow-empty", "-m", "Synthetic fixture"], check=True)
-        worker_tree = root / "target worktrees" / "canary-sonnet-probe"
+        worker_tree = root / "target worktrees" / "canary-sonnet-high-probe"
         plugin = root / "plugin"
         (plugin / ".claude-plugin").mkdir(parents=True)
         (plugin / "agents").mkdir()
@@ -167,8 +167,8 @@ if event=="Stop":
                         raise RuntimeError("Native initialization rejected")
                     initialized = True
                     prepared = subprocess.run([sys.executable, str(engine / "scripts/prepare-agent-spawn.py")],
-                        input=json.dumps({"name": "canary-sonnet-probe", "subagent_type": "runtime-probe:canary",
-                            "model": "sonnet", "isolation": "worktree", "description": "Verify isolated target write",
+                        input=json.dumps({"name": "canary-sonnet-high-probe", "subagent_type": "runtime-probe:canary",
+                            "model": "sonnet", "effort": "high", "isolation": "worktree", "description": "Verify isolated target write",
                             "run_in_background": False,
                             "prompt": f"cross-repo-worktree: {worker_tree}\nUse Write to create {worker_tree / 'worker-result.txt'} "
                                       "with exactly CANARY_OK. Read it back and report completion. Change no other files."}),
@@ -204,7 +204,7 @@ if event=="Stop":
                     if phase == 0:
                         phase = 1
                         subprocess.run(["bash", str(engine / "mega-lander/create-teammate-worktree.sh"), str(target),
-                                        "canary-sonnet-probe", "--dir", str(worker_tree), "--session", session],
+                                        "canary-sonnet-high-probe", "--dir", str(worker_tree), "--session", session],
                                        env=env, capture_output=True, text=True, check=True)
                         send({"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": prompt}]}})
                     else:

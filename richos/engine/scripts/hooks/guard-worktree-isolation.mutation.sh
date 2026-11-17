@@ -189,7 +189,7 @@ alive() {
         printf 'UNPROVEN  %-4s %s  <- mutant does not PARSE; a syntax error is not a mutation\n' "$id" "$desc"
         MUT_SCORE=unproven; return 1
     fi
-    printf '{"tool_name":"Agent","session_id":"mut00000-0000-4000-8000-000000000000","tool_use_id":"toolu_mut_control","tool_input":{"subagent_type":"dev","name":"dev-sonnet-alive","isolation":"worktree","prompt":"control payload"}}' \
+    printf '{"tool_name":"Agent","session_id":"mut00000-0000-4000-8000-000000000000","tool_use_id":"toolu_mut_control","tool_input":{"subagent_type":"dev","name":"dev-sonnet-high-alive","effort":"high","isolation":"worktree","prompt":"control payload"}}' \
         | RICHOS_ENTITY_ROOT="$ENG" "$GUARD" >/dev/null 2>&1
     rc=$?
     if [ "$rc" -ne 0 ]; then
@@ -951,7 +951,7 @@ mut_pool_submit M23 _mutant_M23
 # --- M24: CLAUSE 2c deleted — the guard falls back to its own looser
 # NAME_SHAPE_RE (no length bound, no exact-three-parts requirement), so a name
 # the creator (mega-lander/create-teammate-worktree.sh) refuses passes this
-# guard again, exactly the 2026-09-17 defect (zach-sonnet-multirepodemo1,
+# guard again, exactly the 2026-09-17 defect (zach-sonnet-high-multirepodemo1,
 # a 14-character identifier) this clause exists to close.
 _mutant_M24() {
     local ENG GUARD SUITE W_DIR MUT_SCORE

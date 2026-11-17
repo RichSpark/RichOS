@@ -16,11 +16,12 @@
 #      4, below)
 #      -- OR -- an explicit "main-checkout-run:" marker line in the prompt (the
 #      fallback escape hatch, see below).
-#   2. A unique, well-formed, TRUTHFUL name:  "<role>-<model>-<identifier>"
-#      (e.g. dev-sonnet-1, qa-opus-r3) — THREE dash-joined parts. Never bare
-#      ("dev"), 2-part ("dev-1"), or run-together ("devsonnet1"). Required EVEN
-#      WHEN the main-checkout-run marker is present — the marker does not relax
-#      clause 2.
+#   2. A unique, well-formed, TRUTHFUL name:
+#      "<role>-<model>-<effort>-<identifier>" (e.g. dev-sonnet-high-1,
+#      qa-opus-medium-r3) — FOUR dash-joined parts (CEO, 2026-11-17; three
+#      before that, and a three-part name is refused now). Never bare ("dev"),
+#      2-part ("dev-1"), or run-together ("devsonnet1"). Required EVEN WHEN the
+#      main-checkout-run marker is present — the marker does not relax clause 2.
 #        2a. The <model> token must be one of the harness's model aliases
 #            (orchestration.config: ALLOWED_MODELS; default fable/opus/sonnet/haiku).
 #        2b. TRUTHFULNESS: the <model> token must reflect the model the instance
@@ -36,6 +37,11 @@
 #            inherit-from-session case, or model:"inherit"), we cannot know the
 #            boot model, so we require only that the token be a valid alias (2a)
 #            and accept it -- a spawn is never failed on unknowable information.
+#        2d. THE EFFORT WORD is checked the way the model is: it must be one of
+#            the levels Claude Code accepts (scripts/lib/teammate-name.sh:
+#            TEAMMATE_EFFORT_LEVELS) and it must be the level this agent is
+#            started at, tool_input.effort. A call that names no level is
+#            refused, so a level is always named.
 #
 # The "main-checkout-run:" marker is the FALLBACK escape hatch for a genuine
 # one-off main-checkout run of ANY type. A prompt line beginning with
@@ -130,7 +136,7 @@
 #         escape hatch is a `hand-roll-ack: <reason>` prompt line, logged to
 #         .claude/state/hand-roll-acks.log like main-checkout-run: is.
 #   Clauses 1-3 are NOT relaxed by any of this: the name contract holds, and a
-#   `cwd` spawn still needs a truthful <role>-<model>-<identifier> name.
+#   `cwd` spawn still needs a truthful <role>-<model>-<effort>-<identifier> name.
 #
 # CLAUSE 5 — A GENERIC AGENT IS NOT A TEAMMATE (STAFFING, 2026-09-02).
 #   READONLY_ALLOWLIST answers ONE question: does this agent need an isolated
@@ -350,8 +356,10 @@ TOOL_NAME="$(printf '%s' "$INPUT" | python3 -c 'import json,sys; d=json.load(sys
 [ "$TOOL_NAME" = "Agent" ] || exit 0
 
 # A well-formed teammate name under the truthful-naming contract:
-#   <role>-<model>-<identifier>   (THREE+ dash-joined parts)
-# role: starts with a letter, alphanumeric, no dash. model/identifier:
+#   <role>-<model>-<effort>-<identifier>
+# This loose pre-check only wants THREE OR MORE dash-joined parts, so a name
+# with no effort word reaches clause 2c and is refused in the shared rule's own
+# words. role: starts with a letter, alphanumeric, no dash. The other parts:
 # alphanumeric. Set-membership of the model token (clause 2a) and its
 # truthfulness (clause 2b) are checked SEPARATELY so each failure gets a precise
 # message; this regex only fixes the SHAPE (rejects bare "dev", 2-part "dev-1",
@@ -452,6 +460,17 @@ SESSION_ID="$(printf '%s' "$PARSED" | cut -f5)"
 MODEL_OVERRIDE="$(printf '%s' "$PARSED" | cut -f6)"
 SPAWN_CWD="$(printf '%s' "$PARSED" | cut -f7)"
 PROMPT="$(printf '%s' "$PARSED" | cut -f8- | tr '\001' '\n')"
+
+# The effort level this agent is started at (clause 2d), read on its own so the
+# tab-separated record above keeps its field order.
+EFFORT_GIVEN="$(printf '%s' "$INPUT" | python3 -c '
+import json, sys
+try:
+    ti = json.load(sys.stdin).get("tool_input", {})
+    print(str(ti.get("effort", "") or "") if isinstance(ti, dict) else "")
+except Exception:
+    print("")
+' 2>/dev/null || true)"
 
 # Fail-closed: an Agent spawn we cannot parse is blocked, never waved through.
 if [ "$STATUS" = "PARSEFAIL" ]; then
@@ -569,7 +588,7 @@ if [ "$NEEDS_STAFFING_HATCH" -eq 1 ]; then
       echo "      in the record — only this session's transcript, which does not survive."
       echo ""
       echo "  FIX (preferred): re-issue with the ROSTER TEAMMATE whose domain this work is,"
-      echo "  with isolation: \"worktree\" and a truthful '<role>-<model>-<identifier>' name."
+      echo "  with isolation: \"worktree\" and a truthful '<role>-<model>-<effort>-<identifier>' name."
       if [ -n "$ROSTER_HINT" ]; then
         echo "    roster: ${ROSTER_HINT}"
       fi
@@ -783,13 +802,16 @@ if printf '%s' "$PROMPT" | grep -E >/dev/null 'git([[:space:]]+-C[[:space:]]+[^[
 fi
 
 if ! printf '%s' "$NAME" | grep -E >/dev/null "$NAME_SHAPE_RE"; then
-  PROBLEMS+=("missing/malformed name — give a unique '<role>-<model>-<identifier>' name, e.g. dev-sonnet-1 / qa-opus-r3 (got name='${NAME:-unset}'). Needs THREE dash-joined parts (role, model, identifier). Never bare ('dev'), 2-part ('dev-1'), or run-together ('devsonnet1'). NOT relaxed by main-checkout-run:.")
+  PROBLEMS+=("missing/malformed name — give a unique '<role>-<model>-<effort>-<identifier>' name, e.g. dev-sonnet-high-1 / qa-opus-medium-r3 (got name='${NAME:-unset}'). Needs FOUR dash-joined parts (role, model, effort level, identifier). Never bare ('dev'), 2-part ('dev-1'), or run-together ('devsonnet1'). NOT relaxed by main-checkout-run:.")
 else
-  # Shape valid: split into role / <model> token / identifier.
+  # Shape valid: split into role / <model> token / the rest. The rest is
+  # <effort>-<identifier> in a name of today's shape, so a rename this guard
+  # suggests for a wrong model keeps the effort word where it is.
   NAME_ROLE="${NAME%%-*}"
   NAME_REST="${NAME#*-}"
   NAME_MODEL_TOKEN="${NAME_REST%%-*}"
   NAME_ID="${NAME_REST#*-}"
+  NAME_EFFORT_TOKEN="$(teammate_name_effort "$NAME")"
 
   # Clause 2c — the CREATOR (mega-lander/create-teammate-worktree.sh) reads a
   # STRICTER shape than this guard's own NAME_SHAPE_RE ever did: lower-case
@@ -804,9 +826,22 @@ else
     PROBLEMS+=("$_TN_MSG")
   fi
 
+  # Clause 2d — THE EFFORT WORD IS THE LEVEL THE AGENT IS STARTED AT (CEO,
+  # 2026-11-17). Checked the way the model token is: the word in the name must
+  # be the level on the call. A name with no effort word was refused by clause
+  # 2c above, in the shared rule's words; this clause speaks only for a name
+  # that carries one.
+  if [ -n "$NAME_EFFORT_TOKEN" ]; then
+    if [ -z "$EFFORT_GIVEN" ]; then
+      PROBLEMS+=("no effort level given — the name '${NAME}' says '${NAME_EFFORT_TOKEN}' but this call names no level, so the agent would run at whatever the settings hold. The <effort> word MUST be the level the agent is started at. Fix: add  effort: \"${NAME_EFFORT_TOKEN}\"  to the call (spawn.sh: --effort ${NAME_EFFORT_TOKEN}).")
+    elif [ "$EFFORT_GIVEN" != "$NAME_EFFORT_TOKEN" ]; then
+      PROBLEMS+=("untruthful effort word — the name claims '${NAME_EFFORT_TOKEN}' but this agent is started at effort '${EFFORT_GIVEN}'. The <effort> word MUST be the level the agent is started at. Fix: rename to '${NAME_ROLE}-${NAME_MODEL_TOKEN}-${EFFORT_GIVEN}-${NAME##*-}', or change the effort so it matches.")
+    fi
+  fi
+
   # Clause 2a — the <model> token must be a real alias.
   if ! model_in_allowed_set "$NAME_MODEL_TOKEN"; then
-    PROBLEMS+=("model token '${NAME_MODEL_TOKEN}' in name '${NAME}' is not an allowed model — the <model> part of <role>-<model>-<identifier> must be one of: ${ALLOWED_MODELS// /, } (e.g. ${NAME_ROLE}-sonnet-${NAME_ID}). Extend ALLOWED_MODELS in orchestration.config if your harness accepts more.")
+    PROBLEMS+=("model token '${NAME_MODEL_TOKEN}' in name '${NAME}' is not an allowed model — the <model> part of <role>-<model>-<effort>-<identifier> must be one of: ${ALLOWED_MODELS// /, } (e.g. ${NAME_ROLE}-sonnet-${NAME_ID}). Extend ALLOWED_MODELS in orchestration.config if your harness accepts more.")
   else
     # Clause 2b — TRUTHFULNESS. Resolve the model this spawn boots on and
     # require the name token to match it.
@@ -1003,9 +1038,9 @@ PY
       echo "  (active OR completed). Reusing a name causes latest-wins shadowing and"
       echo "  resumed-vs-respawned ambiguity, so it is forbidden — there is NO escape"
       echo "  hatch for this one."
-      echo "  Fix: pick a FRESH '<role>-<identifier>' name. Identifiers are free —"
-      echo "  bump the suffix (${NAME}-2 / ${NAME%%-*}-b / ${NAME%%-*}-0714) or use any"
-      echo "  unused identifier. Never resume-vs-respawn by reusing a name."
+      echo "  Fix: pick a FRESH name. Identifiers (the last part) are free: change"
+      echo "  it (${NAME}b / ${NAME%-*}-0714) or use any unused identifier. Never"
+      echo "  resume-vs-respawn by reusing a name."
       echo "(hook: scripts/hooks/guard-worktree-isolation.sh)"
     } >&2
     exit 2

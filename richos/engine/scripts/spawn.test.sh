@@ -193,13 +193,13 @@ echo "spawn.sh"
 # ---------------------------------------------------------------------------
 echo "  repository resolution"
 # ---------------------------------------------------------------------------
-run "zach-sonnet-r1" --repo widgets --type zach --brief "$BRIEF" --dry-run
+run "zach-sonnet-high-r1" --repo widgets --type zach --brief "$BRIEF" --dry-run
 case "$OUT" in
     *"$TARGET"*) ok "a bare repository name resolves (the old helper answered \"'richos' is not a directory\")" ;;
     *) bad "a bare repository name resolves" "$OUT" ;;
 esac
 
-run "zach-sonnet-r2" --repo nosuchrepo --type zach --brief "$BRIEF" --dry-run
+run "zach-sonnet-high-r2" --repo nosuchrepo --type zach --brief "$BRIEF" --dry-run
 if [ "$RC" -eq 1 ] && printf '%s' "$OUT" | grep -q "no repository of that name is known here" \
    && printf '%s' "$OUT" | grep -q "widgets"; then
     ok "an unknown bare name is refused WITH the candidates"
@@ -209,7 +209,7 @@ fi
 
 mkrepo "$SANDBOX/other/widgets"
 python3 "$WS_PY" integration --repo "$SANDBOX/other/widgets" --branch main --why "the twin" >/dev/null
-run "zach-sonnet-r3" --repo widgets --type zach --brief "$BRIEF" --dry-run
+run "zach-sonnet-high-r3" --repo widgets --type zach --brief "$BRIEF" --dry-run
 if [ "$RC" -eq 1 ] && printf '%s' "$OUT" | grep -q "is ambiguous"; then
     ok "an ambiguous bare name is refused and both candidates are named"
 else
@@ -217,31 +217,53 @@ else
 fi
 rm -rf "$SANDBOX/other"
 
-run "zach-sonnet-r4" --repo "$TARGET" --type zach --brief "$BRIEF" --dry-run
+run "zach-sonnet-high-r4" --repo "$TARGET" --type zach --brief "$BRIEF" --dry-run
 [ "$RC" -eq 0 ] && ok "an absolute path resolves" || bad "an absolute path resolves" "rc=$RC $OUT"
 
 # ---------------------------------------------------------------------------
 echo "  the shared teammate-name shape (scripts/lib/teammate-name.sh, 2026-09-17)"
 # ---------------------------------------------------------------------------
 # BEFORE the fix: guard-worktree-isolation.sh's own shape check had no length
-# bound, so 'zach-sonnet-multirepodemo1' (a 14-character identifier) passed
+# bound, so 'zach-sonnet-high-multirepodemo1' (a 14-character identifier) passed
 # every guard in this table and was refused only later, inside
 # create-teammate-worktree.sh — one round trip after spawn.sh's own guard
 # table said "passed". Both readers now source the same rule
 # (scripts/lib/teammate-name.sh), so the guard refuses it HERE, in this table,
 # before anything is registered — proving spawn.sh's own claim that every
 # refusal is found before anything is created, for THIS rule specifically.
-run "zach-sonnet-multirepodemo1" --repo "$TARGET" --type zach --brief "$BRIEF" --dry-run
+run "zach-sonnet-high-multirepodemo1" --repo "$TARGET" --type zach --brief "$BRIEF" --dry-run
 if [ "$RC" -eq 1 ] && printf '%s' "$OUT" | grep -qE "refused by 1 of [0-9]+ guard\(s\) - NOTHING WAS CREATED" \
-   && printf '%s' "$OUT" | grep -qF "'zach-sonnet-multirepodemo1' is not a teammate name of the form <role>-<model>-<identifier>"; then
+   && printf '%s' "$OUT" | grep -qF "'zach-sonnet-high-multirepodemo1' is not a teammate name of the form <role>-<model>-<effort>-<identifier>"; then
     ok "an over-length identifier (14 chars) is refused BEFORE creation, in the guard table, in the creator's exact wording"
 else
     bad "the creator's stricter name shape is refused up front" "rc=$RC $OUT"
 fi
-[ ! -d "$SANDBOX/widgets-wt/zach-sonnet-multirepodemo1" ] \
+# THE EFFORT WORD (CEO, 2026-11-17). The name carries the level the teammate is
+# started at, and the same guard table refuses a name that does not, before
+# anything is created.
+run "zach-sonnet-names1" --repo "$TARGET" --type zach --brief "$BRIEF" --dry-run
+if [ "$RC" -eq 1 ] && printf '%s' "$OUT" | grep -qE "refused by 1 of [0-9]+ guard\(s\) - NOTHING WAS CREATED" \
+   && printf '%s' "$OUT" | grep -qF "'zach-sonnet-names1' is not a teammate name of the form <role>-<model>-<effort>-<identifier>"; then
+    ok "a name with no effort word is refused BEFORE creation, naming the four-part form"
+else
+    bad "a name with no effort word is refused up front" "rc=$RC $OUT"
+fi
+run "zach-sonnet-high-names1" --repo "$TARGET" --type zach --brief "$BRIEF" --effort low --dry-run
+if [ "$RC" -eq 1 ] && printf '%s' "$OUT" | grep -qF "claims 'high' but this agent is started at effort 'low'"; then
+    ok "a name whose effort word is not the --effort level is refused BEFORE creation, naming both"
+else
+    bad "an untruthful effort word is refused up front" "rc=$RC $OUT"
+fi
+run "zach-sonnet-high-names1" --repo "$TARGET" --type zach --brief "$BRIEF" --dry-run
+if [ "$RC" -eq 0 ]; then
+    ok "with no --effort the name's own word is the level, and every guard passes it"
+else
+    bad "the name's effort word is the level without --effort" "rc=$RC $OUT"
+fi
+[ ! -d "$SANDBOX/widgets-wt/zach-sonnet-high-multirepodemo1" ] \
     && ok "and nothing was created for it" \
     || bad "nothing was created for the refused name" "the workspace exists"
-run "zach-sonnet-shapeok1" --repo "$TARGET" --type zach --brief "$BRIEF" --dry-run
+run "zach-sonnet-high-shapeok1" --repo "$TARGET" --type zach --brief "$BRIEF" --dry-run
 [ "$RC" -eq 0 ] && ok "POSITIVE CONTROL: a name within the shared shape (12-char identifier) still passes" \
                 || bad "the positive control name passes" "rc=$RC $OUT"
 
@@ -253,7 +275,7 @@ echo "  the branch this work integrates on (point 14)"
 # a repository that has not been through it.)
 FRESH="$SANDBOX/sprockets"
 mkrepo "$FRESH"
-run "zach-sonnet-r4b" --repo "$FRESH" --type zach --brief "$BRIEF" --dry-run
+run "zach-sonnet-high-r4b" --repo "$FRESH" --type zach --brief "$BRIEF" --dry-run
 if [ "$RC" -eq 0 ] && printf '%s' "$OUT" | grep -q "RECORDED main for $FRESH"; then
     ok "an ABSENT record is RECORDED, not refused with a second command to run"
 else
@@ -277,7 +299,7 @@ if python3 "$WS_PY" integration-branch --repo "$TARGET" >/dev/null 2>&1; then
 else
     ok "NEGATIVE CONTROL: with the stale record every consumer abstains"
 fi
-run "zach-sonnet-r5" --repo "$TARGET" --type zach --brief "$BRIEF" --dry-run
+run "zach-sonnet-high-r5" --repo "$TARGET" --type zach --brief "$BRIEF" --dry-run
 if [ "$RC" -eq 0 ] && printf '%s' "$OUT" | grep -q "CORRECTED $TARGET from dev/old (no such branch) to main"; then
     ok "a STALE record is CORRECTED in place"
 else
@@ -291,14 +313,14 @@ AFTER_ID="$(python3 "$WS_PY" integration --repo "$TARGET" | awk '{print $5}')"
 # THE HUMAN DECISION: no record, and the checkout is not on the default branch.
 DEV="$SANDBOX/gadgets"
 mkrepo "$DEV" dev/rework
-run "zach-sonnet-r6" --repo "$DEV" --type zach --brief "$BRIEF" --dry-run
+run "zach-sonnet-high-r6" --repo "$DEV" --type zach --brief "$BRIEF" --dry-run
 if [ "$RC" -eq 1 ] && printf '%s' "$OUT" | grep -q "DECISION:" \
    && printf '%s' "$OUT" | grep -q "not on its default branch"; then
     ok "where the answer is a human's, it says WHICH decision and stops (it never guesses one)"
 else
     bad "the human decision is named" "rc=$RC $OUT"
 fi
-run "zach-sonnet-r7" --repo "$DEV" --type zach --brief "$BRIEF" \
+run "zach-sonnet-high-r7" --repo "$DEV" --type zach --brief "$BRIEF" \
     --integration dev/rework --integration-why "the gadget rework" --dry-run
 [ "$RC" -eq 0 ] && ok "--integration answers it and the run proceeds" \
                 || bad "--integration answers it" "rc=$RC $OUT"
@@ -306,7 +328,7 @@ run "zach-sonnet-r7" --repo "$DEV" --type zach --brief "$BRIEF" \
 # ---------------------------------------------------------------------------
 echo "  every guard, from every surface, all failures together"
 # ---------------------------------------------------------------------------
-run "zach-sonnet-g1" --repo "$TARGET" --type zach --brief "$BRIEF" --dry-run
+run "zach-sonnet-high-g1" --repo "$TARGET" --type zach --brief "$BRIEF" --dry-run
 if printf '%s' "$OUT" | grep -q "always-ok.sh"; then
     ok "a MATCHERLESS PreToolUse group is collected (it matches every tool, Agent included)"
 else
@@ -323,7 +345,7 @@ else
     ok "a group matched to another tool is NOT collected"
 fi
 
-REFUSE_A=1 REFUSE_B=1 run "zach-sonnet-g2" --repo "$TARGET" --type zach --brief "$BRIEF" --dry-run
+REFUSE_A=1 REFUSE_B=1 run "zach-sonnet-high-g2" --repo "$TARGET" --type zach --brief "$BRIEF" --dry-run
 if [ "$RC" -eq 1 ] \
    && printf '%s' "$OUT" | grep -q "reason alpha" && printf '%s' "$OUT" | grep -q "reason beta"; then
     ok "TWO guards refusing are BOTH named in ONE run (never one refusal per attempt)"
@@ -334,17 +356,17 @@ fi
 # ---------------------------------------------------------------------------
 echo "  create, and leave nothing behind on failure"
 # ---------------------------------------------------------------------------
-REFUSE_A=1 run "zach-sonnet-c1" --repo "$TARGET" --type zach --brief "$BRIEF"
-WT="$SANDBOX/widgets-wt/zach-sonnet-c1"
-if [ "$RC" -eq 1 ] && [ ! -e "$WT" ] && [ ! -e "$RICHOS_WORKSPACES_DIR/agents/$RICHOS_SESSION_ID--zach-sonnet-c1.json" ] \
-   && ! git -C "$TARGET" rev-parse --verify --quiet refs/heads/cc/zach-sonnet-c1 >/dev/null; then
+REFUSE_A=1 run "zach-sonnet-high-c1" --repo "$TARGET" --type zach --brief "$BRIEF"
+WT="$SANDBOX/widgets-wt/zach-sonnet-high-c1"
+if [ "$RC" -eq 1 ] && [ ! -e "$WT" ] && [ ! -e "$RICHOS_WORKSPACES_DIR/agents/$RICHOS_SESSION_ID--zach-sonnet-high-c1.json" ] \
+   && ! git -C "$TARGET" rev-parse --verify --quiet refs/heads/cc/zach-sonnet-high-c1 >/dev/null; then
     ok "a refusal BEFORE creation leaves no workspace, no branch and no registration"
 else
     bad "a pre-create refusal leaves nothing" "rc=$RC wt=$( [ -e "$WT" ] && echo present || echo absent)"
 fi
 
-run "zach-sonnet-c2" --repo "$TARGET" --type zach --brief "$BRIEF"
-WT2="$SANDBOX/widgets-wt/zach-sonnet-c2"
+run "zach-sonnet-high-c2" --repo "$TARGET" --type zach --brief "$BRIEF"
+WT2="$SANDBOX/widgets-wt/zach-sonnet-high-c2"
 if [ "$RC" -eq 0 ] && [ -d "$WT2" ]; then
     ok "a clean run creates the workspace and exits 0"
 else
@@ -360,13 +382,13 @@ else
     bad "the printed payload is complete" "$OUT"
 fi
 
-# THE NUMBER (CEO, 2026-10-21): zach-sonnet-c2 is active now, so another zach is
+# THE NUMBER (CEO, 2026-10-21): zach-sonnet-high-c2 is active now, so another zach is
 # zach2. Every later case that finds its workspace by the name it gave uses a first
 # name of its own for that reason (ruby, rita, rosa, ivan, mia, max, mel, moe).
-run "zach-sonnet-n1" --repo "$TARGET" --type zach --brief "$BRIEF" --dry-run
-if [ "$RC" -eq 0 ] && printf '%s' "$OUT" | grep -q '"name": "zach2-sonnet-n1"' \
-   && printf '%s' "$OUT" | grep -q "cross-repo-worktree: $SANDBOX/widgets-wt/zach2-sonnet-n1"; then
-    ok "with zach active, spawn.sh zach-sonnet-n1 starts zach2-sonnet-n1 (the lowest free number)"
+run "zach-sonnet-high-n1" --repo "$TARGET" --type zach --brief "$BRIEF" --dry-run
+if [ "$RC" -eq 0 ] && printf '%s' "$OUT" | grep -q '"name": "zach2-sonnet-high-n1"' \
+   && printf '%s' "$OUT" | grep -q "cross-repo-worktree: $SANDBOX/widgets-wt/zach2-sonnet-high-n1"; then
+    ok "with zach active, spawn.sh zach-sonnet-high-n1 starts zach2-sonnet-high-n1 (the lowest free number)"
 else
     bad "a second active zach is numbered zach2" "rc=$RC $OUT"
 fi
@@ -375,14 +397,14 @@ fi
 # repository's body of work and moved every running main-bound teammate with
 # it, and the appended last step still said to merge main into the release.
 git -C "$TARGET" branch rel "$(git -C "$TARGET" commit-tree -p main -m "rel only" "main^{tree}")"
-run "ruby-sonnet-rel1" --repo "$TARGET" --type zach --brief "$BRIEF" --integration "$TARGET=rel"
-RELWT="$SANDBOX/widgets-wt/ruby-sonnet-rel1"
+run "ruby-sonnet-high-rel1" --repo "$TARGET" --type zach --brief "$BRIEF" --integration "$TARGET=rel"
+RELWT="$SANDBOX/widgets-wt/ruby-sonnet-high-rel1"
 RELCHECK="$(python3 - "$RICHOS_WORKSPACES_DIR" "$TARGET" <<'PY'
 import glob, json, os, sys
 d, target = sys.argv[1], os.path.realpath(sys.argv[2])
 integ = json.load(open(os.path.join(d, "integration.json")))
 cur = integ["works"][integ["current"][target]]["branch"]
-rec = [json.load(open(p)) for p in glob.glob(os.path.join(d, "agents", "*ruby-sonnet-rel1.json"))][0]
+rec = [json.load(open(p)) for p in glob.glob(os.path.join(d, "agents", "*ruby-sonnet-high-rel1.json"))][0]
 mine = integ["works"][rec["integration_work"][target]]["branch"]
 print("%s %s" % (cur, mine))
 PY
@@ -410,7 +432,7 @@ GADGETS="$SANDBOX/gadgets"
 mkrepo "$GADGETS"
 git -C "$GADGETS" branch rel "$(git -C "$GADGETS" commit-tree -p main -m "rel only" "main^{tree}")"
 python3 "$WS_PY" integration --repo "$GADGETS" --branch rel --why "the release" >/dev/null
-for case in "rita-sonnet-relrec1:" "rosa-sonnet-relrec2:$GADGETS=rel"; do
+for case in "rita-sonnet-high-relrec1:" "rosa-sonnet-high-relrec2:$GADGETS=rel"; do
     name="${case%%:*}"; integ="${case#*:}"
     if [ -n "$integ" ]; then
         run "$name" --repo "$GADGETS" --type zach --brief "$BRIEF" --integration "$integ"
@@ -431,10 +453,10 @@ done
 # refused before anything is created, and the refusal says to start that
 # teammate from a session in another repository, never to move everybody.
 git -C "$PROJECT" branch rel "$(git -C "$PROJECT" commit-tree -p main -m "rel only" "main^{tree}")"
-run "zach-sonnet-relown1" --repo "$PROJECT" --type zach --brief "$BRIEF" --integration "$PROJECT=rel"
+run "zach-sonnet-high-relown1" --repo "$PROJECT" --type zach --brief "$BRIEF" --integration "$PROJECT=rel"
 if [ "$RC" -eq 1 ] && printf '%s' "$OUT" | grep -qF "from a session in another repository" \
    && ! printf '%s' "$OUT" | grep -qF -- "--correct" \
-   && ! ls "$RICHOS_WORKSPACES_DIR"/agents/*zach-sonnet-relown1.json >/dev/null 2>&1; then
+   && ! ls "$RICHOS_WORKSPACES_DIR"/agents/*zach-sonnet-high-relown1.json >/dev/null 2>&1; then
     ok "--integration for the session's own repository is refused: start that teammate from another repository's session"
 else
     bad "a release target in the session's own repository is refused with the other-session remedy" "rc=$RC $OUT"
@@ -446,7 +468,7 @@ fi
 # main and its land pulled main into the release. Refused the same way, with
 # and without --integration naming that recorded branch.
 python3 "$WS_PY" integration --repo "$PROJECT" --branch rel --correct --why "the release" >/dev/null
-for case in "zach-sonnet-relown2:" "zach-sonnet-relown3:$PROJECT=rel"; do
+for case in "zach-sonnet-high-relown2:" "zach-sonnet-high-relown3:$PROJECT=rel"; do
     name="${case%%:*}"; integ="${case#*:}"
     if [ -n "$integ" ]; then
         run "$name" --repo "$PROJECT" --type zach --brief "$BRIEF" --integration "$integ"
@@ -462,7 +484,7 @@ for case in "zach-sonnet-relown2:" "zach-sonnet-relown3:$PROJECT=rel"; do
 done
 python3 "$WS_PY" integration --repo "$PROJECT" --branch main --correct --why "the session repo" >/dev/null
 
-run "zach-sonnet-c2" --repo "$TARGET" --type zach --brief "$BRIEF"
+run "zach-sonnet-high-c2" --repo "$TARGET" --type zach --brief "$BRIEF"
 if [ "$RC" -eq 1 ] && printf '%s' "$OUT" | grep -qi "already"; then
     ok "a REUSED name is refused before anything is created"
 else
@@ -471,20 +493,20 @@ fi
 [ -d "$WT2" ] && ok "and the refusal did not touch the workspace that already owned the name" \
               || bad "the refused reuse left the existing workspace alone" "$OUT"
 
-REFUSE_AFTER=1 run "zach-sonnet-c3" --repo "$TARGET" --type zach --brief "$BRIEF"
-WT3="$SANDBOX/widgets-wt/zach-sonnet-c3"
+REFUSE_AFTER=1 run "zach-sonnet-high-c3" --repo "$TARGET" --type zach --brief "$BRIEF"
+WT3="$SANDBOX/widgets-wt/zach-sonnet-high-c3"
 if [ "$RC" -eq 4 ] && printf '%s' "$OUT" | grep -q "rolled back"; then
     ok "FAULT INJECTION: a refusal AFTER creation rolls the workspace back and says so"
 else
     bad "a post-create refusal rolls back" "rc=$RC $OUT"
 fi
-if [ ! -e "$WT3" ] && ! git -C "$TARGET" rev-parse --verify --quiet refs/heads/cc/zach-sonnet-c3 >/dev/null \
-   && [ ! -e "$RICHOS_WORKSPACES_DIR/agents/$RICHOS_SESSION_ID--zach-sonnet-c3.json" ]; then
+if [ ! -e "$WT3" ] && ! git -C "$TARGET" rev-parse --verify --quiet refs/heads/cc/zach-sonnet-high-c3 >/dev/null \
+   && [ ! -e "$RICHOS_WORKSPACES_DIR/agents/$RICHOS_SESSION_ID--zach-sonnet-high-c3.json" ]; then
     ok "the rollback leaves no workspace, no branch and no registration"
 else
     bad "the rollback leaves nothing" "wt=$( [ -e "$WT3" ] && echo present || echo absent)"
 fi
-run "zach-sonnet-c3" --repo "$TARGET" --type zach --brief "$BRIEF" --dry-run
+run "zach-sonnet-high-c3" --repo "$TARGET" --type zach --brief "$BRIEF" --dry-run
 [ "$RC" -eq 0 ] && ok "and the name is FREE again, so the retry is the same command" \
                 || bad "the name is free after a rollback" "rc=$RC $OUT"
 
@@ -492,7 +514,7 @@ run "zach-sonnet-c3" --repo "$TARGET" --type zach --brief "$BRIEF" --dry-run
 # (Rich stopped a running spawn on 2026-10-06 and it left a WORKING row and a branch).
 for SIG in TERM INT HUP; do
     IDX=$(( ${IDX:-0} + 1 ))
-    N="ivan-sonnet-i$IDX"
+    N="ivan-sonnet-high-i$IDX"
     MARK="$SANDBOX/stalled-$SIG"
     rm -f "$MARK"
     STALL_MARKER="$MARK" "$SPAWN" "$N" --repo "$TARGET" --type zach --brief "$BRIEF" \
@@ -527,9 +549,9 @@ echo "  several repositories, ONE teammate (point 10)"
 # SECOND NAME — which made it a second agent, landed separately.
 SECOND="$SANDBOX/gizmos"
 mkrepo "$SECOND"
-run "mia-sonnet-m1" --repo "$TARGET" --repo "$SECOND" --type zach --brief "$BRIEF" --dry-run
-M1A="$SANDBOX/widgets-wt/mia-sonnet-m1"
-M1B="$SANDBOX/gizmos-wt/mia-sonnet-m1"
+run "mia-sonnet-high-m1" --repo "$TARGET" --repo "$SECOND" --type zach --brief "$BRIEF" --dry-run
+M1A="$SANDBOX/widgets-wt/mia-sonnet-high-m1"
+M1B="$SANDBOX/gizmos-wt/mia-sonnet-high-m1"
 if [ "$RC" -eq 0 ] \
    && printf '%s' "$OUT" | grep -q "cross-repo-worktree: $M1A" \
    && printf '%s' "$OUT" | grep -q "cross-repo-worktree: $M1B"; then
@@ -543,17 +565,17 @@ else
     bad "every guard passes a two-workspace payload" "rc=$RC $OUT"
 fi
 
-run "max-sonnet-m2" --repo "$TARGET" --repo "$SECOND" --type zach --brief "$BRIEF"
-M2A="$SANDBOX/widgets-wt/max-sonnet-m2"
-M2B="$SANDBOX/gizmos-wt/max-sonnet-m2"
+run "max-sonnet-high-m2" --repo "$TARGET" --repo "$SECOND" --type zach --brief "$BRIEF"
+M2A="$SANDBOX/widgets-wt/max-sonnet-high-m2"
+M2B="$SANDBOX/gizmos-wt/max-sonnet-high-m2"
 if [ "$RC" -eq 0 ] && [ -d "$M2A" ] && [ -d "$M2B" ] \
-   && [ "$(git -C "$M2A" symbolic-ref -q --short HEAD)" = "cc/max-sonnet-m2" ] \
-   && [ "$(git -C "$M2B" symbolic-ref -q --short HEAD)" = "cc/max-sonnet-m2" ]; then
+   && [ "$(git -C "$M2A" symbolic-ref -q --short HEAD)" = "cc/max-sonnet-high-m2" ] \
+   && [ "$(git -C "$M2B" symbolic-ref -q --short HEAD)" = "cc/max-sonnet-high-m2" ]; then
     ok "a clean run CREATES both workspaces, each on cc/<name> in its own repository"
 else
     bad "both workspaces are created" "rc=$RC $OUT"
 fi
-if python3 - "$RICHOS_WORKSPACES_DIR/agents/$RICHOS_SESSION_ID--max-sonnet-m2.json" "$M2A" "$M2B" <<'PY' 2>/dev/null
+if python3 - "$RICHOS_WORKSPACES_DIR/agents/$RICHOS_SESSION_ID--max-sonnet-high-m2.json" "$M2A" "$M2B" <<'PY' 2>/dev/null
 import json, os, sys
 r = json.load(open(sys.argv[1]))
 live = [w for w in r["workspaces"] if not w.get("deleted_at")]
@@ -561,38 +583,38 @@ assert sorted(os.path.realpath(w["path"]) for w in live) == sorted(sys.argv[2:4]
 assert all(w["kind"] == "cc" and w["created"] is True for w in live), live
 PY
 then ok "and BOTH are registered on the ONE agent's record, so they go together at the land"
-else bad "both are on one record" "$(cat "$RICHOS_WORKSPACES_DIR/agents/$RICHOS_SESSION_ID--max-sonnet-m2.json" 2>/dev/null | tr '\n' ' ' | cut -c1-400)"; fi
+else bad "both are on one record" "$(cat "$RICHOS_WORKSPACES_DIR/agents/$RICHOS_SESSION_ID--max-sonnet-high-m2.json" 2>/dev/null | tr '\n' ' ' | cut -c1-400)"; fi
 
-run "zach-sonnet-m3" --repo "$TARGET" --repo widgets --type zach --brief "$BRIEF" --dry-run
+run "zach-sonnet-high-m3" --repo "$TARGET" --repo widgets --type zach --brief "$BRIEF" --dry-run
 if [ "$RC" -eq 1 ] && printf '%s' "$OUT" | grep -q "already this teammate's repository"; then
     ok "NEGATIVE: the SAME repository twice under one name is refused (one workspace per repository)"
 else
     bad "the same repository twice is refused" "rc=$RC $OUT"
 fi
 
-run "zach-sonnet-m4" --repo "$TARGET" --repo "$SECOND" --type zach --brief "$BRIEF" \
+run "zach-sonnet-high-m4" --repo "$TARGET" --repo "$SECOND" --type zach --brief "$BRIEF" \
     --dir "$SANDBOX/anywhere/m4" --dry-run
 if [ "$RC" -eq 1 ] && printf '%s' "$OUT" | grep -q -- "--dir <repo>=<value>"; then
     ok "NEGATIVE: an UNSCOPED --dir with several repositories is refused, naming the form that answers it"
 else
     bad "an unscoped --dir is refused" "rc=$RC $OUT"
 fi
-run "mel-sonnet-m5" --repo "$TARGET" --repo "$SECOND" --type zach --brief "$BRIEF" \
+run "mel-sonnet-high-m5" --repo "$TARGET" --repo "$SECOND" --type zach --brief "$BRIEF" \
     --dir "$SECOND=$SANDBOX/anywhere/m5" --dry-run
 if [ "$RC" -eq 0 ] && printf '%s' "$OUT" | grep -q "cross-repo-worktree: $SANDBOX/anywhere/m5" \
-   && printf '%s' "$OUT" | grep -q "cross-repo-worktree: $SANDBOX/widgets-wt/mel-sonnet-m5"; then
+   && printf '%s' "$OUT" | grep -q "cross-repo-worktree: $SANDBOX/widgets-wt/mel-sonnet-high-m5"; then
     ok "POSITIVE CONTROL: the SCOPED form --dir <repo>=<path> is honored, and the other repository keeps its default"
 else
     bad "the scoped --dir is honored" "rc=$RC $OUT"
 fi
 
-REFUSE_AFTER=1 run "moe-sonnet-m6" --repo "$TARGET" --repo "$SECOND" --type zach --brief "$BRIEF"
-M6A="$SANDBOX/widgets-wt/moe-sonnet-m6"
-M6B="$SANDBOX/gizmos-wt/moe-sonnet-m6"
+REFUSE_AFTER=1 run "moe-sonnet-high-m6" --repo "$TARGET" --repo "$SECOND" --type zach --brief "$BRIEF"
+M6A="$SANDBOX/widgets-wt/moe-sonnet-high-m6"
+M6B="$SANDBOX/gizmos-wt/moe-sonnet-high-m6"
 if [ "$RC" -eq 4 ] && [ ! -e "$M6A" ] && [ ! -e "$M6B" ] \
-   && ! git -C "$TARGET" rev-parse --verify --quiet refs/heads/cc/moe-sonnet-m6 >/dev/null \
-   && ! git -C "$SECOND" rev-parse --verify --quiet refs/heads/cc/moe-sonnet-m6 >/dev/null \
-   && [ ! -e "$RICHOS_WORKSPACES_DIR/agents/$RICHOS_SESSION_ID--moe-sonnet-m6.json" ]; then
+   && ! git -C "$TARGET" rev-parse --verify --quiet refs/heads/cc/moe-sonnet-high-m6 >/dev/null \
+   && ! git -C "$SECOND" rev-parse --verify --quiet refs/heads/cc/moe-sonnet-high-m6 >/dev/null \
+   && [ ! -e "$RICHOS_WORKSPACES_DIR/agents/$RICHOS_SESSION_ID--moe-sonnet-high-m6.json" ]; then
     ok "FAULT INJECTION: a refusal after creation rolls back BOTH workspaces and both branches — nothing is left behind in either repository"
 else
     bad "the rollback covers every workspace" "rc=$RC a=$( [ -e "$M6A" ] && echo present || echo absent) b=$( [ -e "$M6B" ] && echo present || echo absent)"
@@ -602,14 +624,14 @@ fi
 echo "  the dry evaluation is the same code with the write removed"
 # ---------------------------------------------------------------------------
 ENV_JSON="$SANDBOX/env.json"
-python3 - "$ENV_JSON" "$RICHOS_SESSION_ID" "$SANDBOX/widgets-wt/zach-sonnet-d1" "$TARGET" "$PROJECT" <<'PY'
+python3 - "$ENV_JSON" "$RICHOS_SESSION_ID" "$SANDBOX/widgets-wt/zach-sonnet-high-d1" "$TARGET" "$PROJECT" <<'PY'
 import json, sys
 out, sid, path, repo, cwd = sys.argv[1:6]
 json.dump({"session_id": sid, "cwd": cwd, "hook_event_name": "PreToolUse", "tool_name": "Agent",
-           "tool_input": {"name": "zach-sonnet-d1", "subagent_type": "zach", "isolation": "worktree",
+           "tool_input": {"name": "zach-sonnet-high-d1", "subagent_type": "zach", "isolation": "worktree",
                           "prompt": "cross-repo-worktree: %s\n\ndo the thing" % path},
            "richos_spawn_check": {"planned": [{"path": path, "repo": repo,
-                                               "branch": "cc/zach-sonnet-d1"}]}},
+                                               "branch": "cc/zach-sonnet-high-d1"}]}},
           open(out, "w"))
 PY
 if python3 "$WS_PY" check-spawn <"$ENV_JSON" >/dev/null 2>&1; then
@@ -622,7 +644,7 @@ if python3 "$WS_PY" register-spawn <"$ENV_JSON" >/dev/null 2>&1; then
 else
     ok "NEGATIVE CONTROL: register-spawn still refuses it — that was the pre-flight's false positive"
 fi
-if [ -e "$RICHOS_WORKSPACES_DIR/agents/$RICHOS_SESSION_ID--zach-sonnet-d1.json" ]; then
+if [ -e "$RICHOS_WORKSPACES_DIR/agents/$RICHOS_SESSION_ID--zach-sonnet-high-d1.json" ]; then
     bad "check-spawn wrote a registration" "it must write nothing"
 else
     ok "check-spawn wrote NOTHING: no record, no binding, no event"
@@ -677,14 +699,14 @@ D
 
 # 1. THE CASE THIS WHOLE SLICE IS: an operator-session guard refusing does NOT
 #    refuse the app. Proven in both audiences on ONE refusing guard.
-REFUSE_A=1 run "zach-sonnet-aud1" --repo "$TARGET" --type zach --brief "$BRIEF" --dry-run
+REFUSE_A=1 run "zach-sonnet-high-aud1" --repo "$TARGET" --type zach --brief "$BRIEF" --dry-run
 if [ "$RC" -eq 1 ] && printf '%s' "$OUT" | grep -q "GUARD A REFUSES"; then
     ok "operator audience: a refusing guard refuses the dispatch (the control for the next case)"
 else
     bad "operator audience: a refusing guard refuses" "rc=$RC $OUT"
 fi
 
-REFUSE_A=1 RICHOS_SPAWN_GUARD_AUDIENCE="$AUD" run "zach-sonnet-aud2" --repo "$TARGET" \
+REFUSE_A=1 RICHOS_SPAWN_GUARD_AUDIENCE="$AUD" run "zach-sonnet-high-aud2" --repo "$TARGET" \
     --type zach --brief "$BRIEF" --dry-run --audience app
 if [ "$RC" -eq 0 ]; then
     ok "app audience: an operator-session guard's refusal does NOT refuse the app"
@@ -771,7 +793,7 @@ audience: user-work
 reason: fixture
 user_message: I could not give this work its own separate copy of your project. Nothing was created.
 D
-REFUSE_B=1 RICHOS_SPAWN_GUARD_AUDIENCE="$AUD.partial" run "zach-sonnet-aud4" --repo "$TARGET" \
+REFUSE_B=1 RICHOS_SPAWN_GUARD_AUDIENCE="$AUD.partial" run "zach-sonnet-high-aud4" --repo "$TARGET" \
     --type zach --brief "$BRIEF" --dry-run --audience app
 if [ "$RC" -eq 0 ] && printf '%s' "$OUT" | grep -q "not run (nobody has classified it): refuse-b.sh"; then
     ok "app audience: an undeclared guard is not run, and is named as not run"
@@ -802,7 +824,7 @@ id: refuse-after-create.sh
 audience: operator-session
 reason: fixture
 D
-RICHOS_SPAWN_GUARD_AUDIENCE="$AUD.none" run "zach-sonnet-aud5" --repo "$TARGET" \
+RICHOS_SPAWN_GUARD_AUDIENCE="$AUD.none" run "zach-sonnet-high-aud5" --repo "$TARGET" \
     --type zach --brief "$BRIEF" --dry-run --audience app
 if [ "$RC" -eq 1 ] && printf '%s' "$OUT" | grep -q "no guard of this audience"; then
     ok "app audience: an empty user-work list refuses, rather than passing unguarded"
@@ -811,7 +833,7 @@ else
 fi
 
 # 6. AN UNREADABLE DECLARATION IS A REFUSAL, NEVER AN EMPTY ALLOWLIST.
-RICHOS_SPAWN_GUARD_AUDIENCE="$SANDBOX/no-such.declaration" run "zach-sonnet-aud6" \
+RICHOS_SPAWN_GUARD_AUDIENCE="$SANDBOX/no-such.declaration" run "zach-sonnet-high-aud6" \
     --repo "$TARGET" --type zach --brief "$BRIEF" --dry-run --audience app
 if [ "$RC" -eq 1 ] && printf '%s' "$OUT" | grep -q "classification could not be read"; then
     ok "app audience: an unreadable classification refuses, rather than allowing everything"
@@ -821,7 +843,7 @@ fi
 
 # 7. THE DEFAULT IS UNCHANGED. Every case above this section ran without
 #    --audience and is the proof; this one states it.
-run "zach-sonnet-aud7" --repo "$TARGET" --type zach --brief "$BRIEF" --dry-run --audience nonsense
+run "zach-sonnet-high-aud7" --repo "$TARGET" --type zach --brief "$BRIEF" --dry-run --audience nonsense
 if [ "$RC" -eq 2 ] && printf '%s' "$OUT" | grep -q "audience must be"; then
     ok "an unknown --audience is refused by name"
 else
@@ -938,7 +960,7 @@ if [ -f "$SCOPE_GUARD" ]; then
     TWO_RULE_MSG="$(python3 - <<'PY' | (cd "$REAL_PROJECT" && bash "$SCOPE_GUARD" 2>&1 >/dev/null)
 import json
 print(json.dumps({"tool_name": "Agent", "tool_input": {
-    "name": "zach-sonnet-two1", "subagent_type": "zach", "isolation": "worktree",
+    "name": "zach-sonnet-high-two1", "subagent_type": "zach", "isolation": "worktree",
     "prompt": "Verify with scripts/run-all-tests.sh and confirm a complete verification pass is green."}}))
 PY
 )"
@@ -1001,7 +1023,7 @@ git -C "$TARGET" commit -q -m "the walk toolkit"
 KIT_SHA="$(git -C "$TARGET" log -1 --format=%h -- richos/app/scripts/qa)"
 
 PAYLOAD_QA="$SANDBOX/payload-qa.json"
-run "ray-sonnet-kit1" --repo "$TARGET" --type ray --brief "$BRIEF" --dry-run \
+run "ray-sonnet-high-kit1" --repo "$TARGET" --type ray --brief "$BRIEF" --dry-run \
     --payload-out "$PAYLOAD_QA"
 QA_PROMPT="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["prompt"])' "$PAYLOAD_QA" 2>/dev/null)"
 if [ "$RC" -eq 0 ] && printf '%s' "$QA_PROMPT" | grep -q '^## Your committed tools' \
@@ -1042,7 +1064,7 @@ open(p, "w", encoding="utf-8").write(t)
 PY
 git -C "$TARGET" add -A
 git -C "$TARGET" commit -q -m "a tenth tool"
-run "ray-sonnet-kit2" --repo "$TARGET" --type ray --brief "$BRIEF" --dry-run \
+run "ray-sonnet-high-kit2" --repo "$TARGET" --type ray --brief "$BRIEF" --dry-run \
     --payload-out "$SANDBOX/payload-qa2.json"
 QA_PROMPT2="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["prompt"])' "$SANDBOX/payload-qa2.json" 2>/dev/null)"
 if printf '%s' "$QA_PROMPT2" | grep -q '`settle.py`'; then
@@ -1055,7 +1077,7 @@ fi
 # researcher are not walkers, and a section in every payload is noise that
 # teaches everyone to skip the end of the brief.
 PAYLOAD_NONQA="$SANDBOX/payload-nonqa.json"
-run "zach-sonnet-kit3" --repo "$TARGET" --type zach --brief "$BRIEF" --dry-run \
+run "zach-sonnet-high-kit3" --repo "$TARGET" --type zach --brief "$BRIEF" --dry-run \
     --payload-out "$PAYLOAD_NONQA"
 NONQA_PROMPT="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["prompt"])' "$PAYLOAD_NONQA" 2>/dev/null)"
 if [ "$RC" -eq 0 ] && ! printf '%s' "$NONQA_PROMPT" | grep -q 'Your committed tools' \
@@ -1091,7 +1113,7 @@ fi
 # A BRIEF THAT ALREADY CARRIES THE SECTION IS LEFT ALONE — no second copy.
 BRIEF_OWN="$SANDBOX/brief-own-tools.md"
 { cat "$BRIEF"; printf '\n## Your committed tools\n\nthe brief wrote its own.\n'; } >"$BRIEF_OWN"
-run "ray-sonnet-kit4" --repo "$TARGET" --type ray --brief "$BRIEF_OWN" --dry-run \
+run "ray-sonnet-high-kit4" --repo "$TARGET" --type ray --brief "$BRIEF_OWN" --dry-run \
     --payload-out "$SANDBOX/payload-own.json"
 OWN_PROMPT="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["prompt"])' "$SANDBOX/payload-own.json" 2>/dev/null)"
 OWN_N="$(printf '%s\n' "$OWN_PROMPT" | grep -c 'Your committed tools' || true)"
@@ -1103,7 +1125,7 @@ fi
 
 # A TOOLKIT IT CANNOT FIND IS A NOTE, NEVER A DEAD SPAWN. Nothing about
 # starting a walker should depend on a README being where it was last week.
-QA_TOOLKIT_DIR="nowhere/at/all" run "ray-sonnet-kit5" --repo "$TARGET" --type ray \
+QA_TOOLKIT_DIR="nowhere/at/all" run "ray-sonnet-high-kit5" --repo "$TARGET" --type ray \
     --brief "$BRIEF" --dry-run --payload-out "$SANDBOX/payload-gone.json"
 if [ "$RC" -eq 0 ] && printf '%s' "$OUT" | grep -q "NOT ATTACHED"; then
     ok "a toolkit that cannot be found is reported and the spawn still goes"

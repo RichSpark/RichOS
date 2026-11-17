@@ -16,7 +16,7 @@ class WorkspacePathTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="workspace path ") as temporary:
             root = Path(temporary).resolve()
             seat, target = root / "coordination", root / "target project"
-            tree = root / "target worktrees/worker-sonnet-spaces"
+            tree = root / "target worktrees/worker-sonnet-high-spaces"
             # HOME and CLAUDE_CONFIG_DIR are this folder's own: the SessionStart hook collects test
             # devices machine-wide (workspaces.py collect_test_devices, apply=True) under
             # <config>/state/test-devices, and the ownership ledger resolves from HOME. Run by
@@ -45,9 +45,9 @@ class WorkspacePathTests(unittest.TestCase):
             (seat / "orchestration.config").write_text("")
             run(ws + ["hook"], json.dumps({"session_id": "path-probe", "hook_event_name": "SessionStart", "cwd": str(seat)}))
             run(["bash", ENGINE / "mega-lander/create-teammate-worktree.sh", target,
-                 "worker-sonnet-spaces", "--dir", tree, "--session", "path-probe"])
+                 "worker-sonnet-high-spaces", "--dir", tree, "--session", "path-probe"])
             prepared = run([sys.executable, ENGINE / "scripts/prepare-agent-spawn.py"], json.dumps({
-                "name": "worker-sonnet-spaces", "subagent_type": "worker", "model": "sonnet",
+                "name": "worker-sonnet-high-spaces", "subagent_type": "worker", "model": "sonnet", "effort": "high",
                 "prompt": f"cross-repo-worktree: {tree}\nRead the fictional fixture."}))
             payload = {"session_id": "path-probe", "hook_event_name": "PreToolUse", "tool_name": "Agent",
                        "tool_use_id": "tool-probe", "cwd": str(seat), "tool_input": json.loads(prepared.stdout)}

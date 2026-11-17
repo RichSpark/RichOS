@@ -65,9 +65,11 @@ import os
 import re
 import sys
 
-# The spawn-name shape guard-worktree-isolation.sh enforces: <role>-<model>-<id>.
+# The spawn-name shape guard-worktree-isolation.sh enforces,
+# <role>-<model>-<effort>-<id>, and the <role>-<model>-<id> it enforced before
+# 2026-11-17: a name on a workspace that already exists has either.
 TEAMMATE_NAME_RE = re.compile(
-    r"^[a-z][a-z0-9]{1,15}-(?:fable|opus|sonnet|haiku)-[a-z0-9]{1,12}$")
+    r"^[a-z][a-z0-9]{1,15}-(?:fable|opus|sonnet|haiku)-(?:(?:low|medium|high|xhigh|max)-)?[a-z0-9]{1,12}$")
 
 # Session team directories that hold one of these are teams that actually ran.
 # spawned-names.log is deliberately NOT in this set: it is appended for spawns

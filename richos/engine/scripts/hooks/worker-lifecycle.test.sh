@@ -80,7 +80,7 @@ run() {
 LAUNCH_ACK='Async agent launched successfully. (This tool result is internal metadata — never quote or paste any part of it, including the agentId below, into a user-facing reply.)\nagentId: aTESTWORKER00001 (internal ID - do not mention to user. Use SendMessage with to: '"'"'aTESTWORKER00001'"'"', summary: '"'"'<5-10 word recap>'"'"' to continue this agent.)\nThe agent is working in the background. You will be notified automatically when it completes.'
 
 # A real backgrounded spawn's PostToolUse payload.
-SPAWN_OK='{"hook_event_name":"PostToolUse","session_id":"'"$SESSION_ID"'","cwd":"/repo","tool_name":"Agent","tool_use_id":"toolu_1","tool_input":{"name":"dev-sonnet-1","subagent_type":"dev","isolation":"worktree","model":"sonnet","prompt":"do the thing"},"tool_response":[{"type":"text","text":"'"$LAUNCH_ACK"'"}]}'
+SPAWN_OK='{"hook_event_name":"PostToolUse","session_id":"'"$SESSION_ID"'","cwd":"/repo","tool_name":"Agent","tool_use_id":"toolu_1","tool_input":{"name":"dev-sonnet-high-1", "effort": "high","subagent_type":"dev","isolation":"worktree","model":"sonnet","prompt":"do the thing"},"tool_response":[{"type":"text","text":"'"$LAUNCH_ACK"'"}]}'
 
 echo "=== worker-lifecycle emitters: one stream, four hooks ==="
 echo ""
@@ -102,7 +102,7 @@ assert r["event"] == "WorkerCreated", r
 assert r["lifecycle_state"] == "created", r
 assert r["source_hook"] == "PostToolUse[Agent]", r
 assert r["agent_id"] == "aTESTWORKER00001", r
-assert r["worker_name"] == "dev-sonnet-1", r
+assert r["worker_name"] == "dev-sonnet-high-1", r
 assert r["agent_type"] == "dev", r
 assert r["isolation"] == "worktree", r
 assert r["session_id"].startswith("abcd1234"), r
@@ -119,7 +119,7 @@ fi
 # fires when the subagent has ALREADY FINISHED. Treating that as a creation
 # would announce a live worker at the moment it stopped existing.
 reset_log
-SYNC_RESULT='{"hook_event_name":"PostToolUse","session_id":"'"$SESSION_ID"'","tool_name":"Agent","tool_input":{"name":"dev-sonnet-2","subagent_type":"Explore"},"tool_response":[{"type":"text","text":"Here is my final report: I read 4 files and found nothing."}]}'
+SYNC_RESULT='{"hook_event_name":"PostToolUse","session_id":"'"$SESSION_ID"'","tool_name":"Agent","tool_input":{"name":"dev-sonnet-high-2", "effort": "high","subagent_type":"Explore"},"tool_response":[{"type":"text","text":"Here is my final report: I read 4 files and found nothing."}]}'
 rc="$(run "$CREATED_HOOK" "$SYNC_RESULT")"
 [ "$rc" = "0" ] && pass "1d  created: synchronous Agent result still exits 0" \
                 || fail "1d  created: exit $rc != 0"
@@ -129,7 +129,7 @@ rc="$(run "$CREATED_HOOK" "$SYNC_RESULT")"
 # Ack present but no id: we know something launched, we do not know WHICH. An
 # unjoinable worker is worse than a missing one.
 reset_log
-NO_ID='{"hook_event_name":"PostToolUse","session_id":"'"$SESSION_ID"'","tool_name":"Agent","tool_input":{"name":"dev-sonnet-3"},"tool_response":"Async agent launched successfully. (no id in this one)"}'
+NO_ID='{"hook_event_name":"PostToolUse","session_id":"'"$SESSION_ID"'","tool_name":"Agent","tool_input":{"name":"dev-sonnet-high-3", "effort": "high"},"tool_response":"Async agent launched successfully. (no id in this one)"}'
 rc="$(run "$CREATED_HOOK" "$NO_ID")"
 [ "$rc" = "0" ] && pass "1f  created: launch ack without an agentId exits 0" \
                 || fail "1f  created: exit $rc != 0"
@@ -160,7 +160,7 @@ printf -- '---\nname: dev\nmodel: sonnet\n---\nA dev.\n' >"$GUARD_REPO/.claude/a
 simulate_spawn() {
     local iso="$1" name="$2"
     local payload
-    payload='{"session_id":"'"$SESSION_ID"'","cwd":"'"$GUARD_REPO"'","hook_event_name":"PreToolUse","tool_name":"Agent","tool_use_id":"toolu_x","tool_input":{"name":"'"$name"'","subagent_type":"dev","isolation":"'"$iso"'","prompt":"work"}}'
+    payload='{"session_id":"'"$SESSION_ID"'","cwd":"'"$GUARD_REPO"'","hook_event_name":"PreToolUse","tool_name":"Agent","tool_use_id":"toolu_x","tool_input":{"name":"'"$name"'","effort":"high","subagent_type":"dev","isolation":"'"$iso"'","prompt":"work"}}'
     local pre_rc
     printf '%s' "$payload" \
         | CLAUDE_PROJECT_DIR="$GUARD_REPO" GUARD_ISOLATION_TEAMS_DIR="$TEAMS_DIR" \
@@ -177,7 +177,7 @@ simulate_spawn() {
 }
 
 reset_log
-res="$(simulate_spawn "" "dev-sonnet-blocked")"
+res="$(simulate_spawn "" "dev-sonnet-high-blocked")"
 if [ "$res" = "2:no" ]; then
     pass "2a  blocked spawn: the isolation guard refuses it (exit 2), so PostToolUse never runs"
 else
@@ -191,7 +191,7 @@ fi
 
 # POSITIVE CONTROL — same guard, same log, an ALLOWED spawn. Without this,
 # 2b would pass equally well if the hook were simply broken.
-res="$(simulate_spawn "worktree" "dev-sonnet-allowed")"
+res="$(simulate_spawn "worktree" "dev-sonnet-high-allowed")"
 if [ "$res" = "0:yes" ]; then
     pass "2c  POSITIVE CONTROL: the identical spawn WITH isolation is allowed and does run PostToolUse"
 else
@@ -211,14 +211,14 @@ fi
 # same sandbox the cases above use, so a future edit that "helpfully" moved
 # ledger writing into a lifecycle hook would be caught here.
 # ---------------------------------------------------------------------------
-printf 'dev-sonnet-taken\n' >>"$SESSION_DIR/spawned-names.log"
-res="$(simulate_spawn "worktree" "dev-sonnet-taken")"
+printf 'dev-sonnet-high-taken\n' >>"$SESSION_DIR/spawned-names.log"
+res="$(simulate_spawn "worktree" "dev-sonnet-high-taken")"
 if [ "$res" = "2:no" ]; then
     pass "3a  name reuse is still BLOCKED (a name already in spawned-names.log)"
 else
     fail "3a  name reuse: expected '2:no', got '$res'"
 fi
-res="$(simulate_spawn "worktree" "dev-sonnet-fresh")"
+res="$(simulate_spawn "worktree" "dev-sonnet-high-fresh")"
 if [ "$res" = "0:yes" ]; then
     pass "3b  POSITIVE CONTROL: a fresh name is still allowed"
 else
@@ -348,7 +348,7 @@ fi
 # The lead's own SendMessage carries no agent_id. "Messaged {name}" is an
 # orchestrator action, not a worker state.
 reset_log
-FROM_LEAD='{"hook_event_name":"PostToolUse","session_id":"'"$SESSION_ID"'","tool_name":"SendMessage","tool_input":{"to":"dev-sonnet-1","summary":"go ahead","message":"proceed please"}}'
+FROM_LEAD='{"hook_event_name":"PostToolUse","session_id":"'"$SESSION_ID"'","tool_name":"SendMessage","tool_input":{"to":"dev-sonnet-high-1","summary":"go ahead","message":"proceed please"}}'
 rc="$(run "$UPDATED_HOOK" "$FROM_LEAD")"
 [ "$rc" = "0" ] && [ "$(lines)" = "0" ] \
     && pass "6c  updated: the LEAD's SendMessage writes NOTHING (no agent_id -> not a worker update)" \

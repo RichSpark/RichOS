@@ -2337,20 +2337,23 @@ fn delegation_line(what: Option<&str>, who: Option<&str>) -> String {
 }
 
 /// A teammate's display name, the SAME rule as `ui/timeline.js` `teammateName`, so this row
-/// and the worker row that replaces it name one person one way: a `<role>-<model>-<id>`
-/// spawn name (`/^([a-z][a-z0-9]{1,15})-[a-z]+-[a-z0-9]{1,12}$/`) shows as its capitalized
-/// role ("mark-sonnet-f1" is "Mark"); anything else shows as it is.
+/// and the worker row that replaces it name one person one way: a
+/// `<role>-<model>-<effort>-<id>` spawn name, or the `<role>-<model>-<id>` recorded before the
+/// effort word, shows as its capitalized role ("mark-sonnet-high-f1" and "mark-sonnet-f1" are
+/// "Mark"); anything else shows as it is.
 fn teammate_name(raw: &str) -> String {
     let parts: Vec<&str> = raw.split('-').collect();
     let lower_alnum = |s: &str| s.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit());
-    let fits = parts.len() == 3
+    let effort = |s: &str| matches!(s, "low" | "medium" | "high" | "xhigh" | "max");
+    let id = parts.last().copied().unwrap_or("");
+    let fits = (parts.len() == 3 || (parts.len() == 4 && effort(parts[2])))
         && (2..=16).contains(&parts[0].len())
         && parts[0].starts_with(|c: char| c.is_ascii_lowercase())
         && lower_alnum(parts[0])
         && !parts[1].is_empty()
         && parts[1].chars().all(|c| c.is_ascii_lowercase())
-        && (1..=12).contains(&parts[2].len())
-        && lower_alnum(parts[2]);
+        && (1..=12).contains(&id.len())
+        && lower_alnum(id);
     if !fits {
         return raw.to_string();
     }
@@ -3196,6 +3199,8 @@ mod tests {
         assert_eq!(delegation_summary(&bash), None, "only a delegation is one");
         // The same rule as ui/timeline.js `teammateName`.
         assert_eq!(teammate_name("sage-opus-r3"), "Sage");
+        assert_eq!(teammate_name("sage-opus-high-r3"), "Sage", "the effort word is part of a spawn name");
+        assert_eq!(teammate_name("sage-opus-loud-r3"), "sage-opus-loud-r3", "only a real level is one");
         assert_eq!(teammate_name("Clark"), "Clark");
         assert_eq!(teammate_name("a-opus-r3"), "a-opus-r3", "a one-letter role is not a spawn name");
     }

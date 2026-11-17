@@ -214,13 +214,13 @@ python3 "$SRC_ENGINE/mega-lander/workspaces.py" --entity "$SESSREPO" --session d
     integration --repo "$SESSREPO" --branch main --why "the root-contract suite's body of work" >/dev/null
 SPAWN() { # <subagent_type> <name> [model] [prompt]
     local st="$1" nm="$2" md="${3:-}" pr="${4:-}"
-    printf '{"tool_name":"Agent","cwd":"%s","session_id":"deadbeef-0000","tool_use_id":"toolu_root_contract","tool_input":{"subagent_type":"%s","name":"%s","isolation":"worktree"%s%s}}' \
+    printf '{"tool_name":"Agent","cwd":"%s","session_id":"deadbeef-0000","tool_use_id":"toolu_root_contract","tool_input":{"subagent_type":"%s","name":"%s","effort":"high","isolation":"worktree"%s%s}}' \
         "$SESSREPO" "$st" "$nm" \
         "$([ -n "$md" ] && printf ',"model":"%s"' "$md")" \
         "$([ -n "$pr" ] && printf ',"prompt":"%s"' "$pr")"
 }
 # mark.md in the SESSION repo declares model: opus.
-run guard-worktree-isolation.sh "$(SPAWN mark mark-opus-1)" "CLAUDE_PROJECT_DIR=$SESSREPO"
+run guard-worktree-isolation.sh "$(SPAWN mark mark-opus-high-1)" "CLAUDE_PROJECT_DIR=$SESSREPO"
 if [ "$RC" -eq 0 ]; then
     ok "3a POSITIVE  a truthful spawn against the SESSION roster is allowed"
 else
@@ -228,7 +228,7 @@ else
 fi
 # 3b — the untruthful one must be caught, which is only possible if the guard
 # found the session repo's mark.md at all.
-run guard-worktree-isolation.sh "$(SPAWN mark mark-sonnet-1)" "CLAUDE_PROJECT_DIR=$SESSREPO"
+run guard-worktree-isolation.sh "$(SPAWN mark mark-sonnet-high-1)" "CLAUDE_PROJECT_DIR=$SESSREPO"
 if [ "$RC" -eq 2 ] && printf '%s' "$OUT" | grep -q 'untruthful model token'; then
     ok "3b POSITIVE  an untruthful model token is caught using the SESSION repo's roster"
 else
@@ -240,13 +240,13 @@ fi
 CLARK_MODEL="$(awk -F': *' '/^model:/{print $2; exit}' "$ENGINE/.claude/agents/clark.md" 2>/dev/null | tr -d '"'"'"' ')"
 if [ -n "$CLARK_MODEL" ]; then
     WRONG=opus; [ "$CLARK_MODEL" = "opus" ] && WRONG=haiku
-    run guard-worktree-isolation.sh "$(SPAWN richos-engine:clark "clark-$WRONG-1")" "CLAUDE_PROJECT_DIR=$SESSREPO"
+    run guard-worktree-isolation.sh "$(SPAWN richos-engine:clark "clark-$WRONG-high-1")" "CLAUDE_PROJECT_DIR=$SESSREPO"
     if [ "$RC" -eq 2 ] && printf '%s' "$OUT" | grep -q 'untruthful model token'; then
         ok "3c POSITIVE  a NAMESPACED type is checked against the ENGINE roster (clark is $CLARK_MODEL, '$WRONG' rejected)"
     else
         bad "3c namespaced type not checked (rc=$RC out=${OUT:0:300})"
     fi
-    run guard-worktree-isolation.sh "$(SPAWN richos-engine:clark "clark-$CLARK_MODEL-1")" "CLAUDE_PROJECT_DIR=$SESSREPO"
+    run guard-worktree-isolation.sh "$(SPAWN richos-engine:clark "clark-$CLARK_MODEL-high-1")" "CLAUDE_PROJECT_DIR=$SESSREPO"
     if [ "$RC" -eq 0 ]; then
         ok "3d NEGATIVE  the TRUTHFUL namespaced spawn is still allowed (3c is a real check, not a blanket block)"
     else
@@ -256,7 +256,7 @@ else
     bad "3c/3d could not read a model: line from the engine's clark.md"
 fi
 # 3e — an unresolvable NAMESPACE fails loud rather than degrading to accept.
-run guard-worktree-isolation.sh "$(SPAWN ghost-plugin:nobody nobody-opus-1)" "CLAUDE_PROJECT_DIR=$SESSREPO"
+run guard-worktree-isolation.sh "$(SPAWN ghost-plugin:nobody nobody-opus-high-1)" "CLAUDE_PROJECT_DIR=$SESSREPO"
 if [ "$RC" -eq 2 ] && printf '%s' "$OUT" | grep -q 'cannot verify the model token'; then
     ok "3e POSITIVE  an unresolvable namespaced type is REFUSED, not waved through"
 else
@@ -270,7 +270,7 @@ fi
 # asserting exactly one thing: an unresolvable NAMESPACE is refused by the
 # model-truthfulness clause while a bare built-in with no definition is not.
 run guard-worktree-isolation.sh \
-    "$(SPAWN general-purpose gp-sonnet-1 '' 'generic-agent: a bare host built-in with no roster definition, exercised here for the model-truthfulness clause')" \
+    "$(SPAWN general-purpose gp-sonnet-high-1 '' 'generic-agent: a bare host built-in with no roster definition, exercised here for the model-truthfulness clause')" \
     "CLAUDE_PROJECT_DIR=$SESSREPO"
 if [ "$RC" -eq 0 ]; then
     ok "3f NEGATIVE  a bare built-in type with no definition is still allowed"
@@ -282,7 +282,7 @@ fi
 # 4. guard-definition-drift.sh — the guard that wrote state into the wrong repo.
 # ===========================================================================
 rm -rf "$HOSTREPO/.claude/state" "$ENGINE/.claude/state" "$SESSREPO/.claude/state"
-run guard-definition-drift.sh "$(SPAWN mark mark-opus-1)" "CLAUDE_PROJECT_DIR=$SESSREPO"
+run guard-definition-drift.sh "$(SPAWN mark mark-opus-high-1)" "CLAUDE_PROJECT_DIR=$SESSREPO"
 if [ -d "$SESSREPO/.claude/state" ]; then
     ok "4a POSITIVE  drift state is written into the SESSION repo"
 else

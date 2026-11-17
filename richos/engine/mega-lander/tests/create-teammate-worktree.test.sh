@@ -64,10 +64,10 @@ echo "=== create-teammate-worktree tests ==="
 
 # 1. THE HAPPY PATH: created at <repo>-wt/<name>, on branch cc/<name> from HEAD,
 #    seeded, and REGISTERED with path/repo/branch/session.
-OUT="$("$HELPER" "$REPO/app" echo-opus-ct1 2>&1)"; rc=$?
-WT="$SANDBOX/repo-wt/echo-opus-ct1"
+OUT="$("$HELPER" "$REPO/app" echo-opus-high-ct1 2>&1)"; rc=$?
+WT="$SANDBOX/repo-wt/echo-opus-high-ct1"
 if [ "$rc" -eq 0 ] && [ -d "$WT" ] \
-   && [ "$(git -C "$WT" symbolic-ref -q --short HEAD)" = "cc/echo-opus-ct1" ] \
+   && [ "$(git -C "$WT" symbolic-ref -q --short HEAD)" = "cc/echo-opus-high-ct1" ] \
    && [ "$(git -C "$WT" rev-parse HEAD)" = "$(git -C "$REPO" rev-parse HEAD)" ]; then
     ok "C01  creates <repo>-wt/<name> on branch cc/<name> at the main checkout's HEAD (point 1)"
 else
@@ -79,18 +79,18 @@ if [ -f "$WT/.envrc" ] && [ -f "$WT/app/.env.local" ] && [ -f "$WT/app/deep/.env
 else
     bad "C02  seeding: $(ls -la "$WT" "$WT/app" 2>/dev/null | tr '\n' ' ')"
 fi
-if python3 - "$(REC echo-opus-ct1)" "$WT" "$REPO" <<'PY' 2>/dev/null
+if python3 - "$(REC echo-opus-high-ct1)" "$WT" "$REPO" <<'PY' 2>/dev/null
 import json, os, sys
 r = json.load(open(sys.argv[1]))
-assert r["name"] == "echo-opus-ct1" and r["session_id"] == "feedface-0000-4000-8000-000000000001", r
+assert r["name"] == "echo-opus-high-ct1" and r["session_id"] == "feedface-0000-4000-8000-000000000001", r
 w = r["workspaces"][0]
-assert w["kind"] == "cc" and w["branch"] == "cc/echo-opus-ct1" and w["created"] is True, w
+assert w["kind"] == "cc" and w["branch"] == "cc/echo-opus-high-ct1" and w["created"] is True, w
 assert os.path.realpath(w["path"]) == os.path.realpath(sys.argv[2]), w
 assert os.path.realpath(w["repo"]) == os.path.realpath(sys.argv[3]), w
 assert r["session_identity"]["pid"] and r["session_identity"]["pid_start"], r
 PY
 then ok "C03  the workspace is REGISTERED: name, session, repo, exact path, cc/ branch, created, and the session's process identity (point 3)"
-else bad "C03  registration: $(cat "$(REC echo-opus-ct1)" 2>/dev/null | tr '\n' ' ' | cut -c1-300)"; fi
+else bad "C03  registration: $(cat "$(REC echo-opus-high-ct1)" 2>/dev/null | tr '\n' ' ' | cut -c1-300)"; fi
 if printf '%s' "$OUT" | grep -q 'isolation: "worktree"' \
    && printf '%s' "$OUT" | grep -q "cross-repo-worktree: $WT" \
    && printf '%s' "$OUT" | grep -q 'prepare-agent-spawn.py' \
@@ -102,25 +102,34 @@ fi
 
 # 2. REFUSALS, each named. Nothing is created and nothing is registered.
 N0="$(ls "$RICHOS_WORKSPACES_DIR/agents" | wc -l | tr -d ' ')"
-"$HELPER" "$REPO" echo-opus-ct1 >/dev/null 2>&1; rc=$?
+"$HELPER" "$REPO" echo-opus-high-ct1 >/dev/null 2>&1; rc=$?
 [ "$rc" -eq 3 ] && ok "C06  refuses a name whose branch already exists (exit 3)" || bad "C06  duplicate name rc=$rc"
 "$HELPER" "$REPO" echo-ct2 >/dev/null 2>&1; rc=$?
-[ "$rc" -eq 3 ] && [ ! -d "$SANDBOX/repo-wt/echo-ct2" ] && ok "C07  refuses a name that is not <role>-<model>-<identifier> (exit 3)" || bad "C07  bad name rc=$rc"
+[ "$rc" -eq 3 ] && [ ! -d "$SANDBOX/repo-wt/echo-ct2" ] && ok "C07  refuses a name that is not <role>-<model>-<effort>-<identifier> (exit 3)" || bad "C07  bad name rc=$rc"
+# The effort word (CEO, 2026-11-17): the three parts every name had before are refused for a
+# NEW workspace, in the shared rule's own words, and a word that is not a level is refused.
+OUT="$("$HELPER" "$REPO" echo-opus-ct7 2>&1)"; rc=$?
+[ "$rc" -eq 3 ] && [ ! -d "$SANDBOX/repo-wt/echo-opus-ct7" ] \
+    && printf '%s' "$OUT" | grep -qF "is not a teammate name of the form <role>-<model>-<effort>-<identifier>" \
+    && ok "C07b refuses a name with no effort word, naming the four-part form (exit 3)" || bad "C07b no effort word rc=$rc: $OUT"
+"$HELPER" "$REPO" echo-opus-ultra-ct7 >/dev/null 2>&1; rc=$?
+[ "$rc" -eq 3 ] && [ ! -d "$SANDBOX/repo-wt/echo-opus-ultra-ct7" ] \
+    && ok "C07c refuses an effort word that is not a level Claude Code accepts (exit 3)" || bad "C07c bad effort word rc=$rc"
 "$HELPER" "$REPO" echo-gpt-ct3 >/dev/null 2>&1; rc=$?
 [ "$rc" -eq 3 ] && ok "C08  refuses a model token outside the allowed set (exit 3)" || bad "C08  bad model rc=$rc"
-mkdir -p "$SANDBOX/repo-wt/echo-opus-ct4"
-"$HELPER" "$REPO" echo-opus-ct4 >/dev/null 2>&1; rc=$?
+mkdir -p "$SANDBOX/repo-wt/echo-opus-high-ct4"
+"$HELPER" "$REPO" echo-opus-high-ct4 >/dev/null 2>&1; rc=$?
 [ "$rc" -eq 3 ] && ok "C09  refuses a target path that already exists (exit 3)" || bad "C09  existing path rc=$rc"
-"$HELPER" "$REPO" echo-opus-ct5 --base no-such-ref >/dev/null 2>&1; rc=$?
+"$HELPER" "$REPO" echo-opus-high-ct5 --base no-such-ref >/dev/null 2>&1; rc=$?
 [ "$rc" -eq 3 ] && ok "C10  refuses a base ref that does not resolve (exit 3)" || bad "C10  bad base rc=$rc"
-"$HELPER" "$SANDBOX" echo-opus-ct6 >/dev/null 2>&1; rc=$?
+"$HELPER" "$SANDBOX" echo-opus-high-ct6 >/dev/null 2>&1; rc=$?
 [ "$rc" -eq 3 ] && ok "C11  refuses a path that is not inside a repository (exit 3)" || bad "C11  non-repo rc=$rc"
 "$HELPER" "$REPO" >/dev/null 2>&1; rc=$?
 [ "$rc" -eq 2 ] && ok "C12  missing arguments is a usage error (exit 2)" || bad "C12  usage rc=$rc"
 # An option with no value: the helper has no errexit, so an unguarded `shift 2` looped
 # forever (hunt P5-27 pattern). Bounded by python's timeout, which kills only its own child.
 for opt in --dir --base --session; do
-    rc="$(python3 - "$HELPER" "$REPO" echo-opus-ct7 "$opt" <<'PYB'
+    rc="$(python3 - "$HELPER" "$REPO" echo-opus-high-ct7 "$opt" <<'PYB'
 import subprocess, sys
 try:
     print(subprocess.run(sys.argv[1:], capture_output=True, timeout=10).returncode)
@@ -132,23 +141,23 @@ PYB
         || bad "C12c $opt with no value: rc=$rc"
 done
 git -C "$REPO" branch codex/their-fix HEAD
-"$HELPER" "$REPO" echo-opus-cx1 --base codex/their-fix >/dev/null 2>&1; rc=$?
-[ "$rc" -eq 3 ] && [ ! -d "$SANDBOX/repo-wt/echo-opus-cx1" ] && ok "C12b refuses a codex/ base: an agent works from a copy, never inside codex/ (point 2)" || bad "C12b codex base rc=$rc"
+"$HELPER" "$REPO" echo-opus-high-cx1 --base codex/their-fix >/dev/null 2>&1; rc=$?
+[ "$rc" -eq 3 ] && [ ! -d "$SANDBOX/repo-wt/echo-opus-high-cx1" ] && ok "C12b refuses a codex/ base: an agent works from a copy, never inside codex/ (point 2)" || bad "C12b codex base rc=$rc"
 [ "$(ls "$RICHOS_WORKSPACES_DIR/agents" | wc -l | tr -d ' ')" -eq "$N0" ] && ok "C13  no refusal wrote a registration" || bad "C13  a refusal wrote a registration"
 
 # 3. --dir, --base and --session are honored.
 git -C "$REPO" branch older-base HEAD
-OUT="$("$HELPER" "$REPO" mark-sonnet-ct7 --dir "$SANDBOX/elsewhere/mark-sonnet-ct7" --base older-base --session cafebabe-0000-4000-8000-000000000002 2>&1)"; rc=$?
-if [ "$rc" -eq 0 ] && [ -d "$SANDBOX/elsewhere/mark-sonnet-ct7" ] && [ -f "$(REC mark-sonnet-ct7 cafebabe-0000-4000-8000-000000000002)" ]; then
+OUT="$("$HELPER" "$REPO" mark-sonnet-high-ct7 --dir "$SANDBOX/elsewhere/mark-sonnet-high-ct7" --base older-base --session cafebabe-0000-4000-8000-000000000002 2>&1)"; rc=$?
+if [ "$rc" -eq 0 ] && [ -d "$SANDBOX/elsewhere/mark-sonnet-high-ct7" ] && [ -f "$(REC mark-sonnet-high-ct7 cafebabe-0000-4000-8000-000000000002)" ]; then
     ok "C14  --dir, --base and --session are honored (registered under the named session)"
 else
     bad "C14  options (rc=$rc): $OUT"
 fi
 
 # 4. REGISTRATION FIRST: when it cannot be written, NOTHING is created (point 3).
-OUT="$(RICHOS_WORKSPACES_DIR=/nonexistent-dir/registry "$HELPER" "$REPO" norm-opus-ct8 2>&1)"; rc=$?
-if [ "$rc" -eq 3 ] && [ ! -e "$SANDBOX/repo-wt/norm-opus-ct8" ] \
-   && ! git -C "$REPO" rev-parse --verify -q refs/heads/cc/norm-opus-ct8 >/dev/null \
+OUT="$(RICHOS_WORKSPACES_DIR=/nonexistent-dir/registry "$HELPER" "$REPO" norm-opus-high-ct8 2>&1)"; rc=$?
+if [ "$rc" -eq 3 ] && [ ! -e "$SANDBOX/repo-wt/norm-opus-high-ct8" ] \
+   && ! git -C "$REPO" rev-parse --verify -q refs/heads/cc/norm-opus-high-ct8 >/dev/null \
    && printf '%s' "$OUT" | grep -q 'could not be registered, so it was not created'; then
     ok "C17  an unregistrable workspace is NEVER CREATED: no directory, no branch (point 3)"
 else
@@ -157,14 +166,14 @@ fi
 
 # 5. NO SESSION PROCESS -> refused before anything exists: a registration that
 #    could never tell its session ended is not a registration (point 12).
-OUT="$(RICHOS_SESSION_PID=999999 "$HELPER" "$REPO" norm-opus-ct9 2>&1)"; rc=$?
-if [ "$rc" -eq 3 ] && [ ! -e "$SANDBOX/repo-wt/norm-opus-ct9" ] && printf '%s' "$OUT" | grep -q 'process identity'; then
+OUT="$(RICHOS_SESSION_PID=999999 "$HELPER" "$REPO" norm-opus-high-ct9 2>&1)"; rc=$?
+if [ "$rc" -eq 3 ] && [ ! -e "$SANDBOX/repo-wt/norm-opus-high-ct9" ] && printf '%s' "$OUT" | grep -q 'process identity'; then
     ok "C19  no readable session process -> refused, nothing created"
 else
     bad "C19  no-session (rc=$rc): $OUT"
 fi
-"$HELPER" "$REPO" norm-opus-ct9 >/dev/null 2>&1; rc=$?
-[ "$rc" -eq 0 ] && [ -d "$SANDBOX/repo-wt/norm-opus-ct9" ] && ok "C20  the same call with a readable session succeeds (positive control)" || bad "C20  positive control rc=$rc"
+"$HELPER" "$REPO" norm-opus-high-ct9 >/dev/null 2>&1; rc=$?
+[ "$rc" -eq 0 ] && [ -d "$SANDBOX/repo-wt/norm-opus-high-ct9" ] && ok "C20  the same call with a readable session succeeds (positive control)" || bad "C20  positive control rc=$rc"
 
 # 6. CREATION FAILS AFTER REGISTRATION: recorded, NOTHING DELETED by the helper.
 #    A `git` shim fails `worktree add` only.
@@ -187,8 +196,8 @@ done
 exec "$REAL_GIT" "\$@"
 SHIMEOF
 chmod +x "$SHIM/git"
-OUT="$(PATH="$SHIM:$PATH" "$HELPER" "$REPO" norm-opus-ct21 2>&1)"; rc=$?
-if [ "$rc" -eq 4 ] && python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); assert r.get("creation_failed"), r' "$(REC norm-opus-ct21)" 2>/dev/null \
+OUT="$(PATH="$SHIM:$PATH" "$HELPER" "$REPO" norm-opus-high-ct21 2>&1)"; rc=$?
+if [ "$rc" -eq 4 ] && python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); assert r.get("creation_failed"), r' "$(REC norm-opus-high-ct21)" 2>/dev/null \
    && printf '%s' "$OUT" | grep -q "page's own land"; then
     ok "C22  creation failing AFTER registration is RECORDED (creation_failed), exit 4; the helper deletes nothing"
 else
@@ -209,62 +218,62 @@ git -C "$REPO2" add -A
 git -C "$REPO2" commit -q -m seed
 python3 "$WS_PY" --entity "$REPO2" --session "$RICHOS_SESSION_ID" integration \
     --repo "$REPO2" --branch main --why "the second repository of one teammate" >/dev/null
-"$HELPER" "$REPO" norm-opus-ct30 >/dev/null 2>&1; rc=$?
-[ "$rc" -eq 0 ] && ok "C24a POSITIVE CONTROL: the first workspace of norm-opus-ct30 is created (exit 0)" \
+"$HELPER" "$REPO" norm-opus-high-ct30 >/dev/null 2>&1; rc=$?
+[ "$rc" -eq 0 ] && ok "C24a POSITIVE CONTROL: the first workspace of norm-opus-high-ct30 is created (exit 0)" \
                 || bad "C24a first workspace rc=$rc"
-OUT="$("$HELPER" "$REPO2" norm-opus-ct30 2>&1)"; rc=$?
-if [ "$rc" -eq 0 ] && [ -d "$SANDBOX/repo2-wt/norm-opus-ct30" ] \
-   && [ "$(git -C "$SANDBOX/repo2-wt/norm-opus-ct30" symbolic-ref -q --short HEAD)" = "cc/norm-opus-ct30" ]; then
+OUT="$("$HELPER" "$REPO2" norm-opus-high-ct30 2>&1)"; rc=$?
+if [ "$rc" -eq 0 ] && [ -d "$SANDBOX/repo2-wt/norm-opus-high-ct30" ] \
+   && [ "$(git -C "$SANDBOX/repo2-wt/norm-opus-high-ct30" symbolic-ref -q --short HEAD)" = "cc/norm-opus-high-ct30" ]; then
     ok "C24  a SECOND repository under the SAME name is created on its own cc/<name> branch (point 10)"
 else
     bad "C24  second repository (rc=$rc): $OUT"
 fi
-if python3 - "$(REC norm-opus-ct30)" "$REPO" "$REPO2" <<'PY' 2>/dev/null
+if python3 - "$(REC norm-opus-high-ct30)" "$REPO" "$REPO2" <<'PY' 2>/dev/null
 import json, os, sys
 r = json.load(open(sys.argv[1]))
 live = [w for w in r["workspaces"] if not w.get("deleted_at")]
 assert len(live) == 2, live
 repos = sorted(os.path.realpath(w["repo"]) for w in live)
 assert repos == sorted(os.path.realpath(p) for p in sys.argv[2:4]), repos
-assert all(w["kind"] == "cc" and w["created"] is True and w["branch"] == "cc/norm-opus-ct30"
+assert all(w["kind"] == "cc" and w["created"] is True and w["branch"] == "cc/norm-opus-high-ct30"
            for w in live), live
 PY
 then ok "C25  BOTH are on the ONE agent's record — one name, one agent, two workspaces (point 10)"
-else bad "C25  one record: $(cat "$(REC norm-opus-ct30)" 2>/dev/null | tr '\n' ' ' | cut -c1-400)"; fi
-OUT="$("$HELPER" "$REPO" norm-opus-ct30 --dir "$SANDBOX/elsewhere/norm-opus-ct30" 2>&1)"; rc=$?
-if [ "$rc" -eq 3 ] && [ ! -e "$SANDBOX/elsewhere/norm-opus-ct30" ]; then
+else bad "C25  one record: $(cat "$(REC norm-opus-high-ct30)" 2>/dev/null | tr '\n' ' ' | cut -c1-400)"; fi
+OUT="$("$HELPER" "$REPO" norm-opus-high-ct30 --dir "$SANDBOX/elsewhere/norm-opus-high-ct30" 2>&1)"; rc=$?
+if [ "$rc" -eq 3 ] && [ ! -e "$SANDBOX/elsewhere/norm-opus-high-ct30" ]; then
     ok "C26  NEGATIVE: a second workspace in the SAME repository under that name is still refused (exit 3)"
 else
     bad "C26  same-repository second workspace (rc=$rc): $OUT"
 fi
 # The same refusal AT THE REGISTRY, which is where the rule lives: the helper's
 # own branch check answers it first, so the registration is asked directly.
-OUT="$(python3 "$WS_PY" register-cc --name norm-opus-ct30 --repo "$REPO" \
-        --path "$SANDBOX/elsewhere/norm-opus-ct30" --branch cc/norm-opus-ct30 2>&1)"; rc=$?
+OUT="$(python3 "$WS_PY" register-cc --name norm-opus-high-ct30 --repo "$REPO" \
+        --path "$SANDBOX/elsewhere/norm-opus-high-ct30" --branch cc/norm-opus-high-ct30 2>&1)"; rc=$?
 if [ "$rc" -ne 0 ] && printf '%s' "$OUT" | grep -q "already has a workspace in"; then
     ok "C27  and the REGISTRY refuses it by the question it asks — one workspace per repository per name (point 3)"
 else
     bad "C27  registry-level same-repository refusal (rc=$rc): $OUT"
 fi
-OUT="$(python3 "$WS_PY" register-cc --name norm-opus-ct30 --repo "$REPO2" \
-        --path "$SANDBOX/elsewhere/norm-opus-ct30b" --branch cc/norm-opus-ct30 2>&1)"; rc=$?
+OUT="$(python3 "$WS_PY" register-cc --name norm-opus-high-ct30 --repo "$REPO2" \
+        --path "$SANDBOX/elsewhere/norm-opus-high-ct30b" --branch cc/norm-opus-high-ct30 2>&1)"; rc=$?
 if [ "$rc" -ne 0 ] && printf '%s' "$OUT" | grep -q "already has a workspace in"; then
     ok "C27b POSITIVE CONTROL: the refusal is about the REPOSITORY, not the name — the same call for the second repository is refused too, and only because that one is taken"
 else
     bad "C27b registry refusal names the repository (rc=$rc): $OUT"
 fi
 # A FINISHED agent gets no further workspace: it never writes again (point 9).
-"$HELPER" "$REPO2" norm-opus-ct31 >/dev/null 2>&1; rc=$?
-[ "$rc" -eq 0 ] && ok "C28a POSITIVE CONTROL: norm-opus-ct31's first workspace is created (exit 0)" \
+"$HELPER" "$REPO2" norm-opus-high-ct31 >/dev/null 2>&1; rc=$?
+[ "$rc" -eq 0 ] && ok "C28a POSITIVE CONTROL: norm-opus-high-ct31's first workspace is created (exit 0)" \
                 || bad "C28a first workspace rc=$rc"
-python3 - "$(REC norm-opus-ct31)" <<'PY'
+python3 - "$(REC norm-opus-high-ct31)" <<'PY'
 import json, sys, time
 r = json.load(open(sys.argv[1]))
 r["agent_id"] = "a0123456789abcde"; r["tool_use_id"] = "toolu_ct31"; r["spawned_at"] = "now"
 r["end"] = {"signal": "SubagentStop", "at": time.time()}
 json.dump(r, open(sys.argv[1], "w"))
 PY
-OUT="$("$HELPER" "$REPO" norm-opus-ct31 2>&1)"; rc=$?
+OUT="$("$HELPER" "$REPO" norm-opus-high-ct31 2>&1)"; rc=$?
 if [ "$rc" -eq 3 ] && printf '%s' "$OUT" | grep -q "is finished"; then
     ok "C28  a FINISHED agent gets no further workspace, in any repository (points 5, 7, 9)"
 else
@@ -286,8 +295,8 @@ git -C "$REPO3" commit -q -m seed
 python3 "$WS_PY" --entity "$REPO3" --session "$RICHOS_SESSION_ID" integration \
     --repo "$REPO3" --branch main --why "the worktree-setup cases" >/dev/null
 
-OUT="$("$HELPER" "$REPO3" zach-opus-ct40 2>&1)"; rc=$?
-WT3="$SANDBOX/repo3-wt/zach-opus-ct40"
+OUT="$("$HELPER" "$REPO3" zach-opus-high-ct40 2>&1)"; rc=$?
+WT3="$SANDBOX/repo3-wt/zach-opus-high-ct40"
 if [ "$rc" -eq 0 ] && [ -f "$WT3/setup-ran.txt" ] \
    && [ "$(cat "$WT3/setup-ran.txt" 2>/dev/null)" = "$WT3" ] \
    && printf '%s' "$OUT" | grep -q "^setup: *ok"; then
@@ -300,8 +309,8 @@ fi
 git -C "$REPO3" checkout -q -b failing main
 printf 'echo "the cache volume is not mounted" >&2\nexit 7\n' >"$REPO3/.richos/worktree-setup"
 git -C "$REPO3" commit -q -am "a setup that fails"
-OUT="$("$HELPER" "$REPO3" zach-opus-ct41 --base failing 2>&1)"; rc=$?
-WT3B="$SANDBOX/repo3-wt/zach-opus-ct41"
+OUT="$("$HELPER" "$REPO3" zach-opus-high-ct41 --base failing 2>&1)"; rc=$?
+WT3B="$SANDBOX/repo3-wt/zach-opus-high-ct41"
 if [ "$rc" -eq 0 ] && [ -d "$WT3B" ] \
    && printf '%s' "$OUT" | grep -q "FAILED (exit 7)" \
    && printf '%s' "$OUT" | grep -q "the cache volume is not mounted"; then
@@ -318,8 +327,8 @@ git -C "$REPO3" checkout -q -b hanging main
 # in twenty seconds rather than holding the whole suite for ten minutes.
 printf 'sleep 20\n' >"$REPO3/.richos/worktree-setup"
 git -C "$REPO3" commit -q -am "a setup that hangs"
-OUT="$(WORKTREE_SETUP_TIMEOUT=2 "$HELPER" "$REPO3" zach-opus-ct42 --base hanging 2>&1)"; rc=$?
-WT3C="$SANDBOX/repo3-wt/zach-opus-ct42"
+OUT="$(WORKTREE_SETUP_TIMEOUT=2 "$HELPER" "$REPO3" zach-opus-high-ct42 --base hanging 2>&1)"; rc=$?
+WT3C="$SANDBOX/repo3-wt/zach-opus-high-ct42"
 if [ "$rc" -eq 0 ] && [ -d "$WT3C" ] && printf '%s' "$OUT" | grep -q "TIMED OUT after 2s"; then
     ok "C42  a HANGING setup is killed at the bound and the workspace is still created"
 else
@@ -327,7 +336,7 @@ else
 fi
 
 # And a repository with no setup file says so rather than inventing a status.
-OUT="$("$HELPER" "$REPO" zach-opus-ct43 2>&1)"; rc=$?
+OUT="$("$HELPER" "$REPO" zach-opus-high-ct43 2>&1)"; rc=$?
 if [ "$rc" -eq 0 ] && printf '%s' "$OUT" | grep -q "^setup: *none$"; then
     ok "C43  a repository with no .worktree-setup reports none, and nothing is run"
 else
@@ -349,20 +358,20 @@ python3 "$WS_PY" --entity "$REPO4" --session "$RICHOS_SESSION_ID" integration \
     --repo "$REPO4" --branch main --why "the seed-failure case" >/dev/null
 printf 'TOKEN=1\n' >"$REPO4/.env.secret"
 chmod 000 "$REPO4/.env.secret"
-OUT="$("$HELPER" "$REPO4" zach-opus-ct44 2>&1)"; rc=$?
+OUT="$("$HELPER" "$REPO4" zach-opus-high-ct44 2>&1)"; rc=$?
 chmod 600 "$REPO4/.env.secret"
 if [ "$rc" -eq 4 ] && printf '%s' "$OUT" | grep -q "seeding the .worktreeinclude files" \
    && printf '%s' "$OUT" | grep -q ".env.secret" \
    && ! printf '%s' "$OUT" | grep -q "^seeded:" \
-   && python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); assert r.get("creation_failed"), r' "$(REC zach-opus-ct44)" 2>/dev/null; then
+   && python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); assert r.get("creation_failed"), r' "$(REC zach-opus-high-ct44)" 2>/dev/null; then
     ok "C44  a FAILED seed is a failed creation (exit 4, recorded, the unreadable file named), never \"seeded: 0\""
 else
     bad "C44  seed failure (rc=$rc): $OUT"
 fi
 # and the positive control, same repository, once the file can be read
-OUT="$("$HELPER" "$REPO4" zach-opus-ct44b 2>&1)"; rc=$?
+OUT="$("$HELPER" "$REPO4" zach-opus-high-ct44b 2>&1)"; rc=$?
 if [ "$rc" -eq 0 ] && printf '%s' "$OUT" | grep -q 'seeded:     1 file(s)' \
-   && [ -f "$SANDBOX/repo4-wt/zach-opus-ct44b/.env.secret" ]; then
+   && [ -f "$SANDBOX/repo4-wt/zach-opus-high-ct44b/.env.secret" ]; then
     ok "C44b POSITIVE CONTROL: the readable file is seeded and counted"
 else
     bad "C44b seed control (rc=$rc): $OUT"
@@ -378,8 +387,8 @@ echo "$!" > "$PWD/child.pid"
 sleep 20
 SETUPEOF
 git -C "$REPO3" commit -q -am "a setup that starts a child and hangs"
-OUT="$(WORKTREE_SETUP_TIMEOUT=2 "$HELPER" "$REPO3" zach-opus-ct45 --base spawning 2>&1)"; rc=$?
-WT3D="$SANDBOX/repo3-wt/zach-opus-ct45"
+OUT="$(WORKTREE_SETUP_TIMEOUT=2 "$HELPER" "$REPO3" zach-opus-high-ct45 --base spawning 2>&1)"; rc=$?
+WT3D="$SANDBOX/repo3-wt/zach-opus-high-ct45"
 CHILD="$(cat "$WT3D/child.pid" 2>/dev/null || true)"
 ALIVE=no
 if [ -n "$CHILD" ] && kill -0 "$CHILD" 2>/dev/null; then
@@ -401,16 +410,16 @@ fi
 # the confirmation needs. Default setup bound (120 s), a 20 s hanging setup,
 # and a deadline 14 s out: the creation must finish well inside 14 s.
 T0="$(date +%s)"
-OUT="$(RICHOS_OPERATION_DEADLINE="$((T0 + 14))" "$HELPER" "$REPO3" zach-opus-ct46 --base hanging 2>&1)"; rc=$?
+OUT="$(RICHOS_OPERATION_DEADLINE="$((T0 + 14))" "$HELPER" "$REPO3" zach-opus-high-ct46 --base hanging 2>&1)"; rc=$?
 T1="$(date +%s)"
-if [ "$rc" -eq 0 ] && [ "$((T1 - T0))" -lt 14 ] && [ -d "$SANDBOX/repo3-wt/zach-opus-ct46" ] \
+if [ "$rc" -eq 0 ] && [ "$((T1 - T0))" -lt 14 ] && [ -d "$SANDBOX/repo3-wt/zach-opus-high-ct46" ] \
    && printf '%s' "$OUT" | grep -q "the caller's deadline"; then
     ok "C46  the setup is bounded by the caller's deadline, and the creation answers inside it ($((T1 - T0))s < 14s)"
 else
     bad "C46  caller deadline (rc=$rc, took $((T1 - T0))s): $OUT"
 fi
-OUT="$(RICHOS_OPERATION_DEADLINE="$(($(date +%s) - 1))" "$HELPER" "$REPO3" zach-opus-ct47 2>&1)"; rc=$?
-if [ "$rc" -eq 3 ] && [ ! -e "$SANDBOX/repo3-wt/zach-opus-ct47" ] && printf '%s' "$OUT" | grep -q "deadline"; then
+OUT="$(RICHOS_OPERATION_DEADLINE="$(($(date +%s) - 1))" "$HELPER" "$REPO3" zach-opus-high-ct47 2>&1)"; rc=$?
+if [ "$rc" -eq 3 ] && [ ! -e "$SANDBOX/repo3-wt/zach-opus-high-ct47" ] && printf '%s' "$OUT" | grep -q "deadline"; then
     ok "C47  a caller whose deadline has already passed gets a refusal and nothing is created"
 else
     bad "C47  passed deadline (rc=$rc): $OUT"

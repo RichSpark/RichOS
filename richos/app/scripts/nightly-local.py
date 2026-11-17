@@ -1756,10 +1756,13 @@ class Runner:
                 return remember(prior["escalation"])
         stable_candidate = packet["channel"] == "stable"
         title = f"Prepare {info['tag']} changelog before publication ({identity_digest[:12]})"
-        model = "opus"
+        # The name carries the model and the effort level the worker is started at; the
+        # spawn guard refuses a name whose words differ from the command's own.
+        model, effort = "opus", "high"
         start = shlex.join([str(ROOT / "richos/engine/scripts/spawn.sh"),
-                            f"newt-{model}-{identity_digest[:12]}", "--repo", "richos",
-                            "--type", "newt", "--model", model, "--brief", str(brief)])
+                            f"newt-{model}-{effort}-{identity_digest[:12]}", "--repo", "richos",
+                            "--type", "newt", "--model", model, "--effort", effort,
+                            "--brief", str(brief)])
         question = (f"Start Newt, the Release Notes Writer, with this exact command: `{start}`. "
                     f"The brief already names the tag and request. The candidate's run is "
                     f"{info['run_id']}. Draft now{' while QA walks it' if not stable_candidate else ' (a stable has no QA walk)'}. "
@@ -3746,11 +3749,13 @@ BRIEF_TAG = "<TAG>"
 
 
 def published_escalation(tag, stable, brief):
-    # The spawn guard wants <role>-<model>-<identifier>, identifier lower-case alphanumeric, at most 12.
+    # The spawn guard wants <role>-<model>-<effort>-<identifier>, identifier lower-case
+    # alphanumeric, at most 12, and the effort word equal to the level the command names.
     slug = "nv" + re.sub(r"[^a-z0-9]+", "", tag.lower().lstrip("v"))[:10]
     start = shlex.join([str(ROOT / "richos/engine/scripts/spawn.sh"),
-                        f"zach-sonnet-{slug}", "--repo", "richos",
-                        "--type", "zach", "--model", "sonnet", "--brief", str(brief)])
+                        f"zach-sonnet-high-{slug}", "--repo", "richos",
+                        "--type", "zach", "--model", "sonnet", "--effort", "high",
+                        "--brief", str(brief)])
     title = f"{tag} published; bump main's next release version."
     return title, (f"The changelog is already published with {tag}. Start Zach with this exact "
                    f"command: `{start}`. The brief already names the published tag. "

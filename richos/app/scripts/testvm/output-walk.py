@@ -436,8 +436,9 @@ def project(rows):
 
 
 # The proto-teammate shelf, slice 2 (richos-hq docs/plans/2026-10-06-proto-teammate-shelf.md §3, §7):
-# an agent the back end starts is `<teammate>-<model>-<id12>`, and a person reads the teammate's name.
-NAMED_AGENT = re.compile(r'^([a-z][a-z0-9]{1,15})-(opus|sonnet|haiku)-([0-9a-f]{12})$')
+# an agent the back end starts is `<teammate>-<model>-<effort>-<id12>`, and a person reads the
+# teammate's name.
+NAMED_AGENT = re.compile(r'^([a-z][a-z0-9]{1,15})-(fable|opus|sonnet|haiku)-(low|medium|high|xhigh|max)-([0-9a-f]{12})$')
 DUTIES = ('worker', 'reviewer', 'consult')
 # Slice 3's research question: plainly Clark's role, with no repository in it, so the back end
 # has no code job to prepare and every word of the brief comes from here.
@@ -456,6 +457,22 @@ SHELF_TASK = ('Please add a file named %s whose whole content is the line "%s" t
 # the start of an assignment. Each ends with how long the renewal took.
 RENEWED_BETWEEN_TURNS = re.compile(r"renewed between two of its turns because its team changed, in (\d+) ms")
 RENEWED_AT_START = re.compile(r"renewed because its team changed, before the next assignment, in (\d+) ms")
+
+
+def agent_starts(callbacks, keys):
+    """Every Agent call the back end itself made, as Agent ran it ({key: value} for KEYS).
+
+    The back end submits the short call `prepare` returned, which names the receipt and carries
+    no name (mega-lander/app.py agent_call, since 2026-10-31); the app's hook hands Agent the
+    stored call in its place, name included, and that is the tool_input the call's PostToolUse
+    carries. A call with no PostToolUse (a hook refused it, or it never returned) is given as it
+    was submitted."""
+    def own(c, event):
+        return (c.get('hook_event_name') == event and c.get('tool_name') in ('Agent', 'Task')
+                and not c.get('agent_id'))
+    ran = {c.get('tool_use_id'): c.get('tool_input') or {} for c in callbacks if own(c, 'PostToolUse')}
+    return [{k: (ran.get(c.get('tool_use_id')) or c.get('tool_input') or {}).get(k) for k in keys}
+            for c in callbacks if own(c, 'PreToolUse')]
 
 
 def consult_verdict(teammate, receipts, spawns, inspects, worktrees, assignments):
@@ -479,8 +496,10 @@ def consult_verdict(teammate, receipts, spawns, inspects, worktrees, assignments
         spawn = [s for s in spawns if s.get('name') == name]
         if not spawn:
             failures.append(f'{name} was never started')
-        elif m and (spawn[0].get('subagent_type') != 'richos-app-engine:' + m.group(1) or spawn[0].get('model') != m.group(2)):
-            failures.append(f'{name} was started as {spawn[0].get("subagent_type")!r} on {spawn[0].get("model")!r}')
+        elif m and (spawn[0].get('subagent_type') != 'richos-app-engine:' + m.group(1) or spawn[0].get('model') != m.group(2)
+                    or spawn[0].get('effort') != m.group(3)):
+            failures.append(f'{name} was started as {spawn[0].get("subagent_type")!r} on {spawn[0].get("model")!r} '
+                            f'at effort {spawn[0].get("effort")!r}')
         elif 'cross-repo-worktree:' in (spawn[0].get('prompt') or ''):
             failures.append(f'{name} was given a workspace')
         answer = r.get('consult_answer') or {}
@@ -534,11 +553,13 @@ def shelf_verdict(shelf, saved, receipts, spawns, lands, read_back, renewals, as
         m = NAMED_AGENT.match(w.get('name') or '')
         spawn = [s for s in spawns if s.get('name') == w.get('name')]
         if not m or m.group(1) != name:
-            failures.append(f"{w.get('name')!r} is not {name}-<model>-<id12>")
+            failures.append(f"{w.get('name')!r} is not {name}-<model>-<effort>-<id12>")
         elif not spawn:
             failures.append(f"{w.get('name')} was never started")
-        elif spawn[0].get('subagent_type') != 'richos-app-engine:' + name or spawn[0].get('model') != m.group(2):
-            failures.append(f"{w.get('name')} was started as {spawn[0].get('subagent_type')!r} on {spawn[0].get('model')!r}")
+        elif (spawn[0].get('subagent_type') != 'richos-app-engine:' + name or spawn[0].get('model') != m.group(2)
+              or spawn[0].get('effort') != m.group(3)):
+            failures.append(f"{w.get('name')} was started as {spawn[0].get('subagent_type')!r} on {spawn[0].get('model')!r} "
+                            f"at effort {spawn[0].get('effort')!r}")
     if not by_role.get('reviewer'):
         failures.append('nobody reviewed the change')
     if name and (not lands or not all((r.get('workerName') or '').startswith(name + '-') for r in lands)):
@@ -554,7 +575,7 @@ def shelf_verdict(shelf, saved, receipts, spawns, lands, read_back, renewals, as
 def named_verdict(teammate, spawns, workers, by_labels, chips):
     """Why the backend-worker job was NOT done by the named teammate, shown by its name ([] = it was).
 
-    spawns: every Agent call the back end made ({name, subagent_type, model}); workers: the record's
+    spawns: every Agent call the back end made ({name, subagent_type, model, effort}); workers: the record's
     worker rows ({workerName, source}); by_labels: the names of the Output panel's rows that carry a
     "by ..." line; chips: any control or text on screen found carrying an engine agent name."""
     failures = []
@@ -563,12 +584,14 @@ def named_verdict(teammate, spawns, workers, by_labels, chips):
     for s in spawns:
         m = NAMED_AGENT.match(s.get('name') or '')
         if not m or m.group(1) in DUTIES:
-            failures.append(f"{s.get('name')!r} is not <teammate>-<model>-<id12> of a named teammate")
+            failures.append(f"{s.get('name')!r} is not <teammate>-<model>-<effort>-<id12> of a named teammate")
             continue
         if s.get('subagent_type') != 'richos-app-engine:' + m.group(1):
             failures.append(f"{s['name']} was started as {s.get('subagent_type')!r}, not its own definition")
         if s.get('model') != m.group(2):
             failures.append(f"{s['name']} was started on {s.get('model')!r}, not the model its name says")
+        if s.get('effort') != m.group(3):
+            failures.append(f"{s['name']} was started at effort {s.get('effort')!r}, not the level its name says")
     if not any((s.get('name') or '').startswith(teammate + '-') for s in spawns):
         failures.append(f'the seeded {teammate} was never started')
     landed = [w for w in workers if w.get('source') == 'land']
@@ -577,7 +600,7 @@ def named_verdict(teammate, spawns, workers, by_labels, chips):
     want = 'by ' + teammate.capitalize()
     if not any(want in label for label in by_labels):
         failures.append(f'the Output panel does not say {want!r}: {by_labels}')
-    raw = [t for t in by_labels + chips if re.search(r'[a-z0-9]-(opus|sonnet|haiku)-[0-9a-f]{12}', t)]
+    raw = [t for t in by_labels + chips if re.search(r'[a-z0-9]-(fable|opus|sonnet|haiku)-((low|medium|high|xhigh|max)-)?[0-9a-f]{12}', t)]
     if raw:
         failures.append(f"a label shows the engine's agent name: {raw}")
     return failures
@@ -823,18 +846,15 @@ class OutputWalk(command_walk.CommandWalk):
     def named(self):
         """Slice 2 of the proto-teammate shelf (plan §3, §7), after backend-worker in the same run,
         with the teammate seeded into the fixture home (command-walk.py --seed-team HOME FILE): the
-        back end started the seeded teammate as `<teammate>-<model>-<id12>` of its own definition on
-        its own model, the landed files are that teammate's, and the Output panel says "by Mark"."""
+        back end started the seeded teammate as `<teammate>-<model>-<effort>-<id12>` of its own
+        definition on its own model at the effort level its name says, the landed files are that
+        teammate's, and the Output panel says "by Mark"."""
         evidence, note = self.observed('named')
         teammate = self.a.teammate
         seen = json.loads((self.out / 'backend-worker-observed.json').read_text())
         spawns = []
         for session in seen.get('work_sessions') or []:
-            for c in self.callbacks(session):
-                if (c.get('hook_event_name') == 'PreToolUse' and c.get('tool_name') in ('Agent', 'Task')
-                        and not c.get('agent_id')):
-                    ti = c.get('tool_input') or {}
-                    spawns.append({k: ti.get(k) for k in ('name', 'subagent_type', 'model')})
+            spawns += agent_starts(self.callbacks(session), ('name', 'subagent_type', 'model', 'effort'))
         workers = [{k: r.get(k) for k in ('path', 'workerName', 'source')}
                    for r in self.record() if r.get('actor') == 'worker']
         note(teammate=teammate, spawns=spawns, worker_rows=workers)
@@ -893,11 +913,9 @@ class OutputWalk(command_walk.CommandWalk):
         receipts = json.loads(guest(self.vm, 'python3 -c ' + shlex.quote(script) + ' ' + shlex.quote(self.data), 60))
         spawns, inspects, ended = [], [], []
         for session in sessions:
+            spawns += agent_starts(self.callbacks(session), ('name', 'subagent_type', 'model', 'effort', 'prompt'))
             for c in self.callbacks(session):
                 event, tool = c.get('hook_event_name'), str(c.get('tool_name') or '')
-                if event == 'PreToolUse' and tool in ('Agent', 'Task') and not c.get('agent_id'):
-                    ti = c.get('tool_input') or {}
-                    spawns.append({k: ti.get(k) for k in ('name', 'subagent_type', 'model', 'prompt')})
                 if event == 'PostToolUse' and 'richos_work' in tool and tool.endswith('inspect') and not c.get('agent_id'):
                     inspects.append(json.dumps(c.get('tool_response')))
                 if event == 'SubagentStop':
@@ -975,11 +993,11 @@ class OutputWalk(command_walk.CommandWalk):
                   '    for line in open(p):\n'
                   '        try: c=json.loads(line).get("callback",{})\n'
                   '        except Exception: continue\n'
-                  '        if c.get("hook_event_name")=="PreToolUse" and c.get("tool_name") in ("Agent","Task") and not c.get("agent_id"):\n'
-                  '            ti=c.get("tool_input") or {}\n'
-                  '            out.append({k:ti.get(k) for k in ("name","subagent_type","model")})\n'
+                  '        if c.get("tool_name") in ("Agent","Task") and not c.get("agent_id"):\n'
+                  '            out.append({k:c.get(k) for k in ("hook_event_name","tool_name","tool_use_id","tool_input")})\n'
                   'print(json.dumps(out))\n')
-        spawns = json.loads(guest(self.vm, 'python3 -c ' + shlex.quote(script) + ' ' + shlex.quote(self.data), 60))
+        spawns = agent_starts(json.loads(guest(self.vm, 'python3 -c ' + shlex.quote(script) + ' ' + shlex.quote(self.data), 60)),
+                              ('name', 'subagent_type', 'model', 'effort'))
         acme = self.company + '/' + SHELF_FILE
         rows = self.save_record('record-after-shelf.jsonl')
         lands = [r for r in rows if r.get('source') == 'land' and r.get('path') == acme]

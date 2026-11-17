@@ -358,6 +358,11 @@ run_case "a.name-never-spawned-blocks" 2 \
     "$(payload 'Dispatched sage-opus-q4 on the migration.')" \
     "never spawned"
 
+# The name with its effort word (2026-11-17) is read as one name, like the three parts before it.
+run_case "a2.four-part-name-never-spawned-blocks" 2 \
+    "$(payload 'Dispatched sage-opus-high-q4 on the migration.')" \
+    "never spawned"
+
 run_case "b.name-in-ledger-passes" 0 \
     "$(payload 'norm-opus-a1 landed the fix.')"
 

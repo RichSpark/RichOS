@@ -2,11 +2,11 @@
 
 Every teammate gets a short human name, not a role string. `backend-engineer-2` is a
 slot; **Milo** is a colleague. Names that read like people make the roster easier to hold
-in your head, faster to say out loud, and pleasant to work with over hundreds of spawns.
+in your head, faster to say out loud and pleasant to work with over hundreds of spawns.
 This doc is the convention for choosing those names. Dean proposes names that conform to it
 by default; the orchestrator and the CEO can always override.
 
-Two layers: a **mandatory floor** every name must clear, and an **optional mnemonic bonus**
+Two layers: a **mandatory floor** every name must clear and an **optional mnemonic bonus**
 that binds a name to its specialty when one comes naturally.
 
 ## The floor (mandatory)
@@ -46,11 +46,11 @@ The convention has been used long enough to surface three things worth writing d
 1. **Retrofits are legitimate.** The mnemonic serves the human, so inventing one *after* the
    name is already in use is completely fine — the value is the same whether the hook came
    first or second. **Jinx's** hook ("**Jinx** jinxes a premature sign-off" — the visual QA
-   counter-key) was retrofitted onto a name chosen first, and it works as well as if it had
+   counter-key) was retrofitted onto a name chosen first and it works as well as if it had
    been designed in.
 
 2. **Mnemonics are disposable scaffolding.** Even a mnemonic you later *forget* has already
-   done its job: it helped the name→role association set, and that association is durable long
+   done its job: it helped the name→role association set and that association is durable long
    after the hook itself is gone. **Lou's** original mnemonic has been forgotten entirely,
    yet "Lou is the copywriter" is rock-solid. Don't mourn a lost hook and don't feel obliged
    to reconstruct one.
@@ -123,9 +123,9 @@ original intent. Adopt only if they genuinely help:
 
 This convention picks the **role name** (the human first name = the agent's `subagent_type`
 slug, e.g. `milo`). It composes cleanly with the enforced spawn-name format
-`<role>-<model>-<identifier>` (e.g. `milo-sonnet-f1`): the convention chooses the `<role>`
-token, and `guard-worktree-isolation.sh` keeps the `<model>` token truthful and the whole
-name unique. The two never conflict — one names the person, the other stamps the instance.
+`<role>-<model>-<effort>-<identifier>` (e.g. `milo-sonnet-high-f1`): the convention chooses
+the `<role>` token and `guard-worktree-isolation.sh` keeps the `<model>` token and the
+`<effort>` word truthful and the whole name unique. The two never conflict — one names the person, the other stamps the instance.
 
 ## Adopting this
 

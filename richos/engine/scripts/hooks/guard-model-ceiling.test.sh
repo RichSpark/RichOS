@@ -177,6 +177,8 @@ case_msg "the refusal carries worked example 2"           "super-premium front-e
 case_msg "the refusal carries worked example 3"           "creating a design system"      "$OVER"
 case_msg "the refusal names the RECONSIDER path"          'model: "opus"'                 "$OVER"
 case_msg "the refusal names the rename the drop forces"   "mcjudge-opus-3"                "$OVER"
+case_msg "the rename keeps the name's effort word (2026-11-17)" "rename the teammate 'mcjudge-opus-medium-3'" \
+    "$(payload mcjudge mcjudge-fable-medium-3 fable 'Judge this.')"
 case_msg "the refusal names the exact ack line to add"    "model-ceiling-ack: <why this is a one-off" "$OVER"
 case_msg "the refusal says the founder's greenlight is a good reason" \
     "greenlighting this tier in conversation IS a good reason" "$OVER"

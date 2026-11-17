@@ -91,7 +91,7 @@ python3 "$ENGINE/mega-lander/workspaces.py" --entity "$ENT" --session "$SID" int
     --why "the pause acceptance suite's body of work" >/dev/null 2>>"$T/hooks.err"
 
 register_agent() { # <name> <agent-id>
-    python3 -c 'import json,sys; print(json.dumps({"hook_event_name":"PreToolUse","session_id":sys.argv[1],"tool_use_id":"tu-"+sys.argv[2],"tool_name":"Agent","cwd":sys.argv[3],"tool_input":{"name":sys.argv[2],"subagent_type":"zach","isolation":"worktree","prompt":"the pause acceptance test agent"}}))' "$SID" "$1" "$ENT" \
+    python3 -c 'import json,sys; print(json.dumps({"hook_event_name":"PreToolUse","session_id":sys.argv[1],"tool_use_id":"tu-"+sys.argv[2],"tool_name":"Agent","cwd":sys.argv[3],"tool_input":{"name":sys.argv[2],"effort":"high","subagent_type":"zach","isolation":"worktree","prompt":"the pause acceptance test agent"}}))' "$SID" "$1" "$ENT" \
         | bash "$HOOKS/guard-worktree-isolation.sh" >/dev/null 2>>"$T/spawn.err"
     local np="$ENT/.claude/worktrees/agent-$2"
     git -C "$ENT" worktree add -q "$np" -b "worktree-agent-$2"
@@ -165,23 +165,23 @@ sub "I1 another invocation's session and agent ids all differ from this one's" \
     "this run: $MINE / another: $OTHER"
 
 echo "=== A the whole run, as Rich will run it: one agent, paused once, held, resumed ==="
-register_agent "zach-opus-accept1" "$AID1"
-W1="$T/work1"; start_fake "zach-opus-accept1" "$AID1" "$W1"
-accept start --agent zach-opus-accept1 --work-dir "$W1" --session "$SID" --hold-seconds 6 --receipt-dir "$T/receipts" >"$T/a-start.out" 2>&1; rc=$?
+register_agent "zach-opus-high-accept1" "$AID1"
+W1="$T/work1"; start_fake "zach-opus-high-accept1" "$AID1" "$W1"
+accept start --agent zach-opus-high-accept1 --work-dir "$W1" --session "$SID" --hold-seconds 6 --receipt-dir "$T/receipts" >"$T/a-start.out" 2>&1; rc=$?
 sub "A1 start: the agent is doing measurable work, and the generated pause is printed" \
-    "[ $rc -eq 0 ] && grep -q '^START zach-opus-accept1' '$T/a-start.out' && grep -q 'richos-pause-control' '$T/a-start.out'" "$(cat "$T/a-start.out")"
-send "zach-opus-accept1" "$(generated "$(tail -1 "$T/a-start.out")")" "$T/a-pause.out"
+    "[ $rc -eq 0 ] && grep -q '^START zach-opus-high-accept1' '$T/a-start.out' && grep -q 'richos-pause-control' '$T/a-start.out'" "$(cat "$T/a-start.out")"
+send "zach-opus-high-accept1" "$(generated "$(tail -1 "$T/a-start.out")")" "$T/a-pause.out"
 accept next --work-dir "$W1" >"$T/a-paused.out" 2>&1; rc=$?
 sub "A2 paused: frozen within seconds, CPU near zero, counter stopped" \
-    "[ $rc -eq 0 ] && grep -q '^PAUSED zach-opus-accept1' '$T/a-paused.out'" "$(cat "$T/a-paused.out" "$T/a-pause.out")"
+    "[ $rc -eq 0 ] && grep -q '^PAUSED zach-opus-high-accept1' '$T/a-paused.out'" "$(cat "$T/a-paused.out" "$T/a-pause.out")"
 accept next --work-dir "$W1" >"$T/a-hold.out" 2>&1; rc=$?
 sub "A3 hold: nothing moved for the hold, its run did not end, and the generated RESUME is printed" \
-    "[ $rc -eq 0 ] && grep -q '^HELD zach-opus-accept1' '$T/a-hold.out' && grep -q 'richos-resume-control' '$T/a-hold.out'" "$(cat "$T/a-hold.out")"
-send "zach-opus-accept1" "$(generated "$(tail -1 "$T/a-hold.out")")" "$T/a-resume.out"
+    "[ $rc -eq 0 ] && grep -q '^HELD zach-opus-high-accept1' '$T/a-hold.out' && grep -q 'richos-resume-control' '$T/a-hold.out'" "$(cat "$T/a-hold.out")"
+send "zach-opus-high-accept1" "$(generated "$(tail -1 "$T/a-hold.out")")" "$T/a-resume.out"
 accept next --work-dir "$W1" >"$T/a-resumed.out" 2>&1; rc=$?
 RECEIPT="$(sed -n 's/^Receipt: //p' "$T/a-resumed.out")"
 sub "A4 resumed: PASS, the same process continued from the frozen value, and the receipt is written" \
-    "[ $rc -eq 0 ] && grep -q '^PASS zach-opus-accept1' '$T/a-resumed.out' && [ -s \"$RECEIPT\" ] && [ -s \"\${RECEIPT%.md}.json\" ] && grep -q 'PASS' \"$RECEIPT\"" \
+    "[ $rc -eq 0 ] && grep -q '^PASS zach-opus-high-accept1' '$T/a-resumed.out' && [ -s \"$RECEIPT\" ] && [ -s \"\${RECEIPT%.md}.json\" ] && grep -q 'PASS' \"$RECEIPT\"" \
     "$(cat "$T/a-resumed.out" "$T/a-resume.out")"
 sub "A5 a finished run refuses another step" "! accept next --work-dir '$W1' >/dev/null 2>&1"
 stop_fake
@@ -195,35 +195,35 @@ run_to_hold() { # <name> <agent-id> <work-dir> <tag>: start, pause, paused
 }
 
 echo "=== N1 the agent's run ends during the hold -> FAIL ==="
-run_to_hold "zach-opus-accept2" "$AID2" "$T/work2" n1
+run_to_hold "zach-opus-high-accept2" "$AID2" "$T/work2" n1
 payload SubagentStop "{\"session_id\":\"$SID\",\"agent_id\":\"$AID2\"}" | lifecycle >/dev/null 2>>"$T/hooks.err"
 accept next --work-dir "$T/work2" >"$T/n1-hold.out" 2>&1; rc=$?
 sub "N1 the hold step fails, naming the ended run" "[ $rc -eq 1 ] && grep -q \"run ended during the hold\" '$T/n1-hold.out'" "$(cat "$T/n1-hold.out")"
-send "zach-opus-accept2" "$(python3 "$LIB/pause_protocol.py" --resume --to zach-opus-accept2 | python3 -c 'import json,sys; print(json.load(sys.stdin)["message"])')" /dev/null
+send "zach-opus-high-accept2" "$(python3 "$LIB/pause_protocol.py" --resume --to zach-opus-high-accept2 | python3 -c 'import json,sys; print(json.load(sys.stdin)["message"])')" /dev/null
 stop_fake
 
 echo "=== N2 a handwritten pause that freezes nothing -> FAIL ==="
-register_agent "zach-opus-accept3" "$AID3"
-start_fake "zach-opus-accept3" "$AID3" "$T/work3"
-accept start --agent zach-opus-accept3 --work-dir "$T/work3" --session "$SID" --hold-seconds 6 --receipt-dir "$T/receipts" >/dev/null 2>&1
-send "zach-opus-accept3" "$(printf 'Please hold for five minutes.\npause-until: my word')" "$T/n2-pause.out"
+register_agent "zach-opus-high-accept3" "$AID3"
+start_fake "zach-opus-high-accept3" "$AID3" "$T/work3"
+accept start --agent zach-opus-high-accept3 --work-dir "$T/work3" --session "$SID" --hold-seconds 6 --receipt-dir "$T/receipts" >/dev/null 2>&1
+send "zach-opus-high-accept3" "$(printf 'Please hold for five minutes.\npause-until: my word')" "$T/n2-pause.out"
 accept next --work-dir "$T/work3" >"$T/n2-paused.out" 2>&1; rc=$?
 sub "N2 the paused step fails: not the generated message" "[ $rc -eq 1 ] && grep -q 'not the unchanged generated message' '$T/n2-paused.out'" "$(cat "$T/n2-paused.out")"
-send "zach-opus-accept3" "carry on" /dev/null      # a handwritten pause ends on any message
+send "zach-opus-high-accept3" "carry on" /dev/null      # a handwritten pause ends on any message
 stop_fake
 
 echo "=== N3 a command of the agent runs during the hold -> FAIL ==="
-run_to_hold "zach-opus-accept4" "$AID4" "$T/work4" n3
+run_to_hold "zach-opus-high-accept4" "$AID4" "$T/work4" n3
 printf '%s 1 start\n' "$(python3 -c 'import time; print("%.3f" % time.time())')" >> "$T/work4/commands.log"
 accept next --work-dir "$T/work4" >"$T/n3-hold.out" 2>&1; rc=$?
 sub "N3 the hold step fails, naming the command that ran" "[ $rc -eq 1 ] && grep -q 'a command of the agent ran during the hold' '$T/n3-hold.out'" "$(cat "$T/n3-hold.out")"
-send "zach-opus-accept4" "$(python3 "$LIB/pause_protocol.py" --resume --to zach-opus-accept4 | python3 -c 'import json,sys; print(json.load(sys.stdin)["message"])')" /dev/null
+send "zach-opus-high-accept4" "$(python3 "$LIB/pause_protocol.py" --resume --to zach-opus-high-accept4 | python3 -c 'import json,sys; print(json.load(sys.stdin)["message"])')" /dev/null
 stop_fake
 
 echo "=== N4 the counter is restarted instead of continued -> FAIL ==="
-run_to_hold "zach-opus-accept5" "$AID5" "$T/work5" n4
+run_to_hold "zach-opus-high-accept5" "$AID5" "$T/work5" n4
 accept next --work-dir "$T/work5" >"$T/n4-hold.out" 2>&1
-send "zach-opus-accept5" "$(generated "$(tail -1 "$T/n4-hold.out")")" "$T/n4-resume.out"
+send "zach-opus-high-accept5" "$(generated "$(tail -1 "$T/n4-hold.out")")" "$T/n4-resume.out"
 # What the incident did: the running counter is ended and a new one started in its place.
 OLD="$(awk 'NR==1 {print $2}' "$T/work5/progress.log")"
 kill -9 "$OLD" 2>/dev/null

@@ -140,7 +140,8 @@ except Exception:
     _al = None
 
 
-NAME = r"[a-z][a-z0-9]{1,15}-(?:fable|opus|sonnet|haiku)-[a-z0-9]{1,12}"
+# Both shapes: with the effort word (2026-11-17) and the three parts before it.
+NAME = r"[a-z][a-z0-9]{1,15}-(?:fable|opus|sonnet|haiku)-(?:(?:low|medium|high|xhigh|max)-)?[a-z0-9]{1,12}"
 AGENT = r"(?<![A-Za-z0-9_-])(" + NAME + r")(?![A-Za-z0-9_-])"
 
 # TIGHT, and the exclusions are the measurement (see REFUSED above).

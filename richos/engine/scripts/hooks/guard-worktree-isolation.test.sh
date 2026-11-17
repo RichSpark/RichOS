@@ -251,6 +251,8 @@ if name:
     ti["name"] = name
 if isolation:
     ti["isolation"] = isolation
+_np = str(ti.get("name") or "").split("-")
+if len(_np) == 4 and _np[2] in ("low", "medium", "high", "xhigh", "max"): ti.setdefault("effort", _np[2])
 print(json.dumps({"tool_name": "Agent", "tool_input": ti, "session_id": "deadbeef-0000-4000-8000-000000000000", "tool_use_id": "toolu_test_agent"}))
 PY
 }
@@ -267,6 +269,8 @@ if subagent: ti["subagent_type"] = subagent
 if name: ti["name"] = name
 if isolation: ti["isolation"] = isolation
 if model: ti["model"] = model
+_np = str(ti.get("name") or "").split("-")
+if len(_np) == 4 and _np[2] in ("low", "medium", "high", "xhigh", "max"): ti.setdefault("effort", _np[2])
 print(json.dumps({"tool_name": "Agent", "tool_input": ti, "session_id": "deadbeef-0000-4000-8000-000000000000", "tool_use_id": "toolu_test_model"}))
 PY
 }
@@ -280,17 +284,17 @@ run_case "non-Agent tool (Read)" 0 '{"tool_name":"Read","tool_input":{"file_path
 
 # --- (a) file-capable, no isolation, no marker -> exit 2 ---
 run_case "no isolation, no marker, well-formed name, dev" 2 \
-    "$(json_agent 'dev' 'dev-sonnet-1' '' 'Do the thing.')"
+    "$(json_agent 'dev' 'dev-sonnet-high-1' '' 'Do the thing.')"
 run_case_msg "block message is self-documenting: names isolation flag" 'isolation: "worktree"' \
-    "$(json_agent 'dev' 'dev-sonnet-1' '' 'Do the thing.')"
+    "$(json_agent 'dev' 'dev-sonnet-high-1' '' 'Do the thing.')"
 run_case_msg "block message is self-documenting: names main-checkout-run fallback" 'main-checkout-run:' \
-    "$(json_agent 'dev' 'dev-sonnet-1' '' 'Do the thing.')"
+    "$(json_agent 'dev' 'dev-sonnet-high-1' '' 'Do the thing.')"
 
 # --- (b) isolation:"worktree" -> exit 0 ---
 run_case "isolation worktree, well-formed name" 0 \
-    "$(json_agent 'dev' 'dev-sonnet-1' 'worktree' 'Do the thing.')"
+    "$(json_agent 'dev' 'dev-sonnet-high-1' 'worktree' 'Do the thing.')"
 run_case "isolation remote, well-formed name" 0 \
-    "$(json_agent 'dev' 'dev-sonnet-r1' 'remote' 'Do the thing.')"
+    "$(json_agent 'dev' 'dev-sonnet-high-r1' 'remote' 'Do the thing.')"
 fi # mutation witness fixture group
 
 # --- (c) read-only agent type -> exit 0, no isolation/name required ---
@@ -315,25 +319,25 @@ fi # mutation witness fixture group
 # isolation:"worktree" or WITH the main-checkout-run: marker they pass.
 if wti_group; then
 run_case "deviceqa: no isolation, no marker -> BLOCKED" 2 \
-    "$(json_agent 'deviceqa' 'deviceqa-sonnet-1' '' 'Run native device QA.')"
+    "$(json_agent 'deviceqa' 'deviceqa-sonnet-high-1' '' 'Run native device QA.')"
 run_case "visualqa: no isolation, no marker -> BLOCKED" 2 \
-    "$(json_agent 'visualqa' 'visualqa-sonnet-1' '' 'Adversarially verify the visual verdict.')"
+    "$(json_agent 'visualqa' 'visualqa-sonnet-high-1' '' 'Adversarially verify the visual verdict.')"
 run_case "funcqa: no isolation, no marker -> BLOCKED" 2 \
-    "$(json_agent 'funcqa' 'funcqa-sonnet-1' '' 'Functional QA on staging.')"
+    "$(json_agent 'funcqa' 'funcqa-sonnet-high-1' '' 'Functional QA on staging.')"
 run_case "deviceqa: isolation worktree -> exit 0" 0 \
-    "$(json_agent 'deviceqa' 'deviceqa-sonnet-1' 'worktree' 'Run native device QA.')"
+    "$(json_agent 'deviceqa' 'deviceqa-sonnet-high-1' 'worktree' 'Run native device QA.')"
 run_case "visualqa: isolation worktree -> exit 0" 0 \
-    "$(json_agent 'visualqa' 'visualqa-sonnet-1' 'worktree' 'Adversarially verify the visual verdict.')"
+    "$(json_agent 'visualqa' 'visualqa-sonnet-high-1' 'worktree' 'Adversarially verify the visual verdict.')"
 run_case "funcqa: isolation worktree -> exit 0" 0 \
-    "$(json_agent 'funcqa' 'funcqa-sonnet-1' 'worktree' 'Functional QA on staging.')"
+    "$(json_agent 'funcqa' 'funcqa-sonnet-high-1' 'worktree' 'Functional QA on staging.')"
 run_case "deviceqa: main-checkout-run marker, no isolation -> exit 0" 0 \
-    "$(json_agent 'deviceqa' 'deviceqa-sonnet-oneoff1' '' $'Run a one-off main-checkout task.\nmain-checkout-run: deliberate one-off main-checkout run.')"
+    "$(json_agent 'deviceqa' 'deviceqa-sonnet-high-oneoff1' '' $'Run a one-off main-checkout task.\nmain-checkout-run: deliberate one-off main-checkout run.')"
 
 # --- (e) main-checkout-run: marker present -> exit 0 ---
 run_case "main-checkout-run marker, well-formed name, no isolation" 0 \
-    "$(json_agent 'worker' 'worker-sonnet-oneoff1' '' $'Run a one-off main-checkout task.\nmain-checkout-run: needs main checkout HEAD for X.')"
+    "$(json_agent 'worker' 'worker-sonnet-high-oneoff1' '' $'Run a one-off main-checkout task.\nmain-checkout-run: needs main checkout HEAD for X.')"
 run_case "marker mid-prompt on its own line still matches" 0 \
-    "$(json_agent 'worker' 'worker-sonnet-oneoff2' '' $'Do the task.\n\nmain-checkout-run: precondition explained here.\n\nProceed once passing.')"
+    "$(json_agent 'worker' 'worker-sonnet-high-oneoff2' '' $'Do the task.\n\nmain-checkout-run: precondition explained here.\n\nProceed once passing.')"
 
 # --- (f) bad/bare name -> exit 2, regardless of isolation or marker ---
 run_case "bare name with isolation set" 2 \
@@ -358,7 +362,7 @@ run_case_msg "malformed-name message present" 'missing/malformed name' \
 # Old 2-part name now BLOCKED — the model token is MISSING.
 run_case "old 2-part name (missing model token), isolation set -> BLOCKED" 2 \
     "$(json_agent 'dev' 'dev-1' 'worktree' 'Do the thing.')"
-run_case_msg "missing-model-token message names the 3-part form" '<role>-<model>-<identifier>' \
+run_case_msg "missing-model-token message names the 4-part form" '<role>-<model>-<effort>-<identifier>' \
     "$(json_agent 'dev' 'dev-1' 'worktree' 'Do the thing.')"
 # Garbage / non-alias model token -> BLOCKED (clause 2a).
 run_case "garbage model token 'gpt' -> BLOCKED" 2 \
@@ -368,45 +372,93 @@ run_case_msg "garbage-token message says 'not an allowed model'" 'is not an allo
 
 # --- (l) CLAUSE 2c — the CREATOR's stricter shape (scripts/lib/teammate-name.sh):
 # lower-case only, role <=16 chars, identifier <=12 chars, EXACTLY three parts.
-# 'zach-sonnet-multirepodemo1' is the real 2026-09-17 case: a 14-character
+# 'zach-sonnet-high-multirepodemo1' is the real 2026-09-17 case: a 14-character
 # identifier that passed this guard's own loose NAME_SHAPE_RE (clause 2, above)
 # and was refused only by mega-lander/create-teammate-worktree.sh, one round
 # trip later. It must be BLOCKED here too, in the creator's exact wording.
 fi # mutation witness fixture group
 if wti_group M24; then
 run_case "C2C1 over-length identifier (14 chars) passes clause 2 but fails the creator's shape -> BLOCKED" 2 \
-    "$(json_agent 'dev' 'zach-sonnet-multirepodemo1' 'worktree' 'Do the thing.')"
+    "$(json_agent 'dev' 'zach-sonnet-high-multirepodemo1' 'worktree' 'Do the thing.')"
 run_case_msg "C2C1m the refusal is the CREATOR's exact wording" \
-    "'zach-sonnet-multirepodemo1' is not a teammate name of the form <role>-<model>-<identifier>" \
-    "$(json_agent 'dev' 'zach-sonnet-multirepodemo1' 'worktree' 'Do the thing.')"
+    "'zach-sonnet-high-multirepodemo1' is not a teammate name of the form <role>-<model>-<effort>-<identifier>" \
+    "$(json_agent 'dev' 'zach-sonnet-high-multirepodemo1' 'worktree' 'Do the thing.')"
 run_case "C2C2 POSITIVE CONTROL: a 12-character identifier is exactly within the shared shape -> allowed" 0 \
-    "$(json_agent 'dev' 'dev-sonnet-multirepodem' 'worktree' 'Do the thing.')"
+    "$(json_agent 'dev' 'dev-sonnet-high-multirepodem' 'worktree' 'Do the thing.')"
 
+fi # mutation witness fixture group
+if wti_group; then
+# --- CLAUSE 2d: THE EFFORT WORD (CEO, 2026-11-17) ---------------------------
+# The name is <role>-<model>-<effort>-<identifier>, and the effort word is
+# checked the way the model is: it must be the level the agent is started at
+# (tool_input.effort), so a level is always named. json_agent_effort sets the
+# level on its own, so each case says exactly what the call carries.
+json_agent_effort() { # <subagent> <name> <effort|""> <model|"">
+    python3 - "$1" "$2" "$3" "$4" <<'PY'
+import json, sys
+subagent, name, effort, model = sys.argv[1:5]
+ti = {"subagent_type": subagent, "name": name, "isolation": "worktree", "prompt": "Do the thing."}
+if effort: ti["effort"] = effort
+if model: ti["model"] = model
+print(json.dumps({"tool_name": "Agent", "tool_input": ti, "session_id": "deadbeef-0000-4000-8000-000000000000", "tool_use_id": "toolu_test_effort"}))
+PY
+}
+run_case "EF1 the CEO's own example: zach-fable-medium-effortfield1 started at medium -> allowed" 0 \
+    "$(json_agent_effort 'dev' 'zach-fable-medium-effortfield1' 'medium' 'fable')"
+run_case "EF2 the CEO's own example: echo2-sonnet-high-video4 started at high -> allowed" 0 \
+    "$(json_agent_effort 'dev' 'echo2-sonnet-high-video4' 'high' 'sonnet')"
+for _level in low medium high xhigh max; do
+    run_case "EF3 every level Claude Code accepts is a word a name may carry: $_level" 0 \
+        "$(json_agent_effort 'dev' "dev-sonnet-$_level-ef3$_level" "$_level" '')"
+done
+run_case "EF4 a name with NO effort word (the three parts of before 2026-11-17) -> BLOCKED" 2 \
+    "$(json_agent_effort 'dev' 'zach-fable-effortfield1' '' 'fable')"
+run_case "EF4b ... and still BLOCKED when the call itself names a level" 2 \
+    "$(json_agent_effort 'dev' 'zach-fable-effortfield1' 'medium' 'fable')"
+run_case_msg "EF4m the refusal names the four-part form and the levels" \
+    "is not a teammate name of the form <role>-<model>-<effort>-<identifier> (model one of: fable opus sonnet haiku; effort one of: low medium high xhigh max)" \
+    "$(json_agent_effort 'dev' 'zach-fable-effortfield1' 'medium' 'fable')"
+run_case "EF5 the effort word is not the level the agent is started at -> BLOCKED" 2 \
+    "$(json_agent_effort 'dev' 'dev-sonnet-high-ef5' 'low' '')"
+run_case_msg "EF5m the refusal names BOTH levels" "claims 'high' but this agent is started at effort 'low'" \
+    "$(json_agent_effort 'dev' 'dev-sonnet-high-ef5' 'low' '')"
+run_case_msg "EF5n ... and the name that would be truthful" "rename to 'dev-sonnet-low-ef5'" \
+    "$(json_agent_effort 'dev' 'dev-sonnet-high-ef5' 'low' '')"
+run_case "EF6 the name says a level and the call names none -> BLOCKED (a level is always named)" 2 \
+    "$(json_agent_effort 'dev' 'dev-sonnet-high-ef6' '' '')"
+run_case_msg "EF6m the refusal says what to add" 'effort: "high"' \
+    "$(json_agent_effort 'dev' 'dev-sonnet-high-ef6' '' '')"
+run_case "EF7 a word that is not a level Claude Code accepts -> BLOCKED" 2 \
+    "$(json_agent_effort 'dev' 'dev-sonnet-ultra-ef7' 'ultra' '')"
+run_case "EF8 a fifth part -> BLOCKED" 2 \
+    "$(json_agent_effort 'dev' 'dev-sonnet-high-ef8-b' 'high' '')"
+run_case_msg "EF9 a wrong model token's suggested rename keeps the effort word" "rename to 'frank-opus-high-ef9'" \
+    "$(json_agent_effort 'frank' 'frank-sonnet-high-ef9' 'high' '')"
 fi # mutation witness fixture group
 if wti_group; then
 # 'fable' is an allowed model alias too (orchestration.config's ALLOWED_MODELS
 # default): a truthfully-named dev-fable-* spawn with an explicit model:"fable"
 # override passes both set-membership (2a) and truthfulness (2b).
 run_case "correct token via override (fable is an allowed alias, dev-fable-*)" 0 \
-    "$(json_agent_model 'dev' 'dev-fable-1' 'worktree' 'fable' 'Do the thing.')"
+    "$(json_agent_model 'dev' 'dev-fable-high-1' 'worktree' 'fable' 'Do the thing.')"
 
 # Correct token via LIVE frontmatter default (frank=opus).
 run_case "correct token via live frontmatter default (frank->opus)" 0 \
-    "$(json_agent 'frank' 'frank-opus-1' 'worktree' 'Stress-test the plan.')"
+    "$(json_agent 'frank' 'frank-opus-high-1' 'worktree' 'Stress-test the plan.')"
 # Wrong token vs live frontmatter default -> BLOCKED (clause 2b).
 run_case "wrong token vs frontmatter (frank is opus, name says sonnet) -> BLOCKED" 2 \
-    "$(json_agent 'frank' 'frank-sonnet-2' 'worktree' 'Stress-test the plan.')"
+    "$(json_agent 'frank' 'frank-sonnet-high-2' 'worktree' 'Stress-test the plan.')"
 run_case_msg "frontmatter-mismatch message names BOTH models" "claims 'sonnet' but this spawn boots on 'opus'" \
-    "$(json_agent 'frank' 'frank-sonnet-2' 'worktree' 'Stress-test the plan.')"
+    "$(json_agent 'frank' 'frank-sonnet-high-2' 'worktree' 'Stress-test the plan.')"
 run_case_msg "frontmatter-mismatch message is labelled 'untruthful model token'" 'untruthful model token' \
-    "$(json_agent 'frank' 'frank-sonnet-2' 'worktree' 'Stress-test the plan.')"
+    "$(json_agent 'frank' 'frank-sonnet-high-2' 'worktree' 'Stress-test the plan.')"
 
 # A non-live TEMPLATE name is NOT a spawnable type and must NOT resolve from
 # .claude/agents/templates/ — so it is undeterminable and a valid alias passes
 # regardless of the template's own frontmatter (templates/backend-engineer.md is
 # sonnet; an opus token must still be accepted, proving templates never resolve).
 run_case "template-named type does NOT resolve from templates/ (undeterminable)" 0 \
-    "$(json_agent 'backend-engineer' 'be-opus-1' 'worktree' 'Build a feature.')"
+    "$(json_agent 'backend-engineer' 'be-opus-high-1' 'worktree' 'Build a feature.')"
 
 # Explicit override WINS over frontmatter (precedence proof). frank=opus; override
 # to sonnet, name claims sonnet -> exit 0. Since clause 6 (2026-09-02) that
@@ -414,22 +466,22 @@ run_case "template-named type does NOT resolve from templates/ (undeterminable)"
 # reason the clause demands — the precedence intent is unchanged, and block (n)
 # below pins the no-reason refusal on its own.
 run_case "correct token via override (override sonnet beats frontmatter opus)" 0 \
-    "$(json_agent_model 'frank' 'frank-sonnet-ov1' 'worktree' 'sonnet' $'Stress-test.\nmodel-downgrade-ack: precedence fixture; the stated reason clause 6 requires for opus -> sonnet.')"
+    "$(json_agent_model 'frank' 'frank-sonnet-high-ov1' 'worktree' 'sonnet' $'Stress-test.\nmodel-downgrade-ack: precedence fixture; the stated reason clause 6 requires for opus -> sonnet.')"
 # Override sonnet, name claims opus (matches frontmatter but NOT the override) -> BLOCKED.
 run_case "wrong token vs override (override sonnet, name says opus) -> BLOCKED" 2 \
-    "$(json_agent_model 'frank' 'frank-opus-ov2' 'worktree' 'sonnet' 'Stress-test.')"
+    "$(json_agent_model 'frank' 'frank-opus-high-ov2' 'worktree' 'sonnet' 'Stress-test.')"
 run_case_msg "override-mismatch message cites the override source" "explicit model override 'sonnet'" \
-    "$(json_agent_model 'frank' 'frank-opus-ov2' 'worktree' 'sonnet' 'Stress-test.')"
+    "$(json_agent_model 'frank' 'frank-opus-high-ov2' 'worktree' 'sonnet' 'Stress-test.')"
 # Verbose model id in the override is normalized to its alias.
 run_case "verbose override id 'claude-opus-4-8' normalizes to opus" 0 \
-    "$(json_agent_model 'dev' 'dev-opus-ov3' 'worktree' 'claude-opus-4-8' 'Do the thing.')"
+    "$(json_agent_model 'dev' 'dev-opus-high-ov3' 'worktree' 'claude-opus-4-8' 'Do the thing.')"
 
 # Undeterminable model -> accept a valid alias (never fail on unknowable info).
 run_case "undeterminable (no live def, no override) accepts valid alias token" 0 \
-    "$(json_agent 'worker' 'worker-haiku-u1' 'worktree' 'Do the thing.')"
+    "$(json_agent 'worker' 'worker-haiku-high-u1' 'worktree' 'Do the thing.')"
 # model:"inherit" override -> undeterminable even though a live def exists.
 run_case "undeterminable via model:inherit accepts valid alias token" 0 \
-    "$(json_agent_model 'frank' 'frank-haiku-u2' 'worktree' 'inherit' 'Stress-test.')"
+    "$(json_agent_model 'frank' 'frank-haiku-high-u2' 'worktree' 'inherit' 'Stress-test.')"
 # Undeterminable STILL requires a valid alias (garbage token -> BLOCKED).
 run_case "undeterminable but garbage token still BLOCKED (2a floor holds)" 2 \
     "$(json_agent 'worker' 'worker-gpt-u3' 'worktree' 'Do the thing.')"
@@ -444,40 +496,40 @@ if wti_group M12 M13 M14 M15 M18; then
 # the killed guard had backwards (it would have refused it forever), the
 # second is the spawn the CEO ordered himself.
 run_case_silent "reed (sonnet default) on fable, no reason -> allowed, SILENT (an upgrade)" \
-    "$(json_agent_model 'reed' 'reed-fable-c6a' 'worktree' 'fable' 'Read the sources.')"
+    "$(json_agent_model 'reed' 'reed-fable-high-c6a' 'worktree' 'fable' 'Read the sources.')"
 run_case_silent "frank (opus default) on fable, no reason -> allowed, SILENT (same tier; the CEO's own spawn shape)" \
-    "$(json_agent_model 'frank' 'frank-fable-c6b' 'worktree' 'fable' 'Stress-test.')"
+    "$(json_agent_model 'frank' 'frank-fable-high-c6b' 'worktree' 'fable' 'Stress-test.')"
 run_case_silent "frank on opus, its own default, explicit -> SILENT" \
-    "$(json_agent_model 'frank' 'frank-opus-c6c' 'worktree' 'opus' 'Stress-test.')"
+    "$(json_agent_model 'frank' 'frank-opus-high-c6c' 'worktree' 'opus' 'Stress-test.')"
 run_case_silent "reed upgraded to opus -> SILENT" \
-    "$(json_agent_model 'reed' 'reed-opus-c6d' 'worktree' 'opus' 'Read the sources.')"
+    "$(json_agent_model 'reed' 'reed-opus-high-c6d' 'worktree' 'opus' 'Read the sources.')"
 run_case_silent "reed on sonnet, its own default, explicit -> SILENT" \
-    "$(json_agent_model 'reed' 'reed-sonnet-c6e' 'worktree' 'sonnet' 'Read the sources.')"
+    "$(json_agent_model 'reed' 'reed-sonnet-high-c6e' 'worktree' 'sonnet' 'Read the sources.')"
 run_case_silent "frank with NO override -> clause 6 never fires" \
-    "$(json_agent 'frank' 'frank-opus-c6f' 'worktree' 'Stress-test.')"
+    "$(json_agent 'frank' 'frank-opus-high-c6f' 'worktree' 'Stress-test.')"
 
-C6_DOWN="$(json_agent_model 'frank' 'frank-sonnet-c6g' 'worktree' 'sonnet' 'Stress-test.')"
+C6_DOWN="$(json_agent_model 'frank' 'frank-sonnet-high-c6g' 'worktree' 'sonnet' 'Stress-test.')"
 run_case "frank (opus default) on sonnet, no reason -> BLOCKED" 2 "$C6_DOWN"
-run_case_msg "the tier refusal names the teammate" "'frank-sonnet-c6g' of 'frank'" "$C6_DOWN"
+run_case_msg "the tier refusal names the teammate" "'frank-sonnet-high-c6g' of 'frank'" "$C6_DOWN"
 run_case_msg "the tier refusal names the definition default" "defaults to 'opus'" "$C6_DOWN"
 run_case_msg "the tier refusal names the requested model" "requests model 'sonnet'" "$C6_DOWN"
 run_case_msg "the tier refusal names the declaration it read" 'MODEL_TIERS="fable > opus > sonnet > haiku"' "$C6_DOWN"
 run_case_msg "the tier refusal names the exact line to add" 'model-downgrade-ack: <why' "$C6_DOWN"
 run_case_msg "the tier refusal says equal-or-higher never needs it" 'Equal or higher tier never needs it' "$C6_DOWN"
 run_case "frank on haiku, no reason -> BLOCKED" 2 \
-    "$(json_agent_model 'frank' 'frank-haiku-c6h' 'worktree' 'haiku' 'Stress-test.')"
+    "$(json_agent_model 'frank' 'frank-haiku-high-c6h' 'worktree' 'haiku' 'Stress-test.')"
 run_case "reed (sonnet default) on haiku, no reason -> BLOCKED" 2 \
-    "$(json_agent_model 'reed' 'reed-haiku-c6i' 'worktree' 'haiku' 'Read the sources.')"
+    "$(json_agent_model 'reed' 'reed-haiku-high-c6i' 'worktree' 'haiku' 'Read the sources.')"
 run_case "frank on sonnet WITH a reasoned model-downgrade-ack: -> allowed" 0 \
-    "$(json_agent_model 'frank' 'frank-sonnet-c6j' 'worktree' 'sonnet' $'Stress-test.\nmodel-downgrade-ack: a mechanical grep pass; the judgment seat is not needed for it.')"
+    "$(json_agent_model 'frank' 'frank-sonnet-high-c6j' 'worktree' 'sonnet' $'Stress-test.\nmodel-downgrade-ack: a mechanical grep pass; the judgment seat is not needed for it.')"
 run_case "a BARE model-downgrade-ack: exempts nothing -> BLOCKED" 2 \
-    "$(json_agent_model 'frank' 'frank-sonnet-c6k' 'worktree' 'sonnet' $'Stress-test.\nmodel-downgrade-ack:')"
+    "$(json_agent_model 'frank' 'frank-sonnet-high-c6k' 'worktree' 'sonnet' $'Stress-test.\nmodel-downgrade-ack:')"
 run_case "model-downgrade-ack: tolerates leading whitespace" 0 \
-    "$(json_agent_model 'frank' 'frank-sonnet-c6l' 'worktree' 'sonnet' $'Stress-test.\n   model-downgrade-ack: leading-whitespace fixture, a real reason.')"
+    "$(json_agent_model 'frank' 'frank-sonnet-high-c6l' 'worktree' 'sonnet' $'Stress-test.\n   model-downgrade-ack: leading-whitespace fixture, a real reason.')"
 run_case "model-downgrade-ack: does NOT relax clause 2b (untruthful name still BLOCKED)" 2 \
-    "$(json_agent_model 'frank' 'frank-opus-c6m' 'worktree' 'sonnet' $'Stress-test.\nmodel-downgrade-ack: a real reason, but the name lies about the model.')"
+    "$(json_agent_model 'frank' 'frank-opus-high-c6m' 'worktree' 'sonnet' $'Stress-test.\nmodel-downgrade-ack: a real reason, but the name lies about the model.')"
 run_case "a verbose lower-tier override id is normalized before ranking -> BLOCKED" 2 \
-    "$(json_agent_model 'frank' 'frank-sonnet-c6n' 'worktree' 'claude-sonnet-4-5' 'Stress-test.')"
+    "$(json_agent_model 'frank' 'frank-sonnet-high-c6n' 'worktree' 'claude-sonnet-4-5' 'Stress-test.')"
 fi # mutation witness fixture group
 
 if wti_group M16 M17 M18 M19; then
@@ -504,7 +556,7 @@ c6_case() { # <name> <expected-exit> <expected-substring-or-empty-for-silence> <
 if wti_want "an accepted model-downgrade-ack: is logged to .claude/state/model-downgrade-acks.log with both models"; then
 c6_config "fable > opus > sonnet > haiku"
 C6_MARK="c6-log-canary-$$"
-c6_out "$(json_agent_model 'judge' 'judge-sonnet-log1' 'worktree' 'sonnet' "Judge.
+c6_out "$(json_agent_model 'judge' 'judge-sonnet-high-log1' 'worktree' 'sonnet' "Judge.
 model-downgrade-ack: logging fixture $C6_MARK")" >/dev/null
 C6_LOG="$C6SB/.claude/state/model-downgrade-acks.log"
 if grep -qF "$C6_MARK" "$C6_LOG" 2>/dev/null && grep -qF "default=opus" "$C6_LOG" && grep -qF "requested=sonnet" "$C6_LOG"; then
@@ -512,8 +564,8 @@ if grep -qF "$C6_MARK" "$C6_LOG" 2>/dev/null && grep -qF "default=opus" "$C6_LOG
 else
     FAIL=$((FAIL + 1)); printf '  FAIL  an accepted model-downgrade-ack: is logged to .claude/state/model-downgrade-acks.log with both models\n'
 fi
-c6_out "$(json_agent_model 'judge' 'judge-sonnet-log2' 'worktree' 'sonnet' 'Judge, no reason.')" >/dev/null
-if grep -qF "judge-sonnet-log2" "$C6_LOG" 2>/dev/null; then
+c6_out "$(json_agent_model 'judge' 'judge-sonnet-high-log2' 'worktree' 'sonnet' 'Judge, no reason.')" >/dev/null
+if grep -qF "judge-sonnet-high-log2" "$C6_LOG" 2>/dev/null; then
     FAIL=$((FAIL + 1)); printf '  FAIL  a REFUSED downgrade was logged as if it were a waiver\n'
 else
     PASS=$((PASS + 1)); printf '  PASS  a REFUSED downgrade is not logged (a refusal is not a waiver)\n'
@@ -523,21 +575,21 @@ fi # mutation witness fixture group
 # FAIL OPEN on the clause's own error — allowed, and announced.
 c6_config "opus > sonnet"
 c6_case "an alias MODEL_TIERS does not rank -> allowed (fail-open)" 0 "SKIPPED" \
-    "$(json_agent_model 'judge' 'judge-haiku-fo1' 'worktree' 'haiku' 'Judge.')"
+    "$(json_agent_model 'judge' 'judge-haiku-high-fo1' 'worktree' 'haiku' 'Judge.')"
 c6_case "the fail-open skip is announced, naming the unranked alias" 0 "'haiku'" \
-    "$(json_agent_model 'judge' 'judge-haiku-fo1' 'worktree' 'haiku' 'Judge.')"
+    "$(json_agent_model 'judge' 'judge-haiku-high-fo1' 'worktree' 'haiku' 'Judge.')"
 c6_case "the fail-open skip reaches the orchestrator as a systemMessage" 0 '"systemMessage"' \
-    "$(json_agent_model 'judge' 'judge-haiku-fo1' 'worktree' 'haiku' 'Judge.')"
+    "$(json_agent_model 'judge' 'judge-haiku-high-fo1' 'worktree' 'haiku' 'Judge.')"
 c6_config ""
 c6_case "a BLANK MODEL_TIERS -> allowed (fail-open), announced as blank" 0 "blank" \
-    "$(json_agent_model 'judge' 'judge-haiku-fo2' 'worktree' 'haiku' 'Judge.')"
+    "$(json_agent_model 'judge' 'judge-haiku-high-fo2' 'worktree' 'haiku' 'Judge.')"
 c6_config "opus > > sonnet"
 c6_case "a MALFORMED MODEL_TIERS -> allowed (fail-open), announced as malformed" 0 "empty" \
-    "$(json_agent_model 'judge' 'judge-haiku-fo3' 'worktree' 'haiku' 'Judge.')"
+    "$(json_agent_model 'judge' 'judge-haiku-high-fo3' 'worktree' 'haiku' 'Judge.')"
 c6_case "a broken declaration is NOT announced on a spawn that never needed it (no override)" 0 "" \
-    "$(json_agent 'judge' 'judge-opus-fo4' 'worktree' 'Judge.')"
+    "$(json_agent 'judge' 'judge-opus-high-fo4' 'worktree' 'Judge.')"
 c6_case "a broken declaration is NOT announced on model:inherit" 0 "" \
-    "$(json_agent_model 'judge' 'judge-opus-fo5' 'worktree' 'inherit' 'Judge.')"
+    "$(json_agent_model 'judge' 'judge-opus-high-fo5' 'worktree' 'inherit' 'Judge.')"
 
 # Parser library missing -> allowed (fail-open), announced.
 if wti_want "parser library missing -> allowed (fail-open), announced"; then
@@ -553,7 +605,7 @@ cp "$SCRIPT_DIR/../lib/resolve-roots.sh" "$SCRIPT_DIR/../lib/resolve-model.sh" "
 cp "$SCRIPT_DIR/workspace-lifecycle.sh" "$SCRIPT_DIR/guard-sealed-worktree.sh" "$C6NOLIB/scripts/hooks/"
 chmod +x "$C6NOLIB/scripts/hooks/guard-worktree-isolation.sh" "$C6NOLIB/scripts/hooks/workspace-lifecycle.sh" "$C6NOLIB/scripts/hooks/guard-sealed-worktree.sh"
 c6_config "fable > opus > sonnet > haiku"
-C6NL_OUT="$(printf '%s' "$(json_agent_model 'judge' 'judge-haiku-fo6' 'worktree' 'haiku' 'Judge.')" | RICHOS_ENTITY_ROOT="$C6SB" "$C6NOLIB/scripts/hooks/guard-worktree-isolation.sh" 2>&1)"
+C6NL_OUT="$(printf '%s' "$(json_agent_model 'judge' 'judge-haiku-high-fo6' 'worktree' 'haiku' 'Judge.')" | RICHOS_ENTITY_ROOT="$C6SB" "$C6NOLIB/scripts/hooks/guard-worktree-isolation.sh" 2>&1)"
 C6NL_RC=$?
 if [ "$C6NL_RC" -eq 0 ] && printf '%s' "$C6NL_OUT" | grep -qF "model-tiers.sh is missing"; then
     PASS=$((PASS + 1)); printf '  PASS  parser library missing -> allowed (fail-open), announced\n'
@@ -568,11 +620,11 @@ fi # mutation witness fixture group
 # that goes red — and it is the property the whole clause exists for.
 c6_config "haiku > opus fable > sonnet"
 c6_case "the declared order is obeyed even when it contradicts the alias names: opus-default on haiku -> SILENT" 0 "" \
-    "$(json_agent_model 'judge' 'judge-haiku-dn1' 'worktree' 'haiku' 'Judge.')"
+    "$(json_agent_model 'judge' 'judge-haiku-high-dn1' 'worktree' 'haiku' 'Judge.')"
 c6_case "the declared order is obeyed even when it contradicts the alias names: opus-default on fable (same tier) -> SILENT" 0 "" \
-    "$(json_agent_model 'judge' 'judge-fable-dn2' 'worktree' 'fable' 'Judge.')"
+    "$(json_agent_model 'judge' 'judge-fable-high-dn2' 'worktree' 'fable' 'Judge.')"
 c6_case "the declared order is obeyed even when it contradicts the alias names: opus-default on sonnet -> BLOCKED" 2 "model tier" \
-    "$(json_agent_model 'judge' 'judge-sonnet-dn3' 'worktree' 'sonnet' 'Judge.')"
+    "$(json_agent_model 'judge' 'judge-sonnet-high-dn3' 'worktree' 'sonnet' 'Judge.')"
 rm -rf "$C6SB"
 fi # mutation witness fixture group
 
@@ -598,10 +650,10 @@ chmod +x "$SANDBOX/scripts/hooks/guard-worktree-isolation.sh"
 # very behavior under repair.
 cp "$SCRIPT_DIR/../lib/resolve-roots.sh" "$SCRIPT_DIR/../lib/resolve-model.sh" "$SCRIPT_DIR/../lib/resolve-main-checkout.sh" "$SCRIPT_DIR/../lib/teammate-name.sh" "$SANDBOX/scripts/lib/"
 printf 'ALLOWED_MODELS="fable opus sonnet haiku"\n' >"$SANDBOX/orchestration.config"
-printf '%s' "$(json_agent 'worker' 'worker-sonnet-log1' '' $'Do the task.\nmain-checkout-run: needs main checkout for X.')" \
+printf '%s' "$(json_agent 'worker' 'worker-sonnet-high-log1' '' $'Do the task.\nmain-checkout-run: needs main checkout for X.')" \
     | RICHOS_ENTITY_ROOT="$SANDBOX" "$SANDBOX/scripts/hooks/guard-worktree-isolation.sh" >/dev/null 2>&1
 if [ -f "$SANDBOX/.claude/state/main-checkout-runs.log" ] \
-    && grep -qF "worker-sonnet-log1" "$SANDBOX/.claude/state/main-checkout-runs.log" \
+    && grep -qF "worker-sonnet-high-log1" "$SANDBOX/.claude/state/main-checkout-runs.log" \
     && grep -qF "main-checkout-run:" "$SANDBOX/.claude/state/main-checkout-runs.log"; then
     PASS=$((PASS + 1)); printf '  PASS  marker use logged to .claude/state/main-checkout-runs.log\n'
 else
@@ -609,10 +661,10 @@ else
 fi
 # A blocked spawn (no marker) is rejected outright — it never reaches the
 # marker-logging path, so no log entry.
-printf '%s' "$(json_agent 'deviceqa' 'deviceqa-sonnet-log2' '' 'Run device QA, no marker given.')" \
+printf '%s' "$(json_agent 'deviceqa' 'deviceqa-sonnet-high-log2' '' 'Run device QA, no marker given.')" \
     | "$SANDBOX/scripts/hooks/guard-worktree-isolation.sh" >/dev/null 2>&1
 if [ -f "$SANDBOX/.claude/state/main-checkout-runs.log" ] \
-    && grep -qF "deviceqa-sonnet-log2" "$SANDBOX/.claude/state/main-checkout-runs.log"; then
+    && grep -qF "deviceqa-sonnet-high-log2" "$SANDBOX/.claude/state/main-checkout-runs.log"; then
     FAIL=$((FAIL + 1)); printf '  FAIL  blocked spawn (no marker) must NOT be logged as a marker use\n'
 else
     PASS=$((PASS + 1)); printf '  PASS  blocked spawn (no marker) must NOT be logged as a marker use\n'
@@ -623,7 +675,7 @@ rm -rf "$SANDBOX"
 # Mirrors the automation QA's repro: with no python3 resolvable on PATH, the guard must
 # refuse (non-zero exit) rather than silently waving the spawn through.
 FAKEBIN="$(make_fakebin_no_python3)"
-NOPY_JSON="$(json_agent 'dev' 'dev-sonnet-1' 'worktree' 'Do the thing.')"
+NOPY_JSON="$(json_agent 'dev' 'dev-sonnet-high-1' 'worktree' 'Do the thing.')"
 NOPY_OUT="$(printf '%s' "$NOPY_JSON" | PATH="$FAKEBIN" "$BASH_BIN" "$HOOK" 2>&1 1>/dev/null)"
 NOPY_RC=$?
 if [ "$NOPY_RC" -ne 0 ]; then
@@ -658,6 +710,8 @@ ti = {"prompt": prompt}
 if subagent: ti["subagent_type"] = subagent
 if name: ti["name"] = name
 if isolation: ti["isolation"] = isolation
+_np = str(ti.get("name") or "").split("-")
+if len(_np) == 4 and _np[2] in ("low", "medium", "high", "xhigh", "max"): ti.setdefault("effort", _np[2])
 print(json.dumps({"tool_name": "Agent", "tool_input": ti, "session_id": sid, "tool_use_id": "toolu_test_sess"}))
 PY
 }
@@ -668,11 +722,11 @@ cat >"$REUSE_TEAM_DIR/config.json" <<JSON
 { "name": "session-cafef00d",
   "members": [
     { "agentId": "team-lead@session-cafef00d", "name": "team-lead" },
-    { "agentId": "dev-sonnet-active@session-cafef00d", "name": "dev-sonnet-active" }
+    { "agentId": "dev-sonnet-high-active@session-cafef00d", "name": "dev-sonnet-high-active" }
   ] }
 JSON
-printf '{"event":"TaskCompleted","teammate":"eng-sonnet-done"}\n' >"$REUSE_TEAM_DIR/task-events.jsonl"
-printf '{"event":"TeammateIdle","teammate":"qa-sonnet-gone"}\n' >"$REUSE_TEAM_DIR/idle-events.jsonl"
+printf '{"event":"TaskCompleted","teammate":"eng-sonnet-high-done"}\n' >"$REUSE_TEAM_DIR/task-events.jsonl"
+printf '{"event":"TeammateIdle","teammate":"qa-sonnet-high-gone"}\n' >"$REUSE_TEAM_DIR/idle-events.jsonl"
 
 # (j1) fresh name -> exit 0, and THIS guard must NOT have written the ledger.
 #
@@ -687,10 +741,10 @@ printf '{"event":"TeammateIdle","teammate":"qa-sonnet-gone"}\n' >"$REUSE_TEAM_DI
 # This case therefore asserts the ABSENCE of a write. Its positive counterpart
 # — that the ledger is still WRITTEN, by the partner — is (j2), because
 # "nobody writes it" would satisfy this case and destroy the reuse clause.
-FRESH_JSON="$(json_agent_sess 'dev' 'dev-sonnet-fresh1' 'worktree' 'Do the thing.' "$REUSE_SESSION")"
+FRESH_JSON="$(json_agent_sess 'dev' 'dev-sonnet-high-fresh1' 'worktree' 'Do the thing.' "$REUSE_SESSION")"
 printf '%s' "$FRESH_JSON" | "$HOOK" >/dev/null 2>&1
 rc=$?
-if [ "$rc" -eq 0 ] && ! grep -qxF "dev-sonnet-fresh1" "$REUSE_TEAM_DIR/spawned-names.log" 2>/dev/null; then
+if [ "$rc" -eq 0 ] && ! grep -qxF "dev-sonnet-high-fresh1" "$REUSE_TEAM_DIR/spawned-names.log" 2>/dev/null; then
     PASS=$((PASS + 1)); printf '  PASS  reuse: fresh name allowed, and NOT burned into the ledger by this PreToolUse guard\n'
 else
     FAIL=$((FAIL + 1)); printf '  FAIL  reuse: fresh name allowed + not recorded here (exit %s)\n' "$rc"
@@ -706,31 +760,31 @@ rc=$?
 # (j2) the ledger IS still consulted — write it the way the PostToolUse partner
 # does, and the same name must now be refused. Without this arm, (j1) would
 # also be satisfied by a guard that stopped reading the ledger entirely.
-printf 'dev-sonnet-fresh1\n' >>"$REUSE_TEAM_DIR/spawned-names.log"
+printf 'dev-sonnet-high-fresh1\n' >>"$REUSE_TEAM_DIR/spawned-names.log"
 printf '%s' "$FRESH_JSON" | "$HOOK" >/dev/null 2>&1
 rc=$?
 [ "$rc" -eq 2 ] && { PASS=$((PASS+1)); printf '  PASS  reuse: ledger-recorded name reused -> block\n'; } \
                 || { FAIL=$((FAIL+1)); printf '  FAIL  reuse: ledger-recorded name reused -> block (exit %s)\n' "$rc"; }
 
 # (j3) ACTIVE roster name reused -> block
-printf '%s' "$(json_agent_sess 'dev' 'dev-sonnet-active' 'worktree' 'x' "$REUSE_SESSION")" | "$HOOK" >/dev/null 2>&1
+printf '%s' "$(json_agent_sess 'dev' 'dev-sonnet-high-active' 'worktree' 'x' "$REUSE_SESSION")" | "$HOOK" >/dev/null 2>&1
 rc=$?
 [ "$rc" -eq 2 ] && { PASS=$((PASS+1)); printf '  PASS  reuse: active roster name -> block\n'; } \
                 || { FAIL=$((FAIL+1)); printf '  FAIL  reuse: active roster name -> block (exit %s)\n' "$rc"; }
 
 # (j4) COMPLETED name absent from live roster but in event logs -> block (critical)
-printf '%s' "$(json_agent_sess 'eng' 'eng-sonnet-done' 'worktree' 'x' "$REUSE_SESSION")" | "$HOOK" >/dev/null 2>&1
+printf '%s' "$(json_agent_sess 'eng' 'eng-sonnet-high-done' 'worktree' 'x' "$REUSE_SESSION")" | "$HOOK" >/dev/null 2>&1
 rc=$?
 [ "$rc" -eq 2 ] && { PASS=$((PASS+1)); printf '  PASS  reuse: completed name (event-log only) -> block\n'; } \
                 || { FAIL=$((FAIL+1)); printf '  FAIL  reuse: completed name (event-log only) -> block (exit %s)\n' "$rc"; }
-printf '%s' "$(json_agent_sess 'qa' 'qa-sonnet-gone' 'worktree' 'x' "$REUSE_SESSION")" | "$HOOK" >/dev/null 2>&1
+printf '%s' "$(json_agent_sess 'qa' 'qa-sonnet-high-gone' 'worktree' 'x' "$REUSE_SESSION")" | "$HOOK" >/dev/null 2>&1
 rc=$?
 [ "$rc" -eq 2 ] && { PASS=$((PASS+1)); printf '  PASS  reuse: completed name (idle-log only) -> block\n'; } \
                 || { FAIL=$((FAIL+1)); printf '  FAIL  reuse: completed name (idle-log only) -> block (exit %s)\n' "$rc"; }
 
 # (j5) block message is self-documenting: names the collision + prescribes fresh id
-REUSE_MSG="$(printf '%s' "$(json_agent_sess 'dev' 'dev-sonnet-active' 'worktree' 'x' "$REUSE_SESSION")" | "$HOOK" 2>&1 >/dev/null)"
-if printf '%s' "$REUSE_MSG" | grep -qF "name 'dev-sonnet-active' has ALREADY been used" \
+REUSE_MSG="$(printf '%s' "$(json_agent_sess 'dev' 'dev-sonnet-high-active' 'worktree' 'x' "$REUSE_SESSION")" | "$HOOK" 2>&1 >/dev/null)"
+if printf '%s' "$REUSE_MSG" | grep -qF "name 'dev-sonnet-high-active' has ALREADY been used" \
    && printf '%s' "$REUSE_MSG" | grep -qF "FRESH"; then
     PASS=$((PASS+1)); printf '  PASS  reuse: block message self-documenting (collision + fresh-id fix)\n'
 else
@@ -739,7 +793,7 @@ fi
 
 # (j6) reusing team-lead is NOT a collision (lead is not a spawnable name) — a
 # fresh non-colliding name still passes even though team-lead is in roster
-printf '%s' "$(json_agent_sess 'plan' 'plan-sonnet-1' 'worktree' 'x' "$REUSE_SESSION")" | "$HOOK" >/dev/null 2>&1
+printf '%s' "$(json_agent_sess 'plan' 'plan-sonnet-high-1' 'worktree' 'x' "$REUSE_SESSION")" | "$HOOK" >/dev/null 2>&1
 rc=$?
 [ "$rc" -eq 0 ] && { PASS=$((PASS+1)); printf '  PASS  reuse: unrelated fresh name still allowed alongside roster\n'; } \
                 || { FAIL=$((FAIL+1)); printf '  FAIL  reuse: unrelated fresh name still allowed (exit %s)\n' "$rc"; }
@@ -747,7 +801,7 @@ rc=$?
 # (j7) inertness proof: with NO resolvable team dir (bad session), a name that
 # WOULD collide in the seeded team is allowed (clause inert) — this is exactly
 # why the un-sessioned cases above are unaffected.
-printf '%s' "$(json_agent_sess 'dev' 'dev-sonnet-active' 'worktree' 'x' 'deadbeef-0000-4000-8000-000000000000')" | "$HOOK" >/dev/null 2>&1
+printf '%s' "$(json_agent_sess 'dev' 'dev-sonnet-high-active' 'worktree' 'x' 'deadbeef-0000-4000-8000-000000000000')" | "$HOOK" >/dev/null 2>&1
 rc=$?
 [ "$rc" -eq 0 ] && { PASS=$((PASS+1)); printf '  PASS  reuse: clause inert without a resolvable team dir\n'; } \
                 || { FAIL=$((FAIL+1)); printf '  FAIL  reuse: clause inert without a resolvable team dir (exit %s)\n' "$rc"; }
@@ -782,11 +836,11 @@ register_cc() { # <session> <teammate> <path> <branch>
         && python3 "$WS_PY" --session "$1" confirm-cc --name "$2" --path "$3" >/dev/null
 }
 # REGISTERED cc/ workspaces, one per teammate that is spawned into one below
-register_cc "$TEST_SID" echo-opus-reg1 "$CR/other-wt/echo-opus-reg1" cc/echo-opus-reg1
-register_cc "$TEST_SID" echo-opus-both1 "$CR/other-wt/echo-opus-both1" cc/echo-opus-both1
-register_cc "feedface-1111-4000-8000-000000000001" echo-opus-other1 "$CR/other-wt/echo-opus-other1" cc/echo-opus-other1
+register_cc "$TEST_SID" echo-opus-high-reg1 "$CR/other-wt/echo-opus-high-reg1" cc/echo-opus-high-reg1
+register_cc "$TEST_SID" echo-opus-high-both1 "$CR/other-wt/echo-opus-high-both1" cc/echo-opus-high-both1
+register_cc "feedface-1111-4000-8000-000000000001" echo-opus-high-other1 "$CR/other-wt/echo-opus-high-other1" cc/echo-opus-high-other1
 # an UNREGISTERED cc/ workspace, a workspace NOT named cc/, and a codex/ one
-git -C "$CR_REPO" worktree add -q -b cc/echo-opus-imp1 "$CR/other-wt/echo-opus-imp1"
+git -C "$CR_REPO" worktree add -q -b cc/echo-opus-high-imp1 "$CR/other-wt/echo-opus-high-imp1"
 git -C "$CR_REPO" worktree add -q -b human/x "$CR/other-wt/human-x"
 git -C "$CR_REPO" worktree add -q -b codex/fix "$CR/other-wt/codex-fix"
 
@@ -797,39 +851,41 @@ name, isolation, cwd, prompt, tuid = sys.argv[1:6]
 ti = {"subagent_type": "dev", "name": name, "prompt": prompt}
 if isolation: ti["isolation"] = isolation
 if cwd: ti["cwd"] = cwd
+_np = str(ti.get("name") or "").split("-")
+if len(_np) == 4 and _np[2] in ("low", "medium", "high", "xhigh", "max"): ti.setdefault("effort", _np[2])
 print(json.dumps({"tool_name": "Agent", "tool_input": ti, "session_id": "deadbeef-0000-4000-8000-000000000000", "tool_use_id": tuid}))
 PY
 }
 
 # (l1) cwd-only into a REGISTERED cc/ workspace -> BLOCKED at clause 7f
 run_case "cwd into a REGISTERED cc/ workspace, no isolation -> BLOCKED (cwd-only)" 2 \
-    "$(json_cwd 'echo-opus-reg1' '' "$CR/other-wt/echo-opus-reg1" 'Work there.')"
+    "$(json_cwd 'echo-opus-high-reg1' '' "$CR/other-wt/echo-opus-high-reg1" 'Work there.')"
 run_case_msg "cwd-only refusal names the cross-repo-worktree line to use instead" 'cross-repo-worktree: ' \
-    "$(json_cwd 'echo-opus-reg1' '' "$CR/other-wt/echo-opus-reg1" 'Work there.')"
+    "$(json_cwd 'echo-opus-high-reg1' '' "$CR/other-wt/echo-opus-high-reg1" 'Work there.')"
 # (l2) cwd into a workspace not named cc/ -> BLOCKED (point 1)
 run_case "cwd into a linked worktree NOT named cc/ -> BLOCKED" 2 \
-    "$(json_cwd 'echo-opus-hum1' '' "$CR/other-wt/human-x" 'Work there.')"
+    "$(json_cwd 'echo-opus-high-hum1' '' "$CR/other-wt/human-x" 'Work there.')"
 run_case_msg "the refusal says every non-native workspace is named cc/" 'not a cc/ branch' \
-    "$(json_cwd 'echo-opus-hum1' '' "$CR/other-wt/human-x" 'Work there.')"
+    "$(json_cwd 'echo-opus-high-hum1' '' "$CR/other-wt/human-x" 'Work there.')"
 # (l3) cwd = the MAIN checkout -> BLOCKED (a teammate never works in main)
 run_case "cwd = a main checkout -> BLOCKED" 2 \
-    "$(json_cwd 'echo-opus-main1' '' "$CR_REPO" 'Work there.')"
+    "$(json_cwd 'echo-opus-high-main1' '' "$CR_REPO" 'Work there.')"
 # (l4) cwd = nonexistent -> BLOCKED
 run_case "cwd = nonexistent path -> BLOCKED" 2 \
-    "$(json_cwd 'echo-opus-none1' '' "$CR/nowhere" 'Work there.')"
+    "$(json_cwd 'echo-opus-high-none1' '' "$CR/nowhere" 'Work there.')"
 # (l5) cwd + isolation -> BLOCKED, named as mutually exclusive
 run_case "cwd together with isolation:worktree -> BLOCKED (mutually exclusive)" 2 \
-    "$(json_cwd 'echo-opus-both1' 'worktree' "$CR/other-wt/echo-opus-both1" 'Work there.')"
+    "$(json_cwd 'echo-opus-high-both1' 'worktree' "$CR/other-wt/echo-opus-high-both1" 'Work there.')"
 run_case_msg "cwd+isolation message says mutually exclusive" 'mutually exclusive' \
-    "$(json_cwd 'echo-opus-both1' 'worktree' "$CR/other-wt/echo-opus-both1" 'Work there.')"
+    "$(json_cwd 'echo-opus-high-both1' 'worktree' "$CR/other-wt/echo-opus-high-both1" 'Work there.')"
 # (l6) a cwd spawn still needs a well-formed name (clause 2 not relaxed)
 run_case "cwd spawn with a bare name -> BLOCKED (name contract not relaxed)" 2 \
-    "$(json_cwd 'echo' '' "$CR/other-wt/echo-opus-reg1" 'Work there.')"
+    "$(json_cwd 'echo' '' "$CR/other-wt/echo-opus-high-reg1" 'Work there.')"
 # (l7) the registered shape: isolation + cross-repo-worktree: line -> allowed and REGISTERED
 run_case "cross-repo-worktree: REGISTERED cc/ path + isolation -> allowed" 0 \
-    "$(json_cwd 'echo-opus-reg1' 'worktree' '' $'Do it.\ncross-repo-worktree: '"$CR/other-wt/echo-opus-reg1" toolu_test_reg1)"
+    "$(json_cwd 'echo-opus-high-reg1' 'worktree' '' $'Do it.\ncross-repo-worktree: '"$CR/other-wt/echo-opus-high-reg1" toolu_test_reg1)"
 if wti_group; then
-if [ "$(ws_record echo-opus-reg1 tool_use_id)" = "toolu_test_reg1" ] && [ "$(ws_record echo-opus-reg1 isolation)" = "worktree" ]; then
+if [ "$(ws_record echo-opus-high-reg1 tool_use_id)" = "toolu_test_reg1" ] && [ "$(ws_record echo-opus-high-reg1 isolation)" = "worktree" ]; then
     PASS=$((PASS + 1)); printf '  PASS  L07b the allowed spawn is REGISTERED: its cc/ registration now carries this spawn (point 3)\n'
 else
     FAIL=$((FAIL + 1)); printf '  FAIL  L07b the allowed spawn left no registration\n'
@@ -837,37 +893,37 @@ fi
 fi # mutation witness fixture group
 # (l8) an UNREGISTERED cc/ workspace -> BLOCKED, the spawn does not happen (point 3)
 run_case "L08  cross-repo-worktree: UNREGISTERED cc/ path + isolation -> BLOCKED" 2 \
-    "$(json_cwd 'echo-opus-imp1' 'worktree' '' $'Do it.\ncross-repo-worktree: '"$CR/other-wt/echo-opus-imp1")"
-run_case_msg "L09  the refusal says the spawn could not be registered and names the helper" 'create-teammate-worktree.sh <repo> echo-opus-imp1' \
-    "$(json_cwd 'echo-opus-imp1' 'worktree' '' $'Do it.\ncross-repo-worktree: '"$CR/other-wt/echo-opus-imp1")"
+    "$(json_cwd 'echo-opus-high-imp1' 'worktree' '' $'Do it.\ncross-repo-worktree: '"$CR/other-wt/echo-opus-high-imp1")"
+run_case_msg "L09  the refusal says the spawn could not be registered and names the helper" 'create-teammate-worktree.sh <repo> echo-opus-high-imp1' \
+    "$(json_cwd 'echo-opus-high-imp1' 'worktree' '' $'Do it.\ncross-repo-worktree: '"$CR/other-wt/echo-opus-high-imp1")"
 # (l10) codex/ is never worked in (point 2); a non-cc/ workspace is refused (point 1)
 run_case_msg "L10  a codex/ workspace on the line -> BLOCKED, naming codex/" 'codex/ is never touched' \
-    "$(json_cwd 'echo-opus-cx1' 'worktree' '' $'Do it.\ncross-repo-worktree: '"$CR/other-wt/codex-fix")"
+    "$(json_cwd 'echo-opus-high-cx1' 'worktree' '' $'Do it.\ncross-repo-worktree: '"$CR/other-wt/codex-fix")"
 run_case "L11  a workspace not named cc/ on the line -> BLOCKED" 2 \
-    "$(json_cwd 'echo-opus-hum2' 'worktree' '' $'Do it.\ncross-repo-worktree: '"$CR/other-wt/human-x")"
+    "$(json_cwd 'echo-opus-high-hum2' 'worktree' '' $'Do it.\ncross-repo-worktree: '"$CR/other-wt/human-x")"
 # (l12) registered for ANOTHER session, or ANOTHER teammate -> BLOCKED
-run_case_msg "L12  a cc/ workspace registered in ANOTHER session -> BLOCKED" 'no registration exists for echo-opus-other1 in this session' \
-    "$(json_cwd 'echo-opus-other1' 'worktree' '' $'Do it.\ncross-repo-worktree: '"$CR/other-wt/echo-opus-other1")"
-run_case_msg "L13  a cc/ workspace registered for a DIFFERENT teammate -> BLOCKED" 'no registration exists for echo-opus-stranger1' \
-    "$(json_cwd 'echo-opus-stranger1' 'worktree' '' $'Do it.\ncross-repo-worktree: '"$CR/other-wt/echo-opus-both1")"
+run_case_msg "L12  a cc/ workspace registered in ANOTHER session -> BLOCKED" 'no registration exists for echo-opus-high-other1 in this session' \
+    "$(json_cwd 'echo-opus-high-other1' 'worktree' '' $'Do it.\ncross-repo-worktree: '"$CR/other-wt/echo-opus-high-other1")"
+run_case_msg "L13  a cc/ workspace registered for a DIFFERENT teammate -> BLOCKED" 'no registration exists for echo-opus-high-stranger1' \
+    "$(json_cwd 'echo-opus-high-stranger1' 'worktree' '' $'Do it.\ncross-repo-worktree: '"$CR/other-wt/echo-opus-high-both1")"
 # (l14) the workspace DRIFTED off its registered branch -> BLOCKED; back on it -> allowed
-git -C "$CR/other-wt/echo-opus-both1" checkout -q -b cc/drifted-away
-run_case_msg "L14  a registered workspace now on a DIFFERENT branch -> BLOCKED, naming both" "not the registered branch 'cc/echo-opus-both1'" \
-    "$(json_cwd 'echo-opus-both1' 'worktree' '' $'Do it.\ncross-repo-worktree: '"$CR/other-wt/echo-opus-both1" toolu_test_both1)"
-git -C "$CR/other-wt/echo-opus-both1" checkout -q cc/echo-opus-both1
+git -C "$CR/other-wt/echo-opus-high-both1" checkout -q -b cc/drifted-away
+run_case_msg "L14  a registered workspace now on a DIFFERENT branch -> BLOCKED, naming both" "not the registered branch 'cc/echo-opus-high-both1'" \
+    "$(json_cwd 'echo-opus-high-both1' 'worktree' '' $'Do it.\ncross-repo-worktree: '"$CR/other-wt/echo-opus-high-both1" toolu_test_both1)"
+git -C "$CR/other-wt/echo-opus-high-both1" checkout -q cc/echo-opus-high-both1
 run_case "L15  ...and back on its registered branch -> allowed (positive control for L14)" 0 \
-    "$(json_cwd 'echo-opus-both1' 'worktree' '' $'Do it.\ncross-repo-worktree: '"$CR/other-wt/echo-opus-both1" toolu_test_both1)"
+    "$(json_cwd 'echo-opus-high-both1' 'worktree' '' $'Do it.\ncross-repo-worktree: '"$CR/other-wt/echo-opus-high-both1" toolu_test_both1)"
 # (l16) a prompt that instructs a hand-rolled worktree -> BLOCKED; hand-roll-ack: -> allowed + logged
 run_case "prompt instructing 'git -C <repo> worktree add' -> BLOCKED" 2 \
-    "$(json_cwd 'echo-opus-hr1' 'worktree' '' "Create a worktree: git -C $CR_REPO worktree add $CR/other-wt/x -b x, then work.")"
+    "$(json_cwd 'echo-opus-high-hr1' 'worktree' '' "Create a worktree: git -C $CR_REPO worktree add $CR/other-wt/x -b x, then work.")"
 run_case_msg "hand-roll refusal names the helper and the ack" 'hand-roll-ack:' \
-    "$(json_cwd 'echo-opus-hr1' 'worktree' '' "Create a worktree: git -C $CR_REPO worktree add $CR/other-wt/x -b x, then work.")"
+    "$(json_cwd 'echo-opus-high-hr1' 'worktree' '' "Create a worktree: git -C $CR_REPO worktree add $CR/other-wt/x -b x, then work.")"
 run_case "prompt instructing 'git worktree add' with a hand-roll-ack: line -> allowed" 0 \
-    "$(json_cwd 'echo-opus-hr2' 'worktree' '' $'Fix the helper that runs git worktree add.\nhand-roll-ack: this task is about the worktree tooling itself' toolu_test_hr2)"
+    "$(json_cwd 'echo-opus-high-hr2' 'worktree' '' $'Fix the helper that runs git worktree add.\nhand-roll-ack: this task is about the worktree tooling itself' toolu_test_hr2)"
 run_case "an ordinary prompt mentioning neither -> allowed (no false positive)" 0 \
-    "$(json_cwd 'echo-opus-plain1' 'worktree' '' 'Add a worktree-lifecycle section to the README and commit.' toolu_test_plain1)"
+    "$(json_cwd 'echo-opus-high-plain1' 'worktree' '' 'Add a worktree-lifecycle section to the README and commit.' toolu_test_plain1)"
 if wti_group; then
-if grep -qF 'echo-opus-hr2' "$RICHOS_ENTITY_ROOT/.claude/state/hand-roll-acks.log" 2>/dev/null; then
+if grep -qF 'echo-opus-high-hr2' "$RICHOS_ENTITY_ROOT/.claude/state/hand-roll-acks.log" 2>/dev/null; then
     PASS=$((PASS + 1)); printf '  PASS  hand-roll-ack use is logged to .claude/state/hand-roll-acks.log\n'
 else
     FAIL=$((FAIL + 1)); printf '  FAIL  hand-roll-ack use not logged\n'
@@ -883,8 +939,8 @@ M_GOOD_Q='generic-agent: a read-only sweep across three repositories that no ros
 
 # (q1) a native isolation spawn is registered: its name, this session, isolation worktree
 if wti_want "Q01"; then
-printf '%s' "$(json_agent 'dev' 'dev-sonnet-q1' 'worktree' 'Do the thing.')" | "$HOOK" >/dev/null 2>&1; rc=$?
-if [ "$rc" -eq 0 ] && [ "$(ws_record dev-sonnet-q1 isolation)" = "worktree" ] && [ "$(ws_record dev-sonnet-q1 tool_use_id)" = "toolu_test_agent" ]; then
+printf '%s' "$(json_agent 'dev' 'dev-sonnet-high-q1' 'worktree' 'Do the thing.')" | "$HOOK" >/dev/null 2>&1; rc=$?
+if [ "$rc" -eq 0 ] && [ "$(ws_record dev-sonnet-high-q1 isolation)" = "worktree" ] && [ "$(ws_record dev-sonnet-high-q1 tool_use_id)" = "toolu_test_agent" ]; then
     PASS=$((PASS + 1)); printf '  PASS  Q01  an allowed native spawn is REGISTERED (name, session, tool_use_id, isolation)\n'
 else
     FAIL=$((FAIL + 1)); printf '  FAIL  Q01  native registration (rc=%s)\n' "$rc"
@@ -905,6 +961,8 @@ name, tuid, marker = sys.argv[1:4]
 d = {"tool_name": "Agent", "session_id": "deadbeef-0000-4000-8000-000000000000",
      "tool_input": {"subagent_type": "dev", "name": name, "isolation": "worktree",
                     "prompt": "Do the thing."}}
+_np = name.split("-")
+if len(_np) == 4: d["tool_input"]["effort"] = _np[2]
 if tuid:
     d["tool_use_id"] = tuid
 if marker == "yes":
@@ -917,11 +975,11 @@ PY
 # decides nothing. This is the case that would go green for a guard that let the
 # marker turn a real spawn into an unregistered one.
 if wti_want "Q7G1"; then
-printf '%s' "$(json_check dev-sonnet-g7a toolu_test_g7a yes)" | "$HOOK" >/dev/null 2>&1; rc=$?
-if [ "$rc" -eq 0 ] && [ "$(ws_record dev-sonnet-g7a tool_use_id)" = "toolu_test_g7a" ]; then
+printf '%s' "$(json_check dev-sonnet-high-g7a toolu_test_g7a yes)" | "$HOOK" >/dev/null 2>&1; rc=$?
+if [ "$rc" -eq 0 ] && [ "$(ws_record dev-sonnet-high-g7a tool_use_id)" = "toolu_test_g7a" ]; then
     PASS=$((PASS + 1)); printf '  PASS  Q7G1  a LIVE payload carrying richos_spawn_check is still REGISTERED\n'
 else
-    FAIL=$((FAIL + 1)); printf '  FAIL  Q7G1  a live payload carrying the marker must still be registered (rc=%s, tool_use_id=%s)\n' "$rc" "$(ws_record dev-sonnet-g7a tool_use_id)"
+    FAIL=$((FAIL + 1)); printf '  FAIL  Q7G1  a live payload carrying the marker must still be registered (rc=%s, tool_use_id=%s)\n' "$rc" "$(ws_record dev-sonnet-high-g7a tool_use_id)"
 fi
 fi # mutation witness fixture group
 
@@ -929,11 +987,11 @@ fi # mutation witness fixture group
 # writes NOTHING. Both halves matter: allowed proves the evaluation runs, and
 # nothing written proves it is not a registration.
 if wti_want "Q7G2"; then
-printf '%s' "$(json_check dev-sonnet-g7b "" yes)" | "$HOOK" >/dev/null 2>&1; rc=$?
-if [ "$rc" -eq 0 ] && [ ! -e "$RICHOS_WORKSPACES_DIR/agents/$TEST_SID--dev-sonnet-g7b.json" ]; then
+printf '%s' "$(json_check dev-sonnet-high-g7b "" yes)" | "$HOOK" >/dev/null 2>&1; rc=$?
+if [ "$rc" -eq 0 ] && [ ! -e "$RICHOS_WORKSPACES_DIR/agents/$TEST_SID--dev-sonnet-high-g7b.json" ]; then
     PASS=$((PASS + 1)); printf '  PASS  Q7G2  a DRY payload is evaluated, allowed, and writes NO registration\n'
 else
-    FAIL=$((FAIL + 1)); printf '  FAIL  Q7G2  dry evaluation (rc=%s, record present=%s)\n' "$rc" "$( [ -e "$RICHOS_WORKSPACES_DIR/agents/$TEST_SID--dev-sonnet-g7b.json" ] && echo yes || echo no )"
+    FAIL=$((FAIL + 1)); printf '  FAIL  Q7G2  dry evaluation (rc=%s, record present=%s)\n' "$rc" "$( [ -e "$RICHOS_WORKSPACES_DIR/agents/$TEST_SID--dev-sonnet-high-g7b.json" ] && echo yes || echo no )"
 fi
 fi # mutation witness fixture group
 
@@ -942,25 +1000,25 @@ fi # mutation witness fixture group
 # case Q7G2 would also be green for a guard that had simply stopped requiring a
 # tool_use_id at all.
 run_case "Q7G3  NEGATIVE CONTROL: no tool_use_id and NO marker -> BLOCKED (unregisterable)" 2 \
-    "$(json_check dev-sonnet-g7c "" no)"
+    "$(json_check dev-sonnet-high-g7c "" no)"
 
 if wti_group; then
 # (q11) SYNCHRONOUS file-writing spawn -> refused; async/unspecified -> allowed
 SYNC_JSON="$(python3 -c '
 import json
-print(json.dumps({"tool_name": "Agent", "tool_input": {"subagent_type": "dev", "name": "dev-sonnet-sync1", "isolation": "worktree", "prompt": "Do it.", "run_in_background": False}, "session_id": "deadbeef-0000-4000-8000-000000000000", "tool_use_id": "toolu_test_sync"}))')"
+print(json.dumps({"tool_name": "Agent", "tool_input": {"subagent_type": "dev", "name": "dev-sonnet-high-sync1", "effort": "high", "isolation": "worktree", "prompt": "Do it.", "run_in_background": False}, "session_id": "deadbeef-0000-4000-8000-000000000000", "tool_use_id": "toolu_test_sync"}))')"
 run_case "Q11  run_in_background: false on a file-capable spawn -> BLOCKED" 2 "$SYNC_JSON"
 run_case_msg "Q12  the refusal names the background form" 'background teammate' "$SYNC_JSON"
 ASYNC_JSON="$(python3 -c '
 import json
-print(json.dumps({"tool_name": "Agent", "tool_input": {"subagent_type": "dev", "name": "dev-sonnet-async1", "isolation": "worktree", "prompt": "Do it.", "run_in_background": True}, "session_id": "deadbeef-0000-4000-8000-000000000000", "tool_use_id": "toolu_test_async"}))')"
+print(json.dumps({"tool_name": "Agent", "tool_input": {"subagent_type": "dev", "name": "dev-sonnet-high-async1", "effort": "high", "isolation": "worktree", "prompt": "Do it.", "run_in_background": True}, "session_id": "deadbeef-0000-4000-8000-000000000000", "tool_use_id": "toolu_test_async"}))')"
 run_case "Q13  run_in_background: true -> allowed (positive control for Q11)" 0 "$ASYNC_JSON"
 
 # (q14) a main-checkout-run spawn is registered with no workspaces
 printf '%s' "$(python3 -c '
 import json
-print(json.dumps({"tool_name": "Agent", "tool_input": {"subagent_type": "worker", "name": "worker-sonnet-mcr1", "prompt": "Do the task.\nmain-checkout-run: needs main checkout HEAD."}, "session_id": "deadbeef-0000-4000-8000-000000000000", "tool_use_id": "toolu_test_mcr"}))')" | "$HOOK" >/dev/null 2>&1; rc=$?
-if [ "$rc" -eq 0 ] && [ "$(ws_record worker-sonnet-mcr1 tool_use_id)" = "toolu_test_mcr" ] && [ "$(ws_record worker-sonnet-mcr1 workspaces)" = "" ]; then
+print(json.dumps({"tool_name": "Agent", "tool_input": {"subagent_type": "worker", "name": "worker-sonnet-high-mcr1", "effort": "high", "prompt": "Do the task.\nmain-checkout-run: needs main checkout HEAD."}, "session_id": "deadbeef-0000-4000-8000-000000000000", "tool_use_id": "toolu_test_mcr"}))')" | "$HOOK" >/dev/null 2>&1; rc=$?
+if [ "$rc" -eq 0 ] && [ "$(ws_record worker-sonnet-high-mcr1 tool_use_id)" = "toolu_test_mcr" ] && [ "$(ws_record worker-sonnet-high-mcr1 workspaces)" = "" ]; then
     PASS=$((PASS + 1)); printf '  PASS  Q14  a main-checkout-run spawn is registered, with no workspaces\n'
 else
     FAIL=$((FAIL + 1)); printf '  FAIL  Q14  main-checkout-run registration (rc=%s)\n' "$rc"
@@ -969,7 +1027,7 @@ fi
 # (q15) NO tool_use_id in the payload -> refused (nothing to key the registration by)
 NOTU_JSON="$(python3 -c '
 import json
-print(json.dumps({"tool_name": "Agent", "tool_input": {"subagent_type": "dev", "name": "dev-sonnet-notu1", "isolation": "worktree", "prompt": "Do it."}, "session_id": "deadbeef-0000-4000-8000-000000000000"}))')"
+print(json.dumps({"tool_name": "Agent", "tool_input": {"subagent_type": "dev", "name": "dev-sonnet-high-notu1", "effort": "high", "isolation": "worktree", "prompt": "Do it."}, "session_id": "deadbeef-0000-4000-8000-000000000000"}))')"
 run_case "Q15  a payload with NO tool_use_id -> BLOCKED (it cannot be registered)" 2 "$NOTU_JSON"
 
 # (q16) A READ-ONLY TYPE IS EXEMPT FROM ISOLATION AND STILL REGISTERED.
@@ -1004,7 +1062,7 @@ cp "$SCRIPT_DIR/../lib/resolve-roots.sh" "$SCRIPT_DIR/../lib/resolve-model.sh" "
 cp "$RICHOS_ENTITY_ROOT/orchestration.config" "$NOTX/"
 cp "$RICHOS_ENTITY_ROOT/.claude/agents/"*.md "$NOTX/.claude/agents/" 2>/dev/null || true
 chmod +x "$NOTX/scripts/hooks/"*.sh
-NOTX_OUT="$(printf '%s' "$(json_agent 'dev' 'dev-sonnet-notx1' 'worktree' 'Do it.')" | RICHOS_ENTITY_ROOT="$NOTX" "$NOTX/scripts/hooks/guard-worktree-isolation.sh" 2>&1 >/dev/null)"; rc=$?
+NOTX_OUT="$(printf '%s' "$(json_agent 'dev' 'dev-sonnet-high-notx1' 'worktree' 'Do it.')" | RICHOS_ENTITY_ROOT="$NOTX" "$NOTX/scripts/hooks/guard-worktree-isolation.sh" 2>&1 >/dev/null)"; rc=$?
 if [ "$rc" -eq 2 ] && printf '%s' "$NOTX_OUT" | grep -qF 'lifecycle component MISSING: mega-lander/workspaces.py'; then
     PASS=$((PASS + 1)); printf '  PASS  Q18  a file-capable spawn with the workspace registry MISSING -> BLOCKED, naming it (fail-closed)\n'
 else
@@ -1017,14 +1075,14 @@ cp "$SCRIPT_DIR/../../mega-lander/workspaces.py" "$NOTX/mega-lander/"
 # Keep its production dependencies while omitting only the component under test.
 cp "$SCRIPT_DIR/../lib/recovery.py" "$SCRIPT_DIR/../lib/recovery_controls.py" "$SCRIPT_DIR/../lib/operator_fences.py" "$SCRIPT_DIR/../lib/machine_settings.py" "$NOTX/scripts/lib/"
 chmod -x "$NOTX/scripts/hooks/guard-sealed-worktree.sh"
-NOTX_OUT="$(printf '%s' "$(json_agent 'dev' 'dev-sonnet-brk2' 'worktree' 'Do it.')" | RICHOS_ENTITY_ROOT="$NOTX" "$NOTX/scripts/hooks/guard-worktree-isolation.sh" 2>&1 >/dev/null)"; rc=$?
+NOTX_OUT="$(printf '%s' "$(json_agent 'dev' 'dev-sonnet-high-brk2' 'worktree' 'Do it.')" | RICHOS_ENTITY_ROOT="$NOTX" "$NOTX/scripts/hooks/guard-worktree-isolation.sh" 2>&1 >/dev/null)"; rc=$?
 if [ "$rc" -eq 2 ] && printf '%s' "$NOTX_OUT" | grep -qF 'lifecycle component NOT EXECUTABLE: scripts/hooks/guard-sealed-worktree.sh'; then
     PASS=$((PASS + 1)); printf '  PASS  Q18c a file-capable spawn with the lock-out NOT EXECUTABLE -> BLOCKED, naming it\n'
 else
     FAIL=$((FAIL + 1)); printf '  FAIL  Q18c non-executable lock-out (exit %s): %s\n' "$rc" "${NOTX_OUT:0:200}"
 fi
 chmod +x "$NOTX/scripts/hooks/guard-sealed-worktree.sh"
-NOTX_OUT="$(printf '%s' "$(json_agent 'dev' 'dev-sonnet-brk3' 'worktree' 'Do it.')" | RICHOS_ENTITY_ROOT="$NOTX" "$NOTX/scripts/hooks/guard-worktree-isolation.sh" 2>&1 >/dev/null)"; rc=$?
+NOTX_OUT="$(printf '%s' "$(json_agent 'dev' 'dev-sonnet-high-brk3' 'worktree' 'Do it.')" | RICHOS_ENTITY_ROOT="$NOTX" "$NOTX/scripts/hooks/guard-worktree-isolation.sh" 2>&1 >/dev/null)"; rc=$?
 if [ "$rc" -eq 0 ]; then
     PASS=$((PASS + 1)); printf '  PASS  Q18d ...and the same sandbox with every component healthy ALLOWS the spawn (positive control)\n'
 else
@@ -1129,25 +1187,25 @@ run_case "claude-code-guide needs NO hatch (harness utility)" 0 \
 # the read-only allowlist, so before clause 5 it sailed through the whole
 # contract on isolation + a truthful name alone.
 run_case "general-purpose, isolated + well-named, NO hatch -> BLOCKED" 2 \
-    "$(json_agent 'general-purpose' 'gen-sonnet-d1' 'worktree' 'Do the work.')"
+    "$(json_agent 'general-purpose' 'gen-sonnet-high-d1' 'worktree' 'Do the work.')"
 run_case "general-purpose, isolated + well-named, WITH hatch -> allowed" 0 \
-    "$(json_agent 'general-purpose' 'gen-sonnet-d2' 'worktree' "Do the work.
+    "$(json_agent 'general-purpose' 'gen-sonnet-high-d2' 'worktree' "Do the work.
 $M_GOOD")"
 # ...and the hatch does NOT relax the rest of the contract for a file-capable type.
 run_case "general-purpose WITH hatch but NO isolation -> still BLOCKED (clauses 1-2 hold)" 2 \
-    "$(json_agent 'general-purpose' 'gen-sonnet-d3' '' "Do the work.
+    "$(json_agent 'general-purpose' 'gen-sonnet-high-d3' '' "Do the work.
 $M_GOOD")"
 
 # (m8) ROSTER TEAMMATES ARE WHOLLY UNAFFECTED — the gate must not tax the
 # normal path, or it will be routed around.
 run_case "roster-style type, isolated, no hatch -> allowed (clause 5 inert)" 0 \
-    "$(json_agent 'dev' 'dev-sonnet-m8a' 'worktree' 'Fix the bug and commit.')"
+    "$(json_agent 'dev' 'dev-sonnet-high-m8a' 'worktree' 'Fix the bug and commit.')"
 run_case "roster-style type, isolated, no hatch, second name -> allowed" 0 \
-    "$(json_agent 'deviceqa' 'deviceqa-sonnet-m8b' 'worktree' 'Run device QA.')"
+    "$(json_agent 'deviceqa' 'deviceqa-sonnet-high-m8b' 'worktree' 'Run device QA.')"
 run_case "roster-style type WITHOUT isolation is still blocked by clause 1, not 5" 2 \
-    "$(json_agent 'dev' 'dev-sonnet-m8c' '' 'Fix the bug.')"
+    "$(json_agent 'dev' 'dev-sonnet-high-m8c' '' 'Fix the bug.')"
 run_case_msg "a roster-type refusal is the ISOLATION message, never the staffing one" 'missing native isolation' \
-    "$(json_agent 'dev' 'dev-sonnet-m8d' '' 'Fix the bug.')"
+    "$(json_agent 'dev' 'dev-sonnet-high-m8d' '' 'Fix the bug.')"
 
 # (m9) CONFIG IS THE SWITCH, AND ITS DEFAULT IS DENY. A type declared a harness
 # utility in the entity's own config is exempt; a type merely added to
@@ -1214,25 +1272,25 @@ if wti_group; then
 # (p5) POINT 5, amended 2026-09-30: pending integration allows unrelated
 # development. Registration, workspace isolation and explicit land helpers remain.
 # ---------------------------------------------------------------------------
-# echo-opus-reg1 was spawned above (L07). The platform acknowledges it, it
+# echo-opus-high-reg1 was spawned above (L07). The platform acknowledges it, it
 # commits in its cc/ workspace, and its run ends: finished, not landed.
-printf '{"hook_event_name":"PostToolUse","session_id":"%s","tool_use_id":"toolu_test_reg1","tool_name":"Agent","tool_input":{"name":"echo-opus-reg1"},"tool_response":{"agentId":"aechoreg10000001"}}' "$TEST_SID" \
+printf '{"hook_event_name":"PostToolUse","session_id":"%s","tool_use_id":"toolu_test_reg1","tool_name":"Agent","tool_input":{"name":"echo-opus-high-reg1", "effort": "high"},"tool_response":{"agentId":"aechoreg10000001"}}' "$TEST_SID" \
     | python3 "$WS_PY" --entity "$RICHOS_ENTITY_ROOT" hook >/dev/null
-printf 'work\n' >"$CR/other-wt/echo-opus-reg1/work.txt"
-git -C "$CR/other-wt/echo-opus-reg1" add work.txt
-git -C "$CR/other-wt/echo-opus-reg1" commit -q -m work
+printf 'work\n' >"$CR/other-wt/echo-opus-high-reg1/work.txt"
+git -C "$CR/other-wt/echo-opus-high-reg1" add work.txt
+git -C "$CR/other-wt/echo-opus-high-reg1" commit -q -m work
 printf '{"hook_event_name":"SubagentStop","session_id":"%s","agent_id":"aechoreg10000001"}' "$TEST_SID" \
     | python3 "$WS_PY" --entity "$RICHOS_ENTITY_ROOT" hook >/dev/null
-run_case "P501 unrelated work while echo-opus-reg1 stays pending -> allowed" 0 \
-    "$(json_cwd 'dev-sonnet-p5new' 'worktree' '' 'Unrelated new work.' toolu_test_p5new)"
+run_case "P501 unrelated work while echo-opus-high-reg1 stays pending -> allowed" 0 \
+    "$(json_cwd 'dev-sonnet-high-p5new' 'worktree' '' 'Unrelated new work.' toolu_test_p5new)"
 run_case "P502 a second unrelated spawn also passes registration" 0 \
-    "$(json_cwd 'dev-sonnet-p5new2' 'worktree' '' 'More unrelated work.' toolu_test_p5new2)"
-run_case "P503 the work that lands it (lands-pending: echo-opus-reg1) -> allowed" 0 \
-    "$(json_cwd 'dev-sonnet-p5fix' 'worktree' '' $'Resolve the clash and land it.\nlands-pending: echo-opus-reg1' toolu_test_p5fix)"
-python3 "$WS_PY" --session "$TEST_SID" discard echo-opus-reg1 --reason "a fixture of this suite, done with" \
+    "$(json_cwd 'dev-sonnet-high-p5new2' 'worktree' '' 'More unrelated work.' toolu_test_p5new2)"
+run_case "P503 the work that lands it (lands-pending: echo-opus-high-reg1) -> allowed" 0 \
+    "$(json_cwd 'dev-sonnet-high-p5fix' 'worktree' '' $'Resolve the clash and land it.\nlands-pending: echo-opus-high-reg1' toolu_test_p5fix)"
+python3 "$WS_PY" --session "$TEST_SID" discard echo-opus-high-reg1 --reason "a fixture of this suite, done with" \
     --not-ceo-ordered "a test fixture made by this suite" >/dev/null 2>&1
 run_case "P504 discarded: new work is allowed again (positive control)" 0 \
-    "$(json_agent 'dev' 'dev-sonnet-p5after' 'worktree' 'New work.')"
+    "$(json_agent 'dev' 'dev-sonnet-high-p5after' 'worktree' 'New work.')"
 fi # mutation witness fixture group
 
 [ -z "${CR:-}" ] || rm -rf "$CR"
