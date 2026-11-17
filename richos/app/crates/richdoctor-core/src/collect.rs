@@ -718,7 +718,8 @@ fn richfiles_timing(scope: &Scope, ctx: &Context, budget: &mut u64) -> Item {
         if id.len() != 36 || !id.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-')
             || build.len() > 40 || !build.bytes().all(|b| b.is_ascii_alphanumeric() || b".-+".contains(&b))
             || !matches!(operation, "listing" | "copy" | "move" | "recovery" | "gitHistory" | "gitComparison"
-                | "glanceDisplay" | "glanceDecode" | "glanceFolder" | "glancePreview" | "glanceDefaults" | "glanceMetadata")
+                | "glanceDisplay" | "glanceDecode" | "glanceFolder" | "glancePreview" | "glanceDefaults" | "glanceMetadata"
+                | "glanceCaptureFrame" | "glanceCaptureOutput" | "glanceCaptureSession")
             || !matches!(outcome, "complete" | "issues" | "canceled" | "unavailable" | "interrupted")
             || confirmed > total {
             return None;
@@ -957,7 +958,13 @@ mod tests {
         let mut metadata = record.clone();
         metadata["operation"] = serde_json::json!("glanceMetadata");
         metadata["note"] = serde_json::json!("Personal RichCleaner note");
-        write(&scope.logs_root().join("richfiles-timing.jsonl"), &format!("{record}\n{glance}\n{defaults}\n{metadata}"));
+        let captures = ["glanceCaptureFrame", "glanceCaptureSession", "glanceCaptureOutput"].map(|stage| {
+            let mut capture = record.clone();
+            capture["operation"] = serde_json::json!(stage);
+            capture["screen"] = serde_json::json!("Private screen content");
+            capture.to_string()
+        }).join("\n");
+        write(&scope.logs_root().join("richfiles-timing.jsonl"), &format!("{record}\n{glance}\n{defaults}\n{metadata}\n{captures}"));
         let items = collect(Category::Configuration, &scope, &Context::default(), 0);
         let timing = items.iter().find(|item| item.source == "RichFiles timing log").unwrap();
         assert_eq!(timing.status, Status::Collected);
@@ -966,6 +973,10 @@ mod tests {
         assert!(timing.text.contains("operation=glanceDecode outcome=issues"));
         assert!(timing.text.contains("operation=glanceDefaults"));
         assert!(timing.text.contains("operation=glanceMetadata"));
+        assert!(timing.text.contains("operation=glanceCaptureFrame"));
+        assert!(timing.text.contains("operation=glanceCaptureSession"));
+        assert!(timing.text.contains("operation=glanceCaptureOutput"));
+        assert!(!timing.text.contains("Private screen content"));
         assert!(!timing.text.contains("Personal RichCleaner note"));
         assert!(!timing.text.contains("Customer names"));
     }

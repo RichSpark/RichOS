@@ -42,3 +42,12 @@ bash richos/app/scripts/run-tests.sh --no-host-screen --only richfiles.test.sh
 ```
 
 RichFiles is part of the [GNU AGPL v3 licensed source](../../../LICENSE).
+
+
+## Precision capture
+
+Choose **File → Capture Region…** in RichGlance or enable its global shortcut in RichOS Settings. On first capture, macOS may ask for screen recording permission under the name of the app that bundles RichGlance. Each session freezes the display under the pointer.
+
+- Aim with the pointer, then drag the selection or use Shift–Return to place each corner.
+- Arrow keys move the target by one image pixel. Release the mouse to lock the selection and use Tab to switch the active corner.
+- M toggles the magnifier. Return copies a PNG. Use **Save PNG…** to write the selected pixels to a file or Escape to dismiss the overlay.
