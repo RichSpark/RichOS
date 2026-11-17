@@ -191,6 +191,17 @@ window.RichVideoAnywhere = (function () {
     }
     return { range: r, color: getComputedStyle(tint).backgroundColor };
   }
+  // WHERE A PIECE OF TEXT STANDS: its boxes on the page, without the empty ones. The Mac's own
+  // webview answers for the first word after a line break with two boxes, the first an empty one
+  // at the end of the line before; taken for the word's place, it cost every such line its first
+  // letter and started the line a letter in (CEO 2026-11-17: "the second text line seems to be
+  // adding one space in front of it").
+  function boxes(rg) {
+    var all = rg.getClientRects();
+    var out = [];
+    for (var i = 0; i < all.length; i++) if (all[i].width > 0) out.push(all[i]);
+    return out;
+  }
   function paintText(cx, node, s, alpha, R, ink) {
     var t = node.textContent;
     var hl = R.sel && R.sel.range;
@@ -240,7 +251,7 @@ window.RichVideoAnywhere = (function () {
       var b = a + m[0].length;
       range.setStart(node, a);
       range.setEnd(node, b);
-      var rects = range.getClientRects();
+      var rects = boxes(range);
       if (!rects.length) continue;
       if (rects.length === 1) {
         run(a, b, rects[0]);
@@ -255,7 +266,7 @@ window.RichVideoAnywhere = (function () {
         if (c < b) {
           range.setStart(node, c);
           range.setEnd(node, c + 1);
-          cr = range.getClientRects()[0];
+          cr = boxes(range)[0];
           if (!cr) continue;
         }
         if (first && (c === b || Math.abs(cr.top - first.top) > 1)) {
