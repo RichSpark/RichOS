@@ -41,6 +41,7 @@ window.RichSettings = (function () {
   var account = null; // { open() }, the first account's sign-in, reached from its card (round 18)
   var accounts = null; // { open(), paint() }, "Claude accounts" for everyone (round 18, accounts.js)
   var cleaner = null;
+  var glanceCapture = null;
   var richpass = null;
   var dictation = null; // { open(), paint() }, "Dictation" for everyone once it is there (round 19, dictation.js)
   var instructions = null; // { open(), paint(), onOpen() }, "Your instructions" (round 36 screen 1, your-instructions.js)
@@ -620,6 +621,11 @@ window.RichSettings = (function () {
       }, "set-dictation-state"));
     }
     if (cleaner) {doors.push(buildDisclosureRow("set-cleaner-open", "RichCleaner", function(){cleaner.open();}, "set-cleaner-state"));}
+    if (glanceCapture) {
+      doors.push(buildDisclosureRow("set-richglance-capture-open", "RichGlance", function () {
+        glanceCapture.open();
+      }, "set-richglance-capture-state"));
+    }
     if (phonePairing) {
       doors.push(buildDisclosureRow("set-phone-open", "Use Rich from your phone", function () {
         phonePairing.open();
@@ -824,6 +830,7 @@ window.RichSettings = (function () {
     if (accounts && accounts.paint && menuEl.querySelector("#set-accounts-open")) accounts.paint();
     if (dictation && dictation.paint && menuEl.querySelector("#set-dictation-open")) dictation.paint();
     if (cleaner && cleaner.paint) cleaner.paint();
+    if (glanceCapture) glanceCapture.paint();
     if (richpass && richpass.paint) richpass.paint();
     if (instructions && instructions.paint && menuEl.querySelector("#set-instructions-open")) instructions.paint();
     if (searchFolders && searchFolders.paint && menuEl.querySelector("#set-search-folders-open")) searchFolders.paint();
@@ -1238,6 +1245,7 @@ window.RichSettings = (function () {
      *  dictation is there, so a build without it carries no row. */
     registerRichPass: function(host){richpass=host || null;rebuild();},
     registerCleaner: function(host){cleaner=host || null;rebuild();},
+    registerGlanceCapture: function (host) { glanceCapture = host || null; rebuild(); },
     registerDictation: function (host) { dictation = host || null; rebuild(); },
     /** "Your instructions" (round 36 screen 1): `host.open()` opens the sheet, `host.paint()` writes
      *  the row's plain line, `host.onOpen()` re-reads the file as the menu opens.

@@ -196,6 +196,7 @@ mod search_rerank;
 /// Finder through `opener.rs`, and the watch that shows a file as soon as it is attached.
 mod rich_files_host;
 mod richfiles_pane;
+mod glance_capture_shortcut;
 #[cfg(target_os = "macos")]
 mod cleaner_native;
 #[cfg(target_os = "macos")]
@@ -4207,6 +4208,11 @@ fn main() {
             // priority, and only after the page has taken over (`late_check.rs`).
             let late_engine = app.state::<AppState>().boot_engine.clone();
             first_frame::after_page(app.handle(), move || late_check::spawn_late_full_checks(late_engine));
+            #[cfg(target_os = "macos")]
+            {
+                let capture_app = app.handle().clone();
+                first_frame::after_page(app.handle(), move || glance_capture_shortcut::restore(capture_app));
+            }
             // The first window is up. Optional private starter I/O stays off startup.
             if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
                 std::thread::spawn(move || {
@@ -4228,6 +4234,7 @@ fn main() {
             splash_did_finish,
             system_resources,
             richfiles_pane::richfiles_pane_available, richfiles_pane::richfiles_place_pane,
+            glance_capture_shortcut::glance_capture_status, glance_capture_shortcut::glance_capture_configure,
             richfiles_pane::richfiles_preload,
             richfiles_pane::richfiles_request_pending, richfiles_pane::richfiles_accept_request,
             richfiles_pane::output_git_open, richfiles_pane::output_git_place, richfiles_pane::richfiles_git_chat,

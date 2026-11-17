@@ -90,6 +90,7 @@ const ROLES = {
   "authored-input.js": { role: "ui", why: "numeric authorship for edited attachment drafts, without retaining another text corpus" },
   "swearmeter.js": { role: "ui", why: "maintained local word count, optional settings/home display and coverage/retry text" },
   "cleaner-settings.js":{role:"ui",why:"RichCleaner settings and Inbox-first preference"},
+  "glance-capture-settings.js": { role: "ui", why: "RichGlance capture settings, shortcut recording and collision feedback" },
   "cleaner.css":{role:"style",why:"RichCleaner capture, search and details"},
   "search-folder-settings.js":{role:"ui",why:"RichFinder folder map and coverage settings"},
   "search-folder-settings.css":{role:"style",why:"RichFinder folder map layout"},
