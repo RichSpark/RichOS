@@ -452,7 +452,8 @@ function probeBody(options) {
           // Keying on the attribute rather than on "the sheet is dark enough" is what stops
           // this from being a knob: a 2%-alpha sheet cannot excuse anything unless the app
           // is also claiming, to every screen reader, that the page behind it is inert.
-          const modal = stack[i].closest('[aria-modal="true"], [role="dialog"]');
+          // An alertdialog is a dialog that interrupts: the same statement, by the same means.
+          const modal = stack[i].closest('[aria-modal="true"], [role="dialog"], [role="alertdialog"]');
           if (modal && !modal.contains(el)) return { modalScrim: shortPath(modal) };
           if (a > 0.001) over.push({ r: c.r, g: c.g, b: c.b, a: a, by: shortPath(stack[i]) });
         }
