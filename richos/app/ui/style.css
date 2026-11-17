@@ -2015,14 +2015,21 @@ body.bp-narrow .first-run {
   outline: none;
 }
 
+/* THE COLOR OF A PLACEHOLDER IS SAID ON ITS FIELD, as `--placeholder-ink`, and the placeholder
+   takes it from there. The Mac's own webview does not tell a page what color a placeholder is,
+   and the video recorder draws the app from what the page tells it (`video-anywhere.js`,
+   `placeholderInk`); `tests/video-as-shown.js` holds every placeholder rule to this. */
+#input {
+  --placeholder-ink: var(--ink-faint);
+}
 #input::placeholder {
-  color: var(--ink-faint);
+  color: var(--placeholder-ink);
 }
 
 /* While the round 51 placeholder is drawn, the field's own placeholder (its state, for
    assistive technology) is not painted under it. */
-#input-shell.is-blank #input::placeholder {
-  color: transparent;
+#input-shell.is-blank #input {
+  --placeholder-ink: transparent;
 }
 
 /* "At line 11 it stops expanding and starts blurring out line one": text above what is shown
@@ -4991,8 +4998,11 @@ body:has(#talk-toggle[aria-pressed="true"]) .talk-icon-inline .talk-icon-bar {
   outline: none;
 }
 
+.entity-add-input {
+  --placeholder-ink: var(--ink-faint);
+}
 .entity-add-input::placeholder {
-  color: var(--ink-faint);
+  color: var(--placeholder-ink);
   opacity: 1; /* Firefox lowers placeholder opacity by default, which would undo the ratio. */
 }
 
@@ -9924,7 +9934,8 @@ body.home-open {
 .ask-other{margin-top:12px;display:flex;gap:8px;align-items:flex-end;background:var(--card);border:1px solid var(--ctl-line);border-radius:12px;padding:6px 6px 6px 14px;}
 .ask-other:focus-within{border-color:var(--gold)}
 .ask-other textarea{flex:1;resize:none;border:0;background:none;outline:none;color:var(--ink);font-family:inherit;font-size:1rem;line-height:1.45;padding:7px 0;max-height:120px}
-.ask-other textarea::placeholder{color:var(--ink-faint)}
+.ask-other textarea { --placeholder-ink: var(--ink-faint); }
+.ask-other textarea::placeholder{color:var(--placeholder-ink)}
 .ask-other .ask-send{margin-left:0}
 /* answered, withdrawn */
 .ask.is-answered,.ask.is-withdrawn{padding:14px 22px 14px 24px}
@@ -10192,7 +10203,8 @@ body.home-open {
 .quota-addform-rows.is-one { grid-template-columns: 1fr; }
 .quota-addform-row { display: flex; flex-direction: column; gap: 5px; min-width: 0; font-size: 1rem; color: var(--ink-soft); }
 .quota-addform-row input { width: 100%; box-sizing: border-box; padding: 5px 10px; border: 1px solid var(--line-control); border-bottom: 2px solid var(--gold); border-radius: 6px 6px 2px 2px; background: var(--surface); font: inherit; font-size: 1.0625rem; font-weight: 600; color: var(--ink); }
-.quota-addform-row input::placeholder { color: var(--ink-faint); font-weight: 400; }
+.quota-addform-row input { --placeholder-ink: var(--ink-faint); }
+.quota-addform-row input::placeholder { color: var(--placeholder-ink); font-weight: 400; }
 .quota-addform-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 12px; }
 .quota-account-feedback { margin-top: 8px; font-size: 1rem; color: var(--ink-soft); }
 .quota-account-feedback:empty { display: none; }
@@ -10675,7 +10687,8 @@ body.bp-narrow #out-bottom .out-word {
   font: inherit;
 }
 
-.op-filename-filter::placeholder { color: var(--ink-soft); }
+.op-filename-filter { --placeholder-ink: var(--ink-soft); }
+.op-filename-filter::placeholder { color: var(--placeholder-ink); }
 .op-native-git { overflow: hidden; }
 .op-native-git .op-view { visibility: hidden; }
 .op-row-compare {
@@ -12677,7 +12690,8 @@ body.panel-full .op-body.op-native-git { padding-bottom: 0; }
 .acc-fields.is-one { grid-template-columns: 1fr; }
 .acc-field { display: flex; flex-direction: column; gap: 6px; font-size: 1rem; color: var(--ink); font-weight: 500; }
 .acc-field input { background: var(--surface-raised); border: 1px solid var(--line-control); border-radius: 9px; padding: 9px 12px; font: inherit; font-size: 1.0625rem; color: var(--ink); font-weight: 400; }
-.acc-field input::placeholder { color: var(--ink-soft); }
+.acc-field input { --placeholder-ink: var(--ink-soft); }
+.acc-field input::placeholder { color: var(--placeholder-ink); }
 .acc-field input:focus { outline: none; border-color: var(--gold); box-shadow: 0 0 0 3px var(--gold-soft); }
 .acc-field.is-invalid input { border-color: var(--gold-text); }
 .acc-err { font-size: 1rem; color: var(--gold-text); font-weight: 600; margin-top: 10px; }
@@ -13518,8 +13532,11 @@ body.bug-dock-open .overlay-panel--desk {
   padding: 7px 0;
   max-height: 120px;
 }
+#bugdock-input {
+  --placeholder-ink: var(--ink-soft);
+}
 #bugdock-input::placeholder {
-  color: var(--ink-soft);
+  color: var(--placeholder-ink);
   /* One line, as round 21 draws it: the panel's field is narrower than the composer's. */
   white-space: nowrap;
   overflow: hidden;
@@ -13910,8 +13927,11 @@ body.bug-dock-open .sp-title { display: none; }   /* the eyebrow names the scree
   line-height: 1.4;
   padding: 10px 0;
 }
+.srch-input {
+  --placeholder-ink: var(--ink-faint);
+}
 .srch-input::placeholder {
-  color: var(--ink-faint);
+  color: var(--placeholder-ink);
 }
 .srch-count {
   flex-shrink: 0;
@@ -14585,7 +14605,8 @@ body.bug-dock-open .sp-title { display: none; }   /* the eyebrow names the scree
   background: transparent; color: var(--ink); position: relative; z-index: 1;
   font: 400 1.0625rem/1.65 var(--font); tab-size: 2; outline: none;
 }
-.yi-editor::placeholder { color: var(--ink-soft); opacity: 1; }
+.yi-editor { --placeholder-ink: var(--ink-soft); }
+.yi-editor::placeholder { color: var(--placeholder-ink); opacity: 1; }
 .yi-editor:focus { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
 /* The lines Rich just saved glow once, behind the text, when the sheet opens from his card. */
 .yi-glow {
@@ -14705,7 +14726,8 @@ body.bug-dock-open .sp-title { display: none; }   /* the eyebrow names the scree
 .voc-input { width: 100%; font: inherit; font-size: 1.0625rem; color: var(--ink); background: var(--surface-sunk); border: 1px solid var(--line-control); border-radius: 9px; padding: 8px 12px; }
 .voc-input:focus { outline: none; border-color: var(--gold); box-shadow: 0 0 0 3px var(--gold-soft); }
 .voc-input[aria-invalid="true"] { border-color: var(--gold-text); border-width: 2px; padding: 7px 11px; }
-.voc-input::placeholder { color: var(--ink-soft); }
+.voc-input { --placeholder-ink: var(--ink-soft); }
+.voc-input::placeholder { color: var(--placeholder-ink); }
 .voc-help { font-size: 1rem; color: var(--ink-soft); line-height: 1.5; }
 .voc-preview { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border-radius: 10px; background: var(--surface-sunk); border: 1px solid var(--line-soft); }
 .voc-preview-t { font-size: 1rem; color: var(--ink); line-height: 1.5; }

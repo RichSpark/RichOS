@@ -270,6 +270,17 @@ window.RichVideoAnywhere = (function () {
     }
     if (native) cx.letterSpacing = "0px";
   }
+  // THE COLOR OF A PLACEHOLDER, read off its field (`--placeholder-ink`, `style.css`), where the app
+  // says it for every placeholder it colors. It cannot be asked of the placeholder itself: the
+  // Mac's own webview answers a question about `::placeholder` with the field's own color, and the
+  // message box's placeholder, which the app paints clear under its two-line hint, was drawn in
+  // full ink under that hint (CEO 2026-11-17: ""Talk to Rich" seems to be overlaying some other
+  // text underneath"). A field that says nothing has the webview's own gray. "" is a placeholder
+  // the app paints clear.
+  function placeholderInk(s) {
+    var v = s.getPropertyValue("--placeholder-ink").trim() || "darkgray";
+    return /^transparent$/i.test(v) || CLEAR.test(v) ? "" : v;
+  }
   // WHAT A BOX OF SEVERAL LINES HOLDS (the message box, Your instructions): every line of it that
   // shows, wrapped and scrolled as the box wraps and scrolls it, with what he highlighted in it.
   // The words of a text box cannot be asked where they stand, so the same words are laid out in a
@@ -282,8 +293,8 @@ window.RichVideoAnywhere = (function () {
     var faint = "";
     if (!text) {
       text = e.getAttribute("placeholder") || "";
-      faint = getComputedStyle(e, "::placeholder").color;
-      if (CLEAR.test(faint)) return; // a box whose own placeholder the app does not paint
+      faint = placeholderInk(s);
+      if (!faint) return; // a box whose own placeholder the app does not paint
     }
     if (!/\S/.test(text)) return;
     if (!twin) {
@@ -325,8 +336,8 @@ window.RichVideoAnywhere = (function () {
       text = e.value;
       if (!text) {
         text = e.getAttribute("placeholder") || "";
-        faint = getComputedStyle(e, "::placeholder").color;
-        if (CLEAR.test(faint)) return; // a field whose own placeholder the app does not paint
+        faint = placeholderInk(s);
+        if (!faint) return; // a field whose own placeholder the app does not paint
       } else if (type === "password") text = text.replace(/./g, "•");
     } else return;
     text = text.split("\n")[0];

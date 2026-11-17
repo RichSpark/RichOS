@@ -114,7 +114,8 @@
 .tg-fields label { font-size: 1rem; font-weight: 600; color: var(--ink); }
 .tg-input { font: inherit; font-size: 1rem; color: var(--ink); background: var(--card); border: 1px solid var(--ctl-line, var(--line-control)); border-radius: 10px; padding: 9px 12px; width: 100%; box-sizing: border-box; outline: none; }
 .tg-sheet .tg-input { border-color: var(--line-control); background: var(--surface-sunk); }
-.tg-input::placeholder { color: var(--ink-faint); opacity: 1; }
+.tg-input { --placeholder-ink: var(--ink-faint); }
+.tg-input::placeholder { color: var(--placeholder-ink); opacity: 1; }
 .tg-input:focus { border-color: var(--gold); box-shadow: 0 0 0 3px var(--gold-soft); }
 .tg-input[aria-invalid="true"] { border-color: var(--danger); box-shadow: 0 0 0 1px var(--danger); }
 .tg-field-msg { grid-column: 2; font-size: 1rem; line-height: 1.45; color: var(--ink-soft); margin: -4px 0 0; }
