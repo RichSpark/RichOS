@@ -3801,10 +3801,12 @@
     },
     "scripts/hooks/detect-nonnative-worktree.sh": {
       "source": "scripts/hooks/detect-nonnative-worktree.sh",
-      "sha256": "c1fc4740b019bf311a56f69aae0df1761e9c2383e77dd2f36ee1af2dbce3bfaf",
-      "evidence": "Reads resolved entity allowlist/team config, parses the Agent payload and reads Git/worktree/process metadata. Workspaces and kill commands in notices are text, never executed. Calls only root and unevaluated-payload helpers. Renewal 2026-10-16: reads only the presence of RICHOS_APP_SCOPE, not its file, to recognize app cross-repo target payloads already verified before dispatch. No new file or subprocess read.",
+      "sha256": "cdc9e57d0eb047a993d77cac8ab611ed2571bdd0b2760abc2b10642959500cc9",
+      "evidence": "Reads resolved entity allowlist/team config, parses the Agent payload and reads Git/worktree/process metadata. Workspaces and kill commands in notices are text, never executed. Calls only root and unevaluated-payload helpers. Renewal 2026-10-16: reads only the presence of RICHOS_APP_SCOPE, not its file, to recognize app cross-repo target payloads already verified before dispatch. No new file or subprocess read. Renewal 2026-11-17: also parses tool_response (status, teammate_id) from the same payload and reads HARNESS_UTILITY_TYPES and GENERIC_AGENT_TYPES from the entity config to tell a roster type; the finding is notice text only.",
       "keys": [
         "READONLY_ALLOWLIST",
+        "HARNESS_UTILITY_TYPES",
+        "GENERIC_AGENT_TYPES",
         "SESSION_TEAMS_DIR"
       ],
       "edges": [
@@ -3822,7 +3824,7 @@
     },
     "scripts/hooks/detect-nonnative-worktree.test.sh": {
       "source": "scripts/hooks/detect-nonnative-worktree.test.sh",
-      "sha256": "893ddfc4afcc1c76cae48de8a975dad666b18ceb11a1343e5bd95631f54f04b7",
+      "sha256": "038b12167c034f5ba941dcc960a1b3430fd64984010b5c3e6d9340e10768a856",
       "evidence": "make_sandbox copies the hook and three fixed helpers with a literal READONLY_ALLOWLIST config. All behavior calls select private entities. The two calls to the original hook select a missing-config private root or unset adoption in a fresh private directory; neither can reach production config values. Process and ledger observations do not execute repository code.",
       "keys": [],
       "edges": [
@@ -18374,7 +18376,7 @@
         "scripts/hooks/commit-ceo-inputs.py": "fb7e04f153db1562f41dc22803ba8d3e8d6f83501ce773033390df0bf2b3e231",
         "scripts/hooks/guard-publication-writes.sh": "b9a13097f1023f8e1e5ebd2a78ee804c73bc6b1953db37727c3ecddcde7de67e",
         "scripts/lib/publication-boundary.sh": "b8e3d8f8b80e0048174b55ca2a479f0030e7b1c6f03caae6e7aa14def514ab4f",
-        "scripts/hooks/detect-nonnative-worktree.sh": "c1fc4740b019bf311a56f69aae0df1761e9c2383e77dd2f36ee1af2dbce3bfaf",
+        "scripts/hooks/detect-nonnative-worktree.sh": "cdc9e57d0eb047a993d77cac8ab611ed2571bdd0b2760abc2b10642959500cc9",
         "scripts/hooks/dispatch-pretooluse.sh": "a8040d635cb70a1ac4d29c140ea398684e6e8f78b6738ac3acc35063d970b602",
         "scripts/hooks/failure-type-lookup.sh": "7c4e881d1c4b1ba62ef0acd876387092ce88fb55981a9497705f86ffa876bfff",
         "scripts/lib/failure-type.py": "24fe80fbc30542333c46f565e521f0b06e9a98bb54e2cc0e8574773e8b9cb1c5",

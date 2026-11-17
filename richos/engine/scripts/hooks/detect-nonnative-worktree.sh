@@ -326,6 +326,58 @@ if [ "$is_readonly" -eq 0 ] && [ -n "$NAME" ] && [ -n "$SESSION_ID" ]; then
   printf '%s\n' "$NAME" >>"$GI_TEAM_DIR/spawned-names.log" 2>/dev/null || true
 fi
 
+# --- THIRD JOB — WHICH KIND OF AGENT CLAUDE CODE SAYS IT STARTED -----------
+#
+# Every agent the lead starts is meant to be a subagent. Claude Code decides
+# the kind itself: a named agent launches as a subagent when the call carries
+# isolation, and joins the team as a teammate when it does not. Every check
+# before launch reads the request; this one reads Claude Code's own answer,
+# which is the only place the kind is stated.
+#
+# The two answers, read 2026-11-17 from this machine's session records
+# (Claude Code 2.1.326; 3,205 and 51 results across the project):
+#   subagent   {"isAsync": true, "status": "async_launched", "agentId": ...}
+#   teammate   {"status": "teammate_spawned", "teammate_id": "<name>@session-...",
+#               "agent_id": ..., "team_name": ...}
+#
+# A named agent of a roster type (the guard's definition: not a read-only,
+# generic or harness utility type) that comes back as anything other than
+# async_launched without a teammate_id is reported, with its name and the
+# status returned. A status this hook has never seen is reported too, so a
+# change in Claude Code's rule is heard and not guessed at. It reports and
+# does nothing else.
+: "${HARNESS_UTILITY_TYPES:=claude-code-guide statusline-setup output-style-setup}"
+: "${GENERIC_AGENT_TYPES:=general-purpose}"
+KIND_NOTICE=""
+is_roster_type=0
+if [ -n "$SUBAGENT_TYPE" ] && [ "$is_readonly" -eq 0 ]; then
+  is_roster_type=1
+  for a in $GENERIC_AGENT_TYPES $HARNESS_UTILITY_TYPES; do
+    [ "$SUBAGENT_TYPE" = "$a" ] && is_roster_type=0
+  done
+fi
+if [ "$is_roster_type" -eq 1 ] && [ -n "$NAME" ]; then
+  ANSWER="$(printf '%s' "$INPUT" | python3 -c '
+import json, sys
+try:
+    r = json.load(sys.stdin).get("tool_response")
+except Exception:
+    r = None
+status, mate = "", ""
+if isinstance(r, dict):
+    status = str(r.get("status") or "")
+    mate = str(r.get("teammate_id") or "")
+elif isinstance(r, str) and r.startswith("Async agent launched"):
+    status = "async_launched"
+print("%s\t%s" % (status.replace("\t", " ").replace("\n", " "), mate.replace("\t", " ").replace("\n", " ")))
+' 2>/dev/null || printf '\t')"
+  ANSWER_STATUS="$(printf '%s' "$ANSWER" | cut -f1)"
+  ANSWER_MATE="$(printf '%s' "$ANSWER" | cut -f2)"
+  if [ "$ANSWER_STATUS" != "async_launched" ] || [ -n "$ANSWER_MATE" ]; then
+    KIND_NOTICE="Agent '${NAME}' (type '${SUBAGENT_TYPE}') did not come back as a regular subagent launch. Claude Code returned status '${ANSWER_STATUS:-<none readable>}'${ANSWER_MATE:+ with teammate_id '${ANSWER_MATE}'}; a subagent launch returns 'async_launched' and no teammate_id. The call carried isolation='${ISOLATION:-unset}': a named agent launches as a subagent only when the call itself carries isolation:\"worktree\"."
+  fi
+fi
+
 # --- BINDING IS NOT THIS HOOK'S JOB ANY MORE --------------------------------
 # The spawn's agent id and the native workspace the platform created for it
 # are registered by workspace-lifecycle.sh on this same PostToolUse[Agent]
@@ -418,6 +470,20 @@ if [ "${#WARN[@]}" -gt 0 ]; then
     echo ""
     echo "(hook: scripts/hooks/detect-nonnative-worktree.sh — detective; this is the"
     echo " guard-free backstop for when the PreToolUse preventer fails.)"
+  } >>"$_NOTICE_BUF"
+fi
+
+if [ -n "$KIND_NOTICE" ]; then
+  {
+    echo "============================================================"
+    echo "  NOT A SUBAGENT — '${NAME}' came back as: ${ANSWER_STATUS:-<none readable>}"
+    echo "============================================================"
+    echo ""
+    echo "$KIND_NOTICE"
+    echo ""
+    echo "This is a report. Nothing was stopped and nothing was refused."
+    echo ""
+    echo "(hook: scripts/hooks/detect-nonnative-worktree.sh)"
   } >>"$_NOTICE_BUF"
 fi
 
