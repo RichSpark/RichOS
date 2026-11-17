@@ -489,6 +489,95 @@ window.RichHomeVideo = (function () {
   var even = function (n) {
     return Math.max(2, Math.round(n / 2) * 2);
   };
+  // THE FILE IS ASKED FOR WHILE IT RECORDS: once a second the recorder is asked for what it has
+  // (`requestData`), one ask at a time, and Stop waits for an ask that is on its way, asks once
+  // more, and only then stops the recorder. Both recorders use this one (`parts.tape`).
+  //
+  // WHY (CEO 2026-11-16, on two recordings he made in the app: "it freezes after the first few
+  // seconds"). Until then the recorder was left alone until Stop, "one whole file". The Mac's own
+  // webview then hands back a file as long as the recording in which the picture and the sound
+  // both end early, somewhere in the first half minute, and the last frame stands to the end,
+  // although every frame was painted and encoded. That happens only to a recording with sound,
+  // and not in Playwright's WebKit, which is why `tests/video-whole.js` records in the Mac's own.
+  // Asked once a second, the file is whole.
+  //
+  // WHY NOT THE RECORDER'S OWN SLICES (`start(1000)`). A Stop that lands while one of its slices
+  // is on its way gets an empty last piece, and everything since the slice before is lost: most
+  // recordings of four seconds came out a second short in that webview. Asked for from here, no
+  // ask is on its way when the recorder is stopped.
+  function tape(tracks, mime) {
+    var T = { mr: null, chunks: [], asked: false, after: null, timer: 0 };
+    T.mr = new MediaRecorder(new MediaStream(tracks), mime ? { mimeType: mime, videoBitsPerSecond: 10000000 } : undefined);
+    T.mr.ondataavailable = function (e) {
+      if (e.data && e.data.size) T.chunks.push(e.data);
+      // an ask is answered even when there is nothing new to hand over (an empty piece)
+      T.asked = false;
+      var then = T.after;
+      T.after = null;
+      if (then) then();
+    };
+    /// Ask for what the recorder has, unless an ask is still on its way.
+    T.ask = function () {
+      if (T.asked || T.mr.state !== "recording") return false;
+      T.asked = true;
+      try {
+        T.mr.requestData();
+      } catch (e) {
+        T.asked = false;
+      }
+      return T.asked;
+    };
+    /// Stop, and say how it ended: "stopped" is a whole file, in `T.chunks`.
+    T.stop = function () {
+      clearInterval(T.timer);
+      return new Promise(function (done) {
+        var closed = false;
+        var close = function (how) {
+          if (closed) return;
+          closed = true;
+          done(how);
+        };
+        /// `next` runs when the ask on its way is answered, or after two seconds without an answer.
+        var answered = function (next) {
+          var went = false;
+          var go = function () {
+            if (went) return;
+            went = true;
+            if (T.after === go) T.after = null;
+            next();
+          };
+          T.after = go;
+          setTimeout(go, 2000);
+        };
+        var end = function () {
+          T.mr.onstop = function () {
+            close("stopped");
+          };
+          T.mr.onerror = function () {
+            close("error");
+          };
+          // a recorder that never says it stopped: the sheet opens with what there is
+          setTimeout(function () {
+            close("timed out");
+          }, 5000);
+          try {
+            T.mr.stop();
+          } catch (e) {
+            close("error");
+          }
+        };
+        var last = function () {
+          if (T.ask()) answered(end);
+          else end();
+        };
+        if (T.asked) answered(last);
+        else last();
+      });
+    };
+    T.mr.start();
+    T.timer = setInterval(T.ask, 1000);
+    return T;
+  }
   function recStart() {
     var W = innerWidth;
     var H = innerHeight;
@@ -498,22 +587,14 @@ window.RichHomeVideo = (function () {
     var cv = document.createElement("canvas");
     cv.width = crop.outW;
     cv.height = crop.outH;
-    var R = (rec = { cv: cv, cx: cv.getContext("2d", { alpha: false }), crop: crop, chunks: [], t0: performance.now(), last: 0, raf: 0, frames: 0, voice: !!mic.stream, tone: !!mic.stream && mic.tone, pointer: opts.pointer, mr: null, mime: mimeType() });
+    var R = (rec = { cv: cv, cx: cv.getContext("2d", { alpha: false }), crop: crop, chunks: [], t0: performance.now(), last: 0, raf: 0, frames: 0, voice: !!mic.stream, tone: !!mic.stream && mic.tone, pointer: opts.pointer, tape: null, mime: mimeType() });
     paintFrame(R);
     try {
-      var stream = cv.captureStream(30);
-      var tracks = stream.getVideoTracks();
+      var tracks = cv.captureStream(30).getVideoTracks();
       if (mic.stream) tracks = tracks.concat(mic.stream.getAudioTracks());
-      R.mr = new MediaRecorder(new MediaStream(tracks), R.mime ? { mimeType: R.mime, videoBitsPerSecond: 10000000 } : undefined);
-      R.mr.ondataavailable = function (e) {
-        if (e.data && e.data.size) R.chunks.push(e.data);
-      };
-      // ONE WHOLE FILE AT STOP, never slices. Asked for in slices of 0.4 s (as the round's mockup
-      // did), 1 recording in 6 with sound came out 1.3 s short of its 4.1 s on this Mac under load
-      // (2.87 s; every frame had been painted and the recorder said it stopped).
-      R.mr.start();
+      R.tape = tape(tracks, R.mime);
     } catch (e) {
-      R.mr = null; // no recorder in this webview: the sheet says so
+      R.tape = null; // no recorder in this webview: the sheet says so
     }
     var frame = function (now) {
       if (rec !== R) return;
@@ -536,31 +617,11 @@ window.RichHomeVideo = (function () {
     if (!R) return Promise.resolve(null);
     cancelAnimationFrame(R.raf);
     var out = { ms: performance.now() - R.t0, w: R.cv.width, h: R.cv.height, voice: R.voice, tone: R.tone, pointer: R.pointer, mime: R.mime, blob: null, frames: R.frames };
-    if (!R.mr) return Promise.resolve(out);
-    return new Promise(function (done) {
-      var closed = false;
-      var close = function (how) {
-        if (closed) return;
-        closed = true;
-        out.ended = how; // "stopped" is a whole file
-        out.blob = new Blob(R.chunks, { type: (R.mime || "video/webm").split(";")[0] });
-        done(out);
-      };
-      R.mr.onstop = function () {
-        close("stopped");
-      };
-      R.mr.onerror = function () {
-        close("error");
-      };
-      // a recorder that never says it stopped: the sheet opens with what there is
-      setTimeout(function () {
-        close("timed out");
-      }, 5000);
-      try {
-        R.mr.stop();
-      } catch (e) {
-        close("error");
-      }
+    if (!R.tape) return Promise.resolve(out);
+    return R.tape.stop().then(function (how) {
+      out.ended = how; // "stopped" is a whole file
+      out.blob = new Blob(R.tape.chunks, { type: (R.mime || "video/webm").split(";")[0] });
+      return out;
     });
   }
 
@@ -1086,7 +1147,7 @@ window.RichHomeVideo = (function () {
     onCount: onCount,
     left: left,
     /// What the recorder of the whole app is made of too (round 79, `video-anywhere.js`).
-    parts: { make: make, icon: icon, level: level, fmt: fmt, clock: clock, microphone: microphone, radius: radius, plate: plate, ground: ground, paintPointer: paintPointer, mimeType: mimeType, even: even, handOver: handOver, DENIED: DENIED },
+    parts: { make: make, icon: icon, level: level, fmt: fmt, clock: clock, microphone: microphone, radius: radius, plate: plate, ground: ground, paintPointer: paintPointer, mimeType: mimeType, tape: tape, even: even, handOver: handOver, DENIED: DENIED },
     state: function () {
       return { state: state, mic: mic.state, stops: opts.stops, pointer: opts.pointer, frames: rec ? rec.frames : shot ? shot.frames : 0, ended: shot ? shot.ended || null : null, saved: !!(el.sheetSaved && !el.sheetSaved.hidden && el.sheetSave.hidden) };
     },
