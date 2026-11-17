@@ -2,6 +2,22 @@
 
 What changed in each RichOS nightly build from 1.2.1-nightly.20261019.67 on, newest first; stable versions are in the [changelog](CHANGELOG.md).
 
+## 1.3.4-nightly.20261117.102
+
+[GitHub release](https://github.com/RichSpark/RichOS/releases/tag/v1.3.4-nightly.20261117.102)
+
+- Added Keep chat alive at the top of every chat, off until you check it: while your Mac is on, it keeps that chat ready so Rich answers right away when you come back hours later or the next morning, for a small hourly cost to your Claude Code quota
+- Added Context meter in Settings, off by default: it shows at the top of each chat how full Rich's context window is when he talks with you and when he directs your team, such as "Rich 50% 500k/1000k"
+- Added an effort level under each of Rich's models in Settings, now called Rich's model and effort: five steps from Low to Max, kept separately for Opus and Fable, with the recommended level marked and a warning if you pick Max; a change also reaches chats that are already running
+- Added follow-ups that wait for something: when you ask Rich to tell you or do something once his team has finished a job or you have answered one of his questions, he now picks it up in that chat by himself when that happens
+- Changed Rich to run on Fable by default both when he talks with you and when he directs your team; if you were on Opus you are now on Fable too and Opus is still one press away in Settings
+- Changed every splash screen to play from start to finish: a click or key no longer skips it, holding Space no longer pauses it and the light that followed the mouse pointer is gone
+- Changed your company's name to appear only on images you save from Your openings, no longer on the opening itself
+- Improved opening RichFiles the first time: RichOS gets it ready in the background after starting and a click before then shows Opening RichFiles… at once instead of seeming to do nothing
+- Improved Rich in a long chat to follow your latest Your instructions once that chat has been compacted, instead of only from your next new chat
+- Fixed Make a video recordings whose picture and sound stopped partway through, often after about 15 seconds
+- Fixed the home screen picture showing up half built or already finished after the splash screen; it now builds itself in front of you once the splash is gone
+
 ## 1.3.4-nightly.20261115.101
 
 [GitHub release](https://github.com/RichSpark/RichOS/releases/tag/v1.3.4-nightly.20261115.101)
