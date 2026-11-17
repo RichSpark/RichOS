@@ -84,7 +84,6 @@ final class Canvas: NSView {
 
     private func updatePalette() {
         let colors = palette
-        window?.backgroundColor = colors.chrome
         feedback.textColor = colors.ink
         needsDisplay = true
     }
@@ -180,14 +179,14 @@ final class Canvas: NSView {
         needsDisplay = true
     }
 
-    private var palette: (chrome: NSColor, ground: NSColor, ink: NSColor, floating: NSColor, border: NSColor) {
+    private var palette: (ground: NSColor, ink: NSColor, floating: NSColor, border: NSColor) {
         func rgb(_ value: UInt32) -> NSColor {
             NSColor(srgbRed: CGFloat(value >> 16) / 255, green: CGFloat((value >> 8) & 255) / 255,
                     blue: CGFloat(value & 255) / 255, alpha: 1)
         }
         if effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua {
-            return (rgb(0x0c1322), rgb(0x060a14), rgb(0xdfe4ee), rgb(0x182440), rgb(0x9399a5))
+            return (rgb(0x060a14), rgb(0xdfe4ee), rgb(0x182440), rgb(0x9399a5))
         }
-        return (rgb(0xeae6dd), rgb(0xdcd7cb), rgb(0x0c1322), rgb(0xfdfcf8), rgb(0x53575e))
+        return (rgb(0xdcd7cb), rgb(0x0c1322), rgb(0xfdfcf8), rgb(0x53575e))
     }
 }
