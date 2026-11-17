@@ -79,6 +79,7 @@ public struct GlanceImage {
 
     public let bitmap: CGImage
     public let size: CGSize
+    public let animation: GlanceAnimation?
 
     public static func decode(_ url: URL) throws -> Self {
         // Opening a directory, device or named pipe as an image must never block the decoder.
@@ -96,7 +97,9 @@ public struct GlanceImage {
         case .ico, .icns: index = largestRepresentation(in: source)
         default: index = 0
         }
-        return try decodeFrame(in: source, at: index)
+        let animation = GlanceAnimation(source: source, format: format)
+        let first = try decodeFrame(in: source, at: index, pixelLimit: animation == nil ? 32_000_000 : GlanceAnimation.pixelLimit)
+        return Self(bitmap: first.bitmap, size: first.size, animation: animation)
     }
 
     private static func largestRepresentation(in source: CGImageSource) -> Int {
@@ -113,7 +116,8 @@ public struct GlanceImage {
         return largest
     }
 
-    private static func decodeFrame(in source: CGImageSource, at index: Int) throws -> Self {
+    fileprivate static func decodeFrame(in source: CGImageSource, at index: Int,
+                                        pixelLimit: Double) throws -> (bitmap: CGImage, size: CGSize) {
         guard let props = CGImageSourceCopyPropertiesAtIndex(source, index, nil) as? [CFString: Any],
               let width = props[kCGImagePropertyPixelWidth] as? Double,
               let height = props[kCGImagePropertyPixelHeight] as? Double,
@@ -124,7 +128,7 @@ public struct GlanceImage {
         let size = (5...8).contains(orientation) ? CGSize(width: height, height: width) : CGSize(width: width, height: height)
         // Preserve normal screenshots at full resolution. Bound the decoded surface for very large files.
         let longest = max(width, height)
-        let reduction = min(1, 8192 / longest, sqrt(32_000_000 / width / height))
+        let reduction = min(1, 8192 / longest, sqrt(pixelLimit / width / height))
         let options: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceCreateThumbnailWithTransform: true,
@@ -133,7 +137,69 @@ public struct GlanceImage {
         ]
         guard let bitmap = CGImageSourceCreateThumbnailAtIndex(source, index, options as CFDictionary),
               CGImageSourceGetStatusAtIndex(source, index) == .statusComplete else { throw Failure.unreadable }
-        return Self(bitmap: bitmap, size: size)
+        return (bitmap, size)
+    }
+}
+
+/// Uses Image I/O's composited frames, including GIF disposal and WebP blends.
+/// The source is private and its reads after initialization are serialized by a lock.
+public struct GlanceAnimation: @unchecked Sendable {
+    private struct Keys {
+        let dictionary: CFString
+        let loop: CFString
+        let delay: CFString
+        let unclamped: CFString
+    }
+
+    fileprivate static let pixelLimit = 4_000_000.0
+    private let source: CGImageSource
+    private let sourceLock = NSLock()
+    private let keys: Keys
+    public let frameCount: Int
+    /// Image I/O reports total plays. Zero means loop indefinitely.
+    public let loopCount: Int
+    public let initialDuration: TimeInterval
+
+    fileprivate init?(source: CGImageSource, format: GlanceFormat) {
+        let count = CGImageSourceGetCount(source)
+        guard count > 1 else { return nil }
+        let keys: Keys
+        switch format {
+        case .gif:
+            keys = Keys(dictionary: kCGImagePropertyGIFDictionary, loop: kCGImagePropertyGIFLoopCount,
+                        delay: kCGImagePropertyGIFDelayTime, unclamped: kCGImagePropertyGIFUnclampedDelayTime)
+        case .webp:
+            keys = Keys(dictionary: kCGImagePropertyWebPDictionary, loop: kCGImagePropertyWebPLoopCount,
+                        delay: kCGImagePropertyWebPDelayTime, unclamped: kCGImagePropertyWebPUnclampedDelayTime)
+        default:
+            return nil
+        }
+        let container = CGImageSourceCopyProperties(source, nil) as? [CFString: Any]
+        let timing = container?[keys.dictionary] as? [CFString: Any]
+        self.source = source
+        self.keys = keys
+        frameCount = count
+        loopCount = max(0, timing?[keys.loop] as? Int ?? 1)
+        initialDuration = Self.duration(in: source, at: 0, keys: keys)
+    }
+
+    public func frame(at index: Int) throws -> (bitmap: CGImage, duration: TimeInterval) {
+        guard (0..<frameCount).contains(index) else { throw GlanceImage.Failure.unreadable }
+        return try sourceLock.withLock {
+            let frame = try GlanceImage.decodeFrame(in: source, at: index, pixelLimit: Self.pixelLimit)
+            return (frame.bitmap, Self.duration(in: source, at: index, keys: keys))
+        }
+    }
+
+    private static func duration(in source: CGImageSource, at index: Int, keys: Keys) -> TimeInterval {
+        let properties = CGImageSourceCopyPropertiesAtIndex(source, index, nil) as? [CFString: Any]
+        let timing = properties?[keys.dictionary] as? [CFString: Any]
+        for key in [keys.unclamped, keys.delay] {
+            if let seconds = timing?[key] as? Double, seconds.isFinite, seconds >= 0.02 {
+                return seconds
+            }
+        }
+        return 0.1
     }
 }
 

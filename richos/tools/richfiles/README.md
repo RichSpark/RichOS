@@ -25,7 +25,7 @@ Core browsing and file operations work locally. The optional RichFinder and Rich
 
 RichGlance ships inside RichFiles as an optional viewer for PNG, JPEG (`.jpg`, `.jpeg` and `.jpe`), HEIC, HEIF, WebP, AVIF, GIF, TIFF, BMP, ICO and ICNS. RichFiles and Finder open images in the app chosen in macOS. Use **Open With** to try RichGlance on one file or choose it under **Get Info → Open with → Change All** in Finder for each image type you want it to open by default. RichFiles registers the viewer when first opened. RichGlance can open files while both RichFiles and RichOS are closed.
 
-In RichGlance, press Left or Right to cycle through images in that folder, Control and scroll to zoom, drag to pan and Escape to close. **File → Open in Preview** opens the current image for editing.
+In RichGlance, press Left or Right to cycle through images in that folder, Control and scroll to zoom, drag to pan and Escape to close. Animated GIFs and WebPs play automatically. TIFF opens on its first page. **File → Open in Preview** opens the current image for editing.
 
 The existing RichFiles timing log also records RichGlance decode, canvas update, folder scan and Preview handoff outcomes without storing filenames or paths. It is included in RichDoctor's Configuration diagnostics.
 

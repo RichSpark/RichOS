@@ -46,6 +46,11 @@ final class Canvas: NSView {
         refresh()
     }
 
+    func showAnimationFrame(_ bitmap: CGImage) {
+        image = NSImage(cgImage: bitmap, size: viewport.imageSize)
+        needsDisplay = true
+    }
+
     func announce(_ text: String?) {
         feedbackTimer?.invalidate()
         feedback.isHidden = text == nil

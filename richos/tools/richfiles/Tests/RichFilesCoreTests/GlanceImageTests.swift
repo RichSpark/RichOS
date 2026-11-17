@@ -26,6 +26,41 @@ final class GlanceImageTests: XCTestCase {
         try FileManager.default.copyItem(at: fixture("sample.heic"), to: heif)
         defer { try? FileManager.default.removeItem(at: heif) }
         XCTAssertEqual(try GlanceImage.decode(heif).size, CGSize(width: 40, height: 24))
+        XCTAssertNil(try GlanceImage.decode(fixture("sample.tif")).animation)
+        XCTAssertNil(try GlanceImage.decode(fixture("still.webp")).animation)
+    }
+
+    func testGIFAndWebPDecodeCompositedFramesAndTiming() throws {
+        for name in ["delta.gif", "delta.webp"] {
+            let first = try GlanceImage.decode(fixture(name))
+            let motion = try XCTUnwrap(first.animation, name)
+            XCTAssertEqual(motion.frameCount, 3, name)
+            XCTAssertEqual(motion.loopCount, 2, name)
+            XCTAssertEqual(motion.initialDuration, 0.08, accuracy: 0.001, name)
+            XCTAssertEqual(try dominantChannel(in: first.bitmap, x: 20, y: 12), 0, name)
+            for (index, expectedDuration) in [(1, 0.16), (2, 0.24)] {
+                let frame = try motion.frame(at: index)
+                XCTAssertEqual(frame.duration, expectedDuration, accuracy: 0.001, name)
+                XCTAssertEqual(CGSize(width: frame.bitmap.width, height: frame.bitmap.height), first.size, name)
+                // The changed patch advances while the background from frame one survives.
+                XCTAssertEqual(try dominantChannel(in: frame.bitmap, x: 20, y: 12), index, name)
+                XCTAssertEqual(try dominantChannel(in: frame.bitmap, x: 2, y: 2), 0, name)
+            }
+            XCTAssertThrowsError(try motion.frame(at: 3), name)
+        }
+    }
+
+    private func dominantChannel(in image: CGImage, x: Int, y: Int) throws -> Int {
+        let sample = try XCTUnwrap(image.cropping(to: CGRect(x: x, y: y, width: 1, height: 1)))
+        var rgba = [UInt8](repeating: 0, count: 4)
+        return try rgba.withUnsafeMutableBytes { bytes in
+            let context = try XCTUnwrap(CGContext(data: bytes.baseAddress, width: 1, height: 1, bitsPerComponent: 8,
+                                                bytesPerRow: 4, space: CGColorSpaceCreateDeviceRGB(),
+                                                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+            context.draw(sample, in: CGRect(x: 0, y: 0, width: 1, height: 1))
+            XCTAssertEqual(bytes[3], 255)
+            return try XCTUnwrap((0..<3).max(by: { bytes[$0] < bytes[$1] }))
+        }
     }
 
     func testDocumentClaimsMatchTheOpenPanelAndExcludeSVG() throws {
