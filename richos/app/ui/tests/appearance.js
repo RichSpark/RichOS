@@ -1130,7 +1130,7 @@ async function main() {
       // last row of "How it looks" (round 83 screen 1, CEO 2026-11-16).
       [
         "Theme", "Text size", "Oxford comma: OFF", "Technical view", "Claude Code quota", "Keep the stored output", "Show SwearMeter", "Context meter",
-        "Your instructions", "Search folders", "Rich's model", "How much should Rich interrupt you?", "Use Rich from your phone", "RichPass", "Terminal setup",
+        "Your instructions", "Search folders", "Rich's model and effort", "How much should Rich interrupt you?", "Use Rich from your phone", "RichPass", "Terminal setup",
         "Company", "Home screen", "Token spend", "Let Codex review your team’s work", "Start meeting notes", "Claude accounts",
         "Connected folders (repositories)", "Your name in Git", "Memory folder", "Updates",
         "Your name", "Splash screen", "Bust a bug!", "Request a feature",

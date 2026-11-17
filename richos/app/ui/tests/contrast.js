@@ -984,6 +984,49 @@ const SURFACES = [
       await overlaySettled(p, "#set-menu");
     },
   },
+  // ROUND 86.1 (CEO 2026-11-17), RICH'S MODEL AND EFFORT. The `settings` walk above measures the
+  // section at its defaults, as far as the panel shows it without scrolling. These two bring the
+  // whole section into view and paint what the defaults never do: the warning color
+  // (`--attention`) on "Generally not recommended.", "Not recommended for anything." and
+  // "Max · not recommended", the note's bold sentence, and the warning card with its two buttons
+  // over the veiled panel.
+  {
+    name: "effort-above-and-max",
+    what: "Rich's model and effort with High on the conversation row and Max kept on the team row: the caution words and Max's name in the warning color, and the note naming it",
+    drive: async (p) => {
+      await p.click("#set-btn");
+      await p.waitForSelector("#set-menu:not([hidden])");
+      await overlaySettled(p, "#set-menu");
+      await p.evaluate(() => document.getElementById("md").scrollIntoView({ block: "start" }));
+      await p.click("#ef-rich-high");
+      // The team row and the note under it, in the middle of the panel: clear of the band
+      // across its foot, which would hide them from this walk.
+      await p.evaluate(() => document.getElementById("md-note").scrollIntoView({ block: "center" }));
+      await p.click("#ef-stu-max");
+      await p.waitForSelector(".efw.is-open");
+      await p.click(".efw-anyway");
+      await p.waitForSelector(".efw", { state: "hidden" });
+      await p.mouse.move(4, 4);
+      await p.waitForFunction(() => {
+        const name = (who) => document.querySelector(`#ef-${who} .ef-name`).textContent;
+        return name("stu") === "Max · not recommended" && name("rich") === "High";
+      });
+      await pageSettled(p);
+    },
+  },
+  {
+    name: "effort-max-warning",
+    what: "the warning card over Settings when Max is chosen: WARNING!, his sentence, the reason, the recommended line and the two buttons",
+    drive: async (p) => {
+      await p.click("#set-btn");
+      await p.waitForSelector("#set-menu:not([hidden])");
+      await overlaySettled(p, "#set-menu");
+      await p.evaluate(() => document.getElementById("md").scrollIntoView({ block: "start" }));
+      await p.click("#ef-rich-max");
+      await p.waitForSelector(".efw.is-open");
+      await overlaySettled(p, ".efw");
+    },
+  },
   // NO SEPARATE SURFACE FOR THE COMPANY RADIOS, and that is a measured decision rather than
   // an omission. One was written — it scrolled the group into view on the assumption that the
   // popover's `max-height: calc(100vh - 70px); overflow-y: auto` had pushed it out — and it
