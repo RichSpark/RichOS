@@ -120,9 +120,25 @@ final class CaptureController: NSObject, NSWindowDelegate {
         self.canvas = canvas
         overlay = window
         activate()
-        window.makeKeyAndOrderFront(nil)
-        window.makeFirstResponder(canvas)
+        if NSApp.isActive {
+            focusCapture()
+        } else {
+            // A background Launch Services wakeup must leave the source app undisturbed
+            // until the frame exists. Ask Launch Services to activate the existing app now.
+            let configuration = NSWorkspace.OpenConfiguration()
+            configuration.activates = true
+            configuration.addsToRecentItems = false
+            NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL, configuration: configuration) { [weak self] _, _ in
+                Task { @MainActor in self?.focusCapture() }
+            }
+        }
         record(.glanceCaptureFrame, .complete, since: began)
+    }
+
+    private func focusCapture() {
+        guard let overlay, let canvas else { return }
+        overlay.makeKeyAndOrderFront(nil)
+        overlay.makeFirstResponder(canvas)
     }
 
     private func copyImage() {
