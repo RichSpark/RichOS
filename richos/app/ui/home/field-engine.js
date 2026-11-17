@@ -179,7 +179,11 @@ function setCount(nn, animate) {
   }
   gateClock = 0; gateBusy = true;
   if (!animate) { for (let i = 0; i < N; i++) gate[i] = gateT[i]; gateBusy = false; }
-  bloomEnd = 0.55; for (let r = 0; r < COUNT; r++) { const i = arrival[r]; const e = (D.delay[i] + D.dur[i]) * V.bloom; if (e > bloomEnd) bloomEnd = e; }
+  // ROUND 84: the entrance's end is taken at the reveal (`entranceEnd`) over every light that can be
+  // seen, the example's included. It was retaken here over his arrived lights alone, 0.55 s with none,
+  // which ended the bloom while the example was still on its way out from the core: it snapped into
+  // place under the curtain. A count that changes while the entrance runs can only make it longer.
+  if (blooming && ENT.state === 'running') bloomEnd = Math.max(bloomEnd, entranceEnd());
   NODE_MULT = nodeMultFor(COUNT); nSizeDirty = true;
   sparseAmt = Math.pow(clamp(1 - COUNT / (V.sparseSpan || 600), 0, 1), 0.7);
   LABEL_DEG = Math.round(LABEL_DEG_LO + (14 - LABEL_DEG_LO) * Math.min(1, COUNT / 600));
@@ -289,9 +293,63 @@ function exHigh() { return GROWTH ? clamp((XA[5] - (V.ghost || 0)) / 0.3, 0, 1) 
 const CORE_TINT = new Float32Array(V.coreTint || [0.42, 0.86, 0.6]);
 const domCss = domains.map((d, di) => `rgb(${(D.domCol[di * 3] * 255) | 0},${(D.domCol[di * 3 + 1] * 255) | 0},${(D.domCol[di * 3 + 2] * 255) | 0})`);
 
-const T0 = performance.now();
+/* ================= ROUND 84 — THE LAUNCH ENTRANCE ================================================
+   The bloom is round-11.1/v1's, unchanged: the core comes up, every light leaves the core along its
+   own strand and lands on its place. What this round changes is WHEN its clock runs.
+
+   Through round 75 the clock was `performance.now() - T0`, with T0 taken when this file ran. This
+   file runs under the opening curtain, so the bloom played where nobody could see it and the home
+   screen appeared half assembled or finished. Now:
+
+     held     the picture is built, drawn and kept at its opening state: the clock is 0, no light has
+              left the core, the core is unlit and the river is an ember (`EMBER`). It stays there for
+              as long as the page says the field is covered (`window.loroCovered`).
+     running  from the first frame drawn uncovered. The clock counts only the frames that are drawn,
+              so nothing can advance it while the field is covered, hidden or paused.
+     done     the last light has landed; the same clock carries on as the picture's idle clock, so
+              twinkle, breathing, the rays and the packets never see a jump.
+
+   One clock, `ENT.clock`, in seconds. Nothing else may advance it and nothing may set it back: the
+   handover, a new light arriving and "Watch it grow" drive `gate` and the levels and never read it.
+
+   The river is the one piece round 11.1 did not animate (its loading veil was fading over it). With
+   no veil here it would stand at full light on the first frame, so the light runs out along it from
+   the brain end, in the shader, by one number per vertex: the second its light arrives (`a_e`). == */
+const ENT = { state: 'held', clock: 0, heldFrames: 0, revealedAt: 0, doneAt: 0 };
+const EMBER = 0.07;            // the river's light before the entrance reaches it (of its finished light)
+const RIVER_AT = 0.35;         // seconds after the reveal when the river's brain end takes light
+const RIVER_RUN = 2.6;         // seconds for that light to run to the river's far end
+const RIVER_JIT = 0.5;         // each source's own lateness, so the front is not a ruled line
+const ENT_SOFT = 0.7;          // seconds a point takes from ember to its finished light
+const CORE_UP = 1.2;           // round 11.1's own: the core is at full size 1.2 s in
+function fieldCovered() { try { return typeof window.loroCovered === 'function' && !!window.loroCovered(); } catch (e) { return false; } }
+function entranceSignal() { try { if (typeof window.onLoroEntrance === 'function') window.onLoroEntrance(ENT.state, window.__loro); } catch (e) { /* a listener's failure is not the picture's */ } }
+// When the light reaches a point of the river: by its distance from the core, so the light runs out
+// along the river as one front from the brain end to the far ends, like the lights above it. (By the
+// strand's own `u` every strand lit from its own near end at once, and the far ones showed as dashes.)
+let RIVER_FAR = 1;
+const riverEnt = (si, x, y) => RIVER_AT + D.srcPhase[si] * RIVER_JIT + Math.min(1, Math.hypot(x - CORE.x, y - CORE.y) / RIVER_FAR) * RIVER_RUN;
+// 0 before the entrance reaches a point whose light arrives at second `e`, 1 once it is lit
+function entK(e) { if (ENT.state === 'done') return 1; const x = clamp((ENT.clock - e) / ENT_SOFT, 0, 1); return x * x * (3 - 2 * x); }
+// The second the entrance is over: the core up, the river lit, and every light that can be seen landed.
+// A light that has not arrived and stands at no light (no example behind it) is not waited for.
+function entranceEnd() {
+  let end = Math.max(CORE_UP, S ? RIVER_AT + RIVER_JIT + RIVER_RUN + ENT_SOFT : 0, stEntEnd ? stEntEnd + ENT_SOFT : 0);
+  for (let i = 0; i < N; i++) { if (gateT[i] <= 0.004 && gate[i] <= 0.004) continue; const e = (D.delay[i] + D.dur[i]) * V.bloom; if (e > end) end = e; }
+  return end;
+}
 let bloomEnd = 0; for (let i = 0; i < N; i++) bloomEnd = Math.max(bloomEnd, (D.delay[i] + D.dur[i]) * V.bloom);
 let blooming = true, geomDirty = true;
+
+function finishEntrance(now) {
+  blooming = false;
+  nAlpha.fill(1);
+  pos.set(D.home);
+  ENT.state = 'done';
+  ENT.doneAt = now;
+  entranceSignal();
+}
+
 
 // ---------------- WebGL ----------------
 function shader(type, src) { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s) + '\n' + src); return s; }
@@ -319,9 +377,14 @@ const CAMV = `
   }
   vec4 toClip(vec2 scr) { vec2 c = scr / u_view * 2.0 - 1.0; c.y = -c.y; return vec4(c, 0.0, 1.0); }`;
 
+// ROUND 84: `a_e` is the second of the entrance at which this vertex takes its light, `u_ent` is the
+// entrance clock, soft edge and ember. The river and his strands carry it; every other draw turns the
+// array off and leaves the constant at -1e4 (`entOff`), which is "lit long ago".
 const fibreProg = program(`
-  attribute vec2 a_pos; attribute float a_z; attribute vec4 a_col; varying vec4 v_col; varying vec2 v_scr; ${CAMV} uniform float u_zgain;
-  void main(){ vec2 scr = toScr(a_pos, a_z); gl_Position = toClip(scr); v_col = a_col * (1.0 + u_zgain * a_z); v_scr = scr; }`,
+  attribute vec2 a_pos; attribute float a_z; attribute vec4 a_col; attribute float a_e; varying vec4 v_col; varying vec2 v_scr; ${CAMV} uniform float u_zgain; uniform vec3 u_ent;
+  void main(){ vec2 scr = toScr(a_pos, a_z); gl_Position = toClip(scr);
+    float k = clamp((u_ent.x - a_e) / u_ent.y, 0.0, 1.0); k = k * k * (3.0 - 2.0 * k);
+    v_col = a_col * (1.0 + u_zgain * a_z) * mix(u_ent.z, 1.0, k); v_scr = scr; }`,
   `precision mediump float; varying vec4 v_col; varying vec2 v_scr; uniform float u_gain; ${QUIET}
   void main(){ gl_FragColor = v_col * (u_gain * quietK(v_scr)); }`);
 const ribbonProg = program(`
@@ -381,9 +444,11 @@ const compProg = program(`attribute vec2 a_uv; varying vec2 v_uv; varying vec2 v
 const buf = (data, usage, target) => { const b = gl.createBuffer(); gl.bindBuffer(target || gl.ARRAY_BUFFER, b); gl.bufferData(target || gl.ARRAY_BUFFER, data, usage); return b; };
 const loc = (p, n) => gl.getAttribLocation(p, n), uni = (p, n) => gl.getUniformLocation(p, n);
 function attr(b, l, size, type, norm, stride, offset) { gl.bindBuffer(gl.ARRAY_BUFFER, b); gl.enableVertexAttribArray(l); gl.vertexAttribPointer(l, size, type || gl.FLOAT, !!norm, stride || 0, offset || 0); }
-const U = (p) => ({ cam: uni(p, 'u_cam'), view: uni(p, 'u_view'), cursor: uni(p, 'u_cursor'), prox: uni(p, 'u_prox'), tilt: uni(p, 'u_tilt'), quiet: uni(p, 'u_quiet'), qf: uni(p, 'u_qf'), qbox: uni(p, 'u_qbox'), gain: uni(p, 'u_gain'), dpr: uni(p, 'u_dpr'), homeS: uni(p, 'u_homeS'), time: uni(p, 'u_time'), breathe: uni(p, 'u_breathe'), tex: uni(p, 'u_tex'), dir: uni(p, 'u_dir'), w: uni(p, 'u_w'), zgain: uni(p, 'u_zgain') });
+const U = (p) => ({ cam: uni(p, 'u_cam'), view: uni(p, 'u_view'), cursor: uni(p, 'u_cursor'), prox: uni(p, 'u_prox'), tilt: uni(p, 'u_tilt'), quiet: uni(p, 'u_quiet'), qf: uni(p, 'u_qf'), qbox: uni(p, 'u_qbox'), gain: uni(p, 'u_gain'), dpr: uni(p, 'u_dpr'), homeS: uni(p, 'u_homeS'), time: uni(p, 'u_time'), breathe: uni(p, 'u_breathe'), tex: uni(p, 'u_tex'), dir: uni(p, 'u_dir'), w: uni(p, 'u_w'), zgain: uni(p, 'u_zgain'), ent: uni(p, 'u_ent') });
 const FU = U(fibreProg), RU = U(ribbonProg), NU = U(nodeProg), QU = U(quadProg), CU = U(compProg);
-const FA = { pos: loc(fibreProg, 'a_pos'), z: loc(fibreProg, 'a_z'), col: loc(fibreProg, 'a_col') };
+const FA = { pos: loc(fibreProg, 'a_pos'), z: loc(fibreProg, 'a_z'), col: loc(fibreProg, 'a_col'), e: loc(fibreProg, 'a_e') };
+// ROUND 84: for every fibre draw that takes no light from the entrance (the links, the core's rays)
+function entOff() { if (FA.e >= 0) { gl.disableVertexAttribArray(FA.e); gl.vertexAttrib1f(FA.e, -1e4); } }
 const RA = { pos: loc(ribbonProg, 'a_pos'), nrm: loc(ribbonProg, 'a_nrm'), hw: loc(ribbonProg, 'a_hw'), u: loc(ribbonProg, 'a_u'), z: loc(ribbonProg, 'a_z'), col: loc(ribbonProg, 'a_col') };
 const NA = { pos: loc(nodeProg, 'a_pos'), size: loc(nodeProg, 'a_size'), col: loc(nodeProg, 'a_col'), glow: loc(nodeProg, 'a_glow'), kind: loc(nodeProg, 'a_kind'), light: loc(nodeProg, 'a_light'), phase: loc(nodeProg, 'a_phase'), z: loc(nodeProg, 'a_z') };
 const QA = loc(quadProg, 'a_uv'), CA = loc(compProg, 'a_uv');
@@ -396,7 +461,7 @@ const rayPos = new Float32Array(28 * 2), rayZ = new Float32Array(28), rayCol = n
 const bRayPos = buf(rayPos, gl.DYNAMIC_DRAW), bRayZ = buf(rayZ, gl.STATIC_DRAW), bRayCol = buf(rayCol, gl.DYNAMIC_DRAW);
 let corePulse = 0;
 function drawCoreGL(t) {
-  const bloomK = clamp(t / 1.2, 0, 1);
+  const bloomK = clamp(t / CORE_UP, 0, 1);
   const breathe = 1 + 0.035 * Math.sin(t * 1.5) + corePulse * 0.35;
   corePulse *= 0.95; if (corePulse < 0.01) corePulse = 0;
   const k = cam.s / home.s;
@@ -410,7 +475,7 @@ function drawCoreGL(t) {
     rayCol[o + 4] = 0; rayCol[o + 5] = 0; rayCol[o + 6] = 0; rayCol[o + 7] = 0; // fades to nothing at the tip
   }
   gl.blendFunc(gl.ONE, gl.ONE);
-  gl.useProgram(fibreProg); setCommonU(FU); gl.uniform1f(FU.gain, 1.0);
+  gl.useProgram(fibreProg); setCommonU(FU); gl.uniform1f(FU.gain, 1.0); entOff(); // ROUND 84
   gl.bindBuffer(gl.ARRAY_BUFFER, bRayPos); gl.bufferSubData(gl.ARRAY_BUFFER, 0, rayPos); gl.enableVertexAttribArray(FA.pos); gl.vertexAttribPointer(FA.pos, 2, gl.FLOAT, false, 0, 0);
   attr(bRayZ, FA.z, 1);
   gl.bindBuffer(gl.ARRAY_BUFFER, bRayCol); gl.bufferSubData(gl.ARRAY_BUFFER, 0, rayCol); gl.enableVertexAttribArray(FA.col); gl.vertexAttribPointer(FA.col, 4, gl.UNSIGNED_BYTE, true, 0, 0);
@@ -503,6 +568,11 @@ const sidxArr = []; const srcAlpha = new Float32Array(S);
 }
 const sidx = new Uint32Array(sidxArr);
 const bSPos = buf(spts, gl.STATIC_DRAW), bSZ = buf(sz, gl.STATIC_DRAW), bSCol = buf(scol, gl.DYNAMIC_DRAW), bSIdx = buf(sidx, gl.STATIC_DRAW, gl.ELEMENT_ARRAY_BUFFER);
+// ROUND 84: when the entrance's light reaches each point of the river (static, like its geometry)
+const sEnt = new Float32Array(SVN);
+for (let v = 0; v < SVN; v++) RIVER_FAR = Math.max(RIVER_FAR, Math.hypot(spts[v * 2] - CORE.x, spts[v * 2 + 1] - CORE.y));
+for (let si = 0; si < S; si++) { const st = D.strands[D.srcStrand[si]], base = srcStart[si]; for (let p = 0; p < st.n; p++) sEnt[base + p] = riverEnt(si, spts[(base + p) * 2], spts[(base + p) * 2 + 1]); }
+const bSEnt = buf(sEnt, gl.STATIC_DRAW);
 let srcColDirty = true;
 const srcSig = new Float64Array(S).fill(-1);
 // ---- the stages: the strands his memories stand on, drawn as the picture's own traced lines ----
@@ -513,6 +583,12 @@ const strandAmt = new Float32Array(STR.length), strandSig = new Float64Array(STR
 if (GROWTH) for (let k = 0; k < STR.length; k++) { const st = STR[k], base = strStart[k]; for (let p = 0; p < st.n; p++) { stpts[(base + p) * 2] = st.P[p * 2]; stpts[(base + p) * 2 + 1] = st.P[p * 2 + 1]; stz[base + p] = st.lum - 0.5; if (p) stidxArr.push(base + p - 1, base + p); } }
 const stidx = new Uint32Array(stidxArr);
 const bStPos = buf(stpts, gl.STATIC_DRAW), bStZ = buf(stz, gl.STATIC_DRAW), bStCol = buf(stcol, gl.DYNAMIC_DRAW), bStIdx = buf(stidx, gl.STATIC_DRAW, gl.ELEMENT_ARRAY_BUFFER);
+// ROUND 84: his strands take their light as the lights on them leave the core: the strand's own start
+// (the first two terms of a light's `delay` in field-prep.js), then outward along it
+const stEnt = new Float32Array(STV);
+if (GROWTH) for (let k = 0; k < STR.length; k++) { const st = STR[k], base = strStart[k]; for (let p = 0; p < st.n; p++) stEnt[base + p] = (0.25 + st.d0 / 700 * 1.6 + st.U[p] * 1.4) * V.bloom; }
+const bStEnt = buf(stEnt, gl.STATIC_DRAW);
+let stEntEnd = 0; for (let v = 0; v < STV; v++) if (stEnt[v] > stEntEnd) stEntEnd = stEnt[v];
 function buildStrandColors() {
   strandAmt.fill(0);
   for (let r = 0; r < N; r++) { const i = arrival[r]; if (!own[i]) break; const v = gate[i] * laneOn[D.nodeDomain[i]], s = D.nStrand[i]; if (v > strandAmt[s]) strandAmt[s] = v; }
@@ -1281,7 +1357,29 @@ let motionFrames = 0;
 function frame() {
   const now = performance.now();
   const dt = Math.min(0.05, (now - lastNow) / 1000); lastNow = now;
-  const t = (now - T0) / 1000;
+  // ROUND 84: the entrance clock. Held at 0 for as long as the field is covered; the first frame drawn
+  // uncovered is still second 0 (the opening state, seen once), and every frame after it adds its own
+  // time. Under the curtain the opening state is drawn three times (the buffers and shaders are warm
+  // when it lifts) and then only once in twelve frames, or when the window or a count changes, so the
+  // curtain has the machine to itself.
+  if (ENT.state === 'held') {
+    if (fieldCovered()) {
+      ENT.heldFrames++;
+      if (ENT.heldFrames > 3 && ENT.heldFrames % 12 && !quietDirty && !fboDirty && !gateBusy) { rafId = running ? requestAnimationFrame(frame) : 0; return; }
+    } else {
+      ENT.revealedAt = now;
+      bloomEnd = entranceEnd();
+      if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+        ENT.clock = bloomEnd;
+        finishEntrance(now);
+        geomDirty = true;
+      } else {
+        ENT.state = 'running';
+        entranceSignal();
+      }
+    }
+  } else ENT.clock += dt;
+  const t = ENT.clock;
   frames++;
 
   // camera
@@ -1301,7 +1399,13 @@ function frame() {
   // motion
   let moved = stepGate(dt) && !GROWTH;
   stepLevels(dt);
-  if (blooming) { moved = stepBloom(t); if (t > bloomEnd + 0.05) { blooming = false; for (let i = 0; i < N; i++) { nAlpha[i] = 1; pos[i * 2] = D.home[i * 2]; pos[i * 2 + 1] = D.home[i * 2 + 1]; } moved = true; } }
+  if (blooming) {
+    moved = stepBloom(t);
+    if (ENT.state === 'running' && t > bloomEnd + 0.05) { // ROUND 84: only a running entrance can end; a held one has not begun
+      finishEntrance(now);
+      moved = true;
+    }
+  }
   else {
     if (dragging >= 0 && dragNbr) {
       const [wx, wy] = toWorld(cursor.x, cursor.y);
@@ -1381,7 +1485,8 @@ function frame() {
       const base = srcStart[rv.si], cnt = srcStart[rv.si + 1] - base, fp = rv.u * (cnt - 1), p0 = Math.min(cnt - 2, Math.floor(fp)), f = fp - p0;
       pkPos[n * 2] = spts[(base + p0) * 2] + (spts[(base + p0 + 1) * 2] - spts[(base + p0) * 2]) * f; pkPos[n * 2 + 1] = spts[(base + p0) * 2 + 1] + (spts[(base + p0 + 1) * 2 + 1] - spts[(base + p0) * 2 + 1]) * f;
       pkZ[n] = sz[base + p0];
-      const a = (blooming ? 0 : 1) * (gate[D.srcNode[rv.si]] > 0.5 ? 1 : 0) * (GROWTH && own[D.srcNode[rv.si]] ? XA[1] : 1) * (hoverActive ? 0.5 : 1) * 0.85 * V.packetGain * Math.min(1, rv.u * 6) * Math.min(1, (1 - rv.u) * 8);
+      // ROUND 84: a river light shows where the river is already lit (it was off until the bloom ended, then all 180 came on in one frame)
+      const a = entK(riverEnt(rv.si, pkPos[n * 2], pkPos[n * 2 + 1])) * (gate[D.srcNode[rv.si]] > 0.5 ? 1 : 0) * (GROWTH && own[D.srcNode[rv.si]] ? XA[1] : 1) * (hoverActive ? 0.5 : 1) * 0.85 * V.packetGain * Math.min(1, rv.u * 6) * Math.min(1, (1 - rv.u) * 8);
       const dc = D.srcDomain[rv.si] * 3;
       pkCol[n * 4] = (D.domCol[dc] * 0.35 + 0.65) * a; pkCol[n * 4 + 1] = (D.domCol[dc + 1] * 0.35 + 0.65) * a; pkCol[n * 4 + 2] = (D.domCol[dc + 2] * 0.35 + 0.65) * a; pkCol[n * 4 + 3] = a;
       pkSize[n] = 1.3; n++;
@@ -1395,20 +1500,22 @@ function frame() {
     gl.uniform3f(Uu.cam, cam.x, cam.y, cam.s); gl.uniform2f(Uu.view, W, H); gl.uniform2f(Uu.cursor, cursor.x, cursor.y); gl.uniform2f(Uu.prox, 150, proxAmp); gl.uniform2f(Uu.tilt, tilt.x, tilt.y);
     gl.uniform4fv(Uu.quiet, quietRects); gl.uniform1f(Uu.qf, QUIET_FEATHER); gl.uniform4fv(Uu.qbox, quietBox);
     if (Uu.zgain) gl.uniform1f(Uu.zgain, V.zGain);
+    if (Uu.ent) gl.uniform3f(Uu.ent, ENT.state === "done" ? 1e6 : ENT.clock, ENT_SOFT, EMBER);
   };
   setCommonU = setCommon;
   const drawFibres = (gain) => {
     gl.useProgram(fibreProg); setCommon(FU);
     // river
     gl.uniform1f(FU.gain, gain * (domActive ? 1 : 1));
-    attr(bSPos, FA.pos, 2); attr(bSZ, FA.z, 1); attr(bSCol, FA.col, 4, gl.UNSIGNED_BYTE, true);
+    attr(bSPos, FA.pos, 2); attr(bSZ, FA.z, 1); attr(bSCol, FA.col, 4, gl.UNSIGNED_BYTE, true); attr(bSEnt, FA.e, 1);
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, bSIdx); gl.drawElements(gl.LINES, sidx.length, gl.UNSIGNED_INT, 0);
     if (GROWTH && stidx.length) { // the stages: his strands
-      attr(bStPos, FA.pos, 2); attr(bStZ, FA.z, 1); attr(bStCol, FA.col, 4, gl.UNSIGNED_BYTE, true);
+      attr(bStPos, FA.pos, 2); attr(bStZ, FA.z, 1); attr(bStCol, FA.col, 4, gl.UNSIGNED_BYTE, true); attr(bStEnt, FA.e, 1);
       gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, bStIdx); gl.drawElements(gl.LINES, stidx.length, gl.UNSIGNED_INT, 0);
     }
-    // links
+    // Links take their light from their two nodes.
     gl.uniform1f(FU.gain, gain);
+    entOff();
     attr(bLPos, FA.pos, 2); attr(bLZ, FA.z, 1);
     gl.bindBuffer(gl.ARRAY_BUFFER, bLCol); gl.bufferSubData(gl.ARRAY_BUFFER, 0, lcol); gl.enableVertexAttribArray(FA.col); gl.vertexAttribPointer(FA.col, 4, gl.UNSIGNED_BYTE, true, 0, 0);
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, bLIdx); gl.drawElements(gl.LINES, lidx.length, gl.UNSIGNED_INT, 0);
@@ -1686,9 +1793,17 @@ function resume() {
 }
 
 setCount(V.count !== undefined ? V.count : N, false);
+// ROUND 84: THE ENTRANCE PLAYS ONCE A LAUNCH. A picture drawn again on the same page (his first hire
+// with the example up, his records arriving late) is a new run of this file; the page hands it the
+// entrance of the one it replaces (`window.loroEntranceCarry`), so a finished entrance stays finished
+// and one that is running carries on from the same second instead of starting again from the core.
+{
+  const carry = window.loroEntranceCarry; window.loroEntranceCarry = null;
+  if (carry && carry.state === 'done') { ENT.state = 'done'; ENT.clock = +carry.clock || 0; blooming = false; nAlpha.fill(1); }
+  else if (carry && carry.state === 'running') { ENT.state = 'running'; ENT.clock = +carry.clock || 0; bloomEnd = entranceEnd(); }
+}
 $('#home-loading').classList.add('gone');
 rafId = requestAnimationFrame(frame);
-if (typeof window.onLoroReady === 'function') setTimeout(() => window.onLoroReady(window.__loro), 0);
 // READ-ONLY, FOR `tests/home.js` ONLY. Calling `ingest()` from outside (the line above) does
 // NOT reset this field's own idle-learning clock (`lastIngest`/`nextIngestGap`, line 593/838) —
 // only the scheduler's own auto-fire does that — so a driven line and an auto-fired one can
@@ -1704,7 +1819,18 @@ function autoIngestDueInMs() { return Math.max(0, (lastIngest + nextIngestGap) -
 window.__loro = { growth: { get X() { const o = {}; KEYS.forEach((key, j) => { o[key] = XA[j]; }); return o; }, XT, laneOn, laneOnT, own, dbg: DBG, get ex() { return XA[5]; } }, arrive, N, L, S, V, snapshot, pause, resume, nodeScreen, setCount, coreTint: CORE_TINT, coreScreen: () => toScreen(CORE.x, CORE.y, 0), get ghostLevel() { return ghostNow; }, get COUNT() { return COUNT; }, get stats() { return STATS; }, gate, arrival, nodes, domains, D, get running() { return running; }, quietRect, quietAt,
   get eraseRects() { const out = []; for (let g = 0; g < QUIET_N; g++) { const o = g * 4; if (quietRects[o + 2] < 0) continue; out.push({ x0: quietRects[o], y0: quietRects[o + 1], x1: quietRects[o + 2], y1: quietRects[o + 3] }); } return out; },
   get labelBlockers() { return blockRects.map(([x0, y0, x1, y1]) => ({ x0, y0, x1, y1 })); },
-  get domLabelRects() { return domLabelRects; }, get nodeLabelRects() { return nodeLabelRects; }, landed, get pos() { return pos; }, get hover() { return hover; }, get selected() { return selected; }, get cam() { return cam; }, fade, lit, glow, releaseAll, ingest: () => ingest(performance.now()), get autoIngestDueInMs() { return autoIngestDueInMs(); }, get blooming() { return blooming; }, get motionFrames() { return motionFrames; }, get frames() { return frames; }, pushWave, get activeList() { return activeList; } };
+  get domLabelRects() { return domLabelRects; }, get nodeLabelRects() { return nodeLabelRects; }, landed, get pos() { return pos; }, get hover() { return hover; }, get selected() { return selected; }, get cam() { return cam; }, fade, lit, glow, releaseAll, ingest: () => ingest(performance.now()), get autoIngestDueInMs() { return autoIngestDueInMs(); }, get blooming() { return blooming; },
+  // ROUND 84: the launch entrance, read-only. `state` is held, running or done; `clock` is its seconds;
+  // `end` the second its last light lands; `lit(i)` how far light i has come (0 at the core, 1 landed).
+  entrance: { get state() { return ENT.state; }, get clock() { return ENT.clock; }, get end() { return bloomEnd; }, get revealedAt() { return ENT.revealedAt; }, get doneAt() { return ENT.doneAt; },
+    get heldFrames() { return ENT.heldFrames; }, lit: (i) => nAlpha[i], ember: EMBER, coreUp: CORE_UP, riverAt: RIVER_AT, riverRun: RIVER_RUN, riverFar: RIVER_FAR },
+  get motionFrames() { return motionFrames; }, get frames() { return frames; }, pushWave, get activeList() { return activeList; } };
+const readyApi = window.__loro;
+const onReady = window.onLoroReady;
+if (typeof onReady === 'function') setTimeout(() => {
+  // A late corpus can rebuild the field before this notification runs.
+  if (window.__loro === readyApi) onReady(readyApi);
+}, 0);
 })().catch((e) => {
   // THE HONEST FAILURE NEEDS SOMEWHERE TO LAND. Every throw above is inside this async
   // IIFE — `WebGL unavailable` at the context, a shader that will not compile, a program

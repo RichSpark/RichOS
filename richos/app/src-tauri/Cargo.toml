@@ -48,6 +48,7 @@ default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]
 
 [build-dependencies]
+cc = "1"
 tauri-build = { version = "2", features = [] }
 # build.rs derives the required icon set from tauri.conf.json's own bundle.icon array
 # rather than hand-typing filenames. serde_json is already in this crate's runtime
@@ -56,6 +57,8 @@ serde_json = "1"
 
 [dependencies]
 notify = "8.2"
+sha2 = "0.10"
+tempfile = "3"
 # DICTATION'S BAR AND MENU BAR ITEM (dictation plan rev 2, slice 3, Frank's minor 4): `tray-icon` for
 # the menu bar item, `macos-private-api` for the bar's and the flight's transparent windows, which
 # `tauri-build` checks against `"macOSPrivateApi": true` under `app` in tauri.conf.json. Both
@@ -105,7 +108,7 @@ tauri-plugin-updater = "2.11.0"
 # around every command body. Tauri's own runtime is the multi-threaded one
 # (`tauri-2.11.5/src/async_runtime.rs:223`, `TokioRuntime::new()`), so the feature is already on
 # in this graph; it is named because the shell's own code now depends on it.
-tokio = { version = "1", features = ["time", "rt", "rt-multi-thread", "net", "io-util", "sync"] }
+tokio = { version = "1", features = ["time", "rt", "rt-multi-thread", "net", "io-util", "sync", "fs"] }
 # THE SPEECH-MODEL DOWNLOAD (src/voice_provision.rs).
 #
 # NO NEW CRATE, AND THE FEATURE LIST IS WHY IT IS SPELLED OUT RATHER THAN LEFT TO A DEFAULT.

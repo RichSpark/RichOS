@@ -563,17 +563,6 @@
 [richos] late check: not started ({}); the next launch's checks still run
 [richos] quit: the prepared update is put in place as RichOS closes
 [richos] quit: the update helper did not start ({}); the next launch puts the update in place
-[richos] splash at quit: the Dock icon was clicked during the quit; RichOS stays open
-[richos] splash at quit: the Dock icon was clicked while the opening was drawn; the quit is called off
-[richos] splash at quit: the next start shows {} (start {}); its opening was drawn: {}; {} ms
-[richos] splash at quit: the next start shows {}; no opening was saved ({}), so it shows the splash's ground until the page draws it; {} ms
-[richos] splash at quit: a start on a later day shows {}; its opening was drawn: {}; {} ms
-[richos] splash at quit: a start on a later day shows {}; no opening was saved ({}), so it shows the splash's ground until the page draws it; {} ms
-[richos] splash at quit: today's opening could not be written down ({})
-[richos] splash at quit: the next start's splash and its opening are already saved; nothing drawn
-[richos] splash at quit: the pick could not be saved ({}); the next start applies the rules itself
-[richos] splash: a reader of the opening's pictures could not start ({})
-[richos] splash: the opening's later pictures could not start ({}); its first picture holds
 [richos] update at quit: RichOS did not end; the next launch puts the update in place
 [richos] update at quit: a RichOS session is still open; the next launch puts the update in place
 [richos] update at quit: could not read the update lease ({}); the next launch puts the update in place
@@ -584,6 +573,8 @@
 [richos] openings: the image of {} was not saved ({})
 [richos] openings: what was earned could not be saved ({})
 [richos] openings: today's opening could not be written down ({})
+[richos] native splash: renderer failed
+[richos] splash assets: pack download failed
 #
 # Keep chat alive and the context meter (round 83). A healthy boot prints none of these: a
 # keep-alive is sent only once a chat whose box is checked has been idle for 55 minutes, and

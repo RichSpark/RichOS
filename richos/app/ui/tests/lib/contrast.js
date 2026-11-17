@@ -475,6 +475,19 @@ function probeBody(options) {
       const g = ghosts[i];
       if (g.el === el || g.el.contains(el) || el.contains(g.el)) continue;
       if (pt.x >= g.rect.left && pt.x <= g.rect.right && pt.y >= g.rect.top && pt.y <= g.rect.bottom) {
+        // A click-through decoration does not make text behind its opaque parent visible.
+        // The same decoration can still cover text inside that parent.
+        if (!g.opaque) {
+          for (const layer of document.elementsFromPoint(pt.x, pt.y)) {
+            if (layer.contains(el)) break;
+            if (!layer.contains(g.el)) continue;
+            const style = getComputedStyle(layer);
+            const color = parseCssColor(style.backgroundColor);
+            if (color && color.a * cumulativeOpacity(layer) >= 0.999 && style.mixBlendMode === "normal" && style.filter === "none") {
+              return { path: shortPath(layer), opaque: true };
+            }
+          }
+        }
         return { path: shortPath(g.el), opaque: g.opaque };
       }
     }

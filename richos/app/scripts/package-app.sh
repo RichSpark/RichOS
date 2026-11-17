@@ -1530,6 +1530,26 @@ if [ "${#build_launch[@]}" -eq 0 ]; then
   warn "  note: this compile runs without the release-build role ($build_launch_why),"
   warn "  so the CPU guard may stop rustc after 10 s above 3 cores."
 fi
+# The first launch after an update can show the exact version in the shared splash.
+# The stock splashes are bundled by tauri.conf.json, and other packs are downloaded.
+splash_edition_cache="$(cargo_target_dir "$src_tauri")/splash-editions/$source_sha/$target_version"
+splash_edition="$splash_edition_cache/edition-update.mp4"
+splash_edition_bar="$splash_edition_cache/edition-update.bar.json"
+if [ ! -f "$splash_edition" ] || [ ! -f "$splash_edition_bar" ]; then
+  RICHOS_SPLASH_RENDER_TMP="${TMPDIR:-$splash_edition_cache}" bash "$here/../native/splash/render-packs.sh" \
+    "$splash_edition_cache" "$target_version" edition-update >&2 || exit 4
+fi
+splash_edition_config="$(python3 - "$splash_edition" "$splash_edition_bar" "$target_version" <<'PYCONFIG'
+import json, sys
+video, bar, version = sys.argv[1:]
+print(json.dumps({"bundle": {"resources": {
+    video: f"Splash/edition-update-{version}.mp4",
+    bar: f"Splash/edition-update-{version}.bar.json",
+}}}))
+PYCONFIG
+)" || exit 4
+build_args+=(--config "$splash_edition_config")
+
 # The native file adapter and metadata runtime travel inside the signed app. Users
 # install no separate tools; source pins and the complete resource manifest are verified.
 cleaner_resources="$(python3 "$here/build-cleaner-resources.py")" || { warn "RichCleaner's resources could not be built."; exit 4; }

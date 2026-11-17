@@ -14,11 +14,22 @@
 //   * it does no I/O, reads no file, and awaits no command before painting. What it needs
 //     to know (what kind of start this is, which splash was picked, which openings are his)
 //     is already in front of this script, put there by the shell;
-//   * the curtain is `pointer-events: none` for its whole life, so the live app underneath
-//     is reachable the moment it is live;
-//   * and it gets out of the way on the FIRST of three signals - the app reporting ready,
-//     the CEO touching a key or the trackpad, or a hard ceiling - so no failure anywhere
+//   * and it leaves by itself when its time is up - the app reporting ready, held to the
+//     screen's own 3 or 5 seconds, or a hard ceiling one second later - so no failure anywhere
 //     else in the shell can leave it up.
+//
+// ROUND 85 (the CEO, 2026-11-16; richos-hq design/mockups/rounds/round-85): IT PLAYS FROM START
+// TO FINISH, WHATEVER THE USER DOES. His words: "We no longer need any interactivity in splash
+// screens i.e. each splash screen shall play from start to finish regardless of what the user
+// might do with their mouse." So nothing a hand does reaches this screen or changes it:
+//
+//   * a click, a drag or a scroll lands on the curtain and does nothing (`splash.css`), and
+//     nothing under it is pressed;
+//   * a key does nothing either (`quiet()` below). Until this round the first click or key sent
+//     the screen away and the space key held it (CEO §62); both are gone, and with the hold the
+//     settings button and the line it showed. A key with ⌘ or ⌃ keeps what the Mac does with
+//     it (quit, reload); the app's own shortcuts wait until the splash has played;
+//   * the light that followed the pointer is gone (`openings.js`, `splash.css`).
 //
 // THE HONEST STATES. If the library is missing, unparseable or
 // empty, if every entry in it is malformed, or if anything at all throws while drawing,
@@ -53,54 +64,25 @@
   };
 
   // -------------------------------------------------------------------------------------
-  // THE SPACE KEY'S CLOCK — ONE OFFSET, ON THE ONE CLOCK EVERYTHING HERE ALREADY SHARES
+  // THE CLOCK — ONE READING, WHICH EVERYTHING HERE SHARES
   // -------------------------------------------------------------------------------------
   //
-  // CEO §62, 2026-09-19: *"Hitting the space key while the splash screen is shown should
-  // 'pause' the splash screen."* Amended the same day: *"if the animation on the splash
-  // screen can be easily paused without adding too much complexity, then sure the animation
-  // should pause."*
-  //
-  // IT CAN, AND THIS IS WHY IT IS THREE LINES RATHER THAN A STATE MACHINE. Everything that
-  // moves on this surface is driven from ONE reading: `clock()`. The bar's fill is
-  // `clock() - shownAt`, the landing flare is `clock() - bar.landedAt`, and the hold the
-  // ceremony is measured against is `holdMs - (clock() - shownAt)` - the same number, which
-  // is the property `SPLASH_SECONDS`' comment already names ("the bar reaches 100% at
-  // exactly this many seconds"). Stop that one reading and all three stop together, in step,
-  // with no second notion of time to drift against the first.
-  //
-  // `pausedTotal` is how long the surface has been held, in ms, and `pausedSince` is the raw
-  // reading the current hold began at. While a hold is on, `clock()` returns the instant it
-  // began; when the hold ends, the time spent is added to the offset, so the value `clock()`
-  // returns is continuous across the resume and never goes backwards. The RAW clock is still
-  // what a pause is measured with - a paused clock cannot time its own pause.
-  //
-  // The CSS composition (four `splash-rise` stages, the strike and the rule) is not on this
-  // clock and does not need to be: it is paused declaratively by `splash--paused` in
-  // `splash.css`, and the bar track's one Web-Animations fade is paused through the handle
-  // `buildBar` keeps on it. Three mechanisms because there are three kinds of motion, and
-  // each one is paused where it lives.
-  var pausedTotal = 0;
-  var pausedSince = null;
-  function runningClock() {
-    return (pausedSince === null ? now() : pausedSince) - pausedTotal;
-  }
+  // Everything that moves on this surface is driven from ONE reading: `clock()`. The bar's fill
+  // is `clock() - shownAt`, the landing flare is `clock() - bar.landedAt`, and the hold the
+  // ceremony is measured against is `holdMs - (clock() - shownAt)` - the same number, which is
+  // the property `SPLASH_SECONDS`' comment already names ("the bar reaches 100% at exactly this
+  // many seconds").
   function clock() {
-    return heldMoment !== null && shownAt !== null ? shownAt + heldMoment : runningClock();
+    return heldMoment !== null && shownAt !== null ? shownAt + heldMoment : now();
   }
 
   // -------------------------------------------------------------------------------------
-  // HELD AT A MOMENT, AND STARTED FROM ONE (Sage's plan 2026-11-14, "the splash the rules
-  // picked is playing within 380 ms of the click", section 1)
+  // FRAME EXPORT AND THE FINAL GOLD BAR
   // -------------------------------------------------------------------------------------
   //
-  // The opening of the splash is drawn when the app QUITS, as pictures of this code held still
-  // at one moment after another, in a web view nobody sees; at the next start macOS plays those
-  // pictures while this page loads, and this page then joins the splash at the moment the
-  // pictures have reached. So every splash must be drawable at any moment of its first second
-  // without playing up to it, and startable from that moment. `holdAt(ms)` and `release()` are
-  // that, for every entry the library will ever hold, because they hold the three kinds of
-  // motion this file already names (THE SPACE KEY'S CLOCK) where each lives:
+  // The exporter holds this scene at each frame's timestamp, and macOS plays the resulting
+  // asset through its last frame. The page also holds the scene to calculate where the final
+  // gold bar meets Home. `holdAt(ms)` freezes the clock, CSS animations and bar together:
   //
   //   * the clock: `clock()` returns `shownAt + heldMoment` while held, so the bar and the hold
   //     read the held moment;
@@ -110,9 +92,6 @@
   //   * the bar: painted at once from the moment (`paintMoment`). A web view nobody sees gets no
   //     animation frames at all (the trials measured none), so a hold never waits for one.
   //
-  // `release()` starts the splash from where it is held: the clock carries on from the held
-  // moment and every animation plays on from it. `shownAt` then counts from the moment the
-  // splash was FIRST on the glass, so its 3 or 5 seconds are measured from when he first saw it.
   var heldMoment = null;
 
   // -------------------------------------------------------------------------------------
@@ -183,11 +162,9 @@
   // =====================================================================================
   //
   // IT DOES NOT DELAY THE LAUNCH, and that rule is unchanged and still binding. The app
-  // underneath is live, focused and reachable from its first frame, and this curtain is
-  // `pointer-events: none` for its whole life - so holding it is not a wait, it is a layer
-  // that has not faded yet. The two things that prove it are still true and still tested:
-  // his first keystroke or touch yields IMMEDIATELY (the hold is never allowed to catch his
-  // hand), and the ceiling still fires on a launch that never reports ready.
+  // underneath is live from its first frame - so holding the curtain is not a wait, it is a
+  // layer that has not faded yet - and the ceiling still fires on a launch that never reports
+  // ready. ROUND 85: his first keystroke or touch no longer sends it away; it plays through.
 
   /// This launch's hold, in ms - `SPLASH_SECONDS` unless the chosen screen asked for its
   /// own. Set once, in `start()`, from the entry that was actually drawn.
@@ -206,9 +183,7 @@
   /// When the composition went up, for measuring the hold against. `null` until it does.
   var shownAt = null;
 
-  /// How much of the hold is left, in ms. Zero once it is served - and zero for any caller
-  /// that is not the app-ready path, because the hold governs the ceremony and never the
-  /// CEO's hand.
+  /// How much of the hold is left, in ms. Zero once it is served.
   function holdRemaining() {
     if (shownAt === null) return 0;
     var left = holdMs - (clock() - shownAt);
@@ -873,10 +848,8 @@
       inset: parseFloat(b.pitchInset) || 0,
       landed: false,
       landedAt: 0,
-      /// The track's own fade-in, kept rather than fired and forgotten: it is the one piece
-      /// of motion on this surface that is neither a CSS animation (which `splash--paused`
-      /// reaches) nor on `clock()` (which the space key stops), so pausing it needs its
-      /// handle. `null` under reduced motion, where it is never started.
+      /// The track's own fade-in, kept rather than fired and forgotten. `null` under reduced
+      /// motion, where it is never started.
       enter: null
     };
 
@@ -1166,23 +1139,24 @@
     frame.appendChild(buildBar(t.bar));
     stage.appendChild(frame);
     root.appendChild(stage);
-    // ROUND 74: the number, his company's line, the held line, the light. A throw in there
-    // leaves the screen exactly as it was drawn above.
+    // ROUND 74: the number, his company's line, the seal. A throw in there leaves the screen
+    // exactly as it was drawn above.
     if (RO) {
       try {
         RO.dress(root, entry, {
           elapsed: function () {
             return shownAt === null ? 0 : clock() - shownAt;
           },
-          paused: function () {
-            return paused;
-          },
           held: function () {
             return heldMoment !== null;
           },
           hold: holdMs,
-          // The page nobody sees (the opening drawn at quit, a saved image) makes no sound.
-          silent: drawing()
+          // Exports and share cards make no sound. Native playback owns its cue.
+          silent: drawing() || state.native,
+          native: state.native,
+          drawing: drawing(),
+          exportScale: drawing() ? window.__RICHOS_LAUNCH__.exportScale : 0,
+          card: drawing() && window.__RICHOS_LAUNCH__.card === true
         });
       } catch (_e) {
         /* drawn without the additions */
@@ -1241,18 +1215,9 @@
     /// hole, because a loop cannot leave the loop stopped.
     barPasses: 0,
     barStopped: false,
-    /// THE SPACE KEY'S OWN ACCOUNT OF ITSELF (CEO §62). `paused` is the state the settings
-    /// button appears in and the state the automatic switch to the home screen is held in;
-    /// `pauses` counts how many times it has been entered, so "he held it once" and "the
-    /// key is toggling on its own" are different readings; `pausedMs` is how long has been
-    /// spent held, which is exactly how much later than its three seconds this screen will
-    /// leave. `deferred` is the automatic caller that asked to go while it was held and was
-    /// refused - reported rather than swallowed, because "the app was ready and waited" and
-    /// "the app never became ready" are two different launches.
-    paused: false,
-    pauses: 0,
-    pausedMs: 0,
-    deferred: null
+    /// ROUND 85: how many presses and keys the screen was given and did nothing with. It is
+    /// here so a walk can show the screen was really pressed while it played.
+    ignored: 0
   };
 
   function removeSelf() {
@@ -1271,9 +1236,6 @@
       if (replayKept) {
         state.barPasses = replayKept.barPasses;
         state.barStopped = replayKept.barStopped;
-        state.pauses = replayKept.pauses;
-        state.pausedMs = replayKept.pausedMs;
-        state.deferred = replayKept.deferred;
         holdMs = replayKept.hold;
         replayKept = null;
       }
@@ -1281,228 +1243,59 @@
     }
   }
 
+  function afterFade() {
+    var finishedLaunch = !replaying && !drawing();
+    state.native = false;
+    removeSelf();
+    var shell = window.__TAURI_INTERNALS__;
+    if (finishedLaunch && shell && typeof shell.invoke === "function") {
+      Promise.resolve(shell.invoke("splash_did_finish")).catch(function () {});
+    }
+  }
+
   // -------------------------------------------------------------------------------------
-  // THE SPACE KEY — HOLD THE SCREEN, AND ONLY THEN OFFER SETTINGS
+  // ROUND 85: NOTHING THE USER DOES CHANGES THE SCREEN
   // -------------------------------------------------------------------------------------
   //
-  // CEO §62, 2026-09-19, verbatim and in full because it is the whole specification of this
-  // block: *"The splash screen is one of those rare cases where the screen should NOT have a
-  // settings button (because it's only there for 3 seconds by default and 5 seconds in some
-  // cases in the future). However: An additional feature for the splash screen should be
-  // this: Hitting the space key while the splash screen is shown should 'pause' the splash
-  // screen. Not necessarily pause the animation but stop it from automatically switching
-  // from splash screen to home screen. Hitting the space key a second time would 'resume'
-  // it i.e. switch to home screen. AND: while the splash screen is 'paused', THAT'S when the
-  // settings button should show up on the splash screen. Because that's the only time it
-  // would make sense. Otherwise no settings button on the splash screen."*
+  // The CEO, 2026-11-16: "We no longer need any interactivity in splash screens i.e. each splash
+  // screen shall play from start to finish regardless of what the user might do with their
+  // mouse."
   //
-  // THIS REPLACES §15's EXCEPTION ON THIS ONE SURFACE, and the replacement is the ruling's
-  // own: §15 puts the settings button on every screen, and this is the screen he has taken
-  // it off. `splash.css` is where that happens (the button's own CSS is in `style.css` and
-  // is not touched), keyed on the curtain being present, not paused and not yet yielding -
-  // so the button cannot be left hidden by any state this file can end in, including a
-  // throw. The moment the node is gone the rule cannot match.
+  // WHAT WAS HERE: the space key held the screen and showed the settings button (CEO §62), and
+  // any other key, and any click, sent the screen away at once. All of that is removed: there
+  // is no held state, no way to leave early, and so no settings button on this screen at all.
   //
-  // WHAT IS PAUSED, AND WHAT IS NOT. The automatic switch to the home screen is: the ceiling
-  // and `main.js`'s `app-ready` yield both stop taking the curtain down (`yieldNow` below).
-  // HIS HAND IS NOT: any other key, and any pointer, still dismisses on first input exactly
-  // as before, held or not - §5.5 forbids anything on this surface that is delaying, and a
-  // hold he can get stuck in would be precisely that. The animation is paused too, per the
-  // same day's amendment, because it could be done in three places rather than a redesign.
-  var paused = false;
-
-  /// The space bar, and only the space bar, and only unmodified. A modified press (⌘, ⌃, ⌥)
-  /// is an app or system shortcut rather than this surface's control, so it falls through to
-  /// the first-input dismissal every other key has always taken.
-  function isSpace(e) {
-    if (e.metaKey || e.ctrlKey || e.altKey) return false;
-    return e.key === " " || e.key === "Spacebar" || e.code === "Space" || e.keyCode === 32;
+  // WHAT IS HERE INSTEAD, and it is small. The pointer is the curtain's own for as long as it
+  // is up (`splash.css`), so a click lands on it and presses nothing under it; and while it is
+  // up no press, scroll or key travels any further than this function, because the app under
+  // the curtain would otherwise act on it for somebody who cannot see it (Space and Enter open
+  // Talk to Rich on the home screen, ⌘K opens the search). A key with ⌘ or ⌃ keeps what the Mac
+  // itself does with it, quitting and reloading included: only the app's own listeners are
+  // kept from it.
+  var QUIET = ["keydown", "keyup", "keypress", "pointerdown", "pointerup", "mousedown", "mouseup", "click", "dblclick", "auxclick", "contextmenu", "wheel"];
+  function quiet(e) {
+    if (!node || yielded) return;
+    e.stopImmediatePropagation();
+    var key = e.type.indexOf("key") === 0;
+    if (key && !e.metaKey && !e.ctrlKey) e.preventDefault();
+    if ((e.type === "keydown" && !e.repeat) || e.type === "pointerdown") state.ignored++;
+  }
+  function listen(on) {
+    var f = on ? window.addEventListener : window.removeEventListener;
+    for (var i = 0; i < QUIET.length; i++) f.call(window, QUIET[i], quiet, true);
   }
 
-  /// HOLD IT. The automatic switch stops; the ceremony stops where it stands; the settings
-  /// button appears.
-  function pauseNow() {
-    if (paused || yielded || !node) return;
-    paused = true;
-    state.paused = true;
-    state.pauses++;
-    // The clock stops FIRST, so the bar and the hold both freeze on the same reading rather
-    // than on two readings taken either side of the work below.
-    pausedSince = now();
-    // The two automatic ways out, disarmed rather than left to fire into a `yieldNow` that
-    // would refuse them. The ceiling is not re-armed on resume because resume IS the yield -
-    // a failsafe against a boot that hangs has nothing to protect while he is holding the
-    // screen open on purpose, and one more keystroke takes it down whatever the app is doing.
-    if (ceiling !== null) {
-      clearTimeout(ceiling);
-      ceiling = null;
-    }
-    if (holdTimer !== null) {
-      clearTimeout(holdTimer);
-      holdTimer = null;
-      state.deferred = "app-ready";
-    }
-    node.classList.add("splash--paused");
-    // The class holds a CSS animation only until script has played or paused it; a splash the
-    // page joined at a moment (`release`) has been, so its animations are held here by hand too.
-    setAnimationsPlaying(false);
-    if (bar && bar.enter && bar.enter.pause) {
-      try {
-        bar.enter.pause();
-      } catch (_e) {
-        /* an engine that will not pause its own animation still gets a paused surface */
-      }
-    }
-    // The frame loop is put down rather than left spinning on a frozen number: a hold has no
-    // end he is obliged to reach, and a `requestAnimationFrame` that repaints an unchanged
-    // bar for as long as he leaves the screen up is work with no picture to show for it.
-    // `state.barStopped` is deliberately NOT set - the bar has not finished, it is held, and
-    // that flag's whole job is to answer "did the one pass end".
-    if (raf !== null) {
-      cancelAnimationFrame(raf);
-      raf = null;
-    }
-  }
-
-  /// Let it go again. The clock picks up exactly where it stopped, so a screen held at 1.4 s
-  /// still has 1.6 s of ceremony left in it and the bar is where he left it, not ahead of it.
-  function unpause() {
-    if (!paused) return;
-    paused = false;
-    state.paused = false;
-    if (pausedSince !== null) {
-      pausedTotal += now() - pausedSince;
-      pausedSince = null;
-      state.pausedMs = Math.round(pausedTotal);
-    }
-    if (node) node.classList.remove("splash--paused");
-    if (heldMoment === null) setAnimationsPlaying(true);
-    if (bar && bar.enter && bar.enter.play) {
-      try {
-        bar.enter.play();
-      } catch (_e) {
-        /* see pauseNow */
-      }
-    }
-    if (bar && !state.barStopped && raf === null) raf = requestAnimationFrame(tick);
-  }
-
-  /// The second space: *"resume it i.e. switch to home screen"*. Both halves, in his order -
-  /// the ceremony is let go first so nothing is left frozen behind the fade, and then the
-  /// curtain goes. `yieldNow` pins the composition to where it was going (`splash--settled`)
-  /// as it always has, so what a resumed screen shows on its way out is a finished mark and
-  /// not a frame that ran for 16 ms.
-  function resumeNow() {
-    unpause();
-    yieldNow("resume");
-  }
-
-  /// The CEO's first keystroke or touch gets the curtain out of the way — with TWO
-  /// exceptions now, and both of them are §62's.
-  ///
-  /// THE SETTINGS BUTTON. It is drawn ABOVE this curtain (z-index 300 in `style.css:4990`
-  /// against `splash.css:21`'s 200) and, since §62, it is only on this screen while the
-  /// screen is paused. Reaching it must not count as first input: the curtain would lift the
-  /// instant it was touched, and the bug report the CEO was opening would start from the
-  /// shell instead of from the opening screen he was actually looking at. That is precisely
-  /// the outcome §15 names — "reporting a bug must never require navigating away from the
-  /// screen the bug is on" — and it is why he put the button on the paused screen at all.
-  /// The exemption covers the whole `.settings` wrapper, so the menu's own rows, and a space
-  /// pressed on a focused row inside it, belong to the menu and never to this file.
-  ///
-  /// THE SPACE KEY. It holds the screen, and a second press resumes and goes. It is consumed
-  /// — `preventDefault` and `stopPropagation` — because it is this surface's control while
-  /// this surface is up: `main.js` has focused the composer by then (`main.js:7669`), and a
-  /// space that paused the opening screen AND typed a character into the thread behind it
-  /// would be one keystroke doing two things. A held-down key repeats; the repeats are
-  /// swallowed rather than toggled on, because holding space is one press to a person.
-  ///
-  /// AND WHAT THE MENU'S BUST A BUG OPENS (round 21, CEO §115). The report opens in the Rich
-  /// panel ON TOP of this held screen (`#bugdock`, z-index 298, the app's top layer), and the user
-  /// answers it there: a click into it, and every key typed into it, spaces included, belongs to
-  /// the report. Measured with this exemption taken out (`tests/bug-report.js`, "Bust a bug on
-  /// the held opening screen"): the first click into the answer box took the screen the bug is on
-  /// down. A first key would have too, and a space would have been eaten by the branch below as
-  /// the hold's own toggle rather than typed.
-  ///
-  /// Everything else still dismisses on first input, unchanged, paused or not.
-  function onInput(e) {
-    var t = e && e.target;
-    if (t && t.closest && t.closest(".settings, #bugdock")) return;
-    if (e.type === "keydown" && isSpace(e)) {
-      e.preventDefault();
-      e.stopPropagation();
-      if (e.repeat) return;
-      if (paused) resumeNow();
-      else pauseNow();
-      return;
-    }
-    // ESCAPE TAKES THE CURTAIN DOWN AND NOTHING ELSE, and this is the third instance of one
-    // defect rather than a new rule.
-    //
-    // MEASURED AT dcebed09, WebKit, on a Mac missing its engine: `init()` opens the engine
-    // offer while this curtain is still up (z-index 200 over `.overlay`'s 60), so it is on
-    // screen in the DOM and behind a full-screen picture to a person. `main.js`'s Escape
-    // machinery asks `isOnScreen()`, which tests `hidden`, `display` and `visibility` and has
-    // no idea what is painted over what — so one Escape here took the curtain down AND pressed
-    // "Not now" on a question he had never seen. Result, measured: `#setup-sheet.hidden` true,
-    // the offer gone for the session, and an app that looks perfectly normal and cannot answer
-    // anything. That is Ray's candidate .15 (`esc-20260919T152225Z-2e44d112`), reached by the
-    // key a person presses to get a curtain out of the way.
-    //
-    // WHY ONLY ESCAPE, and not every first input. His first LETTER must still reach the
-    // composer — §5.5 forbids anything delaying on this surface, and swallowing the "h" of the
-    // first thing he ever types would be a worse instrument than the one this fixes. Escape is
-    // not content. On this surface it means exactly one thing, the curtain is already going,
-    // and a dismissal that also dismisses something it is covering is one keystroke doing two
-    // jobs — the same argument §62 makes two branches above for the space bar.
-    if (e.type === "keydown" && e.key === "Escape" && !e.metaKey && !e.ctrlKey && !e.altKey) {
-      e.preventDefault();
-      e.stopPropagation();
-      yieldNow("first-input");
-      return;
-    }
-    yieldNow("first-input");
-  }
-
-  /// Get out of the way. Called by `main.js` when the app is usable, by the CEO's first
-  /// keystroke or touch, and by the ceiling - whichever happens first, and only once.
+  /// Get out of the way. Called by `main.js` when the app is usable and by the ceiling -
+  /// whichever happens first, and only once. ROUND 85: never by the user's hand.
   function yieldNow(reason) {
-    if (yielded) return;
-
-    // THE SPACE KEY'S HOLD, AND THE THREE CALLERS IT APPLIES TO (CEO §62).
-    //
-    // *"stop it from automatically switching from splash screen to home screen"* - so the
-    // three callers that switch BY THEMSELVES are refused while the screen is held, and are
-    // refused by name rather than by a default, because the list is the ruling: `app-ready`
-    // is `main.js` reporting the shell usable, `held` is that same yield coming back after
-    // the remainder of the hold, and `ceiling` is the failsafe. Nothing else is automatic.
-    //
-    // WHAT IS DELIBERATELY NOT IN THE LIST: `first-input` (his hand - §5.5), `resume` (his
-    // hand again, and the whole point of the second press), and any caller a harness invents.
-    // A hold that could swallow an explicit call would be a surface that can wedge, and this
-    // one is `pointer-events: none` over a live app precisely so it never can.
-    if (paused && (reason === "app-ready" || reason === "held" || reason === "ceiling")) {
-      state.deferred = reason;
-      return;
-    }
-    // Any other caller getting through while the screen is held takes the hold off on its
-    // way past, so the clock, the class and `state.paused` cannot be left saying "held" on a
-    // surface that has already decided to go.
-    if (paused) unpause();
+    if (yielded || (state.native && reason !== "native-finished")) return;
 
     // THE HOLD, AND THE ONE CALLER IT APPLIES TO.
     //
     // `app-ready` is the ceremony finishing early: the app became usable before the
-    // composition had had its three seconds. That one waits out the remainder. Everything
-    // else goes now, and the two that matter are exactly the two that must never be made to
-    // wait - "first-input" is the CEO's hand, and §5.5 forbids anything on this surface that
-    // is delaying; "ceiling" is the failsafe, and a failsafe that could itself be deferred
-    // is not one.
-    //
-    // `yielded` is deliberately NOT set here, so a keystroke arriving during the hold still
-    // takes the fast path and reports its own reason rather than being swallowed as a
-    // duplicate.
+    // composition had had its three seconds. That one waits out the remainder, so the screen
+    // plays to its end. The ceiling goes now: a failsafe that could itself be deferred is not
+    // one.
     if (reason === "app-ready") {
       var left = holdRemaining();
       if (left > 0) {
@@ -1528,13 +1321,12 @@
       clearTimeout(ceiling);
       ceiling = null;
     }
-    window.removeEventListener("keydown", onInput, true);
-    window.removeEventListener("pointerdown", onInput, true);
+    listen(false);
     if (!node) return;
     // Pin the composition where it was going BEFORE fading it, so a launch that finishes
     // mid-ceremony shows a finished mark on its way out rather than unlit metal.
     // ROUND 74: a bar that had landed is handed to the home screen; one cut short is not.
-    var hadLanded = !!(bar && bar.landed);
+    var hadLanded = state.native || !!(bar && bar.landed);
     node.classList.add("splash--settled");
     settleBar();
     if (RO) {
@@ -1542,7 +1334,11 @@
       if (hadLanded && !replaying) RO.handover(node);
     }
     node.classList.add("splash--yielding");
-    setTimeout(removeSelf, FADE_MS + 40);
+    if (state.native) {
+      Promise.resolve(window.__TAURI_INTERNALS__.invoke("splash_native_dismiss", { animated: true })).then(afterFade);
+    } else {
+      setTimeout(afterFade, FADE_MS + 40);
+    }
     // Drop the always-dark clamp as the curtain goes, not after it has gone: the fade is
     // the app arriving, and the control crossing over with it is the same "one system, two
     // lightings" move every other element makes.
@@ -1550,10 +1346,10 @@
   }
 
   // ROUND 74. THE GALLERY'S PLAY. This file used to have no path that showed the screen a
-  // second time, by design. This is that path, and it is the only one: the same build, the same
-  // clock, the same space key and the same first-click-leaves, for exactly the screen's own
-  // time. It is asked for by a person pressing Play; nothing else calls it. It never joins the
-  // shell's pictures and reports nothing to the shell: it is not a start.
+  // second time, by design. This is that path, and it is the only one: the same build and the
+  // same clock, for exactly the screen's own time, and (ROUND 85) as deaf to the pointer and
+  // the keys as a start is. It is asked for by a person pressing Play; nothing else calls it.
+  // A replay stays in the page and reports nothing to the launch tracker.
   function replay(openingId, done) {
     if (node || !RO) return false;
     var candidates = pool();
@@ -1563,17 +1359,12 @@
     }
     if (!entry) return false;
     yielded = false;
-    paused = false;
-    pausedTotal = 0;
-    pausedSince = null;
     heldMoment = null;
     state.barStopped = false;
-    state.paused = false;
-    state.deferred = null;
     state.heldAt = null;
     // The start's own record is kept and put back when the replay has left: a replay is not
     // a start, and what `state` says about the launch stays what happened at the launch.
-    replayKept = { barPasses: state.barPasses, barStopped: state.barStopped, pauses: state.pauses, pausedMs: state.pausedMs, deferred: state.deferred, hold: holdMs };
+    replayKept = { barPasses: state.barPasses, barStopped: state.barStopped, hold: holdMs };
     holdMs = Math.round(secondsFor(entry) * 1000);
     replaying = typeof done === "function" ? done : function () {};
     try {
@@ -1588,8 +1379,7 @@
     shownAt = clock();
     if (bar) raf = requestAnimationFrame(tick);
     if (window.RichTheme) window.RichTheme.forceDark(true);
-    window.addEventListener("keydown", onInput, true);
-    window.addEventListener("pointerdown", onInput, true);
+    listen(true);
     ceiling = setTimeout(function () {
       yieldNow("ceiling");
     }, holdMs);
@@ -1597,7 +1387,7 @@
   }
 
   // -------------------------------------------------------------------------------------
-  // HOLDING AND STARTING (see HELD AT A MOMENT, AND STARTED FROM ONE, at the top)
+  // FRAME EXPORT
   // -------------------------------------------------------------------------------------
 
   /// Every animation on this surface, read off the document: the CSS stages, the strike, the
@@ -1608,24 +1398,6 @@
       var t = a.effect && a.effect.target;
       return !!t && (t === node || node.contains(t));
     });
-  }
-
-  /// Pause or play every animation on this surface where it stands. One that has already run to
-  /// its end is left alone either way: `play()` on an animation at its end starts it again from
-  /// the beginning, and a stage that rose once must never rise twice.
-  function setAnimationsPlaying(on) {
-    var all = splashAnimations();
-    for (var i = 0; i < all.length; i++) {
-      try {
-        var a = all[i];
-        var end = a.effect && a.effect.getComputedTiming ? a.effect.getComputedTiming().endTime : Infinity;
-        if (Number(a.currentTime) >= end) continue;
-        if (on) a.play();
-        else a.pause();
-      } catch (_e) {
-        /* an animation that will not move stays where it stands */
-      }
-    }
   }
 
   /// HOLD the splash at `ms` after its first frame: everything on it stands exactly where the
@@ -1639,13 +1411,14 @@
       cancelAnimationFrame(raf);
       raf = null;
     }
+    var landing = RO ? RO.seekLanding(t) : null;
     var all = splashAnimations();
     for (var i = 0; i < all.length; i++) {
       try {
         all[i].pause();
-        all[i].currentTime = t;
+        all[i].currentTime = landing !== null && /^ro-land-/.test(all[i].animationName) ? t - landing : t;
       } catch (_e) {
-        /* see setAnimationsPlaying */
+        /* Skip an animation WebKit cannot seek. */
       }
     }
     paintMoment(t);
@@ -1653,118 +1426,8 @@
     return true;
   }
 
-  /// START the splash from the moment it is held at. The clock carries on from that moment, so
-  /// the bar, the hold and the ceiling all count from the splash's first frame.
-  function release() {
-    if (heldMoment === null) return;
-    var t = heldMoment;
-    heldMoment = null;
-    shownAt = runningClock() - t;
-    state.heldAt = null;
-    if (paused) return; // the space key holds it; its second press lets it go
-    // Each animation runs on from the held moment AS OF NOW, on the same clock as the bar: its
-    // start is set rather than asked for with `play()`, which would wait for the page's next
-    // frame (on a busy page, a tenth of a second and more) and leave the stages that far behind
-    // the bar and behind the opening the page has just joined.
-    var real = window.performance && window.performance.now ? window.performance.now() : null;
-    var all = splashAnimations();
-    for (var i = 0; i < all.length; i++) {
-      try {
-        if (real !== null && document.timeline) all[i].startTime = real - t;
-        else all[i].play();
-      } catch (_e) {
-        /* see setAnimationsPlaying */
-      }
-    }
-    if (bar && !state.barStopped && raf === null) raf = requestAnimationFrame(tick);
-  }
-
-  /// THE PART OF THE PAGE THE OPENING CHANGES, in CSS pixels `[left, top, width, height]`:
-  /// every element inside a moving thing (an animation's target, or the bar, which the clock
-  /// paints), as it stands at the opening's first and last moments, with its shadows and its
-  /// outline. The opening's later pictures are only this part, laid over its first picture
-  /// (Sage's plan, section 1: "each later one is only the part that changes"); the splash
-  /// suite composites them that way and holds the result against the running splash, so a
-  /// part that is missed here is a failed commit, not a quiet seam.
-  function openingRegion(endMs) {
-    if (!node || shownAt === null) return null;
-    var was = heldMoment;
-    var box = null;
-    function grow(l, t, r, b) {
-      if (!(r > l) || !(b > t)) return;
-      if (!box) box = { l: l, t: t, r: r, b: b };
-      else {
-        if (l < box.l) box.l = l;
-        if (t < box.t) box.t = t;
-        if (r > box.r) box.r = r;
-        if (b > box.b) box.b = b;
-      }
-    }
-    function px(v) {
-      var n = parseFloat(v);
-      return isFinite(n) ? n : 0;
-    }
-    /// A box-shadow list's reach outside the element: each shadow's offset plus blur plus spread.
-    function shadowReach(r, list) {
-      if (!list || list === "none") return;
-      var depth = 0;
-      var parts = [];
-      var cur = "";
-      for (var i = 0; i < list.length; i++) {
-        var c = list.charAt(i);
-        if (c === "(") depth++;
-        if (c === ")") depth--;
-        if (c === "," && depth === 0) {
-          parts.push(cur);
-          cur = "";
-        } else cur += c;
-      }
-      parts.push(cur);
-      for (var j = 0; j < parts.length; j++) {
-        if (/\binset\b/.test(parts[j])) continue;
-        var nums = parts[j].replace(/\([^)]*\)/g, "").match(/-?[\d.]+px/g) || [];
-        var ox = px(nums[0]), oy = px(nums[1]), blur = px(nums[2]), spread = px(nums[3]);
-        grow(r.left + ox - blur - spread, r.top + oy - blur - spread, r.right + ox + blur + spread, r.bottom + oy + blur + spread);
-      }
-    }
-    function measure() {
-      var movers = splashAnimations().map(function (a) { return a.effect.target; });
-      if (bar) movers.push(bar.root);
-      // ROUND 74: what the openings paint from the clock (the lights' canvas).
-      if (RO) movers = movers.concat(RO.movers());
-      for (var i = 0; i < movers.length; i++) {
-        var els = [movers[i]].concat(Array.prototype.slice.call(movers[i].querySelectorAll("*")));
-        for (var j = 0; j < els.length; j++) {
-          var r = els[j].getBoundingClientRect();
-          if (!r.width && !r.height) continue;
-          grow(r.left, r.top, r.right, r.bottom);
-          var cs = getComputedStyle(els[j]);
-          shadowReach(r, cs.boxShadow);
-          var ow = cs.outlineStyle !== "none" ? px(cs.outlineWidth) + Math.max(0, px(cs.outlineOffset)) : 0;
-          if (ow) grow(r.left - ow, r.top - ow, r.right + ow, r.bottom + ow);
-          // A filter's reach (a drop shadow, a blur) is not in its box; give it room.
-          if (cs.filter && cs.filter !== "none") grow(r.left - 48, r.top - 48, r.right + 48, r.bottom + 48);
-        }
-      }
-    }
-    holdAt(0);
-    measure();
-    holdAt(endMs);
-    measure();
-    if (was === null) holdAt(0);
-    else holdAt(was);
-    if (!box) return null;
-    var w = window.innerWidth;
-    var h = window.innerHeight;
-    var l = Math.max(0, Math.floor(box.l) - 2);
-    var t = Math.max(0, Math.floor(box.t) - 2);
-    var r = Math.min(w, Math.ceil(box.r) + 2);
-    var b = Math.min(h, Math.ceil(box.b) + 2);
-    return [l, t, r - l, b - t];
-  }
-
   /// THE SHELL'S PICK, from the object it puts in front of every page script, or `null`. The
-  /// rules run in the shell when the app quits (`richos-core` `launch::pick_splash`); this page
+  /// rules run in the shell at launch (`richos-core` `launch::pick_splash`); this page
   /// draws what was picked and no longer chooses, except where nothing was injected or the id is
   /// one it does not know (`choose()` below is that fallback).
   function shellPick() {
@@ -1777,7 +1440,7 @@
     return null;
   }
 
-  /// Drawing an opening (the web view nobody sees, at quit): build the picked splash, hold it at
+  /// Exporting a splash or a share card: build the picked splash, hold it at
   /// its first moment, and nothing else: no listeners, no ceiling, no report.
   function drawing() {
     try {
@@ -1787,63 +1450,36 @@
     }
   }
 
-  var tookOver = false;
+  // The native layer owns every visible splash frame. The page keeps the covered
+  // state until the shell confirms that the layer's fade has finished.
+  function playNative(entry) {
+    var invoke = window.__TAURI_INTERNALS__.invoke.bind(window.__TAURI_INTERNALS__);
+    Promise.resolve(invoke("splash_native_finished")).then(function (finished) {
+      if (finished) {
+        holdAt(holdMs);
+        yieldNow("native-finished");
+      } else {
+        recover();
+      }
+    }, recover);
 
-  /// THE PAGE TAKES OVER FROM THE OPENING. The shell has its saved pictures of this splash's
-  /// first second playing above this page; it says when the first of them reached the glass and
-  /// how long they run. This page draws the splash at the moment they have reached (or holds at
-  /// their last picture when it is later than they are long), reports, and the shell takes the
-  /// pictures down in that step. Both show the same moment of the same splash, drawn by the same
-  /// code, so nothing moves. With no answer it starts from the beginning, as it always did.
-  function takeOver(invoke) {
-    tookOver = true;
-    var report = function (moment) {
-      var done = function () {
-        release();
-      };
-      requestAnimationFrame(function () {
-        requestAnimationFrame(function () {
-          try {
-            Promise.resolve(invoke("first_frame_painted", moment === null ? {} : { moment: moment })).then(done, done);
-          } catch (_e) {
-            done();
-          }
-        });
+    function recover() {
+      Promise.resolve(invoke("splash_native_dismiss", { animated: false })).then(function () {
+        if (!node || yielded) return;
+        removeSelf();
+        state.native = false;
+        shownAt = null;
+        heldMoment = null;
+        state.heldAt = null;
+        node = build(entry);
+        document.body.insertBefore(node, document.body.firstChild);
+        shownAt = clock();
+        if (bar) raf = requestAnimationFrame(tick);
+        // The recovery shows the whole authored animation, including frame zero.
+        ceiling = setTimeout(function () { yieldNow("ceiling"); }, holdMs + CEILING_GRACE_MS);
+        yieldNow("app-ready");
       });
-    };
-    var fromStart = function () {
-      state.joinedAt = null;
-      release();
-      report(null);
-    };
-    var asked;
-    try {
-      asked = Promise.resolve(invoke("splash_take_over"));
-    } catch (_e) {
-      fromStart();
-      return;
     }
-    asked.then(function (r) {
-      if (!r || typeof r.firstFrameMs !== "number" || typeof r.openingMs !== "number") {
-        fromStart();
-        return;
-      }
-      var elapsed = Date.now() - r.firstFrameMs;
-      var at = elapsed < r.openingMs ? elapsed : r.openingMs;
-      if (!(at >= 0)) at = 0;
-      holdAt(at);
-      state.joinedAt = Math.round(at);
-      // Inside the opening: it is still playing, so the page plays from the same moment. Past
-      // its end: the page holds at the last picture until the pictures are down.
-      if (elapsed < r.openingMs) release();
-      if (ceiling !== null) {
-        clearTimeout(ceiling);
-        ceiling = setTimeout(function () {
-          yieldNow("ceiling");
-        }, Math.max(0, holdMs + CEILING_GRACE_MS - at));
-      }
-      report(Math.round(at));
-    }, fromStart);
   }
 
   function start() {
@@ -1872,10 +1508,13 @@
     }
     state.pickedBy = entry ? "shell" : "page";
     if (!entry) entry = choose(candidates, ordinal);
+    state.native = !!(picked && picked.native && state.pickedBy === "shell" &&
+      window.__TAURI_INTERNALS__ && typeof window.__TAURI_INTERNALS__.invoke === "function");
     holdMs = Math.round(secondsFor(entry) * 1000);
     state.seconds = holdMs / 1000;
     try {
       node = build(entry);
+      if (state.native) node.classList.add("splash--native");
       document.body.insertBefore(node, document.body.firstChild);
     } catch (e) {
       removeSelf();
@@ -1886,8 +1525,7 @@
     state.variationId = entry.id;
     shownAt = clock();
     if (drawing()) {
-      // The web view nobody sees, drawing the opening at quit: held at the first moment, and the
-      // shell moves the hold from there. Nothing here is for a person.
+      // The exporter samples this timeline at fixed times.
       state.drawing = true;
       if (window.__RICHOS_LAUNCH__.card === true) {
         // ROUND 74, "Save image": the same hidden page, held at the finished frame with the
@@ -1902,45 +1540,25 @@
       holdAt(0);
       return;
     }
-    var invoke = window.__TAURI_INTERNALS__ && typeof window.__TAURI_INTERNALS__.invoke === "function"
-      ? window.__TAURI_INTERNALS__.invoke.bind(window.__TAURI_INTERNALS__)
-      : null;
-    // THE SHELL'S OPENING IS ON THE GLASS ABOVE THIS PAGE: hold at the first moment (nobody sees
-    // this page yet) and join the opening where it has reached.
-    var joining = !!(entry && picked && picked.opening === true && state.pickedBy === "shell" && invoke);
-    state.opening = joining;
-    if (joining) holdAt(0);
-    // ONE PASS OF THE LOADING BAR, STARTING NOW. `shownAt` is the clock it runs on and the
-    // clock the hold is measured against, so the bar reaches 100% at exactly the instant the
-    // hold is served - the same number, not two numbers that agree.
-    else if (bar) raf = requestAnimationFrame(tick);
-    // §15's ONE PERMANENT EXCEPTION: "because of its nature the start screen will always
-    // need to be in dark mode", and no switch reaches it. The curtain's own composition was
-    // always dark — it draws from `--splash-*` properties this file sets, never from the
-    // app's theme tokens — but the SETTINGS BUTTON sits above the curtain (it has to; its
-    // floor is "Bust a bug" from every screen) and it does read those tokens. Without this
-    // clamp a CEO on light mode gets an ivory control floating on a midnight composition.
-    //
-    // `RichTheme` and not `RichSettings`: theme-boot.js is loaded in `<head>`, so it is
-    // certain to exist here, whereas settings-button.js loads after this file. The clamp is
-    // a FORCE flag and never writes the preference, so light mode is exactly where he left
-    // it the moment the curtain lifts.
     if (window.RichTheme) window.RichTheme.forceDark(true);
-    window.addEventListener("keydown", onInput, true);
-    window.addEventListener("pointerdown", onInput, true);
-    ceiling = setTimeout(function () {
-      yieldNow("ceiling");
-    }, holdMs + CEILING_GRACE_MS);
-    if (joining) takeOver(invoke);
+    listen(true);
+    if (state.native) {
+      holdAt(0);
+      playNative(entry);
+    } else {
+      if (bar) raf = requestAnimationFrame(tick);
+      ceiling = setTimeout(function () {
+        yieldNow("ceiling");
+      }, holdMs + CEILING_GRACE_MS);
+    }
   }
 
   // THE PAGE HAS TAKEN OVER (Sage's plan 2026-11-14, rules 3 and 5): two animation frames after
   // this script ran, the page, with its splash if one is drawn, has painted at least once. The
   // shell then starts what waited for the page and writes its launch line. Reported whether or
   // not a splash is drawn; the shell counts the first report of a launch. No shell, no report.
-  // A page joining the shell's opening reports from `takeOver`, once it has joined.
   function reportPainted() {
-    if (tookOver || drawing()) return;
+    if (drawing()) return;
     if (!window.__TAURI_INTERNALS__ || typeof window.__TAURI_INTERNALS__.invoke !== "function") return;
     requestAnimationFrame(function () {
       requestAnimationFrame(function () {
@@ -1973,16 +1591,13 @@
     /// It is a pure function of the pool and the ordinal; that is what makes it testable
     /// without launching anything, and what makes the later criteria a change to one place.
     choose: choose,
-    /// ROUND 74: the gallery's Play, and whether a screen is up (the gallery leaves the keys to it).
+    /// ROUND 74: the gallery's Play, and whether a screen is up.
     replay: replay,
     isUp: function () {
       return !!node;
     },
-    /// HELD AT A MOMENT, AND STARTED FROM ONE: the shell draws the opening at quit with these
-    /// (`src-tauri/src/splash_opening.rs`), and the splash suite holds every entry to them.
+    /// Build-time export and Save Image sample the same authored clock.
     holdAt: holdAt,
-    release: release,
-    openingRegion: openingRegion,
     /// Where the splash stands now, in ms after its first frame (`null` before it is up): the
     /// reading the bar and the hold are painted from. Read-only; the suite compares by it.
     moment: function () {

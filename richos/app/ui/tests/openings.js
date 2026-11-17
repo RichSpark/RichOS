@@ -186,7 +186,7 @@ async function main() {
     for (const [what, opts] of [
       ["switched off", { record: { sound: false } }],
       ["no record (a plain browser)", { record: null }],
-      ["the page drawn at quit", { record: { sound: true }, launch: { kind: "fresh", ordinal: null, draw: true, splash: { id: "round-11/v1" } }, url: "file://" + path.join(UI_DIR, "splash-opening.html") }],
+      ["the frame export page", { record: { sound: true }, launch: { kind: "fresh", ordinal: null, draw: true, splash: { id: "round-11/v1" } }, url: "file://" + path.join(UI_DIR, "splash-opening.html") }],
     ]) {
       page = await open(browser, Object.assign({ virtualTime: true }, opts));
       await page.clock.runFor(3500);
@@ -268,7 +268,7 @@ async function main() {
     return seen.cards.length + " cards, 4 sealed tiles, none naming what is behind it";
   });
 
-  await run.check("6  Play runs that opening full screen exactly as it ran, a click takes it away, and he is back where he was", async () => {
+  await run.check("6  Play runs the whole opening and returns focus to the gallery", async () => {
     const page = await openGallery(browser, { record: { company: "Acme Robotics" } });
     const before = await page.evaluate(() => JSON.stringify([window.RichSplash.state.reason, window.RichSplash.state.variationId]));
     await page.click('.opg-card[data-opening="power-100k"] .opg-btn--play');
@@ -280,35 +280,33 @@ async function main() {
         variation: n.dataset.variation,
         figure: !!n.querySelector(".ro-figure"),
         caption: n.querySelector(".ro-caption").textContent,
-        company: n.querySelector(".ro-company").textContent,
-        collector: n.querySelector(".ro-collector").textContent,
+        company: !!n.querySelector(".ro-company"),
+        collector: !!n.querySelector(".ro-collector"),
         above: Number(getComputedStyle(n).zIndex) > Number(getComputedStyle(document.getElementById("openings-page")).zIndex),
       };
     });
     assertEqual(up.opening, "power-100k", "the opening that was asked for");
     assert(up.figure, "its number is on it");
     assertEqual(up.caption, "in AI power harnessed", "its line");
-    assertEqual(up.company, "Acme Robotics", "his company's line, under ours");
-    assertEqual(up.collector, "No. 7·Struck·Earned September 2, 2026", "the held line");
+    assertEqual(up.company, false, "the playback carries only shared artwork");
+    assertEqual(up.collector, false, "the preview omits the personal collector line");
     assert(up.above, "the opening plays above the gallery");
-    // The number counts up: whole by 3.0 s. Held at moments, so this reads the page, not a clock.
-    const counted = await page.evaluate(() => {
-      const at = (ms) => { window.RichSplash.holdAt(ms); return document.querySelector("#splash .ro-figure-num").textContent; };
-      const r = [at(0), at(600), at(1500), at(3000), at(4200)];
-      window.RichSplash.release();
-      return r;
+    await page.keyboard.press("Space");
+    await page.mouse.click(700, 80);
+    assert(await page.evaluate(() => window.RichSplash.isUp()), "input ended the preview");
+    await page.waitForFunction(() => !window.RichSplash.isUp());
+    const artwork = await open(browser, {
+      launch: { kind: "fresh", draw: true, splash: { id: "opening/power-100k" } },
+      url: "file://" + path.join(UI_DIR, "splash-opening.html"),
     });
+    const counted = await artwork.evaluate(() => [0, 600, 1500, 3000, 4200].map((ms) => {
+      window.RichSplash.holdAt(ms);
+      return document.querySelector("#splash .ro-figure-num").textContent;
+    }));
+    await artwork.__ctx.close();
     assertEqual(counted[0] + " " + counted[1], "0 0", "it starts at nothing");
     assert(Number(counted[2].replace(/,/g, "")) > 0 && Number(counted[2].replace(/,/g, "")) < 100000, "it is counting at 1.5 s: " + counted[2]);
     assertEqual(counted[3] + " " + counted[4], "100,000 100,000", "it is whole by 3.0 s and stays");
-    // The space key holds it and shows the line that names it; the same key lets it go.
-    await page.keyboard.press(" ");
-    const held = await page.evaluate(() => ({ paused: window.RichSplash.state.paused, line: getComputedStyle(document.querySelector("#splash .ro-collector")).opacity }));
-    assert(held.paused, "the space key did not hold it");
-    await page.waitForFunction(() => getComputedStyle(document.querySelector("#splash .ro-collector")).opacity === "1");
-    // A click takes it away, and the gallery is still there with the keyboard on Play.
-    await page.mouse.click(700, 80);
-    await page.waitForFunction(() => !window.RichSplash.isUp());
     const after = await page.evaluate(() => ({
       open: window.RichOpeningsPage.isOpen(),
       focus: document.activeElement.className + "@" + (document.activeElement.closest(".opg-card") || { dataset: {} }).dataset.opening,
@@ -320,7 +318,7 @@ async function main() {
     assert(after.open, "the gallery closed when the opening left");
     assertEqual(after.focus, "opg-btn opg-btn--play@power-100k", "focus is back on the Play he pressed");
     assertEqual(after.launch, before, "a replay rewrote the start's own record");
-    assertEqual(after.replayed + " / " + after.how, "opening/power-100k / first-input", "what was replayed, and how it left");
+    assertEqual(after.replayed + " / " + after.how, "opening/power-100k / ceiling", "what was replayed, and how it left");
     assertEqual(after.leftovers, 0, "something of the opening was left on the page");
     // Left alone it leaves by itself when its own time is up (3 s for a material).
     await page.click('.opg-card[data-opening="material-leather"] .opg-poster');
@@ -334,7 +332,7 @@ async function main() {
     assertEqual((await audio(page)).length, 0, "with the sound off a replay made a sound file ready");
     assertEqual(page.__errors.length, 0, "page errors: " + page.__errors.join("; "));
     await page.__ctx.close();
-    return "power-100k: " + counted.join(" → ") + "; held by the space key; left on a click; material-leather left by itself after " + took + " ms";
+    return "power-100k: " + counted.join(" → ") + "; played through keyboard and mouse input; material-leather left by itself after " + took + " ms";
   });
 
   await run.check("7  Make it my opening: RichOS starts with that one from then on, and only one that is his can be picked", async () => {
@@ -466,41 +464,23 @@ async function main() {
     return "fill " + m.early.fill + "% at 2.1 s, 100% at 2.2 s; flare on at 2.4 s, off by 2.83 s; still at 3.0 s";
   });
 
-  await run.check("10  the gold answers his hand, moving the pointer dismisses nothing, and the lamp rests for the first second", async () => {
-    // Held at moments in the page the shell draws from: the first second, which is drawn ahead
-    // as pictures, never moves the lamp; after it, left alone, the light drifts.
-    const drawn = await open(browser, { launch: { kind: "fresh", ordinal: null, draw: true, splash: { id: "round-11/v1" } }, url: "file://" + path.join(UI_DIR, "splash-opening.html") });
-    const lamp = await drawn.evaluate(() => {
-      const at = (ms) => { window.RichSplash.holdAt(ms); const s = document.getElementById("splash").style; return s.getPropertyValue("--ro-lx") + " " + s.getPropertyValue("--ro-ly"); };
-      return [at(0), at(500), at(1000), at(2000), at(2000), at(2900)];
-    });
-    assertEqual(lamp.slice(0, 3).join(" | "), "40.00% 40.00% | 40.00% 40.00% | 40.00% 40.00%", "the lamp during the first second");
-    assert(lamp[3] !== lamp[0] && lamp[5] !== lamp[3], "left alone, the light does not drift: " + lamp.join(" | "));
-    assertEqual(lamp[3], lamp[4], "the same moment is the same picture");
-    await drawn.__ctx.close();
-
-    // On the page's own clock, stepped by hand, so a slow machine cannot run the splash out
-    // from under the pointer.
-    const page = await open(browser, { virtualTime: true });
-    await page.clock.runFor(200);
-    await page.mouse.move(1100, 250);
-    await page.mouse.move(1150, 260);
-    await page.clock.runFor(600);
-    assert(await page.evaluate(() => parseFloat(document.getElementById("splash").style.getPropertyValue("--ro-lx")) > 60), "the lamp did not follow the pointer: " + (await page.evaluate(() => document.getElementById("splash").style.getPropertyValue("--ro-lx"))));
-    const s = await page.evaluate(() => {
-      const n = document.getElementById("splash");
-      return {
-        up: !!n && !window.RichSplash.state.reason,
-        pool: !!n.querySelector(".ro-pool") && n.querySelector(".ro-pool").style.getPropertyValue("--ro-px") !== "",
-        glints: n.querySelectorAll(".ro-glint").length,
-        bar: !!n.querySelector(".ro-bar-glint"),
-        css: getComputedStyle(n.querySelector(".splash-lamp")).backgroundImage.includes("at"),
-      };
-    });
-    assert(s.up, "moving the pointer dismissed the splash");
-    assert(s.pool && s.glints >= 2 && s.bar, "the pool on the mat, the glints on both marks and the bar's glint: " + JSON.stringify(s));
-    await page.__ctx.close();
-    return "lamp " + lamp[0] + " for the first second, " + lamp[3] + " at 2.0 s, " + lamp[5] + " at 2.9 s; follows the pointer; nothing dismissed";
+  await run.check("10  the lamp stays in its authored position across the catalog", async () => {
+    const ids = JSON.parse(read("openings-catalog.js").replace(/^[\s\S]*?=\s*/, "").replace(/;\s*$/, "")).openings;
+    for (const { id } of ids) {
+      const page = await open(browser, { launch: { kind: "fresh", draw: true, splash: { id: "opening/" + id } }, url: "file://" + path.join(UI_DIR, "splash-opening.html") });
+      await page.mouse.move(1150, 260);
+      const light = await page.evaluate(() => {
+        const root = document.getElementById("splash");
+        return [0, 1500, 2900].map((ms) => {
+          window.RichSplash.holdAt(ms);
+          return [getComputedStyle(root.querySelector(".splash-lamp")).backgroundImage, root.querySelectorAll(".ro-pool, .ro-glint, .ro-bar-glint").length];
+        });
+      });
+      assert(light[0][0].includes("40% 40%"), id + ": the lamp moved from its authored origin");
+      for (const sample of light) assertEqual(sample, [light[0][0], 0], id + ": pointer light or glint");
+      await page.__ctx.close();
+    }
+    return ids.length + " openings use the authored lamp throughout";
   });
 
   await run.check("11  what a milestone paints stands at a moment: the same held moment is the same picture, lights and all", async () => {
@@ -513,18 +493,28 @@ async function main() {
         for (let i = 3; i < d.length; i += 4) { if (d[i]) lit++; total += d[i]; }
         return lit + ":" + total;
       };
-      const at = (ms) => { window.RichSplash.holdAt(ms); return { lights: sum(), n: document.querySelector("#splash .ro-figure-num").textContent }; };
+      const at = (ms) => {
+        window.RichSplash.holdAt(ms);
+        const animation = document.getAnimations().find((a) => a.animationName === "ro-land-lit");
+        return { lights: sum(), n: document.querySelector("#splash .ro-figure-num").textContent,
+          landed: document.getElementById("splash").classList.contains("splash--landed"),
+          glow: animation ? [animation.playState, animation.currentTime] : null };
+      };
       const a = at(900), b = at(300), c = at(900), end = at(4200);
-      return { a, b, c, end, region: window.RichSplash.openingRegion(1000), w: innerWidth, h: innerHeight };
+      const glow = at(4380), rewound = at(300), repeated = at(4380);
+      return { a, b, c, end, glow, rewound, repeated };
     });
     assertEqual(JSON.stringify(r.a), JSON.stringify(r.c), "0.9 s, held twice with another moment between");
     assertEqual(r.b.lights, "0:0", "before 0.6 s no light is on");
     assert(r.a.lights !== "0:0", "at 0.9 s no light has come on");
     assertEqual(r.end.n, "500", "the number is whole at the landing");
     assert(Number(r.end.lights.split(":")[0]) > Number(r.a.lights.split(":")[0]), "more lights are on at the landing than at 0.9 s");
-    assertEqual(JSON.stringify(r.region), JSON.stringify([0, 0, r.w, r.h]), "the part the drawn-ahead opening covers is the whole page, since the lights are everywhere");
+    assert(r.end.landed, "the gold bar's landing appears at 4.2 s");
+    assertEqual(r.glow.glow, ["paused", 180], "the film includes the light thrown back from the landing");
+    assertEqual(r.rewound, r.b, "seeking before the landing clears its effects");
+    assertEqual(r.repeated, r.glow, "seeking to the landing again paints the same frame");
     await page.__ctx.close();
-    return "0.9 s: " + r.a.lights + " (lit pixels:alpha) twice; landing: " + r.end.lights + "; region " + JSON.stringify(r.region);
+    return "0.9 s: " + r.a.lights + " (lit pixels:alpha) twice; landing: " + r.end.lights;
   });
 
   await run.check("12  every way in has its way out, and the home screen's keys stay off while the gallery covers it", async () => {
@@ -570,24 +560,6 @@ async function main() {
     assertEqual((await calls(page, "openings_state")).length, settled, "the page keeps asking after the count is done");
     assertEqual(page.__errors.length, 0, "page errors: " + page.__errors.join("; "));
     await page.__ctx.close();
-
-    // A SPLASH HELD WITH THE SPACE KEY shows the settings button, and Settings leads here: the
-    // held splash is above every page, so opening the gallery lets it go.
-    const held = await open(browser);
-    await held.keyboard.press(" ");
-    assert(await held.evaluate(() => window.RichSplash.state.paused && window.RichSplash.isUp()), "the space key did not hold the splash");
-    await held.waitForFunction(() => window.RichSettings && window.RichOpeningsPage);
-    await held.evaluate(() => window.RichSettings.openMenu());
-    await held.click("#openings-open");
-    await held.waitForFunction(() => window.RichOpeningsPage.isOpen() && !window.RichSplash.isUp());
-    const over = await held.evaluate(() => {
-      const b = document.querySelector("#openings-page .opg-back").getBoundingClientRect();
-      const top = document.elementFromPoint(b.x + b.width / 2, b.y + b.height / 2);
-      return { reason: window.RichSplash.state.reason, splash: document.querySelectorAll("#splash").length, top: top ? top.className : null };
-    });
-    assertEqual(over.reason + " / " + over.splash + " / " + over.top, "your-openings / 0 / opg-back", "why the held splash left, what is left of it, and what is on top where Back is");
-    assertEqual(held.__errors.length, 0, "page errors: " + held.__errors.join("; "));
-    await held.__ctx.close();
 
     // TOKEN SPEND IS A SCREEN ABOVE THIS PAGE, and Settings is reachable over it: opened from
     // there, the gallery sat under it (the review of 408e628f9). It steps aside now.
@@ -638,7 +610,7 @@ async function main() {
     assertEqual(sheet, "1 / true / false", "sheets up, the focus inside it, the gallery's body class");
     assertEqual(way.__errors.length, 0, "page errors: " + way.__errors.join("; "));
     await way.__ctx.close();
-    return "Back and Escape close it; Enter and Space reach nothing under it; a newly earned opening appears on the next open, and by itself while the spend is still being counted; a held splash and Token spend give way when the gallery opens; the gallery gives way to a sheet opened from Settings and leaves Settings its Escape";
+    return "Back and Escape close it; Enter and Space reach nothing under it; a newly earned opening appears on the next open, and by itself while the spend is still being counted; Token spend gives way when the gallery opens; the gallery gives way to a sheet opened from Settings and leaves Settings its Escape";
   });
 
   await run.check("13  Save image asks the shell for that opening's picture and says where it went; his company's line is saved", async () => {
@@ -649,17 +621,15 @@ async function main() {
     await page.fill("#opg-company", "Acme Robotics");
     await page.waitForFunction(() => window.__RICHOS_MOCK__.openingsRecord().company === "Acme Robotics");
     assertEqual(await page.evaluate(() => document.getElementById("opg-company").maxLength), 32, "the line's limit");
-    // The line is on the next opening he plays.
-    await page.click('.opg-card[data-opening="ruled-standard"] .opg-btn--play');
-    await page.waitForFunction(() => window.RichSplash.isUp());
-    assertEqual(await page.evaluate(() => document.querySelector("#splash .ro-company").textContent), "Acme Robotics", "his company's line on the opening");
-    const sizes = await page.evaluate(() => [parseFloat(getComputedStyle(document.querySelector("#splash .ro-company")).fontSize), parseFloat(getComputedStyle(document.querySelector("#splash .splash-line")).fontSize)]);
-    assert(sizes[0] <= sizes[1], "his company's line is larger than ours: " + sizes.join(" vs "));
-    await page.keyboard.press("Escape");
-    await page.waitForFunction(() => !window.RichSplash.isUp());
-    assert(await page.evaluate(() => window.RichOpeningsPage.isOpen()), "Escape over a playing opening closed the gallery too");
+    const card = await open(browser, {
+      launch: { kind: "fresh", draw: true, card: true, splash: { id: "opening/ruled-standard" } },
+      url: "file://" + path.join(UI_DIR, "splash-opening.html"),
+      record: { company: "Acme Robotics" },
+    });
+    assertEqual(await card.locator("#splash .ro-company").textContent(), "Acme Robotics", "the company line stays on the saved image");
+    await card.__ctx.close();
     await page.__ctx.close();
-    return "save_opening_image power-100k; company line saved and drawn";
+    return "Save image keeps the company line and playback uses the shared design";
   });
 
   await run.check("14  the handover: a landed bar leaves the splash for Talk to Rich; one cut short does not", async () => {

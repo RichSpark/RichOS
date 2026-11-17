@@ -25,9 +25,13 @@ mod first_frame;
 /// splash the rules picked is playing within 380 ms of the click", rules 1 and 2).
 mod splash_pick;
 mod openings;
-/// That splash's opening: drawn at quit in a web view nobody sees, played at the click.
+/// The gallery can render a share card. The launch uses a separate native player.
 #[cfg(target_os = "macos")]
 mod splash_opening;
+#[cfg(target_os = "macos")]
+mod splash_player;
+#[cfg(target_os = "macos")]
+mod splash_assets;
 /// One line per launch with its own milestones and which checks it ran (the same plan, rule 5).
 mod launch_timing;
 /// Every byte of the updated bundle and the engine, read late and in the background.
@@ -2837,23 +2841,25 @@ fn main() {
             }
             // What the page reads about his openings, in front of every page script.
             let openings_record = openings::page_record(&launch_store, &opening_settings, &app_version, launch_now);
-            // THE SPLASH PICKED AT THE LAST QUIT, and whether its opening can play (Sage's plan
-            // 2026-11-14, "the splash the rules picked is playing within 380 ms of the click",
-            // section 2): one small file read; nothing is chosen, drawn or checked here beyond
-            // comparing what the opening was made for with the window about to be built.
-            // EVERY FRESH START PLAYS IT (CEO, 2026-11-14: "We now also need to remove the settings
-            // toggle for disabling the splash screen. Because the splash screen is now needed for
-            // the illusion of a super-fast app launch."): there is no switch to read.
-            let splash_plays = launch_kind == LaunchKind::Fresh;
-            let splash = if splash_plays {
-                splash_pick::for_launch(&data_dir, &openings::splash_facts(&launch_store, &opening_settings, start_ordinal, launch_now))
+            let splash = (launch_kind == LaunchKind::Fresh)
+                .then(|| openings::splash_facts(&launch_store, &opening_settings, start_ordinal, launch_now))
+                .and_then(|facts| splash_pick::pick_for(&facts));
+            #[cfg(target_os = "macos")]
+            // A saved choice may predate downloaded packs. The page can play that same
+            // opening in full while the launch is still independent of the network.
+            let pack = splash.as_ref()
+                .filter(|_| !splash_player::reduce_motion())
+                .and_then(|entry| splash_player::locate(app.handle(), &data_dir, entry, opening_settings.sound));
+            #[cfg(target_os = "macos")]
+            let native_bar = pack.as_ref().and_then(|pack| pack.bar);
+            #[cfg(not(target_os = "macos"))]
+            let native_bar = None;
+            #[cfg(target_os = "macos")]
+            let mut pack = if activation.presentation == activation::Presentation::Regular {
+                pack.and_then(splash_player::prepare)
             } else {
                 None
             };
-            #[cfg(target_os = "macos")]
-            let reduce_motion = splash.is_some() && splash_opening::reduce_motion();
-            #[cfg(not(target_os = "macos"))]
-            let reduce_motion = false;
 
             // =====================================================================
             // HOW BIG IT OPENS, AND WHERE — ASKED OF THE DISPLAY
@@ -2897,11 +2903,11 @@ fn main() {
                 let placement =
                     window_geometry::decide_with(&displays, saved.take().as_ref(), preference);
                 eprintln!("[richos] window: {}", placement.describe());
-                // This window's splash, if it plays one, and the saved opening if it was made for
-                // exactly this window (else why not, for the launch line).
                 let window_splash = splash.as_ref().filter(|_| kind == LaunchKind::Fresh);
-                let opening = window_splash
-                    .map(|pick| pick.opening(&splash_target(&placement, &displays, reduce_motion)));
+                #[cfg(target_os = "macos")]
+                let native = window_splash.is_some() && pack.is_some();
+                #[cfg(not(target_os = "macos"))]
+                let native = false;
                 let mut builder = tauri::WebviewWindowBuilder::from_config(app.handle(), window_config)?
                     // THE SIZE THE DISPLAY CAN HOLD, not the size the config asked for. On
                     // his 1920-wide displays these are still 1400 x 880 — the constant was
@@ -2919,7 +2925,7 @@ fn main() {
                     .initialization_script(launch_init_script(
                         kind,
                         start_ordinal,
-                        window_splash.map(|pick| (pick.id.as_str(), cfg!(target_os = "macos") && matches!(opening, Some(Ok(_))))),
+                        window_splash.map(|pick| (pick.id.as_str(), native, if native { native_bar } else { None })),
                     ))
                     .initialization_script(openings_record.clone())
                     // THE FIRST FRAME (Sage's plan 2026-11-14, rule 1, as the CEO narrowed it:
@@ -2928,7 +2934,8 @@ fn main() {
                     // for the saved theme, so the window is never white. With the saved opening
                     // its first picture lies over that ground and is what reaches the glass.
                     .background_color(match window_splash {
-                        Some(pick) => first_frame::color(pick.ground),
+                        Some(pick) => first_frame::color(splash_pick::parse_hex(&pick.ground)
+                            .unwrap_or(first_frame::SPLASH_GROUND)),
                         None => first_frame::ground(kind == LaunchKind::Fresh, light_theme),
                     })
                     // The right-click guard in every frame, the PDF preview's too (nightly 66).
@@ -2979,32 +2986,22 @@ fn main() {
                 }
                 let window = builder.build()?;
                 launch_timing::mark_window();
-                // THE SPLASH'S OPENING, its first picture in a layer over the page (plan section 2,
-                // "Show"). If it cannot be shown, the start says why and the page draws the splash
-                // from its start over the ground color.
                 #[cfg(target_os = "macos")]
-                let opening = opening.map(|o| o.and_then(|o| splash_opening::show(&window, &o).map(|_| o)));
-                // ON THE GLASS NOW: macOS would show the window only when this thread next goes
-                // idle. With the opening, what reaches the glass is the picked splash at its first
-                // moment, already playing; without it, the splash's ground color, which is not the
-                // splash and is not counted as it (the CEO, 2026-11-14: the job is the splash screen
-                // itself playing); it only means the window is never white while the page loads.
+                let playing = native && pack.take().is_some_and(|pack| splash_player::show(&window, pack));
+                #[cfg(not(target_os = "macos"))]
+                let playing = false;
+                #[cfg(target_os = "macos")]
+                if native && !playing {
+                    splash_player::did_not_attach();
+                }
                 first_frame::commit(&window);
                 #[cfg(target_os = "macos")]
-                let pictures = matches!(opening, Some(Ok(_))).then(splash_opening::started).flatten();
-                #[cfg(not(target_os = "macos"))]
-                let pictures: Option<usize> = None;
+                if playing {
+                    splash_player::window_visible();
+                }
                 launch_timing::mark_first_frame(kind == LaunchKind::Fresh);
                 if let Some(pick) = window_splash {
-                    launch_timing::note_splash(
-                        &pick.id,
-                        pick.saved,
-                        match (&opening, pictures) {
-                            (Some(Ok(_)), Some(n)) => Ok(n),
-                            (Some(Err(why)), _) => Err(why.clone()),
-                            _ => Err("it could not be started".to_string()),
-                        },
-                    );
+                    launch_timing::note_splash(&pick.id, playing);
                 }
                 #[cfg(target_os="macos")]
                 cleaner_host::watch_main(&window);
@@ -3058,13 +3055,7 @@ fn main() {
             );
             // What waits for the page starts at the latest 5 s after the first frame, and the
             // launch line is written then if the page never reported.
-            // The splash's opening comes down then too, so a page that failed never leaves a
-            // healthy-looking splash on a dead window (plan section 2, "A ceiling").
-            let ceiling_app = app.handle().clone();
-            first_frame::arm_ceiling(app.handle().clone(), move || {
-                remove_splash_opening(&ceiling_app);
-                launch_timing::write_line(false);
-            });
+            first_frame::arm_ceiling(app.handle().clone(), || launch_timing::write_line(false));
             // WHAT USED TO START BEFORE THE WINDOW, NOW STARTED WHEN THE PAGE TAKES OVER (rule 3):
             // each one starts a thread that competes for the processor in the first fraction of
             // a second.
@@ -3847,17 +3838,12 @@ fn main() {
                 _ => {}
             }
 
-            // Apply any stop request that outlived the process. The window is one line
-            // wide — request fsync'd, process dies, terminal event never written — and
-            // without this the turn is `in_flight` forever and crash-replay would re-run
-            // work the CEO explicitly stopped.
+            // Restore durable Stops before any recovered message is submitted. Reconciliation
+            // queues accepted inputs locally. A provider reply must never hold the window's thread.
+            spine.detach_conversation_io();
             if let Err(e) = spine.reconcile_intake() {
                 eprintln!("[richos] intake reconciliation at boot: {e}");
             }
-            // What it ran — a phone message that outlived the last process — ended here, so
-            // the work those turns wrote down starts here (`adopt_at_the_turn_boundary`). The
-            // recovery above has already settled every assignment the LAST process left, so
-            // only what these turns registered can be adopted (spec §6.3: nothing restarts).
             adopt_at_the_turn_boundary(&mut spine, &work);
 
             // THE CORRECTION DESK (open-items 3.5). Its log sits beside the ledger and the
@@ -4009,7 +3995,6 @@ fn main() {
                 }
             };
 
-            spine.detach_conversation_io();
             app.manage(AppState {
                 swearmeter: swearmeter_host::Service::new(app.handle().clone(), spine.reader(), control.clone(), card_counts, card_source_seen),
                 quota: quota.clone(),
@@ -4079,6 +4064,8 @@ fn main() {
             rich_files_host::start(app.handle().clone());
             #[cfg(target_os = "macos")]
             {app.manage(Arc::new(writing_host::Host::default()));cleaner_host::start(app.handle())?;cleaner_service::register(app.handle())?;}
+            let intake_app = app.handle().clone();
+            first_frame::after_page(app.handle(), move || start_incoming_drain(intake_app));
             git_name_host::start(app.handle().clone());
             peer_messages::start(app.handle().clone())?;
             // After an update, this build's own engine, installed by the app itself (the flag
@@ -4236,7 +4223,9 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             first_frame_painted,
-            splash_take_over,
+            splash_native_finished,
+            splash_native_dismiss,
+            splash_did_finish,
             system_resources,
             richfiles_pane::richfiles_pane_available, richfiles_pane::richfiles_place_pane,
             richfiles_pane::richfiles_preload,
@@ -4623,13 +4612,7 @@ fn main() {
             // for `app.exit`), and an empty channel is NOT `Prevent`. So this arm decides
             // and returns; nothing here waits for him, and the question — when there is
             // one — is asked afterwards, from `ask_before_quitting`.
-            // THE SPLASH'S OPENING WAS DRAWN AND THIS IS THE QUIT'S OWN EXIT: the first pass through
-            // this arm already allowed it (`splash_at_quit` below), so it goes straight through.
-            #[cfg(target_os = "macos")]
-            let finishing = splash_opening::quit_is_finishing();
-            #[cfg(not(target_os = "macos"))]
-            let finishing = false;
-            if let (false, tauri::RunEvent::ExitRequested { code, api, .. }) = (finishing, &event) {
+            if let tauri::RunEvent::ExitRequested { code, api, .. } = &event {
                 if let Some(state) = handle.try_state::<AppState>() {
                     let request = lifecycle::ExitRequest {
                         questions_pending: questions_pending(&state),
@@ -4650,13 +4633,6 @@ fn main() {
                             // is "idle must still quit". Only the silence was.
                             if let Some(why) = lifecycle::allow_reason(&request) {
                                 eprintln!("[richos] {why}");
-                            }
-                            // WHEN THE APP QUITS, THE NEXT START'S SPLASH IS PICKED (the CEO,
-                            // 2026-11-14), and its opening drawn when the pick or the window
-                            // changed: the windows go, the quit waits at most 3 s, then exits.
-                            #[cfg(target_os = "macos")]
-                            if splash_at_quit(handle) {
-                                api.prevent_exit();
                             }
                         }
                         lifecycle::ExitDecision::StayResident => {
@@ -4683,12 +4659,6 @@ fn main() {
             // `applicationShouldHandleReopen` through tao and wry
             // (`tauri-runtime-wry-2.11.4/src/lib.rs:4391-4394`).
             if let tauri::RunEvent::Reopen { has_visible_windows, .. } = &event {
-                // A click while the quit draws the next start's opening: he wants the app, so the
-                // quit is called off and the window comes back below (its windows were hidden).
-                #[cfg(target_os = "macos")]
-                if splash_opening::call_off_quit() {
-                    eprintln!("[richos] splash at quit: the Dock icon was clicked during the quit; RichOS stays open");
-                }
                 // **OFF THE EVENT-LOOP CALLBACK, deliberately.** Building a window is a
                 // runtime message, and issuing one from inside the callback the runtime
                 // is currently dispatching is the shape that deadlocks; a spawned thread
@@ -4808,159 +4778,59 @@ fn main() {
 /// UX §2.1: "Rail header = the company/CEO identity, not RichOS." Configurable,
 /// persisted, sensible fallback when unset — the fallback lives in richos-core's
 /// config.rs so this thin shell layer never has to know the placeholder string.
-/// The page's splash has painted (or, with no splash, the page has): what waited for the page
-/// starts now, and the launch line is written (Sage's plan 2026-11-14, rules 3 and 5). The
-/// first report of a launch counts; a reloaded page's is ignored. It reads no state.
-///
-/// With the splash's opening up, the page reports once it has joined it, with the moment of the
-/// splash it joined at (`moment`, ms after the first frame): the opening comes down in this step,
-/// before the answer, so the page lets its splash run on only once it is the one on the glass.
+/// The WebView has painted. This releases the deferred startup work independently
+/// of the native splash's playback clock.
 #[richos_command::command]
-fn first_frame_painted(app: AppHandle, moment: Option<f64>) {
-    remove_splash_opening(&app);
-    if let Some(moment) = moment {
-        launch_timing::note_joined(moment);
-    }
+fn first_frame_painted(app: AppHandle) {
     if first_frame::page_took_over(&app) {
         launch_timing::write_line(true);
     }
 }
 
-/// The splash's opening, for the page to join (Sage's plan 2026-11-14, section 2, "The page takes
-/// over"): when its first picture reached the glass (wall clock, ms since the epoch, the clock the
-/// page's `Date.now()` reads) and how long it runs. `null` when no opening is up.
 #[richos_command::command]
-fn splash_take_over() -> Option<serde_json::Value> {
+async fn splash_native_finished() -> bool {
     #[cfg(target_os = "macos")]
-    {
-        splash_opening::take_over_info()
-            .map(|(first_frame_ms, opening_ms)| serde_json::json!({ "firstFrameMs": first_frame_ms, "openingMs": opening_ms }))
-    }
+    { splash_player::finished().await }
     #[cfg(not(target_os = "macos"))]
-    {
-        None
-    }
+    { false }
 }
 
-/// Take the splash's opening down, on the main thread, and wait until it is down (a second at
-/// most). Nothing when none is up.
-fn remove_splash_opening(app: &AppHandle) {
+#[richos_command::command]
+async fn splash_native_dismiss(app: AppHandle, animated: bool) {
     #[cfg(target_os = "macos")]
-    {
-        // SAFETY: a read of this thread's identity.
-        if unsafe { libc::pthread_main_np() } == 1 {
-            splash_opening::remove();
-            return;
-        }
-        let (tx, rx) = std::sync::mpsc::channel();
-        if app
-            .run_on_main_thread(move || {
-                splash_opening::remove();
-                tx.send(()).ok();
-            })
-            .is_ok()
-        {
-            rx.recv_timeout(std::time::Duration::from_secs(1)).ok();
-        }
-    }
+    splash_player::dismiss(&app, animated).await;
+    #[cfg(not(target_os = "macos"))]
+    let _ = (app, animated);
+}
+
+#[richos_command::command]
+fn splash_did_finish(app: AppHandle) {
+    #[cfg(target_os = "macos")]
+    tauri::async_runtime::spawn(async move {
+        prepare_future_splash(&app).await;
+    });
     #[cfg(not(target_os = "macos"))]
     let _ = app;
 }
 
-/// The window a start is about to build, as the splash's opening sees it: the page's size in
-/// points, the scale of the display it opens on, and reduced motion. One function for the start
-/// and the quit, so the quit draws for exactly the window the next start will compute.
-fn splash_target(
-    placement: &window_geometry::Placement,
-    displays: &[window_geometry::Display],
-    reduce_motion: bool,
-) -> splash_pick::Target {
-    let display = displays
-        .iter()
-        .find(|d| placement.display.is_some() && d.name == placement.display)
-        .or_else(|| displays.iter().find(|d| d.primary))
-        .or_else(|| displays.first());
-    splash_pick::Target {
-        page: [placement.width, placement.height],
-        scale: display.map(|d| d.scale).unwrap_or(1.0),
-        reduce_motion,
-    }
-}
-
-/// AT QUIT: the pick for the next start, by the rules, and its opening when the pick or the window
-/// changed (Sage's plan 2026-11-14, section 1). True when the quit is held while the opening is
-/// drawn (the caller prevents this exit; the drawing exits when done, in at most 3 s).
 #[cfg(target_os = "macos")]
-fn splash_at_quit(app: &AppHandle) -> bool {
-    let Some(state) = app.try_state::<AppState>() else { return false };
-    // What he earned in this run is his before the pick reads it (round 74): the money too, when
-    // its history has been read.
-    let version = app.package_info().version.to_string();
-    let now = richos_core::util::now_millis();
-    let settings = openings::Settings::of(&state.config.lock().unwrap_or_else(|p| p.into_inner()));
-    // As already counted: a quit starts no read of the history and waits for none. Read before
-    // the launch record is held, so no lock is taken inside another here.
-    let spend = state.quota.spend_all_time_counted();
-    let (facts, page, today) = {
-        let mut launch = state.launch.lock().unwrap_or_else(|p| p.into_inner());
-        openings::sync(&mut launch, spend, &version, now);
-        (
-            openings::splash_facts(&launch, &settings, launch.next_start_ordinal(), now),
-            openings::page_record(&launch, &settings, &version, now),
-            openings::today(&launch, &settings, now),
-        )
+async fn prepare_future_splash(app: &AppHandle) {
+    let Some(state) = app.try_state::<AppState>() else { return };
+    let settings = openings::Settings::of(&state.config.lock().unwrap());
+    let packs = {
+        let launch = state.launch.lock().unwrap();
+        openings::playback_packs(&launch, &settings, richos_core::util::now_millis())
     };
-    let Some(next) = splash_pick::next(&facts, |id| openings::shown_facts(id, &settings, &version)) else { return false };
-    // "ONE OF MINE, A DIFFERENT ONE EACH DAY": the quit cannot know which day the next start is
-    // on, so it saves today's opening and the one any later day opens on (`openings::daily`), and
-    // the first start of a new day plays its pictures like every other start. Today's is written
-    // down first, as the one the later day follows.
-    let later = today.as_ref().and_then(|today| {
-        if let Err(e) = state.config.lock().unwrap_or_else(|p| p.into_inner()).set_opening_daily(today.0, &today.1) {
-            eprintln!("[richos] splash at quit: today's opening could not be written down ({e})");
-        }
-        splash_pick::next(&openings::later_day_facts(&facts, today), |id| openings::shown_facts(id, &settings, &version))
-            .filter(|later| later.id != next.id)
-    });
-    let Some(config) = app.config().app.windows.first().cloned() else { return false };
-    let displays = read_displays(app);
-    let saved_geometry = window_geometry::GeometryStore::new(state.data_dir.join("window.json")).load();
-    let preference = window_geometry::Preference {
-        width: config.width,
-        height: config.height,
-        min_width: config.min_width.unwrap_or(window_geometry::PREFERRED_MIN_WIDTH),
-        min_height: config.min_height.unwrap_or(window_geometry::PREFERRED_MIN_HEIGHT),
-    };
-    let placement = window_geometry::decide_with(&displays, saved_geometry.as_ref(), preference);
-    let mut target = splash_target(&placement, &displays, splash_opening::reduce_motion());
-    // THE WINDOW HE IS LEAVING, when it is still there (plan section 1: "at the size of the window
-    // as he left it"): its own size and scale, not a second prediction of them. Measured in the test
-    // VM, 2026-11-14: the prediction said 1400x869 where the next start built 1400x866 (the window
-    // record held a height the display's work area clamps), so the opening was never used; the
-    // live window is the clamped size the next start builds again.
-    if let Some(window) = conversation_window(app) {
-        if let (Ok(size), Ok(scale)) = (window.inner_size(), window.scale_factor()) {
-            if scale.is_finite() && scale > 0.0 && size.width > 0 && size.height > 0 {
-                target.page = [f64::from(size.width) / scale, f64::from(size.height) / scale];
-                target.scale = scale;
-            }
-        }
+    // Clean up only the old generated assets in this app's data directory.
+    for file in ["splash-next.json", "splash-later.json"] {
+        let _removed = std::fs::remove_file(state.data_dir.join(file));
     }
-    let mut drawings = Vec::new();
-    for (slot, picked) in [(splash_pick::Slot::Next, Some(next)), (splash_pick::Slot::Later, later)] {
-        let Some(picked) = picked else { continue };
-        let saved = splash_pick::read_slot(&state.data_dir, slot);
-        let nonce = splash_pick::manifest_nonce_in(&state.data_dir, slot);
-        if let splash_pick::AtQuit::Draw(drawn) = splash_pick::at_quit(saved.as_ref(), nonce.as_deref(), picked, &target, splash_opening::nonce()) {
-            let (saved, made) = *drawn;
-            drawings.push(splash_opening::Drawing { slot, saved, made });
-        }
+    for directory in ["splash-opening", "splash-opening-later"] {
+        let _removed = std::fs::remove_dir_all(state.data_dir.join(directory));
     }
-    if drawings.is_empty() {
-        eprintln!("[richos] splash at quit: the next start's splash and its opening are already saved; nothing drawn");
-        return false;
+    if splash_assets::prepare(app, &state.data_dir, &packs, packs.first().map(String::as_str)).await.is_err() {
+        eprintln!("[richos] splash assets: pack download failed");
     }
-    splash_opening::draw_before_quit(app, state.data_dir.clone(), drawings, placement.position, page)
 }
 
 #[richos_command::command]
@@ -5118,13 +4988,18 @@ fn take_work_notices(
     Ok(Vec::new())
 }
 
+fn start_incoming_drain(app: AppHandle) {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        if let Err(error) = drain_incoming_messages(&state.spine, &state.work) {
+            eprintln!("[richos] incoming message: {error}");
+        }
+    });
+}
+
 /// All asynchronous incoming messages use the same turn, stream and phone delivery.
 fn dispatch_incoming_messages(app: &AppHandle, _thread_id: &str) -> Result<(), String> {
-    let app=app.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let state=app.state::<AppState>();
-        if let Err(error)=drain_incoming_messages(&state.spine,&state.work) { eprintln!("[richos] incoming message: {error}"); }
-    });
+    start_incoming_drain(app.clone());
     Ok(())
 }
 
@@ -10232,17 +10107,37 @@ fn openings_state(app: AppHandle, state: State<AppState>) -> serde_json::Value {
 }
 
 /// "Make it my opening", and "One of mine, a different one each day" (`"daily"`); `None` goes
-/// back to the app's own rule. The next quit picks by it.
+/// back to the app's own rule. Downloads finish before a changed choice becomes active.
 #[richos_command::command]
-fn set_opening_pick(state: State<AppState>, pick: Option<String>) -> Result<(), String> {
-    if let Some(id) = pick.as_deref().filter(|p| *p != richos_core::openings::DAILY) {
-        let launch = state.launch.lock().unwrap();
-        let his = openings::catalog().get(id).is_some() && launch.reward_fired_at(&richos_core::openings::key(id)).is_some();
+async fn set_opening_pick(app: AppHandle, pick: Option<String>) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let daily = pick.as_deref() == Some(richos_core::openings::DAILY);
+    if let Some(id) = pick.as_deref().filter(|_| !daily) {
+        let his = openings::catalog().get(id).is_some() &&
+            state.launch.lock().unwrap().reward_fired_at(&richos_core::openings::key(id)).is_some();
         if !his {
             return Err("That opening is not one of yours yet.".to_string());
         }
     }
-    state.config.lock().unwrap().set_opening_pick(pick.as_deref()).map_err(|e| e.to_string())
+    #[cfg(target_os = "macos")]
+    if pick.is_some() {
+        let settings = openings::Settings::of(&state.config.lock().unwrap());
+        let (packs, keep) = {
+            let now = richos_core::util::now_millis();
+            let launch = state.launch.lock().unwrap();
+            let keep = openings::today(&launch, &settings, now).map(|(_, id)| id)
+                .or_else(|| settings.pick.clone());
+            let next_settings = openings::Settings { pick: pick.clone(), ..settings };
+            (openings::playback_packs(&launch, &next_settings, now), keep)
+        };
+        splash_assets::prepare(&app, &state.data_dir, &packs, keep.as_deref())
+            .await.map_err(|error| {
+                eprintln!("[richos] splash assets: pack download failed");
+                format!("Could not download the opening: {error}")
+            })?;
+    }
+    let mut config = state.config.lock().unwrap();
+    config.set_opening_pick(pick.as_deref()).map_err(|e| e.to_string())
 }
 
 /// "Save image": the finished frame of one of his openings, with its name and the day it became
@@ -10616,10 +10511,8 @@ fn remember_window_geometry(window: &tauri::WebviewWindow, path: std::path::Path
 /// (CEO, 2026-11-14: "We now also need to remove the settings toggle for disabling the splash
 /// screen. Because the splash screen is now needed for the illusion of a super-fast app launch.").
 ///
-/// `splash` is the splash the rules picked at the last quit, and whether its opening is on the glass
-/// above the page (Sage's plan 2026-11-14, section 2, "Tell the page"): the page draws that splash
-/// and, with the opening up, joins it where it has reached (`splash_take_over`).
-fn launch_init_script(kind: LaunchKind, ordinal: Option<u64>, splash: Option<(&str, bool)>) -> String {
+/// `splash` carries the launch choice and whether its complete native pack is available.
+fn launch_init_script(kind: LaunchKind, ordinal: Option<u64>, splash: Option<(&str, bool, Option<[f64; 4]>)>) -> String {
     // One line per window, so a walk can read "a fresh start with the splash" or "a second
     // window, no splash" off the log instead of off a frame (dictation plan slice 5's proof,
     // the CEO's "still show the splash screen etc as usual"). The splash itself is the
@@ -10634,10 +10527,7 @@ fn launch_init_script(kind: LaunchKind, ordinal: Option<u64>, splash: Option<(&s
         kind.as_str(),
         ordinal.map(|n| n.to_string()).unwrap_or_else(|| "null".to_string()),
         splash
-            .map(|(id, opening)| format!(
-                "Object.freeze({{ id: {}, opening: {opening} }})",
-                serde_json::to_string(id).unwrap_or_else(|_| "null".into())
-            ))
+            .map(|(id, native, bar)| format!("Object.freeze({})", serde_json::json!({ "id": id, "native": native, "bar": bar })))
             .unwrap_or_else(|| "null".to_string())
     )
 }
