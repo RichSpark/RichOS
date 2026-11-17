@@ -590,3 +590,4 @@
 [richos] keep chat alive: the team's session of {} was not resumed: {}
 [richos] keep chat alive: {} is not idle; nothing was sent
 [richos] queued input after a keep-alive: {}
+[richos] launch log: the line was not kept in {} ({})
