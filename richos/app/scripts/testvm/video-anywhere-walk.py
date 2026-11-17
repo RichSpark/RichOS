@@ -37,8 +37,9 @@ WHAT IT DOES, in the guest, never on the host's screen (CEO ruling 65):
           (frame 8-home); Stop; the sheet (frame 9-sheet); Save video, the Mac's save window
           (frame 10-anywhere-save-window), Save, "Saved to …" (frame 10-anywhere-saved). The file
           is pulled out of the guest and read back.
-  still   (not run unless named) a recording of 25 s in which nothing is pressed, saved and read
-          back: how long a guest's file is when the walk leaves the app alone while it records
+  still   (not run unless named) a recording of 32 s in a chat in which nothing is pressed, saved
+          and read back: how long the file is against how long the recording was
+          (home-video-walk.py's `whole`: failed for its length only with --expect-picture).
 
 READ BACK is home-video-walk.py's `read_back`: ffprobe's streams and length (AAC, and that sound
 is not silence), everything in the file decoded with no error, the name saying when it was made,
@@ -48,15 +49,13 @@ the walk recorded, and frames taken out of it into --out for a person to look at
 A GUEST'S FILE HAS NO PICTURE AND ONLY PART OF THE SOUND, and this walk asks for more only with
 --expect-picture. The guest has no hardware H.264 encoder (home-video-walk.py's note), and the
 webview's recorder then writes the sound and no picture, and that sound ends before the
-recording does. Measured 2026-11-15 in three guests: 10.03 s of sound for a recording of 48 s that
-went through four screens, 10.03 s for one of 27 s in which nothing was pressed (the `still`
-step), 28.91 s for one of 42 s. WHY IT ENDS EARLY THERE IS NOT ESTABLISHED; it does not follow
-what is pressed. On this Mac's own encoder the same code writes a recording of 30 s whole (30.1 s
-of H.264 and of AAC, headless WebKit). The picture in the file (every screen he went to, the
-pointer, the text he highlighted, every line of a text box) and its length are proved on the host
-by ui/tests/video-anywhere.js, which records through the same code in headless WebKit and reads
-the H.264 back. What the guest proves is the real app: the button, the choices, the count, Stop on
-every screen, the sheet and the Mac's save window, and a real file with the recording's sound.
+recording does, whatever is pressed, and both before and after the recorder was changed to ask
+for its file while it records (home-video-walk.py's note has the measurements). The picture in the
+file (every screen he went to, the pointer, the text he highlighted, every line of a text box) is
+proved on the host by ui/tests/video-anywhere.js in Playwright's WebKit, and that a recording of
+half a minute is whole by ui/tests/video-whole.js in the Mac's own webview. What the guest proves is
+the real app: the button, the choices, the count, Stop on every screen, the sheet and the Mac's
+save window, and a real file with the start of the recording's sound.
 
 Evidence (frames, the file's facts, every step's result) is written to --out/report.json. Exit 0
 when every step passes. It quits nothing itself: run-walk.py quits the app by its pid and deletes
@@ -177,23 +176,22 @@ class Walk(home_video.Walk):
             raise StepFailed('chose %s and the choices read %s' % (', '.join(titles), ', '.join(pressed) or 'none of them'))
 
     def still(self):
-        """A recording of 25 s in which nothing is pressed and nothing moves, saved and read back:
-        how long a guest's file is when the walk does nothing to the app while it records (10.03 s
-        of sound, 2026-11-15: a guest's file ends early whatever is pressed)."""
+        """A recording of 32 s in a chat in which nothing is pressed and nothing moves, saved and
+        read back: how long the file is against how long the recording was."""
         self.to_the_conversation()
         self.choose('On', 'Shown')
         time.sleep(2)
         self.press('--title', 'Start recording', '--role', 'AXButton')
         self.until(self.recording, 20, 'the button beside the settings button never became Stop')
         began = time.monotonic()
-        time.sleep(25)
+        time.sleep(32)
         self.press('--id', 'video-anywhere-stop')
         result = {'pressed_stop_after_s': round(time.monotonic() - began, 1)}
         if not self.to_the_sheet(30):
             raise StepFailed('the sheet has no video to save: ' + str(self.words('could not record')))
         result['sheet_says'] = self.words(' · with your voice · ')
         result.update(self.save('11-still'))
-        result['seconds_in_the_file'] = result['read_back']['seconds']
+        self.whole(result, 'a chat')
         self.press('--title', 'Done', '--role', 'AXButton')
         time.sleep(1.5)
         return result
