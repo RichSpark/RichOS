@@ -29,7 +29,11 @@ its exit status, its output and the clock, so a walk's evidence is one file and 
                                        "points": [] with "hover" rests on that control). The same
                                        point twice is a click, the way a hand clicks; `ax click --at` is
                                        System Events' accessibility press at a point and does not focus
-                                       a text box (candidate 50 rewalk, run K)
+                                       a text box (candidate 50 rewalk, run K). "scroll": N turns the
+                                       wheel N lines on one point, "ctrl" holding Control (RichGlance's
+                                       zoom); "double": true double-clicks one point; "app": NAME sends
+                                       it to that guest process (a second app the walk opened) and finds
+                                       "find" in it (the RichGlance walk)
   openlink pattern [app] [seconds]     read the app window's tree until an https:// address containing
                                        PATTERN is drawn, then open it in the guest with APP (default
                                        Safari): the Mac's pairing address handed to the guest's phone
@@ -117,7 +121,8 @@ def step_run(vm, step, out):
         if step.get('find'):
             # The control's center, read off the guest's tree at this moment: a control the app
             # moves (Talk to Rich between its slots, a row that grows) is found where it is now.
-            code, text = run([str(HERE / 'ax.sh'), vm, 'find'] + step['find'] + ['--json', '--first'])
+            code, text = run([str(HERE / 'ax.sh'), vm, 'find'] + step['find'] + ['--json', '--first']
+                             + (['--app', step['app']] if step.get('app') else []))
             if code != 0:
                 return code, f'pointer find: {text}'
             node = next((rec for rec in (json.loads(line) for line in text.splitlines() if line.strip().startswith('{'))
@@ -126,7 +131,11 @@ def step_run(vm, step, out):
                 return 1, f'pointer find: nothing with a position matched; ax said {text[:300]!r}'
             points.append(f"{round(node['x'] + node['w'] / 2)},{round(node['y'] + node['h'] / 2)}")
         return run([str(HERE / 'pointer-drag.sh'), vm] + points + (['--right'] if step.get('right') else [])
-                   + (['--hover'] if step.get('hover') else []))
+                   + (['--hover'] if step.get('hover') else [])
+                   + (['--scroll', str(step['scroll'])] if step.get('scroll') else [])
+                   + (['--ctrl'] if step.get('ctrl') else [])
+                   + (['--double'] if step.get('double') else [])
+                   + (['--app', step['app']] if step.get('app') else []))
     if op == 'openlink':
         return open_link(vm, step)
     if op == 'wait':
@@ -173,7 +182,8 @@ REQUIRED = {
     'wait': {'seconds': (int, float)}, 'until': {'args': list, 'contains': str}, 'relaunch': {},
     'pointer': {'points': list}, 'openlink': {'pattern': str},
 }
-OPTIONAL = {'tree': {'app': str}, 'shot': {'ocr': bool}, 'handfile': {'to': str}, 'pointer': {'right': bool, 'hover': bool, 'find': list},
+OPTIONAL = {'tree': {'app': str}, 'shot': {'ocr': bool}, 'handfile': {'to': str},
+            'pointer': {'right': bool, 'hover': bool, 'find': list, 'scroll': int, 'ctrl': bool, 'double': bool, 'app': str},
             'relaunch': {'env': list}, 'openlink': {'app': str, 'seconds': (int, float)},
             'until': {'seconds': (int, float)}, '*': {'allow_fail': bool}}
 
@@ -199,7 +209,19 @@ def problems(steps):
                                 or (isinstance(step[key], bool) and kind != bool)):
                 found.append(f'step {i} ({op}): {key!r} has the wrong type')
         found_point = 1 if isinstance(step.get('find'), list) and step['find'] else 0
-        if op == 'pointer' and isinstance(step.get('points'), list) and (
+        if op == 'pointer' and isinstance(step.get('scroll'), int) and not isinstance(step.get('scroll'), bool) and (
+                not -50 <= step['scroll'] <= 50 or step['scroll'] == 0
+                or (isinstance(step.get('points'), list) and len(step['points']) + found_point != 1)):
+            found.append(f'step {i} (pointer): "scroll" is a whole number of lines from -50 to 50, not 0, '
+                         f'turned with the pointer resting on exactly one point ("points" or "find")')
+        elif op == 'pointer' and step.get('double') is True and (
+                step.get('scroll') or step.get('hover') or step.get('right')
+                or (isinstance(step.get('points'), list) and len(step['points']) + found_point != 1)):
+            found.append(f'step {i} (pointer): "double" is a left double-click on exactly one point, '
+                         f'with no "scroll", "hover" or "right"')
+        elif op == 'pointer' and step.get('ctrl') is True and not step.get('scroll'):
+            found.append(f'step {i} (pointer): "ctrl" holds Control on a wheel turn, so it needs "scroll"')
+        elif op == 'pointer' and isinstance(step.get('points'), list) and not step.get('scroll') and not step.get('double') and (
                 len(step['points']) + found_point < (1 if step.get('hover') is True else 2)
                 or not all(isinstance(pt, str) and pt.count(',') == 1 for pt in step['points'])):
             found.append(f'step {i} (pointer): \'points\' needs at least two "x,y" strings (the same one twice is a click; '
