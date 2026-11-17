@@ -62,8 +62,24 @@ public enum WorkspaceServices {
         try Task.checkCancellation()
         let workspace = NSWorkspace.shared
         let configuration = NSWorkspace.OpenConfiguration()
-        if let application {
-            _ = try await workspace.open([file], withApplicationAt: application.url, configuration: configuration)
+        var target = application?.url
+        if GlanceFiles.supports(file) {
+            let explicitlyChosen = target
+            // Pass focus information only if Open With or macOS chose RichGlance.
+            // Ask about the exact file so Finder's per-file overrides also apply.
+            let glance = await Task.detached { () -> URL? in
+                guard let chosen = explicitlyChosen ?? NSWorkspace.shared.urlForApplication(toOpen: file),
+                      Bundle(url: chosen)?.bundleIdentifier == "app.richos.richglance" else { return nil }
+                return chosen
+            }.value
+            try Task.checkCancellation()
+            if let glance {
+                configuration.arguments = ["--return-to", String(ProcessInfo.processInfo.processIdentifier)]
+                target = glance
+            }
+        }
+        if let target {
+            _ = try await workspace.open([file], withApplicationAt: target, configuration: configuration)
         } else {
             _ = try await workspace.open(file, configuration: configuration)
         }
