@@ -616,6 +616,28 @@ async function main() {
       await warningIs(page, false);
       await levelIs(page, "rich", "low");
       assertEqual([await isOpen(page), (await effort(page, "rich")).level], [true, "low"], "a press outside: back to Low, Settings open");
+      // Max chosen again right behind the press that closed the warning (the second press of a
+      // double press, 2026-11-17's nightly): the new warning stays up. Both presses are made in one
+      // turn of the page and it is read after the first warning's leaving has run out, so no
+      // machine's speed decides which comes first.
+      await page.click('#ef-rich .ef-step[data-l="max"]');
+      await warningIs(page, true);
+      const again = await page.evaluate(
+        () =>
+          new Promise((done) => {
+            document.querySelector(".efw-scrim").click();
+            document.querySelector("#ef-rich-max").click();
+            setTimeout(() => {
+              const w = document.querySelector(".efw");
+              done({ hidden: w.hidden, classes: w.className, focus: document.activeElement ? document.activeElement.className : null });
+            }, 600);
+          })
+      );
+      assertEqual(again, { hidden: false, classes: "efw is-open", focus: "efw-keep" }, "Max chosen again while the first warning was leaving");
+      await page.keyboard.press("Escape");
+      await warningIs(page, false);
+      await levelIs(page, "rich", "low");
+      assertEqual([await warning(page), (await effort(page, "rich")).level], [null, "low"], "Escape after it: back to Low");
       // A click with no pointer on Max (VoiceOver's press) opens the warning too; Enter on the
       // focused safe button goes back.
       await page.$eval("#ef-rich-max", (n) => n.click());

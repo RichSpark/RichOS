@@ -11,17 +11,22 @@ const assert = require("assert");
 
 const SOURCE = fs.readFileSync(path.join(__dirname, "..", "pointer-drag.js"), "utf8");
 
-function drive(params, frontmost) {
+function drive(params, frontmost, named) {
   const posted = [];
+  const asked = [];
   const sandbox = {
     ObjC: { import() {} },
     delay() {},
     Application() {
-      const proc = { unixId: () => params.pid, frontmost: frontmost };
+      // `named`: the guest's process of that name and its pid (a second app).
+      const pid = named ? named.pid : params.pid;
+      const proc = { unixId: () => pid, frontmost: frontmost };
       return {
         processes: {
           whose(q) {
+            asked.push(q);
             if ("frontmost" in q) return frontmost ? [proc] : [{ unixId: () => 1 }];
+            if ("name" in q) return named && q.name === named.name ? [proc] : [];
             return [proc];
           },
         },
@@ -30,12 +35,15 @@ function drive(params, frontmost) {
   };
   const $ = function () { return null; };
   $.CGEventCreateMouseEvent = (src, type, point, button) => ({ type, button, x: point.x, y: point.y });
+  $.CGEventCreateScrollWheelEvent2 = (src, units, count, d1) => ({ type: 22, units, count, d1, flags: 0 });
+  $.CGEventSetFlags = (ev, flags) => { ev.flags = flags; };
+  $.CGEventSetIntegerValueField = (ev, field, value) => { if (field === 1) ev.clickState = value; };
   $.CGEventPost = (tap, ev) => posted.push(ev);
   sandbox.$ = $;
   const fn = new Function("ObjC", "delay", "Application", "$", "DRAG_PARAMS",
     SOURCE + "\nreturn run();");
   const answer = JSON.parse(fn(sandbox.ObjC, sandbox.delay, sandbox.Application, sandbox.$, params));
-  return { answer, posted };
+  return { answer, posted, asked };
 }
 
 // A left drag, as the divider pull uses it.
@@ -87,4 +95,43 @@ function drive(params, frontmost) {
   assert.strictEqual(posted.length, 0);
 }
 
-console.log("pointer-drag: a left drag, a right-click with no dragged event, a hover with no button and the frontmost refusal passed");
+// A Control-scroll in a second app, named: one move to the point, then one line-unit wheel event
+// per line, each with Control (0x40000) held, sent once that app's own pid is frontmost.
+{
+  const { answer, posted, asked } = drive({ pid: 42, app: "RichGlance", points: [[840, 520]], step: 8, pause: 0, rest: 0, scroll: -3, ctrl: true },
+    true, { name: "RichGlance", pid: 77 });
+  assert.strictEqual(answer.scrolled, true);
+  assert.strictEqual(answer.pid, 77, "the named app's pid, not the recorded one");
+  assert.ok(asked.some((q) => q.name === "RichGlance"), "the process was looked up by its name");
+  assert.deepStrictEqual(posted.map((e) => e.type), [5, 22, 22, 22]);
+  assert.ok(posted.slice(1).every((e) => e.units === 1 && e.count === 1 && e.d1 === -1 && e.flags === 0x40000));
+}
+
+// A plain scroll holds no key.
+{
+  const { posted } = drive({ pid: 42, points: [[10, 10]], step: 8, pause: 0, rest: 0, scroll: 2 }, true);
+  assert.deepStrictEqual(posted.slice(1).map((e) => [e.d1, e.flags]), [[1, 0], [1, 0]]);
+}
+
+// The refusals: a named app that is not running, and one that is not frontmost, post nothing.
+{
+  const gone = drive({ pid: 42, app: "RichGlance", points: [[1, 1]], step: 8, pause: 0, rest: 0, scroll: 1 }, true, null);
+  assert.strictEqual(gone.answer.error, "noprocess");
+  assert.strictEqual(gone.posted.length, 0);
+  const behind = drive({ pid: 42, app: "RichGlance", points: [[1, 1]], step: 8, pause: 0, rest: 0, scroll: 1 }, false, { name: "RichGlance", pid: 77 });
+  assert.strictEqual(behind.answer.error, "notfront");
+  assert.strictEqual(behind.posted.length, 0);
+}
+
+// A double-click: one move, then down/up with click state 1 and down/up with click state 2.
+{
+  const { answer, posted } = drive({ pid: 42, points: [[645, 316]], step: 8, pause: 0, rest: 0, double: true }, true);
+  assert.strictEqual(answer.doubled, true);
+  assert.deepStrictEqual(posted.map((e) => [e.type, e.clickState]), [[5, undefined], [1, 1], [2, 1], [1, 2], [2, 2]]);
+  const behind = drive({ pid: 42, points: [[645, 316]], step: 8, pause: 0, rest: 0, double: true }, false);
+  assert.strictEqual(behind.answer.error, "notfront");
+  assert.strictEqual(behind.posted.length, 0);
+}
+
+console.log("pointer-drag: a double-click with click states 1 and 2 passed");
+console.log("pointer-drag: a left drag, a right-click with no dragged event, a hover with no button, a Control-scroll in a named app and the refusals passed");
