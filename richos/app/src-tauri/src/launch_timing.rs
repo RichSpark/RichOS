@@ -7,11 +7,21 @@
 //! the ceiling, with its own milestones counted from the moment macOS started the process:
 //!
 //! ```text
-//! [richos] launch timing: update step 15 ms, window 210 ms, first frame 214 ms, start-up finished
-//! 330 ms, page took over 420 ms after the process started; splash shown; update put in place: no;
-//! bundle check none (trusted as written at its update), 1 ms; engine check none (trusted as
-//! verified when it was written), 3 ms; process started at 1763112345678
+//! [richos] launch timing: update step 15 ms, window 210 ms, first frame 214 ms, splash started
+//! playing 221 ms, start-up finished 330 ms, page took over 420 ms after the process started; splash
+//! shown, round-11/v2 (native pack); update put in place: no; bundle check none (trusted as written
+//! at its update), 1 ms; engine check none (trusted as verified when it was written), 3 ms; process
+//! started at 1763112345678
 //! ```
+//!
+//! `splash started playing` is the native splash's frame zero, and is in the line only when the
+//! native player reported it; a web-animation splash plays with the page, at `page took over`.
+//!
+//! THE LINE IS KEPT, for every launch, in `~/Library/Logs/RichOS/launch.log` ([`log_path`]), one
+//! entry per launch with the time, the version and the pid in front. A launch from the Dock or
+//! Finder has no terminal, so what the app writes to its error output is kept nowhere; until
+//! 2026-11-17 that was the only place this line went, and nobody could read a launch's times
+//! after starting the app the ordinary way.
 //!
 //! The process start is the kernel's own (`proc_pidinfo`), and it survives an update hand-over:
 //! the copy that hands over and the copy that ends up running are one process (`exec`), so the
@@ -32,6 +42,7 @@ struct Marks {
     engine: Option<String>,
     splash_id: Option<String>,
     native_splash: bool,
+    splash_started: Option<u64>,
     written: bool,
 }
 
@@ -120,8 +131,18 @@ pub fn note_splash(id: &str, native: bool) {
 /// The video clock is anchored on the host clock and begins at the next refresh.
 pub fn note_native_splash_started(anchor_ms: f64) {
     if let Some(start) = process_started_ms() {
-        let elapsed = anchor_ms.round() as u64;
-        eprintln!("[richos] native splash: frame zero scheduled {} ms after process start", elapsed.saturating_sub(start));
+        let at = (anchor_ms.round() as u64).saturating_sub(start);
+        let said = format!("[richos] native splash: frame zero scheduled {at} ms after process start");
+        eprintln!("{said}");
+        // A player that became ready only after the launch line was written still gets its
+        // start into the file, as its own entry.
+        let line_written = with(|m| {
+            m.splash_started = Some(at);
+            m.written
+        });
+        if line_written {
+            keep(&said);
+        }
     }
 }
 
@@ -146,7 +167,37 @@ pub fn write_line(page: bool) {
     });
     if let Some(line) = line {
         eprintln!("{line}");
+        keep(&line);
     }
+}
+
+/// `~/Library/Logs/RichOS/launch.log`, beside the startup log (`startup_alert::log_path`).
+pub fn log_path() -> std::path::PathBuf {
+    crate::startup_alert::log_path().with_file_name("launch.log")
+}
+
+/// Keep `line` in the launch log. A launch that cannot write its log is still a launch.
+fn keep(line: &str) {
+    let entry = log_entry(now_ms(), crate::startup_alert::version(), std::process::id(), line);
+    if let Err(error) = append(&log_path(), &entry) {
+        eprintln!("[richos] launch log: the line was not kept in {} ({error})", log_path().display());
+    }
+}
+
+/// One entry of the launch log: when, which version, which process, then the line as written.
+fn log_entry(millis: u64, version: &str, pid: u32, line: &str) -> String {
+    format!("{} RichOS {version} pid {pid} {line}\n", crate::startup_alert::utc_stamp(millis))
+}
+
+/// Append one entry, creating the folder and the file, and keeping one earlier generation.
+fn append(path: &std::path::Path, entry: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    crate::startup_alert::rotate_if_large(path);
+    let mut file = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
+    file.write_all(entry.as_bytes())
 }
 
 /// The line, from the marks. Pure, so its wording is a unit test.
@@ -164,6 +215,7 @@ fn line(m: &Marks, started: Option<u64>) -> String {
         ),
         (Some(check), Some(old)) => format!("bundle check {check}, after a hand-over whose check was {old}"),
     };
+    let playing = m.splash_started.map(|v| format!("splash started playing {v} ms, ")).unwrap_or_default();
     let splash = match &m.splash_id {
         Some(id) => {
             let player = if m.native_splash { "native pack" } else { "web animation" };
@@ -173,7 +225,7 @@ fn line(m: &Marks, started: Option<u64>) -> String {
         None => "no splash".to_string(),
     };
     format!(
-        "[richos] launch timing: update step {}, window {}, first frame {}, start-up finished {}, {page} after the \
+        "[richos] launch timing: update step {}, window {}, first frame {}, {playing}start-up finished {}, {page} after the \
          process started; {splash}; update put in place: {}; {bundle}; engine check {}; process started at {}",
         ms(m.update_step),
         ms(m.window),
@@ -213,6 +265,7 @@ mod tests {
             engine: Some("none (trusted as verified when it was written), 3 ms".into()),
             splash_id: None,
             native_splash: false,
+            splash_started: None,
             written: false,
         };
         assert_eq!(
@@ -230,11 +283,37 @@ mod tests {
             ..m.clone()
         };
         assert!(line(&opened, None).contains("; splash shown, round-11/v2 (native pack); "));
+        let played = Marks { splash_started: Some(221), ..opened.clone() };
+        assert!(
+            line(&played, None).contains("first frame 214 ms, splash started playing 221 ms, start-up finished 330 ms, "),
+            "{}",
+            line(&played, None)
+        );
         let fallback = Marks { native_splash: false, ..opened };
         assert!(line(&fallback, None).contains("; splash shown, round-11/v2 (web animation); "));
         let ceiling = Marks { page: None, splash: Some(false), engine: None, ..m };
         let text = line(&ceiling, None);
         assert!(text.contains("page took over: not reported"), "{text}");
         assert!(text.contains("no splash") && text.contains("engine check none (no engine)"), "{text}");
+    }
+
+    /// A Dock launch has no terminal: the line must be in a file afterwards, one entry per launch.
+    #[test]
+    fn every_launch_line_is_kept_in_the_launch_log() {
+        let dir = std::env::temp_dir().join(format!("richos-launch-log-test-{}", std::process::id()));
+        assert!(!dir.exists(), "{} is left from an earlier run", dir.display());
+        let path = dir.join("Logs").join("RichOS").join("launch.log");
+        let first = log_entry(1_757_493_852_000, "1.2.3", 41, "[richos] launch timing: update step 15 ms");
+        assert_eq!(first, "2025-09-10T08:44:12Z RichOS 1.2.3 pid 41 [richos] launch timing: update step 15 ms\n");
+        append(&path, &first).expect("the first launch creates the folder and the file");
+        append(&path, &log_entry(1_757_493_853_000, "1.2.3", 42, "[richos] launch timing: update step 16 ms"))
+            .expect("the second launch adds to it");
+        let kept = std::fs::read_to_string(&path).expect("the launch log is readable");
+        let lines: Vec<&str> = kept.lines().collect();
+        assert_eq!(lines.len(), 2, "{kept}");
+        assert!(lines[0].ends_with("pid 41 [richos] launch timing: update step 15 ms"), "{kept}");
+        assert!(lines[1].starts_with("2025-09-10T08:44:13Z RichOS 1.2.3 pid 42 "), "{kept}");
+        assert!(log_path().ends_with("RichOS/launch.log"), "{}", log_path().display());
+        std::fs::remove_dir_all(&dir).expect("the test removes what it wrote");
     }
 }

@@ -268,6 +268,11 @@ pub fn log_path_under(home: Option<&Path>) -> PathBuf {
     }
 }
 
+/// The version this process was started as, for an entry in a log file.
+pub(crate) fn version() -> &'static str {
+    VERSION.get().map(String::as_str).unwrap_or("unknown")
+}
+
 /// One report, appended. Returns where it landed, or `None` when nowhere would take it.
 fn record(operator: &str) -> Option<PathBuf> {
     let path = log_path();
@@ -307,7 +312,7 @@ pub fn log_entry(
 
 /// Keep one generation. A startup log only grows on boots that failed, so this is a bound
 /// rather than a rotation policy.
-fn rotate_if_large(path: &Path) {
+pub(crate) fn rotate_if_large(path: &Path) {
     if std::fs::metadata(path).map(|m| m.len()).unwrap_or(0) > LOG_ROTATE_BYTES {
         let _ = std::fs::rename(path, path.with_extension("log.1"));
     }
