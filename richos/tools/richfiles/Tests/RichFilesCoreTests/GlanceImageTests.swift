@@ -6,18 +6,95 @@ import XCTest
 @testable import RichFilesCore
 
 final class GlanceImageTests: XCTestCase {
+    func testDecodesNewImageTypesAndChoosesLargestIcon() throws {
+        let cases: [(String, CGSize)] = [
+            ("sample.avif", CGSize(width: 40, height: 24)),
+            ("sample.bmp", CGSize(width: 40, height: 24)),
+            ("sample.heic", CGSize(width: 40, height: 24)),
+            ("sample.icns", CGSize(width: 128, height: 128)),
+            ("sample.ico", CGSize(width: 64, height: 64)),
+            ("sample.jpe", CGSize(width: 40, height: 24)),
+            ("sample.tif", CGSize(width: 40, height: 24)),
+            ("still.webp", CGSize(width: 40, height: 24))
+        ]
+        for (name, size) in cases {
+            let image = try GlanceImage.decode(fixture(name))
+            XCTAssertEqual(image.size, size, name)
+            XCTAssertEqual(CGSize(width: image.bitmap.width, height: image.bitmap.height), size, name)
+        }
+        let heif = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".heif")
+        try FileManager.default.copyItem(at: fixture("sample.heic"), to: heif)
+        defer { try? FileManager.default.removeItem(at: heif) }
+        XCTAssertEqual(try GlanceImage.decode(heif).size, CGSize(width: 40, height: 24))
+        XCTAssertNil(try GlanceImage.decode(fixture("sample.tif")).animation)
+        XCTAssertNil(try GlanceImage.decode(fixture("still.webp")).animation)
+    }
+
+    func testGIFAndWebPDecodeCompositedFramesAndTiming() throws {
+        for name in ["delta.gif", "delta.webp"] {
+            let first = try GlanceImage.decode(fixture(name))
+            let motion = try XCTUnwrap(first.animation, name)
+            XCTAssertEqual(motion.frameCount, 3, name)
+            XCTAssertEqual(motion.loopCount, 2, name)
+            XCTAssertEqual(motion.initialDuration, 0.08, accuracy: 0.001, name)
+            XCTAssertEqual(try dominantChannel(in: first.bitmap, x: 20, y: 12), 0, name)
+            for (index, expectedDuration) in [(1, 0.16), (2, 0.24)] {
+                let frame = try motion.frame(at: index)
+                XCTAssertEqual(frame.duration, expectedDuration, accuracy: 0.001, name)
+                XCTAssertEqual(CGSize(width: frame.bitmap.width, height: frame.bitmap.height), first.size, name)
+                // The changed patch advances while the background from frame one survives.
+                XCTAssertEqual(try dominantChannel(in: frame.bitmap, x: 20, y: 12), index, name)
+                XCTAssertEqual(try dominantChannel(in: frame.bitmap, x: 2, y: 2), 0, name)
+            }
+            XCTAssertThrowsError(try motion.frame(at: 3), name)
+        }
+    }
+
+    private func dominantChannel(in image: CGImage, x: Int, y: Int) throws -> Int {
+        let sample = try XCTUnwrap(image.cropping(to: CGRect(x: x, y: y, width: 1, height: 1)))
+        var rgba = [UInt8](repeating: 0, count: 4)
+        return try rgba.withUnsafeMutableBytes { bytes in
+            let context = try XCTUnwrap(CGContext(data: bytes.baseAddress, width: 1, height: 1, bitsPerComponent: 8,
+                                                bytesPerRow: 4, space: CGColorSpaceCreateDeviceRGB(),
+                                                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+            context.draw(sample, in: CGRect(x: 0, y: 0, width: 1, height: 1))
+            XCTAssertEqual(bytes[3], 255)
+            return try XCTUnwrap((0..<3).max(by: { bytes[$0] < bytes[$1] }))
+        }
+    }
+
+    func testDocumentClaimsMatchTheOpenPanelAndExcludeSVG() throws {
+        let package = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+        let plist = try PropertyListSerialization.propertyList(
+            from: Data(contentsOf: package.appendingPathComponent("RichGlance-Info.plist")), format: nil
+        ) as? [String: Any]
+        let claims = try XCTUnwrap((plist?["CFBundleDocumentTypes"] as? [[String: Any]])?.first)
+        XCTAssertEqual(claims["CFBundleTypeRole"] as? String, "Viewer")
+        XCTAssertEqual(claims["LSHandlerRank"] as? String, "Alternate")
+        XCTAssertEqual(Set(try XCTUnwrap(claims["LSItemContentTypes"] as? [String])),
+                       Set(GlanceFiles.contentTypes.map(\.identifier)))
+        XCTAssertFalse(GlanceFiles.supports(URL(fileURLWithPath: "/example.svg")))
+    }
+
+    private func fixture(_ name: String) throws -> URL {
+        try XCTUnwrap(Bundle.module.url(forResource: name, withExtension: nil, subdirectory: "Glance"))
+    }
+
     func testFolderListsOnlyImmediateVisibleImagesInFilenameOrder() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
         defer { try? FileManager.default.removeItem(at: root) }
-        for name in ["Bravo.jpeg", "Zulu.JPG", "alpha.png", "notes.txt", ".hidden.png"] {
+        for name in ["Bravo.jpeg", "Zulu.JPG", "alpha.png", "c.HEIC", "d.WebP", "e.avif", "f.gif",
+                     "g.tiff", "h.bmp", "i.ico", "j.icns", "notes.txt", "vector.svg", ".hidden.png"] {
             try Data().write(to: root.appendingPathComponent(name))
         }
         try FileManager.default.createDirectory(at: root.appendingPathComponent("Folder.png"), withIntermediateDirectories: false)
         try FileManager.default.createSymbolicLink(at: root.appendingPathComponent("link.jpg"),
                                                    withDestinationURL: root.appendingPathComponent("Zulu.JPG"))
         let urls = try GlanceFiles.folder(containing: root.appendingPathComponent("Bravo.jpeg"))
-        XCTAssertEqual(urls.map(\.lastPathComponent), ["alpha.png", "Bravo.jpeg", "Zulu.JPG"])
+        XCTAssertEqual(urls.map(\.lastPathComponent), ["alpha.png", "Bravo.jpeg", "c.HEIC", "d.WebP", "e.avif",
+                                                        "f.gif", "g.tiff", "h.bmp", "i.ico", "j.icns", "Zulu.JPG"])
     }
 
     func testDecodesRotatedJPEGAndRefusesMislabeledImage() throws {

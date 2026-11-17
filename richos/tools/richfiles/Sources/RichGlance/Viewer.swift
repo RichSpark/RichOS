@@ -22,6 +22,7 @@ final class Viewer {
     private var pendingStep = 0
     private var displayRequest: Request?
     private var decodeWork: DispatchWorkItem?
+    private var playback: Task<Void, Never>?
     private var folderWork: DispatchWorkItem?
     private let decoder = DispatchQueue(label: "app.richos.richglance.decode", qos: .userInitiated)
     private let scanner = DispatchQueue(label: "app.richos.richglance.folder", qos: .userInitiated)
@@ -82,6 +83,8 @@ final class Viewer {
     }
 
     private func stopDisplay() {
+        playback?.cancel()
+        playback = nil
         decodeWork?.cancel()
         decodeWork = nil
         displayRequest?.record(.glanceDisplay, .cancelled)
@@ -128,6 +131,7 @@ final class Viewer {
                 case .success(let image):
                     outcome = .complete
                     canvas.show(image, filename: file.lastPathComponent)
+                    if let animation = image.animation { play(animation, request: request) }
                 case .failure(let error):
                     outcome = (error as? GlanceImage.Failure) == .unavailable ? .unavailable : .issues
                     canvas.show(nil, filename: file.lastPathComponent, message: "This image could not be opened.")
@@ -140,6 +144,39 @@ final class Viewer {
         }
         decodeWork = work
         decoder.async(execute: work)
+    }
+
+    private func play(_ animation: GlanceAnimation, request: Request) {
+        playback = Task { [weak self, decoder] in
+            var index = 1
+            var pass = 1
+            var deadline = ProcessInfo.processInfo.systemUptime + animation.initialDuration
+            while !Task.isCancelled {
+                if index == animation.frameCount {
+                    guard animation.loopCount == 0 || pass < animation.loopCount else { return }
+                    if animation.loopCount > 0 { pass += 1 }
+                    index = 0
+                }
+                // Decode at most one frame ahead, then wait out the current frame's duration.
+                let next = index
+                let began = ProcessInfo.processInfo.systemUptime
+                let frame: (bitmap: CGImage, duration: TimeInterval)? = await withCheckedContinuation { continuation in
+                    decoder.async { continuation.resume(returning: try? animation.frame(at: next)) }
+                }
+                guard !Task.isCancelled else { return }
+                guard let frame else {
+                    request.record(.glanceDecode, .issues, started: began)
+                    return
+                }
+                do {
+                    try await Task.sleep(for: .seconds(max(0, deadline - ProcessInfo.processInfo.systemUptime)))
+                } catch { return }
+                guard !Task.isCancelled, let self else { return }
+                canvas.showAnimationFrame(frame.bitmap)
+                deadline = ProcessInfo.processInfo.systemUptime + frame.duration
+                index += 1
+            }
+        }
     }
 
     func openInPreview() {
