@@ -107,7 +107,8 @@
 .rf-search { position: relative; display: flex; align-items: center; }
 .rf-search svg { position: absolute; left: 10px; width: 16px; height: 16px; color: var(--ink-soft); pointer-events: none; }
 .rf-search input { width: 100%; font: inherit; font-size: 1rem; color: var(--ink); background: var(--surface-sunk); border: 1px solid var(--line-control); border-radius: 9px; padding: 7px 10px 7px 34px; outline: none; }
-.rf-search input::placeholder { color: var(--ink-faint); opacity: 1; }
+.rf-search input { --placeholder-ink: var(--ink-faint); }
+.rf-search input::placeholder { color: var(--placeholder-ink); opacity: 1; }
 .rf-search input:focus { border-color: var(--gold); box-shadow: 0 0 0 3px var(--gold-soft); }
 .rf-win-body { display: grid; grid-template-columns: minmax(0, 1fr) 340px; min-height: 0; }
 .rf-win-body.is-alone { grid-template-columns: minmax(0, 1fr); }

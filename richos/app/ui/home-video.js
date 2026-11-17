@@ -99,6 +99,18 @@ window.RichHomeVideo = (function () {
     );
     return inputKind;
   }
+  // THE MICROPHONE IS ASKED FOR WITHOUT ECHO CANCELING (CEO 2026-11-17: "In the very first playback
+  // after a recording between second 2 and second 3 there's always like half a second of an audio
+  // that cuts out. But that only happens on the first playback."). His files held that half second
+  // whole, and the sheet's player decodes it whole the first time; what only the first playback
+  // has is the microphone being let go as it starts. Echo canceling is what ties a microphone to
+  // the Mac's speakers: with it the webview opens the microphone as a call's (the Mac's
+  // voice-processing unit, which takes the sound output in with it), and letting such a microphone
+  // go changes the output again while the video is already playing. A recording is not a call:
+  // asked for without it, the microphone is only a microphone, and his voice is recorded as the
+  // microphone hears it. Not heard on a Mac by any check (none may open a microphone or play a
+  // sound); `tests/video-as-shown.js` holds both recorders to asking this way.
+  var ASK = { audio: { echoCancellation: false } };
   function microphone(paint, bars) {
     var mic = { want: false, state: "off", stream: null, ac: null, an: null, buf: null, level: 0, tone: false };
     /// The made-up microphone: a 196 Hz tone that swells 1.7 times a second, into the file only.
@@ -134,7 +146,7 @@ window.RichHomeVideo = (function () {
             return tone(AC);
           }
           if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw new Error("no microphone");
-          return navigator.mediaDevices.getUserMedia({ audio: true });
+          return navigator.mediaDevices.getUserMedia(ASK);
         })
         .then(
           function (stream) {

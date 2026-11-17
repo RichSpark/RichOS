@@ -3713,8 +3713,13 @@
         // ON PURPOSE — the unset state is what almost every install actually has, and it
         // is the state the acceptance suite has to be able to reach without arranging
         // anything.
-        case "get_swearmeter":
-          return { show: mockConfig.show_swearmeter, result: { detector_version: 1, count: 0, unknown_card_inputs: 0, unknown_message_inputs: 0, incomplete_history: false, available: true, revision: 1, periods: { last_30_days: 0, months: [], undated: 0 } } };
+        // `preset.swearMonths` ([{ month: 202611, count: 545 }, ...]) gives the count its months, so
+        // Settings has its closed "By month" list (`tests/video-as-shown.js`).
+        case "get_swearmeter": {
+          const months = Array.isArray(preset.swearMonths) ? preset.swearMonths : [];
+          const all = months.reduce((n, m) => n + m.count, 0);
+          return { show: mockConfig.show_swearmeter, result: { detector_version: 1, count: all, unknown_card_inputs: 0, unknown_message_inputs: 0, incomplete_history: false, available: true, revision: 1, periods: { last_30_days: months.length ? 30 : 0, months: months, undated: 0 } } };
+        }
         case "set_swearmeter_visible":
           mockConfig.show_swearmeter = args.show === true;
           persistMockConfig();

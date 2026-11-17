@@ -1373,8 +1373,11 @@ body.home-open {
    company's real name, which is the thing that tells him an empty box is not a broken button.
    `--ink-soft` holds it to the reading floor — 5.51:1 dark / 5.86:1 light on this field's own
    background — rather than the browser's default placeholder grey, which is roughly 2.9:1. */
+.home-prefs-label {
+  --placeholder-ink: var(--ink-soft);
+}
 .home-prefs-label::placeholder {
-  color: var(--ink-soft);
+  color: var(--placeholder-ink);
   opacity: 1;
 }
 .home-prefs-show {

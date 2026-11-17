@@ -364,8 +364,11 @@
   font: inherit;
   color: #eef1f7;
 }
+.opg-input {
+  --placeholder-ink: #9fb0cf;
+}
 .opg-input::placeholder {
-  color: #9fb0cf;
+  color: var(--placeholder-ink);
 }
 .opg-hint {
   margin: 8px 0 0;

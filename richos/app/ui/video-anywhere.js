@@ -191,6 +191,17 @@ window.RichVideoAnywhere = (function () {
     }
     return { range: r, color: getComputedStyle(tint).backgroundColor };
   }
+  // WHERE A PIECE OF TEXT STANDS: its boxes on the page, without the empty ones. The Mac's own
+  // webview answers for the first word after a line break with two boxes, the first an empty one
+  // at the end of the line before; taken for the word's place, it cost every such line its first
+  // letter and started the line a letter in (CEO 2026-11-17: "the second text line seems to be
+  // adding one space in front of it").
+  function boxes(rg) {
+    var all = rg.getClientRects();
+    var out = [];
+    for (var i = 0; i < all.length; i++) if (all[i].width > 0) out.push(all[i]);
+    return out;
+  }
   function paintText(cx, node, s, alpha, R, ink) {
     var t = node.textContent;
     var hl = R.sel && R.sel.range;
@@ -240,7 +251,7 @@ window.RichVideoAnywhere = (function () {
       var b = a + m[0].length;
       range.setStart(node, a);
       range.setEnd(node, b);
-      var rects = range.getClientRects();
+      var rects = boxes(range);
       if (!rects.length) continue;
       if (rects.length === 1) {
         run(a, b, rects[0]);
@@ -255,7 +266,7 @@ window.RichVideoAnywhere = (function () {
         if (c < b) {
           range.setStart(node, c);
           range.setEnd(node, c + 1);
-          cr = range.getClientRects()[0];
+          cr = boxes(range)[0];
           if (!cr) continue;
         }
         if (first && (c === b || Math.abs(cr.top - first.top) > 1)) {
@@ -270,6 +281,17 @@ window.RichVideoAnywhere = (function () {
     }
     if (native) cx.letterSpacing = "0px";
   }
+  // THE COLOR OF A PLACEHOLDER, read off its field (`--placeholder-ink`, `style.css`), where the app
+  // says it for every placeholder it colors. It cannot be asked of the placeholder itself: the
+  // Mac's own webview answers a question about `::placeholder` with the field's own color, and the
+  // message box's placeholder, which the app paints clear under its two-line hint, was drawn in
+  // full ink under that hint (CEO 2026-11-17: ""Talk to Rich" seems to be overlaying some other
+  // text underneath"). A field that says nothing has the webview's own gray. "" is a placeholder
+  // the app paints clear.
+  function placeholderInk(s) {
+    var v = s.getPropertyValue("--placeholder-ink").trim() || "darkgray";
+    return /^transparent$/i.test(v) || CLEAR.test(v) ? "" : v;
+  }
   // WHAT A BOX OF SEVERAL LINES HOLDS (the message box, Your instructions): every line of it that
   // shows, wrapped and scrolled as the box wraps and scrolls it, with what he highlighted in it.
   // The words of a text box cannot be asked where they stand, so the same words are laid out in a
@@ -282,8 +304,8 @@ window.RichVideoAnywhere = (function () {
     var faint = "";
     if (!text) {
       text = e.getAttribute("placeholder") || "";
-      faint = getComputedStyle(e, "::placeholder").color;
-      if (CLEAR.test(faint)) return; // a box whose own placeholder the app does not paint
+      faint = placeholderInk(s);
+      if (!faint) return; // a box whose own placeholder the app does not paint
     }
     if (!/\S/.test(text)) return;
     if (!twin) {
@@ -325,8 +347,8 @@ window.RichVideoAnywhere = (function () {
       text = e.value;
       if (!text) {
         text = e.getAttribute("placeholder") || "";
-        faint = getComputedStyle(e, "::placeholder").color;
-        if (CLEAR.test(faint)) return; // a field whose own placeholder the app does not paint
+        faint = placeholderInk(s);
+        if (!faint) return; // a field whose own placeholder the app does not paint
       } else if (type === "password") text = text.replace(/./g, "•");
     } else return;
     text = text.split("\n")[0];
@@ -563,11 +585,16 @@ window.RichVideoAnywhere = (function () {
       plate(cx, r.left, r.top, r.width, r.height, rad);
       cx.clip();
     }
+    // A CLOSED LIST (`<details>`) SHOWS ITS HEADING ONLY. What it holds still answers a place and
+    // a size on the page in the Mac's own webview, and was drawn over what stands under it (CEO
+    // 2026-11-17, Settings' "By month": "a transparent overlay appears with the text that's
+    // normally hidden").
+    var shut = tag === "DETAILS" && !e.open;
     if (tag !== "TEXTAREA" && tag !== "SELECT") {
       for (var c = e.firstChild; c; c = c.nextSibling) {
         if (c.nodeType === 3) {
-          if (seen) paintText(cx, c, s, a, R);
-        } else if (c.nodeType === 1) paintDom(cx, c, a, R);
+          if (seen && !shut) paintText(cx, c, s, a, R);
+        } else if (c.nodeType === 1 && (!shut || c.tagName === "SUMMARY")) paintDom(cx, c, a, R);
       }
     }
     if (clip) cx.restore();
