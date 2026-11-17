@@ -5760,7 +5760,7 @@ async function syncAssertivenessFromBackend() {
 // ---------------------------------------------------------------------------------------
 // RICH'S MODEL (CEO §119; round 23). Two rows: "talks with you" (the conversation, Rich) and
 // "directs your team" (the team's back end, Stu in the record, never named in the app, §110),
-// each Opus (the default) or Fable. Conversation effort prioritizes quick replies. Backed by `get_lease_models` /
+// each Opus or Fable (the default, CEO 2026-11-17). Conversation effort prioritizes quick replies. Backed by `get_lease_models` /
 // `set_lease_models` (main.rs -> richos-core's config.rs).
 //
 // HELD WHILE PREFERENCES IS OPEN, SAVED AND APPLIED WHEN IT CLOSES. The CEO's addendum, his
@@ -5778,31 +5778,31 @@ const MODEL_ROWS = [
   ["stu", "md-stu", "md-stu-state"],
 ];
 const MODEL_NOTE = {
-  "opus,opus":
-    "Opus is the default for both. Fable is more capable than Opus and uses up your Claude limits faster.",
-  "fable,opus":
-    "<strong>Rich talks with you on Fable.</strong> Fable is more capable than Opus and uses up your Claude limits faster.",
-  "opus,fable":
-    "<strong>Rich directs your team on Fable.</strong> Fable is more capable than Opus and uses up your Claude limits faster. Your teammates keep their own models.",
   "fable,fable":
-    "<strong>Rich is on Fable for both.</strong> Fable is more capable than Opus and uses up your Claude limits faster, on every reply and every piece of work he directs.",
+    "Fable is the default for both. Fable is more capable than Opus and uses up your Claude limits faster.",
+  "opus,fable":
+    "<strong>Rich talks with you on Opus.</strong> Opus is less capable than Fable and uses up your Claude limits more slowly.",
+  "fable,opus":
+    "<strong>Rich directs your team on Opus.</strong> Opus is less capable than Fable and uses up your Claude limits more slowly. Your teammates keep their own models.",
+  "opus,opus":
+    "<strong>Rich is on Opus for both.</strong> Opus is less capable than Fable and uses up your Claude limits more slowly, on every reply and every piece of work he directs.",
 };
 const MODEL_TOAST = {
   rich: {
-    fable: "Rich now talks with you on Fable.",
-    opus: "Rich talks with you on Opus again, the default.",
+    fable: "Rich talks with you on Fable again, the default.",
+    opus: "Rich now talks with you on Opus.",
   },
   stu: {
-    fable: "Rich now directs your team on Fable.",
-    opus: "Rich directs your team on Opus at high effort again, the default.",
+    fable: "Rich directs your team on Fable again, the default.",
+    opus: "Rich now directs your team on Opus at high effort.",
   },
 };
 /// What is saved, as the store last said. The default until the first read answers.
-let modelSaved = { rich: "opus", stu: "opus" };
+let modelSaved = { rich: "fable", stu: "fable" };
 /// What Preferences shows while it is open. Equal to `modelSaved` whenever it is closed.
 let modelDraft = { ...modelSaved };
 function modelValue(v) {
-  return v === "fable" ? "fable" : "opus";
+  return v === "opus" ? "opus" : "fable";
 }
 function paintModelRows(lit) {
   for (const [who, segId, stateId] of MODEL_ROWS) {
@@ -5815,7 +5815,7 @@ function paintModelRows(lit) {
       opt.setAttribute("aria-checked", String(on));
       opt.tabIndex = on ? 0 : -1;
     }
-    el(stateId).textContent = v === "opus" ? "default" : "";
+    el(stateId).textContent = v === "fable" ? "default" : "";
     if (lit === who && v === "fable") {
       seg.classList.remove("is-lit");
       void seg.offsetWidth;
@@ -5826,7 +5826,7 @@ function paintModelRows(lit) {
   const note = el("md-note");
   if (note) {
     note.innerHTML = MODEL_NOTE[key];
-    note.classList.toggle("is-fable", key !== "opus,opus");
+    note.classList.toggle("is-changed", key !== "fable,fable");
   }
 }
 function pickModel(who, v, focus) {

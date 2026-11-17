@@ -9,6 +9,10 @@
 //
 // CEO 2026-10-14 prioritizes instant replies over effort; the conversation now uses low effort.
 //
+// CEO 2026-11-17: "Fable at low effort might actually be a good new default for Rich in the
+// RichOS app. And for Stu, Fable at medium effort might be the best new default." So the row
+// marked "default" is Fable in both, and Opus is the option.
+//
 // WHAT THIS SUITE PROVES is the browser half, through the real renderer and mock.js's stand-in
 // for config.rs:
 //   1. the rows show the stored choice, first under "Working with Rich" in the one Settings
@@ -90,7 +94,7 @@ const calls = (page, cmd) => page.evaluate((c) => window.__calls.filter((x) => x
 const stored = (page) =>
   page.evaluate((key) => {
     const c = JSON.parse(window.localStorage.getItem(key) || "{}");
-    return { rich: c.rich_model || "opus", stu: c.stu_model || "opus" };
+    return { rich: c.rich_model || "fable", stu: c.stu_model || "fable" };
   }, STORE);
 
 /// Round 27: Rich's model lives in the one Settings panel, opened by the button at top right.
@@ -152,13 +156,13 @@ async function main() {
 
   // ---- 1. the rows show the stored choice ------------------------------------------------
   await run.check("1. the rows show the stored choice, first under Working with Rich, away from the first column", async () => {
-    // A fresh install: both on Opus, both marked default.
+    // A fresh install: both on Fable, both marked default (CEO 2026-11-17).
     const fresh = await openApp(browser);
     await openPrefs(fresh);
-    await rowsShow(fresh, { rich: "opus", stu: "opus" });
+    await rowsShow(fresh, { rich: "fable", stu: "fable" });
     const r0 = await rows(fresh);
-    assertEqual([r0.rich, r0.stu], [{ chosen: "opus", state: "default" }, { chosen: "opus", state: "default" }], "fresh install");
-    assert(r0.note.startsWith("Opus is the default for both."), "the line under the rows: " + r0.note);
+    assertEqual([r0.rich, r0.stu], [{ chosen: "fable", state: "default" }, { chosen: "fable", state: "default" }], "fresh install");
+    assert(r0.note.startsWith("Fable is the default for both."), "the line under the rows: " + r0.note);
     // Round 27: first in the middle column, "Working with Rich", and never in the first column
     // of quick controls (§119: "in general settings, not in quick settings").
     const where = await fresh.evaluate(() => {
@@ -175,36 +179,36 @@ async function main() {
     assert(!/\bStu\b/.test(visible), "Stu is named in Settings");
     await fresh.close();
 
-    // A stored choice of Fable for "talks with you" is what the row shows.
-    const page = await openApp(browser, { models: { rich: "fable" } });
+    // A stored choice of Opus for "talks with you" is what the row shows.
+    const page = await openApp(browser, { models: { rich: "opus" } });
     await openPrefs(page);
-    await rowsShow(page, { rich: "fable", stu: "opus" });
+    await rowsShow(page, { rich: "opus", stu: "fable" });
     const r = await rows(page);
-    assertEqual([r.rich, r.stu], [{ chosen: "fable", state: "" }, { chosen: "opus", state: "default" }], "stored rich=fable");
-    assert(r.note.startsWith("Rich talks with you on Fable."), "the line names the change first: " + r.note);
+    assertEqual([r.rich, r.stu], [{ chosen: "opus", state: "" }, { chosen: "fable", state: "default" }], "stored rich=opus");
+    assert(r.note.startsWith("Rich talks with you on Opus."), "the line names the change first: " + r.note);
     assertEqual(page.__errors, [], "no page errors");
     await page.close();
-    return "fresh: opus/opus default; stored fable: shown";
+    return "fresh: fable/fable default; stored opus: shown";
   });
 
   // ---- 2. changing a row while open changes nothing in use ------------------------------
   await run.check("2. a row changed while Settings is open changes nothing in use: no command, no write, no toast", async () => {
     const page = await openApp(browser);
     await openPrefs(page);
-    await rowsShow(page, { rich: "opus", stu: "opus" });
+    await rowsShow(page, { rich: "fable", stu: "fable" });
     await page.click('#md-rich .seg-opt[data-v="fable"]');
     // The keyboard is a second way in: the arrows move the team row's choice.
     await page.focus('#md-stu .seg-opt[data-v="opus"]');
-    await page.keyboard.press("ArrowRight");
+    await page.keyboard.press("ArrowLeft");
     // A pick is synchronous (`pickModel`): once the rows show both, any command or write a
     // pick could make has already been made, so the negatives below wait on a fact, not a clock.
-    await rowsShow(page, { rich: "fable", stu: "fable" });
+    await rowsShow(page, { rich: "opus", stu: "opus" });
     const r = await rows(page);
-    assertEqual([r.rich.chosen, r.stu.chosen], ["fable", "fable"], "the popover shows both picks");
-    assert(r.note.startsWith("Rich is on Fable for both."), "and says what they would mean: " + r.note);
+    assertEqual([r.rich.chosen, r.stu.chosen], ["opus", "opus"], "the popover shows both picks");
+    assert(r.note.startsWith("Rich is on Opus for both."), "and says what they would mean: " + r.note);
     assert(await isOpen(page), "Settings is still open");
     assertEqual(await calls(page, "set_lease_models"), [], "a command went out while Settings was open");
-    assertEqual(await stored(page), { rich: "opus", stu: "opus" }, "the store changed while Settings was open");
+    assertEqual(await stored(page), { rich: "fable", stu: "fable" }, "the store changed while Settings was open");
     assertEqual(await toastText(page), null, "a toast fired before Settings closed");
     await page.close();
     return "shown, not sent";
@@ -215,26 +219,26 @@ async function main() {
     // (a) the Settings button.
     const page = await openApp(browser);
     await openPrefs(page);
-    await rowsShow(page, { rich: "opus", stu: "opus" });
+    await rowsShow(page, { rich: "fable", stu: "fable" });
     await page.click('#md-rich .seg-opt[data-v="fable"]');
     await page.click("#set-btn");
-    await toastSays(page, "Rich now talks with you on Fable.");
+    await toastSays(page, "Rich now talks with you on Opus.");
     assertEqual(await isOpen(page), false, "the Settings button closed Settings");
     const sent = await calls(page, "set_lease_models");
-    assertEqual(sent.map((c) => c.args), [{ rich: "fable", stu: "opus" }], "one save, both rows, on close");
-    assertEqual(await stored(page), { rich: "fable", stu: "opus" }, "the store after close");
-    assertEqual(await toastText(page), "Rich now talks with you on Fable.", "the toast says what is now true");
+    assertEqual(sent.map((c) => c.args), [{ rich: "opus", stu: "fable" }], "one save, both rows, on close");
+    assertEqual(await stored(page), { rich: "opus", stu: "fable" }, "the store after close");
+    assertEqual(await toastText(page), "Rich now talks with you on Opus.", "the toast says what is now true");
 
-    // (b) Escape, both rows back to Opus at once: one save, one toast with both sentences.
+    // (b) Escape, both rows changed at once: one save, one toast with both sentences.
     await openPrefs(page);
-    await rowsShow(page, { rich: "fable", stu: "opus" });
+    await rowsShow(page, { rich: "opus", stu: "fable" });
     await page.click('#md-rich .seg-opt[data-v="opus"]');
     await page.click('#md-stu .seg-opt[data-v="fable"]');
     await page.keyboard.press("Escape");
-    const both = "Rich talks with you on Opus again, the default. Rich now directs your team on Fable.";
+    const both = "Rich talks with you on Fable again, the default. Rich now directs your team on Opus at high effort.";
     await toastSays(page, both);
     assertEqual(await isOpen(page), false, "Escape closed Settings");
-    assertEqual(await stored(page), { rich: "opus", stu: "fable" }, "the store after Escape");
+    assertEqual(await stored(page), { rich: "fable", stu: "opus" }, "the store after Escape");
     assertEqual(await toastText(page), both, "one toast, both changes");
 
     // (c) a click outside; and a choice flipped and flipped back saves nothing, says nothing.
@@ -244,7 +248,7 @@ async function main() {
       if (t) t.hidden = true;
     });
     await openPrefs(page);
-    await rowsShow(page, { rich: "opus", stu: "fable" });
+    await rowsShow(page, { rich: "fable", stu: "opus" });
     await page.click('#md-rich .seg-opt[data-v="fable"]');
     await page.click('#md-rich .seg-opt[data-v="opus"]');
     // Below the panel, which now spans the stage. Measured, not typed: with round 36's Your
@@ -271,14 +275,14 @@ async function main() {
   await run.check("4. reopening Settings shows the saved choice, and so does the next launch", async () => {
     const page = await openApp(browser, { theme: "light" });
     await openPrefs(page);
-    await rowsShow(page, { rich: "opus", stu: "opus" });
+    await rowsShow(page, { rich: "fable", stu: "fable" });
     await page.click('#md-stu .seg-opt[data-v="fable"]');
     await page.click("#set-btn");
-    await toastSays(page, "Rich now directs your team on Fable.");
+    await toastSays(page, "Rich now directs your team on Opus at high effort.");
     await openPrefs(page);
-    await rowsShow(page, { rich: "opus", stu: "fable" });
+    await rowsShow(page, { rich: "fable", stu: "opus" });
     const r = await rows(page);
-    assertEqual([r.rich, r.stu], [{ chosen: "opus", state: "default" }, { chosen: "fable", state: "" }], "reopened");
+    assertEqual([r.rich, r.stu], [{ chosen: "fable", state: "default" }, { chosen: "opus", state: "" }], "reopened");
     assert(r.note.includes("Your teammates keep their own models."), "the team row's line: " + r.note);
 
     // The next launch reads the store, not the page's memory.
@@ -286,9 +290,9 @@ async function main() {
     await leaveHome(page);
     await page.waitForSelector(".nav-thread", { state: "attached" });
     await openPrefs(page);
-    await rowsShow(page, { rich: "opus", stu: "fable" });
+    await rowsShow(page, { rich: "fable", stu: "opus" });
     const after = await rows(page);
-    assertEqual([after.rich.chosen, after.stu.chosen], ["opus", "fable"], "after a relaunch");
+    assertEqual([after.rich.chosen, after.stu.chosen], ["fable", "opus"], "after a relaunch");
     assertEqual(page.__errors, [], "no page errors");
     await page.close();
     return "reopen and relaunch";
@@ -314,17 +318,17 @@ async function main() {
       };
     });
     await openPrefs(page);
-    await rowsShow(page, { rich: "opus", stu: "opus" });
+    await rowsShow(page, { rich: "fable", stu: "fable" });
     await page.click('#md-rich .seg-opt[data-v="fable"]');
     await page.click("#set-btn"); // close: the save starts and is held
     const readsBefore = await page.evaluate(() => window.__readsDone);
     await openPrefs(page); // reopen: its read starts while the save is held
     await page.evaluate(() => window.__releaseSave());
-    await toastSays(page, "Rich now talks with you on Fable.");
+    await toastSays(page, "Rich now talks with you on Opus.");
     await page.waitForFunction((n) => window.__readsDone > n, readsBefore).catch(() => {});
-    assertEqual(await stored(page), { rich: "fable", stu: "opus" }, "the save landed");
+    assertEqual(await stored(page), { rich: "opus", stu: "fable" }, "the save landed");
     const r = await rows(page);
-    assertEqual([r.rich.chosen, r.stu.chosen], ["fable", "opus"], "the reopened rows after the save and the read settled");
+    assertEqual([r.rich.chosen, r.stu.chosen], ["opus", "fable"], "the reopened rows after the save and the read settled");
     assertEqual(page.__errors, [], "no page errors");
     await page.close();
     return "read waited for the save";
@@ -341,7 +345,7 @@ async function main() {
       for (const width of widths) {
         const page = await openApp(browser, { theme, viewport: { width, height: 700 }, reducedMotion: "reduce" });
         await openPrefs(page);
-        await rowsShow(page, { rich: "opus", stu: "opus" });
+        await rowsShow(page, { rich: "fable", stu: "fable" });
         const steps = await page.evaluate(() => window.RichTheme.STEPS);
         for (const scale of steps) {
           for (const stu of ["opus", "fable"]) {

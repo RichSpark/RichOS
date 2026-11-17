@@ -4858,7 +4858,7 @@ fn set_assertiveness(state: State<AppState>, level: String) -> Result<(), String
 
 /// **Rich's model, as Preferences shows it** (§119; round 23): `{ "rich": "opus"|"fable",
 /// "stu": "opus"|"fable" }`. Rich is the conversation, Stu the team's back end, named in the
-/// app only by what each does (§110). A value another build wrote reads as Opus.
+/// app only by what each does (§110). A value another build wrote reads as Fable, the default.
 #[richos_command::command]
 fn get_lease_models(state: State<AppState>) -> serde_json::Value {
     let models = state.config.lock().unwrap().lease_models();

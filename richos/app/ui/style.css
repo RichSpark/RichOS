@@ -7465,7 +7465,7 @@ body.bp-narrow .tl-user-bubble {
   line-height: 1.5;
   color: var(--ink-soft);
 }
-.md-note.is-fable {
+.md-note.is-changed {
   color: var(--ink);
   padding-left: 12px;
   border-left: 2px solid var(--gold);

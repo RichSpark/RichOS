@@ -226,11 +226,11 @@
 
   const MOCK_CONFIG_KEY = "richos-mock-config";
   const mockConfig = (function () {
-    // `rich_model`/`stu_model` stand in for config.rs's §119 pair: absent reads as Opus.
+    // `rich_model`/`stu_model` stand in for config.rs's §119 pair: absent reads as Fable (CEO, 2026-11-17).
     // `oxford_comma` stands in for config.rs's Oxford comma setting: absent reads as off (CEO, 2026-10-19).
     // `resources_view` stands in for config.rs's resources square view: absent reads as Ink (round 47).
     // `show_context_meter` stands in for config.rs's context meter switch: absent reads as off (CEO, 2026-11-16).
-    const fresh = { theme: "system", font_scale: 100, user_name: null, rich_model: "opus", stu_model: "opus", oxford_comma: false, show_swearmeter: false, show_context_meter: false, resources_view: "ink" };
+    const fresh = { theme: "system", font_scale: 100, user_name: null, rich_model: "fable", stu_model: "fable", oxford_comma: false, show_swearmeter: false, show_context_meter: false, resources_view: "ink" };
     try {
       const raw = window.localStorage.getItem(MOCK_CONFIG_KEY);
       if (!raw) return fresh;
@@ -239,8 +239,8 @@
         theme: ["dark", "light", "system"].includes(parsed.theme) ? parsed.theme : fresh.theme,
         font_scale: Number.isFinite(parsed.font_scale) ? parsed.font_scale : fresh.font_scale,
         user_name: typeof parsed.user_name === "string" && parsed.user_name.trim() ? parsed.user_name : null,
-        rich_model: parsed.rich_model === "fable" ? "fable" : "opus",
-        stu_model: parsed.stu_model === "fable" ? "fable" : "opus",
+        rich_model: parsed.rich_model === "opus" ? "opus" : "fable",
+        stu_model: parsed.stu_model === "opus" ? "opus" : "fable",
         oxford_comma: parsed.oxford_comma === true,
         show_swearmeter: parsed.show_swearmeter === true,
         show_context_meter: parsed.show_context_meter === true,

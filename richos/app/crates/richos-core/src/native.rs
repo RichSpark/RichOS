@@ -732,12 +732,18 @@ pub fn child_args(session_id: &str) -> Vec<String> {
     .collect()
 }
 
-/// The CEO's 2026-10-14 instruction prioritizes instant replies over effort level.
-/// The conversation only answers or hands work over; the work lease retains high effort.
-pub fn lease_effort(role: LeaseRole) -> &'static str {
-    match role {
-        LeaseRole::Conversation => "low",
-        LeaseRole::Work => "high",
+/// **The effort a lease of this role runs at on this model.**
+///
+/// The conversation only answers or hands work over, so it is at low effort on either model
+/// (the CEO's 2026-10-14 instruction: instant replies before effort). The work lease is at
+/// medium effort on Fable, his 2026-11-17 default (*"for Stu, Fable at medium effort might be
+/// the best new default"*), and keeps high effort on Opus (§119), so a user who picks Opus for
+/// the work gets what Opus users had before.
+pub fn lease_effort(role: LeaseRole, model: crate::config::ModelChoice) -> &'static str {
+    match (role, model) {
+        (LeaseRole::Conversation, _) => "low",
+        (LeaseRole::Work, crate::config::ModelChoice::Opus) => "high",
+        (LeaseRole::Work, _) => "medium",
     }
 }
 
@@ -746,19 +752,20 @@ pub fn lease_effort(role: LeaseRole) -> &'static str {
 /// assert on. Rich is the conversation lease and Stu the work lease (§110); each gets the
 /// model its stored setting names ([`crate::engine_profile::EngineProfile::lease_models`],
 /// read from `config.json` at every spawn). A lease spawned without an engine profile (the
-/// headless and test paths, which read no settings) gets the default, Opus.
+/// headless and test paths, which read no settings) gets the default, Fable.
 ///
 /// Until §119 the app passed neither flag, so both sessions ran on the CLI's own default for
 /// the account. Measured on `claude` 2.1.295 with the lease's `--setting-sources ''` on
 /// 2026-10-10: `--model opus --effort high` answered as `claude-opus-5-5`, and
-/// `--model fable --effort high` as `claude-fable-5-1`.
+/// `--model fable --effort high` as `claude-fable-5-1`. On 2.1.326 on 2026-11-17:
+/// `--model fable --effort medium` answered as `claude-fable-5-2`, recorded at effort medium.
 pub fn lease_model_args(role: LeaseRole, profile: Option<&crate::engine_profile::EngineProfile>) -> Vec<String> {
     let models = profile.map(|p| p.lease_models).unwrap_or_default();
     let model = match role {
         LeaseRole::Conversation => models.rich,
         LeaseRole::Work => models.stu,
     };
-    vec!["--model".into(), model.cli_alias().into(), "--effort".into(), lease_effort(role).into()]
+    vec!["--model".into(), model.cli_alias().into(), "--effort".into(), lease_effort(role, model).into()]
 }
 
 pub fn chat_child_args(session_id: &str, doctrine: &Path, skills: &Path) -> Vec<String> {
@@ -1454,6 +1461,8 @@ pub struct NativeClient {
     /// `lease_commands.rs`): which tool commands are running outside the provider's group.
     reap_state: Option<std::path::PathBuf>,
     settle_workers_on_stop: bool,
+    /// Which lease this is, for the effort a model change brings with it ([`lease_effort`]).
+    role: LeaseRole,
     stdin: Arc<Mutex<ChildStdin>>,
     session_id: String,
     app_message_ids: Arc<Mutex<std::collections::HashSet<String>>>,
@@ -2536,6 +2545,7 @@ impl NativeClient {
             },
             reap_state,
             settle_workers_on_stop: profile.is_some(),
+            role,
             stdin,
             session_id,
             app_message_ids: Arc::new(Mutex::new(app_message_ids)),
@@ -3685,6 +3695,7 @@ impl NativeClient {
             action_grants: self.action_grants.clone(),
             process_fence: self.child.fence(),
             settle_workers_on_stop: self.settle_workers_on_stop,
+            role: self.role,
             next_id: self.next_id.clone(),
             pending: Arc::clone(&self.pending),
             reader_state: Arc::clone(&self.reader_state),
@@ -3992,6 +4003,7 @@ pub struct NativeCancelHandle {
     action_grants: Vec<ActionGrant>,
     process_fence: crate::owned_process::ProcessFence,
     settle_workers_on_stop: bool,
+    role: LeaseRole,
     next_id: Arc<AtomicI64>,
     /// The client's control-reply table, so a `stop_task` is answered the way every other
     /// control request this file sends is (finding 11 v2).
@@ -4010,21 +4022,37 @@ const STOP_TASK_REPLY_WAIT: Duration = Duration::from_secs(5);
 /// the answer is [`CommandStop::Unconfirmed`] — a stated unknown, never "stopped".
 const STOP_TASK_ENDING_WAIT: Duration = Duration::from_secs(5);
 
-impl TurnCancel for NativeCancelHandle {
-    /// The flag [`NativeCognition`]'s own `is_closed` reads: the child's output closed.
-    fn is_closed(&self) -> bool { self.reader_closed.load(Ordering::SeqCst) }
-    fn set_model(&self,model:crate::config::ModelChoice)->Result<bool,String> {
-        if self.reader_closed.load(Ordering::SeqCst) {return Ok(false)}
+impl NativeCancelHandle {
+    /// One control request, answered by the provider or refused by name.
+    fn confirmed_control(&self,what:&str,request:Value)->Result<(),String> {
         let id=format!("richos_set_model_{}",self.next_id.fetch_add(1,Ordering::SeqCst));
         let (tx,rx)=channel();self.pending.lock().unwrap().insert(id.clone(),tx);
         let result=(|| {
-            NativeClient::write_line(&self.stdin,&json!({"type":"control_request","request_id":id,
-                "request":{"subtype":"set_model","model":model.cli_alias()}})).map_err(|error|error.to_string())?;
-            let response=rx.recv_timeout(HANDSHAKE_TIMEOUT).map_err(|error|format!("Model change was not confirmed: {error}"))?;
-            if response["response"]["subtype"]!="success" {return Err(format!("Model change refused: {}",response["response"]["error"]))}
-            Ok(true)
+            NativeClient::write_line(&self.stdin,&json!({"type":"control_request","request_id":id,"request":request})).map_err(|error|error.to_string())?;
+            let response=rx.recv_timeout(HANDSHAKE_TIMEOUT).map_err(|error|format!("{what} was not confirmed: {error}"))?;
+            if response["response"]["subtype"]!="success" {return Err(format!("{what} refused: {}",response["response"]["error"]))}
+            Ok(())
         })();
         self.pending.lock().unwrap().remove(&id);result
+    }
+}
+
+impl TurnCancel for NativeCancelHandle {
+    /// The flag [`NativeCognition`]'s own `is_closed` reads: the child's output closed.
+    fn is_closed(&self) -> bool { self.reader_closed.load(Ordering::SeqCst) }
+    /// The model, and for the work lease the effort that belongs to it ([`lease_effort`]):
+    /// the session keeps running, so the effort it was started at has to move with the model.
+    /// The conversation is at the same effort on either model and is sent the model alone.
+    /// Measured on `claude` 2.1.326 on 2026-11-17: a session started with `--model fable
+    /// --effort medium` and sent these two requests recorded its next reply as
+    /// `claude-opus-5-5` at effort high.
+    fn set_model(&self,model:crate::config::ModelChoice)->Result<bool,String> {
+        if self.reader_closed.load(Ordering::SeqCst) {return Ok(false)}
+        self.confirmed_control("Model change",json!({"subtype":"set_model","model":model.cli_alias()}))?;
+        if self.role==LeaseRole::Work {
+            self.confirmed_control("Effort change",json!({"subtype":"apply_flag_settings","settings":{"effortLevel":lease_effort(self.role,model)}}))?;
+        }
+        Ok(true)
     }
 
     fn worker_status(&self) -> Option<crate::worker_status::WorkerStatusView> {
@@ -7773,17 +7801,17 @@ printf '%s\n' '{"type":"system","subtype":"task_notification","task_id":"remaini
     }
 
     #[test]
-    fn conversation_starts_at_low_effort_and_work_keeps_high_effort() {
-        // CEO 2026-10-14: "Forget the effort level for now."
+    fn conversation_starts_on_fable_at_low_effort_and_work_on_fable_at_medium_effort() {
+        // CEO 2026-11-17: Fable at low effort for Rich, Fable at medium effort for Stu.
         // Read off the argument vector the child actually received, on a real
-        // `spawn_with_tools`, one per role. The per-role Fable setting is
-        // `each_role_keeps_its_model_with_low_effort_for_replies_and_high_for_work`
+        // `spawn_with_tools`, one per role. The per-role Opus setting is
+        // `each_role_defaults_to_fable_and_its_effort_follows_the_role_and_the_model`
         // (`tests/engine_profile.rs`), through the same `lease_model_args`.
         let handshake = "for a in \"$@\"; do printf '%s\\n' \"$a\"; done > \"$(dirname \"$0\")/argv\"\n\
              read -r line\n\
              printf '%s\\n' '{\"type\":\"control_response\",\"response\":{\"subtype\":\"success\",\"request_id\":\"req_init\",\"response\":{}}}'\n\
              sleep 5\n";
-        for (tag, role, effort) in [("models-desk", LeaseRole::Conversation, "low"), ("models-work", LeaseRole::Work, "high")] {
+        for (tag, role, effort) in [("models-desk", LeaseRole::Conversation, "low"), ("models-work", LeaseRole::Work, "medium")] {
             let script = write_script(tag, handshake);
             let _client = NativeClient::spawn_with_tools(
                 &script, Path::new("/tmp"),
@@ -7794,10 +7822,55 @@ printf '%s\n' '{"type":"system","subtype":"task_notification","task_id":"remaini
                 .lines().map(String::from).collect();
             let at = argv.iter().position(|a| a == "--model")
                 .unwrap_or_else(|| panic!("{role:?} was started without --model: {argv:?}"));
-            assert_eq!(&argv[at..at + 4], ["--model", "opus", "--effort", effort], "{role:?}: {argv:?}");
+            assert_eq!(&argv[at..at + 4], ["--model", "fable", "--effort", effort], "{role:?}: {argv:?}");
             assert_eq!(argv.iter().filter(|a| *a == "--model" || *a == "--effort").count(), 2,
                 "{role:?} names a model or an effort twice: {argv:?}");
         }
+    }
+
+    #[test]
+    fn a_model_chosen_while_work_runs_moves_its_effort_with_it() {
+        // The model row is applied to the running session (`set_model`), so the effort that
+        // belongs to that model has to follow on the same session: Stu on Opus keeps high
+        // effort (§119) and Stu on Fable runs at medium (CEO 2026-11-17). Rich is at low
+        // effort on either model, so his session is sent the model alone, which
+        // `native_model_control_keeps_pending_inputs_and_a_refusal_does_not_replace_the_session`
+        // pins. Measured on `claude` 2.1.326, 2026-11-17: a session started with
+        // `--model fable --effort medium`, sent `set_model opus` then `apply_flag_settings
+        // {effortLevel: high}`, recorded its next reply as claude-opus-5-5 at effort high.
+        let script = write_script("work-model-effort", r#"
+exec python3 -u -c '
+import json,os,sys
+def read(): return json.loads(sys.stdin.readline())
+def send(row): print(json.dumps(row),flush=True)
+init=read()
+send({"type":"control_response","response":{"subtype":"success","request_id":init["request_id"],"response":{}}})
+seen=[]
+for _ in range(4):
+ row=read()
+ seen.append(row["request"])
+ send({"type":"control_response","response":{"subtype":"success","request_id":row["request_id"]}})
+open(os.path.join(os.path.dirname(sys.argv[1]),"controls"),"w").write(json.dumps(seen))
+sys.stdin.readline()
+' "$0"
+"#);
+        let client = NativeClient::spawn_with_tools(
+            &script, Path::new("/tmp"),
+            Some((doctrine_fixture().as_path(), skills_fixture().as_path())),
+            None, None, None, None, None, LeaseRole::Work,
+        ).expect("the handshake should succeed");
+        assert!(client.cancel_handle().set_model(crate::config::ModelChoice::Opus).unwrap());
+        assert!(client.cancel_handle().set_model(crate::config::ModelChoice::Fable).unwrap());
+        let controls = script.parent().unwrap().join("controls");
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !controls.exists() && std::time::Instant::now() < deadline { std::thread::sleep(Duration::from_millis(20)); }
+        let seen: Value = serde_json::from_str(&std::fs::read_to_string(&controls).expect("the child recorded no controls")).unwrap();
+        assert_eq!(seen, json!([
+            {"subtype":"set_model","model":"opus"},
+            {"subtype":"apply_flag_settings","settings":{"effortLevel":"high"}},
+            {"subtype":"set_model","model":"fable"},
+            {"subtype":"apply_flag_settings","settings":{"effortLevel":"medium"}},
+        ]));
     }
 
     #[test]
