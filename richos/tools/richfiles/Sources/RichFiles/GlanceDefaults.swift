@@ -290,6 +290,7 @@ struct GlanceDefaultPage: View {
                     Toggle("Use RichGlance as my default image viewer", isOn: Binding(
                         get: { defaults.state.enabled }, set: { defaults.setEnabled($0) }))
                         .toggleStyle(.switch).fontWeight(.semibold)
+                        .accessibilityLabel("Use RichGlance as my default image viewer")
                         .disabled(defaults.busy || (defaults.viewer == nil && !defaults.state.enabled))
                     Text("Double-click a supported image in Finder, on the Desktop or in RichFiles to open it in RichGlance.")
                         .foregroundStyle(palette.hint)
