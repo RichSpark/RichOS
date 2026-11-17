@@ -2,6 +2,21 @@
 
 What changed in each RichOS nightly build from 1.2.1-nightly.20261019.67 on, newest first; stable versions are in the [changelog](CHANGELOG.md).
 
+## 1.3.4-nightly.20261117.104
+
+[GitHub release](https://github.com/RichSpark/RichOS/releases/tag/v1.3.4-nightly.20261117.104)
+
+- Added RichGlance, an image viewer that comes with RichFiles: right-click a picture in RichFiles or Finder and choose Open With, then use the arrow keys to go through the pictures in that folder, Control and scroll to zoom, drag to move around and Escape to close; GIF and WebP pictures play and File, Open in Preview opens the picture for editing
+- Added an info button in RichGlance that shows the note, keywords, folder and date RichCleaner saved for a picture: point at it to take a look, click it or press I to keep it showing, with Show by default and a shortcut you can change
+- Added Default image viewer in RichFiles Settings: one switch makes RichGlance open your pictures everywhere on your Mac, in Finder and on the Desktop too; turning it off brings back the apps you had before
+- Changed Rich's team to skip the design mockup it makes before building a new or changed screen when you tell it you approve the design without seeing it
+- Fixed Make a video cutting the first letter off each wrapped line and drawing text that was not on screen, such as hidden text under the message box's hint or what a closed list holds
+- Fixed the Max warning in Settings vanishing as it opened when you chose Max again right after closing it
+- [technical] Added a launch log that keeps the timings of every start of RichOS, including starts from the Dock or Finder
+- [technical] Added RichGlance's timings, without file names or notes, to RichDoctor's reports
+- [technical] Changed Rich's team to start every teammate on a model and an effort level picked for the kind of job, such as Opus at high for everyday coding and Fable at medium for hard problems, never at Max
+- [technical] Changed Rich's team to drop a review finding no user would notice instead of filing it as a follow-up
+
 ## 1.3.4-nightly.20261117.102
 
 [GitHub release](https://github.com/RichSpark/RichOS/releases/tag/v1.3.4-nightly.20261117.102)
