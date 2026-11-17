@@ -55,6 +55,13 @@ final class GlanceMetadataTests: XCTestCase {
         XCTAssertEqual(info.updated, Date(timeIntervalSince1970: 1_700_000_000))
         XCTAssertTrue(info.embedded)
 
+        let opened = Data([1])
+        let attributeStatus = opened.withUnsafeBytes {
+            setxattr(image.path, "com.richos.test.opened", $0.baseAddress, $0.count, 0, 0)
+        }
+        XCTAssertEqual(attributeStatus, 0)
+        XCTAssertEqual(try GlanceMetadata.read(for: image, catalog: catalog)?.note, "Saved note")
+
         let other = root.appendingPathComponent("Other.png")
         try FileManager.default.copyItem(at: image, to: other)
         XCTAssertNil(try GlanceMetadata.read(for: other, catalog: catalog))

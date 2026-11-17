@@ -31,12 +31,17 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
             self, selector: #selector(applicationActivated(_:)),
             name: NSWorkspace.didActivateApplicationNotification, object: nil
         )
-        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            MainActor.assumeIsolated {
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .mouseMoved]) { [weak self] event in
+            let handled = MainActor.assumeIsolated {
                 guard let viewer = self?.viewer, NSApp.keyWindow === viewer.window,
-                      event.window == nil || event.window === viewer.window else { return event }
-                return viewer.handleKey(event) ? nil : event
+                      event.window == nil || event.window === viewer.window else { return false }
+                if event.type == .mouseMoved {
+                    viewer.info.trackPointer(at: viewer.window.mouseLocationOutsideOfEventStream)
+                    return false
+                }
+                return viewer.handleKey(event)
             }
+            return handled ? nil : event
         }
     }
 

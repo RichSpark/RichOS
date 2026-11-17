@@ -25,7 +25,7 @@ final class Viewer {
     private var decodeWork: DispatchWorkItem?
     private var playback: Task<Void, Never>?
     private var metadataWork: DispatchWorkItem?
-    private var metadataRequest: UUID?
+    private var metadataRequest: (request: Request, began: TimeInterval)?
     private var folderWork: DispatchWorkItem?
     private let decoder = DispatchQueue(label: "app.richos.richglance.decode", qos: .userInitiated)
     private let scanner = DispatchQueue(label: "app.richos.richglance.folder", qos: .userInitiated)
@@ -104,6 +104,9 @@ final class Viewer {
         playback = nil
         metadataWork?.cancel()
         metadataWork = nil
+        if let metadataRequest {
+            metadataRequest.request.record(.glanceMetadata, .cancelled, started: metadataRequest.began)
+        }
         metadataRequest = nil
         decodeWork?.cancel()
         decodeWork = nil
@@ -168,15 +171,12 @@ final class Viewer {
     }
 
     private func readMetadata(for file: URL, request: Request) {
-        metadataRequest = request.id
         let began = ProcessInfo.processInfo.systemUptime
+        metadataRequest = (request, began)
         let work = DispatchWorkItem { [weak self] in
             let result = Result { try GlanceMetadata.read(for: file) }
             DispatchQueue.main.async { [weak self] in
-                guard let self, metadataRequest == request.id else {
-                    request.record(.glanceMetadata, .cancelled, started: began)
-                    return
-                }
+                guard let self, metadataRequest?.request.id == request.id else { return }
                 metadataRequest = nil
                 metadataWork = nil
                 switch result {

@@ -15,7 +15,6 @@ public struct GlanceMetadata: Sendable {
             let object: UInt64
             let size: UInt64
             let modified: String
-            let changed: String
 
             init?(_ file: URL) {
                 var info = stat()
@@ -24,7 +23,6 @@ public struct GlanceMetadata: Sendable {
                 object = info.st_ino
                 size = UInt64(info.st_size)
                 modified = "\(info.st_mtimespec.tv_sec):\(info.st_mtimespec.tv_nsec)"
-                changed = "\(info.st_ctimespec.tv_sec):\(info.st_ctimespec.tv_nsec)"
             }
         }
 
@@ -88,6 +86,8 @@ public struct GlanceMetadata: Sendable {
               let blob = sqlite3_column_blob(statement, 0) else { throw LookupError.catalogUnavailable }
         let record = try JSONDecoder().decode(Record.self, from: Data(bytes: blob, count: bytes))
         let savedFile = URL(fileURLWithPath: record.path).standardizedFileURL.resolvingSymlinksInPath()
+        // Opening a file through Launch Services can update its extended attributes and ctime.
+        // Match the file and its content version so those updates don't hide the saved note.
         guard savedFile == file, record.identity == fileIdentity, Record.Identity(file) == fileIdentity else { return nil }
         return Self(note: record.note, labels: record.labels, folder: record.folder,
                     updated: Date(timeIntervalSince1970: Double(record.updated) / 1000),

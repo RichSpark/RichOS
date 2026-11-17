@@ -94,9 +94,25 @@ final class GlanceInfoView: NSView {
         }
     }
 
+    private final class FocusSwitch: NSSwitch {
+        var focusChanged: (() -> Void)?
+        override var acceptsFirstResponder: Bool { true }
+        override func becomeFirstResponder() -> Bool {
+            let accepted = super.becomeFirstResponder()
+            if accepted { focusChanged?() }
+            return accepted
+        }
+        override func resignFirstResponder() -> Bool {
+            let accepted = super.resignFirstResponder()
+            if accepted { focusChanged?() }
+            return accepted
+        }
+    }
+
     private let preferences: GlanceInfoPreferences
     private let icon = FocusButton()
-    private let showDefault = FocusButton()
+    private let showDefault = FocusSwitch()
+    private let showDefaultLabel = NSTextField(labelWithString: "Show by default")
     private let shortcutButton = FocusButton()
     private let controlsMaterial = NSVisualEffectView()
     private let note = NSTextView(frame: .zero)
@@ -128,7 +144,6 @@ final class GlanceInfoView: NSView {
         icon.layer?.cornerRadius = 13
         icon.contentTintColor = .white
         icon.setAccessibilityLabel("Show RichCleaner Info")
-        icon.toolTip = "Show RichCleaner Info"
         icon.target = self
         icon.action = #selector(toggleInfo)
         controlsMaterial.material = .popover
@@ -138,15 +153,19 @@ final class GlanceInfoView: NSView {
         controlsMaterial.layer?.cornerRadius = 10
         controlsMaterial.layer?.masksToBounds = true
         addSubview(controlsMaterial)
-        configure(showDefault, action: #selector(toggleDefault))
-        showDefault.setButtonType(.switch)
+        showDefault.target = self
+        showDefault.action = #selector(toggleDefault)
+        showDefault.setAccessibilityLabel("Show by default")
+        showDefaultLabel.font = .systemFont(ofSize: 16, weight: .medium)
+        showDefaultLabel.setAccessibilityElement(false)
         configure(shortcutButton, action: #selector(beginRecording))
-        for button in [icon, showDefault, shortcutButton] {
-            button.focusChanged = { [weak self] in
-                DispatchQueue.main.async { self?.updateVisibility() }
-            }
-            addSubview(button)
+        let focusChanged: () -> Void = { [weak self] in
+            DispatchQueue.main.async { self?.updateVisibility() }
         }
+        icon.focusChanged = focusChanged
+        showDefault.focusChanged = focusChanged
+        shortcutButton.focusChanged = focusChanged
+        for control in [icon, showDefault, shortcutButton, showDefaultLabel] as [NSView] { addSubview(control) }
         icon.nextKeyView = showDefault
         showDefault.nextKeyView = shortcutButton
         note.isEditable = false
@@ -267,11 +286,12 @@ final class GlanceInfoView: NSView {
 
     private func updateVisibility() {
         let focus = window?.firstResponder
-        let controlsFocused = [icon, showDefault, shortcutButton].contains { focus === $0 }
+        let controls: [NSView] = [icon, showDefault, shortcutButton]
+        let controlsFocused = controls.contains { focus === $0 }
         let showControls = recording || controlsHovered || controlsFocused
         showDefault.isHidden = !showControls
+        showDefaultLabel.isHidden = !showControls
         controlsMaterial.isHidden = !showControls
-        showDefault.title = "Show by default"
         showDefault.state = preferences.showByDefault ? .on : .off
         shortcutButton.isHidden = !showControls
         shortcutButton.title = recording ? "Press the new shortcut" : "Shortcut  \(preferences.shortcut.label)"
@@ -287,15 +307,21 @@ final class GlanceInfoView: NSView {
         super.layout()
         icon.frame = CGRect(x: 12, y: 12, width: 26, height: 26)
         let width = max(1, min(bounds.width - 24, 550))
-        let switchWidth = max(154, showDefault.intrinsicContentSize.width)
-        let shortcutWidth = min(width, max(100, shortcutButton.intrinsicContentSize.width))
-        showDefault.frame = CGRect(x: 48, y: 10, width: switchWidth, height: 30)
-        shortcutButton.frame = CGRect(x: 56 + switchWidth, y: 10, width: shortcutWidth, height: 30)
+        let switchSize = showDefault.intrinsicContentSize
+        showDefault.frame = CGRect(x: 48, y: 25 - switchSize.height / 2,
+                                   width: switchSize.width, height: switchSize.height)
+        showDefaultLabel.frame = CGRect(x: showDefault.frame.maxX + 6, y: 15,
+                                        width: showDefaultLabel.intrinsicContentSize.width + 2, height: 22)
+        let labelWidth = (shortcutButton.title as NSString).size(withAttributes: [
+            .font: shortcutButton.font ?? NSFont.systemFont(ofSize: 16)
+        ]).width
+        let shortcutWidth = min(width, max(111, ceil(labelWidth) + 28))
+        shortcutButton.frame = CGRect(x: showDefaultLabel.frame.maxX + 6, y: 10, width: shortcutWidth, height: 30)
         if shortcutButton.frame.maxX > bounds.width - 12 {
             shortcutButton.frame.origin = CGPoint(x: 48, y: 44)
         }
         let rowBottom = showDefault.isHidden ? icon.frame.maxY : max(shortcutButton.frame.maxY, showDefault.frame.maxY)
-        var materialBounds = showDefault.frame.union(shortcutButton.frame)
+        var materialBounds = showDefault.frame.union(showDefaultLabel.frame).union(shortcutButton.frame)
         status.frame = CGRect(x: 53, y: rowBottom + 4, width: max(1, materialBounds.width - 10), height: 35)
         if !status.isHidden { materialBounds = materialBounds.union(status.frame) }
         controlsMaterial.frame = materialBounds.insetBy(dx: -5, dy: -3)
@@ -319,15 +345,14 @@ final class GlanceInfoView: NSView {
 
     override func updateTrackingAreas() {
         if let tracking { removeTrackingArea(tracking) }
-        let area = NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .mouseMoved, .activeInKeyWindow, .inVisibleRect],
+        let area = NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
                                   owner: self, userInfo: nil)
         addTrackingArea(area)
         tracking = area
         super.updateTrackingAreas()
     }
 
-    override func mouseEntered(with event: NSEvent) { track(event) }
-    override func mouseMoved(with event: NSEvent) { track(event) }
+    override func mouseEntered(with event: NSEvent) { trackPointer(at: event.locationInWindow) }
 
     override func mouseExited(with event: NSEvent) {
         controlsHovered = false
@@ -336,10 +361,12 @@ final class GlanceInfoView: NSView {
         updateVisibility()
     }
 
-    private func track(_ event: NSEvent) {
-        let point = convert(event.locationInWindow, from: nil)
-        let controls = [icon, showDefault, shortcutButton].filter { !$0.isHidden }.map(\.frame)
-        let buttonArea = controls.reduce(icon.frame) { $0.union($1) }.insetBy(dx: -4, dy: -4)
+    func trackPointer(at windowPoint: CGPoint) {
+        guard !isHidden else { return }
+        let point = convert(windowPoint, from: nil)
+        let controls: [NSView] = [icon, showDefault, shortcutButton, showDefaultLabel]
+        let buttonArea = controls.filter { !$0.isHidden }.map(\.frame)
+            .reduce(icon.frame) { $0.union($1) }.insetBy(dx: -4, dy: -4)
         let inControls = buttonArea.contains(point)
         let textArea = scroll.frame.insetBy(dx: -3, dy: -8)
         let inText = (explicitlyShown || peek || suppressed) && textArea.contains(point)
@@ -357,13 +384,13 @@ final class GlanceInfoView: NSView {
             if lines.length > 0 { lines.append(NSAttributedString(string: "\n")) }
             let shadow = NSShadow()
             shadow.shadowColor = NSColor.black
-            shadow.shadowBlurRadius = 5
-            shadow.shadowOffset = CGSize(width: 0, height: -1)
+            shadow.shadowBlurRadius = 3
+            shadow.shadowOffset = CGSize(width: 0, height: -1.5)
             let paragraph = NSMutableParagraphStyle()
             paragraph.paragraphSpacing = 6
             lines.append(NSAttributedString(string: text, attributes: [
                 .font: NSFont.systemFont(ofSize: size, weight: weight), .foregroundColor: NSColor.white,
-                .strokeColor: NSColor.black, .strokeWidth: -3.5, .shadow: shadow, .paragraphStyle: paragraph
+                .shadow: shadow, .paragraphStyle: paragraph
             ]))
         }
         if let metadata {
