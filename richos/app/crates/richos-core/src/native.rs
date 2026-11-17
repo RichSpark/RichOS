@@ -732,27 +732,15 @@ pub fn child_args(session_id: &str) -> Vec<String> {
     .collect()
 }
 
-/// **The effort a lease of this role runs at on this model.**
-///
-/// The conversation only answers or hands work over, so it is at low effort on either model
-/// (the CEO's 2026-10-14 instruction: instant replies before effort). The work lease is at
-/// medium effort on Fable, his 2026-11-17 default (*"for Stu, Fable at medium effort might be
-/// the best new default"*), and keeps high effort on Opus (§119), so a user who picks Opus for
-/// the work gets what Opus users had before.
-pub fn lease_effort(role: LeaseRole, model: crate::config::ModelChoice) -> &'static str {
-    match (role, model) {
-        (LeaseRole::Conversation, _) => "low",
-        (LeaseRole::Work, crate::config::ModelChoice::Opus) => "high",
-        (LeaseRole::Work, _) => "medium",
-    }
-}
-
 /// **The flags that name the model and the effort for a lease of this role** — appended to
 /// every lease's vector by [`NativeClient::spawn_with_tools`], and the one function the tests
 /// assert on. Rich is the conversation lease and Stu the work lease (§110); each gets the
 /// model its stored setting names ([`crate::engine_profile::EngineProfile::lease_models`],
-/// read from `config.json` at every spawn). A lease spawned without an engine profile (the
-/// headless and test paths, which read no settings) gets the default, Fable.
+/// read from `config.json` at every spawn) and the effort chosen for that row on that model
+/// (`lease_efforts`, round 86.1; [`crate::config::EffortLevel::recommended`] when nobody
+/// chose). A lease spawned without an engine profile (the headless and test paths, which read
+/// no settings) gets the defaults: Fable, at low effort for the conversation and medium for
+/// the work.
 ///
 /// Until §119 the app passed neither flag, so both sessions ran on the CLI's own default for
 /// the account. Measured on `claude` 2.1.295 with the lease's `--setting-sources ''` on
@@ -761,11 +749,12 @@ pub fn lease_effort(role: LeaseRole, model: crate::config::ModelChoice) -> &'sta
 /// `--model fable --effort medium` answered as `claude-fable-5-2`, recorded at effort medium.
 pub fn lease_model_args(role: LeaseRole, profile: Option<&crate::engine_profile::EngineProfile>) -> Vec<String> {
     let models = profile.map(|p| p.lease_models).unwrap_or_default();
-    let model = match role {
-        LeaseRole::Conversation => models.rich,
-        LeaseRole::Work => models.stu,
+    let efforts = profile.map(|p| p.lease_efforts).unwrap_or_default();
+    let (model, effort) = match role {
+        LeaseRole::Conversation => (models.rich, efforts.rich),
+        LeaseRole::Work => (models.stu, efforts.stu),
     };
-    vec!["--model".into(), model.cli_alias().into(), "--effort".into(), lease_effort(role, model).into()]
+    vec!["--model".into(), model.cli_alias().into(), "--effort".into(), effort.as_str().into()]
 }
 
 pub fn chat_child_args(session_id: &str, doctrine: &Path, skills: &Path) -> Vec<String> {
@@ -1461,8 +1450,6 @@ pub struct NativeClient {
     /// `lease_commands.rs`): which tool commands are running outside the provider's group.
     reap_state: Option<std::path::PathBuf>,
     settle_workers_on_stop: bool,
-    /// Which lease this is, for the effort a model change brings with it ([`lease_effort`]).
-    role: LeaseRole,
     stdin: Arc<Mutex<ChildStdin>>,
     session_id: String,
     app_message_ids: Arc<Mutex<std::collections::HashSet<String>>>,
@@ -2545,7 +2532,6 @@ impl NativeClient {
             },
             reap_state,
             settle_workers_on_stop: profile.is_some(),
-            role,
             stdin,
             session_id,
             app_message_ids: Arc::new(Mutex::new(app_message_ids)),
@@ -3695,7 +3681,6 @@ impl NativeClient {
             action_grants: self.action_grants.clone(),
             process_fence: self.child.fence(),
             settle_workers_on_stop: self.settle_workers_on_stop,
-            role: self.role,
             next_id: self.next_id.clone(),
             pending: Arc::clone(&self.pending),
             reader_state: Arc::clone(&self.reader_state),
@@ -4003,7 +3988,6 @@ pub struct NativeCancelHandle {
     action_grants: Vec<ActionGrant>,
     process_fence: crate::owned_process::ProcessFence,
     settle_workers_on_stop: bool,
-    role: LeaseRole,
     next_id: Arc<AtomicI64>,
     /// The client's control-reply table, so a `stop_task` is answered the way every other
     /// control request this file sends is (finding 11 v2).
@@ -4040,18 +4024,18 @@ impl NativeCancelHandle {
 impl TurnCancel for NativeCancelHandle {
     /// The flag [`NativeCognition`]'s own `is_closed` reads: the child's output closed.
     fn is_closed(&self) -> bool { self.reader_closed.load(Ordering::SeqCst) }
-    /// The model, and for the work lease the effort that belongs to it ([`lease_effort`]):
-    /// the session keeps running, so the effort it was started at has to move with the model.
-    /// The conversation is at the same effort on either model and is sent the model alone.
-    /// Measured on `claude` 2.1.326 on 2026-11-17: a session started with `--model fable
-    /// --effort medium` and sent these two requests recorded its next reply as
-    /// `claude-opus-5-5` at effort high.
     fn set_model(&self,model:crate::config::ModelChoice)->Result<bool,String> {
         if self.reader_closed.load(Ordering::SeqCst) {return Ok(false)}
         self.confirmed_control("Model change",json!({"subtype":"set_model","model":model.cli_alias()}))?;
-        if self.role==LeaseRole::Work {
-            self.confirmed_control("Effort change",json!({"subtype":"apply_flag_settings","settings":{"effortLevel":lease_effort(self.role,model)}}))?;
-        }
+        Ok(true)
+    }
+    /// The session keeps running, so the level it was started at is replaced on it. Measured
+    /// on `claude` 2.1.326 on 2026-11-17 (`scripts/qa/live-effort-probe.py`): a session started
+    /// with `--model fable --effort low` and sent this request recorded its next reply at
+    /// effort high, on the same model.
+    fn set_effort(&self,effort:crate::config::EffortLevel)->Result<bool,String> {
+        if self.reader_closed.load(Ordering::SeqCst) {return Ok(false)}
+        self.confirmed_control("Effort change",json!({"subtype":"apply_flag_settings","settings":{"effortLevel":effort.as_str()}}))?;
         Ok(true)
     }
 
@@ -6410,7 +6394,7 @@ while True:
             codex_root: root.join("codex-coordination"),
             user: Default::default(),
 
-            claude_account: None, token_sink: None, chat_readings: None, speech_model: None, meetings_corpus: None, live_meeting_reader: None, lease_models: Default::default(), machine_settings: Default::default(),
+            claude_account: None, token_sink: None, chat_readings: None, speech_model: None, meetings_corpus: None, live_meeting_reader: None, lease_models: Default::default(), lease_efforts: Default::default(), machine_settings: Default::default(),
         }
     }
 
@@ -7829,15 +7813,14 @@ printf '%s\n' '{"type":"system","subtype":"task_notification","task_id":"remaini
     }
 
     #[test]
-    fn a_model_chosen_while_work_runs_moves_its_effort_with_it() {
-        // The model row is applied to the running session (`set_model`), so the effort that
-        // belongs to that model has to follow on the same session: Stu on Opus keeps high
-        // effort (§119) and Stu on Fable runs at medium (CEO 2026-11-17). Rich is at low
-        // effort on either model, so his session is sent the model alone, which
-        // `native_model_control_keeps_pending_inputs_and_a_refusal_does_not_replace_the_session`
-        // pins. Measured on `claude` 2.1.326, 2026-11-17: a session started with
-        // `--model fable --effort medium`, sent `set_model opus` then `apply_flag_settings
-        // {effortLevel: high}`, recorded its next reply as claude-opus-5-5 at effort high.
+    fn a_model_and_a_level_chosen_while_a_session_runs_are_sent_to_it() {
+        // Settings is saved while the sessions run, so the model and the effort chosen there
+        // go to the running session: `set_model`, then the level that row has on that model
+        // (round 86.1; `set_lease_models` in src-tauri sends both). Measured on `claude`
+        // 2.1.326, 2026-11-17: a session started with `--model fable --effort medium`, sent
+        // `set_model opus` then `apply_flag_settings {effortLevel: high}`, recorded its next
+        // reply as claude-opus-5-5 at effort high; and `scripts/qa/live-effort-probe.py`,
+        // fable:low sent fable:high, recorded claude-fable-5-2 at effort high.
         let script = write_script("work-model-effort", r#"
 exec python3 -u -c '
 import json,os,sys
@@ -7859,8 +7842,11 @@ sys.stdin.readline()
             Some((doctrine_fixture().as_path(), skills_fixture().as_path())),
             None, None, None, None, None, LeaseRole::Work,
         ).expect("the handshake should succeed");
-        assert!(client.cancel_handle().set_model(crate::config::ModelChoice::Opus).unwrap());
-        assert!(client.cancel_handle().set_model(crate::config::ModelChoice::Fable).unwrap());
+        use crate::config::{EffortLevel, ModelChoice};
+        assert!(client.cancel_handle().set_model(ModelChoice::Opus).unwrap());
+        assert!(client.cancel_handle().set_effort(EffortLevel::High).unwrap());
+        assert!(client.cancel_handle().set_model(ModelChoice::Fable).unwrap());
+        assert!(client.cancel_handle().set_effort(EffortLevel::Xhigh).unwrap());
         // The child records each request before it answers it, and `set_model` returns only
         // on the answer, so the record is complete here.
         let controls = script.parent().unwrap().join("controls");
@@ -7869,7 +7855,7 @@ sys.stdin.readline()
             {"subtype":"set_model","model":"opus"},
             {"subtype":"apply_flag_settings","settings":{"effortLevel":"high"}},
             {"subtype":"set_model","model":"fable"},
-            {"subtype":"apply_flag_settings","settings":{"effortLevel":"medium"}},
+            {"subtype":"apply_flag_settings","settings":{"effortLevel":"xhigh"}},
         ]));
     }
 
@@ -9821,7 +9807,7 @@ read -r keep_alive
             cognition.engine_profile = Some(crate::engine_profile::EngineProfile {
                 engine: root.clone(), coordination: root.clone(), plugin: root.clone(), state: root.clone(), user: Default::default(),
                 runtime: crate::runtime::EngineRuntime {root: root.clone(), python:"/usr/bin/python3".into(), node:"/usr/bin/false".into(), git:"/usr/bin/git".into(),versions:BTreeMap::new()},
-                codex_root:root.join("codex-coordination"), work_scope:None, search_binding: None, claude_account: None, token_sink: None, chat_readings: None, speech_model: None, meetings_corpus: None, live_meeting_reader: None, lease_models: Default::default(), machine_settings: Default::default()
+                codex_root:root.join("codex-coordination"), work_scope:None, search_binding: None, claude_account: None, token_sink: None, chat_readings: None, speech_model: None, meetings_corpus: None, live_meeting_reader: None, lease_models: Default::default(), lease_efforts: Default::default(), machine_settings: Default::default()
             });
             let result = cognition.prompt("Synthetic audit turn", &mut |_| {});
             let provider_alive = cognition.client.child.try_wait().unwrap().is_none();

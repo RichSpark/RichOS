@@ -749,8 +749,8 @@ fn the_team_digest_moves_with_what_a_lease_registers_and_nothing_else() {
 }
 
 /// CEO 2026-11-17: Rich defaults to Fable at low effort and Stu to Fable at medium effort.
-/// Rich stays at low effort on either model (2026-10-14: immediate replies first) and Stu on
-/// Opus keeps high effort (§119). Each role's flags come from the one function
+/// Rich's recommended level is low on either model (2026-10-14: immediate replies first) and
+/// Stu's on Opus is high (§119); a level chosen in Settings replaces it (round 86.1). Each role's flags come from the one function
 /// `spawn_with_tools` appends to the child's argument vector, given the profile every product
 /// lease is spawned with, which reads `config.json` in the data folder.
 #[test]
@@ -785,6 +785,19 @@ fn each_role_defaults_to_fable_and_its_effort_follows_the_role_and_the_model() {
     let profile = prepare_fixture(&engine(), &f.0, f.runtime()).unwrap();
     assert_eq!(lease_model_args(LeaseRole::Conversation, Some(&profile)), rich_fable, "Rich switched back");
     assert_eq!(lease_model_args(LeaseRole::Work, Some(&profile)), stu_opus);
+
+    // Round 86.1: a level chosen in Settings for a row on its model is what that row's process
+    // is started with, and the other model's level waits for the way back.
+    use richos_core::config::{EffortChoices, EffortLevel, LeaseModels};
+    let chosen = EffortChoices { rich_fable: EffortLevel::Medium, stu_opus: EffortLevel::Xhigh, stu_fable: EffortLevel::Max, ..EffortChoices::default() };
+    let models = LeaseModels { rich: ModelChoice::Fable, stu: ModelChoice::Opus };
+    ConfigStore::open(f.0.join("config.json")).unwrap().set_lease_choices(models, chosen).unwrap();
+    let profile = prepare_fixture(&engine(), &f.0, f.runtime()).unwrap();
+    assert_eq!(lease_model_args(LeaseRole::Conversation, Some(&profile)), ["--model", "fable", "--effort", "medium"]);
+    assert_eq!(lease_model_args(LeaseRole::Work, Some(&profile)), ["--model", "opus", "--effort", "xhigh"]);
+    ConfigStore::open(f.0.join("config.json")).unwrap().set_stu_model(ModelChoice::Fable).unwrap();
+    let profile = prepare_fixture(&engine(), &f.0, f.runtime()).unwrap();
+    assert_eq!(lease_model_args(LeaseRole::Work, Some(&profile)), ["--model", "fable", "--effort", "max"]);
 }
 
 #[test]

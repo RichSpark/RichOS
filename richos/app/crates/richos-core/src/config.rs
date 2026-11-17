@@ -222,8 +222,7 @@ impl Theme {
 /// One value per role, stored as `rich_model` and `stu_model` in `config.json`, and only when
 /// the user chose it ([`ConfigStore::write`]). The wire strings are the `claude` CLI's own
 /// model aliases (`--model opus`, `--model fable`), so the value goes to the child unchanged
-/// ([`ModelChoice::cli_alias`]). Effort is not a setting: it follows the role and the model
-/// (`native.rs`'s `lease_effort`).
+/// ([`ModelChoice::cli_alias`]). The effort is its own setting, [`EffortLevel`].
 ///
 /// Before §119, the app never named a model, so both sessions ran on whatever the CLI chose
 /// for the account (Clark's 2026-10-10 Haiku audit in the private record).
@@ -278,6 +277,106 @@ impl ModelChoice {
     }
 }
 
+/// **How hard one of the two sessions thinks**: the five levels the `claude` CLI's `--effort`
+/// takes (`claude --help` on 2.1.326: "low, medium, high, xhigh, max"), so the value goes to
+/// the child unchanged.
+///
+/// A setting since round 86.1 (CEO 2026-11-17: *"round-86.1 is good to go. Implement now."*):
+/// each row of Settings carries its own level for each model, and each model's default is the
+/// level his 2026-11-17 words name, shown there as "Recommended". Stored per row and per model
+/// (`rich_effort_fable` and its three siblings), and only when the user chose it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum EffortLevel {
+    Low,
+    Medium,
+    High,
+    Xhigh,
+    Max,
+    /// A level on disk this build has no name for: the same contract as
+    /// [`ModelChoice::Unknown`]. A session reads it as that row's default on that model.
+    #[serde(other)]
+    Unknown,
+}
+
+impl EffortLevel {
+    /// The `--effort` value, and the word the file and Settings use.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            EffortLevel::Low => "low",
+            EffortLevel::Medium => "medium",
+            EffortLevel::High => "high",
+            EffortLevel::Xhigh => "xhigh",
+            EffortLevel::Max => "max",
+            EffortLevel::Unknown => "unknown",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        [EffortLevel::Low, EffortLevel::Medium, EffortLevel::High, EffortLevel::Xhigh, EffortLevel::Max]
+            .into_iter()
+            .find(|level| level.as_str() == s)
+    }
+
+    /// **The recommended level**, which is the default. The conversation only answers or hands
+    /// work over, so it is at low effort on either model (CEO 2026-10-14: instant replies
+    /// before effort). The work is at medium effort on Fable (CEO 2026-11-17: *"for Stu, Fable
+    /// at medium effort might be the best new default"*) and keeps high effort on Opus (§119),
+    /// so a user who picks Opus for the work gets what Opus users had before.
+    pub fn recommended(work: bool, model: ModelChoice) -> Self {
+        match (work, model) {
+            (false, _) => EffortLevel::Low,
+            (true, ModelChoice::Opus) => EffortLevel::High,
+            (true, _) => EffortLevel::Medium,
+        }
+    }
+}
+
+/// The level of each row on each model, as Settings shows and saves them: each model keeps
+/// its own, so switching a row's model brings that model's level back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EffortChoices {
+    pub rich_opus: EffortLevel,
+    pub rich_fable: EffortLevel,
+    pub stu_opus: EffortLevel,
+    pub stu_fable: EffortLevel,
+}
+
+impl Default for EffortChoices {
+    fn default() -> Self {
+        EffortChoices {
+            rich_opus: EffortLevel::recommended(false, ModelChoice::Opus),
+            rich_fable: EffortLevel::recommended(false, ModelChoice::Fable),
+            stu_opus: EffortLevel::recommended(true, ModelChoice::Opus),
+            stu_fable: EffortLevel::recommended(true, ModelChoice::Fable),
+        }
+    }
+}
+
+impl EffortChoices {
+    /// The two levels in use on these models: what each session is started with.
+    pub fn on(&self, models: LeaseModels) -> LeaseEfforts {
+        LeaseEfforts {
+            rich: if models.rich == ModelChoice::Opus { self.rich_opus } else { self.rich_fable },
+            stu: if models.stu == ModelChoice::Opus { self.stu_opus } else { self.stu_fable },
+        }
+    }
+}
+
+/// The level each session runs at, on the model it is on: Rich's and Stu's `--effort`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LeaseEfforts {
+    pub rich: EffortLevel,
+    pub stu: EffortLevel,
+}
+
+impl Default for LeaseEfforts {
+    /// Nothing chosen: the default models at their recommended levels.
+    fn default() -> Self {
+        EffortChoices::default().on(LeaseModels::default())
+    }
+}
+
 /// The two stored choices together, as the spawn path reads them: Rich is the front desk
 /// (the conversation lease), Stu is the back end (the work lease, §110).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -295,6 +394,14 @@ pub fn lease_models_from_config(data_dir: &Path) -> LeaseModels {
     match ConfigStore::open(data_dir.join("config.json")) {
         Ok(c) => c.lease_models(),
         Err(_) => LeaseModels::default(),
+    }
+}
+
+/// The effort each session starts at, read with the models and by the same rule.
+pub fn lease_efforts_from_config(data_dir: &Path) -> LeaseEfforts {
+    match ConfigStore::open(data_dir.join("config.json")) {
+        Ok(c) => c.lease_efforts(),
+        Err(_) => LeaseEfforts::default(),
     }
 }
 
@@ -549,6 +656,16 @@ struct StoredConfig {
     /// §119: the model Stu's session (the back end) starts on. Absent reads as Fable.
     #[serde(default)]
     stu_model: ModelChoice,
+    /// Round 86.1: the effort of each row on each model, [`EffortLevel`]. Absent reads as that
+    /// row's recommended level on that model, so the four are never written until chosen.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    rich_effort_opus: Option<EffortLevel>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    rich_effort_fable: Option<EffortLevel>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    stu_effort_opus: Option<EffortLevel>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    stu_effort_fable: Option<EffortLevel>,
     /// **THIS FILE HOLDS ONLY WHAT THE USER CHOSE** (CEO, 2026-11-17: *"make sure that from
     /// now on, the settings can always tell what is what"*). `true` in every file this build
     /// writes; absent in every file written before it, where each save wrote every key with
@@ -635,6 +752,10 @@ impl Default for StoredConfig {
             home_entity_hidden: BTreeMap::new(),
             rich_model: ModelChoice::default(),
             stu_model: ModelChoice::default(),
+            rich_effort_opus: None,
+            rich_effort_fable: None,
+            stu_effort_opus: None,
+            stu_effort_fable: None,
             only_chosen: true,
             oxford_comma: false,
             show_swearmeter: false,
@@ -1135,6 +1256,77 @@ impl ConfigStore {
     /// Both, as the spawn path reads them.
     pub fn lease_models(&self) -> LeaseModels {
         LeaseModels { rich: self.rich_model(), stu: self.stu_model() }
+    }
+
+    /// Round 86.1: the level of each row on each model. One nobody chose, or one this build has
+    /// no name for, answers with that row's recommended level on that model.
+    pub fn effort_choices(&self) -> EffortChoices {
+        let or = |stored: Option<EffortLevel>, recommended: EffortLevel| match stored {
+            Some(EffortLevel::Unknown) | None => recommended,
+            Some(level) => level,
+        };
+        let recommended = EffortChoices::default();
+        EffortChoices {
+            rich_opus: or(self.config.rich_effort_opus, recommended.rich_opus),
+            rich_fable: or(self.config.rich_effort_fable, recommended.rich_fable),
+            stu_opus: or(self.config.stu_effort_opus, recommended.stu_opus),
+            stu_fable: or(self.config.stu_effort_fable, recommended.stu_fable),
+        }
+    }
+
+    /// The level each session is started with: its row's level on the model it is on.
+    pub fn lease_efforts(&self) -> LeaseEfforts {
+        self.effort_choices().on(self.lease_models())
+    }
+
+    /// **Both rows' models and all four levels in one write**, as Settings saves them when it
+    /// closes (round 86.1). Settings sends every value whenever any changed, so only the ones
+    /// that moved are his choices: those are written, and the rest stay as they were, chosen
+    /// or not. A name this build cannot choose refuses the whole save.
+    pub fn set_lease_choices(&mut self, models: LeaseModels, efforts: EffortChoices) -> io::Result<()> {
+        refuse_unknown_model(models.rich)?;
+        refuse_unknown_model(models.stu)?;
+        let now = self.effort_choices();
+        let levels = [
+            ("rich_effort_opus", efforts.rich_opus, now.rich_opus),
+            ("rich_effort_fable", efforts.rich_fable, now.rich_fable),
+            ("stu_effort_opus", efforts.stu_opus, now.stu_opus),
+            ("stu_effort_fable", efforts.stu_fable, now.stu_fable),
+        ];
+        if levels.iter().any(|(_, level, _)| *level == EffortLevel::Unknown) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "EffortLevel::Unknown is what a value written by another build reads as; it is not a \
+                 setting this build can choose",
+            ));
+        }
+        let mut picked = Vec::new();
+        if self.config.rich_model != models.rich {
+            picked.push("rich_model");
+        }
+        if self.config.stu_model != models.stu {
+            picked.push("stu_model");
+        }
+        self.config.rich_model = models.rich;
+        self.config.stu_model = models.stu;
+        for (key, level, was) in levels {
+            if level == was {
+                continue;
+            }
+            picked.push(key);
+            let slot = match key {
+                "rich_effort_opus" => &mut self.config.rich_effort_opus,
+                "rich_effort_fable" => &mut self.config.rich_effort_fable,
+                "stu_effort_opus" => &mut self.config.stu_effort_opus,
+                _ => &mut self.config.stu_effort_fable,
+            };
+            *slot = Some(level);
+        }
+        if picked.is_empty() {
+            return Ok(());
+        }
+        // One write; on failure `persist` puts every row back to what the file holds.
+        self.persist_choice(&picked)
     }
 
     /// The general-settings row's write for Rich. Refuses [`ModelChoice::Unknown`] by name —
@@ -1705,6 +1897,16 @@ impl ConfigStore {
         if self.config.stu_model == ModelChoice::Unknown {
             keys.push("stu_model");
         }
+        for (key, level) in [
+            ("rich_effort_opus", self.config.rich_effort_opus),
+            ("rich_effort_fable", self.config.rich_effort_fable),
+            ("stu_effort_opus", self.config.stu_effort_opus),
+            ("stu_effort_fable", self.config.stu_effort_fable),
+        ] {
+            if level == Some(EffortLevel::Unknown) {
+                keys.push(key);
+            }
+        }
         keys
     }
 }
@@ -1942,6 +2144,55 @@ mod tests {
         let mut fresh = serde_json::to_value(StoredConfig::default()).unwrap();
         fresh["only_chosen"] = serde_json::Value::Bool(false);
         assert_eq!(serde_json::to_value(empty).unwrap(), fresh);
+    }
+
+    #[test]
+    fn each_row_keeps_a_level_per_model_and_only_a_chosen_level_is_written() {
+        // Round 86.1 (CEO 2026-11-17): an effort control under each model row, each model
+        // keeping its own level. Defaults: Fable at low for the conversation and at medium for
+        // the work; Opus keeps low and high.
+        let path = tmp_path("efforts");
+        let mut store = ConfigStore::open(&path).unwrap();
+        let recommended = EffortChoices {
+            rich_opus: EffortLevel::Low, rich_fable: EffortLevel::Low,
+            stu_opus: EffortLevel::High, stu_fable: EffortLevel::Medium,
+        };
+        assert_eq!(store.effort_choices(), recommended);
+        assert_eq!(store.lease_efforts(), LeaseEfforts { rich: EffortLevel::Low, stu: EffortLevel::Medium });
+        assert_eq!(lease_efforts_from_config(path.parent().unwrap().join("no-such-dir").as_path()),
+            LeaseEfforts { rich: EffortLevel::Low, stu: EffortLevel::Medium }, "no file is the default");
+
+        // One level chosen, sent with everything else as Settings sends it: only it is written.
+        let fable = LeaseModels { rich: ModelChoice::Fable, stu: ModelChoice::Fable };
+        store.set_lease_choices(fable, EffortChoices { stu_fable: EffortLevel::Xhigh, ..recommended }).unwrap();
+        let mut keys: Vec<String> = on_disk(&path).keys().cloned().collect();
+        keys.sort();
+        assert_eq!(keys, ["only_chosen", "schema_version", "stu_effort_fable"]);
+        assert_eq!(on_disk(&path)["stu_effort_fable"], "xhigh");
+        let mut store = ConfigStore::open(&path).unwrap();
+        assert_eq!(store.lease_efforts(), LeaseEfforts { rich: EffortLevel::Low, stu: EffortLevel::Xhigh });
+
+        // The work moved to Opus: Opus's own level is in use, and Fable's is kept for the way back.
+        let opus_work = LeaseModels { rich: ModelChoice::Fable, stu: ModelChoice::Opus };
+        store.set_lease_choices(opus_work, store.effort_choices()).unwrap();
+        assert_eq!(store.lease_efforts(), LeaseEfforts { rich: EffortLevel::Low, stu: EffortLevel::High });
+        store.set_lease_choices(fable, store.effort_choices()).unwrap();
+        assert_eq!(ConfigStore::open(&path).unwrap().lease_efforts().stu, EffortLevel::Xhigh);
+
+        // Chosen back to the recommended level: a choice, written as one.
+        store.set_lease_choices(fable, recommended).unwrap();
+        assert_eq!(on_disk(&path)["stu_effort_fable"], "medium");
+        assert!(!on_disk(&path).contains_key("rich_effort_fable"), "a level nobody chose was written");
+
+        // A level a newer build wrote reads as the recommended one and goes back out unchanged.
+        fs::write(&path, r#"{"only_chosen":true,"rich_effort_fable":"ultra"}"#).unwrap();
+        let mut store = ConfigStore::open(&path).unwrap();
+        assert_eq!(store.effort_choices(), recommended);
+        store.set_font_scale(120).unwrap();
+        assert_eq!(on_disk(&path)["rich_effort_fable"], "ultra");
+        let unknown = EffortChoices { rich_opus: EffortLevel::Unknown, ..recommended };
+        assert!(store.set_lease_choices(fable, unknown).is_err(), "Unknown is never a choice");
+        fs::remove_file(&path).ok();
     }
 
     #[test]

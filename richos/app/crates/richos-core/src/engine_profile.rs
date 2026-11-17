@@ -193,6 +193,9 @@ pub struct EngineProfile {
     /// setting as it is at that moment. `native.rs` gives the conversation lease (Rich) `rich`
     /// and the work lease (Stu) `stu`.
     pub lease_models: crate::config::LeaseModels,
+    /// **The effort each session starts at** (round 86.1), read with the models: each row's
+    /// chosen level on the model it is on, or that model's recommended level.
+    pub lease_efforts: crate::config::LeaseEfforts,
     pub machine_settings: crate::machine_settings::Settings,
     /// **What this lease takes from the user's own settings files** (§138, build plan item 0):
     /// read by [`Self::prepare`] from the user's central folder, the same way for every user.
@@ -760,7 +763,8 @@ impl EngineProfile {
               &json!({"hooks":{"PreToolUse":[{"matcher":"Agent","hooks":preflight}]}}).to_string())?;
         let profile = Self { engine, coordination, plugin, state, runtime, work_scope: None, search_binding: None, codex_root:crate::codex_bridge::root(),
                   claude_account: None, token_sink: None, chat_readings: None, speech_model: None, meetings_corpus: None, live_meeting_reader: None,
-                  lease_models: crate::config::lease_models_from_config(&data), machine_settings, user };
+                  lease_models: crate::config::lease_models_from_config(&data),
+                  lease_efforts: crate::config::lease_efforts_from_config(&data), machine_settings, user };
         write(&profile.plugin.join(COMMANDS_ENV), &profile.commands_env())?;
         Ok(profile)
     }
