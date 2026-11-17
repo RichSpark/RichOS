@@ -287,9 +287,14 @@ class DesktopWork(unittest.TestCase):
         self.scope_path.write_text(json.dumps(self.scope))
         self.app.ECS.execute(ecs,{"protocol":1,"command":"checkpoint","binding":binding,"request_id":"accept-fixture","checkpoint":{"statements":[{"verb":"commitment","fields":{"id":"fixture-task","title":"Create the fictional result"}}]}})
         self.app.W.record_session_start(self.session,str(self.coord))
-        self.args={"request_id":"prepare-one","obligation_id":"fixture-task","repo":str(self.repo),"title":"Create fictional result","brief":"Create result.txt with FICTIONAL in the assigned target worktree. Commit only that file. Do not publish.","role":"worker","teammate":"mark","integration":"main"}
+        self.args={"request_id":"prepare-one","obligation_id":"fixture-task","repo":str(self.repo),"title":"Create fictional result","brief":"Create result.txt with FICTIONAL in the assigned target worktree. Commit only that file. Do not publish.","role":"worker","teammate":"mark","effort":"high","integration":"main"}
 
-    def call(self,name,args=None):return self.app.call(self.scope_path,name,args or {})
+    def call(self,name,args=None):
+        # Every new job names its effort level (CEO 2026-11-17): a fixture job that names none runs
+        # at high. `"effort":None` is a request that names none, as the back end could send it.
+        args=args or {}
+        if name=="prepare" and "effort" not in args: args={**args,"effort":"high"}
+        return self.app.call(self.scope_path,name,args)
     def records(self,scope_path=None,read_only=False):
         """Every receipt in scope, each in full as `inspect` returns it by id, after the
         reconciliation a lookup runs. Since 2026-10-31 a lookup without an id answers the
@@ -380,7 +385,7 @@ class DesktopWork(unittest.TestCase):
         self.assertEqual(self.records(),[],"a refused teammate left a receipt")
 
         ready=self.call("prepare",{**self.args,"teammate":"frank"})
-        self.assertRegex(ready["name"],r"^frank-opus-[0-9a-f]{12}$")
+        self.assertRegex(ready["name"],r"^frank-opus-high-[0-9a-f]{12}$")
         payload=self.stored_call(ready)
         self.assertNotIn("name",payload)
         self.assertNotIn("isolation",payload)
@@ -407,15 +412,15 @@ class DesktopWork(unittest.TestCase):
         """The CEO's numbering (2026-10-21, richos-hq docs/plans/follow-ups.md), for Stu's teammates
         too: a second active teammate of one first name is mark2-..., a third mark3-...; the lowest
         free number among the active ones, none for the first."""
-        self.active_teammate("mark-sonnet-aaaaaaaaaaaa");self.active_teammate("mark2-sonnet-bbbbbbbbbbbb")
+        self.active_teammate("mark-sonnet-high-aaaaaaaaaaaa");self.active_teammate("mark2-sonnet-high-bbbbbbbbbbbb")
         ready=self.call("prepare",self.args)
         self.assertEqual(ready["status"],"prepared",ready)
-        self.assertRegex(ready["name"],r"^mark3-sonnet-[0-9a-f]{12}$")
+        self.assertRegex(ready["name"],r"^mark3-sonnet-high-[0-9a-f]{12}$")
         self.assertIsNotNone(self.app.W.load_agent(self.app.W.named_key(self.session,ready["name"])))
 
     def test_stus_teammate_with_only_mark2_active_is_mark(self):
-        self.active_teammate("mark2-sonnet-bbbbbbbbbbbb")
-        self.assertRegex(self.call("prepare",self.args)["name"],r"^mark-sonnet-[0-9a-f]{12}$")
+        self.active_teammate("mark2-sonnet-high-bbbbbbbbbbbb")
+        self.assertRegex(self.call("prepare",self.args)["name"],r"^mark-sonnet-high-[0-9a-f]{12}$")
 
     def other_conversation(self,entity,thread,running=(),pending=()):
         """Another conversation's receipt folder and registry, laid out as the app lays them out
@@ -429,7 +434,7 @@ class DesktopWork(unittest.TestCase):
             (agents/(key+".json")).write_text(json.dumps({"key":key,"name":name,"session_id":"","agent_id":"","workspaces":[],
                 "end":None,"handed_in":None,"pause":None,"disposition":None,"orphan":False}))
         # Every conversation has receipts once it has teammates; the first ties the folder to its company.
-        for n,(name,status) in enumerate([*((p,"prepared") for p in pending),("mark-sonnet-000000000000","run-ended")]):
+        for n,(name,status) in enumerate([*((p,"prepared") for p in pending),("mark-sonnet-high-000000000000","run-ended")]):
             (receipts/("%064x.json"%n)).write_text(json.dumps({"schema":1,"id":"%064x"%n,"name":name,"status":status,
                 "binding":{"entity_id":entity,"thread_id":thread}}))
 
@@ -438,15 +443,15 @@ class DesktopWork(unittest.TestCase):
         the CEO's lowest free number is among all the company's active teammates. Another
         conversation of this company running mark and preparing mark2 makes this one mark3; another
         company's mark4 and mark5 count for nothing."""
-        self.other_conversation("depot","thread-b",running=["mark-sonnet-aaaaaaaaaaaa"],pending=["mark2-sonnet-bbbbbbbbbbbb"])
-        self.other_conversation("elsewhere","thread-c",running=["mark3-sonnet-cccccccccccc"],pending=["mark4-sonnet-dddddddddddd"])
-        self.assertRegex(self.call("prepare",self.args)["name"],r"^mark3-sonnet-[0-9a-f]{12}$")
+        self.other_conversation("depot","thread-b",running=["mark-sonnet-high-aaaaaaaaaaaa"],pending=["mark2-sonnet-high-bbbbbbbbbbbb"])
+        self.other_conversation("elsewhere","thread-c",running=["mark3-sonnet-high-cccccccccccc"],pending=["mark4-sonnet-high-dddddddddddd"])
+        self.assertRegex(self.call("prepare",self.args)["name"],r"^mark3-sonnet-high-[0-9a-f]{12}$")
 
     def test_two_of_stus_teammates_of_one_kind_prepared_together_are_mark_and_mark2(self):
         first=self.call("prepare",self.args)
         second=self.call("prepare",{**self.args,"request_id":"prepare-two","title":"Create a second fictional result"})
-        self.assertRegex(first["name"],r"^mark-sonnet-[0-9a-f]{12}$")
-        self.assertRegex(second["name"],r"^mark2-sonnet-[0-9a-f]{12}$")
+        self.assertRegex(first["name"],r"^mark-sonnet-high-[0-9a-f]{12}$")
+        self.assertRegex(second["name"],r"^mark2-sonnet-high-[0-9a-f]{12}$")
 
     def test_prepare_runs_one_job_on_a_named_model_within_the_users_ceiling(self):
         """Build plan item 7 (richos-hq docs/plans/2026-10-21-everything-for-every-user.md): an
@@ -464,7 +469,7 @@ class DesktopWork(unittest.TestCase):
         # Above the default and within the ceiling: Mark (sonnet) on Opus for this one job.
         ready=self.call("prepare",{**self.args,"request_id":"stronger","model":"opus"})
         self.assertEqual(ready["status"],"prepared")
-        self.assertRegex(ready["name"],r"^mark-opus-[0-9a-f]{12}$")
+        self.assertRegex(ready["name"],r"^mark-opus-high-[0-9a-f]{12}$")
         self.assertEqual(ready["agent_call"]["model"],"opus")
         self.assertEqual(self.record_of(ready)["request"]["model"],"opus")
         # The same request on the teammate's own model is different work.
@@ -480,7 +485,7 @@ class DesktopWork(unittest.TestCase):
         cheaper=self.call("prepare",{**self.args,"request_id":"cheaper","model":"haiku","title":"Cheaper",
             "brief":"model-downgrade-ack: a one-line rename that needs no reasoning at all\n"+self.args["brief"]})
         # The "stronger" Mark is still prepared, so this second active Mark is mark2 (CEO, 2026-10-21).
-        self.assertRegex(cheaper["name"],r"^mark2-haiku-[0-9a-f]{12}$")
+        self.assertRegex(cheaper["name"],r"^mark2-haiku-high-[0-9a-f]{12}$")
         self.assertEqual(cheaper["agent_call"]["model"],"haiku")
         # A user whose allowed list and ceiling sit below a teammate's own default can still run
         # that teammate on a model they allow (mid-job review rv-20261021T164124Z-0fe64c41-a94a,
@@ -491,7 +496,7 @@ class DesktopWork(unittest.TestCase):
         on_sonnet=self.call("prepare",{**frank,"request_id":"frank-sonnet","model":"sonnet","title":"Frank on Sonnet",
             "brief":"model-downgrade-ack: the user's own ceiling is sonnet, below this teammate's default\n"+self.args["brief"]})
         self.assertEqual(on_sonnet["status"],"prepared")
-        self.assertRegex(on_sonnet["name"],r"^frank-sonnet-[0-9a-f]{12}$")
+        self.assertRegex(on_sonnet["name"],r"^frank-sonnet-high-[0-9a-f]{12}$")
         self.assertEqual(on_sonnet["agent_call"]["model"],"sonnet")
         with self.assertRaisesRegex(Exception,"more expensive model"):
             self.call("prepare",{**frank,"request_id":"frank-fable","model":"fable","title":"Frank on Fable"})
@@ -503,30 +508,41 @@ class DesktopWork(unittest.TestCase):
         self.assertIn("model",prepare_tool["inputSchema"]["properties"])
 
     def test_prepare_runs_one_job_at_a_named_effort_level(self):
-        """An optional `effort` runs this one job at that level (CEO 2026-11-17: "Always name both
-        the model and the level when starting a subagent"): it reaches spawn.py as `--effort` and
-        the Agent call Stu submits, and the call Agent runs, carry it. Left out, the command and
-        the call are what they were."""
-        got=self.app.build_spawn_command([("/some/repo","/dest/path")],"mark-opus-abc123456789","mark","opus",
+        """`effort` runs this one job at that level (CEO 2026-11-17: "Always name both the model
+        and the level when starting a subagent"): it reaches spawn.py as `--effort` and the Agent
+        call Stu submits, and the call Agent runs, carry it. The teammate's name carries it too,
+        `<teammate>-<model>-<effort>-<id12>` (CEO 2026-11-17), so a new job that names no level
+        is refused and leaves no receipt."""
+        got=self.app.build_spawn_command([("/some/repo","/dest/path")],"mark-opus-high-abc123456789","mark","opus",
             Path("/x/y.brief"),"Some title",effort="high")
         self.assertEqual(got[got.index("--model"):got.index("--brief")],["--model","opus","--effort","high"])
-        plain=self.call("prepare",self.args)
-        self.assertNotIn("effort",plain["agent_call"])
-        self.assertNotIn("effort",self.record_of(plain)["request"])
-        self.assertNotIn("effort",self.record_of(plain)["payload"])
+        for unnamed in ({**self.args,"effort":None},{k:v for k,v in self.args.items() if k!="effort"}):
+            with self.subTest(unnamed="effort" in unnamed),self.assertRaisesRegex(
+                    ValueError,"name the effort level this job runs at: effort is one of low, medium, high, xhigh, max"):
+                self.app.call(self.scope_path,"prepare",unnamed)
         with self.assertRaisesRegex(ValueError,"effort must be one of low, medium, high, xhigh, max"):
             self.call("prepare",{**self.args,"request_id":"unknown-level","effort":"ultra"})
-        self.assertEqual(len(self.records()),1,"a level nobody accepts left a receipt")
+        self.assertEqual(self.records(),[],"a request with no level, or a level nobody accepts, left a receipt")
+        for level in self.app.EFFORT_LEVELS:
+            with self.subTest(level=level):
+                named=self.call("prepare",{**self.args,"request_id":"at-"+level,"title":"At "+level,"effort":level})
+                self.assertRegex(named["name"],r"^mark[0-9]*-sonnet-%s-[0-9a-f]{12}$"%level)
+                self.assertEqual(named["agent_call"]["effort"],level)
         ready=self.call("prepare",{**self.args,"request_id":"harder","model":"opus","effort":"high"})
         self.assertEqual(ready["status"],"prepared")
+        self.assertRegex(ready["name"],r"^mark[0-9]*-opus-high-[0-9a-f]{12}$")
         self.assertEqual((ready["agent_call"]["model"],ready["agent_call"]["effort"]),("opus","high"))
         record=self.record_of(ready)
         self.assertEqual(record["request"]["effort"],"high")
         self.assertEqual(record["payload"]["effort"],"high")
         # The same request at another level, or at none, is different work.
-        for other in ({"effort":"low"},{}):
+        for other in ({"effort":"low"},{"effort":None}):
             with self.subTest(other=other),self.assertRaisesRegex(ValueError,"different work"):
                 self.call("prepare",{**self.args,"request_id":"harder","model":"opus",**other})
+        # A receipt prepared before the level was required is still answered by its request_id.
+        path=self.app.folder(self.scope)/(ready["id"]+".json")
+        old=json.loads(path.read_text());del old["request"]["effort"];path.write_text(json.dumps(old))
+        self.assertEqual(self.call("prepare",{**self.args,"request_id":"harder","model":"opus","effort":None})["name"],ready["name"])
         # What Agent runs is the stored call, level included; a call at another level is refused.
         call=lambda tool_input: {"session_id":self.session,"tool_use_id":"native-effort","tool_input":tool_input}
         with self.assertRaisesRegex(ValueError,"differs"):
@@ -593,7 +609,7 @@ class DesktopWork(unittest.TestCase):
         so what it accepts reaches prepare, and what it refuses is refused there, with its size."""
         transport=self.app.load("work_transport_test",ENGINE/"ecs/adapters/mcp.py")
         def send(brief,request_id,obligation="fixture-task"):
-            ask={"request_id":request_id,"obligation_id":obligation,"role":"consult","teammate":"dean",
+            ask={"request_id":request_id,"obligation_id":obligation,"role":"consult","teammate":"dean","effort":"high",
                  "title":"Write teammate definitions","brief":brief}
             # The lines as Claude Code writes them (Node's JSON.stringify): UTF-8, and nothing escaped
             # but quotes, backslashes and control characters.
@@ -746,7 +762,7 @@ class DesktopWork(unittest.TestCase):
                 self.call("prepare",{**ask,"request_id":"with-"+key,key:value})
         ready=self.call("prepare",ask)
         self.assertEqual(ready["status"],"prepared")
-        self.assertRegex(ready["name"],r"^clark-sonnet-[0-9a-f]{12}$")
+        self.assertRegex(ready["name"],r"^clark-sonnet-high-[0-9a-f]{12}$")
         self.assertEqual((self.record_of(ready)["request"]["repo"],self.record_of(ready)["request"]["repos"],self.record_of(ready)["request"]["role"]),(None,[],"consult"))
         payload=self.stored_call(ready)
         self.assertEqual((payload["subagent_type"],payload["model"]),("richos-app-engine:clark","sonnet"))
@@ -1475,8 +1491,8 @@ class DesktopWork(unittest.TestCase):
         stray=agents/"wait-regression.json"
         stray.write_text(json.dumps({"key":"wait-regression","name":"lead-fixture","session_id":"fixture",
             "waiting":{"kind":"started","on":"its merge check is running","end":"at:2099-01-01T00:00:00Z"}}))
-        lost=agents/(self.app.W.named_key(self.session,"mark-sonnet-lostlist")+".json")
-        lost.write_text(json.dumps({"key":self.app.W.named_key(self.session,"mark-sonnet-lostlist"),"name":"mark-sonnet-lostlist"}))
+        lost=agents/(self.app.W.named_key(self.session,"mark-sonnet-high-lostlist")+".json")
+        lost.write_text(json.dumps({"key":self.app.W.named_key(self.session,"mark-sonnet-high-lostlist"),"name":"mark-sonnet-high-lostlist"}))
         garbled=agents/"garbled.json";garbled.write_text("{not json")
         self.assertEqual(len(self.app.W.damaged_records(include_done=False)),3)
         with self.assertRaisesRegex(ValueError,"may own a workspace"):
@@ -1668,7 +1684,7 @@ class DesktopWork(unittest.TestCase):
         # and never by the development session's (Rich's ruling, CEO §57).
         # Slice 2 of the proto-teammate shelf plan: the type is the named teammate and the model
         # its own, where both were the fixed generic worker on sonnet.
-        name,brief_path,title="mark-sonnet-abc123456789",Path("/x/y.brief"),"Some title"
+        name,brief_path,title="mark-sonnet-high-abc123456789",Path("/x/y.brief"),"Some title"
         got=self.app.build_spawn_command([("/some/repo","/dest/path")],name,"mark","sonnet",brief_path,title,
             integration="main",base=None)
         want=[sys.executable,str(self.app.ENGINE/"scripts/lib/spawn.py"),name,"--repo","/some/repo",
@@ -1677,7 +1693,7 @@ class DesktopWork(unittest.TestCase):
         self.assertEqual(got,want)
 
     def test_build_spawn_command_two_repositories_emits_two_repo_and_scoped_values(self):
-        name,brief_path,title="frank-opus-def456789012","/x/y.brief","Some title"
+        name,brief_path,title="frank-opus-high-def456789012","/x/y.brief","Some title"
         got=self.app.build_spawn_command(
             [("/repoA","/destA"),("/repoB","/destB")],name,"frank","opus",brief_path,title,
             integration="main",base="deadbeef")
@@ -1691,7 +1707,7 @@ class DesktopWork(unittest.TestCase):
     def test_build_spawn_command_scopes_a_per_repository_base_to_every_repository(self):
         # Part 4, finding 2: a reviewer or continuation of a job in several
         # repositories starts each workspace at that repository's own commit.
-        got=self.app.build_spawn_command([("/repoA","/destA"),("/repoB","/destB")],"frank-opus-abc",
+        got=self.app.build_spawn_command([("/repoA","/destA"),("/repoB","/destB")],"frank-opus-high-abc",
             "frank","opus","/x/y.brief","Review",integration=None,base={"/repoB":"b"*40,"/repoA":"a"*40})
         self.assertEqual(got[got.index("--json")+1:],["--base","/repoA="+"a"*40,"--base","/repoB="+"b"*40])
 
@@ -2562,7 +2578,7 @@ class DesktopWork(unittest.TestCase):
         self.finish_fixture_worker("fixture-worker")
         reviewer=self.call("prepare",{**self.args,"request_id":"review-one","role":"reviewer","teammate":"frank","review_of":worker["id"],"title":"Review fictional result","brief":"Review the exact result.txt change; do not modify any files."})
         # Slice 2: Frank reviews as himself, on his own model, carrying the reviewer duty.
-        self.assertTrue(reviewer["name"].startswith("frank-opus-"))
+        self.assertTrue(reviewer["name"].startswith("frank-opus-high-"))
         self.assertEqual(reviewer["agent_call"]["subagent_type"],"richos-app-engine:frank")
         self.assertIn(DUTY_TOP["reviewer"],self.stored_call(reviewer)["prompt"])
         review_target=self.start_fixture_worker(reviewer,"fixture-reviewer")

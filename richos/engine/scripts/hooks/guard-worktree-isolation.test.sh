@@ -988,10 +988,10 @@ fi # mutation witness fixture group
 # nothing written proves it is not a registration.
 if wti_want "Q7G2"; then
 printf '%s' "$(json_check dev-sonnet-high-g7b "" yes)" | "$HOOK" >/dev/null 2>&1; rc=$?
-if [ "$rc" -eq 0 ] && [ ! -e "$RICHOS_WORKSPACES_DIR/agents/$TEST_SID--dev-sonnet-g7b.json" ]; then
+if [ "$rc" -eq 0 ] && [ ! -e "$RICHOS_WORKSPACES_DIR/agents/$TEST_SID--dev-sonnet-high-g7b.json" ]; then
     PASS=$((PASS + 1)); printf '  PASS  Q7G2  a DRY payload is evaluated, allowed, and writes NO registration\n'
 else
-    FAIL=$((FAIL + 1)); printf '  FAIL  Q7G2  dry evaluation (rc=%s, record present=%s)\n' "$rc" "$( [ -e "$RICHOS_WORKSPACES_DIR/agents/$TEST_SID--dev-sonnet-g7b.json" ] && echo yes || echo no )"
+    FAIL=$((FAIL + 1)); printf '  FAIL  Q7G2  dry evaluation (rc=%s, record present=%s)\n' "$rc" "$( [ -e "$RICHOS_WORKSPACES_DIR/agents/$TEST_SID--dev-sonnet-high-g7b.json" ] && echo yes || echo no )"
 fi
 fi # mutation witness fixture group
 

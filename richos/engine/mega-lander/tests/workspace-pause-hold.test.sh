@@ -189,7 +189,7 @@ python3 "$ENGINE/mega-lander/workspaces.py" --entity "$ENT" --session "$CUR_SID"
     --why "the pause-hold suite's body of work" >/dev/null 2>>"$T/hooks.err"
 AID="aholdholdholdhold"
 register_agent "zach-opus-high-hold1" "$AID"
-sub "H0 the agent is registered with its id" "grep -q '\"agent_id\": \"$AID\"' \"\$(ls $STORE/agents/*--zach-opus-hold1.json)\"" "$(cat "$T/spawn.err" "$T/hooks.err" 2>/dev/null)"
+sub "H0 the agent is registered with its id" "grep -q '\"agent_id\": \"$AID\"' \"\$(ls $STORE/agents/*--zach-opus-high-hold1.json)\"" "$(cat "$T/spawn.err" "$T/hooks.err" 2>/dev/null)"
 
 echo "=== H1 PAUSE suspends the running work at once; it uses no CPU while held ==="
 agent_call "$AID" "toolu_work1" "python3 $T/worker.py $T/w1 $ROUNDS; echo native-result; exit 7" w1
@@ -217,7 +217,7 @@ sub "H1.2 it uses no CPU and makes no progress while held (cpu $C1 -> $C2, progr
 sub "H1.3 the lead is told, measured, in its own context" \
     "python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); c=d[\"hookSpecificOutput\"][\"additionalContext\"]; sys.exit(0 if \"HOLD zach-opus-high-hold1:\" in c and \"suspended in\" in c else 1)' '$T/pause.out'" "$(cat "$T/pause.out")"
 # Rich made the pause, so Rich's resume ends it (no silent holds, 2026-10-22: pause_protocol.py).
-sub "H1.4 the registry records the pause, ended by Rich's resume" "grep -q '\"until\": \"Rich' \"\$(ls $STORE/agents/*--zach-opus-hold1.json)\""
+sub "H1.4 the registry records the pause, ended by Rich's resume" "grep -q '\"until\": \"Rich' \"\$(ls $STORE/agents/*--zach-opus-high-hold1.json)\""
 printf '  measured: pause hook returned %.2f s after the send began; %s\n' "$(python3 -c "print($T1 - $T0)")" \
     "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["hookSpecificOutput"]["additionalContext"])' "$T/pause.out" 2>/dev/null)"
 

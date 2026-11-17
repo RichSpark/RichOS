@@ -59,7 +59,7 @@ class LongPayload(unittest.TestCase):
     def agent(self, first, **extra):
         return {'tool_name': 'Agent', 'session_id': SID, 'tool_use_id': 'tool-long-payload',
                 'tool_input': {'prompt': first + '\n' + PADDING, 'subagent_type': 'dev',
-                               'name': 'dev-opus-long1', **extra}}
+                               'name': 'dev-opus-high-long1', 'effort': 'high', **extra}}
 
     def test_long_prompt_cannot_hide_subagent_spawning(self):
         output = self.run_hook('verify-agent-prompt.sh',
@@ -83,7 +83,7 @@ class LongPayload(unittest.TestCase):
         self.assertIn(marker, log.read_text())
         # The permitted spawn is registered at spawn (docs/plans/worktree-spec-
         # 2026-09-11.md, point 3), with no isolation recorded.
-        registrations = list((self.root / 'ws' / 'agents').glob('*--dev-opus-long1.json'))
+        registrations = list((self.root / 'ws' / 'agents').glob('*--dev-opus-high-long1.json'))
         self.assertEqual(len(registrations), 1, 'the permitted spawn was never registered')
         self.assertEqual(json.loads(registrations[0].read_text()).get('isolation'), '')
 

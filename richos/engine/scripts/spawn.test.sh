@@ -358,7 +358,7 @@ echo "  create, and leave nothing behind on failure"
 # ---------------------------------------------------------------------------
 REFUSE_A=1 run "zach-sonnet-high-c1" --repo "$TARGET" --type zach --brief "$BRIEF"
 WT="$SANDBOX/widgets-wt/zach-sonnet-high-c1"
-if [ "$RC" -eq 1 ] && [ ! -e "$WT" ] && [ ! -e "$RICHOS_WORKSPACES_DIR/agents/$RICHOS_SESSION_ID--zach-sonnet-c1.json" ] \
+if [ "$RC" -eq 1 ] && [ ! -e "$WT" ] && [ ! -e "$RICHOS_WORKSPACES_DIR/agents/$RICHOS_SESSION_ID--zach-sonnet-high-c1.json" ] \
    && ! git -C "$TARGET" rev-parse --verify --quiet refs/heads/cc/zach-sonnet-high-c1 >/dev/null; then
     ok "a refusal BEFORE creation leaves no workspace, no branch and no registration"
 else
@@ -501,7 +501,7 @@ else
     bad "a post-create refusal rolls back" "rc=$RC $OUT"
 fi
 if [ ! -e "$WT3" ] && ! git -C "$TARGET" rev-parse --verify --quiet refs/heads/cc/zach-sonnet-high-c3 >/dev/null \
-   && [ ! -e "$RICHOS_WORKSPACES_DIR/agents/$RICHOS_SESSION_ID--zach-sonnet-c3.json" ]; then
+   && [ ! -e "$RICHOS_WORKSPACES_DIR/agents/$RICHOS_SESSION_ID--zach-sonnet-high-c3.json" ]; then
     ok "the rollback leaves no workspace, no branch and no registration"
 else
     bad "the rollback leaves nothing" "wt=$( [ -e "$WT3" ] && echo present || echo absent)"
@@ -614,7 +614,7 @@ M6B="$SANDBOX/gizmos-wt/moe-sonnet-high-m6"
 if [ "$RC" -eq 4 ] && [ ! -e "$M6A" ] && [ ! -e "$M6B" ] \
    && ! git -C "$TARGET" rev-parse --verify --quiet refs/heads/cc/moe-sonnet-high-m6 >/dev/null \
    && ! git -C "$SECOND" rev-parse --verify --quiet refs/heads/cc/moe-sonnet-high-m6 >/dev/null \
-   && [ ! -e "$RICHOS_WORKSPACES_DIR/agents/$RICHOS_SESSION_ID--moe-sonnet-m6.json" ]; then
+   && [ ! -e "$RICHOS_WORKSPACES_DIR/agents/$RICHOS_SESSION_ID--moe-sonnet-high-m6.json" ]; then
     ok "FAULT INJECTION: a refusal after creation rolls back BOTH workspaces and both branches — nothing is left behind in either repository"
 else
     bad "the rollback covers every workspace" "rc=$RC a=$( [ -e "$M6A" ] && echo present || echo absent) b=$( [ -e "$M6B" ] && echo present || echo absent)"
@@ -644,7 +644,7 @@ if python3 "$WS_PY" register-spawn <"$ENV_JSON" >/dev/null 2>&1; then
 else
     ok "NEGATIVE CONTROL: register-spawn still refuses it — that was the pre-flight's false positive"
 fi
-if [ -e "$RICHOS_WORKSPACES_DIR/agents/$RICHOS_SESSION_ID--zach-sonnet-d1.json" ]; then
+if [ -e "$RICHOS_WORKSPACES_DIR/agents/$RICHOS_SESSION_ID--zach-sonnet-high-d1.json" ]; then
     bad "check-spawn wrote a registration" "it must write nothing"
 else
     ok "check-spawn wrote NOTHING: no record, no binding, no event"

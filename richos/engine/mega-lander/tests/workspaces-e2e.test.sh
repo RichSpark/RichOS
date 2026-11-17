@@ -214,7 +214,7 @@ CC7B="$T/third-wt/zach-opus-high-e7"
 check "E7.1 two repositories, ONE name: both cc/ workspaces are created and registered (points 1, 3)" \
     "[ $rc1 -eq 0 ] && [ $rc2 -eq 0 ] && [ -d '$CC7A' ] && [ -d '$CC7B' ] && has_branch '$OTHER' cc/zach-opus-high-e7 && has_branch '$THIRD' cc/zach-opus-high-e7" \
     "$(cat "$T/create7a.out" "$T/create7b.out")"
-REC7="$CLAUDE_CONFIG_DIR/state/workspaces/agents/$CUR_SID--zach-opus-e7.json"
+REC7="$CLAUDE_CONFIG_DIR/state/workspaces/agents/$CUR_SID--zach-opus-high-e7.json"
 check "E7.2 and both are on the ONE agent's record" \
     "[ \"\$(python3 -c 'import json,sys; print(len([w for w in json.load(open(sys.argv[1]))[\"workspaces\"] if not w.get(\"deleted_at\")]))' '$REC7')\" = 2 ]" \
     "$(cat "$REC7" 2>/dev/null | tr '\n' ' ' | cut -c1-300)"
@@ -318,7 +318,7 @@ commit_in "$NP6" e6-side.txt
 git -C "$NP6" branch e6-spare
 git -C "$NP6" checkout -q "worktree-agent-ae6e6e6e6e6e6e6e6"
 post_tool "ae6e6e6e6e6e6e6e6" Bash
-REC6="$CLAUDE_CONFIG_DIR/state/workspaces/agents/$(ls "$CLAUDE_CONFIG_DIR/state/workspaces/agents" | grep -- "-zach-opus-e6.json")"
+REC6="$CLAUDE_CONFIG_DIR/state/workspaces/agents/$(ls "$CLAUDE_CONFIG_DIR/state/workspaces/agents" | grep -- "-zach-opus-high-e6.json")"
 check "E6.2 both refs it created are recorded against it (points 3, 10)" \
     "grep -q 'e6-side' '$REC6' && grep -q 'e6-spare' '$REC6'" "$(head -40 "$REC6" 2>/dev/null) $(cat "$T/observe.err")"
 subagent_stop "ae6e6e6e6e6e6e6e6"
