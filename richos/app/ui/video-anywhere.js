@@ -574,11 +574,16 @@ window.RichVideoAnywhere = (function () {
       plate(cx, r.left, r.top, r.width, r.height, rad);
       cx.clip();
     }
+    // A CLOSED LIST (`<details>`) SHOWS ITS HEADING ONLY. What it holds still answers a place and
+    // a size on the page in the Mac's own webview, and was drawn over what stands under it (CEO
+    // 2026-11-17, Settings' "By month": "a transparent overlay appears with the text that's
+    // normally hidden").
+    var shut = tag === "DETAILS" && !e.open;
     if (tag !== "TEXTAREA" && tag !== "SELECT") {
       for (var c = e.firstChild; c; c = c.nextSibling) {
         if (c.nodeType === 3) {
-          if (seen) paintText(cx, c, s, a, R);
-        } else if (c.nodeType === 1) paintDom(cx, c, a, R);
+          if (seen && !shut) paintText(cx, c, s, a, R);
+        } else if (c.nodeType === 1 && (!shut || c.tagName === "SUMMARY")) paintDom(cx, c, a, R);
       }
     }
     if (clip) cx.restore();
