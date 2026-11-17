@@ -975,7 +975,7 @@ impl ConfigStore {
     pub fn set_company_name(&mut self, name: &str) -> io::Result<()> {
         let trimmed = name.trim();
         self.config.company_name = if trimmed.is_empty() { None } else { Some(trimmed.to_string()) };
-        self.persist()
+        self.persist_choice(&["company_name"])
     }
 
     /// The dial's position. A value on disk this build has no name for answers with the
@@ -1002,7 +1002,7 @@ impl ConfigStore {
             ));
         }
         self.config.assertiveness = level;
-        self.persist()
+        self.persist_choice(&["assertiveness"])
     }
 
     // -----------------------------------------------------------------------------------
@@ -1015,11 +1015,11 @@ impl ConfigStore {
     }
 
     pub fn set_opening_sound(&mut self, on: bool) -> io::Result<()> {
-        if self.config.opening_sound == on {
+        if self.already_chosen("opening_sound", self.config.opening_sound == on) {
             return Ok(());
         }
         self.config.opening_sound = on;
-        self.persist()
+        self.persist_choice(&["opening_sound"])
     }
 
     /// Which opening RichOS starts with: an opening's id, `"daily"`, or `None` for the app's
@@ -1032,11 +1032,11 @@ impl ConfigStore {
 
     pub fn set_opening_pick(&mut self, pick: Option<&str>) -> io::Result<()> {
         let pick = pick.map(str::trim).filter(|p| !p.is_empty()).map(str::to_string);
-        if self.config.opening_pick == pick {
+        if self.already_chosen("opening_pick", self.config.opening_pick == pick) {
             return Ok(());
         }
         self.config.opening_pick = pick;
-        self.persist()
+        self.persist_choice(&["opening_pick"])
     }
 
     /// "A different one each day": the last such day and the opening it showed
@@ -1063,11 +1063,11 @@ impl ConfigStore {
     pub fn set_opening_company(&mut self, name: &str) -> io::Result<()> {
         let line: String = name.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(OPENING_COMPANY_MAX).collect();
         let line = if line.is_empty() { None } else { Some(line) };
-        if self.config.opening_company == line {
+        if self.already_chosen("opening_company", self.config.opening_company == line) {
             return Ok(());
         }
         self.config.opening_company = line;
-        self.persist()
+        self.persist_choice(&["opening_company"])
     }
 
     /// The first time the splash was shown, epoch millis, or `None` if it never has been.
@@ -1112,11 +1112,11 @@ impl ConfigStore {
                  setting this build can choose",
             ));
         }
-        if self.config.theme == theme {
+        if self.already_chosen("theme", self.config.theme == theme) {
             return Ok(());
         }
         self.config.theme = theme;
-        self.persist()
+        self.persist_choice(&["theme"])
     }
 
     // ---- §119: the model each session starts on ----------------------------------------
@@ -1141,11 +1141,11 @@ impl ConfigStore {
     /// see [`ConfigStore::set_assertiveness`]. Takes effect at the next session Rich starts.
     pub fn set_rich_model(&mut self, model: ModelChoice) -> io::Result<()> {
         refuse_unknown_model(model)?;
-        if self.config.rich_model == model {
+        if self.already_chosen("rich_model", self.config.rich_model == model) {
             return Ok(());
         }
         self.config.rich_model = model;
-        self.persist()
+        self.persist_choice(&["rich_model"])
     }
 
     /// **Both rows in one write**, as Preferences saves them when it closes (round 23). Either
@@ -1157,21 +1157,30 @@ impl ConfigStore {
         if self.config.rich_model == models.rich && self.config.stu_model == models.stu {
             return Ok(());
         }
+        // Settings sends both rows when either changed, so the row that moved is the one he
+        // chose; the other stays as it was, chosen or not.
+        let mut picked = Vec::new();
+        if self.config.rich_model != models.rich {
+            picked.push("rich_model");
+        }
+        if self.config.stu_model != models.stu {
+            picked.push("stu_model");
+        }
         self.config.rich_model = models.rich;
         self.config.stu_model = models.stu;
         // One write; on failure `persist` puts both back to what the file holds.
-        self.persist()
+        self.persist_choice(&picked)
     }
 
     /// The general-settings row's write for Stu, by the same rule as
     /// [`ConfigStore::set_rich_model`].
     pub fn set_stu_model(&mut self, model: ModelChoice) -> io::Result<()> {
         refuse_unknown_model(model)?;
-        if self.config.stu_model == model {
+        if self.already_chosen("stu_model", self.config.stu_model == model) {
             return Ok(());
         }
         self.config.stu_model = model;
-        self.persist()
+        self.persist_choice(&["stu_model"])
     }
 
     /// The font control's position, as a percentage of the 16px root. Always one of
@@ -1183,11 +1192,11 @@ impl ConfigStore {
 
     pub fn set_font_scale(&mut self, pct: u16) -> io::Result<()> {
         let snapped = snap_font_scale(pct);
-        if self.config.font_scale == snapped {
+        if self.already_chosen("font_scale", self.config.font_scale == snapped) {
             return Ok(());
         }
         self.config.font_scale = snapped;
-        self.persist()
+        self.persist_choice(&["font_scale"])
     }
 
     // ---- the Oxford comma in what Claude writes (CEO, 2026-10-19) -------------------
@@ -1198,18 +1207,18 @@ impl ConfigStore {
     }
 
     pub fn set_oxford_comma(&mut self, keep: bool) -> io::Result<()> {
-        if self.config.oxford_comma == keep {
+        if self.already_chosen("oxford_comma", self.config.oxford_comma == keep) {
             return Ok(());
         }
         self.config.oxford_comma = keep;
-        self.persist()
+        self.persist_choice(&["oxford_comma"])
     }
 
     pub fn show_swearmeter(&self) -> bool { self.config.show_swearmeter }
 
     pub fn set_show_swearmeter(&mut self, show: bool) -> io::Result<()> {
         self.config.show_swearmeter = show;
-        self.persist()
+        self.persist_choice(&["show_swearmeter"])
     }
 
     /// Whether each chat shows its context meter. Off until the user switches it on.
@@ -1217,7 +1226,7 @@ impl ConfigStore {
 
     pub fn set_show_context_meter(&mut self, show: bool) -> io::Result<()> {
         self.config.show_context_meter = show;
-        self.persist()
+        self.persist_choice(&["show_context_meter"])
     }
 
     // ---- the Mac resources square (round 47) ---------------------------------------
@@ -1225,7 +1234,7 @@ impl ConfigStore {
     /// `"ink"` or `"readout"`. Ink when nothing was chosen or the stored word is one this build
     /// does not draw.
     pub fn cleaner_inbox_first(&self)->bool {self.config.cleaner_inbox_first}
-    pub fn set_cleaner_inbox_first(&mut self,on:bool)->io::Result<()> {self.config.cleaner_inbox_first=on;self.persist()}
+    pub fn set_cleaner_inbox_first(&mut self,on:bool)->io::Result<()> {self.config.cleaner_inbox_first=on;self.persist_choice(&["cleaner_inbox_first"])}
 
     /// `None` means this installation has never saved a folder choice. The shell
     /// can still honor an explicitly configured pilot folder in that case. An unreadable
@@ -1250,7 +1259,7 @@ impl ConfigStore {
     pub fn set_cleaner(&mut self,on:bool,root:Option<String>)->io::Result<()> {
         self.config.cleaner_on=on;
         if let Some(root)=root{self.config.cleaner_root=Some(root);}
-        self.persist()
+        self.persist_choice(&["cleaner_on"])
     }
 
     pub fn resources_view(&self) -> &'static str {
@@ -1263,11 +1272,11 @@ impl ConfigStore {
         if !RESOURCES_VIEWS.contains(&view) {
             return Err(io::Error::new(io::ErrorKind::InvalidInput, format!("unknown resources view: {view}")));
         }
-        if self.config.resources_view.as_deref() == Some(view) {
+        if self.already_chosen("resources_view", self.config.resources_view.as_deref() == Some(view)) {
             return Ok(());
         }
         self.config.resources_view = Some(view.to_string());
-        self.persist()
+        self.persist_choice(&["resources_view"])
     }
 
     // ---- idle conversation sessions (follow-ups, decision 3) -----------------------
@@ -1278,11 +1287,11 @@ impl ConfigStore {
     }
 
     pub fn set_idle_session_minutes(&mut self, minutes: u32) -> io::Result<()> {
-        if self.config.idle_session_minutes == minutes {
+        if self.already_chosen("idle_session_minutes", self.config.idle_session_minutes == minutes) {
             return Ok(());
         }
         self.config.idle_session_minutes = minutes;
-        self.persist()
+        self.persist_choice(&["idle_session_minutes"])
     }
 
     // ---- the person at the foot of the rail ----------------------------------------
@@ -1300,7 +1309,7 @@ impl ConfigStore {
     pub fn set_user_name(&mut self, name: &str) -> io::Result<()> {
         let trimmed = name.trim();
         self.config.user_name = if trimmed.is_empty() { None } else { Some(trimmed.to_string()) };
-        self.persist()
+        self.persist_choice(&["user_name"])
     }
 
     /// His initials for the rail circle — `None` when the name is unset, never a guess.
@@ -1319,7 +1328,7 @@ impl ConfigStore {
     /// the CEO pinned are untouched, which is what makes a pin mean something.
     pub fn set_techy_default(&mut self, enabled: bool) -> io::Result<()> {
         self.config.techy_default = enabled;
-        self.persist()
+        self.persist_choice(&["techy_default"])
     }
 
     /// This thread's override, or `None` when it follows the default.
@@ -1428,8 +1437,10 @@ impl ConfigStore {
         entity_id: Option<&str>,
         enabled: bool,
     ) -> io::Result<TechyMode> {
+        let mut picked: &[&str] = &[];
         match scope {
             TechyScope::AllCompanies => {
+                picked = &["techy_default"];
                 self.config.techy_default = enabled;
                 if let Some(id) = entity_id {
                     self.config.techy_entities.remove(id);
@@ -1452,7 +1463,7 @@ impl ConfigStore {
         }
         // ONE persist for the whole application, not one per tier touched: a crash
         // between two writes would otherwise leave a scope half-applied on disk.
-        self.persist()?;
+        self.persist_choice(picked)?;
         Ok(self.techy_mode(thread_id, entity_id))
     }
 
@@ -1473,7 +1484,7 @@ impl ConfigStore {
     /// `{"age_days": 45}` is as settable as a click and `Custom` stays describable.
     pub fn set_raw_retention(&mut self, retention: RawRetention) -> io::Result<()> {
         self.config.raw_retention = retention;
-        self.persist()
+        self.persist_choice(&["raw_retention"])
     }
 
     /// Set the window from a menu entry. `Custom` has no window to write and is refused —
@@ -1598,8 +1609,22 @@ impl ConfigStore {
     /// The restore can only ever fire on a key that came off disk: `Unknown` has no other
     /// source. [`ConfigStore::set_theme`] and [`ConfigStore::set_assertiveness`] refuse it by
     /// name, so there is no path by which this build invents one.
+    /// Whether a setter has nothing to write: the value is already this one and the file
+    /// already holds it as a choice.
+    fn already_chosen(&self, key: &str, same: bool) -> bool {
+        same && self.chosen.contains(key)
+    }
+
     fn persist(&mut self) -> io::Result<()> {
-        match self.write() {
+        self.persist_choice(&[])
+    }
+
+    /// [`ConfigStore::persist`] for a setter the user's own pick reaches: `keys` are the
+    /// settings that pick names, and they are written as chosen **even where the value is the
+    /// default's**. A person who picks "Forever" while Forever is the default has chosen it,
+    /// and keeps it when the default moves.
+    fn persist_choice(&mut self, keys: &[&str]) -> io::Result<()> {
+        match self.write(keys) {
             Ok(written) => {
                 self.saved = self.config.clone();
                 self.chosen = written;
@@ -1615,13 +1640,14 @@ impl ConfigStore {
     /// **Writes only the settings the user chose, and answers with their keys** (CEO,
     /// 2026-11-17: *"make sure that from now on, the settings can always tell what is what"*).
     ///
-    /// A setting is written when the file already holds it or its value is not the default's;
-    /// one nobody touched stays out. So an absent key means "never chosen" and follows the
+    /// A setting is written when the file already holds it, when the setter that got here was
+    /// called for it (`picked`), or when its value is not the default's; one nobody touched
+    /// stays out. So an absent key means "never chosen" and follows the
     /// default wherever it moves, and a present key means "chosen" and stays, including one
     /// chosen back to the value the default happens to have. Until this, every save wrote
     /// every key, and on the day the model default moved from Opus to Fable a file holding
     /// `"opus"` could not say whether anyone had picked it.
-    fn write(&self) -> io::Result<BTreeSet<String>> {
+    fn write(&self, picked: &[&str]) -> io::Result<BTreeSet<String>> {
         if !self.readable {
             // Not written, and SAID: an `Ok` here told the caller "saved" about a change that
             // is gone at the next launch (hunt part 1, finding 38).
@@ -1645,7 +1671,10 @@ impl ConfigStore {
         let defaults = default_document();
         if let Some(object) = document.as_object_mut() {
             object.retain(|key, value| {
-                ALWAYS_WRITTEN.contains(&key.as_str()) || self.chosen.contains(key) || defaults.get(key) != Some(value)
+                ALWAYS_WRITTEN.contains(&key.as_str())
+                    || self.chosen.contains(key)
+                    || picked.contains(&key.as_str())
+                    || defaults.get(key) != Some(value)
             });
         }
         let serialized = serde_json::to_string_pretty(&document)
@@ -1882,6 +1911,8 @@ mod tests {
         // default was chosen and stays; what equals it goes, and reads the same.
         let mut before = serde_json::to_value(StoredConfig { theme: Theme::Dark, ..StoredConfig::default() }).unwrap();
         before.as_object_mut().unwrap().remove("only_chosen");
+        before["rich_model"] = "opus".into();
+        before["stu_model"] = "opus".into();
         assert!(before.as_object().unwrap().len() > 20, "the old file's shape: {before}");
         fs::write(&path, before.to_string()).unwrap();
         let mut store = ConfigStore::open(&path).unwrap();
@@ -1889,6 +1920,22 @@ mod tests {
         store.set_font_scale(120).unwrap();
         assert_eq!(keys(&path), ["font_scale", "only_chosen", "schema_version", "theme"]);
         fs::remove_file(&path).ok();
+
+        // A pick of the value the default already has is a pick: written, and kept.
+        let mut store = ConfigStore::open(&path).unwrap();
+        store.set_theme(Theme::System).unwrap();
+        store.set_rich_model(ModelChoice::Fable).unwrap();
+        assert_eq!(keys(&path), ["only_chosen", "rich_model", "schema_version", "theme"]);
+        assert_eq!(on_disk(&path)["theme"], "system");
+        fs::remove_file(&path).ok();
+
+        // Every key a setter names is a field of the file, so none is marked under a wrong name.
+        let source = include_str!("config.rs");
+        let named: Vec<&str> = source.split("persist_choice(&[\"").skip(1).filter_map(|rest| rest.split('"').next()).collect();
+        assert!(named.len() > 15, "{named:?}");
+        for key in named {
+            assert!(source.contains(&format!("\n    {key}: ")), "a setter names {key}, which is no field of the file");
+        }
 
         // What makes leaving a key out safe: an absent key reads as exactly the default.
         let empty: StoredConfig = serde_json::from_str("{}").unwrap();
