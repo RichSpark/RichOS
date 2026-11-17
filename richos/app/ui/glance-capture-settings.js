@@ -4,7 +4,7 @@
   const settings = window.RichSettings, bridge = window.RichBridge;
   if (!settings || !bridge) return;
 
-  let view, sheet, toggle, record, feedback, saved, keycaps, keyHint, shortcutFields, summary, card;
+  let view, sheet, toggle, record, feedback, saved, keycaps, keyHint, summary, card;
   let listening = false, busy = false;
 
   function shortcutLabel(shortcut) {
@@ -25,11 +25,11 @@
     summary.textContent = !view.enabled ? "Off. Capture Region… is always in RichGlance’s File menu."
       : view.registered ? `On. Press ${shortcutLabel(view.shortcut)} in any app to capture a region.`
         : "Shortcut unavailable. Choose another combination.";
-    shortcutFields.hidden = !view.enabled;
     record.textContent = listening ? "Cancel" : "Change";
     record.setAttribute("aria-label", listening ? "Cancel recording a capture shortcut" : "Change capture shortcut");
     keyHint.textContent = listening ? "Press the new shortcut. Esc to cancel."
-      : "Starts a capture on the display under your pointer.";
+      : view.enabled ? "Starts a capture on the display under your pointer."
+        : "Used when Capture from any app is on.";
     keycaps.replaceChildren(...[...(listening ? "?" : shortcutLabel(view.shortcut))].map(text => {
       const key = document.createElement("kbd");
       key.className = "dict-key";
@@ -105,7 +105,6 @@
     saved = sheet.querySelector(".dict-saved");
     keycaps = sheet.querySelector("#richglance-capture-keys");
     keyHint = sheet.querySelector("#richglance-capture-key-hint");
-    shortcutFields = sheet.querySelector("#richglance-capture-fields");
     summary = sheet.querySelector("#richglance-capture-summary");
     sheet.querySelector(".dict-close").addEventListener("click", close);
     sheet.addEventListener("click", event => { if (event.target === sheet) close(); });
