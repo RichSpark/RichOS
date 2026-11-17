@@ -502,6 +502,44 @@ class DesktopWork(unittest.TestCase):
         prepare_tool=next(t for t in self.app.available_tools() if t["name"]=="prepare")
         self.assertIn("model",prepare_tool["inputSchema"]["properties"])
 
+    def test_prepare_runs_one_job_at_a_named_effort_level(self):
+        """An optional `effort` runs this one job at that level (CEO 2026-11-17: "Always name both
+        the model and the level when starting a subagent"): it reaches spawn.py as `--effort` and
+        the Agent call Stu submits, and the call Agent runs, carry it. Left out, the command and
+        the call are what they were."""
+        got=self.app.build_spawn_command([("/some/repo","/dest/path")],"mark-opus-abc123456789","mark","opus",
+            Path("/x/y.brief"),"Some title",effort="high")
+        self.assertEqual(got[got.index("--model"):got.index("--brief")],["--model","opus","--effort","high"])
+        plain=self.call("prepare",self.args)
+        self.assertNotIn("effort",plain["agent_call"])
+        self.assertNotIn("effort",self.record_of(plain)["request"])
+        self.assertNotIn("effort",self.record_of(plain)["payload"])
+        with self.assertRaisesRegex(ValueError,"effort must be one of low, medium, high, xhigh, max"):
+            self.call("prepare",{**self.args,"request_id":"unknown-level","effort":"ultra"})
+        self.assertEqual(len(self.records()),1,"a level nobody accepts left a receipt")
+        ready=self.call("prepare",{**self.args,"request_id":"harder","model":"opus","effort":"high"})
+        self.assertEqual(ready["status"],"prepared")
+        self.assertEqual((ready["agent_call"]["model"],ready["agent_call"]["effort"]),("opus","high"))
+        record=self.record_of(ready)
+        self.assertEqual(record["request"]["effort"],"high")
+        self.assertEqual(record["payload"]["effort"],"high")
+        # The same request at another level, or at none, is different work.
+        for other in ({"effort":"low"},{}):
+            with self.subTest(other=other),self.assertRaisesRegex(ValueError,"different work"):
+                self.call("prepare",{**self.args,"request_id":"harder","model":"opus",**other})
+        # What Agent runs is the stored call, level included; a call at another level is refused.
+        call=lambda tool_input: {"session_id":self.session,"tool_use_id":"native-effort","tool_input":tool_input}
+        with self.assertRaisesRegex(ValueError,"differs"):
+            self.app.dispatch_intent(self.scope,call({**ready["agent_call"],"effort":"max"}))
+        judged=call(dict(ready["agent_call"]))
+        self.app.dispatch_intent(self.scope,judged,inspect_only=True)
+        self.assertEqual((judged["tool_input"]["model"],judged["tool_input"]["effort"]),("opus","high"))
+        # The levels are spawn.py's own, and the field is in the tool's schema.
+        spawn_source=(ENGINE/"scripts/lib/spawn.py").read_text(encoding="utf-8")
+        self.assertIn("EFFORT_LEVELS = (%s)"%", ".join('"%s"'%level for level in self.app.EFFORT_LEVELS),spawn_source)
+        prepare_tool=next(t for t in self.app.available_tools() if t["name"]=="prepare")
+        self.assertEqual(prepare_tool["inputSchema"]["properties"]["effort"]["enum"],list(self.app.EFFORT_LEVELS))
+
     def test_a_consult_may_make_the_media_skills_working_folder_and_no_other_file(self):
         """Every teammate's standing instruction sends a recording to `watch-video` or
         `transcribe-audio` (CEO 2026-10-10), and both make a working folder for frames,
