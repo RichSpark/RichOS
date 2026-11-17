@@ -109,7 +109,48 @@ final class GlanceInfoView: NSView {
         }
     }
 
+    /// The text has no panel behind it; it reads over any picture by round 90's stacked shadow: a dense
+    /// black edge (two 2 px and eight 5 px layers) and three wider soft ones. An attributed string
+    /// carries one shadow, so this view draws each layer from the text view's glyphs, behind the text
+    /// and unclipped by the scroll view, as CSS `text-shadow` paints them.
+    private final class TextShadow: NSView {
+        static let layers: [(blur: CGFloat, down: CGFloat, alpha: CGFloat)] =
+            Array(repeating: (2, 0, 1), count: 2) + Array(repeating: (5, 0, 1), count: 8)
+            + [(10, 1, 0.9), (18, 0, 0.6), (32, 2, 0.45)]
+
+        weak var text: NSTextView?
+        override var isFlipped: Bool { true }
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+        override func draw(_ dirtyRect: NSRect) {
+            guard let text, let layout = text.layoutManager, let container = text.textContainer,
+                  let clip = text.enclosingScrollView?.contentView,
+                  let context = NSGraphicsContext.current?.cgContext else { return }
+            let shown = clip.convert(clip.bounds, to: self)
+            let glyphs = layout.glyphRange(forBoundingRect: clip.convert(clip.bounds, to: text), in: container)
+            guard glyphs.length > 0, !shown.isEmpty else { return }
+            let origin = text.convert(text.textContainerOrigin, to: self)
+            for layer in Self.layers {
+                NSGraphicsContext.saveGraphicsState()
+                let shadow = NSShadow()
+                shadow.shadowColor = NSColor.black.withAlphaComponent(layer.alpha)
+                shadow.shadowBlurRadius = layer.blur
+                shadow.shadowOffset = CGSize(width: 0, height: -layer.down)
+                shadow.set()
+                context.beginTransparencyLayer(auxiliaryInfo: nil)
+                context.clip(to: shown)
+                layout.drawGlyphs(forGlyphRange: glyphs, at: origin)
+                context.setBlendMode(.sourceIn)
+                context.setFillColor(NSColor.black.cgColor)
+                context.fill(shown)
+                context.endTransparencyLayer()
+                NSGraphicsContext.restoreGraphicsState()
+            }
+        }
+    }
+
     private let preferences: GlanceInfoPreferences
+    private let textShadow = TextShadow()
     private let icon = FocusButton()
     private let showDefault = FocusSwitch()
     private let showDefaultLabel = NSTextField(labelWithString: "Show by default")
@@ -183,6 +224,11 @@ final class GlanceInfoView: NSView {
         scroll.drawsBackground = false
         scroll.borderType = .noBorder
         addSubview(scroll, positioned: .below, relativeTo: icon)
+        textShadow.text = note
+        addSubview(textShadow, positioned: .below, relativeTo: nil)
+        scroll.contentView.postsBoundsChangedNotifications = true
+        NotificationCenter.default.addObserver(self, selector: #selector(textScrolled),
+                                               name: NSView.boundsDidChangeNotification, object: scroll.contentView)
         status.maximumNumberOfLines = 2
         status.lineBreakMode = .byWordWrapping
         status.font = .systemFont(ofSize: 14, weight: .medium)
@@ -193,6 +239,8 @@ final class GlanceInfoView: NSView {
     }
 
     required init?(coder: NSCoder) { nil }
+
+    @objc private func textScrolled() { textShadow.needsDisplay = true }
 
     func linkKeyboard(after view: NSView) {
         view.nextKeyView = icon
@@ -300,6 +348,7 @@ final class GlanceInfoView: NSView {
         icon.contentTintColor = explicitlyShown ? NSColor.black : NSColor.white
         icon.setAccessibilityLabel(explicitlyShown ? "Hide RichCleaner Info" : "Show RichCleaner Info")
         scroll.isHidden = !(explicitlyShown || (peek && !suppressed))
+        textShadow.isHidden = scroll.isHidden
         needsLayout = true
     }
 
@@ -336,6 +385,8 @@ final class GlanceInfoView: NSView {
             note.frame.size.height = height
             scroll.frame.size.height = min(limit, height)
         }
+        textShadow.frame = bounds
+        textShadow.needsDisplay = true
     }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
@@ -382,15 +433,11 @@ final class GlanceInfoView: NSView {
         let lines = NSMutableAttributedString(string: "")
         func append(_ text: String, size: CGFloat, weight: NSFont.Weight = .medium) {
             if lines.length > 0 { lines.append(NSAttributedString(string: "\n")) }
-            let shadow = NSShadow()
-            shadow.shadowColor = NSColor.black
-            shadow.shadowBlurRadius = 3
-            shadow.shadowOffset = CGSize(width: 0, height: -1.5)
             let paragraph = NSMutableParagraphStyle()
             paragraph.paragraphSpacing = 6
             lines.append(NSAttributedString(string: text, attributes: [
                 .font: NSFont.systemFont(ofSize: size, weight: weight), .foregroundColor: NSColor.white,
-                .shadow: shadow, .paragraphStyle: paragraph
+                .paragraphStyle: paragraph
             ]))
         }
         if let metadata {
@@ -406,6 +453,7 @@ final class GlanceInfoView: NSView {
         }
         note.textStorage?.setAttributedString(lines)
         scroll.contentView.scroll(to: .zero)
+        textShadow.needsDisplay = true
         needsLayout = true
     }
 }
