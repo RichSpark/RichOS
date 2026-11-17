@@ -62,13 +62,19 @@ public struct GlanceCaptureSelection {
     }
 
     public mutating func mouseUp() {
-        if phase == .dragging { phase = .refining }
+        guard phase == .dragging else { return }
+        if canCapture {
+            phase = .refining
+        } else {
+            first = second
+            phase = .aiming
+        }
     }
 
     public mutating func shiftReturn() {
         switch phase {
         case .aiming: anchor(.placing)
-        case .placing: phase = .refining
+        case .placing: if canCapture { phase = .refining }
         case .dragging, .refining: break
         }
     }
@@ -79,6 +85,12 @@ public struct GlanceCaptureSelection {
     }
 
     public mutating func toggleLens() { showsLens.toggle() }
+
+    public mutating func startOver(at pointer: CGPoint) {
+        let showsLens = self.showsLens
+        self = Self(width: width, height: height, pointer: pointer)
+        self.showsLens = showsLens
+    }
 
     private mutating func anchor(_ phase: Phase) {
         first = second

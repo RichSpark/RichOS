@@ -39,6 +39,7 @@ final class CaptureCanvas: NSView {
     private let actions = NSStackView()
     private let copyButton = NSButton(title: "Copy Image    ↵", target: nil, action: nil)
     private let saveButton = NSButton(title: "Save PNG…    ⌘S", target: nil, action: nil)
+    private let retryButton = NSButton(title: "Start Over    R", target: nil, action: nil)
     private let cancelButton = NSButton(title: "Cancel    Esc", target: nil, action: nil)
     private var failure: String?
     override var isFlipped: Bool { true }
@@ -62,7 +63,7 @@ final class CaptureCanvas: NSView {
         actions.layer?.cornerRadius = 12
         actions.layer?.borderWidth = 1
         for (button, action) in [(copyButton, #selector(copyPressed)), (saveButton, #selector(savePressed)),
-                                 (cancelButton, #selector(cancelPressed))] {
+                                 (retryButton, #selector(startOver)), (cancelButton, #selector(cancelPressed))] {
             button.target = self
             button.action = action
             button.bezelStyle = .rounded
@@ -115,11 +116,13 @@ final class CaptureCanvas: NSView {
             case 53: cancel?(); return
             case 36, 76: if !event.isARepeat { copy?() }; return
             default:
-                guard event.charactersIgnoringModifiers?.lowercased() == "m" else {
+                guard let character = event.charactersIgnoringModifiers?.lowercased(), ["m", "r"].contains(character) else {
                     super.keyDown(with: event)
                     return
                 }
-                if !event.isARepeat { selection.toggleLens() }
+                guard !event.isARepeat else { return }
+                if character == "r" { startOver(); return }
+                selection.toggleLens()
             }
         } else {
             super.keyDown(with: event)
@@ -172,6 +175,13 @@ final class CaptureCanvas: NSView {
 
     @objc private func copyPressed() { copy?() }
     @objc private func savePressed() { save?() }
+    @objc private func startOver() {
+        guard selection.phase == .refining, let window else { return }
+        let point = convert(window.mouseLocationOutsideOfEventStream, from: nil)
+        selection.startOver(at: geometry.sourcePoint(point))
+        refresh()
+        window.makeFirstResponder(self)
+    }
     @objc private func cancelPressed() { cancel?() }
 
     private func source(_ event: NSEvent) -> CGPoint {
@@ -212,6 +222,7 @@ final class CaptureCanvas: NSView {
         actions.layer?.borderColor = border.cgColor
         styleAction(copyButton, primary: true)
         styleAction(saveButton, primary: false)
+        styleAction(retryButton, primary: false)
         styleAction(cancelButton, primary: false)
     }
 

@@ -26,6 +26,8 @@ final class GlanceCaptureSelectionTests: XCTestCase {
     func testKeyboardPlacementCanCrossCornersAndClampsAtEdges() {
         var selection = GlanceCaptureSelection(width: 40, height: 30, pointer: CGPoint(x: 3, y: 10))
         selection.shiftReturn()
+        selection.shiftReturn()
+        XCTAssertEqual(selection.phase, .placing)
         XCTAssertFalse(selection.canCapture)
         for _ in 0..<8 { selection.nudge(dx: -1, dy: -1) }
         selection.shiftReturn()
@@ -38,6 +40,31 @@ final class GlanceCaptureSelectionTests: XCTestCase {
         selection.toggleLens()
         XCTAssertFalse(selection.showsLens)
         XCTAssertTrue(selection.canCapture)
+    }
+
+    func testEmptyClickAndStartOverAllowAnotherDrag() {
+        let origin = CGPoint(x: 50, y: 75)
+        var selection = GlanceCaptureSelection(width: 200, height: 200, pointer: origin)
+        selection.mouseDown(at: origin)
+        selection.mouseUp()
+        XCTAssertNil(selection.crop)
+
+        selection.mouseDown(at: origin)
+        selection.movePointer(to: CGPoint(x: 150, y: 125))
+        selection.mouseUp()
+        selection.switchCorner()
+        selection.toggleLens()
+        XCTAssertTrue(selection.canCapture)
+
+        let newOrigin = CGPoint(x: 110, y: 110)
+        selection.startOver(at: newOrigin)
+        XCTAssertNil(selection.crop)
+        XCTAssertFalse(selection.showsLens)
+        selection.mouseDown(at: newOrigin)
+        selection.movePointer(to: CGPoint(x: 90, y: 80))
+        selection.mouseUp()
+        XCTAssertEqual(selection.crop, CGRect(x: 90, y: 80, width: 20, height: 30))
+        XCTAssertEqual(selection.target, .init(x: 90, y: 80))
     }
 
     func testOnePixelNudgeUsesTheActualFrameScaleAndKeepsTheExactCrop() throws {
