@@ -459,6 +459,22 @@ RENEWED_BETWEEN_TURNS = re.compile(r"renewed between two of its turns because it
 RENEWED_AT_START = re.compile(r"renewed because its team changed, before the next assignment, in (\d+) ms")
 
 
+def agent_starts(callbacks, keys):
+    """Every Agent call the back end itself made, as Agent ran it ({key: value} for KEYS).
+
+    The back end submits the short call `prepare` returned, which names the receipt and carries
+    no name (mega-lander/app.py agent_call, since 2026-10-31); the app's hook hands Agent the
+    stored call in its place, name included, and that is the tool_input the call's PostToolUse
+    carries. A call with no PostToolUse (a hook refused it, or it never returned) is given as it
+    was submitted."""
+    def own(c, event):
+        return (c.get('hook_event_name') == event and c.get('tool_name') in ('Agent', 'Task')
+                and not c.get('agent_id'))
+    ran = {c.get('tool_use_id'): c.get('tool_input') or {} for c in callbacks if own(c, 'PostToolUse')}
+    return [{k: (ran.get(c.get('tool_use_id')) or c.get('tool_input') or {}).get(k) for k in keys}
+            for c in callbacks if own(c, 'PreToolUse')]
+
+
 def consult_verdict(teammate, receipts, spawns, inspects, worktrees, assignments):
     """Why a consult did NOT reach the back end as the teammate's answer ([] = it did). Slice 3 of
     the proto-teammate shelf plan (richos-hq docs/plans/2026-10-06-proto-teammate-shelf.md §3).
@@ -838,11 +854,7 @@ class OutputWalk(command_walk.CommandWalk):
         seen = json.loads((self.out / 'backend-worker-observed.json').read_text())
         spawns = []
         for session in seen.get('work_sessions') or []:
-            for c in self.callbacks(session):
-                if (c.get('hook_event_name') == 'PreToolUse' and c.get('tool_name') in ('Agent', 'Task')
-                        and not c.get('agent_id')):
-                    ti = c.get('tool_input') or {}
-                    spawns.append({k: ti.get(k) for k in ('name', 'subagent_type', 'model', 'effort')})
+            spawns += agent_starts(self.callbacks(session), ('name', 'subagent_type', 'model', 'effort'))
         workers = [{k: r.get(k) for k in ('path', 'workerName', 'source')}
                    for r in self.record() if r.get('actor') == 'worker']
         note(teammate=teammate, spawns=spawns, worker_rows=workers)
@@ -901,11 +913,9 @@ class OutputWalk(command_walk.CommandWalk):
         receipts = json.loads(guest(self.vm, 'python3 -c ' + shlex.quote(script) + ' ' + shlex.quote(self.data), 60))
         spawns, inspects, ended = [], [], []
         for session in sessions:
+            spawns += agent_starts(self.callbacks(session), ('name', 'subagent_type', 'model', 'effort', 'prompt'))
             for c in self.callbacks(session):
                 event, tool = c.get('hook_event_name'), str(c.get('tool_name') or '')
-                if event == 'PreToolUse' and tool in ('Agent', 'Task') and not c.get('agent_id'):
-                    ti = c.get('tool_input') or {}
-                    spawns.append({k: ti.get(k) for k in ('name', 'subagent_type', 'model', 'effort', 'prompt')})
                 if event == 'PostToolUse' and 'richos_work' in tool and tool.endswith('inspect') and not c.get('agent_id'):
                     inspects.append(json.dumps(c.get('tool_response')))
                 if event == 'SubagentStop':
@@ -983,11 +993,11 @@ class OutputWalk(command_walk.CommandWalk):
                   '    for line in open(p):\n'
                   '        try: c=json.loads(line).get("callback",{})\n'
                   '        except Exception: continue\n'
-                  '        if c.get("hook_event_name")=="PreToolUse" and c.get("tool_name") in ("Agent","Task") and not c.get("agent_id"):\n'
-                  '            ti=c.get("tool_input") or {}\n'
-                  '            out.append({k:ti.get(k) for k in ("name","subagent_type","model","effort")})\n'
+                  '        if c.get("tool_name") in ("Agent","Task") and not c.get("agent_id"):\n'
+                  '            out.append({k:c.get(k) for k in ("hook_event_name","tool_name","tool_use_id","tool_input")})\n'
                   'print(json.dumps(out))\n')
-        spawns = json.loads(guest(self.vm, 'python3 -c ' + shlex.quote(script) + ' ' + shlex.quote(self.data), 60))
+        spawns = agent_starts(json.loads(guest(self.vm, 'python3 -c ' + shlex.quote(script) + ' ' + shlex.quote(self.data), 60)),
+                              ('name', 'subagent_type', 'model', 'effort'))
         acme = self.company + '/' + SHELF_FILE
         rows = self.save_record('record-after-shelf.jsonl')
         lands = [r for r in rows if r.get('source') == 'land' and r.get('path') == acme]

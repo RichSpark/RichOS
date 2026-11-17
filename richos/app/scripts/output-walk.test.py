@@ -88,6 +88,27 @@ class OutputWalkTests(unittest.TestCase):
         failures = output.named_verdict("mark", [mark], [{"workerName": frank["name"], "source": "land"}], ["by Mark"], [])
         self.assertTrue(any("not mark's" in f for f in failures), failures)
 
+    def test_an_agent_start_is_read_as_agent_ran_it(self):
+        """The back end submits the call `prepare` gave it, which has no name; the app's hook hands
+        Agent the stored call, and the name is on the call's PostToolUse (real app, 2026-11-17:
+        the PreToolUse of mark-opus-high-21b721b62155 carried no name)."""
+        def row(event, use, tool_input, agent=None):
+            return {"hook_event_name": event, "tool_name": "Agent", "tool_use_id": use,
+                    "tool_input": tool_input, "agent_id": agent}
+        sent = {"subagent_type": "richos-app-engine:mark", "model": "opus", "effort": "high",
+                "prompt": "richos-prepared-brief:21b7"}
+        ran = dict(sent, name="mark-opus-high-21b721b62155", prompt="the stored brief")
+        keys = ("name", "subagent_type", "model", "effort")
+        callbacks = [row("PreToolUse", "t1", sent), row("PostToolUse", "t1", ran),
+                     row("PreToolUse", "t2", dict(sent, effort="low")),          # refused: never ran
+                     row("PreToolUse", "t3", {"name": "inner"}, agent="a1"),     # a worker's own call
+                     {"hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_use_id": "t4", "tool_input": {}}]
+        starts = output.agent_starts(callbacks, keys)
+        self.assertEqual(starts, [{k: ran.get(k) for k in keys}, {"name": None, "subagent_type": sent["subagent_type"],
+                                                                 "model": "opus", "effort": "low"}])
+        self.assertEqual(output.named_verdict("mark", starts[:1], [{"workerName": ran["name"], "source": "land"}],
+                                              ["by Mark"], []), [])
+
     def test_consult_passes_only_for_clarks_answer_read_back_with_no_workspace(self):
         """Slice 3 of the proto-teammate shelf plan: consult's verdict, offline."""
         name = "clark-sonnet-high-0123456789ab"
