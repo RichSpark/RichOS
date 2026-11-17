@@ -127,7 +127,9 @@ final class GlanceInfoView: NSView {
                   let clip = text.enclosingScrollView?.contentView,
                   let context = NSGraphicsContext.current?.cgContext else { return }
             let shown = clip.convert(clip.bounds, to: self)
-            let glyphs = layout.glyphRange(forBoundingRect: clip.convert(clip.bounds, to: text), in: container)
+            let inset = text.textContainerOrigin
+            let glyphs = layout.glyphRange(
+                forBoundingRect: clip.convert(clip.bounds, to: text).offsetBy(dx: -inset.x, dy: -inset.y), in: container)
             guard glyphs.length > 0, !shown.isEmpty else { return }
             let origin = text.convert(text.textContainerOrigin, to: self)
             for layer in Self.layers {
