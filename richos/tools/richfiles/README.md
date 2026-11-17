@@ -23,11 +23,13 @@ The script builds and ad hoc signs a development bundle. RichOS packaging uses t
 
 Core browsing and file operations work locally. The optional RichFinder and RichCleaner menu actions use the corresponding RichOS services when installed.
 
-RichGlance ships inside RichFiles as an optional viewer for PNG, JPEG (`.jpg`, `.jpeg` and `.jpe`), HEIC, HEIF, WebP, AVIF, GIF, TIFF, BMP, ICO and ICNS. RichFiles and Finder open images in the app chosen in macOS. Use **Open With** to try RichGlance on one file or choose it under **Get Info → Open with → Change All** in Finder for each image type you want it to open by default. RichFiles registers the viewer when first opened. RichGlance can open files while both RichFiles and RichOS are closed.
+RichGlance ships inside RichFiles as an optional viewer for PNG, JPEG (`.jpg`, `.jpeg` and `.jpe`), HEIC, HEIF (`.heif` and `.hif`), WebP, AVIF, GIF, TIFF, BMP (`.bmp` and `.dib`), ICO and ICNS. Use **Open With** to try RichGlance on one file. To make it the default across Finder, the Desktop and RichFiles, use **Default image viewer** in RichFiles Settings. Each row reflects macOS's choice for that format. Turning the switch off restores the previous apps when they are available and preserves choices you made separately. RichGlance can open files while both RichFiles and RichOS are closed.
 
 In RichGlance, press Left or Right to cycle through images in that folder, Control and scroll to zoom, drag to pan and Escape to close. Animated GIFs and WebPs play automatically. TIFF opens on its first page. **File → Open in Preview** opens the current image for editing.
 
-The existing RichFiles timing log also records RichGlance decode, canvas update, folder scan and Preview handoff outcomes without storing filenames or paths. It is included in RichDoctor's Configuration diagnostics.
+Hover over the **Info** button to peek at the current image’s RichCleaner note, keywords, folder and saved date. Click to keep it visible or press **I**. **Show by default** and **Shortcut** are available beside the button and in the **View** menu. The overlay reads the local RichCleaner catalog when the image matches its last saved record.
+
+The existing RichFiles timing log also records RichGlance decode, canvas update, folder scan, Preview handoff, default-viewer and metadata lookup outcomes without storing filenames, paths or note text. It is included in RichDoctor's Configuration diagnostics.
 
 On volumes such as exFAT, regular file copies reserve the destination name exclusively after staging the file. A failed publication keeps the source and reports the output for review. Rename, move into and staged folder copy require the destination volume to support exclusive rename.
 

@@ -358,6 +358,7 @@ struct RichFilesSettings: View {
         case general = "General"
         case keyboard = "Keyboard"
         case association = "Default file manager"
+        case imageViewer = "Default image viewer"
         case launch = "Launch and window"
         case workspaces = "Workspaces"
 
@@ -418,6 +419,7 @@ struct RichFilesSettings: View {
                             case .general: general
                             case .keyboard: keyboard
                             case .association: association
+                            case .imageViewer: GlanceDefaultPage()
                             case .launch: launch
                             case .workspaces: EmptyView()
                             }

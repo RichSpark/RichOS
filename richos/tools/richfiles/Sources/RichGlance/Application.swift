@@ -9,6 +9,9 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var previousApplication: NSRunningApplication?
     private var returnTo: NSRunningApplication?
     private var viewer: Viewer?
+    private let infoPreferences = GlanceInfoPreferences()
+    private var infoMenuItem: NSMenuItem?
+    private var keyMonitor: Any?
     private var openingPanel: NSOpenPanel?
     private var launchOrigin = Application.launchOrigin()
 
@@ -28,6 +31,18 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
             self, selector: #selector(applicationActivated(_:)),
             name: NSWorkspace.didActivateApplicationNotification, object: nil
         )
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .mouseMoved]) { [weak self] event in
+            let handled = MainActor.assumeIsolated {
+                guard let viewer = self?.viewer, NSApp.keyWindow === viewer.window,
+                      event.window == nil || event.window === viewer.window else { return false }
+                if event.type == .mouseMoved {
+                    viewer.info.trackPointer(at: viewer.window.mouseLocationOutsideOfEventStream)
+                    return false
+                }
+                return viewer.handleKey(event)
+            }
+            return handled ? nil : event
+        }
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {
@@ -84,8 +99,9 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
             returnTo = origin
         }
         launchOrigin = nil
-        let viewer = self.viewer ?? Viewer()
+        let viewer = self.viewer ?? Viewer(preferences: infoPreferences)
         self.viewer = viewer
+        viewer.info.preferencesChanged = { [weak self] in self?.updateInfoShortcut() }
         openingPanel?.cancel(nil)
         viewer.window.delegate = self
         viewer.open(file.standardizedFileURL)
@@ -117,6 +133,14 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     @objc private func openInPreview() { viewer?.openInPreview() }
+    @objc private func showInfo() { viewer?.info.toggleInfo() }
+    @objc private func showInfoByDefault() { viewer?.info.toggleDefault() }
+    @objc private func changeInfoShortcut() { viewer?.info.beginRecording() }
+
+    private func updateInfoShortcut() {
+        infoMenuItem?.keyEquivalent = infoPreferences.shortcut.key
+        infoMenuItem?.keyEquivalentModifierMask = infoPreferences.shortcut.flags
+    }
 
     private func installMenu() {
         let menuBar = NSMenu()
@@ -137,6 +161,16 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
         fileMenu.addItem(withTitle: "Close", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
         menuBar.addItem(file)
 
+        let view = NSMenuItem()
+        let viewMenu = NSMenu(title: "View")
+        infoMenuItem = viewMenu.addItem(withTitle: "Show Info", action: #selector(showInfo), keyEquivalent: "")
+        infoMenuItem?.target = self
+        updateInfoShortcut()
+        viewMenu.addItem(withTitle: "Show Info by Default", action: #selector(showInfoByDefault), keyEquivalent: "").target = self
+        viewMenu.addItem(withTitle: "Change Info Shortcut…", action: #selector(changeInfoShortcut), keyEquivalent: "").target = self
+        view.submenu = viewMenu
+        menuBar.addItem(view)
+
         let window = NSMenuItem()
         let windowMenu = NSMenu(title: "Window")
         window.submenu = windowMenu
@@ -151,6 +185,17 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
 extension Application: NSMenuItemValidation {
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         if menuItem.action == #selector(openInPreview) { return viewer?.file != nil }
+        if menuItem.action == #selector(showInfo) {
+            menuItem.title = viewer?.info.explicitlyShown == true ? "Hide Info" : "Show Info"
+            return viewer?.info.isHidden == false && openingPanel == nil
+        }
+        if menuItem.action == #selector(showInfoByDefault) {
+            menuItem.state = infoPreferences.showByDefault ? .on : .off
+            return viewer?.info.isHidden == false && openingPanel == nil
+        }
+        if menuItem.action == #selector(changeInfoShortcut) {
+            return viewer?.info.isHidden == false && openingPanel == nil
+        }
         return true
     }
 }

@@ -16,18 +16,23 @@ final class Viewer {
 
     let window: NSWindow
     private(set) var file: URL?
-    private let canvas = Canvas()
+    private let canvas: Canvas
+    var info: GlanceInfoView { canvas.info }
     private var folder: [URL]?
     private var folderRequest: Request?
     private var pendingStep = 0
     private var displayRequest: Request?
     private var decodeWork: DispatchWorkItem?
     private var playback: Task<Void, Never>?
+    private var metadataWork: DispatchWorkItem?
+    private var metadataRequest: (request: Request, began: TimeInterval)?
     private var folderWork: DispatchWorkItem?
     private let decoder = DispatchQueue(label: "app.richos.richglance.decode", qos: .userInitiated)
     private let scanner = DispatchQueue(label: "app.richos.richglance.folder", qos: .userInitiated)
+    private let catalogReader = DispatchQueue(label: "app.richos.richglance.metadata", qos: .userInitiated)
 
-    init() {
+    init(preferences: GlanceInfoPreferences) {
+        canvas = Canvas(preferences: preferences)
         let area = NSScreen.main?.visibleFrame.size ?? CGSize(width: 1_200, height: 800)
         let size = CGSize(width: min(920, area.width * 0.82), height: min(620, area.height * 0.82))
         window = NSWindow(contentRect: CGRect(origin: .zero, size: size),
@@ -37,10 +42,22 @@ final class Viewer {
         window.collectionBehavior.insert(.fullScreenPrimary)
         window.contentMinSize = CGSize(width: 300, height: 180)
         window.tabbingMode = .disallowed
+        window.acceptsMouseMovedEvents = true
+        window.autorecalculatesKeyViewLoop = false
         window.contentView = canvas
         window.center()
-        canvas.step = { [weak self] in self?.step($0) }
-        canvas.close = { [weak self] in self?.window.performClose(nil) }
+    }
+
+    func handleKey(_ event: NSEvent) -> Bool {
+        if info.handleKey(event) { return true }
+        guard event.modifierFlags.intersection(GlanceInfoShortcut.modifiers).isEmpty else { return false }
+        switch event.keyCode {
+        case 53: window.performClose(nil)
+        case 123: step(-1)
+        case 124: step(1)
+        default: return false
+        }
+        return true
     }
 
     func show() {
@@ -85,6 +102,12 @@ final class Viewer {
     private func stopDisplay() {
         playback?.cancel()
         playback = nil
+        metadataWork?.cancel()
+        metadataWork = nil
+        if let metadataRequest {
+            metadataRequest.request.record(.glanceMetadata, .cancelled, started: metadataRequest.began)
+        }
+        metadataRequest = nil
         decodeWork?.cancel()
         decodeWork = nil
         displayRequest?.record(.glanceDisplay, .cancelled)
@@ -132,6 +155,7 @@ final class Viewer {
                     outcome = .complete
                     canvas.show(image, filename: file.lastPathComponent)
                     if let animation = image.animation { play(animation, request: request) }
+                    readMetadata(for: file, request: request)
                 case .failure(let error):
                     outcome = (error as? GlanceImage.Failure) == .unavailable ? .unavailable : .issues
                     canvas.show(nil, filename: file.lastPathComponent, message: "This image could not be opened.")
@@ -144,6 +168,29 @@ final class Viewer {
         }
         decodeWork = work
         decoder.async(execute: work)
+    }
+
+    private func readMetadata(for file: URL, request: Request) {
+        let began = ProcessInfo.processInfo.systemUptime
+        metadataRequest = (request, began)
+        let work = DispatchWorkItem { [weak self] in
+            let result = Result { try GlanceMetadata.read(for: file) }
+            DispatchQueue.main.async { [weak self] in
+                guard let self, metadataRequest?.request.id == request.id else { return }
+                metadataRequest = nil
+                metadataWork = nil
+                switch result {
+                case .success(let metadata):
+                    info.finishLookup(metadata, unavailable: false)
+                    request.record(.glanceMetadata, .complete, started: began, total: metadata == nil ? 0 : 1)
+                case .failure:
+                    info.finishLookup(nil, unavailable: true)
+                    request.record(.glanceMetadata, .unavailable, started: began)
+                }
+            }
+        }
+        metadataWork = work
+        catalogReader.async(execute: work)
     }
 
     private func play(_ animation: GlanceAnimation, request: Request) {

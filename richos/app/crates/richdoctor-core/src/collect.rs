@@ -718,7 +718,7 @@ fn richfiles_timing(scope: &Scope, ctx: &Context, budget: &mut u64) -> Item {
         if id.len() != 36 || !id.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-')
             || build.len() > 40 || !build.bytes().all(|b| b.is_ascii_alphanumeric() || b".-+".contains(&b))
             || !matches!(operation, "listing" | "copy" | "move" | "recovery" | "gitHistory" | "gitComparison"
-                | "glanceDisplay" | "glanceDecode" | "glanceFolder" | "glancePreview")
+                | "glanceDisplay" | "glanceDecode" | "glanceFolder" | "glancePreview" | "glanceDefaults" | "glanceMetadata")
             || !matches!(outcome, "complete" | "issues" | "canceled" | "unavailable" | "interrupted")
             || confirmed > total {
             return None;
@@ -952,13 +952,21 @@ mod tests {
         let mut glance = record.clone();
         glance["operation"] = serde_json::json!("glanceDecode");
         glance["outcome"] = serde_json::json!("issues");
-        write(&scope.logs_root().join("richfiles-timing.jsonl"), &format!("{record}\n{glance}"));
+        let mut defaults = record.clone();
+        defaults["operation"] = serde_json::json!("glanceDefaults");
+        let mut metadata = record.clone();
+        metadata["operation"] = serde_json::json!("glanceMetadata");
+        metadata["note"] = serde_json::json!("Personal RichCleaner note");
+        write(&scope.logs_root().join("richfiles-timing.jsonl"), &format!("{record}\n{glance}\n{defaults}\n{metadata}"));
         let items = collect(Category::Configuration, &scope, &Context::default(), 0);
         let timing = items.iter().find(|item| item.source == "RichFiles timing log").unwrap();
         assert_eq!(timing.status, Status::Collected);
         assert_eq!(timing.coverage, Coverage::InWindow);
         assert!(timing.text.contains("outcome=canceled worker=145ms first_rows=32ms confirmed=290/300"));
         assert!(timing.text.contains("operation=glanceDecode outcome=issues"));
+        assert!(timing.text.contains("operation=glanceDefaults"));
+        assert!(timing.text.contains("operation=glanceMetadata"));
+        assert!(!timing.text.contains("Personal RichCleaner note"));
         assert!(!timing.text.contains("Customer names"));
     }
 

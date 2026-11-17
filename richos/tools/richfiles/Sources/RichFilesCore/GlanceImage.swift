@@ -3,7 +3,7 @@ import Foundation
 import ImageIO
 import UniformTypeIdentifiers
 
-private enum GlanceFormat: String, CaseIterable {
+public enum GlanceFormat: String, CaseIterable, Identifiable {
     case png = "public.png"
     case jpeg = "public.jpeg"
     case heic = "public.heic"
@@ -16,20 +16,55 @@ private enum GlanceFormat: String, CaseIterable {
     case ico = "com.microsoft.ico"
     case icns = "com.apple.icns"
 
-    private var extensions: [String] {
+    public var id: String { rawValue }
+    public var contentType: UTType? { UTType(rawValue) }
+
+    public var title: String {
+        switch self {
+        case .png: "PNG"
+        case .jpeg: "JPEG"
+        case .heic: "HEIC"
+        case .heif: "HEIF"
+        case .webp: "WebP"
+        case .avif: "AVIF"
+        case .gif: "GIF"
+        case .tiff: "TIFF"
+        case .bmp: "BMP"
+        case .ico: "ICO"
+        case .icns: "ICNS"
+        }
+    }
+
+    public var extensions: [String] {
         switch self {
         case .png: ["png"]
         case .jpeg: ["jpg", "jpeg", "jpe"]
         case .heic: ["heic"]
-        case .heif: ["heif"]
+        case .heif: ["heif", "hif"]
         case .webp: ["webp"]
         case .avif: ["avif"]
         case .gif: ["gif"]
         case .tiff: ["tiff", "tif"]
-        case .bmp: ["bmp"]
+        case .bmp: ["bmp", "dib"]
         case .ico: ["ico"]
         case .icns: ["icns"]
         }
+    }
+
+    private static let decoderTypes = Set(CGImageSourceCopyTypeIdentifiers() as? [String] ?? [])
+
+    /// Launch Services changes the type as a whole, including its extension aliases.
+    public var associationProblem: String? {
+        guard let contentType, Self.decoderTypes.contains(rawValue) else {
+            return "This version of macOS has no decoder for \(title)."
+        }
+        let aliases = contentType.tags[.filenameExtension] ?? []
+        let unsupported = aliases.map { $0.lowercased() }.filter { !extensions.contains($0) }
+        guard unsupported.isEmpty else {
+            let names = unsupported.map { ".\($0)" }.joined(separator: ", ")
+            return "RichGlance cannot open \(names), which macOS includes in this type."
+        }
+        return nil
     }
 
     private static let byExtension = Dictionary(uniqueKeysWithValues:
@@ -86,8 +121,7 @@ public struct GlanceImage {
         guard (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else {
             throw Failure.unavailable
         }
-        guard let expected = GlanceFormat.forFile(url),
-              let source = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary),
+        guard let expected = GlanceFormat.forFile(url), let source = imageSource(url),
               let kind = CGImageSourceGetType(source) as String?, let format = GlanceFormat(rawValue: kind),
               expected.accepts(format), CGImageSourceGetCount(source) > 0 else { throw Failure.unreadable }
 
@@ -100,6 +134,56 @@ public struct GlanceImage {
         let animation = GlanceAnimation(source: source, format: format)
         let first = try decodeFrame(in: source, at: index, pixelLimit: animation == nil ? 32_000_000 : GlanceAnimation.pixelLimit)
         return Self(bitmap: first.bitmap, size: first.size, animation: animation)
+    }
+
+    private static func imageSource(_ url: URL) -> CGImageSource? {
+        let options = [kCGImageSourceShouldCache: false] as CFDictionary
+        if let source = CGImageSourceCreateWithURL(url as CFURL, options), CGImageSourceGetType(source) != nil {
+            return source
+        }
+        guard url.pathExtension.lowercased() == "dib", let bitmap = packedBitmap(url) else { return nil }
+        return CGImageSourceCreateWithData(bitmap as CFData, options)
+    }
+
+    /// A packed Windows DIB has the pixel and palette data of a BMP without its 14-byte file header.
+    private static func packedBitmap(_ url: URL) -> Data? {
+        guard let values = try? url.resourceValues(forKeys: [.fileSizeKey]),
+              let fileSize = values.fileSize, (12...128 * 1024 * 1024).contains(fileSize),
+              let dib = try? Data(contentsOf: url, options: [.mappedIfSafe]), dib.count == fileSize else { return nil }
+        func uint16(_ offset: Int) -> Int {
+            Int(dib[offset]) | (Int(dib[offset + 1]) << 8)
+        }
+        func uint32(_ offset: Int) -> Int {
+            uint16(offset) | (uint16(offset + 2) << 16)
+        }
+        let headerSize = uint32(0)
+        let bitmapOffset: Int
+        switch headerSize {
+        case 12:
+            let depth = uint16(10)
+            guard [1, 4, 8, 24].contains(depth) else { return nil }
+            bitmapOffset = headerSize + (depth <= 8 ? (1 << depth) * 3 : 0)
+        case 40, 52, 56, 108, 124:
+            guard dib.count >= headerSize else { return nil }
+            let depth = uint16(14)
+            let compression = uint32(16)
+            let colors = uint32(32)
+            let masks = headerSize == 40 && (compression == 3 || compression == 6) ? (compression == 3 ? 12 : 16) : 0
+            // Do not delegate linked color profiles, which reference another file, to Image I/O.
+            if headerSize == 124 && uint32(56) == 0x4C494E4B { return nil }
+            let palette = colors == 0 && (1...8).contains(depth) ? 1 << depth : colors
+            bitmapOffset = headerSize + masks + palette * 4
+        default:
+            return nil
+        }
+        guard bitmapOffset < dib.count else { return nil }
+        var bmp = Data([0x42, 0x4D])
+        for value in [UInt32(14 + dib.count), 0, UInt32(14 + bitmapOffset)] {
+            var littleEndian = value.littleEndian
+            withUnsafeBytes(of: &littleEndian) { bmp.append(contentsOf: $0) }
+        }
+        bmp.append(dib)
+        return bmp
     }
 
     private static func largestRepresentation(in source: CGImageSource) -> Int {
