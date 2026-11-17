@@ -42,6 +42,9 @@ start and both answer). Then:
             which saves. PASS needs config.json holding exactly those two levels as chosen
             (`rich_effort_<model>`, `stu_effort_<model>`). The relaunch, job and leases steps after
             it then read the processes: started with that --effort, answering at it.
+  reopen    after effort: Settings opened again by its button. PASS needs all five levels in each
+            of the two controls and exactly one marked chosen in each, the one that was pressed
+            (each button's own checked state, read in the guest; picture effort-reopened.png).
 
 Evidence in --out: report.json, facts.json, leases.json. Exit 0 when every step passes.
 It quits nothing: run-walk.py quits the app by its pid and deletes the clone (CEO 54).
@@ -67,7 +70,26 @@ StepFailed = stu_reminder_walk.StepFailed
 
 STEPS = ['identity', 'first-run', 'relaunch', 'job', 'settings', 'leases']
 # Steps a run names with --steps; not in the default run, which is the never-chosen profile.
-OTHER_STEPS = ['max-warning', 'effort']
+OTHER_STEPS = ['max-warning', 'effort', 'reopen']
+# The five steps of an effort control, in its order (ui/main.js EFFORT_LEVELS; ids ef-<who>-<level>).
+LEVELS = ['low', 'medium', 'high', 'xhigh', 'max']
+
+
+def chosen_level(who, values, want):
+    """The one level of a row whose radio button is checked, from each button's AXValue as read
+    in the guest (None: the button was not on screen). Raises unless all five are there, exactly
+    one is checked and it is `want`."""
+    missing = [level for level in LEVELS if values.get(level) is None]
+    if missing:
+        raise StepFailed("%s's effort control does not show: %s" % (who, ', '.join(missing)))
+    checked = [level for level in LEVELS if str(values[level]).strip().lower() in ('1', 'true')]
+    if len(checked) != 1:
+        raise StepFailed("%s's effort control has %d levels marked chosen (%s); the buttons read %s"
+                         % (who, len(checked), ', '.join(checked) or 'none', json.dumps(values)))
+    if checked[0] != want:
+        raise StepFailed("%s's effort control shows %s after Settings was opened again; %s was pressed"
+                         % (who, checked[0], want))
+    return checked[0]
 
 # The assistant rows of one session's transcript, wherever the lease's account folder put it.
 TRANSCRIPT = r"""import glob,json,os,sys
@@ -160,6 +182,22 @@ class LeaseModelWalk(stu_reminder_walk.StuReminderWalk):
             return held if all(held.get(k) == v for k, v in keys.items()) else None
         held = self.until('config.json to hold the chosen levels %s' % json.dumps(keys), saved, 60)
         return {'chosen': keys, 'effort_keys_in_file': sorted(k for k in held if '_effort_' in k), 'picture': 'effort-chosen.png'}
+
+    def reopen(self):
+        """After `effort` closed Settings: Settings opened again by its button. Each row has its
+        five levels, and the one marked chosen in each is the one that was pressed."""
+        self.open_settings()
+        want = {'rich': self.a.rich.split(':')[1], 'stu': self.a.stu.split(':')[1]}
+        rows = {}
+        for who in want:
+            rows[who] = {}
+            for level in LEVELS:
+                nodes = self.ax('find', '--id', 'ef-%s-%s' % (who, level), '--first')
+                found = [n for n in nodes if n.get('role')]  # the answer's first row is its timing, not a node
+                rows[who][level] = found[0].get('value', '') if found else None
+        self.shot('effort-reopened.png')
+        return {'chosen_after_reopening': {who: chosen_level(who, rows[who], want[who]) for who in want},
+                'values': rows, 'picture': 'effort-reopened.png'}
 
     def settings(self):
         text = guest(self.vm, 'cat %s 2>/dev/null || true' % shlex.quote(self.data + '/config.json'), 60)
