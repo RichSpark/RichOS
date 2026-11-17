@@ -1,4 +1,5 @@
 import AppKit
+import CoreServices
 import RichFilesCore
 import SwiftUI
 import UniformTypeIdentifiers
@@ -10,6 +11,20 @@ public enum RichFilesInstallation {
 
     public static var embeddedApplication: URL {
         Bundle.main.bundleURL.appendingPathComponent("Contents/Applications/RichFiles.app", isDirectory: true)
+    }
+
+    static var glanceApplication: URL? {
+        let richFiles = Bundle.main.bundleIdentifier == "app.richos.richfiles" ? Bundle.main.bundleURL : embeddedApplication
+        let app = richFiles.appendingPathComponent("Contents/Applications/RichGlance.app", isDirectory: true)
+        return Bundle(url: app)?.bundleIdentifier == "app.richos.richglance" ? app : nil
+    }
+
+    /// A nested app isn't always discovered until it runs. Register its document
+    /// claims so Finder can offer it in Open With, without changing any defaults.
+    public static func registerGlance() {
+        guard let app = glanceApplication else { return }
+        let status = LSRegisterURL(app as CFURL, false)
+        if status != noErr { NSLog("RichGlance registration failed (%d)", status) }
     }
 
     @MainActor static var richOSApplication: URL? {
@@ -172,6 +187,7 @@ public final class FolderOpenDelegate: NSObject, NSApplicationDelegate, Observab
     public func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.servicesProvider = self
         NSUpdateDynamicServices()
+        DispatchQueue.global(qos: .utility).async { RichFilesInstallation.registerGlance() }
     }
 
     @objc(openRichFiles:userData:error:)

@@ -1,9 +1,12 @@
 import Darwin
 import Foundation
 
-enum RichFilesDiagnostics {
-    enum Operation: String, Codable, Sendable { case listing, copy, move, recovery, gitHistory, gitComparison }
-    enum Outcome: String, Codable, Sendable {
+public enum RichFilesDiagnostics {
+    public enum Operation: String, Codable, Sendable {
+        case listing, copy, move, recovery, gitHistory, gitComparison
+        case glanceDisplay, glanceDecode, glanceFolder, glancePreview
+    }
+    public enum Outcome: String, Codable, Sendable {
         case complete, issues, unavailable, interrupted
         case cancelled = "canceled"
     }
@@ -24,14 +27,15 @@ enum RichFilesDiagnostics {
     private static let maximumBytes: off_t = 128 * 1024
     private static let writer = DispatchQueue(label: "app.richos.richfiles.diagnostics", qos: .utility)
 
-    static func record(
+    public static func record(
         _ operation: Operation, id: UUID, outcome: Outcome, started: TimeInterval,
         total: Int, confirmed: Int, firstRowsMS: Int? = nil
     ) {
         let bundle = Bundle.main
-        guard bundle.bundleIdentifier == "app.richos.richfiles" || bundle.bundleIdentifier == "com.richos.app",
+        guard ["app.richos.richfiles", "com.richos.app", "app.richos.richglance"].contains(bundle.bundleIdentifier ?? ""),
               let library = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask).first else { return }
-        let version = bundle.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown"
+        let version = bundle.object(forInfoDictionaryKey: "RichOSSourceRevision") as? String
+            ?? bundle.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown"
         let build = String(version.filter { $0.isASCII && ($0.isLetter || $0.isNumber || ".-+".contains($0)) }.prefix(40))
         let sample = Sample(atMS: Int64(Date().timeIntervalSince1970 * 1_000), id: id, build: build,
                             operation: operation, outcome: outcome,
@@ -41,7 +45,7 @@ enum RichFilesDiagnostics {
         writer.async { try? append(sample, in: folder) }
     }
 
-    static func milliseconds(since started: TimeInterval) -> Int {
+    public static func milliseconds(since started: TimeInterval) -> Int {
         max(0, Int((ProcessInfo.processInfo.systemUptime - started) * 1_000))
     }
 

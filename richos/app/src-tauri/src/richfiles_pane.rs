@@ -400,6 +400,12 @@ mod mac {
             unsafe { libc::dlclose(library) };
             return Err("This installation has an incompatible RichFiles pane.");
         }
+        let register_glance = unsafe { libc::dlsym(library, c"richfiles_register_glance".as_ptr()) };
+        if !register_glance.is_null() {
+            // Launch Services registration can do I/O. Never hold up the browser's first paint.
+            let register = unsafe { std::mem::transmute::<*mut c_void, unsafe extern "C" fn()>(register_glance) };
+            std::thread::spawn(move || unsafe { register() });
+        }
         // The bundled Swift target exports this exact C signature. Tauri calls
         // place on the main thread with its live WKWebView pointer.
         Ok(Bridge {

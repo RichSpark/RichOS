@@ -23,6 +23,10 @@ The script builds and ad hoc signs a development bundle. RichOS packaging uses t
 
 Core browsing and file operations work locally. The optional RichFinder and RichCleaner menu actions use the corresponding RichOS services when installed.
 
+RichGlance ships inside RichFiles and opens a single PNG or JPEG from the browser's normal Open action. Press Left or Right to cycle through images in that folder, Control and scroll to zoom, drag to pan and Escape to close. **File → Open in Preview** opens the current image for editing. To use RichGlance in Finder or on the Desktop, choose it under **Get Info → Open with → Change All** for each image type you want it to open. RichFiles registers the viewer when first opened. RichGlance can then open files while both RichFiles and RichOS are closed.
+
+The existing RichFiles timing log also records RichGlance decode, canvas update, folder scan and Preview handoff outcomes without storing filenames or paths. It is included in RichDoctor's Configuration diagnostics.
+
 On volumes such as exFAT, regular file copies reserve the destination name exclusively after staging the file. A failed publication keeps the source and reports the output for review. Rename, move into and staged folder copy require the destination volume to support exclusive rename.
 
 ## Verify
