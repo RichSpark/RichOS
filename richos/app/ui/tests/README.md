@@ -758,6 +758,12 @@ run left red runs again alone after every shard has finished, then `--coverage` 
 the same receipts. The build is refused only if the suite fails alone too and the run log
 quotes both attempts (the rule `run-tests.sh` has for a script suite).
 
+Every suite `run.js` starts has a limit of 900 seconds (`RICHOS_UI_SUITE_LIMIT_SECONDS`
+changes it). A suite still running at its limit is stopped and recorded red: exit 124, with
+a `stopped` line in its receipt. The shard goes on, so one hung suite costs its limit
+instead of the whole gate and still gets its solo attempt (run `20261117T180249Z-3ac38bbc`:
+`rich-files.js` hung in shard 3 until the gate's 3300 s deadline; `gate-honesty.js` check 10).
+
 **`coverage` is the job to read and the one to mark required.** A shard says only what its
 own slice did; the sentence about the directory belongs to the job that has seen every
 receipt and the shards say so themselves rather than leaving it to be inferred. Shard job
