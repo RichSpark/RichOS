@@ -5857,6 +5857,13 @@ function rowIsDefault(c, who) {
 let modelSaved = { rich: MODEL_DEFAULT.rich, stu: MODEL_DEFAULT.stu, effort: effortCopy(null) };
 /// What Settings shows while it is open. Equal to `modelSaved` whenever it is closed.
 let modelDraft = choiceCopy(modelSaved);
+/// THE SETTINGS HE PRESSED WHILE SETTINGS WAS OPEN, by the file's key (`rich_model`,
+/// `stu_effort_fable`): sent with the save as `chosen`. A value pressed and left as it was, or
+/// changed and set back before Settings closed, is his choice of that value, and the file
+/// records it as one (CEO 2026-11-17: "make sure that from now on, the settings can always tell
+/// what is what"). Without this, only a value that ended up different was ever saved. The
+/// pointer over a step is a preview, not a press.
+let modelPressed = new Set();
 /// A step the pointer is over, per row, shown as a preview until it is pressed.
 const effortPreview = { rich: null, stu: null };
 function modelValue(v, who) {
@@ -5951,6 +5958,7 @@ function paintModelRows(lit, rising) {
   }
 }
 function pickModel(who, v, focus) {
+  modelPressed.add(`${who}_model`);
   if (modelDraft[who] === v) return;
   modelDraft[who] = v;
   effortPreview[who] = null;
@@ -5960,6 +5968,7 @@ function pickModel(who, v, focus) {
 function pickEffort(who, level, focus) {
   const model = modelDraft[who];
   const before = modelDraft.effort[who][model];
+  modelPressed.add(`${who}_effort_${model}`);
   effortPreview[who] = null;
   if (before === level) {
     paintModelRows(null);
@@ -6240,12 +6249,16 @@ function modelToast(next, before) {
 function commitModelChoice() {
   effortPreview.rich = effortPreview.stu = null;
   const next = choiceCopy(modelDraft);
-  if (sameChoice(next, modelSaved)) return;
+  const chosen = [...modelPressed].sort();
+  modelPressed = new Set();
+  const moved = !sameChoice(next, modelSaved);
+  if (!moved && chosen.length === 0) return;
   const before = modelSaved;
   modelSaved = next;
-  modelSaving = Bridge.invoke("set_lease_models", { rich: next.rich, stu: next.stu, effort: next.effort })
+  modelSaving = Bridge.invoke("set_lease_models", { rich: next.rich, stu: next.stu, effort: next.effort, chosen })
     .then(() => {
-      if (window.RichSettings) window.RichSettings.toast(modelToast(next, before));
+      // Pressed and left as it was: saved as his choice, and nothing in use changed to announce.
+      if (moved && window.RichSettings) window.RichSettings.toast(modelToast(next, before));
     })
     .catch(() => {
       // Not saved: the leases keep the model they are on, and the rows go back to say so —

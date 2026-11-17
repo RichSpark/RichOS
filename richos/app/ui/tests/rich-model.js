@@ -294,7 +294,7 @@ async function main() {
     await toastSays(page, "Rich now talks with you on Opus at low effort.");
     assertEqual(await isOpen(page), false, "the Settings button closed Settings");
     const sent = await calls(page, "set_lease_models");
-    assertEqual(sent.map((c) => c.args), [{ rich: "opus", stu: "fable", effort: RECOMMENDED }], "one save, both rows and their levels, on close");
+    assertEqual(sent.map((c) => c.args), [{ rich: "opus", stu: "fable", effort: RECOMMENDED, chosen: ["rich_model"] }], "one save, both rows and their levels, on close");
     assertEqual(await stored(page), { rich: "opus", stu: "fable" }, "the store after close");
     assertEqual(await toastText(page), "Rich now talks with you on Opus at low effort.", "the toast says what is now true");
 
@@ -333,8 +333,29 @@ async function main() {
     // follows a sent save, so once the popover is hidden the negatives below are settled.
     await page.waitForSelector("#set-menu", { state: "hidden" }).catch(() => {});
     assertEqual(await isOpen(page), false, "a click outside closed Settings");
-    assertEqual(await calls(page, "set_lease_models"), [], "an unchanged choice was saved");
+    // Changed and set back before closing: nothing in use changed, so nothing is said, and
+    // the row he pressed is saved as his choice (CEO 2026-11-17: the settings can always tell
+    // what is what).
+    assertEqual((await calls(page, "set_lease_models")).map((c) => c.args),
+      [{ rich: "fable", stu: "opus", effort: RECOMMENDED, chosen: ["rich_model"] }], "the row pressed and set back was not saved as chosen");
     assertEqual(await toastText(page), null, "an unchanged choice was announced");
+    assertEqual(await page.evaluate((key) => JSON.parse(window.localStorage.getItem(key)).lease_chosen, STORE), ["rich_model", "stu_model"], "what the store holds as chosen");
+    // Opened and closed with nothing pressed: no save at all. And the default pressed where it
+    // already stands is a press: saved as chosen, said nowhere.
+    await page.evaluate(() => (window.__calls = []));
+    await openPrefs(page);
+    await rowsShow(page, { rich: "fable", stu: "opus" });
+    await page.keyboard.press("Escape");
+    await page.waitForSelector("#set-menu", { state: "hidden" }).catch(() => {});
+    assertEqual(await calls(page, "set_lease_models"), [], "Settings opened and closed untouched was saved");
+    await openPrefs(page);
+    await rowsShow(page, { rich: "fable", stu: "opus" });
+    await page.click("#ef-rich-low");
+    await page.keyboard.press("Escape");
+    await page.waitForSelector("#set-menu", { state: "hidden" }).catch(() => {});
+    assertEqual((await calls(page, "set_lease_models")).map((c) => c.args),
+      [{ rich: "fable", stu: "opus", effort: RECOMMENDED, chosen: ["rich_effort_fable"] }], "the default pressed where it stands was not saved as chosen");
+    assertEqual(await toastText(page), null, "a press that changed nothing was announced");
     assertEqual(page.__errors, [], "no page errors");
     await page.close();
     return "the button, Escape, outside click";
@@ -537,7 +558,7 @@ async function main() {
     const sent = await calls(page, "set_lease_models");
     assertEqual(
       sent.map((c) => c.args),
-      [{ rich: "fable", stu: "fable", effort: withEffort({ rich: { opus: "medium", fable: "xhigh" }, stu: { fable: "high" } }) }],
+      [{ rich: "fable", stu: "fable", effort: withEffort({ rich: { opus: "medium", fable: "xhigh" }, stu: { fable: "high" } }), chosen: ["rich_effort_fable", "rich_effort_opus", "rich_model", "stu_effort_fable"] }],
       "one save: both models and each row's level on each model"
     );
     // Reopened, and after a relaunch.
@@ -628,7 +649,7 @@ async function main() {
       const line = "Rich now directs your team on Opus at max effort, which is not recommended.";
       await toastSays(page, line);
       assertEqual(await toastText(page), line, "the line on close");
-      assertEqual((await calls(page, "set_lease_models")).map((c) => c.args), [{ rich: "fable", stu: "opus", effort: withEffort({ stu: { opus: "max" } }) }], "the save");
+      assertEqual((await calls(page, "set_lease_models")).map((c) => c.args), [{ rich: "fable", stu: "opus", effort: withEffort({ stu: { opus: "max" } }), chosen: ["rich_effort_fable", "stu_effort_opus", "stu_model"] }], "the save");
       // A saved Max opens no warning when Settings opens.
       await openPrefs(page);
       await levelIs(page, "stu", "max");

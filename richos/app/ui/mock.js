@@ -247,6 +247,7 @@
         show_context_meter: parsed.show_context_meter === true,
         resources_view: parsed.resources_view === "readout" ? "readout" : "ink",
         lease_effort: parsed.lease_effort && typeof parsed.lease_effort === "object" ? parsed.lease_effort : null,
+        lease_chosen: Array.isArray(parsed.lease_chosen) ? parsed.lease_chosen : [],
       };
     } catch (e) {
       // A corrupt or unavailable store degrades to the shipped defaults rather than
@@ -3804,6 +3805,8 @@
           mockConfig.stu_model = args.stu;
           // ROUND 86: each row's effort per model, written with the models.
           if (args.effort) mockConfig.lease_effort = args.effort;
+          // The settings he pressed, kept as the file keeps them: once chosen, chosen.
+          mockConfig.lease_chosen = [...new Set([...(mockConfig.lease_chosen || []), ...(args.chosen || [])])].sort();
           persistMockConfig();
           return null;
         }

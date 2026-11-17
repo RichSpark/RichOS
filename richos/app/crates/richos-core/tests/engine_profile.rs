@@ -791,7 +791,7 @@ fn each_role_defaults_to_fable_and_its_effort_follows_the_role_and_the_model() {
     use richos_core::config::{EffortChoices, EffortLevel, LeaseModels};
     let chosen = EffortChoices { rich_fable: EffortLevel::Medium, stu_opus: EffortLevel::Xhigh, stu_fable: EffortLevel::Max, ..EffortChoices::default() };
     let models = LeaseModels { rich: ModelChoice::Fable, stu: ModelChoice::Opus };
-    ConfigStore::open(f.0.join("config.json")).unwrap().set_lease_choices(models, chosen).unwrap();
+    ConfigStore::open(f.0.join("config.json")).unwrap().set_lease_choices(models, chosen, &[]).unwrap();
     let profile = prepare_fixture(&engine(), &f.0, f.runtime()).unwrap();
     assert_eq!(lease_model_args(LeaseRole::Conversation, Some(&profile)), ["--model", "fable", "--effort", "medium"]);
     assert_eq!(lease_model_args(LeaseRole::Work, Some(&profile)), ["--model", "opus", "--effort", "xhigh"]);

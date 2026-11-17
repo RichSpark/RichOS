@@ -4874,11 +4874,13 @@ fn get_lease_models(state: State<AppState>) -> serde_json::Value {
 /// **Both rows at once, as Preferences closes** (the CEO's addendum to §119: *"Closing the
 /// preferences panel IS the confirmation that the settings chosen there now need to be saved
 /// and implemented."*). Save both models and each row's effort on each model together (round
-/// 86.1; `effort` absent keeps the levels), then apply the model and the level now in use to
-/// the existing Rich and Stu sessions. Each control returns the provider's confirmation.
+/// 86.1; `effort` absent keeps the levels), with `chosen` naming the settings he pressed while
+/// Settings was open, by the file's key, so one pressed and left as it was is still written as
+/// his choice. Then apply the model and the level now in use to the existing Rich and Stu
+/// sessions. Each control returns the provider's confirmation.
 /// An unknown name refuses every choice before any is written.
 #[richos_command::command]
-fn set_lease_models(state: State<AppState>, rich: String, stu: String, effort: Option<serde_json::Value>) -> Result<(), String> {
+fn set_lease_models(state: State<AppState>, rich: String, stu: String, effort: Option<serde_json::Value>, chosen: Option<Vec<String>>) -> Result<(), String> {
     use richos_core::config::{EffortChoices, EffortLevel, LeaseModels, ModelChoice};
     let rich = ModelChoice::parse(&rich).ok_or_else(|| format!("unknown model: {rich}"))?;
     let stu = ModelChoice::parse(&stu).ok_or_else(|| format!("unknown model: {stu}"))?;
@@ -4895,7 +4897,8 @@ fn set_lease_models(state: State<AppState>, rich: String, stu: String, effort: O
                 *slot = EffortLevel::parse(level).ok_or_else(|| format!("unknown effort level: {level}"))?;
             }
         }
-        config.set_lease_choices(models, efforts).map_err(|e| e.to_string())?;
+        let pressed: Vec<&str> = chosen.iter().flatten().map(String::as_str).collect();
+        config.set_lease_choices(models, efforts, &pressed).map_err(|e| e.to_string())?;
         EffortChoices::on(&efforts, models)
     };
     let results = [

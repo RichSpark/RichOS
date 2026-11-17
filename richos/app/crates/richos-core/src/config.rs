@@ -1280,10 +1280,17 @@ impl ConfigStore {
     }
 
     /// **Both rows' models and all four levels in one write**, as Settings saves them when it
-    /// closes (round 86.1). Settings sends every value whenever any changed, so only the ones
-    /// that moved are his choices: those are written, and the rest stay as they were, chosen
-    /// or not. A name this build cannot choose refuses the whole save.
-    pub fn set_lease_choices(&mut self, models: LeaseModels, efforts: EffortChoices) -> io::Result<()> {
+    /// closes (round 86.1). Settings sends every value, so his choices are the ones that moved
+    /// and the ones he pressed (`pressed`, by the file's key: [`LEASE_CHOICE_KEYS`]). A value
+    /// pressed and left as it was, or changed and set back before Settings closed, is a choice
+    /// of that value and is written as one (CEO 2026-11-17: *"make sure that from now on, the
+    /// settings can always tell what is what"*). The rest stay as they were, chosen or not. A
+    /// name this build cannot choose, or a key that is not one of the six, refuses the whole
+    /// save.
+    pub fn set_lease_choices(&mut self, models: LeaseModels, efforts: EffortChoices, pressed: &[&str]) -> io::Result<()> {
+        if let Some(unknown) = pressed.iter().find(|key| !LEASE_CHOICE_KEYS.contains(key)) {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, format!("unknown setting: {unknown}")));
+        }
         refuse_unknown_model(models.rich)?;
         refuse_unknown_model(models.stu)?;
         let now = self.effort_choices();
@@ -1301,16 +1308,16 @@ impl ConfigStore {
             ));
         }
         let mut picked = Vec::new();
-        if self.config.rich_model != models.rich {
+        if self.config.rich_model != models.rich || pressed.contains(&"rich_model") {
             picked.push("rich_model");
         }
-        if self.config.stu_model != models.stu {
+        if self.config.stu_model != models.stu || pressed.contains(&"stu_model") {
             picked.push("stu_model");
         }
         self.config.rich_model = models.rich;
         self.config.stu_model = models.stu;
         for (key, level, was) in levels {
-            if level == was {
+            if level == was && !pressed.contains(&key) {
                 continue;
             }
             picked.push(key);
@@ -1911,6 +1918,10 @@ impl ConfigStore {
     }
 }
 
+/// The six settings Settings saves together: each row's model, and its effort on each model.
+pub const LEASE_CHOICE_KEYS: [&str; 6] =
+    ["rich_model", "stu_model", "rich_effort_opus", "rich_effort_fable", "stu_effort_opus", "stu_effort_fable"];
+
 /// The two keys that describe the file and not a choice: always written.
 const ALWAYS_WRITTEN: [&str; 2] = ["schema_version", "only_chosen"];
 
@@ -2164,7 +2175,7 @@ mod tests {
 
         // One level chosen, sent with everything else as Settings sends it: only it is written.
         let fable = LeaseModels { rich: ModelChoice::Fable, stu: ModelChoice::Fable };
-        store.set_lease_choices(fable, EffortChoices { stu_fable: EffortLevel::Xhigh, ..recommended }).unwrap();
+        store.set_lease_choices(fable, EffortChoices { stu_fable: EffortLevel::Xhigh, ..recommended }, &[]).unwrap();
         let mut keys: Vec<String> = on_disk(&path).keys().cloned().collect();
         keys.sort();
         assert_eq!(keys, ["only_chosen", "schema_version", "stu_effort_fable"]);
@@ -2174,15 +2185,28 @@ mod tests {
 
         // The work moved to Opus: Opus's own level is in use, and Fable's is kept for the way back.
         let opus_work = LeaseModels { rich: ModelChoice::Fable, stu: ModelChoice::Opus };
-        store.set_lease_choices(opus_work, store.effort_choices()).unwrap();
+        store.set_lease_choices(opus_work, store.effort_choices(), &[]).unwrap();
         assert_eq!(store.lease_efforts(), LeaseEfforts { rich: EffortLevel::Low, stu: EffortLevel::High });
-        store.set_lease_choices(fable, store.effort_choices()).unwrap();
+        store.set_lease_choices(fable, store.effort_choices(), &[]).unwrap();
         assert_eq!(ConfigStore::open(&path).unwrap().lease_efforts().stu, EffortLevel::Xhigh);
 
         // Chosen back to the recommended level: a choice, written as one.
-        store.set_lease_choices(fable, recommended).unwrap();
+        store.set_lease_choices(fable, recommended, &[]).unwrap();
         assert_eq!(on_disk(&path)["stu_effort_fable"], "medium");
         assert!(!on_disk(&path).contains_key("rich_effort_fable"), "a level nobody chose was written");
+
+        // Pressed and left as it was (the default pressed, or changed and set back before
+        // Settings closed): nothing moved, and it is still his choice, so it is written.
+        fs::remove_file(&path).ok();
+        let mut store = ConfigStore::open(&path).unwrap();
+        store.set_lease_choices(fable, recommended, &[]).unwrap();
+        assert!(!path.exists(), "a save in which nothing was pressed or moved wrote a file");
+        store.set_lease_choices(fable, recommended, &["rich_model", "stu_effort_fable"]).unwrap();
+        let mut keys: Vec<String> = on_disk(&path).keys().cloned().collect();
+        keys.sort();
+        assert_eq!(keys, ["only_chosen", "rich_model", "schema_version", "stu_effort_fable"]);
+        assert_eq!((on_disk(&path)["rich_model"].clone(), on_disk(&path)["stu_effort_fable"].clone()), ("fable".into(), "medium".into()));
+        assert!(store.set_lease_choices(fable, recommended, &["theme"]).is_err(), "a key that is not one of the six was accepted");
 
         // A level a newer build wrote reads as the recommended one and goes back out unchanged.
         fs::write(&path, r#"{"only_chosen":true,"rich_effort_fable":"ultra"}"#).unwrap();
@@ -2191,7 +2215,7 @@ mod tests {
         store.set_font_scale(120).unwrap();
         assert_eq!(on_disk(&path)["rich_effort_fable"], "ultra");
         let unknown = EffortChoices { rich_opus: EffortLevel::Unknown, ..recommended };
-        assert!(store.set_lease_choices(fable, unknown).is_err(), "Unknown is never a choice");
+        assert!(store.set_lease_choices(fable, unknown, &[]).is_err(), "Unknown is never a choice");
         fs::remove_file(&path).ok();
     }
 
