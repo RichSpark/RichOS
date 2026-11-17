@@ -3,8 +3,7 @@ import RichFilesCore
 
 @MainActor
 final class Canvas: NSView {
-    var step: ((Int) -> Void)?
-    var close: (() -> Void)?
+    let info: GlanceInfoView
 
     private var viewport = GlanceViewport()
     private var image: NSImage?
@@ -18,7 +17,8 @@ final class Canvas: NSView {
     override var isOpaque: Bool { true }
     override var acceptsFirstResponder: Bool { true }
 
-    init() {
+    init(preferences: GlanceInfoPreferences) {
+        info = GlanceInfoView(preferences: preferences)
         super.init(frame: .zero)
         setAccessibilityElement(true)
         setAccessibilityRole(.image)
@@ -27,6 +27,11 @@ final class Canvas: NSView {
         feedback.translatesAutoresizingMaskIntoConstraints = false
         feedback.setAccessibilityElement(false)
         addSubview(feedback)
+        addSubview(info)
+        info.frame = bounds
+        info.autoresizingMask = [.width, .height]
+        info.linkKeyboard(after: self)
+        info.announcement = { [weak self] in self?.announce($0) }
         NSLayoutConstraint.activate([
             feedback.centerXAnchor.constraint(equalTo: centerXAnchor),
             feedback.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -24)
@@ -36,6 +41,7 @@ final class Canvas: NSView {
     required init?(coder: NSCoder) { nil }
 
     func show(_ decoded: GlanceImage?, filename: String, message: String? = nil) {
+        info.reset(showIcon: decoded != nil)
         image = decoded.map { NSImage(cgImage: $0.bitmap, size: $0.size) }
         self.message = message
         setAccessibilityLabel(filename)
@@ -117,17 +123,6 @@ final class Canvas: NSView {
             pill.fill()
             colors.border.setStroke()
             pill.stroke()
-        }
-    }
-
-    override func keyDown(with event: NSEvent) {
-        let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
-        guard modifiers.isEmpty else { return super.keyDown(with: event) }
-        switch event.keyCode {
-        case 53: close?()
-        case 123: step?(-1)
-        case 124: step?(1)
-        default: super.keyDown(with: event)
         }
     }
 

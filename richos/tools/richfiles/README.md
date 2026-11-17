@@ -27,7 +27,9 @@ RichGlance ships inside RichFiles as an optional viewer for PNG, JPEG (`.jpg`, `
 
 In RichGlance, press Left or Right to cycle through images in that folder, Control and scroll to zoom, drag to pan and Escape to close. Animated GIFs and WebPs play automatically. TIFF opens on its first page. **File → Open in Preview** opens the current image for editing.
 
-The existing RichFiles timing log also records RichGlance decode, canvas update, folder scan, Preview handoff and default-viewer outcomes without storing filenames or paths. It is included in RichDoctor's Configuration diagnostics.
+Hover over the **Info** button to peek at the current image’s RichCleaner note, keywords, folder and saved date. Click to keep it visible or press **I**. **Show by default** and **Shortcut** are available beside the button and in the **View** menu. The overlay reads the local RichCleaner catalog when the image matches its last saved record.
+
+The existing RichFiles timing log also records RichGlance decode, canvas update, folder scan, Preview handoff, default-viewer and metadata lookup outcomes without storing filenames, paths or note text. It is included in RichDoctor's Configuration diagnostics.
 
 On volumes such as exFAT, regular file copies reserve the destination name exclusively after staging the file. A failed publication keeps the source and reports the output for review. Rename, move into and staged folder copy require the destination volume to support exclusive rename.
 

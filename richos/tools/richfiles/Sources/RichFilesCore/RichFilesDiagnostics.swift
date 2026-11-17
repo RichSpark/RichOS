@@ -4,7 +4,7 @@ import Foundation
 public enum RichFilesDiagnostics {
     public enum Operation: String, Codable, Sendable {
         case listing, copy, move, recovery, gitHistory, gitComparison
-        case glanceDisplay, glanceDecode, glanceFolder, glancePreview, glanceDefaults
+        case glanceDisplay, glanceDecode, glanceFolder, glancePreview, glanceDefaults, glanceMetadata
     }
     public enum Outcome: String, Codable, Sendable {
         case complete, issues, unavailable, interrupted
