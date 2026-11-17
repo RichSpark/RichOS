@@ -374,7 +374,9 @@ class Walk(stages.Walk):
         if not self.to_the_sheet(30):
             raise StepFailed('the sheet has no video to save: ' + str(self.words('could not record')))
         result['sheet_says'] = self.words(' · with your voice · ')
-        result.update(self.save('16-long'))
+        # Its own name: the home screen suggests the same name all day, so after `voice` the Mac
+        # asks whether to replace that file and Save cannot be pressed.
+        result.update(self.save('16-long', typed='RichOS-half-a-minute'))
         self.whole(result, 'the home screen')
         self.press('--title', 'Done', '--role', 'AXButton')
         time.sleep(1.5)
