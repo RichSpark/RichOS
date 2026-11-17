@@ -57,14 +57,32 @@ final class GlanceCaptureSelectionTests: XCTestCase {
         XCTAssertTrue(selection.canCapture)
 
         let newOrigin = CGPoint(x: 110, y: 110)
-        selection.startOver(at: newOrigin)
+        XCTAssertTrue(selection.discardSelection(at: newOrigin))
         XCTAssertNil(selection.crop)
         XCTAssertFalse(selection.showsLens)
+        XCTAssertFalse(selection.discardSelection(at: newOrigin))
         selection.mouseDown(at: newOrigin)
         selection.movePointer(to: CGPoint(x: 90, y: 80))
         selection.mouseUp()
         XCTAssertEqual(selection.crop, CGRect(x: 90, y: 80, width: 20, height: 30))
         XCTAssertEqual(selection.target, .init(x: 90, y: 80))
+    }
+
+    func testEscapeClearsEitherPlacementWithoutClosingTheOverlay() {
+        let origin = CGPoint(x: 10, y: 10)
+        let currentPointer = CGPoint(x: 50, y: 50)
+        var selection = GlanceCaptureSelection(width: 100, height: 100, pointer: origin)
+        selection.shiftReturn()
+        XCTAssertTrue(selection.discardSelection(at: currentPointer))
+        XCTAssertEqual(selection.target, .init(x: 50, y: 50))
+        XCTAssertEqual(selection.phase, .aiming)
+
+        selection.mouseDown(at: currentPointer)
+        selection.movePointer(to: CGPoint(x: 80, y: 70))
+        XCTAssertTrue(selection.discardSelection(at: currentPointer))
+        selection.mouseUp()
+        XCTAssertEqual(selection.phase, .aiming)
+        XCTAssertNil(selection.crop)
     }
 
     func testOnePixelNudgeUsesTheActualFrameScaleAndKeepsTheExactCrop() throws {

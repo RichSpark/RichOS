@@ -35,12 +35,13 @@ final class CaptureCanvas: NSView {
     private(set) var selection: GlanceCaptureSelection
     var copy: (() -> Void)?
     var save: (() -> Void)?
+    var escape: (() -> Void)?
     var cancel: (() -> Void)?
     private let actions = NSStackView()
     private let copyButton = NSButton(title: "Copy Image    ↵", target: nil, action: nil)
     private let saveButton = NSButton(title: "Save PNG…    ⌘S", target: nil, action: nil)
-    private let retryButton = NSButton(title: "Start Over    R", target: nil, action: nil)
-    private let cancelButton = NSButton(title: "Cancel    Esc", target: nil, action: nil)
+    private let retryButton = NSButton(title: "Start Over    Esc", target: nil, action: nil)
+    private let cancelButton = NSButton(title: "Cancel Capture", target: nil, action: nil)
     private var failure: String?
     override var isFlipped: Bool { true }
     override var acceptsFirstResponder: Bool { true }
@@ -113,7 +114,9 @@ final class CaptureCanvas: NSView {
             case 125: selection.nudge(dx: 0, dy: 1)
             case 126: selection.nudge(dx: 0, dy: -1)
             case 48: if !event.isARepeat { selection.switchCorner() }
-            case 53: cancel?(); return
+            case 53:
+                if !event.isARepeat { escape?() }
+                return
             case 36, 76: if !event.isARepeat { copy?() }; return
             default:
                 guard let character = event.charactersIgnoringModifiers?.lowercased(), ["m", "r"].contains(character) else {
@@ -176,13 +179,19 @@ final class CaptureCanvas: NSView {
     @objc private func copyPressed() { copy?() }
     @objc private func savePressed() { save?() }
     @objc private func startOver() {
-        guard selection.phase == .refining, let window else { return }
-        let point = convert(window.mouseLocationOutsideOfEventStream, from: nil)
-        selection.startOver(at: geometry.sourcePoint(point))
-        refresh()
-        window.makeFirstResponder(self)
+        guard selection.phase == .refining else { return }
+        _ = resetSelection()
     }
     @objc private func cancelPressed() { cancel?() }
+
+    func resetSelection() -> Bool {
+        guard let window else { return false }
+        let point = convert(window.mouseLocationOutsideOfEventStream, from: nil)
+        guard selection.discardSelection(at: geometry.sourcePoint(point)) else { return false }
+        refresh()
+        window.makeFirstResponder(self)
+        return true
+    }
 
     private func source(_ event: NSEvent) -> CGPoint {
         geometry.sourcePoint(convert(event.locationInWindow, from: nil))

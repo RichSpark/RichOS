@@ -106,6 +106,7 @@ final class CaptureController: NSObject, NSWindowDelegate {
         let canvas = CaptureCanvas(image: image, frame: CGRect(origin: .zero, size: display.frame.size), pointer: pointer)
         canvas.copy = { [weak self] in self?.copyImage() }
         canvas.save = { [weak self] in self?.saveImage() }
+        canvas.escape = { [weak self] in self?.escapePressed() }
         canvas.cancel = { [weak self] in self?.cancel() }
         let frame = CGRect(origin: .zero, size: display.frame.size)
         let background = NSImageView(frame: frame)
@@ -139,6 +140,14 @@ final class CaptureController: NSObject, NSWindowDelegate {
         guard let overlay, let canvas else { return }
         overlay.makeKeyAndOrderFront(nil)
         overlay.makeFirstResponder(canvas)
+    }
+
+    private func escapePressed() {
+        if let savePanel {
+            savePanel.cancel(nil)
+        } else if canvas?.resetSelection() != true {
+            cancel()
+        }
     }
 
     private func copyImage() {

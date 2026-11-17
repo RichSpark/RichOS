@@ -86,10 +86,14 @@ public struct GlanceCaptureSelection {
 
     public mutating func toggleLens() { showsLens.toggle() }
 
-    public mutating func startOver(at pointer: CGPoint) {
+    /// Discard a crop or its first corner without leaving the capture session.
+    /// A false return means the overlay is already aiming and Escape can close it.
+    public mutating func discardSelection(at pointer: CGPoint) -> Bool {
+        guard phase != .aiming else { return false }
         let showsLens = self.showsLens
         self = Self(width: width, height: height, pointer: pointer)
         self.showsLens = showsLens
+        return true
     }
 
     private mutating func anchor(_ phase: Phase) {
