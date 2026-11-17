@@ -50,4 +50,5 @@ Choose **File → Capture Region…** in RichGlance or enable its global shortcu
 
 - Aim with the pointer, then drag the selection or use Shift–Return to place each corner.
 - Arrow keys move the target by one image pixel. Release the mouse to lock the selection and use Tab to switch the active corner.
-- M toggles the magnifier. Return copies a PNG. Use **Save PNG…** to write the selected pixels to a file or Escape to dismiss the overlay.
+- M toggles the magnifier. Return copies a PNG. Use **Save PNG…** to write the selected pixels to a file.
+- Escape backs up one step: close the Save dialog, clear the current selection or exit capture if only the crosshairs are showing. **Start Over** clears the selection and **Cancel Capture** exits.
