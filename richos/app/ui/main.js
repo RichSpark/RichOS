@@ -6031,7 +6031,7 @@ function maxWarnDialog() {
   const card = wrap.querySelector(".efw-card");
   const keep = wrap.querySelector(".efw-keep");
   const anyway = wrap.querySelector(".efw-anyway");
-  maxWarn = { wrap, card, keep, anyway, who: null, open: false };
+  maxWarn = { wrap, card, keep, anyway, who: null, open: false, leaving: 0 };
   const finish = (useMax) => {
     if (!maxWarn.open) return;
     const who = maxWarn.who;
@@ -6039,7 +6039,8 @@ function maxWarnDialog() {
     window.removeEventListener("keydown", onKey, true);
     wrap.classList.remove("is-open");
     wrap.classList.add("is-leaving");
-    setTimeout(() => {
+    maxWarn.leaving = setTimeout(() => {
+      maxWarn.leaving = 0;
       wrap.hidden = true;
       wrap.classList.remove("is-leaving");
     }, 180);
@@ -6080,6 +6081,13 @@ function warnMax(who) {
   w.wrap.querySelector(".efw-rec-text").textContent = `${rec} is the recommended level here, right for nearly all kinds of work.`;
   w.keep.textContent = `Use ${rec}, the recommended level`;
   el(who === "rich" ? "ef-rich" : "ef-stu").classList.add("is-warned");
+  // Max chosen again while the last warning is still leaving (the second press of a double press
+  // on the veil over the Max step): that leaving ends here. Left to run out, it hid the new
+  // warning 180 ms after it opened, with Escape and Tab still held by it (the nightly of
+  // 2026-11-17, rich-model.js check 8).
+  clearTimeout(w.leaving);
+  w.leaving = 0;
+  w.wrap.classList.remove("is-leaving");
   w.open = true;
   w.wrap.hidden = false;
   void w.wrap.offsetWidth;

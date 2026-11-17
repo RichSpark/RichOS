@@ -100,21 +100,30 @@ function scenario(where, seconds) {
         .find((b) => b.textContent === "On")
         .click();
       await until("the microphone", () => R.state().mic === "on");
+      // THE LENGTH IS READ OFF ONE CLOCK, THE ONE THE RECORDER COUNTS ON (`performance.now()`), and
+      // the wait ends when that clock says so. Until 2026-11-17 it was a `setTimeout` of 31 s
+      // timed with `Date.now()`: two clocks, and in that night's build, on a loaded Mac, the
+      // second said a hair under 31 s had passed when the first fired ("recorded 31.0 s" and
+      // "stopped early" in one line). The count starts once the recorder has painted a frame, which
+      // is after its own clock started, so its own length is at least `length` too and the sheet
+      // must say so.
+      const goAt = performance.now();
       await press(home ? "#home-video-choices .hv-go" : "#video-anywhere-choices .rv-go");
-      await until("the recording to start", () => R.state().state === "rec");
-      const from = Date.now();
-      await sleep(length * 1000);
+      await until("the recording to start", () => R.state().state === "rec" && R.state().frames > 0);
+      const from = performance.now();
+      while (performance.now() - from < length * 1000) await sleep(Math.min(250, Math.max(1, length * 1000 - (performance.now() - from))));
       const framesPainted = R.state().frames;
       await press(home ? "#home-video" : "#video-anywhere-stop");
-      const pressed = (Date.now() - from) / 1000;
+      const pressed = (performance.now() - from) / 1000;
+      const sinceGo = (performance.now() - goAt) / 1000;
       await until("the sheet", () => R.state().state === "sheet");
-      const sheetAfter = (Date.now() - from) / 1000 - pressed;
+      const sheetAfter = (performance.now() - from) / 1000 - pressed;
       const meta = document.querySelector(home ? ".hv-sheet .meta" : ".rv-sheet .meta").textContent;
       await press(home ? ".hv-sheet .hv-main" : ".rv-sheet .rv-main");
       await until("the saved file", () => window.__RICHOS_MOCK__.homeVideoSaves().length > 0);
       const file = window.__RICHOS_MOCK__.homeVideoSaves().pop();
       post({ file: { name: "video.mp4", base64: file.base64 } });
-      post({ done: { name: file.name, size: file.size, pressed, sheetAfter, meta, framesPainted, ended: R.state().ended, errors } });
+      post({ done: { name: file.name, size: file.size, pressed, sinceGo, sheetAfter, meta, framesPainted, ended: R.state().ended, errors } });
     } catch (e) {
       post({ done: { error: String((e && e.message) || e), errors } });
     }
@@ -171,6 +180,12 @@ async function record(where) {
     const widest = v.slice(1).reduce((w, t, i) => Math.max(w, t - v[i]), 0);
     const facts = `${ran.done.name}: recorded ${ran.done.pressed.toFixed(1)} s, the file is ${long.toFixed(1)} s long, its picture runs to ${lastV.toFixed(1)} s in ${v.length} frames (no two more than ${widest.toFixed(2)} s apart), its sound to ${lastA.toFixed(1)} s; the sheet opened ${ran.done.sheetAfter.toFixed(2)} s after Stop and says "${ran.done.meta}"`;
     assert(ran.done.pressed >= SECONDS, "the recording was stopped early: " + facts);
+    // The sheet names the recording's own length in whole seconds: never less than the 31 s that
+    // passed while it ran, never more than the time since Start was pressed (both measured).
+    const said = /^(\d+):(\d\d) /.exec(ran.done.meta);
+    assert(said, "the sheet names no length. " + facts);
+    const saidSeconds = Number(said[1]) * 60 + Number(said[2]);
+    assert(saidSeconds >= SECONDS && saidSeconds <= ran.done.sinceGo, `the sheet's length is not the recording's (between ${SECONDS} s and ${ran.done.sinceGo.toFixed(1)} s). ` + facts);
     assert(long >= ran.done.pressed - 1.5, "the file is shorter than the recording. " + facts);
     assert(lastV >= ran.done.pressed - 1.5, "THE PICTURE FREEZES: it ends before the recording does. " + facts);
     assert(lastA >= ran.done.pressed - 1.5, "the sound ends before the recording does. " + facts);
