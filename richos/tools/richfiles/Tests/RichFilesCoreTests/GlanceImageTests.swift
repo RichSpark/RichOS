@@ -30,6 +30,21 @@ final class GlanceImageTests: XCTestCase {
         XCTAssertNil(try GlanceImage.decode(fixture("still.webp")).animation)
     }
 
+    func testDecodesFinderAliasesAndPackedDIB() throws {
+        let temporary = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: temporary, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: temporary) }
+        let hif = temporary.appendingPathComponent("camera.HIF")
+        try FileManager.default.copyItem(at: fixture("sample.heic"), to: hif)
+        XCTAssertEqual(try GlanceImage.decode(hif).size, CGSize(width: 40, height: 24))
+        let dib = temporary.appendingPathComponent("packed.dib")
+        let bmp = try Data(contentsOf: fixture("sample.bmp"))
+        try bmp.dropFirst(14).write(to: dib)
+        XCTAssertEqual(try GlanceImage.decode(dib).size, CGSize(width: 40, height: 24))
+        try bmp.dropFirst(14).prefix(20).write(to: dib)
+        XCTAssertThrowsError(try GlanceImage.decode(dib))
+    }
+
     func testGIFAndWebPDecodeCompositedFramesAndTiming() throws {
         for name in ["delta.gif", "delta.webp"] {
             let first = try GlanceImage.decode(fixture(name))
