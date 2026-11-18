@@ -142,8 +142,8 @@ ax_walk() {  # ax_walk <mode> <args...>
         scope="${2:-}"; shift 2
         case "$scope" in
           window) window_title="${1:?--in window needs a title}"; shift ;;
-          dialog|sidebar|composer|menubar) ;;
-          *) die "--in needs dialog, sidebar, composer, menubar or window <title>" ;;
+          dialog|sidebar|composer|menubar|app) ;;
+          *) die "--in needs dialog, sidebar, composer, menubar, app or window <title>" ;;
         esac ;;
       --nth)      nth="${2:-}";      shift 2 ;;
       --contains) contains=1;        shift ;;
@@ -413,7 +413,7 @@ if truncated:
 case "${1:-}" in
   --help|-h)
     echo 'ax.sh VM tree|find|click|focus|type TEXT [--title TEXT|--role ROLE|--value TEXT]'
-    echo '  --in dialog|sidebar|composer|menubar|window TITLE  --first | --nth N (zero based)'
+    echo '  --in dialog|sidebar|composer|menubar|app|window TITLE  --first | --nth N (zero based)'
     echo '  --id DOM_ID --expect value=VALUE (click; also enabled, selected, current, title, description)'
     echo '  --replace (type) --contains --app NAME --window N --depth N --max N --json'
     echo '  find defaults to exhaustive; actions require uniqueness unless --first/--nth.'

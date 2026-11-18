@@ -4,7 +4,7 @@
 #   testvm/pointer-drag.sh <vm> <x>,<y> <x>,<y> [<x>,<y> ...] [--step PX] [--pause S] [--rest S] [--right | --hover]
 #   testvm/pointer-drag.sh <vm> <x>,<y> --scroll LINES [--ctrl]
 #   testvm/pointer-drag.sh <vm> <x>,<y> --double
-#   ... [--app NAME]
+#   ... [--app NAME | --as-is]
 #
 #   --scroll LINES turns the wheel LINES lines (a whole number, -50..50, not 0; negative is toward
 #   the user) with the pointer resting on the one point; --ctrl holds Control on each wheel event,
@@ -13,6 +13,12 @@
 #   once it is frontmost. --double is a double-click on the one point (the second press carries
 #   click state 2, as a hand's does). All three exist because the image viewer is
 #   its own process and nothing in the toolkit could turn the wheel or double-click.
+#
+#   --as-is brings no app to the front and needs none to be frontmost: the input lands wherever the
+#   pointer is, which is what a click on the Dock or on a window of an app in the background must
+#   do (raising the app first would change the very state the click is about: a Dock icon only
+#   activates an app in the background, and minimizes the frontmost app's window). The answer
+#   names the process that was frontmost just before. Added with the window-gesture walk.
 #
 #   --hover presses no button at all: the pointer only moves through the points (one is enough) and
 #   rests on the last, the way a hand hovers, so a tooltip shown by `mouseover` can be looked at.
@@ -51,12 +57,12 @@ if [ "${TESTVM_AX_SUPERVISED:-}" != 1 ]; then
 fi
 . "$HERE/lib.sh"
 
-usage="usage: pointer-drag.sh <vm> <x>,<y> <x>,<y> [<x>,<y> ...] [--step PX] [--pause S] [--rest S] [--right | --hover] | <vm> <x>,<y> --scroll LINES [--ctrl] | <vm> <x>,<y> --double; any with [--app NAME]"
+usage="usage: pointer-drag.sh <vm> <x>,<y> <x>,<y> [<x>,<y> ...] [--step PX] [--pause S] [--rest S] [--right | --hover] | <vm> <x>,<y> --scroll LINES [--ctrl] | <vm> <x>,<y> --double; any with [--app NAME | --as-is]"
 VM="${1:-}"
 [ -n "$VM" ] || die "$usage"
 shift
 POINTS=()
-STEP=8; PAUSE=0.02; REST=0.15; RIGHT=0; HOVER=0; SCROLL=0; CTRL=0; APP=""; DOUBLE=0
+STEP=8; PAUSE=0.02; REST=0.15; RIGHT=0; HOVER=0; SCROLL=0; CTRL=0; APP=""; DOUBLE=0; ASIS=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --step) STEP="${2:-}"; shift 2 ;;
@@ -67,11 +73,13 @@ while [ $# -gt 0 ]; do
     --scroll) SCROLL="${2:-}"; shift 2 ;;
     --ctrl) CTRL=1; shift ;;
     --double) DOUBLE=1; shift ;;
+    --as-is) ASIS=1; shift ;;
     --app) APP="${2:-}"; [ -n "$APP" ] || die "--app needs a process name — $usage"; shift 2 ;;
     *,*) POINTS+=("$1"); shift ;;
     *) die "unknown argument: $1 — $usage" ;;
   esac
 done
+[ "$ASIS" = 0 ] || [ -z "$APP" ] || die "--as-is raises no app, so it names none with --app — $usage"
 [ "$HOVER" = 0 ] || [ "$RIGHT" = 0 ] || die "--hover moves with no button, so it cannot also be --right — $usage"
 case "$SCROLL" in
   0) [ "$CTRL" = 0 ] || die "--ctrl holds Control on a wheel turn, so it needs --scroll — $usage" ;;
@@ -98,7 +106,7 @@ if [ -z "${TESTVM_GUEST_EXEC:-}" ]; then
   require_vm_running "$VM"
 fi
 PID="$(cat "$TESTVM_RUN/$VM/app.pid" 2>/dev/null || true)"
-if [ -n "$APP" ]; then
+if [ -n "$APP" ] || [ "$ASIS" = 1 ]; then
   PID="${PID:-0}"   # the named process is resolved in the guest; the recorded pid is not the target
 else
   [ -n "$PID" ] || die "no app pid recorded for $VM — was it started by run.sh?"
@@ -122,7 +130,7 @@ DEADLINE
 
 # Every number is parsed here, so the guest program only ever receives JSON.
 PARAMS="$(PD_PID="$PID" PD_STEP="$STEP" PD_PAUSE="$PAUSE" PD_REST="$REST" PD_RIGHT="$RIGHT" PD_HOVER="$HOVER" \
-           PD_SCROLL="$SCROLL" PD_CTRL="$CTRL" PD_APP="$APP" PD_DOUBLE="$DOUBLE" python3 - "${POINTS[@]}" <<'PY'
+           PD_SCROLL="$SCROLL" PD_CTRL="$CTRL" PD_APP="$APP" PD_DOUBLE="$DOUBLE" PD_ASIS="$ASIS" python3 - "${POINTS[@]}" <<'PY'
 import json, os, sys
 try:
     points = [[float(v) for v in p.split(',', 1)] for p in sys.argv[1:]]
@@ -137,6 +145,7 @@ print("var DRAG_PARAMS = " + json.dumps({"pid": int(os.environ['PD_PID']), "poin
                                          "scroll": int(os.environ['PD_SCROLL']),
                                          "ctrl": os.environ['PD_CTRL'] == '1',
                                          "double": os.environ['PD_DOUBLE'] == '1',
+                                         "asis": os.environ['PD_ASIS'] == '1',
                                          "app": os.environ['PD_APP'] or None}) + ";")
 PY
 )"

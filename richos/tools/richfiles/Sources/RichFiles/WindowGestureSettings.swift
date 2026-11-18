@@ -71,6 +71,7 @@ struct WindowGestureSettings: View {
     private typealias Preferences = WindowGesturePreferences
 
     let appURL: URL
+    @Environment(\.colorScheme) private var colorScheme
     @State private var selection = Preferences.selection
     @State private var runtime: Preferences.Status?
     @State private var registration = ""
@@ -78,6 +79,7 @@ struct WindowGestureSettings: View {
     @State private var nativeTitleBarIsOff = Preferences.nativeTitleBarIsOff
 
     private var helper: URL { appURL.appendingPathComponent(Preferences.helperPath) }
+    private var guidanceColor: Color { BrowserPalette(colorScheme).hint }
 
     var body: some View {
         Toggle("Double-click a title bar to maximize or restore", isOn: toggle(.titleBar))
@@ -86,34 +88,34 @@ struct WindowGestureSettings: View {
             .disabled(updating)
         if !selection.isEmpty {
             Text("These gestures work in other apps and continue after you quit RichOS and RichFiles.")
-                .foregroundStyle(.secondary)
+                .foregroundStyle(guidanceColor)
             if selection.contains(.titleBar) && !nativeTitleBarIsOff {
                 Text("In Desktop & Dock, set “Double-click a window’s title bar to” to Do Nothing. Choose your previous action there to restore native behavior.")
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(guidanceColor)
                 Button("Open Desktop & Dock Settings") { open("com.apple.Desktop-Settings.extension") }
                     .buttonStyle(BrowserButtonStyle(bordered: true))
             }
             if registration == "approval" {
                 Text("Allow RichFiles Window Gestures in Login Items to run it in the background.")
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(guidanceColor)
                 Button("Open Login Items Settings") { SMAppService.openSystemSettingsLoginItems() }
                     .buttonStyle(BrowserButtonStyle(bordered: true))
             } else if registration == "unavailable" || registration == "off" {
                 Text("RichFiles Window Gestures could not start. Try again from the installed copy of RichFiles.")
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(guidanceColor)
                 Button("Retry Window Gestures") { synchronize("register") }
                     .buttonStyle(BrowserButtonStyle(bordered: true)).disabled(updating)
             } else if let runtime {
                 permissions(runtime)
             } else {
                 Text("Waiting for RichFiles Window Gestures to start.")
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(guidanceColor)
                 Button("Open Login Items Settings") { SMAppService.openSystemSettingsLoginItems() }
                     .buttonStyle(BrowserButtonStyle(bordered: true))
             }
         } else if registration == "unavailable" {
             Text("Window gestures are off, but macOS could not remove the background item.")
-                .foregroundStyle(.secondary)
+                .foregroundStyle(guidanceColor)
             Button("Open Login Items Settings") { SMAppService.openSystemSettingsLoginItems() }
                 .buttonStyle(BrowserButtonStyle(bordered: true))
         }
@@ -133,7 +135,7 @@ struct WindowGestureSettings: View {
             Text(accessibility
                 ? "In Accessibility, add and allow RichFiles Window Gestures to move and minimize other apps’ windows."
                 : "In Input Monitoring, add and allow RichFiles Window Gestures to detect mouse clicks.")
-                .foregroundStyle(.secondary)
+                .foregroundStyle(guidanceColor)
             HStack {
                 Button(accessibility ? "Open Accessibility Settings" : "Open Input Monitoring Settings") {
                     open(accessibility ? "com.apple.preference.security?Privacy_Accessibility"
@@ -144,7 +146,7 @@ struct WindowGestureSettings: View {
             .buttonStyle(BrowserButtonStyle(bordered: true))
         case .inputUnavailable:
             Text("macOS is currently blocking mouse monitoring. Check Input Monitoring or sign out and back in.")
-                .foregroundStyle(.secondary)
+                .foregroundStyle(guidanceColor)
             Button("Open Input Monitoring Settings") { open("com.apple.preference.security?Privacy_ListenEvent") }
                 .buttonStyle(BrowserButtonStyle(bordered: true))
         case .running, .off:

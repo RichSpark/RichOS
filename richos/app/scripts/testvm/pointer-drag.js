@@ -16,22 +16,38 @@ ObjC.import("CoreGraphics");
 function run() {
   var P = DRAG_PARAMS;
   var se = Application("System Events");
-  function out(o) { return JSON.stringify(o); }
+  function out(o) {
+    if (P.asis) { o.asis = true; o.front_before = frontBefore; }
+    return JSON.stringify(o);
+  }
   function error(code, why) { return out({ error: code, reason: String(why) }); }
   function frontPid() {
     var f = se.processes.whose({ frontmost: true });
     return f.length ? f[0].unixId() : 0;
   }
-  // P.app: a second app the walk itself opened in this guest (RichGlance, opened from RichFiles),
-  // named by its process name, held to the same frontmost rule as the app under test. The image
-  // viewer is its own process, never the pid run.sh recorded.
-  var procs = P.app ? se.processes.whose({ name: P.app }) : se.processes.whose({ unixId: P.pid });
-  if (!procs.length) return error("noprocess", P.app ? "no process named " + P.app : "no process with pid " + P.pid);
-  var proc = procs[0];
-  var pid = P.app ? proc.unixId() : P.pid;
-  proc.frontmost = true;
-  for (var i = 0; i < 20 && frontPid() !== pid; i++) delay(0.1);
-  if (frontPid() !== pid) return error("notfront", "refusing: the app under test is not frontmost, so nothing was dragged");
+  // P.asis: the input lands wherever the pointer is and NO app is brought to the front first,
+  // because what is clicked is the Dock or a window of an app in the background, and raising an
+  // app before the click would change the very state the click is about (a Dock icon minimizes
+  // the frontmost app's window and only activates an app in the background). The answer names
+  // the process that was frontmost just before the input. Added with the window-gesture walk
+  // (RichFiles window gestures). Still only inside the owned guest.
+  var pid, frontBefore = null;
+  if (P.asis) {
+    var f0 = se.processes.whose({ frontmost: true });
+    pid = f0.length ? f0[0].unixId() : 0;
+    frontBefore = f0.length ? f0[0].name() : null;
+  } else {
+    // P.app: a second app the walk itself opened in this guest (RichGlance, opened from RichFiles),
+    // named by its process name, held to the same frontmost rule as the app under test. The image
+    // viewer is its own process, never the pid run.sh recorded.
+    var procs = P.app ? se.processes.whose({ name: P.app }) : se.processes.whose({ unixId: P.pid });
+    if (!procs.length) return error("noprocess", P.app ? "no process named " + P.app : "no process with pid " + P.pid);
+    var proc = procs[0];
+    pid = P.app ? proc.unixId() : P.pid;
+    proc.frontmost = true;
+    for (var i = 0; i < 20 && frontPid() !== pid; i++) delay(0.1);
+    if (frontPid() !== pid) return error("notfront", "refusing: the app under test is not frontmost, so nothing was dragged");
+  }
 
   // P.right: the RIGHT button (CGMouseButton 1). Given one point twice it is a real right-click,
   // a `contextmenu` event in the app (the Output panel row's menu, PRD §6.3).
