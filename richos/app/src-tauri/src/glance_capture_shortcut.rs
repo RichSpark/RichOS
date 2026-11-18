@@ -31,7 +31,7 @@ pub struct ShortcutStatus {
     shortcut: Shortcut,
 }
 
-#[tauri::command]
+#[richos_command::command]
 pub async fn glance_capture_status(app: AppHandle) -> Result<ShortcutStatus, String> {
     #[cfg(target_os = "macos")]
     return on_main(app, mac::status).await;
@@ -42,7 +42,7 @@ pub async fn glance_capture_status(app: AppHandle) -> Result<ShortcutStatus, Str
     }
 }
 
-#[tauri::command]
+#[richos_command::command]
 pub async fn glance_capture_configure(app: AppHandle, enabled: bool, shortcut: Shortcut) -> Result<ShortcutStatus, String> {
     #[cfg(target_os = "macos")]
     return on_main(app, move |app| mac::configure(app, Preference { enabled, shortcut })).await;
