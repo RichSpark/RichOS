@@ -437,6 +437,7 @@ class DesktopWork(unittest.TestCase):
         for n,(name,status) in enumerate([*((p,"prepared") for p in pending),("mark-sonnet-high-000000000000","run-ended")]):
             (receipts/("%064x.json"%n)).write_text(json.dumps({"schema":1,"id":"%064x"%n,"name":name,"status":status,
                 "binding":{"entity_id":entity,"thread_id":thread}}))
+        return receipts
 
     def test_stus_teammate_counts_the_companys_other_conversations_only(self):
         """Review rv-20261114T100953Z-491c7af2-d68d: the app keeps a registry per conversation, and
@@ -452,6 +453,24 @@ class DesktopWork(unittest.TestCase):
         second=self.call("prepare",{**self.args,"request_id":"prepare-two","title":"Create a second fictional result"})
         self.assertRegex(first["name"],r"^mark-sonnet-high-[0-9a-f]{12}$")
         self.assertRegex(second["name"],r"^mark2-sonnet-high-[0-9a-f]{12}$")
+
+    def test_prepare_ignores_damaged_sibling_receipts_but_validates_its_own(self):
+        sibling=self.other_conversation("depot","thread-b",running=["mark-sonnet-high-aaaaaaaaaaaa"],
+                                        pending=["mark2-sonnet-high-bbbbbbbbbbbb"])
+        # Unreadable receipts on both sides of the readable reservations.
+        (sibling/"0.json").write_text('{"schema":1,')
+        (sibling/"f.json").write_text('{"schema":1,')
+        ready=self.call("prepare",self.args)
+        self.assertEqual(ready["status"],"prepared")
+        self.assertRegex(ready["name"],r"^mark3-sonnet-high-[0-9a-f]{12}$")
+        self.assertTrue(self.target_of(ready).is_dir())
+
+        current=self.app.folder(self.scope)
+        (current/"f.json").write_text('{"schema":1,')
+        before=set(current.glob("*.json"))
+        with self.assertRaises(json.JSONDecodeError):
+            self.call("prepare",{**self.args,"request_id":"prepare-two","title":"Create a second fictional result"})
+        self.assertEqual(set(current.glob("*.json")),before)
 
     def test_prepare_runs_one_job_on_a_named_model_within_the_users_ceiling(self):
         """Build plan item 7 (richos-hq docs/plans/2026-10-21-everything-for-every-user.md): an

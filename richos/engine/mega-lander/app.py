@@ -126,12 +126,16 @@ def locked(scope):
         yield root
 
 
+def read_receipt(path):
+    value = bounded(path)
+    if not isinstance(value, dict) or value.get("schema") != 1:
+        raise ValueError("unsupported dispatch receipt schema")
+    return value
+
+
 def receipts(root):
     for path in sorted(root.glob("*.json")):
-        value = bounded(path)
-        if value.get("schema") != 1:
-            raise ValueError("unsupported dispatch receipt schema")
-        yield path, value
+        yield path, read_receipt(path)
 
 
 def repositories(scope):
@@ -740,19 +744,33 @@ def numbering_lock(scope):
         yield
 
 
-def company_conversations(scope):
-    """The receipt folders of this company's OTHER conversations: each one whose receipts are
-    bound to this company. A folder whose receipts cannot be read names nobody."""
-    own, entity, out = folder(scope), scope["binding"]["entity_id"], []
-    for path in sorted((state() / "work-receipts").iterdir()):
+RESERVED_NAME_STATUSES = ("preparing", "prepared", "dispatching")
+
+
+def company_numbering(scope, own):
+    """Read sibling receipts once for numbering. Keep each readable reservation and
+    consult a sibling registry whenever a readable receipt ties it to this company."""
+    entity = scope["binding"]["entity_id"]
+    taken, registries = [], []
+    for path in sorted(own.parent.iterdir()):
         if path == own or path.is_symlink() or not path.is_dir():
             continue
-        try:
-            if any(r["binding"]["entity_id"] == entity for _p, r in receipts(path)):
-                out.append(path)
-        except (OSError, ValueError, KeyError, TypeError):
-            continue
-    return out
+        same_company = False
+        for receipt_path in sorted(path.glob("*.json")):
+            try:
+                record = read_receipt(receipt_path)
+                if record["binding"]["entity_id"] != entity:
+                    continue
+            except (OSError, ValueError, KeyError, TypeError):
+                continue
+            same_company = True
+            name = record.get("name")
+            if (not record.get("settled") and record.get("status") in RESERVED_NAME_STATUSES
+                    and isinstance(name, str) and W.NAME_RE.fullmatch(name)):
+                taken.append(name)
+        if same_company:
+            registries.append(state() / "workspaces" / path.name)
+    return taken, registries
 
 
 def next_name(name, taken, registries=()):
@@ -1470,11 +1488,10 @@ def prepare(scope_path, scope, args):
         # this receipt is saved, so two of one kind prepared at once, in one conversation or
         # two, differ.
         lock_stack.enter_context(numbering_lock(scope))
-        others = company_conversations(scope)
-        name = next_name(f"{teammate}-{model}-{effort}-{identity[:12]}",
-                         [old["name"] for f in [root, *others] for _p, old in receipts(f)
-                          if not old.get("settled") and old["status"] in ("preparing","prepared","dispatching")],
-                         [state() / "workspaces" / f.name for f in others])
+        taken, registries = company_numbering(scope, root)
+        taken.extend(old["name"] for _, old in receipts(root)
+                     if not old.get("settled") and old["status"] in RESERVED_NAME_STATUSES)
+        name = next_name(f"{teammate}-{model}-{effort}-{identity[:12]}", taken, registries)
         record = {"schema":1,"id":identity,"request_id":request_id,"binding":scope["binding"],
             "recovery_acceptance": hashlib.sha256(json.dumps({k:item.get(k) for k in
                 ("item_id", "title", "details", "beneficiary")}, sort_keys=True).encode()).hexdigest(),
