@@ -277,11 +277,15 @@ async function observe(page, ms, why) {
 /// `updates.js`'s read-only handle on the view it is rendering from, so agreement between it
 /// and the requested state is the panel saying "this is what I am showing" — a fact no number
 /// of milliseconds can assert.
-async function setState(page, v, script) {
-  await page.evaluate(
+function publishState(page, v, script) {
+  return page.evaluate(
     ([vv, ss]) => window.__RICHOS_MOCK__.updateSet(vv, ss),
     [v, script || []]
   );
+}
+
+async function setState(page, v, script) {
+  await publishState(page, v, script);
   await page.waitForFunction(
     (want) => {
       const s = window.RichUpdates && window.RichUpdates.state ? window.RichUpdates.state() : null;
@@ -1574,13 +1578,16 @@ async function main() {
   await run.check("Round 91 keeps the checking stage live and follows the native restart clock", async () => {
     const page = await openApp(browser);
     await settled(page);
+    await page.setViewportSize({ width: 1024, height: 700 });
     await page.emulateMedia({ reducedMotion: "reduce" });
     await page.clock.install();
     await page.clock.pauseAt(await page.evaluate(() => Date.now() + 1000));
     const started = await page.evaluate(() => Date.now());
     const target = { currentVersion: "0.1.0", availableVersion: "0.1.2", downloadedBytes: 13631488 };
 
-    await setState(page, view({ ...target, state: "downloading", revision: 1, percent: 62 }));
+    // The mock publishes synchronously. The paused clock drives the frames
+    // around each assertion when the step needs them.
+    await publishState(page, view({ ...target, state: "downloading", revision: 1, percent: 62 }));
     const cue = page.locator("#update-cue");
     assertEqual(await cue.textContent(), "Downloading 62%");
     await cue.evaluate((node) => node.click());
@@ -1589,7 +1596,7 @@ async function main() {
     assertEqual(await cue.isVisible(), false, "the row carries progress while Settings is open");
 
     const checking = { ...target, state: "installing", revision: 2, phaseStartedAt: started };
-    await setState(page, view(checking));
+    await publishState(page, view(checking));
     const steps = page.locator(".update-checking .update-step");
     assertEqual(await steps.locator(".update-step-name").allTextContents(), ["Downloaded", "Checking", "Restarting"]);
     assertEqual(await page.isVisible("#update-progress"), false, "the complete bar gives way to the steps");
@@ -1602,17 +1609,27 @@ async function main() {
     assertEqual(animation, "2.4s", "the reduced-motion ring turns slowly");
     await page.clock.runFor(3000);
     assertEqual(await elapsed.textContent(), "0:03");
-    await setState(page, view({ ...checking, revision: 3 }));
+    await publishState(page, view({ ...checking, revision: 3 }));
     await page.evaluate(() => window.RichSettings.close());
     assertEqual(await cue.isVisible(), true);
     assertEqual(await cue.textContent(), "Updating RichOS · 0:03");
     await page.clock.runFor(5000);
     assertEqual(await cue.textContent(), "Updating RichOS · 0:08");
     assert((await readRow(page)).sub.startsWith("Still working."), "long checks explain the wait");
+    await cue.evaluate((node) => node.click());
+    await page.clock.runFor(32);
+    const bounds = await page.evaluate(() => {
+      const menu = document.getElementById("set-menu");
+      const steps = document.querySelector(".update-checking").getBoundingClientRect();
+      const footer = menu.querySelector(".sm-foot").getBoundingClientRect();
+      return { top: steps.top, bottom: steps.bottom, menu: menu.getBoundingClientRect().top, footer: footer.top };
+    });
+    assert(bounds.top >= bounds.menu && bounds.bottom <= bounds.footer + 1,
+      "the checking steps and message fit above the sticky footer at 1024 × 700: " + JSON.stringify(bounds));
 
     const restartAt = await page.evaluate(() => Date.now());
     const restart = { ...target, state: "restarting", revision: 4, phaseStartedAt: restartAt, relaunchNoticeMs: 3000 };
-    await setState(page, view(restart));
+    await publishState(page, view(restart));
     const number = page.locator(".update-restart-number");
     const fill = page.locator(".update-ring-fill");
     const full = Number(await fill.getAttribute("stroke-dashoffset"));
@@ -1620,15 +1637,15 @@ async function main() {
     await page.clock.runFor(1020);
     assertEqual(await number.textContent(), "2");
     assert(Number(await fill.getAttribute("stroke-dashoffset")) > full, "the gold ring empties");
-    await setState(page, view({ ...restart, revision: 5 }));
-    await page.evaluate((stale) => window.__RICHOS_MOCK__.updateSet(stale), view(checking));
+    await publishState(page, view({ ...restart, revision: 5 }));
+    await publishState(page, view(checking));
     await page.clock.runFor(1000);
     assertEqual(await number.textContent(), "1", "late events and refreshed restart views preserve the clock");
     await page.clock.runFor(1000);
     assertEqual(await number.textContent(), "");
     assertEqual(await page.locator("#update-restart-title").textContent(), "Closing RichOS 0.1.0…");
     assertEqual(await page.locator(".update-restart-ring[data-closing]").count(), 1, "the ring spins during quit");
-    await setState(page, view({ ...target, state: "ready", revision: 6, busy: true, restartsWhenIdle: true }));
+    await publishState(page, view({ ...target, state: "ready", revision: 6, busy: true, restartsWhenIdle: true }));
     assertEqual(await page.locator("#update-restart").count(), 0, "a declined restart restores the window");
     assertEqual((await readWaiting(page)).count, 1, "the work gate resumes waiting");
     assertEqual(page.__errors, [], "the stage transitions did not throw");
@@ -1649,7 +1666,7 @@ async function main() {
       splash.id = "splash";
       document.body.appendChild(splash);
     });
-    await setState(page, updated);
+    await publishState(page, updated);
     assertEqual(await pill.count(), 0, "the notice waits until the conversation is visible");
     await page.evaluate(() => document.getElementById("splash").remove());
     assertEqual(await pill.locator("[role=status]").textContent(), "Updated to RichOS 0.1.2");

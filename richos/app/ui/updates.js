@@ -869,8 +869,9 @@ window.RichUpdates = (function () {
     var s = window.RichSettings;
     if (!s || !s.openMenu) return;
     if (view && !view.readyIsRollback && (view.state === "downloading" || isPreparing(view))) {
-      s.openMenu({ focus: "#update-line" });
-      if (nodes) nodes.container.scrollIntoView({ block: "center" });
+      s.openMenu();
+      if (nodes) nodes.line.focus({ preventScroll: true });
+      revealUpdateRow();
       return;
     }
     focusWanted = true;
@@ -878,6 +879,17 @@ window.RichUpdates = (function () {
     // The common path ends here: the row is painted from the view the cue itself was drawn
     // from, the control is live, and the hand lands with no round trip in between.
     handToTheControl();
+  }
+
+  function revealUpdateRow() {
+    // Updates is the last row before the sticky footer. Scrolling to the end
+    // after WebKit lays out the menu keeps the whole row above the footer.
+    requestAnimationFrame(function () {
+      var menu = document.getElementById("set-menu");
+      if (menu && !menu.hidden && nodes && document.activeElement === nodes.line) {
+        menu.scrollTop = menu.scrollHeight;
+      }
+    });
   }
 
   /// Put the hand on the control the cue leads to — the moment that is a true thing to do.
@@ -1190,7 +1202,7 @@ window.RichUpdates = (function () {
     if (enteredChecking) {
       tickChecking();
       if (nodes && document.activeElement === nodes.line) {
-        nodes.container.scrollIntoView({ block: "center" });
+        revealUpdateRow();
       }
     }
     if (next.state === "restarting") {
