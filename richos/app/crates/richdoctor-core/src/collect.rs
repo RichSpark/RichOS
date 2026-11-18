@@ -720,7 +720,9 @@ fn richfiles_timing(scope: &Scope, ctx: &Context, budget: &mut u64) -> Item {
             || build.len() > 40 || !build.bytes().all(|b| b.is_ascii_alphanumeric() || b".-+".contains(&b))
             || !matches!(operation, "listing" | "copy" | "move" | "recovery" | "gitHistory" | "gitComparison"
                 | "glanceDisplay" | "glanceDecode" | "glanceFolder" | "glancePreview" | "glanceDefaults" | "glanceMetadata"
-                | "glanceCaptureFrame" | "glanceCaptureOutput" | "glanceCaptureSession")
+                | "glanceCaptureFrame" | "glanceCaptureOutput" | "glanceCaptureSession"
+                | "windowGestureAvailability" | "windowGestureMaximize" | "windowGestureRestore"
+                | "windowGestureDockMinimize" | "windowGestureDockRestore")
             || !matches!(outcome, "complete" | "issues" | "canceled" | "unavailable" | "interrupted")
             || confirmed > total {
             return None;
@@ -1020,7 +1022,10 @@ mod tests {
             capture["screen"] = serde_json::json!("Private screen content");
             capture.to_string()
         }).join("\n");
-        write(&scope.logs_root().join("richfiles-timing.jsonl"), &format!("{record}\n{glance}\n{defaults}\n{metadata}\n{captures}"));
+        let mut gestures = record.clone();
+        gestures["operation"] = serde_json::json!("windowGestureDockRestore");
+        gestures["title"] = serde_json::json!("Private window title");
+        write(&scope.logs_root().join("richfiles-timing.jsonl"), &format!("{record}\n{glance}\n{defaults}\n{metadata}\n{captures}\n{gestures}"));
         let items = collect(Category::Configuration, &scope, &Context::default(), 0);
         let timing = items.iter().find(|item| item.source == "RichFiles timing log").unwrap();
         assert_eq!(timing.status, Status::Collected);
@@ -1032,7 +1037,9 @@ mod tests {
         assert!(timing.text.contains("operation=glanceCaptureFrame"));
         assert!(timing.text.contains("operation=glanceCaptureSession"));
         assert!(timing.text.contains("operation=glanceCaptureOutput"));
+        assert!(timing.text.contains("operation=windowGestureDockRestore"));
         assert!(!timing.text.contains("Private screen content"));
+        assert!(!timing.text.contains("Private window title"));
         assert!(!timing.text.contains("Personal RichCleaner note"));
         assert!(!timing.text.contains("Customer names"));
     }

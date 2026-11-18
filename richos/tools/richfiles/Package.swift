@@ -9,13 +9,15 @@ let package = Package(
         .library(name: "RichFilesBrowser", targets: ["RichFiles"]),
         .library(name: "RichFilesRail", type: .dynamic, targets: ["RichFilesRail"]),
         .executable(name: "RichFiles", targets: ["RichFilesApp"]),
-        .executable(name: "RichGlance", targets: ["RichGlance"])
+        .executable(name: "RichGlance", targets: ["RichGlance"]),
+        .executable(name: "RichFilesWindowGestures", targets: ["RichFilesWindowGestures"])
     ],
     targets: [
         .target(name: "RichFilesCore"),
         .target(name: "RichFiles", dependencies: ["RichFilesCore"]),
         .executableTarget(name: "RichFilesApp", dependencies: ["RichFiles"]),
         .executableTarget(name: "RichGlance", dependencies: ["RichFilesCore"]),
+        .executableTarget(name: "RichFilesWindowGestures", dependencies: ["RichFilesCore"]),
         .target(name: "RichFilesRail", dependencies: ["RichFiles"]),
         .testTarget(name: "RichFilesCoreTests", dependencies: ["RichFilesCore"], resources: [.copy("Fixtures/Glance")]),
         .testTarget(name: "RichFilesTests", dependencies: ["RichFiles", "RichFilesCore"]),

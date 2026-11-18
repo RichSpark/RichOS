@@ -1,0 +1,373 @@
+import AppKit
+import ApplicationServices
+import RichFilesCore
+
+final class GestureController {
+    private typealias Preferences = WindowGesturePreferences
+    private struct RestorableFrame {
+        let original: CGRect
+        let maximized: CGRect
+        let display: CGDirectDisplayID
+    }
+    private enum DockClick {
+        case minimize(AXUIElement)
+        case restore(AXUIElement)
+    }
+    private enum Target {
+        case dock(NSRunningApplication, DockClick)
+        case title(AXUIElement, Int)
+    }
+    private struct Press {
+        let point: CGPoint
+        let timestamp: UInt64
+        let target: Target
+    }
+
+    private let system = AXUIElementCreateSystemWide()
+    private var tap: CFMachPort?
+    private var source: CFRunLoopSource?
+    private var selection: Preferences.Selection = []
+    private var reportedStatus: Preferences.Status?
+    private var press: Press?
+    private var pointerRevision: UInt64 = 0
+    private var firstTitleClick: AXUIElement?
+    private var maximized: [AXUIElement: RestorableFrame] = [:]
+    private var dockMinimized: [pid_t: AXUIElement] = [:]
+    private var observers: [pid_t: AXObserver] = [:]
+    private var appTermination: NSObjectProtocol?
+
+    init() {
+        AXUIElementSetMessagingTimeout(system, 0.08)
+        appTermination = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didTerminateApplicationNotification, object: nil, queue: .main
+        ) { [weak self] notification in
+            guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
+            self?.forget(process: app.processIdentifier)
+        }
+    }
+
+    func refresh() {
+        let previous = selection
+        selection = Preferences.selection
+        if !selection.contains(.titleBar) && previous.contains(.titleBar) { maximized.removeAll() }
+        if !selection.contains(.dock) && previous.contains(.dock) { dockMinimized.removeAll() }
+        if selection != previous { press = nil; firstTitleClick = nil; pruneObservers() }
+
+        let status: Preferences.Status
+        if selection.isEmpty { status = .off }
+        else if !AXIsProcessTrusted() { status = .accessibility }
+        else if !CGPreflightListenEventAccess() { status = .inputMonitoring }
+        else { status = startTap() ? .running : .inputUnavailable }
+
+        if status != .running { stopTap() }
+        if status != reportedStatus {
+            reportedStatus = status
+            Preferences.publish(status)
+            record(.windowGestureAvailability, status == .running || status == .off ? .complete : .unavailable)
+        }
+    }
+
+    private func startTap() -> Bool {
+        if let tap { return CGEvent.tapIsEnabled(tap: tap) }
+        let types: [CGEventType] = [.leftMouseDown, .leftMouseUp, .leftMouseDragged, .rightMouseDown, .otherMouseDown]
+        let mask = types.reduce(CGEventMask(0)) { $0 | (1 << $1.rawValue) }
+        // Observe mouse-down before Dock can change focus. Return every original
+        // event, including those that lead to a window action.
+        guard let tap = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap,
+                                         options: .defaultTap, eventsOfInterest: mask, callback: { _, type, event, context in
+            if let context { Unmanaged<GestureController>.fromOpaque(context).takeUnretainedValue().receive(type, event) }
+            return Unmanaged.passUnretained(event)
+        }, userInfo: Unmanaged.passUnretained(self).toOpaque()),
+              let source = CFMachPortCreateRunLoopSource(nil, tap, 0) else { return false }
+        self.tap = tap
+        self.source = source
+        CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
+        CGEvent.tapEnable(tap: tap, enable: true)
+        return true
+    }
+
+    private func stopTap() {
+        if let source { CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes) }
+        if let tap { CFMachPortInvalidate(tap) }
+        self.source = nil
+        tap = nil
+        press = nil
+        firstTitleClick = nil
+        maximized.removeAll()
+        dockMinimized.removeAll()
+        pruneObservers()
+    }
+
+    private func receive(_ type: CGEventType, _ event: CGEvent) {
+        if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+            pointerRevision &+= 1
+            press = nil
+            firstTitleClick = nil
+            if let tap, AXIsProcessTrusted() { CGEvent.tapEnable(tap: tap, enable: true) }
+            return
+        }
+        let modifiers: CGEventFlags = [.maskCommand, .maskAlternate, .maskControl, .maskShift, .maskSecondaryFn]
+        guard event.flags.intersection(modifiers).isEmpty else {
+            pointerRevision &+= 1
+            press = nil
+            firstTitleClick = nil
+            return
+        }
+        switch type {
+        case .leftMouseDown:
+            pointerRevision &+= 1
+            // Capture activation and window identity during mouse-down, before
+            // native Dock mouse-up can activate, reopen or focus another window.
+            let frontmost = NSWorkspace.shared.frontmostApplication
+            let clicks = Int(event.getIntegerValueField(.mouseEventClickState))
+            press = hit(at: event.location).flatMap { element in
+                target(element, at: event.location, clicks: clicks, frontmost: frontmost)
+                    .map { Press(point: event.location, timestamp: event.timestamp, target: $0) }
+            }
+            if press == nil { firstTitleClick = nil }
+        case .leftMouseUp:
+            finishPress(event)
+        case .leftMouseDragged, .rightMouseDown, .otherMouseDown:
+            pointerRevision &+= 1
+            press = nil
+            firstTitleClick = nil
+        default:
+            break
+        }
+    }
+
+    private func hit(at point: CGPoint) -> AXUIElement? {
+        var result: AXUIElement?
+        guard AXUIElementCopyElementAtPosition(system, Float(point.x), Float(point.y), &result) == .success else { return nil }
+        return result
+    }
+
+    private func target(_ element: AXUIElement, at point: CGPoint, clicks: Int,
+                        frontmost: NSRunningApplication?) -> Target? {
+        if selection.contains(.dock), let app = dockApp(element) {
+            if let pending = dockMinimized[app.processIdentifier] {
+                if pending.minimized == true { return .dock(app, .restore(pending)) }
+                dockMinimized[app.processIdentifier] = nil
+                pruneObservers()
+                return nil
+            }
+            guard frontmost == app, let window = focusedWindow(app.processIdentifier), window.ordinaryWindow,
+                  window.minimized == false, window.settable(kAXMinimizedAttribute) else { return nil }
+            return .dock(app, .minimize(window))
+        }
+        guard selection.contains(.titleBar), (1...2).contains(clicks),
+              let window = titleBar(element, at: point) else { return nil }
+        return .title(window, clicks)
+    }
+
+    private func finishPress(_ event: CGEvent) {
+        guard let press else { return }
+        self.press = nil
+        let point = event.location
+        guard event.timestamp >= press.timestamp, event.timestamp - press.timestamp < 600_000_000,
+              abs(point.x - press.point.x) < 5, abs(point.y - press.point.y) < 5, let element = hit(at: point) else {
+            firstTitleClick = nil
+            return
+        }
+        switch press.target {
+        case let .title(window, count):
+            guard titleBar(element, at: point) == window else { firstTitleClick = nil; return }
+            if count == 1 { firstTitleClick = window; return }
+            defer { firstTitleClick = nil }
+            guard firstTitleClick == window else { return }
+            DispatchQueue.main.async { [weak self] in self?.toggleFrame(window, at: point) }
+        case let .dock(app, action):
+            firstTitleClick = nil
+            guard dockApp(element) == app else { return }
+            // Dock keeps its native click. Give activation and reopening their
+            // turn before deciding which exact window to manipulate.
+            let revision = pointerRevision
+            let deadline = ProcessInfo.processInfo.systemUptime + 0.75
+            DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(80)) { [weak self] in
+                self?.apply(action, to: app, revision: revision, deadline: deadline)
+            }
+        }
+    }
+
+    private func dockApp(_ element: AXUIElement) -> NSRunningApplication? {
+        guard let pid = element.processID,
+              NSRunningApplication(processIdentifier: pid)?.bundleIdentifier == "com.apple.dock",
+              element.subrole == "AXApplicationDockItem",
+              let url: URL = element.value(kAXURLAttribute), url.isFileURL else { return nil }
+        let bundle = url.resolvingSymlinksInPath().standardizedFileURL
+        return NSWorkspace.shared.runningApplications.first {
+            !$0.isTerminated && $0.activationPolicy == .regular
+                && $0.bundleURL?.resolvingSymlinksInPath().standardizedFileURL == bundle
+        }
+    }
+
+    private func titleBar(_ element: AXUIElement, at point: CGPoint) -> AXUIElement? {
+        let role = element.role
+        guard role == kAXWindowRole || role == kAXToolbarRole || role == "AXTitleBar"
+                || role == kAXStaticTextRole || role == kAXGroupRole else { return nil }
+        guard let window = role == kAXWindowRole ? element : element.element(kAXWindowAttribute),
+              let frame = window.frame, frame.contains(point),
+              let close = window.element(kAXCloseButtonAttribute)?.frame,
+              let zoom = window.element(kAXZoomButtonAttribute)?.frame,
+              close.minY >= frame.minY, zoom.minY >= frame.minY else { return nil }
+        // The system's traffic lights anchor the native title strip. Intersect
+        // that strip with the AX hit result so tabs, text fields and buttons
+        // never qualify just because they align with the title bar.
+        if role == kAXGroupRole { return chromiumDragArea(element, in: window, frame: frame, at: point) ? window : nil }
+        let controlTop = min(close.minY, zoom.minY)
+        let bottom = max(close.maxY, zoom.maxY) + max(6, controlTop - frame.minY)
+        guard bottom - frame.minY <= 64, point.y < bottom else { return nil }
+        if role == kAXStaticTextRole, window.element("AXTitleUIElement") != element { return nil }
+        return window
+    }
+
+    private func chromiumDragArea(_ element: AXUIElement, in window: AXUIElement, frame: CGRect, at point: CGPoint) -> Bool {
+        guard let pid = window.processID,
+              let id = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier,
+              ["com.google.Chrome", "org.chromium.Chromium"].contains(id),
+              let bounds = element.frame, bounds.contains(point),
+              abs(bounds.minY - frame.minY) < 2, abs(bounds.maxX - frame.maxX) < 2,
+              (24...60).contains(bounds.height), bounds.minX > frame.minX + 80,
+              let container = element.element(kAXParentAttribute), container.role == kAXGroupRole,
+              let strip = container.frame, strip.contains(bounds), strip.height == bounds.height,
+              strip.minX < bounds.minX, let siblings: [AXUIElement] = container.value(kAXChildrenAttribute),
+              siblings.contains(where: { $0 != element && $0.role == kAXButtonRole
+                  && ($0.frame?.maxX ?? .infinity) <= bounds.minX }),
+              let children: [AXUIElement] = element.value(kAXChildrenAttribute), children.isEmpty else { return false }
+        // Chromium exposes the empty end of its tab strip as a leaf group.
+        // Tab groups, tabs and the tab search control have different bounds or roles.
+        return true
+    }
+
+    private func focusedWindow(_ pid: pid_t) -> AXUIElement? {
+        let app = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(app, 0.08)
+        return app.element(kAXFocusedWindowAttribute)
+    }
+
+    private func toggleFrame(_ window: AXUIElement, at point: CGPoint) {
+        guard Preferences.selection.contains(.titleBar), AXIsProcessTrusted(), CGPreflightListenEventAccess(),
+              Preferences.nativeTitleBarIsOff,
+              window.ordinaryWindow, window.minimized == false, window.settable(kAXPositionAttribute),
+              window.settable(kAXSizeAttribute), let current = window.frame else { return }
+        let displays = GestureDisplay.current()
+        guard let display = displays.first(where: { $0.frame.contains(point) }) else { return }
+        let started = ProcessInfo.processInfo.systemUptime
+        if let saved = maximized[window],
+           current.nearlyEquals(saved.maximized) || !displays.contains(where: { $0.id == saved.display }) {
+            let original = displays.contains(where: { $0.id == saved.display }) ? saved.original : display.reachable(saved.original)
+            let restored = window.setFrame(original) && window.frame?.nearlyEquals(original) == true
+            if restored { maximized[window] = nil; pruneObservers() }
+            record(.windowGestureRestore, restored ? .complete : .issues, started: started)
+        } else if !current.nearlyEquals(display.usable) {
+            let adjusted = window.setFrame(display.usable)
+            if let actual = window.frame, !actual.nearlyEquals(current) {
+                maximized[window] = RestorableFrame(original: current, maximized: actual, display: display.id)
+                observe(window)
+                record(.windowGestureMaximize, adjusted && actual.nearlyEquals(display.usable) ? .complete : .issues, started: started)
+            } else {
+                maximized[window] = nil
+                pruneObservers()
+                record(.windowGestureMaximize, .unavailable, started: started)
+            }
+        }
+    }
+
+    private func apply(_ action: DockClick, to app: NSRunningApplication, revision: UInt64, deadline: TimeInterval) {
+        guard Preferences.selection.contains(.dock), AXIsProcessTrusted(), CGPreflightListenEventAccess(), !app.isTerminated else { return }
+        if NSWorkspace.shared.frontmostApplication?.processIdentifier != app.processIdentifier {
+            // An app in another Space may not be active by the time the Dock
+            // animation starts. Any later mouse action takes precedence.
+            guard case .restore = action, revision == pointerRevision, ProcessInfo.processInfo.systemUptime < deadline else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(50)) { [weak self] in
+                self?.apply(action, to: app, revision: revision, deadline: deadline)
+            }
+            return
+        }
+        let pid = app.processIdentifier
+        let started = ProcessInfo.processInfo.systemUptime
+        switch action {
+        case let .minimize(window):
+            // A rapid following click can have arrived while the first action
+            // was still waiting for Dock. It still toggles the same window.
+            if dockMinimized[pid] == window, window.minimized == true {
+                restoreDockWindow(window, pid: pid, started: started)
+                return
+            }
+            guard focusedWindow(pid) == window, window.ordinaryWindow, window.minimized == false,
+                  window.set(kAXMinimizedAttribute, kCFBooleanTrue) else { return }
+            dockMinimized[pid] = window
+            observe(window)
+            record(.windowGestureDockMinimize, .complete, started: started)
+        case let .restore(window):
+            guard dockMinimized[pid] == window else { return }
+            restoreDockWindow(window, pid: pid, started: started)
+        }
+    }
+
+    private func restoreDockWindow(_ window: AXUIElement, pid: pid_t, started: TimeInterval) {
+        guard let minimized = window.minimized else { return }
+        if let current = focusedWindow(pid), current != window, !current.ordinaryWindow { return }
+        guard !minimized || window.set(kAXMinimizedAttribute, kCFBooleanFalse) else {
+            record(.windowGestureDockRestore, .unavailable, started: started)
+            return
+        }
+        let raised = window.perform(kAXRaiseAction)
+        _ = window.set(kAXMainAttribute, kCFBooleanTrue)
+        dockMinimized[pid] = nil
+        pruneObservers()
+        record(.windowGestureDockRestore, raised ? .complete : .issues, started: started)
+    }
+
+    private func observe(_ window: AXUIElement) {
+        guard let pid = window.processID else { return }
+        let observer: AXObserver
+        if let existing = observers[pid] {
+            observer = existing
+        } else {
+            var new: AXObserver?
+            let result = AXObserverCreate(pid, { _, window, _, context in
+                guard let context, window.minimized == nil else { return }
+                let controller = Unmanaged<GestureController>.fromOpaque(context).takeUnretainedValue()
+                controller.maximized[window] = nil
+                if let pid = window.processID, controller.dockMinimized[pid] == window {
+                    controller.dockMinimized[pid] = nil
+                }
+                controller.pruneObservers()
+            }, &new)
+            guard result == .success, let new else { return }
+            observer = new
+            observers[pid] = new
+            CFRunLoopAddSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(new), .commonModes)
+        }
+        AXObserverAddNotification(observer, window, kAXUIElementDestroyedNotification as CFString,
+                                  Unmanaged.passUnretained(self).toOpaque())
+    }
+
+    private func forget(process pid: pid_t) {
+        dockMinimized[pid] = nil
+        maximized = maximized.filter { $0.key.processID != pid }
+        pruneObservers()
+    }
+
+    private func pruneObservers() {
+        let live = Set(maximized.keys.compactMap(\.processID)).union(dockMinimized.keys)
+        for pid in Set(observers.keys).subtracting(live) {
+            guard let observer = observers.removeValue(forKey: pid) else { continue }
+            CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .commonModes)
+        }
+    }
+
+    private func record(_ operation: RichFilesDiagnostics.Operation, _ outcome: RichFilesDiagnostics.Outcome,
+                        started: TimeInterval = ProcessInfo.processInfo.systemUptime) {
+        RichFilesDiagnostics.record(operation, id: UUID(), outcome: outcome, started: started,
+                                    total: 1, confirmed: outcome == .complete ? 1 : 0)
+    }
+}
+
+private extension CGRect {
+    func nearlyEquals(_ other: CGRect) -> Bool {
+        abs(minX - other.minX) < 2 && abs(minY - other.minY) < 2
+            && abs(width - other.width) < 2 && abs(height - other.height) < 2
+    }
+}

@@ -49,6 +49,7 @@ drop_build_machine_rpaths() {
 }
 python3 "$machine_lib/native-work.py" -- swift build "${swift_args[@]}" -c "$configuration" --product RichFiles
 python3 "$machine_lib/native-work.py" -- swift build "${swift_args[@]}" -c "$configuration" --product RichGlance
+python3 "$machine_lib/native-work.py" -- swift build "${swift_args[@]}" -c "$configuration" --product RichFilesWindowGestures
 if [ "$embedded" -eq 1 ]; then
   python3 "$machine_lib/native-work.py" -- swift build "${swift_args[@]}" -c "$configuration" --product RichFilesRail
   install -m 755 "$build/$configuration/libRichFilesRail.dylib" "$output/libRichFilesRail.dylib"
@@ -88,6 +89,16 @@ if [ "$embedded" -eq 1 ]; then
 fi
 plutil -lint "$glance/Contents/Info.plist"
 codesign --force --sign - "$glance"
+gestures="$app/Contents/Library/LoginItems/RichFiles Window Gestures.app"
+mkdir -p "$gestures/Contents/MacOS"
+install -m 755 "$build/$configuration/RichFilesWindowGestures" "$gestures/Contents/MacOS/RichFilesWindowGestures"
+install -m 644 "$package/RichFilesWindowGestures-Info.plist" "$gestures/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Add :RichOSSourceRevision string $(git -C "$root" rev-parse HEAD)" "$gestures/Contents/Info.plist"
+if [ "$embedded" -eq 1 ]; then
+  drop_build_machine_rpaths "$gestures/Contents/MacOS/RichFilesWindowGestures"
+fi
+plutil -lint "$gestures/Contents/Info.plist"
+codesign --force --sign - "$gestures"
 plutil -lint "$app/Contents/Info.plist"
 codesign --force --sign - "$app/Contents/MacOS/richfiles-archive"
 codesign --force --sign - "$app"

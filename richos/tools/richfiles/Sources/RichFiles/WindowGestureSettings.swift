@@ -1,0 +1,185 @@
+import AppKit
+import RichFilesCore
+import ServiceManagement
+import SwiftUI
+
+public enum WindowGestureService {
+    private static var service: SMAppService { .loginItem(identifier: WindowGesturePreferences.helperID) }
+
+    /// ServiceManagement uses the calling application's bundle to find its login item.
+    /// The docked pane asks the bundled RichFiles executable to do its own registration.
+    public static func runCommandIfRequested() -> Bool {
+        let arguments = CommandLine.arguments
+        guard arguments.count == 3, arguments[1] == WindowGesturePreferences.command else { return false }
+        guard Bundle.main.bundleIdentifier == "app.richos.richfiles" else { exit(2) }
+        print(update(arguments[2]))
+        return true
+    }
+
+    private static func update(_ action: String) -> String {
+        let item = service
+        do {
+            switch action {
+            case "register":
+                if item.status == .notRegistered || item.status == .notFound { try item.register() }
+            case "unregister":
+                if item.status == .enabled || item.status == .requiresApproval { try item.unregister() }
+            case "status":
+                break
+            default:
+                return "unavailable"
+            }
+        } catch {
+            let failure = error as NSError
+            NSLog("RichFiles Window Gestures service %@ failed: %@ (%ld)", action, failure.domain, failure.code)
+            return item.status == .requiresApproval ? "approval" : "unavailable"
+        }
+        switch item.status {
+        case .enabled: return "enabled"
+        case .requiresApproval: return "approval"
+        case .notRegistered: return "off"
+        default: return "unavailable"
+        }
+    }
+
+    static func request(_ action: String, in app: URL) async -> String {
+        let executable = app.appendingPathComponent("Contents/MacOS/RichFiles")
+        return await Task.detached(priority: .userInitiated) {
+            if Bundle.main.bundleIdentifier == "app.richos.richfiles" { return update(action) }
+            let command = Process()
+            let output = Pipe()
+            command.executableURL = executable
+            command.arguments = [WindowGesturePreferences.command, action]
+            command.standardOutput = output
+            command.standardError = FileHandle.nullDevice
+            do {
+                try command.run()
+                let result = output.fileHandleForReading.readDataToEndOfFile()
+                command.waitUntilExit()
+                guard command.terminationStatus == 0 else { return "unavailable" }
+                return String(decoding: result, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+            } catch {
+                return "unavailable"
+            }
+        }.value
+    }
+}
+
+@MainActor
+struct WindowGestureSettings: View {
+    private typealias Preferences = WindowGesturePreferences
+
+    let appURL: URL
+    @State private var selection = Preferences.selection
+    @State private var runtime: Preferences.Status?
+    @State private var registration = ""
+    @State private var updating = false
+    @State private var nativeTitleBarIsOff = Preferences.nativeTitleBarIsOff
+
+    private var helper: URL { appURL.appendingPathComponent(Preferences.helperPath) }
+
+    var body: some View {
+        Toggle("Double-click a title bar to maximize or restore", isOn: toggle(.titleBar))
+            .disabled(updating)
+        Toggle("Click the active app’s Dock icon to minimize or restore", isOn: toggle(.dock))
+            .disabled(updating)
+        if !selection.isEmpty {
+            Text("These gestures work in other apps and continue after you quit RichOS and RichFiles.")
+                .foregroundStyle(.secondary)
+            if selection.contains(.titleBar) && !nativeTitleBarIsOff {
+                Text("In Desktop & Dock, set “Double-click a window’s title bar to” to Do Nothing. Choose your previous action there to restore native behavior.")
+                    .foregroundStyle(.secondary)
+                Button("Open Desktop & Dock Settings") { open("com.apple.Desktop-Settings.extension") }
+                    .buttonStyle(BrowserButtonStyle(bordered: true))
+            }
+            if registration == "approval" {
+                Text("Allow RichFiles Window Gestures in Login Items to run it in the background.")
+                    .foregroundStyle(.secondary)
+                Button("Open Login Items Settings") { SMAppService.openSystemSettingsLoginItems() }
+                    .buttonStyle(BrowserButtonStyle(bordered: true))
+            } else if registration == "unavailable" || registration == "off" {
+                Text("RichFiles Window Gestures could not start. Try again from the installed copy of RichFiles.")
+                    .foregroundStyle(.secondary)
+                Button("Retry Window Gestures") { synchronize("register") }
+                    .buttonStyle(BrowserButtonStyle(bordered: true)).disabled(updating)
+            } else if let runtime {
+                permissions(runtime)
+            } else {
+                Text("Waiting for RichFiles Window Gestures to start.")
+                    .foregroundStyle(.secondary)
+                Button("Open Login Items Settings") { SMAppService.openSystemSettingsLoginItems() }
+                    .buttonStyle(BrowserButtonStyle(bordered: true))
+            }
+        } else if registration == "unavailable" {
+            Text("Window gestures are off, but macOS could not remove the background item.")
+                .foregroundStyle(.secondary)
+            Button("Open Login Items Settings") { SMAppService.openSystemSettingsLoginItems() }
+                .buttonStyle(BrowserButtonStyle(bordered: true))
+        }
+        Color.clear.frame(height: 0).accessibilityHidden(true)
+            .onAppear { refresh(); synchronize("status") }
+            .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+                refresh()
+                synchronize("status")
+            }
+            .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { _ in refresh() }
+    }
+
+    @ViewBuilder private func permissions(_ status: Preferences.Status) -> some View {
+        switch status {
+        case .accessibility, .inputMonitoring:
+            let accessibility = status == .accessibility
+            Text(accessibility
+                ? "In Accessibility, add and allow RichFiles Window Gestures to move and minimize other apps’ windows."
+                : "In Input Monitoring, add and allow RichFiles Window Gestures to detect mouse clicks.")
+                .foregroundStyle(.secondary)
+            HStack {
+                Button(accessibility ? "Open Accessibility Settings" : "Open Input Monitoring Settings") {
+                    open(accessibility ? "com.apple.preference.security?Privacy_Accessibility"
+                                       : "com.apple.preference.security?Privacy_ListenEvent")
+                }
+                Button("Show Helper in Finder") { NSWorkspace.shared.activateFileViewerSelecting([helper]) }
+            }
+            .buttonStyle(BrowserButtonStyle(bordered: true))
+        case .inputUnavailable:
+            Text("macOS is currently blocking mouse monitoring. Check Input Monitoring or sign out and back in.")
+                .foregroundStyle(.secondary)
+            Button("Open Input Monitoring Settings") { open("com.apple.preference.security?Privacy_ListenEvent") }
+                .buttonStyle(BrowserButtonStyle(bordered: true))
+        case .running, .off:
+            EmptyView()
+        }
+    }
+
+    private func toggle(_ gesture: Preferences.Selection) -> Binding<Bool> {
+        Binding(get: { selection.contains(gesture) }, set: { enabled in
+            let current = Preferences.selection
+            selection = enabled ? current.union(gesture) : current.subtracting(gesture)
+            Preferences.selection = selection
+            synchronize(selection.isEmpty ? "unregister" : "register")
+        })
+    }
+
+    private func refresh() {
+        if !updating { selection = Preferences.selection }
+        nativeTitleBarIsOff = selection.contains(.titleBar) && Preferences.nativeTitleBarIsOff
+        let process = NSRunningApplication.runningApplications(withBundleIdentifier: Preferences.helperID)
+            .first { !$0.isTerminated && $0.bundleURL?.resolvingSymlinksInPath() == helper.resolvingSymlinksInPath() }
+        runtime = process.flatMap { Preferences.status(process: $0.processIdentifier) }
+    }
+
+    private func synchronize(_ action: String) {
+        guard !updating else { return }
+        updating = true
+        Task {
+            registration = await WindowGestureService.request(action, in: appURL)
+            updating = false
+            refresh()
+        }
+    }
+
+    private func open(_ destination: String) {
+        guard let url = URL(string: "x-apple.systempreferences:\(destination)") else { return }
+        NSWorkspace.shared.open(url)
+    }
+}

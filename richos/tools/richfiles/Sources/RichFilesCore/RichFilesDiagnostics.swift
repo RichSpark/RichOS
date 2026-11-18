@@ -4,6 +4,8 @@ import Foundation
 public enum RichFilesDiagnostics {
     public enum Operation: String, Codable, Sendable {
         case listing, copy, move, recovery, gitHistory, gitComparison
+        case windowGestureAvailability, windowGestureMaximize, windowGestureRestore
+        case windowGestureDockMinimize, windowGestureDockRestore
         case glanceCaptureFrame, glanceCaptureOutput, glanceCaptureSession
         case glanceDisplay, glanceDecode, glanceFolder, glancePreview, glanceDefaults, glanceMetadata
     }
@@ -33,7 +35,8 @@ public enum RichFilesDiagnostics {
         total: Int, confirmed: Int, firstRowsMS: Int? = nil
     ) {
         let bundle = Bundle.main
-        guard ["app.richos.richfiles", "com.richos.app", "app.richos.richglance"].contains(bundle.bundleIdentifier ?? ""),
+        guard ["app.richos.richfiles", "com.richos.app", "app.richos.richglance", WindowGesturePreferences.helperID]
+            .contains(bundle.bundleIdentifier ?? ""),
               let library = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask).first else { return }
         let version = bundle.object(forInfoDictionaryKey: "RichOSSourceRevision") as? String
             ?? bundle.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown"
