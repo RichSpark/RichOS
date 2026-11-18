@@ -27,7 +27,8 @@
 // line, icon and picture (the home screen's painter, made to walk the whole app, as the round's
 // own recorder does), and that canvas is recorded with the webview's own recorder, with the
 // microphone's sound added when he chose it. The recorder's own pieces (`rv-skip`) are never in
-// the file. TEXT HE HIGHLIGHTS IS IN THE FILE (CEO 2026-11-15, on the round's mockup: "it was
+// the file. The docked RichFiles pane supplies its own pixels because AppKit hosts it beside
+// the webview. TEXT HE HIGHLIGHTS IS IN THE FILE (CEO 2026-11-15, on the round's mockup: "it was
 // recording the mouse but not recording text highlights when I was highlighting the text with the
 // mouse. I would expect the screen recording to record the text highlighting as well."): the
 // highlight is drawn behind the words he selected, in the Mac's own highlight color, in the
@@ -458,6 +459,7 @@ window.RichVideoAnywhere = (function () {
   var SIDES = ["Top", "Right", "Bottom", "Left"];
   function paintDom(cx, e, alpha, R) {
     if (NOT[e.tagName] || NEVER[e.id] || e.classList.contains("rv-skip")) return;
+    if (e.id === "nr-tip" && R.filesTip) return;
     var s = getComputedStyle(e);
     if (s.display === "none") return;
     var op = parseFloat(s.opacity);
@@ -601,6 +603,62 @@ window.RichVideoAnywhere = (function () {
     if (seen && kinds.indexOf("::after") >= 0) paintPseudo(cx, e, s, r, a, "::after");
     R.inHome = wasHome;
   }
+
+  // One bounded native snapshot at a time, only while the pane is visible during
+  // a recording. The canvas continues to draw the webview at its usual rate.
+  var filesRequest = false;
+  async function requestFilesFrame(R, bounds, when) {
+    filesRequest = true;
+    try {
+      const data = new Uint8Array(await window.RichBridge.invoke("richfiles_recording_frame", {}));
+      if (rec !== R || R.filesBounds !== bounds) return;
+      if (data.byteLength <= 8) {
+        R.filesImage = null;
+        return;
+      }
+      // The native bridge sends two little-endian floats (a pane-relative cursor
+      // position, or NaN when outside), followed by the JPEG.
+      const xy = new DataView(data.buffer, data.byteOffset, 8);
+      const image = new Image();
+      const url = URL.createObjectURL(new Blob([data.subarray(8)], { type: "image/jpeg" }));
+      try {
+        image.src = url;
+        await image.decode();
+      } finally {
+        URL.revokeObjectURL(url);
+      }
+      if (rec === R && R.filesBounds === bounds) {
+        R.filesImage = { image, when, x: xy.getFloat32(0, true), y: xy.getFloat32(4, true) };
+      }
+    } catch (_) {
+      // A rejected bridge invocation may mean an older bundled library. Keep
+      // recording the webview and stop requesting frames from that installation.
+      R.filesFailed = true;
+      R.filesImage = null;
+    } finally {
+      filesRequest = false;
+    }
+  }
+
+  function sampleFiles(R) {
+    const bounds = window.RichFilesPage?.recordingBounds?.();
+    if (!bounds) {
+      R.filesBounds = null;
+      R.filesImage = null;
+      return;
+    }
+    const old = R.filesBounds;
+    if (!old || old.left !== bounds.left || old.top !== bounds.top ||
+        old.width !== bounds.width || old.height !== bounds.height) {
+      R.filesBounds = bounds;
+      R.filesImage = null;
+    }
+    if (!filesRequest && !R.filesFailed && (!R.filesAsked || R.now - R.filesAsked >= 100)) {
+      R.filesAsked = R.now;
+      requestFilesFrame(R, R.filesBounds, R.now);
+    }
+  }
+
   function paintFrame(R) {
     var cx = R.cx;
     var k = R.cv.width / R.W;
@@ -614,6 +672,9 @@ window.RichVideoAnywhere = (function () {
     R.nodes = 0;
     R.inHome = false;
     R.sel = selected();
+    sampleFiles(R);
+    const files = R.filesImage;
+    R.filesTip = files && document.getElementById("nr-tip");
     // what stands on the page itself, lowest first (the order the window stacks it in)
     var tops = [];
     for (var c = document.body.firstElementChild, i = 0; c; c = c.nextElementSibling, i++) {
@@ -628,19 +689,38 @@ window.RichVideoAnywhere = (function () {
       cx.fillStyle = bs.backgroundColor;
       cx.fillRect(0, 0, R.W, R.H);
     }
-    for (var j = 0; j < tops.length; j++) paintDom(cx, tops[j].e, 1, R);
+    let filesBox;
+    for (var j = 0; j < tops.length; j++) {
+      var node = tops[j].e;
+      paintDom(cx, node, 1, R);
+      if (files && node.id === "app") {
+        const area = R.filesBounds;
+        filesBox = { x: area.left * innerWidth, y: area.top * innerHeight,
+                     w: area.width * innerWidth, h: area.height * innerHeight };
+        cx.globalAlpha = 1;
+        cx.drawImage(files.image, filesBox.x, filesBox.y, filesBox.w, filesBox.h);
+        if (R.filesTip) {
+          const tip = R.filesTip;
+          R.filesTip = null;
+          paintDom(cx, tip, 1, R);
+        }
+      }
+    }
     cx.globalAlpha = 1;
-    if (R.pointer && ptr.inside && !ptr.own) P.paintPointer(cx, ptr.x, ptr.y);
+    if (R.pointer && filesBox && files.when >= ptr.at && Number.isFinite(files.x) && Number.isFinite(files.y)) {
+      P.paintPointer(cx, filesBox.x + files.x * filesBox.w, filesBox.y + files.y * filesBox.h);
+    } else if (R.pointer && ptr.inside && !ptr.own) P.paintPointer(cx, ptr.x, ptr.y);
   }
 
   // THE MOUSE POINTER, drawn in the file when he chose it; not while it is on the recorder's own
   // pieces, which are not in the file either.
-  var ptr = { x: 0, y: 0, inside: false, own: true };
+  var ptr = { x: 0, y: 0, inside: false, own: true, at: 0 };
   window.addEventListener(
     "pointermove",
     function (e) {
       ptr.x = e.clientX;
       ptr.y = e.clientY;
+      ptr.at = performance.now();
       ptr.inside = true;
       ptr.own = !!(e.target && e.target.closest && e.target.closest(".rv-skip"));
     },

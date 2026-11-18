@@ -725,7 +725,7 @@ fn richfiles_timing(scope: &Scope, ctx: &Context, budget: &mut u64, gestures: bo
             matches!(operation, "windowGestureAvailability" | "windowGestureMaximize" | "windowGestureRestore"
                 | "windowGestureDockMinimize" | "windowGestureDockRestore")
         } else {
-            matches!(operation, "listing" | "copy" | "move" | "recovery" | "gitHistory" | "gitComparison"
+            matches!(operation, "listing" | "copy" | "move" | "recovery" | "gitHistory" | "gitComparison" | "railVideoFrame"
                 | "glanceDisplay" | "glanceDecode" | "glanceFolder" | "glancePreview" | "glanceDefaults" | "glanceMetadata"
                 | "glanceCaptureFrame" | "glanceCaptureOutput" | "glanceCaptureSession")
         };
@@ -1025,7 +1025,7 @@ mod tests {
         let mut metadata = record.clone();
         metadata["operation"] = serde_json::json!("glanceMetadata");
         metadata["note"] = serde_json::json!("Personal RichCleaner note");
-        let captures = ["glanceCaptureFrame", "glanceCaptureSession", "glanceCaptureOutput"].map(|stage| {
+        let captures = ["glanceCaptureFrame", "glanceCaptureSession", "glanceCaptureOutput", "railVideoFrame"].map(|stage| {
             let mut capture = record.clone();
             capture["operation"] = serde_json::json!(stage);
             capture["screen"] = serde_json::json!("Private screen content");
@@ -1047,6 +1047,7 @@ mod tests {
         assert!(timing.text.contains("operation=glanceCaptureFrame"));
         assert!(timing.text.contains("operation=glanceCaptureSession"));
         assert!(timing.text.contains("operation=glanceCaptureOutput"));
+        assert!(timing.text.contains("operation=railVideoFrame"));
         let window_gestures = items.iter().find(|item| item.source == "RichFiles Window Gestures log").unwrap();
         assert_eq!(window_gestures.status, Status::Collected);
         assert!(window_gestures.text.contains("operation=windowGestureDockRestore"));

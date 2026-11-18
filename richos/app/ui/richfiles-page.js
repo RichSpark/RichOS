@@ -159,7 +159,14 @@
     if (available !== true) return;
     rail.registerPage("richfiles", { show, hide });
     button.hidden = false;
-    window.RichFilesPage = { available: true };
+    window.RichFilesPage = {
+      available: true,
+      recordingBounds() {
+        if (!ready || page.hidden) return null;
+        const current = bounds();
+        return current.visible ? current : null;
+      },
+    };
     offered = true;
     prepare();
     try {

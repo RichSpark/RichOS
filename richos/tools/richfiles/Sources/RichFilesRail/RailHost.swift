@@ -1,5 +1,6 @@
 import AppKit
 import RichFiles
+import RichFilesCore
 import SwiftUI
 import WebKit
 
@@ -27,6 +28,22 @@ public func setRichFilesRailTooltip(_ webViewPointer: UnsafeMutableRawPointer?, 
         let webView = Unmanaged<NSView>.fromOpaque(webViewPointer).takeUnretainedValue()
         RailHost.shared.setTooltip(beside: webView, frame: CGRect(x: left, y: top, width: width, height: height),
                                    radius: radius, arrow: arrow)
+    }
+}
+
+@_cdecl("richfiles_rail_recording_frame")
+public func recordRichFilesRailFrame(
+    _ webViewPointer: UnsafeMutableRawPointer?,
+    _ reply: @convention(c) (UnsafeRawPointer?, Int, Float, Float, UnsafeMutableRawPointer?) -> Void,
+    _ context: UnsafeMutableRawPointer?
+) {
+    guard Thread.isMainThread, let webViewPointer else { return }
+    MainActor.assumeIsolated {
+        let webView = Unmanaged<NSView>.fromOpaque(webViewPointer).takeUnretainedValue()
+        guard let (image, cursor) = RailHost.shared.recordingFrame(beside: webView) else { return }
+        image.withUnsafeBytes { bytes in
+            reply(bytes.baseAddress, bytes.count, Float(cursor.x), Float(cursor.y), context)
+        }
     }
 }
 
@@ -85,6 +102,9 @@ private final class RailHost {
     private var monitor: Any?
     private var currentChat: String?
     private var gitHandoff: GitPanelSnapshot?
+    private var recordingVisit = UUID()
+    private var reportedFrame = false
+    private var reportedFrameFailure = false
 
     func place(beside webView: NSView, normalizedFrame: CGRect, visible: Bool) -> Bool {
         guard visible else {
@@ -166,6 +186,46 @@ private final class RailHost {
         layer.mask = mask
     }
 
+    func recordingFrame(beside webView: NSView) -> (Data, CGPoint)? {
+        guard self.webView === webView, let hosting, !hosting.isHiddenOrHasHiddenAncestor,
+              let window = hosting.window, !hosting.bounds.isEmpty else { return nil }
+        let started = ProcessInfo.processInfo.systemUptime
+        let bounds = hosting.bounds
+        let scale = min(1, 1440 / bounds.width, 1080 / bounds.height)
+        let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil,
+            pixelsWide: max(1, Int(bounds.width * scale)), pixelsHigh: max(1, Int(bounds.height * scale)),
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
+            bytesPerRow: 0, bitsPerPixel: 0)
+        bitmap?.size = bounds.size
+        // Snapshot the hosting view alone. The tooltip cutout belongs to its parent
+        // and the canvas draws the rail tooltip over the completed frame itself.
+        let picture = bitmap.flatMap { bitmap in
+            hosting.cacheDisplay(in: bounds, to: bitmap)
+            return bitmap.representation(using: .jpeg, properties: [.compressionFactor: 0.82])
+        }
+        if picture == nil && !reportedFrameFailure {
+            reportedFrameFailure = true
+            RichFilesDiagnostics.record(.railVideoFrame, id: recordingVisit, outcome: .unavailable,
+                                        started: started, total: 1, confirmed: 0)
+        }
+        guard let picture else { return nil }
+        if !reportedFrame {
+            reportedFrame = true
+            RichFilesDiagnostics.record(.railVideoFrame, id: recordingVisit, outcome: .complete,
+                                        started: started, total: 1, confirmed: 1)
+        }
+        // WebKit does not receive pointer moves over its native sibling.
+        let mouse = hosting.convert(window.mouseLocationOutsideOfEventStream, from: nil)
+        let cursor: CGPoint
+        if bounds.contains(mouse) {
+            let y = (mouse.y - bounds.minY) / bounds.height
+            cursor = CGPoint(x: (mouse.x - bounds.minX) / bounds.width, y: hosting.isFlipped ? y : 1 - y)
+        } else {
+            cursor = CGPoint(x: CGFloat.nan, y: CGFloat.nan)
+        }
+        return (picture, cursor)
+    }
+
     func setChat(_ thread: String?) {
         currentChat = thread
         if let gitHandoff, gitHandoff.threadId != thread { self.gitHandoff = nil }
@@ -207,6 +267,9 @@ private final class RailHost {
 
     private func hide() {
         if hasPaneFocus(), let webView { webView.window?.makeFirstResponder(webView) }
+        if reportedFrame || reportedFrameFailure { recordingVisit = UUID() }
+        reportedFrame = false
+        reportedFrameFailure = false
         hosting?.isHidden = true
         container?.layer?.mask = nil
     }

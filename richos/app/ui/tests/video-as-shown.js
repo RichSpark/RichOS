@@ -260,6 +260,70 @@ async function asShown(theme, mic) {
   }
 }
 
+function dockedFiles() {
+  const drive = async (T) => {
+    try {
+      await T.app();
+      await T.chat();
+      const tile = document.createElement("canvas");
+      const tileContext = tile.getContext("2d");
+      tileContext.fillStyle = "#20b030";
+      tileContext.fillRect(0, 0, tile.width, tile.height);
+      const jpeg = await new Promise((resolve) => tile.toBlob(resolve, "image/jpeg"));
+      const frame = await new Blob([new Float32Array([NaN, NaN]), jpeg]).arrayBuffer();
+      window.__richFilesTestFrame = frame;
+
+      await T.press("#set-btn");
+      await T.press("#video-anywhere");
+      await T.press("#video-anywhere-choices .rv-go");
+      await T.until("the recording", () => window.RichVideoAnywhere.state().state === "rec");
+      await T.press("#nr-richfiles");
+      const canvas = await T.until("the recording canvas", () => document.querySelector(".rv-canvas"));
+      const context = canvas.getContext("2d");
+      const isNativeGreen = (x, y) => {
+        const [r, g, b] = context.getImageData(Math.round(x * canvas.width / innerWidth),
+          Math.round(y * canvas.width / innerWidth), 1, 1).data;
+        return r < 50 && g > 130 && b < 100;
+      };
+      const pane = document.getElementById("richfiles-pane").getBoundingClientRect();
+      const center = () => isNativeGreen(pane.left + pane.width / 2, pane.top + pane.height / 2);
+      await T.until("native pixels in the recording", center);
+
+      const finder = document.getElementById("nr-finder");
+      finder.dispatchEvent(new PointerEvent("pointerover", { bubbles: true }));
+      const tip = document.getElementById("nr-tip").getBoundingClientRect();
+      if (tip.top <= pane.top || tip.right <= pane.left) throw new Error("the label does not overlap the pane");
+      const underTip = () => isNativeGreen(tip.right - 8, tip.top + 5);
+      await T.until("the label above the native pixels", () => center() && !underTip());
+      finder.dispatchEvent(new PointerEvent("pointerout", { bubbles: true, relatedTarget: document.body }));
+      await T.until("the pane revealed again under the label", underTip);
+
+      await T.press("#nr-chats");
+      await T.until("native pixels removed", () => !center());
+      await T.press("#video-anywhere-stop");
+      await T.until("the result", () => window.RichVideoAnywhere.state().state === "sheet");
+      T.post({ done: { ended: window.RichVideoAnywhere.state().ended } });
+    } catch (e) {
+      T.post({ done: { error: String((e && e.message) || e) } });
+    }
+  };
+  const bridge = () => Object.defineProperty(window, "RichBridge", {
+    configurable: true,
+    set(bridge) {
+      const invoke = bridge.invoke.bind(bridge);
+      bridge.invoke = async (command, args, options) => {
+        if (command === "richfiles_pane_available") return true;
+        if (command === "richfiles_request_pending") return false;
+        if (command === "richfiles_preload" || command === "richfiles_place_pane") return;
+        if (command === "richfiles_recording_frame") return window.__richFilesTestFrame;
+        return invoke(command, args, options);
+      };
+      Object.defineProperty(window, "RichBridge", { value: bridge, writable: true });
+    },
+  });
+  return `(${bridge.toString()})(); window.addEventListener("load", () => (${drive.toString()})((${tools.toString()})()));`;
+}
+
 /// What each recorder asks the webview for when the microphone is switched on. The microphone
 /// handed back is a silent one made in the page: no real microphone is opened.
 function asking() {
@@ -319,6 +383,18 @@ async function main() {
   await run.check("dark, with the microphone: the empty message box has its hint and no placeholder under it, Settings' closed list is not drawn until it is opened, and every line of a message starts where the box puts it", async () => asShown("dark", true));
 
   await run.check("light, without the microphone: the same three", async () => asShown("light", false));
+
+  await run.check("docked RichFiles is composited in the video below the rail tooltip and removed when leaving the page", async () => {
+    const ran = await runPage(APP, dockedFiles(), 100);
+    try {
+      assert(ran.code === 0 && ran.done, "the page did not finish: " + JSON.stringify(ran.said.slice(-4)));
+      assert(!ran.done.error, ran.done.error);
+      assertEqual(ran.done.ended, "stopped", "the recording did not stop cleanly");
+      return "read the native pixels, the label above them and the cleared pane from the recording canvas";
+    } finally {
+      fs.rmSync(ran.dir, { recursive: true, force: true });
+    }
+  });
 
   await run.check("both recorders ask for the microphone without echo canceling, so letting it go does not touch what the Mac is playing", async () => {
     const ran = await runPage(APP, asking(), 120);
