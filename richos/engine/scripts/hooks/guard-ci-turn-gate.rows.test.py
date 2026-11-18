@@ -308,6 +308,25 @@ class G3(unittest.TestCase):
         self.result("Everything up-to-date", ident="noop")
         self.assertEqual(gate.evaluate(self.payload, gate.Budget(5))[0], 2)
 
+    def test_porcelain_noop_preserves_failed_obligation(self):
+        repo, bare = self.repo()
+        self.call("git push origin main", repo)
+        update = self.git(repo, "push", "origin", "main")
+        self.result(update.stderr)
+        self.enterContext(patch.object(gate, "verdict_for", lambda *_: {"state": "red"}))
+        self.assertEqual(gate.evaluate(self.payload, gate.Budget(5))[0], 2)
+        sha = self.git(bare, "rev-parse", "main").stdout.strip()
+        # Keep the no-op's transcript interval outside the original push's
+        # reflog second. The fixture does not need to wait for a clock tick.
+        with patch.object(gate.time, "time", return_value=time.time() + 60):
+            self.call("git push --porcelain origin main", repo, "noop")
+            noop = self.git(repo, "push", "--porcelain", "origin", "main")
+            self.result(noop.stdout, ident="noop")
+        self.assertIn("=\trefs/heads/main:refs/heads/main\t", noop.stdout)
+        self.assertEqual(self.git(bare, "rev-parse", "main").stdout.strip(), sha)
+        self.assertEqual(gate.evaluate(self.payload, gate.Budget(5))[0], 2)
+        self.assertEqual([p["sha"] for p in gate.load_state("g3")["pushes"].values()], [sha])
+
     def test_p3_45_fetch_before_and_after_first_check_keeps_pushed_sha(self):
         repo, bare = self.repo()
         self.call("git push origin main", repo)

@@ -536,7 +536,11 @@ def observe_pushes(transcript_path, state, budget):
                         if isinstance(output, list):
                             output = "\n".join(str(c.get("text") or "") for c in output
                                                if isinstance(c, dict))
-                        updates = push_updates(str(output))
+                        output = str(output)
+                        updates = push_updates(output)
+                        unchanged = set(re.findall(r"^=\t[^\t:]+:refs/heads/([^\t]+)\t",
+                                                  output, re.MULTILINE))
+                        all_unchanged = "Everything up-to-date" in output
                         expanded = []
                         for p in calls:
                             if not p.get("branch") and updates:
@@ -548,7 +552,8 @@ def observe_pushes(transcript_path, state, budget):
                             if block.get("is_error") is True and branch not in updates:
                                 # An error may still have updated some refs.
                                 continue
-                            if "Everything up-to-date" in str(output) and branch not in updates:
+                            if branch not in updates and (all_unchanged or branch in unchanged
+                                                          or (not branch and unchanged)):
                                 continue  # keep the existing obligation
                             if updates.get(branch):
                                 p["tip"] = updates[branch]
