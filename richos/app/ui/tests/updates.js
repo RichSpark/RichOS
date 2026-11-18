@@ -1575,6 +1575,53 @@ async function main() {
     return "Enter and a click each handed the opener " + CHANGELOG + "; " + out.join("; ");
   });
 
+  await run.check("Round 91 keeps checking in view when another Settings column is taller", async () => {
+    const page = await openApp(browser, "light");
+    try {
+      await settled(page);
+      await page.setViewportSize({ width: 1400, height: 864 });
+      await page.emulateMedia({ reducedMotion: "reduce" });
+      await openMenu(page);
+      // Optional settings can put the end of the middle column well below Updates.
+      await page.locator('[aria-labelledby="set-group-rich"]').evaluate((column) => {
+        column.style.minHeight = "1440px";
+      });
+
+      const target = { availableVersion: "0.1.2", downloadedBytes: 13631488 };
+      await setState(page, view({ ...target, state: "available", revision: 1 }), [
+        view({ ...target, state: "downloading", revision: 2, percent: 62 }),
+      ]);
+      await page.click("#update-install");
+      await settledAfterCommand(page, "update_install");
+      assertEqual(await page.evaluate(() => document.activeElement.id), "update-line");
+
+      async function assertInView(route) {
+        const bounds = await page.locator("#set-updates").evaluate((row) => {
+          const menu = row.closest("#set-menu");
+          return {
+            row: row.getBoundingClientRect().toJSON(),
+            top: menu.getBoundingClientRect().top + menu.clientTop,
+            bottom: menu.querySelector(".sm-foot").getBoundingClientRect().top,
+          };
+        });
+        assert(bounds.row.top >= bounds.top - 1 && bounds.row.bottom <= bounds.bottom + 1,
+          route + ": the full checking row fits above the sticky footer: " + JSON.stringify(bounds));
+      }
+
+      await setState(page, view({ ...target, state: "installing", revision: 3, phaseStartedAt: Date.now() }));
+      await assertInView("Settings left open after Download update");
+
+      await page.evaluate(() => window.RichSettings.close());
+      await page.click("#update-cue");
+      await awaitSettled(page);
+      await flushFrames(page);
+      await assertInView("Settings reopened from the checking pill");
+      return "the complete checking row stays above the sticky footer on both paths at 1400 × 864";
+    } finally {
+      await page.close();
+    }
+  });
+
   await run.check("Round 91 keeps the checking stage live and follows the native restart clock", async () => {
     const page = await openApp(browser);
     await settled(page);
