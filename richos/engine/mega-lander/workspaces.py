@@ -3559,9 +3559,16 @@ def _review_at_ended(repo_name, prefix):
     lock); else why it counts as ended. Lock first: a recheck of a tip that already has a verdict runs."""
     prefix = prefix.lower()
     ref = "%s@%s" % (repo_name, prefix)
-    watch = (os.environ.get("REVIEW_WATCH_STATE_DIR") or "").strip() or os.path.join(
-        (os.environ.get("CLAUDE_CONFIG_DIR") or "").strip() or os.path.join(os.path.expanduser("~"), ".claude"),
-        "state", "review-watch")
+    watch = (os.environ.get("REVIEW_WATCH_STATE_DIR") or "").strip()
+    app_state = (os.environ.get("RICHOS_APP_STATE") or "").strip()
+    if not watch and app_state:
+        review = _import_path("richos_app_review", os.path.join(
+            os.path.dirname(__file__), "..", "scripts", "lib", "app_review.py"))
+        watch = review.app_paths(app_state)["watch"]
+    if not watch:
+        watch = os.path.join(
+            (os.environ.get("CLAUDE_CONFIG_DIR") or "").strip() or os.path.join(os.path.expanduser("~"), ".claude"),
+            "state", "review-watch")
     quiet = None
     for path in sorted(glob.glob(os.path.join(watch, "locks", "*.lock"))):
         try:

@@ -8598,6 +8598,29 @@ class NoSilentHolds(Base):
         self.assertEqual(state, "due")
         self.assertIn("verdict", why)
 
+    def test_app_review_hold_uses_the_watchers_default_directory_and_matches_repo_and_tip(self):
+        app = os.path.join(self.env.home, "Library", "Application Support", "com.richos.app", "engine-state")
+        review = ws._import_path("fixture_app_review", os.path.join(ENGINE, "scripts", "lib", "app_review.py"))
+        path = os.path.join(review.app_paths(app)["watch"], "locks", "running.lock")
+        os.makedirs(os.path.dirname(path))
+        tip = "a" * 40
+        end = "review:%s@%s" % (os.path.basename(self.other), tip[:12])
+        ws.hold("after-app-review", "Work after review", end, "Waiting for review", self.sid)
+        with patch.dict(os.environ, {"RICHOS_APP_STATE": app, "REVIEW_WATCH_STATE_DIR": "",
+                                     "SECOND_REVIEW_STATE_DIR": review.app_paths(app)["reviews"]}):
+            for repo, sha, age, expected in (
+                (self.other, tip, 60, "pending"),
+                (self.entity, tip, 60, "due"),
+                (self.other, "b" * 40, 60, "due"),
+                (self.other, tip, ws.REVIEW_RUN_SECONDS + 60, "due"),
+            ):
+                with self.subTest(repo=repo, tip=sha, age=age):
+                    with open(path, "w") as lock:
+                        json.dump({"repo": repo, "tip": sha, "started_at": ws.now() - age}, lock)
+                    self.assertEqual(ws.hold_end_state(end)[0], expected)
+                    due = [item["name"] for item in ws.due_set(self.sid)]
+                    self.assertEqual("after-app-review" in due, expected == "due")
+
     def test_holds_review_by_rv_id_still_works_and_a_malformed_end_is_refused(self):
         led, _w = self._review_world()
         self.assertEqual(ws.hold_end_state("review:rv-20261106T083301Z-ed8bcf92-82b3")[0], "due")
