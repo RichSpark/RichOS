@@ -69,7 +69,11 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
-        guard capture == nil, !captureLaunch else { return false }
+        if let capture {
+            capture.revisitPermission()
+            return false
+        }
+        guard !captureLaunch else { return false }
         if viewer == nil { chooseImage() }
         else if !hasVisibleWindows { viewer?.show() }
         return true
