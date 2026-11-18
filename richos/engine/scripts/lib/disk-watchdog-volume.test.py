@@ -39,7 +39,7 @@ class Consumers(unittest.TestCase):
             and os.path.basename(path) in (".richos-nightly", "source", "app") else 1
 
     def test_the_subfolder_is_named_not_only_the_total(self):
-        with patch.object(wd, "du_kb", side_effect=lambda p: self.sizes(p) // 1024):
+        with patch.object(wd, "du_kb", side_effect=lambda p, **kw: self.sizes(p) // 1024):
             found = wd.volume_consumers(self.tmp, [self.root], 1024 * 1024)
         self.assertEqual([p for _b, p in found], [self.deep], found)
 
@@ -49,7 +49,7 @@ class Consumers(unittest.TestCase):
         nested = os.path.join(parent, "target")
         os.makedirs(nested)
         sizes = {parent: 100, nested: 10}
-        with patch.object(wd, "du_kb", side_effect=lambda p: sizes.get(p, 0) * 1024 * 1024):
+        with patch.object(wd, "du_kb", side_effect=lambda p, **kw: sizes.get(p, 0) * 1024 * 1024):
             found = wd.volume_consumers(self.tmp, [self.root], 1024 * 1024 * 1024 * 3 // 1024)
         self.assertEqual(sorted(b for b, _p in found), [10 * 1024 ** 3, 90 * 1024 ** 3], found)
 
@@ -60,6 +60,35 @@ class Consumers(unittest.TestCase):
     def test_a_refused_path_is_not_walked(self):
         with patch.object(wd, "du_kb", return_value=None):
             self.assertEqual(wd.volume_consumers(self.tmp, [self.root], 1024), [])
+
+    def test_a_slow_folder_gets_only_the_remaining_walk_budget(self):
+        # The first folder leaves a usable measurement. A slow second folder consumes the
+        # remainder of the budget and no subsequent folder is measured.
+        clock = [0]
+        calls = []
+        os.makedirs(os.path.join(self.root, "z-last"))
+
+        def measure(argv, *, timeout, **kwargs):
+            calls.append((argv[-1], timeout))
+            if len(calls) == 1:
+                clock[0] += 12
+                return subprocess.CompletedProcess(argv, 0, stdout="12\t%s\n" % argv[-1])
+            clock[0] += timeout
+            raise subprocess.TimeoutExpired(argv, timeout)
+
+        with patch.object(wd.time, "time", side_effect=lambda: clock[0]), \
+                patch.object(wd.time, "monotonic", side_effect=lambda: clock[0]), \
+                patch.object(wd.subprocess, "run", side_effect=measure):
+            found = wd.volume_consumers(self.tmp, [self.root], 1024, budget_s=60)
+        self.assertEqual(calls, [(os.path.join(self.root, ".richos-nightly"), 60),
+                                 (os.path.join(self.root, "small"), 48)])
+        self.assertEqual(clock[0], 60)
+        self.assertEqual(found, [(12 * 1024, os.path.join(self.root, ".richos-nightly"))])
+
+    def test_an_exhausted_budget_starts_no_measurement(self):
+        with patch.object(wd.subprocess, "run") as run:
+            self.assertEqual(wd.volume_consumers(self.tmp, [self.root], 1024, budget_s=0), [])
+        run.assert_not_called()
 
     def test_the_totals_come_from_our_folders_on_the_volume_never_its_mount(self):
         """A configured folder equal to the mount would hand the whole drive to one `du`; the

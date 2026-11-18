@@ -163,7 +163,7 @@ def volume_consumers(mount, roots, min_bytes, limit=8, max_depth=6, budget_s=480
     inside the data volume's walk, where it is /System/Volumes/Data/Users/<name>).
     Only called when a volume is under its floor, and bounded by `budget_s`.
     """
-    deadline = time.time() + budget_s
+    deadline = time.monotonic() + budget_s
     found = []
     walked = set()
 
@@ -171,33 +171,33 @@ def volume_consumers(mount, roots, min_bytes, limit=8, max_depth=6, budget_s=480
         try:
             names = sorted(os.listdir(path))
         except OSError:
-            return []
-        out = []
+            return
         for name in names:
+            if time.monotonic() >= deadline:
+                return
             child = os.path.join(path, name)
             if os.path.islink(child) or not os.path.isdir(child) or not on_volume(child, mount):
                 continue
             if foreign_app_data.normalized(child) in walked:
                 continue
-            out.append(child)
-        return out
+            yield child
 
     def walk(path, depth):
         """[(bytes, folder)] for the big folders found BELOW `path`, each counted once."""
+        if time.monotonic() >= deadline:
+            return []
         big, out = [], []
         for child in listing(path):
-            if time.time() > deadline:
-                break
             if foreign_app_data.entering(child):
                 if depth < max_depth and foreign_app_data.listable_holder(child):
                     out.extend(walk(child, depth + 1))
                 continue
-            kb = du_kb(child)
+            kb = du_kb(child, deadline=deadline)
             if kb is not None and kb * 1024 >= min_bytes:
                 big.append((kb * 1024, child))
         for size, child in big:
             sub = []
-            if depth < max_depth and time.time() <= deadline:
+            if depth < max_depth:
                 sub = walk(child, depth + 1)
             if not sub:
                 out.append((size, child))
@@ -209,6 +209,8 @@ def volume_consumers(mount, roots, min_bytes, limit=8, max_depth=6, budget_s=480
         return out
 
     for root in roots:
+        if time.monotonic() >= deadline:
+            break
         root = expand(root)
         if root and os.path.isdir(root) and on_volume(root, mount):
             found.extend(walk(root, 0))
@@ -320,7 +322,7 @@ def is_ours(path):
     return False
 
 
-def du_kb(path):
+def du_kb(path, *, deadline=None):
     """`du -skx path` in kilobytes, or None. THE ONLY PLACE THIS PROGRAM RUNS `du`.
 
     -x keeps each measurement on the volume it starts on: the internal disk's walk measures
@@ -333,8 +335,11 @@ def du_kb(path):
     Apple Music's cache and the CEO was asked whether RichOS may access Apple Music."""
     if foreign_app_data.entering(path):
         return None
+    timeout = 120 if deadline is None else min(120, deadline - time.monotonic())
+    if timeout <= 0:
+        return None
     try:
-        r = subprocess.run(["du", "-skx", path], capture_output=True, text=True, timeout=120)
+        r = subprocess.run(["du", "-skx", path], capture_output=True, text=True, timeout=timeout)
     except (OSError, subprocess.TimeoutExpired):
         return None
     first = (r.stdout or "").split("\n")[0].split("\t")
