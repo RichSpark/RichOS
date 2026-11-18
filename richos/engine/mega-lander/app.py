@@ -978,14 +978,14 @@ COMPLETED_UNRUN = "the assignment was completed and this receipt never ran"
 
 
 def abandoned(record, binding):
-    """A never-started receipt that cannot dispatch, or whose dispatch was refused.
+    """A never-started receipt that can be settled.
 
-    A prepared call remains dispatchable across turns of the same provider session.
-    Completion and replacement must keep it until it runs or is explicitly settled.
+    A prepared call remains dispatchable across turns of the same provider session,
+    even when Pierce refused it before spawn registration.
     """
     if not never_started(record):
         return False
-    if record.get("status") != "prepared" or record.get("pierce_refused") or any(
+    if record.get("status") != "prepared" or any(
             record["binding"].get(key) != binding.get(key) for key in ("entity_id", "thread_id", "session_id")):
         return True
     canonical = canonical_of(record)
@@ -2939,8 +2939,8 @@ def unresolved(rows, binding):
     """The receipts that still have, or may have, a run in flight. A receipt that provably
     never started one and can no longer start (`abandoned`) is not among them: it did no
     work, so nothing waits on it (2026-10-28, work-709b35ac: a review prepared and never
-    admitted held a reviewed, integrated job open). One prepared in this turn that nothing
-    refused is: it may be dispatched next."""
+    admitted held a reviewed, integrated job open). Work that is still prepared and
+    dispatchable in this session may be dispatched next, even after a Pierce refusal."""
     return [record for record in rows if record["status"] in UNRESOLVED and not abandoned(record, binding)]
 
 
