@@ -1,5 +1,6 @@
 import AppKit
 import ApplicationServices
+import Darwin
 import RichFilesCore
 
 final class GestureController {
@@ -35,6 +36,8 @@ final class GestureController {
     private var dockMinimized: [pid_t: AXUIElement] = [:]
     private var observers: [pid_t: AXObserver] = [:]
     private var appTermination: NSObjectProtocol?
+    private var accessibilityChanges: NSObjectProtocol?
+    private var recheckingPermissions = false
 
     init() {
         AXUIElementSetMessagingTimeout(system, 0.08)
@@ -44,9 +47,23 @@ final class GestureController {
             guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
             self?.forget(process: app.processIdentifier)
         }
+        // HIServices can hold its trust verdict for the lifetime of a process.
+        // A privacy change must invalidate the tap before we use that verdict again.
+        accessibilityChanges = DistributedNotificationCenter.default().addObserver(
+            forName: Notification.Name("com.apple.accessibility.api"), object: nil, queue: .main
+        ) { [weak self] _ in self?.recheckPermissions() }
+        CFNotificationCenterAddObserver(
+            CFNotificationCenterGetDarwinNotifyCenter(), Unmanaged.passUnretained(self).toOpaque(),
+            { _, observer, _, _, _ in
+                guard let observer else { return }
+                let controller = Unmanaged<GestureController>.fromOpaque(observer).takeUnretainedValue()
+                DispatchQueue.main.async { controller.recheckPermissions() }
+            }, "com.apple.tcc.access.changed" as CFString, nil, .deliverImmediately
+        )
     }
 
     func refresh() {
+        guard !recheckingPermissions else { return }
         let previous = selection
         selection = Preferences.selection
         if !selection.contains(.titleBar) && previous.contains(.titleBar) { maximized.removeAll() }
@@ -64,6 +81,23 @@ final class GestureController {
             reportedStatus = status
             Preferences.publish(status)
             record(.windowGestureAvailability, status == .running || status == .off ? .complete : .unavailable)
+        }
+    }
+
+    private func recheckPermissions() {
+        guard !Preferences.selection.isEmpty, !recheckingPermissions else { return }
+        recheckingPermissions = true
+        stopTap()
+        // Coalesce the two notifications and allow the privacy change to settle.
+        // exec keeps the launchd job while replacing its cached trust state.
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(150)) { [weak self] in
+            if let executable = Bundle.main.executableURL?.path, let argument = strdup(executable) {
+                var arguments: [UnsafeMutablePointer<CChar>?] = [argument, nil]
+                execv(executable, &arguments)
+                free(argument)
+            }
+            Preferences.publish(.inputUnavailable)
+            self?.record(.windowGestureAvailability, .unavailable)
         }
     }
 
