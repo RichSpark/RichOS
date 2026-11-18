@@ -593,7 +593,7 @@ def _epoch(stamp):
 # 2. FROM A PUSH TO A COMMIT AND A REPOSITORY SLUG
 # ---------------------------------------------------------------------------
 # The push reflog distinguishes our update from a later fetch. Once resolved,
-# the ledger retains the SHA rather than rereading a mutable tracking ref.
+# the ledger retains the remote branch and SHA independently of the checkout.
 
 def repo_facts(directory, remote, budget, cache):
     """(repo_root, slug, error) for a directory. Cached per turn."""
@@ -1032,25 +1032,97 @@ def evaluate(payload, budget):
         state.pop("transcript", None)
         state["push_schema"] = 2
 
-    seen, cannot = observe_pushes(str(payload.get("transcript_path") or ""), state, budget)
-
-    # The LATEST push wins, per (repository, branch). Push a fix and the broken
-    # commit is superseded with no ceremony: this is clause 4 of the predicate.
+    transcript = str(payload.get("transcript_path") or "")
     pushes = state.setdefault("pushes", {})
-    for p in seen:
-        key = "%s\t%s\t%s" % (os.path.normpath(p["dir"]), p.get("remote") or "origin",
-                              p.get("branch") or "")
-        prev = pushes.get(key) or {}
-        if float(p.get("at") or 0) >= float(prev.get("at") or 0):
-            pushes[key] = dict(p)
+    notices, unreadable = [], []
+    facts_cache = {}
+    said = state.setdefault("announced_permanent", [])
 
-    notices = []
-    if cannot and not pushes and pause_for(payload.get("cwd") or os.getcwd()):
+    def permanent(key, sentence):
+        # A push whose identity cannot be recovered gets one notice.
+        pushes.pop(key, None)
+        if sentence not in said:
+            said.append(sentence)
+            del said[:-40]
+            unreadable.append(sentence)
+
+    def push_order(push):
+        return (float(push.get("completed_at") or push.get("at") or 0),
+                float(push.get("at") or 0),
+                int(push.get("order") or 0))
+
+    def refresh():
+        seen, cannot = observe_pushes(transcript, state, budget)
+        for push in seen:
+            order = state["push_order"] = int(state.get("push_order") or 0) + 1
+            pushes["pending\t%d" % order] = dict(push, order=order)
+
+        for key, push in list(pushes.items()):
+            slug, branch, sha = (push.get(field) for field in ("slug", "branch", "sha"))
+            if not (slug and branch and sha):
+                if budget.left() <= 0.05:  # run() needs this much time to start
+                    continue
+                remote = push.get("remote") or "origin"
+                root, slug, err = repo_facts(push["dir"], remote, budget, facts_cache)
+                if slug and pause_for(slug):
+                    continue
+                if err:
+                    context = os.path.basename(push["dir"] or "?")
+                else:
+                    branch = branch or current_branch(root, budget)
+                    context = slug
+                    if branch is None:
+                        err = TRANSIENT + "the pushed branch could not be read inside the budget"
+                    elif not branch:
+                        err = "the branch that was pushed could not be determined"
+                    elif not sha:
+                        interval = ([push["at"], push["completed_at"], push.get("tip")]
+                                    if "completed_at" in push else [])
+                        sha, err = head_of(root, remote, branch, budget, *interval)
+                    push.update(root=root, slug=slug, branch=branch)
+                if err:
+                    if err.startswith(TRANSIENT):
+                        unreadable.append("%s: %s" % (context, err[len(TRANSIENT):]))
+                    else:
+                        permanent(key, "%s: %s" % (context, err))
+                    continue
+                push["sha"] = sha
+
+            # Resolve before rotating. Once a newer push is proven, the old
+            # SHA must never return to the queue, even after a slow CI read.
+            target = "%s\t%s" % (slug.lower(), branch)
+            if key != target:
+                pushes.pop(key)
+                previous = pushes.get(target)
+                if previous is None or push_order(push) >= push_order(previous):
+                    pushes[target] = push
+        return cannot
+
+    def caught_up():
+        try:
+            offset = state.get("transcript", {}).get("offset", 0)
+            return not transcript or os.path.getsize(transcript) == offset
+        except OSError:
+            return True  # A known obligation can still be checked without its transcript.
+
+    def current(push):
+        # An unresolved newer push might supersede this SHA. Keep both until
+        # proof of the update arrives. Other branches can still be checked.
+        for other in pushes.values():
+            if other.get("slug") and other.get("branch") and other.get("sha"):
+                continue
+            if other.get("branch") and other["branch"] != push["branch"]:
+                continue
+            if other.get("slug") and other["slug"].lower() != push["slug"].lower():
+                continue
+            if push_order(other) > push_order(push):
+                return False
+        return True
+
+    cannot = refresh()
+    if cannot and not pushes and not unreadable and pause_for(payload.get("cwd") or os.getcwd()):
         return 0, "", ""
-    if cannot and not pushes:
-        # Nothing to judge AND no way to look. Say so once per session: a turn
-        # that ended without this check having run must not look like a turn
-        # that ran it and found nothing.
+    if cannot and not pushes and not unreadable:
         if state.get("announced_blind") != cannot:
             state["announced_blind"] = cannot
             notices.append("THE CI TURN GATE COULD NOT LOOK: %s. The turn is not held — it has "
@@ -1058,102 +1130,42 @@ def evaluate(payload, budget):
         save_state(session, state)
         return 0, render_notice(notices), ""
 
-    findings, running, unreadable = [], [], []
-    facts_cache = {}
-    # Rotate only targets actually attempted with time left. Unknown is an
-    # attempt too; it keeps its obligation but must not monopolise later turns.
-    targets = sorted(pushes.items(), key=lambda kv: (float((kv[1] or {}).get("checked_at") or 0),
-                                                     -float((kv[1] or {}).get("at") or 0)))[:MAX_TARGETS]
-    _now = time.time()
-    judged = set()
-
-    # AN ANSWER THAT CAN NEVER ARRIVE IS NOT A FINDING TO REPEAT.
-    #
-    # Measured over this project's own transcripts (2026-09-13): one session
-    # pushed a shared branch from SIX scratchpad worktrees that have since been
-    # removed before their identities were known. The directory is gone, so
-    # there is no remote to read a slug from and no ref to read a commit from.
-    # A gate that reported all six every turn for the rest of the
-    # session would teach its reader to skip its output, which is the failure
-    # mode this whole guard exists to correct. So a PERMANENTLY unjudgeable
-    # target is announced ONCE and dropped from the ledger. A TRANSIENT one (a
-    # network failure, an exhausted budget) is kept and re-read, because there
-    # the answer really may arrive next turn.
-    said = state.setdefault("announced_permanent", [])
-
-    def permanent(key, sentence):
-        pushes.pop(key, None)
-        if sentence not in said:
-            said.append(sentence)
-            del said[:-40]
-            unreadable.append(sentence)
-
-    for key, push in targets:
-        if budget.left() <= 0.05:  # run() cannot start a lookup below this floor
+    # A completed CI read may be about a SHA superseded while it was in flight.
+    # Ingest new push results before judging any of the reads from this turn.
+    reads = {}
+    while len(reads) < MAX_TARGETS and budget.left() > 0.05 and caught_up():
+        eligible = ((key, push) for key, push in pushes.items()
+                    if push.get("slug") and push.get("branch") and push.get("sha")
+                    and (key, push["sha"]) not in reads and current(push)
+                    and not pause_for(push["slug"]))
+        target = min(eligible, key=lambda kv: (float(kv[1].get("checked_at") or 0),
+                                               -push_order(kv[1])[0]), default=None)
+        if target is None:
             break
+        key, push = target
+        # Rotate actual attempts, including unreadable CI, so one slow
+        # destination cannot monopolize the next turn's budget.
         push["checked_at"] = time.time()
-        remote = push.get("remote") or "origin"
-        if push.get("slug") and push.get("sha"):
-            root, slug, err = push["root"], push["slug"], ""
-        else:
-            root, slug, err = repo_facts(push["dir"], remote, budget, facts_cache)
-        if slug and pause_for(slug):
-            # Keep the push history for restoration; do not read CI or demand an ack.
-            push["checked_at"] = _now
-            continue
-        if err.startswith(TRANSIENT):
-            unreadable.append("%s: %s" % (os.path.basename(push["dir"] or "?"), err[len(TRANSIENT):]))
-            continue
-        if err:
-            permanent(key, "%s: %s" % (os.path.basename(push["dir"] or "?"), err))
-            continue
-        branch = push.get("branch") or current_branch(root, budget)
-        if branch is None:
-            # Out of time, not unknowable: keep the push and read it next turn.
-            unreadable.append("%s: the pushed branch could not be read inside the budget" % slug)
-            continue
-        if not branch:
-            permanent(key, "%s: the branch that was pushed could not be determined" % slug)
-            continue
-        if (slug, branch) in judged:
-            push["checked_at"] = _now
-            continue
-        judged.add((slug, branch))
-        sha, err = push.get("sha"), ""
-        if not sha:
-            interval = ([push["at"], push["completed_at"], push.get("tip")]
-                        if "completed_at" in push else [])
-            sha, err = head_of(root, remote, branch, budget, *interval)
-        if err.startswith(TRANSIENT):
-            judged.discard((slug, branch))
-            unreadable.append("%s: %s" % (slug, err[len(TRANSIENT):]))
-            continue
-        if err:
-            permanent(key, "%s: %s" % (slug, err))
-            continue
-        push.update(root=root, slug=slug, branch=branch, sha=sha)
-        doc = verdict_for(slug, sha, budget)
-        item = {"slug": slug, "root": root, "remote": remote, "branch": branch,
-                "sha": sha, "at": push.get("at"), "doc": doc}
-        st = doc.get("state")
-        if st != "unknown":
-            push["checked_at"] = _now
-        if st == "red":
-            findings.append(item)
-        elif st == "running":
-            running.append(item)
-        elif st == "none":
-            # ZERO OBSERVED RUNS IS NEVER "RUNNING" — silent, exactly like a
-            # green commit falls through this chain with no branch of its own.
-            # This covers a repository with no workflows at all (richos-hq),
-            # a workflow GitHub has not yet indexed the run for, and CI paused
-            # by any other means: none of those are "in flight", so none of
-            # them are announced as if they were. See the note above
-            # RED_RECHECK_SECONDS-adjacent constants for why this is safe to
-            # do silently: "none" is re-read live on every turn-end.
-            pass
-        elif st == "unknown":
-            unreadable.append("%s at %s: %s" % (slug, sha[:12], doc.get("reason") or "no reason given"))
+        reads[key, push["sha"]] = verdict_for(push["slug"], push["sha"], budget)
+        if not caught_up():
+            refresh()
+
+    findings, running = [], []
+    if not caught_up():
+        unreadable.append("the latest push results in the session transcript")
+    else:
+        for (key, sha), doc in reads.items():
+            push = pushes[key]
+            if push["sha"] != sha or not current(push):
+                continue
+            item = dict(push, doc=doc)
+            if doc.get("state") == "red":
+                findings.append(item)
+            elif doc.get("state") == "running":
+                running.append(item)
+            elif doc.get("state") == "unknown":
+                unreadable.append("%s at %s: %s" % (push["slug"], push["sha"][:12],
+                                                  doc.get("reason") or "no reason given"))
 
     # --- the hatch ---------------------------------------------------------
     acked, rejected = [], []
