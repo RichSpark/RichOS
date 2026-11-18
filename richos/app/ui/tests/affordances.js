@@ -611,6 +611,24 @@ const FIXTURES = {
     });
     await page.click("#set-btn");
     await page.click("#set-richglance-capture-open");
+    const panel = page.locator("#richglance-capture-settings .dict-panel");
+    const inset = await panel.evaluate(node => {
+      const header = node.querySelector(".dict-heading");
+      const card = node.querySelector(".dict-card").getBoundingClientRect();
+      const frame = node.getBoundingClientRect();
+      const title = header.firstElementChild.getBoundingClientRect();
+      const close = header.querySelector("button").getBoundingClientRect();
+      return { bodyLeft: card.left - frame.left, headerLeft: title.left - frame.left,
+        bodyRight: frame.right - card.right, headerRight: frame.right - close.right };
+    });
+    assert(inset.bodyLeft >= 24 && Math.abs(inset.bodyLeft - inset.headerLeft) <= 1 &&
+      Math.abs(inset.bodyRight - inset.headerRight) <= 1, "RichGlance body aligns with its header: " + JSON.stringify(inset));
+    await page.locator("#richglance-capture-record").focus();
+    await page.keyboard.press("Tab");
+    assert(await panel.locator(".dict-close").evaluate(node => node === document.activeElement),
+      "Tab stays in the RichGlance sheet");
+    await page.keyboard.press("Shift+Tab");
+    assertEqual(await page.evaluate(() => document.activeElement.id), "richglance-capture-record");
     await page.click("#richglance-capture-on");
     await page.waitForFunction(() => document.getElementById("richglance-capture-feedback").textContent
       .includes("That shortcut is unavailable."));
