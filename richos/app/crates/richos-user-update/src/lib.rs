@@ -721,6 +721,12 @@ pub enum RollbackTarget {
     NotOlder(String),
 }
 fn read_document<T: serde::de::DeserializeOwned>(path: &Path) -> io::Result<T> {
+    read_document_with_metadata(path).map(|(document, _)| document)
+}
+
+fn read_document_with_metadata<T: serde::de::DeserializeOwned>(
+    path: &Path,
+) -> io::Result<(T, fs::Metadata)> {
     let mut f = OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NOFOLLOW)
@@ -736,7 +742,8 @@ fn read_document<T: serde::de::DeserializeOwned>(path: &Path) -> io::Result<T> {
     }
     let mut bytes = Vec::new();
     f.read_to_end(&mut bytes)?;
-    serde_json::from_slice(&bytes).map_err(|e| refuse(e.to_string()))
+    let document = serde_json::from_slice(&bytes).map_err(|e| refuse(e.to_string()))?;
+    Ok((document, m))
 }
 fn read_json(path: &Path) -> io::Result<Published> {
     let p: Published = read_document(path)?;
@@ -2007,12 +2014,25 @@ pub fn staged(home: &Path) -> io::Result<Option<Staged>> {
 /// What the last activation did, for the boot line and the update surface. `None` before
 /// this installation has ever activated anything (a hand-installed first copy).
 pub fn last_activation(home: &Path) -> io::Result<Option<Activation>> {
+    Ok(read_last_activation(home)?.map(|(activation, _)| activation))
+}
+
+/// The receipt identity for a one-time notice. Reinstalling the same release after
+/// rolling back writes a new receipt even when the archive and versions are identical.
+pub fn last_activation_with_id(home: &Path) -> io::Result<Option<(Activation, String)>> {
+    Ok(read_last_activation(home)?.map(|(activation, meta)| {
+        let id = format!("{}:{}:{}", meta.ino(), meta.mtime(), meta.mtime_nsec());
+        (activation, id)
+    }))
+}
+
+fn read_last_activation(home: &Path) -> io::Result<Option<(Activation, fs::Metadata)>> {
     let root = root(home)?;
     let _lock = Lock::acquire(&root)?;
-    match read_document::<Activation>(&root.join("last-activation.json")) {
-        Ok(a) => {
+    match read_document_with_metadata::<Activation>(&root.join("last-activation.json")) {
+        Ok((a, meta)) => {
             a.entered.valid()?;
-            Ok(Some(a))
+            Ok(Some((a, meta)))
         }
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(e),
@@ -3600,14 +3620,20 @@ released lease, so the next session refused to activate over a session that had 
         let t = home();
         let h = canonical(&t);
         install_verified(&h, &archive("1.0.0", |_| {}), "1.0.0").unwrap();
-        let first = last_activation(&h).unwrap().unwrap();
+        let (first, first_id) = last_activation_with_id(&h).unwrap().unwrap();
         assert!(!first.rollback);
         assert_eq!(first.left, None, "nothing was installed before the first");
         install_verified(&h, &archive("2.0.0", |_| {}), "2.0.0").unwrap();
-        let second = last_activation(&h).unwrap().unwrap();
+        let (second, second_id) = last_activation_with_id(&h).unwrap().unwrap();
         assert!(!second.rollback);
         assert_eq!(second.left.as_deref(), Some("1.0.0"));
         assert_eq!(second.entered.version, "2.0.0");
+        assert_ne!(first_id, second_id, "each publication has its own notice");
+        assert_eq!(
+            second_id,
+            last_activation_with_id(&h).unwrap().unwrap().1,
+            "reading an existing receipt on another launch leaves its identity alone",
+        );
     }
 
     #[cfg(target_os = "macos")]

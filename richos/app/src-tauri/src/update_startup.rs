@@ -21,6 +21,8 @@ pub struct LaunchReport {
     pub handover: Option<String>,
     /// Whether this launch put a prepared update in place before its window.
     pub activated: bool,
+    /// Identity of the completed forward update this window is running, if any.
+    pub update_arrival: Option<String>,
 }
 static REPORT: std::sync::Mutex<Option<LaunchReport>> = std::sync::Mutex::new(None);
 
@@ -144,8 +146,19 @@ pub fn prepare(compiled_version: &str) -> Result<Option<StartupLease>, String> {
     // between here and the redirect can change the record: only an activation writes it, an
     // activation needs the exclusive session lease, and this process holds that lease (or
     // its shared side, which excludes every other activation) until it exits.
-    let last_activation = richos_user_update::last_activation(&home).ok().flatten();
+    let last_activation = richos_user_update::last_activation_with_id(&home).ok().flatten();
+    let mut update_arrival = None;
     let result = wait_for_lock(|| richos_user_update::with_preferred(&home, |publication| {
+        if let Some((activation, id)) = &last_activation {
+            if !activation.rollback && activation.left.is_some()
+                && activation.entered.archive_sha256 == publication.archive_sha256
+                && activation.entered.version == compiled_version
+                && publication.version == compiled_version
+                && bundle == home.join("Applications/RichOS.app")
+            {
+                update_arrival = Some(id.clone());
+            }
+        }
         if redirected {
             if exe.canonicalize()? != publication.executable(&home).canonicalize()?
                 || publication.version != compiled_version
@@ -164,7 +177,7 @@ pub fn prepare(compiled_version: &str) -> Result<Option<StartupLease>, String> {
         // refuses to start with a sentence about a downgrade nobody attempted.
         let rolled_back_here = last_activation
             .as_ref()
-            .is_some_and(|a| a.rollback && a.entered.version == publication.version);
+            .is_some_and(|(a, _)| a.rollback && a.entered.version == publication.version);
         if loaded_bundle_changed && !newer && publication.version != compiled_version && !rolled_back_here {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "Changed application cannot redirect to an older release"));
         }
@@ -200,6 +213,7 @@ pub fn prepare(compiled_version: &str) -> Result<Option<StartupLease>, String> {
             bundle_check: richos_user_update::last_bundle_check().map(|check| check.describe()),
             handover: redirected.then(|| handed_over_said.unwrap_or_default()),
             activated,
+            update_arrival,
         });
     }
     wait_for_lock(|| lease.begin_session()).map_err(|e| e.to_string())?;

@@ -24,9 +24,9 @@
 // was, until that ruling, the whole surface — and it lives inside a menu, so a waiting update
 // reached only a CEO who happened to open one. His words: *"the user can't be bothered to
 // hunt for some update button somewhere."* So there is now a CUE — see the block above
-// `cue()` for the whole reasoning — a single small element that APPEARS beside the universal
-// settings button when, and only when, something is waiting, and is absent from the document
-// entirely the rest of the time. It announces and leads; the row still decides.
+// `cue()` for the placement — a small element beside the universal settings button for an
+// available update, an active update or a prepared update. It opens the row, which still owns
+// the update actions.
 //
 // WHERE THE ROW LIVES, AND WHY NOT IN THE RAIL'S PREFERENCES POPOVER. It renders into a row of
 // the UNIVERSAL settings menu — the button §15 says is "ALWAYS EVERYWHERE ON EVERY PAGE" —
@@ -99,6 +99,12 @@ window.RichUpdates = (function () {
   var host = null; // the container `settings-button.js` hands us, or null before first paint
   var nodes = null; // refs into that container
   var view = null; // the last UpdateView we were given
+  var phaseOrigin = 0;
+  var checkingTimer = null;
+  var restartFrame = null;
+  var restart = null;
+  var arrivalShown = null;
+  var arrivalWait = null;
 
   // AN ACT IS IN FLIGHT — a check, an install, a restart. NOT a read.
   //
@@ -178,7 +184,9 @@ window.RichUpdates = (function () {
     "RichOS will restart into this update as soon as that work is done. Nothing will be interrupted.";
   var RESTART_IN_A_MOMENT = "Nothing is running, so RichOS will restart into it in a moment.";
   var RESTARTING_SUB =
-    "Nothing is running, so RichOS is restarting to finish the update. Your window and conversation will be right where you left them.";
+    "Nothing for you to do. Your window and conversation will be right where you left them.";
+  var CHECKING_SUB = "RichOS is confirming this update was signed by us.";
+  var CHECKING_LONG = "Still working. A larger update takes a little longer to check.";
 
   /// The clauses the work gate adds, joined to whatever the state already said.
   ///
@@ -276,7 +284,7 @@ window.RichUpdates = (function () {
             : "Checking and preparing the update…",
           sub: back
             ? "RichOS is confirming this earlier version was signed by us before preparing it for the next launch."
-            : "RichOS is confirming this update was signed by us before preparing it for the next launch.",
+            : CHECKING_SUB,
         };
       case "ready":
         return {
@@ -303,7 +311,7 @@ window.RichUpdates = (function () {
         // The one short notice before the relaunch. Seconds long, and the window comes back
         // on the same conversation.
         return {
-          headline: "Restarting into RichOS " + v.availableVersion + "…",
+          headline: "Restarting into RichOS " + v.availableVersion,
           sub: RESTARTING_SUB,
         };
       case "failed":
@@ -343,9 +351,9 @@ window.RichUpdates = (function () {
   /// span's text is still laid out at full width from the arrow onward, invisible but ~200px
   /// long, and where the link ends near its column's edge it ran past the column
   /// (`tests/rich-model.js` check 6, "nothing in Settings leaves its place").
-  function changelogLink() {
+  function changelogLink(id) {
     var a = el("a", "update-notes", {
-      id: "update-notes",
+      id: id,
       href: "https://" + CHANGELOG_KEY,
       target: "_blank",
       rel: "noopener noreferrer",
@@ -394,7 +402,7 @@ window.RichUpdates = (function () {
     var title = el("p", "set-name update-title");
     title.textContent = "Updates";
 
-    var line = el("p", "update-line", { id: "update-line", role: "status", "aria-live": "polite" });
+    var line = el("p", "update-line", { id: "update-line", role: "status", "aria-live": "polite", tabindex: "-1" });
     var sub = el("p", "update-sub", { id: "update-sub" });
 
     var progress = el("div", "update-progress", {
@@ -407,6 +415,16 @@ window.RichUpdates = (function () {
     progress.hidden = true;
     var fill = el("div", "update-progress-fill", { id: "update-progress-fill" });
     progress.appendChild(fill);
+
+    var checking = el("div", "update-checking");
+    checking.hidden = true;
+    var steps = updateSteps(false);
+    var hands = el("p", "update-hands");
+    hands.append(
+      glyph(GLYPH.ready),
+      document.createTextNode("Nothing for you to do. RichOS restarts by itself.")
+    );
+    checking.append(steps.list, hands);
 
     var actions = el("div", "update-actions");
     var check = el("button", "update-btn", { id: "update-check", type: "button" });
@@ -425,7 +443,7 @@ window.RichUpdates = (function () {
     actions.appendChild(back);
     // LAST on the line: in round 34's state (up to date) that is right after Check for updates,
     // as drawn; where Download update or Go back show, the row's own action keeps the lead.
-    actions.appendChild(changelogLink());
+    actions.appendChild(changelogLink("update-notes"));
 
     var why = el("button", "update-why", {
       id: "update-why",
@@ -444,6 +462,7 @@ window.RichUpdates = (function () {
     container.appendChild(line);
     container.appendChild(sub);
     container.appendChild(progress);
+    container.appendChild(checking);
     container.appendChild(actions);
     container.appendChild(why);
     container.appendChild(detail);
@@ -453,6 +472,7 @@ window.RichUpdates = (function () {
       call("update_check");
     });
     install.addEventListener("click", function () {
+      line.focus({ preventScroll: true });
       call("update_install");
     });
     back.addEventListener("click", function () {
@@ -471,6 +491,10 @@ window.RichUpdates = (function () {
       sub: sub,
       progress: progress,
       fill: fill,
+      checking: checking,
+      downloaded: steps.downloaded,
+      elapsed: steps.elapsed,
+      actions: actions,
       check: check,
       install: install,
       back: back,
@@ -478,6 +502,56 @@ window.RichUpdates = (function () {
       detail: detail,
       endpoint: endpoint,
     };
+  }
+
+  function updateSteps(restarting) {
+    var list = el("ol", "update-steps", { role: "list", "aria-label": "Update progress" });
+    function step(name, meta, state) {
+      var attrs = { "data-step": state };
+      if (state === "current") attrs["aria-current"] = "step";
+      var item = el("li", "update-step", attrs);
+      var icon = el("span", "update-step-icon", { "aria-hidden": "true" });
+      if (state !== "current") icon.appendChild(glyph(state === "done" ? GLYPH.ready : GLYPH.restarting));
+      var label = el("span", "update-step-name");
+      label.textContent = name;
+      var detail = el("span", "update-step-detail");
+      detail.textContent = meta;
+      item.append(icon, label, detail);
+      list.appendChild(item);
+      return detail;
+    }
+    var downloaded = step("Downloaded", "", "done");
+    var elapsed = restarting
+      ? step("Checked", "signed by us", "done")
+      : step("Checking", "", "current");
+    if (!restarting) elapsed.setAttribute("aria-hidden", "true");
+    step("Restarting", restarting ? "now" : "by itself", restarting ? "current" : "waiting");
+    return { list: list, downloaded: downloaded, elapsed: elapsed };
+  }
+
+  function say(node, text) {
+    if (node.textContent !== text) node.textContent = text;
+  }
+
+  function isPreparing(v) {
+    return v.state === "installing" && !v.readyIsRollback;
+  }
+
+  function elapsedClock(ms) {
+    var seconds = Math.floor(ms / 1000);
+    return Math.floor(seconds / 60) + ":" + String(seconds % 60).padStart(2, "0");
+  }
+
+  function tickChecking() {
+    if (!view || !isPreparing(view)) return;
+    var elapsed = Math.max(0, performance.now() - phaseOrigin);
+    if (nodes) {
+      say(nodes.elapsed, elapsedClock(elapsed));
+      say(nodes.sub, elapsed >= 8000 ? CHECKING_LONG : CHECKING_SUB);
+    }
+    cue(view, elapsed);
+    clearTimeout(checkingTimer);
+    checkingTimer = setTimeout(tickChecking, 1000 - (elapsed % 1000));
   }
 
   function paint() {
@@ -499,11 +573,21 @@ window.RichUpdates = (function () {
       nodes.container.removeAttribute("data-update-failure");
     }
 
-    nodes.line.textContent = s.headline;
-    nodes.sub.textContent = s.sub;
+    say(nodes.line, s.headline);
+    var preparing = isPreparing(v);
+    var elapsed = Math.max(0, performance.now() - phaseOrigin);
+    say(nodes.sub, preparing && elapsed >= 8000 ? CHECKING_LONG : s.sub);
     nodes.sub.hidden = !s.sub;
 
-    var downloading = v.state === "downloading" || v.state === "installing";
+    nodes.container.toggleAttribute("data-update-live", preparing);
+    nodes.actions.hidden = preparing;
+    nodes.checking.hidden = !preparing;
+    if (preparing) {
+      say(nodes.downloaded, bytes(v.downloadedBytes));
+      say(nodes.elapsed, elapsedClock(elapsed));
+    }
+
+    var downloading = v.state === "downloading" || (v.state === "installing" && v.readyIsRollback);
     nodes.progress.hidden = !downloading;
     if (downloading) {
       var pct = typeof v.percent === "number" ? Math.max(0, Math.min(100, v.percent)) : null;
@@ -520,10 +604,10 @@ window.RichUpdates = (function () {
       }
     }
 
-    var canAct = !busy && v.state !== "checking" && !downloading;
+    var canAct = !busy && v.state !== "checking" && !downloading && !preparing;
     // "Check" disappears where it would be the wrong thing to press: with an update waiting
     // or installed, the next act is not another check.
-    nodes.check.hidden = v.state === "available" || v.state === "ready" || v.state === "restarting";
+    nodes.check.hidden = preparing || v.state === "available" || v.state === "ready" || v.state === "restarting";
     nodes.check.disabled = !canAct || v.state === "unconfigured";
     nodes.check.textContent = v.state === "failed" && !isSignature(v) ? "Try again" : "Check for updates";
 
@@ -586,7 +670,7 @@ window.RichUpdates = (function () {
     }
 
     marker(v);
-    cue(v);
+    cue(v, elapsed);
     waitingCue(v);
     // LAST, because it reads what everything above just decided: whether there is a control,
     // whether it is offered, and whether pressing it would do anything.
@@ -613,7 +697,7 @@ window.RichUpdates = (function () {
       ? ""
       : v.state === "available"
         ? "available"
-        : v.state === "ready" || v.state === "restarting"
+        : v.state === "ready"
           ? "ready"
           : "";
     var dot = btn.querySelector(".update-mark");
@@ -660,31 +744,8 @@ window.RichUpdates = (function () {
   // forbids — and the rail's default width is 300px, which cannot hold a label that names a
   // version without truncating it.
   //
-  // THIS FILE DOES NOT FORK THE FLOW. The cue carries no state of its own, issues no command,
-  // and writes no sentence: its label is `sentences(v).headline`, the SAME string the row
-  // renders, so the two can never disagree. Pressing it opens the menu the row lives in and
-  // puts the hand on the row's own control. Everything that decides anything — the install,
-  // the restart, the refused signature that is never offered a retry — stays in the row.
-  //
-  // WHICH STATES, AND WHY NOT THE OTHERS. Exactly `available` and `ready`: the two states
-  // where something is waiting on the CEO, which is the same pair `marker()` has always used
-  // and is therefore one rule rather than two that agree most of the time.
-  //   * `downloading` / `installing` — the operation is under way and nothing is waiting on
-  //     him. It can only have been started from the row, which is open in front of him and
-  //     which owns the progress bar. A second progress readout in the chrome would be the
-  //     fork this file exists not to make.
-  //   * `failed` — deliberately NOT announced here, and this is the one gap worth naming
-  //     rather than hiding. The failure headlines `updates.rs` writes are whole sentences
-  //     ("This download was not signed by RichOS, so it was not installed."); a pill wide
-  //     enough to carry one is a banner, and §26 asks for the opposite of a banner. A failure
-  //     is still stated in full in the row, exactly as it was before this cue existed, so
-  //     nothing regressed — but a failure that happens with the menu shut is still quiet, and
-  //     what failure should look like in chrome is one of the things the CEO's reference does
-  //     not answer.
-  //
-  // MODE 1 (install with no click at all) IS NOT PRESUPPOSED ANYWHERE HERE. §26 makes it the
-  // default and the CEO ruled on 2026-09-04 that hands-free updating waits for a design
-  // session of its own. The cue announces and leads; it never starts anything.
+  // The cue opens the Updates row. During the download and checking it follows the
+  // same UpdateView as the row and stands in for it when the menu is closed.
 
   var SVG_NS = "http://www.w3.org/2000/svg";
 
@@ -718,20 +779,14 @@ window.RichUpdates = (function () {
     restarting: ["M19.5 12a7.5 7.5 0 1 1-2.2-5.3", "M19.5 4.5v4.2h-4.2"],
   };
 
-  function cue(v) {
+  function cue(v, elapsed) {
     var host = document.getElementById("settings");
     if (!host) return;
     var node = document.getElementById("update-cue");
-    // The pill LEADS TO A CONTROL — pressing it opens the menu and puts the hand on the
-    // row's own button. With the control removed there is nothing to lead to, so the pill is
-    // removed as well rather than leading somewhere empty. `waitingCue` takes its place in
-    // the same chrome, saying the same fact with nothing to press.
-    //
-    // `restarting` is here too: it is the short notice before the relaunch (CEO feedback
-    // 2026-10-06, item 1), and the pill is where he sees it with the menu shut. Its label is
-    // the row's own headline, so the two say the same thing.
-    var want =
-      v && ((!v.busy && (v.state === "available" || v.state === "ready")) || v.state === "restarting")
+    var live = v && !v.readyIsRollback && (v.state === "downloading" || isPreparing(v));
+    var want = live
+      ? "live"
+      : v && !v.busy && (v.state === "available" || v.state === "ready")
         ? v.state
         : "";
 
@@ -756,31 +811,33 @@ window.RichUpdates = (function () {
 
     if (node.getAttribute("data-update-cue") !== want) {
       node.textContent = "";
-      node.appendChild(glyph(GLYPH[want]));
+      node.appendChild(glyph(GLYPH[live ? "restarting" : want]));
       node.appendChild(el("span", "update-cue-label", { id: "update-cue-label" }));
       node.setAttribute("data-update-cue", want);
     }
-    // The ROW's own sentence, not a second one. "RichOS 0.1.2 is available." — the version is
-    // named, which is the one place this is deliberately better than the reference, whose
-    // button says only "Update" and never says which.
-    var said =
-      want === "ready"
-        ? v.readyIsRollback
-          ? "RichOS will go back to " + v.availableVersion + "."
-          : "RichOS " + v.availableVersion + " is ready."
-        : sentences(v).headline;
-    // The restart notice leads nowhere new: the row says the same sentence and offers no act.
-    if (want === "restarting") {
-      node.lastChild.textContent = said;
-      node.setAttribute("aria-label", said + " " + RESTARTING_SUB);
-      return;
+    var said;
+    if (want === "live") {
+      if (v.state === "downloading") {
+        said = typeof v.percent === "number"
+          ? "Downloading " + Math.max(0, Math.min(100, v.percent)) + "%"
+          : "Downloading " + bytes(v.downloadedBytes);
+      } else {
+        said = "Updating RichOS · " + elapsedClock(elapsed);
+      }
+    } else if (want === "ready") {
+      said = v.readyIsRollback
+        ? "RichOS will go back to " + v.availableVersion + "."
+        : "RichOS " + v.availableVersion + " is ready.";
+    } else {
+      said = sentences(v).headline;
     }
-    node.lastChild.textContent = said;
+    say(node.lastChild, said);
     // A BUTTON'S NAME SHOULD SAY WHAT PRESSING IT DOES, and the visible label is a statement
     // rather than an act — so the accessible name is the statement PLUS the act. It starts
     // with the visible text verbatim, which is what WCAG 2.5.3 "Label in Name" asks for: a
     // voice user who says the words on the screen still reaches this control.
-    node.setAttribute("aria-label", said + " Open the update settings.");
+    var label = said + " Open the update settings.";
+    if (node.getAttribute("aria-label") !== label) node.setAttribute("aria-label", label);
   }
 
   /// Press the cue: open the menu the row lives in, and put the hand on the row's control.
@@ -811,11 +868,28 @@ window.RichUpdates = (function () {
   function openTheRow() {
     var s = window.RichSettings;
     if (!s || !s.openMenu) return;
+    if (view && !view.readyIsRollback && (view.state === "downloading" || isPreparing(view))) {
+      s.openMenu();
+      if (nodes) nodes.line.focus({ preventScroll: true });
+      revealUpdateRow();
+      return;
+    }
     focusWanted = true;
     s.openMenu();
     // The common path ends here: the row is painted from the view the cue itself was drawn
     // from, the control is live, and the hand lands with no round trip in between.
     handToTheControl();
+  }
+
+  function revealUpdateRow() {
+    // Updates is the last row before the sticky footer. Scrolling to the end
+    // after WebKit lays out the menu keeps the whole row above the footer.
+    requestAnimationFrame(function () {
+      var menu = document.getElementById("set-menu");
+      if (menu && !menu.hidden && nodes && document.activeElement === nodes.line) {
+        menu.scrollTop = menu.scrollHeight;
+      }
+    });
   }
 
   /// Put the hand on the control the cue leads to — the moment that is a true thing to do.
@@ -877,8 +951,7 @@ window.RichUpdates = (function () {
   //
   // WHICH STATES: `available` and `ready`, and only while `busy` — the exact complement of
   // `cue()` above, so at any moment the chrome holds the actionable pill, or this, or
-  // nothing. Never both. `downloading` and `installing` are deliberately not here: the
-  // bytes are already moving, nothing is waiting on him, and the row owns the progress bar.
+  // nothing. Downloading and preparing have their own cue above.
 
   /// The sentence, generated ONCE and used for both the accessible name and the painted note.
   function waitingSaid(v) {
@@ -963,15 +1036,162 @@ window.RichUpdates = (function () {
     document.getElementById("update-waiting-note").textContent = said;
   }
 
+  var RESTART_RING_LENGTH = 2 * Math.PI * 64;
+
+  function restartRing() {
+    var ring = el("div", "update-restart-ring", { "aria-hidden": "true" });
+    var svg = document.createElementNS(SVG_NS, "svg");
+    svg.setAttribute("viewBox", "0 0 148 148");
+    ["track", "fill"].forEach(function (part) {
+      var circle = document.createElementNS(SVG_NS, "circle");
+      circle.setAttribute("class", "update-ring-" + part);
+      circle.setAttribute("cx", "74");
+      circle.setAttribute("cy", "74");
+      circle.setAttribute("r", "64");
+      svg.appendChild(circle);
+    });
+    svg.lastChild.setAttribute("stroke-dasharray", String(RESTART_RING_LENGTH));
+    var number = el("div", "update-restart-number");
+    ring.append(svg, number);
+    return { ring: ring, fill: svg.lastChild, number: number };
+  }
+
+  function showRestart(v) {
+    if (restart) {
+      say(restart.downloaded, bytes(v.downloadedBytes));
+      return;
+    }
+    var dialog = el("dialog", "update-restart", {
+      id: "update-restart",
+      "aria-labelledby": "update-restart-title",
+      "aria-describedby": "update-restart-sub",
+    });
+    var title = el("h2", "update-restart-title", { id: "update-restart-title", tabindex: "-1", "aria-live": "polite" });
+    var sub = el("p", "update-restart-sub", { id: "update-restart-sub" });
+    var steps = updateSteps(true);
+    steps.downloaded.textContent = bytes(v.downloadedBytes);
+    sub.textContent = RESTARTING_SUB;
+    title.textContent = sentences(v).headline;
+    var elements = restartRing();
+    dialog.append(steps.list, elements.ring, title, sub);
+    dialog.addEventListener("cancel", function (event) { event.preventDefault(); });
+    if (window.RichSettings) window.RichSettings.close();
+    document.body.appendChild(dialog);
+    restart = {
+      dialog: dialog,
+      downloaded: steps.downloaded,
+      ring: elements.ring,
+      fill: elements.fill,
+      number: elements.number,
+      title: title,
+    };
+    tickRestart();
+    dialog.showModal();
+    title.focus();
+  }
+
+  function tickRestart() {
+    restartFrame = null;
+    var duration = view.relaunchNoticeMs;
+    var remaining = Math.max(0, duration - (performance.now() - phaseOrigin));
+    if (remaining > 0) {
+      var count = String(Math.ceil(remaining / 1000));
+      if (restart.number.textContent !== count) {
+        var tick = el("span");
+        tick.textContent = count;
+        restart.number.replaceChildren(tick);
+      }
+      restart.fill.setAttribute("stroke-dashoffset", String(RESTART_RING_LENGTH * (1 - remaining / duration)));
+      restartFrame = requestAnimationFrame(tickRestart);
+    } else {
+      restart.ring.setAttribute("data-closing", "");
+      restart.fill.setAttribute("stroke-dasharray", "110 292.1");
+      restart.fill.setAttribute("stroke-dashoffset", "0");
+      say(restart.number, "");
+      say(restart.title, "Closing RichOS " + view.currentVersion + "…");
+    }
+  }
+
+  function hideRestart() {
+    if (!restart) return;
+    if (restartFrame !== null) cancelAnimationFrame(restartFrame);
+    restartFrame = null;
+    restart.dialog.close();
+    restart.dialog.remove();
+    restart = null;
+    var settings = document.getElementById("set-btn");
+    if (settings && document.activeElement === document.body) settings.focus();
+  }
+
+  var ARRIVAL_KEY = "richos-update-arrival";
+
+  function showArrival() {
+    var v = view;
+    if (v && (v.state === "downloading" || v.state === "installing" || v.state === "restarting")) {
+      var prior = document.getElementById("update-arrival");
+      if (prior) prior.remove();
+      return;
+    }
+    if (!v || !v.updateArrival || arrivalShown === v.updateArrival) return;
+    try {
+      if (localStorage.getItem(ARRIVAL_KEY) === v.updateArrival) {
+        arrivalShown = v.updateArrival;
+        return;
+      }
+    } catch (_e) {}
+    if (document.hidden) return;
+    var splash = document.getElementById("splash");
+    if (splash) {
+      if (!arrivalWait) {
+        arrivalWait = new MutationObserver(function () {
+          if (splash.isConnected) return;
+          arrivalWait.disconnect();
+          arrivalWait = null;
+          showArrival();
+        });
+        arrivalWait.observe(splash.parentNode, { childList: true });
+      }
+      return;
+    }
+    var settings = document.getElementById("settings");
+    if (!settings) return;
+    var pill = el("div", "update-arrival", { id: "update-arrival" });
+    var label = el("span", "", { role: "status" });
+    var link = changelogLink("update-arrival-notes");
+    pill.append(glyph(GLYPH.ready), label, link);
+    settings.prepend(pill);
+    label.textContent = "Updated to RichOS " + v.currentVersion;
+    arrivalShown = v.updateArrival;
+    try {
+      localStorage.setItem(ARRIVAL_KEY, arrivalShown);
+    } catch (_e) {}
+    setTimeout(function () {
+      if (document.activeElement === link) {
+        link.addEventListener("blur", function () { pill.remove(); }, { once: true });
+      } else {
+        pill.remove();
+      }
+    }, 9000);
+  }
+
   // ---- talking to the shell --------------------------------------------------------------
 
   function apply(next) {
     if (!next || typeof next !== "object") return;
+    if (view && next.revision < view.revision) return;
+    var changed = !view || next.state !== view.state || next.phaseStartedAt !== view.phaseStartedAt;
+    var enteredChecking = changed && isPreparing(next);
     view = next;
+    if (changed) {
+      var since = typeof next.phaseStartedAt === "number" ? Date.now() - next.phaseStartedAt : 0;
+      phaseOrigin = performance.now() - Math.max(0, since);
+      clearTimeout(checkingTimer);
+      checkingTimer = null;
+    }
     // THE RELAUNCH IS SECONDS AWAY: park the draft and the scroll position NOW rather than
     // on the composer's 400 ms debounce, so the window comes back exactly where he was.
     // `parkViewStateNow` is `main.js`'s, a global of that classic script.
-    if (next.state === "restarting" && typeof window.parkViewStateNow === "function") {
+    if (changed && next.state === "restarting" && typeof window.parkViewStateNow === "function") {
       try {
         window.parkViewStateNow();
       } catch (_e) {
@@ -979,6 +1199,19 @@ window.RichUpdates = (function () {
       }
     }
     paint();
+    if (enteredChecking) {
+      tickChecking();
+      if (nodes && document.activeElement === nodes.line) {
+        revealUpdateRow();
+      }
+    }
+    if (next.state === "restarting") {
+      if (changed) hideRestart();
+      showRestart(next);
+    } else {
+      hideRestart();
+    }
+    showArrival();
   }
 
   /// `opts.read` marks a command that CHANGES NOTHING — `update_state`, and nothing else. It
@@ -1067,6 +1300,7 @@ window.RichUpdates = (function () {
     if (window.RichSettings && window.RichSettings.registerUpdates) {
       window.RichSettings.registerUpdates(api);
     }
+    document.addEventListener("visibilitychange", showArrival);
     // Every transition the Rust side makes, including the automatic launch check, arrives
     // here — so the mark on the button appears whether or not the menu was ever opened.
     if (b.listen) {

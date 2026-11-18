@@ -84,3 +84,4 @@ mod tests {
 }
 
 pub mod richpass_log;
+pub mod update_timing;

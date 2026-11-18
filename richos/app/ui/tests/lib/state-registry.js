@@ -2934,12 +2934,37 @@ module.exports = [
       "for the next launch rather than swapped underneath a running app.",
   },
   {
-    s: "RichOS is confirming this update was signed by us before preparing it for the next launch.",
+    s: "RichOS is confirming this update was signed by us.",
     c: "INFORMATIONAL",
     why:
       "The `installing` sub-line, and it is on screen for a reason: the signature check is " +
       "the property the whole updater rests on, and a step nobody is told about is a step " +
       "nobody misses when it stops happening.",
+  },
+  {
+    s: "Still working. A larger update takes a little longer to check.",
+    c: "INFORMATIONAL",
+    why: "After eight seconds of checking, the row explains the ongoing wait while the elapsed time keeps advancing.",
+  },
+  {
+    s: "Nothing for you to do. RichOS restarts by itself.",
+    c: "INFORMATIONAL",
+    why: "The checking row explains what happens after verification and staging.",
+  },
+  {
+    s: "signed by us",
+    c: "INFORMATIONAL",
+    why: "The Checked step describes the signature verification completed before restart.",
+  },
+  {
+    s: "Updating RichOS ·",
+    c: "FRAGMENT",
+    why: "The closed-menu cue adds the checking timer and opens the update row when pressed.",
+  },
+  {
+    s: "Updated to RichOS",
+    c: "FRAGMENT",
+    why: "The one-time arrival notice adds the running version beside the changelog link.",
   },
   {
     s: "RichOS cannot tell what state the update is in.",
@@ -3052,16 +3077,15 @@ module.exports = [
     s: "Restarting into RichOS",
     c: "FRAGMENT",
     why:
-      "The `restarting` headline: `'Restarting into RichOS ' + v.availableVersion + '…'`, also " +
-      "the pill's label in that state. The short notice before `updates.rs` relaunches into an " +
+      "The restarting headline of the countdown card. The notice appears before `updates.rs` relaunches into an " +
       "update this app downloaded once nothing is running. tests/updates.js check 22.",
   },
   {
-    s: "Nothing is running, so RichOS is restarting to finish the update. Your window and conversation will be right where you left them.",
+    s: "Nothing for you to do. Your window and conversation will be right where you left them.",
     c: "INFORMATIONAL",
     fixture: null,
     why:
-      "The `restarting` sub line and the pill's accessible name: RichOS is about to quit and " +
+      "The countdown card's description: RichOS is about to quit and " +
       "come back on the new version, by itself, within seconds. Nothing is asked of anyone and " +
       "there is no control to offer: the relaunch is the product acting on the CEO's own words " +
       "('the app should automatically re-launch immediately after downloading the new " +

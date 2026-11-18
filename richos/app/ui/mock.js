@@ -2922,6 +2922,10 @@
   const mockUpdate = {
     view: {
       state: "unconfigured",
+      revision: 0,
+      phaseStartedAt: Date.now(),
+      relaunchNoticeMs: null,
+      updateArrival: null,
       currentVersion: "0.1.0",
       availableVersion: null,
       notes: null,

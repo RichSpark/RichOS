@@ -8,7 +8,7 @@
 //! | installation | RichDoctor's version; RichOS's Info.plist in `/Applications` and `~/Applications`; macOS version (`SystemVersion.plist`), CPU kind, memory class |
 //! | startup_crash | `~/Library/Logs/RichOS/startup.log` and `.log.1`; `launches.json` under `~/Library/Application Support/com.richos.app/`; matching `.ips` reports under `~/Library/Logs/DiagnosticReports/` |
 //! | conversation_failure | `conversation-ledger.jsonl` under the app data root: allowlisted fields of `UpstreamFailure`, `TurnInterruptionCause` and `TurnInterrupted` only |
-//! | configuration | `config.json` current settings; bounded RichPass checks and RichFiles timing records |
+//! | configuration | `config.json` current settings; bounded RichPass, RichFiles and update diagnostics |
 //! | richscribe | `dictation.log`'s lines in the window (model, timing, errors; it never holds words) |
 //! | claude_availability | whether the CLI is found, its version, and whether the default sign-in answers |
 //!
@@ -225,6 +225,7 @@ pub fn collect(category: Category, scope: &Scope, ctx: &Context, used: u64) -> V
             configuration(scope, ctx, &mut budget),
             richpass(scope, ctx, &mut budget),
             richfiles_timing(scope, ctx, &mut budget),
+            update_timing(scope, ctx, &mut budget),
         ],
         Category::Richscribe => vec![richscribe(scope, ctx, &mut budget)],
         Category::RichFinder => vec![richfinder_timing(scope, ctx, &mut budget)],
@@ -743,6 +744,61 @@ fn richfiles_timing(scope: &Scope, ctx: &Context, budget: &mut u64) -> Item {
     finish(item, &text, ctx, read.truncated)
 }
 
+fn update_timing(scope: &Scope, ctx: &Context, budget: &mut u64) -> Item {
+    let category = Category::Configuration;
+    let source = "RichOS update timing log";
+    let root = scope.data_root();
+    let name = crate::update_timing::LOG;
+    let mut reads = Vec::new();
+    let mut missing = Status::Absent;
+    for name in [format!("{name}.1"), name.to_string()] {
+        match read_source(&root, &root.join(name), scope, budget, true) {
+            Ok(read) => reads.push(read),
+            Err(Status::Absent) => {}
+            Err(status) => missing = status,
+        }
+    }
+    if reads.is_empty() {
+        return unread(category, source, missing);
+    }
+    let lines: Vec<_> = reads.iter().flat_map(|read| read.text.lines()).filter_map(|line| {
+        let mut fields = line.split_whitespace();
+        let at = crate::util::parse_utc_stamp(fields.next()?)?;
+        if fields.next()? != "update" {
+            return None;
+        }
+        let build = fields.next()?.strip_prefix("build=")?;
+        let pid = fields.next()?.strip_prefix("pid=")?.parse::<u32>().ok()?;
+        let attempt = fields.next()?.strip_prefix("attempt=")?.parse::<u64>().ok()?;
+        let phase = fields.next()?.strip_prefix("phase=")?;
+        let outcome = fields.next()?.strip_prefix("outcome=")?;
+        let elapsed = fields.next()?.strip_prefix("elapsed_ms=")?.parse::<u64>().ok()?;
+        if fields.next().is_some()
+            || build.len() > 64 || !build.bytes().all(|b| b.is_ascii_alphanumeric() || b".-+".contains(&b))
+            || !matches!(phase, "downloading" | "installing" | "ready" | "restarting" | "restart_notice")
+            || !matches!(outcome, "downloading" | "installing" | "ready" | "restarting" | "idle" | "available"
+                | "signature" | "offline" | "network" | "manifest" | "install" | "busy" | "configuration"
+                | "other" | "failed" | "deferred" | "helper_failed" | "quit_requested")
+        {
+            return None;
+        }
+        Some((at, format!("{} build={build} pid={pid} attempt={attempt} phase={phase} outcome={outcome} elapsed_ms={elapsed}", crate::util::utc_stamp(at))))
+    }).collect();
+    if lines.is_empty() {
+        let status = if reads.iter().all(|read| read.text.is_empty()) { Status::Absent } else { Status::Unreadable };
+        return unread(category, source, status);
+    }
+    let (picked, coverage) = pick(&lines, |row| Some(row.0), &scope.window, 10);
+    let selected: Vec<_> = picked.into_iter().rev().take(50).rev().collect();
+    let mut item = Item::new(category, source).expect("random source");
+    item.input_bytes = reads.iter().map(|read| read.bytes).sum();
+    item.coverage = coverage;
+    item.observed_at = selected.last().map(|row| row.0);
+    item.summary = format!("{} RichOS update phase timing record(s).", selected.len());
+    let text = selected.into_iter().map(|row| row.1).collect::<Vec<_>>().join("\n");
+    finish(item, &text, ctx, missing != Status::Absent || reads.iter().any(|read| read.truncated))
+}
+
 // ---------------------------------------------------------------------------------------
 // richscribe
 // ---------------------------------------------------------------------------------------
@@ -979,6 +1035,33 @@ mod tests {
         assert!(!timing.text.contains("Private screen content"));
         assert!(!timing.text.contains("Personal RichCleaner note"));
         assert!(!timing.text.contains("Customer names"));
+    }
+
+    #[test]
+    fn update_timing_collects_producer_records_and_refuses_unrecognized_fields() {
+        use std::io::Write;
+        let h = home();
+        let scope = scope(&h.0, Window::around(T));
+        let root = scope.data_root();
+        std::fs::create_dir_all(&root).unwrap();
+        for (at, phase, outcome, ms) in [
+            (T - 86_400_000, "installing", "ready", 70),
+            (T, "installing", "ready", 17_000),
+            (T + 3000, "restart_notice", "quit_requested", 3000),
+        ] {
+            crate::update_timing::record(&root, at, 42, phase, outcome, ms, "1.3.1");
+        }
+        let path = root.join(crate::update_timing::LOG);
+        let mut file = std::fs::OpenOptions::new().append(true).open(path).unwrap();
+        writeln!(file, "{} update build=1.3.1 pid=1 attempt=42 phase=installing outcome=ready elapsed_ms=81 path=/Users/private", crate::util::utc_stamp(T)).unwrap();
+        let items = collect(Category::Configuration, &scope, &Context::default(), 0);
+        let timing = items.iter().find(|item| item.source == "RichOS update timing log").unwrap();
+        assert_eq!(timing.status, Status::Collected);
+        assert_eq!(timing.coverage, Coverage::InWindow);
+        assert!(timing.text.contains("attempt=42 phase=installing outcome=ready elapsed_ms=17000"));
+        assert!(timing.text.contains("phase=restart_notice outcome=quit_requested elapsed_ms=3000"));
+        assert!(!timing.text.contains("elapsed_ms=70"));
+        assert!(!timing.text.contains("elapsed_ms=81"));
     }
 
     #[test]
