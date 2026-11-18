@@ -13,6 +13,7 @@ import importlib.util
 import os
 from pathlib import Path
 import shutil
+import subprocess
 import tempfile
 import time
 import unittest
@@ -50,7 +51,7 @@ class CargoOutput(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
-    def plan(self):
+    def plan(self, lsof_stdout='p4242\nn/unrelated\n', lsof_status=0):
         r = object.__new__(reaper.Reaper)
         r.cfg = {"nightly_dir": self.nightly, "age_floor_minutes": 30}
         r.floor = 1800
@@ -58,9 +59,10 @@ class CargoOutput(unittest.TestCase):
         r.decisions = []
         r.add = lambda path, klass, size, action, why, **_k: r.decisions.append((path, klass, action, str(why)))
         r.command_lines = lambda: []
-        r.machine_open_paths = lambda: []
         with patch.object(reaper, "registered_workspaces", return_value=set()), \
-                patch.object(reaper, "check_deadline", return_value=None):
+                patch.object(reaper, "check_deadline", return_value=None), \
+                patch.object(reaper.subprocess, "run", return_value=subprocess.CompletedProcess(
+                    ["lsof"], lsof_status, stdout=lsof_stdout, stderr="")):
             r.scan_cargo_output(FakeWalls())
         return r.decisions
 
@@ -88,6 +90,50 @@ class CargoOutput(unittest.TestCase):
             rows = self.plan()
         self.assertEqual([a for _p, _k, a, _w in rows], [reaper.KEEP], rows)
 
+    def test_unreadable_lock_keeps_output(self):
+        real_open = open
+        for lock in (os.path.join(self.nightly, "release.lock"),
+                     os.path.join(self.target, "debug", ".cargo-lock")):
+            with self.subTest(lock=lock):
+                Path(lock).touch()
+                # Keep the age guard from hiding an incorrect lock decision.
+                old = time.time() - 7200
+                os.utime(lock, (old, old))
+                os.utime(os.path.dirname(lock), (old, old))
+
+                def deny_lock(path, *args, **kwargs):
+                    if path == lock:
+                        raise PermissionError(path)
+                    return real_open(path, *args, **kwargs)
+
+                with patch("builtins.open", side_effect=deny_lock):
+                    (row,) = self.plan()
+                self.assertEqual(row[2], reaper.INDETERMINATE, row)
+                self.assertIn(lock, row[3])
+                os.unlink(lock)
+
+    def test_partial_open_file_table_cannot_establish_idleness(self):
+        for stdout, action in (("", reaper.INDETERMINATE),
+                               ("p4242\nn/unrelated\n", reaper.INDETERMINATE),
+                               ("p4242\nn" + self.target + "/debug/big.rlib\n", reaper.KEEP)):
+            with self.subTest(stdout=stdout):
+                (row,) = self.plan(lsof_stdout=stdout, lsof_status=1)
+                self.assertEqual(row[2], action, row)
+
+    def test_unreadable_profile_keeps_output(self):
+        scandir = os.scandir
+        profile = os.path.join(self.target, "debug")
+
+        def deny_profile(path):
+            if path == profile:
+                raise PermissionError(path)
+            return scandir(path)
+
+        with patch.object(reaper.os, "scandir", side_effect=deny_profile):
+            (row,) = self.plan()
+        self.assertEqual(row[2], reaper.INDETERMINATE, row)
+        self.assertIn("could not be fully inspected", row[3])
+
     def test_output_changed_inside_the_floor_is_kept(self):
         Path(self.target, "debug", "fresh.o").write_text("y")
         rows = self.plan()
@@ -101,7 +147,7 @@ class CargoOutput(unittest.TestCase):
             r.cfg = {"nightly_dir": self.nightly, "age_floor_minutes": 30}
             r.floor, r.now, r.entries = 1800, time.time(), []
             r.command_lines = lambda lines=lines: lines
-            r.machine_open_paths = lambda opened=opened: opened
+            r.machine_open_paths = lambda opened=opened: (opened, True)
             r.add = lambda path, klass, size, action, why, **_k: r.entries.append((action, str(why)))
             with patch.object(reaper, "registered_workspaces", return_value=set()), \
                     patch.object(reaper, "check_deadline", return_value=None):
@@ -113,7 +159,7 @@ class CargoOutput(unittest.TestCase):
         r.cfg = {"nightly_dir": self.nightly, "age_floor_minutes": 30}
         r.floor, r.now, r.entries = 1800, time.time(), []
         r.command_lines = lambda: []
-        r.machine_open_paths = lambda: None
+        r.machine_open_paths = lambda: ([], False)
         r.add = lambda path, klass, size, action, why, **_k: r.entries.append((action, str(why)))
         with patch.object(reaper, "registered_workspaces", return_value=set()), \
                 patch.object(reaper, "check_deadline", return_value=None):
@@ -128,7 +174,7 @@ class CargoOutput(unittest.TestCase):
         walls = FakeWalls()
         walls.registered = {os.path.join(self.target, "debug")}
         r.command_lines = lambda: []
-        r.machine_open_paths = lambda: []
+        r.machine_open_paths = lambda: ([], True)
         with patch.object(reaper, "registered_workspaces", return_value=set()), \
                 patch.object(reaper, "check_deadline", return_value=None):
             r.scan_cargo_output(walls)
@@ -359,7 +405,7 @@ class AppBudget(unittest.TestCase):
         r.collect_test_instances = lambda *a: []
         r._record_failures = lambda *a: None
 
-        def measure(path, until=None):
+        def measure(path, until=None, *, strict=False):
             # A real bounded walk stops as soon as it is past `until`.
             if until is not None and clock[0] + scan_seconds > until:
                 clock[0] = max(clock[0], until) + 0.01
@@ -374,7 +420,7 @@ class AppBudget(unittest.TestCase):
             stack.enter_context(patch.object(reaper.os.path, "lexists", return_value=True))
             stack.enter_context(patch.object(reaper.os.path, "isdir", return_value=True))
             stack.enter_context(patch.object(reaper.os.path, "islink", return_value=False))
-            stack.enter_context(patch.object(reaper.glob, "glob", return_value=[]))
+            stack.enter_context(patch.object(reaper.os, "scandir", return_value=contextlib.nullcontext([])))
             stack.enter_context(patch.object(shutil, "rmtree"))
             r.scan_cargo_output(FakeWalls(), ["/p"])
             result = r.apply("/unused.log")

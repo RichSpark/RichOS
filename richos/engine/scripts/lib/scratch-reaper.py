@@ -988,16 +988,17 @@ class Walls(object):
 # measuring
 # ---------------------------------------------------------------------------
 
-def measure(path, until=None):
+def measure(path, until=None, *, strict=False):
     """(bytes_on_disk, newest_mtime, contains_git). Errors are skipped, never
     guessed at: a file that vanished mid-walk was never going to be freed.
     With `until` (a time.time() value) a walk still running past it returns None: a partial
-    walk would understate the newest change, so it is never used as an answer."""
+    walk would understate the newest change, so it is never used as an answer.
+    With strict=True, an inspection error also leaves the result unknown."""
     total, newest, has_git = 0, 0.0, False
     try:
         st = os.lstat(path)
     except OSError:
-        return 0, 0.0, False
+        return None if strict else (0, 0.0, False)
     newest = st.st_mtime
     total = getattr(st, "st_blocks", 0) * 512 or st.st_size
     if not os.path.isdir(path) or os.path.islink(path):
@@ -1011,6 +1012,8 @@ def measure(path, until=None):
         try:
             entries = list(os.scandir(cur))
         except OSError:
+            if strict:
+                return None
             continue
         for e in entries:
             if e.name == ".git":
@@ -1018,10 +1021,12 @@ def measure(path, until=None):
             try:
                 st = e.stat(follow_symlinks=False)
             except OSError:
+                if strict:
+                    return None
                 continue
             total += getattr(st, "st_blocks", 0) * 512 or st.st_size
             newest = max(newest, st.st_mtime)
-            if e.is_dir(follow_symlinks=False):
+            if stat.S_ISDIR(st.st_mode):
                 stack.append(e.path)
     return total, newest, has_git
 
@@ -3305,24 +3310,22 @@ class Reaper(object):
 
     @staticmethod
     def lock_free(path):
-        """True when nothing holds the flock on `path`; a missing file is free. Takes no
-        reservation (the observation CLAUDE.md prescribes)."""
+        """True for a free or missing lock, False for a held lock, None on inspection failure."""
         import fcntl
         try:
-            fh = open(path, "rb")
+            with open(path, "rb") as fh:
+                try:
+                    fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    return False
+                return True  # closing the file releases the observation lock
+        except FileNotFoundError:
+            return True
         except OSError:
-            return True
-        with fh:
-            try:
-                fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except OSError:
-                return False
-            fcntl.flock(fh, fcntl.LOCK_UN)
-            return True
+            return None
 
     def machine_open_paths(self):
-        """[(pid, path)] for every open file, working directory and running executable on the
-        machine, from ONE lsof read once; None if it could not be trusted to answer."""
+        """Cache one lsof scan as ([(pid, path)], complete); partial rows prove use only."""
         if "_machine_open" not in self.__dict__:
             try:
                 # In the app's sweep the read ends with the planning window, so it cannot use up
@@ -3333,7 +3336,7 @@ class Reaper(object):
                 if r.returncode not in (0, 1):
                     raise OSError("lsof exited %d" % r.returncode)
             except (OSError, subprocess.TimeoutExpired):
-                self.__dict__["_machine_open"] = None
+                self.__dict__["_machine_open"] = ([], False)
             else:
                 out, pid = [], None
                 for line in r.stdout.splitlines():
@@ -3341,7 +3344,7 @@ class Reaper(object):
                         pid = line[1:]
                     elif line.startswith("n") and pid is not None:
                         out.append((pid, line[1:]))
-                self.__dict__["_machine_open"] = out
+                self.__dict__["_machine_open"] = (out, r.returncode == 0 and bool(out))
         return self.__dict__["_machine_open"]
 
     def in_use_under(self, path):
@@ -3353,14 +3356,12 @@ class Reaper(object):
         for line in lines:
             if prefix in line:
                 return "its command line names %s" % path
-        opened = self.machine_open_paths()
-        if opened is None:
-            return None
+        opened, complete = self.machine_open_paths()
         mine = {str(os.getpid()), str(os.getppid())}
         for pid, p in opened:
             if pid not in mine and (p == path or p.startswith(prefix)):
                 return "pid %s has %s open" % (pid, p)
-        return ""
+        return "" if complete else None
 
     def scan_cargo_output(self, walls, checkouts=None):
         """CARGO OUTPUT INSIDE A CHECKOUT: deleted while no build is using it.
@@ -3385,9 +3386,11 @@ class Reaper(object):
                 klass = "cargo-output"
                 if self.app_spent(self.app_until):
                     continue
-                measured = measure(path, until=self.app_until)
+                measured = measure(path, until=self.app_until, strict=True)
                 if measured is None:
-                    self.app_deferred += 1
+                    if not self.app_spent(self.app_until):
+                        self.add(path, klass, 0, INDETERMINATE,
+                                 "Cargo output could not be fully inspected")
                     continue
                 size, newest, _repo = measured
                 real = os.path.realpath(path)
@@ -3399,13 +3402,24 @@ class Reaper(object):
                     self.add(path, klass, size, INDETERMINATE,
                              Refusal(3, "wall 3: a registered workspace sits inside %s" % real))
                     continue
-                if not self.lock_free(nightly_lock):
-                    self.add(path, klass, size, KEEP, "a nightly command holds release.lock")
+                try:
+                    with os.scandir(path) as profiles:
+                        locks = [nightly_lock] + [os.path.join(p.path, ".cargo-lock")
+                                                  for p in profiles if p.is_dir()]
+                except OSError:
+                    self.add(path, klass, size, INDETERMINATE, "Cargo profile locks could not be listed")
                     continue
-                locked = [d for d in glob.glob(os.path.join(path, "*", ".cargo-lock"))
-                          if not self.lock_free(d)]
-                if locked:
-                    self.add(path, klass, size, KEEP, "a build holds %s" % locked[0])
+                for lock in locks:
+                    free = self.lock_free(lock)
+                    if free is None:
+                        self.add(path, klass, size, INDETERMINATE, "could not inspect lock %s" % lock)
+                        break
+                    if not free:
+                        self.add(path, klass, size, KEEP, "a build or nightly command holds %s" % lock)
+                        break
+                else:
+                    lock = None
+                if lock is not None:
                     continue
                 if (self.now - newest) < self.floor:
                     self.add(path, klass, size, KEEP,
