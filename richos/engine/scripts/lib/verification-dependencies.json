@@ -4251,7 +4251,7 @@
     },
     "scripts/hooks/guard-hook-registration-commits.sh#private-inventory": {
       "source": "scripts/hooks/guard-hook-registration-commits.sh",
-      "sha256": "820b99bbbca0e13df0f1a8f2de75f172fa26c0669fedc89a49d0aa9ea0384631",
+      "sha256": "8b4ce304f7eb8c72ea729612ec2f9fef78b3d52db57fead7d5f879fd53402b7c",
       "evidence": "Runs the fixed checker on the caller's private target after payload/Git classification. Root helper resolves the engine location only; no entity-config values are loaded. Literal commit/ack payloads are data and ACK_LOG is supplied privately. Generated hooks.json and registered-hooks.sh in the private target are adoption markers, not the shipped manifest. G10: command words and Git verbs are now read by command_reader.py.",
       "keys": [],
       "edges": [
@@ -4274,7 +4274,7 @@
     },
     "scripts/hook-registration-completeness.test.sh": {
       "source": "scripts/hook-registration-completeness.test.sh",
-      "sha256": "8eff1056f8b176698b6a9fb82c3d89cae1ff4125bf10af32c0b4ec9c931f856e",
+      "sha256": "7136ac8298e26998e591a68a2c56c72b58a218bdc28a580bbc7be10454309ac5",
       "evidence": "Every checker and guard invocation targets a fresh synthetic Git repository. make_fixture generates three fake hooks, their manifests/inventories and a find-only ci-units script; no production config or manifest is copied. The in-test checker mutations run against those same fixtures. Production files used are the checker, guard and their fixed libraries only.",
       "keys": [],
       "edges": [
@@ -6803,7 +6803,7 @@
     },
     "scripts/hooks/guard-hook-registration-commits.sh#benign-bash": {
       "source": "scripts/hooks/guard-hook-registration-commits.sh",
-      "sha256": "820b99bbbca0e13df0f1a8f2de75f172fa26c0669fedc89a49d0aa9ea0384631",
+      "sha256": "8b4ce304f7eb8c72ea729612ec2f9fef78b3d52db57fead7d5f879fd53402b7c",
       "evidence": "Fixed dispatcher D21 payload: Bash echo hello with cwd pointing to a new non-Git engine fixture. Only bootstrap and the rejecting/not-applicable classifier path run. Source config reads before classification are retained. No commit, publication scan, remote CI, lease or live operator predicate is reached. G10: command words and Git verbs are now read by command_reader.py.",
       "keys": [],
       "edges": [
@@ -9732,7 +9732,7 @@
     },
     "scripts/hooks/guard-hook-registration-commits.sh#operator-lease-payload": {
       "source": "scripts/hooks/guard-hook-registration-commits.sh",
-      "sha256": "820b99bbbca0e13df0f1a8f2de75f172fa26c0669fedc89a49d0aa9ea0384631",
+      "sha256": "8b4ce304f7eb8c72ea729612ec2f9fef78b3d52db57fead7d5f879fd53402b7c",
       "evidence": "Operator-leads D1 supplies land-lease acquire, not a Git operation, scan or filesystem mutation. Reviewed classifier prefix is the same as the benign payload path; all settings read before classification remain. The suite explicitly supplies its literal entity config. G10: command words and Git verbs are now read by command_reader.py.",
       "keys": [],
       "edges": [
@@ -10311,7 +10311,7 @@
     },
     "scripts/hooks/guard-hook-registration-commits.sh#unadopted-target": {
       "source": "scripts/hooks/guard-hook-registration-commits.sh",
-      "sha256": "820b99bbbca0e13df0f1a8f2de75f172fa26c0669fedc89a49d0aa9ea0384631",
+      "sha256": "8b4ce304f7eb8c72ea729612ec2f9fef78b3d52db57fead7d5f879fd53402b7c",
       "evidence": "The fixed private repository carries no engine hook inventory. Full bootstrap, classifier and target resolution through the explicit HR_ADOPTED check reviewed; returns before the completeness checker. G10: command words and Git verbs are now read by command_reader.py.",
       "keys": [],
       "edges": [
@@ -11071,7 +11071,7 @@
     },
     "scripts/hooks/guard-hook-registration-commits.sh#inventory-write": {
       "source": "scripts/hooks/guard-hook-registration-commits.sh",
-      "sha256": "820b99bbbca0e13df0f1a8f2de75f172fa26c0669fedc89a49d0aa9ea0384631",
+      "sha256": "8b4ce304f7eb8c72ea729612ec2f9fef78b3d52db57fead7d5f879fd53402b7c",
       "evidence": "The inventory parser expands dispatcher modules, while matcher_of finds no direct registration and chooses Write. This module sees a private Write payload or malformed JSON; its reviewed classifier prefix returns before Bash-only operations. Bootstrap helpers remain bound. G10: command words and Git verbs are now read by command_reader.py.",
       "keys": [],
       "edges": [
@@ -15210,7 +15210,7 @@
     },
     "scripts/hooks/guard-hook-registration-commits.sh#find-payload": {
       "source": "scripts/hooks/guard-hook-registration-commits.sh",
-      "sha256": "820b99bbbca0e13df0f1a8f2de75f172fa26c0669fedc89a49d0aa9ea0384631",
+      "sha256": "8b4ce304f7eb8c72ea729612ec2f9fef78b3d52db57fead7d5f879fd53402b7c",
       "evidence": "Source-bound foreign-app-data D1 dispatcher payload is exactly Bash find ~ -name x. Reviewed classifier exits before Git/commit/lease/publication operations; same prefix and helper set as existing benign contract. Retain all settings read before classification. Full file hash protects this boundary. G10: command words and Git verbs are now read by command_reader.py.",
       "keys": [],
       "edges": [
@@ -18105,9 +18105,9 @@
       "text_needles": [],
       "evidence": "All hook manifests and inventory tables in this suite are generated literals. Changes to the real manifest do not change those fixtures. Executed checker/guard/libraries and fixture constructor are all content-bound here; no real hooks.json bytes are read.",
       "sources": {
-        "scripts/hook-registration-completeness.test.sh": "8eff1056f8b176698b6a9fb82c3d89cae1ff4125bf10af32c0b4ec9c931f856e",
+        "scripts/hook-registration-completeness.test.sh": "7136ac8298e26998e591a68a2c56c72b58a218bdc28a580bbc7be10454309ac5",
         "scripts/hook-registration-completeness.sh": "025ddda2c7449dbe3df8b5ef516adf4ad134582f96e9668bdab74dd53f585cfc",
-        "scripts/hooks/guard-hook-registration-commits.sh": "820b99bbbca0e13df0f1a8f2de75f172fa26c0669fedc89a49d0aa9ea0384631",
+        "scripts/hooks/guard-hook-registration-commits.sh": "8b4ce304f7eb8c72ea729612ec2f9fef78b3d52db57fead7d5f879fd53402b7c",
         "scripts/lib/resolve-roots.sh": "561e1a7b4bda39de4276822645a75f0235fa08234511a8d367e9cd2b2a5fa614",
         "scripts/lib/resolve-main-checkout.sh": "7b365389e15be1f270adfbe361cff627a424f815d501d33d357054124ca286ca",
         "scripts/lib/git-jurisdiction.sh": "807f6081cce2e884b4e4e11bfd390e6fa4eaeb3b3c78a5fcb7e43e2868865c23",
@@ -18399,7 +18399,7 @@
         "scripts/lib/ci_pause.py": "f41e86ea2b1aaa036c92eb44ddcb2fe2a6880724162561a5e31b84d556758693",
         "scripts/hooks/guard-completeness-commits.sh": "b671b2b6d926f64bb3f782d9be5885f4a374dc727a0c75e11eb8a94124f32174",
         "scripts/hooks/guard-foreign-app-data.sh": "8345d4a510edef2a3285402a76b37abe2f3a4e86ac19828989137dfcbc8a2b5c",
-        "scripts/hooks/guard-hook-registration-commits.sh": "820b99bbbca0e13df0f1a8f2de75f172fa26c0669fedc89a49d0aa9ea0384631",
+        "scripts/hooks/guard-hook-registration-commits.sh": "8b4ce304f7eb8c72ea729612ec2f9fef78b3d52db57fead7d5f879fd53402b7c",
         "scripts/hook-registration-completeness.sh": "025ddda2c7449dbe3df8b5ef516adf4ad134582f96e9668bdab74dd53f585cfc",
         "scripts/hooks/guard-host-display-power.sh": "27c1e2c03d2cf2fcf6838b664a6d534e8694376ff553adf51b520ad56a63f0ab",
         "scripts/hooks/guard-land-lease-commands.sh": "2156203295cbfcc8000ea30ccef483617645ae9d230e914fdb45b38f9541781a",
@@ -18702,7 +18702,7 @@
         "scripts/lib/declaration-path.sh": "7e2801b579928d127486fb272a07e38ad54e3b12580678a4c1d6fdaa343b4205",
         "scripts/hooks/dialect-guard.sh": "1f11608bc4ee85f825a44997bec5b2ac261189e5e8448eceb26ef0afbee4a67a",
         "scripts/hooks/guard-foreign-app-data.sh": "8345d4a510edef2a3285402a76b37abe2f3a4e86ac19828989137dfcbc8a2b5c",
-        "scripts/hooks/guard-hook-registration-commits.sh": "820b99bbbca0e13df0f1a8f2de75f172fa26c0669fedc89a49d0aa9ea0384631",
+        "scripts/hooks/guard-hook-registration-commits.sh": "8b4ce304f7eb8c72ea729612ec2f9fef78b3d52db57fead7d5f879fd53402b7c",
         "scripts/hooks/guard-host-display-power.sh": "27c1e2c03d2cf2fcf6838b664a6d534e8694376ff553adf51b520ad56a63f0ab",
         "scripts/hooks/guard-inflight-notify.sh": "d68756010cfebf50af7af7320e774d71c07bbc0ded5e4c017c09370e0565816c",
         "scripts/lib/inflight.sh": "db5588f3a0093a55befbcab454ee7e1921e1d8f8a049ff0c243da5020e418e43",
@@ -18942,7 +18942,7 @@
         "scripts/lib/row-currency.sh": "39205edef34a6f81727dc8f3e628d50e57d7e1b82e981c0e43db295d57de5ba0",
         "scripts/hooks/guard-vendoring-commits.sh": "7214a2d8d780c9988eb6a9e4f6ead5fe229b801da73f5548b52d43f041e858ed",
         "scripts/lib/vendored-material.sh": "0463fd1ec609cd013e07e5977e3b8bd4affcbe3d4b603bb9d2e54a2d664bffdc",
-        "scripts/hooks/guard-hook-registration-commits.sh": "820b99bbbca0e13df0f1a8f2de75f172fa26c0669fedc89a49d0aa9ea0384631",
+        "scripts/hooks/guard-hook-registration-commits.sh": "8b4ce304f7eb8c72ea729612ec2f9fef78b3d52db57fead7d5f879fd53402b7c",
         "scripts/hooks/guard-ci-red-lands.sh": "4b22b2af8f72f4d19753b587aeb4b0c76a5e6183c27e3b979f35a025ee5ece32",
         "scripts/hooks/guard-host-display-power.sh": "27c1e2c03d2cf2fcf6838b664a6d534e8694376ff553adf51b520ad56a63f0ab",
         "scripts/hooks/guard-public-record-repo.sh": "a01a080c7f91a20f9b031cf51546861d04a49ae7c2a3815c9b827ac72dd6539b",
@@ -19166,7 +19166,7 @@
         "scripts/hooks/guard-completeness-commits.sh": "b671b2b6d926f64bb3f782d9be5885f4a374dc727a0c75e11eb8a94124f32174",
         "scripts/lib/vendored-material.sh": "0463fd1ec609cd013e07e5977e3b8bd4affcbe3d4b603bb9d2e54a2d664bffdc",
         "scripts/hooks/guard-foreign-app-data.sh": "8345d4a510edef2a3285402a76b37abe2f3a4e86ac19828989137dfcbc8a2b5c",
-        "scripts/hooks/guard-hook-registration-commits.sh": "820b99bbbca0e13df0f1a8f2de75f172fa26c0669fedc89a49d0aa9ea0384631",
+        "scripts/hooks/guard-hook-registration-commits.sh": "8b4ce304f7eb8c72ea729612ec2f9fef78b3d52db57fead7d5f879fd53402b7c",
         "scripts/hooks/guard-inflight-notify.sh": "d68756010cfebf50af7af7320e774d71c07bbc0ded5e4c017c09370e0565816c",
         "scripts/hooks/guard-interactive-prompt.sh": "360c596b01ac3a67bfb0a38635274539801ad40412b3183d6c93eca319788a1e",
         "scripts/lib/interactive-prompt.py": "fd95664d486aa1cde400a9c216e1d2fda2eeb5f21a202a8ccce2b2d1a7b11af8",
