@@ -1685,6 +1685,28 @@ def author_env(repo, run):
     return as_the_run_started(repo, run, env)
 
 
+def with_a_standing_tmpdir(repo, env):
+    """`env` for the author's job, its TMPDIR changed only when it names no writable directory:
+    then the one this land's own checks run with (check_tmpdir: the machine's named scratch for
+    the hook), or none (the job then uses /tmp) where the land has none either.
+
+    2026-11-18, the lands of ba5d393d3 and 025a725dc, each from a Codex checkout: the job runs in
+    the environment its reused run recorded (author_env), whose TMPDIR was that author's own
+    scratch folder, deleted since. The selector's `mktemp -d` under it failed ("proof-for.sh:
+    could not make a scratch directory", "proof-for.sh exited 2; nothing was run"), the land was
+    refused before any check ran, and the lead made the folder by hand both times (§136). A
+    folder that still stands is left as the run named it."""
+    given = env.get("TMPDIR", "")
+    if not given or (os.path.isdir(given) and os.access(given, os.W_OK)):
+        return env
+    own = repo.env.get("TMPDIR", "")
+    if own and os.path.isdir(own) and os.access(own, os.W_OK):
+        env["TMPDIR"] = own
+    else:
+        env.pop("TMPDIR")
+    return env
+
+
 def coverage_of(run, repo=None):
     """(exit, summary or None, output lines, the run's checkout or None) of
     `proof-run.py --coverage RUN`, asked in the run's own checkout. Exit 2: no answer."""
@@ -1816,7 +1838,7 @@ def run_author_job(repo, what, head, recovery):
     if why:
         return None, None, why
     reused = next((argv[i + 1] for i, word in enumerate(argv[:-1]) if word == "--reuse"), None)
-    env = author_env(repo, reused)
+    env = with_a_standing_tmpdir(repo, author_env(repo, reused))
     env.pop(ACTIVE, None)  # the author's own job, not a check of this land
     say(f"autocheck: {what}: the author's proof does not cover {head[:12]}, so the gate runs the one job "
         f"itself, once, in that checkout: {recovery}")

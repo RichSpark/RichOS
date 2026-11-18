@@ -222,9 +222,18 @@ if "--commands" not in sys.argv and "--resume" not in sys.argv:
     # its run goes to that checkout's log directory with a handover hold, as the real runner's,
     # and runs the owning suite there. Its arguments and checkout go to <log>.author-job.
     import hashlib
+    import tempfile
     import time
     with open(os.environ["AUTOCHECK_FIXTURE_LOG"] + ".author-job", "a") as log:
         log.write(os.getcwd() + " " + " ".join(sys.argv[1:]) + "\\n")
+    # As the real runner's selector (proof-for.sh: mktemp -d "${TMPDIR:-/tmp}/proof-for.XXXXXX"):
+    # with no scratch directory, nothing is run.
+    try:
+        os.rmdir(tempfile.mkdtemp(prefix="proof-for.", dir=os.environ.get("TMPDIR") or "/tmp"))
+    except OSError:
+        print("ERROR: proof-for.sh: could not make a scratch directory")
+        print("proof-run: proof-for.sh exited 2; nothing was run.")
+        sys.exit(2)
     span = next(a for a in sys.argv[1:] if ".." in a)
     head = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
     root = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True).stdout.strip()
@@ -2709,6 +2718,36 @@ class AuthorProof(Fixture):
         self.assertIn(f"--reuse {logs}", self.side_log(".runner"))                # offered to the gate
         self.assertEqual(self.head("main^2"), tip)
         self.assertFalse((Path(logs) / "retain").exists())                        # consumed by the land
+
+    def test_the_one_job_runs_when_the_scratch_folder_its_reused_run_recorded_is_gone(self):
+        """2026-11-18, the lands of ba5d393d3 and 025a725dc: the job runs in the environment its
+        reused run recorded, and that run's TMPDIR was the author's own scratch folder, deleted
+        since. The selector could not make its scratch directory under it, so the land was refused
+        before any check ran, and the lead made the folder by hand, twice. The job gets the scratch
+        folder the land's own checks use, and the deleted one is never remade."""
+        # The gate reads a run's recorded environment with the real reader, from the tree it lands.
+        lib = self.repo / "richos/app/scripts/lib"
+        lib.mkdir(parents=True)
+        for name in ("proof_evidence.py", "source_status.py"):
+            shutil.copy(HERE / "lib" / name, lib / name)
+        tip, seat = self.partial_author_proof_in_its_checkout("fine, second\n")
+        gone = self.base / "authors-scratch-deleted-since"
+        values = {k: v for k, v in self.env.items() if not k.startswith(("GIT_", "RICHOS_AUTOCHECK"))}
+        values["TMPDIR"] = str(gone)
+        (self.author_run / "plan.json").write_text(json.dumps({
+            "schema": 1, "root": str(seat), "items": [], "environment": {"values": values, "withheld": []}}))
+        out = self.git("merge", "--no-ff", "-m", "land feature", "feature")
+        text = out.stdout + out.stderr
+        self.assertNotIn("could not make a scratch directory", text)
+        self.assertNotIn("REFUSED", text)
+        self.assertEqual(len(self.side_log(".author-job").splitlines()), 1)
+        seen = [line.split(" ", 1)[1] for line in self.tools().splitlines() if line.startswith("suite-tmp ")]
+        self.assertGreaterEqual(len(seen), 2, self.tools())                       # the job's suite, then the gate's
+        self.assertEqual(len(set(seen)), 1, seen)                                 # the land's own scratch folder
+        self.assertNotEqual(seen[0], str(gone))
+        self.assertTrue(os.path.isdir(seen[0]), seen)
+        self.assertFalse(gone.exists())                                           # never remade
+        self.assertEqual(self.head("main^2"), tip)
 
     def test_a_partial_author_proof_whose_one_job_fails_refuses_naming_the_failing_check(self):
         tip, seat = self.partial_author_proof_in_its_checkout("BROKEN\n")
