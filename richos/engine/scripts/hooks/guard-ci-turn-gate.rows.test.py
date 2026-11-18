@@ -254,7 +254,9 @@ class G3(unittest.TestCase):
             self.git(repo, "config", key, value)
         self.git(repo, "commit", "--allow-empty", "-qm", "initial")
         self.git(repo, "remote", "add", "origin", bare)
-        self.enterContext(patch.object(gate, "repo_facts", lambda d, *_: (d, "fixture/repo", "")))
+        slug_of = gate.slug_of
+        self.enterContext(patch.object(gate, "slug_of",
+                                      lambda url: "fixture/repo" if url == bare else slug_of(url)))
         return repo, bare
 
     def test_p3_19_refusal_across_scans_never_creates_obligation(self):
@@ -326,6 +328,27 @@ class G3(unittest.TestCase):
         self.assertEqual(self.git(bare, "rev-parse", "main").stdout.strip(), sha)
         self.assertEqual(gate.evaluate(self.payload, gate.Budget(5))[0], 2)
         self.assertEqual([p["sha"] for p in gate.load_state("g3")["pushes"].values()], [sha])
+
+    def test_resolved_push_survives_linked_checkout_removal(self):
+        repo, bare = self.repo()
+        linked = os.path.join(self.root, "linked")
+        self.git(repo, "worktree", "add", "--detach", linked)
+        self.call("git push origin HEAD:refs/heads/main", linked)
+        self.result(self.git(linked, "push", "origin", "HEAD:refs/heads/main").stderr)
+        sha = self.git(bare, "rev-parse", "main").stdout.strip()
+        reads = []
+        with patch.object(gate, "verdict_for", side_effect=lambda slug, tip, _:
+                          reads.append((slug, tip)) or {"state": "red"}):
+            self.assertEqual(gate.evaluate(self.payload, gate.Budget(5))[0], 2)
+            self.git(repo, "worktree", "remove", linked)
+            self.assertEqual(self.git(bare, "rev-parse", "main").stdout.strip(), sha)
+            rc, _, err = gate.evaluate(self.payload, gate.Budget(5))
+            self.assertEqual(rc, 2)
+            self.assertIn("https://github.com/fixture/repo/commit/" + sha, err)
+        self.assertEqual(reads, [("fixture/repo", sha)] * 2)
+        with patch.object(gate, "verdict_for", return_value={"state": "green"}) as verdict:
+            self.assertEqual(gate.evaluate(self.payload, gate.Budget(5))[0], 0)
+        self.assertEqual(verdict.call_args.args[:2], ("fixture/repo", sha))
 
     def test_p3_45_fetch_before_and_after_first_check_keeps_pushed_sha(self):
         repo, bare = self.repo()

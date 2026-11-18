@@ -922,14 +922,9 @@ def render_refusal(findings, acked, budget):
                 L.append("      %s" % r["url"])
         L.append("      on commit %s, which this session pushed to `%s` at %s."
                  % (f["sha"][:12], f["branch"], when))
+        L.append("      https://github.com/%s/commit/%s" % (f["slug"], f["sha"]))
         L.append("      Read from GitHub %s." % doc.get("source", "just now, live"))
         L.append("")
-    L.append("  None of that is inferred. The commit is the one `git push` sent — you can")
-    L.append("  read it back with:")
-    L.append("      git -C %s rev-parse %s/%s"
-             % (findings[0]["root"], findings[0].get("remote") or "origin", findings[0]["branch"]))
-    L.append("  and the verdict is GitHub's own, about that exact commit.")
-    L.append("")
     L.append("WHAT CLEARS IT — one of these three, and nothing else:")
     L.append("")
     L.append("  1. FIX IT. Push the fix. The next turn-end reads the new commit and lets")
@@ -1076,9 +1071,9 @@ def evaluate(payload, budget):
     #
     # Measured over this project's own transcripts (2026-09-13): one session
     # pushed a shared branch from SIX scratchpad worktrees that have since been
-    # removed. Those pushes can never be judged again — the directory is gone,
-    # so there is no remote to read a slug from and no ref to read a commit
-    # from — and a gate that reported all six every turn for the rest of the
+    # removed before their identities were known. The directory is gone, so
+    # there is no remote to read a slug from and no ref to read a commit from.
+    # A gate that reported all six every turn for the rest of the
     # session would teach its reader to skip its output, which is the failure
     # mode this whole guard exists to correct. So a PERMANENTLY unjudgeable
     # target is announced ONCE and dropped from the ledger. A TRANSIENT one (a
@@ -1098,7 +1093,10 @@ def evaluate(payload, budget):
             break
         push["checked_at"] = time.time()
         remote = push.get("remote") or "origin"
-        root, slug, err = repo_facts(push["dir"], remote, budget, facts_cache)
+        if push.get("slug") and push.get("sha"):
+            root, slug, err = push["root"], push["slug"], ""
+        else:
+            root, slug, err = repo_facts(push["dir"], remote, budget, facts_cache)
         if slug and pause_for(slug):
             # Keep the push history for restoration; do not read CI or demand an ack.
             push["checked_at"] = _now
@@ -1126,8 +1124,6 @@ def evaluate(payload, budget):
             interval = ([push["at"], push["completed_at"], push.get("tip")]
                         if "completed_at" in push else [])
             sha, err = head_of(root, remote, branch, budget, *interval)
-            if sha:
-                push["sha"] = sha
         if err.startswith(TRANSIENT):
             judged.discard((slug, branch))
             unreadable.append("%s: %s" % (slug, err[len(TRANSIENT):]))
@@ -1135,6 +1131,7 @@ def evaluate(payload, budget):
         if err:
             permanent(key, "%s: %s" % (slug, err))
             continue
+        push.update(root=root, slug=slug, branch=branch, sha=sha)
         doc = verdict_for(slug, sha, budget)
         item = {"slug": slug, "root": root, "remote": remote, "branch": branch,
                 "sha": sha, "at": push.get("at"), "doc": doc}
