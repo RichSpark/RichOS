@@ -76,7 +76,7 @@
           </div>
           <button class="dict-close" type="button" aria-label="Close RichGlance settings">×</button>
         </header>
-        <div class="dict-col">
+        <div class="dict-body">
           <div class="dict-card">
             <span class="dict-spine"></span>
             <div class="dict-card-main">
@@ -135,7 +135,15 @@
       } else close();
       return;
     }
-    if (event.key === "Tab") return;
+    if (event.key === "Tab") {
+      const buttons = [...sheet.querySelectorAll("button:not(:disabled)")];
+      const boundary = event.shiftKey ? buttons[0] : buttons.at(-1);
+      if (document.activeElement === boundary) {
+        event.preventDefault();
+        (event.shiftKey ? buttons.at(-1) : buttons[0])?.focus();
+      }
+      return;
+    }
     if (!listening) return;
     event.preventDefault();
     event.stopPropagation();

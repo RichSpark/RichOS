@@ -34,15 +34,27 @@ final class CaptureController: NSObject, NSWindowDelegate {
     private var overlay: CaptureWindow?
     private var canvas: CaptureCanvas?
     private var savePanel: NSSavePanel?
+    private var permissionPanel: NSPanel?
     private var isFinished = false
     private var permissionRequested = false
-    private var waitingForPermission = false
+    private var waitingForCaptureConsent = false
+    private var resumedAfterCaptureConsent = false
+    private var keyLoss: Task<Void, Never>?
 
     init(previousWindow: NSWindow?, previousApp: NSRunningApplication?,
          finish: @escaping (_ copied: String?, _ display: CGRect?) -> Void) {
         self.previousWindow = previousWindow
         self.previousApp = previousApp
         self.finish = finish
+        super.init()
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self, selector: #selector(applicationActivated(_:)),
+            name: NSWorkspace.didActivateApplicationNotification, object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(displaysChanged),
+            name: NSApplication.didChangeScreenParametersNotification, object: nil
+        )
     }
 
     func start() {
@@ -54,16 +66,15 @@ final class CaptureController: NSObject, NSWindowDelegate {
         }
         self.display = display
         if !CGPreflightScreenCaptureAccess() {
-            let allowed = !permissionRequested && CGRequestScreenCaptureAccess()
+            let granted = !permissionRequested && CGRequestScreenCaptureAccess()
             permissionRequested = true
-            if !allowed {
+            if !granted {
                 record(.glanceCaptureFrame, .unavailable, since: began)
-                showPermissionHelp()
+                showPermissionHelp(on: screen)
                 return
             }
         }
-        NotificationCenter.default.addObserver(self, selector: #selector(displaysChanged),
-                                               name: NSApplication.didChangeScreenParametersNotification, object: nil)
+        dismissPermissionHelp()
         acquisition = Task { [weak self] in
             do {
                 let image = try await CaptureFrame.read(displayID: display.id, size: display.size)
@@ -79,19 +90,63 @@ final class CaptureController: NSObject, NSWindowDelegate {
 
     func cancel() { stop(.cancelled) }
 
-    /// A shortcut pressed from System Settings returns the same permission session to the user.
+    var canRevisitPermission: Bool { permissionPanel != nil }
+
+    /// A repeat capture command or Dock click brings the recovery controls back.
     func revisitPermission() {
-        guard waitingForPermission else { return }
-        waitingForPermission = false
-        NotificationCenter.default.removeObserver(self, name: NSApplication.didBecomeActiveNotification, object: NSApp)
-        showPermissionHelp()
+        guard let permissionPanel else { return }
+        if CGPreflightScreenCaptureAccess() {
+            start()
+        } else {
+            permissionPanel.orderFrontRegardless()
+            permissionPanel.makeKey()
+        }
     }
 
-    @objc private func resumeAfterSettings() {
-        Task { @MainActor [weak self] in self?.revisitPermission() }
+    private static func isCaptureConsent(_ application: NSRunningApplication?) -> Bool {
+        application?.bundleIdentifier == "com.apple.UserNotificationCenter"
+    }
+
+    @objc private func applicationActivated(_ notification: Notification) {
+        guard !isFinished,
+              let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
+        if Self.isCaptureConsent(app) {
+            if overlay != nil, savePanel == nil { waitForCaptureConsent() }
+            return
+        }
+        if waitingForCaptureConsent {
+            waitingForCaptureConsent = false
+            guard app == .current || app == previousApp else {
+                stop(.cancelled, restoreFocus: false)
+                return
+            }
+            resumedAfterCaptureConsent = true
+            start()
+        } else if let permissionPanel, app == .current {
+            if CGPreflightScreenCaptureAccess() { start() }
+            else { permissionPanel.orderFrontRegardless() }
+        }
+    }
+
+    private func waitForCaptureConsent() {
+        guard !waitingForCaptureConsent else { return }
+        guard !resumedAfterCaptureConsent, canvas == nil || canvas?.selection.phase == .aiming else {
+            stop(.interrupted, restoreFocus: false)
+            return
+        }
+        waitingForCaptureConsent = true
+        keyLoss?.cancel()
+        overlay?.delegate = nil
+        overlay?.orderOut(nil)
+        overlay = nil
+        canvas = nil
     }
 
     private func show(_ image: CGImage, on display: Display, point: CGPoint) {
+        if Self.isCaptureConsent(NSWorkspace.shared.frontmostApplication) {
+            waitForCaptureConsent()
+            return
+        }
         let window = CaptureWindow(contentRect: display.frame, styleMask: [.borderless], backing: .buffered, defer: false)
         window.setFrame(display.frame, display: false)
         window.level = .screenSaver
@@ -217,34 +272,76 @@ final class CaptureController: NSObject, NSWindowDelegate {
         overlay?.makeFirstResponder(canvas)
     }
 
-    private func showPermissionHelp() {
-        activate()
-        let alert = NSAlert()
-        alert.messageText = "RichGlance needs your permission to capture the screen"
-        alert.informativeText = "RichGlance takes one still picture when you choose Capture Region, and it stays on this Mac. Turn on the app named in the macOS prompt under Screen & System Audio Recording, then try again. If macOS asks you to quit and reopen that app, do that before capturing again."
-        alert.addButton(withTitle: "Open System Settings")
-        alert.addButton(withTitle: "Try Again")
-        alert.addButton(withTitle: "Not Now").keyEquivalent = "\u{1b}"
-        switch alert.runModal() {
-        case .alertFirstButtonReturn:
-            guard let settings = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"),
-                  NSWorkspace.shared.open(settings) else {
-                stop(.unavailable)
-                return
-            }
-            waitingForPermission = true
-            NotificationCenter.default.addObserver(self, selector: #selector(resumeAfterSettings),
-                                                   name: NSApplication.didBecomeActiveNotification, object: NSApp)
-        case .alertSecondButtonReturn:
-            Task { @MainActor [weak self] in self?.start() }
-        default:
-            stop(.unavailable)
+    private func showPermissionHelp(on screen: NSScreen) {
+        if let permissionPanel {
+            permissionPanel.orderFrontRegardless()
+            return
         }
+
+        let width: CGFloat = 440
+        let inset: CGFloat = 20
+        let message = NSTextField(wrappingLabelWithString: "Allow screen recording for the app named by macOS under Screen & System Audio Recording. If macOS asks you to quit and reopen the app, do that before capturing again. Captures stay on this Mac.")
+        message.preferredMaxLayoutWidth = width - 2 * inset
+        let settings = NSButton(title: "Open System Settings", target: self, action: #selector(openScreenRecordingSettings))
+        let retry = NSButton(title: "Try Again", target: self, action: #selector(retryScreenRecording))
+        let cancel = NSButton(title: "Not Now", target: self, action: #selector(cancelScreenRecording))
+        cancel.keyEquivalent = "\u{1b}"
+        let buttons = NSStackView(views: [cancel, retry, settings])
+        let stack = NSStackView(views: [message, buttons])
+        stack.orientation = .vertical
+        stack.alignment = .trailing
+        stack.spacing = 14
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        message.widthAnchor.constraint(equalToConstant: width - 2 * inset).isActive = true
+        let content = NSView()
+        content.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: inset),
+            stack.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -inset),
+            stack.topAnchor.constraint(equalTo: content.topAnchor, constant: inset),
+            stack.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -inset)
+        ])
+
+        let visible = screen.visibleFrame
+        let frame = CGRect(x: visible.midX - width / 2, y: visible.minY + inset,
+                           width: width, height: stack.fittingSize.height + 2 * inset)
+        let panel = NSPanel(contentRect: frame, styleMask: [.titled, .closable, .nonactivatingPanel],
+                            backing: .buffered, defer: false)
+        panel.title = "RichGlance Needs Screen Recording Permission"
+        panel.isReleasedWhenClosed = false
+        panel.hidesOnDeactivate = false
+        panel.contentView = content
+        panel.delegate = self
+        permissionPanel = panel
+        // The first system request can still be visible after CGRequest returns.
+        // Keep recovery controls below the system dialog without taking its focus.
+        panel.orderFrontRegardless()
+    }
+
+    private func dismissPermissionHelp() {
+        permissionPanel?.delegate = nil
+        permissionPanel?.close()
+        permissionPanel = nil
+    }
+
+    @objc private func openScreenRecordingSettings() {
+        guard let settings = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") else { return }
+        NSWorkspace.shared.open(settings)
+    }
+
+    @objc private func retryScreenRecording() { start() }
+
+    @objc private func cancelScreenRecording() { stop(.unavailable) }
+
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        guard sender === permissionPanel else { return true }
+        cancelScreenRecording()
+        return false
     }
 
     private func showCaptureError() {
-        if !CGPreflightScreenCaptureAccess() {
-            showPermissionHelp()
+        if !CGPreflightScreenCaptureAccess(), let screen = NSScreen.screens.first(where: { display?.matches($0) == true }) {
+            showPermissionHelp(on: screen)
             return
         }
         activate()
@@ -262,9 +359,15 @@ final class CaptureController: NSObject, NSWindowDelegate {
     }
 
     func windowDidResignKey(_ notification: Notification) {
-        guard savePanel == nil else { return }
-        // App switching should put the user back in control of the new app.
-        stop(.cancelled, restoreFocus: false)
+        guard notification.object as? NSWindow === overlay, savePanel == nil else { return }
+        keyLoss?.cancel()
+        // Workspace activation can arrive just after AppKit reports loss of the key window.
+        keyLoss = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(150))
+            guard !Task.isCancelled, let self, let overlay, !overlay.isKeyWindow, savePanel == nil else { return }
+            if Self.isCaptureConsent(NSWorkspace.shared.frontmostApplication) { waitForCaptureConsent() }
+            else { stop(.cancelled, restoreFocus: false) }
+        }
     }
 
     private func activate() {
@@ -279,7 +382,10 @@ final class CaptureController: NSObject, NSWindowDelegate {
         isFinished = true
         acquisition?.cancel()
         acquisition = nil
+        keyLoss?.cancel()
         NotificationCenter.default.removeObserver(self)
+        NSWorkspace.shared.notificationCenter.removeObserver(self)
+        dismissPermissionHelp()
         savePanel?.cancel(nil)
         savePanel = nil
         overlay?.delegate = nil

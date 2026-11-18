@@ -69,7 +69,11 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
-        guard capture == nil, !captureLaunch else { return false }
+        if let capture {
+            capture.revisitPermission()
+            return false
+        }
+        guard !captureLaunch else { return false }
         if viewer == nil { chooseImage() }
         else if !hasVisibleWindows { viewer?.show() }
         return true
@@ -267,7 +271,7 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
 extension Application: NSMenuItemValidation {
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
-        if menuItem.action == #selector(startCapture) { return capture == nil }
+        if menuItem.action == #selector(startCapture) { return capture?.canRevisitPermission ?? true }
         if menuItem.action == #selector(openInPreview) { return viewer?.file != nil }
         if menuItem.action == #selector(showInfo) {
             menuItem.title = viewer?.info.explicitlyShown == true ? "Hide Info" : "Show Info"
