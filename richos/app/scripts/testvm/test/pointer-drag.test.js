@@ -133,5 +133,35 @@ function drive(params, frontmost, named) {
   assert.strictEqual(behind.posted.length, 0);
 }
 
+// --as-is (a Dock icon, a window in the background): nothing is raised, nothing is required to be
+// frontmost, the click is posted where it is and the answer names what was frontmost before it.
+{
+  const raised = [];
+  const posted = [];
+  const front = { unixId: () => 9, name: () => "Finder" };
+  const sandbox = {
+    Application() {
+      return { processes: { whose(q) {
+        if ("frontmost" in q) return [front];
+        // Any lookup by pid or name would be the start of raising an app: there must be none.
+        raised.push(q);
+        return [{ unixId: () => 42, set frontmost(v) { raised.push(v); } }];
+      } } };
+    },
+  };
+  const $ = function () { return null; };
+  $.CGEventCreateMouseEvent = (src, type, point, button) => ({ type, button, x: point.x, y: point.y });
+  $.CGEventPost = (tap, ev) => posted.push(ev);
+  const fn = new Function("ObjC", "delay", "Application", "$", "DRAG_PARAMS", SOURCE + "\nreturn run();");
+  const answer = JSON.parse(fn({ import() {} }, () => {}, sandbox.Application, $,
+    { pid: 0, points: [[700, 1020], [700, 1020]], step: 8, pause: 0, rest: 0, asis: true }));
+  assert.strictEqual(answer.dragged, true);
+  assert.strictEqual(answer.asis, true);
+  assert.strictEqual(answer.front_before, "Finder", "the answer names what was frontmost before the click");
+  assert.strictEqual(raised.length, 0, "no app was looked up to be raised");
+  assert.deepStrictEqual(posted.map((e) => e.type), [5, 1, 2], "move, down, up: a click where the pointer is");
+}
+
+console.log("pointer-drag: a click with --as-is raised nothing and named the app in front");
 console.log("pointer-drag: a double-click with click states 1 and 2 passed");
 console.log("pointer-drag: a left drag, a right-click with no dragged event, a hover with no button, a Control-scroll in a named app and the refusals passed");

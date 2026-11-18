@@ -415,6 +415,28 @@ class MenuBar(unittest.TestCase):
         self.assertGreaterEqual(records[-1]['returned_at_ms'], records[-1]['pressed_at_ms'])
 
 
+class AppChildren(unittest.TestCase):
+    """The Dock has no window: its icons are a list hanging off the application element.
+    `--in app` searches the application's own children; without it the read is `nowindow`."""
+
+    def exercise(self, **extra):
+        world = World({})
+        world.pressed = 0
+        icon = El('AXDockItem', 'TextEdit', AXSubrole='AXApplicationDockItem', AXEnabled=True,
+                  AXPosition=[600, 980], AXSize=[64, 64])
+        world.window = None
+        world.app = El('AXApplication', 'Dock', kids=[El('AXList', '', kids=[icon])], AXWindows=[])
+        P = dict({'mode': 'find', 'pid': 71, 'text': 'TextEdit', 'role': 'AXDockItem', 'value': None,
+                  'first': True, 'nth': None, 'max': 100, 'depth': 16}, **extra)
+        return [json.loads(l) for l in ax.run(P, FakeAX(world), FakeHost(world)).split('\n')]
+
+    def test_a_dock_icon_is_in_no_window_and_app_finds_it(self):
+        self.assertEqual(self.exercise()[-1]['error'], 'nowindow')
+        records = self.exercise(scope='app')
+        node = records[-1].get('node') or records[-1]
+        self.assertEqual((node.get('title'), node.get('x'), node.get('w')), ('TextEdit', 600, 64), records)
+
+
 # ---------------------------------------------------------------------------
 # GuestHost.frontmost_pid: WindowServer's front app, never the system-wide AX element
 # ---------------------------------------------------------------------------

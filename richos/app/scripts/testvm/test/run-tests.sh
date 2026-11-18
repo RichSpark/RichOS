@@ -1955,7 +1955,7 @@ t "hand-file: a drag of an updated file never hands over the older Desktop copy 
   node "$HERE/hand-file.test.js" >"$TMP/handfile-node.log" 2>&1; ok $? "$(cat "$TMP/handfile-node.log")"
 t_done
 
-t "pointer-drag: a left drag, a right-click (--right) with no dragged event, a double-click, a Control-scroll in a named app, and the frontmost refusals"
+t "pointer-drag: a left drag, a right-click (--right) with no dragged event, a double-click, a Control-scroll in a named app, a click with --as-is that raises nothing, and the frontmost refusals"
   node "$HERE/pointer-drag.test.js" >"$TMP/pointer-drag.log" 2>&1; ok $? "$(cat "$TMP/pointer-drag.log")"
 t_done
 

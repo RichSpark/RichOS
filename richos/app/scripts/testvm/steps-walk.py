@@ -26,14 +26,17 @@ its exit status, its output and the clock, so a walk's evidence is one file and 
                                        ("hover": moves only, no button, one point is enough: a tooltip
                                        shown on mouseover can be looked at; "find": ax.sh find args
                                        whose first match's CENTER is added as the last point, so
-                                       "points": [] with "hover" rests on that control). The same
+                                       "points": [] with "hover" rests on that control and "points": []
+                                       alone clicks it). The same
                                        point twice is a click, the way a hand clicks; `ax click --at` is
                                        System Events' accessibility press at a point and does not focus
                                        a text box (candidate 50 rewalk, run K). "scroll": N turns the
                                        wheel N lines on one point, "ctrl" holding Control (RichGlance's
                                        zoom); "double": true double-clicks one point; "app": NAME sends
                                        it to that guest process (a second app the walk opened) and finds
-                                       "find" in it (the RichGlance walk)
+                                       "find" in it (the RichGlance walk); "asis": true raises no app before
+                                       the input, for a click on the Dock or a background window ("app"
+                                       then only names whose tree "find" reads, e.g. "Dock"; the window-gesture walk)
   openlink pattern [app] [seconds]     read the app window's tree until an https:// address containing
                                        PATTERN is drawn, then open it in the guest with APP (default
                                        Safari): the Mac's pairing address handed to the guest's phone
@@ -130,12 +133,18 @@ def step_run(vm, step, out):
             if node is None:
                 return 1, f'pointer find: nothing with a position matched; ax said {text[:300]!r}'
             points.append(f"{round(node['x'] + node['w'] / 2)},{round(node['y'] + node['h'] / 2)}")
+            if len(points) == 1 and not (step.get('hover') or step.get('double') or step.get('scroll')):
+                # No points of its own and nothing else asked: a click on the found control, the
+                # same point twice (a Dock icon, found in the Dock's own tree).
+                points.append(points[0])
         return run([str(HERE / 'pointer-drag.sh'), vm] + points + (['--right'] if step.get('right') else [])
                    + (['--hover'] if step.get('hover') else [])
                    + (['--scroll', str(step['scroll'])] if step.get('scroll') else [])
                    + (['--ctrl'] if step.get('ctrl') else [])
                    + (['--double'] if step.get('double') else [])
-                   + (['--app', step['app']] if step.get('app') else []))
+                   # "asis": the pointer lands with no app raised first (a Dock icon, a background
+                   # window); "app" then only names whose tree "find" reads, such as the Dock's.
+                   + (['--as-is'] if step.get('asis') else (['--app', step['app']] if step.get('app') else [])))
     if op == 'openlink':
         return open_link(vm, step)
     if op == 'wait':
@@ -183,7 +192,8 @@ REQUIRED = {
     'pointer': {'points': list}, 'openlink': {'pattern': str},
 }
 OPTIONAL = {'tree': {'app': str}, 'shot': {'ocr': bool}, 'handfile': {'to': str},
-            'pointer': {'right': bool, 'hover': bool, 'find': list, 'scroll': int, 'ctrl': bool, 'double': bool, 'app': str},
+            'pointer': {'right': bool, 'hover': bool, 'find': list, 'scroll': int, 'ctrl': bool, 'double': bool, 'app': str,
+                        'asis': bool},
             'relaunch': {'env': list}, 'openlink': {'app': str, 'seconds': (int, float)},
             'until': {'seconds': (int, float)}, '*': {'allow_fail': bool}}
 
@@ -222,7 +232,7 @@ def problems(steps):
         elif op == 'pointer' and step.get('ctrl') is True and not step.get('scroll'):
             found.append(f'step {i} (pointer): "ctrl" holds Control on a wheel turn, so it needs "scroll"')
         elif op == 'pointer' and isinstance(step.get('points'), list) and not step.get('scroll') and not step.get('double') and (
-                len(step['points']) + found_point < (1 if step.get('hover') is True else 2)
+                len(step['points']) + found_point < (1 if step.get('hover') is True or (found_point and not step['points']) else 2)
                 or not all(isinstance(pt, str) and pt.count(',') == 1 for pt in step['points'])):
             found.append(f'step {i} (pointer): \'points\' needs at least two "x,y" strings (the same one twice is a click; '
                          f'one is enough with "hover", and "find" supplies the last one)')
