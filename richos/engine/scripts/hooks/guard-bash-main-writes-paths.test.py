@@ -114,6 +114,13 @@ class WritePaths(unittest.TestCase):
         self.verdict(f'if false; then cd "{self.work}"; fi; touch new', 2, main)
         self.verdict(f'if test -n "$FLAG"; then cd "{self.work}"; fi; touch new', 2, main)
 
+    def test_directory_flow_keeps_conditional_expressions_atomic(self):
+        main = self.root / 'src'
+        self.verdict(f'[[ x && false ]] && cd "{main}"; touch new', 2, self.work)
+        self.verdict(f'false=1; (( false )) && cd "{main}"; touch new', 2, self.work)
+        self.verdict(f'if false; # note\n  # another note\nthen cd "{main}"; fi; touch new',
+                     0, self.work)
+
     def test_32_physical_aliases(self):
         for target in (self.root / 'src/file', self.alias / 'src/file'):
             with self.subTest(target=target):

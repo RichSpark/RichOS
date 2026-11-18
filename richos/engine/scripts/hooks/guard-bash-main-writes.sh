@@ -390,7 +390,7 @@ def flow_tokens(text):
     # existing word, redirection and substitution classifier for each chunk.
     start = end = 0
     quote = ''
-    word = False
+    word = in_test = False
     while end < len(text):
         c = text[end]
         if c == BS and quote != Q1:
@@ -422,7 +422,22 @@ def flow_tokens(text):
                 start = len(text) if comment < 0 else comment
             end = len(text) if comment < 0 else comment
             continue
-        elif c in ';\n&|()' and not (c == '&' and (
+        elif not word and text.startswith('[[', end) and text[end + 2:end + 3] in (' ', '\t', '\n'):
+            in_test, word = True, True
+            end += 2
+            continue
+        elif in_test and not word and text.startswith(']]', end):
+            in_test, word = False, True
+            end += 2
+            continue
+        elif not in_test and not word and text.startswith('((', end):
+            # _match_paren starts inside an opener. With ((, it sees the second
+            # parenthesis first, leaving one more closing parenthesis to consume.
+            end = match_paren(text, end)
+            end += text.startswith(')', end)
+            word = True
+            continue
+        elif not in_test and c in ';\n&|()' and not (c == '&' and (
                 text[end - 1:end] in ('<', '>') or text.startswith(('&>', '&>>'), end))):
             if text[start:end].strip():
                 yield text[start:end], False
@@ -435,12 +450,13 @@ def flow_tokens(text):
             start, word = end, False
             continue
         else:
-            word = c not in ' \t<>'
+            word = c not in ' \t\n<>'
         end += 1
     if text[start:].strip():
         yield text[start:], False
 
 
+LITERAL_STATUS = re.compile(r'\s*(?:!\s+)?(true|false|:)(?:[ \t]+#[^\n]*)?\s*')
 CONTROL = re.compile(r'^\s*(if|then|elif|else|fi|\{|\})(?=[ \t\n]|$)')
 
 
@@ -530,13 +546,12 @@ def inspect(text, bases, depth=0, docs=None):
     if docs is None:
         text, docs = heredoc_projection(text)
 
-    def simple(st, redirects, nested, incoming):
+    def simple(st, redirects, nested, incoming, literal=None):
         for body in nested:
             inspect(body, incoming, depth + 1, docs)
         bodies = docs.get(tuple(st), [])
         body = bodies.pop(0) if bodies else None
         good, bad = set(), set()
-        bare = st[1:2] if st[:1] == ['!'] else st[:1]
         for base in incoming:
             verb, args, location = verb_and_args(st, base)
             if body is not None and verb in ('bash', 'sh', 'zsh', 'dash', 'ksh'):
@@ -550,9 +565,9 @@ def inspect(text, bases, depth=0, docs=None):
                 dest = [arg for arg in args if arg not in ('--', '-P', '-L')]
                 target = dest[0] if dest else os.path.expanduser('~')
                 good.add(os.path.realpath(os.path.join(base, os.path.expanduser(target))))
-            elif bare != ['false'] or redirects:
+            elif literal != 'false':
                 good.add(base)
-            if bare not in (['true'], [':']) or redirects:
+            if literal not in ('true', ':'):
                 bad.add(base)
         if st and st[0] == '!':
             return bad, good
@@ -580,9 +595,11 @@ def inspect(text, bases, depth=0, docs=None):
             if kind == '(':
                 return (incoming if yes else set()), (incoming if no else set())
             return yes, no
+        text = parts[0]
+        constant = LITERAL_STATUS.fullmatch(text)
         good, bad = incoming, set()
-        for st, redirects, nested in statements(parts[0]):
-            good, bad = simple(st, redirects, nested, good | bad)
+        for st, redirects, nested in statements(text):
+            good, bad = simple(st, redirects, nested, good | bad, constant[1] if constant else None)
         return good, bad
 
     def run_list(commands, incoming):
