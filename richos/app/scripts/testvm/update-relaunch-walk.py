@@ -30,6 +30,11 @@ WHAT IT DOES, in the guest, never on the host's screen (CEO ruling §65):
   after      the new process has a window with the same frame, the same conversation, and the
              unsent sentence still in the composer (photographed)
 
+The download frames carry their moments (download-frames/times.tsv, seconds after the press), and
+the updating app's own phase timings are kept as update-timing.log, so the stretch from the end of
+the download to the restart is read against a clock (round 91, 2026-11-18). --close-settings shuts
+the menu right after the press, so the frames show the window with Settings closed.
+
 Every app instance is quit by run-walk.py's stop.sh (CEO §54): this walk records the relaunched
 process's pid in the run state, so stop.sh quits the instance that is actually running.
 Exit 0 when every step passes.
@@ -171,6 +176,10 @@ class Walk(adopt.Walk):
         self.wait_for('Download update', seconds=20)
         pressed = time.monotonic()
         self.press('Download update')
+        if self.a.close_settings:
+            # --close-settings: the menu is shut right after the press, the way a user clicks away,
+            # so the frames show what the window says with Settings closed (round 91's pill).
+            command([HERE / 'ax.sh', self.vm, '--key', '53'], 60)
         # 1. THE NOTICE. It is on screen for three seconds once the download is verified and
         #    staged, then the app writes "relaunching into" and quits. A frame of the guest's
         #    screen is taken on every turn of this loop (a screen capture, which does not wait
@@ -181,13 +190,21 @@ class Walk(adopt.Walk):
         end = pressed + self.a.within
         n = 0
         after_line = None
+        # Each frame's moment, seconds after the press, so "did anything stand still" is read
+        # against a clock: frame name, when its capture began, when it was back on this side.
+        times = open(frames / 'times.tsv', 'w')
+        times.write('frame\tasked_s\tdone_s\n')
         while time.monotonic() < end:
             n += 1
+            asked = time.monotonic() - pressed
             command([HERE / 'shot.sh', self.vm, frames / ('%03d.png' % n)], 60)
+            times.write('%03d.png\t%.2f\t%.2f\n' % (n, asked, time.monotonic() - pressed))
+            times.flush()
             if after_line is None and 'relaunching into' in self.log():
                 after_line = n
             if after_line is not None and n >= after_line + 1:
                 break
+        times.close()
         relaunch_line = next((x for x in self.log().splitlines() if 'relaunching into' in x), '')
         if not relaunch_line:
             raise StepFailed(f'no relaunch within {self.a.within} s of the press')
@@ -216,16 +233,23 @@ class Walk(adopt.Walk):
         relaunched = round(time.monotonic() - pressed, 1)
         # stop.sh quits the recorded pid: record the instance that is actually running now.
         (self.state / 'app.pid').write_text(new + '\n')
+        # The updating app's own phase timings (richdoctor update_timing: downloading, installing,
+        # restart_notice, in milliseconds), kept beside the frames before anything below can fail.
+        # A build without that record leaves the file empty, which says so rather than failing.
+        (self.out / 'update-timing.log').write_text(guest(
+            self.vm, 'find ' + shlex.quote(self.home) + ' -name "update-timing.log*" -exec cat {} + 2>/dev/null || true',
+            60) + '\n')
         end = time.monotonic() + 60
         while time.monotonic() < end and 'update activated:' not in self.log():
             time.sleep(1)
         log = self.log()
         line = next((x for x in log.splitlines() if 'update activated:' in x), '')
         want = f"{self.facts['version_before']} -> {self.a.expect_version}"
-        if want not in line:
-            raise StepFailed('the relaunch did not activate the update: ' + (line or 'no activation line'))
         version = guest(self.vm, '/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" '
                         + shlex.quote(self.dest + '/Contents/Info.plist'))
+        if want not in line:
+            raise StepFailed('the relaunch did not activate the update: ' + (line or 'no activation line')
+                             + f'; the installed bundle is {version}')
         if version != self.a.expect_version:
             raise StepFailed('the installed bundle is ' + version)
         self.facts.update({'pid_after': int(new), 'version_after': version})
@@ -304,6 +328,8 @@ def main():
     p.add_argument('--expect-version', required=True, help='the version that endpoint offers')
     p.add_argument('--within', type=float, default=300, help='seconds for each wait on the app')
     p.add_argument('--steps', default=','.join(STEPS))
+    p.add_argument('--close-settings', action='store_true',
+                   help='press Escape right after Download update, so the frames show the window with Settings closed')
     a = p.parse_args()
     if '/releases/download/v' + a.expect_version + '/' not in a.endpoint:
         p.error('--endpoint must be the --expect-version release tag\'s own manifest')
