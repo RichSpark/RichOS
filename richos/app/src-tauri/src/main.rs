@@ -4794,12 +4794,22 @@ fn first_frame_painted(app: AppHandle) {
     }
 }
 
+#[derive(Debug, PartialEq, serde::Serialize)]
+#[serde(tag = "state", rename_all = "kebab-case")]
+enum SplashPlayback {
+    Finished,
+    Fallback {
+        #[serde(rename = "elapsedMs")]
+        elapsed_ms: u64,
+    },
+}
+
 #[richos_command::command]
-async fn splash_native_finished() -> bool {
+async fn splash_native_finished() -> SplashPlayback {
     #[cfg(target_os = "macos")]
     { splash_player::finished().await }
     #[cfg(not(target_os = "macos"))]
-    { false }
+    { SplashPlayback::Fallback { elapsed_ms: 0 } }
 }
 
 #[richos_command::command]

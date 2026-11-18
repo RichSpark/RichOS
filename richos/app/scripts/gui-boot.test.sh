@@ -444,7 +444,7 @@ declare_rules() {
     'the late background check confirming what was written; a confirmation, not a finding'
   routine '^\[richos\] native splash: frame zero scheduled [0-9]+ ms after process start$' \
     'the authored splash clock began'
-  routine '^\[richos\] native splash: (reached authored endpoint|fade complete)$' \
+  routine '^\[richos\] native splash: (reached authored endpoint at ([0-9]+ ms|unknown) after process start|fade complete)$' \
     'the authored timeline and the Home reveal completed'
   routine '^\[richos\] native splash: [0-9]+ frames, [0-9]+ dropped, [0-9]+ corrupted$' \
     'the native renderer reported frame counts for the completed splash'

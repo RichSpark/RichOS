@@ -573,7 +573,6 @@
 [richos] openings: the image of {} was not saved ({})
 [richos] openings: what was earned could not be saved ({})
 [richos] openings: today's opening could not be written down ({})
-[richos] native splash: renderer failed
 [richos] splash assets: pack download failed
 #
 # Keep chat alive and the context meter (round 83). A healthy boot prints none of these: a

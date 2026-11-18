@@ -1034,7 +1034,7 @@
   }
 
 
-  function build(entry) {
+  function build(entry, silent) {
     var t = entry.tokens;
     var root = div("splash");
     root.id = "splash";
@@ -1152,7 +1152,7 @@
           },
           hold: holdMs,
           // Exports and share cards make no sound. Native playback owns its cue.
-          silent: drawing() || state.native,
+          silent: drawing() || state.native || !!silent,
           native: state.native,
           drawing: drawing(),
           exportScale: drawing() ? window.__RICHOS_LAUNCH__.exportScale : 0,
@@ -1178,6 +1178,7 @@
 
   var node = null;
   var yielded = false;
+  var nativeRecovering = false;
   var ceiling = null;
   var holdTimer = null;
   var state = {
@@ -1288,7 +1289,7 @@
   /// Get out of the way. Called by `main.js` when the app is usable and by the ceiling -
   /// whichever happens first, and only once. ROUND 85: never by the user's hand.
   function yieldNow(reason) {
-    if (yielded || (state.native && reason !== "native-finished")) return;
+    if (yielded || nativeRecovering || (state.native && reason !== "native-finished")) return;
 
     // THE HOLD, AND THE ONE CALLER IT APPLIES TO.
     //
@@ -1454,31 +1455,48 @@
   // state until the shell confirms that the layer's fade has finished.
   function playNative(entry) {
     var invoke = window.__TAURI_INTERNALS__.invoke.bind(window.__TAURI_INTERNALS__);
-    Promise.resolve(invoke("splash_native_finished")).then(function (finished) {
-      if (finished) {
+    Promise.resolve(invoke("splash_native_finished")).then(function (result) {
+      if (result.state === "finished" || result.elapsedMs >= holdMs) {
         holdAt(holdMs);
         yieldNow("native-finished");
       } else {
-        recover();
+        recover(Math.max(0, result.elapsedMs));
       }
-    }, recover);
+    }, function () { recover(0); });
 
-    function recover() {
-      Promise.resolve(invoke("splash_native_dismiss", { animated: false })).then(function () {
+    function recover(elapsed) {
+      // Paint the fallback at the same point while the native view still covers it.
+      // The native cue may already have sounded. Only a fallback from zero owns it.
+      if (!node || yielded) return;
+      nativeRecovering = true;
+      removeSelf();
+      state.native = false;
+      shownAt = null;
+      heldMoment = null;
+      state.heldAt = null;
+      node = build(entry, elapsed > 0);
+      document.body.insertBefore(node, document.body.firstChild);
+      shownAt = clock();
+      holdAt(elapsed);
+      Promise.resolve(invoke("splash_native_dismiss", { animated: false })).then(resume, resume);
+
+      function resume() {
         if (!node || yielded) return;
-        removeSelf();
-        state.native = false;
-        shownAt = null;
+        nativeRecovering = false;
         heldMoment = null;
         state.heldAt = null;
-        node = build(entry);
-        document.body.insertBefore(node, document.body.firstChild);
-        shownAt = clock();
+        shownAt = clock() - elapsed;
+        if (bar && barRun(elapsed) === 1) {
+          bar.landed = true;
+          bar.landedAt = shownAt + BAR_START_MS + barSpan();
+        }
+        splashAnimations().forEach(function (animation) {
+          if (animation.currentTime < animation.effect.getComputedTiming().endTime) animation.play();
+        });
         if (bar) raf = requestAnimationFrame(tick);
-        // The recovery shows the whole authored animation, including frame zero.
-        ceiling = setTimeout(function () { yieldNow("ceiling"); }, holdMs + CEILING_GRACE_MS);
+        ceiling = setTimeout(function () { yieldNow("ceiling"); }, holdRemaining() + CEILING_GRACE_MS);
         yieldNow("app-ready");
-      });
+      }
     }
   }
 

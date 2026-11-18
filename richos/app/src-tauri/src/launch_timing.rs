@@ -146,6 +146,14 @@ pub fn note_native_splash_started(anchor_ms: f64) {
     }
 }
 
+#[cfg(target_os = "macos")]
+pub fn note_native_splash_outcome(outcome: &str) {
+    let elapsed = since_start().map_or_else(|| "unknown".to_string(), |ms| format!("{ms} ms"));
+    let said = format!("[richos] native splash: {outcome} at {elapsed} after process start");
+    eprintln!("{said}");
+    keep(&said);
+}
+
 /// The start-up hook has finished.
 pub fn mark_finished() {
     let at = since_start();
