@@ -38,6 +38,8 @@ final class GestureController {
     private var appTermination: NSObjectProtocol?
     private var accessibilityChanges: NSObjectProtocol?
     private var recheckingPermissions = false
+    private var permissionCheckQueued = false
+    private var permission: GesturePermission?
 
     init() {
         AXUIElementSetMessagingTimeout(system, 0.08)
@@ -71,10 +73,17 @@ final class GestureController {
         if selection != previous { press = nil; firstTitleClick = nil; pruneObservers() }
 
         let status: Preferences.Status
-        if selection.isEmpty { status = .off }
-        else if !AXIsProcessTrusted() { status = .accessibility }
-        else if !CGPreflightListenEventAccess() { status = .inputMonitoring }
-        else { status = startTap() ? .running : .inputUnavailable }
+        if selection.isEmpty {
+            status = .off
+        } else {
+            let measured = GesturePermission.current
+            permission = measured
+            switch measured {
+            case .accessibility: status = .accessibility
+            case .inputMonitoring: status = .inputMonitoring
+            case .granted: status = startTap() ? .running : .inputUnavailable
+            }
+        }
 
         if status != .running { stopTap() }
         if status != reportedStatus {
@@ -85,20 +94,52 @@ final class GestureController {
     }
 
     private func recheckPermissions() {
-        guard !Preferences.selection.isEmpty, !recheckingPermissions else { return }
+        guard !Preferences.selection.isEmpty else { return }
+        if recheckingPermissions { permissionCheckQueued = true; return }
         recheckingPermissions = true
-        stopTap()
-        // Coalesce the two notifications and allow the privacy change to settle.
-        // exec keeps the launchd job while replacing its cached trust state.
+        stopTap(keepingWindows: true)
+        // Both notifications can describe a grant for a different app. A fresh
+        // process can check them without discarding the windows we remember.
         DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(150)) { [weak self] in
-            if let executable = Bundle.main.executableURL?.path, let argument = strdup(executable) {
-                var arguments: [UnsafeMutablePointer<CChar>?] = [argument, nil]
-                execv(executable, &arguments)
-                free(argument)
-            }
-            Preferences.publish(.inputUnavailable)
-            self?.record(.windowGestureAvailability, .unavailable)
+            self?.probePermission()
         }
+    }
+
+    private func probePermission() {
+        guard let executable = Bundle.main.executableURL else { finishPermissionCheck(nil); return }
+        let probe = Process()
+        probe.executableURL = executable
+        probe.arguments = ["--check-gesture-permission"]
+        probe.standardOutput = FileHandle.nullDevice
+        probe.standardError = FileHandle.nullDevice
+        probe.terminationHandler = { [weak self] result in
+            let observed = result.terminationReason == .exit ? GesturePermission(rawValue: result.terminationStatus) : nil
+            DispatchQueue.main.async { self?.finishPermissionCheck(observed) }
+        }
+        do { try probe.run() }
+        catch { finishPermissionCheck(nil); return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + .seconds(2)) {
+            if probe.isRunning { probe.terminate() }
+        }
+    }
+
+    private func finishPermissionCheck(_ observed: GesturePermission?) {
+        if Preferences.selection.isEmpty || (observed != nil && observed == permission) {
+            let queued = permissionCheckQueued
+            permissionCheckQueued = false
+            recheckingPermissions = false
+            if queued && !Preferences.selection.isEmpty { recheckPermissions() }
+            else { refresh() }
+            return
+        }
+        // exec keeps the launchd job while replacing its cached trust state.
+        if let executable = Bundle.main.executableURL?.path, let argument = strdup(executable) {
+            var arguments: [UnsafeMutablePointer<CChar>?] = [argument, nil]
+            execv(executable, &arguments)
+            free(argument)
+        }
+        Preferences.publish(.inputUnavailable)
+        record(.windowGestureAvailability, .unavailable)
     }
 
     private func startTap() -> Bool {
@@ -120,13 +161,14 @@ final class GestureController {
         return true
     }
 
-    private func stopTap() {
+    private func stopTap(keepingWindows: Bool = false) {
         if let source { CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes) }
         if let tap { CFMachPortInvalidate(tap) }
         self.source = nil
         tap = nil
         press = nil
         firstTitleClick = nil
+        if keepingWindows { return }
         maximized.removeAll()
         dockMinimized.removeAll()
         pruneObservers()
@@ -280,20 +322,28 @@ final class GestureController {
     }
 
     private func toggleFrame(_ window: AXUIElement, at point: CGPoint) {
-        guard Preferences.selection.contains(.titleBar), AXIsProcessTrusted(), CGPreflightListenEventAccess(),
+        guard !recheckingPermissions, Preferences.selection.contains(.titleBar), AXIsProcessTrusted(), CGPreflightListenEventAccess(),
               Preferences.nativeTitleBarIsOff,
               window.ordinaryWindow, window.minimized == false, window.settable(kAXPositionAttribute),
               window.settable(kAXSizeAttribute), let current = window.frame else { return }
         let displays = GestureDisplay.current()
         guard let display = displays.first(where: { $0.frame.contains(point) }) else { return }
         let started = ProcessInfo.processInfo.systemUptime
+        let restoreFrame: CGRect?
         if let saved = maximized[window],
            current.nearlyEquals(saved.maximized) || !displays.contains(where: { $0.id == saved.display }) {
-            let original = displays.contains(where: { $0.id == saved.display }) ? saved.original : display.reachable(saved.original)
-            let restored = window.setFrame(original) && window.frame?.nearlyEquals(original) == true
+            restoreFrame = displays.contains(where: { $0.id == saved.display }) ? saved.original : display.reachable(saved.original)
+        } else if current.nearlyEquals(display.usable) {
+            // A manually filled window or a fresh helper has no exact frame to restore.
+            restoreFrame = display.usable.insetBy(dx: display.usable.width / 8, dy: display.usable.height / 8).integral
+        } else {
+            restoreFrame = nil
+        }
+        if let restoreFrame {
+            let restored = window.setFrame(restoreFrame) && window.frame?.nearlyEquals(restoreFrame) == true
             if restored { maximized[window] = nil; pruneObservers() }
             record(.windowGestureRestore, restored ? .complete : .issues, started: started)
-        } else if !current.nearlyEquals(display.usable) {
+        } else {
             let adjusted = window.setFrame(display.usable)
             if let actual = window.frame, !actual.nearlyEquals(current) {
                 maximized[window] = RestorableFrame(original: current, maximized: actual, display: display.id)
@@ -308,7 +358,8 @@ final class GestureController {
     }
 
     private func apply(_ action: DockClick, to app: NSRunningApplication, revision: UInt64, deadline: TimeInterval) {
-        guard Preferences.selection.contains(.dock), AXIsProcessTrusted(), CGPreflightListenEventAccess(), !app.isTerminated else { return }
+        guard !recheckingPermissions, Preferences.selection.contains(.dock), AXIsProcessTrusted(),
+              CGPreflightListenEventAccess(), !app.isTerminated else { return }
         if NSWorkspace.shared.frontmostApplication?.processIdentifier != app.processIdentifier {
             // An app in another Space may not be active by the time the Dock
             // animation starts. Any later mouse action takes precedence.
@@ -324,7 +375,7 @@ final class GestureController {
         case let .minimize(window):
             // A rapid following click can have arrived while the first action
             // was still waiting for Dock. It still toggles the same window.
-            if dockMinimized[pid] == window, window.minimized == true {
+            if dockMinimized[pid] == window {
                 restoreDockWindow(window, pid: pid, started: started)
                 return
             }

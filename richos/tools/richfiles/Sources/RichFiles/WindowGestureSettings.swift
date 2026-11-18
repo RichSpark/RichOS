@@ -38,6 +38,7 @@ public enum WindowGestureService {
         case .enabled: return "enabled"
         case .requiresApproval: return "approval"
         case .notRegistered: return "off"
+        case .notFound: return action == "register" ? "unavailable" : "off"
         default: return "unavailable"
         }
     }
