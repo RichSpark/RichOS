@@ -418,7 +418,10 @@ fn launch_timing(scope: &Scope, ctx: &Context, budget: &mut u64) -> Item {
                     let (stamp, rest) = line.split_once(" RichOS ")?;
                     let at = crate::util::parse_utc_stamp(stamp)?;
                     let (_, event) = rest.split_once(" [richos] ")?;
-                    if !event.starts_with("launch timing: ") && !event.starts_with("native splash: ") {
+                    if !event.starts_with("launch timing: ")
+                        && !event.starts_with("native splash: ")
+                        && !event.starts_with("launch engine check completed: ")
+                    {
                         return None;
                     }
                     Some((at, line.chars().take(1024).collect::<String>()))
@@ -1042,6 +1045,7 @@ mod tests {
         write(&root.join("launch.log"), &format!(
             "{when} RichOS 1.2.1 pid 11 [richos] launch timing: splash started playing 350 ms\n\
              {when} RichOS 1.2.1 pid 11 [richos] native splash: renderer missed the authored endpoint, falling back at 2999 ms of playback at 3349 ms after process start\n\
+             {when} RichOS 1.2.1 pid 11 [richos] launch engine check completed: full, once for this runtime (6535 files read), 1090 ms\n\
              {when} RichOS 1.2.1 pid 11 [richos] unrelated detail\n"
         ));
         let items = collect(Category::StartupCrash, &scope(&h.0, Window::around(T)), &Context::default(), 0);
@@ -1050,6 +1054,7 @@ mod tests {
         assert_eq!(timing.coverage, Coverage::InWindow);
         assert!(timing.text.contains("1.2.1 pid 11") && timing.text.contains("350 ms"));
         assert!(timing.text.contains("2999 ms of playback at 3349 ms after process start"));
+        assert!(timing.text.contains("launch engine check completed: full, once for this runtime (6535 files read), 1090 ms"));
         assert!(!timing.text.contains("old outcome") && !timing.text.contains("unrelated detail"));
     }
 

@@ -448,6 +448,8 @@ declare_rules() {
     'the authored timeline and the Home reveal completed'
   routine '^\[richos\] native splash: [0-9]+ frames, [0-9]+ dropped, [0-9]+ corrupted$' \
     'the native renderer reported frame counts for the completed splash'
+  routine '^\[richos\] launch engine check completed: (none \(trusted as verified when it was written\)|full, once for this runtime \([0-9]+ files read\)|refused the engine), [0-9]+ ms$' \
+    'the runtime verifier completed after the launch timing line'
   # The optional RichFiles library warmup, after the app is usable.
   routine '^\[richos\] RichFiles library: loaded in [0-9]+ ms at [0-9]+ ms after process start$' \
     'RichFiles library load completed; duration and time since startup'

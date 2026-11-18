@@ -590,3 +590,9 @@
 [richos] keep chat alive: {} is not idle; nothing was sent
 [richos] queued input after a keep-alive: {}
 [richos] launch log: the line was not kept in {} ({})
+
+# Failures in runtime verification and its handoff to the app event loop.
+[richos] launch engine check: could not start the verifier ({})
+[richos] launch engine check: review and Codex watchers await a verified engine ({})
+[richos] launch engine check: the engine update could not reach the app ({})
+[richos] launch engine check: watchers could not reach the app ({})

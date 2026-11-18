@@ -110,6 +110,11 @@ pub fn mark_first_frame(splash: bool) {
     });
 }
 
+/// The window can paint while the engine check is still running.
+pub fn mark_engine_check_started() {
+    with(|m| m.engine = Some("pending (verification in progress)".into()));
+}
+
 /// The first engine check: how many files it read (`None` when it refused) and what it cost.
 pub fn note_engine_check(files_read: Option<usize>, millis: u64) {
     let said = match files_read {
@@ -117,7 +122,18 @@ pub fn note_engine_check(files_read: Option<usize>, millis: u64) {
         Some(n) => format!("full, once for this runtime ({n} files read), {millis} ms"),
         None => format!("refused the engine, {millis} ms"),
     };
-    with(|m| m.engine = Some(said));
+    let written = with(|m| {
+        if m.written {
+            return true;
+        }
+        m.engine = Some(said.clone());
+        false
+    });
+    if written {
+        let line = format!("[richos] launch engine check completed: {said}");
+        eprintln!("{line}");
+        keep(&line);
+    }
 }
 
 /// Which splash was selected and whether its native player was attached.
