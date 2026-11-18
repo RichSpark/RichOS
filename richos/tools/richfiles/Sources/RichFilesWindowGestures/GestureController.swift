@@ -5,6 +5,9 @@ import RichFilesCore
 
 final class GestureController {
     private typealias Preferences = WindowGesturePreferences
+    // Layouts with tiling margins and character grids can land just inside
+    // the requested edges while still filling the display or the smaller frame.
+    private static let layoutTolerance: CGFloat = 16
     private struct RestorableFrame {
         let original: CGRect
         let maximized: CGRect
@@ -338,8 +341,8 @@ final class GestureController {
 
         let usable = display.usable
         let reduced = usable.insetBy(dx: usable.width / 8, dy: usable.height / 8).integral
-        if current.nearlyEquals(usable) {
-            restoreFrame(window, to: reduced, started: started)
+        if current.edgesAreNear(usable, within: Self.layoutTolerance) {
+            restoreFrame(window, to: reduced, started: started, allowLayoutAdjustment: true)
             return
         }
 
@@ -348,7 +351,8 @@ final class GestureController {
         if let actual, !actual.nearlyEquals(current) {
             maximized[window] = RestorableFrame(original: current, maximized: actual, display: display.id)
             observe(window)
-            record(.windowGestureMaximize, adjusted && actual.nearlyEquals(usable) ? .complete : .issues, started: started)
+            let fillsDisplay = adjusted && actual.edgesAreNear(usable, within: Self.layoutTolerance)
+            record(.windowGestureMaximize, fillsDisplay ? .complete : .issues, started: started)
         } else {
             maximized[window] = nil
             pruneObservers()
@@ -356,15 +360,21 @@ final class GestureController {
             // resize leaves a filled window where it was, let it shrink.
             let visible = current.intersection(usable)
             if adjusted, actual != nil, visible.width >= usable.width * 0.9, visible.height >= usable.height * 0.9 {
-                restoreFrame(window, to: reduced, started: started)
+                restoreFrame(window, to: reduced, started: started, allowLayoutAdjustment: true)
                 return
             }
             record(.windowGestureMaximize, .unavailable, started: started)
         }
     }
 
-    private func restoreFrame(_ window: AXUIElement, to frame: CGRect, started: TimeInterval) {
-        let restored = window.setFrame(frame) && window.frame?.nearlyEquals(frame) == true
+    private func restoreFrame(_ window: AXUIElement, to frame: CGRect, started: TimeInterval,
+                              allowLayoutAdjustment: Bool = false) {
+        guard window.setFrame(frame), let actual = window.frame else {
+            record(.windowGestureRestore, .issues, started: started)
+            return
+        }
+        let restored = allowLayoutAdjustment ? actual.edgesAreNear(frame, within: Self.layoutTolerance)
+                                            : actual.nearlyEquals(frame)
         if restored {
             maximized[window] = nil
             pruneObservers()
@@ -466,6 +476,11 @@ final class GestureController {
 }
 
 private extension CGRect {
+    func edgesAreNear(_ other: CGRect, within tolerance: CGFloat) -> Bool {
+        abs(minX - other.minX) <= tolerance && abs(minY - other.minY) <= tolerance
+            && abs(maxX - other.maxX) <= tolerance && abs(maxY - other.maxY) <= tolerance
+    }
+
     func nearlyEquals(_ other: CGRect) -> Bool {
         abs(minX - other.minX) < 2 && abs(minY - other.minY) < 2
             && abs(width - other.width) < 2 && abs(height - other.height) < 2
