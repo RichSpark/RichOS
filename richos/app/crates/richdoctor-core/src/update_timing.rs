@@ -10,7 +10,7 @@ pub fn record(
     phase: &'static str,
     outcome: &'static str,
     elapsed_ms: u64,
-    build: &'static str,
+    build: &str,
 ) {
     crate::richpass_log::append_bounded(
         root,

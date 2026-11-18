@@ -103,6 +103,9 @@ pub fn prepare(compiled_version: &str) -> Result<Option<StartupLease>, String> {
         }
         None => wait_for_lock(|| StartupLease::acquire(&home)),
     }.map_err(|e| format!("Could not establish application update exclusion: {e}"))?;
+    if let Err(error) = wait_for_lock(|| lease.remember_installation(&bundle, compiled_version)) {
+        return Err(format!("Could not recover the application installation: {error}"));
+    }
     let current_bundle_matches = || -> bool {
         fs::metadata(&bundle).map(|m| m.dev() == before.dev() && m.ino() == before.ino()).unwrap_or(false)
             && richos_user_update::bundle_version(&bundle).ok().as_deref() == Some(compiled_version)
@@ -148,19 +151,20 @@ pub fn prepare(compiled_version: &str) -> Result<Option<StartupLease>, String> {
     // its shared side, which excludes every other activation) until it exits.
     let last_activation = richos_user_update::last_activation_with_id(&home).ok().flatten();
     let mut update_arrival = None;
-    let result = wait_for_lock(|| richos_user_update::with_preferred(&home, |publication| {
+    let result = wait_for_lock(|| richos_user_update::with_preferred_at(&home, |publication, installed| {
         if let Some((activation, id)) = &last_activation {
             if !activation.rollback && activation.left.is_some()
                 && activation.entered.archive_sha256 == publication.archive_sha256
                 && activation.entered.version == compiled_version
                 && publication.version == compiled_version
-                && bundle == home.join("Applications/RichOS.app")
+                && bundle.canonicalize()? == installed
             {
                 update_arrival = Some(id.clone());
             }
         }
+        let target = installed.join("Contents/MacOS").join(&publication.executable_name);
         if redirected {
-            if exe.canonicalize()? != publication.executable(&home).canonicalize()?
+            if exe.canonicalize()? != target.canonicalize()?
                 || publication.version != compiled_version
             {
                 return Err(io::Error::new(io::ErrorKind::InvalidData,
@@ -184,7 +188,7 @@ pub fn prepare(compiled_version: &str) -> Result<Option<StartupLease>, String> {
         if !activated && !loaded_bundle_changed && !newer {
             return Ok(());
         }
-        let mut command = Command::new(publication.executable(&home));
+        let mut command = Command::new(target);
         command.args(std::env::args_os().skip(1))
             .env(INHERITED_SESSION, lease.session_fd().to_string())
             // Which check this copy ran before handing over, for the launch line the copy that
