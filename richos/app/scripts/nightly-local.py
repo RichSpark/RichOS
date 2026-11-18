@@ -1792,16 +1792,18 @@ class Runner:
             return None
         slug = re.sub(r"[^a-z0-9]+", "-", tag.lower()).strip("-")[:40].rstrip("-")
         brief = self.state / "next-versions" / slug / "next-version-worker-brief.md"
-        title, question = published_escalation(tag, stable, brief)
+        title = f"{tag} published; bump main's next release version."
+        question = "Start Zach with the filled brief using the model configured in his shelf."
         try:
+            question = next_version_handoff(tag, brief)
             brief.parent.mkdir(parents=True, exist_ok=True)
             brief.write_text((ROOT / SCRIPTS / "next-version-worker-brief.md").read_text()
                              .replace(BRIEF_TAG, tag))
             return self.raise_release_job(title, question, f"{tag} is published with its changelog.")
-        except (OSError, RuntimeError) as error:
+        except (OSError, RuntimeError, UnicodeError) as error:
             # Do not report a published release as failed because its later version bump
             # needs recovery. The next build's version collision guard remains in force.
-            self.announce(escalation_missing_line(tag, stable, error, brief))
+            self.announce(escalation_missing_line(tag, error, brief, question))
             return None
 
     def describe_stable(self, info):
@@ -3743,28 +3745,32 @@ CHANGELOG_SPAWN_LINES = (
 BRIEF_TAG = "<TAG>"
 
 
-def published_escalation(tag, stable, brief):
+def next_version_handoff(tag, brief):
+    shelf = ROOT / "richos/engine/team/shelf/zach.md"
+    header = re.match(r"\A---[ \t]*\n(.*?)^---[ \t]*$", shelf.read_text(encoding="utf-8"), re.M | re.S)
+    configured = re.search(r"^model:[ \t]*(.*)$", header[1], re.M) if header else None
+    model = configured[1].strip().strip("\"'").lower() if configured else ""
+    if not re.fullmatch(r"[a-z][a-z0-9]*", model) or model == "inherit":
+        raise RuntimeError(f"no explicit model in Zach's shelf: {shelf}")
     # The spawn guard wants <role>-<model>-<effort>-<identifier>, identifier lower-case
     # alphanumeric, at most 12, and the effort word equal to the level the command names.
     slug = "nv" + re.sub(r"[^a-z0-9]+", "", tag.lower().lstrip("v"))[:10]
     start = shlex.join([str(ROOT / "richos/engine/scripts/spawn.sh"),
-                        f"zach-sonnet-high-{slug}", "--repo", "richos",
-                        "--type", "zach", "--model", "sonnet", "--effort", "high",
+                        f"zach-{model}-high-{slug}", "--repo", "richos",
+                        "--type", "zach", "--model", model, "--effort", "high",
                         "--brief", str(brief)])
-    title = f"{tag} published; bump main's next release version."
-    return title, (f"The changelog is already published with {tag}. Start Zach with this exact "
-                   f"command: `{start}`. The brief already names the published tag. "
-                   "Review and land its version-only commit. No changelog "
-                   "writing or CEO intervention is needed.")
+    return (f"The changelog is already published with {tag}. Start Zach with this exact "
+            f"command: `{start}`. The brief already names the published tag. "
+            "Review and land its version-only commit. No changelog writing or CEO intervention is needed.")
 
 
-def escalation_missing_line(tag, stable, error, brief):
+def escalation_missing_line(tag, error, brief, question):
     """The one line a publish whose escalation could not be raised leaves: what to do by hand."""
     reason = " ".join(str(error).split())
     if len(reason) > 300:
         reason = reason[:297] + "..."
-    title, question = published_escalation(tag, stable, brief)
-    return (f"ESCALATION NOT RAISED ({reason}). The release itself is published. {title} "
+    return (f"ESCALATION NOT RAISED ({reason}). The release itself is published. "
+            f"Bump main's next release version after {tag}. "
             f"If its brief is missing, fill {brief} from "
             f"richos/app/scripts/next-version-worker-brief.md with <TAG> replaced by {tag}. "
             f"{question}")

@@ -4207,13 +4207,30 @@ class PublishedReportTests(unittest.TestCase):
         self.assertEqual(row["title"], "v1.2.1 published; bump main's next release version.")
         self.assertIn("next-version-worker-brief.md", row["question"])
         self.assertIn("already published", row["question"])
-        self.assertIn("zach-sonnet-high-nv121 ", row["question"] + " ")
-        self.assertRegex(row["question"], r"zach-sonnet-high-[a-z0-9]{1,12} --repo")
-        self.assertIn("--repo richos --type zach --model sonnet --effort high --brief", row["question"])
+        self.assertRegex(row["question"], r"zach-(?P<model>[a-z0-9]+)-high-nv121 --repo richos "
+                         r"--type zach --model (?P=model) --effort high --brief")
         brief = self.runner.state / "next-versions/v1-2-1/next-version-worker-brief.md"
         self.assertIn(shlex.quote(str(brief)), row["question"])
-        self.assertIn("v1.2.1 is a published stable release", brief.read_text())
-        self.assertNotIn("<TAG>", brief.read_text())
+        text = brief.read_text()
+        self.assertIn("v1.2.1 is a published stable release", text)
+        self.assertNotIn("<TAG>", text)
+        self.assertNotIn("--model ", text)
+        self.assertEqual([args[0] for args in self.started], [str(m.ESCALATE)])
+        self.main_untouched()
+
+    def test_a_changed_shelf_model_changes_both_the_spawn_name_and_model_flag(self):
+        repo = self.root / "checkout"
+        shelf = repo / "richos/engine/team/shelf/zach.md"
+        shelf.parent.mkdir(parents=True)
+        shelf.write_text("---\nname: zach\nmodel: haiku\n---\n\nmodel: sonnet\n")
+        template = m.SCRIPTS / "next-version-worker-brief.md"
+        (repo / m.SCRIPTS).mkdir(parents=True)
+        shutil.copyfile(m.ROOT / template, repo / template)
+        with patch.object(m, "ROOT", repo), contextlib.redirect_stdout(io.StringIO()):
+            self.runner.report_published("v1.2.1", stable=True)
+        (row,) = self.rows()
+        self.assertIn("zach-haiku-high-nv121 --repo richos --type zach --model haiku --effort high",
+                      row["question"])
         self.assertEqual([args[0] for args in self.started], [str(m.ESCALATE)])
         self.main_untouched()
 
@@ -4231,8 +4248,23 @@ class PublishedReportTests(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()) as output:
             self.runner.report_published("v1.2.1", stable=True)
         self.assertIn("The release itself is published", output.getvalue())
-        self.assertIn("--type zach --model sonnet", output.getvalue())
+        self.assertRegex(output.getvalue(), r"zach-(?P<model>[a-z0-9]+)-high-nv121 --repo richos "
+                         r"--type zach --model (?P=model) --effort high --brief")
         self.assertIn("If its brief is missing", output.getvalue())
+        self.assertEqual(self.rows(), [])
+        self.assertEqual(self.started, [])
+        self.main_untouched()
+
+    def test_a_missing_shelf_model_does_not_claim_publication_failed(self):
+        repo = self.root / "checkout"
+        shelf = repo / "richos/engine/team/shelf/zach.md"
+        shelf.parent.mkdir(parents=True)
+        shelf.write_text("---\nname: zach\n---\n\nmodel: sonnet\n")
+        with patch.object(m, "ROOT", repo), contextlib.redirect_stdout(io.StringIO()) as output:
+            self.runner.report_published("v1.2.1", stable=True)
+        self.assertIn("The release itself is published", output.getvalue())
+        self.assertIn("model in Zach's shelf", output.getvalue())
+        self.assertNotIn("Start Zach with this exact command", output.getvalue())
         self.assertEqual(self.rows(), [])
         self.assertEqual(self.started, [])
         self.main_untouched()
