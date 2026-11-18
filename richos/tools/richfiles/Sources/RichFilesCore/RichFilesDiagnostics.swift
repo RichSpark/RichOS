@@ -4,6 +4,7 @@ import Foundation
 public enum RichFilesDiagnostics {
     public enum Operation: String, Codable, Sendable {
         case listing, copy, move, recovery, gitHistory, gitComparison
+        case glanceCaptureFrame, glanceCaptureOutput, glanceCaptureSession
         case glanceDisplay, glanceDecode, glanceFolder, glancePreview, glanceDefaults, glanceMetadata
     }
     public enum Outcome: String, Codable, Sendable {
@@ -44,6 +45,9 @@ public enum RichFilesDiagnostics {
         let folder = library.appendingPathComponent("Logs/RichOS", isDirectory: true)
         writer.async { try? append(sample, in: folder) }
     }
+
+    /// Finish enqueued records before a short-lived app exits.
+    public static func flush() { writer.sync {} }
 
     public static func milliseconds(since started: TimeInterval) -> Int {
         max(0, Int((ProcessInfo.processInfo.systemUptime - started) * 1_000))

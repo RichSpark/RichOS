@@ -151,17 +151,17 @@ async function techyScopeThisConversation(page) {
   await page.waitForSelector("#techy-scope", { state: "hidden" });
 }
 
-async function openApp(browser, viewport, preset) {
+async function openApp(browser, viewport, preset, overrides = {}) {
   const page = await browser.newPage({ viewport: viewport || { width: 1400, height: 900 } });
   const errors = [];
   page.on("pageerror", (e) => errors.push(String(e)));
   page.on("console", (m) => {
     if (m.type() === "error") errors.push("console: " + m.text());
   });
-  await page.addInitScript(() => {
+  await page.addInitScript((initialOverrides) => {
     let real = null;
     window.__listeners = {};
-    window.__overrides = {};
+    window.__overrides = initialOverrides;
     Object.defineProperty(window, "RichBridge", {
       configurable: true,
       get() {
@@ -187,7 +187,7 @@ async function openApp(browser, viewport, preset) {
     window.__emit = function (name, payload) {
       for (const cb of window.__listeners[name] || []) cb({ event: name, payload });
     };
-  });
+  }, overrides);
   if (preset) {
     await page.addInitScript((v) => {
       window.__RICHOS_MOCK_PRESET__ = v;
@@ -603,6 +603,19 @@ async function openSwearMeterFailure(browser, mode) {
 }
 
 const FIXTURES = {
+  async "richglance-shortcut-collision"(browser) {
+    const page = await openApp(browser, undefined, undefined, {
+      glance_capture_status: {value: {available: true, enabled: false, registered: false,
+        shortcut: {code: "KeyC", control: true, option: false, shift: true, command: false}}},
+      glance_capture_configure: {reject: true, value: "That shortcut is unavailable. Choose another combination."},
+    });
+    await page.click("#set-btn");
+    await page.click("#set-richglance-capture-open");
+    await page.click("#richglance-capture-on");
+    await page.waitForFunction(() => document.getElementById("richglance-capture-feedback").textContent
+      .includes("That shortcut is unavailable."));
+    return page;
+  },
   "swearmeter-preference-refused": browser => openSwearMeterFailure(browser, "preference"),
   "swearmeter-retry-refused": browser => openSwearMeterFailure(browser, "retry"),
   "swearmeter-card-unavailable": browser => openSwearMeterFailure(browser, "card"),
@@ -1553,6 +1566,7 @@ const FIXTURES = {
 /// names is present and usable on the screen the sentence appears on. Said here rather than
 /// left as an unexplained asymmetry.
 const TEXT_RENDERING_FIXTURES = new Set([
+  "richglance-shortcut-collision",
   "swearmeter-preference-refused", "swearmeter-retry-refused", "swearmeter-card-unavailable",
   "context-meter-refused", "keep-alive-refused",
   "resources-keyboard",

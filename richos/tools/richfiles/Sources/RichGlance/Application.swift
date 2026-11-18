@@ -13,6 +13,9 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var infoMenuItem: NSMenuItem?
     private var keyMonitor: Any?
     private var openingPanel: NSOpenPanel?
+    private var capture: CaptureController?
+    private var captureNotice: NSPanel?
+    private var captureLaunch = CommandLine.arguments.contains("--capture-request")
     private var launchOrigin = Application.launchOrigin()
 
     static func main() {
@@ -46,21 +49,33 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {
-        if let file = urls.first(where: GlanceFiles.supports) ?? urls.first(where: \.isFileURL) { open(file) }
+        for url in urls {
+            if let request = CaptureRequest.consume(url) {
+                beginCapture(originPID: request.originPID)
+                return
+            }
+        }
+        if let file = urls.first(where: GlanceFiles.supports) ?? urls.first(where: \.isFileURL) {
+            captureLaunch = false
+            open(file)
+        } else if captureLaunch, viewer == nil, capture == nil {
+            NSApp.terminate(nil)
+        }
     }
 
     func applicationOpenUntitledFile(_ sender: NSApplication) -> Bool {
-        if viewer == nil { chooseImage() }
+        if viewer == nil, capture == nil, !captureLaunch { chooseImage() }
         return true
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
+        guard capture == nil, !captureLaunch else { return false }
         if viewer == nil { chooseImage() }
         else if !hasVisibleWindows { viewer?.show() }
         return true
     }
 
-    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { capture == nil }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         // Hand back foreground ownership before the last window disappears.
@@ -128,8 +143,75 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
             guard let self else { return }
             openingPanel = nil
             if result == .OK, let file = panel?.url { open(file) }
-            else if viewer == nil { NSApp.terminate(nil) }
+            else if viewer == nil, capture == nil { NSApp.terminate(nil) }
         }
+    }
+
+    @objc private func startCapture() { beginCapture(originPID: nil) }
+
+    private func beginCapture(originPID: pid_t?) {
+        if let capture {
+            capture.revisitPermission()
+            return
+        }
+        captureNotice?.orderOut(nil)
+        captureNotice = nil
+        let shortcutOrigin = originPID.flatMap(NSRunningApplication.init(processIdentifier:))
+        let reliableOrigin = shortcutOrigin.flatMap { app in
+            app != .current && !app.isTerminated && app.activationPolicy == .regular ? app : nil
+        }
+        let origin = reliableOrigin ?? externalFrontmost
+        let keyWindow = origin == nil && NSApp.isActive ? NSApp.keyWindow : nil
+        let session = CaptureController(previousWindow: keyWindow === viewer?.window ? keyWindow : nil,
+                                        previousApp: origin ?? previousApplication) { [weak self] message, display in
+            guard let self else { return }
+            capture = nil
+            if let message, let display { showCaptureNotice(message, display: display) }
+            else { endCaptureLaunch() }
+        }
+        capture = session
+        openingPanel?.cancel(nil)
+        session.start()
+    }
+
+    private func showCaptureNotice(_ message: String, display: CGRect) {
+        let dark = NSApp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        let panel = NSPanel(contentRect: CGRect(x: display.midX - 123, y: display.maxY - 84, width: 246, height: 38),
+                            styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.level = .statusBar
+        panel.hasShadow = true
+        panel.ignoresMouseEvents = true
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
+        let background = NSView(frame: CGRect(x: 0, y: 0, width: 246, height: 38))
+        background.wantsLayer = true
+        background.layer?.backgroundColor = (dark ? NSColor(red: 0.094, green: 0.141, blue: 0.251, alpha: 1)
+                                                   : NSColor(red: 0.992, green: 0.988, blue: 0.973, alpha: 1)).cgColor
+        background.layer?.cornerRadius = 19
+        let label = NSTextField(labelWithString: "✓  " + message)
+        label.textColor = dark ? .white : .black
+        label.font = .systemFont(ofSize: 16, weight: .semibold)
+        label.alignment = .center
+        label.frame = CGRect(x: 0, y: 9, width: 246, height: 20)
+        background.addSubview(label)
+        panel.contentView = background
+        captureNotice = panel
+        panel.orderFrontRegardless()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) { [weak self, weak panel] in
+            guard let self, let panel, captureNotice === panel else { return }
+            panel.orderOut(nil)
+            captureNotice = nil
+            endCaptureLaunch()
+        }
+    }
+
+    private func endCaptureLaunch() {
+        if captureLaunch, viewer == nil {
+            RichFilesDiagnostics.flush()
+            NSApp.terminate(nil)
+        }
+        captureLaunch = false
     }
 
     @objc private func openInPreview() { viewer?.openInPreview() }
@@ -157,6 +239,7 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
         file.submenu = fileMenu
         fileMenu.addItem(withTitle: "Open…", action: #selector(chooseImage), keyEquivalent: "o").target = self
         fileMenu.addItem(withTitle: "Open in Preview", action: #selector(openInPreview), keyEquivalent: "").target = self
+        fileMenu.addItem(withTitle: "Capture Region…", action: #selector(startCapture), keyEquivalent: "").target = self
         fileMenu.addItem(.separator())
         fileMenu.addItem(withTitle: "Close", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
         menuBar.addItem(file)
@@ -184,6 +267,7 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
 extension Application: NSMenuItemValidation {
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == #selector(startCapture) { return capture == nil }
         if menuItem.action == #selector(openInPreview) { return viewer?.file != nil }
         if menuItem.action == #selector(showInfo) {
             menuItem.title = viewer?.info.explicitlyShown == true ? "Hide Info" : "Show Info"
