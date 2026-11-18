@@ -124,8 +124,10 @@ printf '%s\n' '  ok  packaged helper listed and extracted TAR.GZ and 7z'
 # object file's absolute path as a debug map and SwiftPM adds an absolute rpath to
 # the toolchain, so this scans the built bytes rather than trusting the flags.
 TMPDIR="$scratch" bash "$root/richos/app/scripts/package-richfiles.sh" --embedded "$scratch/embedded"
-python3 - "$HOME" "$scratch/embedded/RichFiles.app/Contents/MacOS/RichFiles" "$scratch/embedded/libRichFilesRail.dylib" \
-  "$scratch/embedded/RichFiles.app/Contents/Applications/RichGlance.app/Contents/MacOS/RichGlance" <<'PYTHON'
+embedded="$scratch/embedded/RichFiles.app"
+python3 - "$HOME" "$embedded/Contents/MacOS/RichFiles" "$scratch/embedded/libRichFilesRail.dylib" \
+  "$embedded/Contents/Applications/RichGlance.app/Contents/MacOS/RichGlance" \
+  "$embedded/Contents/Library/LoginItems/RichFiles Window Gestures.app/Contents/MacOS/RichFilesWindowGestures" <<'PYTHON'
 import sys
 home = sys.argv[1].rstrip('/').encode()
 markers = [b'/Volumes/', b'/Users/'] + ([home] if home else [])
@@ -140,4 +142,4 @@ if failed:
     print('  FAIL  the release RichFiles payload carries a build-machine path', file=sys.stderr)
     sys.exit(1)
 PYTHON
-printf '%s\n' '  ok  release RichFiles, RichGlance and libRichFilesRail.dylib carry no build-machine path'
+printf '%s\n' '  ok  release RichFiles, RichGlance, the login item and libRichFilesRail.dylib carry no build-machine path'
