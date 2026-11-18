@@ -3039,6 +3039,79 @@ assert len(rw.PRINTED["told"]) == 2, rw.PRINTED
 PY
 check "W40 terminal handovers at one tip keep their own review attempts and notices" $? "see above"
 
+# W41: when one set of instructions unlocks multiple READY revisions, review the latest.
+python3 - "$LIB" "$SB/w41" "$REPO" "$NEWTIP" "$BASE" "$OLDTIP" <<'PY'
+import os, sys
+from pathlib import Path
+from unittest.mock import patch
+
+lib, directory, repo, tip, base, old = sys.argv[1:]
+sys.path.insert(0, lib)
+import review_watch as rw
+
+branch, distinct = "codex/revised", "codex/separate"
+now = 1800000000
+
+
+class World(rw.World):
+    repos = ["richos"]
+
+    def __init__(self):
+        pass
+
+    def repo_named(self, name):
+        return repo if name == "richos" else ""
+
+    def merge_base_for(self, repo, tip):
+        return base
+
+
+def handover(branch, tip, claim=""):
+    return f"\n## READY TO LAND: {branch}\n\nRepository: richos.\nCommit: {tip}\n{claim}\n"
+
+
+for scenario in ("immediate", "delayed", "during-retry"):
+    root = Path(directory) / scenario
+    root.mkdir(parents=True)
+    ready, words = root / "ready.md", root / "words.md"
+    os.environ.update(REVIEW_WATCH_TO_RICH=str(ready), REVIEW_WATCH_TO_CODEX=str(words),
+                      REVIEW_WATCH_STATE_DIR=str(root / "state"))
+    orders = f"## Instructions for {branch}\n\nReview the revision.\n\n## Instructions for {distinct}\n\nReview the separate job.\n"
+    ready.touch()
+    words.write_text(orders if scenario == "immediate" else "")
+    world, state = World(), {}
+    world.codex_items(now, state)
+    ready.write_text(handover(branch, old) + handover(distinct, tip)
+                     + handover(branch, tip, "Earlier claim.") + handover(branch, tip, "Current claim."))
+    assert world.codex_items(now, state) == ([], [])  # wait for the appended bytes to settle
+    items, problems = world.codex_items(now, state)
+    if scenario != "immediate":
+        assert not items and len(problems) == 4
+    if scenario == "delayed":
+        words.write_text(orders)
+        items, problems = world.codex_items(now, state)
+    if scenario == "during-retry":
+        read_words = rw.codex_words
+
+        def write_after_read(to_codex, to_rich, job):
+            result = read_words(to_codex, to_rich, job)
+            if job == branch and not result:
+                words.write_text(orders)
+            return result
+
+        with patch.object(rw, "codex_words", write_after_read):
+            items, problems = world.codex_items(now, state)
+        assert all(it.branch != branch for it in items), [(it.branch, it.tip) for it in items]
+        items, problems = world.codex_items(now, state)
+    assert not problems, problems
+    assert not state["awaiting_words"], state
+    queued = sorted((it.branch, it.tip) for it in items)
+    assert queued == [(branch, tip), (distinct, tip)], (scenario, queued, old, tip)
+    revised = next(it for it in items if it.branch == branch)
+    assert Path(revised.claims[0]).read_text().strip().endswith("Current claim.")
+PY
+check "W41 delayed instructions queue the latest READY revision and retain the separate job" $? "see above"
+
 echo
 echo "review-watch.test.sh: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

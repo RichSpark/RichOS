@@ -652,20 +652,24 @@ class World(object):
         # Entries not read yet may hold a newer READY for the same branch, so nothing is retried
         # until the file is read to its end; and a retried older entry never displaces a newer tip.
         unread = st is not None and st.st_size > (codex_state.get("offset") or 0)
+        seen_work = {p["work"] for p in pending}
         still = []
-        for a in awaiting:
+        # Several entries can have the same arrival time. The list keeps file order.
+        for a in reversed(awaiting):
             if now - float(a.get("at") or now) > KEEP_SECONDS:
                 continue
             if unread:
                 still.append(a)
                 continue
-            got = self.codex_handover(a["header"], a["body"], to_rich, to_codex, now)
+            got = self.codex_handover(a["header"], a["body"], to_rich, to_codex, now, skip_work=seen_work)
             if isinstance(got, NoWords):
                 still.append(a)
+                # The words can arrive during this look. Only this revision may use them next.
+                seen_work.add(got.work)
             elif isinstance(got, dict):
-                if not any(p.get("work") == got["work"] and p.get("tip") != got["tip"] for p in pending):
-                    self._add_pending(pending, got)
-        awaiting[:] = still
+                self._add_pending(pending, got)
+                seen_work.add(got["work"])
+        awaiting[:] = reversed(still)
         items = []
         keep = []
         for p in pending:
@@ -690,7 +694,7 @@ class World(object):
         itip, _why = self.integration_tip([], repo)
         return self.merge_base(repo, itip, tip) if itip else None
 
-    def codex_handover(self, header, body, to_rich, to_codex, now, words=None, repo_map=None, origin=""):
+    def codex_handover(self, header, body, to_rich, to_codex, now, words=None, repo_map=None, origin="", *, skip_work=()):
         """A pending review for a READY entry naming a codex/ branch; a string
         saying why one cannot start; or None for any other entry."""
         if not header or "READY" not in header.upper():
@@ -738,6 +742,9 @@ class World(object):
                     "started" % (header[:90], branch))
         if not self.wanted(repo):
             return None
+        work = "branch:%s:%s" % (repo, branch)
+        if work in skip_work:
+            return None
         cm = re.search(r"Commit:\s*`?([0-9a-f]{40})", text) or SHA_RE.search(text)
         tip = line_tips.get(names[0]) or (cm.group(1) if cm and cm.groups() else (cm.group(0) if cm else ""))
         if not tip:
@@ -748,10 +755,10 @@ class World(object):
         words = codex_words(to_codex, to_rich, branch) if words is None else words
         if not words:
             return NoWords("Codex's handover %r: no entry in %s names %s or comes before Codex first named it, so "
-                           "there are no original words and no review of it started" % (header[:90], to_codex, branch))
+                           "there are no original words and no review of it started" % (header[:90], to_codex, branch),
+                           work)
         wdir = _p("codex-words")
         os.makedirs(wdir, exist_ok=True)
-        work = "branch:%s:%s" % (repo, branch)
         if origin:
             stem = "%s-%s-%s" % (re.sub(r"[^A-Za-z0-9._-]", "_", branch), tip[:12], origin)
         else:
@@ -957,6 +964,11 @@ class AppWorld(World):
 class NoWords(str):
     """codex_handover's refusal for a READY with no original words yet: told once, and the READY
     is looked at again each look until an entry naming its branch appears in to-codex.md."""
+
+    def __new__(cls, message, work):
+        problem = super().__new__(cls, message)
+        problem.work = work
+        return problem
 
 
 def split_entries(text):
