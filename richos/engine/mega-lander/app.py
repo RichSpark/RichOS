@@ -563,32 +563,23 @@ def witness_git_review(scope, repo, branch, before, after, reviewed):
         print("RichOS output: the Git integration marker could not be recorded.", file=sys.stderr)
 
 
-def witness_land(scope, worker, targets, plan):
+def witness_land(scope, worker, repo, worktree, before, landed):
     """WITNESS (d), THE LAND (Output side panel PRD §4.1 (d), slice S2b). A worker writes in its
     own worktree, which cleanup deletes minutes after this; the landed copy in the connected
     repository is written by the merge above and by nothing the hook sees. So the land itself
-    records, for every repository whose ref it moved, one row per landed file: the landed path,
+    records one row per landed file when its repository's ref moves: the landed path,
     the worktree path it came from (which the app's record then retires), the commit and the
     worker named by its own receipt. Into the BACK-END session's `writes.jsonl`, through the
     hook's own appender, so the app joins it to the thread like every other row of the job.
 
-    A history is never worth failing a land for (the land record's rule, workspaces.py): any
-    failure here is reported on stderr, appends nothing and returns. A repeated integrate merges
-    nothing (`already`) and records nothing."""
+    Record each move as it happens so a later repository's refusal cannot lose it.
+    A retry skips merges already made. History failures are reported on stderr and
+    never fail the land."""
     try:
         evidence = load("richos_app_evidence", ENGINE / "scripts/lib/app-evidence.py")
         who = {"name": worker["name"], "agent_id": worker.get("agent_id") or None}
-        rows = []
-        for repo, step in plan.items():
-            if step["already"] or not step.get("landed"):
-                continue
-            # Its real path, resolved by integrate while the worktree still existed (the land
-            # deletes it), is the one the hook's command witness recorded (it resolves every
-            # directory it lists).
-            worktree = os.path.realpath(targets[repo]["path"])
-            for name in landed_files(repo, step["tip"], step["landed"]):
-                rows.append({"path": os.path.join(repo, name), "from": os.path.join(worktree, name),
-                             "commit": step["landed"], "worker": who})
+        rows = [{"path": os.path.join(repo, name), "from": os.path.join(worktree, name),
+                 "commit": landed, "worker": who} for name in landed_files(repo, before, landed)]
         evidence.append_land_rows(state() / "evidence", scope["binding"]["session_id"], rows)
     except Exception as error:  # noqa: BLE001 -- a history never fails a land
         print("RichOS output: the landed files were not recorded: %s" % str(error)[-500:], file=sys.stderr)
@@ -2690,8 +2681,13 @@ def integrate(scope_path,scope,args):
                 # repeated integrate finds it already contains the reviewed commit and lands only
                 # the rest. What is the app's own stays here: the receipt checks above, the
                 # user's own Git settings (users_git_settings_applied), and the land record.
-                # The land deletes the worktrees; the witness below names each by its real path.
-                targets={r:{**t,"path":os.path.realpath(t["path"])} for r,t in targets.items()}
+                # Keep the real paths used by the command witness before cleanup can remove them.
+                worktree_paths={r:os.path.realpath(t["path"]) for r,t in targets.items()}
+
+                def record_merge(repo, branch, before, after, reviewed):
+                    witness_git_review(scope, repo, branch, before, after, reviewed)
+                    witness_land(scope, worker, repo, worktree_paths[repo], before, after)
+
                 pending=[r for r in repositories_to_land if not plan[r]["already"]]
                 refused=None
                 try:
@@ -2704,8 +2700,7 @@ def integrate(scope_path,scope,args):
                             W.merge_and_land(worker["workspace_ref"],me=scope["binding"]["session_id"],
                                              message="Merge reviewed work of %s\n\n%s" % (worker["name"],reviewed_by),
                                              only={r:plan[r]["commit"] for r in pending},
-                                             on_merge=lambda repo, branch, before, after, reviewed:
-                                             witness_git_review(scope, repo, branch, before, after, reviewed))
+                                             on_merge=record_merge)
                 except W.SpecError as error:
                     refused=str(error)
                 finally:
@@ -2724,7 +2719,6 @@ def integrate(scope_path,scope,args):
                         landed,_unread=W.branch_tip_read(repo,branch)
                         if not landed or not W.is_ancestor(repo,commit,landed):
                             continue
-                        plan[repo]["landed"]=landed
                         landed_now.append(repo)
                         lands[repo]["landed"]={"schema":1,"branch":branch,"before":tip,"commit":landed,"reviewed_commit":commit,"at":W.iso(),
                             "thread_id":scope["binding"].get("thread_id") or "","entity_id":scope["binding"].get("entity_id") or "",
@@ -2741,8 +2735,6 @@ def integrate(scope_path,scope,args):
                 worker["integration"]["verified"]=True
                 worker["status"]="integrated"
                 save(path,worker)
-                # Every ref has moved and every land lock is still held. Never fails the land.
-                witness_land(scope,worker,targets,plan)
             # Cleanup remains canonical Mega Lander. Its result is separate from Git
             # integration; partial cleanup never rolls back a verified target commit.
             # A revision can leave earlier review workspaces outside the worker's

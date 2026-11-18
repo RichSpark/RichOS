@@ -220,14 +220,14 @@ class DesktopWork(unittest.TestCase):
         self.assertEqual(self.records()[0]["status"], "prepared")
         self.app.dispatch_intent(self.scope, envelope, review_refused=True)
         self.assertEqual(self.records()[0]["status"], "prepared")
-        # A changed brief uses a new request. Only this provably never-dispatched
-        # preparation is withdrawn, through the existing clean-workspace checks.
+        # A changed brief uses a new request. The original remains available for retry.
         replacement = self.call("prepare", {**self.args, "request_id": "revised-brief",
                                             "brief": "Implement the corrected fictional requirement."})
         self.assertEqual(replacement["status"], "prepared")
         self.app.dispatch_intent(self.scope, {"session_id": self.session, "tool_use_id": "revised-call",
                                              "tool_input": replacement["agent_call"]})
         records = self.records()
+        self.assertEqual(next(row for row in records if row["id"] == ready["id"])["status"], "prepared")
         self.assertEqual(next(row for row in records if row["id"] == replacement["id"])["status"], "dispatching")
 
     def test_pierce_dismissal_can_retry_the_exact_prepared_payload(self):
@@ -3367,8 +3367,8 @@ class DesktopWork(unittest.TestCase):
     # terminal does. Before, integrate ran Git with core.hooksPath=/dev/null and landed by
     # commit-tree plus a fast-forward, so no merge-time check and no fence ever saw an app land.
 
-    def repository_hook(self,name,body):
-        hooks=Path(self.app.git(self.repo,"rev-parse","--path-format=absolute","--git-common-dir"))/"hooks"
+    def repository_hook(self,name,body,repo=None):
+        hooks=Path(self.app.git(repo or self.repo,"rev-parse","--path-format=absolute","--git-common-dir"))/"hooks"
         hooks.mkdir(exist_ok=True)
         path=hooks/name;path.write_text("#!/bin/sh\n"+body);path.chmod(0o755)
         return path
@@ -3908,8 +3908,25 @@ class DesktopWork(unittest.TestCase):
         self.finish_fixture_worker("multi-witness-reviewer","RICHOS_REVIEW "+json.dumps(
             {"commit":commits[str(self.repo)],"commits":commits,"verdict":"passed","checks":["both repositories"]}))
         before={repo:self.app.git(repo,"rev-parse","main") for repo in commits}
-        self.assertTrue(self.call("integrate",{"worker_id":worker["id"],"reviewer_id":reviewer["id"]})["work_integrated"])
+        # Canonical workspace order determines which repository merges first.
+        first,last=paths
+        hook=self.repository_hook("pre-merge-commit",'echo "Fixture refused second merge" >&2\nexit 1\n',repo=last)
+        args={"worker_id":worker["id"],"reviewer_id":reviewer["id"]}
+        with self.assertRaisesRegex(ValueError,"Fixture refused second merge"):
+            self.call("integrate",args)
+        self.assertEqual(self.app.git(first,"rev-parse","main^2"),commits[first])
+        self.assertEqual(self.app.git(last,"rev-parse","main"),before[last])
+        partial=self.land_rows()
+        marker,file=partial
+        self.assert_land_marker(marker,first,before[first],commits[first])
+        self.assertEqual((file["source"],file["path"],file["from"],file["commit"]),
+            ("land",os.path.join(first,"result.txt"),os.path.join(paths[first],"result.txt"),
+             self.app.git(first,"rev-parse","main")))
+
+        hook.unlink()
+        self.assertTrue(self.call("integrate",args)["work_integrated"])
         rows=self.land_rows()
+        self.assertEqual(rows[:len(partial)],partial)
         self.assertCountEqual([r["source"] for r in rows],["land-marker","land"] * len(commits))
         markers={r["path"]:r for r in rows if r["source"]=="land-marker"}
         self.assertEqual(set(markers),set(commits))
@@ -3919,6 +3936,8 @@ class DesktopWork(unittest.TestCase):
         self.assertEqual(sorted((r["path"],r["from"],r["commit"]) for r in rows if r["source"]=="land"),
             sorted((os.path.join(repo,"result.txt"),os.path.join(paths[repo],"result.txt"),
                     self.app.git(repo,"rev-parse","main")) for repo in commits))
+        self.assertTrue(self.call("integrate",args)["work_integrated"])
+        self.assertEqual(self.land_rows(),rows)
 
 
 class RunBoundIsTheWholeOperations(unittest.TestCase):
