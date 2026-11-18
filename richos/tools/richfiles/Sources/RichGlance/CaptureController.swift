@@ -37,15 +37,28 @@ final class CaptureController: NSObject, NSWindowDelegate {
     private var isFinished = false
     private var permissionRequested = false
     private var waitingForPermission = false
+    private var waitingForCaptureConsent = false
+    private var resumedAfterCaptureConsent = false
+    private var keyLoss: Task<Void, Never>?
 
     init(previousWindow: NSWindow?, previousApp: NSRunningApplication?,
          finish: @escaping (_ copied: String?, _ display: CGRect?) -> Void) {
         self.previousWindow = previousWindow
         self.previousApp = previousApp
         self.finish = finish
+        super.init()
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self, selector: #selector(applicationActivated(_:)),
+            name: NSWorkspace.didActivateApplicationNotification, object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(displaysChanged),
+            name: NSApplication.didChangeScreenParametersNotification, object: nil
+        )
     }
 
     func start() {
+        waitingForPermission = false
         let point = NSEvent.mouseLocation
         guard let screen = NSScreen.screens.first(where: { $0.frame.contains(point) }) ?? NSScreen.main,
               let display = Display(screen) else {
@@ -54,16 +67,19 @@ final class CaptureController: NSObject, NSWindowDelegate {
         }
         self.display = display
         if !CGPreflightScreenCaptureAccess() {
-            let allowed = !permissionRequested && CGRequestScreenCaptureAccess()
-            permissionRequested = true
-            if !allowed {
+            if permissionRequested {
                 record(.glanceCaptureFrame, .unavailable, since: began)
                 showPermissionHelp()
                 return
             }
+            permissionRequested = true
+            guard CGRequestScreenCaptureAccess() else {
+                // The system can present its own prompt after this call returns.
+                waitingForPermission = true
+                record(.glanceCaptureFrame, .unavailable, since: began)
+                return
+            }
         }
-        NotificationCenter.default.addObserver(self, selector: #selector(displaysChanged),
-                                               name: NSApplication.didChangeScreenParametersNotification, object: nil)
         acquisition = Task { [weak self] in
             do {
                 let image = try await CaptureFrame.read(displayID: display.id, size: display.size)
@@ -79,19 +95,59 @@ final class CaptureController: NSObject, NSWindowDelegate {
 
     func cancel() { stop(.cancelled) }
 
-    /// A shortcut pressed from System Settings returns the same permission session to the user.
-    func revisitPermission() {
-        guard waitingForPermission else { return }
-        waitingForPermission = false
-        NotificationCenter.default.removeObserver(self, name: NSApplication.didBecomeActiveNotification, object: NSApp)
-        showPermissionHelp()
+    var canRevisitPermission: Bool {
+        waitingForPermission && !Self.isCaptureConsent(NSWorkspace.shared.frontmostApplication)
     }
 
-    @objc private func resumeAfterSettings() {
-        Task { @MainActor [weak self] in self?.revisitPermission() }
+    /// An explicit capture request resumes a session waiting for screen recording access.
+    func revisitPermission() {
+        guard canRevisitPermission else { return }
+        start()
+    }
+
+    private static func isCaptureConsent(_ application: NSRunningApplication?) -> Bool {
+        application?.bundleIdentifier == "com.apple.UserNotificationCenter"
+    }
+
+    @objc private func applicationActivated(_ notification: Notification) {
+        guard !isFinished,
+              let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
+        if Self.isCaptureConsent(app) {
+            if overlay != nil, savePanel == nil { waitForCaptureConsent() }
+            return
+        }
+        if waitingForCaptureConsent {
+            waitingForCaptureConsent = false
+            guard app == .current || app == previousApp else {
+                stop(.cancelled, restoreFocus: false)
+                return
+            }
+            resumedAfterCaptureConsent = true
+            start()
+        } else if waitingForPermission, app == .current, CGPreflightScreenCaptureAccess() {
+            start()
+        }
+    }
+
+    private func waitForCaptureConsent() {
+        guard !waitingForCaptureConsent else { return }
+        guard !resumedAfterCaptureConsent, canvas == nil || canvas?.selection.phase == .aiming else {
+            stop(.interrupted, restoreFocus: false)
+            return
+        }
+        waitingForCaptureConsent = true
+        keyLoss?.cancel()
+        overlay?.delegate = nil
+        overlay?.orderOut(nil)
+        overlay = nil
+        canvas = nil
     }
 
     private func show(_ image: CGImage, on display: Display, point: CGPoint) {
+        if Self.isCaptureConsent(NSWorkspace.shared.frontmostApplication) {
+            waitForCaptureConsent()
+            return
+        }
         let window = CaptureWindow(contentRect: display.frame, styleMask: [.borderless], backing: .buffered, defer: false)
         window.setFrame(display.frame, display: false)
         window.level = .screenSaver
@@ -227,14 +283,12 @@ final class CaptureController: NSObject, NSWindowDelegate {
         alert.addButton(withTitle: "Not Now").keyEquivalent = "\u{1b}"
         switch alert.runModal() {
         case .alertFirstButtonReturn:
+            waitingForPermission = true
             guard let settings = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"),
                   NSWorkspace.shared.open(settings) else {
                 stop(.unavailable)
                 return
             }
-            waitingForPermission = true
-            NotificationCenter.default.addObserver(self, selector: #selector(resumeAfterSettings),
-                                                   name: NSApplication.didBecomeActiveNotification, object: NSApp)
         case .alertSecondButtonReturn:
             Task { @MainActor [weak self] in self?.start() }
         default:
@@ -263,8 +317,14 @@ final class CaptureController: NSObject, NSWindowDelegate {
 
     func windowDidResignKey(_ notification: Notification) {
         guard savePanel == nil else { return }
-        // App switching should put the user back in control of the new app.
-        stop(.cancelled, restoreFocus: false)
+        keyLoss?.cancel()
+        // Workspace activation can arrive just after AppKit reports loss of the key window.
+        keyLoss = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(150))
+            guard !Task.isCancelled, let self, let overlay, !overlay.isKeyWindow, savePanel == nil else { return }
+            if Self.isCaptureConsent(NSWorkspace.shared.frontmostApplication) { waitForCaptureConsent() }
+            else { stop(.cancelled, restoreFocus: false) }
+        }
     }
 
     private func activate() {
@@ -279,7 +339,9 @@ final class CaptureController: NSObject, NSWindowDelegate {
         isFinished = true
         acquisition?.cancel()
         acquisition = nil
+        keyLoss?.cancel()
         NotificationCenter.default.removeObserver(self)
+        NSWorkspace.shared.notificationCenter.removeObserver(self)
         savePanel?.cancel(nil)
         savePanel = nil
         overlay?.delegate = nil
