@@ -346,13 +346,12 @@ LAUNCH_SPEED_PHASE = "launch-speed"
 LAUNCH_SPEED_WARM_RATIO = 1.013
 LAUNCH_SPEED_COLD_RATIO = 7.84
 LAUNCH_SPEED_WAIT = 3600
-# Launches (testvm/launch-speed-walk.py): with every route passing at 5 starts, 40 (1 + 5 cold + 5
+# Launches (testvm/launch-speed-walk.py): with every route passing at 5 starts, 42 (1 + 5 cold + 5
 # ordinary + 2; 3 + 5 for the rule switch, three fresh homes; 2 + 5 for the day change; 2 + 10
-# after an update). With every route taken on to 20, at most 138 (15 more cold, 15 more ordinary,
+# after an update; 2 for the install path). With every route taken on to 20, at most 140 (15 more cold, 15 more ordinary,
 # 8 + 15 for the rule switch in eight more homes, 15 more day changes, 30 more after an update).
 # The 90 minutes this budget had covered 165 launches, Dictionary's 20 among them (5400 s / 165 =
-# 32.7 s a launch); 138 x 32.7 s = 4516 s, so the budget is the slot wait plus 80 minutes, and the
-# usual walk of 40 launches takes about a quarter of it.
+# 32.7 s a launch); 140 x 32.7 s = 4578 s, within the 80 minutes after the slot wait.
 LAUNCH_SPEED_BUDGET = LAUNCH_SPEED_WAIT + 4800
 
 # GUEST MEMORY, ASKED AT ONCE. A build that passed every gate could wait the full hour for a
@@ -3008,7 +3007,11 @@ class Runner:
             finally:
                 shutil.rmtree(home, ignore_errors=True)
             try:
-                said = json.loads((walk / "report.json").read_text())["sentence"]
+                walked = json.loads((walk / "report.json").read_text())
+                said = walked["sentence"]
+                for check in walked.get("checks", []):
+                    if check.get("id") == "install-path" and check.get("pass") is not True:
+                        said += " Install path failed. " + check.get("detail", "")
             except (OSError, ValueError, KeyError):
                 said = None
             self.announce(f"{said or 'Launch speed not measured.'} Evidence: {walk}.")
@@ -3054,6 +3057,13 @@ class Runner:
                     own_limits_hold = False
             if facts.get("version") != info.get("version"):
                 problems.append(f"{report} measured {facts.get('version') or '<no version>'}, not {info.get('version')}")
+            elif info.get("install_path_required") and (
+                not facts.get("older") or not any(
+                    check.get("id") == "install-path" and check.get("pass") is True
+                    for check in walked.get("checks", [])
+                )
+            ):
+                problems.append(f"{report}: missing a passing install path check with a previous bundle")
             elif summary.get("incomplete") is not False or summary.get("refused") is not False \
                     or not isinstance(p95, (int, float)) or limit is None \
                     or summary.get("limit_ms") != limit or p95 > limit or not own_limits_hold:
@@ -3706,9 +3716,10 @@ class Runner:
             # Recorded on the candidate first, so `publish` requires the evidence whatever happens next.
             candidate_file = Path(out) / "candidate.json"
             candidate = json.loads(candidate_file.read_text())
-            candidate["info"]["launch_speed_required"] = True
+            requirements = {"launch_speed_required": True, "install_path_required": True}
+            candidate["info"].update(requirements)
             candidate_file.write_text(json.dumps(candidate, indent=2) + "\n")
-            candidate_info = {**candidate_info, "launch_speed_required": True}
+            candidate_info = {**candidate_info, **requirements}
             proof_error = self.launch_speed_check(self.env["RICHOS_NIGHTLY_RUN_ID"], out, candidate_info)
         self.summary()
         print("", flush=True)
