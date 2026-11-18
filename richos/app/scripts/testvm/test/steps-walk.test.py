@@ -182,6 +182,13 @@ with tempfile.TemporaryDirectory(prefix='steps-walk-test-') as tmp:
     check('pointer with asis looks in the named tree and sends --as-is without --app',
           len(seen) == 2 and seen[0][-2:] == ['--app', 'Dock'] and seen[1][-1] == '--as-is'
           and '--app' not in seen[1], seen)
+    check('"points": [] with find alone clicks the found center: the same point twice',
+          len(seen) == 2 and seen[1][1:4] == ['no-such-vm', '488,998', '488,998'], seen)
+    check('a click step with find and no points is valid',
+          mod.problems([{'op': 'pointer', 'points': [], 'find': ['--title', 'TextEdit']}]) == [],
+          mod.problems([{'op': 'pointer', 'points': [], 'find': ['--title', 'TextEdit']}]))
+    check('a click step with neither points nor find is refused',
+          mod.problems([{'op': 'pointer', 'points': []}]) != [], mod.problems([{'op': 'pointer', 'points': []}]))
     check('an asis that is not a boolean is refused', mod.problems([{'op': 'pointer', 'points': ['1,2', '1,2'], 'asis': 'yes'}]) != [],
           mod.problems([{'op': 'pointer', 'points': ['1,2', '1,2'], 'asis': 'yes'}]))
     mod.run = lambda args, timeout=120: (seen.append(args) or (0, ''))
