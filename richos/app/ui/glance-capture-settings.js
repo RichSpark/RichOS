@@ -67,7 +67,7 @@
     sheet.hidden = true;
     sheet.dataset.dismiss = "control:#richglance-capture-settings .dict-close";
     sheet.innerHTML = `
-      <section class="overlay-panel dict-panel" role="dialog" aria-modal="true" aria-labelledby="richglance-capture-title">
+      <section class="overlay-panel dict-panel" role="dialog" aria-labelledby="richglance-capture-title">
         <header class="dict-heading">
           <div>
             <p class="dict-eyebrow">Settings</p>
@@ -135,17 +135,7 @@
       } else close();
       return;
     }
-    if (event.key === "Tab") {
-      const controls = [...sheet.querySelectorAll("button, input")].filter(control => !control.disabled && control.getClientRects().length);
-      if (event.shiftKey && document.activeElement === controls[0]) {
-        event.preventDefault();
-        controls.at(-1)?.focus();
-      } else if (!event.shiftKey && document.activeElement === controls.at(-1)) {
-        event.preventDefault();
-        controls[0]?.focus();
-      }
-      return;
-    }
+    if (event.key === "Tab") return;
     if (!listening) return;
     event.preventDefault();
     event.stopPropagation();
