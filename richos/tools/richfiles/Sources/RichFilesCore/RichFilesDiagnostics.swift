@@ -8,6 +8,16 @@ public enum RichFilesDiagnostics {
         case windowGestureDockMinimize, windowGestureDockRestore
         case glanceCaptureFrame, glanceCaptureOutput, glanceCaptureSession
         case glanceDisplay, glanceDecode, glanceFolder, glancePreview, glanceDefaults, glanceMetadata
+
+        fileprivate var logFilename: String {
+            switch self {
+            case .windowGestureAvailability, .windowGestureMaximize, .windowGestureRestore,
+                 .windowGestureDockMinimize, .windowGestureDockRestore:
+                return RichFilesDiagnostics.gestureFilename
+            default:
+                return RichFilesDiagnostics.filename
+            }
+        }
     }
     public enum Outcome: String, Codable, Sendable {
         case complete, issues, unavailable, interrupted
@@ -27,6 +37,7 @@ public enum RichFilesDiagnostics {
     }
 
     static let filename = "richfiles-timing.jsonl"
+    static let gestureFilename = "richfiles-window-gestures.jsonl"
     private static let maximumBytes: off_t = 128 * 1024
     private static let writer = DispatchQueue(label: "app.richos.richfiles.diagnostics", qos: .utility)
 
@@ -60,7 +71,7 @@ public enum RichFilesDiagnostics {
         var bytes = try JSONEncoder().encode(sample)
         bytes.append(10)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        let descriptor = open(folder.appendingPathComponent(filename).path,
+        let descriptor = open(folder.appendingPathComponent(sample.operation.logFilename).path,
                               O_WRONLY | O_CREAT | O_APPEND | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC, 0o600)
         guard descriptor >= 0 else { throw CocoaError(.fileWriteNoPermission) }
         let file = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)

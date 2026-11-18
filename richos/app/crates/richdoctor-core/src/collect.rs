@@ -224,8 +224,9 @@ pub fn collect(category: Category, scope: &Scope, ctx: &Context, used: u64) -> V
         Category::Configuration => vec![
             configuration(scope, ctx, &mut budget),
             richpass(scope, ctx, &mut budget),
-            richfiles_timing(scope, ctx, &mut budget),
+            richfiles_timing(scope, ctx, &mut budget, false),
             update_timing(scope, ctx, &mut budget),
+            richfiles_timing(scope, ctx, &mut budget, true),
         ],
         Category::Richscribe => vec![richscribe(scope, ctx, &mut budget)],
         Category::RichFinder => vec![richfinder_timing(scope, ctx, &mut budget)],
@@ -698,11 +699,15 @@ fn richfinder_timing(scope: &Scope, ctx: &Context, budget: &mut u64) -> Item {
     finish(item, &text, ctx, reads.iter().any(|read| read.truncated))
 }
 
-fn richfiles_timing(scope: &Scope, ctx: &Context, budget: &mut u64) -> Item {
+fn richfiles_timing(scope: &Scope, ctx: &Context, budget: &mut u64, gestures: bool) -> Item {
     let category = Category::Configuration;
-    let source = "RichFiles timing log";
+    let (source, filename) = if gestures {
+        ("RichFiles Window Gestures log", "richfiles-window-gestures.jsonl")
+    } else {
+        ("RichFiles timing log", "richfiles-timing.jsonl")
+    };
     let root = scope.logs_root();
-    let read = match read_source(&root, &root.join("richfiles-timing.jsonl"), scope, budget, true) {
+    let read = match read_source(&root, &root.join(filename), scope, budget, true) {
         Ok(read) => read,
         Err(status) => return unread(category, source, status),
     };
@@ -716,13 +721,17 @@ fn richfiles_timing(scope: &Scope, ctx: &Context, budget: &mut u64) -> Item {
         let duration = record["workerMS"].as_u64()?;
         let total = record["total"].as_u64()?;
         let confirmed = record["confirmed"].as_u64()?;
+        let known_operation = if gestures {
+            matches!(operation, "windowGestureAvailability" | "windowGestureMaximize" | "windowGestureRestore"
+                | "windowGestureDockMinimize" | "windowGestureDockRestore")
+        } else {
+            matches!(operation, "listing" | "copy" | "move" | "recovery" | "gitHistory" | "gitComparison"
+                | "glanceDisplay" | "glanceDecode" | "glanceFolder" | "glancePreview" | "glanceDefaults" | "glanceMetadata"
+                | "glanceCaptureFrame" | "glanceCaptureOutput" | "glanceCaptureSession")
+        };
         if id.len() != 36 || !id.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-')
             || build.len() > 40 || !build.bytes().all(|b| b.is_ascii_alphanumeric() || b".-+".contains(&b))
-            || !matches!(operation, "listing" | "copy" | "move" | "recovery" | "gitHistory" | "gitComparison"
-                | "glanceDisplay" | "glanceDecode" | "glanceFolder" | "glancePreview" | "glanceDefaults" | "glanceMetadata"
-                | "glanceCaptureFrame" | "glanceCaptureOutput" | "glanceCaptureSession"
-                | "windowGestureAvailability" | "windowGestureMaximize" | "windowGestureRestore"
-                | "windowGestureDockMinimize" | "windowGestureDockRestore")
+            || !known_operation
             || !matches!(outcome, "complete" | "issues" | "canceled" | "unavailable" | "interrupted")
             || confirmed > total {
             return None;
@@ -1025,7 +1034,8 @@ mod tests {
         let mut gestures = record.clone();
         gestures["operation"] = serde_json::json!("windowGestureDockRestore");
         gestures["title"] = serde_json::json!("Private window title");
-        write(&scope.logs_root().join("richfiles-timing.jsonl"), &format!("{record}\n{glance}\n{defaults}\n{metadata}\n{captures}\n{gestures}"));
+        write(&scope.logs_root().join("richfiles-timing.jsonl"), &format!("{record}\n{glance}\n{defaults}\n{metadata}\n{captures}"));
+        write(&scope.logs_root().join("richfiles-window-gestures.jsonl"), &format!("{gestures}\n{record}"));
         let items = collect(Category::Configuration, &scope, &Context::default(), 0);
         let timing = items.iter().find(|item| item.source == "RichFiles timing log").unwrap();
         assert_eq!(timing.status, Status::Collected);
@@ -1037,9 +1047,12 @@ mod tests {
         assert!(timing.text.contains("operation=glanceCaptureFrame"));
         assert!(timing.text.contains("operation=glanceCaptureSession"));
         assert!(timing.text.contains("operation=glanceCaptureOutput"));
-        assert!(timing.text.contains("operation=windowGestureDockRestore"));
+        let window_gestures = items.iter().find(|item| item.source == "RichFiles Window Gestures log").unwrap();
+        assert_eq!(window_gestures.status, Status::Collected);
+        assert!(window_gestures.text.contains("operation=windowGestureDockRestore"));
+        assert!(!window_gestures.text.contains("operation=listing"));
         assert!(!timing.text.contains("Private screen content"));
-        assert!(!timing.text.contains("Private window title"));
+        assert!(!window_gestures.text.contains("Private window title"));
         assert!(!timing.text.contains("Personal RichCleaner note"));
         assert!(!timing.text.contains("Customer names"));
     }
