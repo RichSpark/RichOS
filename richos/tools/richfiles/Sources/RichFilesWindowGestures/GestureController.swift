@@ -329,32 +329,47 @@ final class GestureController {
         let displays = GestureDisplay.current()
         guard let display = displays.first(where: { $0.frame.contains(point) }) else { return }
         let started = ProcessInfo.processInfo.systemUptime
-        let restoreFrame: CGRect?
         if let saved = maximized[window],
            current.nearlyEquals(saved.maximized) || !displays.contains(where: { $0.id == saved.display }) {
-            restoreFrame = displays.contains(where: { $0.id == saved.display }) ? saved.original : display.reachable(saved.original)
-        } else if current.nearlyEquals(display.usable) {
-            // A manually filled window or a fresh helper has no exact frame to restore.
-            restoreFrame = display.usable.insetBy(dx: display.usable.width / 8, dy: display.usable.height / 8).integral
-        } else {
-            restoreFrame = nil
+            let original = displays.contains(where: { $0.id == saved.display }) ? saved.original : display.reachable(saved.original)
+            restoreFrame(window, to: original, started: started)
+            return
         }
-        if let restoreFrame {
-            let restored = window.setFrame(restoreFrame) && window.frame?.nearlyEquals(restoreFrame) == true
-            if restored { maximized[window] = nil; pruneObservers() }
-            record(.windowGestureRestore, restored ? .complete : .issues, started: started)
+
+        let usable = display.usable
+        let reduced = usable.insetBy(dx: usable.width / 8, dy: usable.height / 8).integral
+        if current.nearlyEquals(usable) {
+            restoreFrame(window, to: reduced, started: started)
+            return
+        }
+
+        let adjusted = window.setFrame(usable)
+        let actual = window.frame
+        if let actual, !actual.nearlyEquals(current) {
+            maximized[window] = RestorableFrame(original: current, maximized: actual, display: display.id)
+            observe(window)
+            record(.windowGestureMaximize, adjusted && actual.nearlyEquals(usable) ? .complete : .issues, started: started)
         } else {
-            let adjusted = window.setFrame(display.usable)
-            if let actual = window.frame, !actual.nearlyEquals(current) {
-                maximized[window] = RestorableFrame(original: current, maximized: actual, display: display.id)
-                observe(window)
-                record(.windowGestureMaximize, adjusted && actual.nearlyEquals(display.usable) ? .complete : .issues, started: started)
-            } else {
-                maximized[window] = nil
-                pruneObservers()
-                record(.windowGestureMaximize, .unavailable, started: started)
+            maximized[window] = nil
+            pruneObservers()
+            // Apps such as Terminal snap to a character grid. If a successful
+            // resize leaves a filled window where it was, let it shrink.
+            let visible = current.intersection(usable)
+            if adjusted, actual != nil, visible.width >= usable.width * 0.9, visible.height >= usable.height * 0.9 {
+                restoreFrame(window, to: reduced, started: started)
+                return
             }
+            record(.windowGestureMaximize, .unavailable, started: started)
         }
+    }
+
+    private func restoreFrame(_ window: AXUIElement, to frame: CGRect, started: TimeInterval) {
+        let restored = window.setFrame(frame) && window.frame?.nearlyEquals(frame) == true
+        if restored {
+            maximized[window] = nil
+            pruneObservers()
+        }
+        record(.windowGestureRestore, restored ? .complete : .issues, started: started)
     }
 
     private func apply(_ action: DockClick, to app: NSRunningApplication, revision: UInt64, deadline: TimeInterval) {
