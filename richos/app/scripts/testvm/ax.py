@@ -86,7 +86,7 @@ def ax_search(roots, P, api):
     truncated = stopped_early = False
     limit = 1 if P.get('first') else (P['nth'] + 1 if P.get('nth') is not None else None)
     # "window" and "menubar" choose the ROOTS (run() below); nothing inside them needs finding.
-    scoped = not P.get('scope') or P['scope'] in ('window', 'menubar')
+    scoped = not P.get('scope') or P['scope'] in ('window', 'menubar', 'app')
     while head < len(queue):
         if count >= P['max']:
             truncated = True
@@ -229,6 +229,13 @@ def run(P, ax, host):
         roots = [bar] if bar is not None else []
         if not roots:
             return error('nowindow', 'target=%s pid=%s has no menu bar' % (name, pid))
+    # The Dock draws its icons in a list that hangs off the application element itself; it has
+    # no window at all. `--in app` searches the application's own children.
+    if P.get('scope') == 'app':
+        kids = get(app, 'AXChildren')
+        roots = kids if isinstance(kids, list) else []
+        if not roots:
+            return error('nowindow', 'target=%s pid=%s has no children' % (name, pid))
     if not roots:
         return error('nowindow', 'target=%s pid=%s windows=%d' % (name, pid, len(wins)))
 
