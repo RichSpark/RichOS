@@ -1,12 +1,19 @@
 #!/usr/bin/env python3
-"""Walk control flow refuses failed steps and failed theme presses without mislabeled captures."""
+"""Walk entry points refuse missing steps or failed reads, presses and captures."""
+import contextlib
+import importlib.util
+import io
+import json
 import os
 from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 
 ROOT=Path(os.environ.get('G8_ROOT',Path(__file__).resolve().parents[5]))
 HERE=ROOT/'richos/app/scripts/testvm'
@@ -123,6 +130,81 @@ eval "${!#}"
                     self.assertIn(f'passthrough to this Mac: {status}', result.stdout)
                     self.assertIn('output muted: false', result.stdout)
                     self.assertIn(f'app running: {app}', result.stdout)
+
+
+class WalkSelection(unittest.TestCase):
+    def test_entry_points_refuse_empty_steps_and_dispatch_valid_selections_in_order(self):
+        walks = (
+            ('video-anywhere', 'seed button record', 'still button'),
+            ('home-video', 'seed button voice film space long', 'film button'),
+            ('home-standard', 'identity history companies picture swear-on space card enter swear-off', 'fresh swear-on'),
+            ('home-fps', 'example companies during change relaunch', 'relaunch change'),
+            ('openings', 'first history gallery play pick daily sound save spend sheet', 'missing_pack gallery'),
+            ('loro-stages', 'fresh hire grow replay', 'replay grow'),
+            ('keep-alive', 'setup talk meter keep idle keepalive unseen after', 'unseen after'),
+        )
+        for name, default, subset in walks:
+            spec = importlib.util.spec_from_file_location(name, HERE / f'{name}-walk.py')
+            module = importlib.util.module_from_spec(spec)
+            with patch.object(sys, 'path', [str(HERE), *sys.path]):
+                spec.loader.exec_module(module)
+
+            cases = [
+                (['--steps='], []), (['--steps=,,,'], []),
+                (['--steps=,' + ',,'.join(subset.split()) + ','], subset.split()),
+                ([], default.split()),
+            ]
+            for cli, expected in cases:
+                with self.subTest(walk=name, cli=cli), tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    out = root / 'out'
+                    state = root / 'run' / 'fixture'
+                    state.mkdir(parents=True)
+                    (state / 'audio').write_text('off\n')
+                    events = []
+
+                    class StubWalk:
+                        def __init__(self, *args):
+                            out.mkdir(exist_ok=True)
+                            events.append('start')
+
+                    def step_stub(step):
+                        return lambda *_: events.append(step)
+
+                    if name == 'keep-alive':
+                        # The walk defines its class in main. Stub only its scenario methods and pull.
+                        class StubConversation(StubWalk):
+                            def __getattribute__(self, attr):
+                                if attr.startswith('step_') or attr == 'pull':
+                                    return step_stub(attr.removeprefix('step_'))
+                                return super().__getattribute__(attr)
+
+                        conversation = SimpleNamespace(ConversationWalk=StubConversation, adopt_walk=SimpleNamespace(
+                            StepFailed=RuntimeError, guest=lambda *_: self.fail('unexpected guest call')))
+                        scenario = patch.object(module, 'load', side_effect=[conversation, None])
+                    else:
+                        StubWalk.sound_mode = lambda _: 'off'
+                        for step in set(default.split() + subset.split()):
+                            method = 'button_step' if step == 'button' else step.replace('-', '_')
+                            setattr(StubWalk, method, step_stub(step))
+                        scenario = patch.object(module, 'Walk', StubWalk)
+
+                    args = [str(spec.origin), 'fixture', '--out', str(out), *cli]
+                    with scenario, patch.object(sys, 'argv', args), patch.dict(os.environ, TESTVM_ROOT=tmp), \
+                            contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()) as err:
+                        if not expected:
+                            with self.assertRaises(SystemExit) as stopped:
+                                module.main()
+                            self.assertEqual(stopped.exception.code, 2)
+                            self.assertIn('--steps must select at least one step', err.getvalue())
+                            self.assertEqual(events, [])
+                            self.assertFalse(out.exists())
+                        else:
+                            self.assertEqual(module.main(), 0)
+                            report = json.loads((out / 'report.json').read_text())
+                            steps = report if name == 'keep-alive' else report['steps']
+                            self.assertEqual(list(steps), expected)
+                            self.assertEqual(events, ['start', *expected, *(['pull'] if name == 'keep-alive' else [])])
 
 
 if __name__=='__main__': unittest.main()

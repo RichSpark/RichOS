@@ -511,6 +511,8 @@ def main():
     p.add_argument('--expect-picture', action='store_true', help='fail when a saved file has no picture (a machine with a hardware H.264 encoder; a guest has none)')
     a = p.parse_args()
     steps = [s for s in a.steps.split(',') if s]
+    if not steps:
+        p.error('--steps must select at least one step')
     unknown = [s for s in steps if s not in STEPS]
     if unknown:
         p.error('unknown step(s): ' + ', '.join(unknown))
