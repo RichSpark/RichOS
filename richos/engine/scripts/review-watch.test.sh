@@ -405,18 +405,18 @@ ok3 = ok3 and "automatic handover review will retry" in notice and "Nothing more
 # keep their cap, while an app worker that stopped early gets no handover.
 item = AppReplayWorld().registry_items(retry_at, {})[0][0]
 losses = [dict(repo=item.repo, tip=item.tip, outcome="lost", trigger="handover", ended_at=retry_at)] * 3
-book = rw.Book([], {}, losses)
+book = rw.Book([], {}, losses, app=True)
 ok3 = ok3 and not rw.due([item], book, retry_at + cooldown - 1, {}, 3600)
 ok3 = ok3 and len(rw.due([item], book, retry_at + cooldown, {}, 3600)) == 1
 # A quota hold spends no loss budget and keeps its own shorter retry delay,
 # including when a real-loss cooldown has already elapsed for an app handover.
 held = dict(repo=item.repo, tip=item.tip, outcome="held", trigger="handover", ended_at=retry_at)
-held_book = rw.Book([], {}, [held])
+held_book = rw.Book([], {}, [held], app=True)
 ok3 = ok3 and not held_book.losses
 ok3 = ok3 and not rw.due([item], held_book, retry_at + rw.HOLD_RETRY_SECONDS - 1, {}, 3600)
 ok3 = ok3 and len(rw.due([item], held_book, retry_at + rw.HOLD_RETRY_SECONDS, {}, 3600)) == 1
 held["ended_at"] = retry_at + cooldown
-mixed_book = rw.Book([], {}, losses + [held])
+mixed_book = rw.Book([], {}, losses + [held], app=True)
 ok3 = ok3 and len(mixed_book.losses[item.key]) == 3
 ok3 = ok3 and not rw.due([item], mixed_book, held["ended_at"] + rw.HOLD_RETRY_SECONDS - 1, {}, 3600)
 ok3 = ok3 and len(rw.due([item], mixed_book, held["ended_at"] + rw.HOLD_RETRY_SECONDS, {}, 3600)) == 1
@@ -2221,7 +2221,7 @@ class Watcher(object):
 
 
 sd = rw.session_dir("lead-A")
-key = "lost:%s:%s" % (repo, "f" * 40)
+key = "lost:%s:%s:teammate:lost" % (repo, "f" * 40)
 looks, early = [], []
 for n in range(4):
     out = io.StringIO()
@@ -2929,12 +2929,115 @@ book = rw.Book(rows, {}, attempts())
 got["two holds spend no retry"] = book.losses == {}
 got["after the reset: still started again"] = [d[1] for d in due(now + 3600)] == ["quiet"]
 got["a real loss still counts as lost"] = review(now + 3600, 3, held=False) == "lost" \
-    and len(rw.Book(rows, {}, attempts()).losses.get((repo, tip), [])) == 1
+    and len(rw.Book(rows, {}, attempts()).losses.get((repo, tip, item.work), [])) == 1
 print("    %s" % got)
 sys.exit(0 if all(got.values()) else 1)
 PY
 check "W39 a review ended by the quota hold is held, not lost: retried after the poll interval, retries kept" \
     $? "see above"
+
+# W40: two terminal handovers may point at the same tip and still need separate reviews.
+python3 - "$LIB" "$SB/w40" "$REPO" "$CTIP" "$BASE" <<'PY'
+import os, sys
+from pathlib import Path
+
+lib, directory, repo, tip, base = sys.argv[1:]
+sys.path.insert(0, lib)
+import review_watch as rw
+
+root = Path(directory)
+root.mkdir()
+ready, words = root / "ready.md", root / "words.md"
+os.environ.update(REVIEW_WATCH_TO_RICH=str(ready), REVIEW_WATCH_TO_CODEX=str(words),
+                  REVIEW_WATCH_STATE_DIR=str(root / "state"))
+now = 1800000000
+branches = ["codex/shared_tip", "codex/shared/tip"]
+
+
+class World(rw.World):
+    repos = ["richos"]
+    repos_error = ""
+
+    def __init__(self):
+        pass
+
+    def repo_named(self, name):
+        return repo if name == "richos" else ""
+
+    def merge_base_for(self, repo, tip):
+        return base
+
+    def registry_items(self, now, seen):
+        return [], []
+
+
+world = World()
+state = {}
+ready.touch()
+words.write_text("".join(f"## Instructions for {branch}\n\nReview {branch}.\n" for branch in branches))
+world.codex_items(now, state)
+ready.write_text("".join(f"\n## READY TO LAND: {branch}\n\nRepository: richos.\nCommit: {tip}\n" for branch in branches))
+world.codex_items(now, state)
+items, problems = world.codex_items(now, state)
+assert not problems, problems
+assert [it.branch for it in items] == branches, [it.branch for it in items]
+for it in items:
+    assert Path(it.words[0]).read_text().strip().endswith(f"Review {it.branch}."), it.branch
+    assert Path(it.claims[0]).read_text().startswith(f"## READY TO LAND: {it.branch}\n"), it.branch
+
+first, second = items
+loss = dict(repo=repo, tip=tip, work=first.work, name=first.branch, outcome="lost",
+            trigger="handover", ended_at=now, why="fake reviewer exited")
+other = dict(loss, work=second.work, name=second.branch)
+losses = [loss] * rw.MAX_LOSSES
+other_verdict = dict(other, outcome="verdict", verdict="passed")
+
+
+def due(attempts, rows=(), running=None):
+    book = rw.Book(rows, running or {}, attempts)
+    return [it.branch for it, _, _ in rw.due(items, book, now, {}, 3600)]
+
+
+assert due([loss]) == branches
+assert due(losses) == branches[1:]
+assert due(losses + [other_verdict], [other_verdict]) == []
+assert due([dict(loss, outcome="held")]) == branches[1:]
+assert due([], running={first.key: dict(loss, trigger="quiet")}) == branches[:1]
+assert due([], [other_verdict]) == branches[:1]
+
+# Exercise the actual look path, including the attempt ordinal it passes to start.
+rw.append_jsonl(rw._p("attempts.jsonl"), loss)
+rw.stall_watch._write_json(rw._p("shared.json"), {"codex": state})
+
+
+class Watcher(rw.Watcher):
+    def start(self, item, trigger, now, attempt, supersede, rows):
+        starts.append((item.branch, attempt))
+        return {"work": item.work}
+
+
+starts = []
+watcher = Watcher("", "", world)
+watcher.look(now, {})
+assert starts == [(first.branch, 2), (second.branch, 1)], starts
+starts.clear()
+rw.append_jsonl(rw._p("attempts.jsonl"), loss)
+notices = watcher.look(now, {})
+assert starts == [(second.branch, 1)], starts
+assert any(first.branch in line and "NO VERDICT TWICE" in line for line in notices), notices
+
+# An independent verdict arriving while the terminal lock was held cannot settle it.
+lock = str(root / "fixture.lock")
+Path(lock).touch()
+settled = watcher.settle(lock, dict(loss, started_at=now), now + 1, [dict(other_verdict, at=rw.iso(now))])
+assert settled["outcome"] == "lost", settled
+
+both_capped = rw.Book([], {}, losses + [other] * rw.MAX_LOSSES)
+notices = rw.tell(now, {}, [], both_capped, items, [], [])
+assert sum("NO VERDICT TWICE" in line for line in notices) == 2, notices
+assert len(rw.PRINTED["told"]) == 2, rw.PRINTED
+PY
+check "W40 terminal handovers at one tip keep their own review attempts and notices" $? "see above"
 
 echo
 echo "review-watch.test.sh: $PASS passed, $FAIL failed"

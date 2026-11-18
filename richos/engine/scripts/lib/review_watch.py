@@ -683,9 +683,8 @@ class World(object):
 
     @staticmethod
     def _add_pending(pending, got):
-        pending[:] = [p for p in pending if p.get("work") != got["work"] or p.get("tip") == got["tip"]]
-        if not any(p.get("tip") == got["tip"] and p.get("repo") == got["repo"] for p in pending):
-            pending.append(got)
+        pending[:] = [p for p in pending if p.get("work") != got["work"]]
+        pending.append(got)
 
     def merge_base_for(self, repo, tip):
         itip, _why = self.integration_tip([], repo)
@@ -752,13 +751,18 @@ class World(object):
                            "there are no original words and no review of it started" % (header[:90], to_codex, branch))
         wdir = _p("codex-words")
         os.makedirs(wdir, exist_ok=True)
-        stem = "%s-%s%s" % (re.sub(r"[^A-Za-z0-9._-]", "_", branch), tip[:12], "-" + origin if origin else "")
+        work = "branch:%s:%s" % (repo, branch)
+        if origin:
+            stem = "%s-%s-%s" % (re.sub(r"[^A-Za-z0-9._-]", "_", branch), tip[:12], origin)
+        else:
+            # Branches such as codex/a_b and codex/a/b must have separate evidence files.
+            stem = hashlib.sha256((work + ":" + tip).encode("utf-8")).hexdigest()
         wpath, cpath = os.path.join(wdir, stem + ".words.md"), os.path.join(wdir, stem + ".claims.md")
         with open(wpath, "w", encoding="utf-8") as f:
             f.write("".join("%s\n%s\n" % (h, b) for h, b in words))
         with open(cpath, "w", encoding="utf-8") as f:
             f.write("%s\n%s\n" % (header, body))
-        return {"work": "branch:%s:%s" % (repo, branch), "repo": repo, "branch": branch, "tip": tip,
+        return {"work": work, "repo": repo, "branch": branch, "tip": tip,
                 "words": [wpath], "claims": [cpath], "at": now, "title": header[3:].strip()[:120]}
 
     def channel_items(self, now, codex_state, connections):
@@ -1013,7 +1017,8 @@ def lock_path(repo, tip):
 class Book(object):
     """Everything known about reviews, read once per look."""
 
-    def __init__(self, rows, running, attempts):
+    def __init__(self, rows, running, attempts, *, app=False):
+        self.app = app
         self.rows = rows
         self.running = running                      # {(repo, tip): lock info}
         self.verdicts = {}                          # {(repo, tip): [rows with a verdict]}
@@ -1023,9 +1028,9 @@ class Book(object):
                 self.verdicts.setdefault((os.path.realpath(r.get("repo") or ""), r.get("tip")), []).append(r)
                 self.by_work.setdefault(r.get("work"), []).append(r)
         self.losses = {}
-        self.held = {}                              # {(repo, tip): the newest held attempt still owed a retry}
+        self.held = {}                              # newest held attempt still owed a retry, by attempt key
         for a in attempts:
-            k = (a.get("repo"), a.get("tip"))
+            k = self.attempt_key((a.get("repo"), a.get("tip")), a.get("work"))
             if a.get("outcome") == "lost":
                 self.losses.setdefault(k, []).append(a)
                 self.held.pop(k, None)
@@ -1034,6 +1039,11 @@ class Book(object):
             elif a.get("outcome") == "verdict":
                 self.losses.pop(k, None)
                 self.held.pop(k, None)
+
+    def attempt_key(self, key, work):
+        # Terminal retry state follows the job. Older unattributed attempts still
+        # have a notice key, but cannot spend another job's retry budget.
+        return key if self.app or not work else key + (work,)
 
     def handover_verdict(self, key, work=None):
         return [r for r in self.verdicts.get(key, []) if r.get("trigger") in HANDOVER_KINDS
@@ -1072,7 +1082,8 @@ def due(items, book, now, seen, long_seconds):
         if it.tip == it.base:
             continue
         key = it.key
-        lost = book.losses.get(key) or []
+        attempt_key = book.attempt_key(key, it.work)
+        lost = book.losses.get(attempt_key) or []
         if len(lost) >= MAX_LOSSES:
             # The app's handover verdict is its only integration route. A quota
             # hold or unavailable CLI must not disable that route permanently.
@@ -1082,7 +1093,7 @@ def due(items, book, now, seen, long_seconds):
                     or now - float(lost[-1].get("ended_at") or 0) < REPEAT_MINUTES * 60):
                 continue
         running = book.running.get(key)
-        held = book.held.get(key)
+        held = book.held.get(attempt_key)
         if held and not running and now - float(held.get("ended_at") or 0) < HOLD_RETRY_SECONDS:
             continue                                # held by the quota: asked again at the next poll
 
@@ -1371,6 +1382,8 @@ class Watcher(object):
             mine = [r for r in rows if os.path.realpath(r.get("repo") or "") == info.get("repo")
                     and r.get("tip") == info.get("tip") and r.get("id") not in info.get("prior_reviews", [])
                     and (parse_iso(r.get("at")) or 0) >= started - 5]
+            if not isinstance(self.world, AppWorld) and info.get("work"):
+                mine = [r for r in mine if r.get("work") == info["work"]]
             got = [r for r in mine if r.get("verdict")]
             if got or self.joined_verdict(info,rows):
                 outcome = "verdict"
@@ -1573,7 +1586,8 @@ class Watcher(object):
             except (OSError, ValueError) as error:
                 sys.stderr.write("review-watch: recovery event drain unavailable: %s\n" % error)
         attempts = read_jsonl(_p("attempts.jsonl"))
-        book = Book(rows, running, attempts)
+        app = isinstance(self.world, AppWorld)
+        book = Book(rows, running, attempts, app=app)
         import recovery
         conflicting={}
         for row in rows:
@@ -1593,13 +1607,14 @@ class Watcher(object):
                     if v is None:os.environ.pop(k,None)
                     else:os.environ[k]=v
         for item, prior in recovery_requests or []:
-            if item.key not in book.running and len(book.losses.get(item.key) or [])<MAX_LOSSES:
+            losses = book.losses.get(book.attempt_key(item.key, item.work), [])
+            if item.key not in book.running and len(losses) < MAX_LOSSES:
                 item.recheck = prior
                 info = self.start(item, "handover", now, 1, None, rows)
                 if info:
                     book.running[item.key] = info
         for it, trigger, supersede in due(items, book, now, seen, LONG_JOB_MINUTES * 60):
-            n = len(book.losses.get(it.key) or []) + 1
+            n = len(book.losses.get(book.attempt_key(it.key, it.work), [])) + 1
             info = self.start(it, trigger, now, n, supersede, rows)
             if info:
                 book.running[it.key] = info
@@ -1608,7 +1623,7 @@ class Watcher(object):
                 del seen[w]
         stall_watch._write_json(_p("shared.json"), shared)
         attempts = read_jsonl(_p("attempts.jsonl"))
-        if isinstance(self.world, AppWorld):
+        if app:
             owners = list(codex_state.get("channel_pending", [])) + attempts + list(book.running.values())
             publish_channel_results(rows, owners)
             def channel_owned(row):
@@ -1619,7 +1634,7 @@ class Watcher(object):
             attempts = [a for a in attempts if not a.get("channel")]
             items = [it for it in items if not getattr(it, "channel", None)]
             book.running = {k: v for k, v in book.running.items() if not v.get("channel")}
-        return tell(now, session_state, rows, Book(rows, book.running, attempts), items, problems, attempts)
+        return tell(now, session_state, rows, Book(rows, book.running, attempts, app=app), items, problems, attempts)
 
 
 # ---------------------------------------------------------------------------
@@ -1657,7 +1672,7 @@ def publish_channel_results(rows, owners):
                 print("review-watch: result retained in review ledger for %s: %s" % (channel, exc), file=sys.stderr)
     # Use the existing loss budget and notice text, not a new first-loss or
     # quota-hold notification policy for dedicated channels.
-    book = Book(rows, {}, [o for o in owners if o.get("outcome")])
+    book = Book(rows, {}, [o for o in owners if o.get("outcome")], app=True)
     for key in lost_review_keys(book).values():
         attempt = book.losses[key][-1]
         channel = attempt.get("channel")
@@ -1804,7 +1819,7 @@ def convergence_notices(row, rows, who):
 
 
 def lost_review_keys(book):
-    return dict(("lost:%s:%s" % key, key) for key, lost in book.losses.items() if len(lost) >= MAX_LOSSES)
+    return {"lost:" + ":".join(map(str, key)): key for key, lost in book.losses.items() if len(lost) >= MAX_LOSSES}
 
 
 def lost_review_notice(key, attempt, item):
@@ -2061,8 +2076,10 @@ def tell(now, sstate, rows, book, items, problems, attempts):
         if key[0] and git(key[0], "merge-base", "--is-ancestor", str(key[1]), "refs/heads/main") is not None:
             continue
         a = book.losses[key][-1]
-        item = items_by_key.get(key + (a.get("work") or "",)) or items_by_key.get(key)
-        session = a.get("session") or getattr(items_by_key.get(key + (a.get("work") or "",)), "session", "") or ""
+        item = items_by_key.get(key[:2] + (a.get("work") or "",))
+        session = a.get("session") or getattr(item, "session", "") or ""
+        if item is None and len(key) == 2:
+            item = items_by_key.get(key)
         add(lost_review_notice(key, a, item), session=session, key=k if ours(session) else None,
             mark=None if ours(session) else (k, {"first": now}))
     # -- what could not be read or started ------------------------------------------
