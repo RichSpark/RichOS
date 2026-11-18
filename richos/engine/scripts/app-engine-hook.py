@@ -6,6 +6,7 @@ fallback. Provider callbacks are evidence, not proof of assignment completion.
 """
 import concurrent.futures
 import contextlib
+import fcntl
 import importlib.util
 import io
 import json
@@ -201,37 +202,40 @@ def a_worker_this_lease_already_dispatched(active, payload):
     return bool(payload.get("agent_id")) and active.get("background_work_allowed") is True
 
 
-def mid_job_notice(work, active, payload, root, emit):
-    """A second review's verdict on a running worker's work, told ONCE to that worker at its next
-    tool call, by THE TERMINAL'S OWN DELIVERY: scripts/hooks/deliver-review-verdict.sh, whose body
-    is scripts/lib/review_delivery.py (CEO §154, 2026-10-31: the app does every job the terminal
-    already does with the terminal's own code). The app's workers run this hook and not the
-    engine's hook set (Sage's check, catch 7), so the script is run from here, unchanged, with the
-    app's own folders: its ledger (SECOND_REVIEW_STATE_DIR, set by handle), the review watch's
-    delivery markers (REVIEW_WATCH_STATE_DIR) and this conversation's registry
-    (RICHOS_WORKSPACES_DIR, already the lease's). The reviews are started by the app's own
-    review-watch, the host's child (scripts/lib/app_review.py names the folders). What the
-    script answers goes to emit(text), which writes and flushes the hook's one answer; True when
-    it did. Only a worker's tool call is answered, nothing here can refuse a tool call, and a
-    delivery that fails says so on stderr rather than stopping the work. `work` and `active` are
-    unused: the terminal's delivery finds the worker by its registered record, never by branch."""
+def mid_job_notice(_work, _active, payload, root, emit):
+    """Use the terminal delivery hook to select and render a worker's reviews.
+    Hold its delivery lock until the desktop envelope is flushed and marked."""
     if not payload.get("agent_id"):
         return False
     paths = load("richos_app_review", ENGINE / "scripts/lib/app_review.py").app_paths(root)
-    env = dict(os.environ, SECOND_REVIEW_STATE_DIR=paths["reviews"], REVIEW_WATCH_STATE_DIR=paths["watch"])
-    try:
-        done = subprocess.run(["/bin/bash", str(ENGINE / "scripts/hooks/deliver-review-verdict.sh")],
-                              input=json.dumps(payload), text=True, capture_output=True, timeout=10, env=env)
-    except (OSError, subprocess.TimeoutExpired) as error:
-        print(f"RichOS desktop engine: a review verdict could not be read: {error}", file=sys.stderr)
+    if not Path(paths["ledger"]).is_file():
         return False
-    if done.stderr:
-        sys.stderr.write(done.stderr)
-    texts = lead_contexts(done.stdout)
-    if not texts:
-        return False
-    emit("\n\n".join(texts))
-    return True
+    delivery = load("richos_review_delivery", ENGINE / "scripts/lib/review_delivery.py")
+    with contextlib.ExitStack() as stack:
+        try:
+            if not stack.enter_context(delivery.delivery_lock(paths["delivered"])):
+                return False
+            env = dict(os.environ, SECOND_REVIEW_STATE_DIR=paths["reviews"], REVIEW_WATCH_STATE_DIR=paths["watch"])
+            env[delivery.DEFER_ACK] = "1"
+            done = subprocess.run(["/bin/bash", str(ENGINE / "scripts/hooks/deliver-review-verdict.sh")],
+                                  input=json.dumps(payload), text=True, capture_output=True, timeout=10, env=env)
+            if done.stderr:
+                sys.stderr.write(done.stderr)
+            if not done.stdout.strip() or done.returncode:
+                return False
+            answer = json.loads(done.stdout)
+            text = answer["hookSpecificOutput"]["additionalContext"]
+            receipt = answer["reviewDelivery"]
+            key, ids = receipt["key"], receipt["ids"]
+        except (OSError, subprocess.TimeoutExpired, ValueError, KeyError, TypeError) as error:
+            print(f"RichOS desktop engine: a review verdict could not be read: {error}", file=sys.stderr)
+            return False
+        emit(text)
+        try:
+            delivery.acknowledge(paths["delivered"], key, ids)
+        except OSError as error:
+            print(f"RichOS desktop engine: a review verdict could not be marked delivered: {error}", file=sys.stderr)
+        return True
 
 
 # What opens the app's own keep-alive message (richos-core chat_cache.rs KEEP_ALIVE_TAG, which a
@@ -250,31 +254,44 @@ def keep_alive(payload):
     return str(payload.get("prompt") or "").startswith(KEEP_ALIVE_TAG)
 
 
-def home_stage_notice(root, payload):
-    """A STAGE OF THE HOME PICTURE WAS REACHED (CEO 2026-11-14: "a hook that automatically
-    notifies Rich when a milestone is reached"). The app writes <state>/home-stage-notice.json
-    when the user's loro crosses a stage (main.rs home_stage_reached: stage, name, count); the
-    conversation lease's next turn opens with that fact, once, and the file is gone. What Rich
-    does with it is his instruction file's, never this notice's: it states the fact only."""
-    if lease_role(root, payload) not in (None, "rich"):
-        return ""
+def home_stage_notice(root, emit):
+    """Deliver the app's milestone once to Rich, leaving it pending if output fails.
+    The producer can atomically replace the source while a previous stage is being told."""
     path = root / "home-stage-notice.json"
-    try:
-        notice = json.loads(path.read_text())
-        stage, name, count = int(notice["stage"]), str(notice["name"]), int(notice["count"])
-    except (OSError, ValueError, KeyError, TypeError):
-        return ""
-    try:
-        path.unlink()
-    except OSError:
-        return ""  # a notice that cannot be taken is not said at every turn
-    if not 1 <= stage <= 6 or not name.strip() or count < 0:
-        return ""
-    return (f"HOME PICTURE STAGE REACHED: the user's loro picture on the home screen reached "
-            f"stage {stage} of 6, \"{name.strip()[:60]}\", at {count:,} memories.")
+    pending = root / "home-stage-notice.pending.json"
+    if not path.exists() and not pending.exists():
+        return False
+    with contextlib.ExitStack() as stack:
+        try:
+            lock = stack.enter_context((root / ".home-stage-notice.lock").open("a"))
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            if not pending.exists():
+                path.replace(pending)
+            body = pending.read_text()
+        except (FileNotFoundError, BlockingIOError):
+            return False
+        except OSError as error:
+            print(f"RichOS desktop engine: a home milestone could not be read: {error}", file=sys.stderr)
+            return False
+        text = ""
+        try:
+            notice = json.loads(body)
+            stage, name, count = int(notice["stage"]), str(notice["name"]).strip(), int(notice["count"])
+            if 1 <= stage <= 6 and name and count >= 0:
+                text = (f"HOME PICTURE STAGE REACHED: the user's loro picture on the home screen reached "
+                        f"stage {stage} of 6, \"{name[:60]}\", at {count:,} memories.")
+        except (ValueError, KeyError, TypeError):
+            pass
+        if text:
+            emit(text)
+        try:
+            pending.unlink()
+        except OSError as error:
+            print(f"RichOS desktop engine: a home milestone could not be retired: {error}", file=sys.stderr)
+        return bool(text)
 
 
-def held_work_context(work, root, payload, also=""):
+def held_work_context(work, payload, also=""):
     """THE FALLBACK FOR DUE WORK in the app (orchestration reliability R5, richos-hq docs/
     prds/2026-10-23-orchestration-reliability.md): while no healthy stall watcher evaluates
     this conversation, Rich's turn opens with the due work (workspaces.fallback_notice, the
@@ -282,8 +299,6 @@ def held_work_context(work, root, payload, also=""):
     The old every-turn hold lines are gone (R6). Only the conversation lease: Stu's turns
     carry none. The registry is this conversation's own partition (RICHOS_WORKSPACES_DIR)."""
     session = str(payload.get("session_id") or "")
-    if lease_role(root, payload) not in (None, "rich"):
-        return
     try:
         text = work.W.fallback_notice(session)
     except Exception as error:  # noqa: BLE001 -- an unread list is said, never silence
@@ -291,7 +306,7 @@ def held_work_context(work, root, payload, also=""):
     text = "\n\n".join(part for part in (text, also) if part)
     if text:
         print(json.dumps({"hookSpecificOutput": {"hookEventName": "UserPromptSubmit",
-                                                 "additionalContext": text}}))
+                                                 "additionalContext": text}}), flush=True)
 
 
 def lease_role(root, payload):
@@ -350,8 +365,12 @@ def handle(payload):
         return
     ws = [sys.executable, str(ENGINE / "mega-lander/workspaces.py"), "--entity", str(coordination)]
     work = load("richos_desktop_work", ENGINE / "mega-lander/app.py")
-    if event == "UserPromptSubmit" and not keep_alive(payload):
-        held_work_context(work, root, payload, also=home_stage_notice(root, payload))
+    if event == "UserPromptSubmit" and not keep_alive(payload) and lease_role(root, payload) in (None, "rich"):
+        def emit_home(milestone):
+            held_work_context(work, payload, also=milestone)
+
+        if not home_stage_notice(root, emit_home):
+            emit_home("")
     if event == "PreToolUse":
         refuse_the_leads_own_read(work, root, payload)
         run(["/bin/bash", str(ENGINE / "scripts/hooks/guard-sealed-worktree.sh")], payload)
@@ -364,14 +383,7 @@ def handle(payload):
                 context = context or {"hookSpecificOutput":{"hookEventName":"PreToolUse"}}
                 context["hookSpecificOutput"]["additionalContext"] = notice
 
-        def emit(notice):
-            # One JSON answer per hook call: the verdict joins the worker's host context.
-            answer = context or {"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": ""}}
-            out = answer["hookSpecificOutput"]
-            out["additionalContext"] = (out.get("additionalContext") + "\n\n" if out.get("additionalContext") else "") + notice
-            sys.stdout.write(json.dumps(answer) + "\n")
-            sys.stdout.flush()
-        if not mid_job_notice(work, active, payload, root, emit) and context and payload.get("tool_name") != "Agent":
+        if context and payload.get("tool_name") != "Agent":
             print(json.dumps(context))
     if event == "PreToolUse" and payload.get("tool_name") == "Agent":
         payload["richos_recovery_assignment"] = work.dispatch_intent(active, payload, inspect_only=True)
@@ -434,20 +446,6 @@ def handle(payload):
             answer["hookSpecificOutput"] = {"hookEventName": "Stop", "additionalContext": "\n\n".join(contexts)}
         if answer:
             print(json.dumps(answer))
-
-
-def lead_contexts(text):
-    """The additionalContext strings in a hook's JSON stdout lines."""
-    out = []
-    for line in (text or "").splitlines():
-        try:
-            obj = json.loads(line)
-        except ValueError:
-            continue
-        ctx = (obj.get("hookSpecificOutput") or {}).get("additionalContext") if isinstance(obj, dict) else None
-        if ctx:
-            out.append(ctx)
-    return out
 
 
 DECISION_RANK = {"allow": 1, "ask": 2, "defer": 3, "deny": 4}
@@ -520,16 +518,30 @@ def runtime_before_stubs(environ=os.environ):
 def main(stdin=sys.stdin, stdout=sys.stdout):
     runtime_before_stubs()
     payload = json.load(stdin)
-    if payload.get("hook_event_name") == "PreToolUse" and payload.get("tool_name") == "Agent":
+    pre_tool = payload.get("hook_event_name") == "PreToolUse"
+    worker = pre_tool and bool(payload.get("agent_id"))
+    if pre_tool and (worker or payload.get("tool_name") == "Agent"):
         captured = io.StringIO()
         with contextlib.redirect_stdout(captured):
             handle(payload)
         envelope = one_envelope(captured.getvalue())
-        if envelope is not None:
-            stdout.write(json.dumps(envelope) + "\n")
-            stdout.flush()
+
+        def emit(notice=""):
+            answer = envelope
+            if notice:
+                answer = answer or {"hookSpecificOutput": {"hookEventName": "PreToolUse"}}
+                specific = answer["hookSpecificOutput"]
+                specific["additionalContext"] = "\n\n".join(
+                    part for part in (specific.get("additionalContext"), notice) if part)
+            if answer is not None:
+                stdout.write(json.dumps(answer) + "\n")
+                stdout.flush()
+
+        if not worker or not mid_job_notice(None, None, payload, Path(os.environ["RICHOS_APP_STATE"]), emit):
+            emit()
     else:
-        handle(payload)
+        with contextlib.redirect_stdout(stdout):
+            handle(payload)
 
 
 if __name__ == "__main__":

@@ -581,8 +581,8 @@ mutant sr-old-verdict-dropped "test_second_review_a_verdict_waits_for_the_teamma
 # them afterward. O_EXCL in that final claim is now a redundant safeguard; the
 # pending-marker check carries the observable once-only delivery rule.
 mutant sr-delivered-every-call "test_second_review_a_running_teammates_next_tool_call_carries_a_new_verdict_once" "scripts/lib/review_delivery.py" \
-    '                   and not os.path.exists(marker(rec["key"], str(r["id"])))]' \
-    '                   and True]' \
+    'and not os.path.exists(marker(rec["key"], str(r["id"])))]' \
+    'and True]' \
     "a mid-job verdict would be repeated at every tool call of the teammate instead of once (plan §2.5)."
 
 mutant sr-launcher-decides-what-is-reviewed "test_second_review_a_listed_repository_without_its_launcher_is_still_refused" "$W" \
