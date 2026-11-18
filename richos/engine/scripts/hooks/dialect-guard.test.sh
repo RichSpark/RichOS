@@ -187,6 +187,29 @@ the behaviour
 the colour"
 case_fixed "A23. the report tells the model to quote the American form" '"old_string" in o["additionalContext"]' "True" Write "$MD" "the colour"
 
+
+# Check the entire updated payload, including tabs, trailing spaces and final newline.
+HD_DATA=$'value="$(cat <<\'ONE\' <<-TWO\n# colour  \nONE\n\t# behaviour\n\tTWO\n)"\n'
+HD_SOURCE="${HD_DATA}"$'# the colour of it\n'
+HD_EXPECTED="${HD_DATA}"$'# the color of it\n'
+hook_run Write "$SANDBOX/heredoc.sh" "$HD_SOURCE"
+if [ "$RC" -eq 0 ] && printf '%s' "$OUT" | python3 -c '
+import json, sys
+assert json.load(sys.stdin)["hookSpecificOutput"]["updatedInput"]["content"] == sys.argv[1]
+' "$HD_EXPECTED"; then
+    ok "A24. shell heredoc bytes are preserved while the real comment is fixed"
+else
+    bad "A24. shell heredoc bytes and comment" "exit $RC; $ERR"
+fi
+
+case_quiet "A24b. indented text is not an exact heredoc terminator" Write "$SANDBOX/heredoc.sh" \
+    $'cat <<END\n END\n# colour\nEND\n'
+case_quiet "A24c. an unquoted heredoc joins escaped newlines before testing its delimiter" \
+    Write "$SANDBOX/heredoc.sh" $'cat <<END\nprefix\\\nEND\n# colour\nEND\n'
+case_fixed "A25. a quoted redirect and a here-string leave shell comments fixable" "$C" \
+    $'printf "<< EOF"\ncat <<<input\n# the color of it' \
+    Write "$SANDBOX/heredoc.sh" $'printf "<< EOF"\ncat <<<input\n# the colour of it'
+
 echo
 echo "=== R. REFUSALS — what cannot be fixed mechanically still blocks ==="
 
