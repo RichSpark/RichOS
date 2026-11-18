@@ -258,6 +258,7 @@ mod tests {
             page: Some(420),
             splash: Some(true),
             report: crate::update_startup::LaunchReport {
+                update_arrival: None,
                 bundle_check: Some("none (trusted as written at its update), 1 ms".into()),
                 handover: None,
                 activated: false,

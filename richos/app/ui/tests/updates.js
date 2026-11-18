@@ -803,9 +803,8 @@ async function main() {
   // interrupted. In this case, the app should automatically re-launch immediately after
   // downloading the new version. Avoiding/preventing a re-launch is only meant for when there
   // are workers running." `updates.rs` decides and relaunches (its own unit test holds the
-  // decision); this proves the page half: what he is told before it happens, that the pill
-  // says it with the menu shut, that his draft is parked at once, and that while work runs
-  // the row promises the relaunch for when the work is done instead of the next launch.
+  // decision); this proves the page half: the restart card, the draft parked at once,
+  // and the waiting state while work runs.
   await run.check("22. a downloaded update restarts when nothing runs, after one short notice", async () => {
     const live = { endpointIsPlaceholder: false, endpoint: "https://u.example.com/x" };
     const page = await openApp(browser);
@@ -834,7 +833,9 @@ async function main() {
       input.dispatchEvent(new Event("input", { bubbles: true }));
       window.localStorage.removeItem("richos.view.drafts");
       window.__RICHOS_MOCK__.updateSet(
-        Object.assign({}, window.RichUpdates.state(), { state: "restarting" }),
+        Object.assign({}, window.RichUpdates.state(), {
+          state: "restarting", phaseStartedAt: Date.now(), relaunchNoticeMs: 3000,
+        }),
         []
       );
       return window.localStorage.getItem("richos.view.drafts") || "";
@@ -844,26 +845,18 @@ async function main() {
     await flushFrames(page);
     row = await readRow(page);
     assertEqual(row.state, "restarting", "the row took the notice");
-    assertEqual(row.headline, "Restarting into RichOS 0.1.2…", "the notice names the version");
+    assertEqual(row.headline, "Restarting into RichOS 0.1.2", "the notice names the version");
     assert(row.sub.indexOf("Your window and conversation will be right where you left them.") >= 0, "and says he loses nothing: " + row.sub);
     assertEqual(row.check, null, "no control: nothing to press while it restarts");
     assertEqual(row.install, null, "no control: nothing to press while it restarts");
     assertEqual(row.back, null, "no control: nothing to press while it restarts");
-    assertEqual(row.mark, "ready", "the settings button keeps its mark");
-
-    // With the menu SHUT, the pill carries the same sentence.
+    assertEqual(row.mark, null, "the modal carries the notice");
+    assertEqual(await page.isVisible("#set-menu"), false, "the settings menu closes");
+    assertEqual(await page.locator("#update-cue").count(), 0, "the restart pill is gone");
+    assertEqual(await page.locator("#update-restart-title").textContent(), row.headline);
+    assertEqual(await page.locator("#update-restart").evaluate((dialog) => dialog.matches(":modal")), true);
     await page.keyboard.press("Escape");
-    await page.waitForFunction(() => {
-      const m = document.getElementById("set-menu");
-      return !m || m.hidden;
-    });
-    const cue = await readCue(page);
-    assertEqual(cue.count, 1, "the notice is in the chrome with the menu shut");
-    assertEqual(cue.cueState, "restarting", "as the restart notice");
-    assertEqual(cue.text, "Restarting into RichOS 0.1.2…", "the pill and the row say the same thing");
-    assertEqual(cue.onTop, true, "and nothing covers it");
-    await settled(page);
-    await evidence(page, SHOTS + "/updates-cue-restarting");
+    assertEqual(await page.locator("#update-restart").evaluate((dialog) => dialog.open), true, "Escape leaves the notice up");
     await page.close();
 
     // --- WORKING: the relaunch waits for the work, and says so --------------------------
@@ -893,7 +886,7 @@ async function main() {
     assertEqual(row.headline, "RichOS 0.1.2 is ready for the next launch.", "a ready this app did not download");
     assert(row.sub.indexOf("next time RichOS opens") >= 0, "keeps the next-launch sentence: " + row.sub);
     await p2.close();
-    return "idle: ready, then a named notice in the row and the pill, draft parked at once; working: restart after the work";
+    return "idle: modal notice and draft parked at once; working: restart after the work";
   });
 
   // ---- 10. the row survives a menu rebuild ----------------------------------------------
@@ -949,7 +942,7 @@ async function main() {
   // =======================================================================================
 
   // ---- 12. it appears when there is something, and does not EXIST when there is not -----
-  await run.check("12. the cue APPEARS for a waiting update and does not EXIST otherwise", async () => {
+  await run.check("12. the cue appears for waiting and active updates", async () => {
     const page = await openApp(browser);
 
     // Nothing has been opened, and nothing will be: this is the whole claim.
@@ -987,7 +980,7 @@ async function main() {
 
     // AND BACK. A build that only ever ADDS the element passes the half above and is the
     // exact failure the ruling names, so the return trip is asserted rather than assumed.
-    for (const s of ["idle", "checking", "upToDate", "downloading", "installing", "failed", "unconfigured", "a-state-nobody-shipped"]) {
+    for (const s of ["idle", "checking", "upToDate", "failed", "unconfigured", "a-state-nobody-shipped"]) {
       await setState(
         page,
         view({
@@ -1002,7 +995,7 @@ async function main() {
     await settled(page);
     await evidence(page, SHOTS + "/updates-cue-absent");
     await page.close();
-    return "available and ready raise exactly one element with the menu shut; the other eight states raise none";
+    return "available and ready raise one element with the menu shut; idle and failed states leave no cue";
   });
 
   // ---- 13. absent costs NOTHING, and present is in chrome that is on every screen --------
@@ -1576,6 +1569,106 @@ async function main() {
       out.push(theme + " label " + rest.text + " rest / " + hover.text + " hover, ring " + ring.ring);
     }
     return "Enter and a click each handed the opener " + CHANGELOG + "; " + out.join("; ");
+  });
+
+  await run.check("Round 91 keeps the checking stage live and follows the native restart clock", async () => {
+    const page = await openApp(browser);
+    await settled(page);
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await page.clock.install();
+    await page.clock.pauseAt(await page.evaluate(() => Date.now() + 1000));
+    const started = await page.evaluate(() => Date.now());
+    const target = { currentVersion: "0.1.0", availableVersion: "0.1.2", downloadedBytes: 13631488 };
+
+    await setState(page, view({ ...target, state: "downloading", revision: 1, percent: 62 }));
+    const cue = page.locator("#update-cue");
+    assertEqual(await cue.textContent(), "Downloading 62%");
+    await cue.evaluate((node) => node.click());
+    assertEqual(await page.isVisible("#set-menu"), true, "the live cue opens Updates");
+    assertEqual(await page.evaluate(() => document.activeElement.id), "update-line", "focus lands on the update");
+    assertEqual(await cue.isVisible(), false, "the row carries progress while Settings is open");
+
+    const checking = { ...target, state: "installing", revision: 2, phaseStartedAt: started };
+    await setState(page, view(checking));
+    const steps = page.locator(".update-checking .update-step");
+    assertEqual(await steps.locator(".update-step-name").allTextContents(), ["Downloaded", "Checking", "Restarting"]);
+    assertEqual(await page.isVisible("#update-progress"), false, "the complete bar gives way to the steps");
+    assertEqual(await page.isVisible(".update-actions"), false, "there is nothing to press");
+    assertEqual(await steps.nth(0).locator(".update-step-detail").textContent(), "13.0 MB");
+    const elapsed = steps.nth(1).locator(".update-step-detail");
+    assertEqual(await elapsed.textContent(), "0:00");
+    assertEqual(await elapsed.getAttribute("aria-hidden"), "true", "the clock does not announce every tick");
+    const animation = await steps.nth(1).locator(".update-step-icon").evaluate((node) => getComputedStyle(node).animationDuration);
+    assertEqual(animation, "2.4s", "the reduced-motion ring turns slowly");
+    await page.clock.runFor(3000);
+    assertEqual(await elapsed.textContent(), "0:03");
+    await setState(page, view({ ...checking, revision: 3 }));
+    await page.evaluate(() => window.RichSettings.close());
+    assertEqual(await cue.isVisible(), true);
+    assertEqual(await cue.textContent(), "Updating RichOS · 0:03");
+    await page.clock.runFor(5000);
+    assertEqual(await cue.textContent(), "Updating RichOS · 0:08");
+    assert((await readRow(page)).sub.startsWith("Still working."), "long checks explain the wait");
+
+    const restartAt = await page.evaluate(() => Date.now());
+    const restart = { ...target, state: "restarting", revision: 4, phaseStartedAt: restartAt, relaunchNoticeMs: 3000 };
+    await setState(page, view(restart));
+    const number = page.locator(".update-restart-number");
+    const fill = page.locator(".update-ring-fill");
+    const full = Number(await fill.getAttribute("stroke-dashoffset"));
+    assertEqual(await number.textContent(), "3");
+    await page.clock.runFor(1020);
+    assertEqual(await number.textContent(), "2");
+    assert(Number(await fill.getAttribute("stroke-dashoffset")) > full, "the gold ring empties");
+    await setState(page, view({ ...restart, revision: 5 }));
+    await page.evaluate((stale) => window.__RICHOS_MOCK__.updateSet(stale), view(checking));
+    await page.clock.runFor(1000);
+    assertEqual(await number.textContent(), "1", "late events and refreshed restart views preserve the clock");
+    await page.clock.runFor(1000);
+    assertEqual(await number.textContent(), "");
+    assertEqual(await page.locator("#update-restart-title").textContent(), "Closing RichOS 0.1.0…");
+    assertEqual(await page.locator(".update-restart-ring[data-closing]").count(), 1, "the ring spins during quit");
+    await setState(page, view({ ...target, state: "ready", revision: 6, busy: true, restartsWhenIdle: true }));
+    assertEqual(await page.locator("#update-restart").count(), 0, "a declined restart restores the window");
+    assertEqual((await readWaiting(page)).count, 1, "the work gate resumes waiting");
+    assertEqual(page.__errors, [], "the stage transitions did not throw");
+    await page.close();
+    return "0:00 to 0:08, then 3, 2, 1 and Closing, with a stale snapshot and a deferred quit";
+  });
+
+  await run.check("Round 91 announces a completed update once and opens the changelog", async () => {
+    const page = await openApp(browser, "light");
+    await settled(page);
+    await page.clock.install();
+    await page.clock.pauseAt(await page.evaluate(() => Date.now() + 1000));
+    const updated = view({ state: "upToDate", currentVersion: "0.1.2", updateArrival: "12:345:678", revision: 1 });
+    const pill = page.locator("#update-arrival");
+    assertEqual(await pill.count(), 0, "ordinary launches show no confirmation");
+    await page.evaluate(() => {
+      const splash = document.createElement("div");
+      splash.id = "splash";
+      document.body.appendChild(splash);
+    });
+    await setState(page, updated);
+    assertEqual(await pill.count(), 0, "the notice waits until the conversation is visible");
+    await page.evaluate(() => document.getElementById("splash").remove());
+    assertEqual(await pill.locator("[role=status]").textContent(), "Updated to RichOS 0.1.2");
+    await pill.locator("a").evaluate((link) => link.click());
+    assertEqual(await page.evaluate(() => window.__RICHOS_OPENED__), [
+      "github.com/RichSpark/RichOS/blob/main/docs/CHANGELOG.md",
+    ]);
+    await page.clock.runFor(8999);
+    assertEqual(await pill.count(), 1, "the notice is still there before nine seconds");
+    await page.clock.runFor(1);
+    assertEqual(await pill.count(), 0, "the notice dismisses itself after nine seconds");
+    await page.clock.resume();
+    await page.reload();
+    await leaveHome(page);
+    await bootSettled(page);
+    await setState(page, updated);
+    assertEqual(await pill.count(), 0, "the same receipt does not advertise again on the next launch");
+    await page.close();
+    return "waits for splash, opens the changelog, dismisses and stays dismissed on launch";
   });
 
   await browser.close();

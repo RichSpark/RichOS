@@ -15,7 +15,8 @@
 //! runs it waits, and relaunches when the work ends. `update_relaunch.rs` holds the how.
 
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
+    Arc,
     Mutex,
 };
 use std::time::{Duration, Instant};
@@ -141,6 +142,16 @@ pub struct UpdateView {
     /// `unconfigured` | `idle` | `checking` | `upToDate` | `available` | `downloading`
     /// | `installing` | `ready` | `restarting` | `failed`
     pub state: &'static str,
+    /// Snapshots and events share an order, even when IPC delivers them out of order.
+    pub revision: u64,
+    /// When the phase changed. Re-reads and work-gate refreshes preserve this clock.
+    pub phase_started_at: u64,
+    pub relaunch_notice_ms: Option<u64>,
+    pub update_arrival: Option<String>,
+    #[serde(skip)]
+    phase_started: Instant,
+    #[serde(skip)]
+    attempt: Option<u64>,
     /// The version running right now, and the ONLY thing the window may ever call the version.
     ///
     /// ITS SOURCE IS `app/src-tauri/Cargo.toml`, not `tauri.conf.json` — this line used to say
@@ -246,6 +257,12 @@ impl UpdateView {
     fn new(current_version: String, endpoint: String, placeholder: bool) -> Self {
         UpdateView {
             state: if placeholder { "unconfigured" } else { "idle" },
+            revision: 0,
+            phase_started_at: now_millis(),
+            relaunch_notice_ms: None,
+            update_arrival: None,
+            phase_started: Instant::now(),
+            attempt: None,
             current_version,
             available_version: None,
             notes: None,
@@ -491,10 +508,11 @@ where
 /// whole payload takes as long as the payload is long.
 fn download_progress(app: &AppHandle) -> (impl FnMut(usize, Option<u64>), impl FnOnce()) {
     let app_for_chunks = app.clone();
-    let mut received: u64 = 0;
+    let bytes = Arc::new(AtomicU64::new(0));
+    let chunk_bytes = Arc::clone(&bytes);
     let mut last_emit = Instant::now() - Duration::from_millis(200);
     let on_chunk = move |chunk: usize, total: Option<u64>| {
-        received += chunk as u64;
+        let received = chunk_bytes.fetch_add(chunk as u64, Ordering::Relaxed) + chunk as u64;
         let done = total.map(|t| received >= t).unwrap_or(false);
         if last_emit.elapsed() >= Duration::from_millis(100) || done {
             last_emit = Instant::now();
@@ -517,6 +535,7 @@ fn download_progress(app: &AppHandle) -> (impl FnMut(usize, Option<u64>), impl F
     let on_finish = move || {
         transition(&app_for_finish, |v| {
             v.state = "installing";
+            v.downloaded_bytes = bytes.load(Ordering::Relaxed);
             v.percent = Some(100);
         });
     };
@@ -539,8 +558,10 @@ async fn download_verified(app: &AppHandle, update: &tauri_plugin_updater::Updat
 pub fn init(app: &AppHandle) {
     let (endpoint, placeholder) = resolve_endpoint(app);
     let version = app.package_info().version.to_string();
+    let mut view = UpdateView::new(version, endpoint, placeholder);
+    view.update_arrival = crate::update_startup::launch_report().update_arrival;
     app.manage(Updates {
-        view: Mutex::new(UpdateView::new(version, endpoint, placeholder)),
+        view: Mutex::new(view),
         pending: Mutex::new(None),
         operation: AtomicBool::new(false),
         relaunching: AtomicBool::new(false),
@@ -551,15 +572,45 @@ pub fn init(app: &AppHandle) {
 /// here, so there is exactly one place an emit could be forgotten.
 fn transition<F: FnOnce(&mut UpdateView)>(app: &AppHandle, f: F) -> UpdateView {
     let state = app.state::<Updates>();
-    let view = {
+    let (view, completed) = {
         let mut guard = state.view.lock().expect("update view lock");
+        let previous = guard.state;
         f(&mut guard);
-        guard.clone()
+        guard.revision += 1;
+        let completed = if guard.state != previous {
+            let duration = guard.phase_started.elapsed().as_millis() as u64;
+            guard.phase_started = Instant::now();
+            guard.phase_started_at = now_millis();
+            guard.relaunch_notice_ms = (guard.state == "restarting")
+                .then_some(RELAUNCH_NOTICE.as_millis() as u64);
+            if guard.state == "downloading" && previous != "installing" {
+                guard.attempt = Some(guard.revision);
+            }
+            Some((previous, duration))
+        } else {
+            None
+        };
+        (guard.clone(), completed)
     };
     // Best-effort, exactly like every other emitter in this shell: a missing or closed
     // webview must never stall the update path.
     let _ = app.emit(EVENT_UPDATE, view.clone());
+    if let Some((phase, elapsed)) = completed {
+        if matches!(phase, "downloading" | "installing" | "restarting")
+            || (phase == "ready" && view.state == "restarting")
+        {
+            timing(app, &view, phase, view.failure.as_ref().map_or(view.state, |f| f.kind), elapsed);
+        }
+    }
     view
+}
+
+fn timing(app: &AppHandle, view: &UpdateView, phase: &'static str, outcome: &'static str, elapsed_ms: u64) {
+    if let (Some(attempt), Some(state)) = (view.attempt, app.try_state::<crate::AppState>()) {
+        richdoctor_core::update_timing::record(
+            &state.data_dir, now_millis(), attempt, phase, outcome, elapsed_ms, env!("CARGO_PKG_VERSION"),
+        );
+    }
 }
 
 fn now_millis() -> u64 {
@@ -683,7 +734,7 @@ pub async fn check(app: &AppHandle) -> UpdateView {
 /// Download and verify the offered update into private staging. Ready means activation
 /// will happen at a normal startup when no participating RichOS session is running.
 /// This command never replaces an application bundle or exits the live process.
-pub async fn install(app: &AppHandle) -> UpdateView {
+pub async fn install(app: &AppHandle, relaunch: bool) -> UpdateView {
     let state = app.state::<Updates>();
     let Some(_operation) = UpdateOperation::acquire(&state.operation) else {
         return state.snapshot();
@@ -768,6 +819,7 @@ pub async fn install(app: &AppHandle) -> UpdateView {
             v.state = "ready";
             v.percent = Some(100);
             v.ready_is_rollback = false;
+            v.restarts_when_idle = relaunch;
         }),
         Err(error) => journal_failure(app, error),
     }
@@ -1200,8 +1252,7 @@ pub fn spawn_work_watcher(app: AppHandle) {
 // The relaunch (CEO feedback, 2026-10-06, item 1)
 // ---------------------------------------------------------------------------------------
 
-/// How long the notice is on screen before RichOS quits and comes back. Long enough to read
-/// one sentence in the pill or the row; short enough that it is still "immediately".
+/// How long the restart countdown is on screen before RichOS can quit.
 const RELAUNCH_NOTICE: Duration = Duration::from_secs(3);
 
 /// How long a declined quit may leave the notice up before the row goes back to `ready`.
@@ -1238,10 +1289,10 @@ fn relaunch_if_clear(app: &AppHandle) {
     {
         return;
     }
+    let notice = transition(app, |v| v.state = "restarting");
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
-        transition(&app, |v| v.state = "restarting");
-        tokio::time::sleep(RELAUNCH_NOTICE).await;
+        tokio::time::sleep_until((notice.phase_started + RELAUNCH_NOTICE).into()).await;
         // ASKED AGAIN AT THE LAST MOMENT: he may have sent a message during the notice.
         let verdict = refresh_work_verdict(&app);
         let still = should_relaunch("ready", true, verdict.busy, !app.webview_windows().is_empty());
@@ -1254,6 +1305,7 @@ fn relaunch_if_clear(app: &AppHandle) {
         };
         if !still {
             // Work started: today's behavior, and the watcher relaunches when it ends.
+            timing(&app, &notice, "restart_notice", "deferred", notice.phase_started.elapsed().as_millis() as u64);
             back_to_ready(&app, true);
             return;
         }
@@ -1265,6 +1317,7 @@ fn relaunch_if_clear(app: &AppHandle) {
             // Nothing quits without something to bring it back. The update stays prepared
             // and activates at the next launch, which the row says again.
             eprintln!("[richos] update relaunch: could not start the helper: {error}");
+            timing(&app, &notice, "restart_notice", "helper_failed", notice.phase_started.elapsed().as_millis() as u64);
             back_to_ready(&app, false);
             return;
         }
@@ -1273,6 +1326,7 @@ fn relaunch_if_clear(app: &AppHandle) {
             app.state::<Updates>().snapshot().available_version.unwrap_or_default()
         );
         // The app's own quit path: every lease settles and the clean-exit marker is written.
+        timing(&app, &notice, "restart_notice", "quit_requested", notice.phase_started.elapsed().as_millis() as u64);
         app.exit(0);
         // Still here: the quit was declined (registered work appeared in the last instant and
         // he chose to keep it). The helper starts nothing after its own bound, and this does
@@ -1309,13 +1363,9 @@ pub async fn update_check(app: AppHandle) -> UpdateView {
 
 #[richos_command::command]
 pub async fn update_install(app: AppHandle) -> UpdateView {
-    let view = install(&app).await;
     // THE PRESS THAT DOWNLOADED IT ARMS THE RELAUNCH, and only that press: the selftest
     // calls `install` directly and exits at `ready`, as `updater-e2e.sh` requires.
-    if view.state != "ready" || view.ready_is_rollback {
-        return view;
-    }
-    transition(&app, |v| v.restarts_when_idle = true);
+    install(&app, true).await;
     relaunch_if_clear(&app);
     app.state::<Updates>().snapshot()
 }
@@ -1430,7 +1480,7 @@ pub fn spawn_selftest(app: AppHandle, mode: String) {
 
         let code = match checked.state {
             "available" if mode == "install" => {
-                let installed = install(&app).await;
+                let installed = install(&app, false).await;
                 say(&installed);
                 if installed.state == "ready" {
                     0

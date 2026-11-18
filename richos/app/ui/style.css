@@ -9151,6 +9151,243 @@ body.home-open {
   color: var(--ink-soft);
 }
 
+.sm-col .set-updates[data-update-live] {
+  padding: 6px 8px 8px;
+  margin-inline: -8px;
+  background: var(--gold-soft);
+  border-radius: 8px;
+}
+.update-steps {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  list-style: none;
+  margin: 14px 0 4px;
+  padding: 0;
+}
+.update-checking:not([hidden]) {
+  animation: update-steps-in 0.36s cubic-bezier(0.2, 0.8, 0.25, 1) both;
+}
+.update-step {
+  position: relative;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+.update-step + .update-step::before {
+  content: "";
+  position: absolute;
+  top: 16px;
+  left: calc(-50% + 21px);
+  right: calc(50% + 21px);
+  height: 4px;
+  border-radius: 2px;
+  background: var(--line-control);
+}
+.update-step[data-step="done"]::before {
+  background: var(--success);
+}
+.update-step[data-step="current"]::before {
+  background: repeating-linear-gradient(90deg, var(--gold) 0 10px, transparent 10px 18px);
+  background-size: 18px 4px;
+  animation: update-step-travel 0.5s linear infinite;
+}
+.update-step-icon {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  margin: 0 auto;
+  border: 2px solid var(--line-control);
+  border-radius: 50%;
+  background: var(--card);
+  color: var(--ink-soft);
+}
+.update-step-icon svg {
+  width: 18px;
+  height: 18px;
+}
+.update-step[data-step="done"] .update-step-icon {
+  border-color: var(--success);
+  background: var(--success);
+  color: var(--card);
+  animation: update-check-pop 0.42s cubic-bezier(0.3, 1.6, 0.5, 1) both;
+}
+.update-step[data-step="current"] .update-step-icon {
+  border: 4px solid var(--gold-soft);
+  border-top-color: var(--gold);
+  border-right-color: var(--gold);
+  animation: update-spin 0.8s linear infinite;
+}
+.update-step-name,
+.update-step-detail {
+  display: block;
+  font-size: 1rem;
+  color: var(--ink-soft);
+}
+.update-step-name {
+  margin-top: 8px;
+  font-weight: 600;
+}
+.update-step:not([data-step="waiting"]) .update-step-name {
+  color: var(--ink);
+}
+.update-step-detail,
+.update-cue[data-update-cue="live"],
+.update-restart-number {
+  font-variant-numeric: tabular-nums;
+}
+.update-hands {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin: 12px 0 0;
+  padding: 9px 12px;
+  border: 1px solid var(--line-control);
+  border-radius: 8px;
+  background: var(--card);
+  font-size: 1rem;
+  font-weight: 600;
+}
+.update-hands svg,
+.update-arrival > svg {
+  width: 20px;
+  height: 20px;
+  color: var(--success);
+}
+
+.update-restart {
+  box-sizing: border-box;
+  width: min(560px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+  margin: auto;
+  padding: 34px clamp(16px, 4vw, 40px) 30px;
+  border: 1px solid var(--chrome-edge);
+  border-radius: 20px;
+  background: var(--card);
+  color: var(--ink);
+  box-shadow: 0 40px 90px -30px var(--shadow-strong);
+  text-align: center;
+  animation: update-steps-in 0.3s cubic-bezier(0.2, 0.8, 0.25, 1) both;
+}
+.update-restart::backdrop {
+  background: var(--scrim);
+}
+.update-restart .update-steps {
+  margin: 0 0 26px;
+}
+.update-restart-ring {
+  position: relative;
+  width: 148px;
+  height: 148px;
+  margin: 0 auto 20px;
+}
+.update-restart-ring svg {
+  width: 100%;
+  height: 100%;
+  transform: rotate(-90deg);
+}
+.update-restart-ring[data-closing] svg,
+.update-cue[data-update-cue="live"] svg {
+  animation: update-spin 0.8s linear infinite;
+}
+.settings.open .update-cue[data-update-cue="live"] {
+  display: none;
+}
+.update-ring-track,
+.update-ring-fill {
+  fill: none;
+}
+.update-ring-track {
+  stroke: var(--line-control);
+  stroke-width: 6;
+}
+.update-ring-fill {
+  stroke: var(--gold);
+  stroke-width: 10;
+  stroke-linecap: round;
+}
+.update-restart-number {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-size: 4rem;
+  font-weight: 600;
+  line-height: 1;
+}
+.update-restart-number span {
+  animation: update-count-tick 0.3s cubic-bezier(0.2, 0.8, 0.25, 1) both;
+}
+.update-restart-title {
+  margin: 0 0 8px;
+  outline: none;
+  font-size: 1.75rem;
+  font-weight: 600;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+.update-restart-sub {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 1.125rem;
+}
+.update-arrival {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  max-width: calc(100vw - 80px);
+  padding: 5px 8px 5px 12px;
+  border: 1px solid var(--chrome-edge);
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--ink);
+  font-size: 1rem;
+  font-weight: 600;
+  box-shadow: 0 10px 26px -18px var(--shadow-strong);
+  animation: update-cue-arrive 0.4s cubic-bezier(0.2, 0.8, 0.25, 1) both;
+}
+.update-arrival .update-notes {
+  flex: none;
+  padding: 1px 6px;
+}
+.settings:has(> .update-arrival) > .update-cue {
+  display: none;
+}
+@keyframes update-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+@keyframes update-steps-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes update-check-pop {
+  from { transform: scale(0.5); }
+  to { transform: none; }
+}
+@keyframes update-step-travel {
+  to { background-position: 18px 0; }
+}
+@keyframes update-count-tick {
+  from { opacity: 0; transform: scale(1.5); }
+  to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .update-checking:not([hidden]),
+  .update-restart,
+  .update-step[data-step="done"] .update-step-icon,
+  .update-arrival,
+  .update-restart-number span,
+  .update-step[data-step="current"]::before {
+    animation: none;
+  }
+  .update-step[data-step="current"] .update-step-icon,
+  .update-restart-ring[data-closing] svg,
+  .update-cue[data-update-cue="live"] svg {
+    animation-duration: 2.4s;
+  }
+}
+
 /* THE BAR. Its TRACK is nearly the panel's own colour (1.23:1 dark, 1.16:1 light), which is
    why the border is not decoration: without it the bar's extent is invisible and a half-full
    bar is unreadable as half-full. The border is `--line-control`, the token this file

@@ -53,13 +53,17 @@ pub fn failure(
     append(root,at,&format!("richpass {point} outcome=unavailable problem={problem:?} elapsed_ms=unmeasured build={build}"));
 }
 fn append(root: &Path, at: u64, message: &str) {
+    append_bounded(root, "richpass.log", at.saturating_mul(1000), message);
+}
+
+pub(crate) fn append_bounded(root: &Path, name: &str, at_ms: u64, message: &str) {
     let _guard = WRITER.lock().unwrap_or_else(|p| p.into_inner());
-    let path = root.join("richpass.log");
+    let path = root.join(name);
     if let Ok(m) = std::fs::symlink_metadata(&path) {
         if !m.is_file() {
             return;
         }
-        if m.len() >= CAP && std::fs::rename(&path, root.join("richpass.log.1")).is_err() {
+        if m.len() >= CAP && std::fs::rename(&path, root.join(format!("{name}.1"))).is_err() {
             return;
         }
     }
@@ -73,11 +77,8 @@ fn append(root: &Path, at: u64, message: &str) {
             .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
     }
     if let Ok(mut file) = options.open(path) {
-        drop(writeln!(
-            file,
-            "{} {message}",
-            crate::util::utc_stamp(at.saturating_mul(1000))
-        ));
+        let entry = format!("{} {message}\n", crate::util::utc_stamp(at_ms));
+        drop(file.write_all(entry.as_bytes()));
     }
 }
 
