@@ -914,7 +914,7 @@
     },
     "scripts/hooks/commit-ceo-inputs.py#unfenced-fixtures": {
       "source": "scripts/hooks/commit-ceo-inputs.py",
-      "sha256": "fb7e04f153db1562f41dc22803ba8d3e8d6f83501ce773033390df0bf2b3e231",
+      "sha256": "6ae8bccc69a5e8d4d9596e947c77591d6470b75e114766e3c33ff453d4ab9d7b",
       "evidence": "The ingress suite supplies only paths in its freshly initialized private repositories, with no installed reference-transaction launcher. Git/file classification and commits execute the secret/publication write gates. fence_on returns false, so land-lease commands are not invoked in this context.",
       "keys": [],
       "edges": [
@@ -963,7 +963,7 @@
     },
     "scripts/hooks/ceo-inputs.test.sh": {
       "source": "scripts/hooks/ceo-inputs.test.sh",
-      "sha256": "f0a6bb9a538edb3de49d93e84ae3155e18a83b7670f5987b4170aafc4a8198ee",
+      "sha256": "06077398ce73e0c1115ae94da055dae05a66bde58ca5af9ebc031be7ddd18af6",
       "evidence": "Every new_repo config is created from literal PROTECTED_PATHS and explicit opt-out settings. All normal/broken-wrapper and Stop calls pin RICHOS_ENTITY_ROOT to those private repositories. Even the outside-seat and unadopted target files are created inside this suite sandbox; it never copies the real config.",
       "keys": [],
       "edges": [
@@ -10162,7 +10162,7 @@
     },
     "scripts/hooks/commit-ceo-inputs.py#fenced-fixtures": {
       "source": "scripts/hooks/commit-ceo-inputs.py",
-      "sha256": "fb7e04f153db1562f41dc22803ba8d3e8d6f83501ce773033390df0bf2b3e231",
+      "sha256": "6ae8bccc69a5e8d4d9596e947c77591d6470b75e114766e3c33ff453d4ab9d7b",
       "evidence": "The private fenced ingress fixture executes classification and secret/publication gates plus take_lease/release_lease through fixed land-lease.sh. The seat, ingress state and repository inputs are literal private fixture paths.",
       "keys": [],
       "edges": [
@@ -12163,7 +12163,7 @@
     },
     "scripts/operator-fences.mutation.sh": {
       "source": "scripts/operator-fences.mutation.sh",
-      "sha256": "dbe626a60d6915e650dab7d484bfa75be3725edb257ea235baf79c832cc9814f",
+      "sha256": "97d7123a22513f067541f5b1ee12d0cbe1350634566d9da77287f1fa7ad54e3e",
       "evidence": "All34 named mutants patch finite literal source operands then invoke the existing operator-fences fixture suite through mutation_focus stop-at-want. Mutations change branches/constants or fixed commands, never introduce a config reader. The shared harness transports config; the fixture suite constructs its own literal entity config.",
       "keys": [],
       "edges": [
@@ -18373,7 +18373,7 @@
         "scripts/hooks/dispatch-pretooluse.manifest": "5151275bc5a6153a25ab2c28cb9f7820a5af67ba03042fc073cdb48cf3697e38",
         "hooks/hooks.json": "1900262012a6a6466d162075f65b80d561112021b85ccc7c0ce687fca222db41",
         "scripts/hooks/commit-ceo-inputs.sh": "332b5ec9ce51872486cca4c5aa7dc5e74b6608cd06ebf4c95b830cf9ebd7288a",
-        "scripts/hooks/commit-ceo-inputs.py": "fb7e04f153db1562f41dc22803ba8d3e8d6f83501ce773033390df0bf2b3e231",
+        "scripts/hooks/commit-ceo-inputs.py": "6ae8bccc69a5e8d4d9596e947c77591d6470b75e114766e3c33ff453d4ab9d7b",
         "scripts/hooks/guard-publication-writes.sh": "b9a13097f1023f8e1e5ebd2a78ee804c73bc6b1953db37727c3ecddcde7de67e",
         "scripts/lib/publication-boundary.sh": "b8e3d8f8b80e0048174b55ca2a479f0030e7b1c6f03caae6e7aa14def514ab4f",
         "scripts/hooks/detect-nonnative-worktree.sh": "cdc9e57d0eb047a993d77cac8ab611ed2571bdd0b2760abc2b10642959500cc9",
@@ -19125,7 +19125,7 @@
         "scripts/hooks/guard-worktree-isolation.sh": "ef69b1a460d26a38765ac8ec22e12eef2f1e3d3177d16e8cd728c9fcf3710fab",
         "scripts/lib/teammate-name.sh": "c347d4d2999c60c2b8b289fdda9dabbde7b66b7845653d70f38b6e6be6d3cdd0",
         "scripts/hooks/notice-ceo-inputs-unheld.sh": "fc44a75854df8c13eed1d926300a58e1d72ffd7c1136b18e99a1137daa1cf650",
-        "scripts/hooks/commit-ceo-inputs.py": "fb7e04f153db1562f41dc22803ba8d3e8d6f83501ce773033390df0bf2b3e231",
+        "scripts/hooks/commit-ceo-inputs.py": "6ae8bccc69a5e8d4d9596e947c77591d6470b75e114766e3c33ff453d4ab9d7b",
         "scripts/hooks/scan-secrets.sh": "1f9f7dc2923f12417d7d86155733b65f84f837d2b72d1d8fa1864a7d970415d4",
         "scripts/hooks/guard-publication-writes.sh": "b9a13097f1023f8e1e5ebd2a78ee804c73bc6b1953db37727c3ecddcde7de67e",
         "scripts/hooks/notice-ceo-ruled-prose.sh": "c7d745cc6544f879eee24428b32ce8a964a217f36de7b27684b0d3cd190057f0",
