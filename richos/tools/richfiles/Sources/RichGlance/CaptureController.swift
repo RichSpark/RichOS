@@ -26,6 +26,7 @@ final class CaptureController: NSObject, NSWindowDelegate {
 
     private let id = UUID()
     private let began = ProcessInfo.processInfo.systemUptime
+    private let refreshPermission: (_ session: CaptureController, _ originPID: pid_t?) -> Void
     private let finish: (_ copied: String?, _ display: CGRect?) -> Void
     private weak var previousWindow: NSWindow?
     private let previousApp: NSRunningApplication?
@@ -42,9 +43,11 @@ final class CaptureController: NSObject, NSWindowDelegate {
     private var keyLoss: Task<Void, Never>?
 
     init(previousWindow: NSWindow?, previousApp: NSRunningApplication?,
+         refreshPermission: @escaping (_ session: CaptureController, _ originPID: pid_t?) -> Void,
          finish: @escaping (_ copied: String?, _ display: CGRect?) -> Void) {
         self.previousWindow = previousWindow
         self.previousApp = previousApp
+        self.refreshPermission = refreshPermission
         self.finish = finish
         super.init()
         NSWorkspace.shared.notificationCenter.addObserver(
@@ -71,6 +74,8 @@ final class CaptureController: NSObject, NSWindowDelegate {
             if !granted {
                 record(.glanceCaptureFrame, .unavailable, since: began)
                 showPermissionHelp(on: screen)
+                // Core Graphics can retain this process's old answer after the user grants access.
+                refreshPermission(self, permissionOriginPID)
                 return
             }
         }
@@ -92,6 +97,10 @@ final class CaptureController: NSObject, NSWindowDelegate {
 
     var canRevisitPermission: Bool { permissionPanel != nil }
 
+    private var permissionOriginPID: pid_t? {
+        previousWindow == nil ? previousApp?.processIdentifier : nil
+    }
+
     /// A repeat capture command or Dock click brings the recovery controls back.
     func revisitPermission() {
         guard let permissionPanel else { return }
@@ -100,6 +109,7 @@ final class CaptureController: NSObject, NSWindowDelegate {
         } else {
             permissionPanel.orderFrontRegardless()
             permissionPanel.makeKey()
+            refreshPermission(self, permissionOriginPID)
         }
     }
 
@@ -280,7 +290,7 @@ final class CaptureController: NSObject, NSWindowDelegate {
 
         let width: CGFloat = 440
         let inset: CGFloat = 20
-        let message = NSTextField(wrappingLabelWithString: "Allow screen recording for the app named by macOS under Screen & System Audio Recording. If macOS asks you to quit and reopen the app, do that before capturing again. Captures stay on this Mac.")
+        let message = NSTextField(wrappingLabelWithString: "Allow the app named by macOS under Screen & System Audio Recording, then try again here. RichGlance may need to reopen after the grant, even if macOS restarted RichOS. Captures stay on this Mac.")
         message.preferredMaxLayoutWidth = width - 2 * inset
         let settings = NSButton(title: "Open System Settings", target: self, action: #selector(openScreenRecordingSettings))
         let retry = NSButton(title: "Try Again", target: self, action: #selector(retryScreenRecording))
@@ -329,7 +339,7 @@ final class CaptureController: NSObject, NSWindowDelegate {
         NSWorkspace.shared.open(settings)
     }
 
-    @objc private func retryScreenRecording() { start() }
+    @objc private func retryScreenRecording() { revisitPermission() }
 
     @objc private func cancelScreenRecording() { stop(.unavailable) }
 

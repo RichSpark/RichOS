@@ -1,10 +1,13 @@
 import AppKit
+import Darwin
+import OSLog
 import RichFilesCore
 import UniformTypeIdentifiers
 
 @main
 @MainActor
 final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
+    private static let permissionLog = Logger(subsystem: "app.richos.richglance", category: "capture-permission")
     private let workspace = NSWorkspace.shared
     private var previousApplication: NSRunningApplication?
     private var returnTo: NSRunningApplication?
@@ -14,11 +17,20 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var keyMonitor: Any?
     private var openingPanel: NSOpenPanel?
     private var capture: CaptureController?
+    private var permissionProbe: Process?
     private var captureNotice: NSPanel?
     private var captureLaunch = CommandLine.arguments.contains("--capture-request")
     private var launchOrigin = Application.launchOrigin()
 
     static func main() {
+        let arguments = Array(CommandLine.arguments.dropFirst())
+        if arguments == ["--check-screen-recording-access"] {
+            exit(CGPreflightScreenCaptureAccess() ? EXIT_SUCCESS : EXIT_FAILURE)
+        }
+        if arguments.first == "--reopen-after-screen-recording" {
+            reopenAfterExit(arguments)
+            return
+        }
         let delegate = Application()
         let app = NSApplication.shared
         app.delegate = delegate
@@ -68,6 +80,17 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
         return true
     }
 
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        let arguments = CommandLine.arguments
+        guard captureLaunch, arguments.count >= 4, arguments[2] == "--retry-screen-recording",
+              let originPID = pid_t(arguments[3]), capture == nil else { return }
+        if arguments.count == 5 {
+            captureLaunch = false
+            open(URL(fileURLWithPath: arguments[4]), activate: originPID == 0)
+        }
+        beginCapture(originPID: originPID > 0 ? originPID : nil)
+    }
+
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
         if let capture {
             capture.revisitPermission()
@@ -111,7 +134,7 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
         previousApplication = app
     }
 
-    private func open(_ file: URL) {
+    private func open(_ file: URL, activate: Bool = true) {
         let finder = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.finder").first
         if let origin = [launchOrigin, externalFrontmost, previousApplication, finder]
             .compactMap({ $0 }).first(where: { !$0.isTerminated }) {
@@ -125,8 +148,10 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
         viewer.window.delegate = self
         viewer.open(file.standardizedFileURL)
         viewer.show()
-        if #available(macOS 14, *) { NSApp.activate() }
-        else { NSApp.activate(ignoringOtherApps: true) }
+        if activate {
+            if #available(macOS 14, *) { NSApp.activate() }
+            else { NSApp.activate(ignoringOtherApps: true) }
+        }
     }
 
     private static func launchOrigin() -> NSRunningApplication? {
@@ -167,7 +192,10 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let origin = reliableOrigin ?? externalFrontmost
         let keyWindow = origin == nil && NSApp.isActive ? NSApp.keyWindow : nil
         let session = CaptureController(previousWindow: keyWindow === viewer?.window ? keyWindow : nil,
-                                        previousApp: origin ?? previousApplication) { [weak self] message, display in
+                                        previousApp: origin ?? previousApplication,
+                                        refreshPermission: { [weak self] session, originPID in
+            self?.refreshCapturePermission(for: session, originPID: originPID)
+        }) { [weak self] message, display in
             guard let self else { return }
             capture = nil
             if let message, let display { showCaptureNotice(message, display: display) }
@@ -176,6 +204,79 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
         capture = session
         openingPanel?.cancel(nil)
         session.start()
+    }
+
+    private func refreshCapturePermission(for session: CaptureController, originPID: pid_t?) {
+        guard permissionProbe == nil, let executable = Bundle.main.executableURL else { return }
+        let probe = Process()
+        probe.executableURL = executable
+        probe.arguments = ["--check-screen-recording-access"]
+        probe.terminationHandler = { [weak self, weak session] process in
+            let granted = process.terminationReason == .exit && process.terminationStatus == EXIT_SUCCESS
+            Task { @MainActor in
+                guard let self else { return }
+                self.permissionProbe = nil
+                guard granted, let session, self.capture === session, session.canRevisitPermission else { return }
+                self.reopenForCapture(session, originPID: originPID)
+            }
+        }
+        do {
+            try probe.run()
+            permissionProbe = probe
+        } catch {
+            // The existing permission panel stays usable if the check cannot launch.
+        }
+    }
+
+    private func reopenForCapture(_ session: CaptureController, originPID: pid_t?) {
+        guard let executable = Bundle.main.executableURL else { return }
+        let helper = Process()
+        helper.executableURL = executable
+        var arguments = ["--reopen-after-screen-recording", String(getpid()), String(originPID ?? 0)]
+        if let file = viewer?.file { arguments.append(file.path) }
+        helper.arguments = arguments
+        do {
+            try helper.run()
+            session.cancel()
+            NSApp.terminate(nil)
+        } catch {
+            // Leave the open image and permission panel available if the helper cannot launch.
+        }
+    }
+
+    private static func reopenAfterExit(_ arguments: [String]) {
+        guard arguments.count >= 3, let oldPID = pid_t(arguments[1]), oldPID > 0 else { return }
+        // Launch Services allows only one RichGlance instance. Wait until this helper
+        // has been reparented and the previous app is gone from Launch Services.
+        permissionLog.info("Waiting for RichGlance to exit after the Screen Recording grant")
+        Task { @MainActor in
+            let deadline = ContinuousClock.now + .seconds(5)
+            while getppid() == oldPID || NSRunningApplication(processIdentifier: oldPID)?.isTerminated == false {
+                guard ContinuousClock.now < deadline else {
+                    permissionLog.error("The previous RichGlance instance did not exit")
+                    exit(EXIT_FAILURE)
+                }
+                try? await Task.sleep(for: .milliseconds(25))
+            }
+            let configuration = NSWorkspace.OpenConfiguration()
+            configuration.activates = arguments[2] == "0" && arguments.count == 4
+            configuration.addsToRecentItems = false
+            configuration.arguments = ["--capture-request", "--retry-screen-recording"] + arguments.dropFirst(2)
+            do {
+                let app = try await NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL, configuration: configuration)
+                guard app.processIdentifier != oldPID else {
+                    permissionLog.error("Launch Services returned the previous RichGlance instance")
+                    exit(EXIT_FAILURE)
+                }
+                permissionLog.info("Reopened RichGlance after the Screen Recording grant")
+                exit(EXIT_SUCCESS)
+            } catch {
+                permissionLog.error("Could not reopen RichGlance after the Screen Recording grant")
+                exit(EXIT_FAILURE)
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 10) { exit(EXIT_FAILURE) }
+        dispatchMain()
     }
 
     private func showCaptureNotice(_ message: String, display: CGRect) {
