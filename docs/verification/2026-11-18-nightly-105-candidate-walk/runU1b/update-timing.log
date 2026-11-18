@@ -1,0 +1,4 @@
+2026-11-18T04:08:59Z update build=1.3.4 pid=1209 attempt=8 phase=downloading outcome=installing elapsed_ms=35849
+2026-11-18T04:09:25Z update build=1.3.4 pid=1209 attempt=8 phase=installing outcome=ready elapsed_ms=26083
+2026-11-18T04:09:25Z update build=1.3.4 pid=1209 attempt=8 phase=ready outcome=restarting elapsed_ms=8
+2026-11-18T04:09:28Z update build=1.3.4 pid=1209 attempt=8 phase=restart_notice outcome=quit_requested elapsed_ms=3041
