@@ -53,4 +53,76 @@ class WalkFailures(unittest.TestCase):
             self.assertNotEqual(result.returncode,0,result.stdout+result.stderr)
             self.assertNotIn('COMPLETE',result.stdout)
 
+class GuestSound(unittest.TestCase):
+    def test_sound_reads_distinguish_absence_from_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / 'run' / 'sound-fixture'
+            state.mkdir(parents=True)
+            (state / 'ip').write_text('192.0.2.1\n')
+            (state / 'audio').write_text('off\n')
+            ssh = root / 'ssh'
+            ssh.write_text('''#!/bin/bash
+system_profiler() {
+  case "$SOUND_FIXTURE" in
+    devices-fail) echo 'fixture device read failed' >&2; return 2 ;;
+    absent) return 0 ;;
+    passthrough) printf 'Input Channels: 2\\n' ;;
+  esac
+  printf 'Output Channels: 2\\n'
+}
+osascript() {
+  case "$SOUND_FIXTURE" in
+    mute-fail) echo 'fixture mute read failed' >&2; return 2 ;;
+    mute-empty) return 0 ;;
+  esac
+  echo false
+}
+pgrep() {
+  case "$SOUND_FIXTURE" in
+    app-fail) echo 'fixture process read failed' >&2; return 2 ;;
+    absent) return 1 ;;
+  esac
+  printf '123\\n456\\n'
+}
+if [ "$SOUND_FIXTURE" = ssh-fail ]; then
+  echo 'fixture SSH unavailable' >&2
+  exit 255
+fi
+eval "${!#}"
+''')
+            ssh.chmod(0o700)
+            env = {**os.environ, 'TESTVM_ROOT': tmp, 'PATH': f"{tmp}:{os.environ['PATH']}"}
+
+            def read(case):
+                # load-bound: hang guard for the local SSH fixture, not a sound assertion.
+                return subprocess.run(['bash', str(HERE / 'guest-sound.sh'), 'sound-fixture'],
+                                      capture_output=True, text=True, timeout=30,
+                                      env={**env, 'SOUND_FIXTURE': case})
+
+            for case, diagnostic in (
+                ('ssh-fail', 'sound devices'), ('devices-fail', 'sound devices'),
+                ('mute-fail', 'output mute'), ('mute-empty', 'output mute'),
+                ('app-fail', 'app process'),
+            ):
+                with self.subTest(case=case):
+                    result = read(case)
+                    self.assertNotEqual(result.returncode, 0, result.stdout)
+                    self.assertIn(diagnostic, result.stderr)
+                    self.assertNotIn('passthrough to this Mac:', result.stdout)
+                    self.assertNotIn('app running:', result.stdout)
+
+            for case, status, app in (
+                ('absent', 'no (no sound device listed)', 'none'),
+                ('output-only', 'no (output only:', '123 456'),
+                ('passthrough', 'yes (input and output channels)', '123 456'),
+            ):
+                with self.subTest(case=case):
+                    result = read(case)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertIn(f'passthrough to this Mac: {status}', result.stdout)
+                    self.assertIn('output muted: false', result.stdout)
+                    self.assertIn(f'app running: {app}', result.stdout)
+
+
 if __name__=='__main__': unittest.main()
