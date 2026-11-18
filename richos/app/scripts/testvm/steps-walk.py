@@ -33,7 +33,9 @@ its exit status, its output and the clock, so a walk's evidence is one file and 
                                        wheel N lines on one point, "ctrl" holding Control (RichGlance's
                                        zoom); "double": true double-clicks one point; "app": NAME sends
                                        it to that guest process (a second app the walk opened) and finds
-                                       "find" in it (the RichGlance walk)
+                                       "find" in it (the RichGlance walk); "asis": true raises no app before
+                                       the input, for a click on the Dock or a background window ("app"
+                                       then only names whose tree "find" reads, e.g. "Dock"; the window-gesture walk)
   openlink pattern [app] [seconds]     read the app window's tree until an https:// address containing
                                        PATTERN is drawn, then open it in the guest with APP (default
                                        Safari): the Mac's pairing address handed to the guest's phone
@@ -135,7 +137,9 @@ def step_run(vm, step, out):
                    + (['--scroll', str(step['scroll'])] if step.get('scroll') else [])
                    + (['--ctrl'] if step.get('ctrl') else [])
                    + (['--double'] if step.get('double') else [])
-                   + (['--app', step['app']] if step.get('app') else []))
+                   # "asis": the pointer lands with no app raised first (a Dock icon, a background
+                   # window); "app" then only names whose tree "find" reads, such as the Dock's.
+                   + (['--as-is'] if step.get('asis') else (['--app', step['app']] if step.get('app') else [])))
     if op == 'openlink':
         return open_link(vm, step)
     if op == 'wait':
@@ -183,7 +187,8 @@ REQUIRED = {
     'pointer': {'points': list}, 'openlink': {'pattern': str},
 }
 OPTIONAL = {'tree': {'app': str}, 'shot': {'ocr': bool}, 'handfile': {'to': str},
-            'pointer': {'right': bool, 'hover': bool, 'find': list, 'scroll': int, 'ctrl': bool, 'double': bool, 'app': str},
+            'pointer': {'right': bool, 'hover': bool, 'find': list, 'scroll': int, 'ctrl': bool, 'double': bool, 'app': str,
+                        'asis': bool},
             'relaunch': {'env': list}, 'openlink': {'app': str, 'seconds': (int, float)},
             'until': {'seconds': (int, float)}, '*': {'allow_fail': bool}}
 
