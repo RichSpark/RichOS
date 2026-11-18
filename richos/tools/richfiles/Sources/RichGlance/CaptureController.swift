@@ -95,8 +95,12 @@ final class CaptureController: NSObject, NSWindowDelegate {
     /// A repeat capture command or Dock click brings the recovery controls back.
     func revisitPermission() {
         guard let permissionPanel else { return }
-        if CGPreflightScreenCaptureAccess() { start() }
-        else { permissionPanel.makeKeyAndOrderFront(nil) }
+        if CGPreflightScreenCaptureAccess() {
+            start()
+        } else {
+            permissionPanel.orderFrontRegardless()
+            permissionPanel.makeKey()
+        }
     }
 
     private static func isCaptureConsent(_ application: NSRunningApplication?) -> Bool {
@@ -287,18 +291,26 @@ final class CaptureController: NSObject, NSWindowDelegate {
         stack.orientation = .vertical
         stack.alignment = .trailing
         stack.spacing = 14
-        stack.edgeInsets = NSEdgeInsets(top: inset, left: inset, bottom: inset, right: inset)
+        stack.translatesAutoresizingMaskIntoConstraints = false
         message.widthAnchor.constraint(equalToConstant: width - 2 * inset).isActive = true
+        let content = NSView()
+        content.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: inset),
+            stack.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -inset),
+            stack.topAnchor.constraint(equalTo: content.topAnchor, constant: inset),
+            stack.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -inset)
+        ])
 
         let visible = screen.visibleFrame
         let frame = CGRect(x: visible.midX - width / 2, y: visible.minY + inset,
-                           width: width, height: stack.fittingSize.height)
+                           width: width, height: stack.fittingSize.height + 2 * inset)
         let panel = NSPanel(contentRect: frame, styleMask: [.titled, .closable, .nonactivatingPanel],
                             backing: .buffered, defer: false)
         panel.title = "RichGlance Needs Screen Recording Permission"
         panel.isReleasedWhenClosed = false
         panel.hidesOnDeactivate = false
-        panel.contentView = stack
+        panel.contentView = content
         panel.delegate = self
         permissionPanel = panel
         // The first system request can still be visible after CGRequest returns.
