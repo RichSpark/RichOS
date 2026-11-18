@@ -882,12 +882,26 @@ window.RichUpdates = (function () {
   }
 
   function revealUpdateRow() {
-    // Updates is the last row before the sticky footer. Scrolling to the end
-    // after WebKit lays out the menu keeps the whole row above the footer.
+    // Wait for WebKit to lay out the menu and the new update stage.
     requestAnimationFrame(function () {
       var menu = document.getElementById("set-menu");
-      if (menu && !menu.hidden && nodes && document.activeElement === nodes.line) {
-        menu.scrollTop = menu.scrollHeight;
+      if (!menu || menu.hidden || !nodes || document.activeElement !== nodes.line) return;
+
+      var top = menu.getBoundingClientRect().top + menu.clientTop;
+      var bottom = top + menu.clientHeight;
+      var footer = menu.querySelector(".sm-foot");
+      if (footer) bottom = Math.min(bottom, footer.getBoundingClientRect().top);
+
+      // The other columns can extend past Updates. Scroll just enough to show
+      // this row, or its live steps if the whole row does not fit.
+      var bounds = nodes.container.getBoundingClientRect();
+      if (bounds.height > bottom - top && !nodes.checking.hidden) {
+        bounds = nodes.checking.getBoundingClientRect();
+      }
+      if (bounds.top < top || bounds.height > bottom - top) {
+        menu.scrollTop += bounds.top - top;
+      } else if (bounds.bottom > bottom) {
+        menu.scrollTop += bounds.bottom - bottom;
       }
     });
   }
