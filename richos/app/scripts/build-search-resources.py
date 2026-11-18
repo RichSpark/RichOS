@@ -67,36 +67,51 @@ def digest(path):
         return hashlib.file_digest(source, "sha256").hexdigest()
 
 
+def remove_cache_entry(path):
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path)
+    else:
+        path.unlink(missing_ok=True)
+
+
 def pinned_input(cache, name, pins=PINS):
     url, expected = pins[name]
     path = cache / name
-    if not path.exists():
-        part = cache / (name + ".download")
-        try:
-            with urllib.request.urlopen(url, timeout=60) as response, part.open("wb") as out:
-                remaining = 128 * 1024 * 1024
-                while data := response.read(1024 * 1024):
-                    remaining -= len(data)
-                    if remaining < 0:
-                        raise RuntimeError("The RichFinder resource download exceeded its limit.")
-                    out.write(data)
-            if digest(part) != expected:
-                raise RuntimeError(f"The downloaded {name} failed its integrity check.")
-            part.replace(path)
-        finally:
-            part.unlink(missing_ok=True)
-    if digest(path) != expected:
-        raise RuntimeError(f"The cached {name} failed its integrity check.")
+    try:
+        if path.is_file() and digest(path) == expected:
+            return path
+    except OSError:
+        pass
+    if path.exists() or path.is_symlink():
+        print(f"Replacing the invalid RichFinder cache entry {name}.", file=sys.stderr)
+    with tempfile.TemporaryDirectory(prefix="richfinder-download-", dir=cache) as stage:
+        part = Path(stage) / name
+        with urllib.request.urlopen(url, timeout=60) as response, part.open("wb") as out:
+            remaining = 128 * 1024 * 1024
+            while data := response.read(1024 * 1024):
+                remaining -= len(data)
+                if remaining < 0:
+                    raise RuntimeError("The RichFinder resource download exceeded its limit.")
+                out.write(data)
+        if digest(part) != expected:
+            raise RuntimeError(f"The downloaded {name} failed its integrity check.")
+        if path.is_dir() and not path.is_symlink():
+            remove_cache_entry(path)
+        part.replace(path)
     return path
 
 
 def verify(directory):
-    files = json.loads((directory / "manifest.json").read_text())
+    manifest = directory / "manifest.json"
     required = {"llama-server", MODEL, "BGE-LICENSE", "LLAMA-LICENSE"}
-    if set(files) != required or files[MODEL] != PINS[MODEL][1]:
+    if not manifest.is_file():
+        raise RuntimeError("The cached RichFinder resources are incomplete.")
+    files = json.loads(manifest.read_text())
+    if not isinstance(files, dict) or set(files) != required or files[MODEL] != PINS[MODEL][1]:
         raise RuntimeError("The cached RichFinder resources are incomplete.")
     for name, expected in files.items():
-        if digest(directory / name) != expected:
+        path = directory / name
+        if not path.is_file() or digest(path) != expected:
             raise RuntimeError(f"The built RichFinder resource {name} failed its integrity check.")
 
 
@@ -126,9 +141,13 @@ def watch_owner(source):
 
 def build(cache):
     destination = cache / f"b7870-{digest(Path(__file__))[:16]}"
-    if destination.exists():
-        verify(destination)
-        return destination
+    if destination.exists() or destination.is_symlink():
+        try:
+            verify(destination)
+        except (OSError, ValueError, RuntimeError) as error:
+            print(f"Rebuilding the invalid RichFinder resource bundle: {error}", file=sys.stderr)
+        else:
+            return destination
     cmake = shutil.which("cmake")
     if not cmake:
         raise RuntimeError("CMake is required to build the RichFinder runtime.")
@@ -168,6 +187,7 @@ def build(cache):
             files = {f.name: digest(f) for f in sorted(result.iterdir())}
             (result / "manifest.json").write_text(json.dumps(files, indent=2) + "\n")
             verify(result)
+            remove_cache_entry(destination)
             result.replace(destination)
     return destination
 
