@@ -3631,7 +3631,8 @@ class Runner:
         # A NEW USER'S FIRST RUN GATES EVERY NEW CANDIDATE, whichever command made it: `release`
         # builds and is published by the same `publish` (review rv-20261021T173525Z-f1f16a31-356b:
         # with the flag on `build` alone, a release candidate skipped the walk and its check).
-        info = {**info, "new_user_walk_required": True}
+        # Record both requirements in the build plan so they survive any proof failure.
+        info = {**info, "new_user_walk_required": True, "launch_speed_required": True}
         plan_path.write_text(json.dumps(info, indent=2) + "\n")
         if no_host_screen or isinstance(suites, dict):
             # Into the plan for the same reason the land proof is: nightly.py copies the
@@ -3701,14 +3702,8 @@ class Runner:
         if not proof_error and candidate_info.get("new_user_walk_required"):
             proof_error = self.new_user_walk(self.env["RICHOS_NIGHTLY_RUN_ID"], out, candidate_info)
         # Then its launch speed: the p95 from the click to the splash showing, against 380 ms
-        # (LAUNCH_SPEED_PHASE), for the same candidates the new-user walk takes.
-        if not proof_error and candidate_info.get("new_user_walk_required"):
-            # Recorded on the candidate first, so `publish` requires the evidence whatever happens next.
-            candidate_file = Path(out) / "candidate.json"
-            candidate = json.loads(candidate_file.read_text())
-            candidate["info"]["launch_speed_required"] = True
-            candidate_file.write_text(json.dumps(candidate, indent=2) + "\n")
-            candidate_info = {**candidate_info, "launch_speed_required": True}
+        # (LAUNCH_SPEED_PHASE).
+        if not proof_error and candidate_info.get("launch_speed_required"):
             proof_error = self.launch_speed_check(self.env["RICHOS_NIGHTLY_RUN_ID"], out, candidate_info)
         self.summary()
         print("", flush=True)

@@ -1822,10 +1822,10 @@ while True: time.sleep(.02)
         self.assertEqual(publisher.command.call_args.args[2], "finish")
 
     # ---- 2026-10-21: a new user's first run is a gate of its own -------------------------
-    def build_that_walks_as_a_new_user(self, steps):
+    def build_that_walks_as_a_new_user(self, steps, boot_result="pass"):
         """A build whose candidate carries the plan's `new_user_walk_required`, as nightly.py
         copies the plan into it, and whose walk writes `steps` as its report."""
-        r, calls = self.build_that_takes_its_vm_proof("pass")
+        r, calls = self.build_that_takes_its_vm_proof(boot_result)
         proof_and_build = r.command.side_effect
 
         def fake_command(*args, **kwargs):
@@ -1862,7 +1862,9 @@ while True: time.sleep(.02)
                 self.assertIs(plan.get("new_user_walk_required"), True, "a new build requires the new-user walk")
                 out = Path(args[args.index("--out") + 1])
                 candidate = json.loads((out / "candidate.json").read_text())
-                candidate["info"]["new_user_walk_required"] = True
+                for key in ("new_user_walk_required", "launch_speed_required"):
+                    if key in plan:
+                        candidate["info"][key] = plan[key]
                 (out / "candidate.json").write_text(json.dumps(candidate))
         r.command = Mock(side_effect=fake_command)
         return r, calls
@@ -1891,6 +1893,31 @@ while True: time.sleep(.02)
         self.assertEqual(publisher.command.call_args.args[2], "finish")
 
     # ---- 2026-11-14: the launch-speed gate, a p95 against 380 ms ----------------------------
+    def test_publish_requires_launch_speed_after_an_earlier_proof_is_repaired(self):
+        passed = [{"step": s, "outcome": "PASS"} for s in m.NEW_USER_WALK_STEPS]
+        failed = [{"step": "identity", "outcome": "FAIL", "detail": "wrong app version"}]
+        run = "fixture-run-id"
+        for boot, steps, error in (("fail", passed, "ITS BOOT WAS NOT PROVEN"),
+                                   ("pass", failed, "A NEW USER'S FIRST RUN OF IT FAILED")):
+            with self.subTest(error=error), tempfile.TemporaryDirectory(dir=self.root) as scratch, \
+                    patch.object(self, "root", Path(scratch)), contextlib.redirect_stdout(io.StringIO()):
+                r, calls = self.build_that_walks_as_a_new_user(steps, boot_result=boot)
+                with self.assertRaisesRegex(RuntimeError, error):
+                    r.perform("build", no_host_screen=True)
+                self.assertFalse(any(str(arg).endswith("launch-speed-walk.py") for args, _ in calls for arg in args))
+
+                repair, _ = self.build_that_walks_as_a_new_user(passed)
+                out, info = repair.load_candidate(run)
+                self.assertIsNone(repair.vm_boot_proof(run))
+                self.assertIsNone(repair.new_user_walk(run, out, info))
+
+                publisher = self.runner()
+                (publisher.state / "source").mkdir(parents=True, exist_ok=True)
+                with self.assertRaisesRegex(ValueError, "no complete launch-speed measurement"):
+                    publisher.perform("publish", run_id=run)
+                publisher.command.assert_not_called()
+                self.assertIs(info.get("launch_speed_required"), True)
+
     def test_a_build_times_its_launch_after_the_new_user_walk_and_states_the_p95(self):
         passed = [{"step": s, "outcome": "PASS"} for s in m.NEW_USER_WALK_STEPS]
         r, calls = self.build_that_walks_as_a_new_user(passed)
