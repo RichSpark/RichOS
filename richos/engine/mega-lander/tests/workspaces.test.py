@@ -4562,6 +4562,73 @@ class HuntV2_03_TheBudgetBoundsEveryCleanupStage(Base):
         self.assertIn("worktree-agent-" + rec["agent_id"], branches(self.entity))
         self.assertEqual(self.rec("zach-opus-timev3")["deletion"].get("attempts", 0), 0)
 
+    def test_branch_lock_probe_uses_the_remaining_budget_and_cleanup_retries(self):
+        name = "zach-opus-lockbudget"
+        rec, path = self._discarded(name)
+        branch = "worktree-agent-" + rec["agent_id"]
+        lock = os.path.join(self.entity, ".git", "refs", "heads", branch + ".lock")
+        open(lock, "w").close()
+        old = time.time() - ws.STALE_LOCK_AGE - 60
+        os.utime(lock, (old, old))
+        clock = [100.0]
+        deletes, probes = [], []
+        real_run = subprocess.run
+
+        def controlled_run(argv, **kwargs):
+            if argv[0] == "lsof" and argv[-1] == lock:
+                probes.append(kwargs["timeout"])
+                clock[0] = 101.0
+                return subprocess.CompletedProcess(argv, 1, stdout="", stderr="")
+            if argv[:5] == ["git", "-C", self.entity, "branch", "-D"]:
+                deletes.append(clock[0])
+                return subprocess.CompletedProcess(argv, 1, stdout="", stderr=f"'{lock}': File exists")
+            return real_run(argv, **kwargs)
+
+        with patch.object(ws, "now", side_effect=lambda: clock[0]), \
+                patch.object(ws, "stop_containers", return_value={}), \
+                patch.object(ws, "stop_test_instances", return_value={}), \
+                patch.object(ws.subprocess, "run", side_effect=controlled_run):
+            done = ws._delete(rec, ws.live_workspaces(rec), branches=True, why="discarded",
+                              processes={"stopped": [], "survivors": []}, deadline=100.04)
+        self.assertFalse(done)
+        self.assertEqual(deletes, [100.0])
+        self.assertEqual(len(probes), 1)
+        self.assertAlmostEqual(probes[0], 0.04)
+        self.assertTrue(os.path.exists(lock))
+        self.assertIn(branch, branches(self.entity))
+        self.assertFalse(os.path.exists(path))
+        deletion = self.rec(name)["deletion"]
+        self.assertIn(branch, deletion["deferred"])
+        self.assertEqual(deletion["attempts"], 0)
+        os.unlink(lock)
+        self.assertEqual([ok for _key, ok in ws.retry_due()], [True])
+        self.assertNotIn(branch, branches(self.entity))
+
+    def test_recovered_lock_does_not_admit_a_branch_retry_after_the_deadline(self):
+        branch = "cc/zach-opus-recovered"
+        run("git", "-C", self.other, "branch", branch)
+        clock = [100.0]
+        real_git = ws.git
+        deletes = []
+
+        def git(repo, *args, **kwargs):
+            if args[:2] == ("branch", "-D"):
+                deletes.append(clock[0])
+                return 1, "", "lock refusal"
+            return real_git(repo, *args, **kwargs)
+
+        def clear_lock(*args, **kwargs):
+            clock[0] = 101.0
+            return True
+
+        with patch.object(ws, "now", side_effect=lambda: clock[0]), \
+                patch.object(ws, "git", side_effect=git), \
+                patch.object(ws, "_clear_stale_git_lock", side_effect=clear_lock):
+            with self.assertRaises(ws.Deadline):
+                ws.delete_branch(self.other, branch, deadline=100.04)
+        self.assertEqual(deletes, [100.0])
+        self.assertIn(branch, branches(self.other))
+
     def test_v2_03_the_git_removal_gets_what_is_left_not_its_own_300_seconds(self):
         rec, path = self._discarded("zach-opus-timev4")
         seen = []
