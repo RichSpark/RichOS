@@ -316,26 +316,83 @@ class WorkProof(unittest.TestCase):
 
 
 class Toolchain(unittest.TestCase):
-    """The cleanup never starts developer tools to find out whether they exist."""
+    """The cleanup resolves the selected Xcode on disk before starting simulator tools."""
+
+    def setUp(self):
+        root = tempfile.TemporaryDirectory(prefix="reaper-toolchain-test.")
+        self.addCleanup(root.cleanup)
+        self.root = Path(root.name)
+        env = patch.dict(os.environ, {"RICHOS_TOOLCHAIN_ROOT": str(self.root)}, clear=True)
+        env.start()
+        self.addCleanup(env.stop)
+        access = os.access
+        fixture_only = patch.object(os, "access", side_effect=lambda path, mode:
+                                    os.fspath(path).startswith(str(self.root) + os.sep) and access(path, mode))
+        fixture_only.start()
+        self.addCleanup(fixture_only.stop)
+        self.reaper = object.__new__(reaper.Reaper)
+        self.reaper.skip_build_caches = False
+
+    def install_xcode(self, rel):
+        developer = self.root / rel / "Contents" / "Developer"
+        simctl = developer / "usr" / "bin" / "simctl"
+        simctl.parent.mkdir(parents=True)
+        simctl.touch(mode=0o755)
+        return developer
+
+    def select(self, developer):
+        link = self.root / "var" / "db" / "xcode_select_link"
+        link.parent.mkdir(parents=True)
+        link.symlink_to(developer)
+
+    def test_lists_simulators_from_custom_selected_xcode(self):
+        developer = self.install_xcode("Volumes/Tools/Xcode Beta.app")
+        self.select(developer)
+        devices = '{"devices":{"runtime":[{"name":"iPhone","udid":"id","state":"Shutdown",'
+        devices += '"deviceTypeIdentifier":"type","dataPath":"/fixture/data"}]}}'
+        types = '{"devicetypes":[{"identifier":"type","name":"iPhone"}]}'
+        with patch.object(reaper.subprocess, "run", side_effect=[
+            subprocess.CompletedProcess([], 0, stdout=devices),
+            subprocess.CompletedProcess([], 0, stdout=types),
+        ]) as run:
+            self.assertEqual(self.reaper.sim_devices(),
+                             [("iPhone", "id", "Shutdown", "iPhone", "runtime", "/fixture/data")])
+        self.assertEqual([c.args[0] for c in run.call_args_list],
+                         [["xcrun", "simctl", "list", kind, "-j"] for kind in ("devices", "devicetypes")])
+        for call in run.call_args_list:
+            self.assertEqual(call.kwargs["env"]["DEVELOPER_DIR"], str(developer))
+
+    def test_explicit_xcode_overrides_the_selected_directory(self):
+        self.select(self.install_xcode("Applications/Xcode.app"))
+        developer = self.install_xcode("Volumes/Tools/Xcode Beta.app")
+        os.environ["DEVELOPER_DIR"] = str(developer)
+        with patch.object(reaper.subprocess, "run", side_effect=[
+            subprocess.CompletedProcess([], 0, stdout='{"devices":{}}'),
+            subprocess.CompletedProcess([], 0, stdout='{"devicetypes":[]}'),
+        ]) as run:
+            self.assertEqual(self.reaper.sim_devices(), [])
+        self.assertEqual(run.call_args.kwargs["env"]["DEVELOPER_DIR"], str(developer))
+
+    def test_selected_command_line_tools_do_not_start_simctl_even_with_default_xcode(self):
+        self.install_xcode("Applications/Xcode.app")
+        selected = self.root / "Library" / "Developer" / "CommandLineTools"
+        (selected / "usr" / "bin").mkdir(parents=True)
+        self.select(selected)
+        with patch.object(reaper.subprocess, "run") as run:
+            self.assertIsNone(self.reaper.sim_devices())
+        run.assert_not_called()
 
     def test_no_xcode_no_process_and_no_simulator_work(self):
-        r = object.__new__(reaper.Reaper)
-        r.skip_build_caches = False
-        with patch.object(reaper.Reaper, "simulator_toolchain", return_value=False), \
-                patch.object(reaper.subprocess, "run", side_effect=AssertionError("a process was started")):
-            self.assertIsNone(r.sim_devices())
+        with patch.object(reaper.subprocess, "run") as run:
+            self.assertIsNone(self.reaper.sim_devices())
+        run.assert_not_called()
 
     def test_a_notice_never_runs_developer_tools_even_where_they_exist(self):
-        r = object.__new__(reaper.Reaper)
-        r.skip_build_caches = True
-        with patch.object(reaper.Reaper, "simulator_toolchain", return_value=True), \
-                patch.object(reaper.subprocess, "run", side_effect=AssertionError("a process was started")):
-            self.assertIsNone(r.sim_devices())
-
-    def test_the_toolchain_is_looked_for_on_disk_only(self):
-        with patch.object(reaper.subprocess, "run", side_effect=AssertionError("a process was started")), \
-                patch.dict(os.environ, {"DEVELOPER_DIR": "/nonexistent-developer-dir"}):
-            self.assertIsInstance(reaper.Reaper.simulator_toolchain(), bool)
+        os.environ["DEVELOPER_DIR"] = str(self.install_xcode("Applications/Xcode.app"))
+        self.reaper.skip_build_caches = True
+        with patch.object(reaper.subprocess, "run") as run:
+            self.assertIsNone(self.reaper.sim_devices())
+        run.assert_not_called()
 
 
 class NamedScratch(unittest.TestCase):

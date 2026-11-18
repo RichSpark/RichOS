@@ -3485,29 +3485,31 @@ class Reaper(object):
         return ""
 
     @staticmethod
-    def simulator_toolchain():
-        """True only when Xcode's simulator tool is installed, found by looking at the disk.
-
-        NEVER `xcrun` TO FIND OUT: on a Mac without developer tools `xcrun` opens Apple's
-        "install the command line developer tools" dialog, which a regular user must never see
-        because of a cleanup. The simulator tool ships only with a full Xcode, so a missing one
-        means no simulators and no Xcode data to clear, and the arm is skipped silently."""
-        candidates = []
-        if os.environ.get("DEVELOPER_DIR"):
-            candidates.append(os.environ["DEVELOPER_DIR"])
-        candidates += ["/Applications/Xcode.app/Contents/Developer"]
-        return any(os.access(os.path.join(c, "usr", "bin", "simctl"), os.X_OK) for c in candidates)
+    def simulator_env():
+        """Resolve the selected Xcode on disk. Probing with xcrun can open Apple's install dialog."""
+        import toolchain
+        env = _ps_env()
+        developer, _source = toolchain.developer_dir(env)
+        if toolchain.tool_path(developer, "simctl") is None:
+            return None
+        env["DEVELOPER_DIR"] = developer
+        return env
 
     def sim_devices(self):
         """[(name, udid, state, stock name, runtime, data dir)] from simctl, or None."""
-        if getattr(self, "skip_build_caches", False) or not self.simulator_toolchain():
-            # --notice (a session start) never runs developer tools; and no Xcode, no simulators.
+        if getattr(self, "skip_build_caches", False):
+            # --notice (a session start) never runs developer tools.
+            return None
+        env = self.simulator_env()
+        if env is None:
             return None
         try:
             r = subprocess.run(["xcrun", "simctl", "list", "devices", "-j"], capture_output=True,
-                               text=True, timeout=60, env=_ps_env())
+                               text=True, timeout=60, env=env)
             t = subprocess.run(["xcrun", "simctl", "list", "devicetypes", "-j"], capture_output=True,
-                               text=True, timeout=60, env=_ps_env())
+                               text=True, timeout=60, env=env)
+            if r.returncode != 0 or t.returncode != 0:
+                return None
             devices, types = json.loads(r.stdout)["devices"], json.loads(t.stdout)["devicetypes"]
         except (OSError, subprocess.TimeoutExpired, ValueError, KeyError):
             return None
@@ -4856,11 +4858,15 @@ class Reaper(object):
             if e.klass in ("sim-unavailable", "sim-device"):
                 # simctl itself refuses a device that is booted now.
                 argv = ["xcrun", "simctl", "delete", "unavailable" if e.klass == "sim-unavailable" else e.udid]
-                try:
-                    r = subprocess.run(argv, capture_output=True, text=True, timeout=300, env=_ps_env())
-                    ok, err = r.returncode == 0, (r.stderr or "").strip()[:200]
-                except (OSError, subprocess.TimeoutExpired) as exc:
-                    ok, err = False, str(exc)
+                env = self.simulator_env()
+                if env is None:
+                    ok, err = False, "the selected developer directory has no simulator tool"
+                else:
+                    try:
+                        r = subprocess.run(argv, capture_output=True, text=True, timeout=300, env=env)
+                        ok, err = r.returncode == 0, (r.stderr or "").strip()[:200]
+                    except (OSError, subprocess.TimeoutExpired) as exc:
+                        ok, err = False, str(exc)
                 if ok:
                     if e.klass == "sim-device":
                         deleted += 1
