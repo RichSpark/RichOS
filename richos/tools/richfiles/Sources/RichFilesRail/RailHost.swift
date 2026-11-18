@@ -19,6 +19,17 @@ public func placeRichFilesRail(_ webViewPointer: UnsafeMutableRawPointer?, _ lef
     }
 }
 
+@_cdecl("richfiles_rail_tooltip")
+public func setRichFilesRailTooltip(_ webViewPointer: UnsafeMutableRawPointer?, _ left: Double, _ top: Double,
+                                    _ width: Double, _ height: Double, _ radius: Double, _ arrow: Double) {
+    guard Thread.isMainThread, let webViewPointer else { return }
+    MainActor.assumeIsolated {
+        let webView = Unmanaged<NSView>.fromOpaque(webViewPointer).takeUnretainedValue()
+        RailHost.shared.setTooltip(beside: webView, frame: CGRect(x: left, y: top, width: width, height: height),
+                                   radius: radius, arrow: arrow)
+    }
+}
+
 @_cdecl("richfiles_rail_receive_workspace")
 public func receiveRichFilesWorkspace(_ identifier: UnsafePointer<CChar>?) -> Int32 {
     guard Thread.isMainThread, let identifier, let value = String(validatingUTF8: identifier),
@@ -68,6 +79,7 @@ public func changeRichFilesGitChat(_ value: UnsafePointer<CChar>?) -> Int32 {
 private final class RailHost {
     static let shared = RailHost()
     private weak var webView: NSView?
+    private var container: NSView?
     private var hosting: PaneHostingView?
     private var dockTarget: RichFilesDockTarget?
     private var monitor: Any?
@@ -83,9 +95,9 @@ private final class RailHost {
               CGRect(x: 0, y: 0, width: 1.000001, height: 1.000001).contains(normalizedFrame) else {
             return false
         }
-        if self.webView !== webView || hosting?.superview !== parent {
+        if self.webView !== webView || container?.superview !== parent {
             hide()
-            hosting?.removeFromSuperview()
+            container?.removeFromSuperview()
             self.webView = webView
             let home = FileManager.default.homeDirectoryForCurrentUser
             let destination = RichFilesDockTarget()
@@ -96,22 +108,21 @@ private final class RailHost {
                                      acceptsKeyboard: { [weak self] in self?.hasPaneFocus() == true },
                                      returnKeyboardFocus: { [weak self] in self?.focusPane() },
                                      dockTarget: destination, didUndock: { [weak self] in self?.showChats() })
+            let container = NSView()
+            container.wantsLayer = true
+            parent.addSubview(container, positioned: .above, relativeTo: webView)
+            self.container = container
             let view = PaneHostingView(rootView: pane)
             view.sizingOptions = []
             view.autoresizingMask = []
             view.isHidden = true
-            parent.addSubview(view, positioned: .above, relativeTo: webView)
+            container.addSubview(view)
             hosting = view
             installFocusMonitor()
         }
-        guard let hosting else { return false }
-        let bounds = webView.bounds
-        let top = webView.isFlipped ? normalizedFrame.minY : 1 - normalizedFrame.maxY
-        let local = CGRect(x: bounds.minX + normalizedFrame.minX * bounds.width,
-                           y: bounds.minY + top * bounds.height,
-                           width: normalizedFrame.width * bounds.width,
-                           height: normalizedFrame.height * bounds.height)
-        hosting.frame = webView.convert(local, to: parent)
+        guard let hosting, let container else { return false }
+        container.frame = webView.convert(webRect(normalizedFrame, in: webView), to: parent)
+        hosting.frame = container.bounds
         if hosting.isHidden {
             hosting.isHidden = false
             focusPane()
@@ -121,6 +132,38 @@ private final class RailHost {
             _ = performInPane { try await $0.showGit(snapshot) }
         }
         return true
+    }
+
+    private func webRect(_ frame: CGRect, in webView: NSView) -> CGRect {
+        let bounds = webView.bounds
+        let top = webView.isFlipped ? frame.minY : 1 - frame.maxY
+        return CGRect(x: bounds.minX + frame.minX * bounds.width, y: bounds.minY + top * bounds.height,
+                      width: frame.width * bounds.width, height: frame.height * bounds.height)
+    }
+
+    func setTooltip(beside webView: NSView, frame: CGRect, radius: CGFloat, arrow: CGFloat) {
+        guard self.webView === webView, let container, let layer = container.layer else { return }
+        let tip = webView.convert(webRect(frame, in: webView), to: container)
+        let arrow = arrow * webView.bounds.width
+        guard !tip.isEmpty, container.bounds.intersects(tip.insetBy(dx: -arrow, dy: 0)) else {
+            layer.mask = nil
+            return
+        }
+        // The label belongs to WebKit. Cut its shape out of the native sibling so its
+        // existing text, size and shortcut stay visible, with the pane still interactive.
+        let radius = min(radius * webView.bounds.width, tip.width / 2, tip.height / 2)
+        let path = CGMutablePath()
+        path.addRect(container.bounds)
+        path.addRoundedRect(in: tip, cornerWidth: radius, cornerHeight: radius)
+        path.move(to: CGPoint(x: tip.minX, y: tip.midY - arrow))
+        path.addLine(to: CGPoint(x: tip.minX - arrow, y: tip.midY))
+        path.addLine(to: CGPoint(x: tip.minX, y: tip.midY + arrow))
+        path.closeSubpath()
+        let mask = CAShapeLayer()
+        mask.frame = layer.bounds
+        mask.fillRule = .evenOdd
+        mask.path = path
+        layer.mask = mask
     }
 
     func setChat(_ thread: String?) {
@@ -165,6 +208,7 @@ private final class RailHost {
     private func hide() {
         if hasPaneFocus(), let webView { webView.window?.makeFirstResponder(webView) }
         hosting?.isHidden = true
+        container?.layer?.mask = nil
     }
 
     private func focusPane() {

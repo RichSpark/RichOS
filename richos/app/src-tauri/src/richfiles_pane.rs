@@ -23,6 +23,26 @@ impl PaneBounds {
     }
 }
 
+#[derive(Deserialize)]
+pub struct RailTooltip {
+    left: f64,
+    top: f64,
+    width: f64,
+    height: f64,
+    radius: f64,
+    arrow: f64,
+}
+
+impl RailTooltip {
+    fn valid(&self) -> bool {
+        [self.left, self.top].into_iter().all(|value| (-1.0..=1.0).contains(&value))
+            && [self.width, self.height, self.radius, self.arrow]
+                .into_iter().all(|value| (0.0..=4.0).contains(&value))
+            && self.width > 0.0
+            && self.height > 0.0
+    }
+}
+
 #[richos_command::command]
 pub fn richfiles_pane_available(window: WebviewWindow) -> bool {
     if window.label() != "main" {
@@ -37,12 +57,17 @@ pub fn richfiles_pane_available(window: WebviewWindow) -> bool {
 }
 
 #[richos_command::command]
-pub async fn richfiles_place_pane(window: WebviewWindow, bounds: PaneBounds) -> Result<(), String> {
+pub async fn richfiles_place_pane(
+    window: WebviewWindow,
+    bounds: PaneBounds,
+    tooltip: Option<RailTooltip>,
+) -> Result<(), String> {
     if window.label() != "main" || !bounds.valid() {
         return Err("RichFiles could not use that window area.".to_owned());
     }
     #[cfg(target_os = "macos")]
     {
+        let tooltip = tooltip.filter(RailTooltip::valid);
         if bounds.visible {
             // A click can beat preload. Join the same load off the window thread.
             mac::load_in_background().await?;
@@ -50,7 +75,7 @@ pub async fn richfiles_place_pane(window: WebviewWindow, bounds: PaneBounds) -> 
         let (send, receive) = tokio::sync::oneshot::channel();
         window
             .with_webview(move |webview| {
-                let result = mac::place(webview.inner(), &bounds);
+                let result = mac::place(webview.inner(), &bounds, tooltip.as_ref());
                 let _ignored = send.send(result);
             })
             .map_err(|_| "RichFiles could not reach the window.".to_owned())?;
@@ -340,14 +365,16 @@ mod mac {
     use std::path::{Path, PathBuf};
     use std::sync::OnceLock;
 
-    use super::PaneBounds;
+    use super::{PaneBounds, RailTooltip};
 
     type Place = unsafe extern "C" fn(*mut c_void, f64, f64, f64, f64, i32) -> i32;
+    type SetTooltip = unsafe extern "C" fn(*mut c_void, f64, f64, f64, f64, f64, f64);
     type Accept = unsafe extern "C" fn(*const std::ffi::c_char) -> i32;
     type PlaceGit = unsafe extern "C" fn(*mut c_void, f64, f64, f64, f64, i32, i32, *const std::ffi::c_char, i32) -> i32;
 
     struct Bridge {
         place: Place,
+        set_tooltip: Option<SetTooltip>,
         accept: Accept,
         reveal: Accept,
         place_git: PlaceGit,
@@ -392,6 +419,7 @@ mod mac {
             return Err("RichFiles could not load from this installation.");
         }
         let symbol = unsafe { libc::dlsym(library, c"richfiles_rail_place".as_ptr()) };
+        let tooltip = unsafe { libc::dlsym(library, c"richfiles_rail_tooltip".as_ptr()) };
         let accept = unsafe { libc::dlsym(library, c"richfiles_rail_receive_workspace".as_ptr()) };
         let reveal = unsafe { libc::dlsym(library, c"richfiles_rail_reveal".as_ptr()) };
         let git = unsafe { libc::dlsym(library, c"richfiles_git_place".as_ptr()) };
@@ -410,6 +438,8 @@ mod mac {
         // place on the main thread with its live WKWebView pointer.
         Ok(Bridge {
             place: unsafe { std::mem::transmute::<*mut c_void, Place>(symbol) },
+            set_tooltip: (!tooltip.is_null())
+                .then(|| unsafe { std::mem::transmute::<*mut c_void, SetTooltip>(tooltip) }),
             accept: unsafe { std::mem::transmute::<*mut c_void, Accept>(accept) },
             reveal: unsafe { std::mem::transmute::<*mut c_void, Accept>(reveal) },
             place_git: unsafe { std::mem::transmute::<*mut c_void, PlaceGit>(git) },
@@ -446,17 +476,20 @@ mod mac {
         unsafe { (bridge.git_chat)(pointer); }
     }
 
-    pub fn place(webview: *mut c_void, bounds: &PaneBounds) -> Result<(), String> {
+    pub fn place(
+        webview: *mut c_void,
+        bounds: &PaneBounds,
+        tooltip: Option<&RailTooltip>,
+    ) -> Result<(), String> {
         if !bounds.visible && BRIDGE.get().is_none() {
             return Ok(());
         }
-        let action = BRIDGE
+        let bridge = BRIDGE
             .get_or_init(load)
             .as_ref()
-            .map_err(|message| (*message).to_owned())?
-            .place;
+            .map_err(|message| (*message).to_owned())?;
         let accepted = unsafe {
-            action(
+            (bridge.place)(
                 webview,
                 bounds.left,
                 bounds.top,
@@ -466,6 +499,17 @@ mod mac {
             )
         };
         if accepted == 1 {
+            if bounds.visible {
+                if let Some(set_tooltip) = bridge.set_tooltip {
+                    unsafe {
+                        if let Some(tip) = tooltip {
+                            set_tooltip(webview, tip.left, tip.top, tip.width, tip.height, tip.radius, tip.arrow);
+                        } else {
+                            set_tooltip(webview, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+                        }
+                    }
+                }
+            }
             Ok(())
         } else {
             Err("RichFiles could not appear in this window.".to_owned())
