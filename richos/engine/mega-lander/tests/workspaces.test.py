@@ -8,6 +8,7 @@ teams and worktrees are never read or written. A session is a real process
 (`sleep`) whose pid the registry records, so "its process no longer exists"
 is a fact the operating system reports, not a fixture flag.
 """
+import glob
 import importlib.util
 import json
 import os
@@ -9149,6 +9150,37 @@ class HuntV5_01_WorkspaceOwnership(Base):
 
 
 class HuntV5_03_PreservationRetries(Base):
+    def test_archive_unavailable_keeps_files_pending_and_the_gate_continues(self):
+        blocked = "zach-opus-archive"
+        aid, path = self.spawn(blocked)
+        self.finish(aid)
+        with open(os.path.join(path, ".env"), "w") as stream:
+            stream.write("local ignored work")
+        clean_aid, clean_path = self.spawn("zach-opus-clean")
+        self.finish(clean_aid)
+        archive = os.path.join(ws.state_dir(), "kept")
+        with open(archive, "w") as stream:
+            stream.write("obstruction")
+
+        allowed, _person, lead = ws.gate_stop({"session_id": self.sid}, self.entity)
+        self.assertTrue(allowed)
+        self.assertIn("ignored-file archive", lead)
+        self.assertIsNone(self.rec(blocked).get("disposition"))
+        with open(os.path.join(path, ".env")) as stream:
+            self.assertEqual(stream.read(), "local ignored work")
+        self.assertFalse(os.path.exists(clean_path))
+
+        os.unlink(archive)
+        allowed, _person, _lead = ws.gate_stop({"session_id": self.sid}, self.entity)
+        self.assertTrue(allowed)
+        self.assertFalse(os.path.exists(path))
+        roots = os.listdir(archive)
+        self.assertEqual(len(roots), 1)
+        copies = glob.glob(os.path.join(archive, roots[0], "*", ".env"))
+        self.assertEqual(len(copies), 1)
+        with open(copies[0]) as stream:
+            self.assertEqual(stream.read(), "local ignored work")
+
     def test_two_keeps_in_one_second_retain_both_versions(self):
         name = "zach-opus-v5keep"
         _aid, path = self.spawn(name)

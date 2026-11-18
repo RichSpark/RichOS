@@ -7512,15 +7512,19 @@ def _keep_ignored(rec, chain, deadline=None):
     # A MOVE, NEVER A COPY: inside a gate's budget only a rename is bounded.
     # A workspace on another volume than the registry keeps the old answer
     # (the land waits, and pending() now says why).
-    _ensure_dirs()
     try:
         here = os.stat(state_dir()).st_dev
         if any(os.stat(p).st_dev != here for _k, _l, p, _r in plan):
             return ""
     except OSError:
         return ""
-    os.makedirs(_p("kept"), exist_ok=True)
-    root = tempfile.mkdtemp(prefix="%s-%d-" % (_key_segment(rec["key"]), int(now())), dir=_p("kept"))
+    archive = _p("kept")
+    try:
+        os.makedirs(archive, exist_ok=True)
+        root = tempfile.mkdtemp(prefix="%s-%d-" % (_key_segment(rec["key"]), int(now())), dir=archive)
+    except OSError as e:
+        raise SpecError("cannot land %s: the ignored-file archive %s could not be opened (%s)"
+                        % (rec["name"], archive, e)) from e
     moved, dropped = [], []
     # An entry that holds the ack directory (a `.claude/` the main checkout
     # lacks) loses the acks first, so they are not kept inside it.
@@ -7543,8 +7547,8 @@ def _keep_ignored(rec, chain, deadline=None):
         src, dst = os.path.join(p, rel), os.path.join(root, where, rel)
         if not os.path.lexists(src):
             continue
-        os.makedirs(os.path.dirname(dst), exist_ok=True)
         try:
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
             shutil.move(src, dst)
         except (OSError, shutil.Error) as e:
             event("kept-ignored", key=rec["key"], kept=root, entries=moved[:50], failed=rel, why=str(e)[:200])
