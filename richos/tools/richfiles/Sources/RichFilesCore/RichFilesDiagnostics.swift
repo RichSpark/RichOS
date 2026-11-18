@@ -4,8 +4,20 @@ import Foundation
 public enum RichFilesDiagnostics {
     public enum Operation: String, Codable, Sendable {
         case listing, copy, move, recovery, gitHistory, gitComparison
+        case windowGestureAvailability, windowGestureMaximize, windowGestureRestore
+        case windowGestureDockMinimize, windowGestureDockRestore
         case glanceCaptureFrame, glanceCaptureOutput, glanceCaptureSession
         case glanceDisplay, glanceDecode, glanceFolder, glancePreview, glanceDefaults, glanceMetadata
+
+        fileprivate var logFilename: String {
+            switch self {
+            case .windowGestureAvailability, .windowGestureMaximize, .windowGestureRestore,
+                 .windowGestureDockMinimize, .windowGestureDockRestore:
+                return RichFilesDiagnostics.gestureFilename
+            default:
+                return RichFilesDiagnostics.filename
+            }
+        }
     }
     public enum Outcome: String, Codable, Sendable {
         case complete, issues, unavailable, interrupted
@@ -25,6 +37,7 @@ public enum RichFilesDiagnostics {
     }
 
     static let filename = "richfiles-timing.jsonl"
+    static let gestureFilename = "richfiles-window-gestures.jsonl"
     private static let maximumBytes: off_t = 128 * 1024
     private static let writer = DispatchQueue(label: "app.richos.richfiles.diagnostics", qos: .utility)
 
@@ -33,7 +46,8 @@ public enum RichFilesDiagnostics {
         total: Int, confirmed: Int, firstRowsMS: Int? = nil
     ) {
         let bundle = Bundle.main
-        guard ["app.richos.richfiles", "com.richos.app", "app.richos.richglance"].contains(bundle.bundleIdentifier ?? ""),
+        guard ["app.richos.richfiles", "com.richos.app", "app.richos.richglance", WindowGesturePreferences.helperID]
+            .contains(bundle.bundleIdentifier ?? ""),
               let library = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask).first else { return }
         let version = bundle.object(forInfoDictionaryKey: "RichOSSourceRevision") as? String
             ?? bundle.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown"
@@ -57,7 +71,7 @@ public enum RichFilesDiagnostics {
         var bytes = try JSONEncoder().encode(sample)
         bytes.append(10)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        let descriptor = open(folder.appendingPathComponent(filename).path,
+        let descriptor = open(folder.appendingPathComponent(sample.operation.logFilename).path,
                               O_WRONLY | O_CREAT | O_APPEND | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC, 0o600)
         guard descriptor >= 0 else { throw CocoaError(.fileWriteNoPermission) }
         let file = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)

@@ -31,6 +31,34 @@ final class BrowserActionsTests: XCTestCase {
     }
 
     @MainActor
+    func testWindowGestureDiagnosticsRotateIndependentlyOfFileOperations() async throws {
+        try await withFixture { _, logs, _ in
+            let fileLog = logs.appendingPathComponent(RichFilesDiagnostics.filename)
+            let gestureLog = logs.appendingPathComponent(RichFilesDiagnostics.gestureFilename)
+            let listing = RichFilesDiagnostics.Sample(
+                atMS: 1_792_658_590_000, id: UUID(), build: "1", operation: .listing, outcome: .complete,
+                workerMS: 15, firstRowsMS: 10, total: 3, confirmed: 3
+            )
+            let gesture = RichFilesDiagnostics.Sample(
+                atMS: 1_792_658_590_000, id: UUID(), build: "1", operation: .windowGestureRestore, outcome: .complete,
+                workerMS: 10, firstRowsMS: nil, total: 1, confirmed: 1
+            )
+            try RichFilesDiagnostics.append(listing, in: logs)
+            let original = try Data(contentsOf: fileLog)
+            try RichFilesDiagnostics.append(gesture, in: logs)
+            let file = try FileHandle(forWritingTo: gestureLog)
+            try file.truncate(atOffset: 128 * 1024)
+            try file.close()
+            try RichFilesDiagnostics.append(gesture, in: logs)
+            XCTAssertEqual(try Data(contentsOf: fileLog), original)
+            let data = try Data(contentsOf: gestureLog)
+            XCTAssertLessThan(data.count, 1024)
+            let record = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+            XCTAssertEqual(record["operation"] as? String, "windowGestureRestore")
+        }
+    }
+
+    @MainActor
     func testRestoreSelectedKeepsOccupiedNameAndGroupsSuccessfulRestores() async throws {
         try await withFixture { root, trash, board in
             let names = ["Alpha.png", "Beta.jpg", "Gamma.pdf"]

@@ -551,6 +551,8 @@ struct RichFilesSettings: View {
             Text("Assign Open RichFiles in System Settings → Keyboard → Keyboard Shortcuts → Services.")
             heading("Window")
             Toggle("Restore tabs when RichFiles reopens", isOn: $restoreSession)
+            heading("System-wide window gestures")
+            WindowGestureSettings(appURL: appURL)
         }
     }
 

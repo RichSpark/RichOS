@@ -1763,6 +1763,7 @@ fi
 codesign --force "${richfiles_sign[@]}" "$app_bundle/Contents/Frameworks/libRichFilesRail.dylib" || exit 1
 codesign --force "${richfiles_sign[@]}" "$richfiles_app/Contents/MacOS/richfiles-archive" || exit 1
 codesign --force "${richfiles_sign[@]}" "$richfiles_app/Contents/Applications/RichGlance.app" || exit 1
+codesign --force "${richfiles_sign[@]}" "$richfiles_app/Contents/Library/LoginItems/RichFiles Window Gestures.app" || exit 1
 codesign --force "${richfiles_sign[@]}" "$richfiles_app" || exit 1
 codesign --verify --deep --strict "$richfiles_app" || exit 1
 
