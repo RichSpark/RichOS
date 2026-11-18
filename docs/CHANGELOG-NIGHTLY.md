@@ -2,6 +2,17 @@
 
 What changed in each RichOS nightly build from 1.2.1-nightly.20261019.67 on, newest first; stable versions are in the [changelog](CHANGELOG.md).
 
+## 1.3.4-nightly.20261118.107
+
+[GitHub release](https://github.com/RichSpark/RichOS/releases/tag/v1.3.4-nightly.20261118.107)
+
+- Added Capture Region… to RichGlance's File menu: it freezes the screen under your pointer so you can drag out an exact area with a magnifier and its size in pixels, move a corner one pixel at a time with the arrow keys, then press Return to copy it as a picture or choose Save PNG… to keep it as a file; Escape goes back one step at a time
+- Added RichGlance in Settings with Capture from any app, off until you turn it on: while RichOS is running, even minimized or closed, Control-Shift-C or a shortcut you choose starts a capture from any app
+- Added System-wide window gestures in RichFiles Settings, both off until you turn them on: double-click any app's title bar to make its window fill the screen or put it back as it was and click the front app's Dock icon to minimize its window or bring it back; once you allow them in macOS they keep working after you quit RichOS and RichFiles
+- Added a short Updated to RichOS note beside Settings once an update is in place, with See what's new
+- Improved updating so you can follow it to the end: a small button beside Settings shows the download and the check that follows even while Settings is closed, the Updates row shows each step with a running clock and a short countdown appears before RichOS restarts
+- [technical] Added update timings, RichGlance captures and the window gestures to RichDoctor's reports, without anything on your screen or any window titles
+
 ## 1.3.4-nightly.20261117.104
 
 [GitHub release](https://github.com/RichSpark/RichOS/releases/tag/v1.3.4-nightly.20261117.104)
