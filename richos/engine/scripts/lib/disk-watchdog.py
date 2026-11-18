@@ -348,8 +348,8 @@ def du_kb(path, *, deadline=None):
     return int(first[0].strip())
 
 
-def richos_garbage_bytes():
-    """How much of the shortfall is OUR OWN scratch.
+def richos_garbage_bytes(mount):
+    """How much of the shortfall on this volume is OUR OWN scratch.
 
     CEO addendum 2: the watchdog should never bark because RichOS failed to clean
     up after itself, so an alert has to say whether that is what happened. This
@@ -372,7 +372,7 @@ def richos_garbage_bytes():
     seen = set()
     for root in roots:
         real = os.path.realpath(root)
-        if real in seen or not os.path.isdir(real):
+        if real in seen or not os.path.isdir(real) or not on_volume(real, mount):
             continue
         seen.add(real)
         kb = du_kb(real)
@@ -940,6 +940,7 @@ def main():
               "rich_alert_gb": round(t_rich, 1),
               "ceo_notify_gb": round(t_ceo, 1),
               "ceo_urgent_gb": round(t_urgent, 1),
+              "shortfall_bytes": max(0, t_rich * GB - free),
               "below_rich": free < t_rich * GB,
               "below_ceo": free < t_ceo * GB,
               "below_urgent": free < t_urgent * GB,
@@ -1246,53 +1247,46 @@ def main():
     anything = condition or garbage_report
 
     # --- attribution and classification, ONLY when something is wrong -------
-    consumers, classification, garbage = [], "", 0
-    # Attribution walks the disk, so only the conditions it explains pay for it;
-    # a cleanup result alone does not (its detail is the reaper's own record).
+    consumers = []
+    # A cleanup result alone does not need a disk walk. A low-volume cause
+    # compares that volume's own scratch with that volume's missing space.
     disk_condition = bool(alerting) or n_fail > 0 or n_inst > 0 or n_dev > 0
-    # THE SHORTFALL IS SPACE ACTUALLY MISSING below a volume's own declared floor.
-    # With none, there is no low-disk cause to classify and no classification is
-    # printed: on 2026-10-24 a clamp of 1 byte here made any scratch at all read
-    # "RichOS garbage (DEFECT)" with 74 GB free. A failed cleanup or a device left
-    # behind still alarms under its own heading above.
-    shortfall = max((v["rich_alert_gb"] * GB - v["free_bytes"] for v in volumes), default=0)
     if disk_condition and mode in ("check", "status"):
-        consumers = []
-        low = [v for v in volumes if v["below_rich"] or v["drop_alert"]] or volumes
         min_b = int(env_num("DISK_CONSUMER_MIN_GB", 3) * GB)
-        for v in low:
+        for v in alerting or volumes:
             mount = v["mount"]
-            # ONLY FOLDERS ON THIS VOLUME, found by walking the whole volume (walk_roots), so a
-            # new pile anywhere on it is named, plus RichOS's own configured folders on it.
             roots = consumer_roots(candidates, mount)
             found = volume_consumers(mount, walk_roots(mount, primary), min_b)
-            for b, p in found:
-                consumers.append({"path": p, "bytes": b, "human": human(b), "mount": mount,
-                                  "ours": is_ours(p.split("  (")[0])})
-            # The same folders' totals too, except one whose subfolder the walk already named
-            # (a total would only repeat it).
+            mine = [{"path": p, "bytes": b, "human": human(b), "mount": mount,
+                     "ours": is_ours(p.split("  (")[0])} for b, p in found]
+            # The same folders' totals too, except one whose subfolder the walk already named.
             named = [p.split("  (")[0] for _b, p in found]
             for b, p in top_consumers(roots):
                 if not any(n.startswith(p + os.sep) or n == p for n in named):
-                    consumers.append({"path": p, "bytes": b, "human": human(b), "mount": mount,
-                                      "ours": is_ours(p)})
-        garbage = richos_garbage_bytes()
-        # Our own build output counts as ours: what this run's cleanup freed, and any of the
-        # folders named above that RichOS's own builds and tools made.
-        garbage += sum(c["bytes"] for c in consumers if c.get("ours"))
-        garbage += sum(v.get("reclaimed_bytes", 0) for v in volumes)
-        # "RichOS garbage (DEFECT)" when our own scratch is a material part of
-        # what is missing. The comparison is against the SHORTFALL rather than
-        # against the disk: 5 GB of our scratch on a disk 200 GB short is not
-        # our defect, and the same 5 GB on a disk 6 GB short is.
-        if shortfall > 0:
-            classification = ("RichOS garbage (DEFECT)"
-                              if garbage >= 0.25 * shortfall else "other")
+                    mine.append({"path": p, "bytes": b, "human": human(b), "mount": mount,
+                                 "ours": is_ours(p)})
+            consumers.extend(mine)
+            if v["below_rich"]:
+                garbage = (richos_garbage_bytes(mount) + v.get("reclaimed_bytes", 0)
+                           + sum(c["bytes"] for c in mine if c["ours"]))
+                v["richos_garbage_bytes"] = garbage
+                v["classification"] = ("RichOS garbage (DEFECT)"
+                                       if garbage >= 0.25 * v["shortfall_bytes"] else "other")
     elif disk_condition:
-        if shortfall > 0:
-            classification = prev.get("classification") or "other"
-        garbage = prev.get("richos_garbage_bytes") or 0
+        # Read-only alerts use the last measurement for the same mount. Old
+        # state that only recorded a pooled cause cannot attribute a volume.
+        for v in alerting:
+            if v["below_rich"]:
+                old = prev_vols.get(v["mount"], {})
+                v["classification"] = old.get("classification") or "other"
+                v["richos_garbage_bytes"] = old.get("richos_garbage_bytes") or 0
         consumers = prev.get("top_consumers") or []
+
+    classified = [v for v in alerting if v.get("classification")]
+    if len(alerting) == 1 and classified:
+        classification = classified[0]["classification"]
+    else:
+        classification = "; ".join("%s on %s" % (v["classification"], v["mount"]) for v in classified)
 
     notified = dict(prev.get("notified") or {})
 
@@ -1314,16 +1308,17 @@ def main():
                                 for c in mine[:3]) or "not measured"
                 title = ("RichOS: disk space CRITICAL" if level == "urgent"
                          else "RichOS: disk space low")
+                cause = v.get("classification", "")
                 msg = ("%s free on %s (%.0f%%). Top: %s. %s"
                        % (human(v["free_bytes"]), v["mount"],
-                          v["percent_free"], top, classification))
+                          v["percent_free"], top, cause))
                 if notify_ceo(title, msg):
                     notified[key] = now
                     posted.append(key)
                     log(log_path, "%s NOTIFIED ceo level=%s mount=%s free=%s "
                                   "class=%s" % (stamp, level, v["mount"],
                                                 human(v["free_bytes"]),
-                                                classification))
+                                                cause))
                 else:
                     log(log_path, "%s NOTIFY-FAILED ceo level=%s mount=%s "
                                   "(osascript would not post)"
@@ -1453,9 +1448,10 @@ def main():
         if classification:
             lines.append("")
             lines.append("  CLASSIFICATION: %s" % classification)
-            if classification.startswith("RichOS"):
-                lines.append("  RichOS's own scratch is %s of this. THE APP IS"
-                             % human(garbage))
+        for v in classified:
+            if v["classification"].startswith("RichOS"):
+                lines.append("  RichOS's own scratch accounts for %s on %s. THE APP IS"
+                             % (human(v["richos_garbage_bytes"]), v["mount"]))
                 lines.append("  SUPPOSED TO CLEAN THIS UP ITSELF — the CEO's words:")
                 lines.append("  \"the disk watchdog will NEVER bark because the RichOS")
                 lines.append("  app failed to clean up its garbage\". So this is a DEFECT")
@@ -1596,7 +1592,7 @@ def main():
         "volumes": volumes,
         "alerting": bool(condition),
         "classification": classification,
-        "richos_garbage_bytes": garbage,
+        "richos_garbage_bytes": sum(v["richos_garbage_bytes"] for v in classified),
         "top_consumers": consumers,
         "reclaim": reclaim,
         "consumers_refused": consumers_refused,
