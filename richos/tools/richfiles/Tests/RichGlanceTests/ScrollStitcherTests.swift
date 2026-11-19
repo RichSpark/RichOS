@@ -498,6 +498,23 @@ final class ScrollStitcherTests: XCTestCase {
         }
     }
 
+    func testFlatPanelOverAShortPageIsNotStretchedByTheOnlyMove() throws {
+        // A page only 50 pixels longer than the view, under a flat panel that stays in the middle. The
+        // one move there is was explained by a bar 140 pixels tall at the top and another at the
+        // bottom, with the panel kept as a stripe of the page: the image offered at the end of the page
+        // had the panel 50 pixels taller than it is, over text both views showed. The page's text moves
+        // through those bars, and where they account for a difference it is the text they cover and
+        // the flat panel they keep: the wrong way round. The move is not stitched.
+        for scale in [1, 2] as [CGFloat] {
+            let page = textPage(width: 800, height: 550, scale: scale)
+            func view(_ y: Int) -> CGImage { withBox(crop(page, x: 0, y: y, w: 800, h: 500), x: 300, y: 140, w: 200, h: 220) }
+            var sut = ScrollStitcher()
+            XCTAssertEqual(sut.append(view(0)), .initial)
+            XCTAssertEqual(sut.append(view(50)), .unmatched, "text at \(scale)x")
+            XCTAssertTrue(pixels(try XCTUnwrap(sut.image())) == pixels(view(0)), "what is offered is the first view, as captured")
+        }
+    }
+
     func testPageThatChangesWhileItScrollsIsNotStitched() throws {
         // A picture that loads after the first view was captured: the two views show different pixels
         // at the same place of the page, in the middle of the view.

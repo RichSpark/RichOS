@@ -118,6 +118,8 @@ struct ScrollStitcher {
               abs(offset.y) <= next.height - agreed.top - agreed.bottom else { return .unmatched }
         if agreed == bands {
             keep(next, at: origin)
+        } else if Self.turned(from: last, to: next, moved: offset, bands: agreed) {
+            return .unmatched
         } else {
             // Larger bars take the places under them out of the page. A frame whose bars would leave a
             // place with nothing to show inside a page that was whole before it is not stitched.
@@ -264,6 +266,59 @@ struct ScrollStitcher {
             }
         }
         return found
+    }
+
+    /// Whether larger bars `bands`, which account for every difference between a frame and the page
+    /// kept so far, have the page and a bar the wrong way round. Bars are fixed things and the page is
+    /// what moves. Here, for one of the bars, two things are true at once. The page's own detail
+    /// moves through it: many of its pixels changed where they are, stand out sharply from their
+    /// neighbors, and are the pixels the frame before showed one move away, also in that bar. And
+    /// where that bar accounts for a difference between the two frames, the pixel it covers is such
+    /// detail, new where it is, while the pixel kept as the page is flat. Then the flat thing that
+    /// stays put is what is fixed (a panel in the middle of the view, say), the bar is page, and no
+    /// bars along the edges account for the frame.
+    private static func turned(from last: Raster, to raster: Raster, moved: Offset, bands: Bands) -> Bool {
+        let (width, height) = (raster.width, raster.height)
+        let (next, before) = (raster.pixels, last.pixels)
+        /// The bar a view position lies in (0 top, 1 bottom, 2 left, 3 right), or nil.
+        func bar(_ x: Int, _ y: Int) -> Int? {
+            y < bands.top ? 0 : y >= height - bands.bottom ? 1 : x < bands.left ? 2 : x >= width - bands.right ? 3 : nil
+        }
+        /// Clearly different from the pixels on both sides of it, across or down.
+        func sharp(_ pixels: [UInt32], _ x: Int, _ y: Int) -> Bool {
+            let pixel = pixels[y * width + x]
+            return (distance(pixels[y * width + x - 1], pixel) > 32 && distance(pixels[y * width + x + 1], pixel) > 32)
+                || (distance(pixels[(y - 1) * width + x], pixel) > 32 && distance(pixels[(y + 1) * width + x], pixel) > 32)
+        }
+        func flat(_ pixels: [UInt32], _ x: Int, _ y: Int) -> Bool {
+            let pixel = pixels[y * width + x]
+            return pixels[y * width + x - 1] == pixel && pixels[y * width + x + 1] == pixel
+                && pixels[(y - 1) * width + x] == pixel && pixels[(y + 1) * width + x] == pixel
+        }
+        var moving = [0, 0, 0, 0]
+        var wrongWay = [0, 0, 0, 0]
+        for y in 1..<(height - 1) {
+            // Where the frame before showed the same place of the page.
+            let lastY = y + moved.y
+            guard lastY >= 1, lastY < height - 1 else { continue }
+            for x in max(1, 1 - moved.x)..<min(width - 1, width - 1 - moved.x) {
+                let lastX = x + moved.x
+                let (pixel, earlier) = (next[y * width + x], before[lastY * width + lastX])
+                switch (bar(x, y), bar(lastX, lastY)) {
+                case let (here?, there):
+                    // Detail that is new at this place in the view.
+                    guard before[y * width + x] != pixel, sharp(next, x, y), !sharp(before, x, y) else { continue }
+                    if there == here, earlier == pixel { moving[here] += 1 }
+                    if there == nil, earlier != pixel, flat(before, lastX, lastY) { wrongWay[here] += 1 }
+                case let (nil, there?):
+                    if earlier != pixel, flat(next, x, y), next[lastY * width + lastX] != earlier,
+                       sharp(before, lastX, lastY), !sharp(next, lastX, lastY) { wrongWay[there] += 1 }
+                default:
+                    break
+                }
+            }
+        }
+        return (0..<4).contains { moving[$0] >= 64 && wrongWay[$0] >= 64 }
     }
 
     /// Keep a frame that agrees with the frames before it. Between its bars its pixels are the page:
