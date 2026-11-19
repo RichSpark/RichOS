@@ -1375,7 +1375,6 @@ fn recover(root: &Path) -> io::Result<Option<Activation>> {
     let mut left = None;
     if !matches(&dest, &p)? {
         install_path::preflight(root, &dest)?;
-        install_path::check_exchange_permission(root, &p)?;
         if !matches(&incoming, &p).unwrap_or(false) {
             quarantine_invalid_pending(root, &p)?;
             return Err(refuse("prepared update no longer matches its receipt"));

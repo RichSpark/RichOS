@@ -233,6 +233,9 @@ fn ensure_unused(_system: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// For the update surface only: the last exchange of this update into Applications was denied.
+/// Publication never reads it and always tries again, so the update goes through once the
+/// user grants the permission; a successful exchange removes the record.
 pub(super) fn check_exchange_permission(root: &Path, publication: &Published) -> io::Result<()> {
     match read_document::<String>(&root.join(BLOCKED)) {
         Ok(digest) if digest == publication.archive_sha256 => Err(permission_required()),
@@ -257,6 +260,17 @@ pub(super) fn exchange_update(
         {
             write_document(root, BLOCKED, &p.archive_sha256)?;
             Err(permission_required())
+        }
+        Ok(()) => {
+            // The swap has happened, so a stale record must not fail it; it only names a
+            // digest that is published now.
+            match fs::remove_file(root.join(BLOCKED)) {
+                Err(error) if error.kind() != io::ErrorKind::NotFound => {
+                    eprintln!("[richos-user-update] could not clear the permission record: {error}")
+                }
+                _ => {}
+            }
+            Ok(())
         }
         result => result,
     }
@@ -714,6 +728,52 @@ mod tests {
         assert_eq!(staged(&home).unwrap().unwrap().publication.version, "2.0.0");
         activate_at_quit(&home, "1.0.0", &system).unwrap().unwrap();
         assert_eq!(bundle_version(&system).unwrap(), "2.0.0");
+    }
+
+    /// The staged app made immutable, so the exchange itself is refused with EPERM, as macOS
+    /// refuses it after a "Don't Allow" on its permission prompt, until dropped (permission
+    /// granted).
+    struct ExchangeDenied(std::ffi::CString);
+
+    impl ExchangeDenied {
+        fn new(path: &Path) -> Self {
+            let path = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+            assert_eq!(unsafe { libc::chflags(path.as_ptr(), libc::UF_IMMUTABLE as _) }, 0);
+            Self(path)
+        }
+    }
+
+    impl Drop for ExchangeDenied {
+        fn drop(&mut self) {
+            if unsafe { libc::chflags(self.0.as_ptr(), 0) } != 0 {
+                eprintln!("could not clear the immutable flag on {:?}", self.0);
+            }
+        }
+    }
+
+    #[test]
+    fn update_denied_at_the_exchange_goes_through_once_permission_is_granted() {
+        // One wrong click on a macOS permission prompt denies the exchange into Applications.
+        // Once permission is granted, the next attempt puts the same verified update in place.
+        let (_work, home, system) = fixture();
+        let mut lease = StartupLease::acquire(&home).unwrap();
+        lease.remember_installation(&system, "1.0.0").unwrap();
+        drop(lease);
+        stage_verified(&home, &archive("2.0.0", |_| {}), "2.0.0").unwrap();
+        let root = root(&home).unwrap();
+        let digest = staged(&home).unwrap().unwrap().publication.archive_sha256;
+        let denied = ExchangeDenied::new(&root.join(&digest).join("incoming.app"));
+
+        let error = activate_at_quit(&home, "1.0.0", &system).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(bundle_version(&system).unwrap(), "1.0.0");
+        // While permission is missing, the update surface says so.
+        assert_eq!(staged(&home).unwrap_err().kind(), io::ErrorKind::PermissionDenied);
+
+        drop(denied);
+        activate_at_quit(&home, "1.0.0", &system).unwrap().unwrap();
+        assert_eq!(bundle_version(&system).unwrap(), "2.0.0");
+        assert!(staged(&home).unwrap().is_none());
     }
 
     #[test]
