@@ -422,7 +422,7 @@ for name in sorted(found):
     printf '%s\n' "$out"
 }
 
-# registered_hook_rows <path-to-hooks.json>
+# registered_hook_rows <path-to-hooks.json> [--host-only]
 #
 # The same registration surface, read at one more level of detail: prints one
 # TAB-separated row per registered hook script,
@@ -430,7 +430,9 @@ for name in sorted(found):
 #     <event>\t<matcher>\t<script-basename>
 #
 # sorted and de-duplicated, with an absent or empty matcher normalized to "-".
+# A plugin module uses "Plugin module", "-", and the path from modules[].
 # Inline hooks that run no script contribute nothing, exactly as above.
+# --host-only excludes rules expanded from the live dispatcher manifest.
 #
 # WHY A SECOND FUNCTION RATHER THAN A RICHER FIRST ONE
 # ----------------------------------------------------
@@ -456,7 +458,7 @@ for name in sorted(found):
 # Exit codes — identical contract to registered_hook_scripts:
 #   0  complete inventory printed
 #   1  no such file
-#   2  present but unparseable, registering no script at all, or no python3
+#   2  present but unparseable, producing no rows, or no python3
 registered_hook_rows() {
     local f="${1:-}"
     local out=""
@@ -466,8 +468,9 @@ registered_hook_rows() {
     command -v python3 >/dev/null 2>&1 || return 2
 
     out="$(PYTHONPATH="$_RH_LIB_DIR${PYTHONPATH:+:$PYTHONPATH}" python3 -c '
-import json, os, re, sys
+import json, os, sys
 from hook_command import executed_hooks, dispatch_keys
+host_only = sys.argv[3] == "--host-only"
 with open(sys.argv[1], encoding="utf-8") as fh:
     doc = json.load(fh)
 
@@ -487,7 +490,7 @@ _cands = [
 manifest = {}
 manifest_ok = True
 found_manifest = False
-for _c in _cands:
+for _c in ([] if host_only else _cands):
     if not os.path.isfile(_c):
         continue
     found_manifest = True
@@ -505,6 +508,15 @@ for _c in _cands:
     break
 
 rows = set()
+modules = doc.get("modules", [])
+if not isinstance(modules, list):
+    raise SystemExit(2)
+for module in modules:
+    if not isinstance(module, str) or not module:
+        raise SystemExit(2)
+    # Escape control characters so the path always occupies one row and column.
+    rows.add("Plugin module\t-\t" + json.dumps(module, ensure_ascii=False)[1:-1])
+
 used_dispatcher = False
 hooks = doc.get("hooks", {})
 if isinstance(hooks, dict):
@@ -525,6 +537,8 @@ if isinstance(hooks, dict):
                     continue
                 for m in executed_hooks(cmd):
                     rows.add("%s\t%s\t%s" % (event, matcher, m))
+                if host_only:
+                    continue
                 for dk in dispatch_keys(cmd):
                     used_dispatcher = True
                     for mod in manifest.get(dk, []):
@@ -536,7 +550,7 @@ if used_dispatcher and not (found_manifest and manifest_ok):
     raise SystemExit(3)
 for row in sorted(rows):
     print(row)
-' "$f" "$_RH_LIB_DIR" 2>/dev/null)"
+' "$f" "$_RH_LIB_DIR" "${2:-}" 2>/dev/null)"
     rc=$?
     [ "$rc" -eq 0 ] || return 2
 

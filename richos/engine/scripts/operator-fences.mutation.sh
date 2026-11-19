@@ -157,8 +157,8 @@ mutant ingress-swallows-lease-notes "F30 " "$I" \
     '    notes = []' \
     "Fix 4: the ingress's renewal of the lead's lease would lift the residue refusal while what it named went nowhere."
 mutant ingress-drops-pending "F30 " "$I" \
-    '    cands += [(p, "pending") for p in pending_paths(state_dir) if p not in named] if state_dir else []' \
-    '    cands += []' \
+    '    queued = pending_paths(state_dir) if state_dir else []' \
+    '    queued = []' \
     "Fix 4: a file handed over while another land held the lease would never be committed unless he named it again."
 
 # --- the launcher and the switch (e8, G12) --------------------------------------------

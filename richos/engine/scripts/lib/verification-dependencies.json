@@ -914,7 +914,7 @@
     },
     "scripts/hooks/commit-ceo-inputs.py#unfenced-fixtures": {
       "source": "scripts/hooks/commit-ceo-inputs.py",
-      "sha256": "fb7e04f153db1562f41dc22803ba8d3e8d6f83501ce773033390df0bf2b3e231",
+      "sha256": "6ae8bccc69a5e8d4d9596e947c77591d6470b75e114766e3c33ff453d4ab9d7b",
       "evidence": "The ingress suite supplies only paths in its freshly initialized private repositories, with no installed reference-transaction launcher. Git/file classification and commits execute the secret/publication write gates. fence_on returns false, so land-lease commands are not invoked in this context.",
       "keys": [],
       "edges": [
@@ -963,7 +963,7 @@
     },
     "scripts/hooks/ceo-inputs.test.sh": {
       "source": "scripts/hooks/ceo-inputs.test.sh",
-      "sha256": "f0a6bb9a538edb3de49d93e84ae3155e18a83b7670f5987b4170aafc4a8198ee",
+      "sha256": "06077398ce73e0c1115ae94da055dae05a66bde58ca5af9ebc031be7ddd18af6",
       "evidence": "Every new_repo config is created from literal PROTECTED_PATHS and explicit opt-out settings. All normal/broken-wrapper and Stop calls pin RICHOS_ENTITY_ROOT to those private repositories. Even the outside-seat and unadopted target files are created inside this suite sandbox; it never copies the real config.",
       "keys": [],
       "edges": [
@@ -1831,7 +1831,7 @@
     },
     "scripts/lib/registered-hooks.sh": {
       "source": "scripts/lib/registered-hooks.sh",
-      "sha256": "bdf6a8b80c62eca6b7a174ab03276ad7b1a1dc89ec51d79ac2208b4ac19208c0",
+      "sha256": "a6cd8c4a7f0a6b40db2640f799c67d3abdda538cff2b111e80db0c33711d8bd5",
       "evidence": "Parses hooks/hooks.json and the dispatcher manifest to derive registered scripts. Embedded standard-library Python and shell fallback read those registration files as data, never execute their commands or source orchestration.config. The embedded Python imports the sibling scripts/lib/hook_command.py (standard-library shlex only) to decide which guard a registered command executes; it reads no other file.",
       "keys": [],
       "edges": [],
@@ -2730,7 +2730,7 @@
     },
     "scripts/hooks/snapshot-enforcing-hooks.sh": {
       "source": "scripts/hooks/snapshot-enforcing-hooks.sh",
-      "sha256": "b86f95a4ad2d2ff8442f4775d1b9a52c84eb1beb5ef3b484683ea2663c1eb509",
+      "sha256": "79a1a0bf24059d23ee1d2909a21910cf26751c944bfa8cd47be75ff3337d7c86",
       "evidence": "Root resolution tests adoption presence only. The snapshot/notice logic derives registration rows and reads/writes the supplied snapshot state. Registered command paths are parsed as data, never executed. No config value is sourced.",
       "keys": [],
       "edges": [
@@ -2747,7 +2747,7 @@
     },
     "scripts/hooks/notice-hook-staleness.sh": {
       "source": "scripts/hooks/notice-hook-staleness.sh",
-      "sha256": "d217b974a1c751da477a6208853926b1ac4e37f623ea8182fa562b3459f49cfc",
+      "sha256": "49607991173330a951de52f88fe98a99e924f64ff02cd974a9a0568a9e97843a",
       "evidence": "Root resolution tests adoption presence only. The snapshot/notice logic derives registration rows and reads/writes the supplied snapshot state. Registered command paths are parsed as data, never executed. No config value is sourced.",
       "keys": [],
       "edges": [
@@ -2767,7 +2767,7 @@
     },
     "scripts/hooks/hook-staleness.test.sh": {
       "source": "scripts/hooks/hook-staleness.test.sh",
-      "sha256": "f59b07882623aa0a379008e841f02f14cb8f507dd266fa47ddc4a9638db37ebc",
+      "sha256": "7fb9325554b09e11f47813183d9366b74f3a9cb738b9295bb995d1b2c473ce5e",
       "evidence": "Snapshot/notice calls use generated adopted roots and explicit copied registration surfaces. Installer cases copy the engine and run only install.sh with private CLAUDE_CONFIG_DIR. That private-home installer closure never consumes config values; copying settings is transport. Guards named in registration mutations and generated script bodies are data, not executed suites.",
       "keys": [],
       "edges": [
@@ -4254,7 +4254,7 @@
     },
     "scripts/hooks/guard-hook-registration-commits.sh#private-inventory": {
       "source": "scripts/hooks/guard-hook-registration-commits.sh",
-      "sha256": "820b99bbbca0e13df0f1a8f2de75f172fa26c0669fedc89a49d0aa9ea0384631",
+      "sha256": "8b4ce304f7eb8c72ea729612ec2f9fef78b3d52db57fead7d5f879fd53402b7c",
       "evidence": "Runs the fixed checker on the caller's private target after payload/Git classification. Root helper resolves the engine location only; no entity-config values are loaded. Literal commit/ack payloads are data and ACK_LOG is supplied privately. Generated hooks.json and registered-hooks.sh in the private target are adoption markers, not the shipped manifest. G10: command words and Git verbs are now read by command_reader.py.",
       "keys": [],
       "edges": [
@@ -4277,7 +4277,7 @@
     },
     "scripts/hook-registration-completeness.test.sh": {
       "source": "scripts/hook-registration-completeness.test.sh",
-      "sha256": "8eff1056f8b176698b6a9fb82c3d89cae1ff4125bf10af32c0b4ec9c931f856e",
+      "sha256": "7136ac8298e26998e591a68a2c56c72b58a218bdc28a580bbc7be10454309ac5",
       "evidence": "Every checker and guard invocation targets a fresh synthetic Git repository. make_fixture generates three fake hooks, their manifests/inventories and a find-only ci-units script; no production config or manifest is copied. The in-test checker mutations run against those same fixtures. Production files used are the checker, guard and their fixed libraries only.",
       "keys": [],
       "edges": [
@@ -6806,7 +6806,7 @@
     },
     "scripts/hooks/guard-hook-registration-commits.sh#benign-bash": {
       "source": "scripts/hooks/guard-hook-registration-commits.sh",
-      "sha256": "820b99bbbca0e13df0f1a8f2de75f172fa26c0669fedc89a49d0aa9ea0384631",
+      "sha256": "8b4ce304f7eb8c72ea729612ec2f9fef78b3d52db57fead7d5f879fd53402b7c",
       "evidence": "Fixed dispatcher D21 payload: Bash echo hello with cwd pointing to a new non-Git engine fixture. Only bootstrap and the rejecting/not-applicable classifier path run. Source config reads before classification are retained. No commit, publication scan, remote CI, lease or live operator predicate is reached. G10: command words and Git verbs are now read by command_reader.py.",
       "keys": [],
       "edges": [
@@ -7520,7 +7520,7 @@
     },
     "scripts/hooks/notice-hook-staleness.sh#unadopted-stop": {
       "source": "scripts/hooks/notice-hook-staleness.sh",
-      "sha256": "d217b974a1c751da477a6208853926b1ac4e37f623ea8182fa562b3459f49cfc",
+      "sha256": "49607991173330a951de52f88fe98a99e924f64ff02cd974a9a0568a9e97843a",
       "evidence": "Visibility suite invokes this hook with no CLI arguments and a new unadopted directory, first as explicit bad root then as cwd/payload. Root-failure/not-adopted paths terminate before entity config, transcript predicates or live-state checks. Bootstrap, module initialization and any pre-root session-recovery helper remain bound. The negative control only replaces stop_notice_abnormal output.",
       "keys": [],
       "edges": [
@@ -9735,7 +9735,7 @@
     },
     "scripts/hooks/guard-hook-registration-commits.sh#operator-lease-payload": {
       "source": "scripts/hooks/guard-hook-registration-commits.sh",
-      "sha256": "820b99bbbca0e13df0f1a8f2de75f172fa26c0669fedc89a49d0aa9ea0384631",
+      "sha256": "8b4ce304f7eb8c72ea729612ec2f9fef78b3d52db57fead7d5f879fd53402b7c",
       "evidence": "Operator-leads D1 supplies land-lease acquire, not a Git operation, scan or filesystem mutation. Reviewed classifier prefix is the same as the benign payload path; all settings read before classification remain. The suite explicitly supplies its literal entity config. G10: command words and Git verbs are now read by command_reader.py.",
       "keys": [],
       "edges": [
@@ -10165,7 +10165,7 @@
     },
     "scripts/hooks/commit-ceo-inputs.py#fenced-fixtures": {
       "source": "scripts/hooks/commit-ceo-inputs.py",
-      "sha256": "fb7e04f153db1562f41dc22803ba8d3e8d6f83501ce773033390df0bf2b3e231",
+      "sha256": "6ae8bccc69a5e8d4d9596e947c77591d6470b75e114766e3c33ff453d4ab9d7b",
       "evidence": "The private fenced ingress fixture executes classification and secret/publication gates plus take_lease/release_lease through fixed land-lease.sh. The seat, ingress state and repository inputs are literal private fixture paths.",
       "keys": [],
       "edges": [
@@ -10314,7 +10314,7 @@
     },
     "scripts/hooks/guard-hook-registration-commits.sh#unadopted-target": {
       "source": "scripts/hooks/guard-hook-registration-commits.sh",
-      "sha256": "820b99bbbca0e13df0f1a8f2de75f172fa26c0669fedc89a49d0aa9ea0384631",
+      "sha256": "8b4ce304f7eb8c72ea729612ec2f9fef78b3d52db57fead7d5f879fd53402b7c",
       "evidence": "The fixed private repository carries no engine hook inventory. Full bootstrap, classifier and target resolution through the explicit HR_ADOPTED check reviewed; returns before the completeness checker. G10: command words and Git verbs are now read by command_reader.py.",
       "keys": [],
       "edges": [
@@ -11074,7 +11074,7 @@
     },
     "scripts/hooks/guard-hook-registration-commits.sh#inventory-write": {
       "source": "scripts/hooks/guard-hook-registration-commits.sh",
-      "sha256": "820b99bbbca0e13df0f1a8f2de75f172fa26c0669fedc89a49d0aa9ea0384631",
+      "sha256": "8b4ce304f7eb8c72ea729612ec2f9fef78b3d52db57fead7d5f879fd53402b7c",
       "evidence": "The inventory parser expands dispatcher modules, while matcher_of finds no direct registration and chooses Write. This module sees a private Write payload or malformed JSON; its reviewed classifier prefix returns before Bash-only operations. Bootstrap helpers remain bound. G10: command words and Git verbs are now read by command_reader.py.",
       "keys": [],
       "edges": [
@@ -12166,7 +12166,7 @@
     },
     "scripts/operator-fences.mutation.sh": {
       "source": "scripts/operator-fences.mutation.sh",
-      "sha256": "dbe626a60d6915e650dab7d484bfa75be3725edb257ea235baf79c832cc9814f",
+      "sha256": "97d7123a22513f067541f5b1ee12d0cbe1350634566d9da77287f1fa7ad54e3e",
       "evidence": "All34 named mutants patch finite literal source operands then invoke the existing operator-fences fixture suite through mutation_focus stop-at-want. Mutations change branches/constants or fixed commands, never introduce a config reader. The shared harness transports config; the fixture suite constructs its own literal entity config.",
       "keys": [],
       "edges": [
@@ -15213,7 +15213,7 @@
     },
     "scripts/hooks/guard-hook-registration-commits.sh#find-payload": {
       "source": "scripts/hooks/guard-hook-registration-commits.sh",
-      "sha256": "820b99bbbca0e13df0f1a8f2de75f172fa26c0669fedc89a49d0aa9ea0384631",
+      "sha256": "8b4ce304f7eb8c72ea729612ec2f9fef78b3d52db57fead7d5f879fd53402b7c",
       "evidence": "Source-bound foreign-app-data D1 dispatcher payload is exactly Bash find ~ -name x. Reviewed classifier exits before Git/commit/lease/publication operations; same prefix and helper set as existing benign contract. Retain all settings read before classification. Full file hash protects this boundary. G10: command words and Git verbs are now read by command_reader.py.",
       "keys": [],
       "edges": [
@@ -18108,9 +18108,9 @@
       "text_needles": [],
       "evidence": "All hook manifests and inventory tables in this suite are generated literals. Changes to the real manifest do not change those fixtures. Executed checker/guard/libraries and fixture constructor are all content-bound here; no real hooks.json bytes are read.",
       "sources": {
-        "scripts/hook-registration-completeness.test.sh": "8eff1056f8b176698b6a9fb82c3d89cae1ff4125bf10af32c0b4ec9c931f856e",
+        "scripts/hook-registration-completeness.test.sh": "7136ac8298e26998e591a68a2c56c72b58a218bdc28a580bbc7be10454309ac5",
         "scripts/hook-registration-completeness.sh": "025ddda2c7449dbe3df8b5ef516adf4ad134582f96e9668bdab74dd53f585cfc",
-        "scripts/hooks/guard-hook-registration-commits.sh": "820b99bbbca0e13df0f1a8f2de75f172fa26c0669fedc89a49d0aa9ea0384631",
+        "scripts/hooks/guard-hook-registration-commits.sh": "8b4ce304f7eb8c72ea729612ec2f9fef78b3d52db57fead7d5f879fd53402b7c",
         "scripts/lib/resolve-roots.sh": "561e1a7b4bda39de4276822645a75f0235fa08234511a8d367e9cd2b2a5fa614",
         "scripts/lib/resolve-main-checkout.sh": "7b365389e15be1f270adfbe361cff627a424f815d501d33d357054124ca286ca",
         "scripts/lib/git-jurisdiction.sh": "807f6081cce2e884b4e4e11bfd390e6fa4eaeb3b3c78a5fcb7e43e2868865c23",
@@ -18130,7 +18130,7 @@
         "scripts/hooks/engine-status.sh": "66b0482b79ebf8bb81067ed07f02a7d3f275c42022334e461fe3888cdbf988a6",
         "scripts/lib/resolve-roots.sh": "561e1a7b4bda39de4276822645a75f0235fa08234511a8d367e9cd2b2a5fa614",
         "scripts/lib/resolve-main-checkout.sh": "7b365389e15be1f270adfbe361cff627a424f815d501d33d357054124ca286ca",
-        "scripts/lib/registered-hooks.sh": "bdf6a8b80c62eca6b7a174ab03276ad7b1a1dc89ec51d79ac2208b4ac19208c0",
+        "scripts/lib/registered-hooks.sh": "a6cd8c4a7f0a6b40db2640f799c67d3abdda538cff2b111e80db0c33711d8bd5",
         "scripts/hooks/workspace-lifecycle.sh": "5c60902e44c8c46c072bdabd66bc5d7f66ae845e59a880bf371c489b885dfecd",
         "mega-lander/workspaces.py": "46f5c0d31139df4b27d2d66411a5f01a5030305e144a6bde878e6a140e4038bb",
         "scripts/lib/appinstances.py": "53d9cf10481a84e8ab6c768fe2506ff1347deedecc62ac1ecfc383c7ea297596",
@@ -18141,7 +18141,7 @@
         "scripts/hooks/session-start-escalations.sh": "ab5ded2d505e2b61f489b69bcfae85e017c005bfaa06c65e1bc4c4d9d6cea9ea",
         "scripts/lib/escalations.sh": "bda6b4af107d64144cac6fe9a5ac507b007c81ebac30b53bb59256b49f9ff1c5",
         "scripts/lib/escalations.py": "71dae88f354ed235bd9f7552e63941ac55841467eb396c2faf9db423cc628022",
-        "scripts/hooks/snapshot-enforcing-hooks.sh": "b86f95a4ad2d2ff8442f4775d1b9a52c84eb1beb5ef3b484683ea2663c1eb509",
+        "scripts/hooks/snapshot-enforcing-hooks.sh": "79a1a0bf24059d23ee1d2909a21910cf26751c944bfa8cd47be75ff3337d7c86",
         "scripts/hooks/session-start-ci-surface.sh": "4008c254ef4c8ea491b6e59ba13c4c9abf7c67a777eb94e1b19a62a8a72dddbf",
         "scripts/lib/ci_pause.py": "f41e86ea2b1aaa036c92eb44ddcb2fe2a6880724162561a5e31b84d556758693",
         "scripts/hooks/notice-disk-alert.sh": "f93a1aab5a6b2b828e82569f609119db1f0f4ca080eb23ad99db303b89351df2",
@@ -18199,7 +18199,7 @@
         "scripts/hooks/snapshot-agent-definitions.sh": "37080a33015c780667bacc7b8c92340da55bcd2a5022b2f37c3c5991003e7f3f",
         "scripts/hooks/workspace-lifecycle.sh": "5c60902e44c8c46c072bdabd66bc5d7f66ae845e59a880bf371c489b885dfecd",
         "scripts/hooks/engine-status.sh": "66b0482b79ebf8bb81067ed07f02a7d3f275c42022334e461fe3888cdbf988a6",
-        "scripts/lib/registered-hooks.sh": "bdf6a8b80c62eca6b7a174ab03276ad7b1a1dc89ec51d79ac2208b4ac19208c0",
+        "scripts/lib/registered-hooks.sh": "a6cd8c4a7f0a6b40db2640f799c67d3abdda538cff2b111e80db0c33711d8bd5",
         "scripts/hooks/scan-secrets.sh": "1f9f7dc2923f12417d7d86155733b65f84f837d2b72d1d8fa1864a7d970415d4",
         "scripts/hooks/root-contract.mutation.sh": "db613fd93e6f39bacb23b1a822e5870cd84e6af6e13d39de320c498f8de14093",
         "scripts/lib/mutation-harness.sh": "f2ec43237a5c7ea406f8ae01cec513b2988651103ec03ba98792312cb20b01f5",
@@ -18218,7 +18218,7 @@
         "scripts/hooks/session-start-escalations.sh": "ab5ded2d505e2b61f489b69bcfae85e017c005bfaa06c65e1bc4c4d9d6cea9ea",
         "scripts/lib/escalations.sh": "bda6b4af107d64144cac6fe9a5ac507b007c81ebac30b53bb59256b49f9ff1c5",
         "scripts/lib/escalations.py": "71dae88f354ed235bd9f7552e63941ac55841467eb396c2faf9db423cc628022",
-        "scripts/hooks/snapshot-enforcing-hooks.sh": "b86f95a4ad2d2ff8442f4775d1b9a52c84eb1beb5ef3b484683ea2663c1eb509",
+        "scripts/hooks/snapshot-enforcing-hooks.sh": "79a1a0bf24059d23ee1d2909a21910cf26751c944bfa8cd47be75ff3337d7c86",
         "scripts/hooks/session-start-ci-surface.sh": "4008c254ef4c8ea491b6e59ba13c4c9abf7c67a777eb94e1b19a62a8a72dddbf",
         "scripts/lib/ci_pause.py": "f41e86ea2b1aaa036c92eb44ddcb2fe2a6880724162561a5e31b84d556758693",
         "scripts/hooks/notice-disk-alert.sh": "f93a1aab5a6b2b828e82569f609119db1f0f4ca080eb23ad99db303b89351df2",
@@ -18340,7 +18340,7 @@
         "scripts/lib/proc_tree.py": "36fb7ad0b2d034da825c75efb81902e77c27d42400ff84b5478b33d9b8e3e3d7",
         "scripts/lib/qa-throwaways.py": "c00b466f73136875fe8024388ccc06e83603d5c59b369e54bd9a5500180f2e86",
         "scripts/lib/qa-toolkit.py": "f490cd7a72bacf99bef3eef47cc059d99cac5f3878b0d2399eea06dae55a24c0",
-        "scripts/lib/registered-hooks.sh": "bdf6a8b80c62eca6b7a174ab03276ad7b1a1dc89ec51d79ac2208b4ac19208c0",
+        "scripts/lib/registered-hooks.sh": "a6cd8c4a7f0a6b40db2640f799c67d3abdda538cff2b111e80db0c33711d8bd5",
         "scripts/lib/resolve-main-checkout.sh": "7b365389e15be1f270adfbe361cff627a424f815d501d33d357054124ca286ca",
         "scripts/lib/resolve-model.sh": "99641cc02487da81c7fb6ecd216b10ddcaff5254c1c734b714aef8de8f81db03",
         "scripts/lib/resolve-roots.sh": "561e1a7b4bda39de4276822645a75f0235fa08234511a8d367e9cd2b2a5fa614",
@@ -18376,7 +18376,7 @@
         "scripts/hooks/dispatch-pretooluse.manifest": "5151275bc5a6153a25ab2c28cb9f7820a5af67ba03042fc073cdb48cf3697e38",
         "hooks/hooks.json": "1900262012a6a6466d162075f65b80d561112021b85ccc7c0ce687fca222db41",
         "scripts/hooks/commit-ceo-inputs.sh": "332b5ec9ce51872486cca4c5aa7dc5e74b6608cd06ebf4c95b830cf9ebd7288a",
-        "scripts/hooks/commit-ceo-inputs.py": "fb7e04f153db1562f41dc22803ba8d3e8d6f83501ce773033390df0bf2b3e231",
+        "scripts/hooks/commit-ceo-inputs.py": "6ae8bccc69a5e8d4d9596e947c77591d6470b75e114766e3c33ff453d4ab9d7b",
         "scripts/hooks/guard-publication-writes.sh": "b9a13097f1023f8e1e5ebd2a78ee804c73bc6b1953db37727c3ecddcde7de67e",
         "scripts/lib/publication-boundary.sh": "b8e3d8f8b80e0048174b55ca2a479f0030e7b1c6f03caae6e7aa14def514ab4f",
         "scripts/hooks/detect-nonnative-worktree.sh": "cdc9e57d0eb047a993d77cac8ab611ed2571bdd0b2760abc2b10642959500cc9",
@@ -18402,7 +18402,7 @@
         "scripts/lib/ci_pause.py": "f41e86ea2b1aaa036c92eb44ddcb2fe2a6880724162561a5e31b84d556758693",
         "scripts/hooks/guard-completeness-commits.sh": "b671b2b6d926f64bb3f782d9be5885f4a374dc727a0c75e11eb8a94124f32174",
         "scripts/hooks/guard-foreign-app-data.sh": "8345d4a510edef2a3285402a76b37abe2f3a4e86ac19828989137dfcbc8a2b5c",
-        "scripts/hooks/guard-hook-registration-commits.sh": "820b99bbbca0e13df0f1a8f2de75f172fa26c0669fedc89a49d0aa9ea0384631",
+        "scripts/hooks/guard-hook-registration-commits.sh": "8b4ce304f7eb8c72ea729612ec2f9fef78b3d52db57fead7d5f879fd53402b7c",
         "scripts/hook-registration-completeness.sh": "025ddda2c7449dbe3df8b5ef516adf4ad134582f96e9668bdab74dd53f585cfc",
         "scripts/hooks/guard-host-display-power.sh": "27c1e2c03d2cf2fcf6838b664a6d534e8694376ff553adf51b520ad56a63f0ab",
         "scripts/hooks/guard-land-lease-commands.sh": "2156203295cbfcc8000ea30ccef483617645ae9d230e914fdb45b38f9541781a",
@@ -18451,7 +18451,7 @@
         "scripts/lib/disk-watchdog.py": "8595d56f0564fd69077a1590c365448e353934906ef604893318b3519a6fe46c",
         "scripts/lib/foreign_app_data.py": "b679938f600d79f3c28aae63f8eb0ead0402d5bda2bfca6b185ed9e72c51790b",
         "scripts/hooks/notice-escalations.sh": "af7a832d84cbb43d22bb5ea1cd15bdf1948c0c01978777797a5d407d7872d4eb",
-        "scripts/hooks/notice-hook-staleness.sh": "d217b974a1c751da477a6208853926b1ac4e37f623ea8182fa562b3459f49cfc",
+        "scripts/hooks/notice-hook-staleness.sh": "49607991173330a951de52f88fe98a99e924f64ff02cd974a9a0568a9e97843a",
         "scripts/hooks/notice-protected-ref-moves.sh": "a7d72e3c248439acf00ec585f442cd0d09385b691c041fcfb902578cebb4ac87",
         "scripts/lib/protected-ref-moves.py": "e9eabe8c92572d0a08d03938b12d59cb407a6429cc41360b11fd3e70bf30975b",
         "scripts/hooks/protected-ref-moves.test.sh": "830d43434a876df2fed6f4f989b0f9dcb8e833aad5f6977e04a54d8e529f4de1",
@@ -18474,7 +18474,7 @@
         "scripts/hooks/session-start-scratch.sh": "ec65aa22fcd926498c154a8a20f7477d4678c4c6aaf586eae341b576d6858598",
         "scripts/hooks/shell-evidence.sh": "3df2704fd0ba1f8788fee3d61a8196e1d3a4aeedff7f92bb3c76fbc91eb2dfd5",
         "scripts/hooks/shell-evidence.py": "56328138fd38e7217a4f7e2712dade2dc230e57573610ae103051f6a6bb4b0e8",
-        "scripts/hooks/snapshot-enforcing-hooks.sh": "b86f95a4ad2d2ff8442f4775d1b9a52c84eb1beb5ef3b484683ea2663c1eb509",
+        "scripts/hooks/snapshot-enforcing-hooks.sh": "79a1a0bf24059d23ee1d2909a21910cf26751c944bfa8cd47be75ff3337d7c86",
         "scripts/hooks/task-completed-handoff.sh": "285b845f27400588fd3beb3c79c5dea01aa06c37b67311e84ce7d6e40a066c1c",
         "scripts/hooks/teammate-idle-handoff.sh": "e95532825a3d051ae27bb44cb374686bf0e025a956157dfd28a461b3b1fb074b",
         "scripts/lib/worktree-ledger.py": "38f6cc15cd69ccd6aae90232db8b1b078866b6676b3f4795bdfe13212e1cb8ce",
@@ -18539,7 +18539,7 @@
       ],
       "sources": {
         "scripts/hooks/row-currency.test.sh": "802f6a46747b6cdfd085e81d6b2ec2e191e3e5e0c6715c253de4465b40d5434f",
-        "scripts/lib/registered-hooks.sh": "bdf6a8b80c62eca6b7a174ab03276ad7b1a1dc89ec51d79ac2208b4ac19208c0",
+        "scripts/lib/registered-hooks.sh": "a6cd8c4a7f0a6b40db2640f799c67d3abdda538cff2b111e80db0c33711d8bd5",
         "scripts/hooks/guard-row-currency-commits.sh": "07e76b7854f576e17335d065ec4f509ac2ca7bb4da5fb5dbe6c4e2c8c18e5474",
         "scripts/lib/resolve-roots.sh": "561e1a7b4bda39de4276822645a75f0235fa08234511a8d367e9cd2b2a5fa614",
         "scripts/lib/resolve-main-checkout.sh": "7b365389e15be1f270adfbe361cff627a424f815d501d33d357054124ca286ca",
@@ -18586,7 +18586,7 @@
       ],
       "sources": {
         "scripts/hooks/completeness-commits.test.sh": "a3224852ed2a5f6e74a6c85ce7813771aac758a343bb5f86810da33e1bbfc8af",
-        "scripts/lib/registered-hooks.sh": "bdf6a8b80c62eca6b7a174ab03276ad7b1a1dc89ec51d79ac2208b4ac19208c0",
+        "scripts/lib/registered-hooks.sh": "a6cd8c4a7f0a6b40db2640f799c67d3abdda538cff2b111e80db0c33711d8bd5",
         "scripts/hooks/guard-completeness-commits.sh": "b671b2b6d926f64bb3f782d9be5885f4a374dc727a0c75e11eb8a94124f32174",
         "scripts/lib/resolve-roots.sh": "561e1a7b4bda39de4276822645a75f0235fa08234511a8d367e9cd2b2a5fa614",
         "scripts/lib/resolve-main-checkout.sh": "7b365389e15be1f270adfbe361cff627a424f815d501d33d357054124ca286ca",
@@ -18639,7 +18639,7 @@
       ],
       "sources": {
         "scripts/hooks/named-persons.test.sh": "758e528e5b44ad079c18e7d91e0688eff8c837ad6c78ff5451bb5f35c0f02707",
-        "scripts/lib/registered-hooks.sh": "bdf6a8b80c62eca6b7a174ab03276ad7b1a1dc89ec51d79ac2208b4ac19208c0",
+        "scripts/lib/registered-hooks.sh": "a6cd8c4a7f0a6b40db2640f799c67d3abdda538cff2b111e80db0c33711d8bd5",
         "scripts/hooks/guard-named-persons-writes.sh": "aeaf6dc75586ad6ac4ed6cffbd22cc718cde0e4440c9b2626462e8a67b5fb26e",
         "scripts/lib/resolve-roots.sh": "561e1a7b4bda39de4276822645a75f0235fa08234511a8d367e9cd2b2a5fa614",
         "scripts/lib/resolve-main-checkout.sh": "7b365389e15be1f270adfbe361cff627a424f815d501d33d357054124ca286ca",
@@ -18681,7 +18681,7 @@
         "scripts/lib/unevaluated-notice.sh": "321ce01b7cbb7efc2a96ef3a2355c6c1ede33bbe16678a5a02276cee9eeb5833",
         "scripts/hooks/dispatch-pretooluse.manifest": "5151275bc5a6153a25ab2c28cb9f7820a5af67ba03042fc073cdb48cf3697e38",
         "scripts/hooks/install.sh": "0662dc8008ac3c1075808707ec0e39825600cd82e24f1e0715ae24bd57ee7542",
-        "scripts/lib/registered-hooks.sh": "bdf6a8b80c62eca6b7a174ab03276ad7b1a1dc89ec51d79ac2208b4ac19208c0",
+        "scripts/lib/registered-hooks.sh": "a6cd8c4a7f0a6b40db2640f799c67d3abdda538cff2b111e80db0c33711d8bd5",
         "scripts/hooks/dispatch-pretooluse.mutation.sh": "249f06e849fd11700957be15475e937ff4b222452bdc48c045ba7409ef5efd84",
         "scripts/lib/mutation-harness.sh": "f2ec43237a5c7ea406f8ae01cec513b2988651103ec03ba98792312cb20b01f5",
         "scripts/lib/scratch.sh": "a46b938e776a44638546063d63e1598383e2c4f55230e502f5efb79ef54db7c4",
@@ -18705,7 +18705,7 @@
         "scripts/lib/declaration-path.sh": "7e2801b579928d127486fb272a07e38ad54e3b12580678a4c1d6fdaa343b4205",
         "scripts/hooks/dialect-guard.sh": "1f11608bc4ee85f825a44997bec5b2ac261189e5e8448eceb26ef0afbee4a67a",
         "scripts/hooks/guard-foreign-app-data.sh": "8345d4a510edef2a3285402a76b37abe2f3a4e86ac19828989137dfcbc8a2b5c",
-        "scripts/hooks/guard-hook-registration-commits.sh": "820b99bbbca0e13df0f1a8f2de75f172fa26c0669fedc89a49d0aa9ea0384631",
+        "scripts/hooks/guard-hook-registration-commits.sh": "8b4ce304f7eb8c72ea729612ec2f9fef78b3d52db57fead7d5f879fd53402b7c",
         "scripts/hooks/guard-host-display-power.sh": "27c1e2c03d2cf2fcf6838b664a6d534e8694376ff553adf51b520ad56a63f0ab",
         "scripts/hooks/guard-inflight-notify.sh": "d68756010cfebf50af7af7320e774d71c07bbc0ded5e4c017c09370e0565816c",
         "scripts/lib/inflight.sh": "db5588f3a0093a55befbcab454ee7e1921e1d8f8a049ff0c243da5020e418e43",
@@ -18754,7 +18754,7 @@
       "evidence": "Enumerates, executes and compares every Stop registration on both surfaces. Duplicate-key validation inspects all JSON objects, so parser metadata failures remain conservative. Actual Stop command changes select this suite; non-Stop commands do not change the enumerated set.",
       "sources": {
         "scripts/hooks/stop-hook-visibility.test.sh": "90e16c0ff376d4375d949e1fa6de59aa06f9aadf2539ed16781b9625b0c6c022",
-        "scripts/lib/registered-hooks.sh": "bdf6a8b80c62eca6b7a174ab03276ad7b1a1dc89ec51d79ac2208b4ac19208c0",
+        "scripts/lib/registered-hooks.sh": "a6cd8c4a7f0a6b40db2640f799c67d3abdda538cff2b111e80db0c33711d8bd5",
         "scripts/lib/stop-hook-notice.sh": "36f88235559f112e27880bc78d8609976cd1cd2d6c7fe96f9c0eec7040544a9d",
         "scripts/hooks/guard-agent-state-claims.sh": "2d07a3110b962c142d97522a9fee1fed62d4dfcedbb7c03c5d2661ffc0a98581",
         "scripts/lib/resolve-roots.sh": "561e1a7b4bda39de4276822645a75f0235fa08234511a8d367e9cd2b2a5fa614",
@@ -18775,7 +18775,7 @@
         "scripts/lib/foreign_app_data.py": "b679938f600d79f3c28aae63f8eb0ead0402d5bda2bfca6b185ed9e72c51790b",
         "scripts/hooks/notice-escalations.sh": "af7a832d84cbb43d22bb5ea1cd15bdf1948c0c01978777797a5d407d7872d4eb",
         "scripts/lib/escalations.sh": "bda6b4af107d64144cac6fe9a5ac507b007c81ebac30b53bb59256b49f9ff1c5",
-        "scripts/hooks/notice-hook-staleness.sh": "d217b974a1c751da477a6208853926b1ac4e37f623ea8182fa562b3459f49cfc",
+        "scripts/hooks/notice-hook-staleness.sh": "49607991173330a951de52f88fe98a99e924f64ff02cd974a9a0568a9e97843a",
         "scripts/hooks/notice-inflight-acks.sh": "b17504876f715a764cb28b656e0d1a50fdf16a18567e4c10bc7384382b0c4f7d",
         "scripts/lib/inflight.sh": "db5588f3a0093a55befbcab454ee7e1921e1d8f8a049ff0c243da5020e418e43",
         "scripts/hooks/notice-mechanical-findings.sh": "b22d5adbc9e4927b792daf005ed4406136d742326512df5214b07227dea9b3c5",
@@ -18822,7 +18822,7 @@
       ],
       "sources": {
         "scripts/hooks/guard-vendoring-commits.test.sh": "0df739003abb871a9de16558fa955c082a7ca9bd4b4173275f0860a6cf4fd483",
-        "scripts/lib/registered-hooks.sh": "bdf6a8b80c62eca6b7a174ab03276ad7b1a1dc89ec51d79ac2208b4ac19208c0",
+        "scripts/lib/registered-hooks.sh": "a6cd8c4a7f0a6b40db2640f799c67d3abdda538cff2b111e80db0c33711d8bd5",
         "scripts/hooks/guard-vendoring-commits.sh": "7214a2d8d780c9988eb6a9e4f6ead5fe229b801da73f5548b52d43f041e858ed",
         "scripts/lib/resolve-roots.sh": "561e1a7b4bda39de4276822645a75f0235fa08234511a8d367e9cd2b2a5fa614",
         "scripts/lib/resolve-main-checkout.sh": "7b365389e15be1f270adfbe361cff627a424f815d501d33d357054124ca286ca",
@@ -18865,7 +18865,7 @@
       ],
       "sources": {
         "scripts/hooks/publication-boundary.test.sh": "987fdda426369b64bfbdb0c5ffbe837cc2857badeec15e3ce046071b8d0f80a8",
-        "scripts/lib/registered-hooks.sh": "bdf6a8b80c62eca6b7a174ab03276ad7b1a1dc89ec51d79ac2208b4ac19208c0",
+        "scripts/lib/registered-hooks.sh": "a6cd8c4a7f0a6b40db2640f799c67d3abdda538cff2b111e80db0c33711d8bd5",
         "scripts/hooks/guard-publication-writes.sh": "b9a13097f1023f8e1e5ebd2a78ee804c73bc6b1953db37727c3ecddcde7de67e",
         "scripts/lib/resolve-roots.sh": "561e1a7b4bda39de4276822645a75f0235fa08234511a8d367e9cd2b2a5fa614",
         "scripts/lib/resolve-main-checkout.sh": "7b365389e15be1f270adfbe361cff627a424f815d501d33d357054124ca286ca",
@@ -18945,7 +18945,7 @@
         "scripts/lib/row-currency.sh": "39205edef34a6f81727dc8f3e628d50e57d7e1b82e981c0e43db295d57de5ba0",
         "scripts/hooks/guard-vendoring-commits.sh": "7214a2d8d780c9988eb6a9e4f6ead5fe229b801da73f5548b52d43f041e858ed",
         "scripts/lib/vendored-material.sh": "0463fd1ec609cd013e07e5977e3b8bd4affcbe3d4b603bb9d2e54a2d664bffdc",
-        "scripts/hooks/guard-hook-registration-commits.sh": "820b99bbbca0e13df0f1a8f2de75f172fa26c0669fedc89a49d0aa9ea0384631",
+        "scripts/hooks/guard-hook-registration-commits.sh": "8b4ce304f7eb8c72ea729612ec2f9fef78b3d52db57fead7d5f879fd53402b7c",
         "scripts/hooks/guard-ci-red-lands.sh": "4b22b2af8f72f4d19753b587aeb4b0c76a5e6183c27e3b979f35a025ee5ece32",
         "scripts/hooks/guard-host-display-power.sh": "27c1e2c03d2cf2fcf6838b664a6d534e8694376ff553adf51b520ad56a63f0ab",
         "scripts/hooks/guard-public-record-repo.sh": "a01a080c7f91a20f9b031cf51546861d04a49ae7c2a3815c9b827ac72dd6539b",
@@ -19036,7 +19036,7 @@
       "all_events": true,
       "sources": {
         "scripts/hooks/unevaluated-payload.test.sh": "e296558a8c59d1638445ea475642ceea8c4ba273c80a8b193ee2d7681f6613e8",
-        "scripts/lib/registered-hooks.sh": "bdf6a8b80c62eca6b7a174ab03276ad7b1a1dc89ec51d79ac2208b4ac19208c0",
+        "scripts/lib/registered-hooks.sh": "a6cd8c4a7f0a6b40db2640f799c67d3abdda538cff2b111e80db0c33711d8bd5",
         "hooks/hooks.json": "1900262012a6a6466d162075f65b80d561112021b85ccc7c0ce687fca222db41",
         "scripts/hooks/dispatch-pretooluse.sh": "a8040d635cb70a1ac4d29c140ea398684e6e8f78b6738ac3acc35063d970b602",
         "scripts/hooks/guard-agent-state-claims.sh": "2d07a3110b962c142d97522a9fee1fed62d4dfcedbb7c03c5d2661ffc0a98581",
@@ -19128,7 +19128,7 @@
         "scripts/hooks/guard-worktree-isolation.sh": "ef69b1a460d26a38765ac8ec22e12eef2f1e3d3177d16e8cd728c9fcf3710fab",
         "scripts/lib/teammate-name.sh": "c347d4d2999c60c2b8b289fdda9dabbde7b66b7845653d70f38b6e6be6d3cdd0",
         "scripts/hooks/notice-ceo-inputs-unheld.sh": "fc44a75854df8c13eed1d926300a58e1d72ffd7c1136b18e99a1137daa1cf650",
-        "scripts/hooks/commit-ceo-inputs.py": "fb7e04f153db1562f41dc22803ba8d3e8d6f83501ce773033390df0bf2b3e231",
+        "scripts/hooks/commit-ceo-inputs.py": "6ae8bccc69a5e8d4d9596e947c77591d6470b75e114766e3c33ff453d4ab9d7b",
         "scripts/hooks/scan-secrets.sh": "1f9f7dc2923f12417d7d86155733b65f84f837d2b72d1d8fa1864a7d970415d4",
         "scripts/hooks/guard-publication-writes.sh": "b9a13097f1023f8e1e5ebd2a78ee804c73bc6b1953db37727c3ecddcde7de67e",
         "scripts/hooks/notice-ceo-ruled-prose.sh": "c7d745cc6544f879eee24428b32ce8a964a217f36de7b27684b0d3cd190057f0",
@@ -19138,7 +19138,7 @@
         "scripts/lib/disk-watchdog.py": "8595d56f0564fd69077a1590c365448e353934906ef604893318b3519a6fe46c",
         "scripts/lib/foreign_app_data.py": "b679938f600d79f3c28aae63f8eb0ead0402d5bda2bfca6b185ed9e72c51790b",
         "scripts/hooks/notice-escalations.sh": "af7a832d84cbb43d22bb5ea1cd15bdf1948c0c01978777797a5d407d7872d4eb",
-        "scripts/hooks/notice-hook-staleness.sh": "d217b974a1c751da477a6208853926b1ac4e37f623ea8182fa562b3459f49cfc",
+        "scripts/hooks/notice-hook-staleness.sh": "49607991173330a951de52f88fe98a99e924f64ff02cd974a9a0568a9e97843a",
         "scripts/hooks/notice-inflight-acks.sh": "b17504876f715a764cb28b656e0d1a50fdf16a18567e4c10bc7384382b0c4f7d",
         "scripts/lib/inflight.sh": "db5588f3a0093a55befbcab454ee7e1921e1d8f8a049ff0c243da5020e418e43",
         "scripts/lib/inflight.py": "c4e7e9254aedc11a975be2e72da57d926f4628ef9818128a423ab48654b5a34b",
@@ -19169,7 +19169,7 @@
         "scripts/hooks/guard-completeness-commits.sh": "b671b2b6d926f64bb3f782d9be5885f4a374dc727a0c75e11eb8a94124f32174",
         "scripts/lib/vendored-material.sh": "0463fd1ec609cd013e07e5977e3b8bd4affcbe3d4b603bb9d2e54a2d664bffdc",
         "scripts/hooks/guard-foreign-app-data.sh": "8345d4a510edef2a3285402a76b37abe2f3a4e86ac19828989137dfcbc8a2b5c",
-        "scripts/hooks/guard-hook-registration-commits.sh": "820b99bbbca0e13df0f1a8f2de75f172fa26c0669fedc89a49d0aa9ea0384631",
+        "scripts/hooks/guard-hook-registration-commits.sh": "8b4ce304f7eb8c72ea729612ec2f9fef78b3d52db57fead7d5f879fd53402b7c",
         "scripts/hooks/guard-inflight-notify.sh": "d68756010cfebf50af7af7320e774d71c07bbc0ded5e4c017c09370e0565816c",
         "scripts/hooks/guard-interactive-prompt.sh": "360c596b01ac3a67bfb0a38635274539801ad40412b3183d6c93eca319788a1e",
         "scripts/lib/interactive-prompt.py": "fd95664d486aa1cde400a9c216e1d2fda2eeb5f21a202a8ccce2b2d1a7b11af8",
@@ -19213,7 +19213,7 @@
         "scripts/hooks/by-reference.test.sh": "c4a7a6571b09d92810f0872d99a5d4debbfff56b1a62ba7b9643e3dfd7870992",
         "scripts/lib/global-state-witness.sh": "043848eeb2641037b1e56bce858035e05a80cce775098c7dfa36386f6f048f73",
         "scripts/hooks/install.sh": "0662dc8008ac3c1075808707ec0e39825600cd82e24f1e0715ae24bd57ee7542",
-        "scripts/lib/registered-hooks.sh": "bdf6a8b80c62eca6b7a174ab03276ad7b1a1dc89ec51d79ac2208b4ac19208c0",
+        "scripts/lib/registered-hooks.sh": "a6cd8c4a7f0a6b40db2640f799c67d3abdda538cff2b111e80db0c33711d8bd5",
         "scripts/hooks/contract-integrity-probe.sh": "8b874dcbc46ccd3ad3b923a048e0e78aff91dd6537c9b529e48d19eb21527431",
         "scripts/lib/resolve-roots.sh": "561e1a7b4bda39de4276822645a75f0235fa08234511a8d367e9cd2b2a5fa614",
         "scripts/lib/resolve-main-checkout.sh": "7b365389e15be1f270adfbe361cff627a424f815d501d33d357054124ca286ca",
@@ -19438,7 +19438,7 @@
         "scripts/lib/resolve-main-checkout.sh": "7b365389e15be1f270adfbe361cff627a424f815d501d33d357054124ca286ca",
         "scripts/lib/unevaluated-notice.sh": "321ce01b7cbb7efc2a96ef3a2355c6c1ede33bbe16678a5a02276cee9eeb5833",
         "scripts/lib/operator_fences.py": "c84e2d6e8dcbad70f4a6bd7bee8cf083b09c41b0d016bd70e669d0826bdf8aae",
-        "scripts/lib/registered-hooks.sh": "bdf6a8b80c62eca6b7a174ab03276ad7b1a1dc89ec51d79ac2208b4ac19208c0",
+        "scripts/lib/registered-hooks.sh": "a6cd8c4a7f0a6b40db2640f799c67d3abdda538cff2b111e80db0c33711d8bd5",
         "scripts/hooks/ceo-todos.test.sh": "456edf169779e0b78ae8d3ffba553ded91e72bb0ff61573fccd1ec80ed648cc6",
         "scripts/ceo-todos-render.sh": "63b00d5fde2eb129df925749ae9967521d9251936f5f19db627bded6049fddc3",
         "scripts/lib/mutation-pool.sh": "87243d7dcc77b3e1f3083399015d902b1a14897c8cc930c84c8a852a219a4118",
@@ -19496,7 +19496,7 @@
         "scripts/hooks/by-reference-2.test.sh": "c5f043a5565c46db6ce50e3150994c3b7a933651dd72149baae04195ec9a0834",
         "scripts/lib/global-state-witness.sh": "043848eeb2641037b1e56bce858035e05a80cce775098c7dfa36386f6f048f73",
         "scripts/hooks/install.sh": "0662dc8008ac3c1075808707ec0e39825600cd82e24f1e0715ae24bd57ee7542",
-        "scripts/lib/registered-hooks.sh": "bdf6a8b80c62eca6b7a174ab03276ad7b1a1dc89ec51d79ac2208b4ac19208c0",
+        "scripts/lib/registered-hooks.sh": "a6cd8c4a7f0a6b40db2640f799c67d3abdda538cff2b111e80db0c33711d8bd5",
         "scripts/hooks/contract-integrity-probe.sh": "8b874dcbc46ccd3ad3b923a048e0e78aff91dd6537c9b529e48d19eb21527431",
         "scripts/lib/resolve-roots.sh": "561e1a7b4bda39de4276822645a75f0235fa08234511a8d367e9cd2b2a5fa614",
         "scripts/lib/resolve-main-checkout.sh": "7b365389e15be1f270adfbe361cff627a424f815d501d33d357054124ca286ca",
@@ -19554,7 +19554,7 @@
         "scripts/hooks/by-reference-3.test.sh": "011f1704931fb5194f0af06865eee584205684d2815e0b5775f8c4d5e2563c95",
         "scripts/lib/global-state-witness.sh": "043848eeb2641037b1e56bce858035e05a80cce775098c7dfa36386f6f048f73",
         "scripts/hooks/install.sh": "0662dc8008ac3c1075808707ec0e39825600cd82e24f1e0715ae24bd57ee7542",
-        "scripts/lib/registered-hooks.sh": "bdf6a8b80c62eca6b7a174ab03276ad7b1a1dc89ec51d79ac2208b4ac19208c0",
+        "scripts/lib/registered-hooks.sh": "a6cd8c4a7f0a6b40db2640f799c67d3abdda538cff2b111e80db0c33711d8bd5",
         "scripts/hooks/contract-integrity-probe.sh": "8b874dcbc46ccd3ad3b923a048e0e78aff91dd6537c9b529e48d19eb21527431",
         "scripts/lib/resolve-roots.sh": "561e1a7b4bda39de4276822645a75f0235fa08234511a8d367e9cd2b2a5fa614",
         "scripts/lib/resolve-main-checkout.sh": "7b365389e15be1f270adfbe361cff627a424f815d501d33d357054124ca286ca",
@@ -19612,7 +19612,7 @@
         "scripts/hooks/by-reference-4.test.sh": "98cd1835e1af40de90150d5939a6096ad61f1f428a358aeb7b9b293ca557ea5e",
         "scripts/lib/global-state-witness.sh": "043848eeb2641037b1e56bce858035e05a80cce775098c7dfa36386f6f048f73",
         "scripts/hooks/install.sh": "0662dc8008ac3c1075808707ec0e39825600cd82e24f1e0715ae24bd57ee7542",
-        "scripts/lib/registered-hooks.sh": "bdf6a8b80c62eca6b7a174ab03276ad7b1a1dc89ec51d79ac2208b4ac19208c0",
+        "scripts/lib/registered-hooks.sh": "a6cd8c4a7f0a6b40db2640f799c67d3abdda538cff2b111e80db0c33711d8bd5",
         "scripts/hooks/contract-integrity-probe.sh": "8b874dcbc46ccd3ad3b923a048e0e78aff91dd6537c9b529e48d19eb21527431",
         "scripts/lib/resolve-roots.sh": "561e1a7b4bda39de4276822645a75f0235fa08234511a8d367e9cd2b2a5fa614",
         "scripts/lib/resolve-main-checkout.sh": "7b365389e15be1f270adfbe361cff627a424f815d501d33d357054124ca286ca",

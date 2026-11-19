@@ -534,6 +534,73 @@ case "$SOUT_P343" in
     *)  bad "P3-43 a refused input is still named after 500 unrelated ledger records" "$SOUT_P343" ;;
 esac
 
+# A new handover uses its own intake allowance. Pending lease retries use the
+# remaining per-wakeup work budget and stay in the ledger until processed.
+REPO_BATCH="$(new_repo repo-capture-batch)"
+if python3 -B - "$SRC_DIR/commit-ceo-inputs.py" "$REPO_BATCH" <<'PYBATCH'
+import contextlib, importlib.util, io, json, os, subprocess, sys
+from pathlib import Path
+from unittest.mock import patch
+
+source, root = sys.argv[1:]
+repo = Path(root)
+state = repo / ".claude/state"
+spec = importlib.util.spec_from_file_location("capture", source)
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+limit = mod.MAX_COMMITS
+paths = [str(repo / f"docs/input-{i}.md") for i in range(limit + 1)]
+for path in paths:
+    Path(path).write_text("fixture\n")
+
+
+def wake(prompt, lease):
+    out = io.StringIO()
+    payload = io.StringIO(json.dumps({"prompt": prompt, "cwd": root}))
+    with patch.dict(os.environ, RICHOS_INGRESS_STATE_DIR=str(state),
+                    RICHOS_INGRESS_SEAT_ROOT=root), \
+         patch.object(sys, "stdin", payload), contextlib.redirect_stdout(out), \
+         patch.object(mod, "run_gate", return_value=("pass", "")), \
+         patch.object(mod, "fence_on", return_value=True), \
+         patch.object(mod, "take_lease", return_value=lease), \
+         patch.object(mod, "release_lease"):
+        rc = mod.main()
+    assert rc in (0, 3, 4), rc
+    return json.loads(out.getvalue())
+
+
+held = wake(" ".join(paths[:-1]), ("held", "fixture writer"))
+assert [r["path"] for r in held["pending"]] == paths[:-1], held
+available = ("acquired", [])
+# Repeat a queued file using a relative spelling. It is still a retry.
+mixed = wake(f"`docs/input-0.md` {paths[-1]}", available)
+assert not mixed["refused"], mixed
+assert len(mixed["committed"]) == limit, mixed
+assert any(r["path"] == paths[-1] for r in mixed["committed"]), mixed
+remaining = mod.pending_paths(str(state))
+assert len(remaining) == 1 and remaining[0] in paths[:-1], remaining
+
+# Over-limit fresh intake still gets the paste refusal. The queued path
+# continues through the actual content and Git capture path.
+paste = [str(repo / f"docs/paste-{i}.md") for i in range(limit + 1)]
+for path in paste:
+    Path(path).write_text("fixture\n")
+overflow = wake(" ".join(paste), available)
+assert [r["path"] for r in overflow["refused"]] == paste, overflow
+assert [r["path"] for r in overflow["committed"]] == remaining, overflow
+assert not mod.pending_paths(str(state))
+assert not wake("plain follow-up", available)["committed"]
+captured = subprocess.check_output(
+    ["git", "-C", root, "ls-tree", "-r", "--name-only", "HEAD", "docs"], text=True
+).splitlines()
+assert set(captured) == {os.path.relpath(path, root) for path in paths}, captured
+PYBATCH
+then
+    ok "capture batches bound new intake and preserve lease retries across wakeups"
+else
+    bad "capture batches lost a queued handover or admitted a paste"
+fi
+
 # --- P3-22: the commit holds the bytes the gates checked, not the live file ---
 # Its fixture repository is removed however the fragment ends, and it is made
 # in a temp directory of its own so the suite can SEE that nothing was left

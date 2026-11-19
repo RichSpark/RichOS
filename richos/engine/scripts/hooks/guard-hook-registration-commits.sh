@@ -283,12 +283,47 @@ cmd = (ti.get("command", "") if isinstance(ti, dict) else "") or ""
 
 sys.path.insert(0, sys.argv[1])
 from command_reader import git_commands
-operations = list(git_commands(cmd))
-verb = next((v for v, _ in operations if v == "commit"), "") or \
-       next((v for v, _ in operations if v == "push"), "")
+commit_values = {
+    "message", "file", "author", "date", "trailer", "reuse-message",
+    "reedit-message", "fixup", "squash", "template", "cleanup",
+    "pathspec-from-file", "unified", "inter-hunk-context",
+}
+push_values = {"repo", "receive-pack", "exec", "push-option", "recurse-submodules"}
+
+def dry_run(verb, args):
+    """Recognize the explicit dry-run option after consuming Git operands."""
+    long_values = commit_values if verb == "commit" else push_values
+    short_values = "mFCctU" if verb == "commit" else "o"
+    short_optional = "Su" if verb == "commit" else ""
+    args = iter(args)
+    enabled = False
+    for arg in args:
+        if arg == "--":
+            break
+        if arg.startswith("--"):
+            name, equals, _ = arg[2:].partition("=")
+            negated = name.startswith("no-")
+            if negated:
+                name = name[3:]
+            if not equals and not negated and any(opt.startswith(name) for opt in long_values):
+                # Git accepts unambiguous abbreviated long options too.
+                next(args, None)
+            elif not equals and name.startswith("dr") and "dry-run".startswith(name):
+                enabled = not negated
+        elif arg.startswith("-"):
+            for i, flag in enumerate(arg[1:], 2):
+                if flag in short_values:
+                    if i == len(arg):
+                        next(args, None)
+                    break
+                if flag in short_optional:
+                    break  # optional short values are attached, e.g. -Skey
+    return enabled
+
+operations = {v for v, args in git_commands(cmd)
+              if v in ("commit", "push") and not dry_run(v, args)}
+verb = "commit" if "commit" in operations else "push" if "push" in operations else ""
 if not verb:
-    print("PASS"); raise SystemExit
-if any(v == verb and "--dry-run" in args for v, args in operations):
     print("PASS"); raise SystemExit
 
 # The ack is read off the COMMAND LINE, not out of a file: the claim is then
