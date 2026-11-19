@@ -26,9 +26,14 @@ import WebKit
 
 setvbuf(stdout, nil, _IOLBF, 0)
 let args = CommandLine.arguments
-guard args.count == 5, let allowed = Double(args[4]) else {
+guard args.count == 5, let allowed = Double(args[4]), allowed.isFinite, allowed > 0 else {
     FileHandle.standardError.write("usage: mac-webview <page.html> <init.js> <out dir> <seconds allowed>\n".data(using: .utf8)!)
     exit(2)
+}
+// The parent also watches the build and pipes. Here, include native setup
+// and use an independent queue in case AppKit or WebKit blocks the main one.
+DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + allowed) {
+    _exit(3)
 }
 let page = URL(fileURLWithPath: args[1])
 let outDir = URL(fileURLWithPath: args[3], isDirectory: true)
@@ -111,8 +116,4 @@ if window.screen != nil {
     exit(6)
 }
 view.loadFileURL(page, allowingReadAccessTo: page.deletingLastPathComponent())
-DispatchQueue.main.asyncAfter(deadline: .now() + allowed) {
-    line(["timed_out_after_seconds": allowed])
-    exit(3)
-}
 app.run()

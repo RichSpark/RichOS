@@ -29,10 +29,10 @@ Usage: stop-probe.py --mode interrupt|stop_task|none --out DIR [--model sonnet] 
 Exit 0 with the verdict printed when the Stop was sent and watched; exit 2 with a sentence when
 nothing was measured (no claude, the foreground call never started, or it had no task to stop).
 
-The probe owns exactly one process tree, the `claude` it spawns; it ends that tree on exit by
-the PID it captured at spawn, never by name.
+The probe owns the provider session and a concurrent `claude --version` lookup. It ends
+both owned trees on exit. A failed or unfinished version lookup leaves the verdict intact.
 """
-import argparse, json, os, signal, subprocess, sys, threading, time, uuid
+import argparse, json, math, os, subprocess, sys, tempfile, threading, time, uuid
 from pathlib import Path
 
 sys.dont_write_bytecode = True
@@ -70,8 +70,8 @@ def clean_env():
     return env
 
 
-def descendants(root):
-    out = subprocess.run(["ps", "-A", "-o", "pid=,ppid=,command="], capture_output=True, text=True, check=True, timeout=10).stdout
+def descendants(root, timeout=10):
+    out = subprocess.run(["ps", "-A", "-o", "pid=,ppid=,command="], capture_output=True, text=True, check=True, timeout=timeout).stdout
     kids, cmd = {}, {}
     for line in out.splitlines():
         parts = line.split(None, 2)
@@ -89,8 +89,8 @@ def descendants(root):
     return {p: cmd.get(p, "") for p in seen}
 
 
-def sleeps(root):
-    return sorted({c.strip() for c in descendants(root).values() if c.strip().startswith("sleep ")})
+def sleeps(root, timeout=10):
+    return sorted({c.strip() for c in descendants(root, timeout).values() if c.strip().startswith("sleep ")})
 
 
 def main():
@@ -103,6 +103,10 @@ def main():
     ap.add_argument("--start-within", type=float, default=120.0, help="seconds to wait for the foreground call")
     ap.add_argument("--claude", default="claude", help="the claude executable (default: claude on PATH)")
     a = ap.parse_args()
+    for name in ("start_within", "stop_after", "observe"):
+        seconds = getattr(a, name)
+        if not math.isfinite(seconds) or seconds < 0:
+            ap.error(f"--{name.replace('_', '-')} must be finite and nonnegative")
     import shutil
     if not shutil.which(a.claude):
         print(f"stop-probe: {a.claude} is not an executable claude; nothing was measured", file=sys.stderr)
@@ -110,8 +114,23 @@ def main():
     out = Path(a.out); out.mkdir(parents=True, exist_ok=True)
     work = out / "fixture"; work.mkdir(exist_ok=True)
     (work / "long-task.sh").write_text(TASK_SCRIPT)
+    with tempfile.TemporaryFile(mode="w+t", encoding="utf-8", errors="replace") as version_out:
+        return measure(a, out, work, version_out)
+
+
+def measure(a, out, work, version_out):
     session = str(uuid.uuid4())
-    t0 = time.time()
+    t0 = time.monotonic()
+    start_deadline = t0 + a.start_within
+    run_deadline = start_deadline + a.stop_after + 3 + a.observe
+    cleanup_deadline = start_deadline
+
+    def remaining(deadline):
+        return max(0, deadline - time.monotonic())
+
+    def sample():
+        return sleeps(proc.pid, timeout=min(10, remaining(run_deadline)))
+
     scope = uuid.uuid4().hex
     env = clean_env()
     env[proc_tree.SCOPE_ENV] = env.get(proc_tree.SCOPE_ENV, '') + ':' + scope
@@ -119,7 +138,11 @@ def main():
     proc = subprocess.Popen(lead_args(a.claude, session, a.model), cwd=work, env=env, stdin=subprocess.PIPE,
                             stdout=subprocess.PIPE, stderr=open(out / "stderr.txt", "w"), text=True,
                             start_new_session=True)
+    version_proc = None
+    version = ""
     try:
+        version_proc = subprocess.Popen([a.claude, "--version"], env=env, start_new_session=True,
+                                        stdin=subprocess.DEVNULL, stdout=version_out, stderr=subprocess.DEVNULL)
         tracker.refresh(tags=True)
         frames_file = open(out / "frames.jsonl", "w")
         lock = threading.Lock()
@@ -130,7 +153,7 @@ def main():
         def send(obj):
             line = json.dumps(obj)
             with lock:
-                frames_file.write(json.dumps({"t": round(time.time() - t0, 3), "dir": "out", "frame": obj}) + "\n")
+                frames_file.write(json.dumps({"t": round(time.monotonic() - t0, 3), "dir": "out", "frame": obj}) + "\n")
                 frames_file.flush()
             proc.stdin.write(line + "\n"); proc.stdin.flush()
 
@@ -140,7 +163,7 @@ def main():
                     f = json.loads(line)
                 except ValueError:
                     continue
-                t = round(time.time() - t0, 3)
+                t = round(time.monotonic() - t0, 3)
                 with lock:
                     frames_file.write(json.dumps({"t": t, "dir": "in", "frame": f}) + "\n"); frames_file.flush()
                 ty, sub = f.get("type"), f.get("subtype")
@@ -184,18 +207,17 @@ def main():
         send({"type": "control_request", "request_id": "probe_init", "request": {"subtype": "initialize"}})
         send({"type": "user", "uuid": str(uuid.uuid4()), "message": {"role": "user", "content": [{"type": "text", "text": PROMPT}]}})
 
-        # Wait for the foreground call, then for its own task id (bounded).
-        deadline = time.time() + a.start_within
-        while time.time() < deadline and not st["bash_started_at"]:
-            time.sleep(0.1)
-        if not st["bash_started_at"]:
+        # Wait for the foreground call, then for the scheduled Stop.
+        while remaining(start_deadline) and st["bash_started_at"] is None:
+            time.sleep(min(0.1, remaining(start_deadline)))
+        if st["bash_started_at"] is None or st["bash_started_at"] > a.start_within:
             st["error"] = "the foreground call never started"
         else:
+            cleanup_deadline = run_deadline
             fire_at = t0 + st["bash_started_at"] + a.stop_after
-            while time.time() < fire_at:
-                time.sleep(0.05)
-            st["sleeps_before_stop"] = sleeps(proc.pid)
-            st["stop_sent_at"] = round(time.time() - t0, 3)
+            time.sleep(remaining(fire_at))
+            st["sleeps_before_stop"] = sample()
+            st["stop_sent_at"] = round(time.monotonic() - t0, 3)
             if a.mode == "interrupt":
                 send({"type": "control_request", "request_id": "probe_interrupt", "request": {"subtype": "interrupt"}})
             elif a.mode == "stop_task":
@@ -204,28 +226,38 @@ def main():
                           "request": {"subtype": "stop_task", "task_id": st["bash_task"]}})
                 else:
                     st["error"] = "the foreground call had no task id to stop"
-            time.sleep(3)
-            st["sleeps_3s_after_stop"] = sleeps(proc.pid)
-            end = time.time() + a.observe
-            while time.time() < end:
+            time.sleep(min(3, remaining(run_deadline)))
+            st["sleeps_3s_after_stop"] = sample()
+            end = min(run_deadline, time.monotonic() + a.observe)
+            while remaining(end):
                 if any(n["task_id"] == st["agent_task"] and n["status"] != "running" for n in st["notifications"]) \
                         and len(st["results"]) >= 1 and st["bash_result"]:
                     break
-                time.sleep(0.5)
-            time.sleep(min(5.0, a.observe))
-        st["sleeps_at_end"] = sleeps(proc.pid)
+                time.sleep(min(0.5, remaining(end)))
+            time.sleep(min(5.0, remaining(end)))
+            if remaining(run_deadline):
+                st["sleeps_at_end"] = sample()
+        status = version_proc.poll()
+        if status == 0:
+            version_out.seek(0)
+            version = version_out.read(4096).strip()
+        else:
+            st["claude_version_error"] = ("version lookup still running at end of measurement" if status is None
+                                          else f"version lookup exited {status}")
     finally:
         try:
             proc.stdin.close()
         except OSError:
             pass
-        left = proc_tree.finish_scope(proc, tracker)
+        left = proc_tree.finish_scope(proc, tracker, grace=min(0.25, remaining(cleanup_deadline)))
+        for child in (proc, version_proc):
+            if child is not None and child.poll() is None:
+                left.append(child.pid)
         if left:
             raise RuntimeError(f"Stop-probe cleanup left owned processes: {left}")
-        proc.wait(timeout=5)
     worker = [n for n in st["notifications"] if n["task_id"] == st["agent_task"]]
     summary = {
-        "claude_version": subprocess.run([a.claude, "--version"], capture_output=True, text=True).stdout.strip(),
+        "claude_version": version,
         "mode": a.mode, "model": a.model, "session": session, **st,
         "verdict": {
             "foreground_had_task_id": bool(st["bash_task"]),
