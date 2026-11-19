@@ -530,22 +530,26 @@ class NewUserWalk(setup_walk.SetupWalk):
         heading: the first press opened the panel, OCR read its heading "HOW IT Looks", and the
         second press closed it, so "Settings did not open" was reported with the panel never
         failing to open. The state is now the panel's own node (`panel_shown`) AND the frame
-        (`settings_open`), both read again for up to SETTINGS_WITHIN seconds after the one press."""
+        (`settings_open`), including the final frame taken at the deadline."""
         guest(self.vm, "osascript -e 'tell application id \"com.richos.app\" to activate'")
         node = self.by_id('set-menu')
-        if panel_shown(node) != want_open:
+        pressed = panel_shown(node) != want_open
+        if pressed:
             self.ax('click', '--id', 'set-btn', '--first')
         end = time.monotonic() + SETTINGS_WITHIN
+        if pressed:
+            node = self.by_id('set-menu')
         while True:
-            if panel_shown(node) == want_open:
+            final = time.monotonic() >= end
+            panel_matches = panel_shown(node) == want_open
+            if panel_matches or final:
                 text = self.frame(name)
-                if settings_open(text) == want_open:
+                if panel_matches and settings_open(text) == want_open:
                     return text
-            if time.monotonic() >= end:
+            if final:
                 break
             time.sleep(1)
             node = self.by_id('set-menu')
-        self.frame(name)
         raise StepFailed('Settings did not %s within %g s of one press of its button (panel node: %s)'
                          % ('open' if want_open else 'close', SETTINGS_WITHIN,
                             node and {k: node.get(k) for k in ('x', 'y', 'w', 'h')}))

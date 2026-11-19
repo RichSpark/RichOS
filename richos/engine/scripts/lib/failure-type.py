@@ -661,8 +661,8 @@ def bash_reads_register(cmd, reg_path, rel, base):
     credited `echo cat failure-types.md`, which reads nothing. The command is
     split into simple commands, the command WORD must be a reader, and one of
     its arguments (or the target of a `<` redirect) must be the register. An
-    interpreter run with -c/-e carries its program in one argument, so there the
-    register's name anywhere inside that argument counts."""
+    interpreter run with -c/-e carries its program in one argument, where the
+    interpreter-specific read checks apply."""
     import shlex
     try:
         lex = shlex.shlex(cmd, posix=True, punctuation_chars=True)
@@ -720,55 +720,163 @@ def bash_reads_register(cmd, reg_path, rel, base):
 
 
 def _python_read_targets(program, rest):
-    """Read-call operands from Python syntax. Strings and comments are never code.
-
-    Resolve literal paths and literal sys.argv indices only. An unsupported
-    expression earns no credit; the agent can use Read or cat instead.
-    """
+    """Recognize content reads in straight-line Python and directly called helpers."""
     import ast
     try:
         tree = ast.parse(program)
     except (SyntaxError, ValueError, RecursionError):
         return []
 
-    def path(node):
-        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+    targets = []
+    modules = {name: object() for name in ("sys", "pathlib")}
+    pathlib_path = object()
+
+    def literal(node, names):
+        if isinstance(node, ast.Constant):
             return node.value
+        if isinstance(node, ast.Name):
+            return names.get(node.id)
         if (isinstance(node, ast.Subscript) and isinstance(node.value, ast.Attribute)
                 and isinstance(node.value.value, ast.Name) and node.value.value.id == "sys"
-                and node.value.attr == "argv" and isinstance(node.slice, ast.Constant)
-                and isinstance(node.slice.value, int) and 1 <= node.slice.value <= len(rest)):
+                and node.value.attr == "argv" and names.get("sys") is modules["sys"]
+                and isinstance(node.slice, ast.Constant) and type(node.slice.value) is int
+                and 1 <= node.slice.value <= len(rest)):
             return rest[node.slice.value - 1]
         return None
 
-    targets = []
-    for call in ast.walk(tree):
-        if not isinstance(call, ast.Call):
-            continue
-        func = call.func
-        operand = None
-        mode_index = 1
-        if isinstance(func, ast.Name) and func.id == "open":
-            operand = call.args[0] if call.args else next(
-                (k.value for k in call.keywords if k.arg == "file"), None)
-        elif isinstance(func, ast.Attribute) and func.attr in ("read_text", "read_bytes", "open"):
-            receiver = func.value
-            if (isinstance(receiver, ast.Call) and receiver.args
-                    and ((isinstance(receiver.func, ast.Name) and receiver.func.id == "Path")
-                         or (isinstance(receiver.func, ast.Attribute) and receiver.func.attr == "Path"))):
-                operand = receiver.args[0]
-                mode_index = 0
-        if operand is None:
-            continue
-        if isinstance(func, ast.Name) or getattr(func, "attr", None) == "open":
-            mode = call.args[mode_index] if len(call.args) > mode_index else None
-            mode = next((k.value for k in call.keywords if k.arg == "mode"), mode)
-            if mode is not None and (not isinstance(mode, ast.Constant)
-                                     or not isinstance(mode.value, str) or any(c in mode.value for c in "wax")):
-                continue
-        target = path(operand)
-        if target is not None:
-            targets.append(target)
+    def argument(call, index, *keywords):
+        if len(call.args) > index:
+            return call.args[index]
+        return next((kw.value for kw in call.keywords if kw.arg in keywords), None)
+
+    def path_receiver(node, names):
+        if not isinstance(node, ast.Call) or len(node.args) != 1 or node.keywords:
+            return None
+        func = node.func
+        if ((isinstance(func, ast.Name) and names.get(func.id) is pathlib_path)
+                or (isinstance(func, ast.Attribute) and func.attr == "Path"
+                    and isinstance(func.value, ast.Name)
+                    and names.get(func.value.id) is modules["pathlib"])):
+            return literal(node.args[0], names)
+        return None
+
+    def opened(node, names, streams):
+        if isinstance(node, ast.Name):
+            return streams.get(node.id)
+        if not isinstance(node, ast.Call):
+            return None
+        func = node.func
+        if isinstance(func, ast.Name) and func.id == "open" and "open" not in names:
+            path = literal(argument(node, 0, "file"), names)
+            mode = argument(node, 1, "mode")
+        elif isinstance(func, ast.Attribute) and func.attr == "open":
+            path = path_receiver(func.value, names)
+            mode = argument(node, 0, "mode")
+        else:
+            return None
+        if mode is None or literal(mode, names) in ("r", "rb", "rt", "r+", "rb+", "rt+"):
+            return path
+        return None
+
+    def expression(node, names, streams, active):
+        if isinstance(node, (ast.Constant, ast.Name)) or node is None:
+            return True
+        if isinstance(node, ast.Attribute):
+            return expression(node.value, names, streams, active)
+        if isinstance(node, ast.Subscript):
+            return (expression(node.value, names, streams, active)
+                    and expression(node.slice, names, streams, active))
+        if not isinstance(node, ast.Call):
+            return False
+        func = node.func
+        if not expression(func, names, streams, active):
+            return False
+        for value in [*node.args, *(kw.value for kw in node.keywords)]:
+            if not expression(value, names, streams, active):
+                return False
+
+        if isinstance(func, ast.Attribute):
+            path = None
+            if func.attr in ("read_text", "read_bytes"):
+                path = path_receiver(func.value, names)
+            elif func.attr in ("read", "readline", "readlines"):
+                size = argument(node, 0, "size")
+                requested = literal(size, names)
+                if size is None or (type(requested) is int and
+                                     (requested != 0 or func.attr == "readlines")):
+                    path = opened(func.value, names, streams)
+            if isinstance(path, str):
+                targets.append(path)
+                return True
+        if isinstance(opened(node, names, streams), str) or isinstance(path_receiver(node, names), str):
+            return True
+        if isinstance(func, ast.Name) and func.id == "print" and "print" not in names:
+            return True
+
+        helper = names.get(func.id) if isinstance(func, ast.Name) else None
+        if not isinstance(helper, ast.FunctionDef) or helper in active or len(active) >= 16:
+            return False
+        args = helper.args
+        params = args.posonlyargs + args.args
+        if (args.vararg or args.kwarg or args.kwonlyargs or node.keywords or len(params) != len(node.args)
+                or any(isinstance(n, (ast.Yield, ast.YieldFrom)) for n in ast.walk(helper))):
+            return False
+        bound = names | {param.arg: literal(value, names) for param, value in zip(params, node.args)}
+        return block(helper.body, bound, {}, active | {helper}) is not None
+
+    def block(stmts, names, streams, active):
+        """True for fallthrough, False for return, None for uncertain control flow."""
+        for stmt in stmts:
+            if isinstance(stmt, ast.Expr):
+                if not expression(stmt.value, names, streams, active):
+                    return None
+            elif isinstance(stmt, ast.Return):
+                return False if expression(stmt.value, names, streams, active) else None
+            elif isinstance(stmt, ast.FunctionDef):
+                args = stmt.args
+                if (stmt.decorator_list or stmt.returns or args.defaults or any(args.kw_defaults)
+                        or any(p.annotation for p in args.posonlyargs + args.args + args.kwonlyargs
+                               + [p for p in (args.vararg, args.kwarg) if p])):
+                    return None
+                names[stmt.name] = stmt
+            elif isinstance(stmt, ast.Import) and all(a.name in ("sys", "pathlib") for a in stmt.names):
+                for alias in stmt.names:
+                    names[alias.asname or alias.name] = modules[alias.name]
+            elif (isinstance(stmt, ast.ImportFrom) and stmt.level == 0 and stmt.module == "pathlib"
+                  and all(a.name == "Path" for a in stmt.names)):
+                for alias in stmt.names:
+                    names[alias.asname or alias.name] = pathlib_path
+            elif isinstance(stmt, ast.Assign) and all(isinstance(t, ast.Name) for t in stmt.targets):
+                if not expression(stmt.value, names, streams, active):
+                    return None
+                value = literal(stmt.value, names)
+                path = opened(stmt.value, names, streams)
+                for target in stmt.targets:
+                    names[target.id] = value
+                    streams.pop(target.id, None)
+                    if isinstance(path, str):
+                        streams[target.id] = path
+            elif isinstance(stmt, ast.With) and len(stmt.items) == 1:
+                item = stmt.items[0]
+                path = opened(item.context_expr, names, streams)
+                if (not isinstance(item.optional_vars, ast.Name) or not isinstance(path, str)
+                        or not expression(item.context_expr, names, streams, active)):
+                    return None
+                name = item.optional_vars.id
+                names[name], streams[name] = None, path
+                outcome = block(stmt.body, names, streams, active)
+                streams.pop(name, None)
+                if outcome is not True:
+                    return outcome
+            elif isinstance(stmt, ast.If) and isinstance(stmt.test, ast.Constant):
+                outcome = block(stmt.body if stmt.test.value else stmt.orelse, names, streams, active)
+                if outcome is not True:
+                    return outcome
+            elif not isinstance(stmt, ast.Pass):
+                return None
+        return True
+
+    block(tree.body, {}, {}, set())
     return targets
 
 

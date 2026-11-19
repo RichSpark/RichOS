@@ -644,6 +644,10 @@ button {
   opacity: 1;
   transform: none;
 }
+/* The native RichFiles pane clips around this label at its final position. */
+body[data-page="richfiles"] #nr-tip {
+  transition: none;
+}
 #nr-tip::before {
   content: "";
   position: absolute;

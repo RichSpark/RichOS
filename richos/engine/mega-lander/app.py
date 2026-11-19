@@ -126,12 +126,16 @@ def locked(scope):
         yield root
 
 
+def read_receipt(path):
+    value = bounded(path)
+    if not isinstance(value, dict) or value.get("schema") != 1:
+        raise ValueError("unsupported dispatch receipt schema")
+    return value
+
+
 def receipts(root):
     for path in sorted(root.glob("*.json")):
-        value = bounded(path)
-        if value.get("schema") != 1:
-            raise ValueError("unsupported dispatch receipt schema")
-        yield path, value
+        yield path, read_receipt(path)
 
 
 def repositories(scope):
@@ -559,32 +563,23 @@ def witness_git_review(scope, repo, branch, before, after, reviewed):
         print("RichOS output: the Git integration marker could not be recorded.", file=sys.stderr)
 
 
-def witness_land(scope, worker, targets, plan):
+def witness_land(scope, worker, repo, worktree, before, landed):
     """WITNESS (d), THE LAND (Output side panel PRD §4.1 (d), slice S2b). A worker writes in its
     own worktree, which cleanup deletes minutes after this; the landed copy in the connected
     repository is written by the merge above and by nothing the hook sees. So the land itself
-    records, for every repository whose ref it moved, one row per landed file: the landed path,
+    records one row per landed file when its repository's ref moves: the landed path,
     the worktree path it came from (which the app's record then retires), the commit and the
     worker named by its own receipt. Into the BACK-END session's `writes.jsonl`, through the
     hook's own appender, so the app joins it to the thread like every other row of the job.
 
-    A history is never worth failing a land for (the land record's rule, workspaces.py): any
-    failure here is reported on stderr, appends nothing and returns. A repeated integrate merges
-    nothing (`already`) and records nothing."""
+    Record each move as it happens so a later repository's refusal cannot lose it.
+    A retry skips merges already made. History failures are reported on stderr and
+    never fail the land."""
     try:
         evidence = load("richos_app_evidence", ENGINE / "scripts/lib/app-evidence.py")
         who = {"name": worker["name"], "agent_id": worker.get("agent_id") or None}
-        rows = []
-        for repo, step in plan.items():
-            if step["already"] or not step.get("landed"):
-                continue
-            # Its real path, resolved by integrate while the worktree still existed (the land
-            # deletes it), is the one the hook's command witness recorded (it resolves every
-            # directory it lists).
-            worktree = os.path.realpath(targets[repo]["path"])
-            for name in landed_files(repo, step["tip"], step["landed"]):
-                rows.append({"path": os.path.join(repo, name), "from": os.path.join(worktree, name),
-                             "commit": step["landed"], "worker": who})
+        rows = [{"path": os.path.join(repo, name), "from": os.path.join(worktree, name),
+                 "commit": landed, "worker": who} for name in landed_files(repo, before, landed)]
         evidence.append_land_rows(state() / "evidence", scope["binding"]["session_id"], rows)
     except Exception as error:  # noqa: BLE001 -- a history never fails a land
         print("RichOS output: the landed files were not recorded: %s" % str(error)[-500:], file=sys.stderr)
@@ -740,19 +735,33 @@ def numbering_lock(scope):
         yield
 
 
-def company_conversations(scope):
-    """The receipt folders of this company's OTHER conversations: each one whose receipts are
-    bound to this company. A folder whose receipts cannot be read names nobody."""
-    own, entity, out = folder(scope), scope["binding"]["entity_id"], []
-    for path in sorted((state() / "work-receipts").iterdir()):
+RESERVED_NAME_STATUSES = ("preparing", "prepared", "dispatching")
+
+
+def company_numbering(scope, own):
+    """Read sibling receipts once for numbering. Keep each readable reservation and
+    consult a sibling registry whenever a readable receipt ties it to this company."""
+    entity = scope["binding"]["entity_id"]
+    taken, registries = [], []
+    for path in sorted(own.parent.iterdir()):
         if path == own or path.is_symlink() or not path.is_dir():
             continue
-        try:
-            if any(r["binding"]["entity_id"] == entity for _p, r in receipts(path)):
-                out.append(path)
-        except (OSError, ValueError, KeyError, TypeError):
-            continue
-    return out
+        same_company = False
+        for receipt_path in sorted(path.glob("*.json")):
+            try:
+                record = read_receipt(receipt_path)
+                if record["binding"]["entity_id"] != entity:
+                    continue
+            except (OSError, ValueError, KeyError, TypeError):
+                continue
+            same_company = True
+            name = record.get("name")
+            if (not record.get("settled") and record.get("status") in RESERVED_NAME_STATUSES
+                    and isinstance(name, str) and W.NAME_RE.fullmatch(name)):
+                taken.append(name)
+        if same_company:
+            registries.append(state() / "workspaces" / path.name)
+    return taken, registries
 
 
 def next_name(name, taken, registries=()):
@@ -978,14 +987,14 @@ COMPLETED_UNRUN = "the assignment was completed and this receipt never ran"
 
 
 def abandoned(record, binding):
-    """A never-started receipt that cannot dispatch, or whose dispatch was refused.
+    """A never-started receipt that can be settled.
 
-    A prepared call remains dispatchable across turns of the same provider session.
-    Completion and replacement must keep it until it runs or is explicitly settled.
+    A prepared call remains dispatchable across turns of the same provider session,
+    even when Pierce refused it before spawn registration.
     """
     if not never_started(record):
         return False
-    if record.get("status") != "prepared" or record.get("pierce_refused") or any(
+    if record.get("status") != "prepared" or any(
             record["binding"].get(key) != binding.get(key) for key in ("entity_id", "thread_id", "session_id")):
         return True
     canonical = canonical_of(record)
@@ -1450,8 +1459,16 @@ def prepare(scope_path, scope, args):
             if old["request"]["obligation_id"] == obligation and old["request"]["role"] == role:
                 refresh(old)
                 # Reuse completion's dispatchability check: a new request or turn
-                # does not prove that an independent preparation was replaced.
-                if not old.get("settled") and abandoned(old, scope["binding"]):
+                # does not prove that an independent preparation was replaced. A draft Pierce
+                # refused is the exception when this request revises it: his refusal says to
+                # revise the assignment and retry, so the same job (title and repositories) with
+                # a changed brief replaces the draft here. An independent job of the same
+                # assignment is never taken for its revision (review
+                # rv-20261119T083123Z-9738b7dd-dddf), and completion still keeps a draft no
+                # revision replaced.
+                revises = (old.get("pierce_refused") and old["status"] == "prepared" and never_started(old)
+                           and all(old["request"].get(key) == normalized.get(key) for key in ("title", "repos")))
+                if not old.get("settled") and (abandoned(old, scope["binding"]) or revises):
                     settle_undispatched(scope, old_path, old, "superseded by request %s: %s" % (request_id, NEVER_DISPATCHED))
                 # An assignment may have several independent workers, reviewers or consults.
                 # Reject an exact duplicate under another id, not every request sharing a duty.
@@ -1470,11 +1487,10 @@ def prepare(scope_path, scope, args):
         # this receipt is saved, so two of one kind prepared at once, in one conversation or
         # two, differ.
         lock_stack.enter_context(numbering_lock(scope))
-        others = company_conversations(scope)
-        name = next_name(f"{teammate}-{model}-{effort}-{identity[:12]}",
-                         [old["name"] for f in [root, *others] for _p, old in receipts(f)
-                          if not old.get("settled") and old["status"] in ("preparing","prepared","dispatching")],
-                         [state() / "workspaces" / f.name for f in others])
+        taken, registries = company_numbering(scope, root)
+        taken.extend(old["name"] for _, old in receipts(root)
+                     if not old.get("settled") and old["status"] in RESERVED_NAME_STATUSES)
+        name = next_name(f"{teammate}-{model}-{effort}-{identity[:12]}", taken, registries)
         record = {"schema":1,"id":identity,"request_id":request_id,"binding":scope["binding"],
             "recovery_acceptance": hashlib.sha256(json.dumps({k:item.get(k) for k in
                 ("item_id", "title", "details", "beneficiary")}, sort_keys=True).encode()).hexdigest(),
@@ -2673,8 +2689,13 @@ def integrate(scope_path,scope,args):
                 # repeated integrate finds it already contains the reviewed commit and lands only
                 # the rest. What is the app's own stays here: the receipt checks above, the
                 # user's own Git settings (users_git_settings_applied), and the land record.
-                # The land deletes the worktrees; the witness below names each by its real path.
-                targets={r:{**t,"path":os.path.realpath(t["path"])} for r,t in targets.items()}
+                # Keep the real paths used by the command witness before cleanup can remove them.
+                worktree_paths={r:os.path.realpath(t["path"]) for r,t in targets.items()}
+
+                def record_merge(repo, branch, before, after, reviewed):
+                    witness_git_review(scope, repo, branch, before, after, reviewed)
+                    witness_land(scope, worker, repo, worktree_paths[repo], before, after)
+
                 pending=[r for r in repositories_to_land if not plan[r]["already"]]
                 refused=None
                 try:
@@ -2687,8 +2708,7 @@ def integrate(scope_path,scope,args):
                             W.merge_and_land(worker["workspace_ref"],me=scope["binding"]["session_id"],
                                              message="Merge reviewed work of %s\n\n%s" % (worker["name"],reviewed_by),
                                              only={r:plan[r]["commit"] for r in pending},
-                                             on_merge=lambda repo, branch, before, after, reviewed:
-                                             witness_git_review(scope, repo, branch, before, after, reviewed))
+                                             on_merge=record_merge)
                 except W.SpecError as error:
                     refused=str(error)
                 finally:
@@ -2707,7 +2727,6 @@ def integrate(scope_path,scope,args):
                         landed,_unread=W.branch_tip_read(repo,branch)
                         if not landed or not W.is_ancestor(repo,commit,landed):
                             continue
-                        plan[repo]["landed"]=landed
                         landed_now.append(repo)
                         lands[repo]["landed"]={"schema":1,"branch":branch,"before":tip,"commit":landed,"reviewed_commit":commit,"at":W.iso(),
                             "thread_id":scope["binding"].get("thread_id") or "","entity_id":scope["binding"].get("entity_id") or "",
@@ -2724,8 +2743,6 @@ def integrate(scope_path,scope,args):
                 worker["integration"]["verified"]=True
                 worker["status"]="integrated"
                 save(path,worker)
-                # Every ref has moved and every land lock is still held. Never fails the land.
-                witness_land(scope,worker,targets,plan)
             # Cleanup remains canonical Mega Lander. Its result is separate from Git
             # integration; partial cleanup never rolls back a verified target commit.
             # A revision can leave earlier review workspaces outside the worker's
@@ -2939,8 +2956,8 @@ def unresolved(rows, binding):
     """The receipts that still have, or may have, a run in flight. A receipt that provably
     never started one and can no longer start (`abandoned`) is not among them: it did no
     work, so nothing waits on it (2026-10-28, work-709b35ac: a review prepared and never
-    admitted held a reviewed, integrated job open). One prepared in this turn that nothing
-    refused is: it may be dispatched next."""
+    admitted held a reviewed, integrated job open). Work that is still prepared and
+    dispatchable in this session may be dispatched next, even after a Pierce refusal."""
     return [record for record in rows if record["status"] in UNRESOLVED and not abandoned(record, binding)]
 
 
@@ -2949,8 +2966,13 @@ def completion_evidence(scope, obligation, worker_ids):
     completion (`verify_completion`). Settling happens in `complete`, never here."""
     rows = [refresh(record) for _, record in receipts(folder(scope))
             if record["request"]["obligation_id"] == obligation]
-    if unresolved(rows, scope["binding"]):
-        raise ValueError("this assignment still has unresolved execution; reconcile it before completion")
+    pending = unresolved(rows, scope["binding"])
+    if pending:
+        # Which receipts (review rv-20261119T072050Z-df80aa4c-0832: the refusal named none).
+        raise ValueError("this assignment still has unresolved execution; reconcile it before completion: %s. "
+                         "Dispatch or inspect it, or settle it if it is no longer wanted"
+                         % "; ".join("receipt %s (request %s, status %s)" % (record["name"], record.get("request_id"),
+                                                                            record["status"]) for record in pending))
     # A worker receipt refused, settled or otherwise never started did no work, so it
     # is not a final worker: counting it would make the assignment uncompletable
     # the moment its replacement landed (part 4, finding 1).
@@ -3257,7 +3279,7 @@ TOOLS = [
     {"name":"complete","description":"Close a code assignment in ECS only after every requirement is satisfied and every final worker has a passing independent review, verified local integration and completed cleanup. For independent Stu sessions, supply the obligation_id returned by the operational record or background_work. A legacy assignment-bound connection derives it from its host scope. Never invent one. Supply all final worker receipts, across every repository. Unresolved execution or omitted work is refused. Do not use this to claim unrelated or unverified business outcomes. For an assignment without implementation work, supply answer with your verified outcome instead of worker_ids. Unresolved execution and code work refuse this answer-only path. Completion updates the operational record but never sends Rich a message. Local completion never means publication.","inputSchema":{"type":"object","properties":{"obligation_id":{"type":"string"},"answer":{"type":"string","minLength":1,"maxLength":262144},"worker_ids":{"type":"array","items":{"type":"string"},"minItems":1,"maxItems":50}},"required":[],"additionalProperties":False}},
     {"name":"report","description":"Keep the selected operational assignment current: running when you begin handling it, or failed when you cannot complete it. Supply the real obligation_id from the record. This never dispatches work or sends Rich a message. Completion uses complete and its evidence checks.","inputSchema":{"type":"object","properties":{"obligation_id":{"type":"string"},"state":{"type":"string","enum":["running","failed"]},"detail":{"type":"string","maxLength":4096}},"required":["obligation_id","state","detail"],"additionalProperties":False}},
     {"name":"repositories","description":"List repositories explicitly connected to this company. A company folder alone grants no execution access.","inputSchema":{"type":"object","properties":{},"additionalProperties":False}},
-    {"name":"prepare","description":"Prepare a named teammate as the worker (role worker: implements), the reviewer (role reviewer: reviews) or a consultant (role consult: answers, changing no repository) for the selected obligation. A consult takes no repo, repos, integration, base, review_of or continue_of, gets no workspace and may not edit files; its final message is its deliverable, which inspect returns as consult_answer once its run has ended. Set teammate to the name of the active teammate whose role fits the job best, as your Agent tool lists them; a name that is not active is refused with the names that are. The teammate runs with its own definition, on its definition's model unless you set model for this one job and at the effort level you name in effort, which every new job needs, and the duty's app instructions are put at the top of your brief for you. For independent Stu sessions, supply the obligation_id returned by the operational record or background_work. A legacy assignment-bound connection derives it from its host scope. Never invent one. Persists intent before workspace creation. Returns a short receipt, with agent_call only while no dispatch has been attempted: submit that exact JSON to Agent once. Its prompt names the brief this tool stored, which the teammate receives in full, so never write the brief again in the Agent call. Preparation is not dispatch or completion. Reuse request_id for retries; uncertain work must be inspected first. A preparation that never ran is settled when a new request_id prepares a replacement for the same duty, if it failed, its dispatch was refused, or it belongs to an earlier provider session; what it created is withdrawn only when it holds no commit and no uncommitted file, and anything else is kept and reported. A preparation from an earlier turn in the same provider session can still dispatch unchanged. To continue settled work, set continue_of to its worker receipt: the new worker starts at its actual saved commit. Dirty work is preserved and refused until its uncommitted files are reconciled. Never reset or discard those files to bypass the refusal. If this same worker also needs a workspace in other connected repositories, name them in repos; each gets its own isolated workspace, all under the one worker. Its reviewer and any continuation name the same repos, and review, integration and cleanup then cover every one of those repositories.","inputSchema":{"type":"object","properties":{**{key:{"type":"string"} for key in ("request_id","obligation_id","repo","title","brief","role","teammate","integration","base","review_of","continue_of")},"repos":{"type":"array","items":{"type":"string"},"maxItems":8},"model":{"type":"string","description":"Optional: the model this one job runs on instead of the teammate's own, one of the user's allowed models. A model above the user's cost ceiling is refused unless the brief has a line `model-ceiling-ack: <why this one job needs it>`; a model below the teammate's own needs a line `model-downgrade-ack: <why this job needs less>`."},"effort":{"type":"string","enum":list(EFFORT_LEVELS),"description":"The effort level this one job runs at. Every new job names one; the teammate's name carries it. A request without it is refused."}},"required":["request_id","title","brief","teammate"],"additionalProperties":False}},
+    {"name":"prepare","description":"Prepare a named teammate as the worker (role worker: implements), the reviewer (role reviewer: reviews) or a consultant (role consult: answers, changing no repository) for the selected obligation. A consult takes no repo, repos, integration, base, review_of or continue_of, gets no workspace and may not edit files; its final message is its deliverable, which inspect returns as consult_answer once its run has ended. Set teammate to the name of the active teammate whose role fits the job best, as your Agent tool lists them; a name that is not active is refused with the names that are. The teammate runs with its own definition, on its definition's model unless you set model for this one job and at the effort level you name in effort, which every new job needs, and the duty's app instructions are put at the top of your brief for you. For independent Stu sessions, supply the obligation_id returned by the operational record or background_work. A legacy assignment-bound connection derives it from its host scope. Never invent one. Persists intent before workspace creation. Returns a short receipt, with agent_call only while no dispatch has been attempted: submit that exact JSON to Agent once. Its prompt names the brief this tool stored, which the teammate receives in full, so never write the brief again in the Agent call. Preparation is not dispatch or completion. Reuse request_id for retries; uncertain work must be inspected first. A preparation that never ran is settled when a new request_id prepares a replacement for the same duty, if it failed, its dispatch was refused (a draft Pierce refused: when the replacement keeps its title and repositories and revises the brief), or it belongs to an earlier provider session; what it created is withdrawn only when it holds no commit and no uncommitted file, and anything else is kept and reported. A preparation from an earlier turn in the same provider session can still dispatch unchanged. To continue settled work, set continue_of to its worker receipt: the new worker starts at its actual saved commit. Dirty work is preserved and refused until its uncommitted files are reconciled. Never reset or discard those files to bypass the refusal. If this same worker also needs a workspace in other connected repositories, name them in repos; each gets its own isolated workspace, all under the one worker. Its reviewer and any continuation name the same repos, and review, integration and cleanup then cover every one of those repositories.","inputSchema":{"type":"object","properties":{**{key:{"type":"string"} for key in ("request_id","obligation_id","repo","title","brief","role","teammate","integration","base","review_of","continue_of")},"repos":{"type":"array","items":{"type":"string"},"maxItems":8},"model":{"type":"string","description":"Optional: the model this one job runs on instead of the teammate's own, one of the user's allowed models. A model above the user's cost ceiling is refused unless the brief has a line `model-ceiling-ack: <why this one job needs it>`; a model below the teammate's own needs a line `model-downgrade-ack: <why this job needs less>`."},"effort":{"type":"string","enum":list(EFFORT_LEVELS),"description":"The effort level this one job runs at. Every new job names one; the teammate's name carries it. A request without it is refused."}},"required":["request_id","title","brief","teammate"],"additionalProperties":False}},
     {"name":"integrate","description":"When the automatic independent handover review passes, integrate with worker_id alone. Do not prepare a routine reviewer agent: the watcher uses Codex when enabled and available, otherwise Claude automatically. reviewer_id is accepted for an existing explicit reviewer. Merge the exact reviewed commit into the recorded clean integration branch with git merge, so the repository's own merge checks run and its land fence, where on, sees a land that holds its lease; then clean up through Mega Lander. If the branch moved since the work started, it is merged only when Git merges the two without a conflict. A refusal by the repository's checks lands nothing and is returned in their own words. No push, rebase or conflict resolution. Dirty targets and conflicting changes are preserved and refused. This verifies one work result; it does not close the entire obligation.","inputSchema":{"type":"object","properties":{"worker_id":{"type":"string"},"reviewer_id":{"type":"string"}},"required":["worker_id"],"additionalProperties":False}},
     {"name":"team","description":"Read the shelf and the user's saved team, or save a teammate definition. list returns names, descriptions, models and activated copies. show returns the full definition by name. save writes team/<name>.md from name and text. The definition requires YAML front matter with matching name, description and model. Names contain lowercase ASCII letters and digits, at most 16 characters: Anne-Marie is annemarie, Renée is renee, Bjørn is bjorn. Saving an existing copy requires replace=true. New teammates become available to Agent after this turn through the native plugin reload, without replacing Stu or stopping running workers; RichOS then sends a team_reloaded message: carry on there with the work that waited for them. Changes to an existing definition take effect in a new Stu session.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["list","show","save"]},"name":{"type":"string"},"text":{"type":"string"},"replace":{"type":"boolean"}},"required":["action"],"additionalProperties":False}},
     {"name":"inspect","description":"Reconcile scoped dispatch receipts against actual provider and workspace observations. A run ending is not task completion. Inspect unresolved work before retrying after a restart. Without id it returns jobs: one line per job of this conversation, its name, its state (WORKING, PENDING, LANDABLE, PAUSED, FINISHED...) and why, exactly the lines the terminal's workspaces.sh status shows for them; a landed job has no line. Pass id (the job name a line shows, a receipt id or a request id) to read its record in full, brief and consult_answer included.","inputSchema":{"type":"object","properties":{"id":{"type":"string"}},"additionalProperties":False}},

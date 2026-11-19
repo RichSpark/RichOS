@@ -32,7 +32,6 @@
 [richos] ECS prepare-turn outcome={} local_ms={}
 [richos] ECS reply remains owed: {}
 [richos] standing instructions could not be refreshed: {}
-[richos] waiting notice {} remains pending: {}
 [richos] waiting work {} has no authorized next action
 [richos] waiting work {} has no readable original order
 [richos] waiting-work check could not be requested: {}
@@ -573,7 +572,6 @@
 [richos] openings: the image of {} was not saved ({})
 [richos] openings: what was earned could not be saved ({})
 [richos] openings: today's opening could not be written down ({})
-[richos] native splash: renderer failed
 [richos] splash assets: pack download failed
 #
 # Keep chat alive and the context meter (round 83). A healthy boot prints none of these: a
@@ -591,3 +589,11 @@
 [richos] keep chat alive: {} is not idle; nothing was sent
 [richos] queued input after a keep-alive: {}
 [richos] launch log: the line was not kept in {} ({})
+
+# Failures in runtime verification and its handoff to the app event loop.
+[richos] launch engine check: could not start the verifier ({})
+[richos] launch engine check: review and Codex watchers await a verified engine ({})
+[richos] launch engine check: the engine update could not reach the app ({})
+[richos] launch engine check: watchers could not reach the app ({})
+[richos] native splash: could not attach the Home page ({})
+[richos] native splash: Home attachment could not reach the main thread ({})

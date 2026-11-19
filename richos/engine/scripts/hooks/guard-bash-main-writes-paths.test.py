@@ -97,6 +97,30 @@ class WritePaths(unittest.TestCase):
         command = f'git commit -m "$(bash <<\'EOF\'\necho "don\'t"; touch "{self.root}/src/file"\nEOF\n)"'
         self.verdict(command, 2, self.work)
 
+    def test_conditional_directory_changes(self):
+        main = self.root / 'src'
+        for command, expected in (
+                (f'if false; then cd "{main}"; fi; touch new', 0),
+                (f'if true; then cd "{main}"; fi; touch new', 2),
+                (f'if test -n "$FLAG"; then cd "{main}"; fi; touch new', 2),
+                (f'if false; then :; else cd "{main}"; fi; printf x > new', 2),
+                (f'false && cd "{main}"; touch new', 0),
+                (f'true || cd "{main}"; touch new', 0),
+                (f'false || cd "{main}"; touch new', 2),
+                (f'(cd "{main}"); touch new', 0),
+                (f'(cd "{main}" && touch new)', 2)):
+            with self.subTest(command=command):
+                self.verdict(command, expected, self.work)
+        self.verdict(f'if false; then cd "{self.work}"; fi; touch new', 2, main)
+        self.verdict(f'if test -n "$FLAG"; then cd "{self.work}"; fi; touch new', 2, main)
+
+    def test_directory_flow_keeps_conditional_expressions_atomic(self):
+        main = self.root / 'src'
+        self.verdict(f'[[ x && false ]] && cd "{main}"; touch new', 2, self.work)
+        self.verdict(f'false=1; (( false )) && cd "{main}"; touch new', 2, self.work)
+        self.verdict(f'if false; # note\n  # another note\nthen cd "{main}"; fi; touch new',
+                     0, self.work)
+
     def test_32_physical_aliases(self):
         for target in (self.root / 'src/file', self.alias / 'src/file'):
             with self.subTest(target=target):

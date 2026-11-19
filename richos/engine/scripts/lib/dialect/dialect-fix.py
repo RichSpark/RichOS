@@ -139,7 +139,7 @@ def load_table(path=TABLE_PATH):
     """lowercase form -> (American form, frozenset of exempt extensions). {} when unreadable."""
     table = {}
     try:
-        with open(path, encoding="utf-8") as fh:
+        with open(path, encoding="utf-8", newline="") as fh:
             for raw in fh:
                 line = raw.rstrip("\n")
                 if not line or line.startswith("#"):
@@ -226,7 +226,6 @@ LANG_SPECS = {
     "kotlin": dict(line="//", block=True, multi=('"""',), single=('"',), chars=True),
     "js":     dict(line="//", block=True, multi=("`",), single=('"', "'"), chars=False),
     "python": dict(line="#", block=False, multi=('"""', "'''"), single=('"', "'"), chars=False),
-    "shell":  dict(line="#", block=False, multi=(), single=('"', "'"), chars=False),
 }
 for _spec in LANG_SPECS.values():
     _openers = [_spec["line"]] + (["/*"] if _spec["block"] else []) + list(_spec["multi"]) + list(_spec["single"])
@@ -288,9 +287,140 @@ def _close(text, at, delim, escapes, multiline):
     return None
 
 
+# Shell quote removal leaves one delimiter word. The shell does not expand it.
+_SHELL_WORD = re.compile(r"""(?:[^ \t\n;&|<>()'"\\]+|'[^']*'|"(?:\\[\s\S]|[^"\\])*"|\\[\s\S])+""")
+_SHELL_QUOTED = re.compile(r"""'([^']*)'|"((?:\\[\s\S]|[^"\\])*)"|\\([\s\S])""")
+
+
+def _shell_delimiter(raw):
+    def unquote(match):
+        single, double, escaped = match.groups()
+        if single is not None:
+            return single
+        if double is not None:
+            return re.sub(r'\\([$' + chr(96) + r'"\\\n])',
+                          lambda m: m[1].replace("\n", ""), double)
+        return escaped.replace("\n", "")
+    return _SHELL_QUOTED.sub(unquote, raw)
+
+
+def _shell_body_end(text, start, delimiter, strip_tabs, quoted):
+    logical = ""
+    while start < len(text):
+        end = text.find("\n", start)
+        line = text[start:] if end < 0 else text[start:end]
+        start = len(text) if end < 0 else end + 1
+        # An unquoted heredoc joins escaped newlines before delimiter matching.
+        if not quoted and end >= 0 and (len(line) - len(line.rstrip("\\"))) % 2:
+            logical += line[:-1]
+            continue
+        line = logical + line
+        if (line.lstrip("\t") if strip_tabs else line) == delimiter:
+            break
+        logical = ""
+    return start
+
+
+def _shell_regions(text):
+    """Find comments and protect input and delimiters before scanning for spelling."""
+    regions, n = [], len(text)
+
+    def shell(i, stop="", depth=0):
+        if depth > 64:
+            regions.append(("shell_data", i, n))
+            return n
+        pending, word = [], False
+        while i < n:
+            c = text[i]
+            if stop and c == stop:
+                return i + 1
+            if c == "\\":
+                word = word or text[i + 1:i + 2] != "\n"
+                i += 2
+            elif c == "\n":
+                i += 1
+                for delimiter, tabs, quoted in pending:
+                    end = _shell_body_end(text, i, delimiter, tabs, quoted)
+                    regions.append(("shell_data", i, end))
+                    i = end
+                pending.clear()
+                word = False
+            elif c == "#" and not word:
+                end = text.find("\n", i)
+                end = n if end < 0 else end
+                regions.append(("comment", i + 1, end))
+                i = end
+            elif text.startswith("$'", i) or c == "'":
+                ansi = c == "$"
+                start = i + (2 if ansi else 1)
+                end = _close(text, start, "'", ansi, True)
+                regions.append(("string", start, n if end is None else end))
+                i, word = (n if end is None else end + 1), True
+            elif c == '"':
+                i += 1
+                start = i
+                while i < n and text[i] != '"':
+                    if text[i] == "\\":
+                        i += 2
+                    elif text.startswith("$(", i) and not text.startswith("$((", i):
+                        regions.append(("string", start, i))
+                        i = start = shell(i + 2, ")", depth + 1)
+                    else:
+                        i += 1
+                regions.append(("string", start, min(i, n)))
+                i, word = i + 1, True
+            elif text.startswith("$((", i) or text.startswith("((", i):
+                start = i
+                i += 1 if c == "$" else 0
+                parens = 0
+                while i < n:
+                    parens += (text[i] == "(") - (text[i] == ")")
+                    i += 1
+                    if not parens:
+                        break
+                regions.append(("string", start, i))
+                word = True
+            elif text.startswith("<<<", i):
+                i, word = i + 3, False
+            elif text.startswith("<<", i):
+                start = i + 2
+                tabs = text.startswith("-", start)
+                start += tabs
+                while start < n:
+                    if text[start] in " \t":
+                        start += 1
+                    elif text.startswith("\\\n", start):
+                        start += 2
+                    else:
+                        break
+                match = _SHELL_WORD.match(text, start)
+                if not match or match[0].startswith(("$'", '$"', "#")):
+                    # An unfamiliar delimiter cannot safely establish where data ends.
+                    regions.append(("shell_data", i, n))
+                    return n
+                i, raw = match.end(), match[0]
+                delimiter = _shell_delimiter(raw)
+                pending.append((delimiter, tabs, raw.replace("\\\n", "") != delimiter))
+                regions.append(("shell_data", start, i))
+                word = True
+            elif c == chr(96) or c == "(" or text.startswith(("$(", "<(", ">("), i):
+                opener = 1 if c in ("(", chr(96)) else 2
+                i = shell(i + opener, chr(96) if c == chr(96) else ")", depth + 1)
+                word = opener == 2 or c == chr(96)
+            else:
+                word = c not in " \t;|&<>)"
+                i += 1
+        return n
+
+    shell(0)
+    return [region for region in regions if region[1] < region[2]]
+
+
 def lex(text, lang):
     """Sorted, non-overlapping regions (kind, start, end): kind "comment" or "string", start
     and end bounding the CONTENT (delimiters excluded). Everything outside them is code."""
+    if lang == "shell":
+        return _shell_regions(text)
     spec = LANG_SPECS[lang]
     finder = spec["finder"]
     regions = []
@@ -301,9 +431,6 @@ def lex(text, lang):
             break
         tok, s = m.group(0), m.start()
         if tok == spec["line"]:
-            if lang == "shell" and s > 0 and text[s - 1] not in " \t\n;|&(":
-                i = s + 1
-                continue
             e = text.find("\n", s)
             e = n if e < 0 else e
             regions.append(("comment", s + len(tok), e))
@@ -317,8 +444,7 @@ def lex(text, lang):
             regions.append(("string", s + len(tok), n if e is None else e))
             i = n if e is None else e + len(tok)
         elif tok in spec["single"]:
-            escapes = not (lang == "shell" and tok == "'")
-            e = _close(text, s + 1, tok, escapes, False)
+            e = _close(text, s + 1, tok, True, False)
             if e is None:
                 i = s + 1
                 continue
@@ -462,9 +588,24 @@ def scan(text, kind, lang, ext, table, allowlist=(), region=None):
     if not candidates and not queue_hits and not soft_hits:
         return [], []
 
-    t = Text(text, allowlist)
     regions = lex(text, lang) if kind == "code" else []
     region_starts = [r[1] for r in regions]
+
+    def region_at(pos):
+        k = bisect.bisect_right(region_starts, pos) - 1
+        return regions[k] if k >= 0 and pos < regions[k][2] else None
+
+    # Data can contain Markdown fence markers. Keep those out of the line context.
+    line_text = text
+    if lang == "shell":
+        parts, start = [], 0
+        for kind_at, lo, hi in regions:
+            if kind_at == "shell_data":
+                parts.extend((text[start:lo], re.sub(r"[^\n]", " ", text[lo:hi])))
+                start = hi
+        parts.append(text[start:])
+        line_text = "".join(parts)
+    t = Text(line_text, allowlist)
     findings, soft = [], []
 
     for s, e in candidates:
@@ -490,8 +631,9 @@ def scan(text, kind, lang, ext, table, allowlist=(), region=None):
                 continue
             action, why = _prose_decision(text, s, e, run, ls, t.para[idx])
         elif kind == "code":
-            k = bisect.bisect_right(region_starts, s) - 1
-            reg = regions[k] if k >= 0 and regions[k][1] <= s < regions[k][2] else None
+            reg = region_at(s)
+            if reg and reg[0] == "shell_data":
+                continue
             if reg is None:
                 action, why = "refuse", "code: renaming an identifier changes behavior"
             else:
@@ -514,7 +656,7 @@ def scan(text, kind, lang, ext, table, allowlist=(), region=None):
     for s, e, matched in queue_hits:
         idx = t.line_of(s)
         ls, line = t.starts[idx], t.lines[idx]
-        if t.skip[idx] or _in_code_span(text, ls, s):
+        if (region_at(s) or (None,))[0] == "shell_data" or t.skip[idx] or _in_code_span(text, ls, s):
             continue
         col = s - ls
         if RENAME_CUE_RE.search(line[max(0, col - 60):col]):
@@ -525,7 +667,7 @@ def scan(text, kind, lang, ext, table, allowlist=(), region=None):
     for s, e, matched in soft_hits:
         idx = t.line_of(s)
         ls, line = t.starts[idx], t.lines[idx]
-        if t.skip[idx] or _in_code_span(text, ls, s):
+        if (region_at(s) or (None,))[0] == "shell_data" or t.skip[idx] or _in_code_span(text, ls, s):
             continue
         if not SOFT_CONTEXT_RE.search(line):
             continue
@@ -574,7 +716,7 @@ class Outcome:
 
 def _read(path):
     try:
-        with open(path, encoding="utf-8") as fh:
+        with open(path, encoding="utf-8", newline="") as fh:
             return fh.read()
     except (OSError, UnicodeDecodeError, ValueError):
         return None

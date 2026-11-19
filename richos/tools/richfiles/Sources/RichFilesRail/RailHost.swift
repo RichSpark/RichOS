@@ -1,5 +1,6 @@
 import AppKit
 import RichFiles
+import RichFilesCore
 import SwiftUI
 import WebKit
 
@@ -16,6 +17,33 @@ public func placeRichFilesRail(_ webViewPointer: UnsafeMutableRawPointer?, _ lef
         let view = Unmanaged<NSView>.fromOpaque(webViewPointer).takeUnretainedValue()
         let frame = CGRect(x: left, y: top, width: width, height: height)
         return RailHost.shared.place(beside: view, normalizedFrame: frame, visible: visible != 0) ? 1 : 0
+    }
+}
+
+@_cdecl("richfiles_rail_tooltip")
+public func setRichFilesRailTooltip(_ webViewPointer: UnsafeMutableRawPointer?, _ left: Double, _ top: Double,
+                                    _ width: Double, _ height: Double, _ radius: Double, _ arrow: Double) {
+    guard Thread.isMainThread, let webViewPointer else { return }
+    MainActor.assumeIsolated {
+        let webView = Unmanaged<NSView>.fromOpaque(webViewPointer).takeUnretainedValue()
+        RailHost.shared.setTooltip(beside: webView, frame: CGRect(x: left, y: top, width: width, height: height),
+                                   radius: radius, arrow: arrow)
+    }
+}
+
+@_cdecl("richfiles_rail_recording_frame")
+public func recordRichFilesRailFrame(
+    _ webViewPointer: UnsafeMutableRawPointer?,
+    _ reply: @convention(c) (UnsafeRawPointer?, Int, Float, Float, UnsafeMutableRawPointer?) -> Void,
+    _ context: UnsafeMutableRawPointer?
+) {
+    guard Thread.isMainThread, let webViewPointer else { return }
+    MainActor.assumeIsolated {
+        let webView = Unmanaged<NSView>.fromOpaque(webViewPointer).takeUnretainedValue()
+        guard let (image, cursor) = RailHost.shared.recordingFrame(beside: webView) else { return }
+        image.withUnsafeBytes { bytes in
+            reply(bytes.baseAddress, bytes.count, Float(cursor.x), Float(cursor.y), context)
+        }
     }
 }
 
@@ -68,11 +96,15 @@ public func changeRichFilesGitChat(_ value: UnsafePointer<CChar>?) -> Int32 {
 private final class RailHost {
     static let shared = RailHost()
     private weak var webView: NSView?
+    private var container: NSView?
     private var hosting: PaneHostingView?
     private var dockTarget: RichFilesDockTarget?
     private var monitor: Any?
     private var currentChat: String?
     private var gitHandoff: GitPanelSnapshot?
+    private var recordingVisit = UUID()
+    private var reportedFrame = false
+    private var reportedFrameFailure = false
 
     func place(beside webView: NSView, normalizedFrame: CGRect, visible: Bool) -> Bool {
         guard visible else {
@@ -83,9 +115,9 @@ private final class RailHost {
               CGRect(x: 0, y: 0, width: 1.000001, height: 1.000001).contains(normalizedFrame) else {
             return false
         }
-        if self.webView !== webView || hosting?.superview !== parent {
+        if self.webView !== webView || container?.superview !== parent {
             hide()
-            hosting?.removeFromSuperview()
+            container?.removeFromSuperview()
             self.webView = webView
             let home = FileManager.default.homeDirectoryForCurrentUser
             let destination = RichFilesDockTarget()
@@ -96,22 +128,21 @@ private final class RailHost {
                                      acceptsKeyboard: { [weak self] in self?.hasPaneFocus() == true },
                                      returnKeyboardFocus: { [weak self] in self?.focusPane() },
                                      dockTarget: destination, didUndock: { [weak self] in self?.showChats() })
+            let container = RailPaneContainer()
+            container.wantsLayer = true
+            parent.addSubview(container, positioned: .above, relativeTo: webView)
+            self.container = container
             let view = PaneHostingView(rootView: pane)
             view.sizingOptions = []
             view.autoresizingMask = []
             view.isHidden = true
-            parent.addSubview(view, positioned: .above, relativeTo: webView)
+            container.addSubview(view)
             hosting = view
             installFocusMonitor()
         }
-        guard let hosting else { return false }
-        let bounds = webView.bounds
-        let top = webView.isFlipped ? normalizedFrame.minY : 1 - normalizedFrame.maxY
-        let local = CGRect(x: bounds.minX + normalizedFrame.minX * bounds.width,
-                           y: bounds.minY + top * bounds.height,
-                           width: normalizedFrame.width * bounds.width,
-                           height: normalizedFrame.height * bounds.height)
-        hosting.frame = webView.convert(local, to: parent)
+        guard let hosting, let container else { return false }
+        container.frame = webView.convert(webRect(normalizedFrame, in: webView), to: parent)
+        hosting.frame = container.bounds
         if hosting.isHidden {
             hosting.isHidden = false
             focusPane()
@@ -121,6 +152,78 @@ private final class RailHost {
             _ = performInPane { try await $0.showGit(snapshot) }
         }
         return true
+    }
+
+    private func webRect(_ frame: CGRect, in webView: NSView) -> CGRect {
+        let bounds = webView.bounds
+        let top = webView.isFlipped ? frame.minY : 1 - frame.maxY
+        return CGRect(x: bounds.minX + frame.minX * bounds.width, y: bounds.minY + top * bounds.height,
+                      width: frame.width * bounds.width, height: frame.height * bounds.height)
+    }
+
+    func setTooltip(beside webView: NSView, frame: CGRect, radius: CGFloat, arrow: CGFloat) {
+        guard self.webView === webView, let container, let layer = container.layer else { return }
+        let tip = webView.convert(webRect(frame, in: webView), to: container)
+        let arrow = arrow * webView.bounds.width
+        guard !tip.isEmpty, container.bounds.intersects(tip.insetBy(dx: -arrow, dy: 0)) else {
+            layer.mask = nil
+            return
+        }
+        // The label belongs to WebKit. Cut its shape out of the native sibling so its
+        // existing text, size and shortcut stay visible, with the pane still interactive.
+        let radius = min(radius * webView.bounds.width, tip.width / 2, tip.height / 2)
+        let path = CGMutablePath()
+        path.addRect(container.bounds)
+        path.addRoundedRect(in: tip, cornerWidth: radius, cornerHeight: radius)
+        path.move(to: CGPoint(x: tip.minX, y: tip.midY - arrow))
+        path.addLine(to: CGPoint(x: tip.minX - arrow, y: tip.midY))
+        path.addLine(to: CGPoint(x: tip.minX, y: tip.midY + arrow))
+        path.closeSubpath()
+        let mask = CAShapeLayer()
+        mask.frame = layer.bounds
+        mask.fillRule = .evenOdd
+        mask.path = path
+        layer.mask = mask
+    }
+
+    func recordingFrame(beside webView: NSView) -> (Data, CGPoint)? {
+        guard self.webView === webView, let hosting, !hosting.isHiddenOrHasHiddenAncestor,
+              let window = hosting.window, !hosting.bounds.isEmpty else { return nil }
+        let started = ProcessInfo.processInfo.systemUptime
+        let bounds = hosting.bounds
+        let scale = min(1, 1440 / bounds.width, 1080 / bounds.height)
+        let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil,
+            pixelsWide: max(1, Int(bounds.width * scale)), pixelsHigh: max(1, Int(bounds.height * scale)),
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
+            bytesPerRow: 0, bitsPerPixel: 0)
+        bitmap?.size = bounds.size
+        // Snapshot the hosting view alone. The tooltip cutout belongs to its parent
+        // and the canvas draws the rail tooltip over the completed frame itself.
+        let picture = bitmap.flatMap { bitmap in
+            hosting.cacheDisplay(in: bounds, to: bitmap)
+            return bitmap.representation(using: .jpeg, properties: [.compressionFactor: 0.82])
+        }
+        if picture == nil && !reportedFrameFailure {
+            reportedFrameFailure = true
+            RichFilesDiagnostics.record(.railVideoFrame, id: recordingVisit, outcome: .unavailable,
+                                        started: started, total: 1, confirmed: 0)
+        }
+        guard let picture else { return nil }
+        if !reportedFrame {
+            reportedFrame = true
+            RichFilesDiagnostics.record(.railVideoFrame, id: recordingVisit, outcome: .complete,
+                                        started: started, total: 1, confirmed: 1)
+        }
+        // WebKit does not receive pointer moves over its native sibling.
+        let mouse = hosting.convert(window.mouseLocationOutsideOfEventStream, from: nil)
+        let cursor: CGPoint
+        if bounds.contains(mouse) {
+            let y = (mouse.y - bounds.minY) / bounds.height
+            cursor = CGPoint(x: (mouse.x - bounds.minX) / bounds.width, y: hosting.isFlipped ? y : 1 - y)
+        } else {
+            cursor = CGPoint(x: CGFloat.nan, y: CGFloat.nan)
+        }
+        return (picture, cursor)
     }
 
     func setChat(_ thread: String?) {
@@ -164,7 +267,11 @@ private final class RailHost {
 
     private func hide() {
         if hasPaneFocus(), let webView { webView.window?.makeFirstResponder(webView) }
+        if reportedFrame || reportedFrameFailure { recordingVisit = UUID() }
+        reportedFrame = false
+        reportedFrameFailure = false
         hosting?.isHidden = true
+        container?.layer?.mask = nil
     }
 
     private func focusPane() {
@@ -200,6 +307,15 @@ private final class RailHost {
                 if let window = hosting?.window { NSAlert(error: error).beginSheetModal(for: window, completionHandler: nil) }
             }
         }
+    }
+}
+
+/// Holds the pane so the rail tooltip can be cut out of it. The container itself never
+/// takes a click or scroll: while the pane is hidden, they reach the web view beneath.
+final class RailPaneContainer: NSView {
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        let hit = super.hitTest(point)
+        return hit === self ? nil : hit
     }
 }
 
