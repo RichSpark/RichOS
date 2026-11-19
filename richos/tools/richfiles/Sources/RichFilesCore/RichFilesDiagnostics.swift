@@ -25,6 +25,11 @@ public enum RichFilesDiagnostics {
         case cancelled = "canceled"
     }
 
+    public enum ScrollCaptureFailure: String, Codable, Sendable {
+        case conflictingPixels, lostOverlap, incompleteCoverage, noMotion, sourceChanged
+        case streamInterrupted, noFrame, finalFrameUnavailable, sizeLimit, timeLimit, accessibility
+    }
+
     struct Sample: Encodable, Sendable {
         let atMS: Int64
         let id: UUID
@@ -35,6 +40,7 @@ public enum RichFilesDiagnostics {
         let firstRowsMS: Int?
         let total: Int
         let confirmed: Int
+        var scrollCaptureFailure: ScrollCaptureFailure? = nil
     }
 
     static let filename = "richfiles-timing.jsonl"
@@ -44,7 +50,7 @@ public enum RichFilesDiagnostics {
 
     public static func record(
         _ operation: Operation, id: UUID, outcome: Outcome, started: TimeInterval,
-        total: Int, confirmed: Int, firstRowsMS: Int? = nil
+        total: Int, confirmed: Int, firstRowsMS: Int? = nil, scrollCaptureFailure: ScrollCaptureFailure? = nil
     ) {
         let bundle = Bundle.main
         guard ["app.richos.richfiles", "com.richos.app", "app.richos.richglance", WindowGesturePreferences.helperID]
@@ -56,7 +62,7 @@ public enum RichFilesDiagnostics {
         let sample = Sample(atMS: Int64(Date().timeIntervalSince1970 * 1_000), id: id, build: build,
                             operation: operation, outcome: outcome,
                             workerMS: milliseconds(since: started), firstRowsMS: firstRowsMS,
-                            total: total, confirmed: confirmed)
+                            total: total, confirmed: confirmed, scrollCaptureFailure: scrollCaptureFailure)
         let folder = library.appendingPathComponent("Logs/RichOS", isDirectory: true)
         writer.async { try? append(sample, in: folder) }
     }

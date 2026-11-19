@@ -61,8 +61,7 @@ final class CaptureController: NSObject, NSWindowDelegate {
         )
     }
 
-    func start() {
-        let point = NSEvent.mouseLocation
+    func start(at point: CGPoint = NSEvent.mouseLocation) {
         guard let screen = NSScreen.screens.first(where: { $0.frame.contains(point) }) ?? NSScreen.main,
               let display = Display(screen) else {
             stop(.unavailable, operation: .glanceCaptureFrame)
@@ -283,6 +282,7 @@ final class CaptureController: NSObject, NSWindowDelegate {
         session.copy = { [weak self] in self?.copyImage() }
         session.save = { [weak self] in self?.saveImage() }
         session.cancel = { [weak self] in self?.cancel() }
+        session.retry = { [weak self] in self?.retryScrolling(on: display, near: region) }
         if source != .current {
             if #available(macOS 14.0, *) { _ = source.activate(from: .current, options: []) }
             else { _ = source.activate(options: []) }
@@ -290,6 +290,15 @@ final class CaptureController: NSObject, NSWindowDelegate {
             previousWindow.makeKeyAndOrderFront(nil)
         }
         session.start()
+    }
+
+    private func retryScrolling(on display: Display, near region: CGRect) {
+        guard !isFinished, let scrolling, scrolling.result == nil else { return }
+        scrolling.close()
+        self.scrolling = nil
+        let pointer = NSEvent.mouseLocation
+        let point = display.frame.contains(pointer) ? pointer : CGPoint(x: region.midX, y: region.midY)
+        start(at: point)
     }
 
     private static func sourceApp(at point: CGPoint, excluding windowNumber: Int) -> NSRunningApplication? {

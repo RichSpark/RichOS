@@ -100,6 +100,22 @@ final class ScrollFrameStream {
         return ScrollFrameStream(stream: stream, output: output)
     }
 
+    /// A fresh viewport through the same pixel pipeline as the frames used for stitching.
+    static func snapshot(displayID: CGDirectDisplayID, size: CGSize, crop: CGRect,
+                         excluding windows: Set<CGWindowID>) async throws -> CGImage {
+        let captured = try await open(displayID: displayID, size: size, crop: crop, excluding: windows)
+        let timeout = Task {
+            try? await Task.sleep(for: .seconds(3))
+            if !Task.isCancelled { captured.output.continuation.finish() }
+        }
+        var iterator = captured.images.makeAsyncIterator()
+        let image = try? await iterator.next()
+        timeout.cancel()
+        await captured.stop()
+        guard let image else { throw CaptureFrame.Failure.displayUnavailable }
+        return image
+    }
+
     func stop() async {
         output.continuation.finish()
         try? await stream.stopCapture()

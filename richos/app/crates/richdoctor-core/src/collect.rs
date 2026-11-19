@@ -792,7 +792,12 @@ fn richfiles_timing(scope: &Scope, ctx: &Context, budget: &mut u64, gestures: bo
         }
         let first_rows = record["firstRowsMS"].as_u64().filter(|ms| *ms <= duration)
             .map(|ms| format!(" first_rows={ms}ms")).unwrap_or_default();
-        Some((at, format!("{} build={build} id={id} operation={operation} outcome={outcome} worker={duration}ms{first_rows} confirmed={confirmed}/{total}",
+        let scroll_failure = record["scrollCaptureFailure"].as_str().filter(|reason| {
+            operation == "glanceScrollCapture" && outcome == "issues" && matches!(*reason,
+                "conflictingPixels" | "lostOverlap" | "incompleteCoverage" | "noMotion" | "sourceChanged" |
+                "streamInterrupted" | "noFrame" | "finalFrameUnavailable" | "sizeLimit" | "timeLimit" | "accessibility")
+        }).map(|reason| format!(" scroll_failure={reason}")).unwrap_or_default();
+        Some((at, format!("{} build={build} id={id} operation={operation} outcome={outcome} worker={duration}ms{first_rows} confirmed={confirmed}/{total}{scroll_failure}",
                           crate::util::utc_stamp(at))))
     }).collect();
     if lines.is_empty() {
@@ -1106,6 +1111,7 @@ mod tests {
         let mut metadata = record.clone();
         metadata["operation"] = serde_json::json!("glanceMetadata");
         metadata["note"] = serde_json::json!("Personal RichCleaner note");
+        metadata["scrollCaptureFailure"] = serde_json::json!("lostOverlap");
         let captures = [
             "glanceCaptureFrame",
             "glanceCaptureSession",
@@ -1117,6 +1123,13 @@ mod tests {
             let mut capture = record.clone();
             capture["operation"] = serde_json::json!(stage);
             capture["screen"] = serde_json::json!("Private screen content");
+            if stage == "glanceScrollCapture" {
+                capture["outcome"] = serde_json::json!("issues");
+                capture["scrollCaptureFailure"] = serde_json::json!("conflictingPixels");
+                let mut invalid = capture.clone();
+                invalid["scrollCaptureFailure"] = serde_json::json!("Private text pretending to be a reason");
+                return format!("{capture}\n{invalid}");
+            }
             capture.to_string()
         }).join("\n");
         let mut gestures = record.clone();
@@ -1135,7 +1148,10 @@ mod tests {
         assert!(timing.text.contains("operation=glanceCaptureFrame"));
         assert!(timing.text.contains("operation=glanceCaptureSession"));
         assert!(timing.text.contains("operation=glanceCaptureOutput"));
-        assert!(timing.text.contains("operation=glanceScrollCapture"));
+        assert!(timing.text.contains("operation=glanceScrollCapture outcome=issues"));
+        assert!(timing.text.contains("scroll_failure=conflictingPixels"));
+        assert!(!timing.text.contains("scroll_failure=lostOverlap"));
+        assert!(!timing.text.contains("Private text pretending"));
         assert!(timing.text.contains("operation=railVideoFrame"));
         let window_gestures = items.iter().find(|item| item.source == "RichFiles Window Gestures log").unwrap();
         assert_eq!(window_gestures.status, Status::Collected);

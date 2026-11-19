@@ -22,6 +22,7 @@ final class ScrollingCapture: NSObject, NSWindowDelegate {
     private let displayID: CGDirectDisplayID
     private let displaySize: CGSize
     private let crop: CGRect
+    private let regionSize: CGSize
     private let visible: CGRect
     private let guide: NSWindow
     private let panel: ScrollPanel
@@ -33,6 +34,7 @@ final class ScrollingCapture: NSObject, NSWindowDelegate {
     private var stream: ScrollFrameStream?
     private var frames: Task<Void, Never>?
     private var automatic: Task<Void, Never>?
+    private var latestAutomaticFrame: CGImage?
     private var deadline: Task<Void, Never>?
     private var completing: Task<Void, Never>?
     private let started = ProcessInfo.processInfo.systemUptime
@@ -41,7 +43,6 @@ final class ScrollingCapture: NSObject, NSWindowDelegate {
     private var received = 0
     private var accepted = 0
     private var unmatched = 0
-    private var hasUnmatchedEnd = false
     private var movingShare: CGSize?
     private var lastPreview = 0.0
     private var reported = false
@@ -52,6 +53,7 @@ final class ScrollingCapture: NSObject, NSWindowDelegate {
     var copy: (() -> Void)?
     var save: (() -> Void)?
     var cancel: (() -> Void)?
+    var retry: (() -> Void)?
 
     init(mode: Mode, source: NSRunningApplication, anchor: CGPoint, displayID: CGDirectDisplayID,
          displaySize: CGSize, crop: CGRect, region: CGRect, visible: CGRect, id: UUID) {
@@ -61,9 +63,11 @@ final class ScrollingCapture: NSObject, NSWindowDelegate {
         self.displayID = displayID
         self.displaySize = displaySize
         self.crop = crop
+        regionSize = region.size
         self.visible = visible
         self.id = id
-        guide = NSWindow(contentRect: region.insetBy(dx: -3, dy: -3), styleMask: .borderless,
+        // Keep the rounded stroke and its antialiasing entirely outside the captured pixels.
+        guide = NSWindow(contentRect: region.insetBy(dx: -6, dy: -6), styleMask: .borderless,
                          backing: .buffered, defer: false)
         guide.backgroundColor = .clear
         guide.isOpaque = false
@@ -79,6 +83,7 @@ final class ScrollingCapture: NSObject, NSWindowDelegate {
         panel.level = .floating
         panel.isReleasedWhenClosed = false
         panel.hidesOnDeactivate = false
+        panel.hasShadow = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         super.init()
 
@@ -107,9 +112,15 @@ final class ScrollingCapture: NSObject, NSWindowDelegate {
         install(rows: [row, buttons])
         let size = panel.frame.size
         let x = min(max(visible.minX + 12, region.midX - size.width / 2), visible.maxX - size.width - 12)
-        let choices = [region.minY - size.height - 10, region.maxY + 10, visible.minY + 12]
-        let y = choices.first { $0 >= visible.minY + 8 && $0 + size.height <= visible.maxY - 8 } ?? visible.minY
-        panel.setFrameOrigin(CGPoint(x: x, y: y))
+        let y = min(max(visible.minY + 12, region.midY - size.height / 2), visible.maxY - size.height - 12)
+        let choices = [
+            CGPoint(x: x, y: region.minY - size.height - 10),
+            CGPoint(x: x, y: region.maxY + 10),
+            CGPoint(x: region.minX - size.width - 10, y: y),
+            CGPoint(x: region.maxX + 10, y: y)
+        ]
+        let position = choices.first { visible.insetBy(dx: 8, dy: 8).contains(CGRect(origin: $0, size: size)) }
+        panel.setFrameOrigin(position ?? CGPoint(x: x, y: visible.minY + 12))
     }
 
     func start() {
@@ -123,32 +134,37 @@ final class ScrollingCapture: NSObject, NSWindowDelegate {
                                                               crop: crop, excluding: windows)
                 guard recording, !Task.isCancelled else { await opened.stop(); return }
                 stream = opened
+                // The menu and capture overlay have just closed. Let the source finish repainting
+                // before locking the baseline. The stream buffers the latest complete frame.
+                try await Task.sleep(for: .milliseconds(180))
                 for try await frame in opened.images {
                     guard recording, !Task.isCancelled else { break }
                     if let front = NSWorkspace.shared.frontmostApplication, front != source {
                         // Activating the source can take longer than opening the stream.
                         if front == .current, firstFrameMS == nil { continue }
-                        stop(message: "The source app changed. Review the area captured so far.")
+                        stop(.sourceChanged)
                         break
                     }
-                    let update = await assembler.append(frame)
-                    guard recording, !Task.isCancelled else { break }
-                    await updateProgress(update)
+                    if mode != .manual, firstFrameMS != nil {
+                        latestAutomaticFrame = frame
+                    } else {
+                        await verify(frame)
+                    }
                 }
             } catch {
-                if recording { stop(message: "Screen capture was interrupted.") }
+                if recording { stop(.streamInterrupted) }
             }
         }
         deadline = Task { [weak self] in
             try? await Task.sleep(for: .seconds(5))
             guard let self, !Task.isCancelled, firstFrameMS == nil else { return }
-            stop(message: "No frame arrived. Try selecting the area again.")
+            stop(.noFrame)
         }
     }
 
     func appActivated(_ app: NSRunningApplication) {
         if recording, app != source, app != .current || firstFrameMS != nil {
-            stop(message: "The source app changed. Review the area captured so far.")
+            stop(.sourceChanged)
         }
     }
 
@@ -166,6 +182,12 @@ final class ScrollingCapture: NSObject, NSWindowDelegate {
         report(.cancelled)
     }
 
+    private func verify(_ frame: CGImage) async {
+        let update = await assembler.append(frame)
+        guard recording, !Task.isCancelled else { return }
+        await updateProgress(update)
+    }
+
     private func updateProgress(_ progress: ScrollAssembly.Progress) async {
         received += 1
         movingShare = progress.moving ?? movingShare
@@ -181,19 +203,16 @@ final class ScrollingCapture: NSObject, NSWindowDelegate {
             }
         case .moved:
             accepted += 1
-            hasUnmatchedEnd = false
             status.stringValue = instructions
         case .unchanged:
-            hasUnmatchedEnd = false
             status.stringValue = instructions
-        case .unmatched:
+        case .unmatched, .conflict:
             unmatched += 1
-            hasUnmatchedEnd = true
             if mode == .manual {
-                status.stringValue = "Scroll back until the captured area overlaps, then scroll slowly."
+                status.stringValue = "Return to the last captured view or click Stop to try again."
             }
         case .limit:
-            stop(message: "The image reached the scrolling capture size limit.")
+            stop(.sizeLimit)
             return
         }
         sizeLabel.stringValue = "\(Int(progress.size.width)) × \(Int(progress.size.height)) px"
@@ -216,31 +235,36 @@ final class ScrollingCapture: NSObject, NSWindowDelegate {
         let until = ContinuousClock.now + .seconds(120)
         while recording, !Task.isCancelled, ContinuousClock.now < until {
             if source.isTerminated || NSWorkspace.shared.frontmostApplication != source {
-                stop(message: "The source app changed. Review the area captured so far.")
+                stop(.sourceChanged)
                 return
             }
             let before = accepted
             let bad = unmatched
-            let dimension = horizontal ? guide.frame.width : guide.frame.height
+            let dimension = horizontal ? regionSize.width : regionSize.height
             let share = movingShare.map { Double(horizontal ? $0.width : $0.height) }
             let delta = direction * Int32(ScrollStitcher.automaticStep(along: Double(dimension), moving: share).rounded())
             guard let event = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2,
                                       wheel1: horizontal ? 0 : delta, wheel2: horizontal ? delta : 0, wheel3: 0),
                   CGPreflightPostEventAccess() else {
-                stop(message: "Automatic scrolling needs Accessibility access.")
+                stop(.accessibility)
                 return
             }
             event.location = anchor
             event.post(tap: .cghidEventTap)
             try? await Task.sleep(for: .milliseconds(340))
             guard recording, !Task.isCancelled else { return }
+            // Verify the latest paint after a wheel step, rather than stitching intermediate
+            // animation frames that can contain different scroll positions within one view.
+            if let frame = latestAutomaticFrame {
+                latestAutomaticFrame = nil
+                await verify(frame)
+            }
+            guard recording, !Task.isCancelled else { return }
             if accepted == before, unmatched > bad {
                 try? await Task.sleep(for: .milliseconds(240))
                 guard recording, !Task.isCancelled else { return }
-                if accepted == before {
-                    stop(message: "The last scroll could not be stitched. Review the area captured so far.")
-                    return
-                }
+                stop(captureLastFrame: true)
+                return
             }
             if accepted == before {
                 inactive += 1
@@ -262,17 +286,20 @@ final class ScrollingCapture: NSObject, NSWindowDelegate {
                 direction = nextSweep
             }
         }
-        if recording, !Task.isCancelled { stop(message: "Automatic scrolling reached its time limit.") }
+        if recording, !Task.isCancelled { stop(.timeLimit) }
     }
 
     private var nextSweep: Int32 = -1
 
     @objc private func stopPressed() { stop(captureLastFrame: true) }
     @objc private func cancelPressed() { cancel?() }
+    @objc private func retryPressed() { retry?() }
     @objc private func copyPressed() { copy?() }
     @objc private func savePressed() { save?() }
 
-    private func stop(message: String? = nil, captureLastFrame: Bool = false) {
+    private typealias Failure = RichFilesDiagnostics.ScrollCaptureFailure
+
+    private func stop(_ failure: Failure? = nil, captureLastFrame: Bool = false) {
         guard recording else { return }
         recording = false
         automatic?.cancel()
@@ -280,32 +307,56 @@ final class ScrollingCapture: NSObject, NSWindowDelegate {
         frames?.cancel()
         stopButton.isEnabled = false
         guide.orderOut(nil)
-        status.stringValue = "Preparing the image…"
+        panel.orderOut(nil)
         let closing = stream
         stream = nil
         completing = Task { [weak self] in
             guard let self else { return }
             if let closing { await closing.stop() }
             guard !Task.isCancelled else { return }
-            if captureLastFrame, NSWorkspace.shared.frontmostApplication == source,
-               let window = CGWindowID(exactly: panel.windowNumber),
-               let final = try? await CaptureFrame.read(displayID: displayID, size: displaySize, excluding: [window]),
-               NSWorkspace.shared.frontmostApplication == source, !Task.isCancelled,
-               let selected = final.cropping(to: crop) {
-                // Coalesced stream delivery can leave the last paint pending when Stop is clicked.
-                let progress = await assembler.append(selected)
-                received += 1
-                if case .moved = progress.update { accepted += 1 }
-                hasUnmatchedEnd = progress.update == .unmatched || progress.update == .limit
+            var failure = failure
+            if captureLastFrame {
+                if NSWorkspace.shared.frontmostApplication != source {
+                    failure = .sourceChanged
+                } else if let final = try? await ScrollFrameStream.snapshot(
+                            displayID: displayID, size: displaySize, crop: crop, excluding: []),
+                          NSWorkspace.shared.frontmostApplication == source {
+                    // Read the current view again so coalesced or late delivery cannot hide a change.
+                    guard !Task.isCancelled else { return }
+                    let progress = await assembler.append(final, final: true)
+                    received += 1
+                    if case .moved = progress.update { accepted += 1 }
+                } else {
+                    failure = .finalFrameUnavailable
+                }
             }
-            let (image, heldBack) = await assembler.finish()
+            let (image, verificationFailure) = await assembler.finish(
+                mayExport: failure == nil, requireComplete: mode != .manual)
             guard !Task.isCancelled else { return }
-            // No image after frames were stitched means the stitcher found its own image at odds with
-            // them; an image held back leaves out the last views, which showed something no later view
-            // bore out.
-            let detail = message ?? (hasUnmatchedEnd || image == nil || heldBack ? "The last view could not be stitched. Review the area captured so far." : nil)
-            report(image == nil || detail != nil ? .issues : .complete)
-            showResult(image, message: detail)
+            let detail = failure ?? verificationFailure
+            report(detail == nil ? .complete : .issues, failure: detail)
+            showResult(image, message: detail.map(Self.failureMessage))
+        }
+    }
+
+    private static func failureMessage(_ failure: Failure) -> String {
+        switch failure {
+        case .conflictingPixels:
+            "The selected area changed while scrolling and could not be stitched. Select just the scrolling content and try again."
+        case .lostOverlap:
+            "The views could not be stitched. Select just the scrolling content and try scrolling more slowly."
+        case .incompleteCoverage:
+            "Some of the selected area could not be stitched. Try a smaller selection or capture in one direction."
+        case .noMotion:
+            "The selected area did not scroll. Try selecting an area that can scroll."
+        case .sourceChanged:
+            "The source app changed during capture. Try again with the source app active."
+        case .streamInterrupted, .noFrame, .finalFrameUnavailable:
+            "RichGlance could not verify the screen capture. Try selecting the area again."
+        case .sizeLimit, .timeLimit:
+            "The capture reached its limit. Try a smaller capture or click Stop sooner."
+        case .accessibility:
+            "Automatic scrolling needs Accessibility access. Try scrolling manually."
         }
     }
 
@@ -313,7 +364,7 @@ final class ScrollingCapture: NSObject, NSWindowDelegate {
 
     private func showResult(_ image: CGImage?, message: String?) {
         result = image
-        status.stringValue = message ?? (accepted < 2 ? "Only the visible area was captured." : "Scrolling capture ready.")
+        status.stringValue = message ?? "Scrolling capture ready."
         if let image {
             sizeLabel.stringValue = "\(image.width) × \(image.height) px"
             let panelSize = CGSize(width: min(700, visible.width - 28), height: min(610, visible.height - 28))
@@ -341,7 +392,11 @@ final class ScrollingCapture: NSObject, NSWindowDelegate {
                 NSButton(title: "Done", target: self, action: #selector(cancelPressed)), save, copy
             ])])
         } else {
-            install(rows: [status, NSButton(title: "Close", target: self, action: #selector(cancelPressed))])
+            let retry = NSButton(title: "Try Again…", target: self, action: #selector(retryPressed))
+            retry.keyEquivalent = "\r"
+            install(rows: [status, NSStackView(views: [
+                NSButton(title: "Close", target: self, action: #selector(cancelPressed)), retry
+            ])])
         }
         panel.center()
         panel.makeKeyAndOrderFront(nil)
@@ -359,11 +414,11 @@ final class ScrollingCapture: NSObject, NSWindowDelegate {
         panel.setContentSize(stack.fittingSize)
     }
 
-    private func report(_ outcome: RichFilesDiagnostics.Outcome) {
+    private func report(_ outcome: RichFilesDiagnostics.Outcome, failure: Failure? = nil) {
         guard !reported else { return }
         reported = true
         RichFilesDiagnostics.record(.glanceScrollCapture, id: id, outcome: outcome, started: started,
-                                    total: received, confirmed: accepted, firstRowsMS: firstFrameMS)
+                                    total: received, confirmed: accepted, firstRowsMS: firstFrameMS, scrollCaptureFailure: failure)
     }
 }
 
@@ -398,17 +453,25 @@ private actor ScrollAssembly {
 
     private var stitcher = ScrollStitcher()
 
-    func append(_ image: CGImage) -> Progress {
-        let update = stitcher.append(image)
+    func append(_ image: CGImage, final: Bool = false) -> Progress {
+        let update = stitcher.append(image, final: final)
         let bounds = stitcher.bounds
         return Progress(update: update, size: bounds.isNull ? .zero : bounds.size, moving: stitcher.movingShare)
     }
 
     func preview() -> CGImage? { stitcher.image(previewLimit: 136) }
 
-    func finish() -> (image: CGImage?, heldBack: Bool) {
-        let result = (stitcher.image(), stitcher.heldBack)
-        stitcher = ScrollStitcher()
-        return result
+    func finish(mayExport: Bool, requireComplete: Bool) -> (CGImage?, RichFilesDiagnostics.ScrollCaptureFailure?) {
+        defer { stitcher = ScrollStitcher() }
+        guard mayExport else { return (nil, nil) }
+        switch stitcher.issue {
+        case .conflict: return (nil, .conflictingPixels)
+        case .unmatched: return (nil, .lostOverlap)
+        case .limit: return (nil, .sizeLimit)
+        default: break
+        }
+        guard stitcher.movingShare != nil else { return (nil, .noMotion) }
+        guard let image = stitcher.image(requireComplete: requireComplete) else { return (nil, .incompleteCoverage) }
+        return (image, nil)
     }
 }
