@@ -158,7 +158,7 @@ pub(super) fn require_repaired_installation(root: &Path) -> io::Result<()> {
     Ok(())
 }
 
-fn legacy_split(root: &Path) -> io::Result<bool> {
+pub(super) fn legacy_split(root: &Path) -> io::Result<bool> {
     Ok(may_migrate(root, &home_bundle(root))
         && optional_json(&root.join("published.json"))?.is_some()
         && bundle_version(&system_bundle()).is_ok())
@@ -495,6 +495,17 @@ pub(super) fn migrate(root: &Path, opened: &Path, version: &str) -> io::Result<b
     sync(home.parent().unwrap())?;
     sync(system.parent().unwrap())?;
     write_document(&tx, "retirement.json", &migration.displaced)?;
+    // An adopted copy is not the publication the receipt describes, unless the installer put
+    // the very same app there: the receipt goes with the retired copy, so nothing checks the
+    // copy in Applications against it until the next update writes its own.
+    let receipt = root.join("published.json");
+    if optional_json(&receipt)?
+        .is_some_and(|p| p.archive_sha256 == migration.publication.archive_sha256)
+        && !matches(&system, &migration.publication)?
+    {
+        fs::rename(&receipt, tx.join("published.json"))?;
+        sync(&tx)?;
+    }
     write_document(
         root,
         SYSTEM_INSTALL,
@@ -921,6 +932,64 @@ mod tests {
                 stage_verified(&home, &archive("4.0.0", |_| {}), "4.0.0").unwrap();
                 activate_at_quit(&home, "3.0.0", &system).unwrap().unwrap();
                 assert_eq!(bundle_version(&system).unwrap(), "4.0.0");
+            }
+        }
+    }
+
+    /// `version` put at `system` by hand, as the regular installer does.
+    fn install_by_hand(work: &tempfile::TempDir, system: &Path, version: &str) {
+        let installer = work.path().canonicalize().unwrap().join(format!("installer-{version}"));
+        fs::create_dir(&installer).unwrap();
+        install_verified(&installer, &archive(version, |_| {}), version).unwrap();
+        if system.exists() {
+            fs::remove_dir_all(system).unwrap();
+        }
+        fs::rename(installer.join("Applications").join(APP), system).unwrap();
+    }
+
+    #[test]
+    fn going_back_after_a_manual_reinstall_never_strands_later_updates() {
+        // Review rv-20261119T165922Z finding 1: the ~/Applications copy's history must not be
+        // offered as Go back once a newer copy was installed in Applications by hand, and a way
+        // back prepared before that reinstall is retired at quit instead of staying ready.
+        let (work, home, system) = fixture();
+        fs::remove_dir_all(&system).unwrap();
+        install_verified(&home, &archive("1.0.0", |_| {}), "1.0.0").unwrap();
+        install_verified(&home, &archive("2.0.0", |_| {}), "2.0.0").unwrap();
+        assert_eq!(rollback_target(&home).unwrap(), RollbackTarget::Available("1.0.0".into()));
+        stage_rollback_verified(&home, &archive("1.0.0", |_| {}), "1.0.0").unwrap();
+
+        install_by_hand(&work, &system, "2.1.0");
+        assert_eq!(rollback_target(&home).unwrap(), RollbackTarget::NoRecord);
+
+        activate_at_quit(&home, "2.1.0", &system).unwrap_err();
+        assert_eq!(bundle_version(&system).unwrap(), "2.1.0");
+        assert!(staged(&home).unwrap().is_none());
+        let mut lease = StartupLease::acquire(&home).unwrap();
+        lease.remember_installation(&system, "2.1.0").unwrap();
+        assert!(activate_prepared(&mut lease, "2.1.0").unwrap().is_none());
+        drop(lease);
+
+        stage_verified(&home, &archive("3.0.0", |_| {}), "3.0.0").unwrap();
+        activate_at_quit(&home, "2.1.0", &system).unwrap().unwrap();
+        assert_eq!(bundle_version(&system).unwrap(), "3.0.0");
+    }
+
+    #[test]
+    fn an_adopted_copy_is_not_checked_against_the_retired_copys_receipt() {
+        // Review rv-20261119T165922Z finding 3: after the repair keeps a different copy installed
+        // by hand, the receipt of the retired ~/Applications copy no longer speaks for the app.
+        for (by_hand, keeps_receipt) in [("2.1.0", false), ("2.0.0", true)] {
+            let (work, home, system) = fixture();
+            fs::remove_dir_all(&system).unwrap();
+            install_verified(&home, &archive("2.0.0", |_| {}), "2.0.0").unwrap();
+            install_by_hand(&work, &system, by_hand);
+            assert!(activate_at_quit(&home, by_hand, &system).unwrap().is_none());
+            assert_eq!(fs::read_link(home.join("Applications").join(APP)).unwrap(), system);
+            let preferred = preferred(&home).unwrap();
+            assert_eq!(preferred.is_some(), keeps_receipt, "{by_hand} by hand");
+            if let Some(p) = preferred {
+                assert_eq!(p.version, by_hand);
             }
         }
     }

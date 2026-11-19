@@ -1972,6 +1972,14 @@ pub fn activate_prepared(
     }
     match read_json(&root.join("prepared.json")) {
         Ok(p) if !install_path::supports_version(&root, &p.version)? => {
+            // Retired, not kept: a receipt this location can never take would otherwise stay
+            // ready on the update surface and hold back every later update.
+            let transaction = root.join(&p.archive_sha256);
+            owned_dir(&transaction)?;
+            fs::rename(root.join("prepared.json"), transaction.join("obsolete.json"))?;
+            sync(&transaction)?;
+            clear_rollback(&root)?;
+            sync(&root)?;
             return Err(refuse("this version predates updates at the current install location"));
         }
         // An authorized rollback is DELIBERATELY not newer, so it must not be retired here
@@ -2102,6 +2110,11 @@ fn resolve_rollback(root: &Path) -> io::Result<RollbackTarget> {
     let Some(published) = optional_json(&root.join("published.json"))? else {
         return Ok(RollbackTarget::NoRecord);
     };
+    // Two copies waiting for their repair: the history is the ~/Applications copy's, and the
+    // repair at quit makes Applications the install location, which no earlier version supports.
+    if install_path::legacy_split(root)? {
+        return Ok(RollbackTarget::NoRecord);
+    }
     let Some(previous) = optional_json(&root.join(&published.archive_sha256).join("previous.json"))?
     else {
         return Ok(RollbackTarget::NoRecord);
