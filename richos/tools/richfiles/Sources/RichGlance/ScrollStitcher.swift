@@ -92,10 +92,10 @@ struct ScrollStitcher {
             issue = nil
             return .unchanged
         }
-        // Revisit the last verified viewport to recover. Later agreement elsewhere cannot
-        // establish what an unresolved view showed in portions that are now offscreen.
-        if let issue { return issue }
-        if final, let fixed, fixed.hasEdges, origins.count >= 3 {
+        // An unplaced frame adds no pixels. A later view can rejoin the verified page
+        // through exact overlap. A known conflict requires returning to the last view.
+        if issue == .conflict { return .conflict }
+        if issue == nil, final, let fixed, fixed.hasEdges, origins.count >= 3 {
             let settled = Frame(raster: next, origin: last.origin)
             if finalRepaintAgrees(last, settled, fixed: fixed) {
                 keep(settled)

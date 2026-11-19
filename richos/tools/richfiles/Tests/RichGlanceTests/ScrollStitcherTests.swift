@@ -85,10 +85,24 @@ final class ScrollStitcherTests: XCTestCase {
         XCTAssertEqual(sut.append(fixture(width: 156, height: 120, salt: 111)), .unmatched)
         XCTAssertNil(sut.image())
         let next = crop(document, x: 0, y: 61, w: 156, h: 120)
-        XCTAssertEqual(sut.append(next), .unmatched)
-        XCTAssertEqual(sut.append(first), .unchanged)
         XCTAssertEqual(sut.append(next), .moved(dx: 0, dy: 61))
         try check(sut, against: crop(document, x: 0, y: 0, w: 156, h: 181))
+    }
+
+    func testManualCaptureResumesAfterReturningToAnOverlappingView() throws {
+        let document = fixture(width: 200, height: 1_300)
+        func view(_ y: Int) -> CGImage { crop(document, x: 0, y: y, w: 200, h: 400) }
+        var sut = ScrollStitcher()
+        XCTAssertEqual(sut.append(view(0)), .initial)
+        XCTAssertEqual(sut.append(view(100)), .moved(dx: 0, dy: 100))
+        XCTAssertEqual(sut.append(view(200)), .moved(dx: 0, dy: 100))
+        for y in [560, 660, 760, 860] {
+            XCTAssertEqual(sut.append(view(y)), .unmatched)
+            XCTAssertNil(sut.image())
+        }
+        XCTAssertEqual(sut.append(view(360)), .moved(dx: 0, dy: 160))
+        XCTAssertEqual(sut.append(view(460), final: true), .moved(dx: 0, dy: 100))
+        try check(sut, against: crop(document, x: 0, y: 0, w: 200, h: 860))
     }
 
     func testAutomaticStepCanResampleBeforeRejectingUnplacedFrame() throws {

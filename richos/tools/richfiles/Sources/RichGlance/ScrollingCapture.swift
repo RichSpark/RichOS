@@ -206,7 +206,11 @@ final class ScrollingCapture: NSObject, NSWindowDelegate {
             status.stringValue = instructions
         case .unchanged:
             status.stringValue = instructions
-        case .unmatched, .conflict:
+        case .unmatched:
+            if mode == .manual {
+                status.stringValue = "Scroll back until the views overlap, then scroll slowly."
+            }
+        case .conflict:
             if mode == .manual {
                 status.stringValue = "Return to the last captured view or click Stop to try again."
             }
