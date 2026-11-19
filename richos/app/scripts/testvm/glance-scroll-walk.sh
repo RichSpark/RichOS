@@ -226,7 +226,12 @@ if [ "$ready" != yes ]; then
     exit 1
 fi
 if [ "$destination" = save ]; then
-    probe glance-press 'Save PNG…'
+    # The preview's buttons can be in the accessibility tree a moment before they take a press.
+    for i in $(seq 1 10); do
+        if probe glance-press 'Save PNG…' 2>/dev/null; then break; fi
+        test "$i" -lt 10
+        sleep 0.5
+    done
     wait_for yes glance-has Save
     shot 06-save
     # The save panel's controls arrive in the accessibility tree a moment after it shows.
