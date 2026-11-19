@@ -4,7 +4,7 @@ const path = require("node:path");
 const { loadPlaywright, createRun, assert, assertEqual, UI_DIR, leaveHome, shellSettled } = require("./lib/harness");
 const contrast = require("./lib/contrast");
 
-const app = "file://" + path.join(process.env.RICHOS_CHAT_LIST_BASE_UI || UI_DIR, "index.html");
+const app = "file://" + path.join(UI_DIR, "index.html");
 
 async function pageFor(browser, theme) {
   const page = await browser.newPage({ colorScheme: theme, reducedMotion: "reduce", viewport: { width: 1440, height: 900 } });
