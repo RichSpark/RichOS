@@ -104,12 +104,15 @@ final class CaptureCanvas: NSView {
             button.controlSize = .large
             button.heightAnchor.constraint(equalToConstant: 36).isActive = true
         }
+        copyButton.setAccessibilityLabel("Copy Image")
+        editButton.setAccessibilityLabel("Open in Editor")
         actionMenu.addItems(withTitles: ["↩", "Return copies the image", "Return opens the editor"])
         actionMenu.setAccessibilityLabel("Default capture action")
         actionMenu.target = self
         actionMenu.action = #selector(pickAction)
         scrollMenu.addItems(withTitles: ["Scrolling Capture…", "Scroll Manually", "Auto Scroll Down",
                                          "Auto Scroll Right", "Auto Scroll Down and Right"])
+        scrollMenu.setAccessibilityLabel("Scrolling Capture…")
         scrollMenu.target = self
         scrollMenu.action = #selector(pickScroll)
         scrollMenu.isHidden = true

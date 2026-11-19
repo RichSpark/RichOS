@@ -54,6 +54,9 @@ final class CaptureController: NSObject, NSWindowDelegate {
     private var countdown: CaptureCountdown?
     private var countdownTask: Task<Void, Never>?
     private var output: Task<Void, Never>?
+    private var scrolling: ScrollingCapture?
+    private var askingScrollAccess = false
+    private var scrollingDocument: ScreenshotDocument?
     private var countdownKeys: LiveCaptureKeys?
     private var pointerPosition = CGPoint.zero
     private var sourceCursor = NSCursor.arrow
@@ -164,6 +167,11 @@ final class CaptureController: NSObject, NSWindowDelegate {
     @objc private func applicationActivated(_ notification: Notification) {
         guard !isFinished,
               let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
+        if let scrolling {
+            scrolling.appActivated(app)
+            return
+        }
+        if askingScrollAccess { return }
         if Self.isCaptureConsent(app) {
             if overlay != nil, savePanel == nil { waitForCaptureConsent() }
             return
@@ -217,6 +225,10 @@ final class CaptureController: NSObject, NSWindowDelegate {
             canvas.copy = { [weak self] in self?.deliver(.copy) }
             canvas.edit = { [weak self] in self?.deliver(.editor) }
             canvas.save = { [weak self] in self?.deliver(.save) }
+            canvas.scroll = { [weak self] index in
+                guard ScrollingCapture.Mode.allCases.indices.contains(index) else { return }
+                self?.startScrolling(ScrollingCapture.Mode.allCases[index])
+            }
             canvas.escape = { [weak self] in self?.escapePressed() }
             canvas.cancel = { [weak self] in self?.cancel() }
             canvas.changeMode = { [weak self] in self?.setMode($0) }
@@ -403,6 +415,112 @@ final class CaptureController: NSObject, NSWindowDelegate {
         }
     }
 
+    private func startScrolling(_ requested: ScrollingCapture.Mode) {
+        guard let canvas, canvas.ready, let viewport = canvas.visibleCrop,
+              let display, let screen = NSScreen.screens.first(where: display.matches),
+              scrolling == nil, countdown == nil, output == nil, savePanel == nil else { return }
+        let crop = viewport.integral.intersection(CGRect(x: 0, y: 0, width: canvas.image.width, height: canvas.image.height))
+        guard crop.width >= 24, crop.height >= 24 else {
+            canvas.showError("Choose a scrolling area at least 24 × 24 pixels.")
+            return
+        }
+        let displayBounds = CGDisplayBounds(display.id)
+        let anchor = CGPoint(x: displayBounds.minX + crop.midX * displayBounds.width / CGFloat(canvas.image.width),
+                             y: displayBounds.minY + crop.midY * displayBounds.height / CGFloat(canvas.image.height))
+        let expected = mode == .window ? windowTarget : nil
+        if mode == .window, let expected, !expected.frame.contains(anchor) {
+            canvas.showError("Choose a scrolling area on the selected window.")
+            return
+        }
+        let sourcePID = expected?.pid ?? CaptureFrame.targets().first { $0.frame.contains(anchor) }?.pid
+        guard let sourcePID, let owner = NSRunningApplication(processIdentifier: sourcePID),
+              owner.activationPolicy == .regular else {
+            canvas.showError("Select an area inside the app you want to scroll.")
+            return
+        }
+        let geometry = GlanceCaptureGeometry(frame: CGSize(width: canvas.image.width, height: canvas.image.height),
+                                             view: display.frame.size)
+        let box = geometry.viewRect(crop)
+        let region = CGRect(x: display.frame.minX + box.minX, y: display.frame.maxY - box.maxY,
+                            width: box.width, height: box.height)
+
+        askingScrollAccess = true
+        defer { askingScrollAccess = false }
+        var mode = requested
+        var access = ScrollAccessPrompt()
+        prompt: while mode != .manual, !CGPreflightPostEventAccess() {
+            let alert = NSAlert()
+            alert.messageText = "Allow automatic scrolling"
+            alert.informativeText = access.message
+            alert.addButton(withTitle: access.allowTitle)
+            alert.addButton(withTitle: "Scroll Manually")
+            alert.addButton(withTitle: "Cancel")
+            let answer: ScrollAccessPrompt.Answer
+            switch alert.runModal() {
+            case .alertFirstButtonReturn: answer = .allow
+            case .alertSecondButtonReturn: answer = .scrollManually
+            default: answer = .cancel
+            }
+            guard !isFinished else { return }
+            switch access.next(after: answer, mode: mode, isTrusted: { CGPreflightPostEventAccess() },
+                               request: { CGRequestPostEventAccess() }) {
+            case .scroll(let chosen):
+                mode = chosen
+                break prompt
+            case .ask: continue
+            case .cancel:
+                focusCapture()
+                return
+            }
+        }
+
+        let session = ScrollingCapture(mode: mode, source: owner, anchor: anchor, displayID: display.id,
+                                       displaySize: display.size, crop: crop, region: region,
+                                       visible: screen.visibleFrame, id: id)
+        session.copy = { [weak self] in self?.deliverScroll(.copy) }
+        session.edit = { [weak self] in self?.deliverScroll(.editor) }
+        session.save = { [weak self] in self?.deliverScroll(.save) }
+        session.cancel = { [weak self] in self?.cancel() }
+        session.retry = { [weak self] in self?.retryScrolling() }
+        session.opensEditor = action == .editor
+        scrolling = session
+        keyLoss?.cancel()
+        for surface in surfaces { surface.window.orderOut(nil) }
+        if #available(macOS 14.0, *) { _ = owner.activate(from: .current, options: []) }
+        else { _ = owner.activate(options: []) }
+        acquisition = Task { [weak self, weak session] in
+            guard let self, let session else { return }
+            for _ in 0..<12 {
+                if NSWorkspace.shared.frontmostApplication == owner { break }
+                try? await Task.sleep(for: .milliseconds(50))
+                guard !Task.isCancelled else { return }
+            }
+            guard scrolling === session else { return }
+            let front = CaptureFrame.targets().first { $0.frame.contains(anchor) }
+            guard front?.pid == sourcePID, expected == nil || front?.id == expected?.id else {
+                retryScrolling()
+                canvas.showError("Bring the window to the front to capture its scrolling area.")
+                return
+            }
+            session.start()
+        }
+    }
+
+    private func retryScrolling() {
+        scrolling?.close()
+        scrolling = nil
+        scrollingDocument = nil
+        prepareOverlay()
+        focusCapture()
+    }
+
+    private func deliverScroll(_ route: Route) {
+        guard let scrolling, let image = scrolling.result, let display, savePanel == nil else { return }
+        let document = scrollingDocument ?? ScreenshotDocument(original: image, scale: display.scale)
+        scrollingDocument = document
+        publish(document, route: route, started: ProcessInfo.processInfo.systemUptime)
+    }
+
     private func shot() -> Shot? {
         guard let display, let canvas, canvas.ready else { return nil }
         switch mode {
@@ -505,7 +623,7 @@ final class CaptureController: NSObject, NSWindowDelegate {
             stop(.complete, restoreFocus: false)
         case .copy:
             guard let data = ScreenshotRenderer.png(document.original), ScreenshotRenderer.copy(data) else {
-                prepareOverlay()
+                if scrolling == nil { prepareOverlay() }
                 outputFailed("The selected image could not be copied.", since: started)
                 return
             }
@@ -513,7 +631,7 @@ final class CaptureController: NSObject, NSWindowDelegate {
             record(.glanceCaptureOutput, .complete, since: started)
             stop(.complete, copied: "Copied \(document.original.width) × \(document.original.height) px", retained: retained)
         case .save:
-            if overlay?.isVisible != true { prepareOverlay(); focusCapture() }
+            if scrolling == nil, overlay?.isVisible != true { prepareOverlay(); focusCapture() }
             save(document)
         }
     }
@@ -530,7 +648,7 @@ final class CaptureController: NSObject, NSWindowDelegate {
     }
 
     private func save(_ document: ScreenshotDocument) {
-        guard let overlay, savePanel == nil else { return }
+        guard let window = scrolling?.reviewWindow ?? overlay, savePanel == nil else { return }
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.png]
         let stamp = DateFormatter()
@@ -538,11 +656,14 @@ final class CaptureController: NSObject, NSWindowDelegate {
         panel.nameFieldStringValue = "RichGlance Capture \(stamp.string(from: Date())).png"
         panel.canCreateDirectories = true
         savePanel = panel
-        panel.level = overlay.level
-        panel.beginSheetModal(for: overlay) { [weak self, weak panel] outcome in
+        panel.level = window.level
+        panel.beginSheetModal(for: window) { [weak self, weak panel] outcome in
             guard let self, let panel, savePanel === panel, !isFinished else { return }
             savePanel = nil
-            guard outcome == .OK, let url = panel.url else { focusCapture(); return }
+            guard outcome == .OK, let url = panel.url else {
+                if scrolling == nil { focusCapture() }
+                return
+            }
             let started = ProcessInfo.processInfo.systemUptime
             do {
                 guard let data = ScreenshotRenderer.png(document.original) else { throw CocoaError(.fileWriteUnknown) }
@@ -597,8 +718,8 @@ final class CaptureController: NSObject, NSWindowDelegate {
 
     private func outputFailed(_ message: String, since started: TimeInterval) {
         record(.glanceCaptureOutput, .issues, since: started)
-        canvas?.showError(message)
-        focusCapture()
+        if let scrolling { scrolling.showError(message) }
+        else { canvas?.showError(message); focusCapture() }
     }
 
     private func showPermissionHelp(on screen: NSScreen) {
@@ -690,12 +811,13 @@ final class CaptureController: NSObject, NSWindowDelegate {
     }
 
     func windowDidResignKey(_ notification: Notification) {
-        guard notification.object as? NSWindow === overlay, savePanel == nil, countdown == nil else { return }
+        guard notification.object as? NSWindow === overlay, savePanel == nil, countdown == nil,
+              scrolling == nil, !askingScrollAccess else { return }
         keyLoss?.cancel()
         // Workspace activation can arrive just after AppKit reports loss of the key window.
         keyLoss = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(150))
-            guard !Task.isCancelled, let self, let overlay, !overlay.isKeyWindow, savePanel == nil, countdown == nil, output == nil else { return }
+            guard !Task.isCancelled, let self, let overlay, !overlay.isKeyWindow, savePanel == nil, countdown == nil, output == nil, scrolling == nil, !askingScrollAccess else { return }
             if Self.isCaptureConsent(NSWorkspace.shared.frontmostApplication) { waitForCaptureConsent() }
             else { stop(.cancelled, restoreFocus: false) }
         }
@@ -731,6 +853,9 @@ final class CaptureController: NSObject, NSWindowDelegate {
         closeCountdown()
         output?.cancel()
         output = nil
+        scrolling?.close()
+        scrolling = nil
+        scrollingDocument = nil
         clearSurfaces()
         if restoreFocus, NSApp.isActive { restoreOrigin() }
         record(operation, outcome, since: began)
@@ -751,4 +876,33 @@ private final class CaptureWindow: NSWindow {
     }
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
+}
+
+/// The Accessibility question before automatic scrolling. macOS answers a request at once, before
+/// the user can turn access on in System Settings, so a refused request asks again with Try Again
+/// instead of ending the capture. The selection is kept until the user scrolls or cancels.
+struct ScrollAccessPrompt {
+    enum Answer { case allow, scrollManually, cancel }
+    enum Next: Equatable { case scroll(ScrollingCapture.Mode), ask, cancel }
+
+    private(set) var requested = false
+
+    var allowTitle: String { requested ? "Try Again" : "Request Access" }
+    var message: String {
+        requested
+            ? "Turn on the app named by macOS under Privacy & Security > Accessibility in System Settings, then click Try Again. You can scroll manually right away."
+            : "RichGlance needs Accessibility access to scroll another app. You can scroll manually right away."
+    }
+
+    mutating func next(after answer: Answer, mode: ScrollingCapture.Mode,
+                       isTrusted: () -> Bool, request: () -> Bool) -> Next {
+        switch answer {
+        case .allow:
+            let granted = requested ? isTrusted() : request()
+            requested = true
+            return granted ? .scroll(mode) : .ask
+        case .scrollManually: return .scroll(.manual)
+        case .cancel: return .cancel
+        }
+    }
 }

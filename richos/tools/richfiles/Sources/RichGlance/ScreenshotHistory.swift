@@ -25,7 +25,7 @@ struct ScreenshotStore: Sendable {
 
     private let root: URL
     private var history: URL { root.appendingPathComponent("Recent Captures", isDirectory: true) }
-    private let files = FileManager.default
+    private var files: FileManager { .default }
 
     init(root: URL? = nil) {
         self.root = root ?? FileManager.default.homeDirectoryForCurrentUser
