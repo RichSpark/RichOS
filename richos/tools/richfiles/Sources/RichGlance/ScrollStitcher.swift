@@ -111,7 +111,9 @@ struct ScrollStitcher {
         // The check. Nothing of the frame is kept unless bars can account for every pixel in which it
         // differs from the frames before it, and the page between its bars reaches the page between
         // the bars of the frame before it.
-        guard let agreed = disagreements(of: next, at: origin, moved: offset).bands(over: bands),
+        // Lines that stayed put beside the move, as the registration found them: a bar that way.
+        let stayed = offset.y == 0 ? match.fixed.top + match.fixed.bottom > 0 : match.fixed.left + match.fixed.right > 0
+        guard let agreed = disagreements(of: next, at: origin, moved: offset).bands(over: bands, stayedBeside: stayed),
               abs(offset.x) <= next.width - agreed.left - agreed.right,
               abs(offset.y) <= next.height - agreed.top - agreed.bottom else { return .unmatched }
         if agreed == bands {
@@ -657,7 +659,9 @@ private struct Bands: Equatable {
 private struct Disagreements {
     /// A band beside the direction of the move takes its strip of the page out of the check for the
     /// whole length of the capture; a band across the move only the lines at one end of it. So where
-    /// either would do, the band across the move is taken unless it is more than twice as thick.
+    /// either would do, the band across the move is taken unless it is more than twice as thick. But
+    /// where the two frames themselves show lines that stayed put beside the move (the registration
+    /// found them), a bar lies that way, and a band beside the move is taken when it is the thinner.
     private static let besideTheMove = 2
     private static let never = Int32.max
     let width: Int
@@ -725,7 +729,7 @@ private struct Disagreements {
 
     /// The thinnest bars, no smaller than `current`, that account for every difference; nil when no
     /// bars can, or when they would leave less than a quarter of the view between them.
-    func bands(over current: Bands) -> Bands? {
+    func bands(over current: Bands, stayedBeside: Bool) -> Bands? {
         guard !unanswerable else { return nil }
         guard count > 0 else { return current }
         // What the differences that bands of s and e lines across the move do not account for need
@@ -751,6 +755,7 @@ private struct Disagreements {
         let (along, other) = sideways ? (width, height) : (height, width)
         let starts = [now.across.0] + (0...reach.across).filter { asked.start[$0] && $0 > now.across.0 }
         let ends = [now.across.1] + (0...reach.across).filter { asked.end[$0] && $0 > now.across.1 }
+        let weight = straight && !stayedBeside ? Self.besideTheMove : 1
         var best: (across: (Int, Int), beside: (Int, Int), cost: Int)?
         for start in starts {
             for end in ends where along - start - end >= max(8, along / 4) {
@@ -758,8 +763,11 @@ private struct Disagreements {
                 guard need.start != Self.never, need.end != Self.never else { continue }
                 let beside = (max(now.beside.0, Int(need.start)), max(now.beside.1, Int(need.end)))
                 guard beside.0 <= reach.beside, beside.1 <= reach.beside, other - beside.0 - beside.1 >= max(8, other / 4) else { continue }
-                let cost = start + end + (beside.0 + beside.1) * (straight ? Self.besideTheMove : 1)
-                if best.map({ cost < $0.cost }) ?? true { best = ((start, end), beside, cost) }
+                let cost = start + end + (beside.0 + beside.1) * weight
+                // At the same cost, the thinner bands beside the move.
+                if best.map({ cost < $0.cost || (cost == $0.cost && beside.0 + beside.1 < $0.beside.0 + $0.beside.1) }) ?? true {
+                    best = ((start, end), beside, cost)
+                }
             }
         }
         guard let best else { return nil }
