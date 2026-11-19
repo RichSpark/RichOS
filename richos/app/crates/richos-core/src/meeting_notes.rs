@@ -428,6 +428,30 @@ pub fn segments(first: &Path) -> Vec<PathBuf> {
     std::iter::once(first.to_path_buf()).chain(rejoins).collect()
 }
 
+/// The ordered recordings to use under the notes worker lock. A normal run uses the recordings
+/// up to this session. A retry includes later ended recordings too. When a later worker has
+/// already transcribed a recording and there is a shared brief, include its transcript even if
+/// its written flag could not be saved. An older resumed run can then refresh the shared brief
+/// without dropping the newer recording.
+pub fn brief_segments(first: &Path, session: &Path, retry: bool) -> Vec<PathBuf> {
+    let mut parts = segments(first);
+    if retry {
+        parts.retain(|part| part == session || read_facts(part).is_some_and(|facts| facts.ended_at != 0));
+    } else if let Some(current) = parts.iter().position(|part| part == session) {
+        let mut end = current + 1;
+        if first.join(BRIEF_FILE).is_file() {
+            if let Some(later) = parts[end..].iter().rposition(|part| part.join(TRANSCRIPT_FILE).is_file()) {
+                end += later + 1;
+            }
+        }
+        parts.truncate(end);
+    }
+    if !parts.iter().any(|part| part == session) {
+        parts.push(session.to_path_buf());
+    }
+    parts
+}
+
 /// The meeting's one transcript: each recording's `transcript.md`, in order, with
 /// [`REJOINED_MARK`] between them, and how many recordings had none (their transcription failed).
 pub fn joined_transcript(segments: &[PathBuf]) -> (String, usize) {

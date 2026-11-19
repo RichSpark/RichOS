@@ -556,6 +556,8 @@ def main():
     p.add_argument('--shape', choices=['two', 'ceo'], default='two', help="companies: two fictional companies, or the CEO's install's shape")
     a = p.parse_args()
     steps = [s for s in a.steps.split(',') if s]
+    if not steps:
+        p.error('--steps must select at least one step')
     unknown = [s for s in steps if s not in STEPS + EXTRA]
     if unknown:
         p.error('unknown step(s): ' + ', '.join(unknown))

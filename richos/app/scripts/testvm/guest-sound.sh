@@ -20,9 +20,9 @@
 #   booted: audio on|off              run.sh's record (<run state>/audio)
 #   muted by run.sh: muted|no         run.sh's record (<run state>/output), written only with --audio
 #   passthrough to this Mac: yes|no   input channels present (yes) or output only, the null speaker (no)
-#   output muted: true|false|...      the guest's own reading, the same AppleScript run.sh mutes with
+#   output muted: true|false          the guest's own reading, the same AppleScript run.sh mutes with
 #   app running: <pids>|none          richos-tauri in the guest, so a reading can be placed beside a launch
-# then the guest's device listing itself. Exit 0 whenever the guest answered.
+# then the guest's device listing itself. A failed guest read exits nonzero.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$HERE/lib.sh"
@@ -33,17 +33,22 @@ STATE="$TESTVM_RUN/$VM"
 
 echo "booted: audio $(cat "$STATE/audio" 2>/dev/null || echo unknown)"
 echo "muted by run.sh: $(cat "$STATE/output" 2>/dev/null || echo no)"
-DEVICES="$(guest_ssh "$VM" "system_profiler SPAudioDataType 2>/dev/null" || true)"
-if printf '%s\n' "$DEVICES" | grep -q 'Input Channels:'; then
+DEVICES="$(guest_ssh "$VM" 'system_profiler SPAudioDataType')" || die "could not read sound devices in $VM"
+MUTED="$(guest_ssh "$VM" "osascript -e 'output muted of (get volume settings)'")" || die "could not read output mute in $VM"
+case "$MUTED" in
+  true|false) ;;
+  *) die "could not read output mute in $VM: expected true or false" ;;
+esac
+# pgrep uses exit 1 for no match. Convert just that guest result to success before SSH returns.
+APP="$(guest_ssh "$VM" 'pgrep -x richos-tauri || [ "$?" -eq 1 ]')" || die "could not read app processes in $VM"
+if [[ "$DEVICES" == *'Input Channels:'* ]]; then
   echo "passthrough to this Mac: yes (input and output channels)"
-elif printf '%s\n' "$DEVICES" | grep -q 'Output Channels:'; then
+elif [[ "$DEVICES" == *'Output Channels:'* ]]; then
   echo "passthrough to this Mac: no (output only: tart's null speaker, which plays nothing)"
 else
   echo "passthrough to this Mac: no (no sound device listed)"
 fi
-MUTED="$(guest_ssh "$VM" "osascript -e 'output muted of (get volume settings)' 2>&1" || true)"
-echo "output muted: ${MUTED:-no answer}"
-APP="$(guest_ssh "$VM" "pgrep -x richos-tauri | tr '\n' ' '" || true)"
-echo "app running: ${APP:-none}"
+echo "output muted: $MUTED"
+printf 'app running: %s\n' "$(printf '%s' "${APP:-none}" | tr '\n' ' ')"
 echo "--- system_profiler SPAudioDataType in the guest ---"
 printf '%s\n' "${DEVICES:-(nothing listed)}"

@@ -4,12 +4,15 @@ unless that step says allow_fail, and an invalid plan (empty, unknown op, bad ar
 before the first step, by execution and by run-walk.py before any guest is booted (R37). A typed
 message that carries a quote or backslash reaches AppleScript escaped (V04).
 Only the steps that need no guest are used."""
+import contextlib
 import importlib.util
+import io
 import json
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from unittest.mock import patch
 
 TOOL = Path(__file__).resolve().parents[1] / 'steps-walk.py'
 RUN_WALK = TOOL.parent / 'run-walk.py'
@@ -62,6 +65,31 @@ with tempfile.TemporaryDirectory(prefix='steps-walk-test-') as tmp:
     check('R37 run-walk.py refuses an empty step list before any guest is booted',
           r.returncode == 2 and 'refused before any guest is booted' in r.stderr and not (Path(tmp) / 'report.json').exists(),
           (r.returncode, r.stderr))
+
+    # Exercise the wrapper's preflight with no possibility of reserving a real slot.
+    spec = importlib.util.spec_from_file_location('run_walk_under_test', RUN_WALK)
+    wrapper = importlib.util.module_from_spec(spec)
+    with patch.object(sys, 'path', [str(TOOL.parent), *sys.path]):
+        spec.loader.exec_module(wrapper)
+    for options, diagnostic in [
+        ({'scroll': 2, 'hover': True}, 'scroll'),
+        ({'scroll': -2, 'right': True}, 'scroll'),
+        ({'hover': True, 'right': True}, 'hover'),
+    ]:
+        plan.write_text(json.dumps([{'op': 'pointer', 'points': ['1,2'], **options}]))
+        args = [str(RUN_WALK), '--no-app', '--home', tmp, '--engine', tmp,
+                '--report', str(Path(tmp) / 'report.json'), '--', str(TOOL), '--steps', str(plan), '--out', tmp]
+        with patch.object(sys, 'argv', args), patch.object(wrapper.signal, 'signal'), \
+                patch.object(wrapper, 'guest_slot', side_effect=SystemExit(99)) as slot, \
+                contextlib.redirect_stderr(io.StringIO()) as err:
+            try:
+                wrapper.main()
+            except SystemExit as exc:
+                check(f'pointer options {options} are refused before requesting a slot',
+                      exc.code == 2 and not slot.called and diagnostic in err.getvalue()
+                      and 'refused before any guest is booted' in err.getvalue(), (exc.code, err.getvalue()))
+            else:
+                check(f'pointer options {options} are refused before requesting a slot', False)
 
     # V04: a quote or backslash in a typed message is escaped for the AppleScript literal.
     spec = importlib.util.spec_from_file_location('steps_walk_under_test', TOOL)
@@ -202,6 +230,14 @@ with tempfile.TemporaryDirectory(prefix='steps-walk-test-') as tmp:
         check('a pointer step %r is refused with a sentence' % (bad,), bool(got), got)
     check('a one-point scroll step is valid', mod.problems([{'op': 'pointer', 'points': ['1,2'], 'scroll': -3}]) == [],
           mod.problems([{'op': 'pointer', 'points': ['1,2'], 'scroll': -3}]))
+    for options in [
+        {'points': [], 'find': ['--title', 'X'], 'scroll': -50, 'ctrl': True, 'hover': False, 'right': False},
+        {'points': ['1,2', '2,3'], 'hover': True},
+        {'points': ['1,2', '2,3'], 'right': True},
+        {'points': [], 'find': ['--title', 'X'], 'right': True},
+    ]:
+        got = mod.problems([{'op': 'pointer', **options}])
+        check(f'valid pointer options {options} pass preflight', not got, got)
     for bad in ({'points': ['1,2', '1,2'], 'scroll': 3}, {'points': ['1,2'], 'scroll': 0, 'ctrl': True},
                 {'points': ['1,2'], 'scroll': 51}, {'points': ['1,2'], 'ctrl': True}, {'points': ['1,2'], 'scroll': '3'}):
         got = mod.problems([dict({'op': 'pointer'}, **bad)])
