@@ -364,7 +364,7 @@ CWD="$(field "$(cat "$C/call.json")" 'r["cwd"]')"
 has " $ARGV " " exec "; check "C01 Codex runs as codex exec" $? "$ARGV"
 has "$ARGV" "--sandbox workspace-write"; check "C01 the sandbox is workspace-write" $? "$ARGV"
 has "$ARGV" "--skip-git-repo-check"; check "C01 --skip-git-repo-check" $? "$ARGV"
-has "$ARGV" "-m gpt-6.1-sol"; check "C01 the model is pinned to gpt-6.1-sol" $? "$ARGV"
+has "$ARGV" "-m gpt-6.2-sol"; check "C01 the model is pinned to gpt-6.2-sol" $? "$ARGV"
 has "$ARGV" '-c model_reasoning_effort="high"'; check "C01 the effort is pinned to high" $? "$ARGV"
 has "$ARGV" "exec --ephemeral "
 check "C18 Codex runs --ephemeral: no session or history entry the user's Codex or ChatGPT app shows" $? "$ARGV"
@@ -377,7 +377,7 @@ check "C01 the reviewer works in an export of the tip, never in the author's wor
 ROW="$(last_row)"
 [ "$(field "$ROW" 'r["verdict"]')" = "passed" ]; check "C01 one ledger row: verdict passed" $? "$ROW"
 [ "$(field "$ROW" 'r["tip"]')" = "$TIP1" ]; check "C01 the row names the exact tip" $? "$ROW"
-[ "$(field "$ROW" 'r["reviewer"]')" = "codex" ] && [ "$(field "$ROW" 'r["reviewer_model"]')" = "gpt-6.1-sol" ] \
+[ "$(field "$ROW" 'r["reviewer"]')" = "codex" ] && [ "$(field "$ROW" 'r["reviewer_model"]')" = "gpt-6.2-sol" ] \
   && [ "$(field "$ROW" 'r["reviewer_effort"]')" = "high" ]
 check "C01 the row records the reviewer, its model and effort as Codex's own session start logged them" $? "$ROW"
 [ "$(field "$ROW" 'r["author"]')" = "echo-sonnet-x1" ] && [ "$(field "$ROW" 'r["author_model"]')" = "sonnet" ]
