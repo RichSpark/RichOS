@@ -4744,7 +4744,7 @@ fn main() {
                 // directly. If it is interrupted, the next launch puts it in place as before.
                 #[cfg(target_os = "macos")]
                 if update_startup::leased()
-                    && std::env::var_os("HOME").is_some_and(|home| richos_user_update::has_prepared(Path::new(&home)))
+                    && std::env::var_os("HOME").is_some_and(|home| update_relaunch::has_quit_work(Path::new(&home)))
                 {
                     match update_relaunch::spawn_at_quit_helper() {
                         Ok(()) => eprintln!("[richos] quit: the prepared update is put in place as RichOS closes"),

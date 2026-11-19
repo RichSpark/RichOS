@@ -840,10 +840,10 @@ fn update_timing(scope: &Scope, ctx: &Context, budget: &mut u64) -> Item {
         let elapsed = fields.next()?.strip_prefix("elapsed_ms=")?.parse::<u64>().ok()?;
         if fields.next().is_some()
             || build.len() > 64 || !build.bytes().all(|b| b.is_ascii_alphanumeric() || b".-+".contains(&b))
-            || !matches!(phase, "downloading" | "installing" | "ready" | "restarting" | "restart_notice")
+            || !matches!(phase, "downloading" | "installing" | "ready" | "restarting" | "restart_notice" | "publication")
             || !matches!(outcome, "downloading" | "installing" | "ready" | "restarting" | "idle" | "available"
                 | "signature" | "offline" | "network" | "manifest" | "install" | "busy" | "configuration"
-                | "other" | "failed" | "deferred" | "helper_failed" | "quit_requested")
+                | "other" | "failed" | "deferred" | "helper_failed" | "quit_requested" | "published" | "migrated" | "permission")
         {
             return None;
         }
@@ -1150,6 +1150,8 @@ mod tests {
             (T - 86_400_000, "installing", "ready", 70),
             (T, "installing", "ready", 17_000),
             (T + 3000, "restart_notice", "quit_requested", 3000),
+            (T + 4000, "publication", "migrated", 280),
+            (T + 5000, "publication", "permission", 150),
         ] {
             crate::update_timing::record(&root, at, 42, phase, outcome, ms, "1.3.1");
         }
@@ -1162,6 +1164,8 @@ mod tests {
         assert_eq!(timing.coverage, Coverage::InWindow);
         assert!(timing.text.contains("attempt=42 phase=installing outcome=ready elapsed_ms=17000"));
         assert!(timing.text.contains("phase=restart_notice outcome=quit_requested elapsed_ms=3000"));
+        assert!(timing.text.contains("phase=publication outcome=migrated elapsed_ms=280"));
+        assert!(timing.text.contains("phase=publication outcome=permission elapsed_ms=150"));
         assert!(!timing.text.contains("elapsed_ms=70"));
         assert!(!timing.text.contains("elapsed_ms=81"));
     }
