@@ -6,7 +6,7 @@
 //! | Category | Sources |
 //! |---|---|
 //! | installation | RichDoctor's version; RichOS's Info.plist in `/Applications` and `~/Applications`; macOS version (`SystemVersion.plist`), CPU kind, memory class |
-//! | startup_crash | `~/Library/Logs/RichOS/startup.log` and `.log.1`; `launches.json` under `~/Library/Application Support/com.richos.app/`; matching `.ips` reports under `~/Library/Logs/DiagnosticReports/` |
+//! | startup_crash | `startup.log` and `launch.log` with their previous generations under `~/Library/Logs/RichOS/`; `launches.json` under `~/Library/Application Support/com.richos.app/`; matching `.ips` reports under `~/Library/Logs/DiagnosticReports/` |
 //! | conversation_failure | `conversation-ledger.jsonl` under the app data root: allowlisted fields of `UpstreamFailure`, `TurnInterruptionCause` and `TurnInterrupted` only |
 //! | configuration | `config.json` current settings; bounded RichPass, RichFiles and update diagnostics |
 //! | richscribe | `dictation.log`'s lines in the window (model, timing, errors; it never holds words) |
@@ -396,7 +396,61 @@ fn startup_crash(scope: &Scope, ctx: &Context, budget: &mut u64) -> Vec<Item> {
     }
     items.push(launches(scope, ctx, budget));
     items.extend(crash_reports(scope, ctx, budget));
+    items.push(launch_timing(scope, ctx, budget));
     items
+}
+
+fn launch_timing(scope: &Scope, ctx: &Context, budget: &mut u64) -> Item {
+    let root = scope.logs_root();
+    let source = "Launch timing";
+    let mut lines = Vec::new();
+    let mut missing = Status::Absent;
+    let mut input_bytes = 0;
+    let mut found_file = false;
+    let mut truncated = false;
+    for name in ["launch.log.1", "launch.log"] {
+        match read_source(&root, &root.join(name), scope, budget, true) {
+            Ok(read) => {
+                found_file = true;
+                input_bytes += read.bytes;
+                truncated |= read.truncated;
+                lines.extend(read.text.lines().filter_map(|line| {
+                    let (stamp, rest) = line.split_once(" RichOS ")?;
+                    let at = crate::util::parse_utc_stamp(stamp)?;
+                    let (_, event) = rest.split_once(" [richos] ")?;
+                    if !event.starts_with("launch timing: ")
+                        && !event.starts_with("native splash: ")
+                        && !event.starts_with("launch engine check completed: ")
+                    {
+                        return None;
+                    }
+                    Some((at, line.chars().take(1024).collect::<String>()))
+                }));
+            }
+            Err(Status::Absent) => {}
+            Err(status) => missing = status,
+        }
+    }
+    if !found_file {
+        return unread(Category::StartupCrash, source, missing);
+    }
+    let window = Window { start: scope.window.start / 1000 * 1000, ..scope.window };
+    let (selected, coverage) = pick(&lines, |(at, _)| Some(*at), &window, 12);
+    let mut item = Item::new(Category::StartupCrash, source).expect("random source");
+    item.input_bytes = input_bytes;
+    item.coverage = coverage;
+    item.observed_at = selected.iter().map(|(at, _)| *at).max();
+    item.summary = match coverage {
+        Coverage::InWindow => "Launch timing and splash events in the incident window.",
+        Coverage::MostRecent => "The most recent launch timing and splash events.",
+        _ => "The launch log holds no timing or splash events.",
+    }.into();
+    if missing != Status::Absent {
+        item.note = missing_note(missing, "Some launch log files");
+    }
+    truncated |= selected.len() > 80;
+    let text: Vec<_> = selected.into_iter().rev().take(80).rev().map(|(_, line)| line).collect();
+    finish(item, &text.join("\n"), ctx, truncated || missing != Status::Absent)
 }
 
 fn launches(scope: &Scope, ctx: &Context, budget: &mut u64) -> Item {
@@ -977,6 +1031,33 @@ mod tests {
         assert_eq!(items[1].status, Status::Absent);
         assert_eq!(items[2].status, Status::Absent);
         assert!(items[2].note.contains("No crash record"));
+    }
+
+    #[test]
+    fn launch_timing_collects_the_selected_process_and_splash_outcome() {
+        let h = home();
+        let root = h.0.join("Library/Logs/RichOS");
+        let old = crate::util::utc_stamp(T - 86_400_000);
+        let when = crate::util::utc_stamp(T);
+        write(&root.join("launch.log.1"), &format!(
+            "{old} RichOS 1.2.0 pid 10 [richos] native splash: old outcome\n"
+        ));
+        write(&root.join("launch.log"), &format!(
+            "{when} RichOS 1.2.1 pid 11 [richos] launch timing: splash started playing 350 ms\n\
+             {when} RichOS 1.2.1 pid 11 [richos] native splash: renderer missed the authored endpoint, falling back at 2999 ms of playback at 3349 ms after process start\n\
+             {when} RichOS 1.2.1 pid 11 [richos] launch engine check completed: full, once for this runtime (6535 files read), 1090 ms\n\
+             {when} RichOS 1.2.1 pid 11 [richos] native splash: renderer counted 300 frames, 45 dropped, 0 corrupted at 5320 ms after process start\n\
+             {when} RichOS 1.2.1 pid 11 [richos] unrelated detail\n"
+        ));
+        let items = collect(Category::StartupCrash, &scope(&h.0, Window::around(T)), &Context::default(), 0);
+        let timing = items.iter().find(|item| item.source == "Launch timing").expect("launch evidence");
+        assert_eq!(timing.status, Status::Collected);
+        assert_eq!(timing.coverage, Coverage::InWindow);
+        assert!(timing.text.contains("1.2.1 pid 11") && timing.text.contains("350 ms"));
+        assert!(timing.text.contains("2999 ms of playback at 3349 ms after process start"));
+        assert!(timing.text.contains("renderer counted 300 frames, 45 dropped, 0 corrupted"));
+        assert!(timing.text.contains("launch engine check completed: full, once for this runtime (6535 files read), 1090 ms"));
+        assert!(!timing.text.contains("old outcome") && !timing.text.contains("unrelated detail"));
     }
 
     #[test]

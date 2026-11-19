@@ -457,6 +457,16 @@ fn ensure_app_review_watch(engine: &Path, data_dir: &Path, claude: &Path, at_lau
             return;
         }
     };
+    start_app_review_watch(engine, data_dir, claude, at_launch, &runtime);
+}
+
+fn start_app_review_watch(
+    engine: &Path,
+    data_dir: &Path,
+    claude: &Path,
+    at_launch: bool,
+    runtime: &richos_core::runtime::EngineRuntime,
+) {
     let launch = richos_core::review_watch::Launch {
         python: runtime.python.clone(),
         engine: engine.to_path_buf(),
@@ -514,7 +524,7 @@ fn codex_sink(app: AppHandle) -> richos_core::codex_watch::Sink {
 /// opens, which covers an engine set up after launch and a changed `CODEX_CHANNELS` setting.
 /// Ended by the quit path.
 fn ensure_app_codex_watch(engine: &Path, data_dir: &Path, at_launch: bool) {
-    let Some(sink) = CODEX_SINK.get() else { return };
+    if CODEX_SINK.get().is_none() { return; }
     let runtime = match richos_core::runtime::verify_engine(engine) {
         Ok(runtime) => runtime,
         Err(e) => {
@@ -524,6 +534,16 @@ fn ensure_app_codex_watch(engine: &Path, data_dir: &Path, at_launch: bool) {
             return;
         }
     };
+    start_app_codex_watch(engine, data_dir, at_launch, &runtime);
+}
+
+fn start_app_codex_watch(
+    engine: &Path,
+    data_dir: &Path,
+    at_launch: bool,
+    runtime: &richos_core::runtime::EngineRuntime,
+) {
+    let Some(sink) = CODEX_SINK.get() else { return };
     let launch = richos_core::codex_watch::Launch {
         python: runtime.python.clone(),
         engine: engine.to_path_buf(),
@@ -538,6 +558,121 @@ fn ensure_app_codex_watch(engine: &Path, data_dir: &Path, at_launch: bool) {
         Ok(_) => {}
         Err(e) => eprintln!("[richos] Codex watch: the watcher could not start ({e})"),
     }
+}
+
+fn check_boot_engine(
+    app: AppHandle,
+    engine: PathBuf,
+    data_dir: PathBuf,
+    claude: PathBuf,
+    report_setup: bool,
+    start_cleanup: impl FnOnce(bool) + Send + 'static,
+) {
+    launch_timing::mark_engine_check_started();
+    let verify_engine = engine.clone();
+    let started = richos_voice::stt::check_delivered_runtime_bin(move || {
+        let started = std::time::Instant::now();
+        let verdict = richos_core::runtime::verify_engine(&verify_engine);
+        launch_timing::note_engine_check(
+            verdict.as_ref().ok().map(|runtime| richos_core::runtime::files_hashed_under(&runtime.root)),
+            started.elapsed().as_millis() as u64,
+        );
+        let bin = verdict.as_ref().ok().map(|runtime| runtime.root.join("bin"));
+        (bin, verdict)
+    }, move |verdict| {
+        start_cleanup(verdict.is_ok());
+        if report_setup && report_startup_setup(&app, Some(&engine)) {
+            let install_app = app.clone();
+            if let Err(error) = app.run_on_main_thread(move || update_engine_by_itself(install_app)) {
+                setup_view::end_engine_update();
+                eprintln!("[richos] launch engine check: the engine update could not reach the app ({error})");
+            }
+        }
+        let runtime = match verdict {
+            Ok(runtime) => runtime,
+            Err(error) => {
+                eprintln!("[richos] launch engine check: review and Codex watchers await a verified engine ({error})");
+                return;
+            }
+        };
+        // Start owned children through the app event loop so quit also owns their cleanup.
+        if let Err(error) = app.run_on_main_thread(move || {
+            start_app_review_watch(&engine, &data_dir, &claude, true, &runtime);
+            start_app_codex_watch(&engine, &data_dir, true, &runtime);
+        }) {
+            eprintln!("[richos] launch engine check: watchers could not reach the app ({error})");
+        }
+    });
+    if let Err(error) = started {
+        eprintln!("[richos] launch engine check: could not start the verifier ({error})");
+        launch_timing::note_engine_check(None, 0);
+    }
+}
+
+fn report_startup_setup(app: &AppHandle, boot_engine: Option<&Path>) -> bool {
+    let s = setup_view::detect(boot_engine);
+    // AFTER AN UPDATE THE APP INSTALLS ITS OWN BUILD'S ENGINE BY ITSELF (the CEO,
+    // 2026-11-14). The flag is set HERE, before `AppState` exists and so before the
+    // window can read the setup status: the sheet never asks for this engine. The
+    // install starts once `AppState` is managed (`update_engine_by_itself`, below).
+    // Not under the updater selftest, which runs headless, as the video tools.
+    let engine_update_now = s.engine_update && updates::selftest_mode().is_none();
+    if engine_update_now {
+        setup_view::begin_engine_update();
+        eprintln!(
+            "[richos] engine update: the installed engine is an earlier build's, so this build installs its own by itself, with no setup sheet."
+        );
+    }
+    if s.complete() {
+        eprintln!("[richos] first-run setup: nothing missing.");
+    } else {
+        for c in s.needs() {
+            let what = match c {
+                richos_core::setup::Component::ClaudeCode => &s.claude,
+                richos_core::setup::Component::Engine => &s.engine,
+                richos_core::setup::Component::MediaTools => &s.media_tools,
+            };
+            // ONE PLACE PER LINE, and never a trailing colon with nothing after
+            // it. On 2026-09-17 the published nightly printed exactly that —
+            // `the RichOS engine is NOT installed — looked in: ` — on four
+            // consecutive launches, because the list was empty and `join("; ")`
+            // on an empty Vec is the empty string. A detector that names no
+            // candidates reads as one that can never find anything, which is
+            // what it was; `setup.rs` now guarantees the list is non-empty, and
+            // this prints it a place at a time so a rejection reason (which
+            // carries its own em dash) is legible rather than run together with
+            // the next path. It names the component by its machine name
+            // (`setup_missing_line`), never by the name on the sheet.
+            eprintln!("{}", setup_missing_line(c, what.looked_in.len()));
+            for place in &what.looked_in {
+                eprintln!("[richos]   looked in {place}");
+            }
+        }
+        // WHETHER THIS BUILD CAN FIX IT. An unpinned build must say so here, not
+        // discover it when he presses the button.
+        match s.engine_pin_version.as_deref() {
+            Some(v) if !s.engine.present => {
+                eprintln!("[richos] first-run setup: this build installs engine {v}.")
+            }
+            None if !s.engine.present => eprintln!(
+                "[richos] first-run setup: this build carries NO engine pin, so it \
+                 cannot install one. Build with RICHOS_ENGINE_VERSION / \
+                 RICHOS_ENGINE_URL / RICHOS_ENGINE_SHA256 set."
+            ),
+            _ => {}
+        }
+        // THE VIDEO TOOLS START DOWNLOADING NOW, in the background, before the window
+        // asks anything (the CEO, 2026-10-07: "The speech models and video tools begin
+        // downloading in the background at first launch, while the user does the rest
+        // of setup."). Nothing in first setup waits for them (`setup_view`, the video
+        // tools block). Not under the updater selftest, which runs headless.
+        if s.needs().contains(&richos_core::setup::Component::MediaTools)
+            && updates::selftest_mode().is_none()
+        {
+            setup_view::start_video_tools_download(app);
+        }
+    }
+    engine_update_now
 }
 
 struct WorkNotice {
@@ -2684,7 +2819,7 @@ fn main() {
             // BEFORE THE FIRST FRAME: A CLOSED LIST (Sage's plan 2026-11-14, rule 3)
             // =====================================================================
             //
-            // From here to `first_frame::commit` runs only what the first frame needs: the data
+            // Before the initial window, run only what its first frame needs: the data
             // folder, the launch decision, the launch record, the display sizes, the saved window
             // position, the splash switch, the window. A test holds the list
             // (`first_frame::tests`); a step that starts threads or programs waits for the page
@@ -2853,8 +2988,6 @@ fn main() {
                 .and_then(|entry| splash_player::locate(app.handle(), &data_dir, entry, opening_settings.sound));
             #[cfg(target_os = "macos")]
             let native_bar = pack.as_ref().and_then(|pack| pack.bar);
-            #[cfg(not(target_os = "macos"))]
-            let native_bar = None;
             #[cfg(target_os = "macos")]
             let mut pack = if activation.presentation == activation::Presentation::Regular {
                 pack.and_then(splash_player::prepare)
@@ -2906,9 +3039,13 @@ fn main() {
                 eprintln!("[richos] window: {}", placement.describe());
                 let window_splash = splash.as_ref().filter(|_| kind == LaunchKind::Fresh);
                 #[cfg(target_os = "macos")]
-                let native = window_splash.is_some() && pack.is_some();
-                #[cfg(not(target_os = "macos"))]
-                let native = false;
+                if let Some((pick, worker)) = window_splash.and_then(|pick| pack.take().map(|worker| (pick, worker))) {
+                    start_native_window(
+                        app.handle(), window_config, placement, geometry_path.clone(), start_ordinal,
+                        NativeOpening { pick, worker, bar: native_bar }, openings_record.clone(),
+                    )?;
+                    continue;
+                }
                 let mut builder = tauri::WebviewWindowBuilder::from_config(app.handle(), window_config)?
                     // THE SIZE THE DISPLAY CAN HOLD, not the size the config asked for. On
                     // his 1920-wide displays these are still 1400 x 880 — the constant was
@@ -2926,7 +3063,7 @@ fn main() {
                     .initialization_script(launch_init_script(
                         kind,
                         start_ordinal,
-                        window_splash.map(|pick| (pick.id.as_str(), native, if native { native_bar } else { None })),
+                        window_splash.map(|pick| (pick.id.as_str(), false, None)),
                     ))
                     .initialization_script(openings_record.clone())
                     // THE FIRST FRAME (Sage's plan 2026-11-14, rule 1, as the CEO narrowed it:
@@ -2987,22 +3124,9 @@ fn main() {
                 }
                 let window = builder.build()?;
                 launch_timing::mark_window();
-                #[cfg(target_os = "macos")]
-                let playing = native && pack.take().is_some_and(|pack| splash_player::show(&window, pack));
-                #[cfg(not(target_os = "macos"))]
-                let playing = false;
-                #[cfg(target_os = "macos")]
-                if native && !playing {
-                    splash_player::did_not_attach();
-                }
-                first_frame::commit(&window);
-                #[cfg(target_os = "macos")]
-                if playing {
-                    splash_player::window_visible();
-                }
                 launch_timing::mark_first_frame(kind == LaunchKind::Fresh);
                 if let Some(pick) = window_splash {
-                    launch_timing::note_splash(&pick.id, playing);
+                    launch_timing::note_splash(&pick.id, false);
                 }
                 #[cfg(target_os="macos")]
                 cleaner_host::watch_main(&window);
@@ -3489,24 +3613,9 @@ fn main() {
             // would otherwise be asked every launch.
             let boot_engine: Option<PathBuf> =
                 resolution.source.is_some().then(|| engine.clone());
-            // THE SPEECH DECODER THE ENGINE DELIVERED. `whisper-cli` is in the verified runtime
-            // since 2026-10-07 (build-runtimes.py); voice resolves it before PATH or Homebrew.
-            // Set here, before the window can ask `voice_readiness`, and again by first-run
-            // setup when it installs an engine (`setup_view::run`). The full hash this costs is
-            // not paid twice: the recovery block below verifies the same runtime and
-            // `runtime.rs` re-reads only files whose stamp changed.
-            // It reads no runtime bytes once the runtime was verified whole (at its install, or
-            // once when first met; `runtime.rs`), and the launch line says which and its cost.
-            let engine_check = std::time::Instant::now();
-            let first_runtime = boot_engine.as_deref().map(richos_core::runtime::verify_engine);
-            if let Some(verdict) = &first_runtime {
-                launch_timing::note_engine_check(
-                    verdict.as_ref().ok().map(|runtime| richos_core::runtime::files_hashed_under(&runtime.root)),
-                    engine_check.elapsed().as_millis() as u64,
-                );
-            }
-            richos_voice::stt::set_delivered_runtime_bin(
-                first_runtime.and_then(Result::ok).map(|runtime| runtime.root.join("bin")),
+            let setup_on_worker = boot_engine.is_some() && !richos_core::setup::engine_update_due(
+                &richos_core::setup::SetupPaths::from_process(),
+                richos_core::setup::engine_pin().as_ref(),
             );
             // THE CELL THE LEASE FACTORY READS. Shared, so a successful first-run install can
             // re-point it without a relaunch (`setup_view::run`).
@@ -3641,16 +3750,9 @@ fn main() {
             work.set_output_store(output_store.clone());
             work.start();
             eprintln!("[richos] compute connection: starts with the first cancellable request over {}", claude_bin.display());
-            // The second review's watcher, the host's own child, from launch to quit (slice 4).
-            if let Some(dir) = boot_engine.as_deref() {
-                ensure_app_review_watch(dir, &data_dir, &claude_bin, true);
-            }
             // Codex's entries, for Stu, the app's own child from launch to quit (gap X).
             if CODEX_SINK.set(codex_sink(app.handle().clone())).is_err() {
                 eprintln!("[richos] Codex watch: its sink was already set");
-            }
-            if let Some(dir) = boot_engine.as_deref() {
-                ensure_app_codex_watch(dir, &data_dir, true);
             }
             // **THE APP CLEANS UP ITS OWN GARBAGE, NO MATTER WHAT** (CEO §54 addendum 2): what an
             // earlier run left (a crash or a force-quit included) goes now, on its own thread;
@@ -3658,14 +3760,28 @@ fn main() {
             // reaper decides and deletes, scoped to this app (`richos_core::app_cleanup`).
             let cleanup = richos_core::app_cleanup::hook(Arc::clone(&engine_cell), data_dir.clone());
             work.set_cleanup(Arc::clone(&cleanup));
-            cleanup(richos_core::app_cleanup::Moment::Start);
-            // And whenever the user's disk drops low while the app runs (every user, not only the
-            // scheduled job on one Mac): the same sweep, now also taking build output in the
-            // repositories the user connected.
-            // And when a drive holding the shared Cargo caches drops below its target, even with
-            // the app's own disk fine: the engine is asked each check (`--floor-check`).
-            richos_core::app_cleanup::watch_disk(data_dir.clone(), Arc::clone(&cleanup),
-                richos_core::app_cleanup::floor_check(Arc::clone(&engine_cell), data_dir.clone()));
+            // The disk monitor makes its first query immediately. Both it and
+            // the startup sweep wait for the same verification as the decoder.
+            let start_cleanup = {
+                let engine = Arc::clone(&engine_cell);
+                let data = data_dir.clone();
+                let cleanup = Arc::clone(&cleanup);
+                move |sweep: bool| {
+                    if sweep {
+                        cleanup(richos_core::app_cleanup::Moment::Start);
+                    }
+                    let floor = richos_core::app_cleanup::floor_check(engine, data.clone());
+                    richos_core::app_cleanup::watch_disk(data, cleanup, floor);
+                }
+            };
+            if let Some(dir) = boot_engine.clone() {
+                check_boot_engine(
+                    app.handle().clone(), dir, data_dir.clone(), claude_bin.clone(), setup_on_worker,
+                    start_cleanup,
+                );
+            } else {
+                start_cleanup(true);
+            }
 
             // Release grants from the old process. Stu owns job recovery through his inbox.
             work.set_screen(std::sync::Arc::new(screen::MacScreen));
@@ -3680,71 +3796,8 @@ fn main() {
             // the condition is visible before a customer discovers it as a broken app. On the
             // CEO's own machine it says nothing is missing and costs two `stat` calls.
             // ==============================================================================
-            let engine_update_now = {
-                let s = setup_view::detect(boot_engine.as_deref());
-                // AFTER AN UPDATE THE APP INSTALLS ITS OWN BUILD'S ENGINE BY ITSELF (the CEO,
-                // 2026-11-14). The flag is set HERE, before `AppState` exists and so before the
-                // window can read the setup status: the sheet never asks for this engine. The
-                // install starts once `AppState` is managed (`update_engine_by_itself`, below).
-                // Not under the updater selftest, which runs headless, as the video tools.
-                let engine_update_now = s.engine_update && updates::selftest_mode().is_none();
-                if engine_update_now {
-                    setup_view::begin_engine_update();
-                    eprintln!(
-                        "[richos] engine update: the installed engine is an earlier build's, so this build installs its own by itself, with no setup sheet."
-                    );
-                }
-                if s.complete() {
-                    eprintln!("[richos] first-run setup: nothing missing.");
-                } else {
-                    for c in s.needs() {
-                        let what = match c {
-                            richos_core::setup::Component::ClaudeCode => &s.claude,
-                            richos_core::setup::Component::Engine => &s.engine,
-                            richos_core::setup::Component::MediaTools => &s.media_tools,
-                        };
-                        // ONE PLACE PER LINE, and never a trailing colon with nothing after
-                        // it. On 2026-09-17 the published nightly printed exactly that —
-                        // `the RichOS engine is NOT installed — looked in: ` — on four
-                        // consecutive launches, because the list was empty and `join("; ")`
-                        // on an empty Vec is the empty string. A detector that names no
-                        // candidates reads as one that can never find anything, which is
-                        // what it was; `setup.rs` now guarantees the list is non-empty, and
-                        // this prints it a place at a time so a rejection reason (which
-                        // carries its own em dash) is legible rather than run together with
-                        // the next path. It names the component by its machine name
-                        // (`setup_missing_line`), never by the name on the sheet.
-                        eprintln!("{}", setup_missing_line(c, what.looked_in.len()));
-                        for place in &what.looked_in {
-                            eprintln!("[richos]   looked in {place}");
-                        }
-                    }
-                    // WHETHER THIS BUILD CAN FIX IT. An unpinned build must say so here, not
-                    // discover it when he presses the button.
-                    match s.engine_pin_version.as_deref() {
-                        Some(v) if !s.engine.present => {
-                            eprintln!("[richos] first-run setup: this build installs engine {v}.")
-                        }
-                        None if !s.engine.present => eprintln!(
-                            "[richos] first-run setup: this build carries NO engine pin, so it \
-                             cannot install one. Build with RICHOS_ENGINE_VERSION / \
-                             RICHOS_ENGINE_URL / RICHOS_ENGINE_SHA256 set."
-                        ),
-                        _ => {}
-                    }
-                    // THE VIDEO TOOLS START DOWNLOADING NOW, in the background, before the window
-                    // asks anything (the CEO, 2026-10-07: "The speech models and video tools begin
-                    // downloading in the background at first launch, while the user does the rest
-                    // of setup."). Nothing in first setup waits for them (`setup_view`, the video
-                    // tools block). Not under the updater selftest, which runs headless.
-                    if s.needs().contains(&richos_core::setup::Component::MediaTools)
-                        && updates::selftest_mode().is_none()
-                    {
-                        setup_view::start_video_tools_download(app.handle());
-                    }
-                }
-                engine_update_now
-            };
+            let engine_update_now = !setup_on_worker
+                && report_startup_setup(app.handle(), boot_engine.as_deref());
 
             // Left-navigation view state — same app data dir, same durability posture as
             // the ledger and config, and never fatal: a corrupt file degrades to defaults
@@ -4794,12 +4847,22 @@ fn first_frame_painted(app: AppHandle) {
     }
 }
 
+#[derive(Debug, PartialEq, serde::Serialize)]
+#[serde(tag = "state", rename_all = "kebab-case")]
+enum SplashPlayback {
+    Finished,
+    Fallback {
+        #[serde(rename = "elapsedMs")]
+        elapsed_ms: u64,
+    },
+}
+
 #[richos_command::command]
-async fn splash_native_finished() -> bool {
+async fn splash_native_finished() -> SplashPlayback {
     #[cfg(target_os = "macos")]
     { splash_player::finished().await }
     #[cfg(not(target_os = "macos"))]
-    { false }
+    { SplashPlayback::Fallback { elapsed_ms: 0 } }
 }
 
 #[richos_command::command]
@@ -6730,7 +6793,9 @@ fn clear_dictation_drafts(app: &AppHandle) {
 /// what makes it ask, and it is the only signal it needs.
 #[richos_command::command]
 fn setup_status(state: State<AppState>) -> serde_json::Value {
-    setup_view::view(&setup_view::detect(Some(&state.engine_dir.lock().unwrap())))
+    richos_voice::stt::wait_for_delivered_runtime_check();
+    let engine = state.engine_dir.lock().unwrap().clone();
+    setup_view::view(&setup_view::detect(Some(&engine)))
 }
 
 /// **May Rich offer dictation now?** (round 19, state 4) Dictation is there, the offer was never
@@ -10537,6 +10602,89 @@ fn remember_window_geometry(window: &tauri::WebviewWindow, path: std::path::Path
             let _ = nudge.send(());
         }
     });
+}
+
+#[cfg(target_os = "macos")]
+struct NativeOpening<'a> {
+    pick: &'a splash_pick::Entry,
+    worker: std::thread::JoinHandle<Option<splash_player::Prepared>>,
+    bar: Option<[f64; 4]>,
+}
+
+#[cfg(target_os = "macos")]
+fn start_native_window(
+    app: &AppHandle,
+    config: &tauri::utils::config::WindowConfig,
+    placement: window_geometry::Placement,
+    geometry_path: PathBuf,
+    start_ordinal: Option<u64>,
+    opening: NativeOpening<'_>,
+    openings_record: String,
+) -> tauri::Result<()> {
+    let NativeOpening { pick, worker, bar } = opening;
+    let background = first_frame::color(splash_pick::parse_hex(&pick.ground)
+        .unwrap_or(first_frame::SPLASH_GROUND));
+    let mut builder = tauri::window::WindowBuilder::from_config(app, config)?
+        .inner_size(placement.width, placement.height)
+        .min_inner_size(placement.min_width, placement.min_height)
+        .background_color(background)
+        .focused(true)
+        .visible(true);
+    if let Some((x, y)) = placement.position {
+        builder = builder.position(x, y);
+    }
+    let window = builder.build()?;
+    launch_timing::mark_window();
+    let playing = splash_player::show_on_window(&window, worker);
+    if let Err(error) = window.set_focus() {
+        eprintln!("[richos] window did not come to the front: {error}");
+    }
+    // A synchronous flush of Tao's plain NSView calls its redraw handler while
+    // setup still holds the event-loop lock. Start after AppKit gets control back.
+    if playing {
+        splash_player::window_visible();
+    } else {
+        splash_player::did_not_attach();
+    }
+    launch_timing::mark_first_frame(true);
+    launch_timing::note_splash(&pick.id, playing);
+
+    let config = config.clone();
+    let launch_script = launch_init_script(LaunchKind::Fresh, start_ordinal,
+        Some((&pick.id, playing, if playing { bar } else { None })));
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        if playing {
+            splash_player::wait_for_start().await;
+        }
+        let main = app.clone();
+        if let Err(error) = app.run_on_main_thread(move || {
+            if main.get_window(window.label()).is_none() {
+                return;
+            }
+            let result = (|| -> tauri::Result<()> {
+                let webview = tauri::webview::WebviewBuilder::from_config(&config)
+                    .initialization_script(launch_script)
+                    .initialization_script(openings_record)
+                    .initialization_script_for_all_frames(webview_menu::EVERY_FRAME)
+                    .background_color(background)
+                    .auto_resize();
+                window.add_child(webview, tauri::LogicalPosition::new(0.0, 0.0), window.inner_size()?)?;
+                let page = main.get_webview_window(window.label()).ok_or(tauri::Error::WindowNotFound)?;
+                cleaner_host::watch_main(&page);
+                remember_window_geometry(&page, geometry_path);
+                mac_attachments::listen_for_drops(&page);
+                Ok(())
+            })();
+            if let Err(error) = result {
+                eprintln!("[richos] native splash: could not attach the Home page ({error})");
+                drop(window.close());
+            }
+        }) {
+            eprintln!("[richos] native splash: Home attachment could not reach the main thread ({error})");
+        }
+    });
+    Ok(())
 }
 
 /// WHAT THE PAGE KNOWS ABOUT THIS START BEFORE ANY COMMAND CAN ANSWER: the curtain decides in the
