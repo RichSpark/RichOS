@@ -33,6 +33,7 @@ class BundleOutput(unittest.TestCase):
                     out = Path('deliverables/result.zip') if relative else root / 'absolute/result.zip'
                     args = ['--out', str(out)]
                     if helper == 'branch-bundle.sh':
+                        shutil.copy2(HERE.parent / 'chat-sounds.py', scripts / 'chat-sounds.py')
                         args += ['--engine-version', '1', '--engine-url', 'fixture', '--engine-sha256', 'fixture']
                     else:
                         for name in ('RichOS', 'RichDoctor'):
@@ -41,7 +42,7 @@ class BundleOutput(unittest.TestCase):
                             subprocess.run(['ditto', '-c', '-k', '--keepParent', str(app.parent), str(root / f'{name}.zip')], check=True)
                         args += ['--in', str(root / 'RichOS.zip'), '--richdoctor-zip', str(root / 'RichDoctor.zip')]
                     done = subprocess.run(['bash', str(scripts / 'testvm' / helper), *args], cwd=root,
-                                          env={**os.environ, 'PATH':str(bin_dir) + ':' + os.environ['PATH']}, capture_output=True, text=True, timeout=30)
+                                          env={**os.environ, 'PATH':str(bin_dir) + ':' + os.environ['PATH'], 'RICHOS_CHAT_SOUNDS': ''}, capture_output=True, text=True, timeout=30)
                     self.assertEqual(done.returncode, 0, done.stderr)
                     self.assertTrue((root / out).is_file(), done.stdout)
 
@@ -56,6 +57,7 @@ class BundleOutput(unittest.TestCase):
                 (scripts / 'lib').mkdir()
                 (root / 'app/src-tauri').mkdir()
                 shutil.copy2(HERE / 'branch-bundle.sh', scripts / 'testvm' / 'branch-bundle.sh')
+                shutil.copy2(HERE.parent / 'chat-sounds.py', scripts / 'chat-sounds.py')
                 bin_dir = root / 'bin'; bin_dir.mkdir()
                 exe = root / 'richos-tauri'; exe.write_text('fixture'); exe.chmod(0o755)
                 seen = root / 'cargo-args'
@@ -68,7 +70,7 @@ class BundleOutput(unittest.TestCase):
                 (scripts / 'lib/gui-launch.sh').write_text('gui_identity() { echo fixture 1.0; }\ngui_bundle() { mkdir -p "$1"; cp "$2" "$1/exe"; }\n')
                 args = ['--out', str(root / 'out.zip'), '--engine-version', '1', '--engine-url', 'fixture', '--engine-sha256', 'fixture']
                 done = subprocess.run(['bash', str(scripts / 'testvm/branch-bundle.sh'), *args, *(['--release'] if release else [])],
-                                      cwd=root, env={**os.environ, 'PATH': str(bin_dir) + ':' + os.environ['PATH']},
+                                      cwd=root, env={**os.environ, 'PATH': str(bin_dir) + ':' + os.environ['PATH'], 'RICHOS_CHAT_SOUNDS': ''},
                                       capture_output=True, text=True, timeout=30)
                 self.assertEqual(done.returncode, 0, done.stderr)
                 self.assertEqual('--release' in seen.read_text().split(), release, seen.read_text())

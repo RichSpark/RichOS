@@ -70,6 +70,9 @@
 [richos] idle sessions: ended {} conversation session(s) idle for {} minute(s): {}; each resumes on its next message
 [richos] incoming message: {}
 [richos] intake reconciliation at boot: {}
+# Recovery runs on persisted work from an interrupted launch.
+[richos] chat-list recovery=exhausted attempts={}
+[richos] chat-list recovery=queued attempt={}
 [richos] launch record: could not mark a clean exit: {}
 [richos] launch record: {}
 [richos] loro correction desk is open but no context compiler is configured — nothing was ever put in front of Rich, so no correction can name a record and the trigger will stay silent

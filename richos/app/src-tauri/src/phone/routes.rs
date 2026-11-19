@@ -121,6 +121,7 @@ pub struct Accepted {
 /// module's reach is an enumerable list. There is no path from here to the ledger, to the raw
 /// event stream or to a `Timeline`, because those are not on this trait (plan §4.2 iii).
 pub trait Bridge: Send + Sync {
+    fn reply_seen(&self, _thread: &str, _message: &str) {}
     fn questions_available(&self)->bool {false}
     fn answer_question(&self,_thread:&str,_answer:richos_core::questions::AnswerRequest)->Result<Value,String> {Err("Question answers are unavailable.".into())}
     fn question_shown(&self,_thread:&str,_question:&str)->Result<(),String> {Err("Question receipts are unavailable.".into())}
@@ -437,6 +438,9 @@ fn pair_or_device_record(channel: &Channel, request: &Incoming) -> Outcome {
         if let Err(error) = channel.devices.record_reply_receipt(seen) {
             eprintln!("[richos] could not record the phone reply receipt: {error}");
             return Outcome::NotFound;
+        }
+        if let Some((thread, message)) = seen {
+            channel.bridge.reply_seen(thread, message);
         }
     }
     // **A cursor is only meaningful inside the conversation that numbered it**, so it is recorded

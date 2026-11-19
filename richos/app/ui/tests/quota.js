@@ -334,13 +334,19 @@ async function main() {
     assert(card.includes("49% used") && card.includes("99%"), card);
     await page.close();
   });
-  await run.check("paused conversation status is scoped and quota details require Technical view", async () => {
-    const held = [{kind: "agent", id: "agt_frank_1", name: "Frank", sinceAt: now, threadId: "general"},
-      {kind: "agent", id: "other", name: "Another thread", sinceAt: now, threadId: "elsewhere"}];
-    const page = await open("dark", quota, 100, {held, released: []}, true);
+  await run.check("a paused chat shows its resume time in both views and names the quota in Technical view", async () => {
+    const fixedTime = new Date("2026-11-19T15:20:00Z");
+    const pausedQuota = { ...quota, checkedAt: +fixedTime, windows: quota.windows.map(window => ({
+      ...window, resetsAt: +fixedTime + (window.resetsAt - now),
+    })) };
+    const held = [{kind: "agent", id: "agt_frank_1", name: "Frank", sinceAt: +fixedTime, threadId: "general"},
+      {kind: "agent", id: "other", name: "Another thread", sinceAt: +fixedTime, threadId: "elsewhere"}];
+    const page = await open("dark", pausedQuota, 100, {held, released: []}, true,
+      { fixedTime, locale: "en-US", timezoneId: "UTC" });
     await page.click("#set-btn");
     await page.waitForFunction(() => !document.getElementById("quota-work-status").hidden);
-    assertEqual(await page.locator("#quota-work-status").innerText(), "1 agent paused. Their work is saved.");
+    assertEqual(await page.locator("#quota-work-status").innerText(),
+      "1 agent paused. Their work is saved. Continues by itself at about 5:00 pm.");
     assert((await page.locator("#drill-chip-zone").innerText()).includes("1 paused"));
     assert(!(await page.locator("#drill-chip-zone").innerText()).includes("1 working"));
     await page.evaluate(() => window.RichHome.hide("quota-test"));
@@ -348,8 +354,8 @@ async function main() {
     assert((await page.locator("#slideover-body").innerText()).includes("Frank · paused"));
     await page.keyboard.press("Escape");
     await page.click("#set-btn"); await enableTechnical(page);
-    assert((await page.locator("#quota-work-status").innerText()).includes("for the quota"));
-    assert((await page.locator("#quota-work-status").innerText()).includes("resume just after"));
+    assertEqual(await page.locator("#quota-work-status").innerText(),
+      "1 agent paused for the quota · can resume just after 5:00 pm");
     await page.close();
   });
   for (const theme of ["dark", "light"]) await run.check(theme + " state matrix fits and readable text meets contrast floors", async () => {

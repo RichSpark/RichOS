@@ -91,6 +91,7 @@
       const saved={answer,method,threadId:item.threadId,display:labels(answer)};
       try {localStorage.setItem(pendingKey,JSON.stringify(saved));}
       catch {status.textContent="Your answer could not be saved on this Mac. Try again after freeing storage.";return;}
+      if(optionIds.length && method!=="typed") window.RichBridge.invoke("play_chat_answer_sound").catch(()=>{});
       await sendSaved(saved);
     }
     async function sendSaved(saved) {

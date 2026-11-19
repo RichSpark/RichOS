@@ -31,6 +31,7 @@ const {
   createRun,
   assert,
   assertEqual,
+  awaitSettled,
   shot,
   publishShotFile,
   openThread,
@@ -560,7 +561,7 @@ async function main() {
       lines.push(assertAA(await measure(page, "#terminal-setup .tg-sheet"), theme, "Reading"));
       await page.evaluate(() => window.__RICHOS_MOCK__.terminalRelease());
       await page.waitForFunction(() => !document.querySelector("#ts-changes").hidden);
-      await page.evaluate(() => Promise.all(document.getAnimations().map((a) => a.finished.catch(() => null))));
+      await awaitSettled(page);
       lines.push(assertAA(await measure(page, "#terminal-setup .tg-sheet"), theme, "What changed"));
       await page.context().close();
 
@@ -608,7 +609,6 @@ async function main() {
       await openTerminal(page);
       await page.click("#ts-read");
       await page.waitForFunction(() => !document.querySelector("#ts-changes").hidden);
-      await page.evaluate(() => Promise.all(document.getAnimations().map((a) => a.finished.catch(() => null))));
       const changes = await shot(page, "terminal-changes-" + theme, { fullPage: false, parkPointer: true });
       publishShotFile(changes.file, path.join(SHOTS, "terminal-changes-" + theme + ".png"));
       done.push("terminal-changes-" + theme);

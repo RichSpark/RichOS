@@ -357,8 +357,8 @@ const menuRows = (page) =>
       .filter((n) => !n.matches(".sm-group, .sm-divider, .popover-hint"))
       .flatMap((n) => (n.classList.contains("set-floor") ? [...n.children] : [n]))
       .map((n) => {
-        // The Codex row's name is its title; the rest of its text is its tooltip's words.
-        const name = n.querySelector(".set-name, #cx-title, .popover-title");
+        // The Codex row and the Notifications section have their own titles.
+        const name = n.querySelector(".set-name, #cx-title, .popover-title, .chat-notification-title");
         return name ? name.textContent.trim() : n.textContent.trim();
       })
   );
@@ -1127,10 +1127,11 @@ async function main() {
       // feedback keeps its place; its switch never gates counting (SwearMeter V3).
       // Terminal setup is the last row of "Working with Rich" and Your name in Git sits directly
       // under Connected folders (round 41, CEO 2026-10-25). The Context meter switch is the
-      // last row of "How it looks" (round 83 screen 1, CEO 2026-11-16).
+      // last row of "How it looks" (round 83 screen 1, CEO 2026-11-16). Round 93 groups
+      // the Mac and sound switches under Notifications in "Working with Rich".
       [
         "Theme", "Text size", "Oxford comma: OFF", "Technical view", "Claude Code quota", "Keep the stored output", "Show SwearMeter", "Context meter",
-        "Your instructions", "Search folders", "Rich's model and effort", "How much should Rich interrupt you?", "Use Rich from your phone", "RichPass", "Terminal setup",
+        "Your instructions", "Search folders", "Rich's model and effort", "How much should Rich interrupt you?", "Notifications", "Use Rich from your phone", "RichPass", "Terminal setup",
         "Company", "Home screen", "Token spend", "Let Codex review your team’s work", "Start meeting notes", "Claude accounts",
         "Connected folders (repositories)", "Your name in Git", "Memory folder", "Updates",
         "Your name", "Splash screen", "Bust a bug!", "Request a feature",
@@ -1441,7 +1442,7 @@ async function main() {
     // neither needs a px declaration.
     assertEqual(
       SOURCES.styleSources(),
-      ["fonts/fonts.css", "style.css", "cleaner.css", "search-folder-settings.css", "speckle.css", "splash.css", "openings.css", "home.css", "instructions-update.css", "terminal-and-git.css", "suite-tools.css", "video-anywhere.css", "context-meter.css", "keep-alive.css", "dictation-overlay.css", "meeting-panel.css"],
+      ["fonts/fonts.css", "style.css", "chat-list.css", "cleaner.css", "search-folder-settings.css", "speckle.css", "splash.css", "openings.css", "home.css", "instructions-update.css", "terminal-and-git.css", "suite-tools.css", "video-anywhere.css", "context-meter.css", "keep-alive.css", "dictation-overlay.css", "meeting-panel.css"],
       "the shipped windows have a different set of stylesheets from the declared list"
     );
     // THE TWO DERIVATIONS ARE JOINED, the way `lib/harness.js` joins its two PNG decoders: a
@@ -1591,9 +1592,8 @@ async function main() {
     const BELOW_FLOOR = {
       ".rail-icon-btn": { kind: "glyph", why: "the rail's icon buttons (the drawer's and the pane's close): one symbol each, each with an aria-label of its own" },
       ".nav-disclosure": { kind: "glyph", why: "the group disclosure triangle in the rail — rotation is the state, and the group's label is beside it" },
-      ".nav-status": { kind: "glyph", why: "the per-conversation status mark, a SHAPE (§18: a state is never carried by color alone), with the word in the row's accessible label" },
       ".tl-chevron": { kind: "glyph", why: "the turn's expand/collapse chevron; the row it belongs to carries the readable label" },
-      ".tl-activity-mark": { kind: "glyph", why: "the activity row's status shape, the same symbol vocabulary as .nav-status, beside 16px text that says the state" },
+      ".tl-activity-mark": { kind: "glyph", why: "the activity row's status shape, beside 16px text that says the state" },
       ".tl-tech-chevron": { kind: "glyph", why: "the technical row's expand chevron. Its ink is measured on the painted glass, on the plain ground with the speckle hidden, by contrast.js check 17 (6.46:1 dark, 5.14:1 light) against a 4.5:1 floor, which is stricter than the 3:1 a non-text indicator owes" },
       ".chrome-select-chevron": { kind: "glyph", why: "the `this opens a list` cue on a <select>; aria-hidden and pointer-events:none, so the control's own accessible name is the whole of what is read" },
     };
