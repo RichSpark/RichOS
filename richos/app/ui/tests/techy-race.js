@@ -61,6 +61,7 @@ function sandbox() {
     TECHY_SCOPE_PRESELECTED: "all-companies", techyScopeInputs: () => [],
     pendingSends: new Map(), conversationEl: { scrollTop: 0 },
     betweenTurnsRowsEl: element(), betweenTurnsQuietEl: element(), betweenTurnsEl: element(),
+    async refreshNavigation() {},
     renderTechyChip() {}, renderTechySettings() {}, renderTechyState() {},
     rememberThreadView() {}, reviveLiveTurns() {}, scheduleRender() {},
     showUnboundView() {}, threadRow() { return null; },

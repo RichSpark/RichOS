@@ -1480,7 +1480,7 @@ const SURFACES = [
     name: "entity-view",
     what: "§3.5's company overview: its facts, its attention list and its thread list",
     drive: async (p) => {
-      await p.click(".nav-group-label");
+      await p.click(".nav-group-label.is-selectable");
       await p.waitForSelector("#entity-view:not([hidden])");
       // `showEntityView` fills the name and the lede synchronously, so an EMPTY name means the
       // pane on screen is not the one this walk is named for — the shell's leftovers, or a pane

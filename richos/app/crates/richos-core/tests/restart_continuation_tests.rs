@@ -305,3 +305,43 @@ fn recovery_delivers_older_ledger_requests_before_newer_intake_and_applies_stops
         }
     }
 }
+
+#[test]
+fn desktop_recovers_the_saved_request_once_then_stops_after_three_restarts() {
+    let root = paths();
+    let path = root.join("ledger.jsonl");
+    let mut ledger = Ledger::open(&path).unwrap();
+    let thread = ledger.create_thread("Restart recovery", &EntityId::parse("femcboost").unwrap()).unwrap();
+    let binding = ledger.thread_binding(&thread).unwrap();
+    let original = ledger.record_prompt_received(&binding, "Finish the draft", Source::Text).unwrap();
+    ledger.mark_turn_started(&original, "original-session").unwrap();
+    drop(ledger);
+
+    for attempt in 1..=3 {
+        let mut spine = support::spine(Ledger::open(&path).unwrap());
+        spine.switch_thread(&thread).unwrap();
+        let mock = MockCognition::new("same-native-session", vec![]);
+        let prompts = mock.prompts.clone();
+        spine.attach_lease(Box::new(mock));
+        spine.detach_conversation_io();
+        spine.recover_after_restart().unwrap();
+        spine.recover_after_restart().unwrap();
+        let pending = spine.ledger().pending_turns();
+        assert_eq!(pending.len(), 1);
+        assert_ne!(pending[0].id, original);
+        assert_eq!(pending[0].user_text, "Finish the draft");
+        assert_eq!(spine.ledger().thread_turns(&thread).unwrap().len(), attempt + 1);
+        assert_eq!(spine.messages(&thread).unwrap().iter().filter(|m| m.role == "user").count(), 1);
+        assert!(prompts.lock().unwrap().is_empty(), "startup must not wait on the provider");
+    }
+
+    let mut spine = support::spine(Ledger::open(&path).unwrap());
+    spine.switch_thread(&thread).unwrap();
+    spine.recover_after_restart().unwrap();
+    assert!(spine.ledger().pending_turns().is_empty());
+    let turn = spine.ledger().thread_turns(&thread).unwrap().pop().unwrap();
+    assert_eq!(turn.state, TurnState::Interrupted);
+    assert_eq!(turn.interruption.as_ref().unwrap().cause, "restart-recovery-exhausted");
+    drop(spine);
+    std::fs::remove_dir_all(root).unwrap();
+}

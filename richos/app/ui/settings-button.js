@@ -611,6 +611,10 @@ window.RichSettings = (function () {
       if (rich.length) rich.push(divider());
       rich.push(interrupt);
     }
+    if (window.RichChatList) {
+      if (rich.length) rich.push(divider());
+      rich.push(window.RichChatList.buildSettings());
+    }
     var doors = [];
     // DICTATION, FOR EVERYONE (round 19, state 5; dictation plan slice 2), with its one plain
     // line ("Off", "On. Tap F1 to talk", "Needs a permission"). `dictation.js` registers it only

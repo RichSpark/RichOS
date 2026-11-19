@@ -310,7 +310,6 @@ let sendBlockedReason = null; // §21: non-null means send is refused, with this
 /// view-dependent ("Talk to Rich about a named company…" on an entity overview) — so it has to be
 /// restored, not re-derived.
 let idlePlaceholder = "Talk to Rich…";
-const expandedEntities = new Set(); // entity ids whose "Show more" has been used
 const drafts = new Map(); // threadId -> unsent composer text (§3.1)
 // The existing draft text plus numeric authorship around generated attachment context.
 const authoredDrafts = new Map();
@@ -557,41 +556,9 @@ function timeGapMinutes(aMs, bMs) {
 //      a privacy boundary (§1) and a bucketing bug here would be a boundary violation with
 //      nothing to catch it.
 //
-//   2. A STATUS GLYPH REQUIRES A LIVE SIGNAL. §22 names active worker count, worker waiting
-//      state and completion state as things that must not be faked. Every mark this rail
-//      can draw is listed in STATUS_MARKS below with the exact signal that produces it; the
-//      §3.2 states with no signal in the build today (Queued, Waiting for CEO) are absent
-//      rather than approximated.
+// Status comes from the same locally saved turns, assignments, questions and quota holds
+// as the conversation. Turn-start events also cover the gap before the next read.
 // ---------------------------------------------------------------------------------------
-
-/// How many threads an entity shows before "Show more" (§3.1: "An entity initially shows
-/// only a bounded set of recent threads"). Revealing more happens IN PLACE — it never
-/// navigates away or changes the selected thread.
-const THREADS_SHOWN_INITIALLY = 6;
-
-// EVERY mark the rail can draw, and the signal that earns it. Nothing is drawn from a
-// timer, a heuristic, or the absence of activity.
-//
-//   working      rich://turn-started for this thread, until its terminal event.  LIVE
-//   unseen       rich://turn-completed arrived while another thread was selected. LIVE
-//   failed       rich://turn-error arrived while another thread was selected.     LIVE
-//   interrupted  durable ledger: the thread's last CEO-visible turn is `interrupted`.
-//   unknown      durable ledger: a turn is still `received`/`in_flight` on disk and no
-//                live turn is running for it in this session — nobody knows how it ended.
-//   unbound      the thread has no entity home at all (slice 1's quarantine state).
-//
-// NOT PRESENT, deliberately: §3.2's "Queued" hollow dot (the spine has a queue depth but
-// no per-thread enqueue event, so a queued thread cannot be identified) and §3.2's
-// "Waiting for CEO" attention mark (no waiting signal exists anywhere in the build yet —
-// see §22 "worker waiting state" under Must not be faked).
-const STATUS_MARKS = {
-  working: { glyph: "◐", label: "working" },
-  unseen: { glyph: "◆", label: "new result ready" },
-  failed: { glyph: "△", label: "ended with an error" },
-  interrupted: { glyph: "△", label: "last turn ended without finishing" },
-  unknown: { glyph: "?", label: "outcome unknown: a turn never finished" },
-  unbound: { glyph: "⊘", label: "no entity home" },
-};
 
 function allRows() {
   const rows = [];
@@ -614,43 +581,17 @@ function entityLabel(entityId) {
   return e ? e.display_name : "No entity";
 }
 
-/// Status precedence: what is happening now beats what happened, which beats what is
-/// merely unknown. Exactly one mark per row — §3.2 forbids stacking status with badges.
 function statusFor(row) {
-  const live = liveStatus.get(row.id);
-  if (live) return live;
-  if (!row.entity_id) return "unbound";
-  if (row.last_turn_state === "interrupted") return "interrupted";
-  if (row.has_pending_turn) return "unknown";
-  return null;
-}
-
-function clearLiveMark(threadId) {
-  const mark = liveStatus.get(threadId);
-  // "working" is a fact about right now and is NOT cleared by looking at the thread; the
-  // away-markers are, because they exist only to say "you haven't seen this yet".
-  if (mark === "unseen" || mark === "failed") liveStatus.delete(threadId);
+  return window.RichChatList.status(row, openQuestionCounts[row.id] || 0, liveStatus.get(row.id));
 }
 
 function isCollapsed(entityId) {
   return !!(navPrefs && navPrefs.collapsed_entities.includes(entityId));
 }
 
-function buildStatusMark(row) {
-  const key = statusFor(row);
-  if (!key) return null;
-  const spec = STATUS_MARKS[key];
-  const mark = document.createElement("span");
-  mark.className = "nav-status nav-status--" + key;
-  // Shape first, color second: §18 requires status never rely on color alone, and the
-  // six glyphs above are visually distinct without it.
-  mark.setAttribute("aria-hidden", "true");
-  mark.textContent = spec.glyph;
-  return { mark, label: spec.label };
-}
-
 let openQuestionCounts = {};
 async function refreshQuestionCounts() {
+  if (allRows().some((row) => row.chat)) return;
   try { openQuestionCounts = await Bridge.invoke("open_question_counts") || {}; renderRail(); } catch (_) {}
 }
 document.addEventListener("richos-questions-changed", refreshQuestionCounts);
@@ -682,30 +623,10 @@ function buildThreadRow(row, opts) {
   // thread lives in — §18: "worker chips: buttons with name, role and state in accessible
   // label", and the same standard applies to a thread row.
   const parts = [row.display_title];
-  const openQuestions = openQuestionCounts[row.id] || 0;
-  if (openQuestions) {
-    const count=document.createElement("span"); count.className="nav-question-count";
-    count.textContent=String(openQuestions);btn.appendChild(count);
-    parts.push(`${openQuestions} question${openQuestions===1?"":"s"} open`);
-  }
-  if (opts.showEntity) parts.push("in " + entityLabel(row.entity_id));
-  const status = buildStatusMark(row);
-  if (status) {
-    btn.appendChild(status.mark);
-    parts.push(status.label);
-  }
+  window.RichChatList.dressRow(row, opts, wrap, btn, parts, entityLabel(row.entity_id), statusFor(row));
   if (row.archived) parts.push("archived");
   btn.setAttribute("aria-label", parts.join(", "));
-  btn.title = row.display_title; // §3.1: full title in a tooltip when truncated
   if (onScreen) btn.setAttribute("aria-current", "true");
-
-  if (opts.showEntity) {
-    const tag = document.createElement("span");
-    tag.className = "nav-thread-entity";
-    tag.textContent = entityLabel(row.entity_id);
-    tag.setAttribute("aria-hidden", "true");
-    btn.appendChild(tag);
-  }
 
   btn.addEventListener("click", () => openThread(row.id));
   wrap.appendChild(btn);
@@ -953,16 +874,14 @@ function buildDraftRow(entityId) {
 
 function buildEntityGroup(group) {
   const entity = group.entity;
-  const visible = group.threads.filter((t) => !t.archived && !t.pinned);
+  const visible = group.threads.filter((t) => !t.archived && !t.pinned && !t.chat?.later_until);
   const { section, list } = buildCompanyShell(entity, visible.length);
 
   if (mainView === "entity" && viewEntityMode === "new" && viewEntityId === entity.id) {
     list.appendChild(buildDraftRow(entity.id));
   }
 
-  const expanded = expandedEntities.has(entity.id);
-  const shown = expanded ? visible : visible.slice(0, THREADS_SHOWN_INITIALLY);
-  for (const row of shown) list.appendChild(buildThreadRow(row));
+  for (const row of visible) list.appendChild(buildThreadRow(row));
   // Only when it truly has none: a company whose chats are all pinned or archived has chats.
   if (!list.children.length && !group.threads.length) {
     const empty = document.createElement("li");
@@ -971,22 +890,6 @@ function buildEntityGroup(group) {
     list.appendChild(empty);
   }
 
-  if (visible.length > shown.length) {
-    const li = document.createElement("li");
-    const more = document.createElement("button");
-    more.type = "button";
-    more.className = "nav-show-more";
-    more.textContent = "Show more";
-    more.setAttribute("aria-label", "Show " + (visible.length - shown.length) + " more threads in " + entity.display_name);
-    // §3.1: reveals older threads IN PLACE, without navigating away or losing the
-    // selected thread — so this only re-renders the rail.
-    more.addEventListener("click", () => {
-      expandedEntities.add(entity.id);
-      renderRail();
-    });
-    li.appendChild(more);
-    list.appendChild(li);
-  }
   return section;
 }
 
@@ -1018,6 +921,22 @@ function buildArchivedGroup(rows) {
   return section;
 }
 
+function buildChatShelf(id, title, rows, option) {
+  const { section, list } = buildGroupShell(id, title, { count: rows.length });
+  section.classList.add("nav-group--" + id);
+  for (const row of rows) list.appendChild(buildThreadRow(row, { [option]: true }));
+  return section;
+}
+
+function chatWait(row) {
+  const chat = row.chat || {};
+  switch (statusFor(row)?.key) {
+    case "needs": return chat.waiting_since ?? row.last_activity;
+    case "stopped": return chat.stopped_at ?? row.last_activity;
+    default: return chat.back_at ?? row.last_activity;
+  }
+}
+
 function renderRail() {
   // A rename open in the rail is not torn down under his typing by a turn event's rebuild; the
   // rebuild runs the moment the rename closes (`finishRename`).
@@ -1027,7 +946,12 @@ function renderRail() {
   }
   railNavEl.innerHTML = "";
 
-  const pinned = allRows().filter((t) => t.pinned && !t.archived);
+  const rows = allRows();
+  const attention = rows.filter((row) => !row.archived && ["needs", "stopped", "back"].includes(statusFor(row)?.key))
+    .sort((a, b) => chatWait(a) - chatWait(b));
+  if (attention.length) railNavEl.appendChild(buildChatShelf("needs", "Needs you", attention, "needsList"));
+
+  const pinned = rows.filter((t) => t.pinned && !t.archived && !t.chat?.later_until);
   if (pinned.length) railNavEl.appendChild(buildPinnedGroup(pinned));
 
   // Every registered entity gets a row, INCLUDING one with zero threads — §3.1's
@@ -1035,9 +959,13 @@ function renderRail() {
   // exists if an empty entity is reachable.
   for (const group of navTree.groups) railNavEl.appendChild(buildEntityGroup(group));
 
-  if (navTree.unbound.length) railNavEl.appendChild(buildUnboundGroup(navTree.unbound));
+  const unbound = navTree.unbound.filter((t) => !t.archived && !t.chat?.later_until);
+  if (unbound.length) railNavEl.appendChild(buildUnboundGroup(unbound));
 
-  const archived = allRows().filter((t) => t.archived);
+  const later = rows.filter((t) => !t.archived && t.chat?.later_until)
+    .sort((a, b) => a.chat.later_until - b.chat.later_until);
+  if (later.length) railNavEl.appendChild(buildChatShelf("later", "Later", later, "laterList"));
+  const archived = rows.filter((t) => t.archived);
   if (archived.length) railNavEl.appendChild(buildArchivedGroup(archived));
   keepRailTip();
 }
@@ -1053,6 +981,7 @@ function setMainView(view) {
   // The waiting band is a conversation surface. It never sits over the entity screen or the
   // §21 unbound screen, where there is no turn on screen for it to describe.
   hideWaitBandOffConversation();
+  window.RichChatList.paintBand(view === "conversation" ? threadRow(activeThreadId) : null);
   // The files on the composer belong to what it is writing TO, like its words.
   if (window.RichAttachments) window.RichAttachments.sync();
   // And the Output buttons belong to the conversation on screen: no thread, no button, and a
@@ -1138,7 +1067,7 @@ function showEntityView(entityId, mode) {
   sendBtn.hidden = false;
 
   const group = navTree.groups.find((g) => g.entity.id === entityId);
-  const threads = group ? group.threads.filter((t) => !t.archived) : [];
+  const threads = group ? group.threads.filter((t) => !t.archived && !t.chat?.later_until) : [];
 
   el("entity-view-name").textContent = entity.display_name;
   el("entity-view-line").textContent =
@@ -1212,7 +1141,7 @@ function renderEntityRows() {
     return;
   }
   const group = navTree.groups.find((g) => g.entity.id === viewEntityId);
-  const threads = group ? group.threads.filter((t) => !t.archived) : [];
+  const threads = group ? group.threads.filter((t) => !t.archived && !t.chat?.later_until) : [];
 
   // "Threads needing attention" — ONLY rows that carry a real mark. If nothing has a
   // signal, the block is absent rather than reassuringly empty.
@@ -1223,7 +1152,7 @@ function renderEntityRows() {
 
   threadList.innerHTML = "";
   el("entity-view-threads").hidden = threads.length === 0 || viewEntityMode === "new";
-  for (const row of threads.slice(0, 8)) threadList.appendChild(buildThreadRow(row));
+  for (const row of threads) threadList.appendChild(buildThreadRow(row));
 }
 
 /// The sticky scope header (§4): the entity and thread every subsequent send runs under.
@@ -1370,7 +1299,13 @@ async function openThread(threadId, opts) {
   // Counted BEFORE the "already there" return below: pressing the row you are on is still a
   // statement of where you want to be, and the restore has nothing to add to it.
   if (!opts.restore) handNavigations++;
-  if (threadId === activeThreadId && mainView === "conversation" && !opts.reopen) return;
+  if (threadId === activeThreadId && mainView === "conversation" && !opts.reopen) {
+    if (row.chat?.unread || row.chat?.back_at) {
+      window.RichChatList.open(row, true);
+      scheduleRender();
+    }
+    return;
+  }
 
   // Taken before the first await. `stale()` is true from the instant a newer openThread has run
   // its own synchronous head, so an older chain resuming later paints nothing.
@@ -1381,7 +1316,8 @@ async function openThread(threadId, opts) {
   const cached = threadViews.get(threadViewKey(row.entity_id, threadId));
   const previousModel = openingThread ? openingThread.previousModel : timelineModel;
   stashThreadViewState(threadId);
-  clearLiveMark(threadId);
+  if (liveStatus.get(threadId) === "unseen") liveStatus.delete(threadId);
+  window.RichChatList.open(row, !pendingSearchAnchor);
   activeThreadId = threadId;
   savedWork = {items: [], omitted: 0};
   ++workStatusRead;
@@ -1903,15 +1839,24 @@ function provisionalTitle(text) {
   return firstLine.length > 48 ? firstLine.slice(0, 47).trimEnd() + "…" : firstLine || "New thread";
 }
 
+let navRead = 0;
 async function refreshNavigation() {
+  const request = ++navRead;
+  let latest;
   try {
-    navTree = await Bridge.invoke("navigation_tree");
-  } catch (_e) {
-    navTree = { groups: [], unbound: [], active: null, unbound_explanation: "" };
+    latest = await Bridge.invoke("navigation_tree");
+  } catch (_) {
+    return;
   }
+  if (!latest || request !== navRead) return;
+  navTree = latest;
   if (navTree.active) activeContext = navTree.active;
   renderRail();
   renderScopeHeader();
+  if (mainView === "conversation") {
+    window.RichChatList.paintBand(threadRow(activeThreadId));
+    window.RichChatList.markVisible(timelineModel, threadRow(activeThreadId));
+  }
 }
 
 async function refreshActiveContext() {
@@ -2237,6 +2182,8 @@ function flushRender() {
     // Keep the same content under the CEO's eye when something above changed height.
     conversationEl.scrollTop = anchorTop + (conversationEl.scrollHeight - anchorHeight);
   }
+  if (window.RichChatList.afterPaint(timelineModel, messagesEl, mainView === "conversation" && !pendingSearchAnchor)) followBottom = false;
+  if (mainView === "conversation") window.RichChatList.markVisible(timelineModel, threadRow(activeThreadId));
   if (pendingSearchAnchor && pendingSearchAnchor.ticket !== navTicket) pendingSearchAnchor = null;
   if (pendingSearchAnchor && pendingSearchAnchor.thread_id === timelineModel.threadId) {
     const { turn_id, message_id } = pendingSearchAnchor;
@@ -4755,7 +4702,11 @@ function renderQuotaWorkStatus() {
   status.dataset.state = n ? "paused" : on ? "working" : "";
   status.textContent = n ? counted(n, "agent", "agents") + " paused" + (techyOn() ? " for the quota" : ". Their work is saved.")
     : on ? counted(quotaWorking, "agent", "agents") + " working on " + on : "";
-  if (n && techyOn() && quotaActivity.resumesAt) status.textContent += " · can resume just after " + new Date(quotaActivity.resumesAt).toLocaleTimeString(undefined, {hour: "numeric", minute: "2-digit"});
+  // The band carries the resume time for everyone. Older bridges may only supply quota activity.
+  if (n && !threadRow(activeThreadId)?.chat?.paused && quotaActivity.resumesAt) {
+    const time = new Date(quotaActivity.resumesAt).toLocaleTimeString("en-US", {hour: "numeric", minute: "2-digit"}).toLowerCase();
+    status.textContent += techyOn() ? " · can resume just after " + time : " Continues by itself at about " + time + ".";
+  }
 }
 
 function renderDrillChip() {
@@ -6392,27 +6343,39 @@ Bridge.listen("rich://turn-started", ({ payload }) => {
   liveStatus.set(payload.threadId, "working");
   renderRail();
 });
-
-// The per-thread live TEXT buffer this block used to keep is gone. It existed so that
-// returning to a background thread could re-show its half-streamed reply from memory;
-// `sessionLiveTurns` plus `get_timeline` now do that from the DURABLE record instead —
-// deltas are persisted before they are emitted (STREAMING.md), so the snapshot on reopen is
-// at least as complete as anything this file could have accumulated, and it survives a
-// reload that the buffer did not.
-
 Bridge.listen("rich://turn-completed", ({ payload }) => {
-  // §3.2 "Completed while away: small completion mark UNTIL OPENED". If the CEO is looking
-  // at the thread, there is nothing to flag — he just watched it finish.
-  if (payload.threadId === activeThreadId) liveStatus.delete(payload.threadId);
-  else liveStatus.set(payload.threadId, "unseen");
+  liveStatus.delete(payload.threadId);
+  if (!threadRow(payload.threadId)?.chat && payload.threadId !== activeThreadId) liveStatus.set(payload.threadId, "unseen");
   refreshNavigation();
+});
+Bridge.listen("rich://turn-error", ({ payload }) => {
+  liveStatus.delete(payload.threadId);
+  if (!threadRow(payload.threadId)?.chat && payload.threadId !== activeThreadId) liveStatus.set(payload.threadId, "failed");
+  refreshNavigation();
+});
+Bridge.listen("rich://chat-list-changed", refreshNavigation);
+window.addEventListener("focus", () => {
+  refreshNavigation();
+  openNotificationChat();
 });
 
-Bridge.listen("rich://turn-error", ({ payload }) => {
-  if (payload.threadId === activeThreadId) liveStatus.delete(payload.threadId);
-  else liveStatus.set(payload.threadId, "failed");
-  refreshNavigation();
-});
+let openingNotification = false;
+async function openNotificationChat() {
+  if (!launchLanded || openingNotification || Bridge.isMock) return;
+  openingNotification = true;
+  try {
+    const id = await invokeQuiet("take_chat_notification_target");
+    if (!id) return;
+    if (!threadRow(id)) await refreshNavigation();
+    if (!threadRow(id)) return;
+    const opening = openThread(id, { reopen: true });
+    if (homeIsUp()) window.RichHome.hide("switch");
+    await opening;
+  } finally {
+    openingNotification = false;
+  }
+}
+Bridge.listen("rich://open-chat-notification", openNotificationChat);
 
 // ---------------------------------------------------------------------------------------
 // Thread context menu — rename, pin, archive (§3.1)
@@ -6447,11 +6410,20 @@ function openThreadMenu(row, anchor, at) {
   // WebView answers it with nothing, so Rename did nothing (nightly 68 walk).
   add("Rename…", () => startRename(row, anchor.closest(".nav-thread-row")));
   add(row.pinned ? "Unpin" : "Pin", async () => {
-    await saveNavChange("set_thread_pinned", { threadId: row.id, pinned: !row.pinned });
+    if (!await saveNavChange("set_thread_pinned", { threadId: row.id, pinned: !row.pinned })) return;
+    if (row.pinned) window.RichChatList.offerUndo("Unpinned.", async () => {
+      await saveNavChange("set_thread_pinned", { threadId: row.id, pinned: true });
+      await refreshNavigation();
+    });
     await refreshNavigation();
   });
+  window.RichChatList.menuItems(row, add, anchor, at);
   add(row.archived ? "Restore from archive" : "Archive", async () => {
-    await saveNavChange("set_thread_archived", { threadId: row.id, archived: !row.archived });
+    if (!await saveNavChange("set_thread_archived", { threadId: row.id, archived: !row.archived })) return;
+    if (!row.archived) window.RichChatList.offerUndo("Archived.", async () => {
+      await saveNavChange("set_thread_archived", { threadId: row.id, archived: false });
+      await refreshNavigation();
+    });
     await refreshNavigation();
   });
 
@@ -6463,7 +6435,7 @@ function openThreadMenu(row, anchor, at) {
     threadMenuEl.style.top = Math.round(Math.max(0, Math.min(at.y, maxTop))) + "px";
     threadMenuEl.style.left = Math.round(Math.min(at.x, window.innerWidth - 200)) + "px";
   } else {
-    threadMenuEl.style.top = Math.round(r.bottom + 4) + "px";
+    threadMenuEl.style.top = Math.round(Math.max(0, Math.min(r.bottom + 4, window.innerHeight - threadMenuEl.offsetHeight - 4))) + "px";
     threadMenuEl.style.left = Math.round(Math.min(r.left, window.innerWidth - 200)) + "px";
   }
   const first = threadMenuEl.querySelector(".menu-item");
@@ -10887,6 +10859,7 @@ async function setTechyDefault(on) {
   threadViews.clear();
   threadViewEpoch++;
   await invokeQuiet("set_techy_default", { enabled: on });
+  refreshNavigation();
   await refreshTechy(activeThreadId);
   const top = conversationEl.scrollTop;
   await loadTimeline();
@@ -11012,6 +10985,7 @@ async function confirmTechyScope() {
     return;
   }
   techy = mode;
+  refreshNavigation();
   renderTechyChip();
   renderTechySettings();
   // §3.4: "Toggling re-renders the thread in place, from the journal. No reload, no
@@ -11092,7 +11066,7 @@ function moveListFocus(e, selector) {
 }
 
 railNavEl.addEventListener("keydown", (e) =>
-  moveListFocus(e, ".nav-group-label.is-selectable, .nav-thread, .nav-show-more")
+  moveListFocus(e, ".nav-group-label.is-selectable, .nav-thread")
 );
 
 document.addEventListener("keydown", (e) => {
@@ -11794,6 +11768,7 @@ async function init() {
   // ONE CALL, NOT AWAITED. `yieldNow` starts a fade on an inert, click-through layer and
   // returns; nothing in this boot path ever waits on the splash.
   if (window.RichSplash) window.RichSplash.yieldNow("app-ready");
+  openNotificationChat();
   // The Mac resources square starts reading the sampler only now (round 47, `resources.js`),
   // so that read is never on the launch path. A square whose script has not run yet starts
   // itself when it does.

@@ -52,16 +52,19 @@
 #   E1  the signature verifier VERIFIES a good pair against the shipped pubkey
 #   E2  ...REFUSES a tampered artifact, and says so as a signature refusal
 #   E3  ...REFUSES a correctly-formed signature from a different key
+#   S1  guest-stage, the test-guest fixture of `update-in-place-walk.py --scenario reinstall`,
+#       puts an archive in place at ~/Applications with its publication receipt
 #
 # THIS SUITE OPENS NO WINDOW, and it says so because `run-tests.test.sh` case S6 scans this
 # directory for anything that could put one on the operator's Mac and refuses silence. The
 # matches here are the `Contents/MacOS/...` members it writes into tar fixtures (lines 235,
 # 301-313) to exercise the updater's archive-shape refusals. It runs `cargo run --example
-# verify_update_signature` and `verify_update_manifest`, which are console programs with no
-# webview and no window; the app itself is never built or launched.
-# run-tests: no-host-screen: its bundle paths are tar fixture members, and its two cargo examples are console programs
+# verify_update_signature` and `verify_update_manifest`, and the updater crate's `guest-stage`
+# (case S1, whose fixture executable only prints its identity), which are console programs with
+# no webview and no window; the app itself is never built or launched.
+# run-tests: no-host-screen: its bundle paths are tar fixture members, and its three cargo examples are console programs
 # run-tests: inputs richos/app/scripts/updater-setup.test.sh richos/app/scripts/package-app.sh richos/app/scripts/lib/updater_tar.py richos/app/scripts/updater-e2e.sh richos/app/src-tauri/Cargo.toml richos/app/src-tauri/tauri.conf.json richos/app/src-tauri/capabilities richos/app/src-tauri/src/update_startup.rs richos/app/crates/richos-user-update
-# run-tests: covers richos/app/scripts/lib/updater_tar.py richos/app/scripts/updater-e2e.sh
+# run-tests: covers richos/app/scripts/lib/updater_tar.py richos/app/scripts/updater-e2e.sh richos/app/crates/richos-user-update/examples/guest-stage.rs
 set -uo pipefail
 
 SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -433,6 +436,36 @@ write_manifest "$TMP/m-version.json" "0.1.0" "$MANIFEST_TARGET" "$GOOD_SIG" "$GO
 run env -C "$APP/src-tauri" "${VM[@]}" "$TMP/m-version.json" "$ART" "$ART.sig" "$GOOD_URL" \
         --current-version 0.1.0 --conf "$SUITE_CONF"
 expect "G6 a version that is not strictly greater -> REFUSED" 1 "only offers a STRICTLY greater version"
+
+echo ""
+echo "=== S. guest-stage, the test guest's copy left in ~/Applications by an older RichOS ==="
+
+# A home of its own under this suite's directory, never the operator's. The bundle's executable
+# answers the updater's identity probe and does nothing else.
+SHOME="$TMP/stage-home"; mkdir -p "$SHOME"; SHOME="$(cd "$SHOME" && pwd -P)"
+SAPP="$TMP/stage-src/RichOS.app"; mkdir -p "$SAPP/Contents/MacOS"
+printf '<?xml version="1.0"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>com.richos.app</string><key>CFBundleShortVersionString</key><string>2.0.0</string><key>CFBundleExecutable</key><string>richos-tauri</string></dict></plist>\n' \
+  > "$SAPP/Contents/Info.plist"
+printf '%s\n' '#include <stdio.h>' '#include <string.h>' \
+  'int main(int n,char**v){if(n!=2||strcmp(v[1],"--richos-internal-update-identity"))return 73;puts("{\"identifier\":\"com.richos.app\",\"version\":\"2.0.0\",\"protocol\":1}");return 0;}' \
+  > "$TMP/identity.c"
+if /usr/bin/cc "$TMP/identity.c" -o "$SAPP/Contents/MacOS/richos-tauri" \
+   && python3 "$TAR_PY" build "$SAPP" "$TMP/stage.tar.gz" >/dev/null; then
+  run env -C "$APP/crates/richos-user-update" cargo run -q --example guest-stage -- "$SHOME" 2.0.0 "$TMP/stage.tar.gz"
+  expect "S1 guest-stage reports the archive put in place" 0 "published 2.0.0"
+  PUBLISHED="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["version"])' \
+    "$SHOME/Applications/.richos-updater/published.json" 2>/dev/null)"
+  INSTALLED="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' \
+    "$SHOME/Applications/RichOS.app/Contents/Info.plist" 2>/dev/null)"
+  if [ "$PUBLISHED" = "2.0.0" ] && [ "$INSTALLED" = "2.0.0" ]; then
+    ok "S1 ...at ~/Applications/RichOS.app, with the updater's own publication receipt"
+  else
+    bad "S1 ...at ~/Applications/RichOS.app, with the updater's own publication receipt" \
+        "receipt '${PUBLISHED}', installed '${INSTALLED}'"
+  fi
+else
+  bad "S1 guest-stage fixture" "could not build the fixture bundle"
+fi
 
 echo ""
 if [ "$FAIL" -gt 0 ]; then

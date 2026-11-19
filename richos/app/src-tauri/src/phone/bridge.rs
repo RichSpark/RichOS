@@ -115,6 +115,21 @@ pub(crate) fn titled(
 }
 
 impl Bridge for PhoneBridge {
+    fn reply_seen(&self, thread: &str, message: &str) {
+        let state = self.app.state::<AppState>();
+        let view = state.reader.snapshot();
+        let Ok(payload) = timeline_payload(&*view, thread) else { return };
+        let Some(turn) = payload["items"].as_array().into_iter().flatten().find_map(|item| {
+            (item["kind"] == "rich_message" && item["id"] == message)
+                .then(|| item["turnId"].as_str()).flatten()
+        }) else { return };
+        let Ok(turns) = view.ledger().thread_turns(thread) else { return };
+        let Some(at) = turns.into_iter().find(|record| record.id == turn
+            && record.state == richos_core::ledger::TurnState::Completed
+            && record.superseded_by.is_none()).and_then(|record| record.ended_at) else { return };
+        crate::chat_list::reply_seen_on_phone(&self.app, &state, thread, at);
+    }
+
     fn questions_available(&self)->bool {true}
     fn answer_question(&self,thread:&str,answer:richos_core::questions::AnswerRequest)->Result<Value,String> {
         let method=if answer.text.trim().is_empty(){"phone_tap"}else{"phone_typed"};

@@ -70,6 +70,9 @@
 [richos] idle sessions: ended {} conversation session(s) idle for {} minute(s): {}; each resumes on its next message
 [richos] incoming message: {}
 [richos] intake reconciliation at boot: {}
+# Recovery runs on persisted work from an interrupted launch.
+[richos] chat-list recovery=exhausted attempts={}
+[richos] chat-list recovery=queued attempt={}
 [richos] launch record: could not mark a clean exit: {}
 [richos] launch record: {}
 [richos] loro correction desk is open but no context compiler is configured — nothing was ever put in front of Rich, so no correction can name a record and the trigger will stay silent
@@ -568,7 +571,9 @@
 [richos] update at quit: deferred to the next launch: {}
 [richos] update at quit: nothing to put in place now; the next launch checks again
 [richos] update at quit: payload reclamation deferred: {}
+[richos] update at quit: moved the active installation into Applications
 [richos] update at quit: {} put in place: {} -> {}
+[richos] update check: the saved permission denial stays: {}
 [richos] openings: the image of {} was not saved ({})
 [richos] openings: what was earned could not be saved ({})
 [richos] openings: today's opening could not be written down ({})

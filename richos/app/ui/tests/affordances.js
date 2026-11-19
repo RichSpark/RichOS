@@ -1083,7 +1083,7 @@ const FIXTURES = {
   /// gets there: open an entity area, type, press Enter.
   async "thread-create-refused"(browser) {
     const page = await openApp(browser);
-    await page.click(".nav-group-label");
+    await page.click(".nav-group-label.is-selectable");
     await page.waitForSelector("#entity-view:not([hidden])");
     await page.evaluate(() => {
       window.__overrides.create_thread_in = { reject: true, value: "scope mismatch on thread thr_x" };
@@ -1210,7 +1210,7 @@ const FIXTURES = {
   /// §3.5 entity overview, reached the way the CEO reaches it.
   async "entity-view"(browser) {
     const page = await openApp(browser);
-    await page.click(".nav-group-label");
+    await page.click(".nav-group-label.is-selectable");
     await page.waitForSelector("#entity-view:not([hidden])");
     return page;
   },
@@ -1274,8 +1274,7 @@ const FIXTURES = {
     return page;
   },
 
-  /// The rail's status marks. Nothing is driven: the seeded `legacy` thread carries the
-  /// `unbound` mark on load, and the structural claim is checked over every mark present.
+  /// Seeded stopped and working chats exercise the status marks in the rail.
   async "rail-mark"(browser) {
     return openApp(browser);
   },
@@ -2350,7 +2349,7 @@ async function main() {
   await run.check("a rail status mark can never render outside the control that acts on it", async () => {
     const page = await FIXTURES["rail-mark"](browser);
     const r = await page.evaluate(() => {
-      const marks = Array.from(document.querySelectorAll(".nav-status"));
+      const marks = Array.from(document.querySelectorAll(".chat-mark"));
       return {
         total: marks.length,
         inButton: marks.filter((m) => m.closest("button.nav-thread")).length,

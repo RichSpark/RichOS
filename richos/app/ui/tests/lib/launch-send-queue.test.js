@@ -54,7 +54,7 @@ function makeShell() {
     let savedWork, workStatusRead = 0, workerCounts, quotaActivity, assignments;
     let firstRunState, firstRunRead = 0, drillItems, techy;
     let navTicket = 0, handNavigations = 0, carriedPendingUserId = null;
-    let activeContext = null, threadViewEpoch = 0, pendingScrollRestore = null;
+    let activeContext = null, threadViewEpoch = 0, pendingScrollRestore = null, pendingSearchAnchor = null;
     const authoredDrafts = new Map();
     const utf8Length = text => new TextEncoder().encode(text).length;
     const drafts = new Map(), scrollTops = new Map(), threadViews = new Map();
@@ -75,7 +75,8 @@ function makeShell() {
     const threadRow = id => ({id, entity_id: 'acme', binding_revision: 1});
     const threadViewKey = (e, t) => JSON.stringify([e, t]);
     const el = () => ({}), isNarrow = () => false, techyOn = () => false;
-    const rememberThreadView = noop, clearLiveMark = noop;
+    const rememberThreadView = noop, liveStatus = new Map();
+    window.RichChatList = { open: noop };
     const renderTechyChip = noop, renderTechyState = noop, renderBetweenTurns = noop;
     const renderDrillChip = noop, closeSlideOver = noop, closeThreadMenu = noop;
     const closeWorkerInspector = noop, setRailOpen = noop, renderScopeHeader = noop;
