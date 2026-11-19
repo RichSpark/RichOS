@@ -220,14 +220,16 @@ class DesktopWork(unittest.TestCase):
         self.assertEqual(self.records()[0]["status"], "prepared")
         self.app.dispatch_intent(self.scope, envelope, review_refused=True)
         self.assertEqual(self.records()[0]["status"], "prepared")
-        # A changed brief uses a new request. The original remains available for retry.
+        # A changed brief uses a new request, which replaces the refused draft: it is settled
+        # as superseded, never left dispatchable beside its revision (review
+        # rv-20261119T072050Z-df80aa4c-0832). The unrevised retry is the case below.
         replacement = self.call("prepare", {**self.args, "request_id": "revised-brief",
                                             "brief": "Implement the corrected fictional requirement."})
         self.assertEqual(replacement["status"], "prepared")
         self.app.dispatch_intent(self.scope, {"session_id": self.session, "tool_use_id": "revised-call",
                                              "tool_input": replacement["agent_call"]})
         records = self.records()
-        self.assertEqual(next(row for row in records if row["id"] == ready["id"])["status"], "prepared")
+        self.assertEqual(next(row for row in records if row["id"] == ready["id"])["status"], "blocked")
         self.assertEqual(next(row for row in records if row["id"] == replacement["id"])["status"], "dispatching")
 
     def test_pierce_dismissal_can_retry_the_exact_prepared_payload(self):
