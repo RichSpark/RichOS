@@ -22,14 +22,18 @@ struct ScrollStitcher {
         var quality: Double { samples == 0 ? 0 : Double(matches) / Double(samples) }
     }
 
-    /// Rows near the top and columns along the left edge that stay put between two frames.
-    private struct Fixed {
-        var rows: [Bool] = []
-        var columns = 0
+    /// Bands along the edges of the view that stay put between two frames while the content
+    /// between them moves: a sticky header, a frozen column.
+    private struct Fixed: Equatable {
+        var top = 0
+        var left = 0
         static let none = Fixed()
 
-        func row(_ y: Int) -> Bool { y < rows.count && rows[y] }
+        func row(_ y: Int) -> Bool { y < top }
+        func covers(_ x: Int, _ y: Int) -> Bool { y < top || x < left }
     }
+
+    private enum Line { case flat, still, moving }
 
     private struct Patch {
         let rect: CGRect
@@ -118,15 +122,18 @@ struct ScrollStitcher {
     }
 
     private static func registration(from old: Raster, to new: Raster) -> Offset? {
-        let fixed = fixedEdge(old, new)
-        let stationary = score(.zero, from: old, to: new, fixed: fixed)
+        let stationary = score(.zero, from: old, to: new)
         if stationary.samples >= 6, stationary.quality >= 0.985 { return .zero }
+        // Each proposed move is judged without the bands that stay put while the content moves that way.
+        func scored(_ offset: Offset) -> Match {
+            score(offset, from: old, to: new, fixed: fixedEdges(old, new, moved: offset))
+        }
 
         var candidates = [stationary]
         // Matching scan lines make short stops at a scroll boundary precise, even
         // with long flat runs or repeating rows. Check every proposed overlap.
         for horizontal in [false, true] {
-            candidates += offsets(from: old, to: new, horizontal: horizontal).map { score($0, from: old, to: new, fixed: fixed) }
+            candidates += offsets(from: old, to: new, horizontal: horizontal).map(scored)
         }
         if candidates.dropFirst().allSatisfy({ $0.quality < 0.97 || $0.matches < 26 }) {
             // Vision handles simultaneous panning and cases where exact scan line
@@ -141,7 +148,7 @@ struct ScrollStitcher {
                 for offset in [Offset(x: x, y: -y), Offset(x: -x, y: y),
                                Offset(x: x, y: y), Offset(x: -x, y: -y)] where offset != .zero {
                     if !candidates.contains(where: { $0.offset == offset }) {
-                        candidates.append(score(offset, from: old, to: new, fixed: fixed))
+                        candidates.append(scored(offset))
                     }
                 }
             }
@@ -202,44 +209,109 @@ struct ScrollStitcher {
         return aScore == bScore ? a.matches > b.matches : aScore > bScore
     }
 
-    /// Rows in the top two fifths and columns along the left edge that stay put in both frames: a
-    /// sticky header or a frozen column while the content under it scrolls. Such a band matches only
-    /// when nothing moved, so it is left out of the comparison. A line is judged only by its detail,
-    /// the pixels that are not flat in either frame (the same test score() uses): it stays put when
-    /// nine in ten of them are close to the same line in the other frame. So short text on a white
-    /// page still counts as moving, while a moving scroll bar beside the header, or content faintly
-    /// visible through a translucent header, does not hide the header. The first frame keeps the
-    /// header in the image, and later frames place it over covered area.
-    private static func fixedEdge(_ old: Raster, _ new: Raster) -> Fixed {
-        enum Line { case flat, still, moving }
-        let edge = old.width * 2 + 2
-        func line(_ index: (Int) -> Int, _ count: Int) -> Line {
-            var detail = 0
-            var differ = 0
-            for i in 0..<count {
-                let at = index(i)
-                guard !near(old.pixels[at], old.pixels[at + edge]) || !near(new.pixels[at], new.pixels[at + edge])
-                else { continue }
-                detail += 1
-                if !close(old.pixels[at], new.pixels[at]) { differ += 1 }
+    /// The rows along the top and the columns along the left that stay put while the content beside
+    /// them moves by `moved`: a sticky header or a frozen column. Such a band matches only when
+    /// nothing moved, so it is left out of the comparison. The first frame keeps the header in the
+    /// image, and later frames place it over covered area.
+    private static func fixedEdges(_ old: Raster, _ new: Raster, moved: Offset) -> Fixed {
+        guard moved != .zero else { return .none }
+        var fixed = Fixed.none
+        func rows() {
+            fixed.top = 0
+            fixed.top = band(reach: old.height * 2 / 5) { index, end in
+                fixed.top = end
+                return line(old, new, moved, at: index, column: false, outside: fixed)
             }
-            return detail < 4 ? .flat : differ * 10 > detail ? .moving : .still
         }
-        let reach = old.height * 2 / 5
-        let rows = (0..<reach).map { y in line({ y * old.width + $0 }, old.width - 2) }
-        var columns = 0
-        while columns <= old.width * 2 / 5, line({ $0 * old.width + columns }, old.height - 2) != .moving { columns += 1 }
-        // A view whose whole top or left reach is unchanged is mostly unchanged, not under a fixed bar.
-        let detailed = rows.filter { $0 != .flat }
-        let unchanged = !detailed.isEmpty && detailed.allSatisfy { $0 == .still }
-        return Fixed(rows: unchanged ? [] : rows.map { $0 != .moving },
-                     columns: columns > old.width * 2 / 5 ? 0 : columns)
+        rows()
+        fixed.left = band(reach: old.width * 2 / 5) { index, end in
+            fixed.left = end
+            return line(old, new, moved, at: index, column: true, outside: fixed)
+        }
+        // A frozen column beside every row hides where the header ends until it is left out.
+        if fixed.left > 0 { rows() }
+        return fixed
+    }
+
+    /// How far a band reaches in from its edge: to the last line that stays put, before three lines
+    /// that move with the content. Lines without detail neither end nor extend it. `line` gets each
+    /// line's index and the band found so far.
+    private static func band(reach: Int, _ line: (Int, Int) -> Line) -> Int {
+        var end = 0
+        var moving = 0
+        for index in 0..<max(0, reach) where moving < 3 {
+            switch line(index, end) {
+            case .flat: continue
+            case .still: end = index + 1; moving = 0
+            case .moving: moving += 1
+            }
+        }
+        return end
+    }
+
+    /// Whether one row (or column) of the view moves with the content: nine in ten of its detail
+    /// pixels line up with the content where it moved (`moved`), in one frame or the other. A line
+    /// whose pixels do not line up there stays put. Detail is counted only in the two pixels being
+    /// compared, never in the same line of the other frame, so content faintly visible through a
+    /// translucent header, and a moving scroll bar beside it, leave the header in its band, while
+    /// short text on a white page still moves. Pixels in or moving into a band already found are left
+    /// out: what moves under a header is hidden, not fixed.
+    private static func line(_ old: Raster, _ new: Raster, _ moved: Offset, at line: Int, column: Bool,
+                             outside fixed: Fixed) -> Line {
+        let width = old.width
+        let height = old.height
+        let length = column ? height : width
+        var samples = 0
+        var matches = 0
+        for along in stride(from: 0, to: length, by: max(1, length / 160)) {
+            let x = column ? line : along
+            let y = column ? along : line
+            guard !fixed.covers(x, y) else { continue }
+            // Where this old pixel's content is in the new frame.
+            let (ax, ay) = (x - moved.x, y - moved.y)
+            if ax >= 0, ax < width, ay >= 0, ay < height, !fixed.covers(ax, ay), clear(old, x, y) || clear(new, ax, ay) {
+                samples += 1
+                if same(old, x, y, new, ax, ay) { matches += 1 }
+            }
+            // Where this new pixel's content was in the old frame.
+            let (bx, by) = (x + moved.x, y + moved.y)
+            if bx >= 0, bx < width, by >= 0, by < height, !fixed.covers(bx, by), clear(new, x, y) || clear(old, bx, by) {
+                samples += 1
+                if same(new, x, y, old, bx, by) { matches += 1 }
+            }
+        }
+        guard samples >= 4 else { return .flat }
+        return matches * 10 >= samples * 9 ? .moving : .still
+    }
+
+    /// A pixel that clearly differs from its neighbor two rows down and two columns across. The faint
+    /// edge of a letter is left out: it can look like a light header as much as like the page.
+    private static func clear(_ raster: Raster, _ x: Int, _ y: Int) -> Bool {
+        distance(raster.pixels[y * raster.width + x], neighbor(raster, x, y)) > 32
+    }
+
+    /// Two pixels and their neighbors match, as in score(): a white page beside a letter is not a
+    /// light header beside nothing.
+    private static func same(_ a: Raster, _ ax: Int, _ ay: Int, _ b: Raster, _ bx: Int, _ by: Int) -> Bool {
+        near(a.pixels[ay * a.width + ax], b.pixels[by * b.width + bx]) && near(neighbor(a, ax, ay), neighbor(b, bx, by))
+    }
+
+    private static func neighbor(_ raster: Raster, _ x: Int, _ y: Int) -> UInt32 {
+        let nx = x + 2 < raster.width ? x + 2 : x - 2
+        let ny = y + 2 < raster.height ? y + 2 : y - 2
+        return raster.pixels[ny * raster.width + nx]
+    }
+
+    /// The largest difference in any one color channel.
+    private static func distance(_ a: UInt32, _ b: UInt32) -> Int {
+        max(abs(Int(a & 255) - Int(b & 255)), abs(Int((a >> 8) & 255) - Int((b >> 8) & 255)),
+            abs(Int((a >> 16) & 255) - Int((b >> 16) & 255)))
     }
 
     private static func score(_ offset: Offset, from old: Raster, to new: Raster, fixed: Fixed = .none,
                               density: Int = 32) -> Match {
         // Sample only where neither frame shows its fixed band.
-        let left = fixed.columns + max(0, offset.x)
+        let left = max(fixed.left, fixed.left + offset.x)
         let top = max(0, offset.y)
         let right = min(old.width, old.width + offset.x) - 2
         let bottom = min(old.height, old.height + offset.y) - 2
@@ -270,15 +342,6 @@ struct ScrollStitcher {
             }
         }
         return Match(offset: offset, matches: matches, samples: samples)
-    }
-
-    /// Looser than near(): a fixed bar that lets 10% of the content show through stays close.
-    private static func close(_ a: UInt32, _ b: UInt32) -> Bool {
-        a == b || (
-            abs(Int(a & 255) - Int(b & 255)) <= 32
-                && abs(Int((a >> 8) & 255) - Int((b >> 8) & 255)) <= 32
-                && abs(Int((a >> 16) & 255) - Int((b >> 16) & 255)) <= 32
-        )
     }
 
     private static func near(_ a: UInt32, _ b: UInt32) -> Bool {

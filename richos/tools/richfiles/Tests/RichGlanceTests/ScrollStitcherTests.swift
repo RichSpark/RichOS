@@ -135,6 +135,21 @@ final class ScrollStitcherTests: XCTestCase {
         XCTAssertTrue(pixels(crop(actual, x: 0, y: 0, w: 800, h: viewport)) == pixels(view(0)))
     }
 
+    func testEightyPercentOpaqueHeaderDoesNotStopAutomaticScroll() throws {
+        // An ordinary translucent header lets a fifth of the text under it show through, and the
+        // page's scroll bar moves beside it.
+        let page = textPage(width: 800, height: 2000)
+        func view(_ y: Int) -> CGImage {
+            withScrollBar(withHeader(crop(page, x: 0, y: y, w: 800, h: 500), rows: 64, opacity: 0.8),
+                          at: y, of: page.height)
+        }
+        let sut = scrollDown(page.height, viewport: 500, step: 140, view: view)
+        let actual = try XCTUnwrap(sut.image())
+        XCTAssertEqual(actual.height, page.height)
+        guard actual.height == page.height else { return }
+        XCTAssertTrue(pixels(crop(actual, x: 0, y: 0, w: 800, h: 500)) == pixels(view(0)), "the header appears once, at the top")
+    }
+
     func testFixedHeaderOverAListOfShortNamesDoesNotStopAutomaticScroll() throws {
         // Short file names on a white page change only a few pixels in each row, yet they scroll.
         let width = 800
@@ -173,6 +188,23 @@ final class ScrollStitcherTests: XCTestCase {
             XCTAssertEqual(sut.append(crop(page, x: 0, y: y + 392, w: 1200, h: 1400)), .moved(dx: 0, dy: 392),
                            "step from y=\(y)")
         }
+    }
+
+    /// Automatic downward scrolling: steps of `step` pixels to the end of a page `height` pixels tall,
+    /// each of which must be stitched.
+    private func scrollDown(_ height: Int, viewport: Int, step: Int, view: (Int) -> CGImage,
+                            file: StaticString = #filePath, line: UInt = #line) -> ScrollStitcher {
+        var sut = ScrollStitcher()
+        XCTAssertEqual(sut.append(view(0)), .initial, file: file, line: line)
+        var y = 0
+        while y + viewport < height {
+            let next = min(height - viewport, y + step)
+            let update = sut.append(view(next))
+            XCTAssertEqual(update, .moved(dx: 0, dy: next - y), "step to y=\(next)", file: file, line: line)
+            guard update == .moved(dx: 0, dy: next - y) else { break }
+            y = next
+        }
+        return sut
     }
 
     private func check(_ sut: ScrollStitcher, against expected: CGImage,
