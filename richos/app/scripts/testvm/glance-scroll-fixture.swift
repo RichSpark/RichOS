@@ -1,7 +1,8 @@
 // glance-scroll-fixture.swift — the source app and the input helper for glance-scroll-walk.sh. It is
 // built on the host into "Scroll Fixture.app" (app.richos.test.capturepattern) and runs in the guest.
 //
-//   CaptureProbe sticky                 show the sticky page (below) in a WebKit window
+//   CaptureProbe sticky [inset]         show the sticky page (below) in a WebKit window; with `inset`,
+//                                       its bottom bar stops 70 px short of each side of the page
 //   CaptureProbe front | app-pid ID     the frontmost app's bundle ID | an app's process ID (0 when none)
 //   CaptureProbe move|down|up X Y       a mouse event at a display point
 //   CaptureProbe scroll X Y DY DX       one pixel scroll-wheel event at a display point
@@ -44,8 +45,9 @@ func find(_ root: AXUIElement, _ name: String) -> AXUIElement? {
 /// blocks the size of words, a red end block, and a white bar fixed to the bottom of the view: dark
 /// labels and one green square between blank margins, as an ordinary cookie notice. Every block sits
 /// on whole pixels at a place glance-scroll-check.swift works out again from the same numbers, so the
-/// saved PNG can be checked pixel by pixel. Keep the two in step.
-let stickyPage = """
+/// saved PNG can be checked pixel by pixel. Keep the two in step. With `inset` the bar stops 70 px
+/// short of each side, and the page scrolls past beside it.
+func stickyPage(inset: Bool) -> String { """
 <!doctype html><html><head><meta charset="utf-8"><style>
 html,body{margin:0;background:#fff;font:15px/22px Helvetica,Arial,sans-serif;color:#1a1a1a}
 header{position:sticky;top:0;z-index:2;height:56px;background:rgba(27,58,107,0.8);color:#fff;display:flex;align-items:center;gap:28px;padding:0 18px;font-weight:bold}
@@ -53,7 +55,7 @@ main{position:relative;height:1820px}
 main i{position:absolute;height:12px;background:#1a1a1a}
 #end{height:50px;background:#b0302a}
 #spacer{height:64px}
-footer{position:fixed;left:0;right:0;bottom:0;z-index:2;height:48px;background:#fff;display:flex;align-items:center;gap:24px;padding:0 18px 0 52px}
+footer{position:fixed;left:\(inset ? 70 : 0)px;right:\(inset ? 70 : 0)px;bottom:0;z-index:2;height:48px;background:#fff;display:flex;align-items:center;gap:24px;padding:0 18px 0 52px}
 footer b{position:absolute;left:30px;top:18px;width:12px;height:12px;background:#2e7d4f}
 </style></head><body>
 <header><span>Home</span><span>Products</span><span>Pricing</span><span>Docs</span></header>
@@ -66,7 +68,7 @@ for(let k=0;y+12<=1810;k++){const last=k%6==5;const end=last?150+r(300):572;let 
 for(;;){const w=18+r(70);if(x+w>end)break;const i=document.createElement("i");i.style.cssText="left:"+x+"px;top:"+y+"px;width:"+w+"px";main.appendChild(i);x+=w+8;}
 y+=last?34:22;}
 </script></body></html>
-"""
+""" }
 
 let args = Array(CommandLine.arguments.dropFirst())
 switch args.first {
@@ -79,7 +81,7 @@ case "sticky":
                           styleMask: [.titled], backing: .buffered, defer: false)
     window.title = "Sticky Header Fixture"
     let web = WKWebView(frame: CGRect(x: 0, y: 0, width: 620, height: 378))
-    web.loadHTMLString(stickyPage, baseURL: nil)
+    web.loadHTMLString(stickyPage(inset: args.dropFirst().first == "inset"), baseURL: nil)
     window.contentView = web
     window.makeKeyAndOrderFront(nil)
     if #available(macOS 14.0, *) { app.activate() } else { app.activate(ignoringOtherApps: true) }

@@ -2,7 +2,7 @@
 # glance-scroll-walk.sh — does RichGlance's scrolling capture of a real web page with a translucent
 #                         sticky header and a bar fixed to the bottom run to the end of the page?
 #
-#   glance-scroll-walk.sh <RichFiles.app> <out-dir> [down|right|both|manual] [copy|save]
+#   glance-scroll-walk.sh <RichFiles.app> <out-dir> [down|right|both|manual] [copy|save] [sticky|inset]
 #
 # Builds the source app (glance-scroll-fixture.swift, a WebKit page with an 80% opaque sticky header,
 # 1820 px of lines of dark blocks, a red end block and a white bar with blank margins fixed to the
@@ -16,6 +16,11 @@
 # pixel of the page between them the page's own, none wrong and none missing. Screenshots, the PNG,
 # RichFiles' timing records and walk.log go to <out-dir>.
 #
+# The page `inset` is the same page with its bottom bar stopping 70 px short of each side, so the page
+# scrolls past beside the bar. For it the walk passes in two ways and no other: the image the app
+# offers has no wrong pixel in it (the whole page, or as far as the app says it got), or the app offers
+# no image at all. The page `sticky` (default) must be captured whole.
+#
 # The disposable guest's screen-capture, Accessibility and event grants are seeded there so the pixel
 # proof can run; the host's are never touched. Both test apps are quit and verified gone, and the guest
 # is stopped and its clone deleted however the walk ends (stop.sh). EXIT STATUS: 0 only when every step
@@ -24,12 +29,14 @@ set -euo pipefail
 T="$(cd "$(dirname "$0")" && pwd)"
 
 if [ "${1:-}" != --guest ]; then
-    APP="${1:?usage: glance-scroll-walk.sh <RichFiles.app> <out-dir> [down|right|both|manual] [copy|save]}"
-    OUT="${2:?usage: glance-scroll-walk.sh <RichFiles.app> <out-dir> [down|right|both|manual] [copy|save]}"
+    APP="${1:?usage: glance-scroll-walk.sh <RichFiles.app> <out-dir> [down|right|both|manual] [copy|save] [sticky|inset]}"
+    OUT="${2:?usage: glance-scroll-walk.sh <RichFiles.app> <out-dir> [down|right|both|manual] [copy|save] [sticky|inset]}"
     MODE="${3:-down}"
     DEST="${4:-copy}"
+    PAGE="${5:-sticky}"
     case "$MODE" in down|right|both|manual) ;; *) echo "unknown mode: $MODE" >&2; exit 2 ;; esac
     case "$DEST" in copy|save) ;; *) echo "unknown destination: $DEST" >&2; exit 2 ;; esac
+    case "$PAGE" in sticky|inset) ;; *) echo "unknown page: $PAGE" >&2; exit 2 ;; esac
     [ "$(basename "$APP")" = RichFiles.app ] && [ -d "$APP" ] || { echo "not a RichFiles.app: $APP" >&2; exit 2; }
     mkdir -p "$OUT"
     OUT="$(cd "$OUT" && pwd)"
@@ -59,7 +66,7 @@ PLIST
     xcrun swiftc -O -o "$WORK/check" "$T/glance-scroll-check.swift"
     ditto -c -k --keepParent "$APP" "$WORK/app.zip"
     python3 "$T/slots.py" run --wait "${GLANCE_WALK_WAIT:-1800}" --purpose "RichGlance scrolling capture walk" -- \
-        bash "$0" --guest "$WORK" "$OUT" "$MODE" "$DEST" 2>&1 | tee "$OUT/walk.log"
+        bash "$0" --guest "$WORK" "$OUT" "$MODE" "$DEST" "$PAGE" 2>&1 | tee "$OUT/walk.log"
     exit "${PIPESTATUS[0]}"
 fi
 
@@ -68,6 +75,7 @@ work="$2"
 evidence="$3"
 mode="$4"
 destination="$5"
+page="$6"
 # shellcheck source=lib.sh
 . "$T/lib.sh"
 preflight_tart
@@ -152,7 +160,11 @@ GRANT
 }
 if [ "$mode" = manual ]; then grant 0; else grant 2; fi
 
-guest open -a "/Users/admin/Applications/Scroll Fixture.app" --args sticky
+if [ "$page" = inset ]; then
+    guest open -a "/Users/admin/Applications/Scroll Fixture.app" --args sticky inset
+else
+    guest open -a "/Users/admin/Applications/Scroll Fixture.app" --args sticky
+fi
 sleep 2
 wait_for app.richos.test.capturepattern front
 origin=$(probe app-pid app.richos.test.capturepattern)
@@ -214,18 +226,38 @@ if [ "$mode" = manual ]; then
 else
     shot 03-auto-controls
 fi
+# The capture ends in one of three ways: an image of the whole page; an image of the page as far as it
+# got, with the app saying that the last scroll could not be stitched; or no image, only a Close button.
 ready=no
+refused=no
 for i in $(seq 1 96); do
     ready=$(probe glance-has 'Copy Image' 2>/dev/null || true)
     if [ "$ready" = yes ]; then break; fi
+    # No image: the capture's own controls are gone and only Close is left.
+    if [ "$(probe glance-has Close 2>/dev/null || true)" = yes ] && [ "$(probe glance-has Stop 2>/dev/null || true)" = no ]; then
+        # The preview may have come up between the two looks.
+        ready=$(probe glance-has 'Copy Image' 2>/dev/null || true)
+        if [ "$ready" != yes ]; then refused=yes; fi
+        break
+    fi
     sleep 0.65
 done
 shot 05-preview
-if [ "$ready" != yes ]; then
+stopped=no
+if [ "$ready" = yes ]; then
+    for said in 'The last scroll could not be stitched. Review the area captured so far.' \
+                'The last view could not be stitched. Review the area captured so far.'; do
+        if [ "$(probe glance-has "$said" 2>/dev/null || true)" = yes ]; then stopped=yes; fi
+    done
+fi
+printf 'capture ended: image offered %s, stopped early %s, no image offered %s\n' "$ready" "$stopped" "$refused"
+if [ "$ready" != yes ] && { [ "$refused" != yes ] || [ "$page" != inset ]; }; then
     "$T/ax.sh" "$vm" tree --app RichGlance --depth 7 || true
     exit 1
 fi
-if [ "$destination" = save ]; then
+if [ "$ready" != yes ]; then
+    printf 'PASS the app offered no image\n'
+elif [ "$destination" = save ]; then
     # The preview's buttons can be in the accessibility tree a moment before they take a press.
     for i in $(seq 1 10); do
         if probe glance-press 'Save PNG…' 2>/dev/null; then break; fi
@@ -256,9 +288,17 @@ else
     probe clipboard-write /Users/admin/scroll-result.png
     guest --pull /Users/admin/scroll-result.png "$evidence/$vm-result.png"
 fi
-printf 'PASS PNG %s\n' "$(python3 -c 'import struct,sys; f=open(sys.argv[1],"rb"); f.seek(16); print("%d × %d px" % struct.unpack(">II", f.read(8)))' "$evidence/$vm-result.png")"
 guest --pull /Users/admin/Library/Logs/RichOS/richfiles-timing.jsonl "$evidence/$vm-timing.jsonl"
-if [ "$mode" = down ]; then "$work/check" "$evidence/$vm-result.png"; fi
+if [ "$ready" = yes ]; then
+    printf 'PASS PNG %s\n' "$(python3 -c 'import struct,sys; f=open(sys.argv[1],"rb"); f.seek(16); print("%d × %d px" % struct.unpack(">II", f.read(8)))' "$evidence/$vm-result.png")"
+    if [ "$mode" = down ]; then
+        checks=()
+        if [ "$page" = inset ]; then checks+=(inset); fi
+        # Only the inset page may stop early; the sticky page must be captured whole.
+        if [ "$page" = inset ] && [ "$stopped" = yes ]; then checks+=(partial); fi
+        "$work/check" "$evidence/$vm-result.png" ${checks[@]+"${checks[@]}"}
+    fi
+fi
 # Quit both test apps in this disposable guest, then confirm they are gone.
 for bundle in app.richos.richglance app.richos.test.capturepattern; do
     pid=$(probe app-pid "$bundle" || true)
