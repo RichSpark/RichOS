@@ -39,7 +39,7 @@ class Consumers(unittest.TestCase):
             and os.path.basename(path) in (".richos-nightly", "source", "app") else 1
 
     def test_the_subfolder_is_named_not_only_the_total(self):
-        with patch.object(wd, "du_kb", side_effect=lambda p: self.sizes(p) // 1024):
+        with patch.object(wd, "du_kb", side_effect=lambda p, **kw: self.sizes(p) // 1024):
             found = wd.volume_consumers(self.tmp, [self.root], 1024 * 1024)
         self.assertEqual([p for _b, p in found], [self.deep], found)
 
@@ -49,7 +49,7 @@ class Consumers(unittest.TestCase):
         nested = os.path.join(parent, "target")
         os.makedirs(nested)
         sizes = {parent: 100, nested: 10}
-        with patch.object(wd, "du_kb", side_effect=lambda p: sizes.get(p, 0) * 1024 * 1024):
+        with patch.object(wd, "du_kb", side_effect=lambda p, **kw: sizes.get(p, 0) * 1024 * 1024):
             found = wd.volume_consumers(self.tmp, [self.root], 1024 * 1024 * 1024 * 3 // 1024)
         self.assertEqual(sorted(b for b, _p in found), [10 * 1024 ** 3, 90 * 1024 ** 3], found)
 
@@ -60,6 +60,35 @@ class Consumers(unittest.TestCase):
     def test_a_refused_path_is_not_walked(self):
         with patch.object(wd, "du_kb", return_value=None):
             self.assertEqual(wd.volume_consumers(self.tmp, [self.root], 1024), [])
+
+    def test_a_slow_folder_gets_only_the_remaining_walk_budget(self):
+        # The first folder leaves a usable measurement. A slow second folder consumes the
+        # remainder of the budget and no subsequent folder is measured.
+        clock = [0]
+        calls = []
+        os.makedirs(os.path.join(self.root, "z-last"))
+
+        def measure(argv, *, timeout, **kwargs):
+            calls.append((argv[-1], timeout))
+            if len(calls) == 1:
+                clock[0] += 12
+                return subprocess.CompletedProcess(argv, 0, stdout="12\t%s\n" % argv[-1])
+            clock[0] += timeout
+            raise subprocess.TimeoutExpired(argv, timeout)
+
+        with patch.object(wd.time, "time", side_effect=lambda: clock[0]), \
+                patch.object(wd.time, "monotonic", side_effect=lambda: clock[0]), \
+                patch.object(wd.subprocess, "run", side_effect=measure):
+            found = wd.volume_consumers(self.tmp, [self.root], 1024, budget_s=60)
+        self.assertEqual(calls, [(os.path.join(self.root, ".richos-nightly"), 60),
+                                 (os.path.join(self.root, "small"), 48)])
+        self.assertEqual(clock[0], 60)
+        self.assertEqual(found, [(12 * 1024, os.path.join(self.root, ".richos-nightly"))])
+
+    def test_an_exhausted_budget_starts_no_measurement(self):
+        with patch.object(wd.subprocess, "run") as run:
+            self.assertEqual(wd.volume_consumers(self.tmp, [self.root], 1024, budget_s=0), [])
+        run.assert_not_called()
 
     def test_the_totals_come_from_our_folders_on_the_volume_never_its_mount(self):
         """A configured folder equal to the mount would hand the whole drive to one `du`; the
@@ -120,22 +149,37 @@ class Consumers(unittest.TestCase):
 
 
 class Notifications(unittest.TestCase):
-    def test_each_volumes_notification_names_only_its_own_folders(self):
-        primary, external = "/System/Volumes/Data", "/Volumes/Working"
-        folders = {primary: "/Users/x/.richos-nightly/source/richos/app/target",
-                   external: external + "/caches"}
-        sent, saved = [], []
-        env = {"MODE": "check", "HOME": "/Users/x", "DISK_PRIMARY_VOLUME": primary,
-               "DISK_SCALE_EXTRA_VOLUMES": "0", "DISK_RECLAIM_ENABLE": "0"}
+    PRIMARY = "/System/Volumes/Data"
+    EXTERNAL = "/Volumes/Working"
+    FOLDERS = {PRIMARY: "/Users/x/.richos-nightly/source/richos/app/target",
+               EXTERNAL: EXTERNAL + "/caches"}
+    SCRATCH = EXTERNAL + "/tmp/richos-scratch"
+
+    def run_watchdog(self, free, owned, *, source="consumer", previous=None):
+        free = dict(free)
+        sent, saved, output = [], [], io.StringIO()
+
+        def reclaim(_cmd, _prev, now, volumes):
+            before = {v["mount"]: v["free_bytes"] for v in volumes}
+            free[self.EXTERNAL] += 16
+            return {"epoch": now, "exit": 0, "free_before": before}
+
+        env = {"MODE": "alert" if previous else "check", "HOME": "/Users/x",
+               "DISK_PRIMARY_VOLUME": self.PRIMARY, "DISK_SCALE_EXTRA_VOLUMES": "0",
+               "TMPDIR": self.EXTERNAL + "/tmp"}
+        if source == "reclaim":
+            env["DISK_RECLAIM_FORCE"] = "1"
         patches = {
             "collect_devices_for_scheduled_check": lambda: None,
-            "storage_candidates": lambda: ([], [external]),
-            "read_volume": lambda mount: (460 * wd.GB, 20 * wd.GB),
-            "read_state": lambda path: {},
+            "storage_candidates": lambda: ([], [self.EXTERNAL]),
+            "read_volume": lambda mount: (460 * wd.GB, free[mount] * wd.GB),
+            "read_state": lambda path: (previous or {}) if path.endswith("disk-watchdog.json") else {},
             "cleanup_health": lambda *a: [],
-            "volume_consumers": lambda mount, *a: [(10 * wd.GB, folders[mount])],
-            "richos_garbage_bytes": lambda: 0,
-            "is_ours": lambda path: True,
+            "reclaim_under_floor": reclaim,
+            "volume_consumers": lambda mount, *a: [(16 * wd.GB, self.FOLDERS[mount])],
+            "on_volume": lambda path, mount: path.startswith(self.EXTERNAL + "/") and mount == self.EXTERNAL,
+            "du_kb": lambda path: 16 * wd.GB // 1024,
+            "is_ours": lambda path: source == "consumer" and path in owned,
             "notify_ceo": lambda title, message: sent.append(message) or True,
             "write_state": lambda path, payload: saved.append(payload),
             "log": lambda *a: None,
@@ -144,15 +188,58 @@ class Notifications(unittest.TestCase):
             stack.enter_context(patch.dict(os.environ, env, clear=True))
             for name, value in patches.items():
                 stack.enter_context(patch.object(wd, name, value))
-            stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
+            stack.enter_context(patch.object(wd.os.path, "isdir",
+                                            side_effect=lambda path: source == "scratch" and path == self.SCRATCH))
+            stack.enter_context(contextlib.redirect_stdout(output))
             self.assertEqual(wd.main(), 1)
+        return sent, saved, output.getvalue()
+
+    def test_each_volumes_notification_names_only_its_own_folders(self):
+        sent, _, _ = self.run_watchdog({self.PRIMARY: 20, self.EXTERNAL: 20}, set(self.FOLDERS.values()))
         self.assertEqual(len(sent), 2, sent)
-        internal = [m for m in sent if "/System/Volumes/Data" in m][0]
-        outside = [m for m in sent if "/Volumes/Working" in m][0]
+        internal = [m for m in sent if self.PRIMARY in m][0]
+        outside = [m for m in sent if self.EXTERNAL in m][0]
         self.assertIn("target", internal)
         self.assertNotIn("caches", internal)
         self.assertIn("caches", outside)
         self.assertNotIn("target", outside)
+
+    def test_each_cause_uses_its_volumes_shortfall_and_owned_bytes(self):
+        for source, external_before in (("consumer", 45), ("scratch", 45), ("reclaim", 29)):
+            with self.subTest(source=source):
+                free = {self.PRIMARY: 18, self.EXTERNAL: external_before}
+                sent, saved, output = self.run_watchdog(free, {self.FOLDERS[self.EXTERNAL]}, source=source)
+                self.assertEqual(len(sent), 2, sent)
+                internal = next(m for m in sent if self.PRIMARY in m)
+                outside = next(m for m in sent if self.EXTERNAL in m)
+                self.assertTrue(internal.endswith("other"), internal)
+                self.assertTrue(outside.endswith("RichOS garbage (DEFECT)"), outside)
+                self.assertIn("other on " + self.PRIMARY, output)
+                self.assertIn("RichOS garbage (DEFECT) on " + self.EXTERNAL, output)
+                volumes = {v["mount"]: v for v in saved[0]["volumes"]}
+                self.assertEqual(volumes[self.PRIMARY]["richos_garbage_bytes"], 0)
+                self.assertEqual(volumes[self.EXTERNAL]["richos_garbage_bytes"], 16 * wd.GB)
+
+    def test_scratch_on_a_healthy_volume_cannot_blame_the_low_volume(self):
+        sent, _, output = self.run_watchdog({self.PRIMARY: 18, self.EXTERNAL: 200}, set(), source="scratch")
+        self.assertEqual(len(sent), 1, sent)
+        self.assertTrue(sent[0].endswith("other"), sent)
+        self.assertIn("CLASSIFICATION: other", output)
+
+    def test_cached_causes_stay_with_their_volumes(self):
+        free = {self.PRIMARY: 18, self.EXTERNAL: 45}
+        _, saved, _ = self.run_watchdog(free, {self.FOLDERS[self.EXTERNAL]})
+        sent, _, output = self.run_watchdog(free, set(), previous=saved[0])
+        self.assertEqual(sent, [])
+        self.assertIn("other on " + self.PRIMARY, output)
+        self.assertIn("RichOS garbage (DEFECT) on " + self.EXTERNAL, output)
+
+    def test_an_old_pooled_classification_is_not_reused(self):
+        _, _, output = self.run_watchdog({self.PRIMARY: 18, self.EXTERNAL: 200}, set(),
+                                         previous={"classification": "RichOS garbage (DEFECT)",
+                                                   "richos_garbage_bytes": 16 * wd.GB})
+        self.assertIn("CLASSIFICATION: other", output)
+        self.assertNotIn("DEFECT", output)
 
 
 class ScanBoundary(unittest.TestCase):
@@ -241,7 +328,7 @@ class ScanBoundary(unittest.TestCase):
             "read_volume": lambda mount: (460 * wd.GB, (20 if mount == low_volume else 200) * wd.GB),
             "read_state": lambda path: {},
             "cleanup_health": lambda *args: [],
-            "richos_garbage_bytes": lambda: 0,
+            "richos_garbage_bytes": lambda mount: 0,
             "notify_ceo": lambda *args: True,
             "write_state": lambda path, payload: saved.append(payload),
             "log": lambda *args: None,
