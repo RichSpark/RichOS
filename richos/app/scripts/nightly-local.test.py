@@ -1863,7 +1863,7 @@ while True: time.sleep(.02)
                 self.assertIs(plan.get("new_user_walk_required"), True, "a new build requires the new-user walk")
                 out = Path(args[args.index("--out") + 1])
                 candidate = json.loads((out / "candidate.json").read_text())
-                for key in ("new_user_walk_required", "launch_speed_required"):
+                for key in ("new_user_walk_required", "launch_speed_required", "install_path_required"):
                     if key in plan:
                         candidate["info"][key] = plan[key]
                 (out / "candidate.json").write_text(json.dumps(candidate))
@@ -1918,6 +1918,29 @@ while True: time.sleep(.02)
                     publisher.perform("publish", run_id=run)
                 publisher.command.assert_not_called()
                 self.assertIs(info.get("launch_speed_required"), True)
+                self.assertIs(info.get("install_path_required"), True)
+
+    def test_a_built_candidate_is_not_published_without_a_passing_install_path_check(self):
+        # The build plan records the install-path requirement and the candidate carries it, so
+        # `publish` refuses a launch-speed report whose install-path check failed or is missing.
+        passed = [{"step": s, "outcome": "PASS"} for s in m.NEW_USER_WALK_STEPS]
+        r, _ = self.build_that_walks_as_a_new_user(passed)
+        with contextlib.redirect_stdout(io.StringIO()):
+            r.perform("build", no_host_screen=True)
+        _, info = r.load_candidate("fixture-run-id")
+        self.assertIs(info.get("install_path_required"), True)
+        report = r.state / "launch-speed" / "fixture-run-id.1" / "report.json"
+        measured = json.loads(report.read_text())
+        for checks in ([], [{"id": "install-path", "pass": False}]):
+            measured["checks"] = checks
+            report.write_text(json.dumps(measured))
+            publisher = self.runner()
+            publisher.command = Mock()
+            (publisher.state / "source").mkdir(parents=True, exist_ok=True)
+            with contextlib.redirect_stdout(io.StringIO()), \
+                    self.assertRaisesRegex(ValueError, "missing a passing install path check"):
+                publisher.perform("publish", run_id="fixture-run-id")
+            publisher.command.assert_not_called()
 
     def test_a_build_times_its_launch_after_the_new_user_walk_and_states_the_p95(self):
         passed = [{"step": s, "outcome": "PASS"} for s in m.NEW_USER_WALK_STEPS]
