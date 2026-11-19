@@ -47,7 +47,7 @@ WHICH MODEL (plan §2.3, Sage's catches 3, 4 and 10)
 ===========================================================================
   * Codex reviews Claude's work: `codex exec` from the CLI inside ChatGPT.app,
     looked up on every run because it moves (it is an alpha), its --version
-    recorded. Pinned, never left to a default: model gpt-6.1-sol, reasoning
+    recorded. Pinned, never left to a default: model gpt-6.2-sol, reasoning
     effort high (what he reviewed with, from Codex Desktop's own session
     record of 2026-10-08), approvals never, sandbox workspace-write rooted at
     the export (-C), so a fixture compiles there and nothing else is written;
@@ -61,7 +61,7 @@ WHICH MODEL (plan §2.3, Sage's catches 3, 4 and 10)
     an --ephemeral run added none of the three and used the same login. The
     model and effort every row records come from Codex's own
     SessionConfiguredEvent, which it logs on stderr at RUST_LOG=codex_exec=info
-    (`model: "gpt-6.1-sol"`, `reasoning_effort: Some(High)`, `rollout_path:
+    (`model: "gpt-6.2-sol"`, `reasoning_effort: Some(High)`, `rollout_path:
     None`); the token count from its turn.completed events. His plan meter
     lived only in the session record, so it is no longer recorded.
   * ISOLATED FROM THE USER'S OWN SETUP (CODEX_ISOLATION, CEO 2026-10-09 ~05:00Z:
@@ -176,7 +176,7 @@ import cpu_policy  # noqa: E402  (sibling in scripts/lib: the engine's CPU admis
 import instruction_files  # noqa: E402  (sibling: the repository's own CLAUDE.md or AGENTS.md, by Claude Code's rule)
 import machine_settings  # noqa: E402  (sibling: claude_home, the machine's one Claude home)
 
-CODEX_MODEL = "gpt-6.1-sol"
+CODEX_MODEL = "gpt-6.2-sol"
 CODEX_EFFORT = "high"
 CLAUDE_MODEL = "opus"
 CLAUDE_EFFORT = "high"

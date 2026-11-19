@@ -23,6 +23,26 @@ impl PaneBounds {
     }
 }
 
+#[derive(Deserialize)]
+pub struct RailTooltip {
+    left: f64,
+    top: f64,
+    width: f64,
+    height: f64,
+    radius: f64,
+    arrow: f64,
+}
+
+impl RailTooltip {
+    fn valid(&self) -> bool {
+        [self.left, self.top].into_iter().all(|value| (-1.0..=1.0).contains(&value))
+            && [self.width, self.height, self.radius, self.arrow]
+                .into_iter().all(|value| (0.0..=4.0).contains(&value))
+            && self.width > 0.0
+            && self.height > 0.0
+    }
+}
+
 #[richos_command::command]
 pub fn richfiles_pane_available(window: WebviewWindow) -> bool {
     if window.label() != "main" {
@@ -37,12 +57,17 @@ pub fn richfiles_pane_available(window: WebviewWindow) -> bool {
 }
 
 #[richos_command::command]
-pub async fn richfiles_place_pane(window: WebviewWindow, bounds: PaneBounds) -> Result<(), String> {
+pub async fn richfiles_place_pane(
+    window: WebviewWindow,
+    bounds: PaneBounds,
+    tooltip: Option<RailTooltip>,
+) -> Result<(), String> {
     if window.label() != "main" || !bounds.valid() {
         return Err("RichFiles could not use that window area.".to_owned());
     }
     #[cfg(target_os = "macos")]
     {
+        let tooltip = tooltip.filter(RailTooltip::valid);
         if bounds.visible {
             // A click can beat preload. Join the same load off the window thread.
             mac::load_in_background().await?;
@@ -50,13 +75,37 @@ pub async fn richfiles_place_pane(window: WebviewWindow, bounds: PaneBounds) -> 
         let (send, receive) = tokio::sync::oneshot::channel();
         window
             .with_webview(move |webview| {
-                let result = mac::place(webview.inner(), &bounds);
+                let result = mac::place(webview.inner(), &bounds, tooltip.as_ref());
                 let _ignored = send.send(result);
             })
             .map_err(|_| "RichFiles could not reach the window.".to_owned())?;
         receive
             .await
             .map_err(|_| "The RichOS window closed.".to_owned())?
+    }
+    #[cfg(not(target_os = "macos"))]
+    Err("RichFiles requires macOS.".to_owned())
+}
+
+/// Snapshot only the docked native view beside this webview. The canvas mixes it
+/// into Make a video without asking macOS for access to the screen.
+#[richos_command::command]
+pub async fn richfiles_recording_frame(window: WebviewWindow) -> Result<tauri::ipc::Response, String> {
+    if window.label() != "main" {
+        return Err("RichFiles could not reach the window.".to_owned());
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let (send, receive) = tokio::sync::oneshot::channel();
+        window
+            .with_webview(move |webview| {
+                let _ignored = send.send(mac::recording_frame(webview.inner()));
+            })
+            .map_err(|_| "RichFiles could not reach the window.".to_owned())?;
+        receive
+            .await
+            .map_err(|_| "The RichOS window closed.".to_owned())?
+            .map(tauri::ipc::Response::new)
     }
     #[cfg(not(target_os = "macos"))]
     Err("RichFiles requires macOS.".to_owned())
@@ -340,14 +389,19 @@ mod mac {
     use std::path::{Path, PathBuf};
     use std::sync::OnceLock;
 
-    use super::PaneBounds;
+    use super::{PaneBounds, RailTooltip};
 
     type Place = unsafe extern "C" fn(*mut c_void, f64, f64, f64, f64, i32) -> i32;
+    type SetTooltip = unsafe extern "C" fn(*mut c_void, f64, f64, f64, f64, f64, f64);
+    type FrameCallback = unsafe extern "C" fn(*const u8, usize, f32, f32, *mut c_void);
+    type RecordingFrame = unsafe extern "C" fn(*mut c_void, FrameCallback, *mut c_void);
     type Accept = unsafe extern "C" fn(*const std::ffi::c_char) -> i32;
     type PlaceGit = unsafe extern "C" fn(*mut c_void, f64, f64, f64, f64, i32, i32, *const std::ffi::c_char, i32) -> i32;
 
     struct Bridge {
         place: Place,
+        set_tooltip: Option<SetTooltip>,
+        recording_frame: Option<RecordingFrame>,
         accept: Accept,
         reveal: Accept,
         place_git: PlaceGit,
@@ -392,6 +446,8 @@ mod mac {
             return Err("RichFiles could not load from this installation.");
         }
         let symbol = unsafe { libc::dlsym(library, c"richfiles_rail_place".as_ptr()) };
+        let tooltip = unsafe { libc::dlsym(library, c"richfiles_rail_tooltip".as_ptr()) };
+        let recording_frame = unsafe { libc::dlsym(library, c"richfiles_rail_recording_frame".as_ptr()) };
         let accept = unsafe { libc::dlsym(library, c"richfiles_rail_receive_workspace".as_ptr()) };
         let reveal = unsafe { libc::dlsym(library, c"richfiles_rail_reveal".as_ptr()) };
         let git = unsafe { libc::dlsym(library, c"richfiles_git_place".as_ptr()) };
@@ -410,6 +466,11 @@ mod mac {
         // place on the main thread with its live WKWebView pointer.
         Ok(Bridge {
             place: unsafe { std::mem::transmute::<*mut c_void, Place>(symbol) },
+            set_tooltip: (!tooltip.is_null())
+                .then(|| unsafe { std::mem::transmute::<*mut c_void, SetTooltip>(tooltip) }),
+            recording_frame: (!recording_frame.is_null()).then(|| unsafe {
+                std::mem::transmute::<*mut c_void, RecordingFrame>(recording_frame)
+            }),
             accept: unsafe { std::mem::transmute::<*mut c_void, Accept>(accept) },
             reveal: unsafe { std::mem::transmute::<*mut c_void, Accept>(reveal) },
             place_git: unsafe { std::mem::transmute::<*mut c_void, PlaceGit>(git) },
@@ -446,17 +507,20 @@ mod mac {
         unsafe { (bridge.git_chat)(pointer); }
     }
 
-    pub fn place(webview: *mut c_void, bounds: &PaneBounds) -> Result<(), String> {
+    pub fn place(
+        webview: *mut c_void,
+        bounds: &PaneBounds,
+        tooltip: Option<&RailTooltip>,
+    ) -> Result<(), String> {
         if !bounds.visible && BRIDGE.get().is_none() {
             return Ok(());
         }
-        let action = BRIDGE
+        let bridge = BRIDGE
             .get_or_init(load)
             .as_ref()
-            .map_err(|message| (*message).to_owned())?
-            .place;
+            .map_err(|message| (*message).to_owned())?;
         let accepted = unsafe {
-            action(
+            (bridge.place)(
                 webview,
                 bounds.left,
                 bounds.top,
@@ -466,6 +530,17 @@ mod mac {
             )
         };
         if accepted == 1 {
+            if bounds.visible {
+                if let Some(set_tooltip) = bridge.set_tooltip {
+                    unsafe {
+                        if let Some(tip) = tooltip {
+                            set_tooltip(webview, tip.left, tip.top, tip.width, tip.height, tip.radius, tip.arrow);
+                        } else {
+                            set_tooltip(webview, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+                        }
+                    }
+                }
+            }
             Ok(())
         } else {
             Err("RichFiles could not appear in this window.".to_owned())
@@ -483,6 +558,28 @@ mod mac {
         } else {
             Err("RichFiles could not show this file.".to_owned())
         }
+    }
+
+    pub fn recording_frame(webview: *mut c_void) -> Result<Vec<u8>, String> {
+        unsafe extern "C" fn copy_frame(bytes: *const u8, size: usize, x: f32, y: f32, context: *mut c_void) {
+            if bytes.is_null() || size == 0 || size > 4 * 1024 * 1024 {
+                return;
+            }
+            // The bundled Swift bridge calls back synchronously while both buffers live.
+            let frame = unsafe { &mut *context.cast::<Vec<u8>>() };
+            frame.reserve(8 + size);
+            frame.extend_from_slice(&x.to_le_bytes());
+            frame.extend_from_slice(&y.to_le_bytes());
+            frame.extend_from_slice(unsafe { std::slice::from_raw_parts(bytes, size) });
+        }
+
+        let capture = BRIDGE
+            .get()
+            .and_then(|bridge| bridge.as_ref().ok()?.recording_frame)
+            .ok_or("This installation cannot record the RichFiles pane.")?;
+        let mut frame = Vec::new();
+        unsafe { capture(webview, copy_frame, std::ptr::from_mut(&mut frame).cast()) };
+        Ok(frame)
     }
 
     pub fn accept(id: &str) -> Result<(), String> {

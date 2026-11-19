@@ -7,9 +7,11 @@ use std::path::{Path, PathBuf};
 use std::ptr::NonNull;
 use std::sync::OnceLock;
 use std::thread::JoinHandle;
-use std::time::Duration;
-use tauri::{AppHandle, Manager, WebviewWindow};
+use std::time::{Duration, Instant};
+use tauri::{AppHandle, Manager, Window};
 use tokio::sync::{oneshot, watch};
+
+use crate::SplashPlayback;
 
 extern "C" {
     fn richos_splash_reduce_motion() -> bool;
@@ -18,6 +20,7 @@ extern "C" {
         frames: i32,
         sound: *const c_char,
         phase: extern "C" fn(i32, f64),
+        metrics: extern "C" fn(u64, u64, u64),
     ) -> *mut c_void;
     fn richos_splash_discard_prepared(player: *mut c_void);
     fn richos_splash_attach(window: *mut c_void, player: *mut c_void) -> bool;
@@ -33,9 +36,19 @@ extern "C" {
 #[derive(Clone, Copy, PartialEq)]
 enum Phase {
     Preparing,
-    Playing,
+    Playing(Instant),
     Finished,
-    Failed,
+    Failed(u64),
+}
+
+impl Phase {
+    fn elapsed_ms(self) -> u64 {
+        match self {
+            Self::Playing(start) => start.elapsed().as_millis() as u64,
+            Self::Failed(ms) => ms,
+            _ => 0,
+        }
+    }
 }
 
 thread_local! {
@@ -48,21 +61,38 @@ fn phase() -> &'static watch::Sender<Phase> {
 }
 
 extern "C" fn on_phase(code: i32, anchor: f64) {
-    let value = match code {
+    match code {
         1 => {
+            let start = Instant::now();
             crate::launch_timing::note_native_splash_started(anchor);
-            Phase::Playing
+            phase().send_replace(Phase::Playing(start));
         }
         2 => {
-            eprintln!("[richos] native splash: reached authored endpoint");
-            Phase::Finished
+            crate::launch_timing::note_native_splash_outcome("reached authored endpoint");
+            phase().send_replace(Phase::Finished);
         }
         _ => {
-            eprintln!("[richos] native splash: renderer failed");
-            Phase::Failed
+            fail(match code {
+                -2 => "cover left the window",
+                -3 => "renderer missed the authored endpoint",
+                _ => "renderer failed",
+            });
         }
-    };
-    phase().send_replace(value);
+    }
+}
+
+extern "C" fn on_metrics(total: u64, dropped: u64, corrupted: u64) {
+    crate::launch_timing::note_native_splash_outcome(
+        &format!("renderer counted {total} frames, {dropped} dropped, {corrupted} corrupted"),
+    );
+}
+
+fn fail(reason: &'static str) {
+    let elapsed_ms = phase().borrow().elapsed_ms();
+    crate::launch_timing::note_native_splash_outcome(
+        &format!("{reason}, falling back at {elapsed_ms} ms of playback"),
+    );
+    phase().send_replace(Phase::Failed(elapsed_ms));
 }
 
 pub fn reduce_motion() -> bool {
@@ -94,7 +124,7 @@ pub fn locate(app: &AppHandle, data: &Path, entry: &crate::splash_pick::Entry, s
 
 pub struct Prepared(NonNull<c_void>);
 
-// SAFETY: a prepared player owns decoded sample buffers but has no AppKit view or layer.
+// SAFETY: a prepared player owns sample buffers but has no AppKit view or layer.
 // The join transfers its sole retained handle to the main thread before attachment.
 unsafe impl Send for Prepared {}
 
@@ -116,13 +146,14 @@ pub fn prepare(pack: Pack) -> Option<JoinHandle<Option<Prepared>>> {
                 pack.frames,
                 sound.as_ref().map_or(std::ptr::null(), |s| s.as_ptr()),
                 on_phase,
+                on_metrics,
             )
         };
         NonNull::new(player).map(Prepared)
     }).ok()
 }
 
-pub fn show(window: &WebviewWindow, worker: JoinHandle<Option<Prepared>>) -> bool {
+pub fn show_on_window(window: &Window, worker: JoinHandle<Option<Prepared>>) -> bool {
     let Ok(window) = window.ns_window() else { return false };
     let Ok(Some(prepared)) = worker.join() else { return false };
     let player = prepared.0.as_ptr();
@@ -144,22 +175,39 @@ pub fn window_visible() {
 }
 
 pub fn did_not_attach() {
-    phase().send_replace(Phase::Failed);
+    fail("could not attach the cover");
 }
 
-pub async fn finished() -> bool {
+/// The overlay has either started after its first frame became ready or needs the page fallback.
+pub async fn wait_for_start() {
+    let mut receiver = phase().subscribe();
+    drop(tokio::time::timeout(
+        Duration::from_secs(2),
+        receiver.wait_for(|value| *value != Phase::Preparing),
+    ).await);
+}
+
+pub async fn finished() -> SplashPlayback {
     wait_for_end(phase().subscribe()).await
 }
 
-async fn wait_for_end(mut receiver: watch::Receiver<Phase>) -> bool {
-    let finished = matches!(
-        tokio::time::timeout(Duration::from_secs(10), receiver.wait_for(|value| {
-            matches!(value, Phase::Finished | Phase::Failed)
-        }))
-        .await,
-        Ok(Ok(value)) if *value == Phase::Finished
-    );
-    finished
+async fn wait_for_end(mut receiver: watch::Receiver<Phase>) -> SplashPlayback {
+    let terminal = tokio::time::timeout(
+        Duration::from_secs(10),
+        receiver.wait_for(|value| matches!(value, Phase::Finished | Phase::Failed(_))),
+    )
+    .await
+    .ok()
+    .and_then(Result::ok)
+    .map(|value| *value);
+    let phase = terminal.unwrap_or_else(|| {
+        crate::launch_timing::note_native_splash_outcome("timed out waiting for the renderer");
+        *receiver.borrow()
+    });
+    match phase {
+        Phase::Finished => SplashPlayback::Finished,
+        phase => SplashPlayback::Fallback { elapsed_ms: phase.elapsed_ms() },
+    }
 }
 
 extern "C" fn faded(data: *mut c_void) {
@@ -195,14 +243,14 @@ mod tests {
         rt.block_on(async {
             let (sender, receiver) = watch::channel(Phase::Preparing);
             let done = tokio::spawn(wait_for_end(receiver));
-            sender.send_replace(Phase::Playing);
+            sender.send_replace(Phase::Playing(Instant::now()));
             tokio::task::yield_now().await;
             assert!(!done.is_finished());
             sender.send_replace(Phase::Finished);
-            assert!(done.await.unwrap());
+            assert_eq!(done.await.unwrap(), SplashPlayback::Finished);
 
-            let (_, receiver) = watch::channel(Phase::Failed);
-            assert!(!wait_for_end(receiver).await);
+            let (_, receiver) = watch::channel(Phase::Failed(1350));
+            assert_eq!(wait_for_end(receiver).await, SplashPlayback::Fallback { elapsed_ms: 1350 });
         });
     }
 }

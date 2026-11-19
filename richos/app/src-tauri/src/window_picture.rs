@@ -1,17 +1,16 @@
-//! **A PICTURE OF RICHOS'S OWN WINDOW**, for Bust a bug: what the user was looking at when they
-//! pressed it, so their Rich can check what they say against it (round 21's "Looked at the
-//! screen you were on"; second review rv-20261009T102303Z-1c3dda1d-4c78, finding 6).
+//! Pictures of RichOS webviews for Bust a bug and Make a video.
 //!
 //! # Why WebKit's snapshot and nothing else
 //!
-//! The window's content IS its webview, and `WKWebView takeSnapshotWithConfiguration:
+//! `WKWebView takeSnapshotWithConfiguration:
 //! completionHandler:` draws the app's own view into an image. It reads nothing outside this
 //! app, so macOS asks for no permission: no Screen Recording prompt, no entry in Privacy &
 //! Security. Every other way to picture a window (`screencapture`, `CGWindowListCreateImage`,
 //! ScreenCaptureKit) goes through the screen-capture permission, which the CEO's brief rules out.
 //!
-//! The picture is JPEG at quality 0.6, held in memory only (never written to disk), given to
-//! the user's own `claude` as an image block on standard input, and never put in the issue.
+//! Bust a bug gives one picture to the user's own `claude` as an image block on standard input.
+//! Make a video composites pictures of the focused RichCleaner webview into its video canvas.
+//! Both use in-memory JPEGs at quality 0.6.
 
 use std::time::Duration;
 
@@ -30,7 +29,13 @@ pub fn take(window: &tauri::WebviewWindow) -> Option<Vec<u8>> {
     {
         let (tx, rx) = std::sync::mpsc::channel::<Option<Vec<u8>>>();
         // `with_webview` runs this on the main thread, where WebKit must be called.
-        let asked = window.with_webview(move |webview| mac::snapshot(webview.inner(), tx));
+        let asked = window.with_webview(move |webview| {
+            mac::snapshot(webview.inner(), None, move |picture| {
+                if tx.send(picture).is_err() {
+                    eprintln!("[richos] bug report: the window's picture came after it was no longer waited for");
+                }
+            });
+        });
         if let Err(e) = asked {
             eprintln!("[richos] bug report: the window's picture could not be asked for ({e})");
             return None;
@@ -51,6 +56,38 @@ pub fn take(window: &tauri::WebviewWindow) -> Option<Vec<u8>> {
     }
 }
 
+/// The focused window's content as two little-endian cursor coordinates followed by a JPEG.
+/// An unfocused window returns no frame. Give each request a deadline that can't stall the movie.
+pub async fn take_focused(window: &tauri::WebviewWindow) -> Result<Option<Vec<u8>>, ()> {
+    #[cfg(target_os = "macos")]
+    {
+        let (send, receive) = tokio::sync::oneshot::channel();
+        window.with_webview(move |webview| {
+            let view = webview.inner();
+            let Some(cursor) = mac::focused_cursor(view) else {
+                let _ignored = send.send(Ok(None));
+                return;
+            };
+            mac::snapshot(view, Some(1200.0), move |picture| {
+                let result = picture.filter(|jpeg| jpeg.len() <= MAX_BYTES).ok_or(()).map(|jpeg| {
+                    let mut frame = Vec::with_capacity(8 + jpeg.len());
+                    frame.extend_from_slice(&cursor.0.to_le_bytes());
+                    frame.extend_from_slice(&cursor.1.to_le_bytes());
+                    frame.extend_from_slice(&jpeg);
+                    Some(frame)
+                });
+                let _ignored = send.send(result);
+            });
+        }).map_err(|_| ())?;
+        tokio::time::timeout(Duration::from_millis(400), receive).await.map_err(|_| ())?.map_err(|_| ())?
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _window = window;
+        Ok(None)
+    }
+}
+
 /// A picture Claude will take, or none: over [`MAX_BYTES`] Rich gets the screen's words only.
 fn within_cap(bytes: Vec<u8>) -> Option<Vec<u8>> {
     if bytes.len() <= MAX_BYTES {
@@ -62,10 +99,11 @@ fn within_cap(bytes: Vec<u8>) -> Option<Vec<u8>> {
 
 #[cfg(target_os = "macos")]
 mod mac {
+    use crate::dictation::appkit::{NSPoint, NSRect};
     use objc2::msg_send;
+    use objc2::rc::Retained;
     use objc2::runtime::{AnyClass, AnyObject};
     use std::ffi::c_void;
-    use std::sync::mpsc::Sender;
     use std::sync::Mutex;
 
     #[link(name = "AppKit", kind = "framework")]
@@ -77,32 +115,64 @@ mod mac {
     /// `NSBitmapImageFileTypeJPEG` (AppKit's `NSBitmapImageRep.h`: TIFF 0, BMP 1, GIF 2, JPEG 3).
     const JPEG: usize = 3;
 
-    /// Ask `wkwebview` for its picture; `done` hears the JPEG, or `None`, once WebKit answers.
-    /// Called on the main thread.
-    pub fn snapshot(wkwebview: *mut c_void, done: Sender<Option<Vec<u8>>>) {
+    /// Called on the main thread. `width` caps the logical width for repeated video snapshots.
+    pub fn snapshot(wkwebview: *mut c_void, width: Option<f64>, done: impl FnOnce(Option<Vec<u8>>) + 'static) {
         let view = wkwebview as *mut AnyObject;
         if view.is_null() {
-            report(done.send(None));
+            done(None);
             return;
         }
         let once = Mutex::new(Some(done));
         let block = block2::RcBlock::new(move |image: *mut AnyObject, _error: *mut AnyObject| {
-            let bytes = if image.is_null() { None } else { jpeg(image) };
             if let Some(done) = once.lock().unwrap_or_else(|p| p.into_inner()).take() {
-                report(done.send(bytes));
+                done(if image.is_null() { None } else { jpeg(image) });
             }
         });
-        // SAFETY: the documented WKWebView method, on the main thread, with no configuration (the
-        // whole visible view); WebKit copies the block it is given.
+        // SAFETY: documented WebKit and Foundation methods, called on the main thread with
+        // the view Tauri supplied. WebKit copies the block it is given.
         unsafe {
-            let () = msg_send![view, takeSnapshotWithConfiguration: std::ptr::null_mut::<AnyObject>(), completionHandler: &*block];
+            let configuration: Option<Retained<AnyObject>> = width.and_then(|limit| {
+                let class = AnyClass::get(c"WKSnapshotConfiguration")?;
+                let numbers = AnyClass::get(c"NSNumber")?;
+                let configuration: Retained<AnyObject> = msg_send![class, new];
+                let bounds: NSRect = msg_send![view, bounds];
+                let number: *mut AnyObject = msg_send![numbers, numberWithDouble: bounds.size.width.clamp(1., limit)];
+                let () = msg_send![&*configuration, setSnapshotWidth: number];
+                Some(configuration)
+            });
+            let config = configuration.as_deref().map_or(std::ptr::null(), std::ptr::from_ref);
+            let () = msg_send![view, takeSnapshotWithConfiguration: config, completionHandler: &*block];
         }
     }
 
-    /// A send whose receiver has already given up (past the deadline) changes nothing.
-    fn report<T>(sent: Result<(), std::sync::mpsc::SendError<T>>) {
-        if sent.is_err() {
-            eprintln!("[richos] bug report: the window's picture came after it was no longer waited for");
+    /// Only include the window currently being used. A pointer outside its content is absent.
+    pub fn focused_cursor(wkwebview: *mut c_void) -> Option<(f32, f32)> {
+        let view = wkwebview.cast::<AnyObject>();
+        if view.is_null() {
+            return None;
+        }
+        // SAFETY: the window and view are live on the main thread. Use the view's own
+        // coordinate system so the pointer scales with the snapshot.
+        unsafe {
+            let window: *mut AnyObject = msg_send![view, window];
+            if window.is_null() {
+                return None;
+            }
+            let key: bool = msg_send![window, isKeyWindow];
+            if !key {
+                return None;
+            }
+            let bounds: NSRect = msg_send![view, bounds];
+            let mouse: NSPoint = msg_send![window, mouseLocationOutsideOfEventStream];
+            let point: NSPoint = msg_send![view, convertPoint: mouse, fromView: std::ptr::null::<AnyObject>()];
+            let flipped: bool = msg_send![view, isFlipped];
+            let x = (point.x - bounds.origin.x) / bounds.size.width;
+            let y = (point.y - bounds.origin.y) / bounds.size.height;
+            if (0. ..1.).contains(&x) && (0. ..1.).contains(&y) {
+                Some((x as f32, if flipped { y } else { 1. - y } as f32))
+            } else {
+                Some((f32::NAN, f32::NAN))
+            }
         }
     }
 

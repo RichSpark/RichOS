@@ -2,21 +2,29 @@
 #import <AppKit/AppKit.h>
 #import <AVFoundation/AVFoundation.h>
 #import <CoreMedia/CoreMedia.h>
-#import <CoreVideo/CoreVideo.h>
 #import <QuartzCore/QuartzCore.h>
 #import <stdatomic.h>
 
 enum { Width = 2800, Height = 1704, FPS = 60, FadeMs = 180, PrerollFrames = 4 };
 static const int VideoFailed = -1;
+static const int VideoSurfaceLost = -2;
+static const int VideoLateFrames = -3;
 static const int VideoPreroll = 0;
 static const int VideoPlaying = 1;
 static const int VideoEnded = 2;
 typedef void (*RichSplashPhase)(int, double);
+typedef void (*RichSplashMetrics)(uint64_t, uint64_t, uint64_t);
 
 @interface RichSplashCover : NSView
+@property(nonatomic, copy) dispatch_block_t lostWindow;
 @end
 
 @implementation RichSplashCover
+- (void)viewDidMoveToWindow {
+    [super viewDidMoveToWindow];
+    if (!self.window && self.lostWindow) self.lostWindow();
+}
+
 - (NSView *)hitTest:(NSPoint)point {
     return [super hitTest:point] ? self : nil;
 }
@@ -29,6 +37,19 @@ typedef void (*RichSplashPhase)(int, double);
 - (void)scrollWheel:(NSEvent *)event {}
 @end
 
+// The cover is its own compositor surface, owned by the app's one main window.
+@interface RichSplashPanel : NSPanel
+@end
+
+@implementation RichSplashPanel
+- (BOOL)canBecomeKeyWindow { return NO; }
+- (BOOL)canBecomeMainWindow { return NO; }
+@end
+
+static NSRect contentOnScreen(NSView *view) {
+    return [view.window convertRectToScreen:[view convertRect:view.bounds toView:nil]];
+}
+
 @interface RichSplashPlayer : NSObject {
     atomic_int _status;
     AVAssetReader *_reader;
@@ -38,12 +59,15 @@ typedef void (*RichSplashPhase)(int, double);
     int _frameCount;
     id _endObserver;
     id _readyObserver;
+    id _failedObserver;
+    id _sizeObserver;
     BOOL _watchingStatus;
     BOOL _removing;                 // main thread
     BOOL _visible;                  // timeline queue
     BOOL _ready;                    // timeline queue
 }
 @property(nonatomic, strong) RichSplashCover *cover;
+@property(nonatomic, strong) RichSplashPanel *panel;
 @property(nonatomic, strong) AVSampleBufferDisplayLayer *video;
 @property(nonatomic, strong) id<AVQueuedSampleBufferRendering> renderer;
 @property(nonatomic, strong) dispatch_queue_t timeline;
@@ -52,6 +76,7 @@ typedef void (*RichSplashPhase)(int, double);
 @property(nonatomic, copy) NSString *soundPath;
 @property(nonatomic) double anchorMs;
 @property(nonatomic) RichSplashPhase phase;
+@property(nonatomic) RichSplashMetrics metrics;
 - (instancetype)initWithPack:(NSString *)path frames:(int)count;
 - (BOOL)prepare;
 - (void)attach:(NSView *)view;
@@ -74,9 +99,9 @@ typedef void (*RichSplashPhase)(int, double);
     if (dimensions.width != Width || dimensions.height != Height) return nil;
 
     _reader = [[AVAssetReader alloc] initWithAsset:asset error:nil];
-    NSDictionary *output = @{ (__bridge NSString *)kCVPixelBufferPixelFormatTypeKey:
-                                          @(kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange) };
-    _frames = [[AVAssetReaderTrackOutput alloc] initWithTrack:track outputSettings:output];
+    // The packs have no reordered frames. Send their H.264 samples directly to
+    // the display renderer so startup I/O cannot stall a separate NV12 decode.
+    _frames = [[AVAssetReaderTrackOutput alloc] initWithTrack:track outputSettings:nil];
     _frames.alwaysCopiesSampleData = NO;
     if (![_reader canAddOutput:_frames]) return nil;
     [_reader addOutput:_frames];
@@ -93,7 +118,7 @@ typedef void (*RichSplashPhase)(int, double);
     [_reader cancelReading];
 }
 
-// Decode to NV12 and pass each sample to the display layer at its authored timestamp.
+// Keep each sample's authored timestamp all the way to the display renderer.
 - (CMSampleBufferRef)nextSample CF_RETURNS_RETAINED {
     CMSampleBufferRef sample;
     while ((sample = [_frames copyNextSampleBuffer])) {
@@ -120,6 +145,10 @@ typedef void (*RichSplashPhase)(int, double);
 - (int)status { return atomic_load(&_status); }
 
 - (void)unwatch {
+    if (_sizeObserver) {
+        [NSNotificationCenter.defaultCenter removeObserver:_sizeObserver];
+        _sizeObserver = nil;
+    }
     if (_readyObserver) {
         [NSNotificationCenter.defaultCenter removeObserver:_readyObserver];
         _readyObserver = nil;
@@ -128,6 +157,21 @@ typedef void (*RichSplashPhase)(int, double);
         _watchingStatus = NO;
         [self.video removeObserver:self forKeyPath:@"status"];
     }
+    if (_failedObserver) {
+        [NSNotificationCenter.defaultCenter removeObserver:_failedObserver];
+        _failedObserver = nil;
+    }
+}
+
+// Called on the timeline queue.
+- (void)fail:(int)reason {
+    int status = self.status;
+    if (status != VideoPreroll && status != VideoPlaying) return;
+    atomic_store(&_status, VideoFailed);
+    [self.renderer stopRequestingMediaData];
+    [self.clock setRate:0 time:self.clock.currentTime];
+    [self.sound stop];
+    self.phase(reason, self.anchorMs);
 }
 
 - (void)feed {
@@ -139,8 +183,7 @@ typedef void (*RichSplashPhase)(int, double);
             @autoreleasepool {
                 CMSampleBufferRef sample = [player nextSample];
                 if (!sample) {
-                    atomic_store(&player->_status, VideoFailed);
-                    player.phase(VideoFailed, player.anchorMs);
+                    [player fail:VideoFailed];
                     break;
                 }
                 [player.renderer enqueueSampleBuffer:sample];
@@ -151,8 +194,8 @@ typedef void (*RichSplashPhase)(int, double);
     }];
 }
 
-// Everything that advances playback runs on the timeline queue. Rust's startup
-// still prepares stores on AppKit's thread after committing the first window.
+// Everything that advances playback runs on the timeline queue. The initial
+// window layout must reach AppKit before this clock consumes any frames.
 - (void)start {
     if (!_visible || !_ready || self.status != VideoPreroll) return;
     CMTime time = CMClockGetTime(CMClockGetHostTimeClock());
@@ -165,19 +208,18 @@ typedef void (*RichSplashPhase)(int, double);
             if (player->_frameIndex != player->_frameCount) {
                 fprintf(stderr, "[richos] native splash: renderer accepted %d of %d frames at the endpoint\n",
                         player->_frameIndex, player->_frameCount);
-                atomic_store(&player->_status, VideoFailed);
-                player.phase(VideoFailed, player.anchorMs);
+                [player fail:VideoLateFrames];
                 return;
             }
             atomic_store(&player->_status, VideoEnded);
             player.phase(VideoEnded, player.anchorMs);
             if (@available(macOS 14.4, *)) {
+                RichSplashMetrics report = player.metrics;
                 [player.video.sampleBufferRenderer loadVideoPerformanceMetricsWithCompletionHandler:
                     ^(AVVideoPerformanceMetrics *metrics) {
-                    if (metrics) {
-                        fprintf(stderr, "[richos] native splash: %ld frames, %ld dropped, %ld corrupted\n",
-                            (long)metrics.totalNumberOfFrames, (long)metrics.numberOfDroppedFrames,
-                            (long)metrics.numberOfCorruptedFrames);
+                    if (metrics && report) {
+                        report((uint64_t)metrics.totalNumberOfFrames, (uint64_t)metrics.numberOfDroppedFrames,
+                               (uint64_t)metrics.numberOfCorruptedFrames);
                     }
                 }];
             }
@@ -245,8 +287,7 @@ typedef void (*RichSplashPhase)(int, double);
         RichSplashPlayer *player = weak;
         if (player && player.status == VideoPreroll) {
             fputs("[richos] native splash: display layer did not become ready\n", stderr);
-            atomic_store(&player->_status, VideoFailed);
-            player.phase(VideoFailed, 0);
+            [player fail:VideoFailed];
         }
     });
 }
@@ -260,14 +301,29 @@ typedef void (*RichSplashPhase)(int, double);
 }
 
 - (void)attach:(NSView *)view {
-    self.cover = [[RichSplashCover alloc] initWithFrame:view.bounds];
+    NSWindow *parent = view.window;
+    self.panel = [[RichSplashPanel alloc] initWithContentRect:contentOnScreen(view)
+        styleMask:NSWindowStyleMaskBorderless | NSWindowStyleMaskNonactivatingPanel
+        backing:NSBackingStoreBuffered defer:NO];
+    self.panel.releasedWhenClosed = NO;
+    self.panel.opaque = YES;
+    self.panel.hasShadow = NO;
+    self.panel.excludedFromWindowsMenu = YES;
+    self.panel.collectionBehavior = NSWindowCollectionBehaviorTransient | NSWindowCollectionBehaviorIgnoresCycle;
+    self.panel.backgroundColor = parent.backgroundColor;
+    self.cover = [[RichSplashCover alloc] initWithFrame:self.panel.contentView.bounds];
     self.cover.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    CALayer *surface = [CALayer layer];
+    surface.frame = self.cover.bounds;
+    surface.zPosition = 1;
+    surface.masksToBounds = YES;
+    self.cover.layer = surface;
     self.cover.wantsLayer = YES;
     self.video = [AVSampleBufferDisplayLayer layer];
     self.video.frame = self.cover.bounds;
     self.video.autoresizingMask = kCALayerWidthSizable | kCALayerHeightSizable;
     self.video.videoGravity = AVLayerVideoGravityResizeAspectFill;
-    [self.cover.layer addSublayer:self.video];
+    [surface addSublayer:self.video];
     self.timeline = dispatch_queue_create("com.richos.splash.timeline",
         dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INTERACTIVE, 0));
     if (@available(macOS 14.0, *)) self.renderer = self.video.sampleBufferRenderer;
@@ -277,13 +333,21 @@ typedef void (*RichSplashPhase)(int, double);
     [self.clock addRenderer:self.renderer];
     [self.clock setRate:0 time:kCMTimeZero];
 
+    __weak RichSplashPlayer *weak = self;
+    NSNotificationName failed = AVSampleBufferDisplayLayerFailedToDecodeNotification;
+    if (@available(macOS 14.0, *)) failed = AVSampleBufferVideoRendererDidFailToDecodeNotification;
+    _failedObserver = [NSNotificationCenter.defaultCenter addObserverForName:failed
+        object:self.renderer queue:nil usingBlock:^(NSNotification *note) {
+            (void)note;
+            RichSplashPlayer *player = weak;
+            if (player) dispatch_async(player.timeline, ^{ [player fail:VideoFailed]; });
+        }];
     for (int i = 0; i < PrerollFrames; i++) {
         [self.renderer enqueueSampleBuffer:_preroll[i]];
         CFRelease(_preroll[i]);
         _preroll[i] = NULL;
     }
     if (@available(macOS 14.4, *)) {
-        __weak RichSplashPlayer *weak = self;
         _readyObserver = [NSNotificationCenter.defaultCenter addObserverForName:AVSampleBufferDisplayLayerReadyForDisplayDidChangeNotification
             object:self.video queue:nil usingBlock:^(NSNotification *notification) {
                 AVSampleBufferDisplayLayer *video = notification.object;
@@ -294,7 +358,26 @@ typedef void (*RichSplashPhase)(int, double);
         _watchingStatus = YES;
         [self.video addObserver:self forKeyPath:@"status" options:NSKeyValueObservingOptionInitial | NSKeyValueObservingOptionNew context:NULL];
     }
-    [view addSubview:self.cover positioned:NSWindowAbove relativeTo:nil];
+    self.panel.contentView = self.cover;
+    [parent addChildWindow:self.panel ordered:NSWindowAbove];
+    __weak NSView *hostView = view;
+    _sizeObserver = [NSNotificationCenter.defaultCenter addObserverForName:NSWindowDidResizeNotification
+        object:parent queue:nil usingBlock:^(NSNotification *note) {
+            (void)note;
+            NSView *host = hostView;
+            if (host) [weak.panel setFrame:contentOnScreen(host) display:NO];
+        }];
+    self.cover.lostWindow = ^{
+        RichSplashPlayer *player = weak;
+        if (player) dispatch_async(player.timeline, ^{ [player fail:VideoSurfaceLost]; });
+    };
+}
+
+- (void)closeSurface {
+    [self.panel.parentWindow removeChildWindow:self.panel];
+    [self.panel close];
+    self.panel = nil;
+    self.cover = nil;
 }
 
 - (void)removeAnimated:(BOOL)animated completion:(dispatch_block_t)completion {
@@ -303,6 +386,7 @@ typedef void (*RichSplashPhase)(int, double);
         return;
     }
     _removing = YES;
+    self.cover.lostWindow = nil;
     [self unwatch];
     dispatch_async(self.timeline, ^{
         if (self->_endObserver) {
@@ -313,18 +397,16 @@ typedef void (*RichSplashPhase)(int, double);
         [self.clock setRate:0 time:self.clock.currentTime];
     });
     if (!animated) {
-        [self.cover removeFromSuperview];
-        self.cover = nil;
+        [self closeSurface];
         completion();
         return;
     }
     [NSAnimationContext runAnimationGroup:^(NSAnimationContext *context) {
         context.duration = FadeMs / 1000.0;
         context.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionLinear];
-        self.cover.animator.alphaValue = 0;
+        self.panel.animator.alphaValue = 0;
     } completionHandler:^{
-        [self.cover removeFromSuperview];
-        self.cover = nil;
+        [self closeSurface];
         fputs("[richos] native splash: fade complete\n", stderr);
         completion();
     }];
@@ -336,12 +418,14 @@ bool richos_splash_reduce_motion(void) {
     return NSWorkspace.sharedWorkspace.accessibilityDisplayShouldReduceMotion;
 }
 
-// Decode the first video frames while the main thread builds the window.
-void *richos_splash_prepare(const char *file, int frames, const char *sound, RichSplashPhase phase) {
+// Read the first video samples while the main thread builds the window.
+void *richos_splash_prepare(const char *file, int frames, const char *sound,
+                            RichSplashPhase phase, RichSplashMetrics metrics) {
     @autoreleasepool {
         NSString *path = [NSFileManager.defaultManager stringWithFileSystemRepresentation:file length:strlen(file)];
         RichSplashPlayer *player = [[RichSplashPlayer alloc] initWithPack:path frames:frames];
         player.phase = phase;
+        player.metrics = metrics;
         if (sound) player.soundPath = [NSFileManager.defaultManager stringWithFileSystemRepresentation:sound length:strlen(sound)];
         if (![player prepare]) return NULL;
         return (__bridge_retained void *)player;
@@ -355,13 +439,16 @@ void richos_splash_discard_prepared(void *handle) {
 // Attach the prepared layer to AppKit on the main thread.
 bool richos_splash_attach(void *window, void *handle) {
     NSView *view = [(__bridge NSWindow *)window contentView];
-    if (!view) return false;
+    if (!view || !view.window) return false;
     [(__bridge RichSplashPlayer *)handle attach:view];
     return true;
 }
 
 void richos_splash_window_visible(void *handle) {
-    [(__bridge RichSplashPlayer *)handle visible];
+    // An explicit window flush can put its background on screen while AppKit
+    // is still busy. Let the launch hook return before starting the movie clock.
+    __weak RichSplashPlayer *player = (__bridge RichSplashPlayer *)handle;
+    dispatch_async(dispatch_get_main_queue(), ^{ [player visible]; });
 }
 
 void richos_splash_remove(void *handle, bool animated, void (*done)(void *), void *data) {

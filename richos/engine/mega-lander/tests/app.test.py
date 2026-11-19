@@ -220,14 +220,16 @@ class DesktopWork(unittest.TestCase):
         self.assertEqual(self.records()[0]["status"], "prepared")
         self.app.dispatch_intent(self.scope, envelope, review_refused=True)
         self.assertEqual(self.records()[0]["status"], "prepared")
-        # A changed brief uses a new request. Only this provably never-dispatched
-        # preparation is withdrawn, through the existing clean-workspace checks.
+        # A changed brief uses a new request, which replaces the refused draft: it is settled
+        # as superseded, never left dispatchable beside its revision (review
+        # rv-20261119T072050Z-df80aa4c-0832). The unrevised retry is the case below.
         replacement = self.call("prepare", {**self.args, "request_id": "revised-brief",
                                             "brief": "Implement the corrected fictional requirement."})
         self.assertEqual(replacement["status"], "prepared")
         self.app.dispatch_intent(self.scope, {"session_id": self.session, "tool_use_id": "revised-call",
                                              "tool_input": replacement["agent_call"]})
         records = self.records()
+        self.assertEqual(next(row for row in records if row["id"] == ready["id"])["status"], "blocked")
         self.assertEqual(next(row for row in records if row["id"] == replacement["id"])["status"], "dispatching")
 
     def test_pierce_dismissal_can_retry_the_exact_prepared_payload(self):
@@ -437,6 +439,7 @@ class DesktopWork(unittest.TestCase):
         for n,(name,status) in enumerate([*((p,"prepared") for p in pending),("mark-sonnet-high-000000000000","run-ended")]):
             (receipts/("%064x.json"%n)).write_text(json.dumps({"schema":1,"id":"%064x"%n,"name":name,"status":status,
                 "binding":{"entity_id":entity,"thread_id":thread}}))
+        return receipts
 
     def test_stus_teammate_counts_the_companys_other_conversations_only(self):
         """Review rv-20261114T100953Z-491c7af2-d68d: the app keeps a registry per conversation, and
@@ -452,6 +455,24 @@ class DesktopWork(unittest.TestCase):
         second=self.call("prepare",{**self.args,"request_id":"prepare-two","title":"Create a second fictional result"})
         self.assertRegex(first["name"],r"^mark-sonnet-high-[0-9a-f]{12}$")
         self.assertRegex(second["name"],r"^mark2-sonnet-high-[0-9a-f]{12}$")
+
+    def test_prepare_ignores_damaged_sibling_receipts_but_validates_its_own(self):
+        sibling=self.other_conversation("depot","thread-b",running=["mark-sonnet-high-aaaaaaaaaaaa"],
+                                        pending=["mark2-sonnet-high-bbbbbbbbbbbb"])
+        # Unreadable receipts on both sides of the readable reservations.
+        (sibling/"0.json").write_text('{"schema":1,')
+        (sibling/"f.json").write_text('{"schema":1,')
+        ready=self.call("prepare",self.args)
+        self.assertEqual(ready["status"],"prepared")
+        self.assertRegex(ready["name"],r"^mark3-sonnet-high-[0-9a-f]{12}$")
+        self.assertTrue(self.target_of(ready).is_dir())
+
+        current=self.app.folder(self.scope)
+        (current/"f.json").write_text('{"schema":1,')
+        before=set(current.glob("*.json"))
+        with self.assertRaises(json.JSONDecodeError):
+            self.call("prepare",{**self.args,"request_id":"prepare-two","title":"Create a second fictional result"})
+        self.assertEqual(set(current.glob("*.json")),before)
 
     def test_prepare_runs_one_job_on_a_named_model_within_the_users_ceiling(self):
         """Build plan item 7 (richos-hq docs/plans/2026-10-21-everything-for-every-user.md): an
@@ -1126,8 +1147,9 @@ class DesktopWork(unittest.TestCase):
             {"commit":commit,"verdict":"passed","checks":["synthetic reviewer observation"]}))
         landed=self.call("integrate",{"worker_id":worker["id"],"reviewer_id":final["id"]})
         self.assertTrue(landed["work_integrated"])
-        # These preparations still dispatch in this session. Explicitly withdraw the
-        # unused briefs; the refused preparations continue to settle automatically.
+        # Explicitly withdraw the unused briefs that still dispatch in this session. The call
+        # refused after spawn registration settles automatically, and the one Pierce refused
+        # was replaced by the next review prepared for the same duty.
         for ready in (placeholder,committed,dirty):
             self.call("settle",{"request_id":self.record_of(ready)["request_id"],
                                 "reason":"This unused brief was replaced by the verified result."})
@@ -1449,23 +1471,63 @@ class DesktopWork(unittest.TestCase):
             self.call("settle",{"request_id":"prepare-one","reason":"It must not be settled here."})
         self.assertEqual(self.receipt_of(worker)["status"],"running")
 
+    def test_a_brief_revised_after_pierce_refused_it_completes(self):
+        """Pierce refuses a dispatch and says to revise the assignment and retry. The revised
+        brief is a new prepare for the same duty: it replaces the refused draft, and once the
+        revised work is reviewed and integrated the assignment completes with no settle step
+        (review rv-20261119T072050Z-df80aa4c-0832: on df80aa4c the draft stayed `prepared` and
+        `complete` refused with "unresolved execution")."""
+        draft=self.call("prepare",{**self.args,"request_id":"draft-1",
+            "brief":"Create result.txt with a stale value in the assigned target worktree. Commit only that file."})
+        branch=self.registered_branch(draft)
+        self.app.dispatch_intent(self.scope,{"session_id":self.session,"tool_use_id":"call-draft-1",
+                                             "tool_input":draft["agent_call"]},review_refused=True)
+        self.assertTrue(self.record_of(draft)["pierce_refused"])
+        args=self.reviewed_pair("revised")
+        record=self.receipt_of(draft)
+        self.assertEqual(record["status"],"blocked","the refused draft is still dispatchable after its revision")
+        self.assertIn("superseded by request prepare-revised",record["settled"]["reason"])
+        self.assertFalse(self.target_of(draft).exists())
+        self.assertFalse(self.branch_exists(branch))
+        self.assertTrue(self.call("integrate",args)["work_integrated"])
+        done=self.call("complete",{"obligation_id":"fixture-task","worker_ids":[args["worker_id"]]})
+        self.assertTrue(done["obligation_closed"])
+
+    def test_an_independent_job_never_replaces_a_draft_pierce_refused(self):
+        """Only the draft's own revision replaces it (review rv-20261119T083123Z-9738b7dd-dddf):
+        an independent job of the same assignment leaves it retryable, and completion names it."""
+        draft=self.call("prepare",{**self.args,"request_id":"auth","title":"Implement authentication",
+                                   "brief":"Create auth.txt with FICTIONAL in the assigned target worktree. Commit only that file."})
+        self.app.dispatch_intent(self.scope,{"session_id":self.session,"tool_use_id":"call-auth",
+                                             "tool_input":draft["agent_call"]},review_refused=True)
+        args=self.reviewed_pair("billing")
+        self.assertEqual(self.receipt_of(draft)["status"],"prepared")
+        self.assertNotIn("settled",self.receipt_of(draft))
+        self.assertTrue(self.call("integrate",args)["work_integrated"])
+        with self.assertRaisesRegex(ValueError,"unresolved execution.*receipt %s \\(request auth, status prepared\\)"
+                                    % re.escape(draft["name"])):
+            self.call("complete",{"obligation_id":"fixture-task","worker_ids":[args["worker_id"]]})
+
     def test_completion_never_settles_a_dispatchable_parallel_worker(self):
-        """A turn change does not withdraw work that dispatch still accepts (V5-09)."""
+        """Completion keeps work retryable after a refusal and a turn change."""
         args=self.reviewed_pair("landed")
         self.assertTrue(self.call("integrate",args)["work_integrated"])
         parallel=self.call("prepare",{**self.args,"request_id":"parallel","title":"Create the second result",
                                       "brief":"Create second.txt with FICTIONAL in the assigned target worktree. Commit only that file."})
         branch=self.registered_branch(parallel)
+        call={"session_id":self.session,"tool_use_id":"parallel-call","tool_input":parallel["agent_call"]}
         for turn in (1,2):
-            if turn==2: self.next_turn(2)
-            self.app.dispatch_intent(self.scope,{"session_id":self.session,"tool_use_id":"parallel-call",
-                                                "tool_input":parallel["agent_call"]},inspect_only=True)
+            if turn==2:
+                self.app.dispatch_intent(self.scope,dict(call),review_refused=True)
+                self.next_turn(2)
+            self.app.dispatch_intent(self.scope,dict(call),inspect_only=True)
             with self.assertRaisesRegex(ValueError,"unresolved execution"):
                 self.call("complete",{"obligation_id":"fixture-task","worker_ids":[args["worker_id"]]})
             self.assertEqual(self.receipt_of(parallel)["status"],"prepared")
             self.assertNotIn("settled",self.receipt_of(parallel))
             self.assertTrue(self.target_of(parallel).is_dir())
             self.assertTrue(self.branch_exists(branch))
+        self.assertTrue(self.record_of(parallel)["pierce_refused"])
         # Only an explicit withdrawal proves this still-dispatchable work is unwanted.
         self.call("settle",{"request_id":"parallel","reason":"The user withdrew the second result."})
         self.assertTrue(self.call("complete",{"obligation_id":"fixture-task",
@@ -3345,8 +3407,8 @@ class DesktopWork(unittest.TestCase):
     # terminal does. Before, integrate ran Git with core.hooksPath=/dev/null and landed by
     # commit-tree plus a fast-forward, so no merge-time check and no fence ever saw an app land.
 
-    def repository_hook(self,name,body):
-        hooks=Path(self.app.git(self.repo,"rev-parse","--path-format=absolute","--git-common-dir"))/"hooks"
+    def repository_hook(self,name,body,repo=None):
+        hooks=Path(self.app.git(repo or self.repo,"rev-parse","--path-format=absolute","--git-common-dir"))/"hooks"
         hooks.mkdir(exist_ok=True)
         path=hooks/name;path.write_text("#!/bin/sh\n"+body);path.chmod(0o755)
         return path
@@ -3886,8 +3948,25 @@ class DesktopWork(unittest.TestCase):
         self.finish_fixture_worker("multi-witness-reviewer","RICHOS_REVIEW "+json.dumps(
             {"commit":commits[str(self.repo)],"commits":commits,"verdict":"passed","checks":["both repositories"]}))
         before={repo:self.app.git(repo,"rev-parse","main") for repo in commits}
-        self.assertTrue(self.call("integrate",{"worker_id":worker["id"],"reviewer_id":reviewer["id"]})["work_integrated"])
+        # Canonical workspace order determines which repository merges first.
+        first,last=paths
+        hook=self.repository_hook("pre-merge-commit",'echo "Fixture refused second merge" >&2\nexit 1\n',repo=last)
+        args={"worker_id":worker["id"],"reviewer_id":reviewer["id"]}
+        with self.assertRaisesRegex(ValueError,"Fixture refused second merge"):
+            self.call("integrate",args)
+        self.assertEqual(self.app.git(first,"rev-parse","main^2"),commits[first])
+        self.assertEqual(self.app.git(last,"rev-parse","main"),before[last])
+        partial=self.land_rows()
+        marker,file=partial
+        self.assert_land_marker(marker,first,before[first],commits[first])
+        self.assertEqual((file["source"],file["path"],file["from"],file["commit"]),
+            ("land",os.path.join(first,"result.txt"),os.path.join(paths[first],"result.txt"),
+             self.app.git(first,"rev-parse","main")))
+
+        hook.unlink()
+        self.assertTrue(self.call("integrate",args)["work_integrated"])
         rows=self.land_rows()
+        self.assertEqual(rows[:len(partial)],partial)
         self.assertCountEqual([r["source"] for r in rows],["land-marker","land"] * len(commits))
         markers={r["path"]:r for r in rows if r["source"]=="land-marker"}
         self.assertEqual(set(markers),set(commits))
@@ -3897,6 +3976,8 @@ class DesktopWork(unittest.TestCase):
         self.assertEqual(sorted((r["path"],r["from"],r["commit"]) for r in rows if r["source"]=="land"),
             sorted((os.path.join(repo,"result.txt"),os.path.join(paths[repo],"result.txt"),
                     self.app.git(repo,"rev-parse","main")) for repo in commits))
+        self.assertTrue(self.call("integrate",args)["work_integrated"])
+        self.assertEqual(self.land_rows(),rows)
 
 
 class RunBoundIsTheWholeOperations(unittest.TestCase):

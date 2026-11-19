@@ -10,4 +10,4 @@
 
 Rich owns completion and retries. Until this lands, the next nightly's existing stable-version collision guard refuses to build under a version already published.
 
-Rich starts Zach with the exact dispatched command (`--repo richos --type zach --model sonnet --brief` pointing to this filled brief). Newt owns changelog prose; Zach owns only this version bump.
+Rich starts Zach with the dispatched command, which uses Zach's configured model and points to this filled brief. Newt owns changelog prose. Zach owns the version bump.

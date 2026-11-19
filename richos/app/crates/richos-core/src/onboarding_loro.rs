@@ -72,12 +72,9 @@ impl Source {
     }
 
     /// The record id: the stem, made a legal loro id (`[a-z0-9][a-z0-9-]{0,79}`), and the hash of what
-    /// the record says; from the second `try_n` on, `-r<n>` after it. A new version of the file is a
-    /// new id, so it can supersede the old one. Words the file held once before (a name changed and
-    /// changed back) find their first id taken by a superseded record, and [`sync`] goes on to the
-    /// next `try_n`, so they become a new current record at the top of the history, never the old
-    /// one again (review rv-20261114T145826Z-8ffdde80-6144).
-    pub fn record_id(&self, try_n: u32) -> String {
+    /// the record says; from its second appearance on, `-r<n>` after it. Restored content gets
+    /// a new revision so it can supersede the current record and keep the earlier one in history.
+    pub fn record_id(&self, revision: u64) -> String {
         let mut slug = String::new();
         for c in self.stem.chars() {
             let c = c.to_ascii_lowercase();
@@ -87,16 +84,12 @@ impl Source {
                 slug.push('-');
             }
         }
-        // Room for everything after the stem: `-` and the 8-digit hash, and `-r9`, the longest
-        // revision suffix (`MAX_TRIES`), inside loro's 80 characters.
-        slug.truncate(80 - 1 - 8 - 3);
+        let suffix = if revision <= 1 { String::new() } else { format!("-r{revision}") };
+        // Reserve at least three bytes for the suffix to preserve existing IDs through r9.
+        slug.truncate(80 - 1 - 8 - suffix.len().max(3));
         let slug = slug.trim_end_matches('-');
         let slug = if slug.is_empty() { "onboarding" } else { slug };
-        if try_n <= 1 {
-            format!("{slug}-{}", self.hash())
-        } else {
-            format!("{slug}-{}-r{try_n}", self.hash())
-        }
+        format!("{slug}-{}{suffix}", self.hash())
     }
 }
 
@@ -214,10 +207,24 @@ fn record_args(source: &Source) -> Vec<String> {
 
 impl CliLoroWriter {
     /// Whether loro holds `record` and nothing has superseded it (its file says `supersededBy: null`).
-    fn is_current(&self, record: &str) -> bool {
-        self.run_verb("show", &["--ref".into(), record.to_string()], None)
-            .is_ok_and(|out| out.text.lines().any(|l| l.trim() == "supersededBy: null"))
+    fn is_current(&self, record: &str) -> Result<bool, String> {
+        let out = self.run_verb("show", &["--ref".into(), record.to_string()], None)
+            .map_err(|error| format!("could not read {record}: {error}"))?;
+        out.text.lines()
+            .find_map(|line| line.trim().strip_prefix("supersededBy:"))
+            .map(|value| value.trim() == "null")
+            .ok_or_else(|| format!("could not read the revision status of {record}"))
     }
+}
+
+/// The writer's refusal names the occupied record. Other errors must leave the source retryable.
+fn occupied_record<'a>(why: &'a str, id: &str) -> Option<&'a str> {
+    let mut quoted = why.splitn(3, '"');
+    quoted.next()?;
+    let record = quoted.next()?;
+    let reason = quoted.next()?;
+    (record.starts_with("rec:") && record.rsplit('/').next() == Some(id)
+        && reason.starts_with(" already exists.")).then_some(record)
 }
 
 impl OnboardingLoroWriter for CliLoroWriter {
@@ -230,12 +237,13 @@ impl OnboardingLoroWriter for CliLoroWriter {
                 // The same file and the same words were written before and the kept file lost
                 // it: the writer names the record that holds them, and that is the one to keep.
                 let why = e.to_string();
-                match why.split('"').nth(1).filter(|r| r.starts_with("rec:") && why.contains("already exists")) {
-                    // Only a record that is still current: one a later revision replaced is
-                    // history, and taking it would put the old words back as if they were new.
-                    Some(existing) if existing.ends_with(&format!("/{id}")) && self.is_current(existing) => Ok(existing.to_string()),
-                    _ => Err(why),
+                if let Some(existing) = occupied_record(&why, id) {
+                    // Advance past history only after the writer confirms this record's status.
+                    if self.is_current(existing)? {
+                        return Ok(existing.to_string());
+                    }
                 }
+                Err(why)
             }
         }
     }
@@ -258,6 +266,9 @@ struct Kept {
     /// The corpus these records are in. A different corpus starts again.
     corpus: String,
     records: BTreeMap<String, KeptRecord>,
+    /// Last accepted revision per source and content hash. Older kept files learn these on demand.
+    #[serde(default)]
+    revisions: BTreeMap<String, BTreeMap<String, u64>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -288,16 +299,13 @@ pub struct SyncReport {
     pub problems: Vec<String>,
 }
 
-/// How many ids one file's words may take before [`sync`] reports it (the same words saved, replaced
-/// and saved again this many times).
-const MAX_TRIES: u32 = 9;
-
 /// One copy at a time in this process: the end of a turn and the boot can come together.
 static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
 
 fn append_into(writer: &dyn OnboardingLoroWriter, source: &Source, id: &str) -> Result<String, String> {
     match writer.append(source, id) {
         Ok(r) => Ok(r),
+        Err(occupied) if occupied_record(&occupied, id).is_some() => Err(occupied),
         // A company added after the memory folder was made has no partition yet. Make it, the
         // way memory setup made the others (`provision.rs`), and write once more.
         Err(first) => match &source.company {
@@ -315,35 +323,44 @@ fn append_into(writer: &dyn OnboardingLoroWriter, source: &Source, id: &str) -> 
 
 /// Copy every source that is new or changed since the last copy into loro.
 pub fn sync(sources: &[Source], writer: &dyn OnboardingLoroWriter, corpus: &str, kept_path: &Path) -> SyncReport {
+    sync_with_sources(|| sources, writer, corpus, kept_path)
+}
+
+/// Read saved sources inside the sync lock so a later callback cannot publish an older snapshot.
+pub fn sync_with_sources<S: AsRef<[Source]>>(read: impl FnOnce() -> S, writer: &dyn OnboardingLoroWriter, corpus: &str, kept_path: &Path) -> SyncReport {
     let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|p| p.into_inner());
     let mut kept = load(kept_path);
     if kept.corpus != corpus {
-        kept = Kept { corpus: corpus.to_string(), records: BTreeMap::new() };
+        kept = Kept { corpus: corpus.to_string(), ..Kept::default() };
     }
     let mut report = SyncReport::default();
-    for source in sources {
+    for source in read().as_ref() {
         let hash = source.hash();
         let previous = kept.records.get(&source.key).cloned();
         if previous.as_ref().is_some_and(|p| p.hash == hash) {
             continue;
         }
-        let mut written = Err(String::new());
-        for try_n in 1..=MAX_TRIES {
-            let id = source.record_id(try_n);
-            written = match &previous {
+        let last_revision = kept.revisions.get(&source.key).and_then(|revisions| revisions.get(&hash)).copied().unwrap_or(0);
+        let mut revision = last_revision;
+        let written = loop {
+            let Some(next) = revision.checked_add(1) else { break Err("record revisions exhausted".to_string()) };
+            revision = next;
+            let id = source.record_id(revision);
+            let attempt = match &previous {
                 // A record that cannot be superseded (moved or removed by hand) is no reason to
                 // lose the new version: it is written as a new record.
                 Some(p) => writer.supersede(source, &p.record, &id).or_else(|_| append_into(writer, source, &id)),
                 None => append_into(writer, source, &id),
             };
             // The id is held by a record a later revision replaced: the next id.
-            if !matches!(&written, Err(why) if why.contains("already exists")) {
-                break;
+            if !matches!(&attempt, Err(why) if occupied_record(why, &id).is_some()) {
+                break attempt;
             }
-        }
+        };
         match written {
             Ok(record) => {
                 report.written.push(format!("{} -> {record}", source.key));
+                kept.revisions.entry(source.key.clone()).or_default().insert(hash.clone(), revision);
                 kept.records.insert(source.key.clone(), KeptRecord { hash, record });
                 if let Err(e) = save(kept_path, &kept) {
                     report.problems.push(format!("{}: written, but {} could not be saved ({e})", source.key, kept_path.display()));
@@ -440,7 +457,7 @@ mod tests {
         }
         // A stem as long as an entity id can make it keeps its revision suffix inside 80 characters.
         let long = Source { stem: format!("{}-{}", "a".repeat(64), "onboarding-research-notes"), ..got[2].clone() };
-        for n in 1..=MAX_TRIES {
+        for n in [1, 2, 9, 10, 100, u64::MAX] {
             let id = long.record_id(n);
             assert!(id.len() <= 80, "{id} is {} characters", id.len());
             if n > 1 {

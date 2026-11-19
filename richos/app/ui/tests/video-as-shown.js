@@ -260,6 +260,143 @@ async function asShown(theme, mic) {
   }
 }
 
+function dockedFiles() {
+  const drive = async (T) => {
+    try {
+      await T.app();
+      await T.chat();
+      const tile = document.createElement("canvas");
+      const tileContext = tile.getContext("2d");
+      tileContext.fillStyle = "#20b030";
+      tileContext.fillRect(0, 0, tile.width, tile.height);
+      const jpeg = await new Promise((resolve) => tile.toBlob(resolve, "image/jpeg"));
+      const frame = await new Blob([new Float32Array([NaN, NaN]), jpeg]).arrayBuffer();
+      window.__richFilesTestFrame = frame;
+
+      await T.press("#set-btn");
+      await T.press("#video-anywhere");
+      await T.press("#video-anywhere-choices .rv-go");
+      await T.until("the recording", () => window.RichVideoAnywhere.state().state === "rec");
+      await T.press("#nr-richfiles");
+      const canvas = await T.until("the recording canvas", () => document.querySelector(".rv-canvas"));
+      const context = canvas.getContext("2d");
+      const isNativeGreen = (x, y) => {
+        const [r, g, b] = context.getImageData(Math.round(x * canvas.width / innerWidth),
+          Math.round(y * canvas.width / innerWidth), 1, 1).data;
+        return r < 50 && g > 130 && b < 100;
+      };
+      const pane = document.getElementById("richfiles-pane").getBoundingClientRect();
+      const center = () => isNativeGreen(pane.left + pane.width / 2, pane.top + pane.height / 2);
+      await T.until("native pixels in the recording", center);
+
+      const finder = document.getElementById("nr-finder");
+      finder.dispatchEvent(new PointerEvent("pointerover", { bubbles: true }));
+      const tip = document.getElementById("nr-tip").getBoundingClientRect();
+      if (tip.top <= pane.top || tip.right <= pane.left) throw new Error("the label does not overlap the pane");
+      const underTip = () => isNativeGreen(tip.right - 8, tip.top + 5);
+      await T.until("the label above the native pixels", () => center() && !underTip());
+      finder.dispatchEvent(new PointerEvent("pointerout", { bubbles: true, relatedTarget: document.body }));
+      await T.until("the pane revealed again under the label", underTip);
+
+      await T.press("#nr-chats");
+      await T.until("native pixels removed", () => !center());
+      await T.press("#video-anywhere-stop");
+      await T.until("the result", () => window.RichVideoAnywhere.state().state === "sheet");
+      T.post({ done: { ended: window.RichVideoAnywhere.state().ended } });
+    } catch (e) {
+      T.post({ done: { error: String((e && e.message) || e) } });
+    }
+  };
+  const bridge = () => Object.defineProperty(window, "RichBridge", {
+    configurable: true,
+    set(bridge) {
+      const invoke = bridge.invoke.bind(bridge);
+      bridge.invoke = async (command, args, options) => {
+        if (command === "richfiles_pane_available") return true;
+        if (command === "richfiles_request_pending") return false;
+        if (command === "richfiles_preload" || command === "richfiles_place_pane") return;
+        if (command === "richfiles_recording_frame") return window.__richFilesTestFrame;
+        return invoke(command, args, options);
+      };
+      Object.defineProperty(window, "RichBridge", { value: bridge, writable: true });
+    },
+  });
+  return `(${bridge.toString()})(); window.addEventListener("load", () => (${drive.toString()})((${tools.toString()})()));`;
+}
+
+function cleanerWindow() {
+  const bridge = () => Object.defineProperty(window, "RichBridge", {
+    configurable: true,
+    set(bridge) {
+      const invoke = bridge.invoke.bind(bridge);
+      const listen = bridge.listen.bind(bridge);
+      bridge.listen = async (event, handler) => {
+        if (event === "rich://cleaner-recording-focus") {
+          window.testCleanerFocus = (focused) => handler({ payload: focused });
+          return () => {};
+        }
+        return listen(event, handler);
+      };
+      bridge.invoke = async (command, args, options) => {
+        if (command === "cleaner_open_window") return window.testCleanerFocus(true);
+        if (command === "cleaner_recording_frame") return window.testCleanerFrame();
+        return invoke(command, args, options);
+      };
+      Object.defineProperty(window, "RichBridge", { value: bridge, writable: true });
+    },
+  });
+  const drive = async (T) => {
+    try {
+      await T.app();
+      await T.chat();
+      await T.until("the Cleaner focus listener", () => window.testCleanerFocus);
+      const tile = document.createElement("canvas");
+      const paint = async (color) => {
+        const cx = tile.getContext("2d");
+        cx.fillStyle = color;
+        cx.fillRect(0, 0, tile.width, tile.height);
+        const jpeg = await new Promise((resolve) => tile.toBlob(resolve, "image/jpeg"));
+        return new Blob([new Float32Array([NaN, NaN]), jpeg]).arrayBuffer();
+      };
+      const red = await paint("#cf2020");
+      const green = await paint("#20b030");
+      let requests = 0;
+      window.testCleanerFrame = () => { requests++; return red; };
+      await T.press("#set-btn");
+      await T.press("#video-anywhere");
+      await T.press("#video-anywhere-choices .rv-go");
+      const canvas = await T.until("the recording canvas", () => document.querySelector(".rv-canvas"));
+      if (requests) throw new Error("sampled Cleaner before opening its window");
+      const center = () => canvas.getContext("2d").getImageData(canvas.width / 2, canvas.height / 2, 1, 1).data;
+      const isRed = ([r, g, b]) => r > 165 && g < 75 && b < 75;
+      const isGreen = ([r, g, b]) => r < 75 && g > 140 && b < 100;
+      // Model a covered main window whose animation callbacks are suspended.
+      const animationFrame = window.requestAnimationFrame;
+      window.requestAnimationFrame = () => 0;
+      await T.press("#nr-cleaner");
+      await T.until("the foreground Cleaner window in the recording", () => isRed(center()));
+      window.testCleanerFrame = () => { requests++; return green; };
+      await T.until("the next Cleaner picture", () => isGreen(center()));
+
+      let resolveFrame;
+      window.testCleanerFrame = () => new Promise((resolve) => { requests++; resolveFrame = resolve; });
+      await T.until("an in-flight window frame", () => resolveFrame);
+      window.requestAnimationFrame = animationFrame;
+      window.testCleanerFocus(false);
+      resolveFrame(red);
+      const sent = requests;
+      await T.until("the main window after Cleaner closed", () => !isRed(center()) && !isGreen(center()));
+      await T.press("#video-anywhere-stop");
+      await T.until("the result", () => window.RichVideoAnywhere.state().state === "sheet");
+      if (requests !== sent) throw new Error("requested Cleaner again after it lost focus");
+      T.post({ done: { ended: window.RichVideoAnywhere.state().ended } });
+    } catch (e) {
+      T.post({ done: { error: String((e && e.message) || e) } });
+    }
+  };
+  return `(${bridge.toString()})(); window.addEventListener("load", () => (${drive.toString()})((${tools.toString()})()));`;
+}
+
 /// What each recorder asks the webview for when the microphone is switched on. The microphone
 /// handed back is a silent one made in the page: no real microphone is opened.
 function asking() {
@@ -319,6 +456,30 @@ async function main() {
   await run.check("dark, with the microphone: the empty message box has its hint and no placeholder under it, Settings' closed list is not drawn until it is opened, and every line of a message starts where the box puts it", async () => asShown("dark", true));
 
   await run.check("light, without the microphone: the same three", async () => asShown("light", false));
+
+  await run.check("docked RichFiles is composited in the video below the rail tooltip and removed when leaving the page", async () => {
+    const ran = await runPage(APP, dockedFiles(), 100);
+    try {
+      assert(ran.code === 0 && ran.done, "the page did not finish: " + JSON.stringify(ran.said.slice(-4)));
+      assert(!ran.done.error, ran.done.error);
+      assertEqual(ran.done.ended, "stopped", "the recording did not stop cleanly");
+      return "read the native pixels, the label above them and the cleared pane from the recording canvas";
+    } finally {
+      fs.rmSync(ran.dir, { recursive: true, force: true });
+    }
+  });
+
+  await run.check("the separate RichCleaner window is sampled only in front and a late frame cannot return after it closes", async () => {
+    const ran = await runPage(APP, cleanerWindow(), 95);
+    try {
+      assert(ran.code === 0 && ran.done, "the page did not finish: " + JSON.stringify(ran.said.slice(-4)));
+      assert(!ran.done.error, ran.done.error);
+      assertEqual(ran.done.ended, "stopped", "the recording did not stop cleanly");
+      return "read two different Cleaner images and the return to the main window from one recording canvas";
+    } finally {
+      fs.rmSync(ran.dir, { recursive: true, force: true });
+    }
+  });
 
   await run.check("both recorders ask for the microphone without echo canceling, so letting it go does not touch what the Mac is playing", async () => {
     const ran = await runPage(APP, asking(), 120);

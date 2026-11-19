@@ -2744,7 +2744,7 @@ async function main() {
     }
     assertEqual(
       tickOwners.slice().sort(),
-      ["recover", "replay", "start", "tick"],
+      ["replay", "resume", "start", "tick"],
       "frame requests for the normal start, the retry, the gallery preview and the bar itself"
     );
     assert(otherOwners.every((o) => o === "reportPainted"),
@@ -3353,11 +3353,11 @@ async function main() {
     const playing = await page.evaluate(() => {
       const splash = document.getElementById("splash");
       window.RichSplash.yieldNow("app-ready");
-      return { hidden: getComputedStyle(splash).visibility, held: window.RichSplash.state.heldAt, reason: window.RichSplash.state.reason, covered: window.loroCovered() };
+      return { hidden: getComputedStyle(splash).visibility, children: splash.childElementCount, held: window.RichSplash.state.heldAt, reason: window.RichSplash.state.reason, covered: window.loroCovered() };
     });
-    assertEqual(playing, { hidden: "hidden", held: 0, reason: null, covered: true }, "the web copy joins or interrupts the native sequence");
+    assertEqual(playing, { hidden: "hidden", children: 0, held: 0, reason: null, covered: true }, "native playback keeps Home covered without building the HTML splash");
     const fading = await page.evaluate(async () => {
-      window.__native.finish(true);
+      window.__native.finish({ state: "finished" });
       await Promise.resolve();
       const style = document.querySelector(".ro-handover")?.style;
       return {
@@ -3381,6 +3381,53 @@ async function main() {
     assertEqual(cleared, { covered: false, prepareCalls: 1 }, "the completed native fade reveals Home and prepares the next pack once");
     await page.__ctx.close();
     return "The renderer completes the authored sequence and acknowledges the fade before Home starts";
+  });
+
+  await run.check("29b  an interrupted native splash uses only its remaining authored time", async () => {
+    for (const { id, duration } of [
+      { id: "round-11/v1", duration: 3000 },
+      { id: "opening/edition-year", duration: 5000 },
+    ]) {
+      for (const elapsed of [0, 1250, duration]) {
+        const page = await launch(browser, {
+          virtualTime: true,
+          initArg: id,
+          init: (openingId) => {
+            window.__RICHOS_LAUNCH__ = { kind: "fresh", splash: { id: openingId, native: true } };
+            window.__native = { dismissals: [] };
+            window.__TAURI_INTERNALS__ = {
+              invoke(cmd, args) {
+                if (cmd === "splash_native_finished") return new Promise(resolve => { window.__native.fail = resolve; });
+                if (cmd === "splash_native_dismiss") {
+                  window.__native.dismissals.push(args.animated);
+                  return Promise.resolve(null);
+                }
+                return Promise.resolve(null);
+              },
+            };
+          },
+        });
+        const recovered = await page.evaluate(async (elapsedMs) => {
+          window.__native.fail({ state: "fallback", elapsedMs });
+          await Promise.resolve();
+          await Promise.resolve();
+          const splash = window.RichSplash;
+          const node = document.getElementById("splash");
+          return [splash.moment(), node ? getComputedStyle(node).visibility : "removed", window.__native.dismissals];
+        }, elapsed);
+        if (elapsed === duration) {
+          assertEqual(recovered, [duration, "removed", [true]], "a failure at the endpoint fades directly to Home");
+        } else {
+          assertEqual(recovered, [elapsed, "visible", [false]], "the web animation continues at the native time");
+          await page.clock.runFor(duration - elapsed - 1);
+          assertEqual(await page.evaluate(() => window.loroCovered()), true, "Home is still covered one ms before the endpoint");
+          await page.clock.runFor(REMOVE_AFTER_YIELD_MS + 1);
+        }
+        assertEqual(await page.evaluate(() => window.loroCovered()), false, "the remainder and fade reveal Home");
+        await page.__ctx.close();
+      }
+    }
+    return "Both durations recover from a failed start, continue from an interruption and fade at the endpoint";
   });
 
   await run.check("30  a saved opening without a local video plays through before preparing its pack", async () => {
