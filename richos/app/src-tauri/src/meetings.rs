@@ -28,7 +28,7 @@ use crate::dictation::appkit::{self, Win};
 use richos_core::ledger::AttentionTier;
 use richos_core::meeting::{parse_watch_line, Action, EndReason, Input, MeetingMonitor, PromptKind, WatchLine};
 use richos_core::meeting_calendar::{self, CalendarMeeting};
-use richos_core::meeting_notes::{self, meeting_zone, MeetingFacts, NextStep, SavedRetry};
+use richos_core::meeting_notes::{self, meeting_zone, BriefState, MeetingFacts, NextStep, SavedRetry};
 use richos_core::util::now_millis;
 use richos_voice::dictation_bar::Rect;
 use serde::{Deserialize, Serialize};
@@ -1323,17 +1323,7 @@ impl Meetings {
         let first = facts.continues.as_ref().map(|name| zone.join(name))
             .or_else(|| retry.as_ref().map(|_| dir.to_path_buf()));
         if let Some(first) = first {
-            let mut parts = meeting_notes::segments(&first);
-            if retry.is_some() {
-                // Retrying an older segment must not replace notes that already include
-                // later parts. Exclude recordings that are still in progress.
-                parts.retain(|s| s == dir || meeting_notes::read_facts(s).is_some_and(|f| f.ended_at != 0));
-            } else {
-                parts = parts.into_iter().take_while(|s| s != dir).chain([dir.to_path_buf()]).collect();
-            }
-            if !parts.iter().any(|s| s == dir) {
-                parts.push(dir.to_path_buf());
-            }
+            let parts = meeting_notes::brief_segments(&first, dir, retry.is_some());
             if parts.len() > 1 || facts.continues.is_some() {
                 let (transcript, missing) = meeting_notes::joined_transcript(&parts);
                 let latest = parts.last().and_then(|s| meeting_notes::read_facts(s)).unwrap_or_else(|| facts.clone());
@@ -1363,57 +1353,37 @@ impl Meetings {
     /// record. `joined`: a rejoin's recording, whose notes are the first recording's brief written
     /// again from every recording ([`meeting_notes::next_step_joined`]).
     fn notes_from(&self, session: &Path, brief_dir: &Path, facts: &MeetingFacts, transcript: &str, transcripts: &[PathBuf], joined: bool) {
-        let dir = session;
-        loop {
-            let mut state = meeting_notes::read_state(dir);
-            let step = if joined { meeting_notes::next_step_joined(&state) } else { meeting_notes::next_step(dir, &state) };
-            match step {
-                NextStep::Write(n) => {
-                    match self.write_brief_once(brief_dir, facts, transcript, transcripts) {
-                        Ok(()) => {
-                            eprintln!("[richos] meeting notes: brief written on attempt {n}");
-                            if joined {
-                                state.written = true;
-                                logged("recording the joined brief", meeting_notes::write_state(dir, &state));
-                            }
-                        }
-                        Err(why) => {
-                            eprintln!("[richos] meeting notes: brief attempt {n} failed: {why}");
-                            state.attempts = n;
-                            state.last_error = Some(why);
-                            logged("recording the attempt", meeting_notes::write_state(dir, &state));
-                            if n < meeting_notes::MAX_ATTEMPTS {
-                                std::thread::sleep(RETRY_AFTER[(n as usize - 1).min(RETRY_AFTER.len() - 1)]);
-                            }
-                        }
+        let preparation = prepare_brief(
+            session,
+            joined,
+            || self.write_brief_once(brief_dir, facts, transcript, transcripts),
+            |n| std::thread::sleep(RETRY_AFTER[(n as usize - 1).min(RETRY_AFTER.len() - 1)]),
+        );
+        match preparation {
+            Ok(PreparedBrief::Deliver(mut state)) => {
+                let brief = std::fs::read_to_string(brief_dir.join(meeting_notes::BRIEF_FILE)).unwrap_or_default();
+                let files: Vec<PathBuf> = std::iter::once(brief_dir.join(meeting_notes::BRIEF_FILE)).chain(transcripts.iter().cloned()).collect();
+                match self.say(facts, &meeting_notes::message_text(&brief, facts), &files) {
+                    Ok(_) => {
+                        state.delivered = true;
+                        eprintln!("[richos] meeting notes: Rich said the notes in the conversation ({})", session.display());
+                        logged("recording the delivery", meeting_notes::write_state(session, &state));
+                        self.set_processing(None);
+                    }
+                    Err(why) => {
+                        eprintln!("[richos] meeting notes: the brief is written but Rich could not say it: {why}");
+                        self.set_processing(Some("notes-failed"));
                     }
                 }
-                NextStep::Deliver => {
-                    let brief = std::fs::read_to_string(brief_dir.join(meeting_notes::BRIEF_FILE)).unwrap_or_default();
-                    let files: Vec<PathBuf> = std::iter::once(brief_dir.join(meeting_notes::BRIEF_FILE)).chain(transcripts.iter().cloned()).collect();
-                    match self.say(facts, &meeting_notes::message_text(&brief, facts), &files) {
-                        Ok(_) => {
-                            state.delivered = true;
-                            eprintln!("[richos] meeting notes: Rich said the notes in the conversation ({})", dir.display());
-                            logged("recording the delivery", meeting_notes::write_state(dir, &state));
-                            self.set_processing(None);
-                        }
-                        Err(why) => {
-                            eprintln!("[richos] meeting notes: the brief is written but Rich could not say it: {why}");
-                            self.set_processing(Some("notes-failed"));
-                        }
-                    }
-                    return;
-                }
-                NextStep::Done => {
-                    self.set_processing(None);
-                    return;
-                }
-                NextStep::GiveUp => {
-                    self.failure_said(dir, self.say(facts, &meeting_notes::notes_failed_text(""), &[]));
-                    self.set_processing(Some("notes-failed"));
-                    return;
-                }
+            }
+            Ok(PreparedBrief::Done) => self.set_processing(None),
+            Ok(PreparedBrief::GiveUp) => {
+                self.failure_said(session, self.say(facts, &meeting_notes::notes_failed_text(""), &[]));
+                self.set_processing(Some("notes-failed"));
+            }
+            Err((stage, error)) => {
+                eprintln!("[richos] meeting notes: {stage} failed, ending this notes run: {error}");
+                self.set_processing(Some("notes-failed"));
             }
         }
     }
@@ -1662,6 +1632,49 @@ pub fn read_live_excerpt(source: &meeting_notes::LiveMeetingSource) -> serde_jso
     match result {
         Some(excerpt) => serde_json::json!({ "status": "available", "excerpt": excerpt }),
         None => serde_json::json!({ "status": "unavailable" }),
+    }
+}
+
+enum PreparedBrief {
+    Deliver(BriefState),
+    Done,
+    GiveUp,
+}
+
+/// Runs under NOTES_RUN. A failed checkpoint ends this run before a retry or delivery can
+/// act on stale disk state. The transcript and any brief already saved stay available.
+fn prepare_brief(
+    session: &Path,
+    joined: bool,
+    mut write: impl FnMut() -> Result<(), String>,
+    mut wait: impl FnMut(u32),
+) -> Result<PreparedBrief, (&'static str, std::io::Error)> {
+    let mut state = meeting_notes::read_state(session);
+    loop {
+        let step = if joined { meeting_notes::next_step_joined(&state) } else { meeting_notes::next_step(session, &state) };
+        match step {
+            NextStep::Write(n) => match write() {
+                Ok(()) => {
+                    eprintln!("[richos] meeting notes: brief written on attempt {n}");
+                    if joined {
+                        state.written = true;
+                        meeting_notes::write_state(session, &state).map_err(|e| ("recording the joined brief", e))?;
+                    }
+                }
+                Err(why) => {
+                    eprintln!("[richos] meeting notes: brief attempt {n} failed: {why}");
+                    state.attempts = n;
+                    state.last_error = Some(why);
+                    meeting_notes::write_state(session, &state).map_err(|e| ("recording the attempt", e))?;
+                    if n < meeting_notes::MAX_ATTEMPTS {
+                        wait(n);
+                    }
+                }
+            },
+            NextStep::Deliver => return Ok(PreparedBrief::Deliver(state)),
+            NextStep::Done => return Ok(PreparedBrief::Done),
+            NextStep::GiveUp => return Ok(PreparedBrief::GiveUp),
+        }
     }
 }
 
@@ -1935,6 +1948,82 @@ pub fn meeting_state(app: AppHandle) -> MeetingState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_failed_attempt_checkpoint_ends_the_run_before_backoff() {
+        let session = tempfile::tempdir().unwrap();
+        std::fs::create_dir(session.path().join(meeting_notes::STATE_FILE)).unwrap();
+        let mut calls = 0;
+        let mut waits = 0;
+
+        let result = prepare_brief(session.path(), false, || {
+            calls += 1;
+            assert_eq!(calls, 1, "a retry requires a saved attempt");
+            Err("fixture writer unavailable".into())
+        }, |_| waits += 1);
+        assert!(matches!(result, Err(("recording the attempt", _))));
+        assert_eq!(calls, 1);
+        assert_eq!(waits, 0);
+        assert_eq!(meeting_notes::read_state(session.path()).attempts, 0);
+
+        let later = tempfile::tempdir().unwrap();
+        let result = prepare_brief(later.path(), false, || {
+            meeting_notes::write_brief(later.path(), "Later meeting").map_err(|e| e.to_string())?;
+            Ok(())
+        }, |_| panic!("a successful write needs no backoff"));
+        assert!(matches!(result, Ok(PreparedBrief::Deliver(_))));
+    }
+
+    #[test]
+    fn a_failed_joined_checkpoint_ends_the_run_with_the_brief_saved() {
+        let zone = tempfile::tempdir().unwrap();
+        let first = zone.path().join("01-first");
+        let rejoin = zone.path().join("02-rejoin");
+        let later = zone.path().join("03-later");
+        let pending = zone.path().join("04-pending");
+        std::fs::create_dir(&first).unwrap();
+        for part in [&rejoin, &later, &pending] {
+            std::fs::create_dir(part).unwrap();
+            meeting_notes::write_facts(part, &MeetingFacts {
+                continues: Some("01-first".into()),
+                ended_at: 1,
+                ..Default::default()
+            }).unwrap();
+        }
+        std::fs::create_dir(rejoin.join(meeting_notes::STATE_FILE)).unwrap();
+        meeting_notes::write_brief(&first, "Original brief").unwrap();
+        std::fs::write(first.join(meeting_notes::TRANSCRIPT_FILE), "First").unwrap();
+        std::fs::write(rejoin.join(meeting_notes::TRANSCRIPT_FILE), "Rejoin").unwrap();
+        assert_eq!(meeting_notes::brief_segments(&first, &rejoin, false), [first.clone(), rejoin.clone()]);
+
+        let mut calls = 0;
+        let result = prepare_brief(&rejoin, true, || {
+            calls += 1;
+            assert_eq!(calls, 1, "the joined brief has already been written");
+            meeting_notes::write_brief(&first, "Brief including rejoin").map_err(|e| e.to_string())?;
+            Ok(())
+        }, |_| panic!("a successful write needs no backoff"));
+        assert!(matches!(result, Err(("recording the joined brief", _))));
+        assert_eq!(calls, 1);
+        assert_eq!(std::fs::read_to_string(first.join(meeting_notes::BRIEF_FILE)).unwrap(), "Brief including rejoin\n");
+        assert!(!meeting_notes::read_state(&rejoin).written);
+
+        // Another job can now publish a newer brief. Recovering the earlier job must use the
+        // later recording too, even if the later job also failed to save its checkpoint.
+        std::fs::write(later.join(meeting_notes::TRANSCRIPT_FILE), "Later").unwrap();
+        let result = prepare_brief(&later, true, || {
+            meeting_notes::write_brief(&first, "Brief including later recording").map_err(|e| e.to_string())?;
+            Ok(())
+        }, |_| panic!("a successful write needs no backoff"));
+        assert!(matches!(result, Ok(PreparedBrief::Deliver(state)) if state.written));
+        assert!(meeting_notes::read_state(&later).written);
+        std::fs::remove_file(later.join(meeting_notes::STATE_FILE)).unwrap();
+        let parts = meeting_notes::brief_segments(&first, &rejoin, false);
+        assert_eq!(parts, [first, rejoin, later]);
+        let (transcript, missing) = meeting_notes::joined_transcript(&parts);
+        assert_eq!(missing, 0);
+        assert_eq!(transcript, ["First", "Rejoin", "Later"].join(&format!("\n\n{}\n\n", meeting_notes::REJOINED_MARK)));
+    }
 
     #[test]
     fn calendar_reconnect_accepts_only_the_selected_providers_sign_in_endpoint() {
