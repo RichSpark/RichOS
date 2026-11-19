@@ -8,7 +8,7 @@ use std::ptr::NonNull;
 use std::sync::OnceLock;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, Manager, WebviewWindow};
+use tauri::{AppHandle, Manager, Window};
 use tokio::sync::{oneshot, watch};
 
 use crate::SplashPlayback;
@@ -153,7 +153,7 @@ pub fn prepare(pack: Pack) -> Option<JoinHandle<Option<Prepared>>> {
     }).ok()
 }
 
-pub fn show(window: &WebviewWindow, worker: JoinHandle<Option<Prepared>>) -> bool {
+pub fn show_on_window(window: &Window, worker: JoinHandle<Option<Prepared>>) -> bool {
     let Ok(window) = window.ns_window() else { return false };
     let Ok(Some(prepared)) = worker.join() else { return false };
     let player = prepared.0.as_ptr();
@@ -176,6 +176,15 @@ pub fn window_visible() {
 
 pub fn did_not_attach() {
     fail("could not attach the cover");
+}
+
+/// The overlay has either started after its first frame became ready or needs the page fallback.
+pub async fn wait_for_start() {
+    let mut receiver = phase().subscribe();
+    drop(tokio::time::timeout(
+        Duration::from_secs(2),
+        receiver.wait_for(|value| *value != Phase::Preparing),
+    ).await);
 }
 
 pub async fn finished() -> SplashPlayback {

@@ -37,6 +37,19 @@ typedef void (*RichSplashMetrics)(uint64_t, uint64_t, uint64_t);
 - (void)scrollWheel:(NSEvent *)event {}
 @end
 
+// The cover is its own compositor surface, owned by the app's one main window.
+@interface RichSplashPanel : NSPanel
+@end
+
+@implementation RichSplashPanel
+- (BOOL)canBecomeKeyWindow { return NO; }
+- (BOOL)canBecomeMainWindow { return NO; }
+@end
+
+static NSRect contentOnScreen(NSView *view) {
+    return [view.window convertRectToScreen:[view convertRect:view.bounds toView:nil]];
+}
+
 @interface RichSplashPlayer : NSObject {
     atomic_int _status;
     AVAssetReader *_reader;
@@ -47,12 +60,14 @@ typedef void (*RichSplashMetrics)(uint64_t, uint64_t, uint64_t);
     id _endObserver;
     id _readyObserver;
     id _failedObserver;
+    id _sizeObserver;
     BOOL _watchingStatus;
     BOOL _removing;                 // main thread
     BOOL _visible;                  // timeline queue
     BOOL _ready;                    // timeline queue
 }
 @property(nonatomic, strong) RichSplashCover *cover;
+@property(nonatomic, strong) RichSplashPanel *panel;
 @property(nonatomic, strong) AVSampleBufferDisplayLayer *video;
 @property(nonatomic, strong) id<AVQueuedSampleBufferRendering> renderer;
 @property(nonatomic, strong) dispatch_queue_t timeline;
@@ -130,6 +145,10 @@ typedef void (*RichSplashMetrics)(uint64_t, uint64_t, uint64_t);
 - (int)status { return atomic_load(&_status); }
 
 - (void)unwatch {
+    if (_sizeObserver) {
+        [NSNotificationCenter.defaultCenter removeObserver:_sizeObserver];
+        _sizeObserver = nil;
+    }
     if (_readyObserver) {
         [NSNotificationCenter.defaultCenter removeObserver:_readyObserver];
         _readyObserver = nil;
@@ -282,11 +301,18 @@ typedef void (*RichSplashMetrics)(uint64_t, uint64_t, uint64_t);
 }
 
 - (void)attach:(NSView *)view {
-    self.cover = [[RichSplashCover alloc] initWithFrame:view.bounds];
+    NSWindow *parent = view.window;
+    self.panel = [[RichSplashPanel alloc] initWithContentRect:contentOnScreen(view)
+        styleMask:NSWindowStyleMaskBorderless | NSWindowStyleMaskNonactivatingPanel
+        backing:NSBackingStoreBuffered defer:NO];
+    self.panel.releasedWhenClosed = NO;
+    self.panel.opaque = YES;
+    self.panel.hasShadow = NO;
+    self.panel.excludedFromWindowsMenu = YES;
+    self.panel.collectionBehavior = NSWindowCollectionBehaviorTransient | NSWindowCollectionBehaviorIgnoresCycle;
+    self.panel.backgroundColor = parent.backgroundColor;
+    self.cover = [[RichSplashCover alloc] initWithFrame:self.panel.contentView.bounds];
     self.cover.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
-    // WebKit and the video need one ordered Core Animation tree. Host our own
-    // layer so AppKit layout never has to preserve video in a view's backing store.
-    view.wantsLayer = YES;
     CALayer *surface = [CALayer layer];
     surface.frame = self.cover.bounds;
     surface.zPosition = 1;
@@ -312,6 +338,7 @@ typedef void (*RichSplashMetrics)(uint64_t, uint64_t, uint64_t);
     if (@available(macOS 14.0, *)) failed = AVSampleBufferVideoRendererDidFailToDecodeNotification;
     _failedObserver = [NSNotificationCenter.defaultCenter addObserverForName:failed
         object:self.renderer queue:nil usingBlock:^(NSNotification *note) {
+            (void)note;
             RichSplashPlayer *player = weak;
             if (player) dispatch_async(player.timeline, ^{ [player fail:VideoFailed]; });
         }];
@@ -331,11 +358,26 @@ typedef void (*RichSplashMetrics)(uint64_t, uint64_t, uint64_t);
         _watchingStatus = YES;
         [self.video addObserver:self forKeyPath:@"status" options:NSKeyValueObservingOptionInitial | NSKeyValueObservingOptionNew context:NULL];
     }
-    [view addSubview:self.cover positioned:NSWindowAbove relativeTo:nil];
+    self.panel.contentView = self.cover;
+    [parent addChildWindow:self.panel ordered:NSWindowAbove];
+    __weak NSView *hostView = view;
+    _sizeObserver = [NSNotificationCenter.defaultCenter addObserverForName:NSWindowDidResizeNotification
+        object:parent queue:nil usingBlock:^(NSNotification *note) {
+            (void)note;
+            NSView *host = hostView;
+            if (host) [weak.panel setFrame:contentOnScreen(host) display:NO];
+        }];
     self.cover.lostWindow = ^{
         RichSplashPlayer *player = weak;
         if (player) dispatch_async(player.timeline, ^{ [player fail:VideoSurfaceLost]; });
     };
+}
+
+- (void)closeSurface {
+    [self.panel.parentWindow removeChildWindow:self.panel];
+    [self.panel close];
+    self.panel = nil;
+    self.cover = nil;
 }
 
 - (void)removeAnimated:(BOOL)animated completion:(dispatch_block_t)completion {
@@ -355,18 +397,16 @@ typedef void (*RichSplashMetrics)(uint64_t, uint64_t, uint64_t);
         [self.clock setRate:0 time:self.clock.currentTime];
     });
     if (!animated) {
-        [self.cover removeFromSuperview];
-        self.cover = nil;
+        [self closeSurface];
         completion();
         return;
     }
     [NSAnimationContext runAnimationGroup:^(NSAnimationContext *context) {
         context.duration = FadeMs / 1000.0;
         context.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionLinear];
-        self.cover.animator.alphaValue = 0;
+        self.panel.animator.alphaValue = 0;
     } completionHandler:^{
-        [self.cover removeFromSuperview];
-        self.cover = nil;
+        [self closeSurface];
         fputs("[richos] native splash: fade complete\n", stderr);
         completion();
     }];
@@ -399,7 +439,7 @@ void richos_splash_discard_prepared(void *handle) {
 // Attach the prepared layer to AppKit on the main thread.
 bool richos_splash_attach(void *window, void *handle) {
     NSView *view = [(__bridge NSWindow *)window contentView];
-    if (!view) return false;
+    if (!view || !view.window) return false;
     [(__bridge RichSplashPlayer *)handle attach:view];
     return true;
 }

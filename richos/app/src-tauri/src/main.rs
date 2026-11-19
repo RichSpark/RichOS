@@ -2819,7 +2819,7 @@ fn main() {
             // BEFORE THE FIRST FRAME: A CLOSED LIST (Sage's plan 2026-11-14, rule 3)
             // =====================================================================
             //
-            // From here to `first_frame::commit` runs only what the first frame needs: the data
+            // Before the initial window, run only what its first frame needs: the data
             // folder, the launch decision, the launch record, the display sizes, the saved window
             // position, the splash switch, the window. A test holds the list
             // (`first_frame::tests`); a step that starts threads or programs waits for the page
@@ -2988,8 +2988,6 @@ fn main() {
                 .and_then(|entry| splash_player::locate(app.handle(), &data_dir, entry, opening_settings.sound));
             #[cfg(target_os = "macos")]
             let native_bar = pack.as_ref().and_then(|pack| pack.bar);
-            #[cfg(not(target_os = "macos"))]
-            let native_bar = None;
             #[cfg(target_os = "macos")]
             let mut pack = if activation.presentation == activation::Presentation::Regular {
                 pack.and_then(splash_player::prepare)
@@ -3041,9 +3039,13 @@ fn main() {
                 eprintln!("[richos] window: {}", placement.describe());
                 let window_splash = splash.as_ref().filter(|_| kind == LaunchKind::Fresh);
                 #[cfg(target_os = "macos")]
-                let native = window_splash.is_some() && pack.is_some();
-                #[cfg(not(target_os = "macos"))]
-                let native = false;
+                if let Some((pick, worker)) = window_splash.and_then(|pick| pack.take().map(|worker| (pick, worker))) {
+                    start_native_window(
+                        app.handle(), window_config, placement, geometry_path.clone(), start_ordinal,
+                        NativeOpening { pick, worker, bar: native_bar }, openings_record.clone(),
+                    )?;
+                    continue;
+                }
                 let mut builder = tauri::WebviewWindowBuilder::from_config(app.handle(), window_config)?
                     // THE SIZE THE DISPLAY CAN HOLD, not the size the config asked for. On
                     // his 1920-wide displays these are still 1400 x 880 — the constant was
@@ -3061,7 +3063,7 @@ fn main() {
                     .initialization_script(launch_init_script(
                         kind,
                         start_ordinal,
-                        window_splash.map(|pick| (pick.id.as_str(), native, if native { native_bar } else { None })),
+                        window_splash.map(|pick| (pick.id.as_str(), false, None)),
                     ))
                     .initialization_script(openings_record.clone())
                     // THE FIRST FRAME (Sage's plan 2026-11-14, rule 1, as the CEO narrowed it:
@@ -3122,22 +3124,9 @@ fn main() {
                 }
                 let window = builder.build()?;
                 launch_timing::mark_window();
-                #[cfg(target_os = "macos")]
-                let playing = native && pack.take().is_some_and(|pack| splash_player::show(&window, pack));
-                #[cfg(not(target_os = "macos"))]
-                let playing = false;
-                #[cfg(target_os = "macos")]
-                if native && !playing {
-                    splash_player::did_not_attach();
-                }
-                first_frame::commit(&window);
-                #[cfg(target_os = "macos")]
-                if playing {
-                    splash_player::window_visible();
-                }
                 launch_timing::mark_first_frame(kind == LaunchKind::Fresh);
                 if let Some(pick) = window_splash {
-                    launch_timing::note_splash(&pick.id, playing);
+                    launch_timing::note_splash(&pick.id, false);
                 }
                 #[cfg(target_os="macos")]
                 cleaner_host::watch_main(&window);
@@ -10613,6 +10602,89 @@ fn remember_window_geometry(window: &tauri::WebviewWindow, path: std::path::Path
             let _ = nudge.send(());
         }
     });
+}
+
+#[cfg(target_os = "macos")]
+struct NativeOpening<'a> {
+    pick: &'a splash_pick::Entry,
+    worker: std::thread::JoinHandle<Option<splash_player::Prepared>>,
+    bar: Option<[f64; 4]>,
+}
+
+#[cfg(target_os = "macos")]
+fn start_native_window(
+    app: &AppHandle,
+    config: &tauri::utils::config::WindowConfig,
+    placement: window_geometry::Placement,
+    geometry_path: PathBuf,
+    start_ordinal: Option<u64>,
+    opening: NativeOpening<'_>,
+    openings_record: String,
+) -> tauri::Result<()> {
+    let NativeOpening { pick, worker, bar } = opening;
+    let background = first_frame::color(splash_pick::parse_hex(&pick.ground)
+        .unwrap_or(first_frame::SPLASH_GROUND));
+    let mut builder = tauri::window::WindowBuilder::from_config(app, config)?
+        .inner_size(placement.width, placement.height)
+        .min_inner_size(placement.min_width, placement.min_height)
+        .background_color(background)
+        .focused(true)
+        .visible(true);
+    if let Some((x, y)) = placement.position {
+        builder = builder.position(x, y);
+    }
+    let window = builder.build()?;
+    launch_timing::mark_window();
+    let playing = splash_player::show_on_window(&window, worker);
+    if let Err(error) = window.set_focus() {
+        eprintln!("[richos] window did not come to the front: {error}");
+    }
+    // A synchronous flush of Tao's plain NSView calls its redraw handler while
+    // setup still holds the event-loop lock. Start after AppKit gets control back.
+    if playing {
+        splash_player::window_visible();
+    } else {
+        splash_player::did_not_attach();
+    }
+    launch_timing::mark_first_frame(true);
+    launch_timing::note_splash(&pick.id, playing);
+
+    let config = config.clone();
+    let launch_script = launch_init_script(LaunchKind::Fresh, start_ordinal,
+        Some((&pick.id, playing, if playing { bar } else { None })));
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        if playing {
+            splash_player::wait_for_start().await;
+        }
+        let main = app.clone();
+        if let Err(error) = app.run_on_main_thread(move || {
+            if main.get_window(window.label()).is_none() {
+                return;
+            }
+            let result = (|| -> tauri::Result<()> {
+                let webview = tauri::webview::WebviewBuilder::from_config(&config)
+                    .initialization_script(launch_script)
+                    .initialization_script(openings_record)
+                    .initialization_script_for_all_frames(webview_menu::EVERY_FRAME)
+                    .background_color(background)
+                    .auto_resize();
+                window.add_child(webview, tauri::LogicalPosition::new(0.0, 0.0), window.inner_size()?)?;
+                let page = main.get_webview_window(window.label()).ok_or(tauri::Error::WindowNotFound)?;
+                cleaner_host::watch_main(&page);
+                remember_window_geometry(&page, geometry_path);
+                mac_attachments::listen_for_drops(&page);
+                Ok(())
+            })();
+            if let Err(error) = result {
+                eprintln!("[richos] native splash: could not attach the Home page ({error})");
+                drop(window.close());
+            }
+        }) {
+            eprintln!("[richos] native splash: Home attachment could not reach the main thread ({error})");
+        }
+    });
+    Ok(())
 }
 
 /// WHAT THE PAGE KNOWS ABOUT THIS START BEFORE ANY COMMAND CAN ANSWER: the curtain decides in the

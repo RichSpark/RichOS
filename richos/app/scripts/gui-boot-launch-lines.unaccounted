@@ -596,3 +596,5 @@
 [richos] launch engine check: review and Codex watchers await a verified engine ({})
 [richos] launch engine check: the engine update could not reach the app ({})
 [richos] launch engine check: watchers could not reach the app ({})
+[richos] native splash: could not attach the Home page ({})
+[richos] native splash: Home attachment could not reach the main thread ({})
