@@ -58,8 +58,9 @@ null speaker, so nothing is heard:
                same EPERM macOS returns when permission is denied
     denied     the app opened again: its launch-time swap is refused and the Updates row says
                "RichOS could not prepare this update." with the permission sentence as its reason
-    retry      the immutable flag cleared (permission restored), Try again pressed: the row no
-               longer shows the permission sentence and the update reads as ready
+    retry      Try again pressed first with the flag still set: the refusal stays and nothing reads
+               ready; then the flag cleared (permission restored) and Try again pressed again: the
+               row no longer shows the permission sentence and the update reads as ready
     publish    the app quit from its menu: the update is put in place at /Applications as it
                closes and the saved denial is gone
 
@@ -498,6 +499,17 @@ class Walk:
                 'version': self.version()}
 
     def retry(self):
+        # Try again while the permission is still missing: the refusal stays, nothing reads ready.
+        self.press('Try again')
+        end = time.monotonic() + 10
+        while time.monotonic() < end:
+            if self.present('is ready', CUE_ROLE):
+                self.shot('5-ready-while-denied.png')
+                raise StepFailed('Try again reported the update ready while the swap is still refused')
+            time.sleep(1)
+        if not self.says(NOT_PREPARED) or self.receipt('system-update-denied.json') is None:
+            raise StepFailed('the refusal left the Updates row while the swap is still refused')
+        self.shot('5-still-denied-before-permission.png')
         self.g('chflags nouchg ' + q(self.immutable))
         flags = self.g('ls -ldO ' + q(self.immutable))
         self.press('Try again')
