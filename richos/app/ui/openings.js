@@ -441,7 +441,7 @@
     } catch (_e) {
       /* the first measure stands */
     }
-    if (!api.native && !api.drawing) live.raf = requestAnimationFrame(frame);
+    if (!api.drawing) live.raf = requestAnimationFrame(frame);
   }
 
   function onResize() {
@@ -766,15 +766,15 @@
   /// `splash.js` `yieldNow()` calls this as the curtain starts to fade. The landed bar leaves
   /// the curtain, crosses to Talk to Rich and becomes its gold edge, so the cut between the two
   /// screens is a designed one. It rides above both; it takes no input and delays nothing.
-  function handover(root) {
+  function handover(root, native) {
     try {
       if (reduceMotion() || !root) return;
       var door = document.getElementById("home-enter");
       // Where the bar rests (it has landed and is still), from the measure already taken: the
       // curtain is not measured again on its way out.
-      var geo = live && live.root === root ? geometry() : null;
-      if (!geo || !geo.bar || !door) return;
-      var a = (live.api.native && movieBar()) || geo.bar;
+      var geo = !native && live && live.root === root ? geometry() : null;
+      var a = native ? movieBar() : geo && geo.bar;
+      if (!a || !door) return;
       var b = door.getBoundingClientRect();
       if (!a.width || !b.width || b.bottom <= 0 || b.top >= window.innerHeight) return;
       var line = el("div", "ro-handover");

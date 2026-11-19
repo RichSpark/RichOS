@@ -1792,16 +1792,18 @@ class Runner:
             return None
         slug = re.sub(r"[^a-z0-9]+", "-", tag.lower()).strip("-")[:40].rstrip("-")
         brief = self.state / "next-versions" / slug / "next-version-worker-brief.md"
-        title, question = published_escalation(tag, stable, brief)
+        title = f"{tag} published; bump main's next release version."
+        question = "Start Zach with the filled brief using the model configured in his shelf."
         try:
+            question = next_version_handoff(tag, brief)
             brief.parent.mkdir(parents=True, exist_ok=True)
             brief.write_text((ROOT / SCRIPTS / "next-version-worker-brief.md").read_text()
                              .replace(BRIEF_TAG, tag))
             return self.raise_release_job(title, question, f"{tag} is published with its changelog.")
-        except (OSError, RuntimeError) as error:
+        except (OSError, RuntimeError, UnicodeError) as error:
             # Do not report a published release as failed because its later version bump
             # needs recovery. The next build's version collision guard remains in force.
-            self.announce(escalation_missing_line(tag, stable, error, brief))
+            self.announce(escalation_missing_line(tag, error, brief, question))
             return None
 
     def describe_stable(self, info):
@@ -3631,7 +3633,8 @@ class Runner:
         # A NEW USER'S FIRST RUN GATES EVERY NEW CANDIDATE, whichever command made it: `release`
         # builds and is published by the same `publish` (review rv-20261021T173525Z-f1f16a31-356b:
         # with the flag on `build` alone, a release candidate skipped the walk and its check).
-        info = {**info, "new_user_walk_required": True}
+        # Record both requirements in the build plan so they survive any proof failure.
+        info = {**info, "new_user_walk_required": True, "launch_speed_required": True}
         plan_path.write_text(json.dumps(info, indent=2) + "\n")
         if no_host_screen or isinstance(suites, dict):
             # Into the plan for the same reason the land proof is: nightly.py copies the
@@ -3701,14 +3704,8 @@ class Runner:
         if not proof_error and candidate_info.get("new_user_walk_required"):
             proof_error = self.new_user_walk(self.env["RICHOS_NIGHTLY_RUN_ID"], out, candidate_info)
         # Then its launch speed: the p95 from the click to the splash showing, against 380 ms
-        # (LAUNCH_SPEED_PHASE), for the same candidates the new-user walk takes.
-        if not proof_error and candidate_info.get("new_user_walk_required"):
-            # Recorded on the candidate first, so `publish` requires the evidence whatever happens next.
-            candidate_file = Path(out) / "candidate.json"
-            candidate = json.loads(candidate_file.read_text())
-            candidate["info"]["launch_speed_required"] = True
-            candidate_file.write_text(json.dumps(candidate, indent=2) + "\n")
-            candidate_info = {**candidate_info, "launch_speed_required": True}
+        # (LAUNCH_SPEED_PHASE).
+        if not proof_error and candidate_info.get("launch_speed_required"):
             proof_error = self.launch_speed_check(self.env["RICHOS_NIGHTLY_RUN_ID"], out, candidate_info)
         self.summary()
         print("", flush=True)
@@ -3748,28 +3745,32 @@ CHANGELOG_SPAWN_LINES = (
 BRIEF_TAG = "<TAG>"
 
 
-def published_escalation(tag, stable, brief):
+def next_version_handoff(tag, brief):
+    shelf = ROOT / "richos/engine/team/shelf/zach.md"
+    header = re.match(r"\A---[ \t]*\n(.*?)^---[ \t]*$", shelf.read_text(encoding="utf-8"), re.M | re.S)
+    configured = re.search(r"^model:[ \t]*(.*)$", header[1], re.M) if header else None
+    model = configured[1].strip().strip("\"'").lower() if configured else ""
+    if not re.fullmatch(r"[a-z][a-z0-9]*", model) or model == "inherit":
+        raise RuntimeError(f"no explicit model in Zach's shelf: {shelf}")
     # The spawn guard wants <role>-<model>-<effort>-<identifier>, identifier lower-case
     # alphanumeric, at most 12, and the effort word equal to the level the command names.
     slug = "nv" + re.sub(r"[^a-z0-9]+", "", tag.lower().lstrip("v"))[:10]
     start = shlex.join([str(ROOT / "richos/engine/scripts/spawn.sh"),
-                        f"zach-sonnet-high-{slug}", "--repo", "richos",
-                        "--type", "zach", "--model", "sonnet", "--effort", "high",
+                        f"zach-{model}-high-{slug}", "--repo", "richos",
+                        "--type", "zach", "--model", model, "--effort", "high",
                         "--brief", str(brief)])
-    title = f"{tag} published; bump main's next release version."
-    return title, (f"The changelog is already published with {tag}. Start Zach with this exact "
-                   f"command: `{start}`. The brief already names the published tag. "
-                   "Review and land its version-only commit. No changelog "
-                   "writing or CEO intervention is needed.")
+    return (f"The changelog is already published with {tag}. Start Zach with this exact "
+            f"command: `{start}`. The brief already names the published tag. "
+            "Review and land its version-only commit. No changelog writing or CEO intervention is needed.")
 
 
-def escalation_missing_line(tag, stable, error, brief):
+def escalation_missing_line(tag, error, brief, question):
     """The one line a publish whose escalation could not be raised leaves: what to do by hand."""
     reason = " ".join(str(error).split())
     if len(reason) > 300:
         reason = reason[:297] + "..."
-    title, question = published_escalation(tag, stable, brief)
-    return (f"ESCALATION NOT RAISED ({reason}). The release itself is published. {title} "
+    return (f"ESCALATION NOT RAISED ({reason}). The release itself is published. "
+            f"Bump main's next release version after {tag}. "
             f"If its brief is missing, fill {brief} from "
             f"richos/app/scripts/next-version-worker-brief.md with <TAG> replaced by {tag}. "
             f"{question}")

@@ -14,6 +14,8 @@
 //!   voice (`capture.rs`): a check on a Mac plays no sound and opens no microphone.
 
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 /// Set (to anything but empty) in a test run: the "Microphone" choice records a made-up tone.
 pub const TONE_ENV: &str = "RICHOS_VIDEO_INPUT_TONE";
@@ -40,6 +42,63 @@ pub fn input_kind(tone: Option<&str>) -> &'static str {
 #[richos_command::command]
 pub fn home_video_input() -> &'static str {
     input_kind(std::env::var(TONE_ENV).ok().as_deref())
+}
+
+#[derive(Default)]
+struct CleanerFrames {
+    recording: u32,
+    captured: u32,
+    missed: u32,
+    elapsed: Duration,
+    slowest: Duration,
+}
+
+impl CleanerFrames {
+    fn add(&mut self, recording: u32, captured: bool, elapsed: Duration) {
+        if self.recording != recording {
+            *self = Self { recording, ..Self::default() };
+        }
+        self.captured += u32::from(captured);
+        self.missed += u32::from(!captured);
+        self.elapsed += elapsed;
+        self.slowest = self.slowest.max(elapsed);
+    }
+
+    fn excerpt(&self) -> Option<String> {
+        let total = self.captured + self.missed;
+        (total > 0).then(|| {
+            let build = option_env!("RICHOS_SOURCE_SHA").unwrap_or(env!("CARGO_PKG_VERSION"));
+            format!("{build} · recording {} · {} captured, {} unavailable · average {} ms, slowest {} ms from request to JPEG",
+                self.recording, self.captured, self.missed, self.elapsed.as_millis() / u128::from(total), self.slowest.as_millis())
+        })
+    }
+}
+
+static CLEANER_FRAMES: Mutex<CleanerFrames> = Mutex::new(CleanerFrames {
+    recording: 0, captured: 0, missed: 0, elapsed: Duration::ZERO, slowest: Duration::ZERO,
+});
+
+pub(crate) fn recent_cleaner_capture() -> Option<String> {
+    CLEANER_FRAMES.lock().ok()?.excerpt()
+}
+
+/// The main recorder can sample the fixed RichCleaner library window as long as it has focus.
+#[richos_command::command]
+pub async fn cleaner_recording_frame(window: tauri::WebviewWindow, recording: u32) -> tauri::ipc::Response {
+    use tauri::Manager;
+    if window.label() == "main" {
+        if let Some(cleaner) = window.app_handle().get_webview_window("cleaner") {
+            let start = Instant::now();
+            let result = crate::window_picture::take_focused(&cleaner).await;
+            if !matches!(result, Ok(None)) {
+                if let Ok(mut frames) = CLEANER_FRAMES.lock() {
+                    frames.add(recording, result.is_ok(), start.elapsed());
+                }
+            }
+            return tauri::ipc::Response::new(result.ok().flatten().unwrap_or_default());
+        }
+    }
+    tauri::ipc::Response::new(Vec::new())
 }
 
 /// Write the video where `choose` points. `choose` is the system save sheet in the app and a
@@ -125,6 +184,21 @@ fn percent_decode(value: &str) -> Option<String> {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn cleaner_window_timings_describe_only_the_latest_recording() {
+        let mut frames = CleanerFrames::default();
+        assert_eq!(frames.excerpt(), None);
+        frames.add(1, true, Duration::from_millis(20));
+        frames.add(1, false, Duration::from_millis(400));
+        assert!(frames.excerpt().unwrap().ends_with(
+            "recording 1 · 1 captured, 1 unavailable · average 210 ms, slowest 400 ms from request to JPEG"
+        ));
+        frames.add(2, true, Duration::from_millis(50));
+        assert!(frames.excerpt().unwrap().ends_with(
+            "recording 2 · 1 captured, 0 unavailable · average 50 ms, slowest 50 ms from request to JPEG"
+        ));
+    }
 
     fn dir(tag: &str) -> PathBuf {
         static N: AtomicUsize = AtomicUsize::new(0);

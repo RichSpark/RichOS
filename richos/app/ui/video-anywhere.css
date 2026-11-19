@@ -20,9 +20,16 @@
   --rv-edge: var(--chrome-edge);
   --rv-plate: var(--card);
   --rv-gold-ink: var(--gold-text);
+  /* the unlit bars of the voice meter: their own token, as `--rv-edge` also draws every edge */
+  --rv-level-off: var(--chrome-edge);
 }
 :root[data-theme="light"] {
   --rv-red: #b93426;
+  /* round 95 (CEO 2026-11-19): a much lighter gray, so the gold bars stand apart from it. Gold
+     against it 3.07:1, where the level is read. DECLARED EXCEPTION, accepted with the design: the
+     unlit bars are the empty part of the meter and stand at 2.17:1 on the plate (1.61:1 on the
+     Stop button under the pointer); no gray holds 3:1 against both the gold and the plate. */
+  --rv-level-off: #a9aeb9;
 }
 
 /* ---- shared pieces ------------------------------------------------------------------------- */
@@ -69,7 +76,7 @@ body.rv-mic-on .rv-level { display: inline-flex; }
   display: block;
   width: 3px;
   border-radius: 2px;
-  background: var(--rv-edge);
+  background: var(--rv-level-off);
 }
 .rv-level i:nth-child(1) { height: 6px; }
 .rv-level i:nth-child(2) { height: 9px; }

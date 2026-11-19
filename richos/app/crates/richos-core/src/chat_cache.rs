@@ -122,6 +122,7 @@ pub type Kept = Arc<dyn Fn(&str) -> bool + Send + Sync>;
 pub struct Readings {
     path: Option<PathBuf>,
     chats: Mutex<BTreeMap<String, Chat>>,
+    saving: Mutex<()>,
     observer: Mutex<Option<Observer>>,
     /// When a keep-alive was last tried on each session (thread, whether it is the team's).
     tried: Mutex<BTreeMap<(String, bool), u64>>,
@@ -190,14 +191,13 @@ impl Readings {
         }
     }
 
-    fn save(&self) {
-        let Some(path) = &self.path else { return };
-        let body = serde_json::to_vec(&*self.chats.lock().unwrap()).unwrap_or_default();
+    fn save(&self, path: &Path) -> std::io::Result<()> {
+        // Serialize saves from the snapshot through rename. Locking only the write could
+        // let a delayed writer replace the newest snapshot with one it took earlier.
+        let _saving = self.saving.lock().unwrap();
+        let body = serde_json::to_vec(&*self.chats.lock().unwrap()).map_err(std::io::Error::other)?;
         let temporary = path.with_extension("json.tmp");
-        let written = std::fs::write(&temporary, body).and_then(|()| std::fs::rename(&temporary, path));
-        if let Err(error) = written {
-            eprintln!("[richos] chat readings were not saved to {}: {error}", path.display());
-        }
+        std::fs::write(&temporary, body).and_then(|()| std::fs::rename(&temporary, path))
     }
 }
 
@@ -233,7 +233,10 @@ impl LeaseMeter {
             self.readings.tell(&self.thread, chat);
         }
         // Once per turn, with the request time and the size that turn left behind.
-        self.readings.save();
+        let Some(path) = &self.readings.path else { return };
+        if let Err(error) = self.readings.save(path) {
+            eprintln!("[richos] chat readings were not saved to {}: {error}", path.display());
+        }
     }
 }
 
@@ -372,6 +375,42 @@ mod tests {
 
         let reopened = Readings::open(&path);
         assert_eq!(reopened.chat("thr_a"), chat);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn concurrent_saves_publish_complete_snapshots_without_losing_readings() {
+        let dir = std::env::temp_dir().join(format!("richos-chat-cache-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("chat-readings.json");
+        let readings = Readings::open(&path);
+        let writers = 12;
+        let ready = std::sync::Barrier::new(writers);
+        std::thread::scope(|scope| {
+            let mut saves = Vec::new();
+            for writer in 0..writers {
+                let meter = readings.lease(&format!("thr_{writer}"), Seat::Rich);
+                let (readings, path, ready) = (&readings, &path, &ready);
+                saves.push(scope.spawn(move || {
+                    let mut snapshots = Vec::new();
+                    for round in 1..=8 {
+                        meter.context(round);
+                        ready.wait();
+                        snapshots.push((round, readings.save(path), std::fs::read(path)));
+                        ready.wait();
+                    }
+                    snapshots
+                }));
+            }
+            for save in saves {
+                for (round, saved, snapshot) in save.join().unwrap() {
+                    saved.expect("every writer must be able to publish");
+                    let snapshot: BTreeMap<String, Chat> = serde_json::from_slice(&snapshot.unwrap()).unwrap();
+                    assert_eq!(snapshot.len(), writers);
+                    assert!(snapshot.values().all(|chat| chat.rich.used == Some(round)));
+                }
+            }
+        });
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

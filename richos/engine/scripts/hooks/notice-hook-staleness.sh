@@ -414,27 +414,21 @@ if ! CUR_ROWS="$(registered_hook_rows "$SURFACE")"; then
 fi
 CUR_ROWS="$(printf '%s\n' "$CUR_ROWS" | grep -v '^$' | LC_ALL=C sort -u)"
 CUR_N="$(printf '%s\n' "$CUR_ROWS" | grep -c . || true)"
-[ "${CUR_N:-0}" -ge 1 ] || cannot_compare "$SURFACE currently registers ZERO hook scripts, so there is nothing to compare the baseline against"
+[ "${CUR_N:-0}" -ge 1 ] || cannot_compare "$SURFACE currently has ZERO registration rows, so there is nothing to compare the baseline against"
 
-# Only hooks.json commands are frozen by the host. The expanded inventory
-# also includes manifest modules, which an existing dispatcher reads afresh.
-# Use the shared command parser to distinguish them without changing the
-# inventory consumed by the snapshotter or the other guards.
-HOST_ROWS="$(PYTHONPATH="$SCRIPT_DIR/../lib${PYTHONPATH:+:$PYTHONPATH}" python3 - "$SURFACE" <<'PY_HOST'
-import json, sys
-from hook_command import executed_hooks
-with open(sys.argv[1], encoding="utf-8") as fh:
-    doc = json.load(fh)
-rows = set()
-for event, entries in doc.get("hooks", {}).items():
-    for entry in entries:
-        matcher = entry.get("matcher") or "-"
-        for hook in entry.get("hooks", []) or []:
-            for script in executed_hooks(hook.get("command", "")):
-                rows.add("%s\t%s\t%s" % (event, matcher, script))
-print("\n".join(sorted(rows)))
-PY_HOST
-)" || cannot_compare "could not distinguish host registrations from live dispatcher modules"
+# The host freezes hooks.json registrations. The dispatcher reads its own
+# manifest afresh, so additions from that manifest do not require reload.
+HOST_ROWS="$(registered_hook_rows "$SURFACE" --host-only)" \
+    || cannot_compare "could not distinguish host registrations from live dispatcher modules"
+
+# Older snapshots have no evidence about the modules loaded at startup.
+# Keep comparing their command rows and ask for a fresh baseline for modules.
+LEGACY_MODULES=""
+if ! grep -q '^# session=.* modules=tracked rows=' "$SNAP_PATH"; then
+    LEGACY_MODULES="yes"
+    CUR_ROWS="$(printf '%s\n' "$CUR_ROWS" | grep -v "^Plugin module"$'\t' || true)"
+    CUR_N="$(printf '%s\n' "$CUR_ROWS" | grep -c . || true)"
+fi
 
 # --- the delta -----------------------------------------------------------
 # Host additions, live module additions and removals in the expanded inventory:
@@ -487,9 +481,14 @@ done <<REM_EOF
 $REMOVED
 REM_EOF
 
-# THE QUIET PATH. Nothing changed, the corpus was non-empty on both sides and
-# self-consistent: say nothing whatsoever. Verified by the suite.
-[ -n "$KEYS" ] || exit 0
+# THE QUIET PATH. A complete baseline with no drift needs no notice.
+if [ -z "$KEYS" ]; then
+    if [ -n "$LEGACY_MODULES" ]; then
+        announce_once "missing-module-baseline" \
+            "RichOS engine: this session-start snapshot predates plugin module tracking. RESTART THIS SESSION to record a baseline for plugin module registrations. $HOOK_TAG"
+    fi
+    exit 0
+fi
 
 N_INERT="$(printf '%s\n' "$NEW_SCRIPT_LINES$NEW_WIRING_LINES" | grep -c . || true)"
 N_DROPPED="$(printf '%s\n' "$DROPPED_LINES" | grep -c . || true)"
@@ -531,6 +530,12 @@ Host registrations removed from hooks.json still require a session restart or
 /reload-plugins to stop running. Manifest removals take effect on the next
 call through the dispatcher. The old expanded snapshot does not distinguish
 the two origins, so removed inventory rows alone cannot prove stale enforcement."
+fi
+if [ -n "$LEGACY_MODULES" ]; then
+    KEYS="${KEYS}missing-module-baseline"$'\n'
+    MSG="$MSG
+This session-start snapshot predates plugin module tracking.
+RESTART THIS SESSION to record a baseline for plugin module registrations."
 fi
 MSG="$MSG
 

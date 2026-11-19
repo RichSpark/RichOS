@@ -896,7 +896,7 @@ pub fn cleaner_open_window(app: AppHandle) -> Result<(), String> {
         window.show().map_err(|e| e.to_string())?;
         return window.set_focus().map_err(|e| e.to_string());
     }
-    tauri::WebviewWindowBuilder::new(
+    let window = tauri::WebviewWindowBuilder::new(
         &app,
         "cleaner",
         tauri::WebviewUrl::App("cleaner.html".into()),
@@ -904,9 +904,19 @@ pub fn cleaner_open_window(app: AppHandle) -> Result<(), String> {
     .title("RichCleaner")
     .inner_size(900., 580.)
     .min_inner_size(650., 480.)
+    .focused(false)
     .build()
     .map_err(|e| e.to_string())?;
-    Ok(())
+    #[cfg(target_os = "macos")]
+    window.on_window_event(move |event| {
+        let focused = match event {
+            tauri::WindowEvent::Focused(focused) => *focused,
+            tauri::WindowEvent::Destroyed => false,
+            _ => return,
+        };
+        let _ignored = app.emit_to("main", "rich://cleaner-recording-focus", focused);
+    });
+    window.set_focus().map_err(|e| e.to_string())
 }
 #[richos_command::command]
 pub fn cleaner_capture_control(app: AppHandle, id: String, action: String) -> Result<(), String> {

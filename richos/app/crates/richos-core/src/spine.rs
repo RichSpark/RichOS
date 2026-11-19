@@ -568,7 +568,10 @@ fn keep_front_desk_alive_with(state:&mut impl PreparationState,thread:&str)->Kep
     // A reply of its own on the lease's account, over when it returns (as a priming is).
     let keeping=format!("keep-alive:{thread}");
     let result=prepare_connection(state,&plan,&desk,&keeping).and_then(|spawned| {
-        let reply=desk.lock().unwrap().as_mut().ok_or(SpineError::NoLease)?.keep_chat_alive()?;
+        // Keep visible delivery out of this provider until the hidden reply ends or the
+        // adapter retires it. The shared Spine stays available while we hold the desk.
+        let mut slot = desk.lock().unwrap();
+        let reply=slot.as_mut().ok_or(SpineError::NoLease)?.keep_chat_alive()?;
         reply.wait(&mut |_| {})?;
         Ok(spawned)
     });

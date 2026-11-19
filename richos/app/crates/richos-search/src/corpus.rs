@@ -165,6 +165,41 @@ pub struct Corpus {
     pub links_skipped: usize,
 }
 
+/// A search snapshot keeps base documents at their original posting positions.
+#[derive(Clone, Copy)]
+pub(crate) struct Documents<'a> {
+    pub(crate) base: &'a [Arc<Document>],
+    pub(crate) media: &'a [Arc<Document>],
+}
+
+impl<'a> Documents<'a> {
+    pub(crate) fn iter(self) -> impl Iterator<Item = &'a Arc<Document>> {
+        self.base.iter().chain(self.media)
+    }
+
+    pub(crate) fn len(self) -> usize {
+        self.base.len() + self.media.len()
+    }
+
+    pub(crate) fn position(self, path: &str) -> Option<usize> {
+        self.base.binary_search_by(|d| d.rel_path.as_str().cmp(path)).ok().or_else(|| {
+            self.media.binary_search_by(|d| d.rel_path.as_str().cmp(path)).ok().map(|i| self.base.len() + i)
+        })
+    }
+}
+
+impl std::ops::Index<usize> for Documents<'_> {
+    type Output = Arc<Document>;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        if index < self.base.len() {
+            &self.base[index]
+        } else {
+            &self.media[index - self.base.len()]
+        }
+    }
+}
+
 pub struct SearchFolder {
     pub path: PathBuf,
     pub files: usize,
@@ -232,14 +267,14 @@ impl Corpus {
 
     /// Broad discovery presents disjoint child folders. Files directly in a
     /// root have their own choice so that unchecking a child actually excludes it.
-    pub(crate) fn folder_options(&self) -> Vec<SearchFolder> {
+    pub(crate) fn folder_options(&self, docs: Documents<'_>) -> Vec<SearchFolder> {
         let mut counts = BTreeMap::new();
         if !self.automatic {
             let roots = self.roots.values().map(PathBuf::as_path)
                 .chain(self.root.is_absolute().then_some(self.root.as_path()));
             counts.extend(roots.map(|root| ((root.to_owned(), false), 0)));
         }
-        for doc in &self.docs {
+        for doc in docs.iter() {
             let Some((root, relative)) = self.origin(&doc.rel_path) else { continue };
             let key = match (self.automatic, relative.split_once('/')) {
                 (true, Some((child, _))) => (root.join(child), false),
@@ -782,7 +817,7 @@ mod tests {
         std::fs::write(root.join("direct.md"), "Notes at the root").unwrap();
         std::fs::write(child.join("agreement.md"), "Notes in Contracts").unwrap();
         let corpus = load_scope_until_stopped(&[root.clone(), missing.clone()], &[], true, None, || false).unwrap().corpus;
-        let options = corpus.folder_options();
+        let options = corpus.folder_options(Documents { base: &corpus.docs, media: &[] });
         let direct = options.iter().find(|folder| folder.direct).unwrap();
         let contracts = options.iter().find(|folder| folder.path == child).unwrap();
         assert_eq!(direct.files, 1);

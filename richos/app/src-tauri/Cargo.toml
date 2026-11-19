@@ -219,6 +219,8 @@ tauri-plugin-dialog = "2.7.1"
 # The two Launch Services functions are declared in output_files.rs against the CoreServices
 # framework.
 [target.'cfg(target_os = "macos")'.dependencies]
+# Build the native launch window before adding its normal WebKit child.
+tauri = { version = "2", features = ["unstable"] }
 # RichFinder reuses the ONNX Runtime and tokenizer already linked for Pocket TTS.
 ort = { version = "=2.0.0-rc.12", default-features = false, features = ["std", "api-24", "download-binaries", "tls-native"] }
 tokenizers = { version = "0.22", default-features = false, features = ["fancy-regex"] }
