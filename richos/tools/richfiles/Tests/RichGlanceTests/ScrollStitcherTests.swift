@@ -462,6 +462,17 @@ final class ScrollStitcherTests: XCTestCase {
                       pixels(crop(fresh, x: 0, y: 112, w: 160, h: 28)))
     }
 
+    func testFinalRepaintCannotDiscardAChangeInAnEdgeFromAnotherViewport() {
+        let page = fixture(width: 160, height: 240)
+        func view(_ y: Int) -> CGImage {
+            withHeader(crop(page, x: 0, y: y, w: 160, h: 140), rows: 28)
+        }
+        var sut = scrollDown(240, viewport: 140, step: 50, view: view)
+        let changed = withBox(view(100), x: 80, y: 10, w: 1, h: 1, gray: 0.7)
+        XCTAssertEqual(sut.append(changed, final: true), .conflict)
+        XCTAssertNil(sut.image())
+    }
+
     func testSideBarBesideAPageThatScrollsDownAppearsOnce() throws {
         // A tool bar down the right of the view, with a button near its foot, while the page scrolls
         // down beside it. Each view shows the whole bar, and the image took the strip under the first

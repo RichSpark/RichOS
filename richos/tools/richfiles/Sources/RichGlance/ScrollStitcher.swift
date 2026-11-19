@@ -97,9 +97,7 @@ struct ScrollStitcher {
         if let issue { return issue }
         if final, let fixed, fixed.hasEdges, origins.count >= 3 {
             let settled = Frame(raster: next, origin: last.origin)
-            // The same viewport can repaint proven fixed chrome when the capture controls close.
-            // Verify the entire body at zero motion, then use the fresh pixels of the known edges.
-            if Self.overlapAgrees(last, settled, excluding: fixed) {
+            if finalRepaintAgrees(last, settled, fixed: fixed) {
                 keep(settled)
                 return .unchanged
             }
@@ -339,6 +337,35 @@ struct ScrollStitcher {
         last = frame
     }
 
+    private func edgeTiles(_ fixed: Fixed, in raster: Raster) -> [(Frame?, CGRect)] {
+        [
+            (top, CGRect(x: 0, y: 0, width: raster.width, height: fixed.top)),
+            (bottom, CGRect(x: 0, y: raster.height - fixed.bottom, width: raster.width, height: fixed.bottom)),
+            (left, CGRect(x: 0, y: 0, width: fixed.left, height: raster.height)),
+            (right, CGRect(x: raster.width - fixed.right, y: 0, width: fixed.right, height: raster.height))
+        ]
+    }
+
+    private func finalRepaintAgrees(_ old: Frame, _ settled: Frame, fixed: Fixed) -> Bool {
+        // Every changed pixel must be in a proven edge that this viewport actually contributes to
+        // the result. The body and edges contributed from other positions still have to agree.
+        let edges = edgeTiles(fixed, in: settled.raster).compactMap { owner, edge in
+            owner?.origin == settled.origin && !edge.isEmpty ? edge : nil
+        }
+        guard !edges.isEmpty else { return false }
+        let width = settled.raster.width
+        return old.raster.pixels.withUnsafeBufferPointer { before in
+            settled.raster.pixels.withUnsafeBufferPointer { after in
+                for index in before.indices where before[index] != after[index] {
+                    if !edges.contains(where: { $0.contains(CGPoint(x: index % width, y: index / width)) }) {
+                        return false
+                    }
+                }
+                return true
+            }
+        }
+    }
+
     func image(previewLimit: Int? = nil, requireComplete: Bool = false) -> CGImage? {
         guard issue == nil, let last else { return nil }
         guard let fixed else { return previewLimit == nil ? last.raster.original : nil }
@@ -348,12 +375,7 @@ struct ScrollStitcher {
 
         // Each bar is drawn from a single original viewport on its own outside edge. In particular,
         // a sidebar beside a long vertical capture never contributes more copies of its controls.
-        let bars: [(Frame?, CGRect)] = [
-            (top, CGRect(x: 0, y: 0, width: last.raster.width, height: fixed.top)),
-            (bottom, CGRect(x: 0, y: last.raster.height - fixed.bottom, width: last.raster.width, height: fixed.bottom)),
-            (left, CGRect(x: 0, y: 0, width: fixed.left, height: last.raster.height)),
-            (right, CGRect(x: last.raster.width - fixed.right, y: 0, width: fixed.right, height: last.raster.height))
-        ]
+        let bars = edgeTiles(fixed, in: last.raster)
         func edgePixel(x: Int, y: Int) -> UInt32? {
             for (owner, rect) in bars {
                 guard let owner else { continue }
