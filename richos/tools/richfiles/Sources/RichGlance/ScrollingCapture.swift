@@ -42,7 +42,6 @@ final class ScrollingCapture: NSObject, NSWindowDelegate {
     private var firstFrameMS: Int?
     private var received = 0
     private var accepted = 0
-    private var unmatched = 0
     private var movingShare: CGSize?
     private var lastPreview = 0.0
     private var reported = false
@@ -148,7 +147,7 @@ final class ScrollingCapture: NSObject, NSWindowDelegate {
                     if mode != .manual, firstFrameMS != nil {
                         latestAutomaticFrame = frame
                     } else {
-                        await verify(frame)
+                        _ = await verify(frame)
                     }
                 }
             } catch {
@@ -182,10 +181,10 @@ final class ScrollingCapture: NSObject, NSWindowDelegate {
         report(.cancelled)
     }
 
-    private func verify(_ frame: CGImage) async {
-        let update = await assembler.append(frame)
-        guard recording, !Task.isCancelled else { return }
-        await updateProgress(update)
+    private func verify(_ frame: CGImage, resampling: Bool = false) async -> ScrollStitcher.Update {
+        let progress = await assembler.append(frame, resampling: resampling)
+        if recording, !Task.isCancelled { await updateProgress(progress) }
+        return progress.update
     }
 
     private func updateProgress(_ progress: ScrollAssembly.Progress) async {
@@ -207,7 +206,6 @@ final class ScrollingCapture: NSObject, NSWindowDelegate {
         case .unchanged:
             status.stringValue = instructions
         case .unmatched, .conflict:
-            unmatched += 1
             if mode == .manual {
                 status.stringValue = "Return to the last captured view or click Stop to try again."
             }
@@ -239,7 +237,6 @@ final class ScrollingCapture: NSObject, NSWindowDelegate {
                 return
             }
             let before = accepted
-            let bad = unmatched
             let dimension = horizontal ? regionSize.width : regionSize.height
             let share = movingShare.map { Double(horizontal ? $0.width : $0.height) }
             let delta = direction * Int32(ScrollStitcher.automaticStep(along: Double(dimension), moving: share).rounded())
@@ -253,18 +250,23 @@ final class ScrollingCapture: NSObject, NSWindowDelegate {
             event.post(tap: .cghidEventTap)
             try? await Task.sleep(for: .milliseconds(340))
             guard recording, !Task.isCancelled else { return }
-            // Verify the latest paint after a wheel step, rather than stitching intermediate
-            // animation frames that can contain different scroll positions within one view.
+            // Take one more sample before giving up on a wheel step whose first paint has no
+            // reliable placement. A pixel conflict at a known placement still refuses export.
             if let frame = latestAutomaticFrame {
                 latestAutomaticFrame = nil
-                await verify(frame)
-            }
-            guard recording, !Task.isCancelled else { return }
-            if accepted == before, unmatched > bad {
-                try? await Task.sleep(for: .milliseconds(240))
+                var update = await verify(frame, resampling: true)
+                if update == .unmatched {
+                    try? await Task.sleep(for: .milliseconds(240))
+                    guard recording, !Task.isCancelled else { return }
+                    let settled = latestAutomaticFrame ?? frame
+                    latestAutomaticFrame = nil
+                    update = await verify(settled)
+                }
                 guard recording, !Task.isCancelled else { return }
-                stop(captureLastFrame: true)
-                return
+                if update == .unmatched || update == .conflict {
+                    stop(captureLastFrame: true)
+                    return
+                }
             }
             if accepted == before {
                 inactive += 1
@@ -453,8 +455,8 @@ private actor ScrollAssembly {
 
     private var stitcher = ScrollStitcher()
 
-    func append(_ image: CGImage, final: Bool = false) -> Progress {
-        let update = stitcher.append(image, final: final)
+    func append(_ image: CGImage, final: Bool = false, resampling: Bool = false) -> Progress {
+        let update = stitcher.append(image, final: final, resampling: resampling)
         let bounds = stitcher.bounds
         return Progress(update: update, size: bounds.isNull ? .zero : bounds.size, moving: stitcher.movingShare)
     }

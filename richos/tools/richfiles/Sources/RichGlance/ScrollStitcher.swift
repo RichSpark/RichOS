@@ -78,7 +78,7 @@ struct ScrollStitcher {
         max(4, min(220, length * (share.map { min(0.28, $0 * 0.5) } ?? 0.1)))
     }
 
-    mutating func append(_ image: CGImage, final: Bool = false) -> Update {
+    mutating func append(_ image: CGImage, final: Bool = false, resampling: Bool = false) -> Update {
         guard image.width >= 24, image.height >= 24,
               Self.fits(CGRect(x: 0, y: 0, width: image.width, height: image.height)),
               let next = Raster(image) else { return refuse(.limit) }
@@ -102,7 +102,9 @@ struct ScrollStitcher {
                 return .unchanged
             }
         }
-        guard let offset = Self.registration(from: last.raster, to: next)?.offset else { return refuse(.unmatched) }
+        guard let offset = Self.registration(from: last.raster, to: next)?.offset else {
+            return resampling ? .unmatched : refuse(.unmatched)
+        }
         guard offset != .zero else { return refuse(.conflict) }
         let frame = Frame(raster: next, origin: Offset(x: last.origin.x + offset.x, y: last.origin.y + offset.y))
         guard Self.fits(bounds.union(frame.viewport)) else { return refuse(.limit) }
@@ -117,7 +119,9 @@ struct ScrollStitcher {
                 }
             }
             let overlap = Self.overlap(last, frame, excluding: narrower)
-            guard overlap.width >= 6, overlap.height >= 6 else { return refuse(.unmatched) }
+            guard overlap.width >= 6, overlap.height >= 6 else {
+                return resampling ? .unmatched : refuse(.unmatched)
+            }
             for (index, side) in Fixed.sides.enumerated() where narrower[keyPath: side] > 0 {
                 let perpendicular = index < 2 ? offset.x != 0 : offset.y != 0
                 if perpendicular && !Self.visibleSeam(in: next, side: index, depth: narrower[keyPath: side]) {

@@ -91,6 +91,21 @@ final class ScrollStitcherTests: XCTestCase {
         try check(sut, against: crop(document, x: 0, y: 0, w: 156, h: 181))
     }
 
+    func testAutomaticStepCanResampleBeforeRejectingUnplacedFrame() throws {
+        let document = fixture(width: 156, height: 220)
+        let first = crop(document, x: 0, y: 0, w: 156, h: 120)
+        let unrelated = fixture(width: 156, height: 120, salt: 111)
+        var sut = ScrollStitcher()
+        XCTAssertEqual(sut.append(first), .initial)
+        XCTAssertEqual(sut.append(unrelated, resampling: true), .unmatched)
+        XCTAssertNil(sut.issue)
+        XCTAssertEqual(sut.append(crop(document, x: 0, y: 61, w: 156, h: 120)), .moved(dx: 0, dy: 61))
+        try check(sut, against: crop(document, x: 0, y: 0, w: 156, h: 181))
+        XCTAssertEqual(sut.append(unrelated, resampling: true), .unmatched)
+        XCTAssertEqual(sut.append(unrelated), .unmatched)
+        XCTAssertNil(sut.image())
+    }
+
     func testFixedHeaderDoesNotStopAutomaticScrollAndAppearsOnce() throws {
         // A sticky site header stays put while the text under it scrolls. Steps are 28% of
         // the viewport, as automatic scrolling sends them.
