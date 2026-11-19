@@ -1,6 +1,7 @@
 import AppKit
 import CoreImage
 import CoreMedia
+import CoreVideo
 import ScreenCaptureKit
 
 @MainActor
@@ -128,7 +129,6 @@ private final class ScrollFrameOutput: NSObject, SCStreamOutput, SCStreamDelegat
     let continuation: AsyncThrowingStream<CGImage, Error>.Continuation
     private let crop: CGRect
     private let displaySize: CGSize
-    private let context = CIContext(options: [.cacheIntermediates: false])
 
     init(crop: CGRect, displaySize: CGSize) {
         (images, continuation) = AsyncThrowingStream.makeStream(bufferingPolicy: .bufferingNewest(1))
@@ -140,14 +140,39 @@ private final class ScrollFrameOutput: NSObject, SCStreamOutput, SCStreamDelegat
         guard type == .screen, let pixels = buffer.imageBuffer,
               let attachments = CMSampleBufferGetSampleAttachmentsArray(buffer, createIfNecessary: false) as? [[SCStreamFrameInfo: Any]],
               attachments.first?[.status] as? Int == SCFrameStatus.complete.rawValue else { return }
-        let frame = CIImage(cvPixelBuffer: pixels)
-        guard frame.extent.size == displaySize else {
+        guard CGSize(width: CVPixelBufferGetWidth(pixels), height: CVPixelBufferGetHeight(pixels)) == displaySize,
+              CVPixelBufferGetPixelFormatType(pixels) == kCVPixelFormatType_32BGRA else {
             continuation.finish(throwing: CaptureFrame.Failure.displayUnavailable)
             return
         }
-        // Core Image y coordinates run upward. The region selector uses top-left pixels.
-        let rect = CGRect(x: crop.minX, y: frame.extent.height - crop.maxY, width: crop.width, height: crop.height)
-        if let image = context.createCGImage(frame, from: rect) { continuation.yield(image) }
+        if let image = croppedImage(from: pixels) { continuation.yield(image) }
+    }
+
+    private func croppedImage(from pixels: CVPixelBuffer) -> CGImage? {
+        let (x, y, width, height) = (Int(crop.minX), Int(crop.minY), Int(crop.width), Int(crop.height))
+        guard x >= 0, y >= 0, width > 0, height > 0,
+              x + width <= CVPixelBufferGetWidth(pixels), y + height <= CVPixelBufferGetHeight(pixels),
+              CVPixelBufferLockBaseAddress(pixels, .readOnly) == kCVReturnSuccess else { return nil }
+        defer { CVPixelBufferUnlockBaseAddress(pixels, .readOnly) }
+        guard let source = CVPixelBufferGetBaseAddress(pixels) else { return nil }
+        let inputStride = CVPixelBufferGetBytesPerRow(pixels)
+        let outputStride = width * 4
+        // ScreenCaptureKit already delivers sRGB BGRA. Copy its pixels verbatim so a new
+        // stream cannot round them differently in a separate Core Image context.
+        var data = Data(count: outputStride * height)
+        data.withUnsafeMutableBytes { destination in
+            guard let base = destination.baseAddress else { return }
+            for row in 0..<height {
+                base.advanced(by: row * outputStride).copyMemory(
+                    from: source.advanced(by: (y + row) * inputStride + x * 4), byteCount: outputStride)
+            }
+        }
+        guard let provider = CGDataProvider(data: data as CFData),
+              let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) else { return nil }
+        return CGImage(width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32,
+                       bytesPerRow: outputStride, space: colorSpace,
+                       bitmapInfo: [.byteOrder32Little, CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedFirst.rawValue)],
+                       provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent)
     }
 
     func stream(_ stream: SCStream, didStopWithError error: any Error) {

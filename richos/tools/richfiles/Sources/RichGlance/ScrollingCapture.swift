@@ -22,7 +22,7 @@ final class ScrollingCapture: NSObject, NSWindowDelegate {
     private let displayID: CGDirectDisplayID
     private let displaySize: CGSize
     private let crop: CGRect
-    private let regionSize: CGSize
+    private let region: CGRect
     private let visible: CGRect
     private let guide: NSWindow
     private let panel: ScrollPanel
@@ -35,6 +35,7 @@ final class ScrollingCapture: NSObject, NSWindowDelegate {
     private var frames: Task<Void, Never>?
     private var automatic: Task<Void, Never>?
     private var latestAutomaticFrame: CGImage?
+    private var excludedWindows: Set<CGWindowID> = []
     private var deadline: Task<Void, Never>?
     private var completing: Task<Void, Never>?
     private let started = ProcessInfo.processInfo.systemUptime
@@ -62,7 +63,7 @@ final class ScrollingCapture: NSObject, NSWindowDelegate {
         self.displayID = displayID
         self.displaySize = displaySize
         self.crop = crop
-        regionSize = region.size
+        self.region = region
         self.visible = visible
         self.id = id
         // Keep the rounded stroke and its antialiasing entirely outside the captured pixels.
@@ -125,12 +126,12 @@ final class ScrollingCapture: NSObject, NSWindowDelegate {
     func start() {
         guide.orderFrontRegardless()
         panel.orderFrontRegardless()
-        let windows = Set([guide, panel].compactMap { CGWindowID(exactly: $0.windowNumber) })
+        excludedWindows = Set([guide, panel].compactMap { CGWindowID(exactly: $0.windowNumber) })
         frames = Task { [weak self] in
             guard let self else { return }
             do {
                 let opened = try await ScrollFrameStream.open(displayID: displayID, size: displaySize,
-                                                              crop: crop, excluding: windows)
+                                                              crop: crop, excluding: excludedWindows)
                 guard recording, !Task.isCancelled else { await opened.stop(); return }
                 stream = opened
                 // The menu and capture overlay have just closed. Let the source finish repainting
@@ -223,7 +224,12 @@ final class ScrollingCapture: NSObject, NSWindowDelegate {
     }
 
     private var instructions: String {
-        mode == .manual ? "Scroll the selected area, then click Stop." : "Scrolling the selected area…"
+        switch mode {
+        case .manual: "Scroll the selected area, then click Stop."
+        case .down: "Scrolling down…"
+        case .right: "Scrolling right…"
+        case .both: "Scrolling down and right…"
+        }
     }
 
     private func driveScroll() async {
@@ -237,15 +243,16 @@ final class ScrollingCapture: NSObject, NSWindowDelegate {
                 return
             }
             let before = accepted
-            let dimension = horizontal ? regionSize.width : regionSize.height
+            let dimension = horizontal ? region.width : region.height
             let share = movingShare.map { Double(horizontal ? $0.width : $0.height) }
             let delta = direction * Int32(ScrollStitcher.automaticStep(along: Double(dimension), moving: share).rounded())
-            guard let event = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2,
-                                      wheel1: horizontal ? 0 : delta, wheel2: horizontal ? delta : 0, wheel3: 0),
-                  CGPreflightPostEventAccess() else {
+            guard CGPreflightPostEventAccess(),
+                  let event = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2,
+                                      wheel1: horizontal ? 0 : delta, wheel2: horizontal ? delta : 0, wheel3: 0) else {
                 stop(.accessibility)
                 return
             }
+            latestAutomaticFrame = nil
             event.location = anchor
             event.post(tap: .cghidEventTap)
             try? await Task.sleep(for: .milliseconds(340))
@@ -264,21 +271,36 @@ final class ScrollingCapture: NSObject, NSWindowDelegate {
                 }
                 guard recording, !Task.isCancelled else { return }
                 if update == .unmatched || update == .conflict {
-                    stop(captureLastFrame: true)
+                    stop(update == .conflict ? .conflictingPixels : .lostOverlap)
                     return
                 }
             }
             if accepted == before {
                 inactive += 1
                 guard inactive == 2 else { continue }
-                if mode == .both, horizontal {
-                    horizontal = false
-                    direction = -1
-                    inactive = 0
-                    continue
+                // Silence from the live stream does not establish a scroll boundary. Its last
+                // paint may still be queued. Verify a fresh view before switching axes or ending.
+                guard let update = await confirmBoundary() else {
+                    if recording { stop(.finalFrameUnavailable) }
+                    return
                 }
-                stop(captureLastFrame: true)
-                return
+                guard recording, !Task.isCancelled else { return }
+                if update == .unchanged {
+                    if mode == .both, horizontal {
+                        horizontal = false
+                        direction = -1
+                        inactive = 0
+                        continue
+                    }
+                    // This sample already verified the end. A panel overlapping the crop needs
+                    // one more check with the controls hidden to guard against compositor leakage.
+                    stop(captureLastFrame: panel.frame.intersects(region))
+                    return
+                }
+                if accepted == before {
+                    stop(update == .conflict ? .conflictingPixels : .lostOverlap)
+                    return
+                }
             }
             inactive = 0
             if mode == .both, !horizontal {
@@ -289,6 +311,17 @@ final class ScrollingCapture: NSObject, NSWindowDelegate {
             }
         }
         if recording, !Task.isCancelled { stop(.timeLimit) }
+    }
+
+    private func confirmBoundary() async -> ScrollStitcher.Update? {
+        for attempt in 0...1 {
+            guard let image = try? await ScrollFrameStream.snapshot(
+                displayID: displayID, size: displaySize, crop: crop, excluding: excludedWindows),
+                recording, !Task.isCancelled else { return nil }
+            let update = await verify(image, resampling: attempt == 0)
+            if attempt == 1 || (update != .unmatched && update != .conflict) { return update }
+        }
+        return nil
     }
 
     private var nextSweep: Int32 = -1
