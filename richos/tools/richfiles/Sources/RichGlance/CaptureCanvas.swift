@@ -177,7 +177,9 @@ final class CaptureCanvas: NSView {
     }
 
     override func resetCursorRects() {
-        addCursorRect(bounds, cursor: mode == .region && isActiveDisplay && selection.phase != .refining ? Self.blankCursor : .arrow)
+        let usesGuides = mode == .region && isActiveDisplay && selection.phase != .refining
+        addCursorRect(bounds, cursor: usesGuides ? Self.blankCursor : .arrow)
+        if usesGuides, !controls.isHidden { addCursorRect(controls.frame, cursor: .arrow) }
     }
 
     override func mouseMoved(with event: NSEvent) {
@@ -418,9 +420,12 @@ final class CaptureCanvas: NSView {
         let bottom = CGRect(x: (bounds.width - controlsSize.width) / 2,
                             y: bounds.maxY - controlsSize.height - 14, width: controlsSize.width, height: controlsSize.height)
         let point = mode == .region ? geometry.viewPoint(selection.target) : .zero
-        controls.frame = area?.intersects(bottom) == true || bottom.insetBy(dx: -22, dy: -30).contains(point) ||
-            (!actions.isHidden && actions.frame.intersects(bottom))
-            ? CGRect(x: bottom.minX, y: 14, width: bottom.width, height: bottom.height) : bottom
+        // Keep the bar reachable from above. Move it when aiming below it or when it covers a crop.
+        let aimsBelow = point.y > bottom.maxY && (bottom.minX...bottom.maxX).contains(point.x)
+        let top = CGRect(x: bottom.minX, y: 14, width: bottom.width, height: bottom.height)
+        let pointsAtTopBar = controls.frame == top && top.contains(point)
+        controls.frame = area?.intersects(bottom) == true || aimsBelow || pointsAtTopBar ||
+            (!actions.isHidden && actions.frame.intersects(bottom)) ? top : bottom
         needsDisplay = true
     }
 

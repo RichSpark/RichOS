@@ -4292,6 +4292,7 @@ fn main() {
             richfiles_pane::richfiles_pane_available, richfiles_pane::richfiles_place_pane,
             richfiles_pane::richfiles_recording_frame,
             glance_capture_shortcut::glance_capture_status, glance_capture_shortcut::glance_capture_configure,
+            glance_capture_shortcut::glance_workflow_status, glance_capture_shortcut::glance_workflow_configure,
             richfiles_pane::richfiles_preload,
             richfiles_pane::richfiles_request_pending, richfiles_pane::richfiles_accept_request,
             richfiles_pane::output_git_open, richfiles_pane::output_git_place, richfiles_pane::richfiles_git_chat,

@@ -12971,6 +12971,10 @@ body.panel-full .op-body.op-native-git { padding-bottom: 0; }
 .dict-switch[aria-checked="true"] { background: var(--gold); border-color: var(--gold); }
 .dict-switch[aria-checked="true"]::after { transform: translateX(28px); background: var(--on-gold); }
 .dict-switch:focus-visible { outline: 2px solid var(--gold); outline-offset: 3px; }
+.richglance-workflow-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.richglance-workflow-actions .dict-btn[aria-pressed="true"] { border-color: var(--gold-text); color: var(--gold-text); background: var(--gold-soft); font-weight: 600; }
+.richglance-workflow-actions .dict-btn:focus-visible { outline: 2px solid var(--gold-text); outline-offset: 3px; }
+#richglance-history-confirm[hidden] { display: none; }
 .dict-feedback { font-size: 1rem; color: var(--ink); display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: -4px 0 0 4px; }
 .dict-feedback svg { width: 18px; height: 18px; color: var(--gold-text); flex-shrink: 0; }
 /* more lines, line 2: dictation works only while RichOS is open */

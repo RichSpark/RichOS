@@ -608,6 +608,8 @@ const FIXTURES = {
       glance_capture_status: {value: {available: true, enabled: false, registered: false,
         shortcut: {code: "KeyC", control: true, option: false, shift: true, command: false}}},
       glance_capture_configure: {reject: true, value: "That shortcut is unavailable. Choose another combination."},
+      glance_workflow_status: {value: {opensEditor: false, keepsHistory: true}},
+      glance_workflow_configure: {value: {opensEditor: true, keepsHistory: true}},
     });
     await page.click("#set-btn");
     await page.click("#set-richglance-capture-open");
@@ -623,12 +625,21 @@ const FIXTURES = {
     });
     assert(inset.bodyLeft >= 24 && Math.abs(inset.bodyLeft - inset.headerLeft) <= 1 &&
       Math.abs(inset.bodyRight - inset.headerRight) <= 1, "RichGlance body aligns with its header: " + JSON.stringify(inset));
-    await page.locator("#richglance-capture-record").focus();
+    const history = page.locator("#richglance-history");
+    await page.waitForFunction(() => document.getElementById("richglance-history").getAttribute("aria-checked") === "true");
+    await history.focus();
     await page.keyboard.press("Tab");
     assert(await panel.locator(".dict-close").evaluate(node => node === document.activeElement),
       "Tab stays in the RichGlance sheet");
     await page.keyboard.press("Shift+Tab");
-    assertEqual(await page.evaluate(() => document.activeElement.id), "richglance-capture-record");
+    assertEqual(await page.evaluate(() => document.activeElement.id), "richglance-history");
+    await history.click();
+    await page.locator("#richglance-history-confirm").waitFor({state: "visible"});
+    await page.keyboard.press("Escape");
+    await page.locator("#richglance-history-confirm").waitFor({state: "hidden"});
+    assertEqual(await history.getAttribute("aria-checked"), "true");
+    await page.click("#richglance-open-editor");
+    await page.waitForFunction(() => document.getElementById("richglance-open-editor").getAttribute("aria-pressed") === "true");
     await page.click("#richglance-capture-on");
     await page.waitForFunction(() => document.getElementById("richglance-capture-feedback").textContent
       .includes("That shortcut is unavailable."));

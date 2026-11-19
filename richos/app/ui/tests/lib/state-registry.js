@@ -95,7 +95,7 @@ module.exports = [
   {"s":"Could not read the RichGlance shortcut settings.","c":"NOT-RENDERED","why":"Reading status fails before the row is registered. Subsequent edits use the already loaded preferences."},
   {"s":"Could not save the RichGlance shortcut. Your previous setting is still in use.","c":"ACTIONABLE","why":"The old registration remains available. The switch and picker allow another attempt.","control":"#richglance-capture-on, #richglance-capture-record"},
   {"s":"Library/Application Support/app.richos.richglance/Capture Requests","c":"NOT-RENDERED","why":"A path for transient native launch requests, never shown in Settings."},
-  {"s":"Off. Capture Region… is always in RichGlance’s File menu.","c":"ACTIONABLE","why":"The switch can enable capture while the standalone File menu remains usable.","control":"#richglance-capture-on","fixture":"richglance-shortcut-collision"},
+  {"s":"Off. Capture… is always in RichGlance’s File menu.","c":"ACTIONABLE","why":"The switch can enable capture while the standalone File menu remains usable.","control":"#richglance-capture-on","fixture":"richglance-shortcut-collision"},
   {"s":"On. Press in any app to capture a region.","c":"FRAGMENT","why":"The normalized template omits the actual key combination between Press and in any app."},
   {"s":"Press the new shortcut. Esc to cancel.","c":"ACTIONABLE","why":"The focused Change button listens to keys and becomes Cancel while recording.","control":"#richglance-capture-record"},
   {"s":"RichGlance is unavailable","c":"NOT-RENDERED","why":"An internal launcher error replaced by the generic native log entry."},
