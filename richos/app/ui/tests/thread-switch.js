@@ -2,7 +2,7 @@
 
 const path = require("path");
 const { spawnSync } = require("child_process");
-const { loadPlaywright, leaveHome, createRun, assert, assertEqual, UI_DIR } = require("./lib/harness");
+const { loadPlaywright, leaveHome, createRun, assert, assertEqual, awaitSettled, flushFrames, UI_DIR } = require("./lib/harness");
 const contrast = require("./lib/contrast");
 const APP = "file://" + path.join(UI_DIR, "index.html");
 
@@ -156,16 +156,16 @@ async function main() {
       assertEqual(await page.locator("#nav-save-note").innerText(),
         "The navigation file could not be read, so it was left untouched and this change was not saved.");
       for (const theme of ["dark", "light"]) {
-        const m = await page.evaluate(async t => {
-          document.documentElement.dataset.theme = t;
-          await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
-          await Promise.all(document.getAnimations().map(a => a.finished.catch(() => {})));
+        await page.evaluate(t => { document.documentElement.dataset.theme = t; }, theme);
+        await flushFrames(page);
+        await awaitSettled(page);
+        const m = await page.evaluate(() => {
           const n = document.getElementById("nav-save-note");
           const cs = getComputedStyle(n);
           let rail = "rgba(0, 0, 0, 0)";
           for (let e = n; e && rail === "rgba(0, 0, 0, 0)"; e = e.parentElement) rail = getComputedStyle(e).backgroundColor;
           return { fg: cs.color, bg: rail, px: parseFloat(cs.fontSize) };
-        }, theme);
+        });
         const lum = c => { const v = c.match(/[\d.]+/g).slice(0, 3).map(x => { x = x / 255; return x <= 0.03928 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4); }); return 0.2126 * v[0] + 0.7152 * v[1] + 0.0722 * v[2]; };
         const a = lum(m.fg), b = lum(m.bg);
         const ratio = (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);

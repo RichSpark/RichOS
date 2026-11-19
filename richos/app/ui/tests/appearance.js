@@ -357,8 +357,8 @@ const menuRows = (page) =>
       .filter((n) => !n.matches(".sm-group, .sm-divider, .popover-hint"))
       .flatMap((n) => (n.classList.contains("set-floor") ? [...n.children] : [n]))
       .map((n) => {
-        // The Codex row's name is its title; the rest of its text is its tooltip's words.
-        const name = n.querySelector(".set-name, #cx-title, .popover-title");
+        // The Codex row and the Notifications section have their own titles.
+        const name = n.querySelector(".set-name, #cx-title, .popover-title, .chat-notification-title");
         return name ? name.textContent.trim() : n.textContent.trim();
       })
   );
@@ -1127,10 +1127,11 @@ async function main() {
       // feedback keeps its place; its switch never gates counting (SwearMeter V3).
       // Terminal setup is the last row of "Working with Rich" and Your name in Git sits directly
       // under Connected folders (round 41, CEO 2026-10-25). The Context meter switch is the
-      // last row of "How it looks" (round 83 screen 1, CEO 2026-11-16).
+      // last row of "How it looks" (round 83 screen 1, CEO 2026-11-16). Round 93 groups
+      // the Mac and sound switches under Notifications in "Working with Rich".
       [
         "Theme", "Text size", "Oxford comma: OFF", "Technical view", "Claude Code quota", "Keep the stored output", "Show SwearMeter", "Context meter",
-        "Your instructions", "Search folders", "Rich's model and effort", "How much should Rich interrupt you?", "Use Rich from your phone", "RichPass", "Terminal setup",
+        "Your instructions", "Search folders", "Rich's model and effort", "How much should Rich interrupt you?", "Notifications", "Use Rich from your phone", "RichPass", "Terminal setup",
         "Company", "Home screen", "Token spend", "Let Codex review your team’s work", "Start meeting notes", "Claude accounts",
         "Connected folders (repositories)", "Your name in Git", "Memory folder", "Updates",
         "Your name", "Splash screen", "Bust a bug!", "Request a feature",
@@ -1441,7 +1442,7 @@ async function main() {
     // neither needs a px declaration.
     assertEqual(
       SOURCES.styleSources(),
-      ["fonts/fonts.css", "style.css", "cleaner.css", "search-folder-settings.css", "speckle.css", "splash.css", "openings.css", "home.css", "instructions-update.css", "terminal-and-git.css", "suite-tools.css", "video-anywhere.css", "context-meter.css", "keep-alive.css", "dictation-overlay.css", "meeting-panel.css"],
+      ["fonts/fonts.css", "style.css", "chat-list.css", "cleaner.css", "search-folder-settings.css", "speckle.css", "splash.css", "openings.css", "home.css", "instructions-update.css", "terminal-and-git.css", "suite-tools.css", "video-anywhere.css", "context-meter.css", "keep-alive.css", "dictation-overlay.css", "meeting-panel.css"],
       "the shipped windows have a different set of stylesheets from the declared list"
     );
     // THE TWO DERIVATIONS ARE JOINED, the way `lib/harness.js` joins its two PNG decoders: a
