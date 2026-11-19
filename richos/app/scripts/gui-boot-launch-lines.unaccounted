@@ -32,7 +32,6 @@
 [richos] ECS prepare-turn outcome={} local_ms={}
 [richos] ECS reply remains owed: {}
 [richos] standing instructions could not be refreshed: {}
-[richos] waiting notice {} remains pending: {}
 [richos] waiting work {} has no authorized next action
 [richos] waiting work {} has no readable original order
 [richos] waiting-work check could not be requested: {}
