@@ -341,8 +341,13 @@ final class ScrollingCapture: NSObject, NSWindowDelegate {
         deadline?.cancel()
         frames?.cancel()
         stopButton.isEnabled = false
-        guide.orderOut(nil)
-        panel.orderOut(nil)
+        let controlsCoverSelection = panel.frame.intersects(region)
+        if controlsCoverSelection {
+            guide.orderOut(nil)
+            panel.orderOut(nil)
+        } else {
+            status.stringValue = "Verifying the capture…"
+        }
         let closing = stream
         stream = nil
         completing = Task { [weak self] in
@@ -354,7 +359,8 @@ final class ScrollingCapture: NSObject, NSWindowDelegate {
                 if NSWorkspace.shared.frontmostApplication != source {
                     failure = .sourceChanged
                 } else if let final = try? await ScrollFrameStream.snapshot(
-                            displayID: displayID, size: displaySize, crop: crop, excluding: []),
+                            displayID: displayID, size: displaySize, crop: crop,
+                            excluding: controlsCoverSelection ? [] : excludedWindows),
                           NSWorkspace.shared.frontmostApplication == source {
                     // Read the current view again so coalesced or late delivery cannot hide a change.
                     guard !Task.isCancelled else { return }
@@ -398,6 +404,7 @@ final class ScrollingCapture: NSObject, NSWindowDelegate {
     func showError(_ message: String) { status.stringValue = message }
 
     private func showResult(_ image: CGImage?, message: String?) {
+        guide.orderOut(nil)
         result = image
         status.stringValue = message ?? "Scrolling capture ready."
         if let image {
