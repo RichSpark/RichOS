@@ -1,4 +1,5 @@
 import CoreGraphics
+import CoreText
 import XCTest
 @testable import RichGlance
 
@@ -85,6 +86,31 @@ final class ScrollStitcherTests: XCTestCase {
         try check(sut, against: crop(document, x: 0, y: 0, w: 156, h: 181))
     }
 
+    func testFixedHeaderDoesNotStopAutomaticScrollAndAppearsOnce() throws {
+        // A sticky site header stays put while the text under it scrolls. Steps are 28% of
+        // the viewport, as automatic scrolling sends them.
+        let page = textPage(width: 800, height: 2000)
+        let viewport = 500
+        let step = 140
+        var sut = ScrollStitcher()
+        XCTAssertEqual(sut.append(withHeader(crop(page, x: 0, y: 0, w: 800, h: viewport), rows: 64)), .initial)
+        var y = 0
+        while y + viewport < page.height {
+            let next = min(page.height - viewport, y + step)
+            XCTAssertEqual(sut.append(withHeader(crop(page, x: 0, y: next, w: 800, h: viewport), rows: 64)),
+                           .moved(dx: 0, dy: next - y), "step to y=\(next)")
+            y = next
+        }
+        let actual = try XCTUnwrap(sut.image())
+        XCTAssertEqual(actual.width, 800)
+        XCTAssertEqual(actual.height, page.height)
+        // The first view, header included, then the page below it without another header.
+        XCTAssertTrue(pixels(crop(actual, x: 0, y: 0, w: 800, h: viewport))
+                      == pixels(withHeader(crop(page, x: 0, y: 0, w: 800, h: viewport), rows: 64)))
+        XCTAssertTrue(pixels(crop(actual, x: 0, y: viewport, w: 800, h: page.height - viewport))
+                      == pixels(crop(page, x: 0, y: viewport, w: 800, h: page.height - viewport)))
+    }
+
     private func check(_ sut: ScrollStitcher, against expected: CGImage,
                        file: StaticString = #filePath, line: UInt = #line) throws {
         let actual = try XCTUnwrap(sut.image(), file: file, line: line)
@@ -114,6 +140,49 @@ final class ScrollStitcherTests: XCTestCase {
         return CGImage(width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: width * 4,
                        space: colorSpace, bitmapInfo: bitmap, provider: CGDataProvider(data: data as CFData)!,
                        decode: nil, shouldInterpolate: false, intent: .defaultIntent)!
+    }
+
+    /// Dark rendered text on a white page, as on a document or web page.
+    private func textPage(width: Int, height: Int, scale: CGFloat = 1) -> CGImage {
+        let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+                                space: colorSpace, bitmapInfo: bitmap.rawValue)!
+        context.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        let words = ["the", "quarterly", "report", "shows", "revenue", "growth", "across", "regions", "and", "teams",
+                     "with", "margin", "notes", "for", "each", "customer", "segment", "plus", "forecast"]
+        var seed: UInt32 = 7
+        var text = ""
+        for index in 0..<(height * width / 250) {
+            seed = seed &* 1_103_515_245 &+ 12_345
+            text += words[Int(seed >> 16) % words.count] + (index % 13 == 12 ? ".\n" : " ")
+        }
+        let attributes: [NSAttributedString.Key: Any] = [
+            NSAttributedString.Key(kCTFontAttributeName as String): CTFontCreateWithName("Helvetica" as CFString, 13 * scale, nil),
+            NSAttributedString.Key(kCTForegroundColorAttributeName as String): CGColor(red: 0.1, green: 0.1, blue: 0.1, alpha: 1)
+        ]
+        let setter = CTFramesetterCreateWithAttributedString(NSAttributedString(string: text, attributes: attributes))
+        let path = CGPath(rect: CGRect(x: 20 * scale, y: 0, width: CGFloat(width) - 40 * scale, height: CGFloat(height)),
+                          transform: nil)
+        CTFrameDraw(CTFramesetterCreateFrame(setter, CFRange(location: 0, length: 0), path, nil), context)
+        return context.makeImage()!
+    }
+
+    /// A light gray header bar with bold labels and a bottom border over the top rows of a view.
+    private func withHeader(_ view: CGImage, rows: Int) -> CGImage {
+        let context = CGContext(data: nil, width: view.width, height: view.height, bitsPerComponent: 8, bytesPerRow: 0,
+                                space: colorSpace, bitmapInfo: bitmap.rawValue)!
+        context.draw(view, in: CGRect(x: 0, y: 0, width: view.width, height: view.height))
+        context.setFillColor(CGColor(red: 0.96, green: 0.96, blue: 0.96, alpha: 1))
+        context.fill(CGRect(x: 0, y: view.height - rows, width: view.width, height: rows))
+        context.setFillColor(CGColor(red: 0.8, green: 0.8, blue: 0.8, alpha: 1))
+        context.fill(CGRect(x: 0, y: view.height - rows, width: view.width, height: 1))
+        let line = CTLineCreateWithAttributedString(NSAttributedString(string: "Home      Products      Pricing      Docs", attributes: [
+            NSAttributedString.Key(kCTFontAttributeName as String): CTFontCreateWithName("Helvetica-Bold" as CFString, 12, nil),
+            NSAttributedString.Key(kCTForegroundColorAttributeName as String): CGColor(red: 0.2, green: 0.2, blue: 0.2, alpha: 1)
+        ]))
+        context.textPosition = CGPoint(x: 20, y: CGFloat(view.height - rows) + CGFloat(rows) * 0.35)
+        CTLineDraw(line, context)
+        return context.makeImage()!
     }
 
     private func crop(_ image: CGImage, x: Int, y: Int, w: Int, h: Int) -> CGImage {

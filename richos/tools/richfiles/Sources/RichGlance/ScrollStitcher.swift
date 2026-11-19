@@ -109,14 +109,15 @@ struct ScrollStitcher {
     }
 
     private static func registration(from old: Raster, to new: Raster) -> Offset? {
-        let stationary = score(.zero, from: old, to: new)
+        let fixed = fixedEdge(old, new)
+        let stationary = score(.zero, from: old, to: new, fixed: fixed)
         if stationary.samples >= 6, stationary.quality >= 0.985 { return .zero }
 
         var candidates = [stationary]
         // Matching scan lines make short stops at a scroll boundary precise, even
         // with long flat runs or repeating rows. Check every proposed overlap.
         for horizontal in [false, true] {
-            candidates += offsets(from: old, to: new, horizontal: horizontal).map { score($0, from: old, to: new) }
+            candidates += offsets(from: old, to: new, horizontal: horizontal).map { score($0, from: old, to: new, fixed: fixed) }
         }
         if candidates.dropFirst().allSatisfy({ $0.quality < 0.97 || $0.matches < 26 }) {
             // Vision handles simultaneous panning and cases where exact scan line
@@ -131,7 +132,7 @@ struct ScrollStitcher {
                 for offset in [Offset(x: x, y: -y), Offset(x: -x, y: y),
                                Offset(x: x, y: y), Offset(x: -x, y: -y)] where offset != .zero {
                     if !candidates.contains(where: { $0.offset == offset }) {
-                        candidates.append(score(offset, from: old, to: new))
+                        candidates.append(score(offset, from: old, to: new, fixed: fixed))
                     }
                 }
             }
@@ -192,9 +193,27 @@ struct ScrollStitcher {
         return aScore == bScore ? a.matches > b.matches : aScore > bScore
     }
 
-    private static func score(_ offset: Offset, from old: Raster, to new: Raster, density: Int = 32) -> Match {
-        let left = max(0, offset.x)
-        let top = max(0, offset.y)
+    /// Rows along the top and columns along the left that are identical in both frames: a sticky
+    /// header or a frozen column that stays put while the content under it scrolls. Such a band
+    /// matches only when nothing moved, so it is left out of the comparison. The first frame keeps
+    /// it in the image, and later frames place it over area that is already covered.
+    private static func fixedEdge(_ old: Raster, _ new: Raster) -> Offset {
+        func same(_ index: (Int) -> Int, _ count: Int) -> Bool {
+            (0..<count).allSatisfy { old.pixels[index($0)] == new.pixels[index($0)] }
+        }
+        var rows = 0
+        while rows < old.height, same({ rows * old.width + $0 }, old.width) { rows += 1 }
+        var columns = 0
+        while columns < old.width, same({ $0 * old.width + columns }, old.height) { columns += 1 }
+        // A band covering much of the frame is a mostly unchanged view, not a fixed bar.
+        return Offset(x: columns * 5 <= old.width * 2 ? columns : 0, y: rows * 5 <= old.height * 2 ? rows : 0)
+    }
+
+    private static func score(_ offset: Offset, from old: Raster, to new: Raster, fixed: Offset = .zero,
+                              density: Int = 32) -> Match {
+        // Sample only where neither frame shows its fixed band.
+        let left = fixed.x + max(0, offset.x)
+        let top = fixed.y + max(0, offset.y)
         let right = min(old.width, old.width + offset.x) - 2
         let bottom = min(old.height, old.height + offset.y) - 2
         guard right - left >= max(6, old.width / 4 - 2),
