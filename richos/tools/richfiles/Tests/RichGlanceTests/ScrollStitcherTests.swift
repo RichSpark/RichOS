@@ -135,6 +135,34 @@ final class ScrollStitcherTests: XCTestCase {
         XCTAssertTrue(pixels(crop(actual, x: 0, y: 0, w: 800, h: viewport)) == pixels(view(0)))
     }
 
+    func testFixedHeaderOverAListOfShortNamesDoesNotStopAutomaticScroll() throws {
+        // Short file names on a white page change only a few pixels in each row, yet they scroll.
+        let width = 800
+        let height = 2000
+        let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+                                space: colorSpace, bitmapInfo: bitmap.rawValue)!
+        context.setFillColor(CGColor(gray: 1, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        var seed: UInt32 = 7
+        for row in 0..<(height / 24) {
+            seed = seed &* 1_103_515_245 &+ 12_345
+            let line = CTLineCreateWithAttributedString(NSAttributedString(string: String(format: "%08X.txt", seed), attributes: [
+                NSAttributedString.Key(kCTFontAttributeName as String): CTFontCreateWithName("Helvetica" as CFString, 13, nil),
+                NSAttributedString.Key(kCTForegroundColorAttributeName as String): CGColor(gray: 0.1, alpha: 1)
+            ]))
+            context.textPosition = CGPoint(x: 20, y: height - 24 - row * 24)
+            CTLineDraw(line, context)
+        }
+        let page = context.makeImage()!
+        var sut = ScrollStitcher()
+        XCTAssertEqual(sut.append(withHeader(crop(page, x: 0, y: 0, w: width, h: 500), rows: 64)), .initial)
+        for y in stride(from: 140, through: height - 500, by: 140) {
+            XCTAssertEqual(sut.append(withHeader(crop(page, x: 0, y: y, w: width, h: 500), rows: 64)),
+                           .moved(dx: 0, dy: 140), "step to y=\(y)")
+        }
+        XCTAssertEqual(Int(sut.bounds.height), 500 + (height - 500) / 140 * 140)
+    }
+
     func testRetinaTextStepIsRegisteredWhenSampleRowsMatchTheLinePitch() throws {
         // A 600 × 700 pt viewport at 2x over plain text. Evenly spaced sample rows matched the
         // line pitch here and landed between lines, so these 28% steps were refused.

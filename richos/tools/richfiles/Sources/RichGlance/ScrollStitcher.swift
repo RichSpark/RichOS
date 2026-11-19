@@ -204,25 +204,36 @@ struct ScrollStitcher {
 
     /// Rows in the top two fifths and columns along the left edge that stay put in both frames: a
     /// sticky header or a frozen column while the content under it scrolls. Such a band matches only
-    /// when nothing moved, so it is left out of the comparison. A line counts as fixed when nine in
-    /// ten of its pixels are close to the same line in the other frame, so a moving scroll bar beside
-    /// the header, or content faintly visible through a translucent header, does not hide it. The
-    /// first frame keeps the header in the image, and later frames place it over covered area.
+    /// when nothing moved, so it is left out of the comparison. A line is judged only by its detail,
+    /// the pixels that are not flat in either frame (the same test score() uses): it stays put when
+    /// nine in ten of them are close to the same line in the other frame. So short text on a white
+    /// page still counts as moving, while a moving scroll bar beside the header, or content faintly
+    /// visible through a translucent header, does not hide the header. The first frame keeps the
+    /// header in the image, and later frames place it over covered area.
     private static func fixedEdge(_ old: Raster, _ new: Raster) -> Fixed {
-        func still(_ index: (Int) -> Int, _ count: Int) -> Bool {
+        enum Line { case flat, still, moving }
+        let edge = old.width * 2 + 2
+        func line(_ index: (Int) -> Int, _ count: Int) -> Line {
+            var detail = 0
             var differ = 0
-            for i in 0..<count where !close(old.pixels[index(i)], new.pixels[index(i)]) {
-                differ += 1
-                if differ * 10 > count { return false }
+            for i in 0..<count {
+                let at = index(i)
+                guard !near(old.pixels[at], old.pixels[at + edge]) || !near(new.pixels[at], new.pixels[at + edge])
+                else { continue }
+                detail += 1
+                if !close(old.pixels[at], new.pixels[at]) { differ += 1 }
             }
-            return true
+            return detail < 4 ? .flat : differ * 10 > detail ? .moving : .still
         }
         let reach = old.height * 2 / 5
-        let rows = (0..<reach).map { y in still({ y * old.width + $0 }, old.width) }
+        let rows = (0..<reach).map { y in line({ y * old.width + $0 }, old.width - 2) }
         var columns = 0
-        while columns <= old.width * 2 / 5, still({ $0 * old.width + columns }, old.height) { columns += 1 }
+        while columns <= old.width * 2 / 5, line({ $0 * old.width + columns }, old.height - 2) != .moving { columns += 1 }
         // A view whose whole top or left reach is unchanged is mostly unchanged, not under a fixed bar.
-        return Fixed(rows: rows.allSatisfy { $0 } ? [] : rows, columns: columns > old.width * 2 / 5 ? 0 : columns)
+        let detailed = rows.filter { $0 != .flat }
+        let unchanged = !detailed.isEmpty && detailed.allSatisfy { $0 == .still }
+        return Fixed(rows: unchanged ? [] : rows.map { $0 != .moving },
+                     columns: columns > old.width * 2 / 5 ? 0 : columns)
     }
 
     private static func score(_ offset: Offset, from old: Raster, to new: Raster, fixed: Fixed = .none,
