@@ -44,7 +44,10 @@ enum CaptureFrame {
             throw Failure.displayUnavailable
         }
         let excluded = content.windows.filter {
-            windows.contains($0.windowID) || (excludingOwnWindows && $0.owningApplication?.processID == getpid())
+            if windows.contains($0.windowID) { return true }
+            guard excludingOwnWindows, let owner = $0.owningApplication else { return false }
+            // A first-time Screen Recording prompt can float without owning foreground focus.
+            return owner.processID == getpid() || owner.bundleIdentifier == "com.apple.UserNotificationCenter"
         }
         return (SCContentFilter(display: display, excludingWindows: excluded), configuration(size: size, pointer: pointer))
     }

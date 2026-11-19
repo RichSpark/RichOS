@@ -79,12 +79,31 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate {
         window.center()
         if #available(macOS 14, *) { NSApp.activate() }
         else { NSApp.activate(ignoringOtherApps: true) }
-        window.makeKeyAndOrderFront(nil)
-        window.makeFirstResponder(canvas)
+        if NSApp.isActive {
+            focus()
+        } else {
+            // The scrolling result floats over an active source app. Ask Launch Services
+            // to bring the existing RichGlance instance forward before assigning key focus.
+            window.orderFrontRegardless()
+            let configuration = NSWorkspace.OpenConfiguration()
+            configuration.activates = true
+            configuration.addsToRecentItems = false
+            NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL, configuration: configuration) { [weak self] _, _ in
+                Task { @MainActor in
+                    guard let self, self.window.isVisible else { return }
+                    self.focus()
+                }
+            }
+        }
         window.contentView?.layoutSubtreeIfNeeded()
         layoutCanvas()
         refresh()
         record(.complete, from: began)
+    }
+
+    func focus() {
+        window.makeKeyAndOrderFront(nil)
+        window.makeFirstResponder(canvas)
     }
 
     private func build() {

@@ -393,7 +393,7 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private func showEditor(_ document: ScreenshotDocument, origin: NSRunningApplication?, previousWindow: NSWindow?) {
         captureLaunch = false
-        if let editor = editors[document.id] { editor.window.makeKeyAndOrderFront(nil); return }
+        if let editor = editors[document.id] { editor.focus(); return }
         let editor = ScreenshotEditor(document: document)
         editors[document.id] = editor
         editor.retainEdits = { [weak self] document in

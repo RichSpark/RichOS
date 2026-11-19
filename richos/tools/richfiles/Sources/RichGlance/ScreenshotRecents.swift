@@ -11,7 +11,7 @@ final class ScreenshotRecents: NSObject, NSWindowDelegate {
     private let toggle = NSSwitch()
     private let clear = NSButton(title: "Clear All…", target: nil, action: nil)
     private let scroll = NSScrollView()
-    private let cards = NSStackView()
+    private let cards = RecentStrip()
     private var entries: [ScreenshotStore.Entry] = []
     private var selected = 0
 
@@ -29,7 +29,6 @@ final class ScreenshotRecents: NSObject, NSWindowDelegate {
         let root = NSStackView()
         root.orientation = .vertical
         root.alignment = .width
-        root.edgeInsets = NSEdgeInsets(top: 18, left: 18, bottom: 18, right: 18)
         root.spacing = 15
         title.font = .systemFont(ofSize: 16)
         title.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
@@ -59,7 +58,16 @@ final class ScreenshotRecents: NSObject, NSWindowDelegate {
         empty.alignment = .center
         empty.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         root.addArrangedSubview(empty)
-        window.contentView = root
+        let content = NSView()
+        content.addSubview(root)
+        root.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            root.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 18),
+            root.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -18),
+            root.topAnchor.constraint(equalTo: content.topAnchor, constant: 18),
+            root.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -18),
+        ])
+        window.contentView = content
     }
 
     func show() {
@@ -237,6 +245,10 @@ private final class RecentPanel: NSPanel {
         if event.type == .keyDown, attachedSheet == nil, handle?(event) == true { return }
         super.sendEvent(event)
     }
+}
+
+private final class RecentStrip: NSStackView {
+    override var isFlipped: Bool { true }
 }
 
 private final class RecentCard: NSStackView {

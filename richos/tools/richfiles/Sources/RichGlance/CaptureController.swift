@@ -623,8 +623,7 @@ final class CaptureController: NSObject, NSWindowDelegate {
         case .editor:
             retain(document)
             record(.glanceCaptureOutput, .complete, since: started)
-            openEditor(document)
-            stop(.complete, restoreFocus: false)
+            stop(.complete, restoreFocus: false, editorDocument: document)
         case .copy:
             guard let data = ScreenshotRenderer.png(document.original), ScreenshotRenderer.copy(data) else {
                 if scrolling == nil { prepareOverlay() }
@@ -843,7 +842,8 @@ final class CaptureController: NSObject, NSWindowDelegate {
 
     private func stop(_ outcome: RichFilesDiagnostics.Outcome,
                       operation: RichFilesDiagnostics.Operation = .glanceCaptureSession,
-                      restoreFocus: Bool = true, copied: String? = nil, retained: UUID? = nil) {
+                      restoreFocus: Bool = true, copied: String? = nil, retained: UUID? = nil,
+                      editorDocument: ScreenshotDocument? = nil) {
         guard !isFinished else { return }
         isFinished = true
         let performedCapture = scrolling?.reviewWindow?.isVisible == true || countdown != nil
@@ -864,6 +864,7 @@ final class CaptureController: NSObject, NSWindowDelegate {
         clearSurfaces()
         if restoreFocus, NSApp.isActive || performedCapture { restoreOrigin() }
         record(operation, outcome, since: began)
+        if let editorDocument { openEditor(editorDocument) }
         finish(copied, display?.frame, retained)
     }
 
