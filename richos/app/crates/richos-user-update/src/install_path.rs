@@ -529,6 +529,15 @@ pub(super) fn recover_migration(root: &Path, opened: &Path, version: &str) -> io
         {
             Ok(())
         }
+        // Only the copy in ~/Applications is still to be retired (always so for an adopted
+        // copy): finished here when it can be, and otherwise left for quit, because both copies
+        // still open and a refused retirement must not keep the app from launching.
+        Ok(draft) if is_payload(&home_bundle(root), &draft.displaced) => {
+            if let Err(error) = migrate(root, opened, version) {
+                eprintln!("[richos-user-update] the repair waits for the next quit: {error}");
+            }
+            Ok(())
+        }
         Ok(_) => migrate(root, opened, version).map(|_| ()),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error),
@@ -973,6 +982,34 @@ mod tests {
         stage_verified(&home, &archive("3.0.0", |_| {}), "3.0.0").unwrap();
         activate_at_quit(&home, "2.1.0", &system).unwrap().unwrap();
         assert_eq!(bundle_version(&system).unwrap(), "3.0.0");
+    }
+
+    #[test]
+    fn a_refused_retirement_of_the_old_copy_never_keeps_the_app_from_launching() {
+        // Review rv-20261119T192312Z finding 1: when the copy in ~/Applications cannot be
+        // retired, the launch from Applications still starts and the repair waits for quit.
+        let (work, home, system) = fixture();
+        fs::remove_dir_all(&system).unwrap();
+        install_verified(&home, &archive("2.0.0", |_| {}), "2.0.0").unwrap();
+        install_by_hand(&work, &system, "2.1.0");
+        let old_home = home.join("Applications").join(APP);
+        let denied = ExchangeDenied::new(&old_home);
+
+        assert_eq!(
+            activate_at_quit(&home, "2.1.0", &system).unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        let mut lease = StartupLease::acquire(&home).unwrap();
+        lease.remember_installation(&system, "2.1.0").unwrap();
+        drop(lease);
+        assert_eq!(bundle_version(&system).unwrap(), "2.1.0");
+        assert_eq!(bundle_version(&old_home).unwrap(), "2.0.0");
+
+        // Once it can be retired, the next start finishes the repair.
+        drop(denied);
+        let mut lease = StartupLease::acquire(&home).unwrap();
+        lease.remember_installation(&system, "2.1.0").unwrap();
+        assert_eq!(fs::read_link(&old_home).unwrap(), system);
     }
 
     #[test]
