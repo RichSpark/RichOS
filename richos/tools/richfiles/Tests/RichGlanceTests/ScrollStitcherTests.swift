@@ -247,6 +247,59 @@ final class ScrollStitcherTests: XCTestCase {
                       == pixels(crop(view(y), x: 0, y: 212, w: 800, h: 88)), "the bar appears once, at the bottom")
     }
 
+    func testWhiteBottomBarWithBlankMarginsLeavesEveryPagePixelInPlace() throws {
+        // An ordinary white cookie bar: dark labels, blank margins, with or without a faint divider.
+        // Its blank rows look like blank page, so they stayed in the image over the text under them.
+        for width in [800, 1200] {
+            let page = textPage(width: width, height: 2000)
+            for divider in [false, true] {
+                func view(_ y: Int) -> CGImage {
+                    withWhiteBar(withHeader(crop(page, x: 0, y: y, w: 800, h: 500), rows: 64, opacity: 0.8),
+                                 rows: 56, divider: divider)
+                }
+                var sut = ScrollStitcher()
+                XCTAssertEqual(sut.append(view(0)), .initial)
+                var y = 0
+                while y < 1500 {
+                    let step = Int(ScrollStitcher.automaticStep(along: 500, moving: sut.movingShare.map { Double($0.height) }).rounded())
+                    let next = min(1500, y + step)
+                    let update = sut.append(view(next))
+                    XCTAssertEqual(update, .moved(dx: 0, dy: next - y), "width \(width), divider \(divider), step to y=\(next)")
+                    guard update == .moved(dx: 0, dy: next - y) else { break }
+                    y = next
+                }
+                let actual = try XCTUnwrap(sut.image())
+                XCTAssertEqual(actual.height, 2000)
+                guard y == 1500, actual.height == 2000 else { continue }
+                XCTAssertEqual(wrong(actual, page, x: 0, y: 64, w: 800, h: 1880), 0,
+                               "wrong pixels between the header and the bar, width \(width), divider \(divider)")
+                XCTAssertTrue(pixels(crop(actual, x: 0, y: 1944, w: 800, h: 56)) == pixels(crop(view(1500), x: 0, y: 444, w: 800, h: 56)),
+                              "the bar appears once, at the bottom")
+            }
+        }
+    }
+
+    func testSidewaysThenDownwardCaptureLeavesNoStripOfABarInThePage() throws {
+        // A header and a bottom bar whose labels sit between blank margins, scrolled right, down,
+        // left, down and right. The margins stayed in the image as strips across the page.
+        let page = textPage(width: 1000, height: 1000)
+        func view(_ x: Int, _ y: Int) -> CGImage {
+            withBottomBar(withHeader(crop(page, x: x, y: y, w: 600, h: 500), rows: 64), rows: 56)
+        }
+        var sut = ScrollStitcher()
+        XCTAssertEqual(sut.append(view(0, 0)), .initial)
+        var last = (x: 0, y: 0)
+        for next in [(x: 168, y: 0), (x: 168, y: 140), (x: 0, y: 140), (x: 0, y: 280), (x: 168, y: 280)] {
+            XCTAssertEqual(sut.append(view(next.x, next.y)), .moved(dx: next.x - last.x, dy: next.y - last.y), "move to \(next)")
+            last = next
+        }
+        let actual = try XCTUnwrap(sut.image())
+        XCTAssertEqual(actual.width, 768)
+        XCTAssertEqual(actual.height, 780)
+        guard actual.width == 768, actual.height == 780 else { return }
+        XCTAssertEqual(wrong(actual, page, x: 0, y: 64, w: 768, h: 660), 0, "wrong pixels between the header and the bar")
+    }
+
     func testFixedHeaderOverAListOfShortNamesDoesNotStopAutomaticScroll() throws {
         // Short file names on a white page change only a few pixels in each row, yet they scroll.
         let width = 800
@@ -392,6 +445,32 @@ final class ScrollStitcherTests: XCTestCase {
         context.textPosition = CGPoint(x: 20, y: CGFloat(rows) * 0.35)
         CTLineDraw(line, context)
         return context.makeImage()!
+    }
+
+    /// A white bar with dark labels along the bottom rows of a view, with a faint line along its top
+    /// when `divider`.
+    private func withWhiteBar(_ view: CGImage, rows: Int, divider: Bool) -> CGImage {
+        let context = CGContext(data: nil, width: view.width, height: view.height, bitsPerComponent: 8, bytesPerRow: 0,
+                                space: colorSpace, bitmapInfo: bitmap.rawValue)!
+        context.draw(view, in: CGRect(x: 0, y: 0, width: view.width, height: view.height))
+        context.setFillColor(CGColor(gray: 1, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: view.width, height: rows))
+        if divider {
+            context.setFillColor(CGColor(gray: 0.93, alpha: 1))
+            context.fill(CGRect(x: 0, y: rows - 1, width: view.width, height: 1))
+        }
+        let line = CTLineCreateWithAttributedString(NSAttributedString(string: "Cookie settings     Accept", attributes: [
+            NSAttributedString.Key(kCTFontAttributeName as String): CTFontCreateWithName("Helvetica" as CFString, 13, nil),
+            NSAttributedString.Key(kCTForegroundColorAttributeName as String): CGColor(gray: 0.1, alpha: 1)
+        ]))
+        context.textPosition = CGPoint(x: 20, y: 20)
+        CTLineDraw(line, context)
+        return context.makeImage()!
+    }
+
+    /// How many pixels of a part of the stitched image differ from the same part of the page.
+    private func wrong(_ actual: CGImage, _ page: CGImage, x: Int, y: Int, w: Int, h: Int) -> Int {
+        zip(pixels(crop(actual, x: x, y: y, w: w, h: h)), pixels(crop(page, x: x, y: y, w: w, h: h))).filter { $0 != $1 }.count
     }
 
     /// A dark bar with white labels down the right columns of a view, as a tool palette.

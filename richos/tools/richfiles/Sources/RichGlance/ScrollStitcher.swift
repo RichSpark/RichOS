@@ -41,13 +41,15 @@ struct ScrollStitcher {
     private struct Patch {
         let rect: CGRect
         let image: CGImage
-        /// A fixed bar's pixels, drawn only where no frame showed the content under it.
-        var bar = false
+        /// For the pixels of a frame's fixed bands, in how many bands of a side that has shown a bar
+        /// they lie; nil for content. They are drawn only where no frame showed the content under them.
+        var rank: Int?
+        var bar: Bool { rank != nil }
     }
 
     static let pixelLimit = 48_000_000
     static let dimensionLimit = 32_000
-    private static let patchLimit = 2_000
+    private static let patchLimit = 6_000
     private var last: Raster?
     private var position = Offset.zero
     private var patches: [Patch] = []
@@ -55,6 +57,8 @@ struct ScrollStitcher {
     private var settled = false
     /// The fixed bars the last move found.
     private var bars: Fixed?
+    /// The sides (top, bottom, left, right) where a move has shown a bar that stays put.
+    private var barred = [false, false, false, false]
     private(set) var bounds = CGRect.null
 
     /// The share of the view's width and height that moves with the content between the fixed bars
@@ -83,14 +87,19 @@ struct ScrollStitcher {
             guard let match = Self.registration(from: last, to: next) else { return .unmatched }
             let offset = match.offset
             guard offset != .zero else { return .unchanged }
+            let fixed = Self.widened(match.fixed, from: last, to: next, moved: offset)
+            for (side, band) in [match.fixed.top, match.fixed.bottom, match.fixed.left, match.fixed.right].enumerated() where band > 0 {
+                barred[side] = true
+            }
             if !settled {
                 patches = []
                 bounds = .null
-                guard add(last, at: position, fixed: match.fixed) else { return .limit }
+                guard add(last, at: position, fixed: fixed) else { return .limit }
                 settled = true
             }
             let nextPosition = Offset(x: position.x + offset.x, y: position.y + offset.y)
-            guard add(next, at: nextPosition, fixed: match.fixed) else { return .limit }
+            guard add(next, at: nextPosition, fixed: fixed) else { return .limit }
+            // Steps are sized by the bars themselves, not by the blank page widened into them.
             bars = match.fixed
             return .moved(dx: offset.x, dy: offset.y)
         }
@@ -119,39 +128,48 @@ struct ScrollStitcher {
     /// only where nothing else is: content always replaces a bar. A bar on a side where this frame
     /// reaches past everything captured so far replaces the bars of earlier frames, so a bottom bar
     /// ends up once, below the last content; any other bar stays behind them, so a header stays once
-    /// above the first content, and scrolling back and forth near an end leaves its bar whole.
+    /// above the first content, and scrolling back and forth near an end leaves its bar whole. Where
+    /// bands cross or lie beside each other, the pixels in fewer bands of a side with a bar replace
+    /// those in more: a blank page margin replaces the end of an earlier bottom bar, never the reverse.
     private mutating func add(_ raster: Raster, at offset: Offset, fixed: Fixed = .none) -> Bool {
         let tile = CGRect(x: offset.x, y: offset.y, width: raster.width, height: raster.height)
         let grown = bounds.union(tile)
         guard Self.fits(grown) else { return false }
-        let (top, bottom) = (CGFloat(fixed.top), CGFloat(fixed.bottom))
-        let (left, right) = (CGFloat(fixed.left), CGFloat(fixed.right))
-        let content = CGRect(x: tile.minX + left, y: tile.minY + top,
-                             width: tile.width - left - right, height: tile.height - top - bottom)
-        let bars = [
-            (CGRect(x: tile.minX, y: tile.minY, width: tile.width, height: top), !bounds.isNull && tile.minY < bounds.minY),
-            (CGRect(x: tile.minX, y: content.maxY, width: tile.width, height: bottom), !bounds.isNull && tile.maxY > bounds.maxY),
-            (CGRect(x: tile.minX, y: content.minY, width: left, height: content.height), !bounds.isNull && tile.minX < bounds.minX),
-            (CGRect(x: content.maxX, y: content.minY, width: right, height: content.height), !bounds.isNull && tile.maxX > bounds.maxX)
-        ].filter { !$0.0.isEmpty }
-        let solid = patches.filter { !$0.bar }.map(\.rect)
-        var fresh = Self.subtract(solid, from: [content]).map { ($0, false) }
-        guard var kept = Self.trim(patches, by: content) else { return false }
-        for (rect, leading) in bars {
-            var area = Self.subtract(solid, from: [rect])
-            if leading {
-                guard let trimmed = Self.trim(kept, by: rect) else { return false }
-                kept = trimmed
-            } else {
-                area = Self.subtract(kept.filter(\.bar).map(\.rect), from: area)
+        let xs = [tile.minX, tile.minX + CGFloat(fixed.left), tile.maxX - CGFloat(fixed.right), tile.maxX]
+        let ys = [tile.minY, tile.minY + CGFloat(fixed.top), tile.maxY - CGFloat(fixed.bottom), tile.maxY]
+        let leads = [tile.minY < bounds.minY, tile.maxY > bounds.maxY, tile.minX < bounds.minX, tile.maxX > bounds.maxX]
+            .map { !bounds.isNull && $0 }
+        let content = CGRect(x: xs[1], y: ys[1], width: xs[2] - xs[1], height: ys[2] - ys[1])
+        // The bands as up to eight pieces around the content; pieces of a row that rank alike are one.
+        var bars: [(rect: CGRect, rank: Int, leading: Bool)] = []
+        for row in 0..<3 {
+            var pieces: [(rect: CGRect, rank: Int, leading: Bool)] = []
+            for column in 0..<3 where row != 1 || column != 1 {
+                let rect = CGRect(x: xs[column], y: ys[row], width: xs[column + 1] - xs[column], height: ys[row + 1] - ys[row])
+                guard !rect.isEmpty else { continue }
+                let sides = (row == 1 ? [] : [row / 2]) + (column == 1 ? [] : [2 + column / 2])
+                let piece = (rect, sides.filter { barred[$0] }.count, leads[row == 1 ? 2 + column / 2 : row / 2])
+                if let before = pieces.last, before.rank == piece.1, before.leading == piece.2, before.rect.maxX == rect.minX {
+                    pieces[pieces.count - 1].rect = before.rect.union(rect)
+                } else {
+                    pieces.append(piece)
+                }
             }
-            fresh += area.map { ($0, true) }
+            bars += pieces
+        }
+        let solid = patches.filter { !$0.bar }.map(\.rect)
+        var fresh: [(CGRect, Int?)] = Self.subtract(solid, from: [content]).map { ($0, nil) }
+        guard var kept = Self.trim(patches, by: content) else { return false }
+        for bar in bars {
+            guard let under = Self.trim(kept, by: bar.rect, above: bar.leading ? -1 : bar.rank) else { return false }
+            kept = under
+            fresh += Self.subtract(kept.filter(\.bar).map(\.rect), from: Self.subtract(solid, from: [bar.rect])).map { ($0, bar.rank) }
         }
         guard kept.count + fresh.count <= Self.patchLimit else { return false }
         var added: [Patch] = []
-        for (rect, bar) in fresh {
+        for (rect, rank) in fresh {
             guard let image = raster.image(in: rect.offsetBy(dx: -tile.minX, dy: -tile.minY)) else { return false }
-            added.append(Patch(rect: rect, image: image, bar: bar))
+            added.append(Patch(rect: rect, image: image, rank: rank))
         }
         patches = kept + added
         bounds = grown
@@ -160,15 +178,15 @@ struct ScrollStitcher {
         return true
     }
 
-    /// Earlier bars cut back so that `rect` is free of them.
-    private static func trim(_ patches: [Patch], by rect: CGRect) -> [Patch]? {
+    /// Earlier bars that rank above `rank` cut back so that `rect` is free of them.
+    private static func trim(_ patches: [Patch], by rect: CGRect, above rank: Int = -1) -> [Patch]? {
         var result: [Patch] = []
         for patch in patches {
-            guard patch.bar, patch.rect.intersects(rect) else { result.append(patch); continue }
+            guard let own = patch.rank, own > rank, patch.rect.intersects(rect) else { result.append(patch); continue }
             for piece in subtract(rect, from: patch.rect) {
                 let local = piece.offsetBy(dx: -patch.rect.minX, dy: -patch.rect.minY)
                 guard let image = patch.image.cropping(to: local) else { return nil }
-                result.append(Patch(rect: piece, image: image, bar: true))
+                result.append(Patch(rect: piece, image: image, rank: own))
             }
         }
         return result
@@ -334,6 +352,58 @@ struct ScrollStitcher {
         return best
     }
 
+    /// The bands of `fixed`, each widened over the lines beside it that do not show moving content:
+    /// up to the first line that changed where it is and lines up with the line the move `moved`
+    /// took it to or brought it from, on the side away from the edge. The blank margin of a
+    /// bar, a faint divider and blank page beside them cannot be told apart, so all of them are kept
+    /// as bar, which any frame that shows content there replaces; kept as content, a bar's margin
+    /// would stay over the page for good. The registration itself uses the narrow bands.
+    private static func widened(_ fixed: Fixed, from old: Raster, to new: Raster, moved: Offset) -> Fixed {
+        var wide = fixed
+        (wide.width, wide.height) = (old.width, old.height)
+        func grow(_ start: Int, _ end: Int, _ length: Int, _ shift: Int, column: Bool) -> (Int, Int) {
+            let across = wide
+            let reach = length / 2
+            var (start, end) = (start, end)
+            func moving(_ line: Int, _ partner: Int) -> Bool {
+                moves(old, new, moved, line: line, partner: partner, column: column, outside: across)
+            }
+            while start < reach, !moving(start, start + abs(shift)) { start += 1 }
+            while end < reach, !moving(length - 1 - end, length - 1 - end - abs(shift)) { end += 1 }
+            return (start, end)
+        }
+        (wide.top, wide.bottom) = grow(wide.top, wide.bottom, old.height, moved.y, column: false)
+        (wide.left, wide.right) = grow(wide.left, wide.right, old.width, moved.x, column: true)
+        return wide
+    }
+
+    /// Whether view line `line` shows moving content: at least eight of its pixels clearly changed in
+    /// place between the two frames, and three quarters of those match the line `partner` in the
+    /// other frame, where the move took them. Pixels in a band of `outside` are left out.
+    private static func moves(_ old: Raster, _ new: Raster, _ moved: Offset, line: Int, partner: Int, column: Bool,
+                              outside fixed: Fixed) -> Bool {
+        let shift = column ? moved.x : moved.y
+        guard partner >= 0, partner < (column ? old.width : old.height) else { return false }
+        // Old line i lines up with new line i - shift.
+        let first = line - shift == partner ? line : partner
+        let length = column ? old.height : old.width
+        let slide = column ? moved.y : moved.x
+        var samples = 0
+        var matches = 0
+        for along in max(0, slide)..<min(length, length + slide) {
+            let (x, y) = column ? (first, along) : (along, first)
+            let (nx, ny) = (x - moved.x, y - moved.y)
+            guard !fixed.covers(x, y), !fixed.covers(nx, ny) else { continue }
+            // The pixels themselves, without the neighbors the other comparisons use: a neighbor two
+            // lines on can be moving page while the line is the last one of a bar.
+            let place = first == line ? y * old.width + x : ny * old.width + nx
+            guard distance(old.pixels[place], new.pixels[place]) > 32 else { continue }
+            samples += 1
+            if near(old.pixels[y * old.width + x], new.pixels[ny * old.width + nx]) { matches += 1 }
+        }
+        return samples >= 8 && matches * 4 >= samples * 3
+    }
+
     /// Whether old line `line` and the new line where its content moved do not line up: fewer than
     /// half of their clearly detailed pixels match, leaving out pixels in a band of `outside`. A pair
     /// without detail is not evidence either way.
@@ -346,6 +416,8 @@ struct ScrollStitcher {
         for along in stride(from: max(0, shift), to: min(length, length + shift), by: max(1, length / 160)) {
             let (x, y) = column ? (line, along) : (along, line)
             let (nx, ny) = (x - moved.x, y - moved.y)
+            // Within two pixels of the far edges a pixel's neighbor lies the other way, and never matches.
+            guard max(x, nx) + 2 < old.width, max(y, ny) + 2 < old.height else { continue }
             guard !fixed.covers(x, y), !fixed.covers(nx, ny), clear(old, x, y) || clear(new, nx, ny) else { continue }
             samples += 1
             if same(old, x, y, new, nx, ny) { matches += 1 }
