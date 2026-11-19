@@ -300,7 +300,8 @@ final class ScrollingCapture: NSObject, NSWindowDelegate {
             }
             let image = await assembler.finish()
             guard !Task.isCancelled else { return }
-            let detail = message ?? (hasUnmatchedEnd ? "The last view could not be stitched. Review the area captured so far." : nil)
+            // No image after frames were stitched means the stitcher found its own image at odds with them.
+            let detail = message ?? (hasUnmatchedEnd || image == nil ? "The last view could not be stitched. Review the area captured so far." : nil)
             report(image == nil || detail != nil ? .issues : .complete)
             showResult(image, message: detail)
         }
