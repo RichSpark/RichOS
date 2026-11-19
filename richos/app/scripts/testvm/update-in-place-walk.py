@@ -35,6 +35,34 @@ null speaker, so nothing is heard:
   dock       the app quit from its menu; the kept Dock item clicked; it opens the new version
              from /Applications
 
+--scenario picks the case (default restart, the steps above):
+
+  reinstall  (review rv-20261119T144657Z finding 1) a copy the old updater left in
+             ~/Applications, and the same version then installed into /Applications by hand.
+    legacy     --stage-tool (the updater crate's `guest-stage` example, built for the guest)
+               puts --bundle-archive (the build under test as an update archive, version
+               --bundle-version) in place at ~/Applications with its publication receipt,
+               through the updater's own staging and publication, as an older RichOS did
+    install    the same build then installed at /Applications and opened, as above
+    ready      as above
+    download   as above, and the update is put in place at /Applications, not left pending:
+               ~/Applications/RichOS.app is now a link to /Applications/RichOS.app and nothing
+               is prepared any more
+    dock       as above
+
+  try-again  (finding 2) an update whose swap into /Applications is refused, permission then
+             restored and Try again pressed in the Updates row.
+    install, ready  as above (the update is offered, nothing downloaded yet)
+    stage      the app quit; the app's own download path (RICHOS_UPDATE_SELFTEST=install) stages
+               the update; the staged copy is made immutable, so the swap is refused with the
+               same EPERM macOS returns when permission is denied
+    denied     the app opened again: its launch-time swap is refused and the Updates row says
+               "RichOS could not prepare this update." with the permission sentence as its reason
+    retry      the immutable flag cleared (permission restored), Try again pressed: the row no
+               longer shows the permission sentence and the update reads as ready
+    publish    the app quit from its menu: the update is put in place at /Applications as it
+               closes and the saved denial is gone
+
 Everything this walk starts is stopped by its recorded pid before it returns (CEO §54).
 Exit 0 when every step passes.
 """
@@ -56,8 +84,14 @@ SYSTEM = '/Applications/RichOS.app'
 EXE = SYSTEM + '/Contents/MacOS/richos-tauri'
 GESTURES = SYSTEM + '/Contents/Applications/RichFiles.app/Contents/Library/LoginItems/RichFiles Window Gestures.app'
 PORT = 8765
-STEPS = ['serve', 'install', 'gestures', 'ready', 'download', 'dock']
+STEPS = {
+    'restart': ['serve', 'install', 'gestures', 'ready', 'download', 'dock'],
+    'reinstall': ['serve', 'legacy', 'install', 'ready', 'download', 'dock'],
+    'try-again': ['serve', 'install', 'ready', 'stage', 'denied', 'retry', 'publish'],
+}
 CUE_ROLE = 'AXPopUpButton'  # the update cue is a <button aria-haspopup="true"> (update-relaunch-walk.py)
+PERMISSION = 'needs permission to replace the existing app in Applications'
+NOT_PREPARED = 'could not prepare this update'
 
 
 class StepFailed(Exception):
@@ -81,8 +115,11 @@ class Walk:
             raise ValueError('not a guest payload: ' + self.payload)
         self.work = self.payload + '/update-in-place'
         self.home = guest(self.vm, 'cd ~ && pwd -P')
+        self.user_app = self.home + '/Applications/RichOS.app'
+        self.journal = self.home + '/Applications/.richos-updater'
         self.owned = {}  # name -> pid, everything this walk started in the guest
         self.facts = {}
+        self.immutable = None  # the staged copy this walk made immutable, cleared at cleanup
 
     # --- the guest ---------------------------------------------------------------------------
     def g(self, command, timeout=60):
@@ -209,8 +246,29 @@ class Walk:
                   'the update server', 20)
         return {'server_pid': int(pid), 'endpoint': 'http://127.0.0.1:%d/latest.json' % PORT}
 
+    def receipt(self, name):
+        """One of the updater's own journal documents, read only; None when absent."""
+        raw = self.g('cat ' + q(self.journal + '/' + name) + ' 2>/dev/null || true')
+        return json.loads(raw) if raw else None
+
+    def legacy(self):
+        if self.g('test -e %s -o -e %s && echo yes || true' % (q(SYSTEM), q(self.user_app))):
+            raise StepFailed('fresh guest required: a RichOS copy already exists')
+        self.g('mkdir -p ' + q(self.work))
+        tool, archive = self.work + '/guest-stage', self.work + '/bundle.tar.gz'
+        self.push(self.a.stage_tool, tool)
+        self.push(self.a.bundle_archive, archive)
+        out = self.g('chmod 755 %s && %s %s %s %s 2>&1' % (q(tool), q(tool), q(self.home), q(self.a.bundle_version),
+                                                          q(archive)), 300)
+        published = self.receipt('published.json') or {}
+        if self.version(self.user_app) != self.a.bundle_version or published.get('version') != self.a.bundle_version:
+            raise StepFailed('no published copy at ~/Applications: ' + out)
+        return {'tool': out, 'user_copy': self.version(self.user_app), 'receipt': published.get('version')}
+
     def install(self):
-        if self.g('test -e %s -o -e %s && echo yes || true' % (q(SYSTEM), q(self.home + '/Applications/RichOS.app'))):
+        legacy = self.a.scenario == 'reinstall'
+        if self.g('test -e %s && echo yes || true' % q(SYSTEM)) or (
+                not legacy and self.g('test -e %s && echo yes || true' % q(self.user_app))):
             raise StepFailed('fresh guest required: a RichOS copy already exists')
         self.push(self.a.bundle, self.work + '/bundle.zip')
         self.g('ditto -x -k ' + q(self.work + '/bundle.zip') + ' /Applications', 180)
@@ -268,18 +326,22 @@ class Walk:
         self.press('Add this company')
         self.facts['first_run'] = True
 
+    def clear_sheets(self):
+        """Answer whichever first-run sheet covers the window, one at a time."""
+        if self.present('Add this company', 'AXButton') and not self.facts.get('first_run'):
+            self.first_run()
+        elif self.present('Not now', 'AXButton'):
+            self.press('Not now')
+        elif self.present('setting up to do first', 'AXGroup'):
+            # A build without an engine pin offers only Close on the setup sheet, and its
+            # button has no accessible name; Escape presses whichever button the sheet shows.
+            subprocess.run([str(HERE / 'ax.sh'), self.vm, '--key', '53'], capture_output=True, timeout=60)
+
     def ready(self):
         def offered():
             if self.present('is available', CUE_ROLE):
                 return True
-            if self.present('Add this company', 'AXButton') and not self.facts.get('first_run'):
-                self.first_run()
-            elif self.present('Not now', 'AXButton'):
-                self.press('Not now')
-            elif self.present('setting up to do first', 'AXGroup'):
-                # A build without an engine pin offers only Close on the setup sheet, and its
-                # button has no accessible name; Escape presses whichever button the sheet shows.
-                subprocess.run([str(HERE / 'ax.sh'), self.vm, '--key', '53'], capture_output=True, timeout=60)
+            self.clear_sheets()
             return False
         try:
             self.wait(offered, 'the update to be offered', self.a.within)
@@ -311,10 +373,17 @@ class Walk:
         relaunched = round(time.monotonic() - pressed, 1)
         self.wait(lambda: self.version() == self.a.update_version, 'the new version in /Applications', 120)
         self.shot('2-after-restart.png')
-        user_copy = self.g('ls -ld ' + q(self.home + '/Applications/RichOS.app') + ' 2>/dev/null || true')
-        if user_copy:
+        user_copy = self.g('ls -ld ' + q(self.user_app) + ' 2>/dev/null || true')
+        if self.a.scenario == 'reinstall':
+            # The copy the old updater left is retired behind a link to the one in Applications.
+            link = self.g('readlink ' + q(self.user_app) + ' 2>/dev/null || true')
+            if link != SYSTEM:
+                raise StepFailed('~/Applications/RichOS.app is not a link to %s: %s' % (SYSTEM, user_copy))
+            if self.receipt('prepared.json') is not None:
+                raise StepFailed('the update is still prepared, not put in place')
+        elif user_copy:
             raise StepFailed('a copy appeared at ~/Applications/RichOS.app: ' + user_copy)
-        if self.owned['gestures'] not in self.gesture_pids() and not self.g(
+        if 'gestures' in self.owned and self.owned['gestures'] not in self.gesture_pids() and not self.g(
                 'kill -0 %d 2>/dev/null && echo alive || true' % self.owned['gestures']):
             raise StepFailed('the login item stopped during the update')
         timing = self.g('cat ' + q(self.home + '/Library/Application Support/com.richos.app/update-timing.log')
@@ -322,7 +391,8 @@ class Walk:
         (self.out / 'update-timing.log').write_text(timing + '\n')
         launch = self.g('cat ' + q(self.home + '/Library/Logs/RichOS/launch.log') + ' 2>/dev/null || true')
         return {'new_pid': new, 'restart_s': relaunched, 'version': self.version(),
-                'helpers_seen': sorted(seen),
+                'helpers_seen': sorted(seen), 'user_copy': user_copy,
+                'system_install': self.receipt('system-install.json'),
                 'publication': [l for l in timing.splitlines() if 'phase=publication' in l][-3:],
                 'relaunched_launch_line': next((l for l in reversed(launch.splitlines()) if 'pid %d ' % new in l), '')}
 
@@ -345,9 +415,117 @@ class Walk:
             raise StepFailed('the Dock launch was handed over: ' + line)
         return {'pid': pid, 'executable': exe, 'launch_line': line, 'guid': pin.get('GUID')}
 
+    # --- try-again ----------------------------------------------------------------------------
+    def says(self, text):
+        """Whether any element on the window shows `text`, as its value or its name."""
+        for key in ('--value', '--title'):
+            try:
+                if self.ax('find', key, text, '--contains', '--first'):
+                    return True
+            except StepFailed:
+                pass
+        return False
+
+    def log_text(self):
+        return self.g('cat ' + q(self.log) + ' 2>/dev/null || true')
+
+    def open_app(self, log):
+        """Open /Applications/RichOS.app as the Dock does, keeping its output in `log`."""
+        self.log = log
+        before = set(self.app_pids())
+        self.g('open -a ' + q(SYSTEM) + ' --env ' + q('RICHOS_UPDATE_ENDPOINT=http://127.0.0.1:%d/latest.json' % PORT)
+               + ' --stdout ' + q(log) + ' --stderr ' + q(log))
+        pid = self.wait(lambda: next((p for p in self.app_pids() if p not in before), None),
+                        'RichOS to start from /Applications', 90)
+        self.set_app(pid)
+        return pid
+
+    def stage(self):
+        self.quit_app(self.owned['app'])
+        log = self.work + '/selftest.log'
+        before = set(self.app_pids())
+        # The app's own check, download, signature check and staging, ending at "ready" without a
+        # restart (updates.rs spawn_selftest), so nothing is put in place yet.
+        self.g('open -n -a ' + q(SYSTEM) + ' --env RICHOS_UPDATE_SELFTEST=install --env '
+               + q('RICHOS_UPDATE_ENDPOINT=http://127.0.0.1:%d/latest.json' % PORT)
+               + ' --stdout ' + q(log) + ' --stderr ' + q(log))
+        pid = self.wait(lambda: next((p for p in self.app_pids() if p not in before), None),
+                        'the staging run to start', 60)
+        self.owned['selftest'] = pid
+        out = self.wait(lambda: (lambda t: t if 'RICHOS-UPDATE-SELFTEST exit=' in t else '')(
+            self.g('cat ' + q(log) + ' 2>/dev/null || true')), 'the staging run to finish', self.a.within)
+        said = [l for l in out.splitlines() if l.startswith('RICHOS-UPDATE-SELFTEST')]
+        if 'RICHOS-UPDATE-SELFTEST exit=0' not in out:
+            raise StepFailed('the update did not stage: ' + ' | '.join(said))
+        self.wait(lambda: pid not in self.app_pids(), 'the staging run to exit', 60)
+        prepared = self.receipt('prepared.json')
+        if not prepared or prepared.get('version') != self.a.update_version:
+            raise StepFailed('nothing prepared: %r' % prepared)
+        incoming = self.journal + '/' + prepared['archive_sha256'] + '/incoming.app'
+        self.g('chflags uchg ' + q(incoming))
+        self.immutable = incoming
+        flags = self.g('ls -ldO ' + q(incoming))
+        if 'uchg' not in flags:
+            raise StepFailed('the staged copy is not immutable: ' + flags)
+        return {'selftest': said, 'prepared': prepared.get('version'), 'immutable': flags}
+
+    def open_updates_row(self, until, what):
+        """Open Settings (the Updates row lives in its menu) and wait until `until()` holds."""
+        def shown():
+            if until():
+                return True
+            self.clear_sheets()
+            if not (self.present('Try again', 'AXButton') or self.present('Check for updates', 'AXButton')):
+                try:
+                    self.press('Settings', role=CUE_ROLE, contains=False)
+                except StepFailed:
+                    pass
+            return False
+        return self.wait(shown, what, self.a.within)
+
+    def denied(self):
+        self.open_app(self.work + '/app-denied.log')
+        line = self.wait(lambda: next((l for l in self.log_text().splitlines() if 'update remains deferred' in l), ''),
+                         'the launch-time swap to be refused', 90)
+        if PERMISSION not in line:
+            raise StepFailed('the launch-time swap was not refused for permission: ' + line)
+        self.open_updates_row(lambda: self.says(NOT_PREPARED), 'the Updates row to report the refusal')
+        self.press('Show the technical reason')
+        self.wait(lambda: self.says(PERMISSION), 'the permission sentence as the reason', 30)
+        self.shot('4-denied.png')
+        return {'pid': self.owned['app'], 'launch': line.strip(),
+                'denial_record': self.receipt('system-update-denied.json') is not None,
+                'version': self.version()}
+
+    def retry(self):
+        self.g('chflags nouchg ' + q(self.immutable))
+        flags = self.g('ls -ldO ' + q(self.immutable))
+        self.press('Try again')
+        self.wait(lambda: self.present('is ready', CUE_ROLE), 'the update to read as ready', 60)
+        if self.says(PERMISSION) or self.says(NOT_PREPARED):
+            self.shot('5-still-denied.png')
+            raise StepFailed('the Updates row still reports the refusal after Try again')
+        self.shot('5-after-try-again.png')
+        if self.receipt('system-update-denied.json') is not None:
+            raise StepFailed('the saved denial is still there')
+        return {'flags': flags, 'ready': True, 'version': self.version()}
+
+    def publish(self):
+        self.quit_app(self.owned['app'])
+        self.wait(lambda: self.version() == self.a.update_version, 'the update in /Applications after quit', 120)
+        if self.receipt('prepared.json') is not None or self.receipt('system-update-denied.json') is not None:
+            raise StepFailed('the journal still holds the prepared update or the denial')
+        if self.g('ls -ld ' + q(self.user_app) + ' 2>/dev/null || true'):
+            raise StepFailed('a copy appeared at ~/Applications/RichOS.app')
+        timing = self.g('cat ' + q(self.home + '/Library/Application Support/com.richos.app/update-timing.log')
+                        + ' 2>/dev/null || true')
+        return {'version': self.version(), 'publication': [l for l in timing.splitlines() if 'phase=publication' in l][-3:]}
+
     # --- cleanup ----------------------------------------------------------------------------
     def cleanup(self):
         done = {}
+        if self.immutable:
+            self.g('chflags nouchg ' + q(self.immutable) + ' 2>/dev/null || true')
         for log in ('Library/Logs/RichOS/launch.log',
                     'Library/Application Support/com.richos.app/update-timing.log'):
             self.pull(self.home + '/' + log, self.out / Path(log).name)
@@ -377,12 +555,18 @@ def main():
     p.add_argument('--update-version', required=True)
     p.add_argument('--signature', type=Path, required=True, help="the update archive's updater signature file")
     p.add_argument('--within', type=float, default=300, help='seconds for each wait on the app')
+    p.add_argument('--scenario', choices=sorted(STEPS), default='restart')
+    p.add_argument('--stage-tool', type=Path, help="reinstall: the updater crate's guest-stage example")
+    p.add_argument('--bundle-archive', type=Path, help='reinstall: the build under test as an update archive')
+    p.add_argument('--bundle-version', help="reinstall: that archive's version")
     a = p.parse_args()
+    if a.scenario == 'reinstall' and not (a.stage_tool and a.bundle_archive and a.bundle_version):
+        p.error('--scenario reinstall needs --stage-tool, --bundle-archive and --bundle-version')
     walk = Walk(a)
-    report = {'vm': a.vm, 'update_version': a.update_version, 'steps': []}
+    report = {'vm': a.vm, 'scenario': a.scenario, 'update_version': a.update_version, 'steps': []}
     ok = True
     try:
-        for step in STEPS:
+        for step in STEPS[a.scenario]:
             began = time.monotonic()
             row = {'step': step}
             try:
