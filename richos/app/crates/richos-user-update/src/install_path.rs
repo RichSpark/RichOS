@@ -354,16 +354,23 @@ pub(super) fn migrate(root: &Path, opened: &Path, version: &str) -> io::Result<b
     let migration: Migration = match read_document(&saved) {
         Ok(existing) => existing,
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            if !may_migrate(root, opened) || opened != home {
+            if !may_migrate(root, opened) {
                 return Ok(false);
             }
             let Some(publication) = optional_json(&root.join("published.json"))? else {
                 return Ok(false);
             };
-            if publication.version != version || !matches(&home, &publication)? {
+            if !matches(&home, &publication)? {
                 return Ok(false);
             }
-            if !publication.is_newer_than(&bundle_version(&system)?)? {
+            let installed = bundle_version(&system)?;
+            // The same or a newer version put in Applications by hand (the regular installer)
+            // stays where it is, and the copy the updater left in ~/Applications is retired
+            // instead, from whichever of the two the app ran. Otherwise the newer copy in
+            // ~/Applications moves into Applications, from the copy that ran it.
+            let adopt = !publication.is_newer_than(&installed)?;
+            let ran = if adopt && opened == system { &installed } else { &publication.version };
+            if (!adopt && opened != home) || ran != version {
                 return Ok(false);
             }
             require_system_write(root, &system)?;
@@ -385,10 +392,14 @@ pub(super) fn migrate(root: &Path, opened: &Path, version: &str) -> io::Result<b
                 _ => return Err(refuse("invalid update migration alias")),
             }
             sync(&tx)?;
+            // `current` is the copy that ends in Applications, `displaced` the one retired. An
+            // adopted copy is already in place, so the swap below is skipped and only the copy
+            // in ~/Applications gives way to the link.
+            let (current, displaced) = if adopt { (&system, &home) } else { (&home, &system) };
             let migration = Migration {
                 publication,
-                current: Retirement::capture(&tx, &home)?,
-                displaced: Retirement::capture(&tx, &system)?,
+                current: Retirement::capture(&tx, current)?,
+                displaced: Retirement::capture(&tx, displaced)?,
                 transaction,
             };
             write_document(root, MIGRATION, &migration)?;
@@ -441,7 +452,8 @@ pub(super) fn migrate(root: &Path, opened: &Path, version: &str) -> io::Result<b
         root,
         SYSTEM_INSTALL,
         &SystemInstall {
-            first_compatible_version: migration.publication.version,
+            // The version now in Applications: the moved publication, or the adopted copy.
+            first_compatible_version: bundle_version(&system)?,
         },
     )?;
     fs::remove_file(saved)?;
@@ -774,6 +786,46 @@ mod tests {
         activate_at_quit(&home, "1.0.0", &system).unwrap().unwrap();
         assert_eq!(bundle_version(&system).unwrap(), "2.0.0");
         assert!(staged(&home).unwrap().is_none());
+    }
+
+    #[test]
+    fn manual_reinstall_over_two_copies_takes_the_next_update_in_applications() {
+        // Review rv-20261119T144657Z finding 1: a user the old updater left with a copy in
+        // ~/Applications puts the same or a newer version in Applications with the regular
+        // installer. The next update must be put in place in Applications at quit, whichever of
+        // the two copies the app ran from, instead of waiting for good.
+        for by_hand in ["2.0.0", "2.1.0"] {
+            for from_applications in [true, false] {
+                let (work, home, system) = fixture();
+                install_verified(&home, &archive("2.0.0", |_| {}), "2.0.0").unwrap();
+                let old_home = home.join("Applications").join(APP);
+                assert_eq!(bundle_version(&old_home).unwrap(), "2.0.0");
+
+                let installer = work.path().canonicalize().unwrap().join("installer");
+                fs::create_dir(&installer).unwrap();
+                install_verified(&installer, &archive(by_hand, |_| {}), by_hand).unwrap();
+                fs::remove_dir_all(&system).unwrap();
+                fs::rename(installer.join("Applications").join(APP), &system).unwrap();
+
+                stage_verified(&home, &archive("3.0.0", |_| {}), "3.0.0").unwrap();
+                let (opened, running) =
+                    if from_applications { (&system, by_hand) } else { (&old_home, "2.0.0") };
+                assert!(needs_install_migration(&home, opened));
+                let done = activate_at_quit(&home, running, opened)
+                    .unwrap_or_else(|e| panic!("{by_hand} by hand, from_applications={from_applications}: {e}"))
+                    .unwrap();
+                assert_eq!(done.entered.version, "3.0.0");
+                assert_eq!(bundle_version(&system).unwrap(), "3.0.0");
+                assert_eq!(fs::read_link(&old_home).unwrap(), system);
+                assert!(staged(&home).unwrap().is_none());
+                assert!(!needs_install_migration(&home, &system));
+
+                // The next update goes to Applications too, with no repair in front of it.
+                stage_verified(&home, &archive("4.0.0", |_| {}), "4.0.0").unwrap();
+                activate_at_quit(&home, "3.0.0", &system).unwrap().unwrap();
+                assert_eq!(bundle_version(&system).unwrap(), "4.0.0");
+            }
+        }
     }
 
     #[test]
