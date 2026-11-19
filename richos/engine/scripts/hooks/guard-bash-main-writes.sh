@@ -196,11 +196,11 @@ if not prefixes:
 cwd = d.get('cwd') or ROOT
 ROOT = os.path.realpath(ROOT)
 
-def check_targets(tokens, base=None):
+def check_targets(tokens, base):
     for tok in tokens:
         if not tok or tok.startswith('-'):
             continue
-        target = os.path.realpath(os.path.join(base or cwd, os.path.expanduser(tok)))
+        target = os.path.realpath(os.path.join(base, os.path.expanduser(tok)))
         for prefix in prefixes:
             protected = os.path.join(ROOT, prefix.strip('/'))
             if target == protected or target.startswith(protected + os.sep):
@@ -321,27 +321,27 @@ def statements(text):
                     stmt.append(tok)
         yield stmt, redirects, nested
 
-def verb_and_args(stmt):
+def verb_and_args(stmt, base):
     k = 0
     while k < len(stmt):
         t = stmt[k].lstrip(BT)
         if t in KEYWORDS or ASSIGN.match(t):
             k += 1
             continue
-        base = os.path.basename(t)
-        if base in WRAPPERS:
-            valued = WRAPPERS[base]
+        name = os.path.basename(t)
+        if name in WRAPPERS:
+            valued = WRAPPERS[name]
             k += 1
             while k < len(stmt) and (stmt[k].startswith('-') or ASSIGN.match(stmt[k]) or stmt[k - 1] in valued):
                 k += 1
             continue
         break
     if k >= len(stmt):
-        return None, [], cwd
+        return None, [], base
     word = os.path.basename(stmt[k].lstrip(BT))
     rest = stmt[k + 1:]
     if word == 'git':
-        location = cwd
+        location = base
         i = 0
         while i < len(rest) and rest[i].startswith('-'):
             if rest[i] == '-C' and i + 1 < len(rest):
@@ -351,8 +351,8 @@ def verb_and_args(stmt):
             i += 2 if rest[i] in ('-C', '-c', '--git-dir', '--work-tree') else 1
         if i < len(rest) and rest[i] in ('rm', 'mv'):
             return rest[i], rest[i + 1:], location
-        return None, [], cwd
-    return word, rest, cwd
+        return None, [], base
+    return word, rest, base
 
 def heredoc_projection(text):
     # Heredoc bytes are data to the surrounding shell, including in $(...).
@@ -366,7 +366,11 @@ def heredoc_projection(text):
         end = start + len(body)
         if not start or text[start:end] != body:
             continue
-        for i in range(start, end):
+        # Also hide the terminator so a delimiter named like a shell keyword
+        # cannot change the surrounding control flow.
+        marker = re.compile(r'\s*').match(text, end).end()
+        terminator = text.find('\n', marker)
+        for i in range(start, len(text) if terminator < 0 else terminator):
             if chars[i] != '\n':
                 chars[i] = ' '
         cursor = end
@@ -381,37 +385,257 @@ def heredoc_projection(text):
     return ''.join(chars), docs
 
 
-def inspect(text, base, depth=0, docs=None):
-    global cwd
-    if depth > 6:
+def flow_tokens(text):
+    # Only operators outside shell words can change control flow. Keep the
+    # existing word, redirection and substitution classifier for each chunk.
+    start = end = 0
+    quote = ''
+    word = in_test = False
+    while end < len(text):
+        c = text[end]
+        if c == BS and quote != Q1:
+            end += 2
+            word = True
+            continue
+        if quote != Q1 and (text.startswith('$(', end) or
+                            (not quote and text.startswith(('<(', '>('), end))):
+            end = match_paren(text, end)
+            word = True
+            continue
+        if c == BT and quote != Q1:
+            # Backtick substitutions, like $(...), have their own cwd.
+            end += 1
+            while end < len(text) and text[end] != BT:
+                end += 2 if text[end] == BS else 1
+            end += 1
+            word = True
+            continue
+        if quote:
+            if c == quote:
+                quote = ''
+        elif c in (Q1, Q2):
+            quote = c
+            word = True
+        elif c == '#' and not word:
+            comment = text.find('\n', end)
+            if not text[start:end].strip():
+                start = len(text) if comment < 0 else comment
+            end = len(text) if comment < 0 else comment
+            continue
+        elif not word and text.startswith('[[', end) and text[end + 2:end + 3] in (' ', '\t', '\n'):
+            in_test, word = True, True
+            end += 2
+            continue
+        elif in_test and not word and text.startswith(']]', end):
+            in_test, word = False, True
+            end += 2
+            continue
+        elif not in_test and not word and text.startswith('((', end):
+            # _match_paren starts inside an opener. With ((, it sees the second
+            # parenthesis first, leaving one more closing parenthesis to consume.
+            end = match_paren(text, end)
+            end += text.startswith(')', end)
+            word = True
+            continue
+        elif not in_test and c in ';\n&|()' and not (c == '&' and (
+                text[end - 1:end] in ('<', '>') or text.startswith(('&>', '&>>'), end))):
+            if text[start:end].strip():
+                yield text[start:end], False
+            op = c
+            end += 1
+            if c in '&|' and text.startswith(c, end):
+                op += c
+                end += 1
+            yield (';' if c == '\n' else op), True
+            start, word = end, False
+            continue
+        else:
+            word = c not in ' \t\n<>'
+        end += 1
+    if text[start:].strip():
+        yield text[start:], False
+
+
+LITERAL_STATUS = re.compile(r'\s*(?:!\s+)?(true|false|:)(?:[ \t]+#[^\n]*)?\s*')
+CONTROL = re.compile(r'^\s*(if|then|elif|else|fi|\{|\})(?=[ \t\n]|$)')
+
+
+def control_items(text):
+    for chunk, operator in flow_tokens(text):
+        if not operator:
+            while match := CONTROL.match(chunk):
+                yield match[1], True
+                chunk = chunk[match.end():]
+            if not chunk.strip():
+                continue
+        yield chunk, operator
+
+
+def command_flow(text):
+    """Split commands into lists, AND/OR chains, pipelines and conditional branches."""
+    items = list(control_items(text))
+    index = 0
+
+    def take(value):
+        nonlocal index
+        if index < len(items) and items[index] == (value, True):
+            index += 1
+            return True
+        return False
+
+    def require(value):
+        if not take(value):
+            raise ValueError('unclosed shell compound')
+
+    def command(depth):
+        nonlocal index
+        if depth > 64:
+            raise ValueError('shell compounds nested too deeply')
+        if take('if'):
+            branches = []
+            while True:
+                condition = commands(('then',), depth + 1)
+                require('then')
+                body = commands(('elif', 'else', 'fi'), depth + 1)
+                branches.append((condition, body))
+                if not take('elif'):
+                    break
+            alternate = commands(('fi',), depth + 1) if take('else') else []
+            require('fi')
+            return ('if', branches, alternate)
+        for opening, closing in (('(', ')'), ('{', '}')):
+            if take(opening):
+                body = commands((closing,), depth + 1)
+                require(closing)
+                return (opening, body)
+        if index < len(items) and not items[index][1]:
+            chunk = items[index][0]
+            index += 1
+            return ('simple', chunk)
+        raise ValueError('unsupported shell control')
+
+    def commands(stop, depth):
+        result = []
+        while index < len(items):
+            if take(';'):
+                continue
+            if items[index][1] and items[index][0] in stop:
+                break
+            chain, gate = [], ';'
+            while True:
+                pipeline = [command(depth)]
+                while take('|'):
+                    while take(';'):
+                        pass
+                    pipeline.append(command(depth))
+                chain.append((gate, pipeline))
+                gate = '&&' if take('&&') else '||' if take('||') else ';'
+                if gate == ';':
+                    break
+                while take(';'):
+                    pass
+            result.append((chain, take('&')))
+        return result
+
+    return commands((), 0)
+
+
+def inspect(text, bases, depth=0, docs=None):
+    if depth > 6 or not bases:
         return
     if docs is None:
         text, docs = heredoc_projection(text)
-    saved, cwd = cwd, base
-    try:
-        for st, redirects, nested in statements(text):
-            for body in nested:
-                inspect(body, cwd, depth + 1, docs)
-            verb, args, location = verb_and_args(st)
-            bodies = docs.get(tuple(st), [])
-            if bodies:
-                body = bodies.pop(0)
-                if verb in ('bash', 'sh', 'zsh', 'dash', 'ksh'):
-                    inspect(body, cwd, depth + 1)
-            hit = check_targets(redirects)
+
+    def simple(st, redirects, nested, incoming, literal=None):
+        for body in nested:
+            inspect(body, incoming, depth + 1, docs)
+        bodies = docs.get(tuple(st), [])
+        body = bodies.pop(0) if bodies else None
+        good, bad = set(), set()
+        for base in incoming:
+            verb, args, location = verb_and_args(st, base)
+            if body is not None and verb in ('bash', 'sh', 'zsh', 'dash', 'ksh'):
+                inspect(body, {base}, depth + 1)
+            hit = check_targets(redirects, base)
             if not hit and verb in ('mkdir', 'cp', 'mv', 'rm', 'tee', 'touch', 'rsync'):
                 hit = check_targets(write_targets(verb, args), location)
             if hit:
                 print('BLOCK ' + hit); raise SystemExit
-            if verb == 'cd' and args:
-                dest = [t for t in args if t not in ('--', '-P', '-L')]
-                if dest:
-                    cwd = os.path.realpath(os.path.join(cwd, os.path.expanduser(dest[0])))
-    finally:
-        cwd = saved
+            if verb == 'cd':
+                dest = [arg for arg in args if arg not in ('--', '-P', '-L')]
+                target = dest[0] if dest else os.path.expanduser('~')
+                good.add(os.path.realpath(os.path.join(base, os.path.expanduser(target))))
+            elif literal != 'false':
+                good.add(base)
+            if literal not in ('true', ':'):
+                bad.add(base)
+        if st and st[0] == '!':
+            return bad, good
+        return good, bad
+
+    def run_command(node, incoming):
+        if not incoming:
+            return set(), set()
+        if len(incoming) > 64:
+            raise ValueError('too many possible shell directories')
+        kind, *parts = node
+        if kind == 'if':
+            branches, alternate = parts
+            good, bad = set(), set()
+            remaining = incoming
+            for condition, body in branches:
+                entered, remaining = run_list(condition, remaining)
+                yes, no = run_list(body, entered)
+                good.update(yes)
+                bad.update(no)
+            yes, no = run_list(alternate, remaining)
+            return good | yes, bad | no
+        if kind in ('(', '{'):
+            yes, no = run_list(parts[0], incoming)
+            if kind == '(':
+                return (incoming if yes else set()), (incoming if no else set())
+            return yes, no
+        text = parts[0]
+        constant = LITERAL_STATUS.fullmatch(text)
+        good, bad = incoming, set()
+        for st, redirects, nested in statements(text):
+            good, bad = simple(st, redirects, nested, good | bad, constant[1] if constant else None)
+        return good, bad
+
+    def run_list(commands, incoming):
+        good, bad = incoming, set()
+        for chain, background in commands:
+            initial = good | bad
+            for gate, pipeline in chain:
+                passed = good if gate == '&&' else bad if gate == '||' else initial
+                if len(pipeline) == 1:
+                    yes, no = run_command(pipeline[0], passed)
+                else:
+                    for node in pipeline:
+                        run_command(node, passed)
+                    yes = no = passed
+                good = yes | (good if gate == '||' else set())
+                bad = no | (bad if gate == '&&' else set())
+            if background:
+                good, bad = initial, set()
+        return good, bad
+
+    try:
+        commands = command_flow(text)
+    except ValueError:
+        # Other compound syntax (for example case patterns) still gets target
+        # checking. Keep both cwd outcomes when its control flow is unknown.
+        for st, redirects, nested in statements(text):
+            good, bad = simple(st, redirects, nested, bases)
+            bases = good | bad | bases
+            if len(bases) > 64:
+                raise ValueError('too many possible shell directories')
+    else:
+        run_list(commands, bases)
+
 
 try:
-    inspect(cmd, cwd)
+    inspect(cmd, {cwd})
 except ValueError:
     print('BLOCK unreadable-shell-syntax'); raise SystemExit
 

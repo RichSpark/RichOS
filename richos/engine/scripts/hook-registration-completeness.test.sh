@@ -42,7 +42,7 @@ command -v git >/dev/null 2>&1 || { echo "git is required"; exit 2; }
 [ -f "$CHECKER" ] || { bad "the predicate is missing at $CHECKER"; exit 1; }
 [ -f "$GUARD" ]   || { bad "the guard is missing at $GUARD"; exit 1; }
 
-SANDBOX="$(mktemp -d -t hookreg.XXXXXX)"
+SANDBOX="$(mktemp -d "${TMPDIR:?}/hookreg.XXXXXX")"
 trap 'rm -rf "$SANDBOX"' EXIT
 
 # --- THE FIXTURE -----------------------------------------------------------
@@ -528,6 +528,33 @@ if [ "$RC" = "0" ]; then
 else
     bad "H4  a quoted word was classified as a git verb, rc=$RC" "$OUT"
 fi
+
+# Only a parsed dry-run option exempts the operation. Operands and other
+# Git invocations in the same command must leave a real commit guarded.
+for cmd in "git commit -am '--dry-run'" \
+           "git commit --message '--dry-run'" \
+           "git commit --mes '--dry-run'" \
+           "git commit -F '--dry-run'" \
+           "git commit -m x -- --dry-run" \
+           "git commit --dry-run --no-dry-run -m x" \
+           "git commit --dry-run && git commit -m x"; do
+    OUT="$(grun "$R13" "$cmd")"; RC=$?
+    if [ "$RC" = "2" ] && printf '%s' "$OUT" | grep -q "REFUSING THIS commit"; then
+        ok "H4a  real commit reaches the registration check: $cmd"
+    else
+        bad "H4a  expected a blocking refusal, rc=$RC: $cmd" "$OUT"
+    fi
+done
+
+for cmd in "git commit --dry-run" "git commit -m x --dry-run" \
+           "git commit -m -- --dry-run" "git commit -Sm --dry-run"; do
+    OUT="$(grun "$R13" "$cmd")"; RC=$?
+    if [ "$RC" = "0" ] && [ -z "$OUT" ]; then
+        ok "H4b  Git dry-run passes: $cmd"
+    else
+        bad "H4b  expected a silent pass, rc=$RC: $cmd" "$OUT"
+    fi
+done
 
 # The hatch: a real reason passes and is logged; a bare marker does not.
 OUT="$(grun "$R13" "git commit -m x # hook-inventory-ack: probe held by another agent on cc/x, paid at merge")"; RC=$?

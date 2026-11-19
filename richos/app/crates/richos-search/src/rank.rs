@@ -17,7 +17,7 @@
 //!   by modification time and path."*
 //!
 //! Raw vector scores are never compared with text scores; only ranks are fused.
-use crate::corpus::{Corpus, Document};
+use crate::corpus::{Corpus, Document, Documents};
 use crate::query::ParsedQuery;
 use crate::text::{count_words, has_span, has_word};
 use std::cmp::Ordering;
@@ -49,9 +49,13 @@ fn by_date_then_path(a: &Document, b: &Document) -> Ordering {
 
 /// The text list: one scan over the cached text of every document.
 pub fn lexical(corpus: &Corpus, query: &ParsedQuery, strict: bool) -> Vec<LexicalHit> {
-    let mut out: Vec<_> = corpus.docs.iter().enumerate()
+    lexical_documents(Documents { base: &corpus.docs, media: &[] }, query, strict)
+}
+
+fn lexical_documents(docs: Documents<'_>, query: &ParsedQuery, strict: bool) -> Vec<LexicalHit> {
+    let mut out: Vec<_> = docs.iter().enumerate()
         .filter_map(|(i, doc)| lexical_hit(i, doc, query, strict)).collect();
-    sort_lexical(corpus, &mut out);
+    sort_lexical(docs, &mut out);
     out
 }
 
@@ -65,13 +69,13 @@ fn lexical_hit(i: usize, doc: &Document, query: &ParsedQuery, strict: bool) -> O
     (file_words > 0 || spans > 0).then_some(LexicalHit { doc: i, title_words, spans, file_words })
 }
 
-fn sort_lexical(corpus: &Corpus, hits: &mut [LexicalHit]) {
+fn sort_lexical(docs: Documents<'_>, hits: &mut [LexicalHit]) {
     hits.sort_by(|a, b| {
         b.title_words
             .cmp(&a.title_words)
             .then(b.spans.cmp(&a.spans))
             .then(b.file_words.cmp(&a.file_words))
-            .then_with(|| by_date_then_path(&corpus.docs[a.doc], &corpus.docs[b.doc]))
+            .then_with(|| by_date_then_path(&docs[a.doc], &docs[b.doc]))
     });
 }
 
@@ -86,26 +90,6 @@ struct WordHit {
 /// token or across whitespace, so those queries still use the literal scan.
 pub(crate) struct LexicalIndex {
     words: HashMap<String, Vec<WordHit>>,
-}
-
-/// Markdown remains in its original order when media is inserted or removed.
-pub(crate) struct UpdatedPositions {
-    markdown: Vec<usize>,
-    media: Vec<usize>,
-}
-
-impl UpdatedPositions {
-    pub(crate) fn for_corpus(corpus: &Corpus) -> Self {
-        let mut result = Self { markdown: Vec::new(), media: Vec::new() };
-        for (i, doc) in corpus.docs.iter().enumerate() {
-            if doc.metadata_version.is_some() {
-                result.media.push(i);
-            } else {
-                result.markdown.push(i);
-            }
-        }
-        result
-    }
 }
 
 impl LexicalIndex {
@@ -136,9 +120,9 @@ impl LexicalIndex {
         Some(Self { words })
     }
 
-    pub(crate) fn search(&self, corpus: &Corpus, query: &ParsedQuery, strict: bool, positions: Option<&UpdatedPositions>) -> Vec<LexicalHit> {
+    pub(crate) fn search(&self, docs: Documents<'_>, query: &ParsedQuery, strict: bool) -> Vec<LexicalHit> {
         if !query.spans.is_empty() {
-            return lexical(corpus, query, strict);
+            return lexical_documents(docs, query, strict);
         }
         #[derive(Clone, Default)]
         struct Counts {
@@ -147,8 +131,7 @@ impl LexicalIndex {
             last_title: usize,
             last_file: usize,
         }
-        let mut counts = vec![Counts::default(); corpus.docs.len()];
-        let position = |doc| positions.map_or(doc, |p| p.markdown[doc]);
+        let mut counts = vec![Counts::default(); docs.base.len()];
         for (i, word) in query.words.iter().enumerate() {
             let mark = i + 1;
             let mut add = |doc: usize, title: bool, body: bool| {
@@ -166,7 +149,7 @@ impl LexicalIndex {
                 for key in [word.clone(), format!("{word}s"), format!("{word}es")] {
                     if let Some(hits) = self.words.get(&key) {
                         for h in hits {
-                            add(position(h.doc), h.title, h.body);
+                            add(h.doc, h.title, h.body);
                         }
                     }
                 }
@@ -176,9 +159,8 @@ impl LexicalIndex {
                 let anchor = word.split(|c: char| !c.is_alphanumeric()).next().unwrap_or_default();
                 if let Some(hits) = self.words.get(anchor) {
                     for h in hits {
-                        let doc = position(h.doc);
-                        let d = &corpus.docs[doc];
-                        add(doc, h.title && has_word(&d.folded_title, word), h.body && has_word(&d.folded_text, word));
+                        let d = &docs[h.doc];
+                        add(h.doc, h.title && has_word(&d.folded_title, word), h.body && has_word(&d.folded_text, word));
                     }
                 }
             }
@@ -186,10 +168,9 @@ impl LexicalIndex {
         let mut hits: Vec<_> = counts.into_iter().enumerate().filter_map(|(doc, c)| {
             (c.file_words > 0).then_some(LexicalHit { doc, title_words: c.title_words, spans: 0, file_words: c.file_words })
         }).collect();
-        if let Some(positions) = positions {
-            hits.extend(positions.media.iter().filter_map(|&i| lexical_hit(i, &corpus.docs[i], query, strict)));
-        }
-        sort_lexical(corpus, &mut hits);
+        hits.extend(docs.media.iter().enumerate()
+            .filter_map(|(i, doc)| lexical_hit(docs.base.len() + i, doc, query, strict)));
+        sort_lexical(docs, &mut hits);
         hits
     }
 }
@@ -229,6 +210,10 @@ pub struct SemanticHit {
 /// The final order. `semantic` is `None` when Super Finder is off (or unavailable): the list
 /// is then the text list with the literal boost, and nothing about meaning is consulted.
 pub fn rank(corpus: &Corpus, query: &ParsedQuery, strict: bool, lexical: &[LexicalHit], semantic: Option<&[SemanticHit]>) -> Vec<Ranked> {
+    rank_documents(Documents { base: &corpus.docs, media: &[] }, query, strict, lexical, semantic)
+}
+
+pub(crate) fn rank_documents(docs: Documents<'_>, query: &ParsedQuery, strict: bool, lexical: &[LexicalHit], semantic: Option<&[SemanticHit]>) -> Vec<Ranked> {
     let mut rows: Vec<Ranked> = Vec::new();
     let mut at: HashMap<usize, usize> = HashMap::new();
     for (i, hit) in lexical.iter().enumerate() {
@@ -246,7 +231,7 @@ pub fn rank(corpus: &Corpus, query: &ParsedQuery, strict: bool, lexical: &[Lexic
     if let Some(semantic) = semantic {
         let mut rank = 0usize;
         for hit in semantic {
-            let doc = &corpus.docs[hit.doc];
+            let doc = &docs[hit.doc];
             if !eligible(doc, query, strict) {
                 continue;
             }
@@ -285,7 +270,7 @@ pub fn rank(corpus: &Corpus, query: &ParsedQuery, strict: bool, lexical: &[Lexic
         } else {
             a.lexical_rank.cmp(&b.lexical_rank)
         };
-        first.then(second).then_with(|| by_date_then_path(&corpus.docs[a.doc], &corpus.docs[b.doc]))
+        first.then(second).then_with(|| by_date_then_path(&docs[a.doc], &docs[b.doc]))
     });
     for row in &mut rows {
         row.why = if row.spans > 0 {
@@ -510,7 +495,7 @@ mod tests {
         for text in ["names inv price", "dmitri's", "dmitri’s", "cache api.v2", "inv-2049", "ärger", "price cache", "\"terminal\"", "\"inv 2049\"", "is in"] {
             let q = parse(text);
             for strict in [false, true] {
-                assert_eq!(index.search(&c, &q, strict, None), lexical(&c, &q, strict), "{text}, strict={strict}");
+                assert_eq!(index.search(Documents { base: &c.docs, media: &[] }, &q, strict), lexical(&c, &q, strict), "{text}, strict={strict}");
             }
         }
     }
