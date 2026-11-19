@@ -40,6 +40,9 @@ WHAT IT DOES, in the guest, never on the host's screen (CEO ruling 65):
   still   (not run unless named) a recording of 32 s in a chat in which nothing is pressed, saved
           and read back: how long the file is against how long the recording was
           (home-video-walk.py's `whole`: failed for its length only with --expect-picture).
+  meter   (not run unless named) round 95: in a chat, Microphone On, one frame of the choices in
+          the light theme and one in the dark (meter-light, meter-dark); the colors beside
+          Microphone are read from each frame's pixels and must be the unlit and the lit bar's.
 
 READ BACK is home-video-walk.py's `read_back`: ffprobe's streams and length (AAC, and that sound
 is not silence), everything in the file decoded with no error, the name saying when it was made,
@@ -62,6 +65,7 @@ when every step passes. It quits nothing itself: run-walk.py quits the app by it
 the clone (CEO 54).
 """
 import argparse
+from collections import Counter
 import importlib.util
 import json
 from pathlib import Path
@@ -74,7 +78,9 @@ import time
 sys.dont_write_bytecode = True
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
+sys.path.insert(0, str(HERE.parent / 'qa' / 'lib'))
 from relaunch import guest  # noqa: E402
+import qaimg  # noqa: E402
 
 
 def load(name, file):
@@ -88,7 +94,7 @@ home_video = load('home_video_walk', 'home-video-walk.py')
 standard = home_video.standard
 StepFailed = home_video.StepFailed
 
-STEPS = ['seed', 'button', 'record', 'still']
+STEPS = ['seed', 'button', 'record', 'still', 'meter']
 NAME = r'RichOS-\d{4}-\d\d-\d\d-at-\d\d\.\d\d\.\d\d\.mp4'
 
 
@@ -194,6 +200,55 @@ class Walk(home_video.Walk):
         self.whole(result, 'a chat')
         self.press('--title', 'Done', '--role', 'AXButton')
         time.sleep(1.5)
+        return result
+
+    def set_theme(self, label):
+        """Settings -> Light theme or Dark theme (asked-again-walk.py's way: the options are
+        pressed-or-not buttons, matched by label alone). Settings stays open."""
+        self.open_settings()
+        self.ax('click', '--title', label, '--first')
+        time.sleep(1.5)
+
+    def bar_colors(self, frame):
+        """The colors in the frame's pixels where the bars stand beside Microphone in the choices:
+        right of the row's word, as high as the 18px meter. Counted exactly, every color but the
+        plate's; nothing is assumed about which color a bar is."""
+        panel = self.node('--id', 'video-anywhere-choices')
+        words = [n for n in self.ax('find', '--value', 'Microphone') + self.ax('find', '--title', 'Microphone') if panel and
+                 panel['x'] <= n['x'] <= panel['x'] + panel['w'] and panel['y'] <= n['y'] <= panel['y'] + panel['h']]
+        if not words:
+            raise StepFailed('no Microphone row in the choices to measure the bars beside')
+        w = words[0]
+        img = qaimg.load(str(self.out / frame))
+        x0, x1 = int(w['x'] + w['w']), int(w['x'] + w['w'] + 44)
+        y0, y1 = int(w['y'] + w['h'] / 2 - 14), int(w['y'] + w['h'] / 2 + 14)
+        seen = Counter(qaimg.hexs(img.at(x, y)) for x in range(x0, x1) for y in range(y0, y1))
+        plate = seen.most_common(1)[0][0]
+        return {'box': [x0, y0, x1 - x0, y1 - y0], 'plate': plate,
+                'colors': [[c, n] for c, n in seen.most_common(8) if c != plate]}
+
+    def meter(self):
+        """Round 95 (CEO 2026-11-19, "Implement round-95"): the bars beside Microphone, the
+        microphone on (the made-up tone), one frame in each theme. In light the unlit bars are
+        #a9aeb9 and the lit ones #715715; in dark, unchanged, #6b7ea8 and #c2a35c."""
+        self.to_the_conversation()
+        result = {}
+        for theme, label, unlit, lit in (('light', 'Light theme', '#a9aeb9', '#715715'), ('dark', 'Dark theme', '#6b7ea8', '#c2a35c')):
+            self.set_theme(label)
+            self.choose('On')
+            time.sleep(3)  # the tone has moved the bars
+            frame = self.shot('meter-' + theme)
+            got = self.bar_colors(frame)
+            got['frame'] = frame
+            # beside the word, the plate aside, the most frequent color is the unlit bars' (the tone
+            # lights one to three of the five) and the lit bars' color is there too; the others are
+            # the bars' rounded, blended edges
+            seen = [c.lower() for c, _ in got['colors']]
+            got['unlit_and_lit'] = bool(seen) and seen[0] == unlit and lit in seen
+            result[theme] = got
+            self.escape()
+        if not (result['light']['unlit_and_lit'] and result['dark']['unlit_and_lit']):
+            raise StepFailed('the bars are not the colors of round 95: ' + json.dumps(result))
         return result
 
     def record(self):
