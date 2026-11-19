@@ -45,7 +45,7 @@ bad() { printf '  FAIL  %s\n' "$1"; [ -n "${2:-}" ] && printf '        %s\n' "$2
 command -v python3 >/dev/null 2>&1 || { echo "ERROR: needs python3" >&2; exit 1; }
 command -v git     >/dev/null 2>&1 || { echo "ERROR: needs git" >&2; exit 1; }
 
-SANDBOX="$(cd "$(mktemp -d -t failure-type.XXXXXX)" && pwd -P)"
+SANDBOX="$(cd "$(python3 -c 'import tempfile; print(tempfile.mkdtemp(prefix="failure-type."))')" && pwd -P)"
 trap 'rm -rf "$SANDBOX"' EXIT
 # A test never writes to the operator's registry.
 export RICHOS_WORKSPACES_DIR="$SANDBOX/workspaces"
@@ -753,9 +753,9 @@ done
 
 # FT58 — P5-57: printing the register's name, matching it as a pattern or feeding it
 # as here-string text is not reading it; a real file operand or an interpreter
-# program that opens it still is. Direct on the predicate, both directions.
+# program that reads its contents still is. Direct on the predicate, both directions.
 FT58_OUT="$(python3 - "$LIB" "$REG" "$REL" <<'PYEOF'
-import importlib.util, os, sys
+import importlib.util, os, shlex, subprocess, sys
 spec = importlib.util.spec_from_file_location("ft", sys.argv[1])
 ft = importlib.util.module_from_spec(spec); spec.loader.exec_module(ft)
 reg, rel = sys.argv[2], sys.argv[3]
@@ -782,12 +782,44 @@ reads_it = [
     "python3 -c \"print(open('%s').read())\"" % reg,
     "perl -ne 'print' %s" % reg,
 ]
+# An inline Python program needs an executed content read. A tool result is
+# also required, even when the program visibly performs the read.
+def python(program):
+    return "python3 -c " + shlex.quote(program)
+not_reads.extend(map(python, [
+    f"def later():\n    open({reg!r}).read()",
+    f"if False:\n    open({reg!r}).read()",
+    f"lambda: open({reg!r}).read()",
+    f"def lazy():\n    yield open({reg!r}).read()\nlazy()",
+    f"open({reg!r})",
+    f"open({reg!r}).read(0)",
+    f"exit(0); open({reg!r}).read()",
+    f"print(exit(0), open({reg!r}).read())",
+    f"def read_file():\n    return None\n    open({reg!r}).read()\nread_file()",
+]))
+helper_program = f"def read_file(path):\n    return open(path).read()\nprint(read_file({reg!r}))"
+helper = python(helper_program)
+completed = subprocess.run([sys.executable, "-c", helper_program], capture_output=True, text=True, check=True)
+with open(reg) as register:
+    assert completed.stdout == register.read() + "\n"
+reads_it.extend([
+    helper,
+    python(f"with open({reg!r}) as register:\n    print(register.read())"),
+    python(f"from pathlib import Path; print(Path({reg!r}).read_text())"),
+    python("import sys; print(open(sys.argv[1]).read())") + " " + shlex.quote(reg),
+])
+for result, expected in [({"content": completed.stdout}, True), ({"is_error": True}, False), (None, False)]:
+    facts = {"calls": [{"id": "call", "name": "Bash", "input": {"command": helper}}],
+             "results": {"call": result}}
+    if ft.register_read(facts, reg, rel) != expected:
+        print("Incorrect credit for helper result:", result)
 bad = ["MISCREDITED: " + c for c in not_reads if reads(c)] + ["MISSED: " + c for c in reads_it if not reads(c)]
 print("\n".join(bad))
 PYEOF
 )"
-if [ -z "$FT58_OUT" ]; then
-    ok "FT58 a printed, pattern or here-string mention of the register is not a read; real file operands and opening programs are"
+FT58_RC=$?
+if [ "$FT58_RC" -eq 0 ] && [ -z "$FT58_OUT" ]; then
+    ok "FT58 a printed, pattern or here-string mention of the register is not a read; real file operands and executed content reads are"
 else
     bad "FT58 register-read proof" "$FT58_OUT"
 fi
