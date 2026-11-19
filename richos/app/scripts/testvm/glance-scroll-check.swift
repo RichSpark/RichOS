@@ -131,6 +131,9 @@ var greenInside = 0
 var greenOutside = 0
 var labels = 0
 var strange = 0
+// The bar is white with a few dark labels on it: most of it must be white, and the labels few.
+var ground = 0
+var barArea = 0
 for y in 0..<h {
     for x in 0..<w {
         let inSquare = square.contains(CGPoint(x: x, y: y))
@@ -145,12 +148,15 @@ for y in 0..<h {
         let i = (y * w + x) * 4
         let (r, g, b) = (Int(rgba[i]), Int(rgba[i + 1]), Int(rgba[i + 2]))
         if max(r, g, b) < 110 { labels += 1 }
+        if has(x, y, white) { ground += 1 }
+        barArea += 1
         // Black on white text is gray all the way; anything colored is not the bar.
         if rgba[i + 3] != 255 || max(r, g, b) - min(r, g, b) > 40 { strange += 1 }
     }
 }
-print("bar rows \(h - barRows)..<\(h): green square \(greenInside) of \(Int(square.width * square.height)) px, green elsewhere \(greenOutside) px, label pixels \(labels), other colors \(strange) px, wrong pixels beside it \(beside)\(corners > 0 ? ", corner pixels of the selection off the page's color \(corners)" : "")")
-if greenInside != Int(square.width * square.height) || greenOutside != 0 || labels < 60 * scale * scale || strange != 0 || beside != 0 {
+print("bar rows \(h - barRows)..<\(h): green square \(greenInside) of \(Int(square.width * square.height)) px, green elsewhere \(greenOutside) px, label pixels \(labels), white \(ground) of \(barArea) px, other colors \(strange) px, wrong pixels beside it \(beside)\(corners > 0 ? ", corner pixels of the selection off the page's color \(corners)" : "")")
+if greenInside != Int(square.width * square.height) || greenOutside != 0 || labels < 60 * scale * scale || labels > 2000 * scale * scale
+    || ground * 10 < barArea * 9 || strange != 0 || beside != 0 {
     print("FAIL the bottom bar must appear once, whole, in the last \(barRows) rows"); ok = false
 }
 if !ok { exit(1) }
