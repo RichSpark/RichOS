@@ -179,7 +179,9 @@ for attempt in 1 2; do
     if [ "$stable" -ne 5 ]; then shot failed-select || true; probe front || true; exit 1; fi
     wait_for 'Display 1680 × 1050 px' selection
     for _ in 1 2 3; do
-        "$T/pointer-drag.sh" "$vm" 200,162 776,524 --step 45 --pause 0.02 --rest 0.1 --app RichGlance
+        if ! "$T/pointer-drag.sh" "$vm" 200,162 776,524 --step 45 --pause 0.02 --rest 0.1 --app RichGlance; then
+            probe drag 200 162 776 524
+        fi
         if [ "$(probe selection 2>/dev/null || true)" = 'Crop 576 × 362 px' ]; then break; fi
     done
     wait_for 'Crop 576 × 362 px' selection
@@ -190,34 +192,56 @@ for attempt in 1 2; do
     sleep 0.4
     shot 02-mode-picker
     case "$mode" in
-        manual) menuY=376; title='Scroll Manually' ;;
-        down) menuY=397; title='Auto Scroll Down' ;;
-        right) menuY=420; title='Auto Scroll Right' ;;
-        both) menuY=442; title='Auto Scroll Down and Right' ;;
+        manual) menuY=376; title='Scroll Manually'; instructions='Scroll the selected area, then click Stop.' ;;
+        down) menuY=397; title='Auto Scroll Down'; instructions='Scrolling down…' ;;
+        right) menuY=420; title='Auto Scroll Right'; instructions='Scrolling right…' ;;
+        both) menuY=442; title='Auto Scroll Down and Right'; instructions='Scrolling down and right…' ;;
     esac
     # Press the menu item by its accessible name; a synthetic click on the open menu is sometimes not
     # taken, and the menu stays open. Click it when the press is unavailable or the menu is still open.
-    pick() {
-        if ! probe glance-press "$title" 2>/dev/null; then probe move 1160 "$menuY"; probe down 1160 "$menuY"; probe up 1160 "$menuY"; fi
+    click_mode() {
+        probe move 1160 "$menuY"
+        sleep 0.25
+        probe down 1160 "$menuY"
+        probe up 1160 "$menuY"
     }
-    pick
+    if ! probe glance-press "$title" 2>/dev/null; then click_mode; fi
     sleep 0.4
     if [ "$(probe glance-has 'Auto Scroll Right' 2>/dev/null || true)" = yes ]; then
         probe move 1160 "$menuY"; probe down 1160 "$menuY"; probe up 1160 "$menuY"
     fi
     if [ "$mode" = manual ]; then
-        wait_for yes glance-has 'Scroll the selected area, then click Stop.'
+        wait_for yes glance-has "$instructions"
         wait_for app.richos.test.capturepattern front
         shot 03-manual-controls
         for i in $(seq 1 6); do probe scroll 450 322 -120 0; sleep 0.45; done
         shot 04-scroll-progress
         probe glance-press Stop
     else
+        for i in $(seq 1 12); do
+            if [ "$(probe approve-capture-reminder 2>/dev/null || true)" = yes ]; then
+                interrupted=yes
+                break
+            fi
+            if [ "$(probe glance-has "$instructions" 2>/dev/null || true)" = yes ]; then
+                printf 'PASS selected mode %s\n' "$title"
+                break
+            fi
+            if { [ "$page" = sticky ] || [ "$page" = inset ]; } &&
+               [ "$(probe glance-has 'Try Again…' 2>/dev/null || true)" = yes ]; then break; fi
+            if [ "$i" -eq 12 ]; then
+                shot failed-mode
+                "$T/ax.sh" "$vm" tree --app RichGlance --depth 7 || true
+                exit 1
+            fi
+            sleep 0.20
+        done
         shot 03-auto-controls
     fi
     ready=no
     refused=no
     for i in $(seq 1 96); do
+        if [ "$interrupted" = yes ]; then break; fi
         if [ "$(probe approve-capture-reminder 2>/dev/null || true)" = yes ]; then
             interrupted=yes
             break

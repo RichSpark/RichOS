@@ -105,6 +105,22 @@ case "page":
     window.makeKeyAndOrderFront(nil)
     if #available(macOS 14.0, *) { app.activate() } else { app.activate(ignoringOtherApps: true) }
     withExtendedLifetime(window) { app.run() }
+case "drag":
+    let start = CGPoint(x: Double(args[1])!, y: Double(args[2])!)
+    let end = CGPoint(x: Double(args[3])!, y: Double(args[4])!)
+    func post(_ type: CGEventType, at point: CGPoint) {
+        let event = CGEvent(mouseEventSource: nil, mouseType: type, mouseCursorPosition: point, mouseButton: .left)
+        event?.post(tap: .cghidEventTap)
+    }
+    CGWarpMouseCursorPosition(start)
+    post(.leftMouseDown, at: start)
+    for step in 1...16 {
+        Thread.sleep(forTimeInterval: 0.02)
+        let fraction = CGFloat(step) / 16
+        post(.leftMouseDragged, at: CGPoint(x: start.x + (end.x - start.x) * fraction,
+                                           y: start.y + (end.y - start.y) * fraction))
+    }
+    post(.leftMouseUp, at: end)
 case "approve-capture-reminder":
     // macOS can put the reminder over the source while the source still owns the frontmost app.
     // In this disposable VM only, acknowledge RichGlance's reminder by its actual button.
