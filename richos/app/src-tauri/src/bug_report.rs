@@ -484,6 +484,10 @@ pub async fn bug_report_write(app: AppHandle, answer: String, screen: bug::Scree
                 prompt.push_str("\n\nRecent media moment playback outcomes:\n");
                 prompt.push_str(&media);
             }
+            if let Some(capture) = crate::home_video::recent_cleaner_capture() {
+                prompt.push_str("\n\nRecent RichCleaner window recording timings:\n");
+                prompt.push_str(&capture);
+            }
         }
         let input = bug::writer_input(&prompt, picture.as_ref());
         // Rich writes it, the scanner goes over it, and Rich gets the last word (CEO §115).

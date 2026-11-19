@@ -28,7 +28,8 @@
 // own recorder does), and that canvas is recorded with the webview's own recorder, with the
 // microphone's sound added when he chose it. The recorder's own pieces (`rv-skip`) are never in
 // the file. The docked RichFiles pane supplies its own pixels because AppKit hosts it beside
-// the webview. TEXT HE HIGHLIGHTS IS IN THE FILE (CEO 2026-11-15, on the round's mockup: "it was
+// the webview. The focused RichCleaner library window is composited over the main view.
+// TEXT HE HIGHLIGHTS IS IN THE FILE (CEO 2026-11-15, on the round's mockup: "it was
 // recording the mouse but not recording text highlights when I was highlighting the text with the
 // mouse. I would expect the screen recording to record the text highlighting as well."): the
 // highlight is drawn behind the words he selected, in the Mac's own highlight color, in the
@@ -607,28 +608,29 @@ window.RichVideoAnywhere = (function () {
   // One bounded native snapshot at a time, only while the pane is visible during
   // a recording. The canvas continues to draw the webview at its usual rate.
   var filesRequest = false;
+  async function readWindowFrame(command, args, when) {
+    const data = new Uint8Array(await window.RichBridge.invoke(command, args));
+    if (data.byteLength <= 8) return null;
+    // Two little-endian floats give the pointer relative to the picture, or NaN
+    // when it is outside. The rest of the packet is the JPEG.
+    const xy = new DataView(data.buffer, data.byteOffset, 8);
+    const image = new Image();
+    const url = URL.createObjectURL(new Blob([data.subarray(8)], { type: "image/jpeg" }));
+    try {
+      image.src = url;
+      await image.decode();
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+    return { image, when, x: xy.getFloat32(0, true), y: xy.getFloat32(4, true) };
+  }
+
   async function requestFilesFrame(R, bounds, when) {
     filesRequest = true;
     try {
-      const data = new Uint8Array(await window.RichBridge.invoke("richfiles_recording_frame", {}));
-      if (rec !== R || R.filesBounds !== bounds) return;
-      if (data.byteLength <= 8) {
-        R.filesImage = null;
-        return;
-      }
-      // The native bridge sends two little-endian floats (a pane-relative cursor
-      // position, or NaN when outside), followed by the JPEG.
-      const xy = new DataView(data.buffer, data.byteOffset, 8);
-      const image = new Image();
-      const url = URL.createObjectURL(new Blob([data.subarray(8)], { type: "image/jpeg" }));
-      try {
-        image.src = url;
-        await image.decode();
-      } finally {
-        URL.revokeObjectURL(url);
-      }
+      const frame = await readWindowFrame("richfiles_recording_frame", {}, when);
       if (rec === R && R.filesBounds === bounds) {
-        R.filesImage = { image, when, x: xy.getFloat32(0, true), y: xy.getFloat32(4, true) };
+        R.filesImage = frame;
       }
     } catch (_) {
       // A rejected bridge invocation may mean an older bundled library. Keep
@@ -659,6 +661,54 @@ window.RichVideoAnywhere = (function () {
     }
   }
 
+  var cleanerFocused = false;
+  var cleanerVisit = 0;
+  var cleanerRequest = false;
+  var recordingNumber = 0;
+  function cleanerFocus(focused) {
+    if (cleanerFocused === focused) return;
+    cleanerFocused = focused;
+    cleanerVisit++;
+    if (!rec) return;
+    rec.cleanerImage = null;
+    rec.cleanerAsked = -Infinity;
+    rec.schedule();
+  }
+
+  async function sampleCleaner(R) {
+    if (!cleanerFocused || cleanerRequest || R.now - R.cleanerAsked < 100) return;
+    const visit = cleanerVisit;
+    cleanerRequest = true;
+    R.cleanerAsked = R.now;
+    try {
+      const frame = await readWindowFrame("cleaner_recording_frame", { recording: R.number }, R.now);
+      if (rec === R && visit === cleanerVisit) R.cleanerImage = frame;
+    } catch (_) {
+      if (rec === R && visit === cleanerVisit) R.cleanerImage = null;
+    } finally {
+      cleanerRequest = false;
+    }
+  }
+
+  function paintCleaner(cx, R) {
+    const frame = R.cleanerImage;
+    if (!frame) return;
+    const { naturalWidth, naturalHeight } = frame.image;
+    const scale = Math.min(960, R.W * 0.9, R.H * 0.9 * naturalWidth / naturalHeight) / naturalWidth;
+    const w = naturalWidth * scale;
+    const h = naturalHeight * scale;
+    const x = (R.W - w) / 2;
+    const y = (R.H - h) / 2;
+    cx.save();
+    cx.shadowColor = "rgba(0, 0, 0, 0.55)";
+    cx.shadowBlur = 24;
+    cx.drawImage(frame.image, x, y, w, h);
+    cx.restore();
+    if (R.pointer && Number.isFinite(frame.x) && Number.isFinite(frame.y)) {
+      P.paintPointer(cx, x + frame.x * w, y + frame.y * h);
+    }
+  }
+
   function paintFrame(R) {
     var cx = R.cx;
     var k = R.cv.width / R.W;
@@ -673,6 +723,7 @@ window.RichVideoAnywhere = (function () {
     R.inHome = false;
     R.sel = selected();
     sampleFiles(R);
+    sampleCleaner(R);
     const files = R.filesImage;
     R.filesTip = files && document.getElementById("nr-tip");
     // what stands on the page itself, lowest first (the order the window stacks it in)
@@ -707,7 +758,8 @@ window.RichVideoAnywhere = (function () {
       }
     }
     cx.globalAlpha = 1;
-    if (R.pointer && filesBox && files.when >= ptr.at && Number.isFinite(files.x) && Number.isFinite(files.y)) {
+    if (cleanerFocused) paintCleaner(cx, R);
+    else if (R.pointer && filesBox && files.when >= ptr.at && Number.isFinite(files.x) && Number.isFinite(files.y)) {
       P.paintPointer(cx, filesBox.x + files.x * filesBox.w, filesBox.y + files.y * filesBox.h);
     } else if (R.pointer && ptr.inside && !ptr.own) P.paintPointer(cx, ptr.x, ptr.y);
   }
@@ -756,6 +808,8 @@ window.RichVideoAnywhere = (function () {
     cv.setAttribute("aria-hidden", "true");
     document.body.appendChild(cv);
     var R = (rec = { cv: cv, cx: cv.getContext("2d", { alpha: false }), W: W, H: H, chunks: [], t0: performance.now(), last: 0, gap: 33, cost: 0, raf: 0, timer: 0, frames: 0, nodes: 0, now: 0, inHome: false, sel: null, voice: !!mic.stream, tone: !!mic.stream && mic.tone, pointer: opts.pointer, tape: null, mime: P.mimeType() });
+    R.number = ++recordingNumber;
+    R.cleanerAsked = -Infinity;
     paintFrame(R);
     try {
       var tracks = cv.captureStream(30).getVideoTracks();
@@ -783,9 +837,20 @@ window.RichVideoAnywhere = (function () {
     // copied in the frame it was drawn in, after it was drawn. Asked for from a timer, this one's
     // turn always comes after the turns already waiting, the picture's among them.
     var again = function () {
+      // A foreground Cleaner can cover the main window. Its frames don't depend
+      // on a browser animation frame in the window behind it.
+      if (cleanerFocused) {
+        R.timer = setTimeout(() => frame(performance.now()), R.gap);
+        return;
+      }
       R.timer = setTimeout(function () {
         if (rec === R) R.raf = requestAnimationFrame(frame);
       }, 0);
+    };
+    R.schedule = function () {
+      cancelAnimationFrame(R.raf);
+      clearTimeout(R.timer);
+      again();
     };
     again();
   }
@@ -1292,6 +1357,7 @@ window.RichVideoAnywhere = (function () {
     // the choices stay under their button while Settings rises into place or is scrolled
     wrap.addEventListener("scroll", seat, true);
     wrap.addEventListener("animationend", seat, true);
+    window.RichBridge.listen("rich://cleaner-recording-focus", ({ payload }) => cleanerFocus(payload === true)).catch(() => {});
   }
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);
   else init();
