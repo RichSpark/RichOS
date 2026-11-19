@@ -293,7 +293,7 @@ class ReplayWatcher(rw.Watcher):
             rw.append_jsonl(rw.review_ledger(), {
                 "id": rid, "at": rw.iso(f["at"]), "repo": REPO, "tip": it.tip, "work": it.work, "trigger": f["trigger"],
                 "verdict": verdict, "findings": len(findings), "p1": 0, "reviewer": "codex",
-                "reviewer_model": "gpt-6.1-sol", "author": it.name, "record": rec})
+                "reviewer_model": "gpt-6.2-sol", "author": it.name, "record": rec})
 
 def run(watcher, t0, t1, step=60):
     out = []
@@ -480,7 +480,7 @@ json.dump({"answer": {"findings": findings, "earlier_findings": []}, "earlier_fi
 at = float(os.environ.get("REVIEW_WATCH_NOW") or time.time())
 row = {"id": rid, "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(at)), "repo": repo, "tip": val("--tip"),
        "work": val("--work"), "trigger": val("--trigger"), "verdict": mode, "findings": len(findings), "p1": 0,
-       "reviewer": "codex", "reviewer_model": "gpt-6.1-sol", "author": "x", "record": rec}
+       "reviewer": "codex", "reviewer_model": "gpt-6.2-sol", "author": "x", "record": rec}
 with open(os.path.join(state, "reviews.jsonl"), "a") as f:
     f.write(json.dumps(row) + "\n")
 PY
