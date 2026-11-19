@@ -187,14 +187,21 @@ probe up 1180 341
 sleep 0.4
 shot 02-mode-picker
 case "$mode" in
-    manual) menuY=376 ;;
-    down) menuY=397 ;;
-    right) menuY=420 ;;
-    both) menuY=442 ;;
+    manual) menuY=376; title='Scroll Manually' ;;
+    down) menuY=397; title='Auto Scroll Down' ;;
+    right) menuY=420; title='Auto Scroll Right' ;;
+    both) menuY=442; title='Auto Scroll Down and Right' ;;
 esac
-probe move 1160 "$menuY"
-probe down 1160 "$menuY"
-probe up 1160 "$menuY"
+# Press the menu item by its accessible name; a synthetic click on the open menu is sometimes not
+# taken, and the menu stays open. Click it when the press is unavailable or the menu is still open.
+pick() {
+    if ! probe glance-press "$title" 2>/dev/null; then probe move 1160 "$menuY"; probe down 1160 "$menuY"; probe up 1160 "$menuY"; fi
+}
+pick
+sleep 0.4
+if [ "$(probe glance-has 'Auto Scroll Right' 2>/dev/null || true)" = yes ]; then
+    probe move 1160 "$menuY"; probe down 1160 "$menuY"; probe up 1160 "$menuY"
+fi
 if [ "$mode" = manual ]; then
     wait_for yes glance-has 'Scroll the selected area, then click Stop.'
     wait_for app.richos.test.capturepattern front

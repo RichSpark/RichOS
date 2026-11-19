@@ -41,17 +41,19 @@ func find(_ root: AXUIElement, _ name: String) -> AXUIElement? {
 }
 
 /// A real web page: a translucent sticky site header (80% opaque) over 1820 px of text, a red end
-/// marker, and a bar fixed to the bottom of the view. Header and bar colors appear nowhere else, so
-/// the saved PNG can be checked for each (glance-scroll-check.swift).
+/// marker, and a bar fixed to the bottom of the view. Seven small markers, each its own color, sit
+/// 250 px apart down the right of the text from y = 150. No color appears anywhere else, so the saved
+/// PNG can be checked for each (glance-scroll-check.swift).
 let stickyPage = """
 <!doctype html><html><head><meta charset="utf-8"><style>
 html,body{margin:0;background:#fff;font:15px/22px Helvetica,Arial,sans-serif;color:#1a1a1a}
-header{position:sticky;top:0;height:56px;background:rgba(27,58,107,0.8);color:#fff;display:flex;align-items:center;gap:28px;padding:0 18px;font-weight:bold}
+header{position:sticky;top:0;z-index:2;height:56px;background:rgba(27,58,107,0.8);color:#fff;display:flex;align-items:center;gap:28px;padding:0 18px;font-weight:bold}
 main{padding:8px 22px}
 p{margin:0 0 12px}
 #end{height:50px;background:#b0302a;color:#fff;font-weight:bold;display:flex;align-items:center;padding-left:18px}
 #spacer{height:64px}
-footer{position:fixed;left:0;right:0;bottom:0;height:48px;background:#2e7d4f;color:#fff;display:flex;align-items:center;gap:24px;padding:0 18px;font-weight:bold}
+.mark{position:absolute;left:520px;width:60px;height:8px;z-index:1}
+footer{position:fixed;left:0;right:0;bottom:0;z-index:2;height:48px;background:#2e7d4f;color:#fff;display:flex;align-items:center;gap:24px;padding:0 18px;font-weight:bold}
 </style></head><body>
 <header><span>Home</span><span>Products</span><span>Pricing</span><span>Docs</span></header>
 <main id="text"></main><div id="end">END OF PAGE</div><div id="spacer"></div>
@@ -61,6 +63,7 @@ const words="the quarterly report shows revenue growth across regions and teams 
 let seed=7;const main=document.getElementById("text");
 while(main.offsetHeight<1820){let s="";for(let i=0;i<40;i++){seed=(seed*1103515245+12345)%2147483648;s+=words[seed%words.length]+" ";}
 const p=document.createElement("p");p.textContent=(main.children.length+1)+". "+s;main.appendChild(p);}
+for(let i=0;i<7;i++){const m=document.createElement("div");m.className="mark";m.style.top=(150+250*i)+"px";m.style.background="rgb(230,"+(30+25*i)+",140)";document.body.appendChild(m);}
 </script></body></html>
 """
 
