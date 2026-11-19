@@ -1145,9 +1145,10 @@ class DesktopWork(unittest.TestCase):
             {"commit":commit,"verdict":"passed","checks":["synthetic reviewer observation"]}))
         landed=self.call("integrate",{"worker_id":worker["id"],"reviewer_id":final["id"]})
         self.assertTrue(landed["work_integrated"])
-        # Explicitly withdraw the unused briefs that still dispatch in this session.
-        # The call refused after spawn registration still settles automatically.
-        for ready in (placeholder,pierced,committed,dirty):
+        # Explicitly withdraw the unused briefs that still dispatch in this session. The call
+        # refused after spawn registration settles automatically, and the one Pierce refused
+        # was replaced by the next review prepared for the same duty.
+        for ready in (placeholder,committed,dirty):
             self.call("settle",{"request_id":self.record_of(ready)["request_id"],
                                 "reason":"This unused brief was replaced by the verified result."})
         done=self.call("complete",{"obligation_id":"fixture-task","worker_ids":[worker["id"]]})
@@ -1467,6 +1468,28 @@ class DesktopWork(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,"run started"):
             self.call("settle",{"request_id":"prepare-one","reason":"It must not be settled here."})
         self.assertEqual(self.receipt_of(worker)["status"],"running")
+
+    def test_a_brief_revised_after_pierce_refused_it_completes(self):
+        """Pierce refuses a dispatch and says to revise the assignment and retry. The revised
+        brief is a new prepare for the same duty: it replaces the refused draft, and once the
+        revised work is reviewed and integrated the assignment completes with no settle step
+        (review rv-20261119T072050Z-df80aa4c-0832: on df80aa4c the draft stayed `prepared` and
+        `complete` refused with "unresolved execution")."""
+        draft=self.call("prepare",{**self.args,"request_id":"draft-1",
+            "brief":"Create result.txt with a stale value in the assigned target worktree. Commit only that file."})
+        branch=self.registered_branch(draft)
+        self.app.dispatch_intent(self.scope,{"session_id":self.session,"tool_use_id":"call-draft-1",
+                                             "tool_input":draft["agent_call"]},review_refused=True)
+        self.assertTrue(self.record_of(draft)["pierce_refused"])
+        args=self.reviewed_pair("revised")
+        record=self.receipt_of(draft)
+        self.assertEqual(record["status"],"blocked","the refused draft is still dispatchable after its revision")
+        self.assertIn("superseded by request prepare-revised",record["settled"]["reason"])
+        self.assertFalse(self.target_of(draft).exists())
+        self.assertFalse(self.branch_exists(branch))
+        self.assertTrue(self.call("integrate",args)["work_integrated"])
+        done=self.call("complete",{"obligation_id":"fixture-task","worker_ids":[args["worker_id"]]})
+        self.assertTrue(done["obligation_closed"])
 
     def test_completion_never_settles_a_dispatchable_parallel_worker(self):
         """Completion keeps work retryable after a refusal and a turn change."""

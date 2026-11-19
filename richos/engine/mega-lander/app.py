@@ -1459,8 +1459,12 @@ def prepare(scope_path, scope, args):
             if old["request"]["obligation_id"] == obligation and old["request"]["role"] == role:
                 refresh(old)
                 # Reuse completion's dispatchability check: a new request or turn
-                # does not prove that an independent preparation was replaced.
-                if not old.get("settled") and abandoned(old, scope["binding"]):
+                # does not prove that an independent preparation was replaced. A draft Pierce
+                # refused is the exception: his refusal says to revise the assignment and retry,
+                # and the revised brief is this new request for the same duty, so the draft is
+                # replaced here (it stays dispatchable only until then, never through completion).
+                if not old.get("settled") and (abandoned(old, scope["binding"]) or (
+                        old.get("pierce_refused") and old["status"] == "prepared" and never_started(old))):
                     settle_undispatched(scope, old_path, old, "superseded by request %s: %s" % (request_id, NEVER_DISPATCHED))
                 # An assignment may have several independent workers, reviewers or consults.
                 # Reject an exact duplicate under another id, not every request sharing a duty.
