@@ -383,6 +383,7 @@ struct RichFilesSettings: View {
     }
     private var installedBundle: Bool { Bundle(url: appURL)?.bundleIdentifier == "app.richos.richfiles" }
     private var isCurrent: Bool { currentHandler?.resolvingSymlinksInPath() == appURL }
+    private var guidanceColor: Color { BrowserPalette(scheme).hint }
 
     var body: some View {
         let palette = BrowserPalette(scheme)
@@ -463,11 +464,11 @@ struct RichFilesSettings: View {
             LabeledContent("Details columns", value: "Name, Date modified, Kind, Size")
             LabeledContent("Thumbnail size", value: "\(Int(display.global.iconSize)) points")
             Text("Changing the view in a folder changes the default, unless that folder has its own view.")
-                .foregroundStyle(.secondary)
+                .foregroundStyle(guidanceColor)
             heading("Folders with their own view")
             if display.folders.isEmpty {
                 Text("Turn on Remember View for This Folder in the sort and view menu.")
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(guidanceColor)
             }
             ForEach(display.folders.keys.sorted(), id: \.self) { path in
                 HStack {
@@ -501,7 +502,7 @@ struct RichFilesSettings: View {
             }
             .pickerStyle(.radioGroup)
             Text("Enter opens, F2 renames, Delete moves to Trash and Space previews.")
-                .foregroundStyle(.secondary)
+                .foregroundStyle(guidanceColor)
             heading("Individual shortcuts")
             Picker("File Action", selection: $shortcutAction) {
                 ForEach(BrowserAction.all + [.init("File Actions", .actionPalette)]) {
@@ -516,7 +517,7 @@ struct RichFilesSettings: View {
                     .disabled(BrowserShortcut.load(shortcutData)[shortcutAction] == nil)
             }
             .buttonStyle(BrowserButtonStyle(bordered: true))
-            if !shortcutProblem.isEmpty { Text(shortcutProblem).foregroundStyle(.secondary) }
+            if !shortcutProblem.isEmpty { Text(shortcutProblem).foregroundStyle(guidanceColor) }
         }
     }
 
@@ -536,8 +537,8 @@ struct RichFilesSettings: View {
             }
             .buttonStyle(BrowserButtonStyle(bordered: true))
             Text("Finder still handles Desktop and Reveal in Finder. macOS may ask for consent.")
-                .foregroundStyle(.secondary)
-            if !status.isEmpty { Text(status).foregroundStyle(.secondary) }
+                .foregroundStyle(guidanceColor)
+            if !status.isEmpty { Text(status).foregroundStyle(guidanceColor) }
         }
     }
 
@@ -566,7 +567,7 @@ struct RichFilesSettings: View {
     ) -> some View {
         let label = VStack(alignment: .leading, spacing: 3) {
             Text(title).fontWeight(.semibold)
-            Text(description).foregroundStyle(.secondary)
+            Text(description).foregroundStyle(guidanceColor)
         }
         return ViewThatFits(in: .horizontal) {
             HStack { label; Spacer(minLength: 12); content() }
