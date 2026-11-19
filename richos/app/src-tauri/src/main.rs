@@ -624,9 +624,11 @@ fn check_boot_engine(
         let bin = verdict.as_ref().ok().map(|runtime| runtime.root.join("bin"));
         (bin, verdict)
     }, move |verdict| {
-        start_cleanup(verdict.is_ok());
+        // The report first: the start sweep and the disk monitor's first query after it took
+        // most of a minute in the test guest (2026-11-19), and neither decides what is missing.
         let engine_update_now = report_setup && report_startup_setup(&app, Some(&engine));
         drop(owed_report);
+        start_cleanup(verdict.is_ok());
         if engine_update_now {
             let install_app = app.clone();
             if let Err(error) = app.run_on_main_thread(move || update_engine_by_itself(install_app)) {
