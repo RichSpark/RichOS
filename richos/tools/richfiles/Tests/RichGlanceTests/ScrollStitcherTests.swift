@@ -300,6 +300,52 @@ final class ScrollStitcherTests: XCTestCase {
         XCTAssertEqual(wrong(actual, page, x: 0, y: 64, w: 768, h: 660), 0, "wrong pixels between the header and the bar")
     }
 
+    func testSweepsBesideARightToolBarLeaveNoStripOfABarInThePage() throws {
+        // A see-through header, a white cookie bar and a tool bar down the right, captured in sideways
+        // sweeps at five heights. Every pixel between the bars is seen clear of them in some frame,
+        // yet strips of the tool bar stayed in the image, over blank page a later frame showed.
+        let page = textPage(width: 1000, height: 1000)
+        func view(_ at: (x: Int, y: Int)) -> CGImage {
+            withRightBar(withWhiteBar(withHeader(crop(page, x: at.x, y: at.y, w: 600, h: 500), rows: 64, opacity: 0.8),
+                                      rows: 56, divider: false), columns: 72)
+        }
+        let path = [(0, 0), (168, 0), (336, 0), (400, 0), (400, 140), (232, 140), (64, 140), (0, 140), (0, 280), (168, 280),
+                    (336, 280), (400, 280), (400, 420), (232, 420), (64, 420), (0, 420), (0, 500), (168, 500), (336, 500),
+                    (400, 500)].map { (x: $0.0, y: $0.1) }
+        let actual = try XCTUnwrap(sweep(path, view: view))
+        XCTAssertEqual(wrong(actual, page, x: 0, y: 64, w: 928, h: 880), 0, "wrong pixels between the bars")
+    }
+
+    func testSidewaysSweepsUpwardUnderASeeThroughHeaderLeaveNoneOfItInThePage() throws {
+        // The same sweeps from the bottom of the page up. A sideways move cannot tell a see-through
+        // header from the page moving under it; its rows stayed in the image from the first sweep.
+        let page = textPage(width: 1000, height: 1000)
+        func view(_ at: (x: Int, y: Int)) -> CGImage {
+            withWhiteBar(withHeader(crop(page, x: at.x, y: at.y, w: 600, h: 500), rows: 64, opacity: 0.8), rows: 56, divider: false)
+        }
+        let path = [(400, 500), (336, 500), (168, 500), (0, 500), (0, 420), (64, 420), (232, 420), (400, 420), (400, 280),
+                    (336, 280), (168, 280), (0, 280), (0, 140), (64, 140), (232, 140), (400, 140), (400, 0), (336, 0), (168, 0),
+                    (0, 0)].map { (x: $0.0, y: $0.1) }
+        let actual = try XCTUnwrap(sweep(path, view: view))
+        XCTAssertEqual(wrong(actual, page, x: 0, y: 64, w: 1000, h: 880), 0, "wrong pixels between the header and the bar")
+    }
+
+    /// A capture through the views at `path`, each move of which must be stitched, of a 1000 × 1000 page.
+    private func sweep(_ path: [(x: Int, y: Int)], view: ((x: Int, y: Int)) -> CGImage,
+                       file: StaticString = #filePath, line: UInt = #line) -> CGImage? {
+        var sut = ScrollStitcher()
+        XCTAssertEqual(sut.append(view(path[0])), .initial, file: file, line: line)
+        for (last, next) in zip(path, path.dropFirst()) {
+            let update = sut.append(view(next))
+            XCTAssertEqual(update, .moved(dx: next.x - last.x, dy: next.y - last.y), "move to \(next)", file: file, line: line)
+            guard update == .moved(dx: next.x - last.x, dy: next.y - last.y) else { return nil }
+        }
+        guard let actual = sut.image() else { XCTFail("no image", file: file, line: line); return nil }
+        XCTAssertEqual(actual.width, 1000, file: file, line: line)
+        XCTAssertEqual(actual.height, 1000, file: file, line: line)
+        return actual.width == 1000 && actual.height == 1000 ? actual : nil
+    }
+
     func testFixedHeaderOverAListOfShortNamesDoesNotStopAutomaticScroll() throws {
         // Short file names on a white page change only a few pixels in each row, yet they scroll.
         let width = 800
