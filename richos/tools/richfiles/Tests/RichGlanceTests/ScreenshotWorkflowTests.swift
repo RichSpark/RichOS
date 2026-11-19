@@ -19,8 +19,23 @@ final class ScreenshotWorkflowTests: XCTestCase {
         let clipboard = NSPasteboard.withUniqueName()
         defer { clipboard.releaseGlobally() }
         XCTAssertTrue(ScreenshotRenderer.copy(png, to: clipboard))
-        XCTAssertEqual(clipboard.types, [.png])
+        // macOS synthesizes TIFF and legacy aliases for the same flattened bitmap.
+        let rasterTypes: Set<String> = ["public.png", "Apple PNG pasteboard type", "public.tiff", "NeXT TIFF v4.0 pasteboard type"]
+        let types = try XCTUnwrap(clipboard.types)
+        XCTAssertTrue(types.allSatisfy { rasterTypes.contains($0.rawValue) }, "\(types)")
+        XCTAssertEqual(clipboard.pasteboardItems?.count, 1)
         XCTAssertEqual(clipboard.data(forType: .png), png)
+        if let tiff = clipboard.data(forType: .tiff) {
+            let tiffSource = try XCTUnwrap(CGImageSourceCreateWithData(tiff as CFData, nil))
+            let tiffImage = try XCTUnwrap(CGImageSourceCreateImageAtIndex(tiffSource, 0, nil))
+            XCTAssertEqual(tiffImage.width, 9)
+            XCTAssertEqual(tiffImage.height, 7)
+            for y in 1..<6 {
+                for x in 2..<7 {
+                    XCTAssertEqual(try sample(tiffImage, x: x, y: y), [12, 19, 34, 255])
+                }
+            }
+        }
         XCTAssertEqual(CGImageSourceGetCount(source), 1)
         let decoded = try XCTUnwrap(CGImageSourceCreateImageAtIndex(source, 0, nil))
         XCTAssertEqual(decoded.width, 9)
