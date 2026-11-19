@@ -439,11 +439,8 @@ fn prepare_delivery_io(state: &mut impl PreparationState, delivery: &mut Deliver
     let prepared=prepare_connection(state,plan,&delivery.lease,&delivery.turn_id).and_then(|_| {
         if stopped() {return Ok(())}
         let (original,source,conversation,channel,app_messages,first_words,live_meeting_at)=state.state(|s| {
-            let mut successor=delivery.turn_id.as_str();let mut seen=std::collections::HashSet::new();
-            while let Some(previous)=s.ledger.turns().iter().find(|t|t.superseded_by.as_deref()==Some(successor)&&t.thread_id==plan.binding.thread_id()&&seen.insert(t.id.clone())) {
-                successor=&previous.id;
-            }
-            let original=successor.to_string();let turn=s.ledger.turn(&delivery.turn_id).ok_or(SpineError::NoLease)?;
+            let (original, restart_attempt) = s.continuation_origin(&plan.binding, &delivery.turn_id);
+            let turn=s.ledger.turn(&delivery.turn_id).ok_or(SpineError::NoLease)?;
             let channel=s.input_channels.get(&delivery.turn_id).cloned().or_else(||turn.channel.clone());
             let mut conversation=String::new();
             for message in s.ledger.messages_scoped(&plan.binding)?.into_iter().filter(|m|m.turn_id!=delivery.turn_id){conversation.push_str(&format!("{}: {}\n",message.role,message.text));}
@@ -462,6 +459,10 @@ fn prepare_delivery_io(state: &mut impl PreparationState, delivery: &mut Deliver
                 .map(|turn|(turn.id.clone(),turn.assistant_text.clone())).collect();
             app_messages.extend(s.ledger.actions().iter().filter(|action|action.kind=="settings_change"&&action.turn_id.as_deref().is_some_and(current))
                 .map(|action|(action.id.clone(),action.detail.clone())));
+            if restart_attempt > 0 {
+                let report = serde_json::json!({"event": "restart_recovery", "attempt": restart_attempt});
+                app_messages.push((format!("restart:{}", turn.id), report.to_string()));
+            }
             let live_meeting_at = (original == turn.id && his(turn)).then_some(turn.created_at);
             Ok::<_,SpineError>((original,turn.source,conversation[from..].to_string(),channel,app_messages,first_words,live_meeting_at))
         })?;
@@ -3228,6 +3229,33 @@ impl Spine {
     /// Called by the shell after the ledger and the control are both open. Safe to call
     /// when there is nothing to do.
     pub fn reconcile_intake(&mut self) -> Result<(), SpineError> {
+        self.reconcile_saved_intake(false)
+    }
+
+    /// Desktop startup resumes saved requests through their scoped native session. Provider
+    /// I/O starts later, after the first page, through the detached delivery queue.
+    pub fn recover_after_restart(&mut self) -> Result<(), SpineError> {
+        self.reconcile_saved_intake(true)
+    }
+
+    fn continuation_origin(&self, binding: &ThreadBinding, turn_id: &str) -> (String, usize) {
+        let mut successor = turn_id;
+        let mut visited = std::collections::HashSet::new();
+        let mut restarts = 0;
+        while let Some(prior) = self.ledger.turns().iter().find(|turn| {
+            turn.thread_id == binding.thread_id() && turn.superseded_by.as_deref() == Some(successor)
+                && !turn.quarantined && !visited.contains(turn.id.as_str())
+        }) {
+            visited.insert(prior.id.as_str());
+            if prior.ended_at.is_none() && prior.state == crate::ledger::TurnState::Interrupted {
+                restarts += 1;
+            }
+            successor = &prior.id;
+        }
+        (successor.to_owned(), restarts)
+    }
+
+    fn reconcile_saved_intake(&mut self, resume: bool) -> Result<(), SpineError> {
         let interrupted: Vec<String> = self.ledger.pending_turns().iter()
             .filter(|turn| turn.source != Source::Internal)
             .map(|turn| turn.id.clone()).collect();
@@ -3254,23 +3282,48 @@ impl Spine {
                 for id in affected { self.ledger.stop_turn_after_restart(&id, at)?; }
             }
         }
+        let mut first_error = None;
         for id in interrupted {
-            let Some(turn) = self.ledger.turn(&id) else { continue };
-            if !matches!(turn.state, crate::ledger::TurnState::Received | crate::ledger::TurnState::InFlight) {
-                continue;
+            if let Err(error) = self.recover_saved_turn(&id, resume) {
+                first_error.get_or_insert(error);
             }
-            let binding = self.fence_binding(&turn.thread_id)?;
-            if turn.state == crate::ledger::TurnState::Received {
-                let text=turn.user_text.clone();
-                self.deliver(&id,&binding,&text,true)?;
-                continue;
-            }
-            self.ledger.interrupt_turn_after_restart(&id,&crate::native::NativeError::Closed.to_string())?;
-
         }
-        // Restore the already accepted ledger requests before appending newer intake.
-        // Durable Stops above still take precedence over both paths.
-        self.drain_intake()
+        // Restore accepted ledger requests before appending newer intake.
+        let intake = self.drain_intake();
+        first_error.map_or(intake, Err)
+    }
+
+    fn recover_saved_turn(&mut self, id: &str, resume: bool) -> Result<(), SpineError> {
+        use crate::ledger::TurnState;
+
+        let Some(turn) = self.ledger.turn(id) else { return Ok(()) };
+        if !matches!(turn.state, TurnState::Received | TurnState::InFlight) { return Ok(()) }
+        let binding = self.fence_binding(&turn.thread_id)?;
+        if self.pending_delivery.iter().any(|delivery| delivery.turn_id == id) { return Ok(()) }
+        let text = turn.user_text.clone();
+        if turn.state == TurnState::Received {
+            return self.deliver(id, &binding, &text, true);
+        }
+        if !resume || !matches!(turn.source, Source::Text | Source::Jam) {
+            return Ok(self.ledger.interrupt_turn_after_restart(id, &crate::native::NativeError::Closed.to_string())?);
+        }
+        let (_, previous_attempts) = self.continuation_origin(&binding, id);
+        if previous_attempts >= 3 {
+            let reason = "Restart recovery stopped after three attempts.";
+            self.ledger.interrupt_turn_after_restart(id, reason)?;
+            self.ledger.record_interruption_cause(id, &crate::interruption::InterruptionRecord {
+                cause: "restart-recovery-exhausted".into(),
+                ceo_message: "RichOS tried three times to pick this back up after a restart. Your request and any saved work are still here.".into(),
+                loss_message: None,
+                offers_retry: false,
+            })?;
+            eprintln!("[richos] chat-list recovery=exhausted attempts={previous_attempts}");
+            return Ok(());
+        }
+        let replay = self.ledger.replay_turn(&binding, id)?;
+        eprintln!("[richos] chat-list recovery=queued attempt={}", previous_attempts + 1);
+        self.emit_live(self.turn_status_event(&binding, &replay, TurnStatus::Recovering, Some(id.to_owned())));
+        self.deliver(&replay, &binding, &text, true)
     }
 
     /// Everything that happens AT a turn boundary, after delivery and before the next
