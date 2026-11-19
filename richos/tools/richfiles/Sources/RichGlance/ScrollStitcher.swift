@@ -211,20 +211,21 @@ struct ScrollStitcher {
 
     /// The rows along the top and the columns along the left that stay put while the content beside
     /// them moves by `moved`: a sticky header or a frozen column. Such a band matches only when
-    /// nothing moved, so it is left out of the comparison. The first frame keeps the header in the
-    /// image, and later frames place it over covered area.
+    /// nothing moved, so it is left out of the comparison. A band may fill half the view, as a site
+    /// header does in a short selection. The first frame keeps the header in the image, and later
+    /// frames place it over covered area.
     private static func fixedEdges(_ old: Raster, _ new: Raster, moved: Offset) -> Fixed {
         guard moved != .zero else { return .none }
         var fixed = Fixed.none
         func rows() {
             fixed.top = 0
-            fixed.top = band(reach: old.height * 2 / 5) { index, end in
+            fixed.top = band(reach: old.height / 2) { index, end in
                 fixed.top = end
                 return line(old, new, moved, at: index, column: false, outside: fixed)
             }
         }
         rows()
-        fixed.left = band(reach: old.width * 2 / 5) { index, end in
+        fixed.left = band(reach: old.width / 2) { index, end in
             fixed.left = end
             return line(old, new, moved, at: index, column: true, outside: fixed)
         }

@@ -150,6 +150,23 @@ final class ScrollStitcherTests: XCTestCase {
         XCTAssertTrue(pixels(crop(actual, x: 0, y: 0, w: 800, h: 500)) == pixels(view(0)), "the header appears once, at the top")
     }
 
+    func testHeaderFillingMostOfTheTopHalfDoesNotStopAutomaticScroll() throws {
+        // A multirow site header in a short selection: more than two fifths of the view stays put.
+        let page = textPage(width: 800, height: 2000)
+        for (viewport, header) in [(300, 128), (500, 224)] {
+            func view(_ y: Int) -> CGImage { withHeader(crop(page, x: 0, y: y, w: 800, h: viewport), rows: header) }
+            let sut = scrollDown(page.height, viewport: viewport, step: viewport * 28 / 100, view: view)
+            let actual = try XCTUnwrap(sut.image())
+            XCTAssertEqual(actual.height, page.height, "\(header)-pixel header in a \(viewport)-pixel view")
+            guard actual.height == page.height else { continue }
+            XCTAssertTrue(pixels(crop(actual, x: 0, y: 0, w: 800, h: viewport)) == pixels(view(0)),
+                          "the \(header)-pixel header appears once, at the top")
+            XCTAssertTrue(pixels(crop(actual, x: 0, y: viewport, w: 800, h: page.height - viewport))
+                          == pixels(crop(page, x: 0, y: viewport, w: 800, h: page.height - viewport)),
+                          "the page below the first view has no header in it")
+        }
+    }
+
     func testFixedHeaderOverAListOfShortNamesDoesNotStopAutomaticScroll() throws {
         // Short file names on a white page change only a few pixels in each row, yet they scroll.
         let width = 800
