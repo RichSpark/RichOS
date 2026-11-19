@@ -33,6 +33,7 @@ REVIEW_WATCH_STATE_DIR (the markers), RICHOS_WORKSPACES_DIR (the registry).
 """
 
 import calendar
+import contextlib
 import fcntl
 import hashlib
 import importlib.util
@@ -47,6 +48,8 @@ MAX_FINDINGS = 8
 # enforcement names implementation work by its assignment, `app:<company>:<assignment>`
 # (workspaces.py recovery_work_key). The review watcher writes whichever that key is.
 WORK_PREFIXES = ("teammate:", "app:")
+# Only the desktop bridge sets this in its child, while it owns delivery_lock.
+DEFER_ACK = "RICHOS_REVIEW_DELIVERY_DEFER_ACK"
 
 
 def epoch(text):
@@ -156,20 +159,29 @@ def is_theirs(row, works, branches):
     return not work.startswith("app:") or (os.path.realpath(row.get("repo") or ""), row.get("branch")) in branches
 
 
-def marker(key, rid):
-    name = "%s-%s" % (hashlib.sha1(key.encode("utf-8")).hexdigest()[:16], rid)
-    return os.path.join(marker_dir(), name)
+@contextlib.contextmanager
+def delivery_lock(directory):
+    os.makedirs(directory, exist_ok=True)
+    with open(os.path.join(directory, ".delivery.lock"), "a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            yield False
+        else:
+            yield True
 
 
-def claim(key, rid):
-    d = marker_dir()
-    os.makedirs(d, exist_ok=True)
+def marker(key, rid, directory=None):
     name = "%s-%s" % (hashlib.sha1(key.encode("utf-8")).hexdigest()[:16], rid)
-    try:
-        os.close(os.open(os.path.join(d, name), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
-        return True
-    except FileExistsError:
-        return False
+    return os.path.join(marker_dir() if directory is None else directory, name)
+
+
+def acknowledge(directory, key, ids):
+    for rid in ids:
+        try:
+            os.close(os.open(marker(key, rid, directory), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
+        except FileExistsError:
+            pass
 
 
 def findings(row):
@@ -209,6 +221,23 @@ def render(row):
     return "\n".join(out)
 
 
+def output_pending(rows, who, directory, defer=False):
+    rec, works, branches = who
+    # A verdict delivered to a predecessor is still owed once to its continuation.
+    pending = [r for r in rows if is_theirs(r, works, branches)
+               and not os.path.exists(marker(rec["key"], str(r["id"])))]
+    if not pending:
+        return
+    answer = {"hookSpecificOutput": {"hookEventName": "PreToolUse",
+                                     "additionalContext": "\n\n".join(render(row) for row in pending)}}
+    ids = [str(row["id"]) for row in pending]
+    if defer:
+        answer["reviewDelivery"] = {"key": rec["key"], "ids": ids}
+    print(json.dumps(answer), flush=True)
+    if not defer:
+        acknowledge(directory, rec["key"], ids)
+
+
 def main():
     try:
         payload = json.loads(sys.stdin.read())
@@ -225,25 +254,15 @@ def main():
     who = teammate(aid)
     if not who:
         return 0
-    rec, works, branches = who
-    # "Once" is per teammate: the marker is keyed by THIS record, so a verdict
-    # its predecessor already received still reaches the continuation, once.
-    os.makedirs(marker_dir(), exist_ok=True)
-    # Serialize selection through output and acknowledgement. The kernel releases
-    # the lock on failure or death, so a failed write/flush remains retryable.
-    with open(os.path.join(marker_dir(), ".delivery.lock"), "a") as lock:
-        try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            return 0
-        pending = [r for r in rows if is_theirs(r, works, branches)
-                   and not os.path.exists(marker(rec["key"], str(r["id"])))]
-        if pending:
-            texts = [render(r) for r in pending]
-            print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse",
-                                                     "additionalContext": "\n\n".join(texts)}}), flush=True)
-            for row in pending:
-                claim(rec["key"], str(row["id"]))
+    directory = marker_dir()
+    # Serialize selection through the final output and acknowledgement. In
+    # desktop mode the parent owns this same lock across the shell bridge.
+    if os.environ.get(DEFER_ACK) == "1":
+        output_pending(rows, who, directory, defer=True)
+    else:
+        with delivery_lock(directory) as acquired:
+            if acquired:
+                output_pending(rows, who, directory)
     return 0
 
 

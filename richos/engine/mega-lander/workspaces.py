@@ -459,9 +459,9 @@ def main_checkout(path):
     return ""
 
 
-def worktree_list(repo):
+def worktree_list(repo, timeout=60):
     """[{path, branch, head, detached, locked, prunable}] or None if unreadable."""
-    rc, out, _ = git(repo, "worktree", "list", "--porcelain")
+    rc, out, _ = git(repo, "worktree", "list", "--porcelain", timeout=timeout)
     if rc != 0:
         return None
     items, cur = [], None
@@ -492,7 +492,7 @@ def branch_tip(repo, branch):
     return out.strip() if rc == 0 else ""
 
 
-def branch_tip_read(repo, branch):
+def branch_tip_read(repo, branch, timeout=60):
     """(tip, "") for a branch that exists, ("", "") for one git positively
     reports absent, and ("", why) when the answer could not be read.
 
@@ -507,7 +507,7 @@ def branch_tip_read(repo, branch):
     for a loose ref git cannot open, and only `for-each-ref` says so, on
     stderr ("ignoring broken ref")."""
     ref = "refs/heads/" + branch
-    rc, out, err = git(repo, "for-each-ref", "--format=%(refname)%00%(objectname)", ref)
+    rc, out, err = git(repo, "for-each-ref", "--format=%(refname)%00%(objectname)", ref, timeout=timeout)
     if rc != 0:
         return "", "%s in %s could not be read (git exit %d: %s)" % (ref, repo, rc, err.strip()[:200])
     for line in out.splitlines():
@@ -3559,9 +3559,16 @@ def _review_at_ended(repo_name, prefix):
     lock); else why it counts as ended. Lock first: a recheck of a tip that already has a verdict runs."""
     prefix = prefix.lower()
     ref = "%s@%s" % (repo_name, prefix)
-    watch = (os.environ.get("REVIEW_WATCH_STATE_DIR") or "").strip() or os.path.join(
-        (os.environ.get("CLAUDE_CONFIG_DIR") or "").strip() or os.path.join(os.path.expanduser("~"), ".claude"),
-        "state", "review-watch")
+    watch = (os.environ.get("REVIEW_WATCH_STATE_DIR") or "").strip()
+    app_state = (os.environ.get("RICHOS_APP_STATE") or "").strip()
+    if not watch and app_state:
+        review = _import_path("richos_app_review", os.path.join(
+            os.path.dirname(__file__), "..", "scripts", "lib", "app_review.py"))
+        watch = review.app_paths(app_state)["watch"]
+    if not watch:
+        watch = os.path.join(
+            (os.environ.get("CLAUDE_CONFIG_DIR") or "").strip() or os.path.join(os.path.expanduser("~"), ".claude"),
+            "state", "review-watch")
     quiet = None
     for path in sorted(glob.glob(os.path.join(watch, "locks", "*.lock"))):
         try:
@@ -7512,15 +7519,19 @@ def _keep_ignored(rec, chain, deadline=None):
     # A MOVE, NEVER A COPY: inside a gate's budget only a rename is bounded.
     # A workspace on another volume than the registry keeps the old answer
     # (the land waits, and pending() now says why).
-    _ensure_dirs()
     try:
         here = os.stat(state_dir()).st_dev
         if any(os.stat(p).st_dev != here for _k, _l, p, _r in plan):
             return ""
     except OSError:
         return ""
-    os.makedirs(_p("kept"), exist_ok=True)
-    root = tempfile.mkdtemp(prefix="%s-%d-" % (_key_segment(rec["key"]), int(now())), dir=_p("kept"))
+    archive = _p("kept")
+    try:
+        os.makedirs(archive, exist_ok=True)
+        root = tempfile.mkdtemp(prefix="%s-%d-" % (_key_segment(rec["key"]), int(now())), dir=archive)
+    except OSError as e:
+        raise SpecError("cannot land %s: the ignored-file archive %s could not be opened (%s)"
+                        % (rec["name"], archive, e)) from e
     moved, dropped = [], []
     # An entry that holds the ack directory (a `.claude/` the main checkout
     # lacks) loses the acks first, so they are not kept inside it.
@@ -7543,8 +7554,8 @@ def _keep_ignored(rec, chain, deadline=None):
         src, dst = os.path.join(p, rel), os.path.join(root, where, rel)
         if not os.path.lexists(src):
             continue
-        os.makedirs(os.path.dirname(dst), exist_ok=True)
         try:
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
             shutil.move(src, dst)
         except (OSError, shutil.Error) as e:
             event("kept-ignored", key=rec["key"], kept=root, entries=moved[:50], failed=rel, why=str(e)[:200])
@@ -8328,7 +8339,11 @@ def _delete(rec, workspaces, branches, why, processes=None, deadline=None, memo=
         for repo, b in _branch_targets([rec]):
             if out_of_time("branch %s was deleted" % b):
                 break
-            ok, err = delete_branch(repo, b, deadline=deadline)
+            try:
+                ok, err = delete_branch(repo, b, deadline=deadline)
+            except Deadline as e:
+                deferred = str(e)
+                break
             if ok is None:
                 # POINT 2, AT THE DELETER: a codex/ ref on this agent's record —
                 # it can only get there by hand or by a defect, since
@@ -8546,19 +8561,28 @@ def delete_branch(repo, b, deadline=None):
     """(True, "") deleted or already gone; (False, why) failed, retried later
     (point 13); (None, why) REFUSED BY THE PAGE — a codex/ branch is never
     touched (point 2), and that is an answer, not a failure to retry. With a
-    `deadline` (V2-03) the deleting git call is bounded by what is left."""
+    `deadline`, expiry raises Deadline so the caller can defer the deletion."""
     if b.startswith(CODEX_PREFIX):
         return None, "branch %s is codex/; never touched (point 2)" % b
-    main = main_checkout(repo)
-    wl = worktree_list(main) or []
+
+    def timeout():
+
+        if _past(deadline):
+            raise Deadline("the budget ran out during deletion of branch %s" % b)
+        return _bounded(deadline, 60)
+
+    wl = worktree_list(repo, timeout=timeout()) or []
+    timeout()
     if not wl:
         return False, "%s: repository %s cannot be read" % (b, repo)
+    main = wl[0]["path"]
     if wl[0]["branch"] == b:
         return False, "branch %s is the main checkout's branch; never deleted" % b
     # "Already gone" is written down as deleted, so it must be git's answer,
     # never a read that failed (hunt part 4, finding 4): that is a failure,
     # retried later (point 13).
-    tip, unread = branch_tip_read(main, b)
+    tip, unread = branch_tip_read(main, b, timeout=timeout())
+    timeout()
     if unread:
         return False, "branch %s: %s" % (b, unread)
     if not tip:
@@ -8566,28 +8590,33 @@ def delete_branch(repo, b, deadline=None):
     holders = [e["path"] for e in wl if e["branch"] == b]
     if holders:
         return False, "branch %s is still checked out at %s" % (b, holders[0])
-    rc, _o, err = git(main, "branch", "-D", b, timeout=_bounded(deadline, 60))
-    if rc != 0 and _clear_stale_git_lock(main, err):
-        rc, _o, err = git(main, "branch", "-D", b, timeout=_bounded(deadline, 60))
-    if rc != 0 or branch_tip(main, b):
+    rc, _o, err = git(main, "branch", "-D", b, timeout=timeout())
+    if rc != 0 and _clear_stale_git_lock(main, err, deadline=deadline):
+        rc, _o, err = git(main, "branch", "-D", b, timeout=timeout())
+    timeout()
+    if rc != 0:
         return False, "git branch -D %s failed: %s" % (b, err.strip()[:300])
+    tip, unread = branch_tip_read(main, b, timeout=timeout())
+    timeout()
+    if tip or unread:
+        return False, "git branch -D %s did not confirm removal: %s" % (b, unread or tip)
     return True, ""
 
 
 STALE_LOCK_AGE = 300.0
 
 
-def _clear_stale_git_lock(main, err):
+def _clear_stale_git_lock(main, err, deadline=None):
     """True when the git lock file `err` names was removed. A lock left by a git
     process that died mid-land blocked one branch deletion for 17 attempts over
     10 hours (2026-11-13). Only a lock that is inside this repository's git
     directory, EMPTY, older than STALE_LOCK_AGE seconds and held open by no
     process is removed; anything held, recent or unreadable is left alone."""
     m = re.search(r"'([^']+\.lock)': File exists", err or "")
-    if not m:
+    if not m or _past(deadline):
         return False
     lock = realpath(m.group(1))
-    rc, out, _e = git(main, "rev-parse", "--git-common-dir")
+    rc, out, _e = git(main, "rev-parse", "--git-common-dir", timeout=_bounded(deadline, 60))
     if rc != 0 or not out.strip():
         return False
     gitdir = realpath(os.path.join(main, out.strip()))
@@ -8599,14 +8628,15 @@ def _clear_stale_git_lock(main, err):
         return False
     if st.st_size != 0 or time.time() - st.st_mtime < STALE_LOCK_AGE:
         return False
-    if not shutil.which("lsof"):
+    if not shutil.which("lsof") or _past(deadline):
         return False                   # cannot show nobody holds it
     try:
-        r = subprocess.run(["lsof", "-t", "-w", "--", lock], capture_output=True, text=True, timeout=20)
+        r = subprocess.run(["lsof", "-t", "-w", "--", lock], capture_output=True, text=True,
+                           timeout=_bounded(deadline, 20))
     except (OSError, subprocess.TimeoutExpired):
         return False
-    if r.returncode not in (0, 1) or r.stdout.strip():
-        return False                   # held, or lsof failed: not provably free
+    if _past(deadline) or r.returncode not in (0, 1) or r.stdout.strip():
+        return False                   # held, unreadable or out of time
     try:
         os.unlink(lock)
     except OSError:

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Synthetic tests of the exact desktop wrapper and canonical Stop analyzer."""
 import contextlib
+import fcntl
 import io
 import json
 import os
@@ -107,6 +108,38 @@ class DesktopHooks(unittest.TestCase):
         notice.write_text('{"stage": 9, "name": "", "count": -1}')
         bad = self.hook("UserPromptSubmit", prompt="Hello?")
         self.assertEqual((bad.returncode, bad.stdout.strip()), (0, ""), bad.stderr)
+
+    def test_home_milestone_retries_after_outer_flush_failure_and_preserves_a_new_stage(self):
+        hook = self._hook_in_process("app_engine_hook_milestone_retry")
+        root = self.root / "state"
+        root.mkdir()
+        source = root / "home-stage-notice.json"
+        source.write_text(json.dumps({"stage": 4, "name": "The River", "count": 1312}))
+        payload = {"hook_event_name": "UserPromptSubmit", "session_id": "fictional-session",
+                   "cwd": str(self.coordination), "prompt": "Good morning."}
+        case = self
+
+        class FailedFlush(io.StringIO):
+            def flush(self):
+                with (root / ".home-stage-notice.lock").open("a") as other:
+                    with case.assertRaises(BlockingIOError):
+                        fcntl.flock(other, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                new = source.with_suffix(".tmp")
+                new.write_text(json.dumps({"stage": 5, "name": "The Forest", "count": 2000}))
+                new.replace(source)
+                raise BrokenPipeError("fixture output failure")
+
+        with self.assertRaises(BrokenPipeError):
+            hook.main(io.StringIO(json.dumps(payload)), FailedFlush())
+        self.assertTrue(source.exists(), "the producer's next stage was lost")
+        for stage in ("stage 4 of 6", "stage 5 of 6"):
+            out = io.StringIO()
+            hook.main(io.StringIO(json.dumps(payload)), out)
+            self.assertIn(stage, json.loads(out.getvalue())["hookSpecificOutput"]["additionalContext"])
+        out = io.StringIO()
+        hook.main(io.StringIO(json.dumps(payload)), out)
+        self.assertEqual(out.getvalue(), "")
+        self.assertFalse(source.exists())
 
     def test_the_apps_keep_alive_message_takes_no_notice_meant_for_richs_next_turn(self):
         """Keep chat alive (CEO 2026-11-16): the app's own keep-alive message is not a turn of
@@ -384,7 +417,7 @@ class DesktopHooks(unittest.TestCase):
             if path.name == "app.py":
                 return work
             return real_load(name, path)
-        hook.run, hook.load, hook.mid_job_notice = run, load, lambda *args: False
+        hook.run, hook.load = run, load
         saved = dict(os.environ)
         self.addCleanup(lambda: (os.environ.clear(), os.environ.update(saved)))
         os.environ.update(self.env)
@@ -427,11 +460,73 @@ class DesktopHooks(unittest.TestCase):
             if path.name == "app.py":
                 return work
             return real_load(module, path)
-        hook.load, hook.mid_job_notice = load, lambda *args: False
+        hook.load = load
         saved = dict(os.environ)
         self.addCleanup(lambda: (os.environ.clear(), os.environ.update(saved)))
         os.environ.update(self.env)
         return hook
+
+    def test_desktop_review_retries_after_the_agent_envelope_flush_and_routes_each_job(self):
+        hook = self._hook_in_process("app_engine_hook_review_retry")
+        hook.run = lambda *args, **kwargs: None
+        root = self.root / "state"
+        paths = hook.load("app_review_fixture", ENGINE / "scripts/lib/app_review.py").app_paths(root)
+        ws = hook.load("workspaces_review_fixture", ENGINE / "mega-lander/workspaces.py")
+        work = "app:fixture-company:fixture-assignment"
+        verdicts = []
+        for name, tip in (("river", "a" * 40), ("forest", "b" * 40)):
+            ws.save_agent({"key": "job-" + name, "agent_id": "worker-" + name,
+                           "registered_at": "2026-01-01T00:00:00Z",
+                           "workspaces": [{"repo": str(self.coordination), "branch": "cc/" + name}],
+                           "recovery_assignment": {"kind": "implementation", "outcome": work,
+                                                   "authority": {"mode": "enforce", "host": {"outcome": work}}}})
+            verdicts.append({"id": "rv-" + name, "work": work, "repo": str(self.coordination),
+                             "tip": tip, "branch": "cc/" + name, "record": str(root / "reviews" / name),
+                             "trigger": "quiet", "verdict": "passed", "reviewer": name,
+                             "findings": 0, "p1": 0, "finished_at": "2026-01-02T00:00:00Z"})
+        Path(paths["reviews"]).mkdir(parents=True)
+        Path(paths["ledger"]).write_text("".join(json.dumps(row) + "\n" for row in verdicts))
+        directory = Path(paths["delivered"])
+        case = self
+
+        class FailedFlush(io.StringIO):
+            def flush(self):
+                with (directory / ".delivery.lock").open("a") as other:
+                    with case.assertRaises(BlockingIOError):
+                        fcntl.flock(other, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                case.assertEqual(list(directory.glob("*-rv-*")), [])
+                raise BrokenPipeError("fixture output failure")
+
+        payload = {"hook_event_name": "PreToolUse", "session_id": "fictional-session",
+                   "cwd": str(self.coordination), "agent_id": "worker-river", "tool_name": "Agent",
+                   "tool_input": {"name": "worker-sonnet-1", "subagent_type": "worker", "prompt": "fictional"}}
+        with self.assertRaises(BrokenPipeError):
+            hook.main(io.StringIO(json.dumps(payload)), FailedFlush())
+        self.assertEqual(list(directory.glob("*-rv-*")), [])
+
+        out = io.StringIO()
+        hook.main(io.StringIO(json.dumps(payload)), out)
+        answer = json.loads(out.getvalue())
+        self.assertNotIn("reviewDelivery", answer)
+        context = answer["hookSpecificOutput"]
+        self.assertEqual(context["updatedInput"], payload["tool_input"])
+        self.assertEqual(context["additionalContext"].count("SECOND REVIEW OF YOUR WORK"), 1)
+        self.assertIn("@aaaaaaaaaaaa", context["additionalContext"])
+        self.assertNotIn("@bbbbbbbbbbbb", context["additionalContext"])
+        self.assertEqual(len(list(directory.glob("*-rv-river"))), 1)
+        self.assertEqual(list(directory.glob("*-rv-forest")), [])
+
+        payload.update(tool_name="Bash", tool_input={"command": "true"})
+        out = io.StringIO()
+        hook.main(io.StringIO(json.dumps(payload)), out)
+        self.assertEqual(out.getvalue(), "")
+        payload["agent_id"] = "worker-forest"
+        out = io.StringIO()
+        hook.main(io.StringIO(json.dumps(payload)), out)
+        context = json.loads(out.getvalue())["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("@bbbbbbbbbbbb", context)
+        self.assertNotIn("@aaaaaaaaaaaa", context)
+        self.assertEqual(len(list(directory.glob("*-rv-forest"))), 1)
 
     def test_a_dispatch_the_terminal_refuses_is_refused_in_the_app_with_the_same_message(self):
         """A brief that rebuilds a surface the adoption ledger answered, with no `reference:` line, is
