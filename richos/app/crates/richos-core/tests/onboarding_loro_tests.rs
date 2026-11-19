@@ -131,9 +131,33 @@ fn what_onboarding_saves_is_added_to_the_users_loro_and_a_change_supersedes_it()
     assert!(!after.contains(current_notes), "the first, superseded record came back as current");
     assert_eq!(census_total(&install), 5, "the history is first, second, restored: nothing rewritten");
 
-    // The kept file lost: the same words are recognized, not written twice.
+    // Simulate a kept file saved by the previous app. Repeated restorations must still
+    // supersede the current note after exhausting the original one-digit revisions.
+    let mut legacy: serde_json::Value = serde_json::from_slice(&std::fs::read(&kept).unwrap()).unwrap();
+    legacy.as_object_mut().unwrap().remove("revisions");
+    std::fs::write(&kept, serde_json::to_vec(&legacy).unwrap()).unwrap();
+    for _ in 3..=12 {
+        for (notes, progress) in [
+            ("Harborline Ferries runs three fictional island routes. Dana wants weekly bookings and crew rotas off her plate.", "complete"),
+            ("Harborline Ferries runs three fictional island routes. Dana wants weekly bookings off her plate.", "partial"),
+        ] {
+            onboarding_tools::call(&scope_path, "save_company_notes", json!({"notes": notes, "progress": progress})).unwrap();
+            let copy = onboarding_loro::sync(&onboarding_loro::sources(&central, &registry), &writer, &corpus, &kept);
+            assert!(copy.problems.is_empty(), "{:?}", copy.problems);
+            assert_eq!(copy.written.len(), 1);
+        }
+    }
+    let current = current_records(&install, &registry);
+    assert_eq!(current.len(), 3, "{current:?}");
+    assert!(current.iter().any(|r| r.contains("harborline-company-") && r.ends_with("-r12")), "{current:?}");
+    assert_eq!(census_total(&install), 25);
+    assert_eq!(onboarding_loro::sync(&onboarding_loro::sources(&central, &registry), &writer, &corpus, &kept),
+        onboarding_loro::SyncReport::default());
+
+    // The kept file lost: recognize the current revision without writing the words twice.
     std::fs::remove_file(&kept).unwrap();
     let relearned = onboarding_loro::sync(&onboarding_loro::sources(&central, &registry), &writer, &corpus, &kept);
     assert!(relearned.problems.is_empty(), "{:?}", relearned.problems);
-    assert_eq!(census_total(&install), 5);
+    assert_eq!(current_records(&install, &registry), current);
+    assert_eq!(census_total(&install), 25);
 }

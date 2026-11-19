@@ -333,14 +333,13 @@ fn home_field_after_onboarding(app: &AppHandle, state: &AppState) {
 fn onboarding_into_loro(state: &AppState) -> bool {
     let Some(install) = state.loro_install.lock().unwrap().clone() else { return false };
     let Some(central) = richos_core::company::install_central_root() else { return false };
-    let registry = state.reader.snapshot().entity_registry().clone();
-    let sources = richos_core::onboarding_loro::sources(&central, &registry);
-    if sources.is_empty() {
-        return false;
-    }
     let writer = richos_core::correction::CliLoroWriter::from_install(&install);
     let kept = state.data_dir.join(richos_core::onboarding_loro::KEPT_FILENAME);
-    let report = richos_core::onboarding_loro::sync(&sources, &writer, &install.root().path().display().to_string(), &kept);
+    let read = || {
+        let view = state.reader.snapshot();
+        richos_core::onboarding_loro::sources(&central, view.entity_registry())
+    };
+    let report = richos_core::onboarding_loro::sync_with_sources(read, &writer, &install.root().path().display().to_string(), &kept);
     for line in &report.written {
         eprintln!("[richos] onboarding into loro: {line}");
     }
