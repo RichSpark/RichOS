@@ -161,18 +161,18 @@ class Rows(unittest.TestCase):
             checked = []
             real = (gate.repo_facts, gate.head_of, gate.verdict_for)
 
-            def spy(directory, remote, budget, cache):
-                checked.append(directory)
-                return (directory, "o/" + os.path.basename(directory), "")
-            gate.repo_facts = spy
+            gate.repo_facts = lambda d, *_: (d, "o/" + os.path.basename(d), "")
             gate.head_of = lambda root, remote, branch, budget: ("abc123", "")
-            gate.verdict_for = lambda slug, sha, budget: {"state": "green"}
+            gate.verdict_for = lambda slug, *_: checked.append(slug) or {"state": "green"}
             try:
-                for _ in range(2):
-                    gate.evaluate({"session_id": sid, "transcript_path": "", "cwd": d}, gate.Budget(5))
+                payload = {"session_id": sid, "transcript_path": "", "cwd": d}
+                gate.evaluate(payload, gate.Budget(5))
+                self.assertEqual(len(checked), gate.MAX_TARGETS)
+                self.assertNotIn("o/0", checked)
+                gate.evaluate(payload, gate.Budget(5))
             finally:
                 gate.repo_facts, gate.head_of, gate.verdict_for = real
-            self.assertIn("/nonexistent/0", checked)     # the OLDEST was reached by turn 2
+            self.assertIn("o/0", checked)     # the OLDEST was reached by turn 2
 
     def test_p3_17_v3_a_selected_target_is_not_marked_judged(self):
         # Six targets; each turn's first CI lookup spends the whole budget, so
@@ -254,7 +254,9 @@ class G3(unittest.TestCase):
             self.git(repo, "config", key, value)
         self.git(repo, "commit", "--allow-empty", "-qm", "initial")
         self.git(repo, "remote", "add", "origin", bare)
-        self.enterContext(patch.object(gate, "repo_facts", lambda d, *_: (d, "fixture/repo", "")))
+        slug_of = gate.slug_of
+        self.enterContext(patch.object(gate, "slug_of",
+                                      lambda url: "fixture/repo" if url == bare else slug_of(url)))
         return repo, bare
 
     def test_p3_19_refusal_across_scans_never_creates_obligation(self):
@@ -307,6 +309,132 @@ class G3(unittest.TestCase):
         self.call("git push origin main", repo, "noop")
         self.result("Everything up-to-date", ident="noop")
         self.assertEqual(gate.evaluate(self.payload, gate.Budget(5))[0], 2)
+
+    def test_porcelain_noop_preserves_failed_obligation(self):
+        repo, bare = self.repo()
+        self.call("git push origin main", repo)
+        update = self.git(repo, "push", "origin", "main")
+        self.result(update.stderr)
+        self.enterContext(patch.object(gate, "verdict_for", lambda *_: {"state": "red"}))
+        self.assertEqual(gate.evaluate(self.payload, gate.Budget(5))[0], 2)
+        sha = self.git(bare, "rev-parse", "main").stdout.strip()
+        # Keep the no-op's transcript interval outside the original push's
+        # reflog second. The fixture does not need to wait for a clock tick.
+        with patch.object(gate.time, "time", return_value=time.time() + 60):
+            self.call("git push --porcelain origin main", repo, "noop")
+            noop = self.git(repo, "push", "--porcelain", "origin", "main")
+            self.result(noop.stdout, ident="noop")
+        self.assertIn("=\trefs/heads/main:refs/heads/main\t", noop.stdout)
+        self.assertEqual(self.git(bare, "rev-parse", "main").stdout.strip(), sha)
+        self.assertEqual(gate.evaluate(self.payload, gate.Budget(5))[0], 2)
+        self.assertEqual([p["sha"] for p in gate.load_state("g3")["pushes"].values()], [sha])
+
+    def test_resolved_push_survives_linked_checkout_removal(self):
+        repo, bare = self.repo()
+        linked = os.path.join(self.root, "linked")
+        self.git(repo, "worktree", "add", "--detach", linked)
+        self.call("git push origin HEAD:refs/heads/main", linked)
+        self.result(self.git(linked, "push", "origin", "HEAD:refs/heads/main").stderr)
+        sha = self.git(bare, "rev-parse", "main").stdout.strip()
+        reads = []
+        with patch.object(gate, "verdict_for", side_effect=lambda slug, tip, _:
+                          reads.append((slug, tip)) or {"state": "red"}):
+            self.assertEqual(gate.evaluate(self.payload, gate.Budget(5))[0], 2)
+            self.git(repo, "worktree", "remove", linked)
+            self.assertEqual(self.git(bare, "rev-parse", "main").stdout.strip(), sha)
+            rc, _, err = gate.evaluate(self.payload, gate.Budget(5))
+            self.assertEqual(rc, 2)
+            self.assertIn("https://github.com/fixture/repo/commit/" + sha, err)
+        self.assertEqual(reads, [("fixture/repo", sha)] * 2)
+        with patch.object(gate, "verdict_for", return_value={"state": "green"}) as verdict:
+            self.assertEqual(gate.evaluate(self.payload, gate.Budget(5))[0], 0)
+        self.assertEqual(verdict.call_args.args[:2], ("fixture/repo", sha))
+
+    def linked_update(self):
+        repo, bare = self.repo()
+        self.call("git push origin main", repo)
+        self.result(self.git(repo, "push", "origin", "main").stderr)
+        old = self.git(bare, "rev-parse", "main").stdout.strip()
+        linked = os.path.join(self.root, "linked")
+        self.git(repo, "worktree", "add", "--detach", linked)
+        self.git(linked, "commit", "--allow-empty", "-qm", "repair")
+        new = self.git(linked, "rev-parse", "HEAD").stdout.strip()
+
+        def push_repair():
+            self.call("git push origin HEAD:main", linked)
+            self.result(self.git(linked, "push", "origin", "HEAD:main").stderr)
+            self.assertEqual(self.git(bare, "rev-parse", "main").stdout.strip(), new)
+
+        return old, new, push_repair
+
+    def test_linked_update_supersedes_old_sha_before_rotation(self):
+        old, new, push_repair = self.linked_update()
+        reads = []
+
+        def verdict(slug, sha, budget):
+            reads.append(sha)
+            budget.seconds = 0.0  # One CI lookup per evaluation.
+            return {"state": "red" if sha == old else "green"}
+
+        with patch.object(gate, "verdict_for", side_effect=verdict):
+            self.assertEqual(gate.evaluate(self.payload, gate.Budget(5))[0], 2)
+            push_repair()
+            self.assertEqual(gate.evaluate(self.payload, gate.Budget(5))[0], 0)
+            self.assertEqual(gate.evaluate(self.payload, gate.Budget(5))[0], 0)
+        self.assertEqual(reads, [old, new, new])
+        self.assertEqual([p["sha"] for p in gate.load_state("g3")["pushes"].values()], [new])
+
+    def test_linked_update_during_ci_lookup_rechecks_current_sha(self):
+        old, new, push_repair = self.linked_update()
+        reads = []
+
+        def verdict(slug, sha, budget):
+            reads.append(sha)
+            if sha == old:
+                push_repair()
+                return {"state": "red"}
+            return {"state": "green"}
+
+        with patch.object(gate, "verdict_for", side_effect=verdict):
+            self.assertEqual(gate.evaluate(self.payload, gate.Budget(5))[0], 0)
+        self.assertEqual(reads, [old, new])
+
+    def test_linked_update_during_last_lookup_stays_due(self):
+        old, new, push_repair = self.linked_update()
+        reads = []
+
+        def verdict(slug, sha, budget):
+            reads.append(sha)
+            if sha == old:
+                push_repair()
+                budget.seconds = 0.0
+            return {"state": "red"}
+
+        with patch.object(gate, "verdict_for", side_effect=verdict):
+            rc, out, _ = gate.evaluate(self.payload, gate.Budget(5))
+            self.assertEqual(rc, 0)
+            self.assertIn("CI COULD NOT BE READ", out)
+            rc, _, err = gate.evaluate(self.payload, gate.Budget(5))
+            self.assertEqual(rc, 2)
+            self.assertIn(new, err)
+        self.assertEqual(reads, [old, new])
+
+    def test_quiet_noop_keeps_proven_push(self):
+        repo, bare = self.repo()
+        self.call("git push origin main", repo)
+        self.result(self.git(repo, "push", "origin", "main").stderr)
+        sha = self.git(bare, "rev-parse", "main").stdout.strip()
+        reads = []
+        self.enterContext(patch.object(gate, "verdict_for", side_effect=lambda slug, tip, _:
+                                      reads.append(tip) or {"state": "red"}))
+        self.assertEqual(gate.evaluate(self.payload, gate.Budget(5))[0], 2)
+        with patch.object(gate.time, "time", return_value=time.time() + 60):
+            self.call("git push -q origin main", repo)
+            noop = self.git(repo, "push", "-q", "origin", "main")
+            self.result(noop.stdout + noop.stderr)
+        self.assertEqual(noop.stdout + noop.stderr, "")
+        self.assertEqual(gate.evaluate(self.payload, gate.Budget(5))[0], 2)
+        self.assertEqual(reads, [sha, sha])
 
     def test_p3_45_fetch_before_and_after_first_check_keeps_pushed_sha(self):
         repo, bare = self.repo()
