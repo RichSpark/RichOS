@@ -14,7 +14,10 @@ import Vision
 /// 1. every pixel between the bars is the pixel of every stitched frame that showed that place between
 ///    its bars, and
 /// 2. the bars are the first rows, last rows, first columns and last columns of the frames farthest
-///    out that way: a header once at the top, a bottom bar once at the bottom.
+///    out that way: a header once at the top, a bottom bar once at the bottom. A bar that stays put
+///    beside the move (a side bar beside a page that scrolls down) shows a different part of itself
+///    at the same place in each frame, so it is shown once, as the first of the frames farthest out
+///    showed it, and the strip beside the rest of the page is left empty (`alongside`).
 /// A place that only ever lay under a bar, with page captured beyond it, has no pixel to show. It
 /// stays transparent, as a place never visited; a manual pan can leave one. A frame whose bars would
 /// leave such places in a page that had none is not stitched.
@@ -87,6 +90,9 @@ struct ScrollStitcher {
     /// Whether the image leaves out the last frames: one of them showed something new in a bar, and
     /// no frame after it showed whether that is a bar.
     var heldBack: Bool { !proven.isEmpty }
+    /// For the top, bottom, left and right bar: frames equally far out that way showed the same place
+    /// of it differently, so it stays put along that edge while the page moves, and is shown once.
+    private var alongside = [false, false, false, false]
     private(set) var bounds = CGRect.null
 
     /// The share of the view's width and height that moves with the content between the fixed bars;
@@ -162,7 +168,7 @@ struct ScrollStitcher {
     }
 
     /// The stitched image, each captured place once. Areas never visited in a manual pan stay
-    /// transparent, and so do places no frame showed clear of a bar (`shows`). With `previewLimit`, a
+    /// transparent, and so do places no frame showed clear of a bar (`rim`). With `previewLimit`, a
     /// small picture of everything captured so far, no side longer than that.
     func image(previewLimit: Int? = nil) -> CGImage? {
         guard !bounds.isNull, !broken, let last else { return nil }
@@ -193,6 +199,17 @@ struct ScrollStitcher {
             return context.makeImage()
         }
         let page = page
+        // Of a bar that stays put along its edge, only the frame that shows it: the first of those
+        // farthest out that way, nearest the top or the left.
+        let frames = origins.indices.dropFirst()
+        let owners = [
+            frames.min { (origins[$0].y, origins[$0].x) < (origins[$1].y, origins[$1].x) },
+            frames.min { (-origins[$0].y, origins[$0].x) < (-origins[$1].y, origins[$1].x) },
+            frames.min { (origins[$0].x, origins[$0].y) < (origins[$1].x, origins[$1].y) },
+            frames.min { (-origins[$0].x, origins[$0].y) < (-origins[$1].x, origins[$1].y) }
+        ].map { UInt32($0 ?? 0) }
+        // The bars that are shown wherever a frame showed them (bit 1 top, 2 bottom, 4 left, 8 right).
+        let anywhere = (0..<4).reduce(0) { alongside[$1] ? $0 : $0 | 1 << $1 }
         var data = Data(count: width * height * 4)
         data.withUnsafeMutableBytes { bytes in
             let pixels = bytes.bindMemory(to: UInt32.self)
@@ -200,9 +217,12 @@ struct ScrollStitcher {
                 let y = firstRow + index - minY
                 row.cells.withUnsafeBufferPointer { cells in
                     for (column, cell) in cells.enumerated() where cell.frame != 0 {
-                        if bands.clear(cell, last.width, last.height) || shows(cell, x: row.x + column, index: index, page) {
-                            pixels[y * width + row.x + column - minX] = cell.value
+                        var shown = bands.clear(cell, last.width, last.height)
+                        if !shown {
+                            let rim = rim(cell, x: row.x + column, index: index, page)
+                            shown = rim & anywhere != 0 || (rim != 0 && (0..<4).contains { rim & 1 << $0 != 0 && cell.frame == owners[$0] })
                         }
+                        if shown { pixels[y * width + row.x + column - minX] = cell.value }
                     }
                 }
             }
@@ -239,27 +259,28 @@ struct ScrollStitcher {
         return page
     }
 
-    /// Whether a place that no frame showed between its bars has a pixel to show: it lies in a bar of
-    /// the frame its pixel is from, and no page was captured beyond it on the side of that bar, as
-    /// above the header over the first content and below the bottom bar under the last. Otherwise it
-    /// is a strip of bar inside the page, and the page under it was never seen.
-    private func shows(_ cell: Cell, x: Int, index: Int, _ page: Page) -> Bool {
-        guard let last else { return false }
+    /// For a place that no frame showed between its bars, the bars in whose rim it lies (bit 1 top,
+    /// 2 bottom, 4 left, 8 right): it lies in that bar of the frame its pixel is from, and no page was
+    /// captured beyond it on the side of that bar, as above the header over the first content and
+    /// below the bottom bar under the last. In none, it is a strip of bar inside the page, and the
+    /// page under it was never seen.
+    private func rim(_ cell: Cell, x: Int, index: Int, _ page: Page) -> Int {
+        guard let last else { return 0 }
         let from = origins[Int(cell.frame)]
         let (viewX, viewY, column) = (x - from.x, firstRow + index - from.y, x - Int(bounds.minX))
-        return (viewY < bands.top && index < page.columnFirst[column])
-            || (viewY >= last.height - bands.bottom && index > page.columnLast[column])
-            || (viewX < bands.left && x < page.rowFirst[index])
-            || (viewX >= last.width - bands.right && x > page.rowLast[index])
+        return (viewY < bands.top && index < page.columnFirst[column] ? 1 : 0)
+            | (viewY >= last.height - bands.bottom && index > page.columnLast[column] ? 2 : 0)
+            | (viewX < bands.left && x < page.rowFirst[index] ? 4 : 0)
+            | (viewX >= last.width - bands.right && x > page.rowLast[index] ? 8 : 0)
     }
 
-    /// Whether every captured place has a pixel to show.
+    /// Whether every captured place is the page or the rim of a bar.
     private var whole: Bool {
         guard let last else { return false }
         let page = page
         for (index, row) in rows.enumerated() {
             for (column, cell) in row.cells.enumerated() where cell.frame != 0 && !bands.clear(cell, last.width, last.height) {
-                if !shows(cell, x: row.x + column, index: index, page) { return false }
+                if rim(cell, x: row.x + column, index: index, page) == 0 { return false }
             }
         }
         return true
@@ -409,7 +430,9 @@ struct ScrollStitcher {
     /// of a bar replaces the bars of earlier frames, so a bottom bar ends up once, below the last
     /// content; any other bar stays behind them, so a header stays once above the first content, and
     /// scrolling back and forth near an end leaves its bar whole. Beside a tool bar, a frame that
-    /// shows a place in fewer bars replaces one that showed it in more.
+    /// shows a place in fewer bars replaces one that showed it in more. Of two frames equally far out
+    /// that show a place in the same bar, the one nearer the top, or the left, wins; and where they
+    /// show it differently, that bar stays put along its edge (`alongside`).
     private mutating func keep(_ raster: Raster, at origin: Offset) {
         let (width, height) = (raster.width, raster.height)
         let tile = CGRect(x: origin.x, y: origin.y, width: width, height: height)
@@ -420,6 +443,7 @@ struct ScrollStitcher {
         let (origins, bands, number) = (origins, bands, UInt32(origins.count - 1))
         let (middleX, middleY) = (width / 2, height / 2)
         var disagreed = false
+        var alongside = alongside
         raster.pixels.withUnsafeBufferPointer { pixels in
             for y in 0..<height {
                 let index = origin.y + y - firstRow
@@ -449,18 +473,24 @@ struct ScrollStitcher {
                         } else if !bands.clear(old, width, height) {
                             // Two frames show this place in their bars.
                             var wins = leads[rowZone != 1 ? rowZone / 2 : 2 + columnZone / 2]
-                            if !wins {
-                                let was = origins[Int(old.frame)]
-                                let (oldX, oldY) = (origin.x + x - was.x, origin.y + y - was.y)
-                                let oldRowZone = oldY < bands.top ? 0 : oldY >= height - bands.bottom ? 2 : 1
-                                let oldColumnZone = oldX < bands.left ? 0 : oldX >= width - bands.right ? 2 : 1
-                                // In no bar the earlier frame did not show it in, at least as far out on
-                                // the side of each, and in fewer bars or farther out on one.
-                                if rowZone == 1 || rowZone == oldRowZone, columnZone == 1 || columnZone == oldColumnZone {
-                                    let down = rowZone == 0 ? was.y - origin.y : rowZone == 2 ? origin.y - was.y : 0
-                                    let across = columnZone == 0 ? was.x - origin.x : columnZone == 2 ? origin.x - was.x : 0
-                                    let fewer = (rowZone == 1 && oldRowZone != 1) || (columnZone == 1 && oldColumnZone != 1)
-                                    wins = down >= 0 && across >= 0 && (fewer || down > 0 || across > 0)
+                            let was = origins[Int(old.frame)]
+                            let (oldX, oldY) = (origin.x + x - was.x, origin.y + y - was.y)
+                            let oldRowZone = oldY < bands.top ? 0 : oldY >= height - bands.bottom ? 2 : 1
+                            let oldColumnZone = oldX < bands.left ? 0 : oldX >= width - bands.right ? 2 : 1
+                            // In no bar the earlier frame did not show it in, at least as far out on
+                            // the side of each, and in fewer bars or farther out on one.
+                            if !wins, rowZone == 1 || rowZone == oldRowZone, columnZone == 1 || columnZone == oldColumnZone {
+                                let down = rowZone == 0 ? was.y - origin.y : rowZone == 2 ? origin.y - was.y : 0
+                                let across = columnZone == 0 ? was.x - origin.x : columnZone == 2 ? origin.x - was.x : 0
+                                let fewer = (rowZone == 1 && oldRowZone != 1) || (columnZone == 1 && oldColumnZone != 1)
+                                wins = down >= 0 && across >= 0 && (fewer || down > 0 || across > 0)
+                            }
+                            // Both frames show it in the one bar, and equally far out that way.
+                            if rowZone == oldRowZone, columnZone == oldColumnZone, (rowZone == 1) != (columnZone == 1) {
+                                let across = rowZone != 1
+                                if across ? was.y == origin.y && was.x != origin.x : was.x == origin.x && was.y != origin.y {
+                                    if old.value != pixel { alongside[across ? rowZone / 2 : 2 + columnZone / 2] = true }
+                                    if !wins { wins = across ? origin.x < was.x : origin.y < was.y }
                                 }
                             }
                             if wins { cells[offset + x] = seen }
@@ -471,6 +501,7 @@ struct ScrollStitcher {
         }
         // Two frames kept that differ between the bars: it cannot happen, and no image is made of it.
         if disagreed { broken = true }
+        self.alongside = alongside
         bounds = bounds.union(tile)
         last = raster
         position = origin

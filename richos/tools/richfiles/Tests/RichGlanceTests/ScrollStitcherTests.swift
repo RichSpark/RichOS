@@ -544,6 +544,29 @@ final class ScrollStitcherTests: XCTestCase {
         XCTAssertTrue(pixels(try XCTUnwrap(steady.image())) == pixels(loaded))
     }
 
+    func testSideBarBesideAPageThatScrollsDownAppearsOnce() throws {
+        // A tool bar down the right of the view, with a button near its foot, while the page scrolls
+        // down beside it. Each view shows the whole bar, and the image took the strip under the first
+        // view from the bottom of each later one: the button came out again every step. The bar is
+        // shown once, beside the view the capture began with, and beside the rest of the page the
+        // image has nothing.
+        let page = textPage(width: 800, height: 2000)
+        func view(_ y: Int) -> CGImage {
+            withBox(withRightBar(crop(page, x: 0, y: y, w: 800, h: 500), columns: 72), x: 740, y: 440, w: 48, h: 28)
+        }
+        let (sut, reached) = automaticDown(to: 1500, viewport: 500, view: view)
+        XCTAssertEqual(reached, 1500, "captured to the end")
+        let actual = try XCTUnwrap(sut.image())
+        XCTAssertEqual(actual.height, 2000)
+        guard actual.height == 2000 else { return }
+        XCTAssertEqual(wrong(actual, page, x: 0, y: 0, w: 728, h: 2000), 0, "wrong pixels in the page beside the bar")
+        XCTAssertTrue(pixels(crop(actual, x: 728, y: 0, w: 72, h: 500)) == pixels(crop(view(0), x: 728, y: 0, w: 72, h: 500)),
+                      "the bar, beside the first view")
+        let button = pixels(crop(view(0), x: 740, y: 440, w: 1, h: 1))[0]
+        XCTAssertEqual(pixels(crop(actual, x: 728, y: 0, w: 72, h: 2000)).filter { $0 == button }.count, 48 * 28, "the button once")
+        XCTAssertTrue(pixels(crop(actual, x: 740, y: 500, w: 60, h: 1500)).allSatisfy { $0 == 0 }, "nothing of the bar below the first view")
+    }
+
     func testHeaderThatAppearsAfterTheFirstViewIsBorneOutByTheNextView() throws {
         // A header that is not there at the top of the page and is fixed once the page scrolls. In the
         // view where it first shows it could as well be a change in the page; the view after it shows
