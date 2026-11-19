@@ -53,7 +53,25 @@ struct ScrollStitcher {
     private var patches: [Patch] = []
     /// The first frame is placed whole until a move shows which of its edges are fixed bars.
     private var settled = false
+    /// The fixed bars the last move found.
+    private var bars: Fixed?
     private(set) var bounds = CGRect.null
+
+    /// The share of the view's width and height that moves with the content between the fixed bars
+    /// the last move found; nil before the first move.
+    var movingShare: CGSize? {
+        guard let bars, let last else { return nil }
+        return CGSize(width: Double(last.width - bars.left - bars.right) / Double(last.width),
+                      height: Double(last.height - bars.top - bars.bottom) / Double(last.height))
+    }
+
+    /// How far one automatic scroll step goes along a view `length` long. The first step is short, to
+    /// find any fixed bars; after it a step keeps at least half of the content between the bars
+    /// (`movingShare`) in view, so the next frame still overlaps it, and never goes past 28% of the
+    /// view, as before.
+    static func automaticStep(along length: Double, moving share: Double?) -> Double {
+        max(4, min(220, length * (share.map { min(0.28, $0 * 0.5) } ?? 0.1)))
+    }
 
     mutating func append(_ image: CGImage) -> Update {
         guard image.width >= 24, image.height >= 24,
@@ -73,6 +91,7 @@ struct ScrollStitcher {
             }
             let nextPosition = Offset(x: position.x + offset.x, y: position.y + offset.y)
             guard add(next, at: nextPosition, fixed: match.fixed) else { return .limit }
+            bars = match.fixed
             return .moved(dx: offset.x, dy: offset.y)
         }
         return add(next, at: .zero) ? .initial : .limit

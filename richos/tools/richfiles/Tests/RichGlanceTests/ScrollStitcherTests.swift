@@ -218,6 +218,35 @@ final class ScrollStitcherTests: XCTestCase {
                       == pixels(crop(view(x), x: 540, y: 0, w: 60, h: 400)), "the bar appears once, at the right")
     }
 
+    func testTallHeaderAndBottomBarInAShortSelectionAreCapturedToTheEnd() throws {
+        // A 128-pixel sticky header and an 88-pixel cookie bar leave 84 of 300 rows moving: a 28% step
+        // would scroll all of them away. Steps are sized as automatic scrolling sizes them.
+        let page = textPage(width: 800, height: 2000)
+        func view(_ y: Int) -> CGImage {
+            withBottomBar(withHeader(crop(page, x: 0, y: y, w: 800, h: 300), rows: 128), rows: 88)
+        }
+        var sut = ScrollStitcher()
+        XCTAssertEqual(sut.append(view(0)), .initial)
+        var y = 0
+        while y + 300 < page.height {
+            let step = Int(ScrollStitcher.automaticStep(along: 300, moving: sut.movingShare.map { Double($0.height) }).rounded())
+            let next = min(page.height - 300, y + step)
+            let update = sut.append(view(next))
+            XCTAssertEqual(update, .moved(dx: 0, dy: next - y), "step to y=\(next)")
+            guard update == .moved(dx: 0, dy: next - y) else { break }
+            y = next
+        }
+        let actual = try XCTUnwrap(sut.image())
+        XCTAssertEqual(actual.height, page.height)
+        guard actual.height == page.height else { return }
+        XCTAssertTrue(pixels(crop(actual, x: 0, y: 0, w: 800, h: 128)) == pixels(crop(view(0), x: 0, y: 0, w: 800, h: 128)),
+                      "the header appears once, at the top")
+        XCTAssertTrue(pixels(crop(actual, x: 0, y: 128, w: 800, h: page.height - 216))
+                      == pixels(crop(page, x: 0, y: 128, w: 800, h: page.height - 216)), "the whole page between them")
+        XCTAssertTrue(pixels(crop(actual, x: 0, y: page.height - 88, w: 800, h: 88))
+                      == pixels(crop(view(y), x: 0, y: 212, w: 800, h: 88)), "the bar appears once, at the bottom")
+    }
+
     func testFixedHeaderOverAListOfShortNamesDoesNotStopAutomaticScroll() throws {
         // Short file names on a white page change only a few pixels in each row, yet they scroll.
         let width = 800

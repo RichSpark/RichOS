@@ -42,6 +42,7 @@ final class ScrollingCapture: NSObject, NSWindowDelegate {
     private var accepted = 0
     private var unmatched = 0
     private var hasUnmatchedEnd = false
+    private var movingShare: CGSize?
     private var lastPreview = 0.0
     private var reported = false
     private var recording = true
@@ -167,6 +168,7 @@ final class ScrollingCapture: NSObject, NSWindowDelegate {
 
     private func updateProgress(_ progress: ScrollAssembly.Progress) async {
         received += 1
+        movingShare = progress.moving ?? movingShare
         switch progress.update {
         case .initial:
             accepted += 1
@@ -220,7 +222,8 @@ final class ScrollingCapture: NSObject, NSWindowDelegate {
             let before = accepted
             let bad = unmatched
             let dimension = horizontal ? guide.frame.width : guide.frame.height
-            let delta = direction * Int32(max(4, min(220, dimension * 0.28)))
+            let share = movingShare.map { Double(horizontal ? $0.width : $0.height) }
+            let delta = direction * Int32(ScrollStitcher.automaticStep(along: Double(dimension), moving: share).rounded())
             guard let event = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2,
                                       wheel1: horizontal ? 0 : delta, wheel2: horizontal ? delta : 0, wheel3: 0),
                   CGPreflightPostEventAccess() else {
@@ -387,6 +390,7 @@ private actor ScrollAssembly {
     struct Progress: Sendable {
         let update: ScrollStitcher.Update
         let size: CGSize
+        let moving: CGSize?
     }
 
     private var stitcher = ScrollStitcher()
@@ -394,7 +398,7 @@ private actor ScrollAssembly {
     func append(_ image: CGImage) -> Progress {
         let update = stitcher.append(image)
         let bounds = stitcher.bounds
-        return Progress(update: update, size: bounds.isNull ? .zero : bounds.size)
+        return Progress(update: update, size: bounds.isNull ? .zero : bounds.size, moving: stitcher.movingShare)
     }
 
     func preview() -> CGImage? { stitcher.image(previewLimit: 136) }
