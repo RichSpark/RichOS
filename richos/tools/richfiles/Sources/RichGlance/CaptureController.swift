@@ -1,5 +1,4 @@
 import AppKit
-import ImageIO
 import RichFilesCore
 import UniformTypeIdentifiers
 
@@ -24,15 +23,43 @@ final class CaptureController: NSObject, NSWindowDelegate {
         }
     }
 
+    private struct Surface {
+        let display: Display
+        let window: CaptureWindow
+        let canvas: CaptureCanvas
+    }
+    private enum Shot {
+        case region(Display, CGRect, CGImage)
+        case display(Display, CGImage)
+        case window(CaptureFrame.WindowTarget, Display)
+    }
+    private enum Route { case copy, editor, save }
+
     private let id = UUID()
     private let began = ProcessInfo.processInfo.systemUptime
     private let refreshPermission: (_ session: CaptureController, _ originPID: pid_t?) -> Void
-    private let finish: (_ copied: String?, _ display: CGRect?) -> Void
+    private let finish: (_ copied: String?, _ display: CGRect?, _ retained: UUID?) -> Void
+    private let store: ScreenshotStore
+    private let openEditor: (ScreenshotDocument) -> Void
     private weak var previousWindow: NSWindow?
     private let previousApp: NSRunningApplication?
     private var display: Display?
     private var acquisition: Task<Void, Never>?
     private var overlay: CaptureWindow?
+    private var surfaces: [Surface] = []
+    private var mode = CaptureMode.region
+    private var candidates: [CaptureFrame.WindowTarget] = []
+    private var windowTarget: CaptureFrame.WindowTarget?
+    private var locked = false
+    private var countdown: CaptureCountdown?
+    private var countdownTask: Task<Void, Never>?
+    private var output: Task<Void, Never>?
+    private var countdownKeys: LiveCaptureKeys?
+    private var pointerPosition = CGPoint.zero
+    private var sourceCursor = NSCursor.arrow
+    private var delay = 0
+    private var includesPointer = false
+    private var action = ScreenshotStore.Action.copy
     private var canvas: CaptureCanvas?
     private var savePanel: NSSavePanel?
     private var permissionPanel: NSPanel?
@@ -42,11 +69,14 @@ final class CaptureController: NSObject, NSWindowDelegate {
     private var resumedAfterCaptureConsent = false
     private var keyLoss: Task<Void, Never>?
 
-    init(previousWindow: NSWindow?, previousApp: NSRunningApplication?,
+    init(previousWindow: NSWindow?, previousApp: NSRunningApplication?, store: ScreenshotStore,
+         openEditor: @escaping (ScreenshotDocument) -> Void,
          refreshPermission: @escaping (_ session: CaptureController, _ originPID: pid_t?) -> Void,
-         finish: @escaping (_ copied: String?, _ display: CGRect?) -> Void) {
+         finish: @escaping (_ copied: String?, _ display: CGRect?, _ retained: UUID?) -> Void) {
         self.previousWindow = previousWindow
         self.previousApp = previousApp
+        self.store = store
+        self.openEditor = openEditor
         self.refreshPermission = refreshPermission
         self.finish = finish
         super.init()
@@ -62,6 +92,11 @@ final class CaptureController: NSObject, NSWindowDelegate {
 
     func start() {
         let point = NSEvent.mouseLocation
+        pointerPosition = point
+        sourceCursor = NSCursor.currentSystem ?? .arrow
+        delay = store.delay
+        includesPointer = store.includesPointer
+        action = store.action
         guard let screen = NSScreen.screens.first(where: { $0.frame.contains(point) }) ?? NSScreen.main,
               let display = Display(screen) else {
             stop(.unavailable, operation: .glanceCaptureFrame)
@@ -80,11 +115,20 @@ final class CaptureController: NSObject, NSWindowDelegate {
             }
         }
         dismissPermissionHelp()
+        acquisition?.cancel()
+        let displays = NSScreen.screens.compactMap(Display.init)
         acquisition = Task { [weak self] in
             do {
-                let image = try await CaptureFrame.read(displayID: display.id, size: display.size)
+                let image = try await CaptureFrame.read(displayID: display.id, size: display.size, excludingOwnWindows: true)
+                var frames = [(display, image)]
+                for other in displays where other.id != display.id {
+                    if let frame = try? await CaptureFrame.read(displayID: other.id, size: other.size, excludingOwnWindows: true) {
+                        frames.append((other, frame))
+                    }
+                }
                 guard !Task.isCancelled, let self, !isFinished else { return }
-                show(image, on: display, point: point)
+                candidates = CaptureFrame.targets()
+                show(frames, on: display, point: point)
             } catch {
                 guard !Task.isCancelled, let self else { return }
                 record(.glanceCaptureFrame, .issues, since: began)
@@ -146,51 +190,64 @@ final class CaptureController: NSObject, NSWindowDelegate {
         }
         waitingForCaptureConsent = true
         keyLoss?.cancel()
-        overlay?.delegate = nil
-        overlay?.orderOut(nil)
-        overlay = nil
-        canvas = nil
+        clearSurfaces()
     }
 
-    private func show(_ image: CGImage, on display: Display, point: CGPoint) {
+    private func show(_ frames: [(Display, CGImage)], on display: Display, point: CGPoint) {
         if Self.isCaptureConsent(NSWorkspace.shared.frontmostApplication) {
             waitForCaptureConsent()
             return
         }
-        let window = CaptureWindow(contentRect: display.frame, styleMask: [.borderless], backing: .buffered, defer: false)
-        window.setFrame(display.frame, display: false)
-        window.level = .screenSaver
-        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
-        window.isReleasedWhenClosed = false
-        window.hasShadow = false
-        window.acceptsMouseMovedEvents = true
-        window.delegate = self
-        window.title = "RichGlance region capture"
-        let geometry = GlanceCaptureGeometry(frame: CGSize(width: image.width, height: image.height), view: display.frame.size)
-        let pointer = geometry.sourcePoint(CGPoint(x: point.x - display.frame.minX, y: display.frame.maxY - point.y))
-        let canvas = CaptureCanvas(image: image, frame: CGRect(origin: .zero, size: display.frame.size), pointer: pointer)
-        canvas.copy = { [weak self] in self?.copyImage() }
-        canvas.save = { [weak self] in self?.saveImage() }
-        canvas.escape = { [weak self] in self?.escapePressed() }
-        canvas.cancel = { [weak self] in self?.cancel() }
-        let frame = CGRect(origin: .zero, size: display.frame.size)
-        let background = NSImageView(frame: frame)
-        background.image = NSImage(cgImage: image, size: frame.size)
-        background.imageScaling = .scaleAxesIndependently
-        background.setAccessibilityElement(false)
-        background.wantsLayer = true
-        let content = NSView(frame: frame)
-        content.addSubview(background)
-        content.addSubview(canvas)
-        window.contentView = content
-        self.canvas = canvas
-        overlay = window
-        activate()
+        clearSurfaces()
+        for (screen, image) in frames {
+            let window = CaptureWindow(contentRect: screen.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+            window.setFrame(screen.frame, display: false)
+            window.level = .screenSaver
+            window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
+            window.isReleasedWhenClosed = false
+            window.hasShadow = false
+            window.acceptsMouseMovedEvents = true
+            window.delegate = self
+            window.title = "RichGlance capture"
+            let frame = CGRect(origin: .zero, size: screen.frame.size)
+            let geometry = GlanceCaptureGeometry(frame: CGSize(width: image.width, height: image.height), view: frame.size)
+            let pointer = geometry.sourcePoint(CGPoint(x: point.x - screen.frame.minX, y: screen.frame.maxY - point.y))
+            let canvas = CaptureCanvas(image: image, frame: frame, pointer: pointer)
+            window.canvas = canvas
+            canvas.copy = { [weak self] in self?.deliver(.copy) }
+            canvas.edit = { [weak self] in self?.deliver(.editor) }
+            canvas.save = { [weak self] in self?.deliver(.save) }
+            canvas.escape = { [weak self] in self?.escapePressed() }
+            canvas.cancel = { [weak self] in self?.cancel() }
+            canvas.changeMode = { [weak self] in self?.setMode($0) }
+            canvas.changeDelay = { [weak self] delay in self?.setDelay(delay) }
+            canvas.changePointer = { [weak self] pointer in self?.setPointer(pointer) }
+            canvas.changeAction = { [weak self] action in self?.setAction(action) }
+            canvas.aim = { [weak self, weak window] point in
+                guard let window else { return }
+                self?.aim(on: screen, point: window.convertPoint(toScreen: point))
+            }
+            canvas.chooseTarget = { [weak self, weak window] point in
+                guard let self, let window else { return }
+                if let point { aim(on: screen, point: window.convertPoint(toScreen: point)) }
+                chooseTarget()
+            }
+            canvas.nextTarget = { [weak self] in self?.nextTarget() }
+            let background = NSImageView(frame: frame)
+            background.image = NSImage(cgImage: image, size: frame.size)
+            background.imageScaling = .scaleAxesIndependently
+            background.setAccessibilityElement(false)
+            let content = NSView(frame: frame)
+            content.addSubview(background)
+            content.addSubview(canvas)
+            window.contentView = content
+            surfaces.append(Surface(display: screen, window: window, canvas: canvas))
+        }
+        selectDisplay(display)
+        prepareOverlay()
         if NSApp.isActive {
             focusCapture()
         } else {
-            // A background Launch Services wakeup must leave the source app undisturbed
-            // until the frame exists. Ask Launch Services to activate the existing app now.
             let configuration = NSWorkspace.OpenConfiguration()
             configuration.activates = true
             configuration.addsToRecentItems = false
@@ -201,43 +258,279 @@ final class CaptureController: NSObject, NSWindowDelegate {
         record(.glanceCaptureFrame, .complete, since: began)
     }
 
+    private func prepareOverlay() {
+        refreshOverlay()
+        activate()
+        for surface in surfaces where surface.window !== overlay { surface.window.orderFrontRegardless() }
+    }
+
     private func focusCapture() {
         guard let overlay, let canvas else { return }
         overlay.makeKeyAndOrderFront(nil)
-        overlay.makeFirstResponder(canvas)
+        canvas.focusAction()
+    }
+
+    private func selectDisplay(_ target: Display) {
+        guard let surface = surfaces.first(where: { $0.display.id == target.id }) else { return }
+        display = target
+        canvas = surface.canvas
+        overlay = surface.window
+    }
+
+    private func clearSurfaces() {
+        for surface in surfaces {
+            surface.window.delegate = nil
+            surface.window.orderOut(nil)
+        }
+        surfaces.removeAll()
+        overlay = nil
+        canvas = nil
+    }
+
+    private func setMode(_ target: CaptureMode) {
+        guard target != mode, output == nil, countdown == nil else { return }
+        _ = canvas?.resetSelection()
+        mode = target
+        locked = false
+        windowTarget = nil
+        if target == .window, let display { aim(on: display, point: NSEvent.mouseLocation) }
+        refreshOverlay()
+        focusCapture()
+    }
+
+    private func aim(on target: Display, point: CGPoint) {
+        guard !locked, countdown == nil, mode != .region || canvas?.selection.phase == .aiming else { return }
+        let changed = display?.id != target.id
+        if changed { selectDisplay(target) }
+        var update = changed
+        if mode == .window {
+            let desktop = CGPoint(x: point.x, y: primaryTop - point.y)
+            let candidate = candidates.first { $0.frame.contains(desktop) }
+            if candidate?.id != windowTarget?.id { windowTarget = candidate; update = true }
+        }
+        if update {
+            refreshOverlay()
+            if changed { focusCapture() }
+        }
+    }
+
+    private var primaryTop: CGFloat { NSScreen.screens.first?.frame.maxY ?? 0 }
+
+    private func chooseTarget() {
+        guard !locked else { return }
+        guard mode == .display || windowTarget != nil else {
+            canvas?.showError("Move over a window or press Tab to choose one.")
+            return
+        }
+        locked = true
+        refreshOverlay()
+        focusCapture()
+    }
+
+    private func nextTarget() {
+        guard !locked else { return }
+        if mode == .display, let index = surfaces.firstIndex(where: { $0.display.id == display?.id }) {
+            selectDisplay(surfaces[(index + 1) % surfaces.count].display)
+        } else if mode == .window, !candidates.isEmpty {
+            let index = candidates.firstIndex { $0.id == windowTarget?.id } ?? -1
+            let candidate = candidates[(index + 1) % candidates.count]
+            windowTarget = candidate
+            let center = CGPoint(x: candidate.frame.midX, y: primaryTop - candidate.frame.midY)
+            if let other = surfaces.first(where: { $0.display.frame.contains(center) }) { selectDisplay(other.display) }
+        }
+        refreshOverlay()
+        focusCapture()
+    }
+
+    private func refreshOverlay() {
+        for surface in surfaces {
+            let active = surface.window === overlay
+            let local = windowTarget.map {
+                CGRect(x: $0.frame.minX - surface.display.frame.minX,
+                       y: $0.frame.minY - (primaryTop - surface.display.frame.maxY),
+                       width: $0.frame.width, height: $0.frame.height)
+            }
+            let rect: CGRect?
+            let size: CGSize
+            switch mode {
+            case .window:
+                rect = local
+                size = local.map { CGSize(width: $0.width * (display?.scale ?? 1), height: $0.height * (display?.scale ?? 1)) } ?? .zero
+            case .display:
+                rect = active ? surface.canvas.bounds : nil
+                size = surface.display.size
+            case .region:
+                rect = nil
+                size = .zero
+            }
+            surface.canvas.configure(mode: mode, active: active, delay: delay, pointer: includesPointer, action: action,
+                                     origin: previousApp?.localizedName ?? "")
+            let dimensions = "\(Int(size.width.rounded())) × \(Int(size.height.rounded())) px"
+            surface.canvas.updateTarget(rect, description: dimensions, locked: locked)
+        }
+    }
+
+    private func setDelay(_ value: Int) {
+        do { try store.setDelay(value); delay = value; refreshOverlay(); focusCapture() }
+        catch { canvas?.showError("Could not save the delay setting.") }
+    }
+
+    private func setPointer(_ value: Bool) {
+        do { try store.setPointer(value); includesPointer = value; refreshOverlay(); focusCapture() }
+        catch { canvas?.showError("Could not save the pointer setting.") }
+    }
+
+    private func setAction(_ value: ScreenshotStore.Action) {
+        do { try store.setAction(value); action = value; refreshOverlay(); focusCapture() }
+        catch { canvas?.showError("Could not save the action setting.") }
     }
 
     private func escapePressed() {
-        if let savePanel {
+        if countdown != nil {
+            cancelCountdown()
+        } else if let savePanel {
             savePanel.cancel(nil)
+        } else if output != nil {
+            output?.cancel()
+            output = nil
+            focusCapture()
+        } else if locked {
+            locked = false
+            refreshOverlay()
+            focusCapture()
         } else if canvas?.resetSelection() != true {
             cancel()
         }
     }
 
-    private func copyImage() {
-        let started = ProcessInfo.processInfo.systemUptime
-        guard let canvas else { return }
-        guard let crop = canvas.selection.crop, !crop.isEmpty else {
-            canvas.showError("Nothing selected yet. Move a corner with the arrows.")
-            return
+    private func shot() -> Shot? {
+        guard let display, let canvas, canvas.ready else { return nil }
+        switch mode {
+        case .region:
+            return canvas.selection.crop.map { .region(display, $0, canvas.image) }
+        case .display:
+            return .display(display, canvas.image)
+        case .window:
+            return windowTarget.map { .window($0, display) }
         }
-        guard let data = pngData() else {
-            outputFailed("The selected image could not be copied.", since: started)
-            return
-        }
-        let clipboard = NSPasteboard.general
-        clipboard.clearContents()
-        guard clipboard.setData(data, forType: .png) else {
-            outputFailed("The selected image could not be copied.", since: started)
-            return
-        }
-        record(.glanceCaptureOutput, .complete, since: started)
-        stop(.complete, copied: "Copied \(Int(crop.width)) × \(Int(crop.height)) px")
     }
 
-    private func saveImage() {
-        guard let overlay, let canvas, canvas.selection.canCapture, savePanel == nil else { return }
+    private func deliver(_ route: Route) {
+        guard !isFinished, savePanel == nil, output == nil, countdown == nil else { return }
+        guard let shot = shot() else {
+            canvas?.showError("Choose an area to capture.")
+            return
+        }
+        if delay > 0 { beginCountdown(shot, route: route) }
+        else { acquireOutput(shot, route: route, fresh: false) }
+    }
+
+    private func acquireOutput(_ shot: Shot, route: Route, fresh: Bool) {
+        let started = ProcessInfo.processInfo.systemUptime
+        output = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let document = try await read(shot, fresh: fresh)
+                guard !Task.isCancelled, !isFinished else { return }
+                output = nil
+                publish(document, route: route, started: started)
+            } catch {
+                guard !Task.isCancelled, !isFinished else { return }
+                output = nil
+                if fresh { prepareOverlay(); focusCapture() }
+                outputFailed("Could not capture the selected target. Choose it again and try once more.", since: started)
+            }
+        }
+    }
+
+    private func read(_ shot: Shot, fresh: Bool) async throws -> ScreenshotDocument {
+        let source: CGImage
+        let scale: CGFloat
+        let crop: CGRect?
+        let pointerOrigin: CGPoint
+        switch shot {
+        case .region(let display, let box, let frozen):
+            source = fresh ? try await CaptureFrame.read(displayID: display.id, size: display.size, pointer: includesPointer,
+                                                        excludingOwnWindows: true) : frozen
+            scale = CGFloat(source.width) / display.frame.width
+            crop = box
+            pointerOrigin = CGPoint(x: display.frame.minX, y: display.frame.maxY)
+        case .display(let display, let frozen):
+            source = fresh ? try await CaptureFrame.read(displayID: display.id, size: display.size, pointer: includesPointer,
+                                                        excludingOwnWindows: true) : frozen
+            scale = CGFloat(source.width) / display.frame.width
+            crop = nil
+            pointerOrigin = CGPoint(x: display.frame.minX, y: display.frame.maxY)
+        case .window(let target, let display):
+            (source, scale) = try await CaptureFrame.read(windowID: target.id, scale: display.scale, pointer: fresh && includesPointer)
+            crop = nil
+            pointerOrigin = CGPoint(x: target.frame.minX, y: primaryTop - target.frame.minY)
+        }
+        let image = !fresh && includesPointer
+            ? drawPointer(on: source, at: CGPoint(x: (pointerPosition.x - pointerOrigin.x) * scale,
+                                                y: (pointerOrigin.y - pointerPosition.y) * scale), scale: scale)
+            : source
+        if let crop {
+            guard let cropped = image.cropping(to: crop), cropped.width == Int(crop.width),
+                  cropped.height == Int(crop.height) else { throw CaptureFrame.Failure.displayUnavailable }
+            return ScreenshotDocument(original: cropped, scale: scale)
+        }
+        return ScreenshotDocument(original: image, scale: scale)
+    }
+
+    private func drawPointer(on image: CGImage, at point: CGPoint, scale: CGFloat) -> CGImage {
+        let cursor = sourceCursor.image
+        let hot = sourceCursor.hotSpot
+        let rect = CGRect(x: point.x - hot.x * scale, y: point.y - hot.y * scale,
+                          width: cursor.size.width * scale, height: cursor.size.height * scale)
+        guard rect.intersects(CGRect(x: 0, y: 0, width: image.width, height: image.height)),
+              let space = CGColorSpace(name: CGColorSpace.sRGB),
+              let context = CGContext(data: nil, width: image.width, height: image.height, bitsPerComponent: 8,
+                                      bytesPerRow: 0, space: space,
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return image }
+        context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: false)
+        cursor.draw(in: CGRect(x: rect.minX, y: CGFloat(image.height) - rect.maxY, width: rect.width, height: rect.height))
+        NSGraphicsContext.restoreGraphicsState()
+        return context.makeImage() ?? image
+    }
+
+    private func publish(_ document: ScreenshotDocument, route: Route, started: TimeInterval) {
+        switch route {
+        case .editor:
+            retain(document)
+            record(.glanceCaptureOutput, .complete, since: started)
+            openEditor(document)
+            stop(.complete, restoreFocus: false)
+        case .copy:
+            guard let data = ScreenshotRenderer.png(document.original), ScreenshotRenderer.copy(data) else {
+                prepareOverlay()
+                outputFailed("The selected image could not be copied.", since: started)
+                return
+            }
+            let retained = retain(document)
+            record(.glanceCaptureOutput, .complete, since: started)
+            stop(.complete, copied: "Copied \(document.original.width) × \(document.original.height) px", retained: retained)
+        case .save:
+            if overlay?.isVisible != true { prepareOverlay(); focusCapture() }
+            save(document)
+        }
+    }
+
+    @discardableResult
+    private func retain(_ document: ScreenshotDocument) -> UUID? {
+        let start = ProcessInfo.processInfo.systemUptime
+        do {
+            if try store.retain(document) { return document.id }
+        } catch {
+            record(.glanceCaptureOutput, .issues, since: start)
+        }
+        return nil
+    }
+
+    private func save(_ document: ScreenshotDocument) {
+        guard let overlay, savePanel == nil else { return }
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.png]
         let stamp = DateFormatter()
@@ -245,20 +538,16 @@ final class CaptureController: NSObject, NSWindowDelegate {
         panel.nameFieldStringValue = "RichGlance Capture \(stamp.string(from: Date())).png"
         panel.canCreateDirectories = true
         savePanel = panel
-        // The panel must float over the full-screen capture window.
         panel.level = overlay.level
         panel.beginSheetModal(for: overlay) { [weak self, weak panel] outcome in
             guard let self, let panel, savePanel === panel, !isFinished else { return }
             savePanel = nil
-            guard outcome == .OK, let url = panel.url else {
-                overlay.makeKeyAndOrderFront(nil)
-                overlay.makeFirstResponder(canvas)
-                return
-            }
+            guard outcome == .OK, let url = panel.url else { focusCapture(); return }
             let started = ProcessInfo.processInfo.systemUptime
             do {
-                guard let data = pngData() else { throw CocoaError(.fileWriteUnknown) }
+                guard let data = ScreenshotRenderer.png(document.original) else { throw CocoaError(.fileWriteUnknown) }
                 try data.write(to: url, options: .atomic)
+                retain(document)
                 record(.glanceCaptureOutput, .complete, since: started)
                 stop(.complete)
             } catch {
@@ -267,19 +556,49 @@ final class CaptureController: NSObject, NSWindowDelegate {
         }
     }
 
-    private func pngData() -> Data? {
-        guard let canvas, let crop = canvas.selection.crop, !crop.isEmpty,
-              let image = canvas.image.cropping(to: crop) else { return nil }
-        let data = NSMutableData()
-        guard let destination = CGImageDestinationCreateWithData(data, UTType.png.identifier as CFString, 1, nil) else { return nil }
-        CGImageDestinationAddImage(destination, image, nil)
-        return CGImageDestinationFinalize(destination) ? data as Data : nil
+    private func beginCountdown(_ shot: Shot, route: Route) {
+        guard let display else { return }
+        let panel = CaptureCountdown(display: display.frame)
+        panel.cancel = { [weak self] in self?.cancelCountdown() }
+        countdown = panel
+        keyLoss?.cancel()
+        for surface in surfaces { surface.window.orderOut(nil) }
+        restoreOrigin()
+        panel.show(seconds: delay)
+        countdownKeys = LiveCaptureKeys(escape: { [weak self] in self?.cancelCountdown() })
+        countdownTask = Task { [weak self, weak panel] in
+            guard let self, let panel else { return }
+            let started = ProcessInfo.processInfo.systemUptime
+            for seconds in stride(from: delay, to: 0, by: -1) {
+                panel.update(seconds: seconds)
+                try? await Task.sleep(for: .seconds(1))
+                guard !Task.isCancelled, countdown === panel else { return }
+            }
+            closeCountdown()
+            record(.glanceCaptureFrame, .complete, since: started)
+            acquireOutput(shot, route: route, fresh: true)
+        }
+    }
+
+    private func closeCountdown() {
+        countdownTask?.cancel()
+        countdownTask = nil
+        countdown?.window.orderOut(nil)
+        countdown = nil
+        countdownKeys = nil
+    }
+
+    private func cancelCountdown() {
+        guard countdown != nil else { return }
+        closeCountdown()
+        prepareOverlay()
+        focusCapture()
     }
 
     private func outputFailed(_ message: String, since started: TimeInterval) {
         record(.glanceCaptureOutput, .issues, since: started)
         canvas?.showError(message)
-        overlay?.makeFirstResponder(canvas)
+        focusCapture()
     }
 
     private func showPermissionHelp(on screen: NSScreen) {
@@ -364,17 +683,19 @@ final class CaptureController: NSObject, NSWindowDelegate {
     }
 
     @objc private func displaysChanged() {
-        guard let display, !NSScreen.screens.contains(where: display.matches) else { return }
+        guard surfaces.contains(where: { surface in !NSScreen.screens.contains(where: surface.display.matches) }) ||
+                (surfaces.isEmpty && display.map { target in !NSScreen.screens.contains(where: target.matches) } == true)
+        else { return }
         stop(.interrupted)
     }
 
     func windowDidResignKey(_ notification: Notification) {
-        guard notification.object as? NSWindow === overlay, savePanel == nil else { return }
+        guard notification.object as? NSWindow === overlay, savePanel == nil, countdown == nil else { return }
         keyLoss?.cancel()
         // Workspace activation can arrive just after AppKit reports loss of the key window.
         keyLoss = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(150))
-            guard !Task.isCancelled, let self, let overlay, !overlay.isKeyWindow, savePanel == nil else { return }
+            guard !Task.isCancelled, let self, let overlay, !overlay.isKeyWindow, savePanel == nil, countdown == nil, output == nil else { return }
             if Self.isCaptureConsent(NSWorkspace.shared.frontmostApplication) { waitForCaptureConsent() }
             else { stop(.cancelled, restoreFocus: false) }
         }
@@ -385,9 +706,18 @@ final class CaptureController: NSObject, NSWindowDelegate {
         else { NSApp.activate(ignoringOtherApps: true) }
     }
 
+    private func restoreOrigin() {
+        if let previousWindow, previousWindow.isVisible, !previousWindow.isMiniaturized {
+            previousWindow.makeKeyAndOrderFront(nil)
+        } else if let previousApp, !previousApp.isTerminated {
+            if #available(macOS 14.0, *) { _ = previousApp.activate(from: .current, options: []) }
+            else { _ = previousApp.activate(options: []) }
+        }
+    }
+
     private func stop(_ outcome: RichFilesDiagnostics.Outcome,
                       operation: RichFilesDiagnostics.Operation = .glanceCaptureSession,
-                      restoreFocus: Bool = true, copied: String? = nil) {
+                      restoreFocus: Bool = true, copied: String? = nil, retained: UUID? = nil) {
         guard !isFinished else { return }
         isFinished = true
         acquisition?.cancel()
@@ -398,20 +728,13 @@ final class CaptureController: NSObject, NSWindowDelegate {
         dismissPermissionHelp()
         savePanel?.cancel(nil)
         savePanel = nil
-        overlay?.delegate = nil
-        if restoreFocus, NSApp.isActive {
-            if let previousWindow, previousWindow.isVisible, !previousWindow.isMiniaturized {
-                previousWindow.makeKeyAndOrderFront(nil)
-            } else if let previousApp, !previousApp.isTerminated {
-                if #available(macOS 14.0, *) { _ = previousApp.activate(from: .current, options: []) }
-                else { _ = previousApp.activate(options: []) }
-            }
-        }
-        overlay?.orderOut(nil)
-        overlay = nil
-        canvas = nil
+        closeCountdown()
+        output?.cancel()
+        output = nil
+        clearSurfaces()
+        if restoreFocus, NSApp.isActive { restoreOrigin() }
         record(operation, outcome, since: began)
-        finish(copied, display?.frame)
+        finish(copied, display?.frame, retained)
     }
 
     private func record(_ operation: RichFilesDiagnostics.Operation, _ outcome: RichFilesDiagnostics.Outcome, since: TimeInterval) {
@@ -421,6 +744,11 @@ final class CaptureController: NSObject, NSWindowDelegate {
 }
 
 private final class CaptureWindow: NSWindow {
+    weak var canvas: CaptureCanvas?
+    override func sendEvent(_ event: NSEvent) {
+        if event.type == .keyDown, attachedSheet == nil, canvas?.handleKey(event) == true { return }
+        super.sendEvent(event)
+    }
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
 }

@@ -23,6 +23,22 @@ final class GlanceCaptureSelectionTests: XCTestCase {
         XCTAssertEqual(selection.crop?.width, 103)
     }
 
+    func testRefinementAndTranslationKeepTheCropInSourcePixels() {
+        let start = CGPoint(x: 200, y: 100)
+        var selection = GlanceCaptureSelection(width: 400, height: 300, pointer: start)
+        selection.mouseDown(at: start)
+        selection.movePointer(to: CGPoint(x: 301, y: 157))
+        selection.mouseUp()
+        selection.refine(active: CGPoint(x: 200, y: 158), fixed: CGPoint(x: 301, y: 100))
+        XCTAssertEqual(selection.crop, CGRect(x: 200, y: 100, width: 101, height: 58))
+        selection.nudge(dx: -1, dy: 0)
+        selection.translate(dx: 10, dy: -400)
+        XCTAssertEqual(selection.crop, CGRect(x: 209, y: 0, width: 102, height: 58))
+        selection.switchCorner()
+        selection.nudge(dx: 1, dy: 0)
+        XCTAssertEqual(selection.crop, CGRect(x: 209, y: 0, width: 103, height: 58))
+    }
+
     func testKeyboardPlacementCanCrossCornersAndClampsAtEdges() {
         var selection = GlanceCaptureSelection(width: 40, height: 30, pointer: CGPoint(x: 3, y: 10))
         selection.shiftReturn()
