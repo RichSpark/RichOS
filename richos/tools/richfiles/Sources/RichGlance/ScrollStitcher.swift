@@ -72,7 +72,7 @@ struct ScrollStitcher {
                 settled = true
             }
             let nextPosition = Offset(x: position.x + offset.x, y: position.y + offset.y)
-            guard add(next, at: nextPosition, fixed: match.fixed, step: offset) else { return .limit }
+            guard add(next, at: nextPosition, fixed: match.fixed) else { return .limit }
             return .moved(dx: offset.x, dy: offset.y)
         }
         return add(next, at: .zero) ? .initial : .limit
@@ -97,11 +97,11 @@ struct ScrollStitcher {
     }
 
     /// Place a frame's content where no earlier frame showed content, and its fixed bars (`fixed`)
-    /// only where nothing else is: content always replaces a bar. A bar on the side the view moves
-    /// toward (`step`) replaces the bars of earlier frames, so a bottom bar ends up once, below the
-    /// last content; a bar on the side it moves away from stays behind them, so a header stays once,
-    /// above the first.
-    private mutating func add(_ raster: Raster, at offset: Offset, fixed: Fixed = .none, step: Offset = .zero) -> Bool {
+    /// only where nothing else is: content always replaces a bar. A bar on a side where this frame
+    /// reaches past everything captured so far replaces the bars of earlier frames, so a bottom bar
+    /// ends up once, below the last content; any other bar stays behind them, so a header stays once
+    /// above the first content, and scrolling back and forth near an end leaves its bar whole.
+    private mutating func add(_ raster: Raster, at offset: Offset, fixed: Fixed = .none) -> Bool {
         let tile = CGRect(x: offset.x, y: offset.y, width: raster.width, height: raster.height)
         let grown = bounds.union(tile)
         guard Self.fits(grown) else { return false }
@@ -110,10 +110,10 @@ struct ScrollStitcher {
         let content = CGRect(x: tile.minX + left, y: tile.minY + top,
                              width: tile.width - left - right, height: tile.height - top - bottom)
         let bars = [
-            (CGRect(x: tile.minX, y: tile.minY, width: tile.width, height: top), step.y < 0),
-            (CGRect(x: tile.minX, y: content.maxY, width: tile.width, height: bottom), step.y > 0),
-            (CGRect(x: tile.minX, y: content.minY, width: left, height: content.height), step.x < 0),
-            (CGRect(x: content.maxX, y: content.minY, width: right, height: content.height), step.x > 0)
+            (CGRect(x: tile.minX, y: tile.minY, width: tile.width, height: top), !bounds.isNull && tile.minY < bounds.minY),
+            (CGRect(x: tile.minX, y: content.maxY, width: tile.width, height: bottom), !bounds.isNull && tile.maxY > bounds.maxY),
+            (CGRect(x: tile.minX, y: content.minY, width: left, height: content.height), !bounds.isNull && tile.minX < bounds.minX),
+            (CGRect(x: content.maxX, y: content.minY, width: right, height: content.height), !bounds.isNull && tile.maxX > bounds.maxX)
         ].filter { !$0.0.isEmpty }
         let solid = patches.filter { !$0.bar }.map(\.rect)
         var fresh = Self.subtract(solid, from: [content]).map { ($0, false) }

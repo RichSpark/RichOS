@@ -169,7 +169,7 @@ final class ScrollStitcherTests: XCTestCase {
 
     func testBottomBarIsCapturedToTheEndAndAppearsOnceAtTheBottom() throws {
         // A translucent sticky header and a bar fixed to the bottom of the view, as on many web pages.
-        // Automatic steps, then manual ones: back up, and shorter than the bar.
+        // Automatic steps, then manual ones: back up, shorter than the bar, and back and forth at the end.
         let page = textPage(width: 800, height: 2000)
         func view(_ y: Int) -> CGImage {
             withBottomBar(withHeader(crop(page, x: 0, y: y, w: 800, h: 500), rows: 64, opacity: 0.8), rows: 56)
@@ -178,7 +178,7 @@ final class ScrollStitcherTests: XCTestCase {
         var manual = ScrollStitcher()
         XCTAssertEqual(manual.append(view(0)), .initial)
         var y = 0
-        for next in [40, 230, 180, 400, 640, 630, 870, 1100, 1340, 1500] {
+        for next in [40, 230, 180, 400, 640, 630, 870, 1100, 1340, 1500, 1440, 1485] {
             XCTAssertEqual(manual.append(view(next)), .moved(dx: 0, dy: next - y), "manual step to y=\(next)")
             y = next
         }
