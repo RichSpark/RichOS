@@ -648,6 +648,9 @@ pub async fn check(app: &AppHandle) -> UpdateView {
                     v.available_version = Some(s.publication.version);
                     v.ready_is_rollback = s.rollback;
                     v.percent = Some(100);
+                    // A failure read earlier (a denied swap, before Try again) is not true of
+                    // a ready update: its technical reason must not stay on screen under it.
+                    v.failure = None;
                 })
             }
             // A shared startup cannot retire an obsolete prepared receipt. It must
