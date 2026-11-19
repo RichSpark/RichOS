@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
-"""no-grant-reader.py's TCC-log summary, offline, on lines in the shape macOS 15.7.7's tccd and
-universalAccessAuthWarn logged them in the 2026-11-12 clean-guest run. The guest run is its own proof."""
+"""Test the TCC-log summary and the reader's evidence handling with local guest and transfer stubs."""
+import contextlib
 import importlib.util
+import io
 from pathlib import Path
+import subprocess
+import sys
+import tempfile
 import unittest
+from unittest.mock import Mock, patch
 
 spec = importlib.util.spec_from_file_location('no_grant_reader', Path(__file__).resolve().parents[1] / 'no-grant-reader.py')
 reader = importlib.util.module_from_spec(spec)
@@ -15,6 +20,7 @@ ASK = ('2026-11-12 05:{t} E  tccd[154:108a] [com.apple.TCC:access] TCCDProcess: 
 UP = ('2026-11-12 05:{t} Df universalAccessAuthWarn[707:16b8] [com.apple.AppKit:Window] Window <NSWindow: 0x14b7267b0> '
       'windowNumber=1b ordered front from a non-active application and may order beneath the active application')
 AGAIN = '2026-11-12 05:{t} Df universalAccessAuthWarn[707:16b8] [com.apple.AppKit:Window] order window: 1b op: 1 relative: 0 related: 0'
+ANSWERS = ''.join('  answered at fixture: {"jsonrpc":"2.0","id":%d,"result":{}}\n' % n for n in (1, 2, 3))
 
 
 class Summary(unittest.TestCase):
@@ -35,7 +41,6 @@ class Summary(unittest.TestCase):
         self.assertEqual(len(reader.summary(log)), 2)
 
     def verdict_of(self, calls, done=True):
-        import tempfile
         with tempfile.TemporaryDirectory() as d:
             out = Path(d)
             (out / 'calls.txt').write_text(calls)
@@ -52,6 +57,130 @@ class Summary(unittest.TestCase):
 
     def test_a_log_without_a_request_says_nothing(self):
         self.assertEqual(reader.summary('2026-11-12 05:00:00.000 Df tccd[1:2] nothing here'), [])
+
+
+class Measurement(unittest.TestCase):
+    def run_reader(self, out, failed=None, deliver=True):
+        events = []
+        destinations = []
+
+        def run(args, **kwargs):
+            stdout = ''
+            if args[0] == reader.TART:
+                stage = args[1]
+                if stage == 'ip':
+                    stdout = '192.0.2.1\n'
+            elif args[0] == 'scp':
+                src, dest = args[-2:]
+                if dest.endswith('/RichOS.zip'):
+                    stage = 'copy bundle'
+                elif dest.endswith('/measure.sh'):
+                    stage = 'copy script'
+                else:
+                    self.assertTrue(src.endswith(':measure/.'))
+                    stage = 'pull'
+                    dest = Path(dest)
+                    destinations.append(dest)
+                    if deliver:
+                        (dest / 'calls.txt').write_text(ANSWERS)
+                        (dest / 'done.txt').write_text('fresh done\n')
+                        (dest / 'tcc.log').write_text(ASK.format(t='34:25.724', pid=649))
+            else:
+                self.assertEqual(args[0], 'ssh')
+                command = args[-1]
+                if command == 'true':
+                    stage = 'ssh ready'
+                elif command.startswith('pgrep -x Finder '):
+                    stage = 'gui session'
+                    stdout = 'finder\n'
+                elif 'ditto' in command:
+                    stage = 'install'
+                else:
+                    self.assertTrue(command.startswith('bash /tmp/measure.sh '))
+                    stage = 'measure'
+            events.append(stage)
+            rc = 1 if stage == failed else 0
+            return subprocess.CompletedProcess(args, rc, stdout, 'fixture failure' if rc else '')
+
+        args = ['no-grant-reader.py', '--out', str(out), '--tart-home', str(out.parent / 'tart'),
+                '--bundle', str(out.parent / 'RichOS.zip')]
+        boot = Mock(pid=123)
+        with patch.object(sys, 'argv', args), patch.object(reader.slots, 'guest_slot', return_value=contextlib.nullcontext(0)), \
+                patch.object(reader.subprocess, 'run', side_effect=run), patch.object(reader.subprocess, 'Popen', return_value=boot), \
+                patch.object(reader.time, 'sleep'), contextlib.redirect_stdout(io.StringIO()) as printed:
+            rc = reader.main()
+        return rc, events, destinations, printed.getvalue(), boot
+
+    def test_failed_prerequisites_cannot_pass_with_a_previous_result(self):
+        for stage, next_stage in (('set', 'ip'), ('ssh ready', 'gui session'), ('gui session', 'copy bundle'),
+                                  ('copy bundle', 'copy script'), ('copy script', 'install'), ('install', 'measure')):
+            with self.subTest(stage=stage), tempfile.TemporaryDirectory() as tmp:
+                out = Path(tmp) / 'evidence'
+                old = self.write_old_result(out)
+                rc, events, _, printed, _ = self.run_reader(out, failed=stage)
+                self.assertEqual(rc, 1, printed)
+                self.assertIn(stage, events)
+                self.assertNotIn(next_stage, events)
+                self.assertEqual(events[-1], 'delete')
+                self.assert_old_result(out, old)
+
+    def test_measure_or_pull_failure_keeps_partial_output_but_refuses_complete_looking_files(self):
+        for stage in ('measure', 'pull'):
+            with self.subTest(stage=stage), tempfile.TemporaryDirectory() as tmp:
+                out = Path(tmp) / 'evidence'
+                old = self.write_old_result(out)
+                rc, events, destinations, printed, boot = self.run_reader(out, failed=stage)
+                self.assertEqual(rc, 1, printed)
+                self.assertIn(f'{stage} 1', printed)
+                self.assertEqual(events[-2:], ['stop', 'delete'])
+                boot.wait.assert_called_once_with(timeout=120)
+                fresh, = destinations
+                self.assertEqual(fresh.parent, out)
+                self.assertTrue((fresh / 'done.txt').exists())
+                self.assertFalse((fresh / 'summary.txt').exists())
+                self.assert_old_result(out, old)
+
+    def test_successful_guest_steps_still_need_fresh_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / 'evidence'
+            old = self.write_old_result(out)
+            rc, _, destinations, printed, _ = self.run_reader(out, deliver=False)
+            self.assertEqual(rc, 1, printed)
+            self.assertIn('0 of 3 reads answered', printed)
+            fresh, = destinations
+            self.assertFalse((fresh / 'done.txt').exists())
+            self.assert_old_result(out, old)
+
+    def test_success_keeps_the_original_and_returns_new_evidence_on_each_repeat(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / 'evidence'
+            rc, _, destinations, printed, _ = self.run_reader(out)
+            self.assertEqual(rc, 0, printed)
+            self.assertEqual(destinations, [out])
+            old = {path.name: path.read_bytes() for path in out.iterdir()}
+            self.assertIn(b'asked macOS for Accessibility', old['summary.txt'])
+            first_repeat = None
+            for _ in range(2):
+                rc, _, destinations, printed, _ = self.run_reader(out)
+                self.assertEqual(rc, 0, printed)
+                fresh, = destinations
+                self.assertEqual(fresh.parent, out)
+                self.assertNotEqual(fresh, first_repeat)
+                self.assertIn(str(fresh), printed)
+                self.assertEqual((fresh / 'summary.txt').read_bytes(), old['summary.txt'])
+                first_repeat = fresh
+            self.assert_old_result(out, old)
+
+    def write_old_result(self, out):
+        out.mkdir()
+        old = {'calls.txt': ANSWERS.encode(), 'done.txt': b'old done\n',
+               'tcc.log': b'old tcc\n', 'summary.txt': b'old summary\n', 'drive.log': b'old drive\n'}
+        for name, data in old.items():
+            (out / name).write_bytes(data)
+        return old
+
+    def assert_old_result(self, out, old):
+        self.assertEqual({name: (out / name).read_bytes() for name in old}, old)
 
 
 if __name__ == '__main__':

@@ -224,6 +224,10 @@ def problems(steps):
                 or (isinstance(step.get('points'), list) and len(step['points']) + found_point != 1)):
             found.append(f'step {i} (pointer): "scroll" is a whole number of lines from -50 to 50, not 0, '
                          f'turned with the pointer resting on exactly one point ("points" or "find")')
+        elif op == 'pointer' and step.get('scroll') and (step.get('hover') is True or step.get('right') is True):
+            found.append(f'step {i} (pointer): "scroll" takes neither "hover" nor "right"')
+        elif op == 'pointer' and step.get('hover') is True and step.get('right') is True:
+            found.append(f'step {i} (pointer): "hover" moves with no button, so it cannot also take "right"')
         elif op == 'pointer' and step.get('double') is True and (
                 step.get('scroll') or step.get('hover') or step.get('right')
                 or (isinstance(step.get('points'), list) and len(step['points']) + found_point != 1)):
