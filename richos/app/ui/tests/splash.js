@@ -2744,7 +2744,7 @@ async function main() {
     }
     assertEqual(
       tickOwners.slice().sort(),
-      ["recover", "replay", "start", "tick"],
+      ["replay", "resume", "start", "tick"],
       "frame requests for the normal start, the retry, the gallery preview and the bar itself"
     );
     assert(otherOwners.every((o) => o === "reportPainted"),
@@ -3353,9 +3353,9 @@ async function main() {
     const playing = await page.evaluate(() => {
       const splash = document.getElementById("splash");
       window.RichSplash.yieldNow("app-ready");
-      return { hidden: getComputedStyle(splash).visibility, held: window.RichSplash.state.heldAt, reason: window.RichSplash.state.reason, covered: window.loroCovered() };
+      return { hidden: getComputedStyle(splash).visibility, children: splash.childElementCount, held: window.RichSplash.state.heldAt, reason: window.RichSplash.state.reason, covered: window.loroCovered() };
     });
-    assertEqual(playing, { hidden: "hidden", held: 0, reason: null, covered: true }, "the web copy joins or interrupts the native sequence");
+    assertEqual(playing, { hidden: "hidden", children: 0, held: 0, reason: null, covered: true }, "native playback keeps Home covered without building the HTML splash");
     const fading = await page.evaluate(async () => {
       window.__native.finish({ state: "finished" });
       await Promise.resolve();

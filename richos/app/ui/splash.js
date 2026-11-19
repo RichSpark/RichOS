@@ -1152,8 +1152,7 @@
           },
           hold: holdMs,
           // Exports and share cards make no sound. Native playback owns its cue.
-          silent: drawing() || state.native || !!silent,
-          native: state.native,
+          silent: drawing() || !!silent,
           drawing: drawing(),
           exportScale: drawing() ? window.__RICHOS_LAUNCH__.exportScale : 0,
           card: drawing() && window.__RICHOS_LAUNCH__.card === true
@@ -1327,17 +1326,19 @@
     // Pin the composition where it was going BEFORE fading it, so a launch that finishes
     // mid-ceremony shows a finished mark on its way out rather than unlit metal.
     // ROUND 74: a bar that had landed is handed to the home screen; one cut short is not.
-    var hadLanded = state.native || !!(bar && bar.landed);
-    node.classList.add("splash--settled");
-    settleBar();
-    if (RO) {
-      RO.settle();
-      if (hadLanded && !replaying) RO.handover(node);
-    }
-    node.classList.add("splash--yielding");
     if (state.native) {
+      node.classList.add("splash--yielding");
+      if (RO) RO.handover(node, true);
       Promise.resolve(window.__TAURI_INTERNALS__.invoke("splash_native_dismiss", { animated: true })).then(afterFade);
     } else {
+      var hadLanded = !!(bar && bar.landed);
+      node.classList.add("splash--settled");
+      settleBar();
+      if (RO) {
+        RO.settle();
+        if (hadLanded && !replaying) RO.handover(node);
+      }
+      node.classList.add("splash--yielding");
       setTimeout(afterFade, FADE_MS + 40);
     }
     // Drop the always-dark clamp as the curtain goes, not after it has gone: the fade is
@@ -1408,6 +1409,8 @@
     var t = Number(ms);
     if (!isFinite(t) || t < 0) t = 0;
     heldMoment = t;
+    state.heldAt = t;
+    if (state.native) return true;
     if (raf !== null) {
       cancelAnimationFrame(raf);
       raf = null;
@@ -1423,7 +1426,6 @@
       }
     }
     paintMoment(t);
-    state.heldAt = t;
     return true;
   }
 
@@ -1531,8 +1533,16 @@
     holdMs = Math.round(secondsFor(entry) * 1000);
     state.seconds = holdMs / 1000;
     try {
-      node = build(entry);
-      if (state.native) node.classList.add("splash--native");
+      if (state.native) {
+        // The native overlay owns the picture. The empty node keeps Home
+        // covered until the fade finishes or the page takes over recovery.
+        node = div("splash splash--native");
+        node.id = "splash";
+        node.setAttribute("aria-hidden", "true");
+        node.dataset.variation = entry.id;
+      } else {
+        node = build(entry);
+      }
       document.body.insertBefore(node, document.body.firstChild);
     } catch (e) {
       removeSelf();
