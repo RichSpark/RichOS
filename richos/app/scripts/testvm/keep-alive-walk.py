@@ -211,6 +211,9 @@ def main():
     a = p.parse_args()
     if not (a.vm and a.out):
         p.error('the VM name (run-walk.py gives it) and --out are required')
+    steps = [s for s in a.steps.split(',') if s]
+    if not steps:
+        p.error('--steps must select at least one step')
     conversation_walk = load('conversation_walk', HERE / 'conversation-walk.py')
     adopt_walk = conversation_walk.adopt_walk
     relaunch = load('relaunch', HERE / 'relaunch.py')
@@ -456,7 +459,7 @@ def main():
     walk = Walk(a)
     ok = True
     try:
-        for name in [s for s in a.steps.split(',') if s]:
+        for name in steps:
             began = time.monotonic()
             try:
                 fact = getattr(walk, 'step_' + name)()

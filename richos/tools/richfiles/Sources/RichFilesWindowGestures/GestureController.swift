@@ -224,13 +224,19 @@ final class GestureController {
     private func target(_ element: AXUIElement, at point: CGPoint, clicks: Int,
                         frontmost: NSRunningApplication?) -> Target? {
         if selection.contains(.dock), let app = dockApp(element) {
-            if let pending = dockMinimized[app.processIdentifier] {
-                if pending.minimized == true { return .dock(app, .restore(pending)) }
-                dockMinimized[app.processIdentifier] = nil
+            let pid = app.processIdentifier
+            let pending = dockMinimized[pid]
+            if let pending {
+                let minimized = pending.minimized
+                if minimized == true { return .dock(app, .restore(pending)) }
+                dockMinimized[pid] = nil
                 pruneObservers()
-                return nil
+                // The Dock can restore the window itself. If it is now the
+                // focused window, this click can minimize it again.
+                guard minimized == false else { return nil }
             }
-            guard frontmost == app, let window = focusedWindow(app.processIdentifier), window.ordinaryWindow,
+            guard frontmost == app, let window = focusedWindow(pid), pending == nil || pending == window,
+                  window.ordinaryWindow,
                   window.minimized == false, window.settable(kAXMinimizedAttribute) else { return nil }
             return .dock(app, .minimize(window))
         }

@@ -34,6 +34,8 @@ DIR gets facts.txt, calls.txt (each call's time and the answer's first character
 ANSWER; any unanswered read, or a guest script that did not finish, fails the run),
 reader.*.out/.err (the JSON-RPC streams), tcc.log, summary.txt and drive.log. The guest is stopped and deleted
 however the run ends, under a held test-VM slot (slots.py), for this run only.
+If DIR already exists, the reading writes to a fresh run-* subdirectory. The reader prints the
+actual evidence directory before booting.
 
 --tart-home is where the vanilla image is cached (pulled on first use, a large download); it is
 outside every repository. The image's login is Cirrus Labs' documented admin/admin.
@@ -60,7 +62,8 @@ OPTS = ['-o', 'StrictHostKeyChecking=no', '-o', 'UserKnownHostsFile=/dev/null', 
 # Runs inside the guest. $1 is the LinkedIn address read.
 GUEST = r'''#!/bin/bash
 set -u
-OUT=~/measure; rm -rf "$OUT"; mkdir -p "$OUT"; cd "$OUT"
+OUT=~/measure
+rm -rf "$OUT" && mkdir "$OUT" && cd "$OUT" || exit 1
 APP=/Applications/RichOS.app
 URL="$1"
 { echo "sip: $(csrutil status)"; echo "macos: $(sw_vers -productVersion) $(sw_vers -buildVersion)";
@@ -142,16 +145,19 @@ def summary(tcc_log):
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('--bundle', type=Path, required=True, help="a RichOS.app zip (branch-bundle.sh's, or a release's)")
-    p.add_argument('--out', type=Path, required=True)
+    p.add_argument('--out', type=Path, required=True, help='evidence directory (a fresh run-* subdirectory if it exists)')
     p.add_argument('--tart-home', type=Path, required=True)
     p.add_argument('--image', default=IMAGE)
     p.add_argument('--url', default='https://www.linkedin.com/in/williamhgates/',
                    help='the address read (nothing is opened without the permission)')
     p.add_argument('--wait', type=float, default=1800, help='seconds to wait for a guest slot (default 1800)')
     a = p.parse_args()
-    a.out.mkdir(parents=True, exist_ok=True)
+    out = a.out
+    try:
+        out.mkdir(parents=True)
+    except FileExistsError:
+        out = Path(tempfile.mkdtemp(prefix='run-', dir=out))
     env = dict(os.environ, TART_HOME=str(a.tart_home))
-    log = open(a.out / 'drive.log', 'a')
 
     def say(*words):
         print(*words, flush=True)
@@ -160,7 +166,12 @@ def main():
     def tart(*args, **k):
         return subprocess.run([TART, *args], env=env, capture_output=True, text=True, **k)
 
-    with tempfile.TemporaryDirectory(prefix='no-grant-') as tmp:
+    def succeeded(stage, result):
+        say(stage, result.returncode, result.stdout.strip()[-200:], result.stderr[-300:])
+        return result.returncode == 0
+
+    with (out / 'drive.log').open('x') as log, tempfile.TemporaryDirectory(prefix='no-grant-') as tmp:
+        say('evidence', out)
         ask = Path(tmp) / 'askpass.sh'
         ask.write_text('#!/bin/sh\necho admin\n')
         ask.chmod(0o700)
@@ -174,20 +185,20 @@ def main():
 
         def scp(src, dst, timeout=600):
             return subprocess.run(['scp', '-r', *OPTS, src, dst], env=ssh_env, capture_output=True, text=True,
-                                  timeout=timeout, stdin=subprocess.DEVNULL).returncode
+                                  timeout=timeout, stdin=subprocess.DEVNULL)
 
         vm = 'no-grant-' + uuid.uuid4().hex[:8]
         with slots.guest_slot(wait_seconds=a.wait, purpose='no-grant-reader.py: clean-Mac Accessibility measurement') as slot:
             say('slot', slot, 'vm', vm)
-            r = tart('clone', a.image, vm)
-            say('clone', r.returncode, r.stderr[-300:])
-            if r.returncode:
+            if not succeeded('clone', tart('clone', a.image, vm)):
                 return 1
-            tart('set', vm, '--cpu', '4', '--memory', '5120')
-            # --no-audio: no guest's sound is passed to this Mac unless a walk asks (run.sh --audio).
-            run = subprocess.Popen([TART, 'run', '--no-graphics', '--no-audio', vm], env=env, stdout=log, stderr=log)
-            say('tart run pid', run.pid)
+            run = None
             try:
+                if not succeeded('set', tart('set', vm, '--cpu', '4', '--memory', '5120')):
+                    return 1
+                # --no-audio: no guest's sound is passed to this Mac unless a walk asks (run.sh --audio).
+                run = subprocess.Popen([TART, 'run', '--no-graphics', '--no-audio', vm], env=env, stdout=log, stderr=log)
+                say('tart run pid', run.pid)
                 ip = None
                 for _ in range(120):
                     r = tart('ip', vm, '--wait', '5')
@@ -199,35 +210,48 @@ def main():
                 if not ip:
                     return 1
                 for _ in range(60):
-                    if ssh(ip, 'true', 20).returncode == 0:
+                    r = ssh(ip, 'true', 20)
+                    if r.returncode == 0:
                         break
                     time.sleep(5)
+                else:
+                    say('SSH did not become ready', r.returncode, r.stderr[-300:])
+                    return 1
                 # macOS shows its request only to a logged-in GUI session.
                 for _ in range(60):
                     r = ssh(ip, 'pgrep -x Finder >/dev/null && echo finder')
-                    if 'finder' in r.stdout:
+                    if r.returncode == 0 and r.stdout.strip() == 'finder':
                         break
                     time.sleep(5)
-                say('gui session', r.stdout.strip() or 'none')
-                say('copy bundle', scp(str(a.bundle), f'admin@{ip}:/tmp/RichOS.zip'))
-                say('copy script', scp(str(script), f'admin@{ip}:/tmp/measure.sh'))
+                else:
+                    say('GUI session unavailable', r.returncode, r.stderr[-300:])
+                    return 1
+                say('gui session', 'finder')
+                if not succeeded('copy bundle', scp(str(a.bundle), f'admin@{ip}:/tmp/RichOS.zip')):
+                    return 1
+                if not succeeded('copy script', scp(str(script), f'admin@{ip}:/tmp/measure.sh')):
+                    return 1
                 r = ssh(ip, 'cd /tmp && ditto -x -k RichOS.zip /Applications && ls -d /Applications/RichOS.app', 300)
-                say('install', r.returncode, r.stdout.strip(), r.stderr[-200:])
-                r = ssh(ip, 'bash /tmp/measure.sh ' + a.url, 900)
-                say('measure', r.returncode, r.stderr[-300:])
-                say('pull', scp(f'admin@{ip}:measure/.', str(a.out)))
-                if (a.out / 'tcc.log').exists():
-                    lines = summary((a.out / 'tcc.log').read_text(errors='replace'))
-                    (a.out / 'summary.txt').write_text('\n'.join(lines) + '\n')
+                if not succeeded('install', r):
+                    return 1
+                measured = succeeded('measure', ssh(ip, 'bash /tmp/measure.sh ' + a.url, 900))
+                # Even a failed measurement can leave guest logs worth keeping.
+                pulled = succeeded('pull', scp(f'admin@{ip}:measure/.', str(out)))
+                if not (measured and pulled):
+                    return 1
+                if (out / 'tcc.log').exists():
+                    lines = summary((out / 'tcc.log').read_text(errors='replace'))
+                    (out / 'summary.txt').write_text('\n'.join(lines) + '\n')
                     say('summary:\n  ' + '\n  '.join(lines))
             finally:
-                say('stop', tart('stop', vm).returncode)
-                try:
-                    run.wait(timeout=120)
-                except subprocess.TimeoutExpired:
-                    run.kill()
+                if run is not None:
+                    say('stop', tart('stop', vm).returncode)
+                    try:
+                        run.wait(timeout=120)
+                    except subprocess.TimeoutExpired:
+                        run.kill()
                 say('delete', tart('delete', vm).returncode)
-    return verdict(a.out, say)
+        return verdict(out, say)
 
 
 CALLS = 3
