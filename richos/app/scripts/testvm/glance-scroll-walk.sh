@@ -1,46 +1,32 @@
 #!/bin/bash
-# glance-scroll-walk.sh — does RichGlance's scrolling capture of a real web page with a translucent
-#                         sticky header and a bar fixed to the bottom run to the end of the page?
+# Verify RichGlance scrolling capture from selection to PNG in a disposable macOS guest.
 #
-#   glance-scroll-walk.sh <RichFiles.app> <out-dir> [down|right|both|manual] [copy|save] [sticky|inset]
+#   glance-scroll-walk.sh <RichFiles.app> <out-dir> [down|right|both|manual] [copy|save] [opaque|grid|sticky|inset]
 #
-# Builds the source app (glance-scroll-fixture.swift, a WebKit page with an 80% opaque sticky header,
-# 1820 px of lines of dark blocks, a red end block and a white bar with blank margins fixed to the
-# bottom) and the PNG check
-# (glance-scroll-check.swift) on the host, then holds one test VM slot (slots.py) for the guest part
-# only: a disposable clone of the test base, booted without sound (--no-audio). In the guest, RichGlance
-# is opened as RichFiles opens it (a capture request naming the page's app), a 576 × 362 region that
-# starts inside the header and ends inside the bar is dragged with the real pointer, the mode is picked
-# from the capture menu (default `down`), and the result is copied (default) or saved as a PNG. In
-# `down` mode the PNG is checked: the header once at the top, the bar once at the bottom, and every
-# pixel of the page between them the page's own, none wrong and none missing. Screenshots, the PNG,
-# RichFiles' timing records and walk.log go to <out-dir>.
-#
-# The page `inset` is the same page with its bottom bar stopping 70 px short of each side, so the page
-# scrolls past beside the bar. For it the walk passes in two ways and no other: the image the app
-# offers has no wrong pixel in it (the whole page, or as far as the app says it got), or the app offers
-# no image at all. The page `sticky` (default) must be captured whole.
-#
-# The disposable guest's screen-capture, Accessibility and event grants are seeded there so the pixel
-# proof can run; the host's are never touched. Both test apps are quit and verified gone, and the guest
-# is stopped and its clone deleted however the walk ends (stop.sh). EXIT STATUS: 0 only when every step
-# passed, the check included.
+# The opaque header and footer page and the plain two-axis grid require a complete PNG, checked
+# pixel by pixel. The translucent header and inset bar pages must show the retry, with no Copy or
+# Save action. This also checks that retry opens a new selection. The test checks local timing
+# records, quits both guest apps and removes the muted disposable clone even after a failure.
 set -euo pipefail
 T="$(cd "$(dirname "$0")" && pwd)"
 
 if [ "${1:-}" != --guest ]; then
-    APP="${1:?usage: glance-scroll-walk.sh <RichFiles.app> <out-dir> [down|right|both|manual] [copy|save] [sticky|inset]}"
-    OUT="${2:?usage: glance-scroll-walk.sh <RichFiles.app> <out-dir> [down|right|both|manual] [copy|save] [sticky|inset]}"
+    APP="${1:?usage: glance-scroll-walk.sh <RichFiles.app> <out-dir> [down|right|both|manual] [copy|save] [opaque|grid|sticky|inset]}"
+    OUT="${2:?usage: glance-scroll-walk.sh <RichFiles.app> <out-dir> [down|right|both|manual] [copy|save] [opaque|grid|sticky|inset]}"
     MODE="${3:-down}"
     DEST="${4:-copy}"
-    PAGE="${5:-sticky}"
+    PAGE="${5:-opaque}"
     case "$MODE" in down|right|both|manual) ;; *) echo "unknown mode: $MODE" >&2; exit 2 ;; esac
     case "$DEST" in copy|save) ;; *) echo "unknown destination: $DEST" >&2; exit 2 ;; esac
-    case "$PAGE" in sticky|inset) ;; *) echo "unknown page: $PAGE" >&2; exit 2 ;; esac
+    case "$PAGE" in opaque|grid|sticky|inset) ;; *) echo "unknown page: $PAGE" >&2; exit 2 ;; esac
+    if [ "$PAGE" != grid ] && [ "$MODE" != down ]; then
+        echo 'The sticky-page fixtures are vertical. Use grid for other modes.' >&2
+        exit 2
+    fi
     [ "$(basename "$APP")" = RichFiles.app ] && [ -d "$APP" ] || { echo "not a RichFiles.app: $APP" >&2; exit 2; }
     mkdir -p "$OUT"
     OUT="$(cd "$OUT" && pwd)"
-    WORK="$(mktemp -d "${TMPDIR:-/tmp}/glance-scroll-walk.XXXXXX")"
+    WORK="$(mktemp -d "${TMPDIR:?}/glance-scroll-walk.XXXXXX")"
     trap 'rm -rf -- "$WORK"' EXIT
     fixture="$WORK/Scroll Fixture.app"
     mkdir -p "$fixture/Contents/MacOS"
@@ -148,9 +134,9 @@ test -n "$blob"
 for service in kTCCServiceScreenCapture kTCCServiceAccessibility kTCCServicePostEvent; do
     if [ "$service" = kTCCServiceScreenCapture ]; then allowed=2; else allowed="$value"; fi
     sql="INSERT OR REPLACE INTO access (service,client,client_type,auth_value,auth_reason,auth_version,csreq,indirect_object_identifier_type,indirect_object_identifier,flags,last_modified) VALUES ('$service','$id',0,$allowed,3,1,X'$blob',0,'UNUSED',0,strftime('%s','now'));"
-    sudo -n /usr/bin/sqlite3 '/Library/Application Support/com.apple.TCC/TCC.db' "$sql"
+    sudo -n /usr/bin/sqlite3 -cmd ".timeout 5000" '/Library/Application Support/com.apple.TCC/TCC.db' "$sql"
     if [ -f "$HOME/Library/Application Support/com.apple.TCC/TCC.db" ]; then
-        sudo -n /usr/bin/sqlite3 "$HOME/Library/Application Support/com.apple.TCC/TCC.db" "$sql"
+        sudo -n /usr/bin/sqlite3 -cmd ".timeout 5000" "$HOME/Library/Application Support/com.apple.TCC/TCC.db" "$sql"
     fi
 done
 printf 'Seeded guest screen capture decision %s for %s\n' "$value" "$id"
@@ -160,103 +146,113 @@ GRANT
 }
 if [ "$mode" = manual ]; then grant 0; else grant 2; fi
 
-if [ "$page" = inset ]; then
-    guest open -a "/Users/admin/Applications/Scroll Fixture.app" --args sticky inset
-else
-    guest open -a "/Users/admin/Applications/Scroll Fixture.app" --args sticky
-fi
-sleep 2
-wait_for app.richos.test.capturepattern front
-origin=$(probe app-pid app.richos.test.capturepattern)
-probe move 480 318
-id=$(uuidgen | tr '[:upper:]' '[:lower:]')
-# shellcheck disable=SC2016  # $HOME, $1 and $2 are the guest shell's, expanded there
-guest /bin/bash -c 'dir="$HOME/Library/Application Support/app.richos.richglance/Capture Requests"; umask 077; mkdir -p "$dir"; printf "%s" "$2" > "$dir/$1"' bash "$id" "$origin"
-guest open -g -a "$viewer" "richglance-capture://request/$id" --args --capture-request
-stable=0
-for i in $(seq 1 45); do
-    front="$(probe front || true)"
-    if [ "$front" = com.apple.UserNotificationCenter ]; then
-        probe press Allow || true
-        stable=0
-    elif [ "$(probe selection 2>/dev/null || true)" = 'Display 1680 × 1050 px' ]; then
-        stable=$((stable+1))
-        if [ "$stable" -eq 5 ]; then break; fi
-    else
-        stable=0
-    fi
-    sleep 0.30
-done
-if [ "$stable" -ne 5 ]; then shot failed-select || true; probe front || true; exit 1; fi
-wait_for 'Display 1680 × 1050 px' selection
-for _ in 1 2 3; do
-    "$T/pointer-drag.sh" "$vm" 200,162 776,524 --step 45 --pause 0.02 --rest 0.1 --app RichGlance
-    if [ "$(probe selection 2>/dev/null || true)" = 'Crop 576 × 362 px' ]; then break; fi
-done
-wait_for 'Crop 576 × 362 px' selection
-shot 01-region
-probe move 1180 341
-probe down 1180 341
-probe up 1180 341
-sleep 0.4
-shot 02-mode-picker
-case "$mode" in
-    manual) menuY=376; title='Scroll Manually' ;;
-    down) menuY=397; title='Auto Scroll Down' ;;
-    right) menuY=420; title='Auto Scroll Right' ;;
-    both) menuY=442; title='Auto Scroll Down and Right' ;;
-esac
-# Press the menu item by its accessible name; a synthetic click on the open menu is sometimes not
-# taken, and the menu stays open. Click it when the press is unavailable or the menu is still open.
-pick() {
-    if ! probe glance-press "$title" 2>/dev/null; then probe move 1160 "$menuY"; probe down 1160 "$menuY"; probe up 1160 "$menuY"; fi
-}
-pick
-sleep 0.4
-if [ "$(probe glance-has 'Auto Scroll Right' 2>/dev/null || true)" = yes ]; then
-    probe move 1160 "$menuY"; probe down 1160 "$menuY"; probe up 1160 "$menuY"
-fi
-if [ "$mode" = manual ]; then
-    wait_for yes glance-has 'Scroll the selected area, then click Stop.'
+# A monthly macOS capture reminder can interrupt the first test-only session even after the initial
+# region is visible. Acknowledge it in the guest, then restart both apps so the measured scroll
+# begins from the original viewport.
+for attempt in 1 2; do
+    interrupted=no
+    guest open -a "/Users/admin/Applications/Scroll Fixture.app" --args page "$page"
+    sleep 2
     wait_for app.richos.test.capturepattern front
-    shot 03-manual-controls
-    for i in $(seq 1 6); do probe scroll 450 322 -120 0; sleep 0.45; done
-    shot 04-scroll-progress
-    probe glance-press Stop
-else
-    shot 03-auto-controls
-fi
-# The capture ends in one of three ways: an image of the whole page; an image of the page as far as it
-# got, with the app saying that the last scroll could not be stitched; or no image, only a Close button.
-ready=no
-refused=no
-for i in $(seq 1 96); do
-    ready=$(probe glance-has 'Copy Image' 2>/dev/null || true)
-    if [ "$ready" = yes ]; then break; fi
-    # No image: the capture's own controls are gone and only Close is left.
-    if [ "$(probe glance-has Close 2>/dev/null || true)" = yes ] && [ "$(probe glance-has Stop 2>/dev/null || true)" = no ]; then
-        # The preview may have come up between the two looks.
-        ready=$(probe glance-has 'Copy Image' 2>/dev/null || true)
-        if [ "$ready" != yes ]; then refused=yes; fi
-        break
+    origin=$(probe app-pid app.richos.test.capturepattern)
+    probe move 480 318
+    id=$(uuidgen | tr '[:upper:]' '[:lower:]')
+    # shellcheck disable=SC2016  # $HOME, $1 and $2 are the guest shell's, expanded there
+    guest /bin/bash -c 'dir="$HOME/Library/Application Support/app.richos.richglance/Capture Requests"; umask 077; mkdir -p "$dir"; printf "%s" "$2" > "$dir/$1"' bash "$id" "$origin"
+    guest open -g -a "$viewer" "richglance-capture://request/$id" --args --capture-request
+    stable=0
+    for i in $(seq 1 45); do
+        front="$(probe front || true)"
+        if [ "$(probe approve-capture-reminder 2>/dev/null || true)" = yes ]; then
+            stable=0
+        elif [ "$front" = com.apple.UserNotificationCenter ]; then
+            probe press Allow || true
+            stable=0
+        elif [ "$(probe selection 2>/dev/null || true)" = 'Display 1680 × 1050 px' ]; then
+            stable=$((stable+1))
+            if [ "$stable" -eq 5 ]; then break; fi
+        else
+            stable=0
+        fi
+        sleep 0.30
+    done
+    if [ "$stable" -ne 5 ]; then shot failed-select || true; probe front || true; exit 1; fi
+    wait_for 'Display 1680 × 1050 px' selection
+    for _ in 1 2 3; do
+        "$T/pointer-drag.sh" "$vm" 200,162 776,524 --step 45 --pause 0.02 --rest 0.1 --app RichGlance
+        if [ "$(probe selection 2>/dev/null || true)" = 'Crop 576 × 362 px' ]; then break; fi
+    done
+    wait_for 'Crop 576 × 362 px' selection
+    shot 01-region
+    probe move 1180 341
+    probe down 1180 341
+    probe up 1180 341
+    sleep 0.4
+    shot 02-mode-picker
+    case "$mode" in
+        manual) menuY=376; title='Scroll Manually' ;;
+        down) menuY=397; title='Auto Scroll Down' ;;
+        right) menuY=420; title='Auto Scroll Right' ;;
+        both) menuY=442; title='Auto Scroll Down and Right' ;;
+    esac
+    # Press the menu item by its accessible name; a synthetic click on the open menu is sometimes not
+    # taken, and the menu stays open. Click it when the press is unavailable or the menu is still open.
+    pick() {
+        if ! probe glance-press "$title" 2>/dev/null; then probe move 1160 "$menuY"; probe down 1160 "$menuY"; probe up 1160 "$menuY"; fi
+    }
+    pick
+    sleep 0.4
+    if [ "$(probe glance-has 'Auto Scroll Right' 2>/dev/null || true)" = yes ]; then
+        probe move 1160 "$menuY"; probe down 1160 "$menuY"; probe up 1160 "$menuY"
     fi
-    sleep 0.65
+    if [ "$mode" = manual ]; then
+        wait_for yes glance-has 'Scroll the selected area, then click Stop.'
+        wait_for app.richos.test.capturepattern front
+        shot 03-manual-controls
+        for i in $(seq 1 6); do probe scroll 450 322 -120 0; sleep 0.45; done
+        shot 04-scroll-progress
+        probe glance-press Stop
+    else
+        shot 03-auto-controls
+    fi
+    ready=no
+    refused=no
+    for i in $(seq 1 96); do
+        if [ "$(probe approve-capture-reminder 2>/dev/null || true)" = yes ]; then
+            interrupted=yes
+            break
+        fi
+        ready=$(probe glance-has 'Copy Image' 2>/dev/null || true)
+        if [ "$ready" = yes ]; then break; fi
+        refused=$(probe glance-has 'Try Again…' 2>/dev/null || true)
+        if [ "$refused" = yes ]; then break; fi
+        sleep 0.65
+    done
+    if [ "$interrupted" = no ]; then break; fi
+    test "$attempt" -lt 2
+    printf 'Acknowledged the macOS Screen Recording reminder. Restarting the guest capture.\n'
+    shot reminder-dismissed
+    for bundle in app.richos.richglance app.richos.test.capturepattern; do
+        pid=$(probe app-pid "$bundle")
+        if [ "$pid" != 0 ]; then guest kill "$pid"; fi
+    done
+    wait_for 0 app-pid app.richos.richglance
+    wait_for 0 app-pid app.richos.test.capturepattern
 done
 shot 05-preview
-stopped=no
-if [ "$ready" = yes ]; then
-    for said in 'The last scroll could not be stitched. Review the area captured so far.' \
-                'The last view could not be stitched. Review the area captured so far.'; do
-        if [ "$(probe glance-has "$said" 2>/dev/null || true)" = yes ]; then stopped=yes; fi
-    done
-fi
-printf 'capture ended: image offered %s, stopped early %s, no image offered %s\n' "$ready" "$stopped" "$refused"
-if [ "$ready" != yes ] && { [ "$refused" != yes ] || [ "$page" != inset ]; }; then
+printf 'capture ended: image offered %s, retry offered %s\n' "$ready" "$refused"
+if [ "$page" = sticky ] || [ "$page" = inset ]; then
+    test "$refused" = yes
+    test "$ready" = no
+    wait_for no glance-has 'Save PNG…'
+    probe glance-press 'Try Again…'
+    wait_for 'Display 1680 × 1050 px' selection
+    shot 06-retry
+    printf 'PASS retry restored the region selector and the rejected stitch offered no export\n'
+elif [ "$ready" != yes ]; then
     "$T/ax.sh" "$vm" tree --app RichGlance --depth 7 || true
+    guest --pull /Users/admin/Library/Logs/RichOS/richfiles-timing.jsonl "$evidence/$vm-incomplete-timing.jsonl" || true
     exit 1
-fi
-if [ "$ready" != yes ]; then
-    printf 'PASS the app offered no image\n'
 elif [ "$destination" = save ]; then
     # The preview's buttons can be in the accessibility tree a moment before they take a press.
     for i in $(seq 1 10); do
@@ -290,15 +286,22 @@ else
 fi
 guest --pull /Users/admin/Library/Logs/RichOS/richfiles-timing.jsonl "$evidence/$vm-timing.jsonl"
 if [ "$ready" = yes ]; then
-    printf 'PASS PNG %s\n' "$(python3 -c 'import struct,sys; f=open(sys.argv[1],"rb"); f.seek(16); print("%d × %d px" % struct.unpack(">II", f.read(8)))' "$evidence/$vm-result.png")"
-    if [ "$mode" = down ]; then
-        checks=()
-        if [ "$page" = inset ]; then checks+=(inset); fi
-        # Only the inset page may stop early; the sticky page must be captured whole.
-        if [ "$page" = inset ] && [ "$stopped" = yes ]; then checks+=(partial); fi
-        "$work/check" "$evidence/$vm-result.png" ${checks[@]+"${checks[@]}"}
-    fi
+    "$work/check" "$evidence/$vm-result.png" "$page" "$mode"
 fi
+python3 - "$evidence/$vm-timing.jsonl" "$ready" <<'PYTHON'
+import json
+import sys
+with open(sys.argv[1], encoding="utf-8") as file:
+    scroll = [row for line in file if (row := json.loads(line))["operation"] == "glanceScrollCapture"]
+assert scroll, "Missing scroll capture diagnostics"
+last = scroll[-1]
+if sys.argv[2] == "yes":
+    assert last["outcome"] == "complete" and last["confirmed"] > 1, last
+    assert "scrollCaptureFailure" not in last, last
+else:
+    assert last["outcome"] == "issues" and last["scrollCaptureFailure"] in ("conflictingPixels", "lostOverlap"), last
+print(f"PASS diagnostics: {last}")
+PYTHON
 # Quit both test apps in this disposable guest, then confirm they are gone.
 for bundle in app.richos.richglance app.richos.test.capturepattern; do
     pid=$(probe app-pid "$bundle" || true)
