@@ -167,6 +167,57 @@ final class ScrollStitcherTests: XCTestCase {
         }
     }
 
+    func testBottomBarIsCapturedToTheEndAndAppearsOnceAtTheBottom() throws {
+        // A translucent sticky header and a bar fixed to the bottom of the view, as on many web pages.
+        // Automatic steps, then manual ones: back up, and shorter than the bar.
+        let page = textPage(width: 800, height: 2000)
+        func view(_ y: Int) -> CGImage {
+            withBottomBar(withHeader(crop(page, x: 0, y: y, w: 800, h: 500), rows: 64, opacity: 0.8), rows: 56)
+        }
+        let automatic = scrollDown(page.height, viewport: 500, step: 140, view: view)
+        var manual = ScrollStitcher()
+        XCTAssertEqual(manual.append(view(0)), .initial)
+        var y = 0
+        for next in [40, 230, 180, 400, 640, 630, 870, 1100, 1340, 1500] {
+            XCTAssertEqual(manual.append(view(next)), .moved(dx: 0, dy: next - y), "manual step to y=\(next)")
+            y = next
+        }
+        for (name, sut) in [("automatic", automatic), ("manual", manual)] {
+            let actual = try XCTUnwrap(sut.image())
+            XCTAssertEqual(actual.height, page.height, name)
+            guard actual.height == page.height else { continue }
+            XCTAssertTrue(pixels(crop(actual, x: 0, y: 0, w: 800, h: 64)) == pixels(crop(view(0), x: 0, y: 0, w: 800, h: 64)),
+                          "\(name): the header appears once, at the top")
+            XCTAssertTrue(pixels(crop(actual, x: 0, y: 64, w: 800, h: page.height - 120))
+                          == pixels(crop(page, x: 0, y: 64, w: 800, h: page.height - 120)),
+                          "\(name): the whole page between them, with no header or bar in it")
+            XCTAssertTrue(pixels(crop(actual, x: 0, y: page.height - 56, w: 800, h: 56))
+                          == pixels(crop(view(1500), x: 0, y: 444, w: 800, h: 56)),
+                          "\(name): the bar appears once, at the bottom")
+        }
+    }
+
+    func testRightBarIsCapturedToTheEndAndAppearsOnceAtTheRight() throws {
+        // A bar fixed to the right of the view while a wide page scrolls to the right.
+        let page = fixture(width: 2000, height: 400)
+        func view(_ x: Int) -> CGImage { withRightBar(crop(page, x: x, y: 0, w: 600, h: 400), columns: 60) }
+        var sut = ScrollStitcher()
+        XCTAssertEqual(sut.append(view(0)), .initial)
+        var x = 0
+        while x + 600 < page.width {
+            let next = min(page.width - 600, x + 168)
+            XCTAssertEqual(sut.append(view(next)), .moved(dx: next - x, dy: 0), "step to x=\(next)")
+            x = next
+        }
+        let actual = try XCTUnwrap(sut.image())
+        XCTAssertEqual(actual.width, page.width)
+        guard actual.width == page.width else { return }
+        XCTAssertTrue(pixels(crop(actual, x: 0, y: 0, w: page.width - 60, h: 400))
+                      == pixels(crop(page, x: 0, y: 0, w: page.width - 60, h: 400)), "the whole page, with no bar in it")
+        XCTAssertTrue(pixels(crop(actual, x: page.width - 60, y: 0, w: 60, h: 400))
+                      == pixels(crop(view(x), x: 540, y: 0, w: 60, h: 400)), "the bar appears once, at the right")
+    }
+
     func testFixedHeaderOverAListOfShortNamesDoesNotStopAutomaticScroll() throws {
         // Short file names on a white page change only a few pixels in each row, yet they scroll.
         let width = 800
@@ -295,6 +346,40 @@ final class ScrollStitcherTests: XCTestCase {
         ]))
         context.textPosition = CGPoint(x: 20, y: CGFloat(view.height - rows) + CGFloat(rows) * 0.35)
         CTLineDraw(line, context)
+        return context.makeImage()!
+    }
+
+    /// A dark bar with white labels along the bottom rows of a view, as a cookie notice or a toolbar.
+    private func withBottomBar(_ view: CGImage, rows: Int) -> CGImage {
+        let context = CGContext(data: nil, width: view.width, height: view.height, bitsPerComponent: 8, bytesPerRow: 0,
+                                space: colorSpace, bitmapInfo: bitmap.rawValue)!
+        context.draw(view, in: CGRect(x: 0, y: 0, width: view.width, height: view.height))
+        context.setFillColor(CGColor(red: 0.18, green: 0.49, blue: 0.31, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: view.width, height: rows))
+        let line = CTLineCreateWithAttributedString(NSAttributedString(string: "Cookie settings      Accept", attributes: [
+            NSAttributedString.Key(kCTFontAttributeName as String): CTFontCreateWithName("Helvetica-Bold" as CFString, 12, nil),
+            NSAttributedString.Key(kCTForegroundColorAttributeName as String): CGColor(red: 1, green: 1, blue: 1, alpha: 1)
+        ]))
+        context.textPosition = CGPoint(x: 20, y: CGFloat(rows) * 0.35)
+        CTLineDraw(line, context)
+        return context.makeImage()!
+    }
+
+    /// A dark bar with white labels down the right columns of a view, as a tool palette.
+    private func withRightBar(_ view: CGImage, columns: Int) -> CGImage {
+        let context = CGContext(data: nil, width: view.width, height: view.height, bitsPerComponent: 8, bytesPerRow: 0,
+                                space: colorSpace, bitmapInfo: bitmap.rawValue)!
+        context.draw(view, in: CGRect(x: 0, y: 0, width: view.width, height: view.height))
+        context.setFillColor(CGColor(red: 0.18, green: 0.49, blue: 0.31, alpha: 1))
+        context.fill(CGRect(x: view.width - columns, y: 0, width: columns, height: view.height))
+        for (index, label) in ["Pen", "Text", "Shape", "Color", "Undo"].enumerated() {
+            let line = CTLineCreateWithAttributedString(NSAttributedString(string: label, attributes: [
+                NSAttributedString.Key(kCTFontAttributeName as String): CTFontCreateWithName("Helvetica-Bold" as CFString, 12, nil),
+                NSAttributedString.Key(kCTForegroundColorAttributeName as String): CGColor(red: 1, green: 1, blue: 1, alpha: 1)
+            ]))
+            context.textPosition = CGPoint(x: CGFloat(view.width - columns + 8), y: CGFloat(view.height - 40 - index * 70))
+            CTLineDraw(line, context)
+        }
         return context.makeImage()!
     }
 
