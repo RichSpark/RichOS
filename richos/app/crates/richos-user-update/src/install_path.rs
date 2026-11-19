@@ -567,6 +567,27 @@ mod tests {
     }
 
     #[test]
+    fn restart_to_update_helpers_do_not_block_the_publication_at_quit() {
+        // "Restart to update" quits the app and leaves the app's own executable running from
+        // inside the bundle: the relaunch helper, which waits for the session lease and then
+        // starts the app again, beside the at-quit helper that puts the update in place. The
+        // relaunch helper, or the app it has just started, must not make that publication
+        // refuse and push the swap back in front of the next window.
+        let (_work, home, system) = fixture();
+        let mut lease = StartupLease::acquire(&home).unwrap();
+        lease.remember_installation(&system, "1.0.0").unwrap();
+        drop(lease);
+        stage_verified(&home, &archive("2.0.0", |_| {}), "2.0.0").unwrap();
+        let relaunch_helper = Resident::start(&system, "Contents/MacOS", "richos-relaunch-helper");
+        assert!(relaunch_helper.running_inside());
+
+        let done = activate_at_quit(&home, "1.0.0", &system).unwrap().unwrap();
+        assert_eq!(done.entered.version, "2.0.0");
+        assert_eq!(bundle_version(&system).unwrap(), "2.0.0");
+        assert!(!home.join("Applications").join(APP).exists());
+    }
+
+    #[test]
     fn running_check_tells_this_account_from_another() {
         // launchd runs as root: a process of another account is still seen as one.
         assert_eq!(process_uid(1), Some(0));
