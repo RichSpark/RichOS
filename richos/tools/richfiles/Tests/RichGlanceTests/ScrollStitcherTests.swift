@@ -213,3 +213,22 @@ final class ScrollStitcherTests: XCTestCase {
         return bytes
     }
 }
+
+final class ScrollAccessPromptTests: XCTestCase {
+    func testRequestAccessKeepsTheCaptureUntilAccessIsGranted() {
+        var prompt = ScrollAccessPrompt()
+        var trusted = false
+        XCTAssertEqual(prompt.allowTitle, "Request Access")
+        // macOS answers the request at once, before the user can turn access on.
+        XCTAssertEqual(prompt.next(after: .allow, mode: .down, isTrusted: { trusted }, request: { false }), .ask)
+        XCTAssertEqual(prompt.allowTitle, "Try Again")
+        XCTAssertTrue(prompt.message.contains("Try Again"))
+        XCTAssertEqual(prompt.next(after: .allow, mode: .down, isTrusted: { trusted },
+                                   request: { XCTFail("asked macOS twice"); return false }), .ask)
+        trusted = true
+        XCTAssertEqual(prompt.next(after: .allow, mode: .down, isTrusted: { trusted }, request: { false }), .scroll(.down))
+        XCTAssertEqual(prompt.next(after: .scrollManually, mode: .down, isTrusted: { false }, request: { false }),
+                       .scroll(.manual))
+        XCTAssertEqual(prompt.next(after: .cancel, mode: .down, isTrusted: { false }, request: { false }), .cancel)
+    }
+}

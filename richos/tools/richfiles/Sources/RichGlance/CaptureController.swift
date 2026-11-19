@@ -248,21 +248,29 @@ final class CaptureController: NSObject, NSWindowDelegate {
         self.canvas = nil
 
         var mode = requested
-        if mode != .manual, !CGPreflightPostEventAccess() {
+        var access = ScrollAccessPrompt()
+        prompt: while mode != .manual, !CGPreflightPostEventAccess() {
             let alert = NSAlert()
             alert.messageText = "Allow automatic scrolling"
-            alert.informativeText = "RichGlance needs Accessibility access to scroll another app. You can scroll manually right away."
-            alert.addButton(withTitle: "Request Access")
+            alert.informativeText = access.message
+            alert.addButton(withTitle: access.allowTitle)
             alert.addButton(withTitle: "Scroll Manually")
             alert.addButton(withTitle: "Cancel")
+            let answer: ScrollAccessPrompt.Answer
             switch alert.runModal() {
-            case .alertFirstButtonReturn:
-                if !CGRequestPostEventAccess() {
-                    stop(.unavailable)
-                    return
-                }
-            case .alertSecondButtonReturn: mode = .manual
-            default:
+            case .alertFirstButtonReturn: answer = .allow
+            case .alertSecondButtonReturn: answer = .scrollManually
+            default: answer = .cancel
+            }
+            // A display change can end the session while the dialog is open.
+            guard !isFinished else { return }
+            switch access.next(after: answer, mode: mode, isTrusted: { CGPreflightPostEventAccess() },
+                               request: { CGRequestPostEventAccess() }) {
+            case .scroll(let chosen):
+                mode = chosen
+                break prompt
+            case .ask: continue
+            case .cancel:
                 cancel()
                 return
             }
@@ -508,6 +516,35 @@ final class CaptureController: NSObject, NSWindowDelegate {
     private func record(_ operation: RichFilesDiagnostics.Operation, _ outcome: RichFilesDiagnostics.Outcome, since: TimeInterval) {
         RichFilesDiagnostics.record(operation, id: id, outcome: outcome, started: since,
                                     total: 1, confirmed: outcome == .complete ? 1 : 0)
+    }
+}
+
+/// The Accessibility question before automatic scrolling. macOS answers a request at once, before
+/// the user can turn access on in System Settings, so a refused request asks again with Try Again
+/// instead of ending the capture. The selection is kept until the user scrolls or cancels.
+struct ScrollAccessPrompt {
+    enum Answer { case allow, scrollManually, cancel }
+    enum Next: Equatable { case scroll(ScrollingCapture.Mode), ask, cancel }
+
+    private(set) var requested = false
+
+    var allowTitle: String { requested ? "Try Again" : "Request Access" }
+    var message: String {
+        requested
+            ? "Turn on the app named by macOS under Privacy & Security > Accessibility in System Settings, then click Try Again. You can scroll manually right away."
+            : "RichGlance needs Accessibility access to scroll another app. You can scroll manually right away."
+    }
+
+    mutating func next(after answer: Answer, mode: ScrollingCapture.Mode,
+                       isTrusted: () -> Bool, request: () -> Bool) -> Next {
+        switch answer {
+        case .allow:
+            let granted = requested ? isTrusted() : request()
+            requested = true
+            return granted ? .scroll(mode) : .ask
+        case .scrollManually: return .scroll(.manual)
+        case .cancel: return .cancel
+        }
     }
 }
 
