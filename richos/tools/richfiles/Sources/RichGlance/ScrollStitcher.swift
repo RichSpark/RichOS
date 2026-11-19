@@ -19,9 +19,14 @@ import Vision
 /// stays transparent, as a place never visited; a manual pan can leave one. A frame whose bars would
 /// leave such places in a page that had none is not stitched.
 ///
-/// Bars are fixed things, and the page is what moves. Should two frames in a row show the page's own
-/// detail in a bar, at places where what was kept as the page is flat, then something fixed and flat
-/// was taken for the page and the page for bars (`keep`): nothing more is stitched and no image is made.
+/// Bars are fixed things, and the page is what moves. What a bar shows may differ from the page kept
+/// under it, but only as a bar would: with no more contrast than that page has, when the page shows
+/// through, or standing still. A frame that shows something new in a bar, with more contrast than the
+/// page kept there and than the frame before showed there, may show a bar that has just appeared, or
+/// a page that has changed (a picture that loaded): the next frame tells, and until it does the image
+/// is the capture as it was before that frame (`heldBack`). And when such a thing moves with the
+/// page from one frame to the next, it is no bar: nothing more is stitched, and the image is the
+/// capture as it was before the thing appeared, or none if it was there all along (`news`).
 struct ScrollStitcher {
     enum Update: Equatable {
         case initial, unchanged, moved(dx: Int, dy: Int), unmatched, limit
@@ -71,8 +76,17 @@ struct ScrollStitcher {
     private var bands = Bands()
     /// The fixed bands the last registration found.
     private var bars: Fixed?
-    /// Set when what was kept as the page turns out not to be the page (`keep`). No image is made.
+    /// Set when what was kept as the page turns out not to be the page, and the capture was never
+    /// without it. No image is made.
     private var broken = false
+    /// Nothing more is stitched.
+    private var ended = false
+    /// The capture as it was before the frame that showed something new in a bar which no later frame
+    /// has borne out as a bar yet; empty otherwise.
+    private var proven: [ScrollStitcher] = []
+    /// Whether the image leaves out the last frames: one of them showed something new in a bar, and
+    /// no frame after it showed whether that is a bar.
+    var heldBack: Bool { !proven.isEmpty }
     private(set) var bounds = CGRect.null
 
     /// The share of the view's width and height that moves with the content between the fixed bars;
@@ -96,7 +110,7 @@ struct ScrollStitcher {
         guard image.width >= 24, image.height >= 24,
               Self.fits(CGRect(x: 0, y: 0, width: image.width, height: image.height)),
               let next = Raster(image) else { return .limit }
-        guard !broken else { return .unmatched }
+        guard !ended else { return .unmatched }
         guard let last else {
             keep(next, at: .zero)
             return .initial
@@ -116,10 +130,18 @@ struct ScrollStitcher {
         guard let agreed = disagreements(of: next, at: origin, moved: offset).bands(over: bands, stayedBeside: stayed),
               abs(offset.x) <= next.width - agreed.left - agreed.right,
               abs(offset.y) <= next.height - agreed.top - agreed.bottom else { return .unmatched }
+        if agreed != bands, Self.turned(from: last, to: next, moved: offset, bands: agreed) { return .unmatched }
+        let news = news(in: next, at: origin, moved: offset, bands: agreed)
+        if news.carried {
+            // What these frames show in a bar moves with the page: it is the page, and what was kept
+            // there is not. Back to the capture as it was before it appeared, if it ever was without it.
+            if let back = proven.first { self = back } else { broken = true }
+            ended = true
+            return .unmatched
+        }
+        let earlier = news.appeared && proven.isEmpty ? [self] : []
         if agreed == bands {
             keep(next, at: origin)
-        } else if Self.turned(from: last, to: next, moved: offset, bands: agreed) {
-            return .unmatched
         } else {
             // Larger bars take the places under them out of the page. A frame whose bars would leave a
             // place with nothing to show inside a page that was whole before it is not stitched.
@@ -129,7 +151,12 @@ struct ScrollStitcher {
             guard grown.broken || grown.whole || !whole else { return .unmatched }
             self = grown
         }
-        guard !broken else { return .unmatched }
+        guard !broken else {
+            ended = true
+            return .unmatched
+        }
+        // A frame with nothing new in its bars bears out what the frame before it showed there.
+        if !news.appeared { proven = [] } else if proven.isEmpty { proven = earlier }
         bars = match.fixed
         return .moved(dx: offset.x, dy: offset.y)
     }
@@ -139,6 +166,7 @@ struct ScrollStitcher {
     /// small picture of everything captured so far, no side longer than that.
     func image(previewLimit: Int? = nil) -> CGImage? {
         guard !bounds.isNull, !broken, let last else { return nil }
+        if previewLimit == nil, let back = proven.first { return back.image() }
         let (minX, minY, width, height) = (Int(bounds.minX), Int(bounds.minY), Int(bounds.width), Int(bounds.height))
         if let previewLimit {
             // Three samples each way for every pixel of the picture, then scaled down smoothly.
@@ -321,6 +349,59 @@ struct ScrollStitcher {
         return (0..<4).contains { moving[$0] >= 64 && wrongWay[$0] >= 64 }
     }
 
+    /// What a frame shows in its bars that is not the page kept under them seen through a bar: two
+    /// pixels side by side, or one above the other, that stand apart by clearly more than the two
+    /// kept pixels do. (Through a bar the page keeps its contrast at most; a bar's own detail is the
+    /// other case, and it stands still.) Such a pair is `carried` when both pixels are the ones the
+    /// frame before showed for the same places of the page, each of them is new where it is or is the
+    /// kept pixel itself, and one is new and not the kept one: it moves with the page, and a bar's own
+    /// label, which stands still, is no part of it. It has `appeared` when the frame before showed nothing
+    /// like it at the same place in the view. A handful of pairs is the edge of a bar meeting the page
+    /// as it passes; the count that matters is that of a thing.
+    private func news(in raster: Raster, at origin: Offset, moved: Offset, bands: Bands) -> (carried: Bool, appeared: Bool) {
+        guard let last, last.pixels.count == raster.pixels.count, bands != Bands() else { return (false, false) }
+        let (width, height) = (raster.width, raster.height)
+        let (next, before) = (raster.pixels, last.pixels)
+        func barred(_ x: Int, _ y: Int) -> Bool {
+            y < bands.top || y >= height - bands.bottom || x < bands.left || x >= width - bands.right
+        }
+        /// The pixel kept for the place a view position shows, where a frame showed it between the bars.
+        func kept(_ x: Int, _ y: Int) -> UInt32? {
+            let index = origin.y + y - firstRow
+            guard index >= 0, index < rows.count else { return nil }
+            let column = origin.x + x - rows[index].x
+            guard column >= 0, column < rows[index].cells.count else { return nil }
+            let cell = rows[index].cells[column]
+            return cell.frame != 0 && bands.clear(cell, width, height) ? cell.value : nil
+        }
+        /// The frame before showed this pixel for the same place of the page.
+        func same(_ x: Int, _ y: Int) -> Bool {
+            let (lastX, lastY) = (x + moved.x, y + moved.y)
+            return lastX >= 0 && lastX < width && lastY >= 0 && lastY < height && before[lastY * width + lastX] == next[y * width + x]
+        }
+        var (carried, appeared) = (0, 0)
+        func compare(_ x: Int, _ y: Int, _ otherX: Int, _ otherY: Int) {
+            let (one, other) = (next[y * width + x], next[otherY * width + otherX])
+            let contrast = Self.distance(one, other)
+            guard contrast > 32, barred(otherX, otherY), let keptOne = kept(x, y), let keptOther = kept(otherX, otherY),
+                  contrast > Self.distance(keptOne, keptOther) + 32 else { return }
+            let (wasOne, wasOther) = (before[y * width + x], before[otherY * width + otherX])
+            if same(x, y), same(otherX, otherY), wasOne != one || keptOne == one, wasOther != other || keptOther == other,
+               (wasOne != one && keptOne != one) || (wasOther != other && keptOther != other) {
+                carried += 1
+            } else if contrast > Self.distance(wasOne, wasOther) + 32 {
+                appeared += 1
+            }
+        }
+        for y in 0..<height {
+            for x in 0..<width where barred(x, y) {
+                if x + 1 < width { compare(x, y, x + 1, y) }
+                if y + 1 < height { compare(x, y, x, y + 1) }
+            }
+        }
+        return (carried >= 128, appeared >= 128)
+    }
+
     /// Keep a frame that agrees with the frames before it. Between its bars its pixels are the page:
     /// they are kept where no frame showed the page yet, and elsewhere they are the pixels already
     /// there. In its bars a pixel is kept only where no frame showed the page, and there the frame
@@ -329,12 +410,6 @@ struct ScrollStitcher {
     /// content; any other bar stays behind them, so a header stays once above the first content, and
     /// scrolling back and forth near an end leaves its bar whole. Beside a tool bar, a frame that
     /// shows a place in fewer bars replaces one that showed it in more.
-    ///
-    /// A bar may show a place differently from the page kept there; that is what makes it a bar. But
-    /// a pixel in a bar that changed where it is, is the pixel the frame before showed for the same
-    /// place of the page, and stands out sharply from the pixels on both sides of it is the page's own
-    /// detail moving through that bar. Where what is kept as the page at that place is flat, the kept
-    /// page is not the page: it is something flat that stays put, and the capture is `broken`.
     private mutating func keep(_ raster: Raster, at origin: Offset) {
         let (width, height) = (raster.width, raster.height)
         let tile = CGRect(x: origin.x, y: origin.y, width: width, height: height)
@@ -344,9 +419,7 @@ struct ScrollStitcher {
         origins.append(origin)
         let (origins, bands, number) = (origins, bands, UInt32(origins.count - 1))
         let (middleX, middleY) = (width / 2, height / 2)
-        let before = last?.pixels ?? []
-        let (fromX, fromY) = (origin.x - position.x, origin.y - position.y)
-        var (disagreed, misplaced) = (false, 0)
+        var disagreed = false
         raster.pixels.withUnsafeBufferPointer { pixels in
             for y in 0..<height {
                 let index = origin.y + y - firstRow
@@ -391,20 +464,13 @@ struct ScrollStitcher {
                                 }
                             }
                             if wins { cells[offset + x] = seen }
-                        } else if old.value != pixel, x > 0, x + 1 < width, offset + x > 0, offset + x + 1 < cells.count,
-                                  y + fromY >= 0, y + fromY < height, x + fromX >= 0, x + fromX < width, !before.isEmpty,
-                                  before[y * width + x] != pixel, before[(y + fromY) * width + x + fromX] == pixel,
-                                  Self.distance(pixels[y * width + x - 1], pixel) > 32, Self.distance(pixels[y * width + x + 1], pixel) > 32 {
-                            // The page's own detail in a bar, over a kept page that is flat there.
-                            let (left, right) = (cells[offset + x - 1], cells[offset + x + 1])
-                            if left.value == old.value, right.value == old.value, left.frame != 0, right.frame != 0,
-                               bands.clear(left, width, height), bands.clear(right, width, height) { misplaced += 1 }
                         }
                     }
                 }
             }
         }
-        if disagreed || misplaced >= 32 { broken = true }
+        // Two frames kept that differ between the bars: it cannot happen, and no image is made of it.
+        if disagreed { broken = true }
         bounds = bounds.union(tile)
         last = raster
         position = origin

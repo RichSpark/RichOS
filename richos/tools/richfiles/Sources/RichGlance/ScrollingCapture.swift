@@ -298,10 +298,12 @@ final class ScrollingCapture: NSObject, NSWindowDelegate {
                 if case .moved = progress.update { accepted += 1 }
                 hasUnmatchedEnd = progress.update == .unmatched || progress.update == .limit
             }
-            let image = await assembler.finish()
+            let (image, heldBack) = await assembler.finish()
             guard !Task.isCancelled else { return }
-            // No image after frames were stitched means the stitcher found its own image at odds with them.
-            let detail = message ?? (hasUnmatchedEnd || image == nil ? "The last view could not be stitched. Review the area captured so far." : nil)
+            // No image after frames were stitched means the stitcher found its own image at odds with
+            // them; an image held back leaves out the last views, which showed something no later view
+            // bore out.
+            let detail = message ?? (hasUnmatchedEnd || image == nil || heldBack ? "The last view could not be stitched. Review the area captured so far." : nil)
             report(image == nil || detail != nil ? .issues : .complete)
             showResult(image, message: detail)
         }
@@ -404,9 +406,9 @@ private actor ScrollAssembly {
 
     func preview() -> CGImage? { stitcher.image(previewLimit: 136) }
 
-    func finish() -> CGImage? {
-        let image = stitcher.image()
+    func finish() -> (image: CGImage?, heldBack: Bool) {
+        let result = (stitcher.image(), stitcher.heldBack)
         stitcher = ScrollStitcher()
-        return image
+        return result
     }
 }

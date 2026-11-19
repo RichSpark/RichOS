@@ -515,6 +515,55 @@ final class ScrollStitcherTests: XCTestCase {
         }
     }
 
+    func testPictureThatLoadsAfterTheFirstViewIsNeverKeptAsItsPlaceholder() throws {
+        // A page with nothing fixed on it, 62 pixels longer than the view. Its one picture is a gray
+        // placeholder in the first view and has loaded by the second. Near the top of the second view
+        // that passed for a bar 56 pixels tall, the capture finished normally, and the image offered
+        // showed the placeholder, which two of the three views contradict. A thing that is new in a bar
+        // is not borne out as a bar until a later view shows it standing still: until then the image is
+        // the capture as it was before. This one moves with the page in the third view, so it is no
+        // bar: nothing more is stitched.
+        let text = textPage(width: 800, height: 562, scale: 1.5)
+        let loading = withBox(text, x: 250, y: 68, w: 300, h: 38, gray: 0.88)
+        let loaded = withBox(text, x: 250, y: 68, w: 300, h: 38)
+        var sut = ScrollStitcher()
+        XCTAssertEqual(sut.append(crop(loading, x: 0, y: 0, w: 800, h: 500)), .initial)
+        XCTAssertEqual(sut.append(crop(loaded, x: 0, y: 50, w: 800, h: 500)), .moved(dx: 0, dy: 50))
+        XCTAssertTrue(sut.heldBack, "the view with the loaded picture is not in the image yet")
+        XCTAssertTrue(pixels(try XCTUnwrap(sut.image())) == pixels(crop(loading, x: 0, y: 0, w: 800, h: 500)),
+                      "had the page ended here, the first view as captured is what is offered")
+        XCTAssertEqual(sut.append(crop(loaded, x: 0, y: 62, w: 800, h: 500)), .unmatched)
+        XCTAssertTrue(pixels(try XCTUnwrap(sut.image())) == pixels(crop(loading, x: 0, y: 0, w: 800, h: 500)),
+                      "what is offered is the first view, as captured, and no view after it")
+        // The same page with the picture there from the start is captured whole.
+        var steady = ScrollStitcher()
+        XCTAssertEqual(steady.append(crop(loaded, x: 0, y: 0, w: 800, h: 500)), .initial)
+        XCTAssertEqual(steady.append(crop(loaded, x: 0, y: 50, w: 800, h: 500)), .moved(dx: 0, dy: 50))
+        XCTAssertEqual(steady.append(crop(loaded, x: 0, y: 62, w: 800, h: 500)), .moved(dx: 0, dy: 12))
+        XCTAssertFalse(steady.heldBack)
+        XCTAssertTrue(pixels(try XCTUnwrap(steady.image())) == pixels(loaded))
+    }
+
+    func testHeaderThatAppearsAfterTheFirstViewIsBorneOutByTheNextView() throws {
+        // A header that is not there at the top of the page and is fixed once the page scrolls. In the
+        // view where it first shows it could as well be a change in the page; the view after it shows
+        // it standing still, and the capture goes on with it as a bar.
+        let page = textPage(width: 800, height: 2000)
+        func view(_ y: Int) -> CGImage {
+            let view = crop(page, x: 0, y: y, w: 800, h: 500)
+            return y == 0 ? view : withHeader(view, rows: 64)
+        }
+        var sut = ScrollStitcher()
+        XCTAssertEqual(sut.append(view(0)), .initial)
+        XCTAssertEqual(sut.append(view(50)), .moved(dx: 0, dy: 50))
+        XCTAssertTrue(sut.heldBack)
+        XCTAssertEqual(sut.append(view(150)), .moved(dx: 0, dy: 100))
+        XCTAssertFalse(sut.heldBack)
+        let actual = try XCTUnwrap(sut.image())
+        XCTAssertEqual(actual.height, 650)
+        XCTAssertTrue(pixels(actual) == pixels(crop(page, x: 0, y: 0, w: 800, h: 650)), "the page, with the header nowhere over it")
+    }
+
     func testPageThatChangesWhileItScrollsIsNotStitched() throws {
         // A picture that loads after the first view was captured: the two views show different pixels
         // at the same place of the page, in the middle of the view.
@@ -756,12 +805,12 @@ final class ScrollStitcherTests: XCTestCase {
         return context.makeImage()!
     }
 
-    /// A blue box over a view, its top-left corner at (`x`, `y`) from the view's top left.
-    private func withBox(_ view: CGImage, x: Int, y: Int, w: Int, h: Int) -> CGImage {
+    /// A box over a view, its top-left corner at (`x`, `y`) from the view's top left: blue, or of a `gray`.
+    private func withBox(_ view: CGImage, x: Int, y: Int, w: Int, h: Int, gray: CGFloat? = nil) -> CGImage {
         let context = CGContext(data: nil, width: view.width, height: view.height, bitsPerComponent: 8, bytesPerRow: 0,
                                 space: colorSpace, bitmapInfo: bitmap.rawValue)!
         context.draw(view, in: CGRect(x: 0, y: 0, width: view.width, height: view.height))
-        context.setFillColor(CGColor(red: 0.12, green: 0.35, blue: 0.8, alpha: 1))
+        context.setFillColor(gray.map { CGColor(gray: $0, alpha: 1) } ?? CGColor(red: 0.12, green: 0.35, blue: 0.8, alpha: 1))
         context.fill(CGRect(x: x, y: view.height - y - h, width: w, height: h))
         return context.makeImage()!
     }
