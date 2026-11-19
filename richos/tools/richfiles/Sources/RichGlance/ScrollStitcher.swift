@@ -220,9 +220,14 @@ struct ScrollStitcher {
               bottom - top >= max(6, old.height / 4 - 2) else { return Match(offset: offset, matches: 0, samples: 0) }
         let stepX = max(1, (right - left) / density)
         let stepY = max(1, (bottom - top) / density)
+        // Evenly spaced rows can match the pitch of text lines and all land between them.
+        // Golden-ratio spacing spreads the same number of rows over every part of a line.
+        let rows = (bottom - top + stepY - 1) / stepY
         var matches = 0
         var samples = 0
-        for y in stride(from: top, to: bottom, by: stepY) {
+        for row in 0..<rows {
+            let y = top + Int((0.5 + Double(row) * 0.618_033_988_749_895)
+                .truncatingRemainder(dividingBy: 1) * Double(bottom - top))
             for x in stride(from: left, to: right, by: stepX) {
                 let ox = x + y * old.width
                 let nx = x - offset.x + (y - offset.y) * old.width

@@ -111,6 +111,18 @@ final class ScrollStitcherTests: XCTestCase {
                       == pixels(crop(page, x: 0, y: viewport, w: 800, h: page.height - viewport)))
     }
 
+    func testRetinaTextStepIsRegisteredWhenSampleRowsMatchTheLinePitch() throws {
+        // A 600 × 700 pt viewport at 2x over plain text. Evenly spaced sample rows matched the
+        // line pitch here and landed between lines, so these 28% steps were refused.
+        let page = textPage(width: 1200, height: 2600, scale: 2)
+        for y in [168, 448, 476, 756] {
+            var sut = ScrollStitcher()
+            XCTAssertEqual(sut.append(crop(page, x: 0, y: y, w: 1200, h: 1400)), .initial)
+            XCTAssertEqual(sut.append(crop(page, x: 0, y: y + 392, w: 1200, h: 1400)), .moved(dx: 0, dy: 392),
+                           "step from y=\(y)")
+        }
+    }
+
     private func check(_ sut: ScrollStitcher, against expected: CGImage,
                        file: StaticString = #filePath, line: UInt = #line) throws {
         let actual = try XCTUnwrap(sut.image(), file: file, line: line)
