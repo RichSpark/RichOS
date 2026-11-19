@@ -1,5 +1,6 @@
 import CoreGraphics
 import CoreText
+import RichFilesCore
 import XCTest
 @testable import RichGlance
 
@@ -103,6 +104,57 @@ final class ScrollStitcherTests: XCTestCase {
         XCTAssertEqual(sut.append(view(360)), .moved(dx: 0, dy: 160))
         XCTAssertEqual(sut.append(view(460), final: true), .moved(dx: 0, dy: 100))
         try check(sut, against: crop(document, x: 0, y: 0, w: 200, h: 860))
+    }
+
+    @MainActor
+    func testSizeLimitKeepsVerifiedImageAndStillChecksTheIncomingOverlap() async throws {
+        let width = 72
+        let limit = ScrollStitcher.dimensionLimit
+        let document = fixture(width: width, height: limit + 2_000)
+        func view(_ y: Int) -> CGImage { crop(document, x: 0, y: y, w: width, h: 4_000) }
+        let assembly = ScrollAssembly()
+        let initial = await assembly.append(view(0))
+        XCTAssertEqual(initial.update, .initial)
+        for y in stride(from: 2_000, through: limit - 4_000, by: 2_000) {
+            let progress = await assembly.append(view(y))
+            XCTAssertEqual(progress.update, .moved(dx: 0, dy: 2_000))
+        }
+        let beyond = view(limit - 2_000)
+        let capped = await assembly.append(beyond)
+        XCTAssertEqual(capped.update, .limit)
+        XCTAssertEqual(capped.size, CGSize(width: width, height: limit))
+        let changed = withBox(beyond, x: 28, y: 71, w: 3, h: 7)
+        let conflict = await assembly.append(changed)
+        XCTAssertEqual(conflict.update, .conflict)
+        let restored = await assembly.append(view(limit - 4_000))
+        XCTAssertEqual(restored.update, .unchanged)
+        let (result, reason) = await assembly.finish(stoppingFor: .sizeLimit, requireComplete: true)
+        XCTAssertEqual(reason, .sizeLimit)
+        let actual = try XCTUnwrap(result)
+        XCTAssertEqual(actual.height, limit)
+        XCTAssertTrue(pixels(actual) == pixels(crop(document, x: 0, y: 0, w: width, h: limit)))
+    }
+
+    @MainActor
+    func testInterruptedCaptureOffersOnlyVerifiedPixels() async throws {
+        let document = fixture(width: 100, height: 250)
+        let first = crop(document, x: 0, y: 0, w: 100, h: 120)
+        let next = crop(document, x: 0, y: 60, w: 100, h: 120)
+        let expected = crop(document, x: 0, y: 0, w: 100, h: 180)
+        let assembly = ScrollAssembly()
+        for stop in [.timeLimit, .sourceChanged] as [RichFilesDiagnostics.ScrollCaptureFailure] {
+            _ = await assembly.append(first)
+            _ = await assembly.append(next)
+            let (result, reason) = await assembly.finish(stoppingFor: stop, requireComplete: true)
+            XCTAssertEqual(reason, stop)
+            XCTAssertTrue(pixels(try XCTUnwrap(result)) == pixels(expected))
+        }
+        _ = await assembly.append(first)
+        _ = await assembly.append(next)
+        _ = await assembly.append(withBox(next, x: 28, y: 71, w: 3, h: 7))
+        let (result, reason) = await assembly.finish(stoppingFor: .sourceChanged, requireComplete: true)
+        XCTAssertNil(result)
+        XCTAssertEqual(reason, .conflictingPixels)
     }
 
     func testAutomaticStepCanResampleBeforeRejectingUnplacedFrame() throws {
