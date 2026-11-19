@@ -285,6 +285,12 @@ pub(super) fn remember(root: &Path, opened: &Path, version: &str) -> io::Result<
         // A published app at the old path has to go through the migration below.
         return Ok(());
     }
+    if require_system_write(root, opened).is_err() {
+        // A copy this account cannot replace (a standard account, a copy another account
+        // owns) keeps updating through ~/Applications, as before (plan 2026-11-14, section 4).
+        // Nothing is recorded, so a later launch asks again.
+        return Ok(());
+    }
     write_document(
         root,
         SYSTEM_INSTALL,
@@ -299,7 +305,10 @@ pub(super) fn may_migrate(root: &Path, opened: &Path) -> bool {
         && (metadata(&root.join(MIGRATION)).is_ok()
             || (system_install(root).is_ok_and(|record| record.is_none())
                 && metadata(&home_bundle(root)).is_ok_and(|m| m.is_dir())
-                && metadata(&system_bundle()).is_ok_and(|m| m.is_dir())))
+                && metadata(&system_bundle()).is_ok_and(|m| m.is_dir())
+                // Two copies are repaired only where this account can replace the one in
+                // Applications; otherwise they keep updating through ~/Applications.
+                && require_system_write(root, &system_bundle()).is_ok()))
         && is_account_home(root)
 }
 
@@ -585,6 +594,54 @@ mod tests {
         assert_eq!(done.entered.version, "2.0.0");
         assert_eq!(bundle_version(&system).unwrap(), "2.0.0");
         assert!(!home.join("Applications").join(APP).exists());
+    }
+
+    /// The fixture's Applications folder made read-only, as it is for a standard account,
+    /// until dropped.
+    struct ReadOnlyApplications(PathBuf);
+
+    impl ReadOnlyApplications {
+        fn new(system: &Path) -> Self {
+            let folder = system.parent().unwrap().to_owned();
+            fs::set_permissions(&folder, fs::Permissions::from_mode(0o555)).unwrap();
+            Self(folder)
+        }
+    }
+
+    impl Drop for ReadOnlyApplications {
+        fn drop(&mut self) {
+            if fs::set_permissions(&self.0, fs::Permissions::from_mode(0o755)).is_err() {
+                eprintln!("could not make {} writable again", self.0.display());
+            }
+        }
+    }
+
+    #[test]
+    fn copy_this_account_cannot_replace_keeps_updating_through_the_per_user_path() {
+        // A standard account cannot write to Applications (and the same check refuses a copy
+        // another account owns). Its copy there is not remembered as the install location:
+        // downloads are accepted and land in ~/Applications, as before this change.
+        let (_work, home, system) = fixture();
+        let user_app = home.join("Applications").join(APP);
+        let _standard = ReadOnlyApplications::new(&system);
+        let mut lease = StartupLease::acquire(&home).unwrap();
+        lease.remember_installation(&system, "1.0.0").unwrap();
+        drop(lease);
+
+        stage_verified(&home, &archive("2.0.0", |_| {}), "2.0.0").unwrap();
+        activate_at_quit(&home, "1.0.0", &system).unwrap().unwrap();
+        assert_eq!(bundle_version(&user_app).unwrap(), "2.0.0");
+        assert_eq!(bundle_version(&system).unwrap(), "1.0.0");
+
+        // The two copies that leaves are not held for a repair this account cannot make:
+        // the next update is accepted and put in place too.
+        assert!(!needs_install_migration(&home, &user_app));
+        assert!(staged(&home).unwrap().is_none());
+        stage_verified(&home, &archive("3.0.0", |_| {}), "3.0.0").unwrap();
+        assert_eq!(staged(&home).unwrap().unwrap().publication.version, "3.0.0");
+        activate_at_quit(&home, "2.0.0", &user_app).unwrap().unwrap();
+        assert_eq!(bundle_version(&user_app).unwrap(), "3.0.0");
+        assert_eq!(bundle_version(&system).unwrap(), "1.0.0");
     }
 
     #[test]
