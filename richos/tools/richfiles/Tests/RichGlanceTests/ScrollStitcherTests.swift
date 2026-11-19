@@ -386,6 +386,214 @@ final class ScrollStitcherTests: XCTestCase {
         }
     }
 
+    // MARK: - The image agrees with every frame it is made from, or the frame is not stitched
+
+    func testCookieBarInsetFromTheSidesLeavesEveryPagePixelInPlace() throws {
+        // A white cookie bar that stops 50 pixels short of each side of the view. The page moving beside
+        // it made part of the bar count as page, and those rows of it stayed in the image over the text
+        // under them, with every move stitched and nothing said.
+        let page = textPage(width: 800, height: 2000)
+        for header in [64, 0] {
+            func view(_ y: Int) -> CGImage {
+                let view = crop(page, x: 0, y: y, w: 800, h: 500)
+                return withCookieBar(header > 0 ? withHeader(view, rows: header, opacity: 0.8) : view, rows: 56, inset: 50)
+            }
+            let (sut, reached) = automaticDown(to: 1500, viewport: 500, view: view)
+            let actual = try exactOrNotStitched(sut, page: page, header: header, bar: 56, "inset bar under a \(header)-pixel header")
+            XCTAssertEqual(reached, 1500, "inset bar under a \(header)-pixel header: captured to the end")
+            XCTAssertEqual(actual?.height, 2000)
+            guard let actual, actual.height == 2000 else { continue }
+            XCTAssertTrue(pixels(crop(actual, x: 0, y: 1944, w: 800, h: 56)) == pixels(crop(view(1500), x: 0, y: 444, w: 800, h: 56)),
+                          "the bar appears once, at the bottom, with the page beside it")
+        }
+    }
+
+    func testSeeThroughBottomBarLeavesEveryPagePixelInPlace() throws {
+        // A bottom bar across the whole view that lets a fifth, or two fifths, of the page show through.
+        // The text moving under it made its rows count as page, and they stayed in the image.
+        let page = textPage(width: 800, height: 2000)
+        for opacity in [0.8, 0.6] {
+            func view(_ y: Int) -> CGImage {
+                withCookieBar(withHeader(crop(page, x: 0, y: y, w: 800, h: 500), rows: 64, opacity: 0.8), rows: 56, inset: 0,
+                              opacity: opacity)
+            }
+            let (sut, reached) = automaticDown(to: 1500, viewport: 500, view: view)
+            let actual = try exactOrNotStitched(sut, page: page, header: 64, bar: 56, "bottom bar at \(opacity)")
+            XCTAssertEqual(reached, 1500, "bottom bar at \(opacity): captured to the end")
+            XCTAssertEqual(actual?.height, 2000)
+        }
+    }
+
+    func testHeaderThatGrowsWhenScrollingBackLeavesNoneOfItInThePage() throws {
+        // A sticky header that is 32 pixels tall while the page scrolls down and 64 once it scrolls
+        // back up. The added rows stayed in the image as page, over text later frames showed clear.
+        let page = textPage(width: 800, height: 2000)
+        let path = [500, 520, 500, 480, 460, 320, 180, 40, 0]
+        func view(_ index: Int) -> CGImage {
+            withHeader(crop(page, x: 0, y: path[index], w: 800, h: 500), rows: index < 2 ? 32 : 64, opacity: 0.8)
+        }
+        var sut = ScrollStitcher()
+        XCTAssertEqual(sut.append(view(0)), .initial)
+        var stitched = 0
+        for index in 1..<path.count {
+            guard sut.append(view(index)) == .moved(dx: 0, dy: path[index] - path[index - 1]) else { break }
+            stitched = index
+        }
+        // What is offered starts at the highest view stitched; under its header every pixel is the page's.
+        let top = path[...stitched].min()!
+        let actual = try XCTUnwrap(sut.image())
+        XCTAssertEqual(wrong(actual, crop(page, x: 0, y: top, w: 800, h: actual.height), x: 0, y: 64, w: 800, h: actual.height - 64), 0,
+                       "wrong pixels under the header")
+        XCTAssertEqual(stitched, path.count - 1, "every move is stitched")
+        XCTAssertEqual(actual.height, 1020)
+        guard stitched == path.count - 1, actual.height == 1020 else { return }
+        XCTAssertTrue(pixels(crop(actual, x: 0, y: 0, w: 800, h: 64)) == pixels(crop(view(path.count - 1), x: 0, y: 0, w: 800, h: 64)),
+                      "the header appears once, at the top, as the highest view showed it")
+    }
+
+    func testFloatingButtonNearACornerAppearsOnceAndLeavesThePageWhole() throws {
+        // A chat button that floats over the page: 56 pixels square, 20 pixels in from the right and
+        // from the bottom of the view.
+        let page = textPage(width: 800, height: 2000)
+        func view(_ y: Int) -> CGImage {
+            withBox(crop(page, x: 0, y: y, w: 800, h: 500), x: 724, y: 424, w: 56, h: 56)
+        }
+        let (sut, reached) = automaticDown(to: 1500, viewport: 500, view: view)
+        let actual = try exactOrNotStitched(sut, page: page, header: 0, bar: 76, "floating button")
+        XCTAssertEqual(reached, 1500, "captured to the end")
+        XCTAssertEqual(actual?.height, 2000)
+        guard let actual, actual.height == 2000 else { return }
+        XCTAssertTrue(pixels(crop(actual, x: 0, y: 1924, w: 800, h: 76)) == pixels(crop(view(1500), x: 0, y: 424, w: 800, h: 76)),
+                      "the button appears once, where the last view showed it")
+    }
+
+    func testSomethingFixedInTheMiddleOfTheViewIsNotStitchedIntoThePage() throws {
+        // A panel that stays in the middle of the view while the page scrolls under it is no bar along
+        // an edge. No image of the page can agree with both views, so the second is not stitched.
+        let page = textPage(width: 800, height: 2000)
+        func view(_ y: Int) -> CGImage {
+            withBox(crop(page, x: 0, y: y, w: 800, h: 500), x: 300, y: 200, w: 200, h: 100)
+        }
+        var sut = ScrollStitcher()
+        XCTAssertEqual(sut.append(view(0)), .initial)
+        XCTAssertEqual(sut.append(view(50)), .unmatched)
+        XCTAssertTrue(pixels(try XCTUnwrap(sut.image())) == pixels(view(0)), "what is offered is the first view, as captured")
+    }
+
+    func testTallFlatPanelInTheMiddleIsNeverSmearedDownThePage() throws {
+        // A flat panel 220 pixels tall that stays in the middle of the view. For one move it can pass
+        // for a stripe of the page between two bars, with the page itself taken for the bars; but then
+        // the text of the page shows in those bars where the stripe was kept, two views in a row, and
+        // that is no bar. Whatever the capture offers after that is not a page with the panel smeared
+        // down it: here, nothing.
+        let page = textPage(width: 800, height: 2000)
+        func view(_ y: Int) -> CGImage { withBox(crop(page, x: 0, y: y, w: 800, h: 500), x: 300, y: 140, w: 200, h: 220) }
+        var sut = ScrollStitcher()
+        XCTAssertEqual(sut.append(view(0)), .initial)
+        _ = sut.append(view(50))
+        XCTAssertEqual(sut.append(view(160)), .unmatched)
+        XCTAssertEqual(sut.append(view(270)), .unmatched)
+        if let offered = sut.image() {
+            XCTAssertTrue(pixels(offered) == pixels(view(0)), "only the first view, as captured, may be offered")
+        }
+    }
+
+    func testPageThatChangesWhileItScrollsIsNotStitched() throws {
+        // A picture that loads after the first view was captured: the two views show different pixels
+        // at the same place of the page, in the middle of the view.
+        let page = textPage(width: 800, height: 2000)
+        let loaded = withBox(page, x: 100, y: 220, w: 600, h: 120)
+        var sut = ScrollStitcher()
+        XCTAssertEqual(sut.append(crop(page, x: 0, y: 0, w: 800, h: 500)), .initial)
+        XCTAssertEqual(sut.append(crop(loaded, x: 0, y: 50, w: 800, h: 500)), .unmatched)
+        XCTAssertTrue(pixels(try XCTUnwrap(sut.image())) == pixels(crop(page, x: 0, y: 0, w: 800, h: 500)),
+                      "what is offered is the first view, as captured")
+    }
+
+    func testStepPastThePageBetweenTheBarsIsNotStitched() throws {
+        // Under a 128-pixel header and over an 88-pixel bar, 84 rows of a 300-pixel view move. A step
+        // of 100 would leave 16 rows of the page that no view showed clear of a bar.
+        let page = textPage(width: 800, height: 2000)
+        func view(_ y: Int) -> CGImage {
+            withBottomBar(withHeader(crop(page, x: 0, y: y, w: 800, h: 300), rows: 128), rows: 88)
+        }
+        var sut = ScrollStitcher()
+        XCTAssertEqual(sut.append(view(0)), .initial)
+        XCTAssertEqual(sut.append(view(30)), .moved(dx: 0, dy: 30))
+        XCTAssertEqual(sut.append(view(130)), .unmatched)
+        let actual = try XCTUnwrap(sut.image())
+        XCTAssertEqual(actual.height, 330)
+        XCTAssertEqual(wrong(actual, page, x: 0, y: 128, w: 800, h: 330 - 216), 0, "wrong pixels between the header and the bar")
+    }
+
+    func testBarsThatAppearLateOverPlacesNoOtherViewShowedAreNotStitched() throws {
+        // Four views 240 pixels apart with nothing fixed in them, then a 240-pixel header and a bar
+        // appear. With bars that size, 40 rows between each pair of the earlier views were only ever
+        // seen where a bar now is, so no image of the page can include that view.
+        let page = textPage(width: 800, height: 2000)
+        var sut = ScrollStitcher()
+        XCTAssertEqual(sut.append(crop(page, x: 0, y: 0, w: 800, h: 500)), .initial)
+        for y in [240, 480, 720] {
+            XCTAssertEqual(sut.append(crop(page, x: 0, y: y, w: 800, h: 500)), .moved(dx: 0, dy: 240))
+        }
+        XCTAssertEqual(sut.append(withBottomBar(withHeader(crop(page, x: 0, y: 760, w: 800, h: 500), rows: 240), rows: 100)), .unmatched)
+        XCTAssertTrue(pixels(try XCTUnwrap(sut.image())) == pixels(crop(page, x: 0, y: 0, w: 800, h: 1220)),
+                      "what is offered is the page as far as it was captured before")
+    }
+
+    func testPlaceSeenOnlyUnderAHeaderStaysEmptyInsideThePage() throws {
+        // A manual pan that starts 500 pixels down, goes right, up to the top and back left. In the
+        // first 168 columns the rows under the first view's header were never seen clear of it, and
+        // page was captured above and below them. The image has nothing there, as where no view went:
+        // not a strip of the header.
+        let page = textPage(width: 1000, height: 1000)
+        func view(_ at: (x: Int, y: Int)) -> CGImage { withHeader(crop(page, x: at.x, y: at.y, w: 600, h: 500), rows: 64) }
+        let path = [(0, 500), (168, 500), (168, 360), (168, 220), (168, 80), (168, 0), (0, 0)].map { (x: $0.0, y: $0.1) }
+        var sut = ScrollStitcher()
+        XCTAssertEqual(sut.append(view(path[0])), .initial)
+        for (last, next) in zip(path, path.dropFirst()) {
+            XCTAssertEqual(sut.append(view(next)), .moved(dx: next.x - last.x, dy: next.y - last.y), "move to \(next)")
+        }
+        let partial = try XCTUnwrap(sut.image())
+        XCTAssertEqual(partial.width, 768)
+        XCTAssertEqual(partial.height, 1000)
+        guard partial.width == 768, partial.height == 1000 else { return }
+        XCTAssertTrue(pixels(crop(partial, x: 0, y: 500, w: 168, h: 64)).allSatisfy { $0 == 0 }, "nothing where only the header was seen")
+        XCTAssertEqual(wrong(partial, page, x: 0, y: 64, w: 768, h: 436), 0, "wrong pixels above it")
+        XCTAssertEqual(wrong(partial, page, x: 0, y: 564, w: 768, h: 436), 0, "wrong pixels below it")
+        XCTAssertEqual(wrong(partial, page, x: 168, y: 500, w: 600, h: 64), 0, "wrong pixels beside it")
+        // One more view, down the left side, shows those rows clear of the header.
+        XCTAssertEqual(sut.append(view((x: 0, y: 140))), .moved(dx: 0, dy: 140))
+        let actual = try XCTUnwrap(sut.image())
+        XCTAssertEqual(wrong(actual, page, x: 0, y: 64, w: 768, h: 936), 0, "wrong pixels under the header")
+    }
+
+    /// Automatic downward scrolling to `end`, with steps sized as the capture sizes them, stopping at
+    /// the first step that is not stitched, as the capture does. Returns how far it got.
+    private func automaticDown(to end: Int, viewport: Int, view: (Int) -> CGImage) -> (ScrollStitcher, reached: Int) {
+        var sut = ScrollStitcher()
+        XCTAssertEqual(sut.append(view(0)), .initial)
+        var y = 0
+        while y < end {
+            let step = Int(ScrollStitcher.automaticStep(along: Double(viewport), moving: sut.movingShare.map { Double($0.height) }).rounded())
+            let next = min(end, y + step)
+            guard sut.append(view(next)) == .moved(dx: 0, dy: next - y) else { break }
+            y = next
+        }
+        return (sut, y)
+    }
+
+    /// The one rule for what a capture from the top of `page` may offer: an image in which every pixel
+    /// between a header of `header` rows and a bottom bar of `bar` rows is the page's, however far the
+    /// capture got; or no image.
+    private func exactOrNotStitched(_ sut: ScrollStitcher, page: CGImage, header: Int, bar: Int, _ name: String,
+                                    file: StaticString = #filePath, line: UInt = #line) throws -> CGImage? {
+        guard let actual = sut.image() else { return nil }
+        XCTAssertEqual(wrong(actual, page, x: 0, y: header, w: actual.width, h: actual.height - header - bar), 0,
+                       "\(name): wrong pixels between the header and the bar", file: file, line: line)
+        return actual
+    }
+
     /// Automatic downward scrolling: steps of `step` pixels to the end of a page `height` pixels tall,
     /// each of which must be stitched.
     private func scrollDown(_ height: Int, viewport: Int, step: Int, view: (Int) -> CGImage,
@@ -511,6 +719,33 @@ final class ScrollStitcherTests: XCTestCase {
         ]))
         context.textPosition = CGPoint(x: 20, y: 20)
         CTLineDraw(line, context)
+        return context.makeImage()!
+    }
+
+    /// A white bar with dark labels along the bottom rows of a view that stops `inset` pixels short of
+    /// each side and lets the page show through unless `opacity` is 1.
+    private func withCookieBar(_ view: CGImage, rows: Int, inset: Int, opacity: CGFloat = 1) -> CGImage {
+        let context = CGContext(data: nil, width: view.width, height: view.height, bitsPerComponent: 8, bytesPerRow: 0,
+                                space: colorSpace, bitmapInfo: bitmap.rawValue)!
+        context.draw(view, in: CGRect(x: 0, y: 0, width: view.width, height: view.height))
+        context.setFillColor(CGColor(gray: 1, alpha: opacity))
+        context.fill(CGRect(x: inset, y: 0, width: view.width - 2 * inset, height: rows))
+        let line = CTLineCreateWithAttributedString(NSAttributedString(string: "Cookie settings     Accept", attributes: [
+            NSAttributedString.Key(kCTFontAttributeName as String): CTFontCreateWithName("Helvetica" as CFString, 13, nil),
+            NSAttributedString.Key(kCTForegroundColorAttributeName as String): CGColor(gray: 0.1, alpha: 1)
+        ]))
+        context.textPosition = CGPoint(x: inset + 20, y: 20)
+        CTLineDraw(line, context)
+        return context.makeImage()!
+    }
+
+    /// A blue box over a view, its top-left corner at (`x`, `y`) from the view's top left.
+    private func withBox(_ view: CGImage, x: Int, y: Int, w: Int, h: Int) -> CGImage {
+        let context = CGContext(data: nil, width: view.width, height: view.height, bitsPerComponent: 8, bytesPerRow: 0,
+                                space: colorSpace, bitmapInfo: bitmap.rawValue)!
+        context.draw(view, in: CGRect(x: 0, y: 0, width: view.width, height: view.height))
+        context.setFillColor(CGColor(red: 0.12, green: 0.35, blue: 0.8, alpha: 1))
+        context.fill(CGRect(x: x, y: view.height - y - h, width: w, height: h))
         return context.makeImage()!
     }
 

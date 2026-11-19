@@ -3,6 +3,25 @@ import Foundation
 import Vision
 
 /// Positions in the stitched image use the same top-left pixel coordinates as a capture crop.
+///
+/// The image is checked against every frame it is made from, as the frames arrive. For each place of
+/// the page the stitcher keeps the pixel the frames showed there, and each new frame is compared with
+/// it pixel by pixel before any of it is kept. Two frames may show a place differently only where one
+/// of them shows a fixed bar (a sticky header, a bottom bar, a side bar, a scroll bar), and a bar is a
+/// band along an edge of the view; so the bands are whatever the disagreements themselves call for,
+/// and nothing else decides them. A frame that disagrees where no such bands can account for it is
+/// not stitched (`unmatched`), and what was stitched before it stays as it was. So in the image
+/// 1. every pixel between the bars is the pixel of every stitched frame that showed that place between
+///    its bars, and
+/// 2. the bars are the first rows, last rows, first columns and last columns of the frames farthest
+///    out that way: a header once at the top, a bottom bar once at the bottom.
+/// A place that only ever lay under a bar, with page captured beyond it, has no pixel to show. It
+/// stays transparent, as a place never visited; a manual pan can leave one. A frame whose bars would
+/// leave such places in a page that had none is not stitched.
+///
+/// Bars are fixed things, and the page is what moves. Should two frames in a row show the page's own
+/// detail in a bar, at places where what was kept as the page is flat, then something fixed and flat
+/// was taken for the page and the page for bars (`keep`): nothing more is stitched and no image is made.
 struct ScrollStitcher {
     enum Update: Equatable {
         case initial, unchanged, moved(dx: Int, dy: Int), unmatched, limit
@@ -24,7 +43,8 @@ struct ScrollStitcher {
     }
 
     /// Bands along the edges of a view `width` × `height` that stay put between two frames while the
-    /// content between them moves: a sticky header, a bottom bar, a frozen column, a side bar.
+    /// content between them moves: a sticky header, a bottom bar, a frozen column, a side bar. These
+    /// are found from two frames alone and are used only to register one against the other.
     private struct Fixed: Equatable {
         var top = 0
         var bottom = 0
@@ -38,64 +58,30 @@ struct ScrollStitcher {
         func covers(_ x: Int, _ y: Int) -> Bool { row(y) || x < left || (right > 0 && x >= width - right) }
     }
 
-    private struct Patch {
-        let rect: CGRect
-        let image: CGImage
-        /// The place in the stitched image of the frame these pixels came from.
-        let tile: CGRect
-        /// For the pixels of a frame's fixed bands, the sides that have shown a bar (0 top, 1 bottom,
-        /// 2 left, 3 right) in whose band they lie; nil for content. They are drawn only where no
-        /// frame showed the content under them.
-        var sides: [Int]?
-        var bar: Bool { sides != nil }
-
-        /// Whether a piece of a band from a frame at `tile`, in the bands of `sides`, shows the page
-        /// where this earlier piece may show a bar: it lies in no band this one is not in, and its
-        /// frame is at least as far out on each of those sides, with fewer bands or farther out on
-        /// one. Under a bottom bar the page is seen only from a frame lower down, which shows it
-        /// higher in its view; so for every side.
-        func yields(to sides: [Int], at tile: CGRect) -> Bool {
-            guard let own = self.sides, sides.allSatisfy(own.contains) else { return false }
-            let gains = sides.map { side -> CGFloat in
-                switch side {
-                case 0: return self.tile.minY - tile.minY
-                case 1: return tile.maxY - self.tile.maxY
-                case 2: return self.tile.minX - tile.minX
-                default: return tile.maxX - self.tile.maxX
-                }
-            }
-            return gains.allSatisfy { $0 >= 0 } && (sides.count < own.count || gains.contains { $0 > 0 })
-        }
-    }
-
     static let pixelLimit = 48_000_000
     static let dimensionLimit = 32_000
-    private static let patchLimit = 6_000
     private var last: Raster?
     private var position = Offset.zero
-    private var patches: [Patch] = []
-    /// The first frame is placed whole until a move shows which of its edges are fixed bars.
-    private var settled = false
-    /// The fixed bars the last move found.
+    /// The rows of the page captured so far, from stitched row `firstRow` down.
+    private var rows: [Row] = []
+    private var firstRow = 0
+    /// Where each stitched frame lies; a cell's `frame` counts into this from 1.
+    private var origins = [Offset.zero]
+    /// The bars of the view: every disagreement between two stitched frames lies in one of them.
+    private var bands = Bands()
+    /// The fixed bands the last registration found.
     private var bars: Fixed?
-    /// The sides (top, bottom, left, right) where a move has shown a bar that stays put.
-    private var barred = [false, false, false, false]
-    /// For each side, the narrowest band a move along its axis left without moving content; nil
-    /// until such a move. A bar is no larger: a line that moved with the page once is page.
-    private var most: [Int?] = [nil, nil, nil, nil]
-    /// For each side, the widest band a move across its axis left without moving content, which
-    /// stands in until a move along it.
-    private var across = [0, 0, 0, 0]
-    /// The bands every frame so far is placed by, and the sides that had shown a bar then.
-    private var placed: (bands: [Int], barred: [Bool])?
+    /// Set when what was kept as the page turns out not to be the page (`keep`). No image is made.
+    private var broken = false
     private(set) var bounds = CGRect.null
 
-    /// The share of the view's width and height that moves with the content between the fixed bars
-    /// the last move found; nil before the first move.
+    /// The share of the view's width and height that moves with the content between the fixed bars;
+    /// nil before the first move.
     var movingShare: CGSize? {
         guard let bars, let last else { return nil }
-        return CGSize(width: Double(last.width - bars.left - bars.right) / Double(last.width),
-                      height: Double(last.height - bars.top - bars.bottom) / Double(last.height))
+        let across = last.width - max(bars.left, bands.left) - max(bars.right, bands.right)
+        let along = last.height - max(bars.top, bands.top) - max(bars.bottom, bands.bottom)
+        return CGSize(width: Double(max(0, across)) / Double(last.width), height: Double(max(0, along)) / Double(last.height))
     }
 
     /// How far one automatic scroll step goes along a view `length` long. The first step is short, to
@@ -110,183 +96,293 @@ struct ScrollStitcher {
         guard image.width >= 24, image.height >= 24,
               Self.fits(CGRect(x: 0, y: 0, width: image.width, height: image.height)),
               let next = Raster(image) else { return .limit }
-        if let last {
-            guard next.width == last.width, next.height == last.height else { return .unmatched }
-            if next.pixels == last.pixels { return .unchanged }
-            guard let match = Self.registration(from: last, to: next) else { return .unmatched }
-            let offset = match.offset
-            guard offset != .zero else { return .unchanged }
-            let wide = Self.widened(match.fixed, from: last, to: next, moved: offset)
-            let narrow = [match.fixed.top, match.fixed.bottom, match.fixed.left, match.fixed.right]
-            var bands = [wide.top, wide.bottom, wide.left, wide.right]
-            for side in 0..<4 {
-                if narrow[side] > 0 { barred[side] = true }
-                // A sideways move cannot tell a see-through header from the page moving under it, so
-                // each band is learned from the moves along its own axis, and from all of them: beside
-                // a bar, page that is blank in this move is still page once another move showed it
-                // moving. Until such a move the widest band seen stands in.
-                if (side < 2 ? offset.y : offset.x) != 0 {
-                    most[side] = min(most[side] ?? bands[side], bands[side])
-                } else {
-                    across[side] = max(across[side], bands[side])
-                }
-                bands[side] = most[side] ?? across[side]
-            }
-            var fixed = wide
-            (fixed.top, fixed.bottom, fixed.left, fixed.right) = (bands[0], bands[1], bands[2], bands[3])
-            if !settled {
-                patches = []
-                bounds = .null
-                guard add(last, at: position, fixed: fixed) else { return .limit }
-                settled = true
-            } else if let placed, placed.bands != bands || placed.barred != barred {
-                // Every frame is placed by the same bands: what was learned now holds for earlier ones.
-                guard sort(by: fixed) else { return .limit }
-            }
-            placed = (bands, barred)
-            let nextPosition = Offset(x: position.x + offset.x, y: position.y + offset.y)
-            guard add(next, at: nextPosition, fixed: fixed) else { return .limit }
-            // Steps are sized by the bars themselves, not by the blank page widened into them.
-            bars = match.fixed
-            return .moved(dx: offset.x, dy: offset.y)
+        guard !broken else { return .unmatched }
+        guard let last else {
+            keep(next, at: .zero)
+            return .initial
         }
-        return add(next, at: .zero) ? .initial : .limit
+        guard next.width == last.width, next.height == last.height else { return .unmatched }
+        if next.pixels == last.pixels { return .unchanged }
+        guard let match = Self.registration(from: last, to: next) else { return .unmatched }
+        let offset = match.offset
+        guard offset != .zero else { return .unchanged }
+        let origin = Offset(x: position.x + offset.x, y: position.y + offset.y)
+        guard Self.fits(bounds.union(CGRect(x: origin.x, y: origin.y, width: next.width, height: next.height))) else { return .limit }
+        // The check. Nothing of the frame is kept unless bars can account for every pixel in which it
+        // differs from the frames before it, and the page between its bars reaches the page between
+        // the bars of the frame before it.
+        guard let agreed = disagreements(of: next, at: origin, moved: offset).bands(over: bands),
+              abs(offset.x) <= next.width - agreed.left - agreed.right,
+              abs(offset.y) <= next.height - agreed.top - agreed.bottom else { return .unmatched }
+        if agreed == bands {
+            keep(next, at: origin)
+        } else {
+            // Larger bars take the places under them out of the page. A frame whose bars would leave a
+            // place with nothing to show inside a page that was whole before it is not stitched.
+            var grown = self
+            grown.bands = agreed
+            grown.keep(next, at: origin)
+            guard grown.broken || grown.whole || !whole else { return .unmatched }
+            self = grown
+        }
+        guard !broken else { return .unmatched }
+        bars = match.fixed
+        return .moved(dx: offset.x, dy: offset.y)
     }
 
-    /// Draw each covered pixel once. Areas never visited in a manual pan stay transparent.
+    /// The stitched image, each captured place once. Areas never visited in a manual pan stay
+    /// transparent, and so do places no frame showed clear of a bar (`shows`). With `previewLimit`, a
+    /// small picture of everything captured so far, no side longer than that.
     func image(previewLimit: Int? = nil) -> CGImage? {
-        guard !bounds.isNull else { return nil }
-        let scale = previewLimit.map { min(1, CGFloat($0) / max(bounds.width, bounds.height)) } ?? 1
-        let width = max(1, Int((bounds.width * scale).rounded(.up)))
-        let height = max(1, Int((bounds.height * scale).rounded(.up)))
-        guard let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8,
-                                      bytesPerRow: 0, space: Raster.colorSpace, bitmapInfo: Raster.bitmapInfo) else { return nil }
-        context.interpolationQuality = scale == 1 ? .none : .medium
-        context.setBlendMode(.copy)
-        for patch in patches {
-            context.draw(patch.image, in: CGRect(x: (patch.rect.minX - bounds.minX) * scale,
-                                                  y: (bounds.maxY - patch.rect.maxY) * scale,
-                                                  width: patch.rect.width * scale, height: patch.rect.height * scale))
+        guard !bounds.isNull, !broken, let last else { return nil }
+        let (minX, minY, width, height) = (Int(bounds.minX), Int(bounds.minY), Int(bounds.width), Int(bounds.height))
+        if let previewLimit {
+            // Three samples each way for every pixel of the picture, then scaled down smoothly.
+            let scale = min(1, Double(previewLimit) / Double(max(width, height)))
+            let small = (width: max(1, Int((Double(width) * scale).rounded(.up))), height: max(1, Int((Double(height) * scale).rounded(.up))))
+            let fine = (width: min(width, small.width * 3), height: min(height, small.height * 3))
+            var samples = [UInt32](repeating: 0, count: fine.width * fine.height)
+            for y in 0..<fine.height {
+                let row = rows[minY - firstRow + (y * 2 + 1) * height / (fine.height * 2)]
+                for x in 0..<fine.width {
+                    let column = minX + (x * 2 + 1) * width / (fine.width * 2) - row.x
+                    if column >= 0, column < row.cells.count, row.cells[column].frame != 0 {
+                        samples[y * fine.width + x] = row.cells[column].value
+                    }
+                }
+            }
+            guard let sampled = Raster.image(samples.withUnsafeBytes { Data($0) }, width: fine.width, height: fine.height) else { return nil }
+            if fine.width == small.width, fine.height == small.height { return sampled }
+            guard let context = CGContext(data: nil, width: small.width, height: small.height, bitsPerComponent: 8,
+                                          bytesPerRow: 0, space: Raster.colorSpace, bitmapInfo: Raster.bitmapInfo) else { return nil }
+            context.interpolationQuality = .medium
+            context.setBlendMode(.copy)
+            context.draw(sampled, in: CGRect(x: 0, y: 0, width: small.width, height: small.height))
+            return context.makeImage()
         }
-        return context.makeImage()
-    }
-
-    /// The bands of `fixed` in a frame at `tile` as up to eight pieces around its content, each with
-    /// the sides that have shown a bar in whose band it lies and the side it is on.
-    private func pieces(of tile: CGRect, fixed: Fixed) -> (content: CGRect, bars: [(rect: CGRect, sides: [Int], side: Int)]) {
-        let xs = [tile.minX, tile.minX + CGFloat(fixed.left), tile.maxX - CGFloat(fixed.right), tile.maxX]
-        let ys = [tile.minY, tile.minY + CGFloat(fixed.top), tile.maxY - CGFloat(fixed.bottom), tile.maxY]
-        var bars: [(rect: CGRect, sides: [Int], side: Int)] = []
-        for row in 0..<3 {
-            for column in 0..<3 where row != 1 || column != 1 {
-                let rect = CGRect(x: xs[column], y: ys[row], width: xs[column + 1] - xs[column], height: ys[row + 1] - ys[row])
-                guard !rect.isEmpty else { continue }
-                let sides = ((row == 1 ? [] : [row / 2]) + (column == 1 ? [] : [2 + column / 2])).filter { barred[$0] }
-                let side = row == 1 ? 2 + column / 2 : row / 2
-                if let before = bars.last, before.sides == sides, before.side == side, before.rect.minY == rect.minY,
-                   before.rect.maxX == rect.minX {
-                    bars[bars.count - 1].rect = before.rect.union(rect)
-                } else {
-                    bars.append((rect, sides, side))
+        let page = page
+        var data = Data(count: width * height * 4)
+        data.withUnsafeMutableBytes { bytes in
+            let pixels = bytes.bindMemory(to: UInt32.self)
+            for (index, row) in rows.enumerated() {
+                let y = firstRow + index - minY
+                row.cells.withUnsafeBufferPointer { cells in
+                    for (column, cell) in cells.enumerated() where cell.frame != 0 {
+                        if bands.clear(cell, last.width, last.height) || shows(cell, x: row.x + column, index: index, page) {
+                            pixels[y * width + row.x + column - minX] = cell.value
+                        }
+                    }
                 }
             }
         }
-        return (CGRect(x: xs[1], y: ys[1], width: xs[2] - xs[1], height: ys[2] - ys[1]), bars)
+        return Raster.image(data, width: width, height: height)
     }
 
-    /// Place a frame's content where no earlier frame showed content, and its fixed bars (`fixed`)
-    /// only where nothing else is: content always replaces a bar. A bar on a side where this frame
-    /// reaches past everything captured so far replaces the bars of earlier frames, so a bottom bar
-    /// ends up once, below the last content; any other bar stays behind them, so a header stays once
-    /// above the first content, and scrolling back and forth near an end leaves its bar whole. A
-    /// piece of a band also replaces an earlier one where it is the likelier to show the page
-    /// (`Patch.yields`): a blank page margin replaces the end of an earlier bottom bar, and the
-    /// page beside a tool bar replaces the bar an earlier frame showed there, never the reverse.
-    private mutating func add(_ raster: Raster, at offset: Offset, fixed: Fixed = .none) -> Bool {
-        let tile = CGRect(x: offset.x, y: offset.y, width: raster.width, height: raster.height)
-        let grown = bounds.union(tile)
-        guard Self.fits(grown) else { return false }
+    /// For each row and each column of the capture, the first and the last place that a frame showed
+    /// between its bars: where the page was seen.
+    private struct Page {
+        var rowFirst: [Int]
+        var rowLast: [Int]
+        var columnFirst: [Int]
+        var columnLast: [Int]
+    }
+
+    private var page: Page {
+        var page = Page(rowFirst: Array(repeating: .max, count: rows.count), rowLast: Array(repeating: .min, count: rows.count),
+                        columnFirst: Array(repeating: .max, count: Int(bounds.width)),
+                        columnLast: Array(repeating: .min, count: Int(bounds.width)))
+        guard let last else { return page }
+        let minX = Int(bounds.minX)
+        for (index, row) in rows.enumerated() {
+            row.cells.withUnsafeBufferPointer { cells in
+                for (column, cell) in cells.enumerated() where cell.frame != 0 && bands.clear(cell, last.width, last.height) {
+                    let x = row.x + column
+                    page.rowFirst[index] = min(page.rowFirst[index], x)
+                    page.rowLast[index] = x
+                    page.columnFirst[x - minX] = min(page.columnFirst[x - minX], index)
+                    page.columnLast[x - minX] = index
+                }
+            }
+        }
+        return page
+    }
+
+    /// Whether a place that no frame showed between its bars has a pixel to show: it lies in a bar of
+    /// the frame its pixel is from, and no page was captured beyond it on the side of that bar, as
+    /// above the header over the first content and below the bottom bar under the last. Otherwise it
+    /// is a strip of bar inside the page, and the page under it was never seen.
+    private func shows(_ cell: Cell, x: Int, index: Int, _ page: Page) -> Bool {
+        guard let last else { return false }
+        let from = origins[Int(cell.frame)]
+        let (viewX, viewY, column) = (x - from.x, firstRow + index - from.y, x - Int(bounds.minX))
+        return (viewY < bands.top && index < page.columnFirst[column])
+            || (viewY >= last.height - bands.bottom && index > page.columnLast[column])
+            || (viewX < bands.left && x < page.rowFirst[index])
+            || (viewX >= last.width - bands.right && x > page.rowLast[index])
+    }
+
+    /// Whether every captured place has a pixel to show.
+    private var whole: Bool {
+        guard let last else { return false }
+        let page = page
+        for (index, row) in rows.enumerated() {
+            for (column, cell) in row.cells.enumerated() where cell.frame != 0 && !bands.clear(cell, last.width, last.height) {
+                if !shows(cell, x: row.x + column, index: index, page) { return false }
+            }
+        }
+        return true
+    }
+
+    /// Every pixel in which `raster`, as a frame at `origin` that moved there by `moved`, differs
+    /// between the bars from what earlier frames showed at the same place between their bars.
+    private func disagreements(of raster: Raster, at origin: Offset, moved: Offset) -> Disagreements {
+        let (width, height) = (raster.width, raster.height)
+        var found = Disagreements(width: width, height: height, moved: (moved.x, moved.y))
+        let bands = bands
+        raster.pixels.withUnsafeBufferPointer { pixels in
+            for y in bands.top..<(height - bands.bottom) {
+                let index = origin.y + y - firstRow
+                guard index >= 0, index < rows.count else { continue }
+                let row = rows[index]
+                let from = max(bands.left, row.x - origin.x)
+                let to = min(width - bands.right, row.x + row.cells.count - origin.x)
+                guard from < to else { continue }
+                row.cells.withUnsafeBufferPointer { cells in
+                    var column = origin.x + from - row.x
+                    var pixel = y * width + from
+                    for x in from..<to {
+                        if cells[column].value != pixels[pixel], cells[column].frame != 0, bands.clear(cells[column], width, height) {
+                            found.add(x: x, y: y, cells[column])
+                        }
+                        column += 1
+                        pixel += 1
+                    }
+                }
+                if found.unanswerable { break }
+            }
+        }
+        return found
+    }
+
+    /// Keep a frame that agrees with the frames before it. Between its bars its pixels are the page:
+    /// they are kept where no frame showed the page yet, and elsewhere they are the pixels already
+    /// there. In its bars a pixel is kept only where no frame showed the page, and there the frame
+    /// farthest out that way wins: a frame that reaches past everything captured so far on the side
+    /// of a bar replaces the bars of earlier frames, so a bottom bar ends up once, below the last
+    /// content; any other bar stays behind them, so a header stays once above the first content, and
+    /// scrolling back and forth near an end leaves its bar whole. Beside a tool bar, a frame that
+    /// shows a place in fewer bars replaces one that showed it in more.
+    ///
+    /// A bar may show a place differently from the page kept there; that is what makes it a bar. But
+    /// a pixel in a bar that changed where it is, is the pixel the frame before showed for the same
+    /// place of the page, and stands out sharply from the pixels on both sides of it is the page's own
+    /// detail moving through that bar. Where what is kept as the page at that place is flat, the kept
+    /// page is not the page: it is something flat that stays put, and the capture is `broken`.
+    private mutating func keep(_ raster: Raster, at origin: Offset) {
+        let (width, height) = (raster.width, raster.height)
+        let tile = CGRect(x: origin.x, y: origin.y, width: width, height: height)
         let leads = [tile.minY < bounds.minY, tile.maxY > bounds.maxY, tile.minX < bounds.minX, tile.maxX > bounds.maxX]
             .map { !bounds.isNull && $0 }
-        let (content, bars) = pieces(of: tile, fixed: fixed)
-        let solid = patches.filter { !$0.bar }.map(\.rect)
-        var fresh: [(CGRect, [Int]?)] = content.isEmpty ? [] : Self.subtract(solid, from: [content]).map { ($0, nil) }
-        guard var kept = Self.trim(patches, by: content) else { return false }
-        for bar in bars {
-            guard let under = Self.trim(kept, by: bar.rect, where: { leads[bar.side] || $0.yields(to: bar.sides, at: tile) })
-            else { return false }
-            kept = under
-            fresh += Self.subtract(kept.filter(\.bar).map(\.rect), from: Self.subtract(solid, from: [bar.rect])).map { ($0, bar.sides) }
+        reserve(origin, width, height)
+        origins.append(origin)
+        let (origins, bands, number) = (origins, bands, UInt32(origins.count - 1))
+        let (middleX, middleY) = (width / 2, height / 2)
+        let before = last?.pixels ?? []
+        let (fromX, fromY) = (origin.x - position.x, origin.y - position.y)
+        var (disagreed, misplaced) = (false, 0)
+        raster.pixels.withUnsafeBufferPointer { pixels in
+            for y in 0..<height {
+                let index = origin.y + y - firstRow
+                let rowZone = y < bands.top ? 0 : y >= height - bands.bottom ? 2 : 1
+                let offset = origin.x - rows[index].x
+                rows[index].cells.withUnsafeMutableBufferPointer { cells in
+                    for x in 0..<width {
+                        let columnZone = x < bands.left ? 0 : x >= width - bands.right ? 2 : 1
+                        let old = cells[offset + x]
+                        let pixel = pixels[y * width + x]
+                        let seen = Cell(value: pixel, frame: number,
+                                        above: y <= middleY ? Int16(y) : -1, below: y <= middleY ? .max : Int16(y),
+                                        before: x <= middleX ? Int16(x) : -1, after: x <= middleX ? .max : Int16(x))
+                        if old.frame == 0 {
+                            cells[offset + x] = seen
+                        } else if rowZone == 1, columnZone == 1 {
+                            if !bands.clear(old, width, height) {
+                                cells[offset + x] = seen
+                            } else if old.value == pixel {
+                                cells[offset + x].above = max(old.above, seen.above)
+                                cells[offset + x].below = min(old.below, seen.below)
+                                cells[offset + x].before = max(old.before, seen.before)
+                                cells[offset + x].after = min(old.after, seen.after)
+                            } else {
+                                disagreed = true
+                            }
+                        } else if !bands.clear(old, width, height) {
+                            // Two frames show this place in their bars.
+                            var wins = leads[rowZone != 1 ? rowZone / 2 : 2 + columnZone / 2]
+                            if !wins {
+                                let was = origins[Int(old.frame)]
+                                let (oldX, oldY) = (origin.x + x - was.x, origin.y + y - was.y)
+                                let oldRowZone = oldY < bands.top ? 0 : oldY >= height - bands.bottom ? 2 : 1
+                                let oldColumnZone = oldX < bands.left ? 0 : oldX >= width - bands.right ? 2 : 1
+                                // In no bar the earlier frame did not show it in, at least as far out on
+                                // the side of each, and in fewer bars or farther out on one.
+                                if rowZone == 1 || rowZone == oldRowZone, columnZone == 1 || columnZone == oldColumnZone {
+                                    let down = rowZone == 0 ? was.y - origin.y : rowZone == 2 ? origin.y - was.y : 0
+                                    let across = columnZone == 0 ? was.x - origin.x : columnZone == 2 ? origin.x - was.x : 0
+                                    let fewer = (rowZone == 1 && oldRowZone != 1) || (columnZone == 1 && oldColumnZone != 1)
+                                    wins = down >= 0 && across >= 0 && (fewer || down > 0 || across > 0)
+                                }
+                            }
+                            if wins { cells[offset + x] = seen }
+                        } else if old.value != pixel, x > 0, x + 1 < width, offset + x > 0, offset + x + 1 < cells.count,
+                                  y + fromY >= 0, y + fromY < height, x + fromX >= 0, x + fromX < width, !before.isEmpty,
+                                  before[y * width + x] != pixel, before[(y + fromY) * width + x + fromX] == pixel,
+                                  Self.distance(pixels[y * width + x - 1], pixel) > 32, Self.distance(pixels[y * width + x + 1], pixel) > 32 {
+                            // The page's own detail in a bar, over a kept page that is flat there.
+                            let (left, right) = (cells[offset + x - 1], cells[offset + x + 1])
+                            if left.value == old.value, right.value == old.value, left.frame != 0, right.frame != 0,
+                               bands.clear(left, width, height), bands.clear(right, width, height) { misplaced += 1 }
+                        }
+                    }
+                }
+            }
         }
-        guard kept.count + fresh.count <= Self.patchLimit else { return false }
-        var added: [Patch] = []
-        for (rect, sides) in fresh {
-            guard let image = raster.image(in: rect.offsetBy(dx: -tile.minX, dy: -tile.minY)) else { return false }
-            added.append(Patch(rect: rect, image: image, tile: tile, sides: sides))
-        }
-        patches = kept + added
-        bounds = grown
+        if disagreed || misplaced >= 32 { broken = true }
+        bounds = bounds.union(tile)
         last = raster
-        position = offset
-        return true
+        position = origin
     }
 
-    /// Every pixel placed so far as content or as bar by the bands of `fixed` in the frame it came
-    /// from: content in a band becomes bar, which stays where nothing else is and which any frame
-    /// that shows content there replaces; bar outside every band becomes content.
-    private mutating func sort(by fixed: Fixed) -> Bool {
-        var result: [Patch] = []
-        for patch in patches {
-            let (content, bars) = pieces(of: patch.tile, fixed: fixed)
-            for (rect, sides) in [(content, nil)] + bars.map({ ($0.rect, Optional($0.sides)) }) {
-                let part = rect.intersection(patch.rect)
-                guard !part.isNull, !part.isEmpty else { continue }
-                guard let image = patch.image.cropping(to: part.offsetBy(dx: -patch.rect.minX, dy: -patch.rect.minY)) else { return false }
-                result.append(Patch(rect: part, image: image, tile: patch.tile, sides: sides))
+    /// Make room for a frame `width` × `height` at `origin`. A row that has to grow sideways grows by
+    /// half as much again, so a long sideways capture does not copy every row at every step.
+    private mutating func reserve(_ origin: Offset, _ width: Int, _ height: Int) {
+        if rows.isEmpty { firstRow = origin.y }
+        if origin.y < firstRow {
+            rows.insert(contentsOf: repeatElement(Row(), count: firstRow - origin.y), at: 0)
+            firstRow = origin.y
+        }
+        let end = origin.y + height - firstRow
+        if end > rows.count { rows.append(contentsOf: repeatElement(Row(), count: end - rows.count)) }
+        for index in (origin.y - firstRow)..<end {
+            let row = rows[index]
+            if row.cells.isEmpty {
+                rows[index] = Row(x: origin.x, cells: ContiguousArray(repeating: Cell(), count: width))
+                continue
             }
+            let (from, to) = (row.x, row.x + row.cells.count)
+            guard origin.x < from || origin.x + width > to else { continue }
+            let spare = (to - from) / 2
+            let start = origin.x < from ? min(origin.x, from - spare) : from
+            let stop = origin.x + width > to ? max(origin.x + width, to + spare) : to
+            var cells = ContiguousArray(repeating: Cell(), count: stop - start)
+            cells.replaceSubrange((from - start)..<(to - start), with: row.cells)
+            rows[index] = Row(x: start, cells: cells)
         }
-        guard result.count <= Self.patchLimit else { return false }
-        patches = result
-        return true
-    }
-
-    /// Earlier bars, all or those `where` says, cut back so that `rect` is free of them.
-    private static func trim(_ patches: [Patch], by rect: CGRect, where goes: (Patch) -> Bool = { _ in true }) -> [Patch]? {
-        var result: [Patch] = []
-        for patch in patches {
-            guard patch.bar, goes(patch), patch.rect.intersects(rect) else { result.append(patch); continue }
-            for piece in subtract(rect, from: patch.rect) {
-                let local = piece.offsetBy(dx: -patch.rect.minX, dy: -patch.rect.minY)
-                guard let image = patch.image.cropping(to: local) else { return nil }
-                result.append(Patch(rect: piece, image: image, tile: patch.tile, sides: patch.sides))
-            }
-        }
-        return result
-    }
-
-    private static func subtract(_ covered: [CGRect], from rects: [CGRect]) -> [CGRect] {
-        var left = rects
-        for rect in covered {
-            left = left.flatMap { subtract(rect, from: $0) }
-            if left.isEmpty { break }
-        }
-        return left
     }
 
     private static func fits(_ rect: CGRect) -> Bool {
         rect.width <= CGFloat(dimensionLimit) && rect.height <= CGFloat(dimensionLimit)
             && rect.width * rect.height <= CGFloat(pixelLimit)
-    }
-
-    private static func subtract(_ covered: CGRect, from rect: CGRect) -> [CGRect] {
-        let overlap = rect.intersection(covered)
-        guard !overlap.isNull, !overlap.isEmpty else { return [rect] }
-        return [
-            CGRect(x: rect.minX, y: rect.minY, width: rect.width, height: overlap.minY - rect.minY),
-            CGRect(x: rect.minX, y: overlap.maxY, width: rect.width, height: rect.maxY - overlap.maxY),
-            CGRect(x: rect.minX, y: overlap.minY, width: overlap.minX - rect.minX, height: overlap.height),
-            CGRect(x: overlap.maxX, y: overlap.minY, width: rect.maxX - overlap.maxX, height: overlap.height)
-        ].filter { !$0.isEmpty }
     }
 
     private static func registration(from old: Raster, to new: Raster) -> Match? {
@@ -424,59 +520,6 @@ struct ScrollStitcher {
         return best
     }
 
-    /// The bands of `fixed`, each widened over the lines beside it that do not show moving content:
-    /// up to the first line that changed where it is and lines up with the line the move `moved`
-    /// took it to or brought it from, on the side away from the edge. The blank margin of a
-    /// bar, a faint divider and blank page beside them cannot be told apart, so all of them are kept
-    /// as bar, which any frame that shows content there replaces; kept as content, a bar's margin
-    /// would stay over the page for good. The registration itself uses the narrow bands.
-    private static func widened(_ fixed: Fixed, from old: Raster, to new: Raster, moved: Offset) -> Fixed {
-        var wide = fixed
-        (wide.width, wide.height) = (old.width, old.height)
-        func grow(_ start: Int, _ end: Int, _ length: Int, _ shift: Int, column: Bool) -> (Int, Int) {
-            let across = wide
-            let reach = length / 2
-            var (start, end) = (start, end)
-            func moving(_ line: Int, _ partner: Int) -> Bool {
-                moves(old, new, moved, line: line, partner: partner, column: column, outside: across)
-            }
-            while start < reach, !moving(start, start + abs(shift)) { start += 1 }
-            while end < reach, !moving(length - 1 - end, length - 1 - end - abs(shift)) { end += 1 }
-            return (start, end)
-        }
-        (wide.top, wide.bottom) = grow(wide.top, wide.bottom, old.height, moved.y, column: false)
-        (wide.left, wide.right) = grow(wide.left, wide.right, old.width, moved.x, column: true)
-        return wide
-    }
-
-    /// Whether view line `line` shows moving content: at least eight of its pixels clearly changed in
-    /// place between the two frames, and three quarters of those are, to within two levels, the
-    /// pixels of the line `partner` in the other frame, where the move took them: page seen through
-    /// a tinted bar is not. Pixels in a band of `outside` are left out.
-    private static func moves(_ old: Raster, _ new: Raster, _ moved: Offset, line: Int, partner: Int, column: Bool,
-                              outside fixed: Fixed) -> Bool {
-        let shift = column ? moved.x : moved.y
-        guard partner >= 0, partner < (column ? old.width : old.height) else { return false }
-        // Old line i lines up with new line i - shift.
-        let first = line - shift == partner ? line : partner
-        let length = column ? old.height : old.width
-        let slide = column ? moved.y : moved.x
-        var samples = 0
-        var matches = 0
-        for along in max(0, slide)..<min(length, length + slide) {
-            let (x, y) = column ? (first, along) : (along, first)
-            let (nx, ny) = (x - moved.x, y - moved.y)
-            guard !fixed.covers(x, y), !fixed.covers(nx, ny) else { continue }
-            // The pixels themselves, without the neighbors the other comparisons use: a neighbor two
-            // lines on can be moving page while the line is the last one of a bar.
-            let place = first == line ? y * old.width + x : ny * old.width + nx
-            guard distance(old.pixels[place], new.pixels[place]) > 32 else { continue }
-            samples += 1
-            if distance(old.pixels[y * old.width + x], new.pixels[ny * old.width + nx]) <= 2 { matches += 1 }
-        }
-        return samples >= 8 && matches * 4 >= samples * 3
-    }
-
     /// Whether old line `line` and the new line where its content moved do not line up: fewer than
     /// half of their clearly detailed pixels match, leaving out pixels in a band of `outside`. A pair
     /// without detail is not evidence either way.
@@ -567,6 +610,164 @@ struct ScrollStitcher {
     }
 }
 
+/// What the frames showed at one place of the page.
+private struct Cell {
+    var value: UInt32 = 0
+    /// The frame the pixel is from, counted from 1; 0 where nothing was captured.
+    var frame: UInt32 = 0
+    /// Of the view rows at which frames showed this pixel here, the one nearest the middle row from
+    /// above (-1 when none) and from below (`Int16.max` when none), and the same for the view columns
+    /// from the left and from the right. No bar reaches the middle of the view, so the place was shown
+    /// between the bars exactly when one of each pair lies between them (`Bands.clear`).
+    var above: Int16 = -1
+    var below: Int16 = .max
+    var before: Int16 = -1
+    var after: Int16 = .max
+}
+
+/// One row of the page: the cells from stitched column `x` on.
+private struct Row {
+    var x = 0
+    var cells: ContiguousArray<Cell> = []
+}
+
+/// The bars of the view: so many rows at its top and bottom and columns at its left and right. They
+/// only ever grow.
+private struct Bands: Equatable {
+    var top = 0
+    var bottom = 0
+    var left = 0
+    var right = 0
+
+    /// Whether a frame showed the cell's pixel at its place clear of every bar. With bars along both
+    /// axes and a place shown at several rows and columns this can say yes where each showing lay in
+    /// one bar; it never says no for a place a frame showed clear of them.
+    func clear(_ cell: Cell, _ width: Int, _ height: Int) -> Bool {
+        (Int(cell.above) >= top || Int(cell.below) < height - bottom) && (Int(cell.before) >= left || Int(cell.after) < width - right)
+    }
+}
+
+/// The pixels in which a new frame differs, between the bars, from what earlier frames showed at the
+/// same places between their bars, and the larger bars that would account for all of them.
+///
+/// One of the two frames shows a bar at such a place, and a band over the place in the view where it
+/// showed it accounts for the difference: a band over the new frame's line, or over every line at which
+/// earlier frames showed their pixel. Along each axis that is a band at the start, one at the end,
+/// either or neither. The bars chosen are the thinnest that account for every difference.
+private struct Disagreements {
+    /// A band beside the direction of the move takes its strip of the page out of the check for the
+    /// whole length of the capture; a band across the move only the lines at one end of it. So where
+    /// either would do, the band across the move is taken unless it is more than twice as thick.
+    private static let besideTheMove = 2
+    private static let never = Int32.max
+    let width: Int
+    let height: Int
+    /// The bars across the move are the left and right ones: the frame moved sideways only.
+    private let sideways: Bool
+    /// The frame moved along one axis only.
+    private let straight: Bool
+    /// The thickest band across the move, and beside it: a band stops short of the middle line.
+    private let reach: (across: Int, beside: Int)
+    private var count = 0
+    /// For each pair of bands across the move, one at the start and one at the end, either of which
+    /// would account for a difference (index: start × (reach + 2) + end, `reach + 1` where that band
+    /// cannot): the thickest bands beside the move, at the start and at the end, that the differences
+    /// of that pair would need instead; `never` where no band beside the move can account for one.
+    private var needs: [(start: Int32, end: Int32)] = []
+    private var asked = (start: [Bool](), end: [Bool]())
+    /// A difference lies where no band can reach, from either frame.
+    private(set) var unanswerable = false
+
+    init(width: Int, height: Int, moved: (x: Int, y: Int)) {
+        self.width = width
+        self.height = height
+        sideways = moved.y == 0
+        straight = moved.x == 0 || moved.y == 0
+        reach = sideways ? ((width - 1) / 2, (height - 1) / 2) : ((height - 1) / 2, (width - 1) / 2)
+    }
+
+    /// The frame shows a pixel at view (`x`, `y`) that is not the pixel of `cell`.
+    mutating func add(x: Int, y: Int, _ cell: Cell) {
+        if count == 0 {
+            needs = Array(repeating: (0, 0), count: (reach.across + 2) * (reach.across + 2))
+            asked = (Array(repeating: false, count: reach.across + 2), Array(repeating: false, count: reach.across + 2))
+        }
+        count += 1
+        let rows = Self.bands(at: y, of: height, nearStart: Int(cell.above), nearEnd: Int(cell.below))
+        let columns = Self.bands(at: x, of: width, nearStart: Int(cell.before), nearEnd: Int(cell.after))
+        let (across, beside) = sideways ? (columns, rows) : (rows, columns)
+        var need = (start: Self.never, end: Self.never)
+        if beside.start <= reach.beside || beside.end <= reach.beside {
+            need = beside.start <= beside.end ? (Int32(beside.start), 0) : (0, Int32(beside.end))
+        } else if across.start > reach.across, across.end > reach.across {
+            unanswerable = true
+            return
+        }
+        let index = across.start * (reach.across + 2) + across.end
+        needs[index] = (max(needs[index].start, need.start), max(needs[index].end, need.end))
+        asked.start[across.start] = true
+        asked.end[across.end] = true
+    }
+
+    /// The thinnest bands along one axis of a view `length` lines long, one at its start and one at
+    /// its end, each of which accounts for a difference: over the frame's own line `line`, or over
+    /// every line at which earlier frames showed their pixel, which one band can cover only when all
+    /// of them lie on one side of the middle. `(length - 1) / 2 + 1` for a band that cannot: it would
+    /// reach the middle line.
+    private static func bands(at line: Int, of length: Int, nearStart: Int, nearEnd: Int) -> (start: Int, end: Int) {
+        let reach = (length - 1) / 2
+        var (start, end) = (reach + 1, reach + 1)
+        if line <= length / 2 { start = min(start, line + 1) } else { end = min(end, length - line) }
+        if nearEnd == Int(Int16.max), nearStart >= 0 { start = min(start, nearStart + 1) }
+        if nearStart < 0, nearEnd != Int(Int16.max) { end = min(end, length - nearEnd) }
+        return (min(start, reach + 1), min(end, reach + 1))
+    }
+
+    /// The thinnest bars, no smaller than `current`, that account for every difference; nil when no
+    /// bars can, or when they would leave less than a quarter of the view between them.
+    func bands(over current: Bands) -> Bands? {
+        guard !unanswerable else { return nil }
+        guard count > 0 else { return current }
+        // What the differences that bands of s and e lines across the move do not account for need
+        // beside it: those of every pair that asks for more than s lines and more than e lines.
+        let side = reach.across + 2
+        var beyond = needs
+        for start in (0..<side).reversed() {
+            for end in (0..<side).reversed() {
+                var most = beyond[start * side + end]
+                if start + 1 < side {
+                    let next = beyond[(start + 1) * side + end]
+                    most = (max(most.start, next.start), max(most.end, next.end))
+                }
+                if end + 1 < side {
+                    let next = beyond[start * side + end + 1]
+                    most = (max(most.start, next.start), max(most.end, next.end))
+                }
+                beyond[start * side + end] = most
+            }
+        }
+        let now = sideways ? (across: (current.left, current.right), beside: (current.top, current.bottom))
+            : (across: (current.top, current.bottom), beside: (current.left, current.right))
+        let (along, other) = sideways ? (width, height) : (height, width)
+        let starts = [now.across.0] + (0...reach.across).filter { asked.start[$0] && $0 > now.across.0 }
+        let ends = [now.across.1] + (0...reach.across).filter { asked.end[$0] && $0 > now.across.1 }
+        var best: (across: (Int, Int), beside: (Int, Int), cost: Int)?
+        for start in starts {
+            for end in ends where along - start - end >= max(8, along / 4) {
+                let need = beyond[(start + 1) * side + end + 1]
+                guard need.start != Self.never, need.end != Self.never else { continue }
+                let beside = (max(now.beside.0, Int(need.start)), max(now.beside.1, Int(need.end)))
+                guard beside.0 <= reach.beside, beside.1 <= reach.beside, other - beside.0 - beside.1 >= max(8, other / 4) else { continue }
+                let cost = start + end + (beside.0 + beside.1) * (straight ? Self.besideTheMove : 1)
+                if best.map({ cost < $0.cost }) ?? true { best = ((start, end), beside, cost) }
+            }
+        }
+        guard let best else { return nil }
+        return sideways ? Bands(top: best.beside.0, bottom: best.beside.1, left: best.across.0, right: best.across.1)
+            : Bands(top: best.across.0, bottom: best.across.1, left: best.beside.0, right: best.beside.1)
+    }
+}
+
 private struct Raster {
     static let colorSpace = CGColorSpace(name: CGColorSpace.sRGB)!
     static let bitmapInfo = CGBitmapInfo.byteOrder32Little.rawValue | CGImageAlphaInfo.premultipliedFirst.rawValue
@@ -593,25 +794,11 @@ private struct Raster {
         pixels = bytes
     }
 
-    func image(in rect: CGRect) -> CGImage? {
-        let x = Int(rect.minX)
-        let y = Int(rect.minY)
-        let patchWidth = Int(rect.width)
-        let patchHeight = Int(rect.height)
-        // Store just the new pixels. A cropped CGImage can keep a full source frame alive.
-        var bytes = Data(count: patchWidth * patchHeight * 4)
-        bytes.withUnsafeMutableBytes { destination in
-            pixels.withUnsafeBytes { source in
-                guard let destination = destination.baseAddress, let source = source.baseAddress else { return }
-                for row in 0..<patchHeight {
-                    destination.advanced(by: row * patchWidth * 4)
-                        .copyMemory(from: source.advanced(by: ((row + y) * width + x) * 4), byteCount: patchWidth * 4)
-                }
-            }
-        }
-        guard let provider = CGDataProvider(data: bytes as CFData) else { return nil }
-        return CGImage(width: patchWidth, height: patchHeight, bitsPerComponent: 8, bitsPerPixel: 32,
-                       bytesPerRow: patchWidth * 4, space: Self.colorSpace, bitmapInfo: CGBitmapInfo(rawValue: Self.bitmapInfo),
-                       provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent)
+    /// An image of `pixels`, in the layout the frames are read in.
+    static func image(_ pixels: Data, width: Int, height: Int) -> CGImage? {
+        guard let provider = CGDataProvider(data: pixels as CFData) else { return nil }
+        return CGImage(width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: width * 4,
+                       space: colorSpace, bitmapInfo: CGBitmapInfo(rawValue: bitmapInfo), provider: provider, decode: nil,
+                       shouldInterpolate: false, intent: .defaultIntent)
     }
 }
