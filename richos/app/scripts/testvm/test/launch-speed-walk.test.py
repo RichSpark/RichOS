@@ -197,7 +197,7 @@ check('the sentence names both fixed limits and their ratios, and no Dictionary 
 # every push and pull answered here, and every launch given the time `time_for(label, n)` says
 # (from the launch line, as a real build writes it). What the walk asked the guest to launch is
 # read back from the plans it wrote.
-def walk_in_fake_guest(time_for, extra=()):
+def walk_in_fake_guest(time_for, extra=(), install_path_migrates=True):
     import contextlib
     import io
     import json
@@ -225,6 +225,8 @@ def walk_in_fake_guest(time_for, extra=()):
                         '(30 later pictures), the page joined it at 500 ms; update put in place: no; bundle check none '
                         '(trusted), 1 ms; engine check none (trusted), 3 ms; process started at %d'
                         % (ms - walk.ALLOWANCE_MS, ms + 400, splash, int(t_open * 1000)))
+                if step['label'] == 'install-path-legacy':
+                    text += ', after a hand-over from an older copy'
                 results.append({'n': n, 'label': step['label'], 'app': step['app'], 't_open': t_open, 'pid': 5000 + n,
                                 'quit': 'quit from its own menu', 'all_gone': True, 'events': [],
                                 'lines': [{'t': t_open, 'text': text}]})
@@ -234,21 +236,28 @@ def walk_in_fake_guest(time_for, extra=()):
             if 'launch-speed-guest.py --plan' in command:
                 probe(shlex.split(command)[shlex.split(command).index('--plan') + 1])
                 return 'probe exit 0'
+            if 'echo migrated' in command:
+                return 'migrated' if install_path_migrates else ''
             for needle, answer in (('PlistBuddy', '1.3.3'), ('ls -d', payload + '/launch-speed/candidate/RichOS.app'),
                                    ('sw_vers', '15.1'), ('hw.ncpu', '4'), ('date +%z', '+0000'),
-                                   ('print(len(json.load', '0'), ('receipt_tree_sha256', 'f' * 64)):
+                                   ('print(len(json.load', '0'), ('receipt_tree_sha256', 'f' * 64),
+                                   ('pwd -P', '/Users/admin')):
                 if needle in command:
                     return answer
             return ''
 
         def run(argv, **kwargs):
             if len(argv) > 2 and argv[2] == '--pull':
-                with tarfile.open(argv[4], 'w:gz') as t:
-                    for name, body in [('launch-speed/guest-system.log', b'')] + [
-                            ('launch-speed/%s/probe.json' % n, json.dumps({'results': r}).encode()) for n, r in probes.items()]:
-                        info = tarfile.TarInfo(name)
-                        info.size = len(body)
-                        t.addfile(info, io.BytesIO(body))
+                if argv[3].endswith('/probe.json'):
+                    plan = Path(argv[3]).parent.name
+                    Path(argv[4]).write_text(json.dumps({'results': probes[plan]}))
+                else:
+                    with tarfile.open(argv[4], 'w:gz') as t:
+                        for name, body in [('launch-speed/guest-system.log', b'')] + [
+                                ('launch-speed/%s/probe.json' % n, json.dumps({'results': r}).encode()) for n, r in probes.items()]:
+                            info = tarfile.TarInfo(name)
+                            info.size = len(body)
+                            t.addfile(info, io.BytesIO(body))
             return types.SimpleNamespace(returncode=0, stdout='', stderr='')
         saved = (sys.modules.get('relaunch'), walk.subprocess.run, sys.argv, os.environ.get('TESTVM_ROOT'))
         sys.modules['relaunch'] = types.SimpleNamespace(guest=guest)
@@ -292,6 +301,14 @@ def judged_in(plans, route, plan=None):
 ROUTES = ('ordinary', 'cold', 'rule-switch', 'day-change', 'after-update')
 PREVIOUS = ('--previous-app', '/Users/admin/testvm/fake-vm/previous/RichOS.app')
 fast_code, fast_report, fast_plans = walk_in_fake_guest(lambda label, n: 300, PREVIOUS)
+check('the installed path is qualified independently of the splash timing routes',
+      fast_report['checks'][-1]['pass'] is True
+      and fast_plans['install-path-direct'][0]['owns'] == ['/Applications/RichOS.app']
+      and fast_plans['install-path-direct'][0]['env']['HOME'] == '/Users/admin')
+split_code, split_report, _ = walk_in_fake_guest(lambda label, n: 300, PREVIOUS, install_path_migrates=False)
+check('a stale Applications copy fails qualification even when all the timings pass',
+      split_code == 1 and split_report['summary']['refused'] is False
+      and split_report['checks'][-1]['pass'] is False)
 check('every route, the rule switch too, runs five starts, and none is taken on when all five are within',
       {r: len(judged_in(fast_plans, r)) for r in ROUTES} == dict.fromkeys(ROUTES, 5)
       and not [n for n in fast_plans if n.startswith('more-')] and fast_code == 0
@@ -396,8 +413,8 @@ check('the day-change route within the limit passes with the rest',
 usual = sum(len(steps) for steps in fast_plans.values())
 _, _, worst_plans = walk_in_fake_guest(lambda label, n: 9000 if label.endswith(':judged') else 300, PREVIOUS)
 worst = sum(len(steps) for steps in worst_plans.values())
-check('a walk launches 39 times when every route passes at five, at most 137 when every route goes on to twenty',
-      (usual, worst) == (39, 137), (usual, worst))
+check('including two install path launches, the walk starts 41 times at five and at most 139 at twenty',
+      (usual, worst) == (41, 139), (usual, worst))
 
 print('%d failure(s)' % len(failures))
 sys.exit(1 if failures else 0)
