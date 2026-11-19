@@ -158,7 +158,7 @@ function railMarks(page) {
     Array.from(document.querySelectorAll(".nav-thread")).map((b) => ({
       id: b.dataset.threadId,
       label: b.getAttribute("aria-label"),
-      glyph: b.querySelector(".nav-status") ? b.querySelector(".nav-status").textContent : null,
+      glyph: b.querySelector(".chat-shape") ? b.closest(".nav-thread-row").dataset.state : null,
     }))
   );
 }
@@ -207,17 +207,17 @@ async function main() {
     await page.waitForFunction(
       () => {
         const b = document.querySelector('.nav-thread[data-thread-id="hiring"]');
-        return b && /working/.test(b.getAttribute("aria-label") || "");
+        return b && /working/i.test(b.getAttribute("aria-label") || "");
       },
       null,
       { timeout: 5000 }
     );
     const after = await railMarks(page);
 
-    assertEqual(markOf(after, "hiring"), "Q4 hiring, working", "the background thread must read as working");
+    assertEqual(markOf(after, "hiring"), "Q4 hiring, Working", "the background thread must read as working");
     assertEqual(
       (after.find((r) => r.id === "hiring") || {}).glyph,
-      "◐",
+      "working",
       "and carry §3.2's low-motion pulse glyph"
     );
     // The selected thread is unaffected, and no OTHER row invented a mark.
@@ -753,37 +753,19 @@ async function main() {
   // 3. RESTART — §14
   // =====================================================================================
 
-  await run.check("§14 a turn that was in flight when the app closed is unknown, never finished", async () => {
-    // §14: "Never infer that a turn completed because the app was closed." The `ecs` thread
-    // is the durable record of exactly that: a turn still `in_flight` on disk, in a session
-    // that has never seen a live event for it.
+  await run.check("§14 a saved pending turn is Working and cannot look completed", async () => {
     const fresh = await openApp(browser);
     const rows = await railMarks(fresh);
     const ecs = rows.find((r) => r.id === "ecs");
-    assert(ecs, "VACUITY: there is no thread with a pending turn in this build to check");
-    assertEqual(
-      ecs.label,
-      "ECS architecture, outcome unknown: a turn never finished",
-      "§14: a record that stops mid-turn must read as unknown, and say so in the accessible name"
-    );
-    assertEqual(ecs.glyph, "?", "the mark must be the unknown mark");
-
-    // The label must claim no OUTCOME. "finished" is deliberately not in this list: the
-    // shipped wording is *"a turn never finished"*, which is the honest sentence, and a
-    // bare-word sweep would forbid the very phrasing it exists to protect.
-    const label = ecs.label.toLowerCase();
-    for (const word of ["completed", "done", "working", "succeeded", "failed", "error"]) {
-      assert(
-        !new RegExp("(^|[ ,])" + word).test(label),
-        `a turn nobody witnessed the end of is described as "${word}": ${ecs.label}`
-      );
-    }
+    assert(ecs, "fixture has a pending turn");
+    assertEqual(ecs.label, "ECS architecture, Working", "the rail shows the pending continuation");
+    assertEqual(ecs.glyph, "working", "the continuation gets the working glyph");
     // And the conversation agrees: no turn, no duration row, no invented terminal state.
     await open(fresh, "ecs");
     const t = await turns(fresh);
     assertEqual(t.map((x) => x.duration), [], "a duration row was drawn for a turn with no recorded end");
     await fresh.close();
-    return `"${ecs.label}" — the honest read of a record that stops mid-turn`;
+    return `"${ecs.label}" — the saved work is still pending`;
   });
 
   await run.check("§25 a mid-turn crash draws the CEO's prompt exactly once", async () => {
@@ -877,7 +859,7 @@ async function main() {
     await s.waitForFunction(
       () => {
         const b = document.querySelector('.nav-thread[data-thread-id="hiring"]');
-        return b && /working/.test(b.getAttribute("aria-label") || "");
+        return b && /working/i.test(b.getAttribute("aria-label") || "");
       },
       null,
       { timeout: 5000 }

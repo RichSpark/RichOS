@@ -95,6 +95,7 @@ const ROLES = {
   "search-folder-settings.js":{role:"ui",why:"RichFinder folder map and coverage settings"},
   "search-folder-settings.css":{role:"style",why:"RichFinder folder map layout"},
   "index.html": { role: "ui", why: "the shell Tauri loads" },
+  "chat-list.js": { role: "ui", why: "chat row states, reminders, Undo and notification preferences" },
   "main.js": { role: "ui", why: "the chat surface and the bridge" },
   "attachments.js": {
     role: "ui",
@@ -215,6 +216,7 @@ const ROLES = {
   "meeting-panel.css": { role: "style", why: "the meeting panel's stylesheet (round 25.1's `#fl`, ported as drawn)" },
   "dictation-overlay.css": { role: "style", why: "the bar's, the flight's and the menu bar menu's stylesheet" },
   "style.css": { role: "style", why: "the shell's stylesheet" },
+  "chat-list.css": { role: "style", why: "chat list states and controls" },
   "home.css": { role: "style", why: "the home screen's stylesheet" },
   "instructions-update.css": { role: "style", why: "the instructions question's and the before and after's stylesheet" },
   "terminal-and-git.css": { role: "style", why: "the Terminal setup sheet's and the Git name card's and sheet's stylesheet" },

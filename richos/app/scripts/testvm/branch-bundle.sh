@@ -76,6 +76,7 @@ GUI_APP_DIR="$APP_DIR"; export GUI_APP_DIR
 . "$APP_DIR/scripts/lib/gui-launch.sh"
 read -r IDENTIFIER VERSION < <(gui_identity "$EXE")
 gui_bundle "$STAGE/RichOS.app" "$EXE" "$IDENTIFIER" "$VERSION"
+python3 "$APP_DIR/scripts/chat-sounds.py" --copy "$STAGE/RichOS.app/Contents/Resources"
 if [ "$RICHFILES" -eq 1 ]; then
   echo "branch-bundle.sh: building RichFiles from this checkout" >&2
   bash "$APP_DIR/scripts/package-richfiles.sh" --embedded "$STAGE/richfiles"

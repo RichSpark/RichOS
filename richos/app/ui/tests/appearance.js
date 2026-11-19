@@ -1591,9 +1591,8 @@ async function main() {
     const BELOW_FLOOR = {
       ".rail-icon-btn": { kind: "glyph", why: "the rail's icon buttons (the drawer's and the pane's close): one symbol each, each with an aria-label of its own" },
       ".nav-disclosure": { kind: "glyph", why: "the group disclosure triangle in the rail — rotation is the state, and the group's label is beside it" },
-      ".nav-status": { kind: "glyph", why: "the per-conversation status mark, a SHAPE (§18: a state is never carried by color alone), with the word in the row's accessible label" },
       ".tl-chevron": { kind: "glyph", why: "the turn's expand/collapse chevron; the row it belongs to carries the readable label" },
-      ".tl-activity-mark": { kind: "glyph", why: "the activity row's status shape, the same symbol vocabulary as .nav-status, beside 16px text that says the state" },
+      ".tl-activity-mark": { kind: "glyph", why: "the activity row's status shape, beside 16px text that says the state" },
       ".tl-tech-chevron": { kind: "glyph", why: "the technical row's expand chevron. Its ink is measured on the painted glass, on the plain ground with the speckle hidden, by contrast.js check 17 (6.46:1 dark, 5.14:1 light) against a 4.5:1 floor, which is stricter than the 3:1 a non-text indicator owes" },
       ".chrome-select-chevron": { kind: "glyph", why: "the `this opens a list` cue on a <select>; aria-hidden and pointer-events:none, so the control's own accessible name is the whole of what is read" },
     };

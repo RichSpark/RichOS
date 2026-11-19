@@ -54,7 +54,12 @@ fn main() {
             .flag("-fobjc-arc")
             .flag("-Wno-deprecated-declarations")
             .compile("richos_splash_player");
-        for framework in ["AppKit", "AVFoundation", "CoreMedia", "CoreVideo", "QuartzCore"] {
+        println!("cargo::rerun-if-changed=../native/notifications/chat.m");
+        cc::Build::new()
+            .file("../native/notifications/chat.m")
+            .flag("-fobjc-arc")
+            .compile("richos_chat_notifications");
+        for framework in ["UserNotifications", "AppKit", "AVFoundation", "CoreMedia", "CoreVideo", "QuartzCore"] {
             println!("cargo::rustc-link-lib=framework={framework}");
         }
     }

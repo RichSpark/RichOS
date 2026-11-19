@@ -1407,6 +1407,12 @@ if [ -n "${RICHOS_EXTRA_TAURI_CONFIG:-}" ]; then
   say "    $RICHOS_EXTRA_TAURI_CONFIG"
 fi
 
+# Source checkout and public CI can build without media. Published editions require all five.
+chat_sound_args=()
+if [ "$intent" != "dev" ]; then chat_sound_args+=(--required); fi
+chat_sound_overlay="$(python3 "$here/chat-sounds.py" --overlay ${chat_sound_args[@]+"${chat_sound_args[@]}"} )" || exit 1
+build_args+=(--config "$chat_sound_overlay")
+
 # The exact pinned connector is included by every packaged Mac build. Preparation is
 # cache-backed on the external SSD and refuses an unexpected published asset digest.
 connect_overlay="$(python3 "$here/prepare-connect-helper.py")" || exit 1

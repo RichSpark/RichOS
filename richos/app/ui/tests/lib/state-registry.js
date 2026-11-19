@@ -66,6 +66,27 @@
 "use strict";
 
 module.exports = [
+  // Chat list and reminder actions.
+  { s: "Bring back later…", c: "CONTROL", why: "Opens the three reminder presets and the custom time picker." },
+  { s: "Bring back now", c: "CONTROL", why: "Returns a chat from Later without waiting for its scheduled time." },
+  { s: "Bring it back then", c: "CONTROL", why: "Saves the day and time selected in the custom picker." },
+  { s: "Bring this back", c: "INFORMATIONAL", why: "Names the section that contains the reminder time choices." },
+  { s: "Choose a future time in the next seven days", c: "ACTIONABLE", control: ".chat-later-item", fixture: null, why: "The reminder menu stays open if the time becomes invalid, with alternative presets and the picker." },
+  { s: "Choose a future time.", c: "ACTIONABLE", control: ".chat-later-item", fixture: null, why: "If the clock passes the picked time, the menu stays open so the user can choose again." },
+  { s: "Continues by itself at about", c: "FRAGMENT", why: "Introduces the observed quota resume time in the conversation." },
+  { s: "Continues by itself when usage is available. Nothing is lost.", c: "INFORMATIONAL", why: "Work is paused on a real quota hold with no known reset time." },
+  { s: "It was running when RichOS restarted.", c: "INFORMATIONAL", why: "Explains that the saved request is resuming automatically." },
+  { s: "Mark as read", c: "CONTROL", why: "Clears the durable New mark from the chat row." },
+  { s: "Mark as unread", c: "CONTROL", why: "Saves a durable unread mark from the chat row menu." },
+  { s: "Pick a time…", c: "CONTROL", why: "Discloses the custom date and time choices." },
+  { s: "Play a sound for notifications and question answers", c: "INFORMATIONAL", why: "Describes which sounds the neighboring Settings switch controls." },
+  { s: "Since you were last here", c: "INFORMATIONAL", why: "Marks the first unread activity in the conversation." },
+  { s: "This chat could not be found", c: "INFORMATIONAL", why: "Reports that the requested chat ceased to exist while its menu was open." },
+  { s: "This setting could not be saved.", c: "ACTIONABLE", control: ".chat-notification-switch", fixture: null, why: "The switch restores its saved state and remains available beside the message." },
+  { s: "This time could not be saved.", c: "ACTIONABLE", control: ".chat-later-item", fixture: null, why: "The menu remains open and the time choices can be used again." },
+  { s: "Unknown chat-list action", c: "UNREACHABLE", why: "The desktop sends only the named read, unread and reminder actions." },
+  { s: "When RichOS is in the background", c: "INFORMATIONAL", why: "Describes when the neighboring Mac notifications switch applies." },
+  { s: "Your team is working on this", c: "INFORMATIONAL", why: "Reports a saved open assignment and shows how long it has been open." },
   // Optional RichGlance global capture shortcut.
   {"s":"<section class=\"overlay-panel dict-panel\" role=\"dialog\" aria-labelledby=\"richglance-capture-title\"> <header class=\"dict-heading\"> <div> <p class=\"dict-eyebrow\">Settings</p> <h2 id=\"richglance-capture-title\" class=\"feature-title\"><img class=\"feature-icon\" src=\"assets/app-icons/richglance-128.png\" alt=\"\" />RichGlance</h2> <p class=\"rf-hint\">Look closely at any part of your screen, measure it and capture it as a picture.</p> </div> <button class=\"dict-close\" type=\"button\" aria-label=\"Close RichGlance settings\">×</button> </header> <div class=\"dict-body\"> <div class=\"dict-card\"> <span class=\"dict-spine\"></span> <div class=\"dict-card-main\"> <h3 class=\"dict-card-title\">Capture from any app</h3> <p class=\"dict-card-sub\" id=\"richglance-capture-summary\" aria-live=\"polite\"></p> </div> <button class=\"dict-switch\" role=\"switch\" type=\"button\" id=\"richglance-capture-on\" aria-label=\"Capture from any app\"></button> </div> <p class=\"dict-copy-note\"><span><b>Works while RichOS is running,</b> also when its window is minimized or closed. Turn this off or quit RichOS to free the shortcut.</span></p> <section class=\"dict-sec\" id=\"richglance-capture-fields\"> <div class=\"dict-sec-h\"><h4 class=\"dict-sec-t\">Your shortcut</h4><span class=\"dict-saved\" role=\"status\" hidden>Saved.</span></div> <div class=\"dict-key-row\"> <div class=\"dict-keys\" id=\"richglance-capture-keys\" aria-hidden=\"true\"></div> <p class=\"dict-key-say is-soft\" id=\"richglance-capture-key-hint\" aria-live=\"polite\"></p> <button class=\"dict-btn\" type=\"button\" id=\"richglance-capture-record\"></button> </div> </section> <p class=\"dict-key-err\" id=\"richglance-capture-feedback\" role=\"alert\"></p> </div> </section>","c":"NOT-RENDERED","why":"The Settings panel's HTML template is parsed as markup. Its controls and live states are classified separately."},
   {"s":"Cancel recording a capture shortcut","c":"CONTROL","why":"The recording button's accessible name while it listens."},
@@ -584,30 +605,6 @@ module.exports = [
       "The mic is already open, so the action is simply to speak; ◉ is present either way and " +
       "is the control if he would rather stop.",
   },
-  {
-    s: "ended with an error",
-    c: "ACTIONABLE",
-    control: ".nav-thread",
-    fixture: "rail-mark",
-    why:
-      "A rail status mark. The mark is appended INSIDE the thread's own <button> " +
-      "(main.js buildThreadRow), so the affordance is structural: the state cannot render " +
-      "outside the control that opens the thread carrying it.",
-  },
-  {
-    s: "last turn ended without finishing",
-    c: "ACTIONABLE",
-    control: ".nav-thread",
-    fixture: "rail-mark",
-    why: "Same structural affordance as 'ended with an error'.",
-  },
-  {
-    s: "outcome unknown: a turn never finished",
-    c: "ACTIONABLE",
-    control: ".nav-thread",
-    fixture: "rail-mark",
-    why: "Same structural affordance. Opening the thread reaches §14's card, which has the button.",
-  },
 
   // THE OTHER NO-LEASE CAUSE, and the reason it is ACTIONABLE where the sentence above it is
   // NEEDS-SOMEONE-ELSE. Nothing is signed out here; something was never installed, and the
@@ -713,14 +710,6 @@ module.exports = [
     control: ".nav-group--unbound .nav-thread",
     fixture: "rail-mark",
     why: "The rail group heading. Two words; the destination screen carries the party and the way out.",
-  },
-  {
-    s: "no entity home",
-    c: "NEEDS-SOMEONE-ELSE",
-    explainedBy: "#unbound-view, which the row carrying this mark opens",
-    control: ".nav-thread",
-    fixture: "rail-mark",
-    why: "The rail status mark for an unbound thread, rendered inside the row's own button.",
   },
   {
     s: "I can't show priorities for this area yet and the area itself is set up inside RichOS rather than in settings. Whoever set RichOS up is the one who changes it. Nothing here needs you.",
@@ -1109,7 +1098,6 @@ module.exports = [
   { s: "Viewed an image", c: "INFORMATIONAL", why: "§5.3 activity rollup label." },
   { s: "name not recorded", c: "INFORMATIONAL", why: "Worker chip qualifier." },
   { s: "outcome not recorded", c: "INFORMATIONAL", why: "Worker chip qualifier." },
-  { s: "new result ready", c: "INFORMATIONAL", why: "Rail mark: navigational, nothing broken." },
   { s: "Time spent working", c: "INFORMATIONAL", why: "Inspector field label." },
 
   {
@@ -1214,7 +1202,6 @@ module.exports = [
   { s: "Type here… OR…", c: "CONTROL", why: "Round 51: line one of the empty box's placeholder (#composer-hint), drawn over #input while it is empty and taking words; the box is the control and the caret is already in it. tests/input-area.js check 1." },
   { s: "Click to talk to Rich.", c: "CONTROL", why: "Round 51: line two of the empty box's placeholder, after the arrow; the real #talk-toggle sits in front of it. tests/input-area.js check 1." },
   { s: "Add context or steer Rich…", c: "CONTROL", why: "#input working placeholder (§9.2)." },
-  { s: "more threads in", c: "CONTROL", why: "'Show more' accessible name." },
 
   // -------------------------------------------------------------------------------------
   // FRAGMENT — half of a composed sentence, never rendered alone (blind spot B1)

@@ -104,6 +104,10 @@ pub struct NavState {
     /// chat but off by default"). Absent = off, so every chat starts unchecked and each keeps
     /// its own. Read by whatever keeps a chat's cache warm (`richos_core::chat_cache`).
     pub keep_alive_threads: Vec<String>,
+    pub chat_list_since: Option<u64>,
+    pub chat_list: BTreeMap<String, crate::chat_list::Preferences>,
+    pub mac_chat_notifications: bool,
+    pub chat_notification_sounds: bool,
 }
 
 impl NavState {
@@ -131,6 +135,10 @@ impl Default for NavState {
             renamed_threads: BTreeMap::new(),
             auto_titles: BTreeMap::new(),
             keep_alive_threads: Vec::new(),
+            chat_list_since: None,
+            chat_list: BTreeMap::new(),
+            mac_chat_notifications: true,
+            chat_notification_sounds: true,
         }
     }
 }
@@ -267,9 +275,18 @@ impl NavStore {
     }
 
     pub fn set_thread_archived(&mut self, thread_id: &str, archived: bool) -> std::io::Result<()> {
-        let before = self.state.archived_threads.clone();
-        set_membership(&mut self.state.archived_threads, thread_id, archived);
-        self.persist().inspect_err(|_| self.state.archived_threads = before)
+        self.update_chat_list(|prefs| {
+            set_membership(&mut prefs.archived_threads, thread_id, archived);
+            let chat = prefs.chat_list.entry(thread_id.to_owned()).or_default();
+            chat.archived_at = archived.then(richos_core::util::now_millis);
+        })
+    }
+
+    pub fn update_chat_list(&mut self, change: impl FnOnce(&mut NavState)) -> std::io::Result<()> {
+        let before = self.state.clone();
+        change(&mut self.state);
+        if self.state == before { return Ok(()); }
+        self.persist().inspect_err(|_| self.state = before)
     }
 
     /// One chat's "Keep chat alive" box. A refused save leaves the box as saved, not as asked.

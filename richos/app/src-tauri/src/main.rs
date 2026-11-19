@@ -104,6 +104,8 @@ mod engine;
 /// Durable left-navigation view state (pin, rename, archive, rail width). See nav.rs
 /// for why these are shell state and not ledger events.
 mod nav;
+mod chat_list;
+mod chat_notifications;
 
 /// Check, download, VERIFY, install, relaunch — the update path. Its own file because it
 /// is the one surface where a mistake ships code to the CEO's machine, and because the
@@ -3842,7 +3844,7 @@ fn main() {
             // Restore durable Stops before any recovered message is submitted. Reconciliation
             // queues accepted inputs locally. A provider reply must never hold the window's thread.
             spine.detach_conversation_io();
-            if let Err(e) = spine.reconcile_intake() {
+            if let Err(e) = spine.recover_after_restart() {
                 eprintln!("[richos] intake reconciliation at boot: {e}");
             }
             adopt_at_the_turn_boundary(&mut spine, &work);
@@ -4060,6 +4062,8 @@ fn main() {
             phone_runtime.resume_if_paired(app.handle().clone());
             app.manage(phone_runtime);
             richpass_host::start(app.handle().clone());
+            chat_notifications::install(app.handle());
+            chat_list::watch(app.handle().clone());
             question_host::start(app.handle().clone());
             swearmeter_host::start(app.handle().clone());
             rich_files_host::start(app.handle().clone());
@@ -4326,6 +4330,10 @@ fn main() {
             set_entity_collapsed,
             set_thread_pinned,
             set_thread_archived,
+            chat_list::set_chat_list_state,
+            chat_notifications::set_chat_notifications,
+            chat_notifications::play_chat_answer_sound,
+            chat_notifications::take_chat_notification_target,
             rename_thread,
             // --- which company this copy of Rich works for (slice 4, 2026-09-01) ---
             entity_choice,
@@ -5774,6 +5782,7 @@ struct ThreadRow {
     /// UNKNOWN rather than as idle. §22: *"If the source signal does not exist, build the
     /// signal first or show unknown."*
     has_pending_turn: bool,
+    chat: chat_list::Row,
 }
 
 /// One entity group: the entity, and the threads whose IMMUTABLE home is that entity.
@@ -5871,11 +5880,16 @@ fn active_binding_view(spine: &dyn SpineView) -> Option<ActiveContext> {
 #[richos_command::command]
 fn navigation_tree(state: State<AppState>) -> NavigationTree {
     let spine = state.reader.snapshot();
-    let nav = state.nav.lock().unwrap();
-    build_navigation_tree(&*spine, nav.state())
+    navigation_snapshot(&state, &*spine)
 }
 
-/// The command's whole body, taking plain references instead of Tauri state — so the rail's
+fn navigation_snapshot(state: &AppState, spine: &dyn SpineView) -> NavigationTree {
+    let mut tree = build_navigation_tree(spine, state.nav.lock().unwrap().state());
+    chat_list::snapshot(state, spine, &mut tree);
+    tree
+}
+
+/// The grouping projection, taking plain references instead of Tauri state — so the rail's
 /// grouping can be tested against a REAL ledger file rather than only exercised by hand.
 fn build_navigation_tree(spine: &dyn SpineView, nav_state: &nav::NavState) -> NavigationTree {
     let ledger = spine.ledger();
@@ -5898,6 +5912,7 @@ fn build_navigation_tree(spine: &dyn SpineView, nav_state: &nav::NavState) -> Na
             archived: nav_state.archived_threads.iter().any(|t| t == &s.id),
             last_turn_state,
             has_pending_turn,
+            chat: chat_list::Row::default(),
         }
     };
 
@@ -6546,14 +6561,7 @@ fn claude_quota_activity(state: State<AppState>, thread_id: Option<String>) -> R
     let scope = entity.as_ref().zip(thread_id.as_ref()).map(|(entity, thread)| (entity.as_str(), thread.as_str()));
     let mut activity = richos_core::quota::holds::read(&state.data_dir.join("engine-state"), scope).map_err(|e| e.to_string())?;
     let quota = state.quota.view();
-    if let richos_core::quota::Admission::Held { resets_at } = quota.admission {
-        let weekly = quota.windows.iter().any(|w| w.id == "seven_day"
-            && w.used_percent >= richos_core::quota::resets::WEEKLY_THRESHOLD
-            && w.resets_at == Some(resets_at));
-        // The 20-minute exception belongs only to the five-hour window.
-        activity.resumes_at = Some(if weekly { resets_at }
-            else { resets_at.saturating_sub(20 * 60_000).saturating_add(1) });
-    }
+    activity.resumes_at = chat_list::quota_reset(&quota).map(|(at, _)| at);
     // Round 16's working row names the account in use once there are two or more.
     activity.account = quota.accounts.iter().find(|a| a.in_use).filter(|_| quota.accounts.len() > 1).map(|a| a.label.clone());
     Ok(activity)
