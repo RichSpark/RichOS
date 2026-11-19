@@ -22,6 +22,15 @@ struct ScrollStitcher {
         var quality: Double { samples == 0 ? 0 : Double(matches) / Double(samples) }
     }
 
+    /// Rows near the top and columns along the left edge that stay put between two frames.
+    private struct Fixed {
+        var rows: [Bool] = []
+        var columns = 0
+        static let none = Fixed()
+
+        func row(_ y: Int) -> Bool { y < rows.count && rows[y] }
+    }
+
     private struct Patch {
         let rect: CGRect
         let image: CGImage
@@ -193,27 +202,34 @@ struct ScrollStitcher {
         return aScore == bScore ? a.matches > b.matches : aScore > bScore
     }
 
-    /// Rows along the top and columns along the left that are identical in both frames: a sticky
-    /// header or a frozen column that stays put while the content under it scrolls. Such a band
-    /// matches only when nothing moved, so it is left out of the comparison. The first frame keeps
-    /// it in the image, and later frames place it over area that is already covered.
-    private static func fixedEdge(_ old: Raster, _ new: Raster) -> Offset {
-        func same(_ index: (Int) -> Int, _ count: Int) -> Bool {
-            (0..<count).allSatisfy { old.pixels[index($0)] == new.pixels[index($0)] }
+    /// Rows in the top two fifths and columns along the left edge that stay put in both frames: a
+    /// sticky header or a frozen column while the content under it scrolls. Such a band matches only
+    /// when nothing moved, so it is left out of the comparison. A line counts as fixed when nine in
+    /// ten of its pixels are close to the same line in the other frame, so a moving scroll bar beside
+    /// the header, or content faintly visible through a translucent header, does not hide it. The
+    /// first frame keeps the header in the image, and later frames place it over covered area.
+    private static func fixedEdge(_ old: Raster, _ new: Raster) -> Fixed {
+        func still(_ index: (Int) -> Int, _ count: Int) -> Bool {
+            var differ = 0
+            for i in 0..<count where !close(old.pixels[index(i)], new.pixels[index(i)]) {
+                differ += 1
+                if differ * 10 > count { return false }
+            }
+            return true
         }
-        var rows = 0
-        while rows < old.height, same({ rows * old.width + $0 }, old.width) { rows += 1 }
+        let reach = old.height * 2 / 5
+        let rows = (0..<reach).map { y in still({ y * old.width + $0 }, old.width) }
         var columns = 0
-        while columns < old.width, same({ $0 * old.width + columns }, old.height) { columns += 1 }
-        // A band covering much of the frame is a mostly unchanged view, not a fixed bar.
-        return Offset(x: columns * 5 <= old.width * 2 ? columns : 0, y: rows * 5 <= old.height * 2 ? rows : 0)
+        while columns <= old.width * 2 / 5, still({ $0 * old.width + columns }, old.height) { columns += 1 }
+        // A view whose whole top or left reach is unchanged is mostly unchanged, not under a fixed bar.
+        return Fixed(rows: rows.allSatisfy { $0 } ? [] : rows, columns: columns > old.width * 2 / 5 ? 0 : columns)
     }
 
-    private static func score(_ offset: Offset, from old: Raster, to new: Raster, fixed: Offset = .zero,
+    private static func score(_ offset: Offset, from old: Raster, to new: Raster, fixed: Fixed = .none,
                               density: Int = 32) -> Match {
         // Sample only where neither frame shows its fixed band.
-        let left = fixed.x + max(0, offset.x)
-        let top = fixed.y + max(0, offset.y)
+        let left = fixed.columns + max(0, offset.x)
+        let top = max(0, offset.y)
         let right = min(old.width, old.width + offset.x) - 2
         let bottom = min(old.height, old.height + offset.y) - 2
         guard right - left >= max(6, old.width / 4 - 2),
@@ -228,6 +244,7 @@ struct ScrollStitcher {
         for row in 0..<rows {
             let y = top + Int((0.5 + Double(row) * 0.618_033_988_749_895)
                 .truncatingRemainder(dividingBy: 1) * Double(bottom - top))
+            if fixed.row(y) || fixed.row(y - offset.y) { continue }
             for x in stride(from: left, to: right, by: stepX) {
                 let ox = x + y * old.width
                 let nx = x - offset.x + (y - offset.y) * old.width
@@ -242,6 +259,15 @@ struct ScrollStitcher {
             }
         }
         return Match(offset: offset, matches: matches, samples: samples)
+    }
+
+    /// Looser than near(): a fixed bar that lets 10% of the content show through stays close.
+    private static func close(_ a: UInt32, _ b: UInt32) -> Bool {
+        a == b || (
+            abs(Int(a & 255) - Int(b & 255)) <= 32
+                && abs(Int((a >> 8) & 255) - Int((b >> 8) & 255)) <= 32
+                && abs(Int((a >> 16) & 255) - Int((b >> 16) & 255)) <= 32
+        )
     }
 
     private static func near(_ a: UInt32, _ b: UInt32) -> Bool {

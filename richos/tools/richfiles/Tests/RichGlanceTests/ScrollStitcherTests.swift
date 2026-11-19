@@ -111,6 +111,30 @@ final class ScrollStitcherTests: XCTestCase {
                       == pixels(crop(page, x: 0, y: viewport, w: 800, h: page.height - viewport)))
     }
 
+    func testTranslucentHeaderBesideAMovingScrollBarDoesNotStopAutomaticScroll() throws {
+        // Content shows faintly through a 90% opaque header, and the page's scroll bar thumb moves
+        // beside it, so no header row is identical from one view to the next.
+        let page = textPage(width: 800, height: 2000)
+        let viewport = 500
+        func view(_ y: Int) -> CGImage {
+            withScrollBar(withHeader(crop(page, x: 0, y: y, w: 800, h: viewport), rows: 64, opacity: 0.9),
+                          at: y, of: page.height)
+        }
+        var sut = ScrollStitcher()
+        XCTAssertEqual(sut.append(view(0)), .initial)
+        var y = 0
+        while y + viewport < page.height {
+            let next = min(page.height - viewport, y + 140)
+            XCTAssertEqual(sut.append(view(next)), .moved(dx: 0, dy: next - y), "step to y=\(next)")
+            y = next
+        }
+        let actual = try XCTUnwrap(sut.image())
+        XCTAssertEqual(actual.height, page.height)
+        guard actual.height == page.height else { return }
+        // The header appears once, in the first view.
+        XCTAssertTrue(pixels(crop(actual, x: 0, y: 0, w: 800, h: viewport)) == pixels(view(0)))
+    }
+
     func testRetinaTextStepIsRegisteredWhenSampleRowsMatchTheLinePitch() throws {
         // A 600 × 700 pt viewport at 2x over plain text. Evenly spaced sample rows matched the
         // line pitch here and landed between lines, so these 28% steps were refused.
@@ -180,11 +204,11 @@ final class ScrollStitcherTests: XCTestCase {
     }
 
     /// A light gray header bar with bold labels and a bottom border over the top rows of a view.
-    private func withHeader(_ view: CGImage, rows: Int) -> CGImage {
+    private func withHeader(_ view: CGImage, rows: Int, opacity: CGFloat = 1) -> CGImage {
         let context = CGContext(data: nil, width: view.width, height: view.height, bitsPerComponent: 8, bytesPerRow: 0,
                                 space: colorSpace, bitmapInfo: bitmap.rawValue)!
         context.draw(view, in: CGRect(x: 0, y: 0, width: view.width, height: view.height))
-        context.setFillColor(CGColor(red: 0.96, green: 0.96, blue: 0.96, alpha: 1))
+        context.setFillColor(CGColor(red: 0.96, green: 0.96, blue: 0.96, alpha: opacity))
         context.fill(CGRect(x: 0, y: view.height - rows, width: view.width, height: rows))
         context.setFillColor(CGColor(red: 0.8, green: 0.8, blue: 0.8, alpha: 1))
         context.fill(CGRect(x: 0, y: view.height - rows, width: view.width, height: 1))
@@ -194,6 +218,20 @@ final class ScrollStitcherTests: XCTestCase {
         ]))
         context.textPosition = CGPoint(x: 20, y: CGFloat(view.height - rows) + CGFloat(rows) * 0.35)
         CTLineDraw(line, context)
+        return context.makeImage()!
+    }
+
+    /// A 12-pixel scroll bar down the right edge whose thumb follows the scroll position.
+    private func withScrollBar(_ view: CGImage, at position: Int, of length: Int) -> CGImage {
+        let context = CGContext(data: nil, width: view.width, height: view.height, bitsPerComponent: 8, bytesPerRow: 0,
+                                space: colorSpace, bitmapInfo: bitmap.rawValue)!
+        context.draw(view, in: CGRect(x: 0, y: 0, width: view.width, height: view.height))
+        context.setFillColor(CGColor(gray: 0.94, alpha: 1))
+        context.fill(CGRect(x: view.width - 12, y: 0, width: 12, height: view.height))
+        let thumb = view.height * view.height / length
+        context.setFillColor(CGColor(gray: 0.55, alpha: 1))
+        context.fill(CGRect(x: view.width - 10, y: view.height - position * view.height / length - thumb,
+                            width: 8, height: thumb))
         return context.makeImage()!
     }
 
