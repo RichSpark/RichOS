@@ -208,7 +208,8 @@ async function main() {
       await run.check(`a right-click ${where} opens the row's own menu, never WebKit's`, async () => {
         const view = await rightClick(row, box => ({ x: position(box).x, y: box.height / 2 }));
         assert(view.open, "the thread menu must open on a right-click");
-        assertEqual(view.items.join(" | "), "Rename… | Pin | Archive", "the same menu the ⋯ button opens");
+        assertEqual(view.items, ["Rename…", "Pin", "Mark as unread", "Bring back later…", "Archive"],
+          "the same menu the ⋯ button opens");
         assertEqual(view.nativeMenuAllowed, false, "the browser's own context menu must be suppressed");
         assertEqual(view.selection, "", "a right-click must not select the title text");
         assert(Math.abs(view.left - view.at.x) <= 2 && Math.abs(view.top - view.at.y) <= 2,
