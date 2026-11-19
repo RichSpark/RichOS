@@ -13,6 +13,7 @@ static const int VideoPreroll = 0;
 static const int VideoPlaying = 1;
 static const int VideoEnded = 2;
 typedef void (*RichSplashPhase)(int, double);
+typedef void (*RichSplashMetrics)(uint64_t, uint64_t, uint64_t);
 
 @interface RichSplashCover : NSView
 @property(nonatomic, copy) dispatch_block_t lostWindow;
@@ -60,6 +61,7 @@ typedef void (*RichSplashPhase)(int, double);
 @property(nonatomic, copy) NSString *soundPath;
 @property(nonatomic) double anchorMs;
 @property(nonatomic) RichSplashPhase phase;
+@property(nonatomic) RichSplashMetrics metrics;
 - (instancetype)initWithPack:(NSString *)path frames:(int)count;
 - (BOOL)prepare;
 - (void)attach:(NSView *)view;
@@ -193,12 +195,12 @@ typedef void (*RichSplashPhase)(int, double);
             atomic_store(&player->_status, VideoEnded);
             player.phase(VideoEnded, player.anchorMs);
             if (@available(macOS 14.4, *)) {
+                RichSplashMetrics report = player.metrics;
                 [player.video.sampleBufferRenderer loadVideoPerformanceMetricsWithCompletionHandler:
                     ^(AVVideoPerformanceMetrics *metrics) {
-                    if (metrics) {
-                        fprintf(stderr, "[richos] native splash: %ld frames, %ld dropped, %ld corrupted\n",
-                            (long)metrics.totalNumberOfFrames, (long)metrics.numberOfDroppedFrames,
-                            (long)metrics.numberOfCorruptedFrames);
+                    if (metrics && report) {
+                        report((uint64_t)metrics.totalNumberOfFrames, (uint64_t)metrics.numberOfDroppedFrames,
+                               (uint64_t)metrics.numberOfCorruptedFrames);
                     }
                 }];
             }
@@ -377,11 +379,13 @@ bool richos_splash_reduce_motion(void) {
 }
 
 // Read the first video samples while the main thread builds the window.
-void *richos_splash_prepare(const char *file, int frames, const char *sound, RichSplashPhase phase) {
+void *richos_splash_prepare(const char *file, int frames, const char *sound,
+                            RichSplashPhase phase, RichSplashMetrics metrics) {
     @autoreleasepool {
         NSString *path = [NSFileManager.defaultManager stringWithFileSystemRepresentation:file length:strlen(file)];
         RichSplashPlayer *player = [[RichSplashPlayer alloc] initWithPack:path frames:frames];
         player.phase = phase;
+        player.metrics = metrics;
         if (sound) player.soundPath = [NSFileManager.defaultManager stringWithFileSystemRepresentation:sound length:strlen(sound)];
         if (![player prepare]) return NULL;
         return (__bridge_retained void *)player;

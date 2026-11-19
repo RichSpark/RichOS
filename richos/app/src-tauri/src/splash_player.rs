@@ -20,6 +20,7 @@ extern "C" {
         frames: i32,
         sound: *const c_char,
         phase: extern "C" fn(i32, f64),
+        metrics: extern "C" fn(u64, u64, u64),
     ) -> *mut c_void;
     fn richos_splash_discard_prepared(player: *mut c_void);
     fn richos_splash_attach(window: *mut c_void, player: *mut c_void) -> bool;
@@ -78,6 +79,12 @@ extern "C" fn on_phase(code: i32, anchor: f64) {
             });
         }
     }
+}
+
+extern "C" fn on_metrics(total: u64, dropped: u64, corrupted: u64) {
+    crate::launch_timing::note_native_splash_outcome(
+        &format!("renderer counted {total} frames, {dropped} dropped, {corrupted} corrupted"),
+    );
 }
 
 fn fail(reason: &'static str) {
@@ -139,6 +146,7 @@ pub fn prepare(pack: Pack) -> Option<JoinHandle<Option<Prepared>>> {
                 pack.frames,
                 sound.as_ref().map_or(std::ptr::null(), |s| s.as_ptr()),
                 on_phase,
+                on_metrics,
             )
         };
         NonNull::new(player).map(Prepared)
