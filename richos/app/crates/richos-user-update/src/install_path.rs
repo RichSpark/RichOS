@@ -164,6 +164,22 @@ fn legacy_split(root: &Path) -> io::Result<bool> {
         && bundle_version(&system_bundle()).is_ok())
 }
 
+/// The account a running process acts for, or `None` when the kernel does not say.
+#[cfg(target_os = "macos")]
+fn process_uid(pid: i32) -> Option<u32> {
+    let mut info = std::mem::MaybeUninit::<libc::proc_bsdshortinfo>::zeroed();
+    let size = std::mem::size_of::<libc::proc_bsdshortinfo>() as i32;
+    let n = unsafe {
+        libc::proc_pidinfo(pid, libc::PROC_PIDT_SHORTBSDINFO, 0, info.as_mut_ptr().cast(), size)
+    };
+    (n == size).then(|| unsafe { info.assume_init() }.pbsi_uid)
+}
+
+/// Refuses while ANOTHER ACCOUNT runs anything from inside the app in Applications, which this
+/// account's session lease cannot see. This account's own processes are left alone: its RichOS
+/// sessions already hold the lease, its relaunch and at-quit helpers wait on it, and RichFiles'
+/// Window Gestures login item keeps running from inside the app after RichOS quits, exactly as
+/// it did at the per-user path, where nothing was ever checked.
 #[cfg(target_os = "macos")]
 fn ensure_unused(system: &Path) -> io::Result<()> {
     use std::os::unix::ffi::OsStrExt;
@@ -198,10 +214,11 @@ fn ensure_unused(system: &Path) -> io::Result<()> {
             let path = Path::new(std::ffi::OsStr::from_bytes(
                 bytes.strip_suffix(&[0]).unwrap_or(bytes),
             ));
-            if path.starts_with(system)
+            if (path.starts_with(system)
                 || path
                     .strip_prefix("/System/Volumes/Data")
-                    .is_ok_and(|tail| Path::new("/").join(tail).starts_with(system))
+                    .is_ok_and(|tail| Path::new("/").join(tail).starts_with(system)))
+                && process_uid(pid) != Some(uid())
             {
                 return Err(io::Error::new(io::ErrorKind::WouldBlock,
                     "RichOS is still running from Applications. The update will wait for it to quit."));
@@ -429,6 +446,7 @@ pub(super) fn recover_migration(root: &Path, opened: &Path, version: &str) -> io
 mod tests {
     use super::*;
     use crate::tests::archive;
+    use std::os::unix::ffi::OsStrExt;
 
     fn fixture() -> (tempfile::TempDir, PathBuf, PathBuf) {
         let work = tempfile::tempdir().unwrap();
@@ -443,6 +461,116 @@ mod tests {
         fs::rename(seed.join("Applications").join(APP), &system).unwrap();
         TEST_SYSTEM.with(|path| *path.borrow_mut() = Some(system.clone()));
         (work, home, system)
+    }
+
+    /// A long-running native executable. A copied system binary such as `/bin/sleep` is
+    /// killed by the kernel within a second when run from outside the system volume.
+    fn sleeper() -> Vec<u8> {
+        static BINARY: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
+        BINARY
+            .get_or_init(|| {
+                let temp = tempfile::tempdir().unwrap();
+                let source = temp.path().join("sleeper.c");
+                let executable = temp.path().join("sleeper");
+                fs::write(&source, "#include <unistd.h>\nint main(void){sleep(120);return 0;}\n").unwrap();
+                let result = spawn_past_lock_steps(
+                    std::process::Command::new("/usr/bin/cc")
+                        .arg(&source)
+                        .arg("-o")
+                        .arg(&executable)
+                        .stdin(std::process::Stdio::null())
+                        .stdout(std::process::Stdio::piped())
+                        .stderr(std::process::Stdio::piped()),
+                )
+                .unwrap()
+                .wait_with_output()
+                .unwrap();
+                assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+                fs::read(executable).unwrap()
+            })
+            .clone()
+    }
+
+    /// A process of this account running an executable from inside `bundle`, killed on drop.
+    struct Resident(std::process::Child, PathBuf);
+
+    impl Resident {
+        fn start(bundle: &Path, folder: &str, name: &str) -> Self {
+            let dir = bundle.join(folder);
+            fs::create_dir_all(&dir).unwrap();
+            let exe = dir.join(name);
+            fs::write(&exe, sleeper()).unwrap();
+            fs::set_permissions(&exe, fs::Permissions::from_mode(0o755)).unwrap();
+            let child = spawn_past_lock_steps(
+                std::process::Command::new(&exe).stdin(std::process::Stdio::null()),
+            )
+            .unwrap();
+            let resident = Self(child, bundle.to_owned());
+            for _ in 0..200 {
+                if resident.running_inside() {
+                    return resident;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            panic!("the resident process never reported its executable inside the bundle");
+        }
+
+        /// Whether the kernel reports this live process's executable inside the bundle, which
+        /// is what the updater's running-process check reads.
+        fn running_inside(&self) -> bool {
+            let mut buffer = [0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
+            let n = unsafe {
+                libc::proc_pidpath(self.0.id() as i32, buffer.as_mut_ptr().cast(), buffer.len() as u32)
+            };
+            n > 0 && Path::new(std::ffi::OsStr::from_bytes(&buffer[..n as usize])).starts_with(&self.1)
+        }
+    }
+
+    impl Drop for Resident {
+        fn drop(&mut self) {
+            if self.0.kill().is_ok() && self.0.wait().is_err() {
+                eprintln!("the resident process {} was killed but not reaped", self.0.id());
+            }
+        }
+    }
+
+    #[test]
+    fn window_gestures_login_item_inside_the_app_does_not_block_updates() {
+        // RichFiles' Window Gestures login item runs from inside RichOS.app and keeps running
+        // after RichOS quits. It must not hold back the update at launch or at quit.
+        let (_work, home, system) = fixture();
+        let mut lease = StartupLease::acquire(&home).unwrap();
+        lease.remember_installation(&system, "1.0.0").unwrap();
+        drop(lease);
+        let gestures = Resident::start(
+            &system,
+            "Contents/Applications/RichFiles.app/Contents/Library/LoginItems/RichFiles Window Gestures.app/Contents/MacOS",
+            "RichFiles Window Gestures",
+        );
+
+        stage_verified(&home, &archive("2.0.0", |_| {}), "2.0.0").unwrap();
+        assert!(gestures.running_inside());
+        let mut lease = StartupLease::acquire(&home).unwrap();
+        assert!(activate_prepared(&mut lease, "1.0.0").unwrap().is_some());
+        drop(lease);
+        assert_eq!(bundle_version(&system).unwrap(), "2.0.0");
+
+        let gestures = Resident::start(
+            &system,
+            "Contents/Applications/RichFiles.app/Contents/Library/LoginItems/RichFiles Window Gestures.app/Contents/MacOS",
+            "RichFiles Window Gestures",
+        );
+        stage_verified(&home, &archive("3.0.0", |_| {}), "3.0.0").unwrap();
+        assert!(gestures.running_inside());
+        activate_at_quit(&home, "2.0.0", &system).unwrap().unwrap();
+        assert_eq!(bundle_version(&system).unwrap(), "3.0.0");
+    }
+
+    #[test]
+    fn running_check_tells_this_account_from_another() {
+        // launchd runs as root: a process of another account is still seen as one.
+        assert_eq!(process_uid(1), Some(0));
+        assert_eq!(process_uid(std::process::id() as i32), Some(uid()));
     }
 
     #[test]
