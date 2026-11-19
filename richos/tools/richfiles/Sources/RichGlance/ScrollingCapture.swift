@@ -531,6 +531,10 @@ private final class ScrollPanel: NSPanel {
     var performAction: ((String) -> Bool)?
     override func keyDown(with event: NSEvent) {
         let flags = event.modifierFlags.intersection([.shift, .command, .control, .option])
+        if flags.isEmpty, event.keyCode == 53 {
+            if !event.isARepeat { cancel?() }
+            return
+        }
         if flags.isEmpty, let key = event.charactersIgnoringModifiers?.lowercased(), performAction?(key) == true { return }
         super.keyDown(with: event)
     }

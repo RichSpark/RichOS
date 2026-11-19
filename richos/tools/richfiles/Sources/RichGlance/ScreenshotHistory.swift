@@ -12,6 +12,7 @@ struct ScreenshotStore: Sendable {
         let id: UUID
         let created: Date
         let scale: CGFloat
+        let kind: ScreenshotKind
         let edits: ScreenshotEdits
 
         var redactions: Int { edits.marks.filter { $0.tool == .redact }.count }
@@ -20,6 +21,7 @@ struct ScreenshotStore: Sendable {
     private struct Record: Codable {
         let created: Date
         let scale: CGFloat
+        let kind: ScreenshotKind?
         let edits: ScreenshotEdits
     }
 
@@ -65,7 +67,7 @@ struct ScreenshotStore: Sendable {
             let existing = try entriesWhileLocked(now: now)
             guard now.timeIntervalSince(document.created) < 7 * 24 * 60 * 60 else { return false }
             let destination = folder(document.id)
-            let record = Record(created: document.created, scale: document.scale, edits: document.edits)
+            let record = Record(created: document.created, scale: document.scale, kind: document.kind, edits: document.edits)
             let data = try JSONEncoder().encode(record)
             if existing.contains(where: { $0.id == document.id }) {
                 try data.write(to: destination.appendingPathComponent("Edits.json"), options: .atomic)
@@ -90,18 +92,18 @@ struct ScreenshotStore: Sendable {
                   let fresh = try entriesWhileLocked(now: Date()).first(where: { $0.id == entry.id }),
                   let source = CGImageSourceCreateWithURL(folder(entry.id).appendingPathComponent("Original.png") as CFURL, nil),
                   let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else { return nil }
-            return ScreenshotDocument(original: image, scale: fresh.scale, id: fresh.id, created: fresh.created, edits: fresh.edits)
+            return ScreenshotDocument(original: image, scale: fresh.scale, kind: fresh.kind, id: fresh.id, created: fresh.created, edits: fresh.edits)
         }
     }
 
-    func thumbnail(_ id: UUID) -> NSImage? {
+    func thumbnail(_ entry: Entry) -> NSImage? {
         guard keepsHistory,
-              let source = CGImageSourceCreateWithURL(folder(id).appendingPathComponent("Original.png") as CFURL, nil),
-              let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
-                kCGImageSourceCreateThumbnailFromImageAlways: true,
-                kCGImageSourceThumbnailMaxPixelSize: 180,
-              ] as CFDictionary) else { return nil }
-        return NSImage(cgImage: image, size: .zero)
+              let source = CGImageSourceCreateWithURL(folder(entry.id).appendingPathComponent("Original.png") as CFURL, nil),
+              let sourceImage = CGImageSourceCreateImageAtIndex(source, 0, nil) else { return nil }
+        let document = ScreenshotDocument(original: sourceImage, scale: entry.scale, kind: entry.kind,
+                                          id: entry.id, created: entry.created, edits: entry.edits)
+        guard let picture = ScreenshotRenderer.thumbnail(document) else { return nil }
+        return NSImage(cgImage: picture, size: .zero)
     }
 
     func remove(_ id: UUID) throws {
@@ -132,7 +134,7 @@ struct ScreenshotStore: Sendable {
             if now.timeIntervalSince(record.created) >= 7 * 24 * 60 * 60 {
                 try files.removeItem(at: url)
             } else {
-                entries.append(Entry(id: id, created: record.created, scale: record.scale, edits: record.edits))
+                entries.append(Entry(id: id, created: record.created, scale: record.scale, kind: record.kind ?? .region, edits: record.edits))
             }
         }
         return entries.sorted { $0.created > $1.created }

@@ -83,18 +83,26 @@ struct ScreenshotEdits: Codable, Equatable {
     }
 }
 
+enum ScreenshotKind: String, Codable {
+    case region, window, display, scrolling
+    var title: String { rawValue.capitalized }
+}
+
 struct ScreenshotDocument {
     let id: UUID
     let created: Date
     let original: CGImage
     let scale: CGFloat
+    let kind: ScreenshotKind
     var edits: ScreenshotEdits
 
-    init(original: CGImage, scale: CGFloat, id: UUID = UUID(), created: Date = Date(), edits: ScreenshotEdits? = nil) {
+    init(original: CGImage, scale: CGFloat, kind: ScreenshotKind = .region,
+         id: UUID = UUID(), created: Date = Date(), edits: ScreenshotEdits? = nil) {
         self.id = id
         self.created = created
         self.original = original
         self.scale = max(1, scale)
+        self.kind = kind
         self.edits = edits ?? ScreenshotEdits(crop: CGRect(x: 0, y: 0, width: original.width, height: original.height))
     }
 
@@ -111,19 +119,34 @@ enum ScreenshotRenderer {
     }
 
     static func flattened(_ document: ScreenshotDocument) -> CGImage? {
+        render(document, crop: document.crop, scale: 1)
+    }
+
+    static func thumbnail(_ document: ScreenshotDocument) -> CGImage? {
         let crop = document.crop
+        guard !crop.isEmpty else { return nil }
+        let scale = min(1, 320 / crop.width)
+        let sample = CGRect(x: crop.minX, y: crop.minY, width: crop.width,
+                            height: min(crop.height, ceil(192 / scale)))
+        return render(document, crop: sample, scale: scale)
+    }
+
+    private static func render(_ document: ScreenshotDocument, crop: CGRect, scale: CGFloat) -> CGImage? {
         guard !crop.isNull, !crop.isEmpty,
               let source = document.original.cropping(to: crop),
-              let space = CGColorSpace(name: CGColorSpace.sRGB),
-              let context = CGContext(data: nil, width: source.width, height: source.height,
+              let space = CGColorSpace(name: CGColorSpace.sRGB) else { return nil }
+        let size = CGSize(width: max(1, (crop.width * scale).rounded()), height: max(1, (crop.height * scale).rounded()))
+        guard let context = CGContext(data: nil, width: Int(size.width), height: Int(size.height),
                                       bitsPerComponent: 8, bytesPerRow: 0, space: space,
                                       bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
-        context.interpolationQuality = .none
+        context.interpolationQuality = scale < 1 ? .medium : .none
         context.setBlendMode(.copy)
-        context.draw(source, in: CGRect(origin: .zero, size: crop.size))
+        context.draw(source, in: CGRect(origin: .zero, size: size))
         context.setBlendMode(.normal)
-        context.translateBy(x: -crop.minX, y: crop.maxY)
-        context.scaleBy(x: 1, y: -1)
+        let sx = size.width / crop.width
+        let sy = size.height / crop.height
+        context.translateBy(x: -crop.minX * sx, y: crop.maxY * sy)
+        context.scaleBy(x: sx, y: -sy)
         NSGraphicsContext.saveGraphicsState()
         NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: true)
         drawMarks(document.edits, scale: document.scale, in: context)
@@ -138,8 +161,7 @@ enum ScreenshotRenderer {
         return CGImageDestinationFinalize(destination) ? data as Data : nil
     }
 
-    static func copy(_ png: Data) -> Bool {
-        let clipboard = NSPasteboard.general
+    static func copy(_ png: Data, to clipboard: NSPasteboard = .general) -> Bool {
         let item = NSPasteboardItem()
         guard item.setData(png, forType: .png) else { return false }
         clipboard.clearContents()

@@ -342,7 +342,7 @@ final class CaptureCanvas: NSView {
             if selection.phase == .refining, let crop = selection.crop { drawHandles(geometry.viewRect(crop), context: context) }
         }
         let position = lensPlacement(around: target)
-        label(readout, in: position.label, size: 14, compact: true)
+        label(readout, in: position.label, size: 16, compact: true)
         if selection.showsLens { drawLens(in: position.lens, context: context) }
         drawFailure()
     }
@@ -512,7 +512,7 @@ final class CaptureCanvas: NSView {
     private func lensPlacement(around center: CGPoint) -> (lens: CGRect, label: CGRect) {
         let size = Self.lensSize
         let outside = size + 2 * Self.rim
-        let labelWidth: CGFloat = selection.showsLens ? outside : 136
+        let labelWidth: CGFloat = selection.showsLens ? outside : 184
         let labelHeight: CGFloat = 26
         let usable = bounds.insetBy(dx: Self.margin, dy: Self.margin)
         let quadrants: [(CGFloat, CGFloat)] = [(-1, 1), (1, 1), (-1, -1), (1, -1)]

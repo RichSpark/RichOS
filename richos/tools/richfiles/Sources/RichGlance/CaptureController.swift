@@ -516,7 +516,7 @@ final class CaptureController: NSObject, NSWindowDelegate {
 
     private func deliverScroll(_ route: Route) {
         guard let scrolling, let image = scrolling.result, let display, savePanel == nil else { return }
-        let document = scrollingDocument ?? ScreenshotDocument(original: image, scale: display.scale)
+        let document = scrollingDocument ?? ScreenshotDocument(original: image, scale: display.scale, kind: .scrolling)
         scrollingDocument = document
         publish(document, route: route, started: ProcessInfo.processInfo.systemUptime)
     }
@@ -564,22 +564,26 @@ final class CaptureController: NSObject, NSWindowDelegate {
     private func read(_ shot: Shot, fresh: Bool) async throws -> ScreenshotDocument {
         let source: CGImage
         let scale: CGFloat
+        let kind: ScreenshotKind
         let crop: CGRect?
         let pointerOrigin: CGPoint
         switch shot {
         case .region(let display, let box, let frozen):
+            kind = .region
             source = fresh ? try await CaptureFrame.read(displayID: display.id, size: display.size, pointer: includesPointer,
                                                         excludingOwnWindows: true) : frozen
             scale = CGFloat(source.width) / display.frame.width
             crop = box
             pointerOrigin = CGPoint(x: display.frame.minX, y: display.frame.maxY)
         case .display(let display, let frozen):
+            kind = .display
             source = fresh ? try await CaptureFrame.read(displayID: display.id, size: display.size, pointer: includesPointer,
                                                         excludingOwnWindows: true) : frozen
             scale = CGFloat(source.width) / display.frame.width
             crop = nil
             pointerOrigin = CGPoint(x: display.frame.minX, y: display.frame.maxY)
         case .window(let target, let display):
+            kind = .window
             (source, scale) = try await CaptureFrame.read(windowID: target.id, scale: display.scale, pointer: fresh && includesPointer)
             crop = nil
             pointerOrigin = CGPoint(x: target.frame.minX, y: primaryTop - target.frame.minY)
@@ -591,9 +595,9 @@ final class CaptureController: NSObject, NSWindowDelegate {
         if let crop {
             guard let cropped = image.cropping(to: crop), cropped.width == Int(crop.width),
                   cropped.height == Int(crop.height) else { throw CaptureFrame.Failure.displayUnavailable }
-            return ScreenshotDocument(original: cropped, scale: scale)
+            return ScreenshotDocument(original: cropped, scale: scale, kind: kind)
         }
-        return ScreenshotDocument(original: image, scale: scale)
+        return ScreenshotDocument(original: image, scale: scale, kind: kind)
     }
 
     private func drawPointer(on image: CGImage, at point: CGPoint, scale: CGFloat) -> CGImage {
@@ -842,6 +846,7 @@ final class CaptureController: NSObject, NSWindowDelegate {
                       restoreFocus: Bool = true, copied: String? = nil, retained: UUID? = nil) {
         guard !isFinished else { return }
         isFinished = true
+        let performedCapture = scrolling?.reviewWindow?.isVisible == true || countdown != nil
         acquisition?.cancel()
         acquisition = nil
         keyLoss?.cancel()
@@ -857,7 +862,7 @@ final class CaptureController: NSObject, NSWindowDelegate {
         scrolling = nil
         scrollingDocument = nil
         clearSurfaces()
-        if restoreFocus, NSApp.isActive { restoreOrigin() }
+        if restoreFocus, NSApp.isActive || performedCapture { restoreOrigin() }
         record(operation, outcome, since: began)
         finish(copied, display?.frame, retained)
     }

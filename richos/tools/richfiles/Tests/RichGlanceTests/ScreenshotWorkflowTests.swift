@@ -16,6 +16,11 @@ final class ScreenshotWorkflowTests: XCTestCase {
         let flat = try XCTUnwrap(ScreenshotRenderer.flattened(document))
         let png = try XCTUnwrap(ScreenshotRenderer.png(flat))
         let source = try XCTUnwrap(CGImageSourceCreateWithData(png as CFData, nil))
+        let clipboard = NSPasteboard.withUniqueName()
+        defer { clipboard.releaseGlobally() }
+        XCTAssertTrue(ScreenshotRenderer.copy(png, to: clipboard))
+        XCTAssertEqual(clipboard.types, [.png])
+        XCTAssertEqual(clipboard.data(forType: .png), png)
         XCTAssertEqual(CGImageSourceGetCount(source), 1)
         let decoded = try XCTUnwrap(CGImageSourceCreateImageAtIndex(source, 0, nil))
         XCTAssertEqual(decoded.width, 9)
@@ -51,7 +56,7 @@ final class ScreenshotWorkflowTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: home) }
         let store = ScreenshotStore(root: home)
         let now = Date()
-        var document = ScreenshotDocument(original: try fixture(), scale: 2, created: now)
+        var document = ScreenshotDocument(original: try fixture(), scale: 2, kind: .scrolling, created: now)
         XCTAssertFalse(store.keepsHistory)
         XCTAssertFalse(try store.retain(document))
         XCTAssertFalse(FileManager.default.fileExists(atPath: home.path))
@@ -62,6 +67,7 @@ final class ScreenshotWorkflowTests: XCTestCase {
         XCTAssertTrue(try store.retain(document, existingOnly: true))
         let entry = try XCTUnwrap(store.entries().first)
         let reopened = try XCTUnwrap(store.load(entry))
+        XCTAssertEqual(reopened.kind, .scrolling)
         XCTAssertEqual(reopened.edits.marks, [mark])
         XCTAssertEqual(try sample(reopened.original, x: 3, y: 3), try sample(document.original, x: 3, y: 3))
         try store.remove(document.id)

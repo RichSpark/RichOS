@@ -57,7 +57,8 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate {
                           styleMask: [.titled, .closable, .miniaturizable, .resizable],
                           backing: .buffered, defer: false)
         super.init()
-        window.title = "RichGlance Screenshot Editor"
+        let time = document.created.formatted(date: .omitted, time: .shortened)
+        window.title = document.kind.title + " · " + time
         window.setAccessibilityTitle("RichGlance Screenshot Editor")
         window.minSize = CGSize(width: 520, height: 420)
         window.isReleasedWhenClosed = false
@@ -240,6 +241,7 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate {
         }
         let mark = canvas.selectedMark
         let crop = canvas.document.crop
+        window.isDocumentEdited = canvas.hasChanges
         dimensions.stringValue = "\(Int(crop.width)) × \(Int(crop.height)) px"
         info.stringValue = canvas.document.hasRedactions
             ? "Copy and Save make one flat picture. Under the redaction the pixels are replaced. The original stays only on this Mac."
@@ -434,7 +436,7 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate {
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         guard !panelOpen else { return false }
         if closeConfirmed { return true }
-        if retainEdits?(canvas.document) == true || !canvas.hasChanges || lastShared == canvas.document.edits { return true }
+        if retainEdits?(canvas.document) == true || !canvas.hasChanges { return true }
         let alert = NSAlert()
         alert.messageText = "Close without keeping your edits?"
         alert.informativeText = "Recent Captures is off or this screenshot could not be kept. You can copy the edited image before closing."

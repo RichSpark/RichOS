@@ -80,7 +80,7 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func applicationOpenUntitledFile(_ sender: NSApplication) -> Bool {
-        if viewer == nil, editors.isEmpty, recents == nil, capture == nil, !captureLaunch { chooseImage() }
+        if viewer == nil, editors.isEmpty, recents == nil, capture == nil, !captureLaunch { openWithoutFile() }
         return true
     }
 
@@ -109,7 +109,7 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
             return false
         }
         guard !captureLaunch else { return false }
-        if viewer == nil, editors.isEmpty, recents == nil { chooseImage() }
+        if viewer == nil, editors.isEmpty, recents == nil { openWithoutFile() }
         else if !hasVisibleWindows { viewer?.show() }
         return true
     }
@@ -177,6 +177,11 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
               let pid = pid_t(arguments[flag + 1]), let origin = NSRunningApplication(processIdentifier: pid),
               ["app.richos.richfiles", "com.richos.app"].contains(origin.bundleIdentifier ?? "") else { return nil }
         return origin
+    }
+
+    private func openWithoutFile() {
+        if (try? screenshotStore.entries().isEmpty) == false { showRecents() }
+        else { chooseImage() }
     }
 
     @objc private func chooseImage() {

@@ -93,6 +93,11 @@ final class ScreenshotCanvas: NSView {
         addTrackingArea(area)
     }
 
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        refresh()
+    }
+
     override func draw(_ dirtyRect: CGRect) {
         guard let context = NSGraphicsContext.current?.cgContext else { return }
         ScreenshotChrome.colors(for: self).ground.setFill()
