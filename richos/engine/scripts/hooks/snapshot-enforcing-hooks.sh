@@ -72,9 +72,10 @@
 #   .claude/state/enforcing-hooks-latest.snapshot       (symlink -> newest)
 #
 #   Two `#` header lines any consumer skips, then one TAB-separated row per
-#   registered hook script, sorted:
+#   registered hook script or plugin module, sorted:
 #     # enforcing-hook snapshot — written by scripts/hooks/snapshot-enforcing-hooks.sh
-#     # session=<id|unknown> generated=<iso8601Z> engine=<abs> surface=hooks/hooks.json rows=<n>
+#     # session=<id|unknown> generated=<iso8601Z> engine=<abs> surface=hooks/hooks.json modules=tracked rows=<n>
+#     Plugin module<TAB>-<TAB>./answer-permission-prompt.ts
 #     PreToolUse<TAB>Agent<TAB>guard-worktree-isolation.sh
 #     SessionStart<TAB>-<TAB>engine-status.sh
 #     ...
@@ -338,7 +339,7 @@ fi
 
 ROW_COUNT="$(printf '%s\n' "$ROWS" | grep -c . || true)"
 if [ "${ROW_COUNT:-0}" -lt 1 ]; then
-    emit_context "enforcing-hook snapshot: NO BASELINE WRITTEN — $SURFACE parsed but registered zero hook scripts. Refusing to record an empty baseline: every later comparison against it would report 'no drift' for the wrong reason."
+    emit_context "enforcing-hook snapshot: NO BASELINE WRITTEN — $SURFACE parsed but produced zero registration rows. Refusing to record an empty baseline: every later comparison against it would report 'no drift' for the wrong reason."
     exit 0
 fi
 
@@ -400,7 +401,7 @@ esac
 
 {
     printf '# enforcing-hook snapshot — written by scripts/hooks/snapshot-enforcing-hooks.sh\n'
-    printf '# session=%s generated=%s engine=%s surface=%s rows=%s\n' \
+    printf '# session=%s generated=%s engine=%s surface=%s modules=tracked rows=%s\n' \
         "${SESSION_ID:-unknown}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
         "$ENGINE_ROOT" "$SURFACE" "$ROW_COUNT"
     printf '%s\n' "$ROWS"

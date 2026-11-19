@@ -266,7 +266,18 @@ impl WorkHost {
         let started = std::time::Instant::now();
         let mut guard = backend.lease.lock().unwrap();
         let Some(lease) = guard.as_mut() else { return };
-        match lease.keep_chat_alive().and_then(|reply| reply.wait(&mut |_| {})) {
+        let result = lease.keep_chat_alive().and_then(|reply| reply.wait(&mut |_| {}));
+        if lease.is_closed() {
+            // Do not let an expired keep-alive's session veto selection of saved input.
+            let mut inner = backend.inner.lock().unwrap();
+            inner.lease_session = None;
+            inner.peer_stopper = None;
+            inner.automatic_turn = false;
+            drop(inner);
+            drop(guard.take());
+            self.note_back_end(binding, None);
+        }
+        match result {
             Ok(_) => eprintln!("[richos] keep chat alive: the team's session of {thread} answered in {} ms", started.elapsed().as_millis()),
             Err(error) => eprintln!("[richos] keep chat alive: the team's session of {thread} was not reached: {error}"),
         }
@@ -3077,6 +3088,67 @@ mod tests {
         h.host.ensure_lease(&backend,&h.binding).unwrap();
         assert_eq!(h.spawns.load(Ordering::SeqCst),1,"a healthy connection was replaced");
         h.host.shutdown();std::fs::remove_dir_all(h.root).unwrap();
+    }
+
+    #[test]
+    fn team_input_waiting_behind_a_keep_alive_runs_after_the_lease_expires() {
+        use crate::chat_cache::{Readings, Seat, HEARTBEAT_AFTER_MS};
+        use crate::cognition::PendingReply;
+        use std::sync::atomic::AtomicBool;
+
+        struct HeldKeepAlive {
+            entered: Arc<AtomicBool>,
+            closed: Arc<AtomicBool>,
+            expire: Option<std::sync::mpsc::Receiver<()>>,
+        }
+        impl Cognition for HeldKeepAlive {
+            fn session_id(&self) -> &str { "held-stu-session" }
+            fn is_closed(&self) -> bool { self.closed.load(Ordering::SeqCst) }
+            fn prompt(&mut self, _: &str, _: &mut dyn FnMut(TurnItem)) -> Result<String, CognitionError> {
+                panic!("saved input must run on the replacement connection")
+            }
+            fn keep_chat_alive(&mut self) -> Result<PendingReply, CognitionError> {
+                let expire = self.expire.take().unwrap();
+                let entered = self.entered.clone();
+                let closed = self.closed.clone();
+                Ok(PendingReply::new(move |_| {
+                    entered.store(true, Ordering::SeqCst);
+                    expire.recv().map_err(|error| CognitionError::Io(error.to_string()))?;
+                    closed.store(true, Ordering::SeqCst);
+                    Err(CognitionError::Io("keep-alive reply timed out".into()))
+                }))
+            }
+        }
+        let h = harness(0);
+        let thread = h.binding.thread_id();
+        let backend = h.host.backend_for(thread).unwrap();
+        let entered = Arc::new(AtomicBool::new(false));
+        let (expire, wait) = std::sync::mpsc::channel();
+        *backend.lease.lock().unwrap() = Some(Box::new(HeldKeepAlive {
+            entered: entered.clone(), closed: Arc::new(AtomicBool::new(false)), expire: Some(wait),
+        }));
+        let readings = Readings::in_memory();
+        let meter = readings.lease(thread, Seat::Team);
+        meter.requested(crate::util::now_millis() - HEARTBEAT_AFTER_MS);
+        meter.turn_ended(None, Some(true));
+        h.host.set_keep_alive(readings, Arc::new(|_| true));
+        h.host.keep_team_alive(&h.binding);
+        until("the keep-alive did not enter the lease", || entered.load(Ordering::SeqCst));
+
+        let scope = h.host.message_scope(&h.binding);
+        let sender = h.state.join("rich-status.json");
+        crate::session_tools::bind(&sender, &scope, "native-rich", "rich", None).unwrap();
+        crate::session_tools::send(&sender, &scope, serde_json::json!({"text":"Inspect the current evidence"})).unwrap();
+        h.host.wake_messages(&h.binding);
+        expire.send(()).unwrap();
+        until("saved input did not complete on the next lease", || backend.inner.lock().unwrap().completed == 1);
+        assert_eq!(h.spawns.load(Ordering::SeqCst), 1);
+        let prompts = h.work_prompts.lock().unwrap().clone();
+        assert_eq!(prompts.len(), 1);
+        assert!(prompts[0].contains("Inspect the current evidence"));
+        assert!(crate::session_tools::pending(&scope, "stu").unwrap().is_none());
+        h.host.shutdown();
+        std::fs::remove_dir_all(h.root).unwrap();
     }
 
     #[test]

@@ -8,6 +8,7 @@
   const pane = document.getElementById("richfiles-pane");
   const error = document.getElementById("richfiles-pane-error");
   const loading = document.getElementById("richfiles-loading");
+  const tooltip = document.getElementById("nr-tip");
   if (!bridge || !rail || !button || !page || !pane || !error || !loading) return;
 
   const hiddenBounds = { left: 0, top: 0, width: 0, height: 0, visible: false };
@@ -40,6 +41,20 @@
     return width > 0 && height > 0 ? { left, top, width, height, visible: true } : hiddenBounds;
   }
 
+  function tooltipBounds(paneBounds) {
+    if (!paneBounds.visible || !tooltip || tooltip.hidden) return null;
+    const tip = tooltip.getBoundingClientRect();
+    if (!tip.width || !tip.height) return null;
+    const arrow = parseFloat(getComputedStyle(tooltip, "::before").borderRightWidth) || 0;
+    if (tip.right <= paneBounds.left * innerWidth || tip.bottom <= paneBounds.top * innerHeight) return null;
+    return {
+      left: tip.left / innerWidth, top: tip.top / innerHeight,
+      width: tip.width / innerWidth, height: tip.height / innerHeight,
+      radius: (parseFloat(getComputedStyle(tooltip).borderTopLeftRadius) || 0) / innerWidth,
+      arrow: arrow / innerWidth,
+    };
+  }
+
   function schedule() {
     if (!frame) frame = requestAnimationFrame(() => { frame = 0; refresh(); });
   }
@@ -47,7 +62,8 @@
   async function refresh() {
     if (waiting) { again = true; return; }
     let next = bounds();
-    let key = JSON.stringify(next);
+    let tip = tooltipBounds(next);
+    let key = JSON.stringify([next, tip]);
     if (key === last && (!next.visible || !showRequested)) return;
     waiting = true;
     try {
@@ -57,9 +73,10 @@
           await painted();
           next = bounds();
           if (!next.visible) { again = true; return; }
-          key = JSON.stringify(next);
+          tip = tooltipBounds(next);
+          key = JSON.stringify([next, tip]);
         }
-        await bridge.invoke("richfiles_place_pane", { bounds: next });
+        await bridge.invoke("richfiles_place_pane", { bounds: next, tooltip: tip });
         last = key;
         if (next.visible) {
           ready = true;
@@ -85,6 +102,7 @@
 
   const size = new ResizeObserver(schedule);
   const overlays = new MutationObserver(schedule);
+  const tooltipChanges = new MutationObserver(schedule);
   function show() {
     preloaded = true; // placement also loads the library if needed
     loading.hidden = ready;
@@ -92,6 +110,10 @@
     document.body.classList.add("page-open");
     size.observe(pane);
     overlays.observe(document.body, { subtree: true, attributes: true, attributeFilter: ["hidden", "inert", "open", "class"] });
+    if (tooltip) {
+      size.observe(tooltip);
+      tooltipChanges.observe(tooltip, { attributes: true, attributeFilter: ["style"] });
+    }
     window.addEventListener("resize", schedule);
     schedule();
   }
@@ -102,6 +124,7 @@
     document.body.classList.remove("page-open");
     size.disconnect();
     overlays.disconnect();
+    tooltipChanges.disconnect();
     window.removeEventListener("resize", schedule);
     refresh();
   }
@@ -136,7 +159,14 @@
     if (available !== true) return;
     rail.registerPage("richfiles", { show, hide });
     button.hidden = false;
-    window.RichFilesPage = { available: true };
+    window.RichFilesPage = {
+      available: true,
+      recordingBounds() {
+        if (!ready || page.hidden) return null;
+        const current = bounds();
+        return current.visible ? current : null;
+      },
+    };
     offered = true;
     prepare();
     try {
