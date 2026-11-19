@@ -5,14 +5,16 @@
 #   glance-scroll-walk.sh <RichFiles.app> <out-dir> [down|right|both|manual] [copy|save]
 #
 # Builds the source app (glance-scroll-fixture.swift, a WebKit page with an 80% opaque sticky header,
-# 1820 px of text, a red end marker and a bar fixed to the bottom) and the PNG check
+# 1820 px of lines of dark blocks, a red end block and a white bar with blank margins fixed to the
+# bottom) and the PNG check
 # (glance-scroll-check.swift) on the host, then holds one test VM slot (slots.py) for the guest part
 # only: a disposable clone of the test base, booted without sound (--no-audio). In the guest, RichGlance
 # is opened as RichFiles opens it (a capture request naming the page's app), a 576 × 362 region that
 # starts inside the header and ends inside the bar is dragged with the real pointer, the mode is picked
 # from the capture menu (default `down`), and the result is copied (default) or saved as a PNG. In
-# `down` mode the PNG is checked: the header once at the top, the bar once at the bottom, the end
-# marker just above it. Screenshots, the PNG, RichFiles' timing records and walk.log go to <out-dir>.
+# `down` mode the PNG is checked: the header once at the top, the bar once at the bottom, and every
+# pixel of the page between them the page's own, none wrong and none missing. Screenshots, the PNG,
+# RichFiles' timing records and walk.log go to <out-dir>.
 #
 # The disposable guest's screen-capture, Accessibility and event grants are seeded there so the pixel
 # proof can run; the host's are never touched. Both test apps are quit and verified gone, and the guest
