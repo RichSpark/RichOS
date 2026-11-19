@@ -6225,6 +6225,7 @@ module.exports = [
   {s: "RichFiles could not use that window area.", c: "INFORMATIONAL", why: "The rail reports that the native view refused its window bounds."},
   {s: "RichFiles requires macOS.", c: "INFORMATIONAL", why: "The desktop bridge reports the platform requirement when it cannot perform the command."},
   {s: "RichFinder is unavailable", c: "NOT-RENDERED", why: "The native Service returns this to macOS. The shell's Service-query invocation handles it quietly."},
+  {s: "This installation cannot record the RichFiles pane.", c: "NOT-RENDERED", why: "`richfiles_pane.rs::recording_frame` refuses when the bundled RichFiles library has no recording export. Its only caller, `video-anywhere.js` `requestFilesFrame`, catches the rejected invoke, sets `filesFailed` and keeps recording the web view; nothing displays the message."},
   {s: "Show in RichFiles", c: "CONTROL", why: "The Output menu action opens the recorded file's folder and selects that file in the RichFiles rail. The Output suite exercises the action."},
   {s: "The RichFiles window is unavailable.", c: "INFORMATIONAL", why: "The Output action reports that the browser cannot receive the requested file."},
   {s: "The output has no filename.", c: "INFORMATIONAL", why: "The Output action reports an invalid file reference before asking the browser to reveal it."},

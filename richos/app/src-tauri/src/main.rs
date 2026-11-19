@@ -4286,6 +4286,7 @@ fn main() {
             splash_did_finish,
             system_resources,
             richfiles_pane::richfiles_pane_available, richfiles_pane::richfiles_place_pane,
+            richfiles_pane::richfiles_recording_frame,
             glance_capture_shortcut::glance_capture_status, glance_capture_shortcut::glance_capture_configure,
             richfiles_pane::richfiles_preload,
             richfiles_pane::richfiles_request_pending, richfiles_pane::richfiles_accept_request,
@@ -4566,6 +4567,7 @@ fn main() {
             // "Make a video" on the home screen (round 77, CEO 2026-11-14)
             home_video::home_video_input,
             home_video::home_video_save,
+            home_video::cleaner_recording_frame,
             // --- a job's result said on its own (2026-10-15) — appended ---
             // --- the Oxford comma in what Claude writes (CEO 2026-10-19) — appended ---
             set_oxford_comma,
