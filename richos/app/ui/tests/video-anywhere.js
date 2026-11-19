@@ -843,6 +843,13 @@ async function main() {
         ["the panel's edge on Settings", "#video-anywhere-choices", ["#set-menu"], "borderTopColor", 3],
         ["a lit bar of the voice meter", ".rv-row .rv-level i.on", ["#video-anywhere-choices"], "backgroundColor", 3],
       ])));
+      if (theme === "light") {
+        // round 95: in light the gold bars stand 3:1 against the unlit ones. A sixth bar is never
+        // lit (the meter lights at most five), so it holds the unlit color while it is measured.
+        await page.evaluate(() => document.querySelector(".rv-row .rv-level").appendChild(Object.assign(document.createElement("i"), { id: "rv-off-probe" })));
+        said.push("the meter: " + (await clears(page, theme, [["a lit bar against an unlit one", ".rv-row .rv-level i.on", ["#rv-off-probe"], "backgroundColor", 3]])));
+        await page.evaluate(() => document.getElementById("rv-off-probe").remove());
+      }
       // the sentence for no microphone stands in the same place in the same ink; shown here to be measured
       await page.evaluate(() => (document.querySelector(".rv-mic-note").hidden = false));
       said.push("no microphone: " + (await clears(page, theme, [["the sentence", ".rv-mic-note", ["#video-anywhere-choices"]]])));
