@@ -6,7 +6,7 @@ public enum RichFilesDiagnostics {
         case listing, copy, move, recovery, gitHistory, gitComparison
         case windowGestureAvailability, windowGestureMaximize, windowGestureRestore
         case windowGestureDockMinimize, windowGestureDockRestore
-        case glanceCaptureFrame, glanceCaptureOutput, glanceCaptureSession
+        case glanceCaptureFrame, glanceCaptureOutput, glanceCaptureSession, glanceScrollCapture
         case glanceDisplay, glanceDecode, glanceFolder, glancePreview, glanceDefaults, glanceMetadata
 
         fileprivate var logFilename: String {

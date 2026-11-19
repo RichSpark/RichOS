@@ -35,11 +35,13 @@ final class CaptureCanvas: NSView {
     private(set) var selection: GlanceCaptureSelection
     var copy: (() -> Void)?
     var save: (() -> Void)?
+    var scroll: ((ScrollingCapture.Mode) -> Void)?
     var escape: (() -> Void)?
     var cancel: (() -> Void)?
     private let actions = NSStackView()
     private let copyButton = NSButton(title: "Copy Image    ↵", target: nil, action: nil)
     private let saveButton = NSButton(title: "Save PNG…    ⌘S", target: nil, action: nil)
+    private let scrollButton = NSButton(title: "Scrolling Capture…", target: nil, action: nil)
     private let retryButton = NSButton(title: "Start Over    Esc", target: nil, action: nil)
     private let cancelButton = NSButton(title: "Cancel Capture", target: nil, action: nil)
     private var failure: String?
@@ -64,7 +66,7 @@ final class CaptureCanvas: NSView {
         actions.layer?.cornerRadius = 12
         actions.layer?.borderWidth = 1
         for (button, action) in [(copyButton, #selector(copyPressed)), (saveButton, #selector(savePressed)),
-                                 (retryButton, #selector(startOver)), (cancelButton, #selector(cancelPressed))] {
+                                 (scrollButton, #selector(scrollPressed)), (retryButton, #selector(startOver)), (cancelButton, #selector(cancelPressed))] {
             button.target = self
             button.action = action
             button.bezelStyle = .rounded
@@ -119,12 +121,13 @@ final class CaptureCanvas: NSView {
                 return
             case 36, 76: if !event.isARepeat { copy?() }; return
             default:
-                guard let character = event.charactersIgnoringModifiers?.lowercased(), ["m", "r"].contains(character) else {
+                guard let character = event.charactersIgnoringModifiers?.lowercased(), ["m", "r", "s"].contains(character) else {
                     super.keyDown(with: event)
                     return
                 }
                 guard !event.isARepeat else { return }
                 if character == "r" { startOver(); return }
+                if character == "s" { scrollPressed(); return }
                 selection.toggleLens()
             }
         } else {
@@ -178,6 +181,23 @@ final class CaptureCanvas: NSView {
 
     @objc private func copyPressed() { copy?() }
     @objc private func savePressed() { save?() }
+    @objc private func scrollPressed() {
+        guard selection.phase == .refining, selection.canCapture else { return }
+        let menu = NSMenu(title: "Scrolling Capture")
+        for mode in ScrollingCapture.Mode.allCases {
+            let item = menu.addItem(withTitle: mode.title, action: #selector(selectScrollMode(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = mode.rawValue
+        }
+        menu.popUp(positioning: nil, at: CGPoint(x: 0, y: scrollButton.bounds.height + 4), in: scrollButton)
+    }
+
+    @objc private func selectScrollMode(_ item: NSMenuItem) {
+        guard let value = item.representedObject as? String,
+              let mode = ScrollingCapture.Mode(rawValue: value) else { return }
+        scroll?(mode)
+    }
+
     @objc private func startOver() {
         guard selection.phase == .refining else { return }
         _ = resetSelection()
@@ -219,6 +239,7 @@ final class CaptureCanvas: NSView {
         actions.isHidden = selection.phase != .refining
         copyButton.isHidden = !selection.canCapture
         saveButton.isHidden = !selection.canCapture
+        scrollButton.isHidden = !selection.canCapture
         if !actions.isHidden, let crop = selection.crop {
             let placement = lensPlacement(around: geometry.viewPoint(selection.target))
             actions.frame = actionPlacement(around: geometry.viewRect(crop), avoiding: placement)
@@ -231,6 +252,7 @@ final class CaptureCanvas: NSView {
         actions.layer?.borderColor = border.cgColor
         styleAction(copyButton, primary: true)
         styleAction(saveButton, primary: false)
+        styleAction(scrollButton, primary: false)
         styleAction(retryButton, primary: false)
         styleAction(cancelButton, primary: false)
     }
