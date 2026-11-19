@@ -2037,6 +2037,17 @@ pub fn staged(home: &Path) -> io::Result<Option<Staged>> {
         rollback,
     }))
 }
+/// The user pressed Try again (or Check for updates) on the update surface. A denial saved by
+/// the last exchange into Applications is set aside, because the user may have granted the
+/// permission since and nothing on disk can say so: [`staged`] then reports the update ready,
+/// and the next publication at quit or launch tries it and saves the denial again if macOS
+/// still refuses. The automatic check never calls this, so the denial stays on screen until
+/// the user asks again.
+pub fn retry_after_denial(home: &Path) -> io::Result<()> {
+    let root = root(home)?;
+    let _lock = Lock::acquire(&root)?;
+    install_path::forget_exchange_denial(&root)
+}
 /// What the last activation did, for the boot line and the update surface. `None` before
 /// this installation has ever activated anything (a hand-installed first copy).
 pub fn last_activation(home: &Path) -> io::Result<Option<Activation>> {

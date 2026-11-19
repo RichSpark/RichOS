@@ -245,6 +245,16 @@ pub(super) fn check_exchange_permission(root: &Path, publication: &Published) ->
     }
 }
 
+/// The user asks again, after granting the permission: the saved denial no longer speaks for
+/// the update, which reads as ready until the next publication is refused again.
+pub(super) fn forget_exchange_denial(root: &Path) -> io::Result<()> {
+    match fs::remove_file(root.join(BLOCKED)) {
+        Ok(()) => sync(root),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
 pub(super) fn exchange_update(
     root: &Path,
     incoming: &Path,
@@ -786,6 +796,53 @@ mod tests {
         activate_at_quit(&home, "1.0.0", &system).unwrap().unwrap();
         assert_eq!(bundle_version(&system).unwrap(), "2.0.0");
         assert!(staged(&home).unwrap().is_none());
+    }
+
+    #[test]
+    fn try_again_after_permission_is_granted_shows_the_update_ready() {
+        // Review rv-20261119T144657Z finding 2: the user grants the permission and presses the
+        // offered Try again; the update surface must stop repeating the old denial.
+        let (_work, home, system) = fixture();
+        let mut lease = StartupLease::acquire(&home).unwrap();
+        lease.remember_installation(&system, "1.0.0").unwrap();
+        drop(lease);
+        stage_verified(&home, &archive("2.0.0", |_| {}), "2.0.0").unwrap();
+        let root = root(&home).unwrap();
+        let digest = staged(&home).unwrap().unwrap().publication.archive_sha256;
+        let denied = ExchangeDenied::new(&root.join(&digest).join("incoming.app"));
+        assert_eq!(
+            activate_at_quit(&home, "1.0.0", &system).unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        drop(denied);
+        // The automatic check, before anyone presses anything, still says what happened last.
+        assert_eq!(staged(&home).unwrap_err().kind(), io::ErrorKind::PermissionDenied);
+
+        retry_after_denial(&home).unwrap();
+        let ready = staged(&home).unwrap().unwrap();
+        assert_eq!((ready.publication.version.as_str(), ready.rollback), ("2.0.0", false));
+        activate_at_quit(&home, "1.0.0", &system).unwrap().unwrap();
+        assert_eq!(bundle_version(&system).unwrap(), "2.0.0");
+    }
+
+    #[test]
+    fn try_again_while_permission_is_still_missing_shows_the_denial_after_the_next_attempt() {
+        // The press cannot know whether permission was granted. If it was not, the next
+        // publication is refused again and the update surface says so again.
+        let (_work, home, system) = fixture();
+        let mut lease = StartupLease::acquire(&home).unwrap();
+        lease.remember_installation(&system, "1.0.0").unwrap();
+        drop(lease);
+        stage_verified(&home, &archive("2.0.0", |_| {}), "2.0.0").unwrap();
+        let root = root(&home).unwrap();
+        let digest = staged(&home).unwrap().unwrap().publication.archive_sha256;
+        let _denied = ExchangeDenied::new(&root.join(&digest).join("incoming.app"));
+        activate_at_quit(&home, "1.0.0", &system).unwrap_err();
+        retry_after_denial(&home).unwrap();
+        assert!(staged(&home).unwrap().is_some());
+        activate_at_quit(&home, "1.0.0", &system).unwrap_err();
+        assert_eq!(staged(&home).unwrap_err().kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(bundle_version(&system).unwrap(), "1.0.0");
     }
 
     #[test]

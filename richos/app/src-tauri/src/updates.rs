@@ -1356,8 +1356,17 @@ pub fn update_state(app: AppHandle) -> UpdateView {
     app.state::<Updates>().snapshot()
 }
 
+/// The press of Check for updates, which is also the Try again of a failure. Only the press
+/// sets aside a denied exchange into Applications (`retry_after_denial`): the user may have
+/// granted the permission since. The automatic check leaves it on screen.
 #[richos_command::command]
 pub async fn update_check(app: AppHandle) -> UpdateView {
+    #[cfg(target_os = "macos")]
+    if let Ok(home) = app.path().home_dir() {
+        if let Err(error) = richos_user_update::retry_after_denial(&home) {
+            eprintln!("[richos] update check: the saved permission denial stays: {error}");
+        }
+    }
     check(&app).await
 }
 
