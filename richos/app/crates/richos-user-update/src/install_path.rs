@@ -245,9 +245,46 @@ pub(super) fn check_exchange_permission(root: &Path, publication: &Published) ->
     }
 }
 
-/// The user asks again, after granting the permission: the saved denial no longer speaks for
-/// the update, which reads as ready until the next publication is refused again.
-pub(super) fn forget_exchange_denial(root: &Path) -> io::Result<()> {
+/// Whether macOS lets this process change `path` now, without changing it: an extended
+/// attribute set and removed at once. That is refused with EPERM exactly where the exchange is,
+/// for an app in Applications this process lacks the App Management permission for and for a
+/// directory marked immutable.
+fn may_change(path: &Path) -> io::Result<()> {
+    use std::{ffi::CString, os::unix::ffi::OsStrExt};
+    let path = CString::new(path.as_os_str().as_bytes()).map_err(io::Error::other)?;
+    let name = c"com.richos.update-permission-check";
+    let set = unsafe {
+        libc::setxattr(path.as_ptr(), name.as_ptr(), b"1".as_ptr().cast(), 1, 0, libc::XATTR_NOFOLLOW)
+    };
+    if set != 0 {
+        let error = io::Error::last_os_error();
+        return Err(match error.raw_os_error() {
+            Some(libc::EPERM) | Some(libc::EACCES) => permission_required(),
+            _ => error,
+        });
+    }
+    if unsafe { libc::removexattr(path.as_ptr(), name.as_ptr(), libc::XATTR_NOFOLLOW) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+/// The user asks again (Try again): the saved denial of the last exchange is removed only when
+/// both sides of that exchange can be changed now, so the update reads as ready once the
+/// permission is granted and the denial stays on screen while it is still missing.
+pub(super) fn retry_exchange_permission(root: &Path, publication: &Published) -> io::Result<()> {
+    match check_exchange_permission(root, publication) {
+        Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {}
+        other => return other,
+    }
+    let dest = destination(root)?;
+    match may_change(&root.join(&publication.archive_sha256).join("incoming.app"))
+        .and_then(|()| may_change(&dest))
+    {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::PermissionDenied => return Ok(()),
+        Err(error) => return Err(error),
+    }
     match fs::remove_file(root.join(BLOCKED)) {
         Ok(()) => sync(root),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
@@ -826,9 +863,9 @@ mod tests {
     }
 
     #[test]
-    fn try_again_while_permission_is_still_missing_shows_the_denial_after_the_next_attempt() {
-        // The press cannot know whether permission was granted. If it was not, the next
-        // publication is refused again and the update surface says so again.
+    fn try_again_while_permission_is_still_missing_keeps_the_denial_on_screen() {
+        // Review rv-20261119T165922Z finding 2: Try again pressed before the permission is
+        // granted must not claim the update is ready; the denial stays until the swap can go.
         let (_work, home, system) = fixture();
         let mut lease = StartupLease::acquire(&home).unwrap();
         lease.remember_installation(&system, "1.0.0").unwrap();
@@ -836,14 +873,17 @@ mod tests {
         stage_verified(&home, &archive("2.0.0", |_| {}), "2.0.0").unwrap();
         let root = root(&home).unwrap();
         let digest = staged(&home).unwrap().unwrap().publication.archive_sha256;
-        let _denied = ExchangeDenied::new(&root.join(&digest).join("incoming.app"));
+        let denied = ExchangeDenied::new(&root.join(&digest).join("incoming.app"));
         activate_at_quit(&home, "1.0.0", &system).unwrap_err();
         retry_after_denial(&home).unwrap();
-        assert!(staged(&home).unwrap().is_some());
-        activate_at_quit(&home, "1.0.0", &system).unwrap_err();
         assert_eq!(staged(&home).unwrap_err().kind(), io::ErrorKind::PermissionDenied);
         assert_eq!(bundle_version(&system).unwrap(), "1.0.0");
+        // The same press after the permission is granted reads ready.
+        drop(denied);
+        retry_after_denial(&home).unwrap();
+        assert_eq!(staged(&home).unwrap().unwrap().publication.version, "2.0.0");
     }
+
 
     #[test]
     fn manual_reinstall_over_two_copies_takes_the_next_update_in_applications() {

@@ -1360,8 +1360,9 @@ pub fn update_state(app: AppHandle) -> UpdateView {
 }
 
 /// The press of Check for updates, which is also the Try again of a failure. Only the press
-/// sets aside a denied exchange into Applications (`retry_after_denial`): the user may have
-/// granted the permission since. The automatic check leaves it on screen.
+/// asks again whether a denied exchange into Applications may go through now
+/// (`retry_after_denial`), and clears the denial once the permission is granted. The automatic
+/// check leaves it on screen.
 #[richos_command::command]
 pub async fn update_check(app: AppHandle) -> UpdateView {
     #[cfg(target_os = "macos")]

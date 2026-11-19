@@ -2038,15 +2038,19 @@ pub fn staged(home: &Path) -> io::Result<Option<Staged>> {
     }))
 }
 /// The user pressed Try again (or Check for updates) on the update surface. A denial saved by
-/// the last exchange into Applications is set aside, because the user may have granted the
-/// permission since and nothing on disk can say so: [`staged`] then reports the update ready,
-/// and the next publication at quit or launch tries it and saves the denial again if macOS
-/// still refuses. The automatic check never calls this, so the denial stays on screen until
-/// the user asks again.
+/// the last exchange into Applications is removed only when macOS lets this process change
+/// both sides of that exchange now (an extended attribute set and removed at once, refused
+/// exactly where the exchange is): [`staged`] then reports the update ready. While the
+/// permission is still missing the denial stays and the surface keeps saying so. The automatic
+/// check never calls this.
 pub fn retry_after_denial(home: &Path) -> io::Result<()> {
     let root = root(home)?;
     let _lock = Lock::acquire(&root)?;
-    install_path::forget_exchange_denial(&root)
+    match read_json(&root.join("prepared.json")) {
+        Ok(p) => install_path::retry_exchange_permission(&root, &p),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e),
+    }
 }
 /// What the last activation did, for the boot line and the update surface. `None` before
 /// this installation has ever activated anything (a hand-installed first copy).
