@@ -3161,6 +3161,11 @@ module.exports = [
     c: "NOT-RENDERED",
     why: "`prepare()` at update_startup.rs:132, when the re-executed bundle will not run. The last thing this process does is print it.",
   },
+  {
+    s: "Could not recover the application installation: {error}",
+    c: "NOT-RENDERED",
+    why: "`prepare()` at update_startup.rs:107, when `remember_installation` cannot finish an interrupted move into Applications or record where the app is installed. Same single call site as the rows above: main.rs hands it to `startup_alert::cannot_start` (stderr and startup.log) and exits 1 before any webview exists.",
+  },
 
   // ---- startup_alert.rs — the surface the nine rows above did not have -----------------
   //

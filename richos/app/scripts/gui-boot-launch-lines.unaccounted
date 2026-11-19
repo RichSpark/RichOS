@@ -571,7 +571,9 @@
 [richos] update at quit: deferred to the next launch: {}
 [richos] update at quit: nothing to put in place now; the next launch checks again
 [richos] update at quit: payload reclamation deferred: {}
+[richos] update at quit: moved the active installation into Applications
 [richos] update at quit: {} put in place: {} -> {}
+[richos] update check: the saved permission denial stays: {}
 [richos] openings: the image of {} was not saved ({})
 [richos] openings: what was earned could not be saved ({})
 [richos] openings: today's opening could not be written down ({})

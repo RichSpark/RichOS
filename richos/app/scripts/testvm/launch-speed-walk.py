@@ -41,6 +41,9 @@ through LaunchServices), as a regular launch (an unattended one builds its windo
                   its record of the last such day is made a day older, which is what a night does.
                   --runs times, his two openings in turn;
   first install   one fresh install launch, reported alongside the timed routes;
+  install path    with --previous-app, a legacy two-copy launch and clean quit, then a direct
+                  launch from the original Applications location. A release check without a
+                  timing threshold. Use --only-install-path to run the check alone;
   checks          with --checks: a start-up step made to fail (its conversation record unreadable),
                   which must end in the start-up alert and the exit; a quit from the app's own menu
                   during start-up; then a normal launch of the same home.
@@ -496,9 +499,13 @@ def main():
                    help='also: a start-up step made to fail, and a quit during start-up')
     p.add_argument('--only-checks', action='store_true',
                    help='only the start-up checks, no timed routes (a re-take of a failed check)')
+    p.add_argument('--only-install-path', action='store_true',
+                   help='only the legacy two-copy repair and direct-launch check')
     p.add_argument('--report-only', action='store_true',
                    help='measure and report, never exit 1 for speed (a before/after measurement of an old build)')
     a = p.parse_args()
+    if a.only_install_path and not a.previous_app:
+        p.error('--only-install-path requires an earlier bundle in the guest')
     sys.path.insert(0, str(HERE))
     from relaunch import guest  # the committed helper
 
@@ -565,6 +572,71 @@ def main():
                  + ' --out ' + shlex.quote(work + '/' + name) + ' ; echo "probe exit $?"', 3600)
         (a.out / (name + '.probe.txt')).write_text(said + '\n')
         return said
+
+    def tree_of(app):
+        return g('python3 -c ' + shlex.quote(
+            'import importlib.util as u; s=u.spec_from_file_location("w", %r); m=u.module_from_spec(s); '
+            's.loader.exec_module(m); print(m.receipt_tree_sha256(%r))' % (work + '/launch-speed-walk.py', app)), 900)
+
+    def check_install_path():
+        # Use the guest's actual account for this check. The timed routes use fixture
+        # homes and cannot exercise a legitimate write to the system installation.
+        q = shlex.quote
+        home = g('cd "$HOME" && pwd -P')
+        user_app = home + '/Applications/RichOS.app'
+        root = home + '/Applications/.richos-updater'
+        g('test ! -e ' + q(user_app) + ' && test ! -L ' + q(user_app) + ' && test ! -e ' + q(root))
+        install(a.previous_app)
+        receipt = json.dumps({
+            'version': version, 'archive_sha256': hashlib.sha256(b'legacy-install-path').hexdigest(),
+            'tree_sha256': tree_of(staged[0]), 'executable_name': 'richos-tauri',
+        })
+        g('mkdir -p ' + q(home + '/Applications') + ' && mkdir -m 700 ' + q(root)
+          + ' && ditto ' + q(staged[0]) + ' ' + q(user_app)
+          + ' && (umask 077 && printf %s ' + q(receipt) + ' > ' + q(root + '/published.json') + ')', 600)
+
+        def probe(label, owns):
+            run_plan(label, [richos(label, home, owns, frame_at=2)])
+            evidence = a.out / 'install-path-evidence'
+            evidence.mkdir(exist_ok=True)
+            local = evidence / (label + '-probe.json')
+            subprocess.run([str(HERE / 'guest.sh'), a.vm, '--pull', work + '/' + label + '/probe.json',
+                            str(local)], check=True, timeout=120)
+            row, = json.loads(local.read_text())['results']
+            if not row['pid'] or not row['all_gone'] or row['quit'] != 'quit from its own menu':
+                raise RuntimeError(label + ' never completed an owned launch and clean quit')
+            line = next((e['text'] for e in row['lines'] if LAUNCH_LINE in e['text']), None)
+            if not line:
+                raise RuntimeError(label + ' has no launch timing record')
+            return line
+
+        transition = probe('install-path-legacy', [INSTALLED, user_app])
+        if 'hand-over' not in transition:
+            raise RuntimeError('the legacy launch did not reach the candidate via handover')
+        installed_version = '$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" ' + q(INSTALLED + '/Contents/Info.plist') + ')'
+        migrated = ('[ -L ' + q(user_app) + ' ] && [ "$(readlink ' + q(user_app) + ')" = ' + q(INSTALLED)
+                    + ' ] && [ "' + installed_version + '" = ' + q(version)
+                    + ' ] && [ ! -e ' + q(root + '/install-migration.json') + ' ]')
+        result = g('for i in $(seq 300); do if ' + migrated + '; then echo migrated; exit 0; fi; sleep 0.1; done', 45)
+        if result != 'migrated':
+            raise RuntimeError('a clean quit left the original Applications copy on the previous version')
+        direct = probe('install-path-direct', [INSTALLED])
+        if 'hand-over' in direct:
+            raise RuntimeError('the original Applications location did not launch the candidate directly')
+
+    def install_path_result():
+        try:
+            check_install_path()
+        except Exception as error:
+            return {'id': 'install-path', 'check': 'the original Applications location opens the update directly',
+                    'pass': False, 'detail': str(error)[:500]}
+        return {'id': 'install-path', 'check': 'the original Applications location opens the update directly', 'pass': True}
+
+    if a.only_install_path:
+        result = install_path_result()
+        (a.out / 'install-path.json').write_text(json.dumps(result, indent=1) + '\n')
+        print(json.dumps(result))
+        return 0 if result['pass'] else 1
 
     # No Dictionary launch: the guest's slowness is the fixed ratio on record (WARM_RATIO, COLD_RATIO).
     install(staged[0])
@@ -662,9 +734,6 @@ def main():
             richos('checks:after', homes['checks'], fresh)]))
     if a.previous_app and not a.only_checks:
         try:
-            # (No route of an older copy in /Applications handing over to an update in ~/Applications:
-            # the update replaces the copy the user opens, so no real user has two copies; the lead,
-            # 2026-11-14: "it was a leftover from the CEO's own testing".)
             # THE PLAN'S ROUTE 3: the first launch after an update put in place at quit. The older copy is
             # in this home's ~/Applications as an update leaves it, the candidate is prepared as its
             # update, the older copy is started and quit (its helper puts the candidate in place as it
@@ -673,9 +742,6 @@ def main():
             after = payload + '/home-after-update'
             g('rm -rf ' + shlex.quote(after) + ' && cp -cRp ' + shlex.quote(fixture) + ' ' + shlex.quote(after)
               + ' && mkdir -p ' + shlex.quote(after + '/Applications'))
-            tree_of = lambda app: g('python3 -c ' + shlex.quote(
-                'import importlib.util as u; s=u.spec_from_file_location("w", %r); m=u.module_from_spec(s); '
-                's.loader.exec_module(m); print(m.receipt_tree_sha256(%r))' % (work + '/launch-speed-walk.py', app)), 900)
             older_receipt = json.dumps({'version': facts['older'], 'archive_sha256': hashlib.sha256(b'older').hexdigest(),
                                         'tree_sha256': tree_of(a.previous_app), 'executable_name': 'richos-tauri'})
             new_sha = hashlib.sha256(a.candidate.name.encode() + b'-after-update').hexdigest()
@@ -772,6 +838,8 @@ def main():
     facts['playing'] = splash_playing(a.out / 'launch-speed' / 'fresh')
     summary = verdict(rows, planned, WARM_LIMIT_MS, WARM_RATIO, WARM_INPUTS, limits, a.full_runs)
     checks = check_results(results) if a.checks or a.only_checks else []
+    if a.previous_app and not a.only_checks and not a.report_only:
+        checks.append(install_path_result())
     report = {'facts': facts, 'summary': summary, 'sentence': sentence(summary), 'launches': rows,
               'checks': checks, 'refusing': not a.report_only,
               'instances': [{'label': r['label'], 'pid': r['pid'], 'quit': r['quit'], 'all_gone': r['all_gone']}

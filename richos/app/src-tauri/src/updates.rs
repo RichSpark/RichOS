@@ -648,6 +648,9 @@ pub async fn check(app: &AppHandle) -> UpdateView {
                     v.available_version = Some(s.publication.version);
                     v.ready_is_rollback = s.rollback;
                     v.percent = Some(100);
+                    // A failure read earlier (a denied swap, before Try again) is not true of
+                    // a ready update: its technical reason must not stay on screen under it.
+                    v.failure = None;
                 })
             }
             // A shared startup cannot retire an obsolete prepared receipt. It must
@@ -1356,8 +1359,18 @@ pub fn update_state(app: AppHandle) -> UpdateView {
     app.state::<Updates>().snapshot()
 }
 
+/// The press of Check for updates, which is also the Try again of a failure. Only the press
+/// asks again whether a denied exchange into Applications may go through now
+/// (`retry_after_denial`), and clears the denial once the permission is granted. The automatic
+/// check leaves it on screen.
 #[richos_command::command]
 pub async fn update_check(app: AppHandle) -> UpdateView {
+    #[cfg(target_os = "macos")]
+    if let Ok(home) = app.path().home_dir() {
+        if let Err(error) = richos_user_update::retry_after_denial(&home) {
+            eprintln!("[richos] update check: the saved permission denial stays: {error}");
+        }
+    }
     check(&app).await
 }
 

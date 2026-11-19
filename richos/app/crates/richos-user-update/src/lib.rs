@@ -21,6 +21,8 @@ use std::{
     sync::RwLock,
 };
 
+mod install_path;
+
 const APP: &str = "RichOS.app";
 const ID: &str = "com.richos.app";
 /// Cumulative expanded size a downloaded update archive may reach before extraction refuses.
@@ -511,6 +513,18 @@ impl StartupLease {
     }
     pub fn session_fd(&self) -> i32 {
         self.file.as_raw_fd()
+    }
+
+    /// Select the actual installation before publishing a prepared update.
+    pub fn remember_installation(&mut self, bundle: &Path, version: &str) -> io::Result<()> {
+        if !self.can_activate() || !install_path::has_startup_work(&self.home, bundle) {
+            return Ok(());
+        }
+        let root = root(&self.home)?;
+        validate_lease_file(&self.file, &root)?;
+        let _lock = Lock::acquire_startup(&root)?;
+        install_path::recover_migration(&root, bundle, version)?;
+        install_path::remember(&root, bundle, version)
     }
     /// Call immediately before the normal app runtime. Keep this object alive until exit.
     /// Failure is a startup refusal, never permission to run without session exclusion.
@@ -1144,19 +1158,18 @@ pub enum BundleRecheck {
 /// threads.
 pub fn recheck_preferred(home: &Path, running: &Path) -> io::Result<BundleRecheck> {
     let root = root(home)?;
-    let p = {
+    let (p, app) = {
         let _lock = Lock::acquire(&root)?;
         match read_json(&root.join("published.json")) {
-            Ok(p) => p,
+            Ok(p) => (p, install_path::destination(&root)?),
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(BundleRecheck::NotPreferred),
             Err(e) => return Err(e),
         }
     };
-    let preferred = p.executable(home);
+    let preferred = app.join("Contents/MacOS").join(&p.executable_name);
     if running.canonicalize()? != preferred.canonicalize()? {
         return Ok(BundleRecheck::NotPreferred);
     }
-    let app = home.join("Applications").join(APP);
     if matches(&app, &p).unwrap_or(false) {
         return Ok(BundleRecheck::Confirmed);
     }
@@ -1329,7 +1342,7 @@ fn probe(_app: &Path, _p: &Published) -> io::Result<()> {
 fn quarantine_invalid_pending(root: &Path, p: &Published) -> io::Result<bool> {
     let tx = root.join(&p.archive_sha256);
     owned_dir(&tx)?;
-    let dest = root.parent().unwrap().join(APP);
+    let dest = install_path::destination(root)?;
     let previous = optional_json(&tx.join("previous.json"))?;
     let published = optional_json(&root.join("published.json"))?;
     let unchanged = previous
@@ -1355,12 +1368,13 @@ fn recover(root: &Path) -> io::Result<Option<Activation>> {
         Err(e) => return Err(e),
     };
     let authorized = rollback_receipt(root, &p)?;
-    let dest = root.parent().unwrap().join(APP);
+    let dest = install_path::destination(root)?;
     let transaction = root.join(&p.archive_sha256);
     owned_dir(&transaction)?;
     let incoming = transaction.join("incoming.app");
     let mut left = None;
     if !matches(&dest, &p)? {
+        install_path::preflight(root, &dest)?;
         if !matches(&incoming, &p).unwrap_or(false) {
             quarantine_invalid_pending(root, &p)?;
             return Err(refuse("prepared update no longer matches its receipt"));
@@ -1406,7 +1420,7 @@ fn recover(root: &Path) -> io::Result<Option<Activation>> {
                     executable_name: bundle_identity(&dest, None)?,
                 };
                 write_json(&transaction, "previous.json", &previous)?;
-                exchange(&incoming, &dest)?;
+                install_path::exchange_update(root, &incoming, &dest, &p)?;
             }
             Err(e) if e.kind() == io::ErrorKind::NotFound => fs::rename(&incoming, &dest)?,
             Err(e) => return Err(e),
@@ -1415,7 +1429,7 @@ fn recover(root: &Path) -> io::Result<Option<Activation>> {
     // Replay may observe the exchanged destination after a crash before either fsync.
     // Always persist both rename directories before committing the publication receipt.
     sync(&transaction)?;
-    sync(root.parent().unwrap())?;
+    sync(dest.parent().unwrap())?;
     if !matches(&dest, &p)? || bundle_identity(&dest, Some(&p.version))? != p.executable_name {
         return Err(refuse("published update verification failed"));
     }
@@ -1726,13 +1740,15 @@ fn stage(
     let _stage = Lock::named(&root, "stage.lock")?;
     let mut session = StartupLease::acquire(home)?;
     session.begin_session()?;
+    let dest = install_path::destination(&root)?;
+    install_path::preflight(&root, &dest)?;
     let offered = semver::Version::parse(version).map_err(|_| refuse("invalid offered version"))?;
     let archive_sha256 = digest(bytes);
     let superseded = match read_json(&root.join("prepared.json")) {
         Ok(p) => {
             let incoming_matches =
                 matches(&root.join(&p.archive_sha256).join("incoming.app"), &p).unwrap_or(false);
-            let published_matches = matches(&home.join("Applications").join(APP), &p)?;
+            let published_matches = matches(&dest, &p)?;
             if p.archive_sha256 == archive_sha256
                 && p.version == version
                 && (incoming_matches || published_matches)
@@ -1803,7 +1819,7 @@ fn stage(
         Ok(p) => {
             if p.archive_sha256 == archive_sha256
                 && p.version == version
-                && matches(&home.join("Applications").join(APP), &p)?
+                && matches(&dest, &p)?
             {
                 return Ok(p);
             }
@@ -1950,12 +1966,27 @@ pub fn activate_prepared(
     let root = root(&lease.home)?;
     validate_lease_file(&lease.file, &root)?;
     let _lock = Lock::acquire_startup(&root)?;
+    let dest = install_path::destination(&root)?;
+    if metadata(&root.join("prepared.json")).is_ok() {
+        install_path::require_repaired_installation(&root)?;
+    }
     match read_json(&root.join("prepared.json")) {
+        Ok(p) if !install_path::supports_version(&root, &p.version)? => {
+            // Retired, not kept: a receipt this location can never take would otherwise stay
+            // ready on the update surface and hold back every later update.
+            let transaction = root.join(&p.archive_sha256);
+            owned_dir(&transaction)?;
+            fs::rename(root.join("prepared.json"), transaction.join("obsolete.json"))?;
+            sync(&transaction)?;
+            clear_rollback(&root)?;
+            sync(&root)?;
+            return Err(refuse("this version predates updates at the current install location"));
+        }
         // An authorized rollback is DELIBERATELY not newer, so it must not be retired here
         // as an obsolete forward update. Whether it still applies is decided by `recover`,
         // against the bundle actually on disk, under the same lock as the exchange.
         Ok(p) if !p.is_newer_than(running_version)? && rollback_receipt(&root, &p)?.is_none() => {
-            if matches(&lease.home.join("Applications").join(APP), &p)? {
+            if matches(&dest, &p)? {
                 // The new image can be loaded after an exchange but before its receipt
                 // is durable. Complete exactly that receipt without exchanging or exec.
                 recover(&root)?;
@@ -1998,8 +2029,11 @@ pub fn staged(home: &Path) -> io::Result<Option<Staged>> {
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(e),
     };
+    let dest = install_path::destination(&root)?;
+    install_path::preflight(&root, &dest)?;
+    install_path::check_exchange_permission(&root, &p)?;
     if !matches(&root.join(&p.archive_sha256).join("incoming.app"), &p)?
-        && !matches(&home.join("Applications").join(APP), &p)?
+        && !matches(&dest, &p)?
     {
         return Err(refuse(
             "pending update no longer matches its verified receipt",
@@ -2010,6 +2044,21 @@ pub fn staged(home: &Path) -> io::Result<Option<Staged>> {
         publication: p,
         rollback,
     }))
+}
+/// The user pressed Try again (or Check for updates) on the update surface. A denial saved by
+/// the last exchange into Applications is removed only when macOS lets this process change
+/// both sides of that exchange now (an extended attribute set and removed at once, refused
+/// exactly where the exchange is): [`staged`] then reports the update ready. While the
+/// permission is still missing the denial stays and the surface keeps saying so. The automatic
+/// check never calls this.
+pub fn retry_after_denial(home: &Path) -> io::Result<()> {
+    let root = root(home)?;
+    let _lock = Lock::acquire(&root)?;
+    match read_json(&root.join("prepared.json")) {
+        Ok(p) => install_path::retry_exchange_permission(&root, &p),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e),
+    }
 }
 /// What the last activation did, for the boot line and the update surface. `None` before
 /// this installation has ever activated anything (a hand-installed first copy).
@@ -2061,12 +2110,20 @@ fn resolve_rollback(root: &Path) -> io::Result<RollbackTarget> {
     let Some(published) = optional_json(&root.join("published.json"))? else {
         return Ok(RollbackTarget::NoRecord);
     };
+    // Two copies waiting for their repair: the history is the ~/Applications copy's, and the
+    // repair at quit makes Applications the install location, which no earlier version supports.
+    if install_path::legacy_split(root)? {
+        return Ok(RollbackTarget::NoRecord);
+    }
     let Some(previous) = optional_json(&root.join(&published.archive_sha256).join("previous.json"))?
     else {
         return Ok(RollbackTarget::NoRecord);
     };
     if !older(&previous.version, &published.version)? {
         return Ok(RollbackTarget::NotOlder(previous.version));
+    }
+    if !install_path::supports_version(root, &previous.version)? {
+        return Ok(RollbackTarget::NoRecord);
     }
     Ok(RollbackTarget::Available(previous.version))
 }
@@ -2120,6 +2177,11 @@ pub fn has_prepared(home: &Path) -> bool {
     metadata(&home.join("Applications/.richos-updater/prepared.json")).is_ok_and(|m| m.is_file())
 }
 
+/// A clean quit also repairs a legacy installation with two app bundles.
+pub fn needs_install_migration(home: &Path, opened: &Path) -> bool {
+    root(home).is_ok_and(|root| install_path::may_migrate(&root, opened))
+}
+
 /// AN UPDATE IS PUT IN PLACE WHEN THE APP CLOSES, NOT WHEN IT NEXT OPENS (Sage's plan
 /// 2026-11-14, rule 4). Run by the helper the quitting app leaves behind, once every RichOS session
 /// has ended: it takes the exclusive side of the session lease, reclaims payloads earlier updates
@@ -2138,7 +2200,17 @@ pub fn activate_at_quit(
     if !lease.can_activate() {
         return Ok(None);
     }
-    if let Err(error) = collect_retired(&mut lease, loaded_bundle) {
+    lease.remember_installation(loaded_bundle, running_version)?;
+    let root = root(home)?;
+    let migrated = {
+        let _lock = Lock::acquire_startup(&root)?;
+        install_path::migrate(&root, loaded_bundle, running_version)?
+    };
+    let loaded = loaded_bundle.canonicalize()?;
+    if migrated {
+        eprintln!("[richos] update at quit: moved the active installation into Applications");
+    }
+    if let Err(error) = collect_retired(&mut lease, &loaded) {
         // Reclaiming is housekeeping: a failure never holds back the update.
         eprintln!("[richos] update at quit: payload reclamation deferred: {error}");
     }
@@ -2166,6 +2238,13 @@ pub fn with_preferred<T>(
     home: &Path,
     action: impl FnOnce(&Published) -> io::Result<T>,
 ) -> io::Result<Option<T>> {
+    with_preferred_at(home, |publication, _| action(publication))
+}
+
+pub fn with_preferred_at<T>(
+    home: &Path,
+    action: impl FnOnce(&Published, &Path) -> io::Result<T>,
+) -> io::Result<Option<T>> {
     LAST_CHECK.with(|last| *last.borrow_mut() = None);
     let root = root(home)?;
     let _lock = Lock::acquire_startup(&root)?;
@@ -2174,7 +2253,7 @@ pub fn with_preferred<T>(
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(e),
     };
-    let app = home.join("Applications").join(APP);
+    let app = install_path::destination(&root)?;
     let started = std::time::Instant::now();
     if bundle_identity(&app, Some(&p.version))? != p.executable_name {
         return Err(refuse(
@@ -2198,7 +2277,7 @@ pub fn with_preferred<T>(
         millis: started.elapsed().as_millis() as u64,
     };
     LAST_CHECK.with(|last| *last.borrow_mut() = Some(check));
-    Ok(Some(action(&p)?))
+    Ok(Some(action(&p, &app)?))
 }
 
 #[cfg(test)]
@@ -2274,7 +2353,7 @@ mod tests {
             .unwrap()
             .join("Resources/fixture-version")
     }
-    fn archive(
+    pub(super) fn archive(
         version: &str,
         extra: impl FnOnce(&mut tar::Builder<GzEncoder<Vec<u8>>>),
     ) -> Vec<u8> {
