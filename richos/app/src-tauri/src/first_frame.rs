@@ -6,20 +6,13 @@
 //!
 //! The CEO, 2026-11-14: "THE JOB IS NOT ABOUT ONE FRAME. THE JOB AT HAND IS TO START SHOWING OUR
 //! ALREADY WELL-DESIGNED AND FULLY-BUILT SPLASH SCREEN IN WELL UNDER 500 MS AFTER BUTTON CLICK."
-//! So what counts is the page's own splash playing (`first_frame_painted`, the launch line's "page
-//! took over"). What this module does toward that: nothing runs before the window but the closed
-//! list (rule 3), and the work that used to start early waits for the page. The window's ground
-//! color and its commit only mean the window is never white while the page loads; they are not
-//! the splash and are not counted as it.
+//! Native timing and the page's first-paint acknowledgement measure different
+//! stages. The opening uses the chosen artwork and starts before WebKit. The
+//! window's ground keeps it dark while the picture or page prepares.
 //!
-//! # WHY
-//!
-//! The window was "ordered front" 0.2 s after the process started and reached the screen at 4 s:
-//! macOS shows a window's contents when the app's main thread next goes idle, and the start-up hook
-//! kept it busy. So the window is built with the splash's ground as its background ([`ground`]; it
-//! is never white, on any launch), and [`commit`] pushes it to the screen explicitly on the hook's
-//! next line (rule 2). From then on nothing the hook does can delay the first frame. The page loads
-//! underneath on the same ground and its splash plays as today.
+//! Present the initial window before other startup work. AppKit commits the
+//! window during its normal display transaction. Forcing a synchronous redraw
+//! from Tao's setup callback can reenter its event-loop lock.
 //!
 //! # WHAT WAITS FOR THE PAGE (rule 3)
 //!
@@ -52,23 +45,6 @@ pub fn ground(splash: bool, light_theme: bool) -> tauri::window::Color {
 pub fn color((r, g, b): (u8, u8, u8)) -> tauri::window::Color {
     tauri::window::Color(r, g, b, 255)
 }
-
-/// RULE 2: show what the window holds now, without waiting for the main thread to go idle: draw
-/// its views and flush the drawing to the window server. Main thread only (the setup hook).
-#[cfg(target_os = "macos")]
-pub fn commit(window: &tauri::WebviewWindow) {
-    use objc2::runtime::AnyObject;
-    use objc2::{class, msg_send};
-    let Ok(ns_window) = window.ns_window() else { return };
-    let ns_window = ns_window as *mut AnyObject;
-    // SAFETY: AppKit and Core Animation calls on the main thread, on this hook's own window.
-    unsafe {
-        let _: () = msg_send![ns_window, displayIfNeeded];
-        let _: () = msg_send![class!(CATransaction), flush];
-    }
-}
-#[cfg(not(target_os = "macos"))]
-pub fn commit(_window: &tauri::WebviewWindow) {}
 
 type Job = Box<dyn FnOnce() + Send>;
 /// `None` until the page took over; then the jobs have run and later ones run at once.
@@ -120,7 +96,7 @@ mod tests {
     use super::*;
 
     /// THE CLOSED LIST (plan rule 3). Every qualified call between the top of `main` and the
-    /// Tauri start, and in the setup hook up to `first_frame::commit`: what may run before the
+    /// Tauri start, and in the setup hook up to `launch_timing::mark_first_frame`: what may run before the
     /// splash's first frame is on the glass. The helper modes at the top of `main` exit before any
     /// window; the rest is the update step, the start-up alert, the data folder, the launch
     /// decision and record, the window's size, place, settings and background, and the window.
@@ -139,7 +115,7 @@ mod tests {
         "richos_core::search_tools::run_stdio", "richos_core::status_tools::run_stdio",
         // The saved pick and its opening's first picture (Sage's plan 2026-11-14, "the splash the
         // rules picked is playing within 380 ms of the click", section 5 item 5).
-        "splash_pick::pick_for", "splash_pick::parse_hex", "splash_player::reduce_motion", "splash_player::locate", "splash_player::prepare", "splash_player::show", "splash_player::did_not_attach", "first_frame::color",
+        "splash_pick::pick_for", "splash_pick::parse_hex", "splash_player::reduce_motion", "splash_player::locate", "splash_player::prepare", "first_frame::color",
         // WHAT THE PICK AND THE SPLASH'S OWN PAGE READ (round 74, the CEO's order of 2026-11-14):
         // his settings for the opening, what he has earned by this start (one write, only when
         // something is new), the facts the pick reads, and the record the page draws his opening
@@ -204,25 +180,31 @@ mod tests {
         let top = main.find("fn main() {").expect("fn main");
         let tauri = top + main[top..].find("tauri::Builder::default()").expect("the Tauri start");
         let hook = main.find(".setup(|app| {").expect("the setup hook");
-        let commit = hook + main[hook..].find("first_frame::commit(&window);").expect("the commit in the hook");
-        let before = without_comments(&main[top..tauri]) + "\n" + &without_comments(&main[hook..commit]);
+        let window = hook + main[hook..].find("launch_timing::mark_first_frame(kind == LaunchKind::Fresh);").expect("first window timing in the hook");
+        let before = without_comments(&main[top..tauri]) + "\n" + &without_comments(&main[hook..window]);
         let found = qualified_calls(&before);
         let allowed: std::collections::BTreeSet<String> = BEFORE_THE_FIRST_FRAME.iter().map(|s| s.to_string()).collect();
         let added: Vec<_> = found.difference(&allowed).collect();
         assert!(added.is_empty(),
                 "a call was added in front of the splash's first frame: {added:?}. Before the first frame runs only \
                  what that frame needs (richos-hq docs/plans/2026-11-14-splash-under-half-a-second.md, rule 3); \
-                 start anything else with first_frame::after_page, or after the commit.");
+                 start anything else with first_frame::after_page, or after opening the window.");
         for name in NEVER_BEFORE_THE_FIRST_FRAME {
             assert!(!before.contains(name), "{name} runs in front of the splash's first frame (rule 3)");
         }
-        // The window's background (the picked splash's ground) and its opening's first picture,
-        // then the commit, are what make the first frame the splash's own.
-        let before_commit = &main[hook..commit];
-        assert!(before_commit.contains(".background_color(match window_splash {")
-            && before_commit.contains("first_frame::color(splash_pick::parse_hex(&pick.ground)")
-            && before_commit.contains("first_frame::ground("));
-        assert!(before_commit.contains("splash_player::show(&window, pack)"), "the native layer goes in before the window commit");
+        let window_setup = &main[hook..window];
+        assert!(window_setup.contains(".background_color(match window_splash {")
+            && window_setup.contains("first_frame::color(splash_pick::parse_hex(&pick.ground)")
+            && window_setup.contains("first_frame::ground("));
+        assert!(window_setup.contains("start_native_window("), "a ready native pack uses the native first window");
+        let native = main.find("fn start_native_window(").expect("the native window path");
+        let native = &main[native..];
+        let overlay = native.find("splash_player::show_on_window").expect("the native layer attaches");
+        let visible = native.find("splash_player::window_visible").expect("the native window starts playback");
+        let webview = native.find(".add_child(").expect("the page joins the window later");
+        assert!(overlay < visible && visible < webview, "the native layer starts before WebKit is created");
+        assert!(!window_setup.contains("displayIfNeeded") && !native[..webview].contains("displayIfNeeded"),
+            "a synchronous AppKit redraw can reenter Tao setup");
     }
 
     #[test]

@@ -149,24 +149,79 @@ impl std::fmt::Display for SttError {
 /// from `richos_core::runtime::verify_engine`, which has just hashed every runtime file against
 /// `delivery.json`, `bin/whisper-cli` included. This crate does not depend on richos-core, so the
 /// shell hands the directory over rather than this crate finding the engine itself.
-static DELIVERED_RUNTIME_BIN: std::sync::RwLock<Option<PathBuf>> = std::sync::RwLock::new(None);
+#[derive(Clone)]
+enum DeliveredRuntimeBin {
+    Ready(Option<PathBuf>),
+    Checking(std::sync::Arc<std::sync::OnceLock<Option<PathBuf>>>),
+}
+
+static DELIVERED_RUNTIME_BIN: std::sync::RwLock<DeliveredRuntimeBin> =
+    std::sync::RwLock::new(DeliveredRuntimeBin::Ready(None));
 
 /// Tell the resolver where the verified engine runtime's executables are (`<runtime>/bin`), or
 /// that this launch has none.
 pub fn set_delivered_runtime_bin(dir: Option<PathBuf>) {
     if let Ok(mut held) = DELIVERED_RUNTIME_BIN.write() {
-        *held = dir;
+        if let DeliveredRuntimeBin::Checking(previous) = &*held {
+            drop(previous.set(None));
+        }
+        *held = DeliveredRuntimeBin::Ready(dir);
     }
 }
 
+/// Verify the delivered runtime on a worker. A consumer that needs the decoder
+/// joins the same verification before resolving a binary.
+pub fn check_delivered_runtime_bin<T>(
+    verify: impl FnOnce() -> (Option<PathBuf>, T) + Send + 'static,
+    after_check: impl FnOnce(T) + Send + 'static,
+) -> std::io::Result<()> {
+    struct Completion(std::sync::Arc<std::sync::OnceLock<Option<PathBuf>>>);
+    impl Drop for Completion {
+        fn drop(&mut self) {
+            // Release any waiting consumer if startup fails or the worker unwinds.
+            drop(self.0.set(None));
+        }
+    }
+
+    let result = std::sync::Arc::new(std::sync::OnceLock::new());
+    {
+        let mut held = DELIVERED_RUNTIME_BIN.write().unwrap_or_else(|error| error.into_inner());
+        *held = DeliveredRuntimeBin::Checking(result.clone());
+    }
+    let completion = Completion(result);
+    std::thread::Builder::new().name("richos-runtime-check".into()).spawn(move || {
+        let (dir, result) = verify();
+        drop(completion.0.set(dir));
+        drop(completion);
+        after_check(result);
+    })?;
+    Ok(())
+}
+
 fn delivered_runtime_bin() -> Option<PathBuf> {
-    DELIVERED_RUNTIME_BIN.read().ok().and_then(|held| held.clone())
+    let state = DELIVERED_RUNTIME_BIN.read().ok()?.clone();
+    let pending = match state {
+        DeliveredRuntimeBin::Ready(dir) => return dir,
+        DeliveredRuntimeBin::Checking(pending) => pending,
+    };
+    pending.wait();
+    // Setup can deliver a newer runtime while the boot check is still running.
+    let state = DELIVERED_RUNTIME_BIN.read().ok()?.clone();
+    match state {
+        DeliveredRuntimeBin::Ready(dir) => dir,
+        DeliveredRuntimeBin::Checking(result) => result.wait().clone(),
+    }
 }
 
 /// The directory [`set_delivered_runtime_bin`] last recorded, for a caller that hands it on to a
 /// process of its own: the dictation tool is started by the app and hears with the same decoder.
 pub fn delivered_runtime_bin_dir() -> Option<PathBuf> {
     delivered_runtime_bin()
+}
+
+/// Setup reads the same runtime and speech assets as voice readiness.
+pub fn wait_for_delivered_runtime_check() {
+    drop(delivered_runtime_bin());
 }
 
 /// Where a DEVELOPER's own `whisper-cli` may be (Homebrew on Apple silicon, then Intel, then the

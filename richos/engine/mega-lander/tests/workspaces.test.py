@@ -6540,7 +6540,7 @@ class SecondReview_NoWorkLandsUnreviewed(Base):
         with open(os.path.join(record, "verdict.json"), "w") as f:
             json.dump({"answer": {"reviewed_commit": tip, "verdict": verdict, "findings": found}}, f)
         row = {"id": rid, "repo": repo or self.other, "tip": tip, "verdict": verdict, "trigger": trigger,
-               "reviewer": "codex", "reviewer_model": "gpt-6.1-sol", "findings": len(found),
+               "reviewer": "codex", "reviewer_model": "gpt-6.2-sol", "findings": len(found),
                "p1": sum(1 for p, _t in findings if p == 1), "record": record,
                "finished_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
         if not legacy:
@@ -8033,7 +8033,7 @@ class SecondReview_AMidJobVerdictReachesTheRunningTeammate(Base):
                 {"priority": 1, "title": title, "files": ["a.rs:9"], "evidence": "a fixture shows it",
                  "fixture": ""}], "not_yet_claimed": []}}, f)
         row = {"id": rid, "repo": self.other, "tip": "f" * 40, "work": work, "verdict": verdict,
-               "trigger": trigger, "reviewer": "codex", "reviewer_model": "gpt-6.1-sol", "findings": 1, "p1": 1,
+               "trigger": trigger, "reviewer": "codex", "reviewer_model": "gpt-6.2-sol", "findings": 1, "p1": 1,
                "record": record,
                "finished_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(finished or time.time()))}
         with open(self.ledger, "a") as f:

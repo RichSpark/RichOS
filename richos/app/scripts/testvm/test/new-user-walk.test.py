@@ -552,10 +552,12 @@ class SettingsButtonToggles(unittest.TestCase):
             frame=lambda _: self.OPEN if state['open'] else self.SHUT)
         return stub, state
 
-    def walked(self, stub, want):
+    def walked(self, stub, want, ticks=None):
         import itertools
+        if ticks is None:
+            ticks = itertools.count()
         with mock.patch.object(walk, 'guest', return_value=''), mock.patch.object(walk.time, 'sleep'), \
-             mock.patch.object(walk.time, 'monotonic', side_effect=itertools.count(0, 1)):
+             mock.patch.object(walk.time, 'monotonic', side_effect=ticks):
             return walk.NewUserWalk.settings(stub, want, 'frame')
 
     def test_one_press_opens_it_and_a_misread_heading_never_presses_again(self):
@@ -568,6 +570,22 @@ class SettingsButtonToggles(unittest.TestCase):
         state['open'] = True
         self.assertEqual(self.walked(stub, False), self.SHUT)
         self.assertEqual(state, {'open': False, 'presses': 1})
+
+    def test_the_final_frame_can_confirm_settings_opened_after_an_ocr_miss(self):
+        stub, state = self.app()
+        stub.frame = mock.Mock(side_effect=[self.SHUT, self.OPEN])
+        self.assertEqual(self.walked(stub, True, ticks=[0, 0, walk.SETTINGS_WITHIN]), self.OPEN)
+        self.assertEqual(stub.frame.call_count, 2)
+        self.assertEqual(state['presses'], 1)
+
+    def test_an_unresponsive_button_fails_even_if_the_final_ocr_matches(self):
+        stub, _ = self.app()
+        stub.ax = mock.Mock()
+        stub.frame = mock.Mock(return_value=self.OPEN)
+        with self.assertRaisesRegex(walk.StepFailed, r'did not open.*panel node: None'):
+            self.walked(stub, True)
+        stub.ax.assert_called_once_with('click', '--id', 'set-btn', '--first')
+        stub.frame.assert_called_once_with('frame')
 
     def test_a_panel_already_in_the_state_asked_for_is_not_pressed(self):
         stub, state = self.app()

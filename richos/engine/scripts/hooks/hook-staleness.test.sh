@@ -225,7 +225,7 @@ if os.path.isfile(mpath):
         if line and not line.startswith("#") and "|" in line:
             k, mod = line.split("|", 1)
             manifest.setdefault(k.strip(), []).append(mod.strip())
-rows = set()
+rows = {("Plugin module", "-", m) for m in d.get("modules", [])}
 for ev, entries in d.get("hooks", {}).items():
     for e in entries:
         matcher = e.get("matcher", "") or "-"
@@ -254,6 +254,70 @@ if [ -z "$OUT" ]; then
 else
     bad "2   unchanged session is silent" "(said: $OUT)"
 fi
+
+# The plugin host loads module registrations separately from command hooks.
+# Use the same basename in a different directory to check that the row retains
+# the entire registered path.
+RMOD="$(make_sandbox)"
+take_baseline "$RMOD"
+MODULE="./fixture/answer-permission-prompt.ts"
+python3 - "$RMOD/hooks.json" "$MODULE" <<'PYMODULE'
+import json, sys
+path, module = sys.argv[1:]
+with open(path) as fh:
+    doc = json.load(fh)
+doc.setdefault("modules", []).append(module)
+with open(path, "w") as fh:
+    json.dump(doc, fh)
+PYMODULE
+OUT="$(run_notice "$RMOD")"
+case "$OUT" in
+    *"$MODULE"*"RESTART THIS SESSION"*)
+        ok "2m  new plugin module path is identified as a host registration" ;;
+    *)  bad "2m  new plugin module asks for restart" "$OUT" ;;
+esac
+OUT="$(run_notice "$RMOD")"
+[ -z "$OUT" ] && ok "2m2 unchanged module drift is announced once" \
+              || bad "2m2 duplicate module notice" "$OUT"
+
+take_baseline "$RMOD" "modboot-0000"
+OUT="$(run_notice "$RMOD" "modboot-0000")"
+[ -z "$OUT" ] && ok "2m3 a session started with the module is quiet" \
+              || bad "2m3 an unchanged module raised drift" "$OUT"
+cp "$REAL_HOOKS" "$RMOD/hooks.json"
+OUT="$(run_notice "$RMOD" "modboot-0000")"
+case "$OUT" in
+    *"REMOVED"*"$MODULE"*"/reload-plugins"*)
+        ok "2m4 a removed plugin module is named with reload guidance" ;;
+    *)  bad "2m4 removed plugin module asks for reload" "$OUT" ;;
+esac
+
+# Replay a snapshot from a session started before module rows were recorded.
+RLEGACY="$(make_sandbox)"
+take_baseline "$RLEGACY"
+python3 - "$RLEGACY/.claude/state/enforcing-hooks-${SESSION_SHORT}.snapshot" <<'PYLEGACY'
+from pathlib import Path
+import re, sys
+path = Path(sys.argv[1])
+rows = path.read_text().splitlines()
+kept = [row for row in rows if not row.startswith("Plugin module\t")]
+removed = len(rows) - len(kept)
+kept[1] = re.sub(r"modules=tracked rows=(\d+)", lambda m: f"rows={int(m[1])-removed}", kept[1])
+path.write_text("\n".join(kept) + "\n")
+PYLEGACY
+OUT="$(run_notice "$RLEGACY")"
+case "$OUT" in
+    *"predates plugin module tracking"*"RESTART THIS SESSION"*)
+        ok "2m5 a legacy baseline asks for a restart to track modules" ;;
+    *)  bad "2m5 a legacy baseline must report its module coverage" "$OUT" ;;
+esac
+wire_hook "$RLEGACY/hooks.json" "Stop" "zz-fixture-legacy-baseline.sh"
+OUT="$(run_notice "$RLEGACY")"
+case "$OUT" in
+    *"zz-fixture-legacy-baseline.sh"*"RESTART THIS SESSION"*)
+        ok "2m6 a legacy baseline still detects new command registrations" ;;
+    *)  bad "2m6 a legacy baseline must still check command registrations" "$OUT" ;;
+esac
 
 # A REORDER is the classic spurious-diff generator: same set, different file.
 R2="$(make_sandbox)"

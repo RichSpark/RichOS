@@ -332,6 +332,9 @@ fn tool_search_notice(residency: Option<&str>) -> String {
 /// rather than at a frozen window.
 pub const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// A cache refresh is optional. Bound its reply wait so it cannot hold a lease indefinitely.
+const KEEP_ALIVE_REPLY_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// The `stop_reason` `prompt` returns when the agent acknowledged the cancel.
 ///
 /// **This is OURS on this wire, and that is a real change from the file this replaces.**
@@ -486,6 +489,8 @@ pub enum NativeError {
     Json(#[from] serde_json::Error),
     #[error("claude channel closed (child exited?)")]
     Closed,
+    #[error("the keep-alive reply timed out")]
+    KeepAliveTimeout,
     /// **The child ended in the middle of a turn without a `result` — WITH ITS OWN WORDS.**
     /// Until 2026-10-21 this was [`NativeError::Closed`], which carries nothing, so the turn's
     /// reason said "claude channel closed" whatever the child had printed on its way out, and
@@ -3783,6 +3788,10 @@ pub(crate) struct NativeResponse {
 
 impl NativeResponse {
     pub(crate) fn wait(self, on_item: &mut dyn FnMut(TurnItem)) -> Result<String, NativeError> {
+        self.wait_until(on_item, None)
+    }
+
+    fn wait_until(self, on_item: &mut dyn FnMut(TurnItem), keep_alive_deadline: Option<std::time::Instant>) -> Result<String, NativeError> {
         let Self { rx, command_uuid, current_prompt, session_id } = self;
         // THE shared per-turn counter (§1.4 G1). Advanced only when an item is actually
         // delivered — a frame that normalizes to nothing consumes no position.
@@ -3855,7 +3864,8 @@ impl NativeResponse {
             NativeError::Protocol(crate::claude_accounts::usage_limit_error(resets_at, &detail))
         };
         loop {
-            let received = match cancel_deadline {
+            let deadline = cancel_deadline.into_iter().chain(keep_alive_deadline).min();
+            let received = match deadline {
                 None => rx.recv().map_err(|_| RecvTimeoutError::Disconnected),
                 Some(deadline) => match deadline.checked_duration_since(std::time::Instant::now()) {
                     Some(remaining) => rx.recv_timeout(remaining),
@@ -3921,14 +3931,15 @@ impl NativeResponse {
                     }
                     return native_result(&result);
                 }
-                Err(RecvTimeoutError::Timeout) if cancel_deadline.is_none() => continue,
                 Err(RecvTimeoutError::Timeout) => {
-                    // The agent was told to interrupt and did not answer within the grace
-                    // window. Stop rendering this turn — and DETACH the sink first, so
+                    // The interrupt grace or hidden reply deadline elapsed. Detach the sink so
                     // anything the agent says afterwards cannot be routed into whatever turn
                     // runs next. What was already said is released first: it is this turn's.
                     release(&mut seq, on_item, &mut spelling, &mut aside, &session_id);
                     current_prompt.lock().unwrap().retain(|pending| pending.command_uuid != command_uuid);
+                    if keep_alive_deadline.is_some() {
+                        return Err(NativeError::KeepAliveTimeout);
+                    }
                     return Ok(STOP_REASON_CANCEL_UNACKNOWLEDGED.to_string());
                 }
                 Err(RecvTimeoutError::Disconnected) => {
@@ -4911,6 +4922,56 @@ impl Drop for NativeCognition {
     }
 }
 
+impl NativeCognition {
+    /// A hidden refresh runs with the standing continuity grant closed. Only an idle lease
+    /// may start one, since a silent provider has to be retired on expiry.
+    fn keep_chat_alive_with_timeout(&mut self, timeout: Duration) -> Result<crate::cognition::PendingReply, CognitionError> {
+        if crate::cognition::account_resume_blocked(self)
+            || self.client.background_commands().iter().any(|command| command.ended.is_none())
+            || self.worker_status().is_some_and(|view| !crate::work_gate::workers(&view).0.permits_action())
+        {
+            return Err(CognitionError::Protocol("This connection has work in progress; it is not idle.".into()));
+        }
+        let operation = self.client.operation_cancel.clone();
+        let closed: Vec<std::path::PathBuf> = {
+            let _stop = operation.lock().unwrap();
+            self.client.action_grants.iter()
+                .filter_map(|grant| match grant { ActionGrant::Continuity(path) => Some(path.clone()), _ => None })
+                .filter(|path| path.exists() && crate::ecs::close_for_keep_alive(path).unwrap_or(false))
+                .collect()
+        };
+        let reopen = move || {
+            let _stop = operation.lock().unwrap();
+            for path in &closed {
+                if let Err(error) = crate::ecs::reopen_after_keep_alive(path) {
+                    eprintln!("[richos] keep chat alive: the grant at {} was not put back: {error}", path.display());
+                }
+            }
+        };
+        let reply = match self.client.enqueue_prepared(crate::chat_cache::KEEP_ALIVE_TEXT, None, None) {
+            Ok(reply) => reply,
+            Err(error) => { reopen(); return Err(error.into()); }
+        };
+        let started = std::time::Instant::now();
+        let closed = self.client.reader_closed.clone();
+        let fence = self.client.child.fence();
+        Ok(crate::cognition::PendingReply::new(move |on_item| {
+            let ended = reply.wait_until(on_item, Some(started + timeout));
+            if matches!(ended, Err(NativeError::KeepAliveTimeout)) {
+                // A late result on this connection could be mistaken for the next input's
+                // result. Keep its grant closed and resume through the normal lease opener.
+                closed.store(true, Ordering::SeqCst);
+                fence.kill();
+                return Err(CognitionError::Io(format!(
+                    "keep-alive reply timed out after {} ms; the connection was retired", started.elapsed().as_millis()
+                )));
+            }
+            reopen();
+            ended.map_err(CognitionError::from)
+        }))
+    }
+}
+
 impl Cognition for NativeCognition {
     fn is_closed(&self)->bool {self.client.reader_closed.load(Ordering::SeqCst)}
     fn set_app_messages(&mut self,messages:Vec<(String,String)>) {self.app_messages=messages;}
@@ -5144,34 +5205,7 @@ impl Cognition for NativeCognition {
     /// closed for as long as it runs and put back after, under the lock a Stop revokes under, so
     /// a Stop that lands meanwhile stays a Stop (`ecs::reopen_after_keep_alive`).
     fn keep_chat_alive(&mut self) -> Result<crate::cognition::PendingReply, CognitionError> {
-        if self.has_pending_input() {
-            return Err(CognitionError::Protocol("This connection has input waiting; it is not idle.".into()));
-        }
-        let operation = self.client.operation_cancel.clone();
-        let closed: Vec<std::path::PathBuf> = {
-            let _stop = operation.lock().unwrap();
-            self.client.action_grants.iter()
-                .filter_map(|grant| match grant { ActionGrant::Continuity(path) => Some(path.clone()), _ => None })
-                .filter(|path| path.exists() && crate::ecs::close_for_keep_alive(path).unwrap_or(false))
-                .collect()
-        };
-        let reopen = move || {
-            let _stop = operation.lock().unwrap();
-            for path in &closed {
-                if let Err(error) = crate::ecs::reopen_after_keep_alive(path) {
-                    eprintln!("[richos] keep chat alive: the grant at {} was not put back: {error}", path.display());
-                }
-            }
-        };
-        let reply = match self.client.enqueue_prepared(crate::chat_cache::KEEP_ALIVE_TEXT, None, None) {
-            Ok(reply) => reply,
-            Err(error) => { reopen(); return Err(error.into()); }
-        };
-        Ok(crate::cognition::PendingReply::new(move |on_item| {
-            let ended = reply.wait(on_item).map_err(CognitionError::from);
-            reopen();
-            ended
-        }))
+        self.keep_chat_alive_with_timeout(KEEP_ALIVE_REPLY_TIMEOUT)
     }
 
     fn enqueue_prompt(&mut self, text: &str, started: Box<dyn FnOnce() -> Result<(), String> + Send>) -> Result<crate::cognition::PendingReply, CognitionError> {
@@ -5682,6 +5716,19 @@ while True:
         let stopped = read();
         assert!(!stopped.actions_allowed, "the keep-alive's end reopened a grant the user's Stop had closed");
         assert_eq!(stopped.closed.map(|c| c.by), Some(crate::ecs::closed_by::STOP.to_string()));
+    }
+
+    #[test]
+    fn a_silent_keep_alive_retires_its_native_connection() {
+        let script = answers_from_a_file("silent-keep-alive", json!([]));
+        let root = script.parent().unwrap();
+        let mut cognition = NativeCognition::start(&script, root, &doctrine_fixture(), &skills_fixture()).unwrap();
+        let reply = cognition.keep_chat_alive_with_timeout(Duration::ZERO).unwrap();
+        assert!(cognition.has_pending_input());
+        let error = reply.wait(&mut |_| panic!("the silent fixture sent an item")).unwrap_err();
+        assert!(error.to_string().contains("keep-alive reply timed out"));
+        assert!(cognition.is_closed(), "the old connection must not take the next input");
+        assert!(!cognition.has_pending_input(), "the hidden reply sink must be detached");
     }
 
     /// **The CEO, 2026-10-07: the switch point rests on the tokens the app's own teammates

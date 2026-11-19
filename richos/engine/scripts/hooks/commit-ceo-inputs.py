@@ -181,7 +181,7 @@ import time
 # A message naming more paths than this is a paste, not a handover.
 MAX_CANDIDATES = 60
 
-# More commits than this from one message is refused wholesale (gate 7).
+# Per-wakeup capture limit. A message over this limit is refused as a paste (gate 7).
 MAX_COMMITS = 10
 
 # Above this the content gates cannot reasonably scan, so nothing is committed.
@@ -924,12 +924,13 @@ def pending_paths(state_dir):
                     latest.pop(p, None)
                 for r in rec.get("refused") or []:
                     if isinstance(r, dict) and r.get("path"):
+                        latest.pop(r["path"], None)
                         if r.get("pending"):
+                            # Attempted retries that still need a lease go to the back.
                             latest[r["path"]] = True
-                        else:
-                            latest.pop(r["path"], None)
-                for p in rec.get("reported") or []:
-                    latest.pop(p, None)
+                for key in ("reported", "resolved"):
+                    for p in rec.get(key) or []:
+                        latest.pop(p, None)
     except OSError:
         return []
     return list(latest)
@@ -989,24 +990,27 @@ def main():
     stamp = time.strftime("%Y-%m-%dT%H:%M:%S%z")
 
     cands = candidates(text)
-    # A file an earlier message handed over while another land held the lease
-    # is retried now, whatever this message says (see THE LAND LEASE above).
-    named = set(c for c, _s in cands)
-    cands += [(p, "pending") for p in pending_paths(state_dir) if p not in named] if state_dir else []
     truncated = len(cands) > MAX_CANDIDATES
-    cands = cands[:MAX_CANDIDATES]
+    queued = pending_paths(state_dir) if state_dir else []
+    queued_set = set(queued)
+    # Limit intake and retry discovery independently. An over-limit prompt
+    # must not classify an existing retry as part of the paste.
+    cands = cands[:MAX_CANDIDATES] + [(p, "pending") for p in queued[:MAX_COMMITS]]
 
     committed, refused, undecided, reported, pending, lease_notes = [], [], [], [], [], []
     held = {}
     states = {}
     seen = set()
-    unheld = []
+    unheld, retries, resolved = [], [], []
 
     for rawc, source in cands:
-        p = resolve(rawc, cwd)
-        if p is None or p in seen:
+        retry = source == "pending"
+        p = rawc if retry else resolve(rawc, cwd)
+        if p is None or p in seen or (not retry and p in queued_set):
             continue
         if not is_handover_file(p):
+            if retry:
+                resolved.append(p)
             continue
         seen.add(p)
         try:
@@ -1031,9 +1035,11 @@ def main():
                 }
             )
         elif state == "untracked":
-            unheld.append((p, repo, source))
+            (retries if retry else unheld).append((p, repo, source))
+        elif retry:
+            resolved.append(p)
 
-    # Gate 7 — a paste, not a handover.
+    # Gate 7 applies to new handovers only.
     if len(unheld) > MAX_COMMITS:
         for p, repo, _s in unheld:
             refused.append(
@@ -1048,7 +1054,9 @@ def main():
             )
         unheld = []
 
-    for p, repo, source in unheld:
+    # New handovers use the first slots. Retries that do not fit get no
+    # outcome in this wakeup, so their prior pending records still apply.
+    for p, repo, source in unheld + retries[:MAX_COMMITS - len(unheld)]:
         lease = "none"
         try:
             check_budget()
@@ -1215,6 +1223,7 @@ def main():
             "refused": [{"path": r["path"], "why": r["why"]} for r in refused]
                        + [{"path": r["path"], "why": r["why"], "pending": True} for r in pending],
             "reported": [r["path"] for r in reported],
+            "resolved": resolved,
             "undecided": [u["path"] for u in undecided],
         },
     )
