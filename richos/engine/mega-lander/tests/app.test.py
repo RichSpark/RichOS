@@ -1493,6 +1493,21 @@ class DesktopWork(unittest.TestCase):
         done=self.call("complete",{"obligation_id":"fixture-task","worker_ids":[args["worker_id"]]})
         self.assertTrue(done["obligation_closed"])
 
+    def test_an_independent_job_never_replaces_a_draft_pierce_refused(self):
+        """Only the draft's own revision replaces it (review rv-20261119T083123Z-9738b7dd-dddf):
+        an independent job of the same assignment leaves it retryable, and completion names it."""
+        draft=self.call("prepare",{**self.args,"request_id":"auth","title":"Implement authentication",
+                                   "brief":"Create auth.txt with FICTIONAL in the assigned target worktree. Commit only that file."})
+        self.app.dispatch_intent(self.scope,{"session_id":self.session,"tool_use_id":"call-auth",
+                                             "tool_input":draft["agent_call"]},review_refused=True)
+        args=self.reviewed_pair("billing")
+        self.assertEqual(self.receipt_of(draft)["status"],"prepared")
+        self.assertNotIn("settled",self.receipt_of(draft))
+        self.assertTrue(self.call("integrate",args)["work_integrated"])
+        with self.assertRaisesRegex(ValueError,"unresolved execution.*receipt %s \\(request auth, status prepared\\)"
+                                    % re.escape(draft["name"])):
+            self.call("complete",{"obligation_id":"fixture-task","worker_ids":[args["worker_id"]]})
+
     def test_completion_never_settles_a_dispatchable_parallel_worker(self):
         """Completion keeps work retryable after a refusal and a turn change."""
         args=self.reviewed_pair("landed")
