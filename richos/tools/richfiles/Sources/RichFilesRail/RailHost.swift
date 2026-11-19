@@ -128,7 +128,7 @@ private final class RailHost {
                                      acceptsKeyboard: { [weak self] in self?.hasPaneFocus() == true },
                                      returnKeyboardFocus: { [weak self] in self?.focusPane() },
                                      dockTarget: destination, didUndock: { [weak self] in self?.showChats() })
-            let container = NSView()
+            let container = RailPaneContainer()
             container.wantsLayer = true
             parent.addSubview(container, positioned: .above, relativeTo: webView)
             self.container = container
@@ -307,6 +307,15 @@ private final class RailHost {
                 if let window = hosting?.window { NSAlert(error: error).beginSheetModal(for: window, completionHandler: nil) }
             }
         }
+    }
+}
+
+/// Holds the pane so the rail tooltip can be cut out of it. The container itself never
+/// takes a click or scroll: while the pane is hidden, they reach the web view beneath.
+final class RailPaneContainer: NSView {
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        let hit = super.hitTest(point)
+        return hit === self ? nil : hit
     }
 }
 
