@@ -54,9 +54,9 @@ pub fn on_menu_undo<R: Runtime>(app: &AppHandle<R>) {
     let window = crate::conversation_window(app);
     let in_front = window.as_ref().is_some_and(|window| window.is_focused().unwrap_or(false));
     match (route(OFFERED.load(Ordering::SeqCst), in_front), window) {
+        // A page the event cannot reach gets text undo, as before.
         (Route::Page, Some(window)) => {
-            if let Err(error) = window.emit_to(window.label(), EVENT_MENU_UNDO, ()) {
-                eprintln!("[richos] Undo did not reach the page ({error}); undoing text instead");
+            if window.emit_to(window.label(), EVENT_MENU_UNDO, ()).is_err() {
                 send_undo();
             }
         }

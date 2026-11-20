@@ -252,20 +252,27 @@ window.RichChatList = (() => {
   // The Mac app's page never sees Command-Z: the menu's Undo takes it (src-tauri/src/chat_undo.rs).
   // So the shell is told while an Undo is on offer, and asks here with `rich://menu-undo`.
   // Each call waits for the one before, so the shell ends on the page's last word.
-  let menuUndoListening = false;
   let menuUndoSent = Promise.resolve();
   function offerToMenu(offered) {
-    if (offered && !menuUndoListening) {
-      menuUndoListening = true;
-      Bridge.listen("rich://menu-undo", () => {
-        if (undo && !textOwnsUndo(document.activeElement)) runUndo();
-        else Bridge.invoke("native_undo").catch(() => {});
-      });
-    }
     menuUndoSent = menuUndoSent.then(() => Bridge.invoke("set_chat_undo", { armed: offered })).catch(() => {});
   }
+  // main.js defines Bridge right after this file. A new page listens at once and withdraws any
+  // offer a closed window left behind.
+  setTimeout(() => {
+    if (typeof Bridge === "undefined") return;
+    Bridge.listen("rich://menu-undo", () => {
+      if (undo && !textOwnsUndo(document.activeElement)) runUndo();
+      else Bridge.invoke("native_undo").catch(() => {});
+    });
+    offerToMenu(false);
+  });
+  // A field edited since the Undo was offered owns Command-Z, even when the edit emptied it.
+  let editedSinceOffer = null;
+  document.addEventListener("input", (event) => { if (undo) editedSinceOffer = event.target; }, true);
   function textOwnsUndo(target) {
-    return !!target && (target.isContentEditable || (target.matches?.("textarea, input") && !!target.value));
+    if (!target) return false;
+    if (target.isContentEditable || target === editedSinceOffer) return true;
+    return !!(target.matches?.("textarea, input") && target.value);
   }
   function clearUndo(replacing) {
     if (!undo) return;
@@ -291,6 +298,7 @@ window.RichChatList = (() => {
     element.append(notice, button, node("span", "chat-undo-bar"));
     document.getElementById("rail").append(element);
     undo = { element, action, timer: setTimeout(clearUndo, 5000) };
+    editedSinceOffer = null;
     offerToMenu(true);
   }
   document.addEventListener("keydown", (event) => {
