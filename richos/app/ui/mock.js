@@ -3397,7 +3397,8 @@
       switch (cmd) {
         case "claude_quota": return {...quotaView(), ...(fableQuotaMock && {fableSwitch: fableQuotaMock})};
         case "set_fable_quota_switch": {
-          fableQuotaMock = { ...fableQuotaMock, enabled: !!args.enabled, ...(args.enabled ? {} : { active: {} }) };
+          fableQuotaMock = { ...fableQuotaMock, enabled: !!args.enabled,
+            ...(args.mode && { mode: args.mode }), ...(args.enabled ? {} : { active: {} }) };
           emit("rich://fable-quota-switch", fableQuotaMock);
           return { fableSwitch: fableQuotaMock };
         }

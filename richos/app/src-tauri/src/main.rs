@@ -6694,8 +6694,8 @@ fn claude_quota(state: State<AppState>, refresh: bool) -> richos_core::quota::Vi
 }
 
 #[richos_command::command]
-fn set_fable_quota_switch(state: State<AppState>, enabled: bool) -> Result<richos_core::quota::View, String> {
-    state.quota.set_fable_switch(enabled).map_err(|error| error.to_string())
+fn set_fable_quota_switch(state: State<AppState>, enabled: bool, mode: Option<richos_core::quota::fable::Mode>) -> Result<richos_core::quota::View, String> {
+    state.quota.set_fable_settings(enabled, mode).map_err(|error| error.to_string())
 }
 
 

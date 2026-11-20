@@ -67,6 +67,7 @@ struct UsageLimitHold {
     wait: std::time::Duration,
     session: String,
     account: String,
+    fable_move: bool,
 }
 
 #[derive(Default)]
@@ -378,23 +379,25 @@ impl WorkHost {
     fn usage_limit_hold(self: &Arc<Self>, backend: &Arc<Backend>, binding: &ThreadBinding, error: &str) -> Option<UsageLimitHold> {
         let limit = crate::claude_accounts::UsageLimit::from_error(error)?;
         let quota = self.quota.lock().unwrap().clone()?;
-        let (account, session) = {
+        let (account, session, fable_move) = {
             let mut slot = backend.lease.lock().unwrap();
             let lease = slot.as_mut()?;
             let account = lease.account()?.to_string();
             let session = lease.session_id().to_string();
-            if quota.fable_limit_reached(&account, lease.lease_model(), limit) {
+            let fable = quota.fable_limit_reached(&account, lease.lease_model(), limit);
+            if fable && quota.accounts.in_use().id == account {
                 if let Err(error) = crate::cognition::apply_model_for_turn(
                     Some(self.factory.as_ref()), lease.as_mut(), true,
                 ) {
                     eprintln!("[richos] Stu's fallback model could not be applied: {error}");
                     return None;
                 }
-                return Some(UsageLimitHold { wait: std::time::Duration::ZERO, session, account });
+                return Some(UsageLimitHold { wait: std::time::Duration::ZERO, session, account, fable_move: false });
             }
-            (account, session)
+            (account, session, fable)
         };
-        let continued = quota.limit_reached(&account, limit.resets_at) == crate::claude_accounts::AfterLimit::Continue;
+        let continued = fable_move
+            || quota.limit_reached(&account, limit.resets_at) == crate::claude_accounts::AfterLimit::Continue;
         // `Continue` says only that another account is in use, which it already is when another
         // conversation's turn moved there first; that account may since have been refused too
         // (review of e58c2c825, P2), or be used up by its readings with no refusal yet (second
@@ -410,15 +413,15 @@ impl WorkHost {
         // The Stop checks follow the session he is on now: a move just made is not his session
         // ending (`retry_stopped`).
         let session = backend.inner.lock().unwrap().lease_session.clone().unwrap_or(session);
-        let hold = UsageLimitHold {wait: std::time::Duration::ZERO, session, account};
-        if self.usage_limit_lifted(backend, &quota, &hold.account) {
+        let hold = UsageLimitHold {wait: std::time::Duration::ZERO, session, account, fable_move};
+        if self.usage_limit_lifted(backend, &quota, &hold) {
             return Some(hold);
         }
         let now = crate::util::now_millis();
         let limited = |id: &str| Self::gone_until(&quota, id);
         // With room he waits only for his own session to come free, at most to this account's
         // reset; without, for the soonest reset of the accounts.
-        let soonest = limited(&hold.account).into_iter().chain(next.as_deref().and_then(limited)).min();
+        let soonest = Self::limit_hold_until(&quota, &hold, now).into_iter().chain(next.as_deref().and_then(limited)).min();
         let held = (!room).then(|| quota.view().held_until).flatten();
         let until = held.or(soonest).unwrap_or(now);
         let wait = std::time::Duration::from_millis(until.saturating_sub(now));
@@ -448,7 +451,7 @@ impl WorkHost {
     fn usage_limit_waited(self: &Arc<Self>, backend: &Arc<Backend>, binding: &ThreadBinding,
         message: Option<&crate::session_tools::Message>, hold: &UsageLimitHold) -> bool {
         let quota = self.quota.lock().unwrap().clone();
-        let lifted = || quota.as_deref().is_some_and(|quota| self.usage_limit_lifted(backend, quota, &hold.account));
+        let lifted = || quota.as_deref().is_some_and(|quota| self.usage_limit_lifted(backend, quota, hold));
         // The Stop checks follow the session he is on: a move this hold makes is not his session
         // ending (as in `usage_limit_hold`).
         let session = std::cell::RefCell::new(hold.session.clone());
@@ -470,7 +473,7 @@ impl WorkHost {
             if let Some(now_on) = now_on { *session.borrow_mut() = now_on; }
             if lifted() { return true; }
             let Some(quota) = quota.as_deref() else { return true };
-            let Some(back) = Self::gone_until_at(quota, &hold.account, reached) else { return true };
+            let Some(back) = Self::limit_hold_until(quota, hold, reached) else { return true };
             let held = quota.view_at(reached).held_until.filter(|until| *until > reached);
             let until = held.map_or(back, |held| held.min(back));
             wait = std::time::Duration::from_millis(until.saturating_sub(crate::util::now_millis()));
@@ -626,12 +629,21 @@ impl WorkHost {
     /// use, is not gone itself, and nothing of his still holds his session on the refused one.
     /// Read by the hold before the retry, so it ends as soon as either is true rather than at
     /// the time it began with. "Gone" is [`Self::gone_until`].
-    fn usage_limit_lifted(&self, backend: &Backend, quota: &crate::quota::Service, account: &str) -> bool {
-        if Self::gone_until(quota, account).is_none() { return true; }
+    fn usage_limit_lifted(&self, backend: &Backend, quota: &crate::quota::Service, hold: &UsageLimitHold) -> bool {
+        if Self::limit_hold_until(quota, hold, crate::util::now_millis()).is_none() { return true; }
+        let account = hold.account.as_str();
         let in_use = quota.accounts.in_use().id;
+        if hold.fable_move && quota.using_opus_for_fable(account) && Self::gone_until(quota, account).is_none() {
+            return true;
+        }
         if in_use == account || Self::gone_until(quota, &in_use).is_some() { return false; }
         let lease = backend.lease.lock().unwrap();
         lease.as_ref().is_none_or(|current| current.account() != Some(account) || !Self::session_in_use(backend, current.as_ref()))
+    }
+
+    fn limit_hold_until(quota: &crate::quota::Service, hold: &UsageLimitHold, at: u64) -> Option<u64> {
+        hold.fable_move.then(|| quota.fable_refusal_until(&hold.account, at)).flatten()
+            .or_else(|| Self::gone_until_at(quota, &hold.account, at))
     }
 
     /// **`id` has no room for Stu's input, and until when**: a usage-limit refusal that has not
@@ -680,6 +692,13 @@ impl WorkHost {
             let input_id=input.input_id();
             let scope = host.message_scope(&binding);
             let succeeded=outcome.result.as_ref().is_ok_and(|reason| reason=="end_turn");
+            // A result taken by live input does not reach the between-turn sink. Close
+            // the automatic turn once, after the input actually ran, so a safe move can start.
+            if let Some(session) = session.as_deref()
+                .filter(|_| outcome.report_failure && Self::live_turn_ran(&outcome.result))
+            {
+                host.note_automatic_turn(&backend, session, false);
+            }
             let receipt = match &input {
                 InputReceipt::Peer(through) if succeeded=>crate::session_tools::acknowledge(&scope,"stu",*through),
                 InputReceipt::Peer(through)=>crate::session_tools::accept_live_handoff(&scope,"stu",*through),
@@ -770,12 +789,16 @@ impl WorkHost {
                 || frame["richos_requested_model"] == "fable";
             if let Some(account) = account.filter(|_| requested_fable) {
                 let quota = self.quota.lock().unwrap().clone();
-                if quota.as_ref().is_some_and(|quota| quota.fable_limit_reached(
+                if let Some(quota) = quota.filter(|quota| quota.fable_limit_reached(
                     &account, Some(crate::config::ModelChoice::Fable), limit,
                 )) {
                     backend.inner.lock().unwrap().fable_worker_notices.insert(call.to_string());
-                    let told = serde_json::json!({"event":"worker_fable_limit",
+                    let mut told = serde_json::json!({"event":"worker_fable_limit",
                         "worker":{"tool_use_id":call,"agent_id":frame.get("agent_id"),"task":task}});
+                    let next = quota.accounts.in_use();
+                    if next.id != account && !quota.using_opus_for_fable(&next.id) {
+                        told["resume_on_fable"] = true.into();
+                    }
                     if let Err(error) = self.tell_stu_after(backend, binding, session, None, move |_, _| vec![told]) {
                         eprintln!("[richos] a worker's Fable limit could not be passed to Stu: {error}");
                     }
@@ -4496,6 +4519,33 @@ mod tests {
             std::fs::remove_dir_all(&self.h.root).unwrap();
         }
     }
+    #[test]
+    fn a_live_input_result_releases_the_account_move_after_an_automatic_turn() {
+        let h = harness(0);
+        let (quota, home) = account_one_and_home_with_room(&h);
+        let stu = native_stu(h, quota);
+        let backend = stu.backend();
+        let sink = stu.sink.lock().unwrap().clone().unwrap();
+        sink(vec![serde_json::json!({"type":"assistant","message":{"content":[
+            {"type":"text","text":"An automatic turn is carrying on."}]}})]);
+        assert!(backend.inner.lock().unwrap().automatic_turn);
+        stu.quota.accounts.use_first(&home.id).unwrap();
+
+        stu.live("An input Claude never ran")(crate::steering::InputOutcome {
+            result: Ok(crate::native::STOP_REASON_DISCARDED.into()), report_failure: true,
+        });
+        assert!(backend.inner.lock().unwrap().automatic_turn, "discarding a queued input ended a running turn");
+        assert_eq!(stu.quota.accounts.running_on().id, "1");
+
+        // A result consumed by live input goes only to its completion, not to the frame sink.
+        stu.live("A live input that ended the turn")(crate::steering::InputOutcome {
+            result: Ok("end_turn".into()), report_failure: true,
+        });
+        assert!(!backend.inner.lock().unwrap().automatic_turn, "the native result left the old lease busy");
+        until("Stu continued on the new account", || stu.accounts("account_moved") == [home.id.clone()]);
+        stu.end();
+    }
+
     fn session_limit(resets_at: u64) -> Result<String, String> {
         Err(crate::claude_accounts::usage_limit_error(Some(resets_at),"[\"You've hit your session limit\"]"))
     }

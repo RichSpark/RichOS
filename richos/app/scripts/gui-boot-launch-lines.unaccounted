@@ -437,6 +437,7 @@
 [richos] quota snapshot: {}
 [richos] quota: Fable switch state could not be saved ({})
 [richos] quota: Fable usage refusal, trying the model fallback
+[richos] quota: could not choose the next Fable account ({})
 [richos] quota: could not save the conversation marker ({})
 [richos] quota: the tokens per point could not be kept ({})
 [richos] refusing to open an address that is not one of the screens': {}

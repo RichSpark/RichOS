@@ -174,6 +174,10 @@
       line = `${Math.floor(week.usedPercent)}% of this week used`;
       attention = true;
     }
+    if (cur && sw?.why === "fable" && view?.fableSwitch?.enabled) {
+      line = `Using ${nameOf(cur)}, on Fable`;
+      time = "";
+    }
     if (cur && view?.fableSwitch?.active?.[cur.id]) {
       line = `Using ${nameOf(cur)}, on Opus for now`;
       time = "";
@@ -289,10 +293,10 @@
         <button class="acc-btn acc-btn-primary" type="button" id="acc-remove-yes" data-act="remove-yes" data-id="${esc(a.id)}">Remove ${esc(a.label)}</button><button class="acc-btn" type="button" id="acc-remove-no" data-act="remove-no">Keep it</button></div>`;
     }
     const fable = view?.fableSwitch?.active?.[a.id];
-    if (fable) {
-      const status = fable.estimateBasedOn != null ? "On Opus for now" : "On Opus until " + when(fable.resetsAt);
+    if (fable && a.inUse) {
+      const status = fable.departing || fable.estimateBasedOn != null ? "On Opus for now" : "On Opus until " + when(fable.resetsAt);
       pill += `<span class="acc-pill is-inuse">${esc(status)}</span>`;
-      if (a.inUse) note = "Rich and the team are working on this account, on Opus for now.";
+      note = "Rich and the team are working on this account, on Opus for now.";
     }
     const look = kind === "leaving" ? "inuse" : kind === "arriving" ? "next" : kind;
     return `<article class="acc-card is-${look}" data-id="${esc(a.id)}" aria-label="${esc(nameOf(a))}"><span class="acc-spine"></span>
@@ -383,6 +387,8 @@
   }
   function why(s) {
     const from = labelOf(s.from), fromAcct = list().find(a => a.id === s.from);
+    if (s.why === "fable") return `${esc(from)} is nearly out of Fable. Rich and the team are still on Fable on ${esc(labelOf(s.to))}.`;
+    if (s.why === "fableOpus") return "Fable was almost used up on every account. This account’s Fable limit was the first to reset.";
     const w = fromAcct && win(fromAcct, s.why === "fiveHour" ? "five_hour" : "seven_day");
     const back = fromAcct && fromAcct.exhaustedUntil > Date.now() ? fromAcct.exhaustedUntil : w && w.resetsAt;
     const fresh = back ? ` It is fresh again ${esc(when(back))}.` : "";
@@ -393,14 +399,16 @@
   const bannerKey = "richos-accounts-banner-seen";
   function banner() {
     const model = view?.fableSwitch?.active?.[inUse()?.id];
+    const sw = recentSwitch();
     if (model) {
-      const detail = model.estimateBasedOn != null ? "The team is on Opus while Fable usage is checked."
+      const detail = model.departing ? "The team can keep working on Opus while the account move finishes."
+        : model.estimateBasedOn != null ? "The team is on Opus while Fable usage is checked."
+        : sw?.why === "fableOpus" ? "Fable is almost used up on every account. This account’s Fable limit resets first. Back on Fable " + when(model.resetsAt) + "."
         : "Fable is almost used up and there’s room left in your weekly quota. Back on Fable " + when(model.resetsAt) + ".";
       return `<div class="acc-banner" role="status"><span class="acc-banner-icon">${ICON.swap}</span>
       <div class="acc-banner-main"><p class="acc-banner-head">Rich switched everyone to Opus</p>
       <p class="acc-banner-body">${esc(detail)}</p></div></div>`;
     }
-    const sw = recentSwitch();
     if (sw && localStorage.getItem(bannerKey) !== String(sw.at)) {
       return `<div class="acc-banner" role="status"><span class="acc-banner-icon">${ICON.swap}</span><div class="acc-banner-main">
         <p class="acc-banner-head">Rich switched to ${esc(labelOf(sw.to))} at ${esc(clock(sw.at))}</p>
@@ -488,15 +496,21 @@
     if (c.kind === "added") return `You added ${name}.`;
     if (c.kind === "removed") return `You removed ${name}.`;
     if (c.kind === "chose") return `You chose ${name}.`;
+    if (c.why === "fable") return `Rich switched to ${name} and stayed on Fable.`;
+    if (c.why === "fableOpus") return `Rich switched to ${name}, on Opus until its Fable limit resets.`;
     if (c.why === "limit") return `Rich switched to ${name}. ${esc(c.from)} reached a Claude usage limit.`;
     return `Rich switched to ${name}. ${esc(c.from)} reached ${Math.floor(c.used || 0)}% of its ${c.why === "fiveHour" ? "5-hour limit" : "week"}.`;
   }
   function renderHow() {
     const fable = view.fableSwitch;
     const rule = !fable ? "" : `<div class="acc-how-sec"><p class="acc-how-h">When Fable is almost used up</p>
-      <p class="acc-how-p">${fable.enabled ? "Everyone switches to Opus and comes back to Fable when it resets." : "Automatic model switching is off."}</p>
+      <p class="acc-how-p">${!fable.enabled ? "Automatic model switching is off."
+        : fable.canUseOtherAccount && fable.mode === "otherAccountFirst"
+          ? "Rich uses another account on Fable first. When Fable is almost used up everywhere, the team uses Opus on the account whose Fable resets soonest."
+          : "Everyone switches to Opus and comes back to Fable when it resets."}</p>
       <button class="acc-btn acc-btn-quiet" type="button" data-act="fable-settings">Change in Settings</button></div>`;
-    const fableRows = (fable?.changes || []).map(c => ({ ...c, kind: "fable" }));
+    const fableRows = (fable?.changes || []).filter(c => c.reason !== "otherAccountWithFable" && c.reason !== "otherAccountWithOpus")
+      .map(c => ({ ...c, kind: "fable" }));
     const changes = source => source.slice().sort((a, b) => b.at - a.at).slice(0, 4);
     const listChanges = rows => `<ul class="acc-log">${rows.map(c => `<li><time>${esc(ago(c.at))}</time><span>${changeText(c)}</span></li>`).join("")}</ul>`;
     if (!multi()) {

@@ -394,10 +394,24 @@
                         aria-checked="true" aria-labelledby="fable-switch-label"></button>
                 <span id="fable-switch-label">Switch automatically</span>
               </div>
-              <div id="fable-option" class="fable-option">
-                <b>Switch everyone to Opus</b>
-                <span>Use Opus while there’s room in your weekly quota. Everyone goes back to Fable when it resets.</span>
+              <div id="fable-option" class="fable-options" role="radiogroup" aria-labelledby="fable-title">
+                <label class="fable-option">
+                  <input id="fable-mode-opus" type="radio" name="fable-mode" value="opus" checked>
+                  <span>
+                    <b>Switch everyone to Opus</b>
+                    <span>Use Opus while there’s room in your weekly quota. Everyone goes back to Fable when it resets.</span>
+                  </span>
+                </label>
+                <label class="fable-option">
+                  <input id="fable-mode-account" type="radio" name="fable-mode" value="otherAccountFirst" disabled>
+                  <span>
+                    <b>Use another Claude account first</b>
+                    <span id="fable-mode-account-detail">Stay on Fable on another account. When all Fable quota is used up, go back to the account whose Fable resets soonest and use Opus there until it resets.</span>
+                    <span id="fable-one-account">You have one Claude account connected. Add a second one to use this.</span>
+                  </span>
+                </label>
               </div>
+              <button id="fable-add-account" type="button" class="acc-btn acc-btn-quiet">Add an account</button>
               <p id="fable-feedback" class="md-note" role="status" hidden></p>
             </section>
           </section>
