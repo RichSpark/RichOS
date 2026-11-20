@@ -264,15 +264,35 @@ pub fn refresh_gestures_after_update() {
     }
     std::thread::spawn(|| {
         if let Some(bundle) = richfiles_bundle() {
-            if let Err(error) = std::process::Command::new(bundle.join("Contents/MacOS/RichFiles"))
-                .args(["--window-gesture-service", "refresh-after-update"])
-                .stdout(std::process::Stdio::null())
-                .status()
-            {
-                eprintln!("[richos] could not check Window Gestures after update: {error}");
-            }
+            refresh_gesture_helper(bundle);
         }
     });
+}
+
+#[cfg(target_os = "macos")]
+pub fn refresh_gestures_after_publication(home: &std::path::Path) {
+    // An update can be published at quit without a new RichOS window. Ask the
+    // verified installed copy to refresh the login item before we leave.
+    if let Ok(Some(bundle)) = richos_user_update::with_preferred_at(home, |_, bundle| {
+        Ok(bundle.join("Contents/Applications/RichFiles.app"))
+    }) {
+        refresh_gesture_helper(bundle);
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn refresh_gesture_helper(bundle: PathBuf) {
+    let binary = bundle.join("Contents/MacOS/RichFiles");
+    if !binary.is_file() {
+        return;
+    }
+    if let Err(error) = std::process::Command::new(binary)
+        .args(["--window-gesture-service", "refresh-after-update"])
+        .stdout(std::process::Stdio::null())
+        .status()
+    {
+        eprintln!("[richos] could not check Window Gestures after update: {error}");
+    }
 }
 
 #[cfg(target_os = "macos")]
