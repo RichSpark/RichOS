@@ -193,11 +193,11 @@ final class GestureController {
             if let tap, AXIsProcessTrusted() { CGEvent.tapEnable(tap: tap, enable: true) }
             return
         }
-        let modifiers: CGEventFlags = [.maskCommand, .maskAlternate, .maskControl, .maskShift, .maskSecondaryFn]
         if type == .keyDown {
-            if event.flags.intersection(modifiers).isEmpty { applyDesktopDelete(to: event) }
+            applyDesktopDelete(to: event)
             return
         }
+        let modifiers: CGEventFlags = [.maskCommand, .maskAlternate, .maskControl, .maskShift, .maskSecondaryFn]
         guard event.flags.intersection(modifiers).isEmpty else {
             pointerRevision &+= 1
             press = nil
@@ -229,7 +229,11 @@ final class GestureController {
 
     private func applyDesktopDelete(to event: CGEvent) {
         let key = event.getIntegerValueField(.keyboardEventKeycode)
+        let modifiers: CGEventFlags = [.maskCommand, .maskAlternate, .maskControl, .maskShift]
+        // macOS sets Fn on the dedicated Forward Delete key.
         guard key == kVK_Delete || key == kVK_ForwardDelete,
+              event.flags.intersection(modifiers).isEmpty,
+              key == kVK_ForwardDelete || !event.flags.contains(.maskSecondaryFn),
               event.getIntegerValueField(.keyboardEventAutorepeat) == 0,
               Preferences.selection.contains(.desktopDelete),
               let app = NSWorkspace.shared.frontmostApplication, app.bundleIdentifier == "com.apple.finder" else { return }
@@ -247,6 +251,7 @@ final class GestureController {
 
         // Use Finder's regular Move to Trash command, including its Undo support.
         event.setIntegerValueField(.keyboardEventKeycode, value: Int64(kVK_Delete))
+        event.flags.remove(.maskSecondaryFn)
         event.flags.insert(.maskCommand)
         record(.desktopDeleteShortcut, .complete, started: started)
     }
