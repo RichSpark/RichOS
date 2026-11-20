@@ -4,24 +4,16 @@ import Foundation
 
 @MainActor
 enum WorkspaceHandoff {
-    enum Target: String, Codable {
-        case standalone, docked
-
-        var scheme: String { self == .standalone ? "richfiles-workspace" : "richos-files-workspace" }
-        var title: String { self == .standalone ? "Undock" : "Dock in RichOS" }
-    }
-
     private struct Ticket: Codable {
         let id: UUID
-        let target: Target
         let expires: Date
         let workspace: Data
     }
 
     private static let maximumTicketBytes = 2 * 1024 * 1024
 
-    static func ticketID(from url: URL, for target: Target) -> UUID? {
-        guard url.scheme == target.scheme, url.host == "receive", url.user == nil, url.password == nil,
+    static func ticketID(from url: URL) -> UUID? {
+        guard url.scheme == "richfiles-workspace", url.host == "receive", url.user == nil, url.password == nil,
               url.port == nil, url.query == nil, url.fragment == nil, url.pathComponents.count == 2 else { return nil }
         return UUID(uuidString: url.lastPathComponent)
     }
@@ -31,9 +23,9 @@ enum WorkspaceHandoff {
         return FileManager.default.fileExists(atPath: ticketURL(id, in: folder).path)
     }
 
-    static func send(_ workspace: Data, to target: Target, application: URL) async throws {
+    static func send(_ workspace: Data, application: URL) async throws {
         let id = UUID()
-        let ticket = Ticket(id: id, target: target, expires: Date().addingTimeInterval(20), workspace: workspace)
+        let ticket = Ticket(id: id, expires: Date().addingTimeInterval(20), workspace: workspace)
         let folder = try ticketFolder(create: true)
         let request = ticketURL(id, in: folder)
         let reply = ackURL(id, in: folder)
@@ -44,11 +36,9 @@ enum WorkspaceHandoff {
             try? FileManager.default.removeItem(at: request)
             try? FileManager.default.removeItem(at: reply)
         }
-        guard let event = URL(string: "\(target.scheme)://receive/\(id.uuidString)") else { throw HandoffError.invalid }
+        guard let event = URL(string: "richfiles-workspace://receive/\(id.uuidString)") else { throw HandoffError.invalid }
         let configuration = NSWorkspace.OpenConfiguration()
-        if target == .standalone {
-            configuration.arguments = ["--receive-workspace", id.uuidString]
-        }
+        configuration.arguments = ["--receive-workspace", id.uuidString]
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             NSWorkspace.shared.open([event], withApplicationAt: application, configuration: configuration) { app, error in
                 if let error { continuation.resume(throwing: error) }
@@ -66,18 +56,16 @@ enum WorkspaceHandoff {
         throw HandoffError.noReply
     }
 
-    static func accept(_ id: UUID, for target: Target, into workspace: WindowWorkspace, chat: String? = nil) throws {
+    static func accept(_ id: UUID, into workspace: WindowWorkspace) throws {
         let folder = try ticketFolder(create: false)
         let request = ticketURL(id, in: folder)
         let reply = ackURL(id, in: folder)
         let data = try readPrivate(request, maximum: maximumTicketBytes)
         let ticket = try JSONDecoder().decode(Ticket.self, from: data)
-        guard ticket.id == id, ticket.target == target, ticket.expires > Date(),
+        guard ticket.id == id, ticket.expires > Date(),
               ticket.expires.timeIntervalSinceNow <= 20,
               !FileManager.default.fileExists(atPath: reply.path) else { throw HandoffError.invalid }
-        let restored = target == .docked ? workspace.acceptDockedSession(ticket.workspace, chat: chat)
-            : workspace.restoreSession(ticket.workspace)
-        guard restored else { throw HandoffError.invalid }
+        guard workspace.restoreSession(ticket.workspace) else { throw HandoffError.invalid }
         try writePrivate(Data(id.uuidString.utf8), to: reply)
     }
 
@@ -133,64 +121,14 @@ enum WorkspaceHandoff {
     }
 
     enum HandoffError: LocalizedError {
-        case invalid, noApp, noReply, busy
+        case invalid, noApp, noReply
 
         var errorDescription: String? {
             switch self {
             case .invalid: return "RichFiles could not read the workspace to move."
             case .noApp: return "The other app could not open."
             case .noReply: return "The other app did not open this workspace. It is still available here."
-            case .busy: return "Finish the current file action before switching apps."
             }
         }
-    }
-}
-
-@MainActor
-public final class RichFilesDockTarget {
-    private weak var workspace: WindowWorkspace?
-    private weak var actions: BrowserActions?
-    private var currentChat: String?
-
-    public init() {}
-
-    func attach(workspace: WindowWorkspace, actions: BrowserActions) {
-        self.workspace = workspace
-        self.actions = actions
-    }
-
-    public func reveal(_ location: URL) async throws {
-        try await attachedWorkspace().activeModel.revealFile(location)
-    }
-
-    public func accept(_ id: UUID) async throws {
-        let workspace = try await attachedWorkspace()
-        guard actions?.busy == false else { throw WorkspaceHandoff.HandoffError.busy }
-        try WorkspaceHandoff.accept(id, for: .docked, into: workspace, chat: currentChat)
-    }
-
-    public func chatChanged(_ thread: String?) {
-        currentChat = thread
-        workspace?.git.chatChanged(to: thread)
-    }
-
-    public func showGit(_ snapshot: GitPanelSnapshot) async throws {
-        let workspace = try await attachedWorkspace()
-        guard snapshot.threadId == currentChat else { return }
-        let root = snapshot.repository.url
-        let active = workspace.activeModel
-        active.openFolder(root)
-        // The browser validates the destination asynchronously. Git reads its
-        // pinned root immediately and follows the browser once navigation lands.
-        workspace.git.startSnapshot(snapshot, folder: active.folder, currentChat: currentChat, docked: true)
-    }
-
-    // The webview can become visible before SwiftUI appears.
-    private func attachedWorkspace() async throws -> WindowWorkspace {
-        for _ in 0..<20 {
-            if let workspace { return workspace }
-            try await Task.sleep(nanoseconds: 50_000_000)
-        }
-        throw WorkspaceHandoff.HandoffError.noApp
     }
 }

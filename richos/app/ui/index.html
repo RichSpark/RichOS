@@ -324,6 +324,14 @@
              NOTES.md table puts it. Until then this holder is hidden, so a page with no
              shell behind it shows none of them. -->
         <div id="settings-parts" hidden>
+          <section data-settings-part="richfiles" id="set-richfiles" hidden aria-labelledby="set-richfiles-heading">
+            <h3 class="set-name" id="set-richfiles-heading">RichFiles</h3>
+            <label class="set-row" for="set-richfiles-always">
+              <span class="set-name">Always open RichFiles in its own window</span>
+              <input type="checkbox" class="set-switch" id="set-richfiles-always" aria-describedby="set-richfiles-hint" />
+            </label>
+            <p class="popover-hint" id="set-richfiles-hint"></p>
+          </section>
           <!-- RICH'S MODEL (§119): two rows, each Opus or Fable (Fable the default and an effort per model: ROUND 86).
                The app only ever names Rich (§110's addendum: Stu is never named in the app),
                so the rows are the two halves of Rich, named by what each does.
@@ -636,13 +644,48 @@
 
         <!-- ENTITY OVERVIEW (§3.5) and EMPTY ENTITY (§21). A practical navigation state,
              not the ambitious start screen. -->
-        <section id="richfiles-page" class="richfiles-page" hidden aria-labelledby="richfiles-title">
-          <header><h1 id="richfiles-title">RichFiles</h1></header>
-          <p id="richfiles-pane-error" role="status" hidden></p>
-          <!-- A click that comes before RichFiles is ready never looks dead: this line is on screen
-               at once and RichFiles covers it when it is (`richfiles-page.js`). The look is the
-               search list's own loading row. -->
-          <div id="richfiles-pane"><p id="richfiles-loading" class="srch-loading is-fetching" role="status" hidden><i aria-hidden="true"></i>Opening RichFiles…</p></div>
+        <section id="richfiles-page" class="rp-page" hidden aria-labelledby="richfiles-title">
+          <div class="rp-col">
+            <div class="rp-ttl">
+              <img class="rf-title-icon" src="assets/app-icons/richfiles-128.png" alt="" />
+              <h1 id="richfiles-title" tabindex="-1">RichFiles</h1>
+            </div>
+            <p class="rp-lede">Your files, with their full names and the keys you already know</p>
+            <p class="rp-body">RichFiles is a file browser for your Mac. Its List view shows every file's whole name and extension and its keys work the way they do on Windows: Ctrl+C copies, Ctrl+V pastes, F2 renames, Enter opens.</p>
+            <p class="rp-body"><b>It is its own app, with its own icon in the Dock. It opens in its own window, next to RichOS.</b></p>
+            <div class="rp-dl">
+              <button type="button" class="rp-btn rp-btn-gold" id="rf-open">Open RichFiles</button>
+              <span class="rp-dl-cap">Opens in its own window · free · open-source</span>
+            </div>
+            <section class="rp-prot rf-launch-choice" aria-labelledby="rf-always-label">
+              <div class="rp-prot-h">
+                <h2 id="rf-always-label">Always open RichFiles in its own window</h2>
+                <button type="button" class="rp-sw" role="switch" aria-checked="false" aria-labelledby="rf-always-label" aria-describedby="rf-always-hint" id="rf-always"></button>
+              </div>
+              <p class="rp-prot-p" id="rf-always-hint"></p>
+            </section>
+            <div class="rp-facts">
+              <div class="rp-fact"><div><b>Full names, always</b><span>List view shows the whole file name and its extension. Nothing is cut short.</span></div></div>
+              <div class="rp-fact"><div><b>The keys you already know</b><span>Copy, paste, rename and open with the keys you use on Windows or switch to the Mac's own.</span></div></div>
+              <div class="rp-fact"><div><b>Tabs, panes and workspaces</b><span>Keep several folders open side by side and come back to the same layout later.</span></div></div>
+            </div>
+            <section class="rp-prot" aria-labelledby="rf-settings-title">
+              <div class="rp-prot-h"><h2 id="rf-settings-title">RichFiles settings</h2></div>
+              <div class="rf-setting">
+                <div><b id="rf-folders-label">Use RichFiles for folders</b><p id="rf-folders-hint">A folder opened from another app opens in RichFiles, not in Finder.</p></div>
+                <button type="button" class="rp-sw" role="switch" aria-checked="false" aria-labelledby="rf-folders-label" aria-describedby="rf-folders-hint" data-rf-setting="folders" disabled></button>
+              </div>
+              <div class="rf-setting">
+                <div><b id="rf-pictures-label">Open pictures in RichGlance</b><p id="rf-pictures-hint">Double-clicking a picture opens it in RichGlance, the viewer that comes with RichFiles.</p></div>
+                <button type="button" class="rp-sw" role="switch" aria-checked="false" aria-labelledby="rf-pictures-label" aria-describedby="rf-pictures-hint" data-rf-setting="pictures" disabled></button>
+              </div>
+              <div class="rf-setting">
+                <div><b id="rf-windowsKeys-label">Windows keys</b><p id="rf-windowsKeys-hint">Ctrl+C copies, F2 renames, Enter opens. Off uses the Mac's own keys.</p></div>
+                <button type="button" class="rp-sw" role="switch" aria-checked="false" aria-labelledby="rf-windowsKeys-label" aria-describedby="rf-windowsKeys-hint" data-rf-setting="windowsKeys" disabled></button>
+              </div>
+              <p id="rf-settings-status" class="rp-prot-p" role="status" hidden></p>
+            </section>
+          </div>
         </section>
 
         <!-- RichPass page from the navigation rail. Copy and title mark follow round 65.1. -->

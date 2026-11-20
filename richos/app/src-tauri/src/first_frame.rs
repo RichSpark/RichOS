@@ -104,7 +104,7 @@ mod tests {
         "ConfigStore::open", "LaunchStore::open", "Mutex::new", "Path::new", "activation::decide",
         "activation::gather", "dictation::tool::main", "first_frame::ground", "launch_timing::mark_update_step",
         "launch_timing::mark_window", "linkedin_host::MacBrowser::default", "phone::connect::supervisor::guard_main",
-        "richfiles_pane::PaneRequests::default", "richos_core::assignment_tools::run_stdio",
+        "richos_core::assignment_tools::run_stdio",
         // The team's browser reader (`--browser-mcp`): a helper mode that exits before any window,
         // like the LinkedIn reader's.
         "richos_core::browser_tools::run_stdio",

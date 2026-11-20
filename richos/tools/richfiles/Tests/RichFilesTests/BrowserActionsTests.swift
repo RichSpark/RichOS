@@ -418,26 +418,6 @@ final class BrowserActionsTests: XCTestCase {
     }
 
     @MainActor
-    func testHostSwitchDropsWaitingTransfersAndPreservesTheirSources() async throws {
-        try await withFixture { root, destination, board in
-            let first = try write("incoming", named: "Conflict.txt", in: root)
-            _ = try write("existing", named: "Conflict.txt", in: destination)
-            let waiting = try write("waiting", named: "Waiting.png", in: root)
-            let actions = BrowserActions(pasteboard: board)
-            try await perform(actions) {
-                actions.transfer([first], into: destination, move: false)
-                actions.transfer([waiting], into: destination, move: true)
-            }
-            XCTAssertEqual(actions.queuedTransfers.count, 1)
-            try await actions.settleForHostSwitch()
-            XCTAssertTrue(actions.queuedTransfers.isEmpty)
-            XCTAssertFalse(actions.busy)
-            XCTAssertEqual(try contents(waiting.url), "waiting")
-            XCTAssertFalse(FileManager.default.fileExists(atPath: destination.appendingPathComponent("Waiting.png").path))
-        }
-    }
-
-    @MainActor
     func testCutSkipKeepBothAndUndoPreserveTheExistingItem() async throws {
         try await withFixture { root, destination, board in
             let source = try write("selected", named: "Report.txt", in: root)

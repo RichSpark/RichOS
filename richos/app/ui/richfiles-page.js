@@ -1,183 +1,103 @@
-"use strict";
+// The RichFiles rail item opens this information page or the standalone Mac app.
+(() => {
+  "use strict";
 
-(function () {
   const bridge = window.RichBridge;
   const rail = window.RichNavRail;
-  const button = document.getElementById("nr-richfiles");
-  const page = document.getElementById("richfiles-page");
-  const pane = document.getElementById("richfiles-pane");
-  const error = document.getElementById("richfiles-pane-error");
-  const loading = document.getElementById("richfiles-loading");
-  const tooltip = document.getElementById("nr-tip");
-  if (!bridge || !rail || !button || !page || !pane || !error || !loading) return;
+  const $ = (id) => document.getElementById(id);
+  const page = $("richfiles-page");
+  if (!bridge || !rail || !page) return;
 
-  const hiddenBounds = { left: 0, top: 0, width: 0, height: 0, visible: false };
-  let last = "";
-  let frame = 0;
-  let waiting = false;
-  let again = false;
-  let showRequested = false;
-  // The native pane has been shown before and can be reused.
-  let ready = false;
-  // Two frames on: what the page changed has been drawn.
-  const painted = () => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)));
+  const preference = "richos.richfiles.openStandalone";
+  const changes = [...page.querySelectorAll("[data-rf-setting]")];
+  let available = false;
+  let changing = false;
+  let current = null;
 
-  function intersects(first, second) {
-    return first.left < second.right && second.left < first.right
-      && first.top < second.bottom && second.top < first.bottom;
+  function opensStandalone() {
+    return available && localStorage.getItem(preference) === "true";
   }
 
-  function bounds() {
-    if (page.hidden || document.getElementById("app")?.inert || window.RichDismiss?.question?.()) return hiddenBounds;
-    const box = pane.getBoundingClientRect();
-    if (box.width <= 0 || box.height <= 0 || !innerWidth || !innerHeight) return hiddenBounds;
-    const popups = window.RichDismiss?.open?.() || [];
-    if (popups.some((node) => intersects(box, node.getBoundingClientRect()))) return hiddenBounds;
-    const limit = (number) => Math.round(Math.min(1, Math.max(0, number)) * 1000000) / 1000000;
-    const left = limit(box.left / innerWidth);
-    const top = limit(box.top / innerHeight);
-    const width = limit(box.right / innerWidth) - left;
-    const height = limit(box.bottom / innerHeight) - top;
-    return width > 0 && height > 0 ? { left, top, width, height, visible: true } : hiddenBounds;
+  function paintChoice() {
+    const on = opensStandalone();
+    $("rf-always").setAttribute("aria-checked", String(on));
+    $("set-richfiles-always").checked = on;
+    $("rf-always-hint").textContent = on
+      ? "On. From now on, the RichFiles icon opens RichFiles in its own window. You will not see this page again. To get it back, turn this off in Settings."
+      : "Turn this on and the RichFiles icon on the left stops showing this page. From then on, every click on it opens RichFiles right away, as its own app.";
+    $("set-richfiles-hint").textContent = on
+      ? "On: the RichFiles icon opens RichFiles as its own app."
+      : "Off: the RichFiles icon opens the RichFiles page.";
   }
 
-  function tooltipBounds(paneBounds) {
-    if (!paneBounds.visible || !tooltip || tooltip.hidden) return null;
-    const tip = tooltip.getBoundingClientRect();
-    if (!tip.width || !tip.height) return null;
-    const arrow = parseFloat(getComputedStyle(tooltip, "::before").borderRightWidth) || 0;
-    // Only the left edge is decided here. The native pane is placed against the whole web view,
-    // title bar included, so it starts higher than this page's pane box; whether a label near the
-    // top meets it (Chats does) is decided natively, against the pane where it really is.
-    if (tip.right <= paneBounds.left * innerWidth) return null;
-    return {
-      left: tip.left / innerWidth, top: tip.top / innerHeight,
-      width: tip.width / innerWidth, height: tip.height / innerHeight,
-      radius: (parseFloat(getComputedStyle(tooltip).borderTopLeftRadius) || 0) / innerWidth,
-      arrow: arrow / innerWidth,
-    };
+  function setChoice(on) {
+    localStorage.setItem(preference, String(on));
+    paintChoice();
   }
 
-  function schedule() {
-    if (!frame) frame = requestAnimationFrame(() => { frame = 0; refresh(); });
+  function open() {
+    return bridge.invoke("richfiles_open", {}).catch((error) => window.RichSettings?.toast(String(error)));
   }
 
-  async function refresh() {
-    if (waiting) { again = true; return; }
-    let next = bounds();
-    let tip = tooltipBounds(next);
-    let key = JSON.stringify([next, tip]);
-    if (key === last && (!next.visible || !showRequested)) return;
-    waiting = true;
-    try {
-      if (key !== last) {
-        // Paint the loading state before AppKit can spend time building the first view.
-        if (next.visible && !ready) {
-          await painted();
-          next = bounds();
-          if (!next.visible) { again = true; return; }
-          tip = tooltipBounds(next);
-          key = JSON.stringify([next, tip]);
-        }
-        await bridge.invoke("richfiles_place_pane", { bounds: next, tooltip: tip });
-        last = key;
-        if (next.visible) {
-          ready = true;
-          loading.hidden = true;
-        }
-      }
-      if (next.visible && showRequested) {
-        showRequested = false;
-        await bridge.invoke("richfiles_accept_request", {});
-      }
-      error.hidden = true;
-    } catch (reason) {
-      loading.hidden = true;
-      if (!page.hidden) {
-        error.textContent = String(reason);
-        error.hidden = false;
-      }
-    } finally {
-      waiting = false;
-      if (again) { again = false; schedule(); }
+  function paintSettings() {
+    for (const button of changes) {
+      button.disabled = changing || !current;
+      button.setAttribute("aria-checked", String(!!current?.[button.dataset.rfSetting]));
     }
   }
 
-  const size = new ResizeObserver(schedule);
-  const overlays = new MutationObserver(schedule);
-  const tooltipChanges = new MutationObserver(schedule);
+  async function settings(option, enabled) {
+    if (changing) return;
+    changing = true;
+    paintSettings();
+    const status = $("rf-settings-status");
+    status.hidden = true;
+    try {
+      current = await bridge.invoke("richfiles_settings", { option, enabled });
+      if (current.message) {
+        status.textContent = current.message;
+        status.hidden = false;
+      }
+    } catch (error) {
+      status.textContent = String(error);
+      status.hidden = false;
+    } finally {
+      changing = false;
+      paintSettings();
+    }
+  }
+
   function show() {
-    preloaded = true; // placement also loads the library if needed
-    loading.hidden = ready;
+    if (!window.RichDismiss?.question?.()) window.RichHome?.hide?.("richfiles");
     page.hidden = false;
     document.body.classList.add("page-open");
-    size.observe(pane);
-    overlays.observe(document.body, { subtree: true, attributes: true, attributeFilter: ["hidden", "inert", "open", "class"] });
-    if (tooltip) {
-      size.observe(tooltip);
-      tooltipChanges.observe(tooltip, { attributes: true, attributeFilter: ["style"] });
-    }
-    window.addEventListener("resize", schedule);
-    schedule();
+    const crumb = $("page-crumb");
+    crumb.textContent = "RichFiles";
+    crumb.hidden = false;
+    $("richfiles-title").focus({ preventScroll: true });
+    settings(null, null);
   }
 
   function hide() {
-    loading.hidden = true;
     page.hidden = true;
     document.body.classList.remove("page-open");
-    size.disconnect();
-    overlays.disconnect();
-    tooltipChanges.disconnect();
-    window.removeEventListener("resize", schedule);
-    refresh();
+    $("page-crumb").hidden = true;
   }
 
-  function requestPane() {
-    showRequested = true;
-    if (!window.RichDismiss?.question?.()) window.RichHome?.hide?.("richfiles");
-    window.RichOutput?.close?.({ keepFocus: true });
-    rail.showPage("richfiles");
-    schedule();
+  $("rf-open").addEventListener("click", open);
+  $("rf-always").addEventListener("click", () => setChoice(!opensStandalone()));
+  $("set-richfiles-always").addEventListener("change", (event) => setChoice(event.target.checked));
+  for (const button of changes) {
+    button.addEventListener("click", () => settings(button.dataset.rfSetting, !current?.[button.dataset.rfSetting]));
   }
-
-  // Warm the library once the opening is gone. The SwiftUI view must be built on the
-  // window thread; doing that in advance can freeze chat even when RichFiles is never opened.
-  let usable = false;
-  let offered = false;
-  let preloaded = false;
-  let openingTimer = 0;
-  function prepare() {
-    if (preloaded || !usable || !offered) return;
-    if (window.RichSplash?.isUp?.()) {
-      if (!openingTimer) openingTimer = setTimeout(() => { openingTimer = 0; prepare(); }, 100);
-      return;
-    }
-    preloaded = true;
-    bridge.invoke("richfiles_preload", {}).catch(() => {});
-  }
-  window.RichFilesReady = { start() { usable = true; prepare(); } };
-  if (window.__richosRichFilesReady) window.RichFilesReady.start();
-
-  bridge.invoke("richfiles_pane_available", {}).then(async (available) => {
-    if (available !== true) return;
+  window.addEventListener("focus", () => { if (!page.hidden) settings(null, null); });
+  window.RichFilesPage = { open, opensStandalone };
+  bridge.invoke("richfiles_available", {}).then((installed) => {
+    if (!installed) return;
+    available = true;
+    paintChoice();
     rail.registerPage("richfiles", { show, hide });
-    button.hidden = false;
-    window.RichFilesPage = {
-      available: true,
-      recordingBounds() {
-        if (!ready || page.hidden) return null;
-        const current = bounds();
-        return current.visible ? current : null;
-      },
-    };
-    offered = true;
-    prepare();
-    try {
-      await bridge.listen?.("rich://richfiles-show", requestPane);
-    } catch {
-      // The initial pending request can still be handled.
-    }
-    const pending = await bridge.invoke("richfiles_request_pending", {});
-    if (pending === true) requestPane();
+    $("nr-richfiles").hidden = false;
+    $("set-richfiles").hidden = false;
   }).catch(() => {});
 })();

@@ -102,7 +102,7 @@ enum ArchiveTools {
 
     private static func run(_ arguments: [String], destination: BrowserTransferDestination? = nil) async throws -> Data {
         let local = Bundle.main.executableURL?.deletingLastPathComponent().appendingPathComponent("richfiles-archive")
-        let embedded = RichFilesInstallation.embeddedApplication.appendingPathComponent("Contents/MacOS/richfiles-archive")
+        let embedded = RichFilesInstallation.bundledApplication.appendingPathComponent("Contents/MacOS/richfiles-archive")
         guard let executable = [local, embedded].compactMap({ $0 }).first(where: {
             FileManager.default.isExecutableFile(atPath: $0.path)
         }) else { throw ArchiveToolError.helperUnavailable }

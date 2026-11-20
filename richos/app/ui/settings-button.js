@@ -644,6 +644,8 @@ window.RichSettings = (function () {
     }
     if (doors.length && rich.length) rich.push(divider());
     rich = rich.concat(doors);
+    var richfiles = part("richfiles");
+    if (richfiles) rich.push(richfiles);
     addColumn(cols, "set-group-rich", "Working with Rich", rich);
 
     // ---- COLUMN 3: your company and team --------------------------------------------------

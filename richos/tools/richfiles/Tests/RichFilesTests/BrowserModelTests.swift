@@ -48,10 +48,9 @@ final class BrowserModelTests: XCTestCase {
     func testHandoffRecognizesOnlyTheExpectedAppAndTicketURL() throws {
         let id = UUID()
         let url = try XCTUnwrap(URL(string: "richfiles-workspace://receive/\(id.uuidString)"))
-        XCTAssertEqual(WorkspaceHandoff.ticketID(from: url, for: .standalone), id)
-        XCTAssertNil(WorkspaceHandoff.ticketID(from: url, for: .docked))
+        XCTAssertEqual(WorkspaceHandoff.ticketID(from: url), id)
         let extra = try XCTUnwrap(URL(string: url.absoluteString + "?extra=true"))
-        XCTAssertNil(WorkspaceHandoff.ticketID(from: extra, for: .standalone))
+        XCTAssertNil(WorkspaceHandoff.ticketID(from: extra))
     }
 
     @MainActor
@@ -71,13 +70,13 @@ final class BrowserModelTests: XCTestCase {
                                         administration: try FileReference(url: administration),
                                         lands: [], allOnMain: false, commit: nil, path: nil)
         let startingFolder = directory.deletingLastPathComponent()
-        git.startSnapshot(snapshot, folder: startingFolder, currentChat: "source", docked: true)
+        git.startSnapshot(snapshot, folder: startingFolder)
         git.follow(startingFolder)
         git.follow(directory)
         XCTAssertEqual(git.snapshot, snapshot)
         XCTAssertEqual(git.scope, .chat)
 
-        git.startSnapshot(snapshot, folder: child, currentChat: nil)
+        git.startSnapshot(snapshot, folder: child)
         git.follow(directory)
         XCTAssertEqual(git.snapshot, snapshot)
         XCTAssertEqual(git.scope, .chat)
@@ -136,7 +135,7 @@ final class BrowserModelTests: XCTestCase {
                 await fulfillment(of: [finished], timeout: 10)
             }
 
-            model.startSnapshot(snapshot, folder: root, currentChat: nil)
+            model.startSnapshot(snapshot, folder: root)
             await waitForHistory()
             XCTAssertEqual(model.unavailableComparisonPath, missingPath)
 

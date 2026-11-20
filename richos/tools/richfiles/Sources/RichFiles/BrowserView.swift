@@ -24,12 +24,8 @@ struct BrowserView: View {
     @Environment(\.colorScheme) private var scheme
     private let side: BrowserPaneSide
     private let windowSize: CGSize
-    private let hostOpenWindow: ((URL) -> Void)?
     private let acceptsKeyboard: () -> Bool
-    private let returnKeyboardFocus: @MainActor @Sendable () -> Void
     private let sessionChanged: () -> Void
-    private let hostSwitchTitle: String?
-    private let switchHost: () -> Void
     @AppStorage("richfiles.windowsKeys") private var windowsKeys = true
     @AppStorage("richfiles.textSize") private var textSize = BrowserTextSize.standard
     @AppStorage("richfiles.shortcuts.v1") private var shortcutData = Data()
@@ -77,21 +73,15 @@ struct BrowserView: View {
     }
 
     init(model: BrowserModel, workspace: WindowWorkspace, side: BrowserPaneSide, windowSize: CGSize,
-         actions: BrowserActions, openWindow: ((URL) -> Void)? = nil,
-         acceptsKeyboard: @escaping () -> Bool, returnKeyboardFocus: @escaping @MainActor @Sendable () -> Void,
-         hostSwitchTitle: String?, switchHost: @escaping () -> Void, sessionChanged: @escaping () -> Void) {
+         actions: BrowserActions, acceptsKeyboard: @escaping () -> Bool, sessionChanged: @escaping () -> Void) {
         self.model = model
         self.workspace = workspace
         git = workspace.git
         self.side = side
         self.windowSize = windowSize
         self.actions = actions
-        hostOpenWindow = openWindow
         self.acceptsKeyboard = acceptsKeyboard
-        self.returnKeyboardFocus = returnKeyboardFocus
         self.sessionChanged = sessionChanged
-        self.hostSwitchTitle = hostSwitchTitle
-        self.switchHost = switchHost
     }
 
     var body: some View {
@@ -163,10 +153,8 @@ struct BrowserView: View {
             actions.refreshClipboard()
         }
         .onChange(of: model.folder) { _ in
-            let returnFocus = editingAddress
             editingAddress = false
             focus = nil
-            if returnFocus { DispatchQueue.main.async(execute: returnKeyboardFocus) }
             suggestions = []
             feedback = ""
             rangeAnchor = nil
@@ -455,10 +443,6 @@ struct BrowserView: View {
                 }
             }
             barButton("Workspaces", "rectangle.on.rectangle", showTitle: true) { sheet = .workspaces }
-            if let hostSwitchTitle {
-                barButton(hostSwitchTitle, hostOpenWindow == nil ? "rectangle.portrait.and.arrow.forward" :
-                            "arrow.up.right.square", showTitle: true, bordered: true, action: switchHost)
-            }
             barButton("Find a Command", "chevron.right.square") { _ = perform(.actionPalette) }
             barButton("Settings", "gearshape") { sheet = .settings }
         }
@@ -482,8 +466,7 @@ struct BrowserView: View {
     }
 
     private func openFolderWindow(_ folder: URL) {
-        if let hostOpenWindow { hostOpenWindow(folder) }
-        else { openWindow(id: "richfiles-folder", value: FolderWindowRequest(folder: folder)) }
+        openWindow(id: "richfiles-folder", value: FolderWindowRequest(folder: folder))
     }
 
     private var commandBar: some View {
@@ -1196,9 +1179,6 @@ struct BrowserView: View {
         Button("Disk Usage…") { sheet = .diskUsage(model.folder) }
         Button("Find Duplicate Files…") { sheet = .duplicates(model.folder) }
         Button("Compare Folders…") { sheet = .compare(model.folder) }
-        if hostOpenWindow != nil {
-            Button("RichFiles Settings…") { sheet = .settings }
-        }
         Button("Refresh") { _ = perform(.refresh) }
     }
 
@@ -1306,7 +1286,7 @@ struct BrowserView: View {
         case .newTab: model.newTab()
         case .closeTab:
             if model.tabs.count > 1 { model.closeTab(model.currentTabID) }
-            else if hostOpenWindow == nil { NSApp.keyWindow?.performClose(nil) }
+            else { NSApp.keyWindow?.performClose(nil) }
         case .selectAll: model.selectAll()
         case .back:
             guard model.canGoBack else { return false }
@@ -1329,7 +1309,6 @@ struct BrowserView: View {
             guard workspace.isSplit else { return false }
             workspace.select(side == .primary ? .secondary : .primary)
             focus = nil
-            returnKeyboardFocus()
         case .addToShelf:
             guard !entries.isEmpty else { return false }
             withReferences(entries) { actions.addToShelf($0) }
@@ -1799,7 +1778,6 @@ struct BrowserView: View {
         case .redo: return actions.redoName != nil && !actions.busy
         case .paste: return actions.canScheduleTransfer && writableFolder
         case .newFolder: return !actions.busy && writableFolder
-        case .closeTab: return model.tabs.count > 1 || hostOpenWindow == nil
         case .switchPane: return workspace.isSplit
         default: return true
         }
