@@ -77,6 +77,8 @@ pub struct Reading {
     /// Time from each window's latest observation to the next eligible provider request.
     pub provider_wait_ms: BTreeMap<String, u64>,
     pub(crate) weekly_pause_points: BTreeMap<String, f64>,
+    pub(crate) fable_estimated_used: Option<f64>,
+    pub(crate) fable_observation: Option<fable::Observation>,
 }
 
 /// **H, the work the weekly point leaves room for after it: 5 minutes at the measured speed.**
@@ -376,6 +378,9 @@ pub struct View {
     /// Measured weekly points used by the separate-process command and review gates.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub weekly_pause_points: BTreeMap<String, f64>,
+    /// Estimated Fable usage while the provider's actual percentage stays in `windows`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fable_estimated_used: Option<f64>,
     /// The rise each speed above was measured over, so the sheet's fast card says round 16's
     /// "took Home's five-hour window from 40% to 71% in 12 minutes" with the same two readings
     /// the account settings view shows.
@@ -616,6 +621,7 @@ struct Snapshot {
     /// set at every token scan. Used only while the reading is older than the normal check
     /// (`reading_with`).
     since_reading: f64,
+    fable_estimate: Option<tokens::Estimate>,
     /// **What the last answer ABOUT the sign-in said** ([`View::signed_in`]), kept apart from
     /// the last check's error (mid-job review rv-20261021T233844Z-10df0b1f-1846, finding 1):
     /// while it lived only in that error, one check where Claude Code did not answer replaced
@@ -754,14 +760,41 @@ impl Snapshot {
                 window.used_percent = (window.used_percent + self.since_reading).min(100.);
             }
         }
+        for window in windows.iter().filter(|w| fable::is_window(&w.id)) {
+            let observed = self.window_observed_at.get(&window.id).copied();
+            if observed.is_some_and(|at| now.saturating_sub(at) > REFRESH_INTERVAL_MS
+                || self.empty_at.is_some_and(|empty| empty >= at)) {
+                // A refused or overdue reader cannot justify projecting its old pace for hours.
+                speeds.remove(&window.id);
+            }
+        }
         let provider_wait_ms = windows.iter().filter_map(|window| {
-            let observed = if week_estimated && window.id == "seven_day" { Some(now) }
+            let at_now = week_estimated && window.id == "seven_day";
+            let observed = if at_now { Some(now) }
                 else { self.window_observed_at.get(&window.id).copied() };
             self.provider_wait_ms(observed).map(|wait| (window.id.clone(), wait))
         }).collect();
         let mut reading = Reading { windows, speeds,
             expected: self.rise_until.is_some_and(|t| t > now), rises: self.rises.clone(),
-            weekly_cutoff, provider_wait_ms, weekly_pause_points: BTreeMap::new() };
+            weekly_cutoff, provider_wait_ms, ..Reading::default() };
+        reading.fable_observation = fable::observation(&reading, &self.window_observed_at);
+        for window in reading.windows.iter_mut().filter(|window| fable::is_window(&window.id)) {
+            let observed = self.window_observed_at.get(&window.id).copied();
+            let Some(estimate) = self.fable_estimate.filter(|estimate| Some(estimate.observed_at) == observed) else {
+                continue;
+            };
+            if estimate.points > 0. {
+                window.used_percent = (window.used_percent + estimate.points).min(100.);
+                reading.fable_estimated_used = Some(window.used_percent);
+                if let Some(wait) = self.provider_wait_ms(Some(now)) {
+                    reading.provider_wait_ms.insert(window.id.clone(), wait);
+                }
+            }
+            if estimate.speed > 0. {
+                let speed = reading.speeds.entry(window.id.clone()).or_insert(0.);
+                *speed = speed.max(estimate.speed);
+            }
+        }
         reading.weekly_pause_points = reading.windows.iter().filter(|window| is_weekly(&window.id))
             .filter_map(|window| {
                 let point = self.published_weekly_points.get(&window.id).copied()
@@ -825,7 +858,7 @@ impl Snapshot {
         let (rise_until, token_speed) = (self.rise_until, self.token_speed);
         // Only a signed-in account reports a reading.
         *self = Self { windows, checked_at: Some(observed), retry_at: None, error, speeds, bases, rises, rise_until, empty_at: None, token_speed,
-            since_reading: 0., signed_in: Some(true), rise_log, window_observed_at,
+            since_reading: 0., fable_estimate: None, signed_in: Some(true), rise_log, window_observed_at,
             shared_checked_at: self.shared_checked_at, shared_next_at: self.shared_next_at,
             shared_interval_ms: self.shared_interval_ms, published_weekly_points: BTreeMap::new() };
     }
@@ -1081,6 +1114,7 @@ impl Snapshot {
             speeds: reading.speeds.clone(),
             act_at,
             weekly_pause_points: reading.weekly_pause_points,
+            fable_estimated_used: reading.fable_estimated_used,
             rises: self.rises.clone(),
             agents_working: 0,
             last_switch: None,
@@ -1166,6 +1200,7 @@ pub const TOKEN_SCAN_MS: u64 = 10_000;
 /// Every account's learned weekly episodes (`tokens::Episode`), kept across launches so the
 /// token speed does not start from nothing at every launch.
 pub const TOKEN_POINTS_FILE: &str = "claude-token-points.json";
+const FABLE_TOKEN_POINTS_FILE: &str = "claude-fable-token-points.json";
 
 /// The gate appends one line per agent dispatch here (`gate.rs`); the service counts them.
 pub const DISPATCH_LOG: &str = "agent-dispatches.log";
@@ -1232,6 +1267,12 @@ impl Service {
         // A missing or unreadable file is no episodes yet: the figures are learned again.
         let learned: BTreeMap<String, Vec<tokens::Episode>> = fs::read(data_dir.join(TOKEN_POINTS_FILE)).ok()
             .and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_default();
+        let fable_learned: BTreeMap<String, Vec<tokens::Episode>> = fs::read(data_dir.join(FABLE_TOKEN_POINTS_FILE)).ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_default();
+        let mut token_tracks: BTreeMap<_, _> = learned.into_iter().map(|(id, entries)| (id, tokens::Track::with_episodes(entries))).collect();
+        for (id, episodes) in fable_learned {
+            token_tracks.entry(id).or_default().fable.entries = episodes;
+        }
         let service = Self {
             resets: resets::Service::new(data_dir),
             last_reset_marker: Mutex::new(None),
@@ -1259,7 +1300,7 @@ impl Service {
             agents_working: std::sync::atomic::AtomicUsize::new(0),
             utc_offset_minutes: Mutex::new(None),
             weekly_cutoff: test_weekly_cutoff(),
-            tokens: Mutex::new(learned.into_iter().map(|(id, e)| (id, tokens::Track::with_episodes(e))).collect()),
+            tokens: Mutex::new(token_tracks),
             transcripts_one: None,
             scanned_at: std::sync::atomic::AtomicU64::new(0),
             sink: std::sync::Arc::new(tokens::Sink::default()),
@@ -1421,6 +1462,7 @@ impl Service {
                     weekly_point,
                     speeds: account_view.speeds,
                     weekly_pause_points: account_view.weekly_pause_points,
+                    fable_estimated_used: account_view.fable_estimated_used,
                     pre_hold: account_view.pre_hold,
                     empty_at: account_view.empty_at,
                 }
@@ -1538,7 +1580,7 @@ impl Service {
         // The leases' requests into the spend ledger too: nothing else holds them (§118).
         self.spend.add(self.sink.take_for_spend(), now);
         self.spend.save(now, false);
-        let (mut learned, mut moved) = (false, false);
+        let (mut learned_weekly, mut learned_fable, mut moved) = (false, false, false);
         // What a lease streamed is its account's, wherever its transcript is (every account's
         // chats share one records folder, `claude_accounts::RECORDS`): taken first, and out of
         // any other account's track that read it from that folder before the stream arrived.
@@ -1554,10 +1596,15 @@ impl Service {
         let readers = self.record_readers();
         for account in self.accounts.list() {
             let one = account.id == crate::claude_accounts::ACCOUNT_ONE;
-            let week = |s: &Snapshot| s.windows.iter().find(|w| w.id == "seven_day").cloned().zip(s.checked_at);
-            let reading = if one { week(&self.snapshot.lock().unwrap()) }
-                else { self.extra.lock().unwrap().get(&account.id).and_then(|(_, s)| week(s)) };
-            let (speed, since) = {
+            let weeks = |s: &Snapshot| {
+                let weekly = s.windows.iter().find(|w| w.id == "seven_day").cloned().zip(s.checked_at);
+                let fable = s.windows.iter().find(|w| fable::is_window(&w.id) && w.resets_at.is_some_and(|at| at > now))
+                    .and_then(|w| s.window_observed_at.get(&w.id).map(|at| (w.clone(), *at)));
+                (weekly, fable)
+            };
+            let (weekly, fable) = if one { weeks(&self.snapshot.lock().unwrap()) }
+                else { self.extra.lock().unwrap().get(&account.id).map(|(_, s)| weeks(s)).unwrap_or_default() };
+            let (speed, since, estimate) = {
                 let mut tracks = self.tokens.lock().unwrap();
                 // A records folder is read once, by its first account (Account 1's: Claude Code
                 // used outside the app is the terminal's, on its sign-in), and a message another
@@ -1565,25 +1612,38 @@ impl Service {
                 if let Some(folder) = readers.get(&account.id) {
                     let others: std::collections::HashSet<String> = tracks.iter()
                         .filter(|(id, _)| **id != account.id).flat_map(|(_, t)| t.ids()).collect();
-                    tracks.entry(account.id.clone()).or_default().scan_except(folder, now, &others);
+                    let observed = fable.as_ref().map(|(_, at)| *at);
+                    tracks.entry(account.id.clone()).or_default().scan_except(folder, now, observed, &others);
                 }
                 let track = tracks.entry(account.id.clone()).or_default();
-                let since = reading.as_ref().map_or(0., |(_, at)| track.points_since(*at, now));
-                if let Some((window, at)) = reading { learned |= track.reading(&window, at, now); }
-                (track.speed(now), since)
+                let since = weekly.as_ref().map_or(0., |(_, at)| track.points_since(*at, now));
+                let estimate = if let Some((window, at)) = fable {
+                    learned_fable |= track.reading(&window, at, now);
+                    track.fable_estimate(at, now)
+                } else {
+                    track.clear_fable_observation();
+                    None
+                };
+                if let Some((window, at)) = weekly { learned_weekly |= track.reading(&window, at, now); }
+                (track.speed(now), since, estimate)
             };
             let mut set = |s: &mut Snapshot| {
-                moved |= s.token_speed != Some(speed) || s.since_reading != since;
+                moved |= s.token_speed != Some(speed) || s.since_reading != since || s.fable_estimate != estimate;
                 s.token_speed = Some(speed);
                 s.since_reading = since;
+                s.fable_estimate = estimate;
             };
             if one { set(&mut self.snapshot.lock().unwrap()); }
             else if let Some((_, snapshot)) = self.extra.lock().unwrap().get_mut(&account.id) { set(snapshot); }
         }
-        if learned {
+        for (learned, file) in [(learned_weekly, TOKEN_POINTS_FILE), (learned_fable, FABLE_TOKEN_POINTS_FILE)] {
+            if !learned { continue; }
             let episodes: BTreeMap<String, Vec<tokens::Episode>> = self.tokens.lock().unwrap().iter()
-                .map(|(id, t)| (id.clone(), t.episodes.clone())).collect();
-            if let Err(error) = atomic_write(&self.cwd.join(TOKEN_POINTS_FILE), &episodes) {
+                .map(|(id, track)| {
+                    let series = if file == FABLE_TOKEN_POINTS_FILE { &track.fable } else { &track.weekly };
+                    (id.clone(), series.entries.clone())
+                }).collect();
+            if let Err(error) = atomic_write(&self.cwd.join(file), &episodes) {
                 eprintln!("[richos] quota: the tokens per point could not be kept ({error})");
             }
         }
@@ -2349,6 +2409,75 @@ pub(crate) mod tests {
             enabled: true,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn fable_week_learns_its_own_tokens_and_switches_during_a_provider_refusal() {
+        let root = Scratch::new();
+        fs::write(root.path().join(TOKEN_POINTS_FILE), json!({"1":[{
+            "points":1., "tokens":{"claude-fable-5-2":100_000_000}
+        }]}).to_string()).unwrap();
+        let service = Service::open(root.path()).unwrap();
+        let hour = 3_600_000;
+        let now = crate::util::now_millis();
+        let reset = now + 48 * hour;
+        let one = crate::claude_accounts::ACCOUNT_ONE;
+        let windows = |used| vec![
+            Window { id: "seven_day".into(), label: "Weekly".into(), used_percent: 30.,
+                resets_at: Some(reset + hour), duration_ms: 168 * hour },
+            Window { id: "model:Fable".into(), label: "Weekly · Fable".into(), used_percent: used,
+                resets_at: Some(reset), duration_ms: 168 * hour },
+        ];
+        let add = |id, model, amount, at| {
+            let row = json!({"type": "assistant", "message": {"id": id, "model": model, "usage": {
+                "input_tokens": amount, "output_tokens": 0}}});
+            service.sink.push(one, tokens::message_use(&row["message"], &row, at).unwrap());
+        };
+        let fable_used = || service.observed_readings()[one].windows.iter()
+            .find(|window| fable::is_window(&window.id)).unwrap().used_percent;
+
+        service.before_turn(one, Some((windows(40.), now - 4 * hour)));
+        add("before-episode", "claude-fable-5-2", 1_000_000, now - 3 * hour - 60_000);
+        service.before_turn(one, None);
+        assert_eq!(fable_used(), 40., "a price card supplies no Fable-week conversion");
+        service.before_turn(one, Some((windows(41.), now - 3 * hour)));
+        add("fable-episode", "claude-fable-5-2", 2_000_000, now - 2 * hour - 60_000);
+        add("opus-episode", "claude-opus-5-5", 10_000_000, now - 2 * hour - 60_000);
+        service.before_turn(one, Some((windows(43.), now - 2 * hour)));
+        assert_eq!(fable_used(), 43., "the latest answer starts a new estimate");
+
+        {
+            let mut snapshot = service.snapshot.lock().unwrap();
+            snapshot.empty(ReadError::NoReading, now - 60_000);
+            snapshot.shared_interval_ms = Some(REFRESH_INTERVAL_MS);
+            snapshot.shared_next_at = Some(now + REFRESH_INTERVAL_MS);
+        }
+        add("opus-after", "claude-opus-5-5", 100_000_000, now - 71_000);
+        service.before_turn(one, None);
+        assert_eq!(fable_used(), 43., "Opus does not spend the Fable allowance");
+        assert!(!service.fable_switch.lock().unwrap().on_opus(one, now));
+        add("fable-after", "claude-fable-5-2", 56_920_000, now - 70_000);
+        service.before_turn(one, None);
+        assert!((fable_used() - 99.92).abs() < 1e-8, "use the Fable window's own episode");
+        assert!(service.fable_switch.lock().unwrap().on_opus(one, now + 10), "switch before the first refused turn");
+        let view = service.view();
+        assert!((view.fable_estimated_used.unwrap() - 99.92).abs() < 1e-8);
+        assert_eq!(view.windows.iter().find(|w| fable::is_window(&w.id)).unwrap().used_percent,
+            43., "keep the observed figure separate from the estimate");
+
+        service.before_turn(one, Some((windows(64.), now - 1_000)));
+        assert_eq!(fable_used(), 64., "an actual answer replaces the estimate");
+        assert!(service.view().fable_estimated_used.is_none());
+        assert!(!service.using_opus_for_fable(one), "return to Fable in the same week when an actual answer shows room");
+        assert_eq!(service.fable_view().changes.iter().map(|change| change.on_opus).collect::<Vec<_>>(),
+            [true, false], "publish both model changes");
+        assert_eq!(service.fable_view().changes[1].reason, Some(fable::ChangeReason::FableRoomConfirmed));
+
+        let reopened = Service::open(root.path()).unwrap();
+        let tracks = reopened.tokens.lock().unwrap();
+        let original = &tracks[one];
+        assert_eq!(original.weekly.entries[0].tokens["claude-fable-5-2"], 100_000_000);
+        assert_eq!(original.fable.entries[0].tokens["model:Fable"], 2_000_000);
     }
     /// **The CEO, 2026-10-07**: the weekly switch point reacts to live token use before the
     /// weekly percentage moves. The app learns Opus's tokens per point from its own readings
@@ -3171,7 +3300,8 @@ pub(crate) mod tests {
         let reading = snapshot.reading_with(None, recent);
         assert!(!reading.reaches(&reading.windows[0], 93.), "the five-hour figure is fresh from the stream");
         assert!(!reading.reaches_weekly(&reading.windows[1]), "the weekly figure is fresh from the stream");
-        assert!(reading.projected(&reading.windows[2]) > 93., "the Fable figure is still from the older provider reading");
+        assert_eq!(reading.windows[2].used_percent, 73.1, "the older provider figure remains available");
+        assert!(!reading.speeds.contains_key("model:Fable"), "a refused stale sample cannot forecast Fable use without tokens");
 
         snapshot.observe(&[fable(85.6)], recent + minute);
         let provider_at = recent + 10_000;
@@ -4402,6 +4532,7 @@ added = bool(_folder) and os.path.realpath(_folder).startswith(_accounts)"#;
                 into["speeds"] = Value::Object(speed_map);
                 into["weeklyPausePoints"] = match pick(3) {
                     0 => json!({"seven_day": 94.}), 1 => json!({"seven_day": 99.4}), _ => json!({}) };
+                into["fableEstimatedUsed"] = if pick(2) == 0 { json!(99.92) } else { Value::Null };
                 into["preHold"] = match pre_holds[pick(pre_holds.len())] { Some(s) => json!({"five_hour": s}), None => json!({}) };
                 let checked_at = offsets(&checked, pick(checked.len()));
                 into["checkedAt"] = json!(checked_at);
@@ -4414,7 +4545,7 @@ added = bool(_folder) and os.path.realpath(_folder).startswith(_accounts)"#;
                 let mut work = json!({"id": "2", "label": "Work", "inUse": true});
                 reading(&mut pick, &mut work);
                 let mut home = json!({"id": "1", "label": "Home", "inUse": false});
-                for key in ["windows", "speeds", "weeklyPausePoints", "preHold", "checkedAt", "emptyAt", "message"] { home[key] = view[key].clone(); }
+                for key in ["windows", "speeds", "weeklyPausePoints", "fableEstimatedUsed", "preHold", "checkedAt", "emptyAt", "message"] { home[key] = view[key].clone(); }
                 view["accounts"] = json!([home, work]);
             }
             let account = [None, Some("1"), Some("2"), Some("9")][pick(4)];

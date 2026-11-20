@@ -290,7 +290,8 @@
     }
     const fable = view?.fableSwitch?.active?.[a.id];
     if (fable) {
-      pill += `<span class="acc-pill is-inuse">On Opus until ${esc(when(fable.resetsAt))}</span>`;
+      const status = fable.estimateBasedOn != null ? "On Opus for now" : "On Opus until " + when(fable.resetsAt);
+      pill += `<span class="acc-pill is-inuse">${esc(status)}</span>`;
       if (a.inUse) note = "Rich and the team are working on this account, on Opus for now.";
     }
     const look = kind === "leaving" ? "inuse" : kind === "arriving" ? "next" : kind;
@@ -392,9 +393,13 @@
   const bannerKey = "richos-accounts-banner-seen";
   function banner() {
     const model = view?.fableSwitch?.active?.[inUse()?.id];
-    if (model) return `<div class="acc-banner" role="status"><span class="acc-banner-icon">${ICON.swap}</span>
+    if (model) {
+      const detail = model.estimateBasedOn != null ? "The team is on Opus while Fable usage is checked."
+        : "Fable is almost used up and there’s room left in your weekly quota. Back on Fable " + when(model.resetsAt) + ".";
+      return `<div class="acc-banner" role="status"><span class="acc-banner-icon">${ICON.swap}</span>
       <div class="acc-banner-main"><p class="acc-banner-head">Rich switched everyone to Opus</p>
-      <p class="acc-banner-body">Fable is almost used up and there’s room left in your weekly quota. Back on Fable ${esc(when(model.resetsAt))}.</p></div></div>`;
+      <p class="acc-banner-body">${esc(detail)}</p></div></div>`;
+    }
     const sw = recentSwitch();
     if (sw && localStorage.getItem(bannerKey) !== String(sw.at)) {
       return `<div class="acc-banner" role="status"><span class="acc-banner-icon">${ICON.swap}</span><div class="acc-banner-main">
@@ -476,6 +481,7 @@
     }
   }
   function changeText(c) {
+    if (c.kind === "fable" && c.reason === "fableRoomConfirmed") return "Everyone is back on <b>Fable</b>. There’s still quota left.";
     if (c.kind === "fable") return c.onOpus ? "Rich switched everyone to <b>Opus</b>."
       : c.at >= c.resetsAt ? "Everyone is back on <b>Fable</b>." : "Automatic model switching was turned off.";
     const name = `<b>${esc(c.label)}</b>`;
