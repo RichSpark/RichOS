@@ -257,6 +257,25 @@ fn open_bundle(file: Option<PathBuf>) -> Result<(), String> {
 }
 
 #[cfg(target_os = "macos")]
+pub fn refresh_gestures_after_update() {
+    let launch = crate::update_startup::launch_report();
+    if launch.update_arrival.is_none() && launch.handover.is_none() {
+        return;
+    }
+    std::thread::spawn(|| {
+        if let Some(bundle) = richfiles_bundle() {
+            if let Err(error) = std::process::Command::new(bundle.join("Contents/MacOS/RichFiles"))
+                .args(["--window-gesture-service", "refresh-after-update"])
+                .stdout(std::process::Stdio::null())
+                .status()
+            {
+                eprintln!("[richos] could not check Window Gestures after update: {error}");
+            }
+        }
+    });
+}
+
+#[cfg(target_os = "macos")]
 mod mac {
     use std::ffi::{c_void, CString};
     use std::os::unix::ffi::OsStrExt;
