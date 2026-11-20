@@ -1875,6 +1875,11 @@ pub fn usage_limit_signal(frame: &Value) -> Option<crate::claude_accounts::Usage
 
 pub(crate) fn worker_usage_limit(frame: &Value) -> Option<crate::claude_accounts::UsageLimit> {
     frame.get("parent_tool_use_id")?.as_str()?;
+    worker_usage_limit_signal(frame)
+}
+
+/// A worker's own transcript does not need the SDK stream's parent tool id.
+pub(crate) fn worker_usage_limit_signal(frame: &Value) -> Option<crate::claude_accounts::UsageLimit> {
     usage_limit_signal(frame).or_else(|| {
         (frame["type"] == "assistant" && frame["error"] == "rate_limit")
             .then_some(crate::claude_accounts::UsageLimit::default())

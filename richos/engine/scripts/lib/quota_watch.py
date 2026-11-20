@@ -332,7 +332,8 @@ FIVE_HOUR_SECONDS = 5 * 3600
 STATE_KEEP_SECONDS = 2 * 86400
 POLLS_LOG_MAX = 1024 * 1024
 # The kinds a --until-reset run still wakes for.
-UNTIL_RESET_KINDS = ("RELEASE", "RESET", "WEEKLY-THRESHOLD", "WEEKLY-RELEASE", "WEEKLY-RESET-STATUS", "CANNOT-WATCH", "FAST")
+UNTIL_RESET_KINDS = ("RELEASE", "RESET", "WEEKLY-THRESHOLD", "WEEKLY-RELEASE", "WEEKLY-RESET-STATUS",
+                     "CANNOT-WATCH", "FAST", "FABLE-OPUS", "FABLE-READY", "FABLE-WORKER")
 
 
 def _last_line(fh):
@@ -1020,7 +1021,7 @@ def shared_get_usage(a, now):
     answer = record.get("answer")
     refusal = record.get("refusal")
     observed_at = int(time.time() * 1000)
-    schedule = {"provider_next_at": store.next_request_at(record, observed_at),
+    schedule = {"usage_account": store.key, "provider_next_at": store.next_request_at(record, observed_at),
                 "provider_interval_ms": store.interval(record, observed_at)}
     reason = "get_usage was refused" if isinstance(refusal, dict) and refusal.get("explicitRefusal") else None
     if not isinstance(answer, dict):
@@ -1079,7 +1080,7 @@ def read_source(a, now):
         g["why"] += " (login alarm %s)" % ("raised" if told else "NOT raised")
     f = read_reading(a.payload, now)
     f["source"] = "the status line"
-    for field in ("provider_refused", "provider_refusal_at", "provider_retry_at", "provider_age",
+    for field in ("usage_account", "provider_refused", "provider_refusal_at", "provider_retry_at", "provider_age",
                   "provider_interval_ms", "provider_next_at"):
         if field in g:
             f[field] = g[field]
@@ -1705,6 +1706,124 @@ def _read_json(path):
         return {}
 
 
+def terminal_worker_refusals(engine_root, session, seen):
+    """Find the last turn's refusal in this session's worker transcripts."""
+    if not session:
+        return {}
+    registry, _ = _load_registry(engine_root)
+    if registry is None:
+        return {}
+    refused = {}
+    for worker in registry.all_agents(include_done=True):
+        agent = worker.get("agent_id")
+        if not agent or agent in seen or worker.get("session_id") != session:
+            continue
+        if worker.get("disposition") in ("merged", "closed"):
+            continue
+        path = registry.platform_agent_transcript(worker)
+        if not path:
+            continue
+        try:
+            with open(path, "rb") as stream:
+                start = max(0, stream.seek(0, os.SEEK_END) - 64 * 1024)
+                stream.seek(start)
+                if start:
+                    stream.readline()
+                records = stream.read().splitlines()
+        except OSError:
+            continue
+        candidate = None
+        fable_model = False
+        for record in records:
+            try:
+                row = json.loads(record)
+            except (ValueError, UnicodeError):
+                continue
+            if not isinstance(row, dict):
+                continue
+            kind = row.get("type")
+            message = row.get("message")
+            model = message.get("model") if isinstance(message, dict) else None
+            if kind == "assistant" and isinstance(model, str) and model not in ("", "<synthetic>"):
+                fable_model = model == "fable" or model.startswith("claude-fable-")
+            if kind == "rate_limit_event":
+                info = row.get("rate_limit_info")
+                if isinstance(info, dict) and info.get("status") == "rejected":
+                    candidate = row
+            elif kind == "assistant" and row.get("error") == "rate_limit":
+                candidate = candidate if candidate and candidate["type"] == "rate_limit_event" else row
+            elif kind == "result" and (row.get("api_error_status") == 429 or row.get("errors")):
+                candidate = candidate or row
+            elif kind in ("user", "assistant") or (kind == "result" and row.get("stop_reason") == "end_turn"
+                                                   and not row.get("is_error")):
+                candidate = None
+        if candidate:
+            name = "".join(c for c in str(worker.get("name") or agent) if c.isprintable())
+            frame = {key: candidate[key] for key in ("type", "rate_limit_info", "api_error_status", "errors", "error")
+                     if key in candidate}
+            refused[agent] = {"id": agent, "name": name, "fableModel": fable_model, "frame": frame}
+    return refused
+
+
+def terminal_fable(a, reading, week_point, out, now, session):
+    """Pass the terminal's existing quota reading to the same rule the app uses."""
+    if app_state():
+        return None
+    previous = out.fable
+    account = reading.get("usage_account") or previous.get("account")
+    now_ms = now * 1000
+    windows = reading.get("windows", [])
+    has_fable = any(window["id"].lower() in ("model:fable", "seven_day_overage_included", "seven_day_fable")
+                    for window in windows)
+    if not account:
+        return None
+    seen = set(previous.get("notifiedWorkers", ()))
+    refused = terminal_worker_refusals(a.engine_root, session, seen)
+    if not (has_fable or previous.get("onOpusUntil") or refused):
+        return None
+    source = None
+    if has_fable and reading["state"] == "ok":
+        start = reading.get("taken_at") or now
+        next_at = _ms(reading.get("provider_next_at"))
+        source = {"windows": quota_usage_store.answer(now_ms, windows)["windows"],
+            "weeklyPausePoint": week_point,
+            "speedsPerSecond": {} if reading.get("provider_refused") else reading.get("provider_speeds", {}),
+            "providerWaitMs": max(0, next_at - start * 1000) if next_at is not None else None}
+    root = (getattr(a, "usage_root", None) or os.environ.get("RICHOS_QUOTA_FIXTURE_STORE")
+            or quota_usage_store.data_dir())
+    settings = _read_json(os.path.join(root, "claude-fable-switch.json"))
+    request = {"now": now_ms, "reading": source, "enabled": settings.get("enabled") is not False,
+               "refusals": list(refused.values())}
+    if account == previous.get("account") and "state" in previous:
+        request["state"] = previous["state"]
+    helper = os.path.join(a.engine_root, "scripts", "quota-reset.sh")
+    try:
+        completed = subprocess.run([helper, "fable-watch-v1"], input=json.dumps(request),
+                                   capture_output=True, text=True, timeout=15, check=True)
+        answer = json.loads(completed.stdout)
+        named = [agent for agent in answer.get("refusedWorkers", []) if agent in refused]
+        state = {"account": account, "state": answer["state"], "onOpusUntil": answer["onOpusUntil"],
+                 "notifiedWorkers": sorted(seen.union(named))}
+    except (OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
+        print("Fable quota switch: could not read the core decision (%s)." % type(error).__name__, flush=True)
+        return previous.get("onOpusUntil")
+    if state != previous:
+        out.fable = state
+        if out.sd:
+            _write_json(os.path.join(out.sd, "fable.json"), state)
+    if answer.get("change") == "opus":
+        out.wake("FABLE-OPUS",
+                 "The Fable week is nearly used up. For new work, take each job's pair from the fallback column in stu.md.",
+                 now)
+    elif answer.get("change") == "fable":
+        out.wake("FABLE-READY", "Fable quota is available again. New workers can use their Fable pairs.", now)
+    for agent in named:
+        out.wake("FABLE-WORKER",
+                 "%s hit the Fable limit. Resume the job from its saved work using its fallback pair in stu.md."
+                 % refused[agent]["name"], now)
+    return state["onOpusUntil"]
+
+
 def _try_lock(path, patience=0.0):
     """An open descriptor holding an exclusive flock on path, or None when
     another process holds it. The OS drops the lock when its holder dies.
@@ -1757,6 +1876,7 @@ class Out:
         self.lines = lines
         self.events = events
         self.partial = ""
+        self.fable = _read_json(os.path.join(sd, "fable.json")) if sd else {}
 
     # the file-like face, so every print() in the poll loop lands in line()
     def write(self, s):
@@ -2009,6 +2129,7 @@ def _poll_loop(a, out, alive, health=None):
             fast_alerted = r["resets_at"]
         point = five_pause_point(a, r, now, speed)
         week_point = weekly_pause_point(a, r, now, expected)
+        fable_until = terminal_fable(a, r, week_point, out, now, w.get("session"))
         verdict, why = rule_verdict(r, point, a.stale, now)
         if verdict != "unknown":
             blind_since = None
@@ -2048,7 +2169,7 @@ def _poll_loop(a, out, alive, health=None):
             print(quota_weekly.describe(r, now), flush=True)
             _poll_completed(health)
             interval = _retry_seconds(a) if retry else a.fast_poll if provider_fast else a.poll
-            _sleep_after_poll(started, interval, reset_started, reset_status, r, alive)
+            _sleep_after_poll(started, interval, reset_started, reset_status, r, alive, fable_until)
             continue
         if window_end is not None and not has_five(r) and classify(r, a.threshold, a.stale)[0] == "below":
             # THE FIVE-HOUR WINDOW WENT AWAY (second review rv-20261031T192316Z-d2322984-98af): a
@@ -2159,10 +2280,10 @@ def _poll_loop(a, out, alive, health=None):
                 sleep_for = max(1, min(sleep_for, expires_in))
         _poll_completed(health)
         # Count local polls from their start and honor the shared provider deadline.
-        _sleep_after_poll(started, sleep_for, reset_started, reset_status, r, alive)
+        _sleep_after_poll(started, sleep_for, reset_started, reset_status, r, alive, fable_until)
 
 
-def _sleep_after_poll(started, interval, reset_started, reset_status, reading, alive):
+def _sleep_after_poll(started, interval, reset_started, reset_status, reading, alive, fable_until=None):
     deadline = started + interval
     now = time.time()
     next_at = _ms(reading.get("provider_next_at"))
@@ -2178,6 +2299,8 @@ def _sleep_after_poll(started, interval, reset_started, reset_status, reading, a
         retry = retry_at / 1000
         if started < retry <= reset_started + interval + 1:
             deadline = min(provider_due, retry) if provider_due is not None else retry
+    if fable_until is not None and fable_until / 1000 > now:
+        deadline = min(deadline, fable_until / 1000)
     _nap(max(1, deadline - now), alive)
 
 

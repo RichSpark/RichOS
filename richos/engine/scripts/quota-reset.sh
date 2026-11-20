@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# User: status | approve <offer-id> | revoke. Watcher: tick (never approves).
+# User: status | approve <offer-id> | revoke. Watcher: tick or fable-watch-v1.
 # Uses the desktop's service and data directory even when the UI is not running.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -10,6 +10,9 @@ compiled_helper() {
   # own fixture so they never run the app a user installed there.
   for binary in "$HERE/../bin/richos-quota" "$HOME/Applications/RichOS.app/Contents/MacOS/richos-tauri" "${RICHOS_SYSTEM_APPLICATIONS:-/Applications}/RichOS.app/Contents/MacOS/richos-tauri"; do
     if [ -x "$binary" ]; then
+      if [ "${1:-}" = fable-watch-v1 ]; then
+        /usr/bin/grep -aFq -- 'fable-watch-v1' "$binary" || continue
+      fi
       case "$binary" in
         */richos-tauri)
           # Inspect before executing: an older app may open its GUI for an unknown flag.
@@ -25,9 +28,9 @@ compiled_helper() {
 # went through `cargo run` each time (Cargo startup and the build lock on every
 # tick, contending with real builds); a compiled helper, when one exists, serves
 # it instead. The user's own commands keep the source-aligned helper first.
-if [ "${1:-}" = tick ]; then
-  compiled_helper "$@"
-fi
+case "${1:-}" in
+  tick|fable-watch-v1) compiled_helper "$@" ;;
+esac
 if [ -f "$PRODUCT/app/Cargo.toml" ]; then
   CARGO="$(command -v cargo || true)"
   [ -n "$CARGO" ] || CARGO="$HOME/.cargo/bin/cargo"

@@ -30,6 +30,12 @@ with tempfile.TemporaryDirectory(prefix='terminal-quota-cli-') as d:
     assert not list(root.iterdir()),'refused approvals wrote state'
     r=call('status');assert r.returncode==2 and 'overrides' in r.stderr,r
     assert not list(root.iterdir()),'refused connection wrote state'
+    # The Fable command is a pure decision, independent of auth and the reset ledger.
+    decision=subprocess.run([exe['richos-quota'],'fable-watch-v1'],env=env,
+        input=json.dumps({'now':1800000000000,'enabled':True,'reading':None}),
+        capture_output=True,text=True,check=True)
+    assert json.loads(decision.stdout)['onOpusUntil'] is None
+    assert not list(root.iterdir()),'the Fable decision wrote account state'
     # HOME no longer redirects the account-wide ledger. Never run revoke here:
     # the Rust isolated-store tests cover revocation and the separate-process
     # account-path test proves that a nightly HOME resolves to the same store.
@@ -53,6 +59,11 @@ with tempfile.TemporaryDirectory(prefix='terminal-quota-cli-') as d:
     app.write_text('#!/bin/sh\n# --richos-quota-v1\nprintf "%s\\n" "$@"\n')
     r=subprocess.run([str(installed/'quota-reset.sh'),'tick'],env=env,capture_output=True,text=True)
     assert r.returncode==0 and r.stdout.splitlines()==['--richos-quota-v1','tick'],r
+    r=subprocess.run([str(installed/'quota-reset.sh'),'fable-watch-v1'],env=env,capture_output=True,text=True)
+    assert r.returncode==2 and not r.stdout,'the old helper accepted an unknown watcher operation'
+    app.write_text('#!/bin/sh\n# --richos-quota-v1 fable-watch-v1\nprintf "%s\\n" "$@"\n')
+    r=subprocess.run([str(installed/'quota-reset.sh'),'fable-watch-v1'],env=env,capture_output=True,text=True)
+    assert r.returncode==0 and r.stdout.splitlines()==['--richos-quota-v1','fable-watch-v1'],r
     # The machine-wide slot resolves to the fixture, never the real /Applications.
     app.write_text('#!/bin/sh\necho GUI-WAS-LAUNCHED\n')
     system_app=system_apps/'RichOS.app/Contents/MacOS/richos-tauri';system_app.parent.mkdir(parents=True)
