@@ -129,6 +129,16 @@ class Walk(folders.Walk):
         the label, so whether it is READABLE is read from the pictures (look at the crops)."""
         self.script('tell application "RichOS" to activate')
         time.sleep(1)
+        # Run straight after identity, a new user's setup question is up and RichFiles stays hidden
+        # while it is; put it aside the way a user can.
+        end = time.monotonic() + 40
+        while not self.center('nr-richfiles'):  # shown once the app has said RichFiles is there
+            if self.present('Not now'):
+                self.press('Not now')
+            if time.monotonic() > end:
+                self.shot('richfiles-hover-no-item.png')
+                raise StepFailed('#nr-richfiles never came on screen within 40 s')
+            time.sleep(2)
         self.click_id('nr-richfiles')
         end = time.monotonic() + 40
         while not self.text_on_screen('Quick Access'):  # RichFiles' own sidebar, drawn natively
