@@ -1089,6 +1089,8 @@ struct BrowserView: View {
                     Button("Open in New Tab") { model.newTab(first.url) }
                     Button("Open in New Window") { openFolderWindow(first.url) }
                     Button("Pin to Quick Access") { model.addFavorite(first.url) }
+                    Button("New Terminal at Folder") { openTerminal(at: first, inNewTab: false) }
+                    Button("New Terminal Tab at Folder") { openTerminal(at: first, inNewTab: true) }
                 } else {
                     Button("Open With…") { chooseApplication(first) }
                     Button("Quick Look") { sheet = .preview(first) }
@@ -1141,6 +1143,11 @@ struct BrowserView: View {
         } else {
             folderMenu
         }
+    }
+
+    private func openTerminal(at entry: FileEntry, inNewTab: Bool) {
+        do { try TerminalAtFolder.open(entry, inNewTab: inNewTab) }
+        catch { feedback = error.localizedDescription }
     }
 
     private func canSendToRichCleaner(_ entries: [FileEntry]) -> Bool {
