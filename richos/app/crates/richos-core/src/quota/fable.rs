@@ -1,5 +1,6 @@
 //! Model-specific limits can change the next model without exhausting the account.
 use super::{Reading, Window};
+use crate::claude_accounts::{LimitWindow, UsageLimit};
 use crate::config::{EffortChoices, LeaseEfforts, LeaseModels, ModelChoice};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -99,27 +100,52 @@ impl State {
             self.active.remove(&id);
             self.record(id, at, false, at);
         }
-        let Some(reading) = reading.filter(|r| week_has_room(r, now)) else { return };
+        let Some(reading) = reading else { return };
         let Some(window) = fable_window(reading) else { return };
-        if let Some(until) = window.resets_at.filter(|until| {
-            *until > now && window.used_percent >= switch_point(reading, window)
+        let Some(until) = window.resets_at.filter(|until| *until > now) else { return };
+        let at_point = window.used_percent >= switch_point(reading, window);
+        // An early reset has a fresh window and a new deadline. Re-reading a low
+        // number from the same window cannot undo a refusal that named Fable.
+        if !at_point && self.period(account, now).is_some_and(|period| {
+            until > period.resets_at && !super::same_reset(until, period.resets_at)
         }) {
+            self.active.remove(account);
+            self.record(account.into(), now, false, now);
+        }
+        if at_point && week_has_room(reading, now) {
             self.activate(account, now, until);
         }
     }
 
-    pub fn refused(&mut self, account: &str, reading: &Reading, reset: Option<u64>, now: u64) -> bool {
-        if !self.enabled || !week_has_room(reading, now) {
+    pub fn refused(&mut self, account: &str, reading: &Reading, limit: UsageLimit, now: u64) -> bool {
+        if !self.enabled || limit.window == LimitWindow::Other || !week_has_room(reading, now) {
             return false;
         }
+        let reset = limit.resets_at;
+        let matches_reset = |window: &Window| reset.zip(window.resets_at).is_some_and(|(a, b)| super::same_reset(a, b));
         if reading.windows.iter().any(|w| w.id == "five_hour" && w.resets_at.is_none_or(|t| t > now)
-            && (w.used_percent >= 100. || reset.zip(w.resets_at).is_some_and(|(a, b)| super::same_reset(a, b))))
+            && (w.used_percent >= 100. || (limit.window == LimitWindow::Unknown && matches_reset(w))))
         {
             return false;
         }
-        let until = fable_window(reading).and_then(|w| w.resets_at)
-            .or(reset)
-            .or_else(|| reading.windows.iter().find(|w| w.id == "seven_day").and_then(|w| w.resets_at));
+        let fable = fable_window(reading);
+        let fable_reset = fable.and_then(|window| window.resets_at);
+        let until = match limit.window {
+            LimitWindow::Fable => reset.or(fable_reset),
+            LimitWindow::Unknown => {
+                let Some(window) = fable else { return false };
+                // A refusal with no named window needs either measured pressure on
+                // Fable or a reset that uniquely identifies Fable's own window.
+                let distinct_reset = matches_reset(window) && !reading.windows.iter()
+                    .any(|other| !is_window(&other.id) && matches_reset(other));
+                if !distinct_reset && (window.used_percent < switch_point(reading, window)
+                    || (reset.is_some() && !matches_reset(window))) {
+                    return false;
+                }
+                fable_reset
+            }
+            LimitWindow::Other => return false,
+        };
         if let Some(until) = until.filter(|t| *t > now) {
             self.activate(account, now, until);
         }
@@ -209,10 +235,41 @@ mod tests {
     }
 
     #[test]
+    fn ambiguous_and_other_window_refusals_do_not_switch_models() {
+        let mut usage = reading(40., 30.);
+        usage.windows.push(Window {
+            id: "five_hour".into(), label: "5-hour".into(), used_percent: 10.,
+            resets_at: Some(NOW + 120_000), duration_ms: 18_000_000,
+        });
+        let mut state = State::default();
+        assert!(!state.refused("1", &usage, UsageLimit::default(), NOW));
+        for resets_at in [NOW + 120_000, END] {
+            assert!(!state.refused("1", &usage, UsageLimit { resets_at: Some(resets_at), window: LimitWindow::Unknown }, NOW));
+        }
+        assert!(!state.refused("1", &reading(40., 100.), UsageLimit { resets_at: None, window: LimitWindow::Other }, NOW));
+        assert!(!state.on_opus("1", NOW));
+    }
+
+    #[test]
+    fn a_new_fable_window_brings_everyone_back_early() {
+        let mut state = State::default();
+        state.observe("1", Some(&reading(40., 100.)), NOW);
+        let mut reset = reading(40., 0.);
+        reset.windows[1].resets_at = Some(END + 120_000);
+        state.observe("1", Some(&reset), NOW + 1);
+        assert!(!state.on_opus("1", NOW + 1));
+        assert_eq!(state.view(None, None, NOW + 1).changes.last().map(|c| (c.at, c.on_opus)),
+            Some((NOW + 1, false)));
+    }
+
+    #[test]
     fn refused_fable_can_retry_with_the_same_account_and_saved_opus_efforts() {
         let mut state = State::default();
-        assert!(state.refused("1", &reading(40., 90.), None, NOW));
-        assert!(!state.refused("2", &reading(99., 100.), None, NOW));
+        let refused = UsageLimit { resets_at: Some(END), window: LimitWindow::Fable };
+        assert!(state.refused("1", &reading(40., 90.), refused, NOW));
+        state.observe("1", Some(&reading(40., 90.)), NOW + 1);
+        assert!(state.on_opus("1", NOW + 1));
+        assert!(!state.refused("2", &reading(99., 100.), refused, NOW));
         let models = LeaseModels::default();
         let efforts = EffortChoices { rich_opus: crate::config::EffortLevel::Medium, ..EffortChoices::default() };
         assert_eq!(lease_choices(state.on_opus("1", NOW), models, efforts).1.rich, efforts.rich_opus);

@@ -2741,14 +2741,14 @@ impl Spine {
         // superseded. With no account left, nothing changes here and the turn ends as it
         // would have with one account.
         if let Err(error)=&stop {
-            if let Some(resets_at)=crate::claude_accounts::parse_usage_limit(&error.to_string()) {
+            if let Some(limit)=crate::claude_accounts::UsageLimit::from_error(&error.to_string()) {
                 if let (Some(quota),Some(account))=(self.quota_service(),delivery.account.as_deref()) {
-                    if quota.fable_limit_reached(account, delivery.model, resets_at) {
+                    if quota.fable_limit_reached(account, delivery.model, limit) {
                         self.ledger.interrupt_turn(turn_id, &error.to_string())?;
                         self.emit_live(self.turn_status_event(binding, turn_id, TurnStatus::Recovering, None));
                         return self.retry_saved_input(turn_id, binding, text, std::time::Duration::ZERO);
                     }
-                    if quota.limit_reached(account,resets_at)==crate::claude_accounts::AfterLimit::Continue {
+                    if quota.limit_reached(account,limit.resets_at)==crate::claude_accounts::AfterLimit::Continue {
                         self.ledger.interrupt_turn(turn_id,&error.to_string())?;
                         self.raise_quota_notices(Some(thread_id));
                         self.emit(StreamEvent::TurnError{thread_id:thread_id.into(),turn_id:turn_id.into(),

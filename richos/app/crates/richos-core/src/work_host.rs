@@ -376,14 +376,14 @@ impl WorkHost {
     /// `None` (no retry, the turn ends as before) when it is not a usage limit, or there is no
     /// quota service or no account to mark, as with Rich's.
     fn usage_limit_hold(self: &Arc<Self>, backend: &Arc<Backend>, binding: &ThreadBinding, error: &str) -> Option<UsageLimitHold> {
-        let resets_at = crate::claude_accounts::parse_usage_limit(error)?;
+        let limit = crate::claude_accounts::UsageLimit::from_error(error)?;
         let quota = self.quota.lock().unwrap().clone()?;
         let (account, session) = {
             let mut slot = backend.lease.lock().unwrap();
             let lease = slot.as_mut()?;
             let account = lease.account()?.to_string();
             let session = lease.session_id().to_string();
-            if quota.fable_limit_reached(&account, lease.lease_model(), resets_at) {
+            if quota.fable_limit_reached(&account, lease.lease_model(), limit) {
                 if let Err(error) = crate::cognition::apply_model_for_turn(
                     Some(self.factory.as_ref()), lease.as_mut(), true,
                 ) {
@@ -394,7 +394,7 @@ impl WorkHost {
             }
             (account, session)
         };
-        let continued = quota.limit_reached(&account, resets_at) == crate::claude_accounts::AfterLimit::Continue;
+        let continued = quota.limit_reached(&account, limit.resets_at) == crate::claude_accounts::AfterLimit::Continue;
         // `Continue` says only that another account is in use, which it already is when another
         // conversation's turn moved there first; that account may since have been refused too
         // (review of e58c2c825, P2), or be used up by its readings with no refusal yet (second
@@ -759,7 +759,7 @@ impl WorkHost {
             return;
         }
         let call = &frame["parent_tool_use_id"];
-        if let Some((reset, call)) = crate::native::worker_usage_limit(frame).zip(call.as_str()) {
+        if let Some((limit, call)) = crate::native::worker_usage_limit(frame).zip(call.as_str()) {
             let (account, task) = {
                 let inner = backend.inner.lock().unwrap();
                 if inner.fable_worker_notices.contains(call) { return; }
@@ -771,7 +771,7 @@ impl WorkHost {
             if let Some(account) = account.filter(|_| requested_fable) {
                 let quota = self.quota.lock().unwrap().clone();
                 if quota.as_ref().is_some_and(|quota| quota.fable_limit_reached(
-                    &account, Some(crate::config::ModelChoice::Fable), reset,
+                    &account, Some(crate::config::ModelChoice::Fable), limit,
                 )) {
                     backend.inner.lock().unwrap().fable_worker_notices.insert(call.to_string());
                     let told = serde_json::json!({"event":"worker_fable_limit",
@@ -1588,7 +1588,7 @@ impl WorkHost {
         let said: Mutex<Option<String>> = Mutex::new(None);
         // A refusal reported before the turn's result (a rejected `rate_limit_event`, with its
         // reset) is that turn's usage limit, as a live input's sink reads it (`native.rs`).
-        let limited: Mutex<Option<Option<u64>>> = Mutex::new(None);
+        let limited = Mutex::new(None);
         lease.set_between_turn_sink(Arc::new(move |records| {
             let Some(host) = host.upgrade() else { return };
             for frame in records {
@@ -1602,7 +1602,7 @@ impl WorkHost {
                     continue;
                 }
                 if frame["type"] == "rate_limit_event" {
-                    if let Some(reset) = crate::native::usage_limit_signal(&frame) { *limited.lock().unwrap() = Some(reset); }
+                    if let Some(limit) = crate::native::usage_limit_signal(&frame) { *limited.lock().unwrap() = Some(limit); }
                     continue;
                 }
                 // Stu's own frames between turns of ours are an automatic turn under way; a task
@@ -1619,7 +1619,7 @@ impl WorkHost {
                 let overload = said.lock().unwrap().take();
                 let limit = limited.lock().unwrap().take();
                 let result = match limit {
-                    Some(reset) => Err(crate::claude_accounts::usage_limit_error(reset, &frame.to_string())),
+                    Some(limit) => Err(limit.error(&frame.to_string())),
                     None => crate::native::native_result(&frame).map_err(|error| error.to_string())
                         .and_then(|reason| match overload {
                             Some(raw) if reason == "end_turn" => Err(raw),
@@ -4832,8 +4832,13 @@ mod tests {
         let observe = |frame| h.host.observe_worker(&backend, &h.binding, "stu-session", &frame);
         observe(serde_json::json!({"type":"system","subtype":"task_started","task_type":"local_agent",
             "tool_use_id":"worker-call","description":"Finish the saved design"}));
-        let refusal = serde_json::json!({"type":"assistant","parent_tool_use_id":"worker-call",
-            "agent_id":"agent-from-first-attempt","error":"rate_limit","richos_requested_model":"fable"});
+        observe(serde_json::json!({"type":"assistant","parent_tool_use_id":"worker-call",
+            "agent_id":"agent-from-first-attempt","error":"rate_limit","richos_requested_model":"fable"}));
+        assert!(!quota.using_opus_for_fable("1"));
+        assert!(backend.inner.lock().unwrap().fable_worker_notices.is_empty());
+        let refusal = serde_json::json!({"type":"rate_limit_event","parent_tool_use_id":"worker-call",
+            "agent_id":"agent-from-first-attempt","richos_requested_model":"fable","rate_limit_info":
+            {"status":"rejected","rateLimitType":"seven_day_fable","resetsAt":crate::util::now_millis()/1000+3600}});
         observe(refusal.clone());
         observe(refusal);
         assert!(h.host.wait_for_completed(1, std::time::Duration::from_secs(30)));

@@ -1719,7 +1719,7 @@ impl Service {
     }
 
     pub fn fable_limit_reached(
-        &self, account: &str, model: Option<crate::config::ModelChoice>, resets_at: Option<u64>,
+        &self, account: &str, model: Option<crate::config::ModelChoice>, limit: crate::claude_accounts::UsageLimit,
     ) -> bool {
         if model != Some(crate::config::ModelChoice::Fable) {
             return false;
@@ -1729,7 +1729,7 @@ impl Service {
         let Some(reading) = readings.get(account) else { return false };
         let Ok((retry, changed)) = self.update_fable(|state| {
             state.observe(account, Some(reading), now);
-            state.refused(account, reading, resets_at, now)
+            state.refused(account, reading, limit, now)
         }) else { return false };
         if changed {
             eprintln!("[richos] quota: Fable usage refusal, trying the model fallback");
