@@ -74,8 +74,8 @@
 #            /, because Claude Code lists every file under its working
 #            directory (from /, the Desktop, Downloads and every volume)
 #   G08      get_usage stays unavailable: one alert after retry, with the reason
-#   R04      this morning's 91% (07:57Z) to 95% (08:07Z), lead idle: through
-#            get_usage the pause fires before 08:07Z under 95%, no wake needed
+#   R04      91% to 95% in ten minutes, with that pace continued: the shared
+#            provider readings defer the pause until 97% and it lands below 100%
 #
 #   W12      a fallback approaching its age limit does not ask for a reply
 #   W06      a stale reading with nothing running does NOT wake the lead
@@ -1111,11 +1111,11 @@ if wants "R04"; then
 fake ok 91
 replay r04
 R04="$(tail -1 "$SB/r04.report")"
-check "R04  91% at 07:57Z, 95% at 08:07Z, lead idle, read through get_usage: the pause fires before 08:07Z under 95%, with no wake of the lead $R04" \
+check "R04  at a slow pace of two points per check, the pause waits until 97% and lands below 100% $R04" \
     "$(printf '%s' "$R04" | python3 -c '
 import json, sys
 d = json.loads(sys.stdin.read())
-ok = d["fired_at"] is not None and d["fired_at"] < 600 and 93 <= d["value"] < 95 and not d["lead_woken"] and d["via_get_usage"]
+ok = d["fired_at"] == 900 and d["value"] == 97 and d["at_hold"] < 100 and not d["lead_woken"] and d["via_get_usage"]
 sys.exit(0 if ok else 1)' 2>/dev/null; echo $?)" "report=$(cat "$SB/r04.report") out=$(cat "$SB/r04/transcript.log")"
 
 fi
@@ -1176,11 +1176,11 @@ if wants "R07"; then
 fake ok 80
 replay r07
 R07="$(tail -1 "$SB/r07.report")"
-check "R07  the fastest normal rise ever logged (4 points in 315 s) behaves as before §108: 300 s polls, no alert, the pause at the first reading at or above 93% $R07" \
+check "R07  a rise of four points in 315 s keeps 300 s polls and the hold lands below 100% $R07" \
     "$(printf '%s' "$R07" | python3 -c '
 import json, sys
 d = json.loads(sys.stdin.read())
-ok = (d["wake_at"] == 1200 and d["value"] >= 93 and not d["early"] and not d["fast_alerts"]
+ok = (d["wake_at"] == 1200 and 93 < d["value"] <= d["at_hold"] < 100 and not d["early"] and not d["fast_alerts"]
       and d["gaps"] and all(g == 300 for g in d["gaps"]))
 sys.exit(0 if ok else 1)' 2>/dev/null; echo $?)" "report=$(cat "$SB/r07.report") out=$(cat "$SB/r07/transcript.log" 2>/dev/null)"
 fi
@@ -1189,13 +1189,13 @@ if wants "R12"; then
 fake ok 10
 replay r12
 R12="$(tail -1 "$SB/r12.report")"
-check "R12  a burst at 20 points per 5 minutes, then normal speed again: back to 300 s polls, and the pause at the first reading at or above 93%, not early $R12" \
+check "R12  a burst followed by slower use restores 300 s polls and the pause lands below 100% $R12" \
     "$(printf '%s' "$R12" | python3 -c '
 import json, sys
 d = json.loads(sys.stdin.read())
 g = d["gaps"]
 ok = (len(d["fast_alerts"]) == 1 and 60 in g and len(g) >= 4 and g[-3:] == [300, 300, 300]
-      and d["wake_at"] is not None and d["value"] >= 93 and not d["early"])
+      and d["wake_at"] is not None and 93 < d["value"] <= d["at_hold"] < 100 and not d["early"])
 sys.exit(0 if ok else 1)' 2>/dev/null; echo $?)" "report=$(cat "$SB/r12.report")"
 fi
 

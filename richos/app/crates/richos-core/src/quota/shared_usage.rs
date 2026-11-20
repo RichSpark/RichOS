@@ -40,6 +40,8 @@ pub(super) struct Saved {
     pub finished_at: Option<u64>,
     pub fast_until: Option<u64>,
     pub answer: Option<Answer>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub previous_answer: Option<Answer>,
     pub refusal: Option<Refusal>,
 }
 
@@ -178,7 +180,7 @@ impl Store {
                 if let Some(windows) = windows {
                     let answer = Answer { checked_at, windows };
                     saved.fast_until = fast_until(&answer, saved.answer.as_ref());
-                    saved.answer = Some(answer);
+                    saved.previous_answer = saved.answer.replace(answer);
                 }
                 saved.refusal = None;
             }
@@ -192,6 +194,7 @@ impl Store {
         let mut saved = self.saved();
         if saved.requested_at == Some(request_at) {
             saved.answer = None;
+            saved.previous_answer = None;
             saved.fast_until = None;
             atomic_write(&self.record(), &saved)?;
         }

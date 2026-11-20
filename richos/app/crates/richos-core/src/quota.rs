@@ -76,6 +76,7 @@ pub struct Reading {
     pub weekly_cutoff: Option<f64>,
     /// Time from each window's latest observation to the next eligible provider request.
     pub provider_wait_ms: BTreeMap<String, u64>,
+    pub(crate) weekly_pause_points: BTreeMap<String, f64>,
 }
 
 /// **H, the work the weekly point leaves room for after it: 5 minutes at the measured speed.**
@@ -112,6 +113,11 @@ pub fn test_weekly_cutoff() -> Option<(String, f64)> {
 /// time between them.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Rise { pub from: f64, pub to: f64, pub ms: u64 }
+
+fn projected_pause_point(speed: f64, wait_ms: u64, resolution: f64) -> f64 {
+    (100. - speed * wait_ms as f64 - resolution).clamp(0., 100.)
+}
+
 impl Reading {
     /// Is usage measured fast enough to check every minute (§108)?
     pub fn fast(&self) -> bool {
@@ -128,33 +134,22 @@ impl Reading {
     pub fn projected(&self, window: &Window) -> f64 {
         window.used_percent + self.speeds.get(&window.id).copied().unwrap_or(0.) * self.projection_interval(window) as f64
     }
-    /// **The check point, recalculated from the measured speed** (plan §15 answer 10): the
-    /// normal threshold (93% five-hour, 99% weekly), or lower when the speed would carry the
-    /// window to 100% before the next check — `100 - speed x interval`. At normal speed it is
-    /// the normal threshold again (answer 11).
+    /// Protect the caller's chosen line if the current pace would fill the window first.
+    /// The five-hour setting remains numeric. The separate Fable switch supplies its own line.
     pub fn act_point(&self, window: &Window, threshold: f64) -> f64 {
-        let reach = self.speeds.get(&window.id).copied().unwrap_or(0.) * self.projection_interval(window) as f64;
-        // Never below 0%: a jump faster than the whole window (20% -> 95% in 30 s) would
-        // otherwise print "-36%". At 0 the window is already at the point, so it still acts at once.
-        threshold.min(100. - reach).clamp(0., 100.)
+        let speed = self.speeds.get(&window.id).copied().unwrap_or(0.);
+        threshold.min(projected_pause_point(speed, self.projection_interval(window), 0.)).clamp(0., 100.)
     }
     /// **Act now?** At the check point (§108: never at 100%).
     pub fn reaches(&self, window: &Window, threshold: f64) -> bool {
         window.used_percent >= self.act_point(window, threshold)
     }
-    /// **The weekly handoff point** (weekly-switch plan §1; his words, 2026-10-07: *"the
-    /// percentage for the switch needs to be adjusted dynamically so that this doesn't happen.
-    /// My "1-2% sooner" was just guesswork."*, "this" being 100% before the switch):
-    ///
-    /// with `s` the window's measured speed (the larger of the percentage speed and the token
-    /// speed), `I` the time to the next provider check and `H` the work left room for after
-    /// the switch ([`HANDOFF_DEFAULT_MS`]): `point = 99 - max(0, ceil(s x (I + H)) - 1)`. If the
-    /// wait for the next check and that work would use 1 point or less, it is 99; up to 2
-    /// points, 98; up to 5, 95; and so on, as early as the speed requires, with no floor but 0.
-    /// So the point plus what the wait and that work spend is at or under 100 at any speed.
-    /// Every weekly decision uses it. 99 is the test cut-off instead, on the one account it names
-    /// (`weekly_cutoff`).
+    /// Use the measured weekly point when the next provider reading is predictable.
+    /// Keep the previous conservative rule for old, missing or refused data and test cut-offs.
     pub fn weekly_point(&self, window: &Window) -> f64 {
+        if self.weekly_cutoff.is_none() {
+            if let Some(point) = self.weekly_pause_points.get(&window.id) { return *point; }
+        }
         let base = self.weekly_cutoff.unwrap_or(resets::WEEKLY_THRESHOLD);
         let speed = self.speeds.get(&window.id).copied().unwrap_or(0.);
         let points = speed * self.projection_interval(window).saturating_add(HANDOFF_DEFAULT_MS) as f64;
@@ -375,10 +370,12 @@ pub struct View {
     /// Each window's measured speed in percentage points per millisecond (§108).
     #[serde(default)]
     pub speeds: BTreeMap<String, f64>,
-    /// The check point of each window, percent used: 93 (five-hour) and 99 (weekly) at
-    /// normal speed, lower while a measured speed would otherwise reach 100% between checks.
+    /// The effective five-hour and overall weekly points shown in the panel.
     #[serde(default)]
     pub act_at: BTreeMap<String, f64>,
+    /// Measured weekly points used by the separate-process command and review gates.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub weekly_pause_points: BTreeMap<String, f64>,
     /// The rise each speed above was measured over, so the sheet's fast card says round 16's
     /// "took Home's five-hour window from 40% to 71% in 12 minutes" with the same two readings
     /// the account settings view shows.
@@ -638,7 +635,12 @@ struct Snapshot {
     shared_checked_at: Option<u64>,
     shared_next_at: Option<u64>,
     shared_interval_ms: Option<u64>,
+    weekly_pauses: BTreeMap<String, WeeklyPause>,
+    published_weekly_points: BTreeMap<String, f64>,
 }
+
+#[derive(Clone, Copy)]
+struct WeeklyPause { reset: u64, used: f64, point: f64 }
 
 /// One window's reading as a speed base: used percent, its reset time, when it was first read
 /// (`at`) and last read (`last`) at that value, and whether its rise into that value was seen
@@ -761,9 +763,55 @@ impl Snapshot {
                 else { self.window_observed_at.get(&window.id).copied() };
             self.provider_wait_ms(observed).map(|wait| (window.id.clone(), wait))
         }).collect();
-        Reading { windows, speeds,
+        let mut reading = Reading { windows, speeds,
             expected: self.rise_until.is_some_and(|t| t > now), rises: self.rises.clone(),
-            weekly_cutoff, provider_wait_ms }
+            weekly_cutoff, provider_wait_ms, weekly_pause_points: BTreeMap::new() };
+        reading.weekly_pause_points = reading.windows.iter().filter(|window| is_weekly(&window.id))
+            .filter_map(|window| {
+                let point = self.weekly_pauses.get(&window.id).filter(|pause| {
+                    window.resets_at.is_some_and(|reset| same_reset(pause.reset, reset))
+                }).map(|pause| pause.point)
+                    .or_else(|| self.published_weekly_points.get(&window.id).copied())
+                    .or_else(|| self.measured_weekly_point(window, &reading, now))?;
+                Some((window.id.clone(), point))
+            }).collect();
+        reading
+    }
+
+    fn measured_weekly_point(&self, window: &Window, reading: &Reading, now: u64) -> Option<f64> {
+        let reset = window.resets_at?;
+        let observed = *self.window_observed_at.get(&window.id)?;
+        let next = self.shared_next_at?;
+        let rise = reading.rises.get(&window.id)?;
+        if reset <= now || observed > now || now >= next || now - observed > REFRESH_INTERVAL_MS
+            || rise.ms > 2 * REFRESH_INTERVAL_MS || rise.to < rise.from || self.error.is_some()
+            || self.empty_at.is_some_and(|empty| empty >= observed) {
+            return None;
+        }
+        let wait = reading.projection_interval(window)
+            .saturating_add(probe::DEADLINE.as_millis() as u64)
+            .saturating_add(HANDOFF_DEFAULT_MS);
+        let speed = *reading.speeds.get(&window.id)?;
+        let resolution = if whole(window.used_percent) { 1. } else { 0.1 };
+        let point = projected_pause_point(speed, wait, resolution);
+        Some(if reading.expected { point.min(resets::WEEKLY_THRESHOLD) } else { point })
+    }
+
+    fn update_weekly_pauses(&mut self, now: u64) {
+        self.weekly_pauses.retain(|id, pause| {
+            now < pause.reset && self.windows.iter().find(|window| window.id == *id).is_none_or(|window| {
+                window.resets_at.is_some_and(|reset| same_reset(pause.reset, reset))
+                    && window.used_percent + 1. > pause.used
+            })
+        });
+        let reading = self.reading_with(None, now);
+        for window in reading.windows.iter().filter(|window| is_weekly(&window.id)) {
+            if let (Some(reset), Some(&point)) = (window.resets_at, reading.weekly_pause_points.get(&window.id)) {
+                if window.used_percent >= point {
+                    self.weekly_pauses.entry(window.id.clone()).or_insert(WeeklyPause { reset, used: window.used_percent, point });
+                }
+            }
+        }
     }
     fn provider_wait_ms(&self, observed: Option<u64>) -> Option<u64> {
         let interval = self.shared_interval_ms?;
@@ -779,7 +827,7 @@ impl Snapshot {
         // Missing weekly data is not evidence that a known weekly hold ended.
         let missing_held_weekly = (!windows.iter().any(|w| w.id == "seven_day"))
             .then(|| self.windows.iter().find(|w| w.id == "seven_day"
-                && w.used_percent >= resets::WEEKLY_THRESHOLD).cloned()).flatten();
+                && (w.used_percent >= resets::WEEKLY_THRESHOLD || self.weekly_pauses.contains_key(&w.id))).cloned()).flatten();
         let error = missing_held_weekly.as_ref().map(|_| ReadError::Malformed);
         if let Some(previous) = missing_held_weekly { windows.push(previous); }
         let mut speeds = std::mem::take(&mut self.speeds);
@@ -802,7 +850,9 @@ impl Snapshot {
         *self = Self { windows, checked_at: Some(observed), retry_at: None, error, speeds, bases, rises, rise_until, empty_at: None, token_speed,
             since_reading: 0., signed_in: Some(true), rise_log, window_observed_at,
             shared_checked_at: self.shared_checked_at, shared_next_at: self.shared_next_at,
-            shared_interval_ms: self.shared_interval_ms };
+            shared_interval_ms: self.shared_interval_ms, weekly_pauses: std::mem::take(&mut self.weekly_pauses),
+            published_weekly_points: BTreeMap::new() };
+        self.update_weekly_pauses(observed);
     }
 
     fn apply_shared(&mut self, saved: shared_usage::Saved, interval_ms: u64) -> bool {
@@ -815,6 +865,11 @@ impl Snapshot {
         if let Some(answer) = saved.answer.filter(|a| self.shared_checked_at.is_none_or(|at| a.checked_at > at)) {
             changed = true;
             self.shared_checked_at = Some(answer.checked_at);
+            if self.checked_at.is_none() {
+                if let Some(previous) = saved.previous_answer.filter(|previous| previous.checked_at < answer.checked_at) {
+                    self.measure(&previous.windows, previous.checked_at);
+                }
+            }
             if self.checked_at.is_none_or(|at| at <= answer.checked_at) {
                 self.accept(answer.windows, answer.checked_at);
             } else {
@@ -879,6 +934,7 @@ impl Snapshot {
         }
         self.checked_at = Some(observed);
         self.auth_known(true, observed);
+        self.update_weekly_pauses(observed);
     }
     /// An auth answer must update the whole visible fact, not leave a contradictory message.
     fn auth_known(&mut self, signed_in: bool, observed: u64) {
@@ -932,9 +988,7 @@ impl Snapshot {
         let reading = self.reading_with(weekly_cutoff, now);
         let separate_fable = fable_fallback_enabled && fable::has_general_window(&reading.windows);
         let interval = reading.interval();
-        // The two check points, recalculated from the measured speed (answer 10), shown in
-        // the panel; the normal 93% and 99% again once the speed is back down (answer 11).
-        // The weekly one is the switch point (weekly-switch plan §1).
+        // Show the user's five-hour line with its fast-use protection and the actual weekly switch point.
         let act_at: BTreeMap<String, f64> = self.windows.iter().filter_map(|w| match w.id.as_str() {
             "five_hour" => Some((w.id.clone(), reading.act_point(w, f64::from(policy.pause_percent)))),
             "seven_day" => Some((w.id.clone(), reading.weekly_point(w))),
@@ -1052,6 +1106,7 @@ impl Snapshot {
             // separate-process gate decides from the same figures.
             speeds: reading.speeds.clone(),
             act_at,
+            weekly_pause_points: reading.weekly_pause_points,
             rises: self.rises.clone(),
             agents_working: 0,
             last_switch: None,
@@ -1391,6 +1446,7 @@ impl Service {
                     signed_in: account_view.signed_in,
                     weekly_point,
                     speeds: account_view.speeds,
+                    weekly_pause_points: account_view.weekly_pause_points,
                     pre_hold: account_view.pre_hold,
                     empty_at: account_view.empty_at,
                 }
@@ -3171,6 +3227,38 @@ pub(crate) mod tests {
             "an outstanding provider reply must leave room for continued use");
     }
 
+    #[test]
+    fn measured_weekly_pause_uses_the_available_room_and_releases_on_reset() {
+        let gap = REFRESH_INTERVAL_MS;
+        let at = NOW + gap;
+        let mut state = Snapshot::default();
+        state.accept(both_at(95., 98.8), NOW);
+        state.shared_interval_ms = Some(gap);
+        state.shared_next_at = Some(at + gap);
+        state.accept(both_at(95., 99.1), at);
+        let view = state.view(policy(), at);
+        assert!((99.1..100.).contains(&view.act_at["seven_day"]));
+        assert_eq!(view.act_at["five_hour"], 93., "the desktop's numeric setting is the user's");
+        assert!(!state.reading_with(None, at).leaving(at));
+        state.shared_next_at = Some(at + 2 * gap);
+        state.accept(both_at(30., 99.6), at + gap);
+        assert!(state.reading_with(None, at + gap).leaving(at + gap), "a slow week pauses before 100%");
+
+        let check = at + gap;
+        state.shared_interval_ms = Some(FAST_REFRESH_INTERVAL_MS);
+        state.shared_next_at = Some(check + FAST_REFRESH_INTERVAL_MS);
+        // A fresh cycle with a fast rise leaves before either old fallback or 100%.
+        let fast_end = NOW + 50 * 3_600_000;
+        let fast = |used| Window { id: "seven_day".into(), label: "Weekly".into(),
+            used_percent: used, resets_at: Some(fast_end), duration_ms: 168 * 3_600_000 };
+        state.accept(vec![fast(82.)], at);
+        state.accept(vec![fast(94.)], check);
+        assert!(state.reading_with(None, check).leaving(check));
+        state.accept(vec![fast(94.)], check + gap);
+        assert!(state.reading_with(None, check + gap).leaving(check + gap), "flat while held is still held");
+        assert!(!state.reading_with(None, fast_end).leaving(fast_end));
+    }
+
     /// **§108: when usage speeds up a lot, the quota is checked every minute instead of 5**
     /// (answer 10 allows a minute; `FAST_REFRESH_INTERVAL_MS` carries the read-cost
     /// measurement). "A lot" is 5 points or more per five-minute check (1 point a minute, 3x a
@@ -4276,7 +4364,7 @@ added = bool(_folder) and os.path.realpath(_folder).startswith(_accounts)"#;
         let offsets = |v: &[Option<i64>], i: usize| v[i].map(|d| (now as i64 + d) as u64);
         let (minute, hour) = (60_000i64, 3_600_000i64);
         let five_used = [0., 50., 79.9, 80., 92.99, 93., 93.5, 97., 99., 100.];
-        let week_used = [10., 93., 94., 95., 96., 98., 99., 100.];
+        let week_used = [10., 93., 94., 95., 96., 98., 99., 99.1, 100.];
         let five_reset = [Some(-minute), Some(0), Some(1), Some(10 * minute), Some(20 * minute - 1), Some(20 * minute), Some(20 * minute + 1), Some(hour), None];
         let week_reset = [Some(-1), Some(1), Some(24 * hour), Some(80 * hour), None];
         let speeds = [None, Some(0.), Some(1e-6), Some(1. / 60_000.), Some(2e-5), Some(5e-4)];
@@ -4312,6 +4400,8 @@ added = bool(_folder) and os.path.realpath(_folder).startswith(_accounts)"#;
                     if let Some(s) = speeds[pick(speeds.len())] { speed_map.insert(id.into(), json!(s)); }
                 }
                 into["speeds"] = Value::Object(speed_map);
+                into["weeklyPausePoints"] = match pick(3) {
+                    0 => json!({"seven_day": 94.}), 1 => json!({"seven_day": 99.4}), _ => json!({}) };
                 into["preHold"] = match pre_holds[pick(pre_holds.len())] { Some(s) => json!({"five_hour": s}), None => json!({}) };
                 let checked_at = offsets(&checked, pick(checked.len()));
                 into["checkedAt"] = json!(checked_at);
@@ -4324,7 +4414,7 @@ added = bool(_folder) and os.path.realpath(_folder).startswith(_accounts)"#;
                 let mut work = json!({"id": "2", "label": "Work", "inUse": true});
                 reading(&mut pick, &mut work);
                 let mut home = json!({"id": "1", "label": "Home", "inUse": false});
-                for key in ["windows", "speeds", "preHold", "checkedAt", "emptyAt", "message"] { home[key] = view[key].clone(); }
+                for key in ["windows", "speeds", "weeklyPausePoints", "preHold", "checkedAt", "emptyAt", "message"] { home[key] = view[key].clone(); }
                 view["accounts"] = json!([home, work]);
             }
             let account = [None, Some("1"), Some("2"), Some("9")][pick(4)];

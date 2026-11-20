@@ -71,7 +71,7 @@
       <div id="quota-boundary-one" class="quota-boundary"><p><b>A pause is not a stop.</b> Each agent finishes the step it is on, then waits before the next, keeping its place and everything it knows. Because a step is allowed to finish, usage can climb a little past the line.</p>
         <p>Your conversation with Rich and any Claude Code you run outside RichOS, are never paused.</p></div>
       <div id="quota-boundary-many" class="quota-boundary" hidden><p><b>A pause is not a stop; a switch is not a restart.</b> Paused, an agent keeps its place and waits; switched, its next step runs on the next account with everything carried over.</p>
-        <p>At <b>99%</b> of an account’s week Rich switches whatever you choose here, always to the account whose week ends soonest; when every account is used up, work waits for the soonest reset.</p></div>
+        <p>Rich switches at the weekly line whatever you choose here. If every account is used up, work waits for the soonest reset.</p></div>
     </form></div></section>`;
   document.body.appendChild(sheet);
   const field = id => sheet.querySelector("#" + id);
@@ -169,7 +169,7 @@
   const fastNow = () => Object.values(view?.speeds || {}).some(s => s * 300000 >= 5);
   const expectedNow = () => !fastNow() && !!view && view.refreshIntervalMs < 300000;
   const fiveLine = () => Math.floor(view.actAt?.five_hour ?? view.policy.pausePercent);
-  const weekLine = () => Math.floor(view.actAt?.seven_day ?? 99);
+  const weekLine = () => Math.floor((view.actAt?.seven_day ?? 99) * 10) / 10;
   const verb = () => multi() && view.atThreshold === "switch" ? "switch" : "pause";
 
   function ruler(window, hero, old, line) {
@@ -267,10 +267,10 @@
       value.append(node("span", "quota-percent", "%"), node("span", "quota-unit", "used"));
       if (old) value.appendChild(node("span", "quota-tag", "stale"));
       heading.appendChild(value);
-      // With a second account the week has a switch line: 99%, earlier while usage is fast.
+      // The weekly switch line follows the account's measured pace.
       let line = primary && isCur ? fiveHourLine() : null;
       if (sel && window.id === "seven_day") {
-        const at = isCur ? weekLine() : 99;
+        const at = isCur ? weekLine() : Math.floor((sel.weeklyPoint ?? 99) * 10) / 10;
         line = { at, was: at !== 99 ? 99 : null, on: true, weekly: true };
         const sw = node("span", "quota-row-switch", `switches at ${at}%`);
         if (at !== 99) sw.appendChild(node("span", "quota-was", " · was 99%"));
@@ -464,7 +464,7 @@
       let then;
       if (!on && !many) then = "Automatic pause is off, so nothing acts before it reaches 100%.";
       else if (!on) then = `The weekly switch ${week !== 99 ? `moved to <b>${week}%</b>` : "stays at <b>99%</b>"}; the five-hour line is off, so nothing acts there.`;
-      else if (moved) then = `The ${many ? "lines" : "line"} moved to ${lines(five, week)} so nothing reaches 100%; ${many ? "they return" : "it returns"} to ${t}%${many ? " and 99%" : ""} when the speed comes back down.`;
+      else if (moved) then = `The ${many ? "lines" : "line"} moved to ${lines(five, week)} to leave room before 100%.`;
       else then = `At this speed the next check still comes before 100%, so the ${many ? "lines stay" : "line stays"} at ${lines(t, 99)}.`;
       return { head: "Usage is fast.", body: `${what} ${then}` };
     }
@@ -474,7 +474,7 @@
   }
   function renderStatus() {
     const held = activity?.held || [], released = activity?.released || [];
-    const weeklyHeld = view?.windows?.some(w => w.id === "seven_day" && w.usedPercent >= 99 && w.resetsAt > Date.now());
+    const weeklyHeld = view?.windows?.some(w => w.id === "seven_day" && w.usedPercent >= (view.actAt?.seven_day ?? 99) && w.resetsAt > Date.now());
     const enabled = view?.policy.enabled, state = view?.admission?.state, now = Date.now();
     const title = field("quota-hold-status"), detail = field("quota-hold-detail"), list = field("quota-held");
     const agents = held.filter(r => r.kind === "agent").length;
@@ -520,7 +520,7 @@
           + (many ? "." : " or sooner if a fresh reading is back under the line.");
       } else {
         head = admitted ? "Releasing the pause…" : agents ? `${agents} ${agents === 1 ? "agent is" : "agents are"} paused` : assignments ? `${assignments} ${assignments === 1 ? "assignment is" : "assignments are"} paused` : "Waiting to start an agent";
-        body = esc(admitted ? "The allowance permits work. Waiting for each pause to clear." : weeklyHeld ? "Weekly usage reached 99%. Waiting for a confirmed reset and available allowance." : activity.resumesAt ? `Can continue just after ${clock(activity.resumesAt)} when the reset is under 20 minutes away.` : "Waiting for a current five-hour reading. Their work is saved.");
+        body = esc(admitted ? "The allowance permits work. Waiting for each pause to clear." : weeklyHeld ? `Weekly usage reached ${weekLine()}%. Waiting for a confirmed reset and available allowance.` : activity.resumesAt ? `Can continue just after ${clock(activity.resumesAt)} when the reset is under 20 minutes away.` : "Waiting for a current five-hour reading. Their work is saved.");
         if (enabled) body += " Continuing now turns automatic pause off.";
       }
       if (many && enabled && view.atThreshold !== "switch" && nx) body += ` <b>${esc(nx.label)}</b> has room: choose <i>switch</i> above and they continue there now.`;
@@ -532,7 +532,7 @@
       // sentence, because a turned-away step runs again on the next account with room.
       const spent = five ? "five-hour window" : "week";
       body = many ? (five ? `Rich’s agents keep working through the line. If ${cur ? poss(cur.label) : "the"} five-hour window runs out, the step Claude Code turns away runs again on the next account with room. ` : "Rich’s agents keep working. ")
-          + "The switch at 99% of the week still happens; that is what a second account is for."
+          + `Rich still switches at the weekly line of ${weekLine()}%.`
         : `Rich’s agents keep working through the limit. When the ${spent} is spent, Claude Code turns them away until it resets and Rich tells you.`;
     } else if (noReading) {
       // Not drawn in round 16: the check came back with no figures, so nothing is held on it.
@@ -541,7 +541,7 @@
       body = `${state === "unknown" ? "There is no current usage reading" : view.message ? "The last check brought no usage figures" : "Claude Code’s last answer had no usage figures"} and the pause acts only on a number. Rather than wait on Claude Code, Rich’s agents keep working; the pause acts again once a reading shows ${five ? `the five-hour window past <b>${fiveLine()}%</b>` : `the week at <b>${weekLine()}%</b>`}.`
         + (ask > now ? ` RichOS asks again in <span class="quota-keep">${esc(duration(ask - now))}.</span>` : "");
     } else if (state === "held") {
-      head = "Ready to pause"; body = esc(weeklyHeld ? "Weekly usage reached 99%. Agents will pause at their next step until allowance is confirmed." : `The five-hour allowance has reached ${view.policy.pausePercent}%. Agents will pause when they finish their current step. No pauses observed yet.`);
+      head = "Ready to pause"; body = esc(weeklyHeld ? `Weekly usage reached ${weekLine()}%. Agents will pause at their next step until allowance is confirmed.` : `The five-hour allowance has reached ${fiveLine()}%. Agents will pause when they finish their current step. No pauses observed yet.`);
     } else {
       acting = true;
       const five = many ? winOf(cur, "five_hour") : (view.windows || []).find(w => w.id === "five_hour");
@@ -567,7 +567,7 @@
       } else {
         // Round 16's `hold-idle` with one account, `two` / `choice-pause` with several.
         head = "On. Nothing is waiting.";
-        body = `${whose} five-hour window is at ${used}. Agents pause the moment it passes <b>${line}%</b>, unless the reset is under 20 minutes away. Then it is not worth stopping.` + (many && nx && cur ? ` ${esc(nx.label)} stays idle until ${poss(cur.label)} week reaches 99%.` : "");
+        body = `${whose} five-hour window is at ${used}. Agents pause the moment it passes <b>${line}%</b>, unless the reset is under 20 minutes away. Then it is not worth stopping.` + (many && nx && cur ? ` ${esc(nx.label)} stays idle until ${poss(cur.label)} week reaches ${weekLine()}%.` : "");
       }
     }
     const speed = view ? speedNote() : null;
@@ -602,7 +602,7 @@
     const row = document.getElementById("set-quota-open"), text = document.getElementById("set-quota-state");
     if (!row || !text) return;
     // The WEEKLY window, labeled (the CEO 2026-10-06: "not supposed to be the weekly?"): the
-    // account switch happens at 99% of the week. The sheet itself keeps both windows.
+    // account switch happens at the weekly line. The sheet itself keeps both windows.
     const week = view?.windows?.find(w => w.id === "seven_day"), n = activity?.held?.filter(r => r.kind === "agent").length || 0;
     const cur = inUseAcct(), nx = multi() ? nextAcct() : null;
     let reading = week ? `${Math.round(week.usedPercent)}% weekly used` : "";
@@ -769,7 +769,7 @@
       // Round 18's confirmation: the account near its limit says when Rich switches again
       // (the CEO's own test, the 97% account); otherwise which account is next.
       const week = winOf(inUseAcct(), "seven_day")?.usedPercent, nx = nextAcct();
-      const then = week >= 90 ? ` ${pick.label} has already used ${Math.floor(week)}% of its week, so Rich will switch again when it reaches 99%.`
+      const then = week >= 90 ? ` ${pick.label} has already used ${Math.floor(week)}% of its week, so Rich will switch again when it reaches ${weekLine()}%.`
         : nx ? ` ${nx.label} is next.` : "";
       feedback(pick ? `Rich now uses ${pick.label}.${then}` : "", true);
       field("quota-lanes").querySelector(".quota-lane-first")?.focus();

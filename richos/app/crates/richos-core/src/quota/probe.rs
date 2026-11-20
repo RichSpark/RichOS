@@ -11,7 +11,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-const DEADLINE: Duration = Duration::from_secs(20);
+pub(super) const DEADLINE: Duration = Duration::from_secs(20);
 const MAX_FRAME: u64 = 256 * 1024;
 const STDERR_BYTES: usize = 4096;
 

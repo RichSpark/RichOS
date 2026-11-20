@@ -63,6 +63,33 @@ def run_polls(readings,worker_rows,polls,args=None,out_cls=None,reset_answers=No
     raise AssertionError('the poll loop returned before its polls were done')
 
 class Weekly(unittest.TestCase):
+    def test_projection_uses_the_shared_deadline_at_fast_and_slow_paces(self):
+        a = watcher.speed_settings(types.SimpleNamespace(threshold=93, poll=300, stale=300))
+        for used, speed, seconds, crosses in [(95.0, 0.001, 300, False), (98.9, 0.003, 300, True),
+                                              (95.0, 0.04, 60, True), (88.0, 0.04, 60, False)]:
+            r = {**reading(used, used), 'source': 'get_usage', 'taken_at': NOW,
+                 'provider_next_at': (NOW + seconds) * 1000, 'provider_interval_ms': seconds * 1000,
+                 'provider_speeds': {'five_hour': speed, 'seven_day': speed}}
+            point = watcher.five_pause_point(a, r, NOW)
+            week_point = watcher.provider_pause_point(a, r, r['windows'][0], NOW)
+            self.assertEqual(used >= point, crosses, (used, point))
+            self.assertEqual(used >= week_point, crosses, (used, week_point))
+            self.assertLess(point, 100)
+            self.assertLess(week_point, 100)
+        r['provider_refused'] = 'stand-in refusal'
+        self.assertIsNone(watcher.provider_pause_point(a, r, r['windows'][0], NOW))
+
+    def test_weekly_hold_waits_for_a_new_cycle_even_after_the_projected_point_recovers(self):
+        r = reading(95)
+        w = workers(held=['worker'])
+        w['weekly_pause_resets'] = {'worker': r['windows'][0]['resets_at']}
+        args = types.SimpleNamespace(stale=300)
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(weekly.handle(args, r, NOW, w, {}, lambda: 'below'), (True, False))
+            r['windows'][0]['resets_at'] += 604800
+            r['windows'][0]['used'] = 1
+            self.assertEqual(weekly.handle(args, r, NOW, w, {}, lambda: 'below'), (False, True))
+
     def test_all_reported_windows_and_provider_names(self):
         windows = weekly.windows({'five_hour':{'utilization':14,'resets_at':'2099-01-01T00:00:00Z'},
             'seven_day':{'utilization':92,'resets_at':'2099-01-02T00:00:00Z'},
