@@ -472,7 +472,22 @@ declare_rules() {
   routine '^\[richos\] launch opens in no conversation; he picks one$' \
     'a launch with conversations on disk selects none (main.rs open_launch_context); a decision, not a finding'
   routine '^\[richos\] boot complete' \
-    'the terminator, printed by setup as its last act'
+    'the terminator: setup has returned and the first-run setup report has printed (boot_marker in main.rs)'
+  # WHAT THE APP DOES WHILE THE FIRST ENGINE CHECK RUNS. Since a23ac2641 that check runs off the
+  # window thread and the first-run setup report waits for it, so `boot complete` waits too: on a
+  # first launch the check reads every runtime file (12755 files, 12015 ms in the test guest on
+  # 2026-11-19) and the lines below, which used to follow the terminator, can now precede it.
+  # Each is the app working, none says where a configuration was found, and only the form that
+  # reports success is here: `yt-dlp: check failed`, `home field: could not read the corpus
+  # census` and `no spare front desk was made ready` stay unaccounted.
+  routine '^\[richos\] home field: [0-9]+ object\(s\) of [0-9]+ record\(s\) at /.+, [0-9]+ link\(s\), [0-9]+ source\(s\), [0-9]+ question\(s\) asked\. Whether that replaces the demonstration is home\.js.s HOME_FIELD_MIN_OBJECTS, not this line\.$' \
+    'the census the home screen draws from the corpus the memory proof above resolved; a count, not a resolution'
+  routine '^\[richos\] yt-dlp: (installed nightly [0-9.]+( \(replaces [0-9.]+\))?|nightly [0-9.]+ is the newest)$' \
+    'the background yt-dlp refresh, three seconds after start-up, finished; its failed form stays unaccounted'
+  routine '^\[richos\] conversation preparation finished in [0-9]+ ms(, including connection startup)?$' \
+    'the first conversation was made ready ahead of the first send; conduct after resolution'
+  routine '^\[richos\] next conversation ready for [a-z0-9-]+: preparation took [0-9]+ ms$' \
+    'the spare conversation was made ready; conduct after resolution'
   # `engine::source_commit_note` (54e79b7f): the artifact under test is built inside this checkout
   # with RICHOS_SOURCE_SHA set, so the healthy line names a commit. The other shape — "built
   # outside a checkout, so it cannot name its source commit" — stays UNACCOUNTED on purpose: a

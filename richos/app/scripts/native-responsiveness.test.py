@@ -33,7 +33,7 @@ source = APP / "src-tauri/src/main.rs"
 s = source.read_text()
 s = s.replace("richos_core::company::install_central_root()", 'Some(PathBuf::from(std::env::var_os("RICHOS_NATIVE_TEST_DIR").unwrap()).join("central"))')
 s = s.replace("tauri::generate_handler![", "tauri::generate_handler![native_test_record,", 1)
-anchor = '            eprintln!("[richos] boot complete'
+anchor = '            boot_marker(|marker| marker.setup_returned = true);'
 i = s.index(anchor)
 s = s[:i] + '''            {
                 let handle = app.handle().clone();

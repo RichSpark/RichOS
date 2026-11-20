@@ -25,10 +25,12 @@
 #   L11 the second incident replayed: the SwearMeter rule removed -> RED, located in swearmeter_host.rs
 #   L12 a new launch line in a crate's source file -> RED, located in that file
 #   L13 the same line in a crate's src/bin program or in a test module kept in its own file -> clean
+#   L14 native-responsiveness.test.py's insertion point (the end of setup, where `boot complete` is
+#       released) is in main.rs exactly once: that test is run by hand and patches a copy of main.rs
 #
 # run-tests: no-host-screen: reads source files and runs grep and bash on rule declarations; nothing is launched
-# run-tests: inputs richos/app/scripts/gui-boot-launch-lines.test.sh richos/app/scripts/gui-boot-launch-lines.py richos/app/scripts/gui-boot-launch-lines.unaccounted richos/app/scripts/gui-boot.test.sh richos/app/src-tauri/src/main.rs richos/app/src-tauri richos/app/crates richos/app/scripts/proof-for.sh
-# run-tests: covers richos/app/scripts/gui-boot-launch-lines.py richos/app/scripts/gui-boot-launch-lines.unaccounted richos/app/src-tauri/src/main.rs richos/app/scripts/gui-boot.test.sh
+# run-tests: inputs richos/app/scripts/gui-boot-launch-lines.test.sh richos/app/scripts/gui-boot-launch-lines.py richos/app/scripts/gui-boot-launch-lines.unaccounted richos/app/scripts/gui-boot.test.sh richos/app/src-tauri/src/main.rs richos/app/src-tauri richos/app/crates richos/app/scripts/proof-for.sh richos/app/scripts/native-responsiveness.test.py
+# run-tests: covers richos/app/scripts/gui-boot-launch-lines.py richos/app/scripts/gui-boot-launch-lines.unaccounted richos/app/src-tauri/src/main.rs richos/app/scripts/gui-boot.test.sh richos/app/scripts/native-responsiveness.test.py
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP="$(cd "$HERE/.." && pwd)"
@@ -208,6 +210,20 @@ if [ "$CODE" -eq 0 ]; then
   ok "L13 the same line in a crate's src/bin program and in a test module kept in its own file is not a launch line"
 else
   bad "L13 other programs and out-of-line test modules are out of scope" "exit $CODE: $(printf '%s' "$OUT" | head -6 | tr '\n' ' ')"
+fi
+
+# --- L14: the hand-run native test inserts its probe at the end of setup, found by a literal line.
+COUNT="$(python3 -B - "$HERE/native-responsiveness.test.py" "$MAIN" <<'PY'
+import ast, sys
+test, main = sys.argv[1:3]
+rows = [l for l in open(test, encoding="utf-8").read().split("\n") if l.startswith("anchor = ")]
+print(open(main, encoding="utf-8").read().count(ast.literal_eval(rows[0].split("=", 1)[1].strip())) if len(rows) == 1 else -1)
+PY
+)"
+if [ "$COUNT" = 1 ]; then
+  ok "L14 native-responsiveness.test.py's insertion point is in main.rs exactly once"
+else
+  bad "L14 native-responsiveness.test.py's insertion point" "its anchor line is in main.rs $COUNT time(s), want 1 (-1: no single anchor row in the test)"
 fi
 
 printf '\n=== gui-boot-launch-lines.test.sh: %d FAILED, %d passed ===\n' "$FAIL" "$PASS"
