@@ -1,12 +1,14 @@
 """Read a pending terminal handoff without running the author's shell command."""
 
+import ast
+from collections import defaultdict, deque
 from dataclasses import dataclass
 import os
 from pathlib import Path
 import re
 import shlex
 
-from command_reader import _redirect_parts, commands
+from command_reader import ASSIGNMENT, SHELLS, _redirect_parts, _unwrap, _words
 from host_sleep import heredocs
 from unguarded_rm import tokenize
 
@@ -14,6 +16,7 @@ from unguarded_rm import tokenize
 DEFAULT_OUTBOX = "~/.richos-coordination/rich-codex/to-codex.md"
 BRIEF = re.compile(r"""(?<![\w./-])(?:[~/][^\s`"'<>()[\]]*/)?(?:[\w.-]+/)*docs/briefs/[^\s`"'<>()[\]]+?\.md\b""")
 ENTRY = re.compile(r"^## \d{4}-\d{2}-\d{2}T\S+[ \t]+", re.M)
+SHELL_VARIABLE = re.compile(r"\$\{([A-Za-z_]\w*)\}|\$([A-Za-z_]\w*)")
 
 
 @dataclass(frozen=True)
@@ -31,63 +34,150 @@ class Handoff:
 
 
 def path_at(word, cwd):
-    # Expand only the conventional home spelling. Shell code is never evaluated.
-    word = re.sub(r"^\$(?:HOME(?=/)|\{HOME\}(?=/))", lambda _: str(Path.home()), word)
     return (cwd / Path(word).expanduser()).resolve()
 
 
-def shell_targets(raw, cwd):
-    """Find literal output redirections, including ones attached to a word."""
+def shell_value(word, variables):
+    """Resolve simple, previously assigned shell variables as literal data."""
+    word = SHELL_VARIABLE.sub(lambda match: variables.get(match[1] or match[2], match[0]), word)
+    if "$" in word or "`" in word:
+        return None
+    return word
+
+
+def shell_path(word, cwd, variables):
+    value = shell_value(word, variables)
+    return path_at(value, cwd) if value is not None else None
+
+
+def shell_targets(raw, cwd, variables):
+    """Find output redirections, including ones attached to a word."""
     redirect = None
     for word in raw:
         for operator, part in _redirect_parts(word):
             if operator:
                 redirect = part
             elif redirect:
-                if redirect in (">", ">>") and "$(" not in part and "`" not in part:
+                if redirect in (">", ">>"):
                     for value in shlex.split(part):
-                        yield path_at(value, cwd)
+                        yield shell_path(value, cwd, variables)
                 redirect = None
 
 
-def shell_handoff(command, cwd, outbox, depth=0):
-    if outbox.name not in command or depth > 8:
+def python_name(node):
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return python_name(node.value) + "." + node.attr
+    return ""
+
+
+def python_path(node, variables):
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return Path(node.value)
+    if isinstance(node, ast.Name):
+        return variables.get(node.id)
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+        left, right = python_path(node.left, variables), python_path(node.right, variables)
+        return left / right if left is not None and right is not None else None
+    if isinstance(node, ast.Call):
+        name = python_name(node.func)
+        if name in ("Path.home", "pathlib.Path.home"):
+            return Path.home()
+        if name in ("Path", "pathlib.Path", "os.path.expanduser") and node.args:
+            return python_path(node.args[0], variables)
+    return None
+
+
+def python_writes(source, cwd, outbox):
+    """Recognize open and Path writes in inline Python without executing it."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return False
+    variables = {}
+    operations = sorted((node for node in ast.walk(tree) if isinstance(node, (ast.Assign, ast.Call))),
+                        key=lambda node: (node.lineno, node.col_offset))
+    for node in operations:
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    variables[target.id] = python_path(node.value, variables)
+            continue
+        mode = None
+        if python_name(node.func) in ("open", "io.open") and node.args:
+            path = python_path(node.args[0], variables)
+            mode = node.args[1] if len(node.args) > 1 else None
+        elif isinstance(node.func, ast.Attribute) and node.func.attr in ("open", "write_text", "write_bytes"):
+            path = python_path(node.func.value, variables)
+            if node.func.attr != "open" and path is not None and path_at(path, cwd) == outbox:
+                return True
+            mode = node.args[0] if node.args else None
+        else:
+            continue
+        mode = next((arg.value for arg in node.keywords if arg.arg == "mode"), mode)
+        if (isinstance(mode, ast.Constant) and isinstance(mode.value, str) and set(mode.value) & set("awx+")
+                and path is not None and path_at(path, cwd) == outbox):
+            return True
+    return False
+
+
+def documents_by_command(command):
+    documents = defaultdict(deque)
+    for head, body in heredocs(command):
+        rows, _ = tokenize(head)
+        if rows:
+            key = (*rows[-1], "<<")
+            quoted_head = re.compile(re.escape(head) + r"<<-?[ \t]*(['\"])[A-Za-z_][A-Za-z0-9_]*\1[^\n]*\n")
+            quoted = any(command.startswith(body, match.end()) for match in quoted_head.finditer(command))
+            documents[key].append((body, quoted or not re.search(r"[$`\\]", body)))
+    return documents
+
+
+def shell_handoff(command, cwd, outbox, depth=0, inherited=None):
+    inherited = inherited or {}
+    if depth > 8 or (outbox.name not in command and
+                     not any(outbox.name in value for value in inherited.values())):
         return None
     rows, nested = tokenize(command)
-    # For the usual quoted cat heredoc, review exactly the Markdown it writes.
-    if rows and not nested and command.count(outbox.name) == 1:
-        documents = heredocs(command)
-        if len(documents) == 1:
-            head, body = documents[0]
-            header_rows, _ = tokenize(head)
-            argv = list(commands(head))
-            quoted = re.search(re.escape(head) + r"<<-?[ \t]*(['\"])[A-Za-z_][A-Za-z0-9_]*\1", command)
-            if (header_rows and argv and argv[-1] == ["cat"]
-                    and outbox in shell_targets(header_rows[-1], cwd)
-                    and (quoted or not re.search(r"[$`\\]", body))):
-                return Handoff(outbox, body)
-    if any(outbox in shell_targets(row, cwd) for row in rows):
-        return Handoff(outbox, command, shell=True)
-    for argv in commands(command):
-        if Path(argv[0]).name == "tee" and any(
-                path_at(word, cwd) == outbox for word in argv[1:] if not word.startswith("-")):
-            return Handoff(outbox, command, shell=True)
-        if Path(argv[0]).name in ("bash", "sh", "zsh", "eval"):
-            # Nested shell redirects are already visible in the tokenizer for
-            # substitutions, but a literal -c argument is an ordinary word.
-            script = (" ".join(argv[1:]) if argv[0] == "eval" else
-                      argv[argv.index("-c") + 1] if "-c" in argv[:-1] else "")
-            if script and script != command and shell_handoff(script, cwd, outbox, depth + 1):
+    documents = documents_by_command(command)
+    variables = {"HOME": str(Path.home()), **inherited}
+    entries = []
+    for row in rows:
+        words = _words(row)
+        for word in words[1:] if words[:1] == ["export"] else words:
+            if not ASSIGNMENT.match(word):
+                break
+            name, value = word.split("=", 1)
+            resolved = shell_value(value, variables)
+            if resolved is None:
+                variables.pop(name, None)
+            else:
+                variables[name] = resolved
+        argv = _unwrap(words)
+        program = Path(argv[0]).name if argv else ""
+        group = documents.get(tuple(row))
+        body, literal = group.popleft() if group else ("", False)
+        if outbox in shell_targets(row, cwd, variables):
+            if program == "cat" and len(argv) == 1 and literal:
+                entries.append(body)
+            else:
                 return Handoff(outbox, command, shell=True)
-    if any(shell_handoff(body, cwd, outbox, depth + 1) for body in nested):
-        return Handoff(outbox, command, shell=True)
-    # The lead also uses Python's literal open(path, mode). Read-only mentions
-    # of the channel in commands and in shell output are common.
-    for match in re.finditer(
-            r"""\bopen\(\s*(?:os\.path\.expanduser\(\s*)?(['"])([^'"\n]+)\1\s*\)?\s*,\s*['"][awx][bt+]*['"]""",
-            command):
-        if path_at(match[2], cwd) == outbox:
+        if program == "tee" and any(shell_path(word, cwd, variables) == outbox for word in argv[1:]):
             return Handoff(outbox, command, shell=True)
+        inline = argv[argv.index("-c") + 1] if "-c" in argv[:-1] else ""
+        if re.fullmatch(r"python(?:3(?:\.\d+)?)?", program) and python_writes(body or inline, cwd, outbox):
+            return Handoff(outbox, command, shell=True)
+        if program in SHELLS or program == "eval":
+            script = " ".join(argv[1:]) if program == "eval" else body or inline
+            if shell_handoff(script, cwd, outbox, depth + 1, variables):
+                return Handoff(outbox, command, shell=True)
+        if program == "cd" and len(argv) == 2:
+            cwd = shell_path(argv[1], cwd, variables) or cwd
+    if any(shell_handoff(body, cwd, outbox, depth + 1, variables) for body in nested):
+        return Handoff(outbox, command, shell=True)
+    if entries:
+        return Handoff(outbox, "\n".join(entries))
     return None
 
 

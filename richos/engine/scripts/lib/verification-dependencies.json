@@ -10541,7 +10541,7 @@
     },
     "scripts/lib/codex_handoff.py": {
       "source": "scripts/lib/codex_handoff.py",
-      "sha256": "89103c25986df9a34731409928120b4847eeb3a6e0c21e23996403f0b738698e",
+      "sha256": "3a0241f6c874e23621790cde6df75d9a6ebeb5af0964a0df1bb0844a3bfc484e",
       "evidence": "Statically reads terminal tool input using the shared shell lexer. Uses the literal channel path or the inherited test override and reads the existing channel only to isolate an appended Write. Does not execute shell input or read orchestration configuration.",
       "keys": [],
       "edges": [

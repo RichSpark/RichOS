@@ -1096,7 +1096,7 @@ print(json.dumps({"structured_output": {
         self.assertIn("Keep the existing API.", captured["user_requests_in_order"])
         self.assertEqual(captured["outgoing_assignment"].strip(), entry.strip())
         self.assertEqual(captured["codex_handoff"]["brief_files"],
-                         {str(brief): hashlib.sha256(brief.read_bytes()).hexdigest()})
+                         {str(brief.resolve()): hashlib.sha256(brief.read_bytes()).hexdigest()})
 
         report_id = re.search(r"--dismiss ([a-f0-9]{64}) ", blocked.stderr)[1]
         report = json.loads((self.root / "config/state/pierce" / (report_id + ".json")).read_text())
@@ -1157,6 +1157,35 @@ print(json.dumps({"structured_output": {
         self.assertIn("Pierce UNAVAILABLE", result.stderr)
         self.assertIn("fixture reviewer is unreachable", result.stderr)
         self.assertEqual(outbox.read_text(), "")
+
+    def test_codex_handoff_extracts_compound_entries_and_resolves_write_targets(self):
+        outbox, _, env, entry = self.handoff_fixture()
+        declared = shlex.quote(str(outbox))
+        status = "\n## 2026-11-20T13:00:00Z STATUS: LANDED\nPushed `abc123`.\n"
+        append = "cat >> \"$out\" <<'ENTRY'\n{body}ENTRY\ntail -2 \"$out\"\n"
+        checkpoint = ("python3 - <<'PY'\n"
+                      f"from pathlib import Path\nPath({str(outbox.with_name('receipt.md'))!r}).write_text('ready')\n"
+                      "PY\n")
+        commands = [
+            (f"out={declared}; " + append.format(body=status) + checkpoint, None),
+            (f"out={declared}; " + append.format(body=entry) + checkpoint, entry.strip()),
+            (f"out={declared}; echo \"$(printf 'Build it' >> \"$out\")\"", "shell"),
+            (f"cd {shlex.quote(str(outbox.parent))} && "
+             f"cat >> {outbox.name} <<'ENTRY'\n{entry}ENTRY", entry.strip()),
+            (f"python3 - <<'PY'\nfrom pathlib import Path\np=Path({str(outbox.parent)!r})/{outbox.name!r}\n"
+             "with p.open('a') as handle: handle.write('Remove the API.')\nPY", "shell"),
+            (f"python3 - <<'PY'\nfrom os import path\np={str(outbox)!r}\n"
+             "with open(p, mode='a') as handle: handle.write('Remove the API.')\nPY", "shell"),
+            (f"python3 - <<'PY'\nfrom pathlib import Path\nPath({str(outbox)!r}).read_text()\nPY", None),
+            (f"out={declared}; tail -2 \"$out\"; " + checkpoint, None),
+        ]
+        with patch.dict(os.environ, env):
+            for command, expected in commands:
+                with self.subTest(command=command):
+                    payload = {**self.payload, "tool_name": "Bash", "tool_input": {"command": command}}
+                    handoff = P.pending_handoff(payload)
+                    actual = None if handoff is None else "shell" if handoff.shell else handoff.text.strip()
+                    self.assertEqual(actual, expected)
 
     def test_codex_handoff_tools_have_the_same_inspection_budget_as_agent(self):
         hooks = json.loads((ENGINE / "hooks/hooks.json").read_text())["hooks"]["PreToolUse"]
