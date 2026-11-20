@@ -74,8 +74,8 @@ pub struct Reading {
     /// §4): it replaces 99 as the weekly point at normal speed. `None` everywhere but the one
     /// account the variable names.
     pub weekly_cutoff: Option<f64>,
-    /// Time from the saved provider reading to the next eligible request.
-    pub provider_wait_ms: Option<u64>,
+    /// Time from each window's latest observation to the next eligible provider request.
+    pub provider_wait_ms: BTreeMap<String, u64>,
 }
 
 /// **H, the work the weekly point leaves room for after it: 5 minutes at the measured speed.**
@@ -121,19 +121,19 @@ impl Reading {
     pub fn interval(&self) -> u64 {
         if self.fast() || self.expected { FAST_REFRESH_INTERVAL_MS } else { REFRESH_INTERVAL_MS }
     }
-    fn projection_interval(&self) -> u64 {
-        self.provider_wait_ms.unwrap_or_else(|| self.interval())
+    fn projection_interval(&self, window: &Window) -> u64 {
+        self.provider_wait_ms.get(&window.id).copied().unwrap_or_else(|| self.interval())
     }
     /// What this window will read at the next check, at its measured speed.
     pub fn projected(&self, window: &Window) -> f64 {
-        window.used_percent + self.speeds.get(&window.id).copied().unwrap_or(0.) * self.projection_interval() as f64
+        window.used_percent + self.speeds.get(&window.id).copied().unwrap_or(0.) * self.projection_interval(window) as f64
     }
     /// **The check point, recalculated from the measured speed** (plan §15 answer 10): the
     /// normal threshold (93% five-hour, 99% weekly), or lower when the speed would carry the
     /// window to 100% before the next check — `100 - speed x interval`. At normal speed it is
     /// the normal threshold again (answer 11).
     pub fn act_point(&self, window: &Window, threshold: f64) -> f64 {
-        let reach = self.speeds.get(&window.id).copied().unwrap_or(0.) * self.projection_interval() as f64;
+        let reach = self.speeds.get(&window.id).copied().unwrap_or(0.) * self.projection_interval(window) as f64;
         // Never below 0%: a jump faster than the whole window (20% -> 95% in 30 s) would
         // otherwise print "-36%". At 0 the window is already at the point, so it still acts at once.
         threshold.min(100. - reach).clamp(0., 100.)
@@ -157,7 +157,7 @@ impl Reading {
     pub fn weekly_point(&self, window: &Window) -> f64 {
         let base = self.weekly_cutoff.unwrap_or(resets::WEEKLY_THRESHOLD);
         let speed = self.speeds.get(&window.id).copied().unwrap_or(0.);
-        let points = speed * self.projection_interval().saturating_add(HANDOFF_DEFAULT_MS) as f64;
+        let points = speed * self.projection_interval(window).saturating_add(HANDOFF_DEFAULT_MS) as f64;
         let earlier = (points.ceil() - 1.).max(0.);
         (base - earlier).clamp(0., 100.)
     }
@@ -632,6 +632,7 @@ struct Snapshot {
     /// adds none, so a held team's flat readings never replace the speed before the hold
     /// (`pre_hold`).
     rise_log: BTreeMap<String, Vec<(f64, f64)>>,
+    window_observed_at: BTreeMap<String, u64>,
     /// The last shared provider answer applied here. Stream frames can be fresher
     /// for the windows they carry and have a separate timestamp.
     shared_checked_at: Option<u64>,
@@ -670,6 +671,7 @@ impl Snapshot {
     /// reading certainly gained nothing, so it is still no speed.
     fn measure(&mut self, windows: &[Window], observed: u64) {
         for window in windows {
+            self.window_observed_at.insert(window.id.clone(), observed);
             let fresh = SpeedBase { used: window.used_percent, resets_at: window.resets_at, at: observed, last: observed, rose: false };
             // The SAME window when the reset times agree within a minute (`same_reset`).
             let same = |a: Option<u64>, b: Option<u64>| match (a, b) {
@@ -747,20 +749,27 @@ impl Snapshot {
         // Expired windows remain in the published telemetry, but cannot drive
         // admission, an account switch or a worker handoff in the next window.
         let mut windows: Vec<_> = self.windows.iter().filter(|w|w.resets_at.is_none_or(|t|t>now)).cloned().collect();
-        if self.checked_at.is_some_and(|t| now.saturating_sub(t) >= REFRESH_INTERVAL_MS) && self.since_reading > 0. {
+        let week_estimated = self.checked_at.is_some_and(|t| now.saturating_sub(t) >= REFRESH_INTERVAL_MS)
+            && self.since_reading > 0.;
+        if week_estimated {
             for window in windows.iter_mut().filter(|w| w.id == "seven_day") {
                 window.used_percent = (window.used_percent + self.since_reading).min(100.);
             }
         }
+        let provider_wait_ms = windows.iter().filter_map(|window| {
+            let observed = if week_estimated && window.id == "seven_day" { Some(now) }
+                else { self.window_observed_at.get(&window.id).copied() };
+            self.provider_wait_ms(observed).map(|wait| (window.id.clone(), wait))
+        }).collect();
         Reading { windows, speeds,
             expected: self.rise_until.is_some_and(|t| t > now), rises: self.rises.clone(),
-            weekly_cutoff, provider_wait_ms: self.provider_wait_ms() }
+            weekly_cutoff, provider_wait_ms }
     }
-    fn provider_wait_ms(&self) -> Option<u64> {
+    fn provider_wait_ms(&self, observed: Option<u64>) -> Option<u64> {
         let interval = self.shared_interval_ms?;
         // An idle account uses the active schedule once a move selects it.
         if interval > REFRESH_INTERVAL_MS { return Some(REFRESH_INTERVAL_MS); }
-        Some(self.shared_next_at.zip(self.shared_checked_at).map_or(interval,
+        Some(self.shared_next_at.zip(observed.or(self.shared_checked_at).or(self.checked_at)).map_or(interval,
             |(next, checked)| next.saturating_sub(checked)))
     }
     fn accept(&mut self, mut windows: Vec<Window>, observed: u64) {
@@ -775,6 +784,7 @@ impl Snapshot {
         let mut bases = std::mem::take(&mut self.bases);
         let mut rises = std::mem::take(&mut self.rises);
         let mut rise_log = std::mem::take(&mut self.rise_log);
+        let mut window_observed_at = std::mem::take(&mut self.window_observed_at);
         // A window the reading no longer carries takes its speed with it (the CEO, 2026-10-31:
         // an account whose five-hour window disappears stops handling it from that reading on).
         // Kept, a fast five-hour speed went on shortening the check interval to a minute and
@@ -784,10 +794,11 @@ impl Snapshot {
         bases.retain(|id, _| present(id));
         rises.retain(|id, _| present(id));
         rise_log.retain(|id, _| present(id));
+        window_observed_at.retain(|id, _| present(id));
         let (rise_until, token_speed) = (self.rise_until, self.token_speed);
         // Only a signed-in account reports a reading.
         *self = Self { windows, checked_at: Some(observed), retry_at: None, error, speeds, bases, rises, rise_until, empty_at: None, token_speed,
-            since_reading: 0., signed_in: Some(true), rise_log,
+            since_reading: 0., signed_in: Some(true), rise_log, window_observed_at,
             shared_checked_at: self.shared_checked_at, shared_next_at: self.shared_next_at,
             shared_interval_ms: self.shared_interval_ms };
     }
@@ -805,13 +816,15 @@ impl Snapshot {
             if self.checked_at.is_none_or(|at| at <= answer.checked_at) {
                 self.accept(answer.windows, answer.checked_at);
             } else {
-                // The stream carries the general windows. Keep its newer figures while
-                // still importing the provider's model-specific windows.
+                // Keep newer streamed figures and import the model-specific cache where current.
+                let is_general = |w: &Window| matches!(w.id.as_str(), "five_hour" | "seven_day");
+                let is_newer = |w: &Window| self.window_observed_at.get(&w.id).is_some_and(|at| *at > answer.checked_at);
                 let models: Vec<_> = answer.windows.into_iter()
-                    .filter(|w| !matches!(w.id.as_str(), "five_hour" | "seven_day")).collect();
+                    .filter(|w| !is_general(w) && !is_newer(w)).collect();
+                self.windows.retain(|w| is_general(w) || is_newer(w));
                 self.measure(&models, answer.checked_at);
-                self.windows.retain(|w| matches!(w.id.as_str(), "five_hour" | "seven_day"));
                 self.windows.extend(models);
+                self.window_observed_at.retain(|id, _| self.windows.iter().any(|w| &w.id == id));
                 self.empty_at = None;
                 self.error = None;
                 self.retry_at = None;
@@ -895,7 +908,7 @@ impl Snapshot {
     /// speed and provider schedule, as [`Reading::act_point`] does.
     fn pre_hold(&self, id: &str, line: f64) -> f64 {
         let point = |speed: f64| {
-            let interval = self.provider_wait_ms().unwrap_or({
+            let interval = self.provider_wait_ms(self.window_observed_at.get(id).copied()).unwrap_or({
                 if speed * REFRESH_INTERVAL_MS as f64 >= FAST_POINTS_PER_CHECK {
                     FAST_REFRESH_INTERVAL_MS
                 } else {
@@ -3101,6 +3114,43 @@ pub(crate) mod tests {
         snapshot.empty(ReadError::NoReading, at + REFRESH_INTERVAL_MS);
         snapshot.shared_next_at = Some(at + 2 * REFRESH_INTERVAL_MS);
         assert_eq!(snapshot.view(policy(), at + REFRESH_INTERVAL_MS).state, State::Stale);
+    }
+
+    #[test]
+    fn a_failed_provider_check_does_not_age_a_newer_streamed_window() {
+        let minute = 60_000;
+        let fable = |used| Window { id: "model:Fable".into(), label: "Weekly · Fable".into(), used_percent: used,
+            resets_at: Some(NOW + 48 * 3_600_000), duration_ms: 168 * 3_600_000 };
+        let provider_reading = |used| {
+            let mut windows = both_at(used, used);
+            windows.push(fable(used));
+            windows
+        };
+        let mut snapshot = Snapshot::default();
+        snapshot.accept(provider_reading(70.), NOW);
+        snapshot.accept(provider_reading(73.1), NOW + 5 * minute);
+        snapshot.shared_checked_at = Some(NOW + 5 * minute);
+        snapshot.shared_interval_ms = Some(5 * minute);
+        let recent = NOW + 34 * minute;
+        snapshot.shared_next_at = Some(recent + 5 * minute);
+        snapshot.empty(ReadError::NoReading, recent - minute);
+        snapshot.observe(&both_at(84.4, 84.4), recent - minute);
+        snapshot.observe(&both_at(85., 85.), recent);
+        let reading = snapshot.reading_with(None, recent);
+        assert!(!reading.reaches(&reading.windows[0], 93.), "the five-hour figure is fresh from the stream");
+        assert!(!reading.reaches_weekly(&reading.windows[1]), "the weekly figure is fresh from the stream");
+        assert!(reading.projected(&reading.windows[2]) > 93., "the Fable figure is still from the older provider reading");
+
+        snapshot.observe(&[fable(85.6)], recent + minute);
+        let provider_at = recent + 10_000;
+        snapshot.apply_shared(shared_usage::Saved {
+            requested_at: Some(provider_at), finished_at: Some(provider_at),
+            answer: Some(shared_usage::Answer { checked_at: provider_at, windows: vec![fable(78.)] }),
+            ..shared_usage::Saved::default()
+        }, REFRESH_INTERVAL_MS);
+        let reading = snapshot.reading_with(None, recent + minute);
+        assert_eq!(reading.windows.iter().find(|w| fable::is_window(&w.id)).unwrap().used_percent, 85.6,
+            "the provider cache preserves a newer Fable stream frame");
     }
 
     /// **§108: when usage speeds up a lot, the quota is checked every minute instead of 5**
