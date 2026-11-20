@@ -845,7 +845,8 @@ def _gate_recompute(data, src, percent, now_ms):
         windows.append({"id": w["id"], "used": float(used), "resets": reset})
     number = lambda v: not isinstance(v, bool) and isinstance(v, (int, float))
     speeds, pre_hold = src.get("speeds") or {}, src.get("preHold") or {}
-    for table in (speeds, pre_hold):
+    weekly_points = src.get("weeklyPausePoints") or {}
+    for table in (speeds, pre_hold, weekly_points):
         if not isinstance(table, dict) or not all(number(s) for s in table.values()):
             return None
     speed = lambda w: float(speeds.get(w["id"], 0.0))
@@ -857,6 +858,8 @@ def _gate_recompute(data, src, percent, now_ms):
     interval = FAST_REFRESH_INTERVAL_MS if is_fast(speeds) else REFRESH_INTERVAL_MS
     clamp = lambda v: min(max(v, 0.0), 100.0)
     def weekly_point(w):
+        if w["id"] in weekly_points:
+            return weekly_points[w["id"]]
         s = speed(w)
         points = s * interval + max(s * HANDOFF_DEFAULT_MS, 0.0)
         return clamp(WEEKLY_THRESHOLD - max(math.ceil(points) - 1.0, 0.0))
@@ -957,6 +960,11 @@ def read_app(state, now):
         windows.append({"id": w["id"], "label": "".join(c for c in str(w.get("label") or w["id"])[:80] if c.isprintable()),
                         "used": used, "resets_at": reset})
     r["windows"] = windows
+    points = src.get("weeklyPausePoints")
+    if isinstance(points, dict):
+        point = points.get("seven_day")
+        if not isinstance(point, bool) and isinstance(point, (int, float)) and 0 <= point < 100:
+            r["published_weekly_point"] = point
     checked = src.get("checkedAt")
     if isinstance(checked, bool) or not isinstance(checked, (int, float)) or checked <= 0:
         r["state"], r["why"] = "missing", "the app has no reading of account %s yet" % label
@@ -1025,6 +1033,19 @@ def shared_get_usage(a, now):
            "windows": windows, "used": None, "resets_at": None, "ended": False,
            "age": max(0, int(time.time()) - checked_at // 1000), "taken_at": checked_at // 1000,
            **schedule}
+    previous = record.get("previousAnswer")
+    if isinstance(previous, dict) and isinstance(previous.get("checkedAt"), int):
+        gap = (checked_at - previous["checkedAt"]) / 1000
+        older = {w["id"]: w for w in previous.get("windows", [])}
+        if 30 <= gap <= 2 * REFRESH_INTERVAL_MS / 1000:
+            row["provider_speeds"] = {}
+            for window in windows:
+                old = older.get(window["id"])
+                if (old and window["resets_at"] and old.get("resetsAt")
+                        and abs(window["resets_at"] - old["resetsAt"] / 1000) < 60):
+                    rise = window["used"] - old["usedPercent"]
+                    if rise >= 0:
+                        row["provider_speeds"][window["id"]] = rise / gap
     if live:
         row.update({field: live[field] for field in ("auth_failed", "seconds", "timing") if field in live})
     if refusal:
@@ -1060,7 +1081,17 @@ def read_source(a, now):
         if f["state"] != "ok" or f["age"] >= g["age"]:
             return g
         windows = {w["id"]: w for w in g["windows"]}
-        windows.update({w["id"]: w for w in f.get("windows", [])})
+        status_windows = {w["id"]: w for w in f.get("windows", [])}
+        f["provider_speeds"] = g.get("provider_speeds", {}).copy()
+        f["taken_at"] = g.get("taken_at")
+        # A newer status line can reveal a new cycle or a jump. Only an unchanged
+        # window can safely reuse the projection from the two provider replies.
+        for name, window in status_windows.items():
+            old = windows.get(name)
+            if (not old or window["used"] != old["used"] or not old["resets_at"] or not window["resets_at"]
+                    or abs(window["resets_at"] - old["resets_at"]) >= 60):
+                f["provider_speeds"].pop(name, None)
+        windows.update(status_windows)
         f["windows"] = list(windows.values())
         f["observed_from_status"] = True
         return f
@@ -1245,13 +1276,16 @@ def _exit_for(verdict):
 
 def mode_once(a, now):
     r = read_source(a, now)
+    now = max(now, r.get("taken_at") or now)
     if a.threshold is None:
         print("quota: UNKNOWN: %s is %s in %s" % (CONFIG_KEY, a.threshold_problem, a.config or "(no config)"))
         return 2
-    verdict, why = rule_verdict(r, a.threshold, a.stale, now)
-    if quota_weekly.held(r, now):
-        verdict, why = "at-or-above", "overall weekly usage reached 99%"
-    line = describe(r, a.threshold, now)
+    point = five_pause_point(a, r, now)
+    verdict, why = rule_verdict(r, point, a.stale, now)
+    week_point = weekly_pause_point(a, r, now)
+    if quota_weekly.held(r, now, week_point):
+        verdict, why = "at-or-above", "overall weekly usage reached its %s%% pause point" % fmt_pct(week_point)
+    line = describe(r, point, now)
     if verdict == "unknown" and r["state"] == "ok":
         line += "  [UNKNOWN: %s]" % why
     elif verdict == "at-or-above":
@@ -1266,6 +1300,7 @@ def mode_once(a, now):
 
 def mode_status(a, now):
     r = read_source(a, now)
+    now = max(now, r.get("taken_at") or now)
     print("THE 93%% QUOTA RULE (%s)" % RULING)
     print("  his words : %s" % HIS_WORDS)
     print("  update    : %s" % RULE_UPDATE)
@@ -1306,9 +1341,13 @@ def mode_status(a, now):
     if a.threshold is None:
         print("  verdict   : UNKNOWN")
         return 2
-    verdict, why = rule_verdict(r, a.threshold, a.stale, now)
-    if quota_weekly.held(r, now):
-        verdict, why = "at-or-above", "overall weekly usage reached 99%"
+    point = five_pause_point(a, r, now)
+    verdict, why = rule_verdict(r, point, a.stale, now)
+    if point != a.threshold:
+        print("  current five-hour pause point: %s%%" % fmt_pct(point))
+    week_point = weekly_pause_point(a, r, now)
+    if quota_weekly.held(r, now, week_point):
+        verdict, why = "at-or-above", "overall weekly usage reached its %s%% pause point" % fmt_pct(week_point)
     print("  verdict   : %s%s" % ({"below": "below the threshold", "at-or-above": "AT OR ABOVE the threshold",
                                     "near-reset": "AT OR ABOVE the threshold, NO PAUSE",
                                     "unknown": "UNKNOWN"}[verdict], (": " + why) if why and r["state"] == "ok" else ""))
@@ -1319,11 +1358,13 @@ def mode_status(a, now):
 KEEPS_POLLING = "  The watcher keeps polling every 5 minutes; nothing needs starting again."
 
 
-def _emit_threshold(a, r, now, w, early=""):
+def _emit_threshold(a, r, now, w, point=None):
     print("QUOTA-THRESHOLD %s%%" % fmt_pct(r["used"]))
-    print("  %s" % describe(r, a.threshold, now))
-    if early:
-        print("  %s" % early)
+    point = a.threshold if point is None else point
+    print("  %s" % describe(r, point, now))
+    if point != a.threshold:
+        lead = "EARLY, AT HIGH SPEED: " if point < a.threshold else ""
+        print("  %sMeasured pace and time to the next reading put the pause at %s%%." % (lead, fmt_pct(point)))
     if r["age"] is not None and r["age"] > a.stale:
         print("  The reading is stale, so this is a FLOOR: usage is at least %s%% now (it only grows inside a"
               " window)." % fmt_pct(r["used"]))
@@ -1520,22 +1561,52 @@ def fast_speed(a):
     return (100.0 - a.threshold) / float(a.poll + a.hold)
 
 
-def early_wake(a, used, speed):
-    """At high speed: True when waiting for the next fast check would let
-    usage reach 100% before the hold lands, so the lead must be woken now."""
-    return used + speed * (a.fast_poll + a.hold) >= 100
+def projected_pause_point(speed, seconds, resolution):
+    return min(100.0, max(0.0, 100.0 - speed * seconds - resolution))
+
+
+def provider_pause_point(a, reading, window, now, measured_speed=None):
+    """Project only from an answered, current pair and the actual next shared slot."""
+    if not window or reading.get("provider_refused"):
+        return None
+    taken, deadline = reading.get("taken_at"), _ms(reading.get("provider_next_at"))
+    speed = reading.get("provider_speeds", {}).get(window["id"])
+    if (speed is None or taken is None or deadline is None or not window["resets_at"]
+            or not taken <= now < min(window["resets_at"], deadline / 1000)
+            or now - taken > a.stale):
+        return None
+    resolution = 1.0 if float(window["used"]).is_integer() else 0.1
+    # The next response is bounded by the control deadline. The previous
+    # fifteen-worker pause took 44 seconds, so retain the one-minute lead budget.
+    seconds = deadline / 1000 - taken + GET_USAGE_SECONDS + a.hold
+    return projected_pause_point(max(speed, measured_speed or 0), seconds, resolution)
+
+
+def five_pause_point(a, reading, now, speed=None):
+    five = {"id": "five_hour", "used": reading["used"], "resets_at": reading["resets_at"]} if has_five(reading) else None
+    point = provider_pause_point(a, reading, five, now, speed)
+    if point is not None:
+        # Five-minute observations cannot bound the next burst when work restarts.
+        return min(a.threshold, point)
+    if speed is not None and speed >= fast_speed(a):
+        return min(a.threshold, projected_pause_point(speed, a.fast_poll + a.hold, 0))
+    return a.threshold
+
+
+def weekly_pause_point(a, reading, now, expected=False):
+    if reading.get("published_weekly_point") is not None:
+        return reading["published_weekly_point"]
+    week = quota_weekly.weekly(reading)
+    if week is None or float(week["used"]).is_integer() or reading.get("provider_speeds", {}).get("seven_day", 0) <= 0:
+        return quota_weekly.THRESHOLD
+    point = provider_pause_point(a, reading, week, now)
+    if point is None:
+        return quota_weekly.THRESHOLD
+    return min(quota_weekly.THRESHOLD, point) if expected else point
 
 
 def per5(rate):
     return rate * 300
-
-
-def _early_text(a, r, speed, now):
-    full = now + int((100 - r["used"]) / speed) if speed > 0 else now
-    return ("EARLY, AT HIGH SPEED (ruling §108, richos-hq/wiki/ceo-decisions.md): usage is rising %.1f points per"
-            " 5 minutes (high speed is %.1f or more). At that speed the window reaches 100%% at about %s, before"
-            " the next check (%d s) plus the minute a hold takes to land, so the pause is due now, below the"
-            " %s%% threshold." % (per5(speed), per5(fast_speed(a)), _hms(full), a.fast_poll, fmt_pct(a.threshold)))
 
 
 def _emit_fast(a, r, speed, now, w):
@@ -1828,6 +1899,8 @@ def _poll_loop(a, out, alive, health=None):
             reset_status = quota_weekly.reset_tick(a.engine_root, previous, at_limit)
             r = read_source(a, now)
             previous_reading = r
+        # A control response can finish after this poll started.
+        now = max(now, int(time.time()))
         cached_notice = None
         if r.get("provider_refused"):
             cached_notice = "%s; using the saved quota reading from %s ago." % (
@@ -1928,14 +2001,17 @@ def _poll_loop(a, out, alive, health=None):
             # measured in this window, before and apart from any pause message.
             out.wake("FAST", _capture(_emit_fast, a, r, speed, now, w), now)
             fast_alerted = r["resets_at"]
-        verdict, why = rule_verdict(r, a.threshold, a.stale, now)
+        point = five_pause_point(a, r, now, speed)
+        week_point = weekly_pause_point(a, r, now, expected)
+        verdict, why = rule_verdict(r, point, a.stale, now)
         if verdict != "unknown":
             blind_since = None
             if outage is None:
                 blind_woken = False
         weekly_text = io.StringIO()
         with contextlib.redirect_stdout(weekly_text):
-            weekly_blocked, weekly_event = quota_weekly.handle(a, r, now, w, reset_status, lambda: verdict, cached_notice)
+            weekly_blocked, weekly_event = quota_weekly.handle(a, r, now, w, reset_status, lambda: verdict,
+                                                               cached_notice, point=week_point)
         reset_key = (week["resets_at"], quota_weekly.reset_notice_key(reset_status), bool(cached_notice)) if week else None
         if weekly_event:
             text = weekly_text.getvalue()
@@ -1945,7 +2021,7 @@ def _poll_loop(a, out, alive, health=None):
             # a hold that is released and then needed again wakes the lead again.
             kind = "threshold" if weekly_blocked else "release"
             this_window = quota_weekly.weekly(r)
-            key = (kind, text.split("\n", 1)[0], tuple(w["working"]), tuple(w.get("weekly_paused", [])),
+            key = (kind, tuple(w["working"]), tuple(w.get("weekly_paused", [])),
                    this_window["resets_at"] if this_window else None)
             if key not in weekly_seen:
                 weekly_seen = {k for k in weekly_seen if k[0] == kind}
@@ -1953,7 +2029,7 @@ def _poll_loop(a, out, alive, health=None):
                 out.wake("WEEKLY-THRESHOLD" if weekly_blocked else "WEEKLY-RELEASE", text, now)
                 if weekly_blocked:
                     weekly_reset_seen = reset_key
-        if quota_weekly.held(r, now):
+        if quota_weekly.held(r, now, week_point):
             if weekly_reset_seen is not None and reset_key != weekly_reset_seen:
                 notice = "Reset status: " + quota_weekly.reset_line(reset_status)
                 if cached_notice:
@@ -2001,21 +2077,14 @@ def _poll_loop(a, out, alive, health=None):
         if window_end is None and r["state"] == "ok" and not r["ended"]:
             window_end = r["resets_at"]
         print("%s  %s" % (_dt.datetime.fromtimestamp(now, _dt.timezone.utc).strftime("%H:%M:%SZ"),
-                          describe(r, a.threshold, now) + ("  [UNKNOWN: %s]" % why if verdict == "unknown" and r["state"] == "ok" else "")),
+                          describe(r, point, now) + ("  [UNKNOWN: %s]" % why if verdict == "unknown" and r["state"] == "ok" else "")),
               flush=True)
-        early = ""
         if expected and not fast:
             print("  RISE EXPECTED: %d teammates started in the last %d s (%d or more); checking every %d s"
                   % (spawned, EXPECT_SECONDS, EXPECT_SPAWNS, a.fast_poll), flush=True)
         if fast:
             print("  HIGH SPEED: %.1f points per 5 minutes (%.1f or more); checking every %d s"
                   % (per5(speed), per5(fast_speed(a)), a.fast_poll), flush=True)
-            if verdict == "below" and early_wake(a, r["used"], speed):
-                if in_last_twenty(r["resets_at"], now):
-                    print("  at this speed the pause is due, but the reset is less than 20 minutes away: no pause",
-                          flush=True)
-                else:
-                    verdict, early = "at-or-above", _early_text(a, r, speed, now)
         if left_held is not None and r["state"] == "ok" and not r["ended"] and verdict != "unknown":
             # The hold in place was the account just left's. Once the account in use reads below the
             # line (or at it with its reset less than 20 minutes away), whoever that hold paused may
@@ -2042,7 +2111,7 @@ def _poll_loop(a, out, alive, health=None):
                 else:
                     told = threshold_named.get(window_end)
                     if told is None or (w["known"] and not set(w["working"]) <= told):
-                        out.wake("THRESHOLD", _capture(_emit_threshold, a, r, now, w, early), now)
+                        out.wake("THRESHOLD", _capture(_emit_threshold, a, r, now, w, point), now)
                         threshold_named[window_end] = set(w["working"]) if w["known"] else set()
                     else:
                         print("  at or above the threshold; the lead was told for this window at the first crossing",
@@ -2536,7 +2605,8 @@ def mode_notice(a, now):
         elif verdict == "near-reset":
             now_line += " [AT OR ABOVE THE THRESHOLD, NO PAUSE: %s]" % why
         lines.append("  Now: %s" % now_line)
-        lines.append("  Weekly: at 99% overall use, consume one eligible user-approved free reset or send the standard pause.")
+        lines.append("  The five-hour line can move earlier at the measured pace. The weekly pause uses the next shared check when the readings show a rise and 99% otherwise.")
+        lines.append("  Weekly: send the standard pause at the current point. An eligible user-approved free reset may be used at 99% overall use.")
         lines.append("  There is no weekly 20-minute exception. Resume only after fresh weekly allowance and the five-hour rule both permit work.")
         lines.append("  Only the user can approve through scripts/quota-reset.sh approve <offer-id>; you may read status or revoke, never approve.")
         lines.append("  THE WATCHER STARTS BY ITSELF with this session: the engine's plugin monitor `quota-watch` runs")

@@ -134,8 +134,8 @@ mutant near-reset-exits-as-pause "Q17" "$L" \
     "--once would tell a caller to pause inside the last 20 minutes."
 
 mutant watch-ignores-exception "W10" "$L" \
-    '        verdict, why = rule_verdict(r, a.threshold, a.stale, now){NL}        if verdict != "unknown":' \
-    '        verdict, why = classify(r, a.threshold, a.stale){NL}        if verdict != "unknown":' \
+    '        verdict, why = rule_verdict(r, point, a.stale, now){NL}        if verdict != "unknown":' \
+    '        verdict, why = classify(r, point, a.stale){NL}        if verdict != "unknown":' \
     "--once would say no pause while the watcher woke the lead to pause anyway."
 
 mutant release-never-fires "E05" "$L" \
@@ -289,9 +289,14 @@ mutant fast-poll-clamped-back "R06" "$L" \
     "The window-end clamp would put the 5-minute interval back, and the 1-minute check would never happen."
 
 mutant early-wake-never "R09" "$L" \
-    '            if verdict == "below" and early_wake(a, r["used"], speed):' \
-    '            if False:' \
+    '        point = five_pause_point(a, r, now, speed)' \
+    '        point = max(a.threshold, five_pause_point(a, r, now, speed))' \
     "At high speed the pause would wait for 93%, and at some poll phases the window reaches 100% before the hold lands."
+
+mutant five-hour-point-uncapped "R04" "$L" \
+    '        # Five-minute observations cannot bound the next burst when work restarts.{NL}        return min(a.threshold, point)' \
+    '        # Five-minute observations cannot bound the next burst when work restarts.{NL}        return point' \
+    "A slow or flat pair would delay the pause beyond the configured line before a renewed burst."
 
 mutant fast-alert-never "R08" "$L" \
     '            out.wake("FAST", _capture(_emit_fast, a, r, speed, now, w), now)' \

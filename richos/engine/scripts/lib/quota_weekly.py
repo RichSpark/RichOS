@@ -40,15 +40,16 @@ def weekly(reading):
     return next((w for w in reading.get("windows", []) if w["id"] == "seven_day"), None)
 
 
-def held(reading, now):
+def held(reading, now, point=THRESHOLD):
     w = weekly(reading)
-    return bool(w and w["used"] >= THRESHOLD)
+    return bool(w and w["used"] >= point)
 
 
-def fresh_below(reading, now, stale):
+def fresh_below(reading, now, stale, point=THRESHOLD):
     w = weekly(reading)
-    return bool(w and w["used"] < THRESHOLD and w["resets_at"] and w["resets_at"] > now
-                and reading.get("state") == "ok" and (reading.get("age") or 0) <= stale)
+    return bool(w and w["used"] < point and w["resets_at"] and w["resets_at"] > now
+                and reading.get("state") == "ok" and (reading.get("age") or 0) <= stale
+                and not reading.get("provider_refused"))
 
 
 def describe(reading, now):
@@ -100,13 +101,13 @@ def reset_notice_key(reset_status):
     return reset_line(reset_status).rsplit(", checked ", 1)[0]
 
 
-def handle(args, reading, now, workers, reset_status, five_verdict, cached_notice=None):
+def handle(args, reading, now, workers, reset_status, five_verdict, cached_notice=None, *, point=THRESHOLD):
     paused = workers.get("weekly_paused", [])
-    if held(reading, now):
+    if held(reading, now, point):
         w = weekly(reading)
         names = workers["working"] + workers.get("quota_paused", [])
         if names or not workers["known"]:
-            print("WEEKLY-QUOTA-THRESHOLD: overall weekly usage reached 99%; pause until allowance is confirmed.")
+            print("WEEKLY-QUOTA-THRESHOLD: overall weekly usage reached %g%%; pause until allowance is confirmed." % point)
             print("  " + describe(reading, now))
             print("  Reset status: " + reset_line(reset_status))
             if cached_notice:
@@ -122,16 +123,17 @@ def handle(args, reading, now, workers, reset_status, five_verdict, cached_notic
             return True, True
         return True, False
     if paused:
-        if fresh_below(reading, now, args.stale) and five_verdict() in ("below", "near-reset"):
-            print("WEEKLY-QUOTA-RELEASE: fresh weekly allowance and five-hour policy both permit work.")
-            print("  Send to: " + ", ".join(paused))
-            print("  First, for each agent, run: python3 %s --resume --to <agent> --reason weekly-quota"
-                  % os.path.abspath(pause_protocol.__file__))
-            print("  It releases that agent's hold before any message and prints this same message to send.")
-            # The generated RESUME, unchanged: the workspace message handler releases a
-            # controlled hold on that message and on nothing else.
-            print(pause_protocol.render_resume("weekly-quota"))
-            print("  The watcher keeps polling.")
-            return False, True
-        return True, False
+        if not fresh_below(reading, now, args.stale, point):
+            return True, False
+        if five_verdict() not in ("below", "near-reset"):
+            # Others still need the five-hour warning while these workers wait.
+            return False, False
+        print("WEEKLY-QUOTA-RELEASE: fresh weekly allowance and five-hour policy both permit work.")
+        print("  Send to: " + ", ".join(paused))
+        print("  First, for each agent, run: python3 %s --resume --to <agent> --reason weekly-quota"
+              % os.path.abspath(pause_protocol.__file__))
+        print("  It releases that agent's hold before any message and prints this same message to send.")
+        print(pause_protocol.render_resume("weekly-quota"))
+        print("  The watcher keeps polling.")
+        return False, True
     return False, False
