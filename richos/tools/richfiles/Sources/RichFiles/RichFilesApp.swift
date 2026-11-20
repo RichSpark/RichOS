@@ -116,6 +116,7 @@ public final class FolderOpenDelegate: NSObject, NSApplicationDelegate, Observab
     private var openedHandoffs: Set<UUID> = []
     private var openedInitialBrowser = false
     private weak var primaryPlacementWindow: NSWindow?
+    private var windowRecording: WindowRecording?
 
     func claimPrimaryPlacement(for window: NSWindow) -> Bool {
         if primaryPlacementWindow == nil { primaryPlacementWindow = window }
@@ -133,7 +134,15 @@ public final class FolderOpenDelegate: NSObject, NSApplicationDelegate, Observab
     public func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.servicesProvider = self
         NSUpdateDynamicServices()
-        DispatchQueue.global(qos: .utility).async { RichFilesInstallation.registerGlance() }
+        DispatchQueue.global(qos: .utility).async {
+            RichFilesInstallation.registerGlance()
+            let recording = WindowRecording()
+            DispatchQueue.main.async { [weak self] in self?.windowRecording = recording }
+        }
+    }
+
+    public func applicationWillTerminate(_ notification: Notification) {
+        windowRecording = nil
     }
 
     @objc(openRichFiles:userData:error:)

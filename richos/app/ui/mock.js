@@ -4502,6 +4502,8 @@
           return { folders: false, pictures: false, windowsKeys: true };
         case "richfiles_open":
           return null;
+        case "richfiles_recording_frame":
+          return [];
         // One file's preview (output side-panel PRD §5.4, §7, slice S5), by its output id.
         case "output_preview":
           return outputPreviewOf(args.outputId ?? args.output_id);

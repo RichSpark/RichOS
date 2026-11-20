@@ -28,7 +28,7 @@
 // own recorder does), and that canvas is recorded with the webview's own recorder, with the
 // microphone's sound added when he chose it. The recorder's own pieces (`rv-skip`) are never in
 // the file.
-// The focused RichCleaner library window is composited over the main view.
+// A focused RichCleaner or RichFiles window is composited over the main view.
 // TEXT HE HIGHLIGHTS IS IN THE FILE (CEO 2026-11-15, on the round's mockup: "it was
 // recording the mouse but not recording text highlights when I was highlighting the text with the
 // mouse. I would expect the screen recording to record the text highlighting as well."): the
@@ -652,8 +652,32 @@ window.RichVideoAnywhere = (function () {
     }
   }
 
-  function paintCleaner(cx, R) {
-    const frame = R.cleanerImage;
+  var filesRequest = false;
+  var filesVisit = 0;
+  function filesFocusChanged() {
+    filesVisit++;
+    if (!rec) return;
+    rec.filesImage = null;
+    rec.filesAsked = -Infinity;
+    rec.schedule();
+  }
+
+  async function sampleFiles(R) {
+    if (document.hasFocus() || cleanerFocused || filesRequest || R.now - R.filesAsked < 100) return;
+    const visit = filesVisit;
+    filesRequest = true;
+    R.filesAsked = R.now;
+    try {
+      const frame = await readWindowFrame("richfiles_recording_frame", {}, R.now);
+      if (rec === R && visit === filesVisit && !document.hasFocus()) R.filesImage = frame;
+    } catch (_) {
+      if (rec === R && visit === filesVisit) R.filesImage = null;
+    } finally {
+      filesRequest = false;
+    }
+  }
+
+  function paintWindowPicture(cx, R, frame) {
     if (!frame) return;
     const { naturalWidth, naturalHeight } = frame.image;
     const scale = Math.min(960, R.W * 0.9, R.H * 0.9 * naturalWidth / naturalHeight) / naturalWidth;
@@ -685,6 +709,7 @@ window.RichVideoAnywhere = (function () {
     R.inHome = false;
     R.sel = selected();
     sampleCleaner(R);
+    sampleFiles(R);
     // what stands on the page itself, lowest first (the order the window stacks it in)
     var tops = [];
     for (var c = document.body.firstElementChild, i = 0; c; c = c.nextElementSibling, i++) {
@@ -704,7 +729,8 @@ window.RichVideoAnywhere = (function () {
       paintDom(cx, node, 1, R);
     }
     cx.globalAlpha = 1;
-    if (cleanerFocused) paintCleaner(cx, R);
+    if (cleanerFocused) paintWindowPicture(cx, R, R.cleanerImage);
+    else if (!document.hasFocus() && R.filesImage) paintWindowPicture(cx, R, R.filesImage);
     else if (R.pointer && ptr.inside && !ptr.own) P.paintPointer(cx, ptr.x, ptr.y);
   }
 
@@ -753,6 +779,7 @@ window.RichVideoAnywhere = (function () {
     var R = (rec = { cv: cv, cx: cv.getContext("2d", { alpha: false }), W: W, H: H, chunks: [], t0: performance.now(), last: 0, gap: 33, cost: 0, raf: 0, timer: 0, frames: 0, nodes: 0, now: 0, inHome: false, sel: null, voice: !!mic.stream, tone: !!mic.stream && mic.tone, pointer: opts.pointer, tape: null, mime: P.mimeType() });
     R.number = ++recordingNumber;
     R.cleanerAsked = -Infinity;
+    R.filesAsked = -Infinity;
     paintFrame(R);
     try {
       var tracks = cv.captureStream(30).getVideoTracks();
@@ -780,9 +807,9 @@ window.RichVideoAnywhere = (function () {
     // copied in the frame it was drawn in, after it was drawn. Asked for from a timer, this one's
     // turn always comes after the turns already waiting, the picture's among them.
     var again = function () {
-      // A foreground Cleaner can cover the main window. Its frames don't depend
-      // on a browser animation frame in the window behind it.
-      if (cleanerFocused) {
+      // A tool window can cover the main window. Its frames don't depend on
+      // a browser animation frame in the window behind it.
+      if (cleanerFocused || !document.hasFocus()) {
         R.timer = setTimeout(() => frame(performance.now()), R.gap);
         return;
       }
@@ -1300,6 +1327,8 @@ window.RichVideoAnywhere = (function () {
     // the choices stay under their button while Settings rises into place or is scrolled
     wrap.addEventListener("scroll", seat, true);
     wrap.addEventListener("animationend", seat, true);
+    window.addEventListener("focus", filesFocusChanged);
+    window.addEventListener("blur", filesFocusChanged);
     window.RichBridge.listen("rich://cleaner-recording-focus", ({ payload }) => cleanerFocus(payload === true)).catch(() => {});
   }
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);
