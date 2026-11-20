@@ -332,7 +332,7 @@ FIVE_HOUR_SECONDS = 5 * 3600
 STATE_KEEP_SECONDS = 2 * 86400
 POLLS_LOG_MAX = 1024 * 1024
 # The kinds a --until-reset run still wakes for.
-UNTIL_RESET_KINDS = ("RELEASE", "RESET", "WEEKLY-THRESHOLD", "WEEKLY-RELEASE", "CANNOT-WATCH", "FAST")
+UNTIL_RESET_KINDS = ("RELEASE", "RESET", "WEEKLY-THRESHOLD", "WEEKLY-RELEASE", "WEEKLY-RESET-STATUS", "CANNOT-WATCH", "FAST")
 
 
 def _last_line(fh):
@@ -934,6 +934,8 @@ def read_app(state, now):
     else:
         r["account"] = app_account(data)
     label = r["account"]["label"]
+    if r["account"]["id"] == "1" and isinstance(data.get("resets"), dict):
+        r["reset_offers"] = data["resets"]
     r["source"] = "the app (account %s)" % label
     windows = []
     for w in src.get("windows") or []:
@@ -1702,6 +1704,7 @@ def _poll_loop(a, out, alive, health=None):
     released = None              # the window whose hold release was announced
     reset_done = None            # the window whose reset was announced
     weekly_seen = set()
+    weekly_reset_seen = None
     last_gu = None               # the last get_usage reading: {"used", "resets_at", "taken", "why"}
     history = []                 # (taken, used) get_usage readings in the current window
     outage = None                # {"at": first failure, "fallback_why"} while get_usage fails
@@ -1722,9 +1725,14 @@ def _poll_loop(a, out, alive, health=None):
         if alive is not None and not alive():
             print("quota-watch: the session this poller belongs to has ended; it ends with it", flush=True)
             return 0
-        now = int(time.time())
-        reset_status = quota_weekly.reset_tick(a.engine_root)
+        started = time.time()
+        now = int(started)
         r = read_source(a, now)
+        week = quota_weekly.weekly(r)
+        at_limit = (week and r["state"] == "ok" and (r.get("age") or 0) <= a.stale
+                    and week["resets_at"] and week["resets_at"] > now and quota_weekly.held(r, now))
+        reset_started = time.time()
+        reset_status = quota_weekly.reset_tick(a.engine_root, r, at_limit)
         w = workers(a.engine_root)
         retry = False
         who = r.get("account") if isinstance(r.get("account"), dict) and r["account"].get("id") else None
@@ -1737,6 +1745,7 @@ def _poll_loop(a, out, alive, health=None):
                 left_held = bound
             window_end = released = reset_done = fast_alerted = app_window = None
             threshold_named, weekly_seen, history, last_gu, outage = {}, set(), [], None, None
+            weekly_reset_seen = None
             blind_since, blind_woken = None, False
         if who is not None:
             bound = who
@@ -1832,11 +1841,20 @@ def _poll_loop(a, out, alive, health=None):
                 weekly_seen = {k for k in weekly_seen if k[0] == kind}
                 weekly_seen.add(key)
                 out.wake("WEEKLY-THRESHOLD" if weekly_blocked else "WEEKLY-RELEASE", text, now)
+                if weekly_blocked:
+                    weekly_reset_seen = (key[-1], quota_weekly.reset_notice_key(reset_status))
+        if quota_weekly.held(r, now):
+            reset_key = (week["resets_at"], quota_weekly.reset_notice_key(reset_status))
+            if weekly_reset_seen is not None and reset_key != weekly_reset_seen:
+                out.wake("WEEKLY-RESET-STATUS", "Reset status: " + quota_weekly.reset_line(reset_status), now)
+            weekly_reset_seen = reset_key
+        else:
+            weekly_reset_seen = None
         if weekly_blocked:
             print(quota_weekly.describe(r, now), flush=True)
             _poll_completed(health)
             interval = _retry_seconds(a) if retry else a.poll
-            _nap(max(1, interval - int(time.time() - now)), alive)
+            _sleep_after_poll(started, interval, reset_started, reset_status, alive)
             continue
         if window_end is not None and not has_five(r) and classify(r, a.threshold, a.stale)[0] == "below":
             # THE FIVE-HOUR WINDOW WENT AWAY (second review rv-20261031T192316Z-d2322984-98af): a
@@ -1955,7 +1973,19 @@ def _poll_loop(a, out, alive, health=None):
         _poll_completed(health)
         # Counted from the START of this poll, so the polls are 300 s apart
         # and not 300 s plus however long get_usage took (20 s on a timeout).
-        _nap(max(1, sleep_for - int(time.time() - now)), alive)
+        _sleep_after_poll(started, sleep_for, reset_started, reset_status, alive)
+
+
+def _sleep_after_poll(started, interval, reset_started, reset_status, alive):
+    deadline = started + interval
+    retry_at = _ms((reset_status.get("resets") or {}).get("retryAt"))
+    if not app_state() and retry_at is not None:
+        # Align a poll that would come fractionally early with the core's
+        # millisecond deadline. Also honor an earlier retry on a slower poll.
+        retry = retry_at / 1000
+        if started < retry <= reset_started + interval + 1:
+            deadline = retry
+    _nap(max(1, deadline - time.time()), alive)
 
 
 def _poll_completed(health):

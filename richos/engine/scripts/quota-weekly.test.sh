@@ -33,7 +33,7 @@ class Recorder(watcher.Out):
         self.woken.append((kind,now))
         return super().wake(kind,text,now)
 
-def run_polls(readings,worker_rows,polls,args=None,out_cls=None):
+def run_polls(readings,worker_rows,polls,args=None,out_cls=None,reset_answers=None):
     """Run the real poll loop for `polls` polls. The clock advances one poll (300 s) per sleep; a
     reading that is an Exception is raised from read_source. Returns the Out it wrote to."""
     out_cls=out_cls or watcher.Out
@@ -51,9 +51,11 @@ def run_polls(readings,worker_rows,polls,args=None,out_cls=None):
         return dict(r)
     def who(_engine):
         return worker_rows[min(naps[0],len(worker_rows)-1)]
+    def reset(*_args):
+        return reset_answers[min(naps[0], len(reset_answers)-1)] if reset_answers else {'error':'no offer'}
     with patch.object(watcher,'read_source',side_effect=read),patch.object(watcher,'workers',side_effect=who), \
         patch.object(watcher.time,'time',side_effect=lambda:NOW+300*naps[0]),patch.object(watcher.time,'sleep',side_effect=nap), \
-        patch.object(weekly,'reset_tick',return_value={'error':'no offer'}):
+        patch.object(weekly,'reset_tick',side_effect=reset):
         try:
             watcher.poll_loop(args,out)
         except Done:
@@ -73,6 +75,27 @@ class Weekly(unittest.TestCase):
         with patch.object(weekly.subprocess,'run',return_value=fake) as run:
             self.assertIsNone(weekly.reset_tick('/engine')['resets']['approval'])
             self.assertEqual(run.call_args.args[0],['/engine/scripts/quota-reset.sh','tick'])
+    def test_recovered_answer_updates_the_notice_once_workers_are_paused(self):
+        answers = [
+            {'actionError':'HTTP 429. Last answer: No weekly reset is on offer, checked 4 h ago.'},
+            {'status':'1 weekly reset is on offer (Free reset), checked under a minute ago.'},
+            {'status':'1 weekly reset is on offer (Free reset), checked 5 min ago.'},
+        ]
+        out = run_polls([reading()], [workers(['worker']), workers(held=['worker'])],
+                        len(answers), out_cls=Recorder, reset_answers=answers)
+        self.assertEqual([kind for kind, _ in out.woken], ['WEEKLY-THRESHOLD','WEEKLY-RESET-STATUS'])
+        self.assertIn('HTTP 429', out.events.getvalue())
+        self.assertIn('1 weekly reset is on offer', out.events.getvalue())
+
+    def test_fractional_poll_sleeps_through_the_retry_deadline(self):
+        started = NOW + .150
+        due = NOW + 300.850
+        status = {'resets':{'retryAt':int(due * 1000)}}
+        with patch.object(watcher.time, 'time', return_value=NOW + .450), \
+             patch.object(watcher, '_nap') as nap:
+            watcher._sleep_after_poll(started, 300, started + .250, status, None)
+        self.assertAlmostEqual(NOW + .450 + nap.call_args.args[0], due, places=6)
+
     def test_missing_reset_time_holds_without_guessing_a_date(self):
         r=reading();r['windows'][0]['resets_at']=None
         self.assertTrue(weekly.held(r,NOW))
@@ -254,6 +277,29 @@ class AppReading(unittest.TestCase):
         view['speeds']={'five_hour':32/300000,'seven_day':1e-6}
         with open(self.state+'/claude-quota.json','w') as f: json.dump(view,f)
         self.assertAlmostEqual(self.read()['speed'],32/300)
+    def test_app_watcher_shows_the_primary_accounts_saved_status_at_99(self):
+        self.publish(NOW-30)
+        with open(self.state+'/claude-quota.json') as f:
+            view = json.load(f)
+        view['accounts'][0]['windows'][0].update(
+            label='Weekly', usedPercent=99, resetsAt=(NOW+86400)*1000)
+        view['accounts'][0]['checkedAt'] = (NOW-30)*1000
+        saved = {'state':'fresh','status':'1 weekly reset is on offer (Free reset), checked 1 h ago.'}
+        view['resets'] = saved
+        with open(self.state+'/claude-quota.json','w') as f:
+            json.dump(view,f)
+        with patch.dict(weekly.os.environ,{'RICHOS_APP_STATE':self.state}), \
+             patch.object(weekly.subprocess,'run',side_effect=AssertionError('ticked from the app')):
+            primary = self.read('1')
+            reset_status = weekly.reset_tick('/engine', primary)
+            self.assertEqual(reset_status['status'], saved['status'])
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                weekly.handle(types.SimpleNamespace(stale=300), primary, NOW,
+                              workers(['worker']), reset_status, lambda:'below')
+            self.assertIn(saved['status'], out.getvalue())
+            self.assertNotIn('reset_offers', self.read('2'))
+
     def test_the_app_never_ticks_the_shared_reset_record(self):
         with patch.dict(weekly.os.environ,{'RICHOS_APP_STATE':self.state}), \
              patch.object(weekly.subprocess,'run',side_effect=AssertionError('ticked from the app')):

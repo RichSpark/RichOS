@@ -3726,7 +3726,7 @@ fn main() {
                 let mut counted: Option<std::time::Instant> = None;
                 loop {
                     let Some(quota) = quota_weak.upgrade() else { break };
-                    let force = quota.wait_for_refresh(wait);
+                    quota.wait_for_refresh(wait);
                     if quota.is_shutdown() { break; }
                     // **How many agents are working**, for round 16's "15 agents reading at
                     // once" and "3 agents are holding their place": the provider's own launch
@@ -3744,8 +3744,7 @@ fn main() {
                         }
                     }
                     let bin = quota_bin.lock().unwrap().clone();
-                    quota.run_approved_weekly_reset(&bin);
-                    quota.refresh(&bin, force);
+                    quota.refresh_in_background(&bin);
                     // **Fill-first's notices, the moment they are read** (plan §15 answer 9:
                     // the high-speed alert "at once, in the conversation"). Only when no turn
                     // holds the spine: a running turn says them at its own end instead

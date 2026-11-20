@@ -64,22 +64,36 @@ def describe(reading, now):
 APP_RUNS_RESET = "the RichOS app runs any user-approved reset itself; this watcher does not tick it"
 
 
-def reset_tick(engine):
-    # FOR THE APP (RICHOS_APP_STATE set) NO TICK (richos-hq follow-ups.md, 7fed0bef). The tick
-    # refreshes the reset record every app and terminal on this Mac shares, under whichever account
-    # this process's environment names: from a Work lease it rewrote the record under Work's key and
-    # cleared the user's approval (resets.rs `update`). The desktop app's own monitor already runs
-    # the approved action (quota.rs `run_approved_weekly_reset`).
+def reset_tick(engine, reading=None, at_limit=False):
+    # An app watcher may run on an added account. Only the desktop monitor can
+    # check or redeem against Account 1, so watchers use its published answer.
     if (os.environ.get("RICHOS_APP_STATE") or "").strip():
+        saved = (reading or {}).get("reset_offers")
+        if isinstance(saved, dict):
+            return {"resets": saved, "status": saved.get("status"),
+                    "actionError": saved.get("message") if saved.get("state") == "unknown" else None}
         return {"status": APP_RUNS_RESET}
-    helper =os.environ.get("QUOTA_RESET_HELPER") or os.path.join(engine, "scripts", "quota-reset.sh")
+    helper = os.environ.get("QUOTA_RESET_HELPER") or os.path.join(engine, "scripts", "quota-reset.sh")
+    env = dict(os.environ, RICHOS_QUOTA_WEEKLY_LIMIT="1" if at_limit else "0")
     try:
-        result = subprocess.run([helper, "tick"], capture_output=True, text=True, timeout=120)
-        if result.returncode:
-            return {"error": "Reset helper unavailable; weekly pause still applies."}
-        return json.loads(result.stdout)
+        result = subprocess.run([helper, "tick"], env=env, capture_output=True, text=True, timeout=120)
+        saved = json.loads(result.stdout) if result.returncode == 0 else None
+        if isinstance(saved, dict):
+            return saved
     except (OSError, ValueError, subprocess.TimeoutExpired):
-        return {"error": "Reset helper unavailable; weekly pause still applies."}
+        pass
+    return {"error": "Reset helper unavailable; weekly pause still applies."}
+
+
+def reset_line(reset_status):
+    return (reset_status.get("error") or reset_status.get("actionError") or reset_status.get("status")
+            or "no successful reset has produced available weekly quota")
+
+
+def reset_notice_key(reset_status):
+    # The age changes each minute, but only a change of answer (or a refusal
+    # appearing/clearing) should wake a waiting lead.
+    return reset_line(reset_status).rsplit(", checked ", 1)[0]
 
 
 def handle(args, reading, now, workers, reset_status, five_verdict):
@@ -90,8 +104,7 @@ def handle(args, reading, now, workers, reset_status, five_verdict):
         if names or not workers["known"]:
             print("WEEKLY-QUOTA-THRESHOLD: overall weekly usage reached 99%; pause until allowance is confirmed.")
             print("  " + describe(reading, now))
-            print("  Reset status: " + (reset_status.get("error") or reset_status.get("actionError") or
-                  reset_status.get("status") or "no successful reset has produced available weekly quota"))
+            print("  Reset status: " + reset_line(reset_status))
             print("  Send the standard message unchanged to: " + (", ".join(names) or "every working agent"))
             reset = datetime.datetime.fromtimestamp(w["resets_at"], datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ") if w["resets_at"] and w["resets_at"] > now else None
             print("  First, for each agent, run: python3 %s --to <agent> --reason weekly-quota%s"

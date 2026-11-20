@@ -9,6 +9,10 @@ use std::{
 };
 
 pub const WEEKLY_THRESHOLD: f64 = 99.;
+/// Background readers share the last successful check for four hours.
+pub const OFFER_INTERVAL_MS: u64 = 4 * 60 * 60_000;
+/// Allow one normal watcher tick to replace the answer before disabling approval.
+const FRESH_MS: u64 = OFFER_INTERVAL_MS + super::REFRESH_INTERVAL_MS;
 const FILE: &str = "claude-reset-offers.json";
 const MAX_ATTEMPTS: usize = 128;
 
@@ -47,7 +51,7 @@ impl Offer {
             && self.remaining == other.remaining
     }
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Approval {
     pub id: String,
@@ -55,7 +59,7 @@ pub struct Approval {
     pub approved_at: u64,
     pub weekly_threshold: u8,
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Attempt {
     pub grant_id: String,
@@ -66,13 +70,21 @@ pub struct Attempt {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     account: String,
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct View {
     pub state: String,
     pub checked_at: Option<u64>,
     pub retry_at: Option<u64>,
     pub message: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub eligible: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    eligibility_message: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fresh_until: Option<u64>,
     pub offers: Vec<Offer>,
     pub approval: Option<Approval>,
     pub last_attempt: Option<Attempt>,
@@ -89,6 +101,10 @@ impl Default for View {
             checked_at: None,
             retry_at: None,
             message: Some("Reset availability has not been checked.".into()),
+            eligible: None,
+            eligibility_message: None,
+            status: None,
+            fresh_until: None,
             offers: vec![],
             approval: None,
             last_attempt: None,
@@ -296,6 +312,9 @@ impl Service {
                     shared.account = old.account.clone();
                     shared.view = old.view.clone();
                     shared.view.checked_at = None;
+                    shared.view.eligible = None;
+                    shared.view.eligibility_message = None;
+                    shared.view.offers.clear();
                     shared.view.state = "unknown".into();
                     shared.view.retry_at = None;
                     shared.view.message = Some("Shared reset approval needs a fresh eligibility check.".into());
@@ -354,58 +373,105 @@ impl Service {
             Err("Reset approval is not supported on this platform yet.".into())
         }
     }
-    /// One five-minute reservation shared by every desktop and terminal poller.
-    /// An approved poll reads eligibility once and uses that same fresh preflight.
-    pub fn tick(&self, bin: &Path, authorized: impl Fn() -> bool) -> View {
-        self.tick_using(crate::util::now_millis(), |approved| {
+    /// Shared background check, with a separate preflight when a user-approved
+    /// reset reaches the weekly limit.
+    pub fn tick_at_limit(&self, bin: &Path, weekly_due: bool, authorized: impl Fn() -> bool) -> View {
+        self.tick_using(crate::util::now_millis(), weekly_due, |approved| {
             let mut transport = super::reset_transport::System::connect(bin)?;
-            self.poll_transport(approved, &mut transport, authorized)
+            self.poll_transport(approved, &mut transport, &authorized)
         })
     }
-    /// Injection seam for the real-reader/fake-redemption proof. Production tick
-    /// constructs System only after winning the shared poll reservation.
+    /// Injection seam for the real-reader/fake-redemption proof.
     pub fn tick_with_transport(&self, transport: &mut dyn Transport, authorized: impl Fn() -> bool) -> View {
-        self.tick_using(crate::util::now_millis(), |approved|
-            self.poll_transport(approved, transport, authorized))
+        self.tick_using(crate::util::now_millis(), true, |approved|
+            self.poll_transport(approved, transport, &authorized))
     }
-    fn poll_transport(&self, approved: bool, transport: &mut dyn Transport, authorized: impl Fn() -> bool) -> Result<View, String> {
-        if approved {
-            match self.use_approved(transport, authorized) {
-                // A successful read can find usage below 99% or an unusable offer.
+    fn poll_transport(&self, approved: bool, transport: &mut dyn Transport, authorized: &impl Fn() -> bool) -> Result<View, String> {
+        if approved && authorized() {
+            match self.use_approved_inner(transport, authorized, false) {
+                // A successful preflight below the limit or without a usable offer still
+                // updates the saved answer.
                 Err(error) if error.starts_with("Reset not used:") => Ok(self.view()),
                 other => other,
             }
-        } else { self.refresh_transport(transport) }
+        } else {
+            self.refresh_transport(transport)
+        }
     }
-    fn tick_using(&self, now: u64, read: impl FnOnce(bool) -> Result<View, String>) -> View {
+    fn tick_using(&self, now: u64, weekly_due: bool, read: impl FnOnce(bool) -> Result<View, String>) -> View {
         let approved = {
             let Ok(_lock) = self.lock() else { return self.view(); };
             let Ok(mut record) = self.read() else { return self.view(); };
-            let v = &record.view;
-            if record.poll_after.is_some_and(|t| t > now)
-                || v.retry_at.is_some_and(|t| t > now)
-                || (v.state == "fresh" && !self.prepared_action_due(now) && v.checked_at.is_some_and(|t|
-                    t <= now && now - t < super::REFRESH_INTERVAL_MS)) {
+            let approved = weekly_due
+                && record.view.approval.as_ref().is_some_and(|a| a.offer.weekly(now));
+            if Self::held(&record, now) || !(Self::aged(&record, now) || approved) {
                 return Self::visible(record.view, now);
             }
             record.poll_after = Some(now + super::REFRESH_INTERVAL_MS);
             if self.save(&record).is_err() { return self.view(); }
-            record.view.approval.is_some()
+            approved
         };
         match read(approved) {
             Ok(view) => view,
             Err(error) => {
-                self.record_failure(error);
-                self.view()
+                // Count from the start of the refused check, in milliseconds.
+                self.record_failure(error, now);
+                self.view_at(now)
             }
         }
     }
-    fn record_failure(&self, error: String) {
+    /// Background readers honor both the shared reservation and the failure deadline.
+    fn held(record: &Record, now: u64) -> bool {
+        record.poll_after.is_some_and(|t| t > now) || record.view.retry_at.is_some_and(|t| t > now)
+    }
+    fn aged(record: &Record, now: u64) -> bool {
+        let v = &record.view;
+        v.retry_at.is_some() || v.checked_at.is_none_or(|t| now >= t.saturating_add(OFFER_INTERVAL_MS))
+    }
+    /// The answer in one sentence, with its age: what the 99% notice says about a reset.
+    fn said(v: &View, now: u64) -> Option<String> {
+        let minutes = now.checked_sub(v.checked_at?)? / 60_000;
+        let age = match (minutes / 60, minutes % 60) {
+            (0, 0) => "under a minute".to_string(),
+            (0, m) => format!("{m} min"),
+            (h, 0) => format!("{h} h"),
+            (h, m) => format!("{h} h {m} min"),
+        };
+        let eligibility = v.eligible.or(match v.state.as_str() {
+            "fresh" | "stale" => Some(true),
+            "ineligible" => Some(false),
+            _ => None,
+        });
+        if eligibility == Some(false) {
+            let reason = v.eligibility_message.as_deref().or(v.message.as_deref())
+                .unwrap_or("Anthropic is not offering a reset through this connection");
+            return Some(format!("{}, checked {age} ago.", reason.trim_end_matches('.')));
+        }
+        if eligibility.is_none() {
+            return Some(format!("Reset eligibility was unconfirmed, checked {age} ago."));
+        }
+        let offers: Vec<&Offer> = v.offers.iter().filter(|o| o.weekly(now)).collect();
+        let count: u64 = offers.iter().map(|o| u64::from(o.remaining)).sum();
+        Some(match count {
+            0 if v.offers.iter().any(|o| o.expires_at <= now && o.weekly(o.expires_at - 1)) =>
+                format!("The last weekly reset offer has expired, checked {age} ago."),
+            0 => format!("No weekly reset is on offer, checked {age} ago."),
+            _ => format!(
+                "{count} weekly {} on offer ({}), checked {age} ago.",
+                if count == 1 { "reset is" } else { "resets are" },
+                offers.iter().map(|o| o.label.as_str()).collect::<Vec<_>>().join(", ")
+            ),
+        })
+    }
+    /// A refused check keeps the last answer (offers and `checked_at`); only the state,
+    /// the message and the retry time change.
+    fn record_failure(&self, error: String, at: u64) {
         if let Ok(_lock) = self.lock() {
             if let Ok(mut record) = self.read() {
+                Self::preserve_eligibility(&mut record.view);
                 record.view.state = "unknown".into();
                 record.view.message = Some(error);
-                record.view.retry_at = Some(crate::util::now_millis() + super::REFRESH_INTERVAL_MS);
+                record.view.retry_at = Some(at + super::REFRESH_INTERVAL_MS);
                 let _saved = self.save(&record);
             }
         }
@@ -421,7 +487,9 @@ impl Service {
             && v.weekly_resets_at.is_some_and(|until| until > now)
     }
     pub fn view(&self) -> View {
-        let now = crate::util::now_millis();
+        self.view_at(crate::util::now_millis())
+    }
+    pub(super) fn view_at(&self, now: u64) -> View {
         match self.read() {
             Ok(record) => Self::visible(record.view, now),
             Err(e) => View {
@@ -431,14 +499,23 @@ impl Service {
         }
     }
     fn visible(mut v: View, now: u64) -> View {
+        Self::preserve_eligibility(&mut v);
+        v.status = Self::said(&v, now);
+        v.fresh_until = v.checked_at.map(|t| t.saturating_add(FRESH_MS));
         if v.state == "fresh"
-            && v.checked_at
-                .is_none_or(|t| t > now || now - t >= super::REFRESH_INTERVAL_MS)
+            && (v.checked_at.is_none_or(|t| t > now) || v.fresh_until.is_none_or(|t| t <= now))
         {
             v.state = "stale".into();
             v.message = Some("Reset offers need a fresh check.".into());
         }
-        v.offers.retain(|o| o.remaining > 0 && o.expires_at > now);
+        v.offers.retain(|o| o.remaining > 0 && o.expires_at > now && v.eligible != Some(false));
+        // Keep the saved answer visible, including an empty or ineligible answer.
+        if v.state == "unknown" {
+            if let (Some(last), Some(error)) = (&v.status, v.message.as_mut()) {
+                error.push_str(" Last answer: ");
+                error.push_str(last);
+            }
+        }
         if v.approval
             .as_ref()
             .is_some_and(|a| a.offer.expires_at <= now)
@@ -449,6 +526,19 @@ impl Service {
             a.account.clear();
         }
         v
+    }
+    fn preserve_eligibility(v: &mut View) {
+        // Upgrade records written before eligibility was stored separately.
+        if v.eligible.is_none() && v.checked_at.is_some() {
+            match v.state.as_str() {
+                "fresh" => v.eligible = Some(true),
+                "ineligible" => {
+                    v.eligible = Some(false);
+                    v.eligibility_message = v.message.clone();
+                }
+                _ => {}
+            }
+        }
     }
     fn update(record: &mut Record, account: Account, reading: Reading, now: u64) {
         if record.account != account.key {
@@ -467,7 +557,12 @@ impl Service {
         }
         record.view.weekly_used = reading.weekly_used;
         record.view.weekly_resets_at = reading.weekly_reset;
-        record.view.offers = reading.offers;
+        record.view.offers = reading.offers.into_iter().filter(|offer| {
+            !record.attempts.iter().any(|a| a.account == record.account && a.grant_id == offer.id
+                && matches!(a.outcome.as_str(), "used" | "alreadyUsed" | "uncertain"))
+        }).collect();
+        record.view.eligible = Some(reading.eligible);
+        record.view.eligibility_message = reading.reason.clone();
         record.view.checked_at = Some(now);
         record.view.retry_at = None;
         record.view.state = if reading.eligible {
@@ -478,68 +573,10 @@ impl Service {
         .into();
         record.view.message = reading.reason;
     }
-    pub fn refresh(&self, bin: &Path, force: bool) -> View {
-        let now = crate::util::now_millis();
-        let Ok(_lock) = self.lock() else {
-            return self.view();
-        };
-        let Ok(mut record) = self.read() else {
-            return self.view();
-        };
-        let v = &record.view;
-        let waiting = if force {
-            // **A manual check is not an automatic one.** The automatic reservation (`poll_after`)
-            // and the failure wait (`retry_at`) exist so the monitor does not hit the provider
-            // every tick; a person who just fixed the problem and asked again must not be handed
-            // the old answer for five minutes. What still holds for him is the short cooldown
-            // that stops a double-click from hitting the provider twice, measured from the last
-            // attempt of any kind: a reading, a failure (whose wait was set five minutes past
-            // it) or the monitor's reservation (set five minutes ahead of its attempt).
-            let interval = super::REFRESH_INTERVAL_MS;
-            let last_attempt = [
-                v.checked_at,
-                v.retry_at.map(|t| t.saturating_sub(interval)),
-                record.poll_after.map(|t| t.saturating_sub(interval)),
-            ]
-            .into_iter()
-            .flatten()
-            .filter(|t| *t <= now)
-            .max();
-            last_attempt.is_some_and(|t| now - t < 5000)
-        } else {
-            record.poll_after.is_some_and(|t| t > now)
-                || v.retry_at.is_some_and(|t| t > now)
-                || v.checked_at.is_some_and(|t| t <= now && now - t < super::REFRESH_INTERVAL_MS)
-        };
-        if waiting {
-            return Self::visible(record.view, now);
-        }
-        // Tests supply a Transport explicitly. Unit tests must never touch real credentials.
-        #[cfg(not(test))]
-        let result = super::reset_transport::System::connect(bin)
-            .and_then(|mut t| Self::read_transport(&mut t));
-        #[cfg(test)]
-        let result: Result<(Account, Reading), String> = {
-            let _best_effort = bin;
-            Err("Fixture has no reset connection.".into())
-        };
-        match result {
-            Ok((account, reading)) => {
-                Self::update(&mut record, account, reading, crate::util::now_millis())
-            }
-            Err(e) => {
-                record.view.state = "unknown".into();
-                record.view.message = Some(e);
-                record.view.retry_at = Some(now + super::REFRESH_INTERVAL_MS);
-            }
-        }
-        let _best_effort = self.save(&record);
-        Self::visible(record.view, crate::util::now_millis())
-    }
     pub fn refresh_transport(&self, t: &mut dyn Transport) -> Result<View, String> {
-        let (account, reading) = Self::read_transport(t)?;
         let _lock = self.lock()?;
         let mut record = self.read()?;
+        let (account, reading) = Self::read_transport(t)?;
         Self::update(&mut record, account, reading, crate::util::now_millis());
         self.save(&record)?;
         Ok(self.view())
@@ -611,6 +648,14 @@ impl Service {
         t: &mut dyn Transport,
         still_authorized: impl Fn() -> bool,
     ) -> Result<View, String> {
+        self.use_approved_inner(t, still_authorized, true)
+    }
+    fn use_approved_inner(
+        &self,
+        t: &mut dyn Transport,
+        still_authorized: impl Fn() -> bool,
+        record_read_failure: bool,
+    ) -> Result<View, String> {
         let lock = self.lock()?;
         let record = self.read()?;
         let approved = record
@@ -626,8 +671,11 @@ impl Service {
         if !still_authorized() {
             return Err("This work session is no longer authorized.".into());
         }
+        let started = crate::util::now_millis();
         let (account, reading) = Self::read_transport(t).inspect_err(|error| {
-            self.record_failure(error.clone());
+            if record_read_failure {
+                self.record_failure(error.clone(), started);
+            }
         })?;
         let _lock = self.lock()?;
         let mut record = self.read()?;
@@ -680,6 +728,7 @@ impl Service {
         };
         record.view.approval = None;
         record.view.last_attempt = Some(attempt.clone());
+        record.view.offers.retain(|offer| offer.id != attempt.grant_id);
         record.attempts.push(attempt.clone());
         self.save(&record)?; // durable one-use fence BEFORE any network write
         let result = t.redeem(&attempt.grant_id, &attempt.request_id);
@@ -698,7 +747,6 @@ impl Service {
         record.view.last_attempt = Some(attempt.clone());
         *record.attempts.last_mut().unwrap() = attempt;
         record.view.state = "unknown".into();
-        record.view.checked_at = None;
         record.view.retry_at = None;
         record.view.message =
             Some("A reset was attempted. Refresh quota to see the current allowance.".into());
@@ -806,7 +854,7 @@ mod tests {
         assert!(shared.view().approval.is_none());
         assert!(shared.use_approved(&mut t, || true).is_err());
         shared.refresh_transport(&mut t).unwrap();
-        assert!(shared.approve(&shared.view().offers[0]).is_err());
+        assert!(shared.view().offers.is_empty());
         assert_eq!(t.posts, 1);
     }
 
@@ -818,15 +866,15 @@ mod tests {
         approve(&app);
         let terminal = Service::new(root.path());
         let now = crate::util::now_millis();
-        let failed = app.tick_using(now, |approved| {
+        let failed = app.tick_using(now, true, |approved| {
             assert!(approved);
             Err("Claude reset eligibility check: HTTP 429".into())
         });
         assert_eq!(failed.state, "unknown");
         assert!(failed.message.unwrap().contains("429"));
         assert!(failed.approval.is_some());
-        terminal.tick_using(now + 1000, |_| panic!("peer must honor shared retry"));
-        app.tick_using(now + super::super::REFRESH_INTERVAL_MS - 1,
+        terminal.tick_using(now + 1000, false, |_| panic!("peer must honor shared retry"));
+        app.tick_using(now + super::super::REFRESH_INTERVAL_MS - 1, false,
             |_| panic!("must not flood Anthropic"));
         assert!(failed.retry_at.unwrap() <= now + super::super::REFRESH_INTERVAL_MS + 1000);
         // Advance the persisted deadlines instead of sleeping for five minutes.
@@ -835,16 +883,144 @@ mod tests {
         record.poll_after = Some(due - 1);
         record.view.retry_at = Some(due - 1);
         app.save(&record).unwrap();
-        let completed = terminal.tick_using(due, |approved| {
+        let completed = terminal.tick_using(due, true, |approved| {
             assert!(approved);
             terminal.use_approved(&mut t, || true)
         });
         assert_eq!(completed.last_attempt.unwrap().outcome, "used");
         assert_eq!(t.posts, 1);
-        app.tick_using(due + 1, |_| panic!("app must not repeat terminal's check"));
+        app.tick_using(due + 1, false, |_| panic!("app must not repeat terminal's check"));
         assert!(app.view().approval.is_none());
         assert!(app.use_approved(&mut t, || true).is_err());
         assert_eq!(t.posts, 1);
+    }
+
+    /// 2026-11-18: the check answered HTTP 429 as weekly usage reached 99%, and the notice
+    /// carried only the refusal. The last answer stays, is said with its age, and the next
+    /// five-minute poll is the retry.
+    #[test]
+    fn a_refused_check_keeps_the_last_answer_with_its_age_and_retries_at_retry_at() {
+        let root = Scratch::new();
+        let mut t = Fake::new(99.);
+        let service = Service::new(root.path());
+        let now = crate::util::now_millis();
+        let checked = now - 4 * 3_600_000 - 5 * 60_000;
+        let mut record = Record::default();
+        let (account, reading) = Service::read_transport(&mut t).unwrap();
+        Service::update(&mut record, account, reading, checked);
+        service.save(&record).unwrap();
+        let refused = service.tick_using(now, false, |_| {
+            Err("Claude reset eligibility check: HTTP 429: Anthropic rate-limited the check.".into())
+        });
+        assert_eq!(refused.state, "unknown");
+        assert_eq!(refused.offers.len(), 1, "the last answer's offer is kept");
+        assert_eq!(refused.checked_at, Some(checked));
+        let said = refused.message.unwrap();
+        assert!(said.contains("HTTP 429"), "{said}");
+        assert!(said.ends_with("Last answer: 1 weekly reset is on offer (One weekly reset), checked 4 h 5 min ago."), "{said}");
+        let retry = now + super::super::REFRESH_INTERVAL_MS;
+        assert_eq!(refused.retry_at, Some(retry));
+        service.tick_using(retry - 1, false, |_| panic!("no call before retryAt"));
+        let mut calls = 0;
+        service.tick_using(retry, false, |_| { calls += 1; service.refresh_transport(&mut t) });
+        assert_eq!(calls, 1, "the poll at retryAt is the retry");
+        assert_eq!(service.view().state, "fresh");
+    }
+
+    /// What was found: the automatic check runs every four hours, including with an unused approval.
+    /// A day of the watcher's five-minute polls is 288 ticks, and was 288 checks before this.
+    #[test]
+    fn a_day_of_watcher_polls_asks_anthropic_every_four_hours() {
+        let root = Scratch::new();
+        let mut t = Fake::new(50.);
+        let service = Service::new(root.path());
+        let start = crate::util::now_millis();
+        let mut calls = 0;
+        for poll in 0..288 {
+            let now = start + poll * super::super::REFRESH_INTERVAL_MS;
+            service.tick_using(now, false, |_| {
+                calls += 1;
+                let (account, reading) = Service::read_transport(&mut t)?;
+                let mut record = service.read()?;
+                Service::update(&mut record, account, reading, now);
+                service.save(&record)?;
+                Ok(Service::visible(record.view, now))
+            });
+        }
+        assert_eq!(calls, 6);
+        assert_eq!(t.posts, 0);
+    }
+
+    #[test]
+    fn app_and_terminal_share_the_four_hour_answer_and_refusal_deadline() {
+        let root = Scratch::new();
+        let mut transport = Fake::new(99.);
+        let app = seeded(root.path(), &mut transport);
+        let terminal = Service::new(root.path());
+        let checked = app.view().checked_at.unwrap();
+        let due = checked + 4 * 60 * 60_000;
+        for wake in [checked + 15_000, checked + 3_600_000, due - 1] {
+            app.tick_using(wake, true, |_| panic!("a session wake must reuse the offer"));
+            terminal.tick_using(wake, true, |_| panic!("crossing 99% must reuse the offer"));
+        }
+        let refused = app.tick_using(due, true, |approved| {
+            assert!(!approved, "a limit reading is not approval");
+            terminal.tick_using(due, true, |_| panic!("another poll owns this check"));
+            Err("HTTP 429".into())
+        });
+        assert_eq!(refused.retry_at, Some(due + super::super::REFRESH_INTERVAL_MS));
+        assert!(refused.message.unwrap().contains("checked 4 h ago"));
+        terminal.tick_using(due + super::super::REFRESH_INTERVAL_MS - 1, true,
+            |_| panic!("a lease or watcher wake cannot move the retry"));
+        assert_eq!(transport.posts, 0);
+    }
+
+    #[test]
+    fn saved_eligibility_and_known_expiry_survive_a_refusal() {
+        let root = Scratch::new();
+        let mut transport = Fake::new(99.);
+        transport.usage["cedar_ember"]["eligible"] = json!(false);
+        transport.usage["cedar_ember"]["ineligible_reason"] = json!("surface");
+        let service = seeded(root.path(), &mut transport);
+        let checked = service.view().checked_at.unwrap();
+        service.record_failure("HTTP 429".into(), checked);
+        let saved = service.view_at(checked + 60_000);
+        assert!(saved.offers.is_empty());
+        assert!(saved.message.unwrap().contains("not available through this Claude Code connection"));
+
+        transport.usage["cedar_ember"]["eligible"] = json!(true);
+        transport.usage["cedar_ember"]["ineligible_reason"] = Value::Null;
+        let service = seeded(root.path(), &mut transport);
+        let mut record = service.read().unwrap();
+        let checked = record.view.checked_at.unwrap();
+        record.view.offers[0].expires_at = checked + 120_000;
+        service.save(&record).unwrap();
+        service.record_failure("HTTP 429".into(), checked + 180_000);
+        let saved = service.view_at(checked + 180_000);
+        assert!(saved.approval.is_none());
+        assert!(saved.offers.is_empty());
+        assert!(saved.message.unwrap().contains("last weekly reset offer has expired, checked 3 min ago"));
+    }
+
+    #[test]
+    fn approved_offer_is_checked_early_only_when_the_weekly_limit_is_reached() {
+        let root = Scratch::new();
+        let mut transport = Fake::new(20.);
+        let service = seeded(root.path(), &mut transport);
+        approve(&service);
+        let checked = service.view().checked_at.unwrap();
+        let next = checked + super::super::REFRESH_INTERVAL_MS;
+        service.tick_using(next, false, |_| panic!("an approval is not a five-minute polling schedule"));
+        service.tick_using(next, true, |approved| {
+            assert!(approved);
+            transport.usage["seven_day"]["utilization"] = json!(99.);
+            service.poll_transport(approved, &mut transport, &|| true)
+        });
+        let saved = service.view();
+        assert_eq!(saved.last_attempt.unwrap().outcome, "used");
+        assert!(saved.offers.is_empty());
+        assert!(saved.approval.is_none());
+        assert_eq!(transport.posts, 1);
     }
 
     #[test]
@@ -878,7 +1054,7 @@ mod tests {
         record.view.checked_at = None;
         service.save(&record).unwrap();
         let before = crate::util::now_millis();
-        let failed = service.refresh(Path::new("/nonexistent/claude"), false);
+        let failed = service.tick_using(before, false, |_| Err("Fixture has no reset connection.".into()));
         assert_eq!(failed.state, "unknown");
         assert!(failed.approval.is_some());
         assert!(failed.retry_at.unwrap() <= before + super::super::REFRESH_INTERVAL_MS + 1000);
@@ -890,39 +1066,6 @@ mod tests {
         assert_eq!(transport.posts, 1);
         assert!(service.use_approved(&mut transport, || true).is_err());
         assert_eq!(transport.posts, 1);
-    }
-
-    /// Hunt part 1 finding 23: a manual reset-offer check is not held by the monitor's
-    /// five-minute reservation or by the failure wait, but the 5 s double-click cooldown holds.
-    /// (In tests the connection is a fixture that always fails, which is what makes a real
-    /// attempt visible: it sets `retry_at`.)
-    #[test]
-    fn a_manual_offer_check_is_not_held_by_the_automatic_reservation_or_failure_wait() {
-        let root = Scratch::new();
-        let mut transport = Fake::new(20.);
-        let service = seeded(root.path(), &mut transport);
-        let interval = super::super::REFRESH_INTERVAL_MS;
-        let now = crate::util::now_millis();
-        // The monitor reserved its poll a minute ago; nothing has been read since.
-        let mut record = service.read().unwrap();
-        record.view.checked_at = None;
-        record.view.retry_at = None;
-        record.poll_after = Some(now + interval - 60_000);
-        service.save(&record).unwrap();
-        assert!(service.refresh(Path::new("/nonexistent/claude"), false).retry_at.is_none(),
-            "the automatic check still waits for the reservation");
-        let asked = service.refresh(Path::new("/nonexistent/claude"), true);
-        assert!(asked.retry_at.is_some(), "his manual check went to the provider");
-        let again = service.refresh(Path::new("/nonexistent/claude"), true);
-        assert_eq!(again.retry_at, asked.retry_at, "a double-click straight after is absorbed");
-        // A failure a minute ago is five minutes of automatic wait; he still gets a real check.
-        let mut record = service.read().unwrap();
-        record.poll_after = None;
-        let stale = now + interval - 60_000;
-        record.view.retry_at = Some(stale);
-        service.save(&record).unwrap();
-        let asked = service.refresh(Path::new("/nonexistent/claude"), true);
-        assert!(asked.retry_at.unwrap() > stale, "the failure wait did not hold his manual check");
     }
 
     #[test]
@@ -1065,7 +1208,7 @@ mod tests {
             let (account, reading) = Service::read_transport(&mut t).unwrap();
             Service::update(&mut record, account, reading, crate::util::now_millis());
             restarted.save(&record).unwrap();
-            assert!(restarted.approve(&restarted.view().offers[0]).is_err());
+            assert!(restarted.view().offers.is_empty());
             assert_eq!(t.posts, 1);
         }
     }
@@ -1104,7 +1247,7 @@ mod tests {
         assert_eq!(t.posts, 2);
         // A grant that really was used stays fenced.
         service.refresh_transport(&mut t).unwrap();
-        assert!(service.approve(&service.view().offers[0]).is_err());
+        assert!(service.view().offers.is_empty());
         assert_eq!(t.posts, 2);
     }
 
