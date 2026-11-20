@@ -3735,7 +3735,7 @@ fn main() {
             });
             // Read immediately at startup, regardless of the pause switch. Session
             // starts and account changes wake this same reader. Otherwise its cache
-            // enforces five-minute polling, with reset deadlines and error backoff.
+            // enforces the shared polling cadence, with reset deadlines and error backoff.
             let quota_weak = Arc::downgrade(&quota);
             let quota_bin = claude_bin_cell.clone();
             let quota_app = app.handle().clone();
@@ -6806,6 +6806,7 @@ fn claude_account_sign_in_poll(state: State<AppState>) -> Option<(String, richos
     let mut same_as = None;
     if view.state == AuthState::Connected {
         if let Some(folder) = state.quota.accounts.folder(&id) {
+            state.quota.added_account_connection_changed(&id);
             same_as = state.quota.accounts.list().into_iter().filter(|a| a.id != id)
                 .find(|a| richos_core::provider_auth::same_account(&bin, Some(&folder), a.folder.as_deref()) == Some(true))
                 .map(|a| a.label);

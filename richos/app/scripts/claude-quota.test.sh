@@ -49,6 +49,9 @@ with tempfile.TemporaryDirectory(prefix="claude-quota-proof-") as temporary:
                        + shlex.quote(str(fixture_code)) + ' "$@"\n')
     fixture_code.write_text('''import json, os, sys
 from pathlib import Path
+if sys.argv[1:] == ["auth", "status", "--json"]:
+    print(json.dumps({"loggedIn": True, "email": "fixture@example.invalid"}))
+    sys.exit(0)
 if os.environ.get("QUOTA_PROOF_EOF") == "1":
     sys.exit(0)
 assert "--no-session-persistence" in sys.argv
@@ -71,7 +74,7 @@ for line in sys.stdin:
     }}), flush=True)
 ''')
     fixture.chmod(0o700)
-    env = {**os.environ, "TMPDIR": str(runs), "QUOTA_PROOF_LOG": str(log)}
+    env = {**os.environ, "TMPDIR": str(runs), "QUOTA_PROOF_LOG": str(log), "RICHOS_QUOTA_FIXTURE_STORE": str(runs)}
 
     def invoke(*args, extra=None):
         return subprocess.run([executable, *map(str, args)], env={**env, **(extra or {})},

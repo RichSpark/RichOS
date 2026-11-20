@@ -122,7 +122,12 @@
     if (cut < 0) { el.textContent = text; return; }
     el.replaceChildren(text.slice(0, cut + 1), node("span", "quota-keep", text.slice(cut + 1)));
   }
-  function stale(now = Date.now()) { return !view || view.state !== "fresh" || !view.checkedAt || now < view.checkedAt || now - view.checkedAt >= view.refreshIntervalMs || view.windows.some(w => w.resetsAt && w.resetsAt <= now); }
+  function stale(now = Date.now()) {
+    if (!view || view.state !== "fresh" || !view.checkedAt || now < view.checkedAt) return true;
+    const interval = view.providerIntervalMs ?? view.refreshIntervalMs;
+    const deadline = view.nextCheckAt ?? view.checkedAt + interval;
+    return now >= deadline || view.windows.some(w => w.resetsAt && w.resetsAt <= now);
+  }
   function validDraft() { return /^[0-9]{1,2}$/.test(field("quota-threshold").value) && Number(field("quota-threshold").value) >= 1; }
   function say(text) { field("quota-save-status").textContent = text; field("quota-save-status").hidden = !text; }
 
@@ -160,9 +165,7 @@
   }
   const selectedAcct = () => accounts().find(a => a.id === selectedId && a.windows.length) || inUseAcct();
   // §108's speed: "fast" is 5 points or more per five-minute check (quota.rs FAST_POINTS_PER_CHECK);
-  // an expected rise checks fast before anything is measured. Either way the app checks every
-  // MINUTE (quota.rs FAST_REFRESH_INTERVAL_MS) — round 16's mockup says 2 minutes; the app's
-  // measured value is the one shown.
+  // An expected rise gets its own status card. The provider clock is tracked separately.
   const fastNow = () => Object.values(view?.speeds || {}).some(s => s * 300000 >= 5);
   const expectedNow = () => !fastNow() && !!view && view.refreshIntervalMs < 300000;
   const fiveLine = () => Math.floor(view.actAt?.five_hour ?? view.policy.pausePercent);
@@ -309,8 +312,8 @@
       : answered ? "Claude Code answered without its usage figures this time." : "Claude Code has not answered yet.");
     const nextAsk = view.nextCheckAt > Date.now() ? duration(view.nextCheckAt - Date.now()) : null;
     field("quota-empty-next").textContent = view.signedIn === false ? "Close this panel, choose Claude accounts and sign in, then refresh."
-      : answered && nextAsk ? `RichOS asks again in ${nextAsk}; Ask Claude Code asks now.`
-      : "Ask Claude Code checks the usage figures again.";
+      : nextAsk ? `RichOS asks again in ${nextAsk}.`
+      : "Refresh shows the latest saved reading.";
     // Round 16 hides the ruler key while the Add account form is open.
     sheet.querySelector(".quota-legend").hidden = !windows.length || !field("quota-account-new").hidden;
   }
@@ -463,10 +466,10 @@
       else if (!on) then = `The weekly switch ${week !== 99 ? `moved to <b>${week}%</b>` : "stays at <b>99%</b>"}; the five-hour line is off, so nothing acts there.`;
       else if (moved) then = `The ${many ? "lines" : "line"} moved to ${lines(five, week)} so nothing reaches 100%; ${many ? "they return" : "it returns"} to ${t}%${many ? " and 99%" : ""} when the speed comes back down.`;
       else then = `At this speed the next check still comes before 100%, so the ${many ? "lines stay" : "line stays"} at ${lines(t, 99)}.`;
-      return { head: "Usage is fast. Checking every minute.", body: `${what} ${then}` };
+      return { head: "Usage is fast.", body: `${what} ${then}` };
     }
-    if (expectedNow()) return { head: "A big rise is expected. Checking every minute.",
-      body: `Several agents just started at once, so Rich checks every minute before the speed is even measured. The ${many ? "lines stay" : "line stays"} at ${lines(t, 99)} until a jump is measured.` };
+    if (expectedNow()) return { head: "A big rise is expected.",
+      body: `Several agents started at once. The ${many ? "lines stay" : "line stays"} at ${lines(t, 99)} until a jump is measured.` };
     return null;
   }
   function renderStatus() {
@@ -803,41 +806,32 @@
 
   function render() {
     paintMenu();
-    // Refresh is never locked by a failure's backoff: that wait holds only the automatic check
-    // (quota.rs `due`); a person who asks is owed a real check (round 16: "Refresh asks
-    // sooner"). Walk of nightly 36, D1: a null answer locked it for 10 minutes.
+    // Refresh always shows the shared answer. The reader owns the next request slot.
     field("quota-refresh").disabled = busy || saving;
-    // Round 16's Refresh: the circular-arrow icon, "Asking Claude Code…" while it asks, and
-    // "Ask Claude Code" while there is no reading at all.
     field("quota-refresh").classList.toggle("is-busy", busy);
-    field("quota-refresh-label").textContent = busy ? "Asking Claude Code…" : view && !view.windows.length ? "Ask Claude Code" : "Refresh";
+    field("quota-refresh-label").textContent = busy ? "Refreshing…" : "Refresh";
     if (!view) return;
-    const now = Date.now(), age = view.checkedAt && view.windows.length ? duration(now - view.checkedAt) + " ago" : null;
+    const now = Date.now(), checked = view.providerCheckedAt ?? view.checkedAt;
+    const age = checked && view.windows.length ? duration(now - checked) + " ago" : null;
     const freshness = field("quota-freshness");
     freshness.classList.toggle("is-stale", !!age && stale());
     if (!age) freshness.replaceChildren(node("b", "", view.signedIn === false ? "Not signed in on this Mac."
       : view.signedIn === true ? "Signed in; no usage reading." : "No usage reading yet."));
     else {
-      // The cadence: every 5 minutes at every level of use; every MINUTE while usage is fast or
-      // a rise is expected, in gold (round 16's reading line, the app's measured interval).
-      // Round 16's words: "Checked 3 min ago", or "Last reading 47 min ago — stale".
-      // Two parts that each keep together, so the line wraps between them and never leaves a
-      // lone word ("usage is / fast", "every 5 / min": walk of nightly 36, D4).
-      const quick = fastNow() ? "every minute (usage is fast)" : expectedNow() ? "every minute (a rise is expected)" : null;
       const when = node("span", "quota-reading-part");
       when.append(node("b", "", stale() ? `Last reading ${age} (stale)` : `Checked ${age}`), " ·");
-      freshness.replaceChildren(when, " ",
-        quick ? node("span", "quota-reading-part quota-fast", quick) : node("span", "quota-reading-part", `checks every ${Math.round(view.refreshIntervalMs / 60000)} min`));
+      const cadence = view.providerIntervalMs === 60000 ? "checks every 1 min" : "checks every 5 min";
+      freshness.replaceChildren(when, " ", node("span", "quota-reading-part", cadence));
     }
     // Round 16's `refresh-failed` notice: what happened, how old the figures are, when RichOS
-    // tries again, and that Refresh asks sooner. The same shape says a null answer over figures
+    // tries again. The same shape says a null answer over figures
     // from earlier ("answered without its usage figures"), and an unreadable answer is still
     // named as unreadable (quota.rs `ReadError`).
     const message = field("quota-message"), again = view.retryAt > now ? view.retryAt : view.nextCheckAt > now ? view.nextCheckAt : null;
     const said = view.message || (view.emptyAt && view.windows.length ? "Claude Code answered without its usage figures just now." : "");
-    if (said && view.windows.length && view.checkedAt) {
-      message.innerHTML = `<b>${esc(said)}</b> The figures below are from ${esc(duration(now - view.checkedAt))} ago and may have moved on.`
-        + (again ? ` RichOS ${view.message ? "tries" : "asks"} again in ${esc(duration(again - now))}; Refresh asks sooner.` : "");
+    if (said && view.windows.length && checked) {
+      message.innerHTML = `<b>${esc(said)}</b> The figures below are from ${esc(duration(now - checked))} ago and may have moved on.`
+        + (again ? ` RichOS ${view.message ? "tries" : "asks"} again in ${esc(duration(again - now))}.` : "");
     } else message.textContent = said + (said && again ? ` RichOS tries again in ${duration(again - now)}.` : "");
     message.hidden = !message.textContent;
     const many = multi();

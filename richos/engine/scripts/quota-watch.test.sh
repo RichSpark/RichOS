@@ -65,8 +65,8 @@
 #   G03-G06  refused, no subscription limits, never answering (bounded by the
 #            deadline, and the hung process ended), unreadable, closed early:
 #            each falls back to the status-line file and says why
-#   G07      --watch takes a fresh get_usage at every poll, so a status-line
-#            file ten minutes old wakes nobody
+#   G07      --watch reuses one get_usage answer across multiple polls, so a
+#            status-line file ten minutes old wakes nobody
 #   G09      get_usage refused with "Login expired": the login alarm is raised
 #            (sandboxed: a recorder, never the CEO's notification center)
 #   G10      any other refusal raises no login alarm
@@ -459,6 +459,9 @@ mkdir -p "$FAKE"
 cat >"$FAKE/claude" <<'PY'
 #!/usr/bin/env python3
 import datetime, json, os, sys, time
+if sys.argv[1:] == ["auth", "status", "--json"]:
+    print(json.dumps({"loggedIn": True, "email": "fixture@example.invalid"}))
+    sys.exit(0)
 d = os.environ["QUOTA_FAKE_DIR"]
 open(os.path.join(d, "pids"), "a").write("%d\n" % os.getpid())
 want = ["--print", "--input-format=stream-json", "--output-format=stream-json", "--verbose",
@@ -542,6 +545,7 @@ PY
 chmod +x "$FAKE/claude"
 export QUOTA_FAKE_DIR="$FAKE"
 fake() { # <mode> [used] [reset-in] — resets the fixture's record
+    export RICHOS_QUOTA_FIXTURE_STORE="$(mktemp -d "$SB/usage-store.XXXXXX")"
     printf '%s' "$1" >"$FAKE/mode"; printf '%s' "${2:-50}" >"$FAKE/used"; printf '%s' "${3:-3600}" >"$FAKE/reset_in"
     rm -f "$FAKE/requests" "$FAKE/refused" "$FAKE/seq" "$FAKE/calls"
     : >"$FAKE/pids.now"
@@ -981,9 +985,9 @@ check "W12  a fallback approaching its age limit never requests a reply" \
 fi
 
 # --- G07 / G08 / R04: --watch with get_usage (a worker is running) ---------
-# G07: get_usage answers at every poll, so a status-line file that is ten
-# minutes old does not matter: no QUOTA-STALE, no QUOTA-REFRESH, one fresh
-# get_usage per poll.
+# G07 exercises quota_usage_store.py through the real watcher. One get_usage
+# answer covers every poll during the five-minute interval,
+# so a ten-minute-old status-line file causes no QUOTA-STALE or QUOTA-REFRESH.
 if wants "G07"; then
 fake ok 60
 write_payload 50 3600 600
@@ -991,8 +995,8 @@ new_state
 ( export QUOTA_CLAUDE_BIN="$FAKE/claude"; exec bash "$Q" --watch >"$SB/g07.out" 2>&1 ) &
 WATCH_PID=$!; finish_watch 4; OUT="$(cat "$SB/g07.out")"
 NGET="$(grep -c '^get_usage$' "$FAKE/requests" 2>/dev/null || true)"
-check "G07  --watch takes a fresh get_usage at every poll: a stale status-line file wakes nobody" \
-    "$([ "$WRC" -eq 124 ] && [ "${NGET:-0}" -ge 2 ] && printf '%s' "$OUT" | grep -q '60% of the five-hour window.*via get_usage' \
+check "G07  --watch reuses one get_usage answer: a stale status-line file wakes nobody" \
+    "$([ "$WRC" -eq 124 ] && [ "${NGET:-0}" -eq 1 ] && printf '%s' "$OUT" | grep -q '60% of the five-hour window.*via get_usage' \
        && ! printf '%s' "$OUT" | grep -qE '^QUOTA-(STALE|REFRESH|UNKNOWN)'; echo $?)" "rc=$WRC get_usage=$NGET out=$OUT"
 
 fi
@@ -1010,143 +1014,43 @@ check "G08  a sustained get_usage refusal and stale fallback wake the lead with 
 
 fi
 
-# --- N02-N06: 2026-09-28, the polling never stops --------------------------
-# At 15:32Z get_usage gave no answer within 20 s (initialize had answered);
-# the watcher fell back to a status-line file 25 minutes old, woke the lead
-# with QUOTA-STALE and EXITED, and nothing polled until it was started again
-# by hand. The reading 5 minutes earlier, through get_usage, was 8%.
-# A worker (dev-held) is running for all of these.
-outage_watch() { # <outfile> <poll> <stale> [retry] — get_usage through the fixture, bounded at 1 s
-    new_state
-    ( export QUOTA_CLAUDE_BIN="$FAKE/claude" QUOTA_WATCH_GET_USAGE_SECONDS=1 \
-             QUOTA_WATCH_POLL_SECONDS="$2" QUOTA_WATCH_STALE_SECONDS="$3" QUOTA_WATCH_RETRY_SECONDS="${4:-60}"
-      exec bash "$Q" --watch >"$1" 2>&1 ) &
-    WATCH_PID=$!
-}
-
-# N02: the 15:32Z shape, far from the threshold: get_usage times out twice and
-# answers again. It is retried sooner than a poll (1 s against 4 s here, 60 s
-# against 300 s in production), the lead is NOT woken (the threshold cannot
-# have been crossed from 8%), and the polling goes on. Retried only at the
-# poll, the reading would reach the two-poll mark (8 s) and wake the lead.
-if wants "N02"; then
-write_payload 7 3600 1500
-fake_seq "ok 8" "ok 8" "hang-usage" "hang-usage" "ok 8"
-outage_watch "$SB/n02.out" 4 4 1
-wait_for_line "$SB/n02.out" 'get_usage answers again' 30
-POLL_WAIT=5; polling_goes_on; unset POLL_WAIT; POLLED="$POLLING"
-NSTALE="$(events_of STALE)"
-finish_watch 1; OUT="$(cat "$SB/n02.out")"; POLLING="$POLLED"
-check "N02  get_usage timing out twice at 8%: retried sooner than a poll, nobody woken, and the polling goes on" \
-    "$([ "$WRC" -eq 124 ] && [ "$POLLING" = yes ] && [ "$NSTALE" = 0 ] \
-       && printf '%s' "$OUT" | grep -q 'no answer to get_usage within 1 s (initialize' \
-       && printf '%s' "$OUT" | grep -q 'get_usage is not answering; the threshold cannot have been reached before' \
-       && printf '%s' "$OUT" | grep -q 'get_usage answers again' && ! printf '%s' "$OUT" | grep -q '^QUOTA-'; echo $?)" \
-    "rc=$WRC polling=$POLLING stale_events=$NSTALE out=$OUT"
-
-fi
-
-write_weekly_payload() {
-    python3 - "$QUOTA_PAYLOAD" <<'PYFIXTURE'
-import json, os, sys, time
-now = time.time()
-with open(sys.argv[1], "w") as payload:
-    json.dump({"rate_limits": {"seven_day": {"used_percentage": 48, "resets_at": int(now) + 86400}}}, payload)
-os.utime(sys.argv[1], (now - 840, now - 840))
-PYFIXTURE
-}
-
-# N07: a healthy weekly-only reading, one timeout against a stale status
-# line, then a healthy weekly-only reading again (the 00:04 UTC incident).
-if wants "N07"; then
-write_weekly_payload
-fake_seq "weekly-only 49" "hang-usage" "weekly-only 49"
-outage_watch "$SB/n07.out" 5 5 1
-RECOVERED="$QUOTA_WATCH_STATE_DIR/$SID/polls.log"
-wait_for_line "$RECOVERED" 'get_usage answers again' 20
-finish_watch 1
-OUT="$(cat "$SB/n07.out")"; LOG="$(polls_log)"
-check "N07  one get_usage timeout on a weekly-only account recovers without a monitor event or a reply" \
-    "$([ "$WRC" -eq 124 ] && [ "$(events_of STALE)" = 0 ] && [ "$(events_of UNKNOWN)" = 0 ] \
-       && [ "$(events_of REFRESH)" = 0 ] && printf '%s' "$LOG" | grep -q 'no answer to get_usage within 1 s' \
-       && printf '%s' "$LOG" | grep -q 'get_usage answers again' \
-       && [ "$(printf '%s\n' "$LOG" | grep -c 'via get_usage; seven_day: 49%')" -ge 2 ]; echo $?)" \
-    "rc=$WRC out=$OUT log=$LOG"
-
-fi
-
-# N08: the same weekly fallback stays stale while every retry also fails.
-if wants "N08"; then
-write_weekly_payload
-fake_seq "weekly-only 49" "hang-usage"
-outage_watch "$SB/n08.out" 3 3 1
-CHECK_POLLING=1 finish_watch 20
-OUT="$(cat "$SB/n08.out")"; LOG="$(polls_log)"
-check "N08  a sustained weekly-only outage wakes once, leaves the usage unknown and keeps retrying" \
-    "$([ "$WRC" -eq 0 ] && [ "$POLLING" = yes ] && [ "$(events_of STALE)" = 1 ] \
-       && [ "$(printf '%s\n' "$LOG" | grep -c 'no answer to get_usage within 1 s')" -ge 3 ] \
-       && printf '%s' "$OUT" | grep -q '^QUOTA-STALE:.*UNKNOWN' \
-       && ! printf '%s' "$OUT" | grep -qi 'reply once'; echo $?)" \
-    "rc=$WRC polling=$POLLING out=$OUT log=$LOG"
-
-fi
-
-# N03: a crossing DURING a timeout streak, seen by the status line: get_usage
-# read 90% and then stops answering; the status line (the lead spoke) reads
-# 94%. The pause fires from the fresher reading, and the polling goes on.
-if wants "N03"; then
-write_payload 90 3600 1500
-fake_seq "ok 90" "hang-usage"
-outage_watch "$SB/n03.out" 2 30
-wait_for_line "$SB/n03.out" '90% of the five-hour window' 10
-write_payload 94 3600 0
-CHECK_POLLING=1 finish_watch 15; OUT="$(cat "$SB/n03.out")"
-check "N03  a threshold crossing during a get_usage timeout streak: QUOTA-THRESHOLD from the status line, and the polling goes on" \
-    "$([ "$WRC" -eq 0 ] && printf '%s' "$OUT" | grep -q '^QUOTA-THRESHOLD 94%' && [ "$POLLING" = yes ]; echo $?)" \
-    "rc=$WRC polling=$POLLING out=$OUT"
-
-fi
-
-# N04: a crossing DURING a timeout streak that nothing can see: get_usage read
-# 80% then 88% one poll later, then stops answering. At that measured rise the
-# threshold could be crossed within the next poll, so the lead is woken as
-# soon as the reading is one poll old, not at the two-poll cap.
-if wants "N04"; then
-write_payload 50 3600 1500
-fake_seq "ok 80" "ok 88" "hang-usage"
-outage_watch "$SB/n04.out" 2 5
-# Since ruling §108, 8 points in one poll is high speed: the first wake-up is
-# QUOTA-FAST, and --watch exits on it. As the fallback is used, it is started
-# again on the same poller, which delivers the QUOTA-STALE this case is about.
-wait_for_line "$SB/n04.out" '^QUOTA-FAST' 20
-n=0; while kill -0 "$WATCH_PID" 2>/dev/null && [ "$n" -lt 50 ]; do sleep 0.1; n=$((n + 1)); done
-( exec bash "$Q" --watch >>"$SB/n04.out" 2>&1 ) &
-WATCH_PID=$!
-CHECK_POLLING=1 finish_watch 20; OUT="$(cat "$SB/n04.out")"
-check "N04  a timeout streak just after a steep rise (80->88% in one poll): QUOTA-FAST first, then QUOTA-STALE at once, from the measured rise, and the polling goes on" \
-    "$([ "$WRC" -eq 0 ] && printf '%s' "$OUT" | grep -q '^QUOTA-STALE: get_usage has not answered since' \
-       && printf '%s\n' "$OUT" | grep -E '^QUOTA-(FAST|STALE)' | head -1 | grep -q '^QUOTA-FAST' \
-       && printf '%s' "$OUT" | grep -q 'at the fastest rise measured this window' \
-       && ! printf '%s' "$OUT" | grep -q 'has been missed' && [ "$POLLING" = yes ]; echo $?)" \
-    "rc=$WRC polling=$POLLING out=$OUT"
-
-fi
-
-# N05: a streak that does not end, far from the threshold: the lead is woken
-# ONCE, when the reading is two polls old (a check he ordered has been
-# missed), and the polling goes on, still retrying.
-if wants "N05"; then
-write_payload 7 3600 1500
-fake_seq "ok 8" "ok 8" "hang-usage"
-outage_watch "$SB/n05.out" 2 3
-CHECK_POLLING=1 POLL_WAIT=5 finish_watch 20; OUT="$(cat "$SB/n05.out")"
-NSTALE="$(cat "$QUOTA_WATCH_STATE_DIR"/*/events.jsonl 2>/dev/null | grep -c '"STALE"' || true)"
-check "N05  a get_usage outage that does not end, at 8%: one QUOTA-STALE at the two-poll mark, and the polling goes on" \
-    "$([ "$WRC" -eq 0 ] && printf '%s' "$OUT" | grep -q '^QUOTA-STALE: get_usage has not answered since' \
-       && printf '%s' "$OUT" | grep -q 'a check the rule orders every 5 minutes has been missed' \
-       && [ "$POLLING" = yes ] && [ "$NSTALE" = 1 ]; echo $?)" "rc=$WRC polling=$POLLING stale_events=$NSTALE out=$OUT"
-
-fi
+# --- N02-N08: failed provider reads keep the saved reading and never stop polling.
+# Replay provider slots with controlled time. The fake transport still times
+# out on get_usage itself, with a real one-second deadline.
+for outage_id in N02 N03 N04 N05 N07 N08; do
+    wants "$outage_id" || continue
+    case "$outage_id" in
+        N02)
+            fake_seq "ok 8" "hang-usage" "ok 8"
+            outage_label="a transient timeout at 8% keeps the answer, checks it locally and recovers at the next provider slot"
+            ;;
+        N03)
+            fake_seq "ok 90" "hang-usage"
+            outage_label="a newer status-line reading crosses the threshold during a refusal and polling continues"
+            ;;
+        N04)
+            fake_seq "ok 80" "ok 90" "hang-usage"
+            outage_label="a refusal after a measured rise says the threshold could have been crossed"
+            ;;
+        N05)
+            fake_seq "ok 8" "hang-usage"
+            outage_label="a sustained outage at 8% wakes once after two polls and polling continues"
+            ;;
+        N07)
+            fake_seq "weekly-only 49" "hang-usage" "weekly-only 49"
+            outage_label="a weekly-only account recovers at the next slot without an alert"
+            ;;
+        N08)
+            fake_seq "weekly-only 49" "hang-usage"
+            outage_label="a sustained weekly-only outage wakes once while provider checks continue"
+            ;;
+    esac
+    outage_case="$(printf '%s' "$outage_id" | tr 'A-Z' 'a-z')"
+    replay "$outage_case"
+    outage_rc=$?
+    outage_report="$(cat "$SB/$outage_case.report")"
+    check "$outage_id  $outage_label" "$outage_rc" "$outage_report"
+done
 
 # N06: a STALE status-line reading with no get_usage at all (the 2026-09-25
 # design): the lead is woken once, and the polling goes on.

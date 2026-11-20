@@ -18,6 +18,7 @@ pub mod terminal;
 pub mod tokens;
 pub mod reset_transport;
 pub mod reset_tools;
+mod shared_usage;
 pub mod stagger;
 
 pub const REFRESH_INTERVAL_MS: u64 = 5 * 60_000;
@@ -32,17 +33,16 @@ pub const REFRESH_INTERVAL_MS: u64 = 5 * 60_000;
 /// 2.02-2.22 s; the child's CPU time grew 2.03-2.04 s per read with reads 6 s apart and
 /// 2.29 s per read with reads 30 s apart — so the cost is the READ, not an idle child: about
 /// 2.2 s of one core per read. The resident child is 390-430 MB. At one read a minute that is
-/// about 3.7% of one core per account being read fast (2.2 / 60), only while usage is fast or
-/// a rise is expected, and only for the account in use; at 2 minutes it would be 1.8%. Every
+/// about 3.7% of one core per account being read fast (2.2 / 60); at 2 minutes it would be 1.8%. Every
 /// minute lets the act point sit closer to the normal one at the same speed (4 points a minute
 /// projects 4 points ahead instead of 8), so it is the choice. The cost no measurement here can
-/// show is Anthropic's side (a `get_usage` a minute per account); a failed read backs off
-/// `BACKOFF_MS` as before.
+/// show is Anthropic's side. The shared reader uses this interval only during measured fast
+/// usage above 80%. A failed read uses the regular interval or the provider's retry time.
 pub const FAST_REFRESH_INTERVAL_MS: u64 = 60_000;
 
 /// **An EXPECTED rise** (plan §15 answer 10): this many leases started, or agents dispatched,
-/// within `EXPECTED_RISE_WINDOW_MS` switches checking to the fast interval before any jump is
-/// measured, for `EXPECTED_RISE_MS`. Then it ends by itself unless a measured speed keeps it.
+/// within `EXPECTED_RISE_WINDOW_MS` marks an expected rise for `EXPECTED_RISE_MS`.
+/// The provider interval depends on measured usage.
 pub const EXPECTED_RISE_STARTS: usize = 3;
 pub const EXPECTED_RISE_WINDOW_MS: u64 = 60_000;
 pub const EXPECTED_RISE_MS: u64 = 10 * 60_000;
@@ -74,6 +74,8 @@ pub struct Reading {
     /// §4): it replaces 99 as the weekly point at normal speed. `None` everywhere but the one
     /// account the variable names.
     pub weekly_cutoff: Option<f64>,
+    /// Time from each window's latest observation to the next eligible provider request.
+    pub provider_wait_ms: BTreeMap<String, u64>,
 }
 
 /// **H, the work the weekly point leaves room for after it: 5 minutes at the measured speed.**
@@ -115,21 +117,23 @@ impl Reading {
     pub fn fast(&self) -> bool {
         self.speeds.values().any(|s| s * REFRESH_INTERVAL_MS as f64 >= FAST_POINTS_PER_CHECK)
     }
-    /// The gap to the next check: one minute when fast or a rise is expected, 5 otherwise.
-    /// When the speed comes back down (and no rise is expected) it is 5 minutes again.
+    /// The local monitoring interval used to describe a fast or expected rise.
     pub fn interval(&self) -> u64 {
         if self.fast() || self.expected { FAST_REFRESH_INTERVAL_MS } else { REFRESH_INTERVAL_MS }
     }
+    fn projection_interval(&self, window: &Window) -> u64 {
+        self.provider_wait_ms.get(&window.id).copied().unwrap_or_else(|| self.interval())
+    }
     /// What this window will read at the next check, at its measured speed.
     pub fn projected(&self, window: &Window) -> f64 {
-        window.used_percent + self.speeds.get(&window.id).copied().unwrap_or(0.) * self.interval() as f64
+        window.used_percent + self.speeds.get(&window.id).copied().unwrap_or(0.) * self.projection_interval(window) as f64
     }
     /// **The check point, recalculated from the measured speed** (plan §15 answer 10): the
     /// normal threshold (93% five-hour, 99% weekly), or lower when the speed would carry the
     /// window to 100% before the next check — `100 - speed x interval`. At normal speed it is
     /// the normal threshold again (answer 11).
     pub fn act_point(&self, window: &Window, threshold: f64) -> f64 {
-        let reach = self.speeds.get(&window.id).copied().unwrap_or(0.) * self.interval() as f64;
+        let reach = self.speeds.get(&window.id).copied().unwrap_or(0.) * self.projection_interval(window) as f64;
         // Never below 0%: a jump faster than the whole window (20% -> 95% in 30 s) would
         // otherwise print "-36%". At 0 the window is already at the point, so it still acts at once.
         threshold.min(100. - reach).clamp(0., 100.)
@@ -143,7 +147,7 @@ impl Reading {
     /// My "1-2% sooner" was just guesswork."*, "this" being 100% before the switch):
     ///
     /// with `s` the window's measured speed (the larger of the percentage speed and the token
-    /// speed), `I` the time to the next check (`interval`) and `H` the work left room for after
+    /// speed), `I` the time to the next provider check and `H` the work left room for after
     /// the switch ([`HANDOFF_DEFAULT_MS`]): `point = 99 - max(0, ceil(s x (I + H)) - 1)`. If the
     /// wait for the next check and that work would use 1 point or less, it is 99; up to 2
     /// points, 98; up to 5, 95; and so on, as early as the speed requires, with no floor but 0.
@@ -153,7 +157,7 @@ impl Reading {
     pub fn weekly_point(&self, window: &Window) -> f64 {
         let base = self.weekly_cutoff.unwrap_or(resets::WEEKLY_THRESHOLD);
         let speed = self.speeds.get(&window.id).copied().unwrap_or(0.);
-        let points = speed * (self.interval() + HANDOFF_DEFAULT_MS) as f64;
+        let points = speed * self.projection_interval(window).saturating_add(HANDOFF_DEFAULT_MS) as f64;
         let earlier = (points.ceil() - 1.).max(0.);
         (base - earlier).clamp(0., 100.)
     }
@@ -251,7 +255,7 @@ pub fn when_long(at_ms: u64, utc_offset_minutes: Option<i32>, now_ms: u64) -> St
     else if now.date().next_day() == Some(at.date()) { format!("tomorrow at {time}") }
     else { format!("on {} at {time}", at.weekday()) }
 }
-pub const BACKOFF_MS: u64 = 600_000;
+pub const BACKOFF_MS: u64 = REFRESH_INTERVAL_MS;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -337,6 +341,10 @@ pub struct View {
     pub state: State,
     pub windows: Vec<Window>,
     pub checked_at: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_checked_at: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_interval_ms: Option<u64>,
     pub retry_at: Option<u64>,
     pub next_check_at: Option<u64>,
     pub refresh_interval_ms: u64,
@@ -364,9 +372,7 @@ pub struct View {
     /// The setting for the five-hour threshold: Pause (default) or Switch.
     #[serde(default)]
     pub at_threshold: crate::claude_accounts::AtThreshold,
-    /// Each window's measured speed, percentage points per millisecond (§108). Published so
-    /// the separate-process gate projects exactly as this process does; `refreshIntervalMs`
-    /// above reads 120000 while it is fast.
+    /// Each window's measured speed in percentage points per millisecond (§108).
     #[serde(default)]
     pub speeds: BTreeMap<String, f64>,
     /// The check point of each window, percent used: 93 (five-hour) and 99 (weekly) at
@@ -444,7 +450,8 @@ pub struct InUse {
     pub label: String,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum ReadError {
     Unsupported,
     Failed,
@@ -547,6 +554,7 @@ pub fn normalize(response: &Value) -> Result<Vec<Window>, ReadError> {
         for (key, label) in [
             ("seven_day_opus", "Weekly · Opus"),
             ("seven_day_sonnet", "Weekly · Sonnet"),
+            ("seven_day_fable", "Weekly · Fable"),
         ] {
             if let Some(value) = limits.get(key) {
                 if let Some(used) = value
@@ -611,8 +619,6 @@ struct Snapshot {
     /// set at every token scan. Used only while the reading is older than the normal check
     /// (`reading_with`).
     since_reading: f64,
-    /// Null answers in a row before this account's first reading (`FIRST_READING_RETRY_MS`).
-    empties: u32,
     /// **What the last answer ABOUT the sign-in said** ([`View::signed_in`]), kept apart from
     /// the last check's error (mid-job review rv-20261021T233844Z-10df0b1f-1846, finding 1):
     /// while it lived only in that error, one check where Claude Code did not answer replaced
@@ -626,25 +632,13 @@ struct Snapshot {
     /// adds none, so a held team's flat readings never replace the speed before the hold
     /// (`pre_hold`).
     rise_log: BTreeMap<String, Vec<(f64, f64)>>,
+    window_observed_at: BTreeMap<String, u64>,
+    /// The last shared provider answer applied here. Stream frames can be fresher
+    /// for the windows they carry and have a separate timestamp.
+    shared_checked_at: Option<u64>,
+    shared_next_at: Option<u64>,
+    shared_interval_ms: Option<u64>,
 }
-
-/// **An account with no reading yet is asked again soon after a null answer** (handoff round
-/// 2, runs 2-4 and 6: null answers, the usage endpoint's 429 reported as `rate_limits: null`,
-/// starved Work's first reading for the whole run, and an account never read is never switched
-/// to). 30 seconds after the first null, doubling to `FIRST_READING_RETRY_MAX_MS` and staying
-/// there until the first reading arrives: well under the 5-minute schedule, never more than
-/// one ask in 30 seconds. With a reading in hand a null waits for the normal schedule.
-pub const FIRST_READING_RETRY_MS: u64 = 30_000;
-pub const FIRST_READING_RETRY_MAX_MS: u64 = 120_000;
-
-/// **A check at a window's reset that still gets the old window back is asked again in
-/// seconds** (follow-ups of 2026-10-29; the CEO, after the 20:50Z reset: *"it took 5 fucking
-/// minutes for the refresh to show up."*). The check is already taken at `resets_at`; when
-/// Claude still answers with the window that just ended, the next one is 10 seconds later, not
-/// the full interval, for at most [`REFRESH_INTERVAL_MS`] after that reset: 300 000 / 10 000 =
-/// at most 30 extra checks per reset, after which a window that keeps its old reset time is
-/// asked on the normal schedule, as before.
-pub const RESET_RETRY_MS: u64 = 10_000;
 
 /// One window's reading as a speed base: used percent, its reset time, when it was first read
 /// (`at`) and last read (`last`) at that value, and whether its rise into that value was seen
@@ -677,6 +671,7 @@ impl Snapshot {
     /// reading certainly gained nothing, so it is still no speed.
     fn measure(&mut self, windows: &[Window], observed: u64) {
         for window in windows {
+            self.window_observed_at.insert(window.id.clone(), observed);
             let fresh = SpeedBase { used: window.used_percent, resets_at: window.resets_at, at: observed, last: observed, rose: false };
             // The SAME window when the reset times agree within a minute (`same_reset`).
             let same = |a: Option<u64>, b: Option<u64>| match (a, b) {
@@ -754,13 +749,30 @@ impl Snapshot {
         // Expired windows remain in the published telemetry, but cannot drive
         // admission, an account switch or a worker handoff in the next window.
         let mut windows: Vec<_> = self.windows.iter().filter(|w|w.resets_at.is_none_or(|t|t>now)).cloned().collect();
-        if self.checked_at.is_some_and(|t| now.saturating_sub(t) >= REFRESH_INTERVAL_MS) && self.since_reading > 0. {
+        let week_estimated = self.checked_at.is_some_and(|t| now.saturating_sub(t) >= REFRESH_INTERVAL_MS)
+            && self.since_reading > 0.;
+        if week_estimated {
             for window in windows.iter_mut().filter(|w| w.id == "seven_day") {
                 window.used_percent = (window.used_percent + self.since_reading).min(100.);
             }
         }
+        let provider_wait_ms = windows.iter().filter_map(|window| {
+            let observed = if week_estimated && window.id == "seven_day" { Some(now) }
+                else { self.window_observed_at.get(&window.id).copied() };
+            self.provider_wait_ms(observed).map(|wait| (window.id.clone(), wait))
+        }).collect();
         Reading { windows, speeds,
-            expected: self.rise_until.is_some_and(|t| t > now), rises: self.rises.clone(), weekly_cutoff }
+            expected: self.rise_until.is_some_and(|t| t > now), rises: self.rises.clone(),
+            weekly_cutoff, provider_wait_ms }
+    }
+    fn provider_wait_ms(&self, observed: Option<u64>) -> Option<u64> {
+        let interval = self.shared_interval_ms?;
+        // An idle account uses the active schedule once a move selects it.
+        if interval > REFRESH_INTERVAL_MS { return Some(REFRESH_INTERVAL_MS); }
+        // A due request may still be in flight when a lease streams a reading.
+        Some(self.shared_next_at.zip(observed.or(self.shared_checked_at).or(self.checked_at))
+            .filter(|(next, checked)| next > checked)
+            .map_or(interval, |(next, checked)| next - checked))
     }
     fn accept(&mut self, mut windows: Vec<Window>, observed: u64) {
         self.measure(&windows, observed);
@@ -774,6 +786,7 @@ impl Snapshot {
         let mut bases = std::mem::take(&mut self.bases);
         let mut rises = std::mem::take(&mut self.rises);
         let mut rise_log = std::mem::take(&mut self.rise_log);
+        let mut window_observed_at = std::mem::take(&mut self.window_observed_at);
         // A window the reading no longer carries takes its speed with it (the CEO, 2026-10-31:
         // an account whose five-hour window disappears stops handling it from that reading on).
         // Kept, a fast five-hour speed went on shortening the check interval to a minute and
@@ -783,10 +796,50 @@ impl Snapshot {
         bases.retain(|id, _| present(id));
         rises.retain(|id, _| present(id));
         rise_log.retain(|id, _| present(id));
+        window_observed_at.retain(|id, _| present(id));
         let (rise_until, token_speed) = (self.rise_until, self.token_speed);
         // Only a signed-in account reports a reading.
         *self = Self { windows, checked_at: Some(observed), retry_at: None, error, speeds, bases, rises, rise_until, empty_at: None, token_speed,
-            since_reading: 0., empties: 0, signed_in: Some(true), rise_log };
+            since_reading: 0., signed_in: Some(true), rise_log, window_observed_at,
+            shared_checked_at: self.shared_checked_at, shared_next_at: self.shared_next_at,
+            shared_interval_ms: self.shared_interval_ms };
+    }
+
+    fn apply_shared(&mut self, saved: shared_usage::Saved, interval_ms: u64) -> bool {
+        let now = crate::util::now_millis();
+        let next = saved.requested_at.map(|_| saved.next_request_at(now, interval_ms));
+        let interval = saved.requested_at.map(|_| saved.interval(now, interval_ms));
+        let mut changed = self.shared_next_at != next || self.shared_interval_ms != interval;
+        self.shared_next_at = next;
+        self.shared_interval_ms = interval;
+        if let Some(answer) = saved.answer.filter(|a| self.shared_checked_at.is_none_or(|at| a.checked_at > at)) {
+            changed = true;
+            self.shared_checked_at = Some(answer.checked_at);
+            if self.checked_at.is_none_or(|at| at <= answer.checked_at) {
+                self.accept(answer.windows, answer.checked_at);
+            } else {
+                // Keep newer streamed figures and import the model-specific cache where current.
+                let is_general = |w: &Window| matches!(w.id.as_str(), "five_hour" | "seven_day");
+                let is_newer = |w: &Window| self.window_observed_at.get(&w.id).is_some_and(|at| *at > answer.checked_at);
+                let models: Vec<_> = answer.windows.into_iter()
+                    .filter(|w| !is_general(w) && !is_newer(w)).collect();
+                self.windows.retain(|w| is_general(w) || is_newer(w));
+                self.measure(&models, answer.checked_at);
+                self.windows.extend(models);
+                self.window_observed_at.retain(|id, _| self.windows.iter().any(|w| &w.id == id));
+                self.empty_at = None;
+                self.error = None;
+                self.retry_at = None;
+            }
+        }
+        if let Some(failure) = saved.refusal.filter(|failure| self.empty_at.is_none_or(|at| failure.at > at)) {
+            self.empty(failure.error, failure.at);
+            changed = true;
+        }
+        if self.error.is_some() && self.empty_at.is_some() {
+            self.retry_at = self.shared_next_at;
+        }
+        changed
     }
     /// **A check that came back with no figures.** Every kind records when, so the pause stops
     /// waiting on it (`Admission::NoReading`). A null answer (`ReadError::NoReading`) is not a
@@ -799,7 +852,6 @@ impl Snapshot {
         if error == ReadError::NoReading {
             self.error = None;
             self.retry_at = None;
-            if self.checked_at.is_none() { self.empties = self.empties.saturating_add(1); }
             return;
         }
         match error {
@@ -855,15 +907,16 @@ impl Snapshot {
     /// starts at or over the point in force when it starts (Stu's own turns, a released
     /// worker) is a rise during that hold, so it never replaces the rise into it. The rises
     /// are read in the order they came (`measure` appends), each moving the point by its
-    /// speed exactly as [`Reading::act_point`] does: `line` at a speed under 1 point a minute
-    /// (5 points or less per five-minute check), `100 - speed x 1 minute` above it.
+    /// speed and provider schedule, as [`Reading::act_point`] does.
     fn pre_hold(&self, id: &str, line: f64) -> f64 {
         let point = |speed: f64| {
-            let interval = if speed * REFRESH_INTERVAL_MS as f64 >= FAST_POINTS_PER_CHECK {
-                FAST_REFRESH_INTERVAL_MS
-            } else {
-                REFRESH_INTERVAL_MS
-            };
+            let interval = self.provider_wait_ms(self.window_observed_at.get(id).copied()).unwrap_or({
+                if speed * REFRESH_INTERVAL_MS as f64 >= FAST_POINTS_PER_CHECK {
+                    FAST_REFRESH_INTERVAL_MS
+                } else {
+                    REFRESH_INTERVAL_MS
+                }
+            });
             line.min(100. - speed * interval as f64).clamp(0., 100.)
         };
         self.rise_log.get(id).map_or(0., |log| log.iter()
@@ -891,9 +944,10 @@ impl Snapshot {
             .windows
             .iter()
             .any(|w| w.resets_at.is_some_and(|t| t <= now));
-        let fresh = self
-            .checked_at
-            .is_some_and(|t| now >= t && now - t < interval)
+        let provider_refused = self.empty_at.zip(self.shared_checked_at).is_some_and(|(empty, checked)| empty >= checked);
+        let fresh = self.checked_at.is_some_and(|checked|
+            now >= checked && now < self.shared_next_at.unwrap_or(checked.saturating_add(interval)))
+            && !provider_refused
             && self.error.is_none()
             && !expired;
         let state = if self.checked_at.is_none() {
@@ -979,26 +1033,11 @@ impl Snapshot {
             state,
             windows: self.windows.clone(),
             checked_at: self.checked_at,
-            // Counted from the last check of any outcome, so a check that came back empty is
-            // asked again one interval later (5 minutes, or 1 while usage is fast), not on the
-            // monitor's next tick.
-            // An account never read yet is asked again soon after a null answer
-            // (`FIRST_READING_RETRY_MS`).
-            next_check_at: [self.checked_at, self.empty_at].into_iter().flatten().max().map(|t| {
-                let wait = if self.checked_at.is_none() && self.error.is_none() && self.empties > 0 {
-                    (FIRST_READING_RETRY_MS << (self.empties - 1).min(8)).min(FIRST_READING_RETRY_MAX_MS)
-                } else { interval };
-                // The last check came after a window's reset, within the interval after it, and
-                // that window is still the one held: Claude has not rolled it over yet
-                // (`RESET_RETRY_MS`).
-                let old_window_back = self.windows.iter().filter_map(|w| w.resets_at)
-                    .any(|r| r <= t && t < r.saturating_add(REFRESH_INTERVAL_MS));
-                let wait = if old_window_back { wait.min(RESET_RETRY_MS) } else { wait };
-                self.windows
-                    .iter()
-                    .filter_map(|w| w.resets_at)
-                    .filter(|r| *r > t)
-                    .fold(t.saturating_add(wait), u64::min)
+            provider_checked_at: self.shared_checked_at,
+            provider_interval_ms: self.shared_interval_ms,
+            next_check_at: self.shared_next_at.or_else(|| {
+                [self.checked_at, self.empty_at].into_iter().flatten().max()
+                    .map(|at| at.saturating_add(REFRESH_INTERVAL_MS))
             }),
             refresh_interval_ms: interval,
             retry_at: self.retry_at.filter(|t| *t > now),
@@ -1039,6 +1078,8 @@ pub struct Service {
     fable_switch: Mutex<fable::State>,
     source: Mutex<Box<dyn Source>>,
     snapshot: Mutex<Snapshot>,
+    usage_root: PathBuf,
+    usage_stores: Mutex<BTreeMap<String, (PathBuf, shared_usage::Store, u64)>>,
     policy: Mutex<Policy>,
     policy_path: PathBuf,
     cwd: PathBuf,
@@ -1047,6 +1088,7 @@ pub struct Service {
     connecting: std::sync::atomic::AtomicBool,
     refresh_requested: Mutex<bool>,
     refresh_wake: std::sync::Condvar,
+    account_refreshes: Mutex<std::collections::BTreeSet<String>>,
     /// The account list and the switch decision (fill-first). `source` and `snapshot` above
     /// are Account 1's, exactly as before; every added account has its own pair here.
     pub accounts: std::sync::Arc<crate::claude_accounts::Accounts>,
@@ -1112,24 +1154,15 @@ type AccountReader = (std::sync::Arc<Mutex<Box<dyn Source>>>, Snapshot);
 /// Windows a lease streamed, and when they were observed (epoch ms).
 pub type StreamedReading = (Vec<Window>, u64);
 
-/// Is a read due? The same rule Account 1's reader has always used: a manual refresh waits
-/// only for the five-second double-click cooldown; the monitor's tick waits for the backoff
-/// and the five-minute cache.
-fn due(current: &View, force: bool, now: u64) -> bool {
-    let last_attempt = [current.checked_at, current.empty_at, current.retry_at.map(|t| t.saturating_sub(BACKOFF_MS))]
-        .into_iter()
-        .flatten()
-        .filter(|t| *t <= now + 5_000)
-        .max();
-    let cooling = last_attempt.is_some_and(|t| now.saturating_sub(t) < 5_000);
-    !if force {
-        cooling
-    } else {
-        current.retry_at.is_some() || current.next_check_at.is_some_and(|t| t > now)
-    }
-}
-
 impl Service {
+    /// A headless diagnostic shares the provider budget without opening the
+    /// desktop's state, approval ledger or transcript readers.
+    pub fn open_shared_reader(data_dir: &Path) -> io::Result<Self> {
+        let mut service = Self::open(data_dir)?;
+        service.usage_root = terminal::data_dir().map_err(io::Error::other)?;
+        Ok(service)
+    }
+
     /// Production desktop entrypoint. Tests and simulations keep `open` isolated.
     pub fn open_account_wide(data_dir: &Path) -> io::Result<Self> {
         let reset_dir = terminal::data_dir().map_err(io::Error::other)?;
@@ -1148,6 +1181,7 @@ impl Service {
     fn open_with_reset_dir(data_dir: &Path, reset_dir: &Path) -> io::Result<Self> {
         let mut service = Self::open(data_dir)?;
         service.resets = resets::Service::new(reset_dir);
+        service.usage_root = reset_dir.to_path_buf();
         service.resets.import_legacy(data_dir).map_err(io::Error::other)?;
         service.publish()?;
         Ok(service)
@@ -1176,6 +1210,8 @@ impl Service {
             fable_switch: Mutex::new(gate::read_json(&data_dir.join("claude-fable-switch.json")).unwrap_or_default()),
             source: Mutex::new(Box::new(probe::ClaudeSource::controlled(control.clone()))),
             snapshot: Mutex::new(Snapshot::default()),
+            usage_root: data_dir.to_path_buf(),
+            usage_stores: Mutex::new(BTreeMap::new()),
             policy: Mutex::new(policy),
             policy_path,
             cwd: data_dir.to_path_buf(),
@@ -1184,6 +1220,7 @@ impl Service {
             connecting: std::sync::atomic::AtomicBool::new(false),
             refresh_requested: Mutex::new(true),
             refresh_wake: std::sync::Condvar::new(),
+            account_refreshes: Mutex::new(std::collections::BTreeSet::new()),
             accounts: std::sync::Arc::new(crate::claude_accounts::Accounts::open(data_dir)?),
             extra: Mutex::new(BTreeMap::new()),
             notes: Mutex::new(std::collections::VecDeque::new()),
@@ -1259,6 +1296,12 @@ impl Service {
     pub fn request_refresh(&self) {
         *self.refresh_requested.lock().unwrap() = true;
         self.refresh_wake.notify_one();
+    }
+    fn request_account_refresh(&self, id: &str) {
+        if id != crate::claude_accounts::ACCOUNT_ONE {
+            self.account_refreshes.lock().unwrap().insert(id.into());
+        }
+        self.request_refresh();
     }
     /// The desktop monitor consumes this signal before applying the normal TTL.
     /// Startup begins signaled, even when automatic pausing is disabled.
@@ -1342,6 +1385,7 @@ impl Service {
                     label: account.label,
                     windows: account_view.windows,
                     checked_at: account_view.checked_at,
+                    provider_checked_at: account_view.provider_checked_at,
                     exhausted_until: exhausted.map(|(_, until)| until),
                     message: account_view.message,
                     signed_in: account_view.signed_in,
@@ -1436,6 +1480,20 @@ impl Service {
             self.extra.lock().unwrap().entry(account.to_string()).or_insert_with(|| self.reader(folder));
         }
         self.before_turn(account, Some((windows, at)))
+    }
+
+    #[cfg(test)]
+    fn age_shared_request_for_test(&self, bin: &Path, account: &str, folder: Option<&Path>) {
+        self.usage_store(bin, account, folder).backdate_request(crate::util::now_millis());
+    }
+
+    /// A fixture has changed the provider's answer after the scheduled interval.
+    #[cfg(test)]
+    pub(crate) fn refresh_fixture(&self, bin: &Path) -> View {
+        for account in self.accounts.list() {
+            self.age_shared_request_for_test(bin, &account.id, account.folder.as_deref());
+        }
+        self.refresh(bin, true)
     }
 
     /// **Token use, before every decision** (`tokens`): take what the app's own leases streamed
@@ -1751,7 +1809,7 @@ impl Service {
             }
         };
         apply_fable_capacity(&mut readings, self.fable_switch.lock().unwrap().enabled);
-        match self.accounts.evaluate(&readings, pause, now) {
+        match self.accounts.evaluate_before_move(&readings, pause, now, |to| self.request_account_refresh(to)) {
             Ok(moved) if moved || changed => {
                 if let Err(error) = self.publish() { eprintln!("[richos] quota snapshot: {error}"); }
             }
@@ -1763,7 +1821,9 @@ impl Service {
     /// **The backstop**: a turn on `account` was refused by a usage limit anyway.
     pub fn limit_reached(&self, account: &str, resets_at: Option<u64>) -> crate::claude_accounts::AfterLimit {
         let pause = self.policy.lock().unwrap().line();
-        let outcome = self.accounts.limit_reached(account, resets_at, &self.readings(), pause, crate::util::now_millis())
+        self.request_refresh();
+        let outcome = self.accounts.limit_reached_before_move(account, resets_at, &self.readings(), pause,
+            crate::util::now_millis(), |to| self.request_account_refresh(to))
             .unwrap_or(crate::claude_accounts::AfterLimit::NoRoom);
         if let Err(error) = self.publish() { eprintln!("[richos] quota snapshot: {error}"); }
         outcome
@@ -1916,6 +1976,10 @@ impl Service {
         }
         Ok(answer)
     }
+    pub fn added_account_connection_changed(&self, id: &str) {
+        self.usage_stores.lock().unwrap().remove(id);
+        self.extra.lock().unwrap().remove(id);
+    }
     /// A used weekly reset ends Account 1's READING (`refresh`), not its sign-in: the account
     /// is still signed in as it was, so the verdict is kept with the new, empty record.
     fn forget_reading(&self) {
@@ -1931,6 +1995,8 @@ impl Service {
     pub fn remove_account(&self, id: &str) -> io::Result<View> {
         self.accounts.remove(id)?;
         self.extra.lock().unwrap().remove(id);
+        self.usage_stores.lock().unwrap().remove(id);
+        self.account_refreshes.lock().unwrap().remove(id);
         let _best_effort = self.publish();
         Ok(self.view())
     }
@@ -1951,6 +2017,7 @@ impl Service {
         if crate::claude_accounts::gone(reading, self.accounts.at_threshold(), pause, self.accounts.limited_until(id), now).is_some() {
             return Err(io::Error::other(format!("{} has no room right now, so Rich would switch away from it at once.", account.label)));
         }
+        self.request_account_refresh(id);
         self.accounts.use_first(id)?;
         self.decide();
         let _best_effort = self.publish();
@@ -1964,39 +2031,70 @@ impl Service {
         Ok(self.view())
     }
 
-    /// Read every added account on the same schedule as Account 1, one control-only child
-    /// each, under its own folder.
+    fn usage_store(&self, bin: &Path, id: &str, folder: Option<&Path>) -> shared_usage::Store {
+        let now = crate::util::now_millis();
+        if let Some((_, store, _)) = self.usage_stores.lock().unwrap().get(id)
+            .filter(|(path, _, expires)| path == bin && now < *expires) {
+            return store.clone();
+        }
+        let store = shared_usage::Store::for_account(&self.usage_root, bin, folder);
+        let expires = if store.verified() { u64::MAX } else { now.saturating_add(FAST_REFRESH_INTERVAL_MS) };
+        #[cfg(test)]
+        let store = store.fixture();
+        self.usage_stores.lock().unwrap().insert(id.to_string(),
+            (bin.to_path_buf(), store.clone(), expires));
+        store
+    }
+
+    fn read_shared_usage(
+        &self, bin: &Path, id: &str, folder: Option<&Path>, source: &mut dyn Source, interval: u64,
+    ) -> shared_usage::Saved {
+        let store = self.usage_store(bin, id, folder);
+        let requested_at = crate::util::now_millis();
+        if store.claim(requested_at, interval, "app").unwrap_or(false) {
+            let result = source.read(bin, &self.cwd);
+            if let Some(detail) = source.diagnostic().filter(|_| result.is_err()) {
+                eprintln!("[richos] quota reader {id}: {detail}");
+            }
+            let observed = crate::util::now_millis();
+            self.record_reading(id, "probe", result.as_deref().map_err(|e| *e), observed);
+            let result = result.map(Some).map_err(|error| shared_usage::Refusal {
+                at: observed, error, explicit_refusal: false, headers: BTreeMap::new(), retry_at: None,
+            });
+            if let Err(error) = store.finish(requested_at, observed, result) {
+                eprintln!("[richos] shared quota answer: {error}");
+            }
+        }
+        store.saved()
+    }
+
+    /// An idle added account uses the thirty-minute schedule. A move or a manual
+    /// refresh can use its next normal slot without changing the read budget.
     fn refresh_accounts(&self, bin: &Path, force: bool) {
-        let policy = self.policy.lock().unwrap().clone();
+        let in_use = self.accounts.in_use().id;
         for account in self.accounts.list() {
             if account.id == crate::claude_accounts::ACCOUNT_ONE || self.is_shutdown() { continue; }
             let Some(folder) = account.folder.clone() else { continue };
-            let now = crate::util::now_millis();
-            let (reader, current) = {
+            let reader = {
                 let mut extra = self.extra.lock().unwrap();
-                let (reader, snapshot) = extra.entry(account.id.clone()).or_insert_with(|| self.reader(folder));
-                (reader.clone(), snapshot.view(policy.clone(), now))
+                let (reader, _) = extra.entry(account.id.clone()).or_insert_with(|| self.reader(folder.clone()));
+                reader.clone()
             };
-            if !due(&current, force, now) { continue; }
-            // The read holds this account's own probe lock, never the map's, so a slow
-            // provider never holds the lock a settings paint needs. A read already in flight
-            // for this account is shared, exactly as Account 1's is (`refresh_windows`).
             let Ok(mut source) = reader.try_lock() else { continue };
-            let result = source.read(bin, &self.cwd);
-            if result.is_err() {
-                if let Some(detail) = source.diagnostic() {
-                    eprintln!("[richos] quota reader {}: {detail}", account.id);
-                }
-            }
+            // A move can be replaced before the monitor wakes. The selected account
+            // still gets one check without waiting for the decision or skipping its slot.
+            let requested = self.account_refreshes.lock().unwrap().remove(&account.id);
+            let interval = if force || requested || account.id == in_use {
+                REFRESH_INTERVAL_MS
+            } else {
+                shared_usage::IDLE_INTERVAL_MS
+            };
+            let saved = self.read_shared_usage(bin, &account.id, Some(&folder), source.as_mut(), interval);
             drop(source);
-            let observed = crate::util::now_millis();
-            self.record_reading(&account.id, "probe", result.as_deref().map_err(|e| *e), observed);
             let mut extra = self.extra.lock().unwrap();
-            let Some((_, snapshot)) = extra.get_mut(&account.id) else { continue };
-            match result {
-                Ok(windows) => snapshot.accept(windows, observed),
-                Err(error) => snapshot.empty(error, observed),
-            }
+            let Some((current, snapshot)) = extra.get_mut(&account.id) else { continue };
+            if !std::sync::Arc::ptr_eq(current, &reader) { continue; }
+            snapshot.apply_shared(saved, interval);
             let unknown = snapshot.signed_in.is_none();
             drop(extra);
             // **AN ADDED ACCOUNT'S VERDICT AFTER A RELAUNCH** (review
@@ -2042,7 +2140,7 @@ impl Service {
                 eprintln!("[richos] claude accounts: the reset could not be recorded ({error})");
             }
         }
-        self.refresh_windows(bin, force || changed);
+        self.refresh_windows(bin);
         if self.accounts.count() > 1 { self.refresh_accounts(bin, force); }
         // The monitor ticks every second; transcripts are read at most every `TOKEN_SCAN_MS`
         // here (every turn reads them anyway, `before_turn`).
@@ -2065,17 +2163,19 @@ impl Service {
         #[cfg(not(test))]
         {
             let now = crate::util::now_millis();
-            let at_limit = self.snapshot.lock().unwrap().windows.iter().any(|w|
-                w.id == "seven_day" && w.used_percent >= resets::WEEKLY_THRESHOLD
-                && w.resets_at.is_some_and(|until| until > now));
-            let at_limit = at_limit || self.resets.prepared_action_due(now);
-            self.resets.tick_at_limit(bin, at_limit, || !self.is_shutdown()
+            let weekly_used = self.snapshot.lock().unwrap().windows.iter().find(|w|
+                w.id == "seven_day" && w.resets_at.is_some_and(|until| until > now))
+                .map(|w| w.used_percent);
+            let at_limit = weekly_used.is_some_and(|used| used >= resets::WEEKLY_THRESHOLD)
+                || self.resets.prepared_action_due(now);
+            let store = self.usage_store(bin, crate::claude_accounts::ACCOUNT_ONE, None);
+            self.resets.tick_with_shared_usage(bin, at_limit, weekly_used, Some(&store), || !self.is_shutdown()
                 && !self.connecting.load(std::sync::atomic::Ordering::SeqCst));
         }
         self.publish_reset_view();
         self.refresh(bin, false);
     }
-    fn refresh_windows(&self, bin: &Path, force: bool) -> View {
+    fn refresh_windows(&self, bin: &Path) -> View {
         if self.is_shutdown() {
             return self.view();
         }
@@ -2085,35 +2185,12 @@ impl Service {
         if self.connecting.load(std::sync::atomic::Ordering::SeqCst) {
             return self.view();
         }
-        let now = crate::util::now_millis();
-        // Account 1's own reading (the account in use may be another one).
-        let current = self.snapshot.lock().unwrap().view(self.policy.lock().unwrap().clone(), now);
-        // **A manual refresh does not wait out the automatic failure backoff.** The backoff
-        // protects the provider from the monitor's ticks; a person who fixed the problem and
-        // asked again is owed a real check. What still protects the provider from him is the
-        // short cooldown against double-clicks, measured from the last attempt of any kind —
-        // a failure's `retry_at` is set `BACKOFF_MS` past the attempt that caused it.
-        if !due(&current, force, now) {
-            return self.view();
-        }
-        let result = source.read(bin, &self.cwd);
-        if result.is_err() {
-            if let Some(detail) = source.diagnostic() {
-                eprintln!("[richos] quota reader 1: {detail}");
+        let saved = self.read_shared_usage(bin, crate::claude_accounts::ACCOUNT_ONE, None, source.as_mut(), REFRESH_INTERVAL_MS);
+        let changed = self.snapshot.lock().unwrap().apply_shared(saved, REFRESH_INTERVAL_MS);
+        if changed {
+            if let Err(error) = self.publish() {
+                eprintln!("[richos] quota snapshot: {error}");
             }
-        }
-        let observed = crate::util::now_millis();
-        self.record_reading(crate::claude_accounts::ACCOUNT_ONE, "probe", result.as_deref().map_err(|e| *e), observed);
-        let mut snapshot = self.snapshot.lock().unwrap();
-        match result {
-            Ok(windows) => {
-                snapshot.accept(windows, observed);
-            }
-            Err(error) => snapshot.empty(error, observed),
-        }
-        drop(snapshot);
-        if let Err(error) = self.publish() {
-            eprintln!("[richos] quota snapshot: {error}");
         }
         self.view()
     }
@@ -2134,6 +2211,7 @@ impl Service {
     }
     fn clear_connection(&self, keep_sign_in: bool) {
         self.source.lock().unwrap().disconnect();
+        self.usage_stores.lock().unwrap().remove(crate::claude_accounts::ACCOUNT_ONE);
         self.resets.clear_connection();
         let mut snapshot = self.snapshot.lock().unwrap();
         let signed_in = if keep_sign_in { snapshot.signed_in } else { None };
@@ -2799,20 +2877,14 @@ pub(crate) mod tests {
         assert!(published.leaving.contains(&work), "Work at 93% during a Fable burst is not being left: {:?}", published.leaving);
     }
 
-    /// **An account the app has never read is asked again soon** (handoff round 2, runs 2-4
-    /// and 6: null answers starved Work's first reading for the whole run, and an account with
-    /// no reading is never switched to). While there is no reading yet, a null answer is asked
-    /// again 30 seconds later, then 1, 2 minutes, and never sooner than 2 minutes after that:
-    /// well under the 5-minute schedule and at most one ask in 30 seconds. Once a reading has
-    /// arrived, a null answer waits for the normal schedule again, as before.
     #[test]
-    fn a_null_answer_before_the_first_reading_is_asked_again_soon_and_bounded() {
+    fn a_null_answer_before_the_first_reading_uses_the_normal_interval() {
         let mut s = Snapshot::default();
         let mut at = NOW;
-        for wait in [30_000, 60_000, 120_000, 120_000, 120_000] {
+        for _ in 0..5 {
             s.empty(ReadError::NoReading, at);
             let next = s.view(policy(), at).next_check_at.expect("a next check");
-            assert_eq!(next - at, wait, "no reading yet: asked again after {wait} ms");
+            assert_eq!(next - at, REFRESH_INTERVAL_MS);
             at = next;
         }
         s.accept(snapshot(20., 3_600_000).windows, at);
@@ -2939,7 +3011,7 @@ pub(crate) mod tests {
         );
     }
     #[test]
-    fn five_minute_polling_at_every_usage_level_and_reset_deadline() {
+    fn five_minute_polling_at_every_usage_level_and_across_a_reset() {
         for used in [0., 69.99, 70., 93., 100.] {
             let interval = 300_000;
             let s = snapshot(used, 18_000_000);
@@ -2952,7 +3024,7 @@ pub(crate) mod tests {
         }
         assert_eq!(
             snapshot(20., 60_000).view(policy(), NOW).next_check_at,
-            Some(NOW + 60_000)
+            Some(NOW + REFRESH_INTERVAL_MS)
         );
     }
     #[test]
@@ -3019,19 +3091,99 @@ pub(crate) mod tests {
         windows
     }
 
+    #[test]
+    fn a_fast_rise_below_eighty_uses_the_real_provider_deadline() {
+        let at = NOW + REFRESH_INTERVAL_MS;
+        let windows = |used, weekly| {
+            let mut windows = both_at(used, weekly);
+            windows.push(Window { id: "model:Fable".into(), label: "Weekly · Fable".into(),
+                used_percent: used, resets_at: Some(NOW + 48 * 3_600_000), duration_ms: 168 * 3_600_000 });
+            windows
+        };
+        let mut snapshot = Snapshot::default();
+        snapshot.accept(windows(55., 64.), NOW);
+        snapshot.accept(windows(78., 77.), at);
+        snapshot.shared_checked_at = Some(at);
+        snapshot.shared_interval_ms = Some(REFRESH_INTERVAL_MS);
+        snapshot.shared_next_at = Some(at + REFRESH_INTERVAL_MS);
+        let reading = snapshot.reading_with(None, at + 90_000);
+        assert_eq!(reading.interval(), FAST_REFRESH_INTERVAL_MS);
+        assert!(reading.reaches(&reading.windows[0], 93.), "the five-hour window can fill before the next provider reading");
+        assert!(reading.reaches_weekly(&reading.windows[1]), "the general week uses the same real wait");
+        assert!(reading.reaches(&reading.windows[2], 99.9), "the Fable switch uses the same real wait");
+        assert_eq!(snapshot.view(policy(), at + 90_000).state, State::Fresh);
+        assert_eq!(snapshot.view(policy(), at + REFRESH_INTERVAL_MS).state, State::Stale);
+        snapshot.empty(ReadError::NoReading, at + REFRESH_INTERVAL_MS);
+        snapshot.shared_next_at = Some(at + 2 * REFRESH_INTERVAL_MS);
+        assert_eq!(snapshot.view(policy(), at + REFRESH_INTERVAL_MS).state, State::Stale);
+    }
+
+    #[test]
+    fn a_failed_provider_check_does_not_age_a_newer_streamed_window() {
+        let minute = 60_000;
+        let fable = |used| Window { id: "model:Fable".into(), label: "Weekly · Fable".into(), used_percent: used,
+            resets_at: Some(NOW + 48 * 3_600_000), duration_ms: 168 * 3_600_000 };
+        let provider_reading = |used| {
+            let mut windows = both_at(used, used);
+            windows.push(fable(used));
+            windows
+        };
+        let mut snapshot = Snapshot::default();
+        snapshot.accept(provider_reading(70.), NOW);
+        snapshot.accept(provider_reading(73.1), NOW + 5 * minute);
+        snapshot.shared_checked_at = Some(NOW + 5 * minute);
+        snapshot.shared_interval_ms = Some(5 * minute);
+        let recent = NOW + 34 * minute;
+        snapshot.shared_next_at = Some(recent + 5 * minute);
+        snapshot.empty(ReadError::NoReading, recent - minute);
+        snapshot.observe(&both_at(84.4, 84.4), recent - minute);
+        snapshot.observe(&both_at(85., 85.), recent);
+        let reading = snapshot.reading_with(None, recent);
+        assert!(!reading.reaches(&reading.windows[0], 93.), "the five-hour figure is fresh from the stream");
+        assert!(!reading.reaches_weekly(&reading.windows[1]), "the weekly figure is fresh from the stream");
+        assert!(reading.projected(&reading.windows[2]) > 93., "the Fable figure is still from the older provider reading");
+
+        snapshot.observe(&[fable(85.6)], recent + minute);
+        let provider_at = recent + 10_000;
+        snapshot.apply_shared(shared_usage::Saved {
+            requested_at: Some(provider_at), finished_at: Some(provider_at),
+            answer: Some(shared_usage::Answer { checked_at: provider_at, windows: vec![fable(78.)] }),
+            ..shared_usage::Saved::default()
+        }, REFRESH_INTERVAL_MS);
+        let reading = snapshot.reading_with(None, recent + minute);
+        assert_eq!(reading.windows.iter().find(|w| fable::is_window(&w.id)).unwrap().used_percent, 85.6,
+            "the provider cache preserves a newer Fable stream frame");
+    }
+
+    #[test]
+    fn an_overdue_provider_reply_keeps_a_forecast_for_the_next_stream_frame() {
+        let mut snapshot = Snapshot::default();
+        let checked = NOW + 60_000;
+        let due = checked + REFRESH_INTERVAL_MS;
+        snapshot.accept(five_hour_at(70.), NOW);
+        snapshot.accept(five_hour_at(73.1), checked);
+        snapshot.shared_checked_at = Some(checked);
+        snapshot.shared_interval_ms = Some(REFRESH_INTERVAL_MS);
+        snapshot.shared_next_at = Some(due);
+        snapshot.observe(&five_hour_at(90.3), due + 5_000);
+        let view = snapshot.view(policy(), due + 5_000);
+        assert!(matches!(view.admission, Admission::Held { .. }),
+            "an outstanding provider reply must leave room for continued use");
+    }
+
     /// **§108: when usage speeds up a lot, the quota is checked every minute instead of 5**
     /// (answer 10 allows a minute; `FAST_REFRESH_INTERVAL_MS` carries the read-cost
     /// measurement). "A lot" is 5 points or more per five-minute check (1 point a minute, 3x a
     /// five-hour window's even pace). The 2026-09-29 run measured 3.7 to 4 a minute: 7% -> 11%
     /// in one minute here. Ordinary use measured about 0.33 a minute: 50% -> 50.33% is not fast.
     #[test]
-    fn fast_usage_is_checked_every_minute_and_normal_usage_every_five() {
+    fn fast_usage_is_projected_without_accelerating_the_provider_read() {
         let mut fast = Snapshot::default();
         fast.accept(five_hour_at(7.), NOW);
         fast.accept(five_hour_at(11.), NOW + 60_000);
         let view = fast.view(policy(), NOW + 60_000);
         assert_eq!(view.refresh_interval_ms, FAST_REFRESH_INTERVAL_MS);
-        assert_eq!(view.next_check_at, Some(NOW + 60_000 + 60_000));
+        assert_eq!(view.next_check_at, Some(NOW + 60_000 + REFRESH_INTERVAL_MS));
         assert_eq!(view.state, State::Fresh);
 
         let mut normal = Snapshot::default();
@@ -3546,7 +3698,7 @@ pub(crate) mod tests {
     /// reading only). Three agent dispatches written by the gate do the same on a fresh
     /// service. Ten minutes later, with no measured speed, it is every 5 minutes again.
     #[test]
-    fn an_expected_rise_checks_every_minute_before_any_jump_is_measured() {
+    fn an_expected_rise_does_not_change_the_shared_read_deadline() {
         for by_dispatch in [false, true] {
             let dir = Scratch::new();
             let service = Service::open(dir.path()).unwrap();
@@ -3554,8 +3706,8 @@ pub(crate) mod tests {
             let mut windows = snapshot(20., 3_600_000).windows;
             windows[0].resets_at = Some(crate::util::now_millis() + 3_600_000);
             *service.source.lock().unwrap() = Box::new(FakeSource { calls, result: Ok(windows) });
-            service.refresh(Path::new("unused"), true);
-            assert_eq!(service.view().refresh_interval_ms, REFRESH_INTERVAL_MS);
+            let initial = service.refresh(Path::new("unused"), true);
+            assert_eq!(initial.refresh_interval_ms, REFRESH_INTERVAL_MS);
             if by_dispatch {
                 let now = crate::util::now_millis();
                 fs::write(dir.path().join("engine-state").join(DISPATCH_LOG), format!("{now}\n{now}\n{now}\n")).unwrap();
@@ -3566,7 +3718,7 @@ pub(crate) mod tests {
             let view = service.view();
             assert!(view.speeds.is_empty(), "nothing was measured yet");
             assert_eq!(view.refresh_interval_ms, FAST_REFRESH_INTERVAL_MS, "dispatch={by_dispatch}");
-            assert_eq!(view.next_check_at, view.checked_at.map(|t| t + FAST_REFRESH_INTERVAL_MS));
+            assert_eq!(view.next_check_at, initial.next_check_at);
             let later = crate::util::now_millis() + EXPECTED_RISE_MS + 1;
             assert_eq!(service.snapshot.lock().unwrap().view(policy(), later).refresh_interval_ms, REFRESH_INTERVAL_MS,
                 "the expected rise ends by itself");
@@ -3758,9 +3910,7 @@ added = bool(_folder) and os.path.realpath(_folder).startswith(_accounts)"#;
 
         // Account 1's five-hour window disappears: from this reading on it is neither shown nor judged.
         usage_weekly_only(&one, 40., "2099-01-05T00:00:00Z");
-        // Past the 5-second double-click cooldown (`due`), as the other refresh-again tests do.
-        service.snapshot.lock().unwrap().checked_at = Some(crate::util::now_millis() - 10_000);
-        let view = service.refresh(&bin, true);
+        let view = service.refresh_fixture(&bin);
         assert_eq!(view.windows.iter().map(|w| w.id.as_str()).collect::<Vec<_>>(), ["seven_day"], "one meter");
         assert!(!view.act_at.contains_key("five_hour"), "{:?}", view.act_at);
         assert_eq!(view.admission, Admission::Ready, "no unknown reading for want of a five-hour window");
@@ -3768,8 +3918,7 @@ added = bool(_folder) and os.path.realpath(_folder).startswith(_accounts)"#;
         assert_eq!(service.accounts.in_use().id, "1", "40% of the week: nothing moves");
 
         usage_weekly_only(&one, 99., "2099-01-05T00:00:00Z");
-        service.snapshot.lock().unwrap().checked_at = Some(crate::util::now_millis() - 10_000);
-        service.refresh(&bin, true);
+        service.refresh_fixture(&bin);
         assert_eq!(service.accounts.in_use().id, work.id, "at 99% of the week the switch moves to Work");
         service.accounts.ran_on("reply-on-work", &work.id);
         let view = service.view();
@@ -3796,8 +3945,7 @@ added = bool(_folder) and os.path.realpath(_folder).startswith(_accounts)"#;
         assert!(!gate::admission(&state, crate::util::now_millis()).allows_work(), "the gate holds at 95%");
 
         usage_weekly_only(&one, 40., "2099-01-05T00:00:00Z");
-        service.snapshot.lock().unwrap().checked_at = Some(crate::util::now_millis() - 10_000);
-        let view = service.refresh(&bin, true);
+        let view = service.refresh_fixture(&bin);
         assert_eq!(view.admission, Admission::Ready, "no five-hour window: the hold is over");
         assert!(view.release.is_none());
         assert!(gate::admission(&state, crate::util::now_millis()).allows_work(), "the gate admits the held work now");
@@ -3835,7 +3983,7 @@ added = bool(_folder) and os.path.realpath(_folder).startswith(_accounts)"#;
         let service = Service::open(root.path()).unwrap();
         assert_eq!(service.accounts.in_use().id, work.id, "the pick survives a relaunch");
         usage(&work_usage, 10., 99., "2099-01-06T00:00:00Z");
-        service.refresh(&bin, true);
+        service.refresh_fixture(&bin);
         assert_eq!(service.accounts.in_use().id, "1", "at 99% of Work's week the switch moves on");
         let refused = service.use_account_first(&work.id).unwrap_err().to_string();
         assert_eq!(refused, "Work has no room right now, so Rich would switch away from it at once.");
@@ -4559,16 +4707,8 @@ added = bool(_folder) and os.path.realpath(_folder).startswith(_accounts)"#;
         assert!(view.accounts.iter().any(|a| a.id == work.id && a.in_use));
     }
 
-    /// **The new window shows within seconds of the reset** (follow-ups of 2026-10-29: after
-    /// Work's 20:50Z reset "it took 5 fucking minutes for the refresh to show up"; Sage's test).
-    /// The window read at 95% resets 2 seconds ago. The check at the reset is taken, and Claude
-    /// still answers with the window that ended. On main the next check was the full 5 minutes
-    /// later, and the file and the gate kept the ended window that long. Now it is 10 seconds
-    /// later (`RESET_RETRY_MS`): once Claude answers with the new window, the published file and
-    /// the gate have it. The retry stops 5 minutes after the reset: a window that still keeps
-    /// its old reset time then is asked on the normal schedule.
     #[test]
-    fn a_check_at_the_reset_that_gets_the_old_window_back_is_asked_again_in_seconds() {
+    fn a_reset_ends_the_old_hold_without_spending_an_extra_read() {
         struct Flips(std::sync::Arc<Mutex<Vec<Window>>>, std::sync::Arc<std::sync::atomic::AtomicUsize>);
         impl Source for Flips {
             fn read(&mut self, _: &Path, _: &Path) -> Result<Vec<Window>, ReadError> {
@@ -4592,30 +4732,20 @@ added = bool(_folder) and os.path.realpath(_folder).startswith(_accounts)"#;
         service.refresh(Path::new("unused"), false);
         assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1, "the check at the reset is taken");
         let view = service.view();
-        let checked = view.checked_at.unwrap();
-        assert_eq!(view.next_check_at, Some(checked + RESET_RETRY_MS),
-            "asked again in seconds, not after {} ms", REFRESH_INTERVAL_MS);
+        assert!(view.admission.allows_work(), "the clock already ended the old hold");
+        let store = service.usage_store(Path::new("unused"), "1", None);
+        assert_eq!(view.next_check_at, Some(store.saved().next_request_at(crate::util::now_millis(), REFRESH_INTERVAL_MS)));
 
-        // Claude rolls the window over; 10 seconds pass.
         let new_reset = crate::util::now_millis() + 5 * 3_600_000;
         *answer.lock().unwrap() = five(3., new_reset);
-        service.snapshot.lock().unwrap().checked_at = Some(checked - RESET_RETRY_MS);
-        service.refresh(Path::new("unused"), false);
-        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2, "the retry is due 10 seconds later");
+        service.refresh(Path::new("unused"), true);
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1, "the reset does not spend another slot");
+        service.refresh_fixture(Path::new("unused"));
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
         let published: View = gate::read_json(&state.join("claude-quota.json")).unwrap();
         let shown = published.windows.iter().find(|w| w.id == "five_hour").unwrap();
-        assert_eq!((shown.used_percent, shown.resets_at), (3., Some(new_reset)), "the file has the new window");
-        assert_eq!(gate::admission(&state, crate::util::now_millis()), Admission::Ready, "and so has the gate");
-        assert_eq!(service.view().next_check_at, published.checked_at.map(|t| t + REFRESH_INTERVAL_MS),
-            "a new window: the normal schedule again");
-
-        // Bounded: a check 5 minutes after the reset that still gets the old window back waits
-        // the normal interval.
-        let mut late = Snapshot::default();
-        late.accept(five(95., NOW), NOW + REFRESH_INTERVAL_MS);
-        assert_eq!(late.view(policy(), NOW + REFRESH_INTERVAL_MS).next_check_at, Some(NOW + 2 * REFRESH_INTERVAL_MS));
-        late.accept(five(95., NOW), NOW + REFRESH_INTERVAL_MS - 1);
-        assert_eq!(late.view(policy(), NOW + REFRESH_INTERVAL_MS).next_check_at, Some(NOW + REFRESH_INTERVAL_MS - 1 + RESET_RETRY_MS));
+        assert_eq!((shown.used_percent, shown.resets_at), (3., Some(new_reset)));
+        assert_eq!(gate::admission(&state, crate::util::now_millis()), Admission::Ready);
     }
 
     #[test]
@@ -4654,15 +4784,6 @@ added = bool(_folder) and os.path.realpath(_folder).startswith(_accounts)"#;
             "session start wakes the sleeping monitor");
         thread.join().unwrap();
         assert_eq!(calls.load(Ordering::SeqCst), 1, "session start respects the five-minute cache");
-        // "Just completed" is the product's 5 s duplicate-request cooldown, measured on the wall
-        // clock from the read above. A test thread descheduled for 5 s between that read and
-        // the next line saw the cooldown over and a third read, and failed while the service
-        // was right (seen under `scripts/qa/stall-run.py`). So the reading is stamped as
-        // completed at the moment these two requests arrive, 4 s ahead (the cooldown tolerates a
-        // stamp up to 5 s in the future, a small clock step backward, so the margin is 4 s + 5 s): the
-        // question is whether simultaneous requests share a just-completed read, not how fast
-        // this thread gets from one line to the next.
-        service.snapshot.lock().unwrap().checked_at = Some(crate::util::now_millis() + 4_000);
         service.request_refresh(); service.request_refresh();
         let force = service.wait_for_refresh(Duration::ZERO);
         assert!(force);
@@ -4674,13 +4795,11 @@ added = bool(_folder) and os.path.realpath(_folder).startswith(_accounts)"#;
         service.set_connecting(false);
         assert!(service.wait_for_refresh(Duration::ZERO), "sign-in completion wakes the reader");
         service.refresh_in_background(Path::new("unused"));
-        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "the unchanged sign-in shares the same budget");
     }
-    /// Hunt part 1 finding 23: a manual refresh is owed a real check even inside the automatic
-    /// ten-minute failure backoff, while the automatic one still waits and a double-click
-    /// straight after a failure still does not reach the provider.
+
     #[test]
-    fn a_manual_refresh_is_not_held_by_the_automatic_failure_backoff() {
+    fn manual_refresh_and_background_retry_share_the_same_five_minute_budget() {
         use std::sync::atomic::Ordering;
         let dir = Scratch::new();
         let service = Service::open(dir.path()).unwrap();
@@ -4691,17 +4810,15 @@ added = bool(_folder) and os.path.realpath(_folder).startswith(_accounts)"#;
         assert_eq!(calls.load(Ordering::SeqCst), 1);
         service.refresh(Path::new("unused"), true);
         assert_eq!(calls.load(Ordering::SeqCst), 1, "a double-click right after a failure is still absorbed");
-        // The failure was 10 s ago (its wait is set BACKOFF_MS past the attempt) and he fixed it.
-        // The attempt is also recorded as the last empty check (`empty_at`), so both move.
-        service.snapshot.lock().unwrap().retry_at = Some(crate::util::now_millis() + BACKOFF_MS - 10_000);
-        service.snapshot.lock().unwrap().empty_at = Some(crate::util::now_millis() - 10_000);
         let mut windows = snapshot(20., 3_600_000).windows;
         windows[0].resets_at = Some(crate::util::now_millis() + 3_600_000);
         *service.source.lock().unwrap() = Box::new(FakeSource { calls: calls.clone(), result: Ok(windows) });
         service.refresh(Path::new("unused"), false);
         assert_eq!(calls.load(Ordering::SeqCst), 1, "the automatic check still waits out the backoff");
-        let view = service.refresh(Path::new("unused"), true);
-        assert_eq!(calls.load(Ordering::SeqCst), 2, "his manual check is a real one");
+        service.refresh(Path::new("unused"), true);
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "Refresh uses the saved refusal until the deadline");
+        let view = service.refresh_fixture(Path::new("unused"));
+        assert_eq!(calls.load(Ordering::SeqCst), 2, "the next eligible request can come from Refresh");
         assert!(view.retry_at.is_none(), "and its answer replaces the old failure");
     }
     /// Walk of nightly 36, D1: Claude Code 2.1.289 sometimes answers `get_usage` with
@@ -4733,9 +4850,8 @@ added = bool(_folder) and os.path.realpath(_folder).startswith(_accounts)"#;
         assert_eq!(view.state, State::Unavailable, "no figures, so no reading to show");
         let empty = view.empty_at.expect("the empty answer is recorded");
         assert!(empty >= before);
-        // No reading yet, so asked again soon (handoff round 2: FIRST_READING_RETRY_MS), not
-        // on the 5-minute schedule; with figures in hand, below, the normal schedule.
-        assert_eq!(view.next_check_at, Some(empty + FIRST_READING_RETRY_MS), "an account never read is asked again soon");
+        let store = service.usage_store(Path::new("unused"), "1", None);
+        assert_eq!(view.next_check_at, Some(store.saved().next_request_at(crate::util::now_millis(), REFRESH_INTERVAL_MS)));
         assert_eq!(view.admission, Admission::NoReading);
         assert!(view.admission.allows_work(), "a missing reading does not hold new background work");
         // The gate, a separate process, decides the same from the published file.
@@ -4743,14 +4859,10 @@ added = bool(_folder) and os.path.realpath(_folder).startswith(_accounts)"#;
         // The automatic check waits for the schedule; no tight loop on null answers.
         service.refresh(Path::new("unused"), false);
         assert_eq!(calls.load(Ordering::SeqCst), 1, "the automatic check waits for the normal interval");
-        // Refresh is never locked by it: past the 5 s double-click cooldown a manual check is real.
-        service.snapshot.lock().unwrap().empty_at = Some(crate::util::now_millis() - 10_000);
         service.refresh(Path::new("unused"), true);
-        assert_eq!(calls.load(Ordering::SeqCst), 2, "a manual Refresh after a null answer reaches Claude Code");
-        // One interval after the empty answer, the automatic check asks again by itself.
-        service.snapshot.lock().unwrap().empty_at = Some(crate::util::now_millis() - REFRESH_INTERVAL_MS - 1);
-        service.refresh(Path::new("unused"), false);
-        assert_eq!(calls.load(Ordering::SeqCst), 3, "the normal schedule asks again");
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "a manual check shares the first request's budget");
+        service.refresh_fixture(Path::new("unused"));
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
 
         // With figures from earlier, a null answer keeps them and is not a failure.
         let mut s = snapshot(20., 3_600_000);
@@ -4786,6 +4898,38 @@ added = bool(_folder) and os.path.realpath(_folder).startswith(_accounts)"#;
     }
 
     #[test]
+    #[cfg(unix)]
+    fn a_move_requests_the_selected_account_even_before_it_becomes_active() {
+        let root = Scratch::new();
+        let service = Service::open(root.path()).unwrap();
+        let work = service.accounts.add("Work").unwrap();
+        let folder = work.folder.as_deref().unwrap();
+        let bin = fake_claude(root.path());
+        let reset = "2099-01-05T00:00:00Z";
+        usage(&root.path().join("usage-1.json"), 20., 40., reset);
+        usage(&folder.join("usage.json"), 10., 20., reset);
+        service.refresh(&bin, true);
+        let store = service.usage_store(&bin, &work.id, Some(folder));
+        let age_ten_minutes = || store.backdate_request(crate::util::now_millis() + 20 * 60_000);
+        let weekly = || service.observed_readings()[&work.id].windows.iter()
+            .find(|window| window.id == "seven_day").unwrap().used_percent;
+
+        age_ten_minutes();
+        usage(&folder.join("usage.json"), 10., 25., reset);
+        service.refresh_accounts(&bin, false);
+        assert_eq!(weekly(), 20., "an idle account outside its 30-minute slot keeps the saved reading");
+        service.request_account_refresh(&work.id);
+        service.refresh_accounts(&bin, false);
+        assert_eq!(service.accounts.in_use().id, "1");
+        assert_eq!(weekly(), 25., "the chosen account uses its eligible 5-minute slot before it is active");
+
+        age_ten_minutes();
+        usage(&folder.join("usage.json"), 10., 30., reset);
+        service.refresh_accounts(&bin, false);
+        assert_eq!(weekly(), 25., "the move requests just one check");
+    }
+
+    #[test]
     fn cache_failure_backoff_policy_persistence_and_account_invalidation() {
         let dir = Scratch::new();
         let service = Service::open(dir.path()).unwrap();
@@ -4809,12 +4953,12 @@ added = bool(_folder) and os.path.realpath(_folder).startswith(_accounts)"#;
             result: Err(ReadError::Failed),
         });
         assert!(service
-            .refresh(Path::new("unused"), true)
+            .refresh_fixture(Path::new("unused"))
             .retry_at
             .is_some());
         service.refresh(Path::new("unused"), true);
         assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
-        assert_eq!(service.view().state, State::Unavailable);
+        assert_eq!(service.view().state, State::Stale);
         service.set_connecting(true);
         service.refresh(Path::new("unused"), true);
         assert_eq!(
@@ -4826,8 +4970,8 @@ added = bool(_folder) and os.path.realpath(_folder).startswith(_accounts)"#;
         service.refresh(Path::new("unused"), true);
         assert_eq!(
             calls.load(std::sync::atomic::Ordering::SeqCst),
-            3,
-            "new connection clears old backoff"
+            2,
+            "reopening the same connection preserves its budget"
         );
     }
 
@@ -4925,7 +5069,7 @@ import json, os, sys, time
         assert_eq!(service.limit_reached("1", Some(until)), crate::claude_accounts::AfterLimit::NoRoom);
         usage(&root.path().join("usage-1.json"), 10., 2., "2099-01-12T00:00:00Z");
         fs::write(root.path().join("claude-reset-refresh.json"), b"{\"outcome\":\"used\"}").unwrap();
-        let view = service.refresh(&bin, true);
+        let view = service.refresh_fixture(&bin);
         assert_eq!(view.accounts[0].windows.iter().find(|w| w.id == "seven_day").unwrap().used_percent, 2.);
         assert_eq!(service.accounts.limited_until("1"), None, "the reset left the old limit in place");
         assert_eq!(view.held_until, None);
@@ -4963,10 +5107,11 @@ for line in sys.stdin:
         service.accounts.add("Work").unwrap();
         let first = service.refresh(&bin, true);
         assert!(first.accounts.iter().all(|a| a.checked_at.is_some()), "{:?}", first.accounts);
-        service.snapshot.lock().unwrap().checked_at = Some(crate::util::now_millis() - 10_000);
+        service.age_shared_request_for_test(&bin, "1", None);
         let reader = service.clone();
         let refreshing = std::thread::spawn(move || reader.refresh(&bin, true));
         wait_until("Account 1's second read is pending", || dir.join("default-pending").exists());
+        assert!(service.snapshot.try_lock().is_ok(), "turn admission can still read quota during the probe");
         let began = std::time::Instant::now();
         service.shutdown();
         let took = began.elapsed();

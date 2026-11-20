@@ -81,7 +81,9 @@ pub fn execute(args: &[String]) -> Result<Value, String> {
     if operation == "tick" {
         let at_limit = std::env::var("RICHOS_QUOTA_WEEKLY_LIMIT").as_deref() == Ok("1")
             || service.prepared_action_due(crate::util::now_millis());
-        let view = service.tick_at_limit(&bin, at_limit, || true);
+        let weekly_used = std::env::var("RICHOS_QUOTA_WEEKLY_USED").ok()
+            .and_then(|used| used.parse::<f64>().ok()).filter(|used| (0. ..=100.).contains(used));
+        let view = service.tick_with_shared_usage(&bin, at_limit, weekly_used, None, || true);
         return Ok(json!({"actionError": if view.state == "unknown" { view.message.clone() } else { None },
             "status": view.status, "resets":printed(&view)}));
     }

@@ -17,6 +17,9 @@ class QuotaDeadlines(unittest.TestCase):
             root=Path(tmp); binary=root/'claude'; child_pid=root/'child.pid'
             binary.write_text(f'''#!{sys.executable}
 import json,os,signal,sys,time
+if sys.argv[1:4] == ['auth', 'status', '--json']:
+    print('{{"loggedIn":true,"email":"fixture@example.invalid"}}')
+    sys.exit(0)
 if '--version' in sys.argv:
     {'time.sleep(300)' if version_hangs else "print('fixture'); sys.exit(0)"}
 for _ in range(2): request=json.loads(sys.stdin.readline())
@@ -33,7 +36,8 @@ sys.exit(0)
                 argv=[sys.executable,str(ROOT/'richos/app/scripts/testvm/claude-usage-probe.py'),tmp,tmp,'--claude',str(binary),'--seconds','10' if answer else '0.2']
             else:
                 argv=['sh',str(ROOT/'richos/app/scripts/qa/usage-shape.sh'),'--claude',str(binary),'--wait','2']
-            p=subprocess.Popen(argv,stdout=subprocess.PIPE,stderr=subprocess.PIPE,start_new_session=True)
+            p=subprocess.Popen(argv,stdout=subprocess.PIPE,stderr=subprocess.PIPE,start_new_session=True,
+                               env={**os.environ,'RICHOS_QUOTA_FIXTURE_STORE':tmp})
             try:
                 # load-bound: outer hang guard; an unanswered probe must terminate, regardless of load.
                 stdout,stderr=p.communicate(timeout=15)

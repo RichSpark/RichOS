@@ -266,6 +266,7 @@
 [richos] claude accounts: the switch could not be saved ({})
 [richos] claude accounts: {}
 [richos] claude accounts: {}'s chats stay in its folder for now ({})
+[richos] clearing a used weekly quota reading: {}
 [richos] codex reviews: `{} login status` could not be ended ({})
 [richos] conversation connection: replies are matched to their requests.
 [richos] correction could not be staged: {}
@@ -432,7 +433,6 @@
 [richos] question notification remains pending: {}
 [richos] question witness remains pending: {}
 [richos] queued input after preparation: {}
-[richos] quota reader 1: {}
 [richos] quota reader {}: {}
 [richos] quota reading history: {}
 [richos] quota snapshot: {}
@@ -472,6 +472,7 @@
 [richos] setup: yt-dlp nightly {} already installed
 [richos] setup: yt-dlp nightly {} already the newest
 [richos] setup: yt-dlp nightly {} installed — sha256 {}
+[richos] shared quota answer: {}
 [richos] speech synthesis install failed this time: {}
 [richos] speech synthesis install: file {} of {} attempt {} failed: {}
 [richos] spend: the ledger could not be saved ({})

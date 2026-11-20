@@ -130,6 +130,16 @@ struct Record {
     imports: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     poll_after: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    unusable_preflight: Option<UnusablePreflight>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UnusablePreflight {
+    approval: String,
+    at: u64,
+    at_exhaustion: bool,
 }
 struct Reading {
     offers: Vec<Offer>,
@@ -376,10 +386,60 @@ impl Service {
     /// Shared background check, with a separate preflight when a user-approved
     /// reset reaches the weekly limit.
     pub fn tick_at_limit(&self, bin: &Path, weekly_due: bool, authorized: impl Fn() -> bool) -> View {
-        self.tick_using(crate::util::now_millis(), weekly_due, |approved| {
+        self.tick_with_shared_usage(bin, weekly_due, None, None, authorized)
+    }
+
+    pub(super) fn tick_with_shared_usage(
+        &self, bin: &Path, weekly_due: bool, weekly_used: Option<f64>, store: Option<&super::shared_usage::Store>,
+        authorized: impl Fn() -> bool,
+    ) -> View {
+        self.tick_using_observed(crate::util::now_millis(), weekly_due, weekly_used, |approved| {
             let mut transport = super::reset_transport::System::connect(bin)?;
-            self.poll_transport(approved, &mut transport, &authorized)
+            let default;
+            let store = match store {
+                Some(store) => store,
+                None => {
+                    default = super::shared_usage::Store::for_account(&self.root, bin, None);
+                    &default
+                }
+            };
+            let requested_at = crate::util::now_millis();
+            if !store.claim(requested_at, super::REFRESH_INTERVAL_MS, "reset")
+                .map_err(|error| error.to_string())? {
+                self.defer_shared_slot(store.saved().next_request_at(requested_at, super::REFRESH_INTERVAL_MS));
+                return Ok(self.view());
+            }
+            let marker = self.marker();
+            let result = self.poll_transport(approved, &mut transport, &authorized);
+            let checked_at = crate::util::now_millis();
+            let refusal = transport.take_refusal();
+            let deadline = refusal.as_ref().and_then(|failure| failure.retry_at);
+            let saved = refusal.map_or_else(|| Ok(transport.take_usage_windows()), Err);
+            if let Err(error) = store.finish(requested_at, checked_at, saved) {
+                eprintln!("[richos] shared quota answer: {error}");
+            }
+            if self.marker() != marker {
+                if let Err(error) = store.clear_answer(requested_at) {
+                    eprintln!("[richos] clearing a used weekly quota reading: {error}");
+                }
+            }
+            match (result, deadline) {
+                (Err(error), Some(deadline)) => {
+                    self.record_failure_with_deadline(error, requested_at, Some(deadline));
+                    Ok(self.view())
+                }
+                (result, _) => result,
+            }
         })
+    }
+
+    fn defer_shared_slot(&self, deadline: u64) {
+        let Ok(_lock) = self.lock() else { return };
+        let Ok(mut record) = self.read() else { return };
+        if deadline > crate::util::now_millis() && record.poll_after != Some(deadline) {
+            record.poll_after = Some(deadline);
+            let _saved = self.save(&record);
+        }
     }
     /// Injection seam for the real-reader/fake-redemption proof.
     pub fn tick_with_transport(&self, transport: &mut dyn Transport, authorized: impl Fn() -> bool) -> View {
@@ -399,11 +459,20 @@ impl Service {
         }
     }
     fn tick_using(&self, now: u64, weekly_due: bool, read: impl FnOnce(bool) -> Result<View, String>) -> View {
+        self.tick_using_observed(now, weekly_due, None, read)
+    }
+
+    fn tick_using_observed(
+        &self, now: u64, weekly_due: bool, weekly_used: Option<f64>, read: impl FnOnce(bool) -> Result<View, String>,
+    ) -> View {
         let approved = {
             let Ok(_lock) = self.lock() else { return self.view(); };
             let Ok(mut record) = self.read() else { return self.view(); };
-            let approved = weekly_due
-                && record.view.approval.as_ref().is_some_and(|a| a.offer.weekly(now));
+            let approved = weekly_due && record.view.approval.as_ref().is_some_and(|approval| {
+                approval.offer.weekly(now) && record.unusable_preflight.as_ref().is_none_or(|previous|
+                    previous.approval != approval.id || now >= previous.at.saturating_add(OFFER_INTERVAL_MS)
+                    || (!previous.at_exhaustion && weekly_used.is_some_and(|used| used >= 100.)))
+            });
             if Self::held(&record, now) || !(Self::aged(&record, now) || approved) {
                 return Self::visible(record.view, now);
             }
@@ -466,12 +535,16 @@ impl Service {
     /// A refused check keeps the last answer (offers and `checked_at`); only the state,
     /// the message and the retry time change.
     fn record_failure(&self, error: String, at: u64) {
+        self.record_failure_with_deadline(error, at, None);
+    }
+
+    fn record_failure_with_deadline(&self, error: String, at: u64, deadline: Option<u64>) {
         if let Ok(_lock) = self.lock() {
             if let Ok(mut record) = self.read() {
                 Self::preserve_eligibility(&mut record.view);
                 record.view.state = "unknown".into();
                 record.view.message = Some(error);
-                record.view.retry_at = Some(at + super::REFRESH_INTERVAL_MS);
+                record.view.retry_at = Some((at + super::REFRESH_INTERVAL_MS).max(deadline.unwrap_or(0)));
                 let _saved = self.save(&record);
             }
         }
@@ -711,6 +784,11 @@ impl Service {
             && approved.weekly_threshold == WEEKLY_THRESHOLD as u8
             && !Self::attempt_blocks(&record, &approved.offer.id)
             && record.attempts.len() < MAX_ATTEMPTS;
+        record.unusable_preflight = (!allowed).then(|| UnusablePreflight {
+            approval: approved.id,
+            at: now,
+            at_exhaustion: reading.weekly_used.is_some_and(|used| used >= 100.),
+        });
         Self::update(&mut record, account, reading, now);
         self.save(&record)?;
         if !allowed {
@@ -813,6 +891,31 @@ mod tests {
     }
     fn approve(s: &Service) {
         s.approve(&s.view().offers[0]).unwrap();
+    }
+
+    #[test]
+    fn an_unusable_approved_offer_retries_only_at_exhaustion_or_at_the_regular_check() {
+        let dir = Scratch::new();
+        let mut transport = Fake::new(99.);
+        let service = seeded(dir.path(), &mut transport);
+        approve(&service);
+        transport.usage["cedar_ember"]["grants"][0]["usable_now"] = json!(false);
+        service.tick_with_transport(&mut transport, || true);
+        let initial = service.view().checked_at.unwrap();
+        assert!(service.view().approval.is_some());
+        assert_eq!(transport.posts, 0);
+        for elapsed in (super::super::REFRESH_INTERVAL_MS..OFFER_INTERVAL_MS).step_by(super::super::REFRESH_INTERVAL_MS as usize) {
+            service.tick_using_observed(initial + elapsed, true, Some(99.), |_| {
+                panic!("an unchanged unusable offer used another check");
+            });
+        }
+        transport.usage["seven_day"]["utilization"] = json!(100.);
+        transport.usage["cedar_ember"]["grants"][0]["usable_now"] = json!(true);
+        service.tick_using_observed(initial + super::super::REFRESH_INTERVAL_MS, true, Some(100.), |approved| {
+            assert!(approved);
+            service.poll_transport(approved, &mut transport, &|| true)
+        });
+        assert_eq!(transport.posts, 1);
     }
     #[test]
     fn nightly_approval_moves_once_and_a_restart_cannot_undo_terminal_revocation() {

@@ -548,6 +548,8 @@ declare_rules() {
   # start: both stay UNACCOUNTED, so a boot that prints either is seen rather than filed.
   routine '^\[richos\] SwearMeter historical sources: read \([0-9]+ ms\)$' \
     'the SwearMeter history reader read every local history source, and how long it took; the partial and unavailable forms stay unaccounted'
+  routine '^\[richos\] quota request: account=[0-9a-f]{64} at_ms=[0-9]+ source=(app|reset) interval_ms=[0-9]+$' \
+    'a signed-in account has claimed a scheduled usage read, with its account hash and interval'
 
   # -- the declared gaps ------------------------------------------------------------------
   gap 'RICHOS_SERVICE_BIN' \

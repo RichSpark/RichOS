@@ -171,11 +171,16 @@ mutant status-omits-update "Q24" "$L" \
     '    pass' \
     "--status would state the rule without his 2026-09-25 update."
 
-# 8. THE READING COMES FROM CLAUDE CODE ITSELF, AT EVERY POLL (2026-09-25).
+# 8. THE READING COMES FROM CLAUDE CODE THROUGH THE SHARED SLOT.
 mutant get-usage-never-used "G01" "$L" \
-    '    g = read_get_usage(now){NL}    if g["state"] == "ok":' \
-    '    g = {"state": "failed", "why": "mutated"}{NL}    if g["state"] == "ok":' \
+    '    g = shared_get_usage(a, now)' \
+    '    g = {"state": "failed", "why": "mutated"}' \
     "The watcher would read only the status-line file, which an idle lead leaves ten minutes old."
+
+mutant shared-read-slot-bypassed "G07" "$L" \
+    '        if binary and store.claim(asked):' \
+    '        if binary:' \
+    "Every process could call get_usage at every local poll."
 
 mutant get-usage-process-left-running "G02" "$L" \
     '                os.killpg(proc.pid, sig)' \
@@ -193,8 +198,8 @@ mutant get-usage-no-fallback "G03" "$L" \
     "A failed get_usage would leave the watcher blind although the status-line file is fresh."
 
 mutant watch-reads-file-only "R04" "$L" \
-    '        r = read_source(a, now){NL}        week = quota_weekly.weekly(r)' \
-    '        r = read_reading(a.payload, now){NL}        week = quota_weekly.weekly(r)' \
+    '            r = read_source(a, now){NL}            previous_reading = r' \
+    '            r = read_reading(a.payload, now){NL}            previous_reading = r' \
     "Every poll after the first would read the status-line file: the 07:57Z/08:07Z miss again."
 
 # 9. RETRY A TRANSIENT FAILURE BEFORE WAKING THE LEAD.
@@ -239,7 +244,7 @@ mutant outage-wakes-at-once "N02" "$L" \
 mutant outage-not-retried-sooner "N02" "$L" \
     '            sleep_for = max(1, min(sleep_for, _retry_seconds(a)))' \
     '            pass' \
-    "A failed get_usage would wait a whole poll to be tried again, and a short outage would reach the two-poll mark."
+    "A failed get_usage would stop checking the saved reading locally before the next provider slot."
 
 mutant outage-ignores-measured-rise "N04" "$L" \
     '    if reach >= a.threshold:' \
@@ -259,13 +264,13 @@ mutant outage-reason-unkept "N02" "$L" \
 # 11. HIGH SPEED, ruling §108 (2026-10-04): the 15 Fable workers of 2026-09-29
 #     took the five-hour window from 93% past 100% between two 5-minute checks.
 mutant fast-never-polls-sooner "R06" "$L" \
-    '        sleep_for = a.fast_poll if fast or expected else a.poll' \
-    '        sleep_for = a.fast_poll if expected else a.poll' \
+    '        sleep_for = a.fast_poll if fast or expected or provider_fast else a.poll' \
+    '        sleep_for = a.fast_poll if expected or provider_fast else a.poll' \
     "At high speed the watcher would still read every 5 minutes, which is what let the window reach 100%."
 
 mutant expected-rise-ignored "R10" "$L" \
-    '        sleep_for = a.fast_poll if fast or expected else a.poll' \
-    '        sleep_for = a.fast_poll if fast else a.poll' \
+    '        sleep_for = a.fast_poll if fast or expected or provider_fast else a.poll' \
+    '        sleep_for = a.fast_poll if fast or provider_fast else a.poll' \
     "Ten teammates started at once would be checked every 5 minutes until the burn had already been measured."
 
 mutant jump-averaged-away "R11" "$L" \

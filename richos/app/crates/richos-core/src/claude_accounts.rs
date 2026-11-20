@@ -233,6 +233,8 @@ pub struct AccountView {
     pub working: Vec<String>,
     pub windows: Vec<Window>,
     pub checked_at: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_checked_at: Option<u64>,
     /// Set while this account is exhausted, with when it comes back.
     pub exhausted_until: Option<u64>,
     /// Shown instead of the figures when the account could not be read.
@@ -1120,6 +1122,12 @@ impl Accounts {
     /// each one rotates at its own next turn boundary, because rotation never happens inside a
     /// turn (`spine.rs`).
     pub fn evaluate(&self, readings: &BTreeMap<String, Reading>, pause: Option<u8>, now: u64) -> io::Result<bool> {
+        self.evaluate_before_move(readings, pause, now, |_| {})
+    }
+
+    pub(crate) fn evaluate_before_move(
+        &self, readings: &BTreeMap<String, Reading>, pause: Option<u8>, now: u64, wake_reader: impl FnOnce(&str),
+    ) -> io::Result<bool> {
         let mut state = self.state.lock().unwrap();
         if state.accounts.len() < 2 { return Ok(false); }
         let current = state.in_use.clone();
@@ -1139,6 +1147,7 @@ impl Accounts {
             Gone::Limit => limit(&current),
             _ => mine.windows.iter().filter_map(|w| w.resets_at).find(|t| *t == until),
         };
+        wake_reader(&next);
         self.switch_to(&mut state, &next, why, fresh_at, now)?;
         Ok(true)
     }
@@ -1147,6 +1156,13 @@ impl Accounts {
     /// account is marked gone until `resets_at` (or, when the refusal did not say, until the
     /// latest reset of its full windows), and the next account with room is put in use.
     pub fn limit_reached(&self, account: &str, resets_at: Option<u64>, readings: &BTreeMap<String, Reading>, pause: Option<u8>, now: u64) -> io::Result<AfterLimit> {
+        self.limit_reached_before_move(account, resets_at, readings, pause, now, |_| {})
+    }
+
+    pub(crate) fn limit_reached_before_move(
+        &self, account: &str, resets_at: Option<u64>, readings: &BTreeMap<String, Reading>,
+        pause: Option<u8>, now: u64, wake_reader: impl FnOnce(&str),
+    ) -> io::Result<AfterLimit> {
         {
             let mut state = self.state.lock().unwrap();
             let until = resets_at.filter(|t| *t > now).or_else(|| readings.get(account).and_then(|r| r.windows.iter()
@@ -1162,7 +1178,7 @@ impl Accounts {
                 return Ok(AfterLimit::Continue);
             }
         }
-        Ok(if self.evaluate(readings, pause, now)? { AfterLimit::Continue } else { AfterLimit::NoRoom })
+        Ok(if self.evaluate_before_move(readings, pause, now, wake_reader)? { AfterLimit::Continue } else { AfterLimit::NoRoom })
     }
 
     /// **A reset was used on `account`** (hunt part 1 v3, finding 49): the usage-limit refusal
@@ -1226,7 +1242,7 @@ pub(crate) mod tests {
         Reading { windows: vec![
             Window { id: "five_hour".into(), label: "Five-hour".into(), used_percent: five, resets_at: Some(NOW + five_reset), duration_ms: 5 * HOUR },
             Window { id: "seven_day".into(), label: "Weekly".into(), used_percent: weekly, resets_at: Some(NOW + weekly_reset), duration_ms: 168 * HOUR },
-        ], speeds: BTreeMap::new(), expected: false, rises: BTreeMap::new(), weekly_cutoff: None }
+        ], ..Reading::default() }
     }
     fn two_accounts() -> (Scratch, Accounts) {
         let dir = Scratch::new();

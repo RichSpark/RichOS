@@ -75,6 +75,10 @@ def reset_tick(engine, reading=None, at_limit=False):
         return {"status": APP_RUNS_RESET}
     helper = os.environ.get("QUOTA_RESET_HELPER") or os.path.join(engine, "scripts", "quota-reset.sh")
     env = dict(os.environ, RICHOS_QUOTA_WEEKLY_LIMIT="1" if at_limit else "0")
+    if at_limit and (week := weekly(reading or {})):
+        env["RICHOS_QUOTA_WEEKLY_USED"] = str(week["used"])
+    else:
+        env.pop("RICHOS_QUOTA_WEEKLY_USED", None)
     try:
         result = subprocess.run([helper, "tick"], env=env, capture_output=True, text=True, timeout=120)
         saved = json.loads(result.stdout) if result.returncode == 0 else None
@@ -96,7 +100,7 @@ def reset_notice_key(reset_status):
     return reset_line(reset_status).rsplit(", checked ", 1)[0]
 
 
-def handle(args, reading, now, workers, reset_status, five_verdict):
+def handle(args, reading, now, workers, reset_status, five_verdict, cached_notice=None):
     paused = workers.get("weekly_paused", [])
     if held(reading, now):
         w = weekly(reading)
@@ -105,6 +109,8 @@ def handle(args, reading, now, workers, reset_status, five_verdict):
             print("WEEKLY-QUOTA-THRESHOLD: overall weekly usage reached 99%; pause until allowance is confirmed.")
             print("  " + describe(reading, now))
             print("  Reset status: " + reset_line(reset_status))
+            if cached_notice:
+                print("  " + cached_notice)
             print("  Send the standard message unchanged to: " + (", ".join(names) or "every working agent"))
             reset = datetime.datetime.fromtimestamp(w["resets_at"], datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ") if w["resets_at"] and w["resets_at"] > now else None
             print("  First, for each agent, run: python3 %s --to <agent> --reason weekly-quota%s"
