@@ -4556,6 +4556,48 @@ class GateReconciliationTests(unittest.TestCase):
             with patch.object(proof_evidence, "installed_dependencies", return_value={"fixture": "changed"}):
                 self.assertNotEqual(r.gate_input_identity(None, True), initial)
 
+    def test_a_branch_started_in_the_shared_repository_does_not_change_the_gate_identity(self):
+        # `git worktree add -b <branch> ... origin/main` in another session writes that branch's
+        # upstream into the .git/config the build's checkout shares; a build whose checks all
+        # passed was refused as inputs-changed for it.
+        source = self.root / "state/source"
+        source.mkdir(parents=True)
+        config = self.root / "fixture.gitconfig"
+        config.write_text('[user]\nname = Verification Fixture\nemail = fixture@example.invalid\n')
+        fixture_env = {**os.environ, "HOME": str(self.root), "GIT_CONFIG_GLOBAL": str(config),
+                       "GIT_CONFIG_NOSYSTEM": "1"}
+        git = lambda *args: subprocess.run(["git", "-C", str(source), *args], env=fixture_env, check=True)
+        subprocess.run(["git", "init", "-q", str(source)], env=fixture_env, check=True)
+        (source / "input.txt").write_text("original")
+        git("add", ".")
+        git("commit", "-qm", "fixture")
+        git("remote", "add", "origin", str(source))
+        git("fetch", "-q", "origin")
+        env = {"PATH": os.environ["PATH"], "HOME": str(self.root / "home"), "TMPDIR": str(self.root),
+               "RICHOS_NAMED_PERSONS_FILE": str(self.root / "private-list"),
+               "RICHOS_NIGHTLY_RUN_ID": "20261007T170000Z-11111111"}
+        r = m.Runner(source, self.root / "state", env, io.StringIO(), gates_at_once="all")
+        library = str(Path(m.__file__).parent / "lib")
+        if library not in sys.path:
+            sys.path.insert(0, library)
+        import proof_evidence
+        with patch.object(proof_evidence, "installed_dependencies", return_value={"fixture": "dependencies"}):
+            initial = r.gate_input_identity(None, True)
+            default = subprocess.run(["git", "-C", str(source), "symbolic-ref", "--short", "HEAD"],
+                                     env=fixture_env, capture_output=True, text=True, check=True).stdout.strip()
+            git("branch", "-q", "--track", "codex/another-session", "origin/" + default)
+            written = (source / ".git/config").read_text()
+            self.assertIn('[branch "codex/another-session"]', written, "the fixture wrote no upstream entry")
+            self.assertEqual(r.gate_input_identity(None, True), initial,
+                             "another session's new branch changed the gate identity")
+            # Any other setting is still an input.
+            git("config", "core.hooksPath", str(self.root / "hooks"))
+            self.assertNotEqual(r.gate_input_identity(None, True), initial)
+            git("config", "--unset", "core.hooksPath")
+            self.assertEqual(r.gate_input_identity(None, True), initial)
+            git("config", "remote.origin.url", str(self.root / "elsewhere"))
+            self.assertNotEqual(r.gate_input_identity(None, True), initial)
+
     def test_release_keeps_every_gate_fresh(self):
         r = self.retry_runner("20261007T170100Z-22222222")
         r.reconcile_gates = Mock(side_effect=AssertionError("release reused evidence"))
