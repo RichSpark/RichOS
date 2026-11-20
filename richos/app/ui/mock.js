@@ -2256,6 +2256,8 @@
   }
 
   const listeners = {}; // eventName -> Set<fn>
+  /// The shell's side of Edit > Undo: whether the page has an Undo on offer, and text undos sent.
+  const mockMenuUndo = { offered: false, native: 0 };
   function emit(eventName, payload) {
     const set = listeners[eventName];
     if (!set) return;
@@ -4571,6 +4573,13 @@
         case "set_thread_archived":
           setMembership(navPrefs.archived_threads, args.threadId ?? args.thread_id, !!args.archived);
           return null;
+        // Edit > Undo (src-tauri/src/chat_undo.rs): the page's offer, and text undo handed back.
+        case "set_chat_undo":
+          mockMenuUndo.offered = !!args.armed;
+          return null;
+        case "native_undo":
+          mockMenuUndo.native += 1;
+          return null;
         case "rename_thread": {
           const id = args.threadId ?? args.thread_id;
           const title = String(args.title || "").trim().slice(0, 200);
@@ -5794,6 +5803,13 @@
   // --- dev-only test hooks, exercised by a headless check, never by real users ----------
   window.__RICHOS_MOCK__ = {
     richpassChanged(view) { emit("rich://richpass", view); },
+    /// Command-Z as the Mac app delivers it: the menu's Undo, routed as `chat_undo::route`
+    /// does with the conversation window in front; `menuUndoState().native` counts text undos.
+    menuUndo() {
+      if (mockMenuUndo.offered) emit("rich://menu-undo", null);
+      else mockMenuUndo.native += 1;
+    },
+    menuUndoState() { return { ...mockMenuUndo }; },
     // ---- a file Rich put in front of the user (round 36 screen 3) --------------------------
     /// What the cards asked the shell to open or show in Finder, oldest first.
     richFileActions() { return richFileActions.slice(); },
