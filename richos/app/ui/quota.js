@@ -804,7 +804,8 @@
     field("quota-fable-title").textContent = period ? "On Opus since " + clock(period.since) + "."
       : sameModel ? "On Fable on " + rule.accountLabel + "."
       : rule.enabled ? "Fable quota switching is on." : "Fable quota switching is off.";
-    field("quota-fable-detail").textContent = period?.estimateBasedOn != null ? "The team is on Opus while Fable usage is checked."
+    field("quota-fable-detail").textContent = period?.departing ? "The team can keep working on Opus while the account move finishes."
+      : period?.estimateBasedOn != null ? "The team is on Opus while Fable usage is checked."
       : period ? "Fable is almost used up. Back on Fable " + when(period.resetsAt) + "."
       : accountFirst ? "Rich uses another Claude account on Fable first. Once Fable is almost used up everywhere, the team uses Opus on the account whose Fable resets soonest."
       : rule.enabled ? "Rich switches to Opus when Fable is almost used up and there’s room in your weekly quota." : "";

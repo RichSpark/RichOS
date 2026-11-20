@@ -1169,9 +1169,9 @@ impl Accounts {
     pub(crate) fn move_for_fable(
         &self, readings: &BTreeMap<String, Reading>, weeks: &BTreeMap<String, crate::quota::fable::Week>,
         pause: Option<u8>, now: u64, wake_reader: impl FnOnce(&str),
-    ) -> io::Result<bool> {
+    ) -> io::Result<Option<String>> {
         let mut state = self.state.lock().unwrap();
-        let Some(current) = weeks.get(&state.in_use).filter(|week| !week.has_room) else { return Ok(false) };
+        let Some(current) = weeks.get(&state.in_use).filter(|week| !week.has_room) else { return Ok(None) };
         let next = state.accounts.iter().filter_map(|account| {
             let reading = readings.get(&account.id)?;
             let week = weeks.get(&account.id)?;
@@ -1180,11 +1180,12 @@ impl Accounts {
                 && gone(reading, state.at_threshold, pause, limited, now).is_none())
                 .then_some((account.id.clone(), week))
         }).min_by_key(|(_, week)| (!week.has_room, week.resets_at));
-        let Some((to, week)) = next.filter(|(id, _)| *id != state.in_use) else { return Ok(false) };
+        let Some((to, week)) = next.filter(|(id, _)| *id != state.in_use) else { return Ok(None) };
+        let leaving = state.in_use.clone();
         wake_reader(&to);
         self.switch_to(&mut state, &to, Gone::Fable { used: current.used, on_opus: !week.has_room },
             Some(current.resets_at), now)?;
-        Ok(true)
+        Ok(Some(leaving))
     }
 
     /// **The backstop.** A lease on `account` was refused by a usage limit inside a turn. The

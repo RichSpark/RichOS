@@ -633,7 +633,9 @@ impl WorkHost {
         if Self::limit_hold_until(quota, hold, crate::util::now_millis()).is_none() { return true; }
         let account = hold.account.as_str();
         let in_use = quota.accounts.in_use().id;
-        if hold.fable_move && in_use == account && quota.using_opus_for_fable(account) { return true; }
+        if hold.fable_move && quota.using_opus_for_fable(account) && Self::gone_until(quota, account).is_none() {
+            return true;
+        }
         if in_use == account || Self::gone_until(quota, &in_use).is_some() { return false; }
         let lease = backend.lease.lock().unwrap();
         lease.as_ref().is_none_or(|current| current.account() != Some(account) || !Self::session_in_use(backend, current.as_ref()))

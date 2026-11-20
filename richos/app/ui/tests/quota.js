@@ -688,6 +688,13 @@ async function main() {
         await leaveHome(page);
         if (!(await page.locator("#set-menu").isHidden())) await page.click("#set-btn");
         const threadId = await page.evaluate(() => activeThreadId);
+        if (!onOpus) {
+          const leaving = { ...phase, account: home, accountLabel: "Home",
+            active: { [home]: { since, resetsAt, departing: true } }, changes: [] };
+          await page.evaluate(view => window.RichMockFableQuota(view), leaving);
+          await page.waitForFunction(() => document.querySelector("#fable-composer-status").textContent === "On Opus while moving accounts");
+          assertEqual(await page.locator(".fable-conversation-marker").count(), 0);
+        }
         const change = { account, accountLabel, threadId, at: since, resetsAt, onOpus,
           reason: onOpus ? "otherAccountWithOpus" : "otherAccountWithFable" };
         await page.evaluate(view => window.RichMockFableQuota(view), { ...phase, changes: [change] });

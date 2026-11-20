@@ -6191,7 +6191,8 @@ function updateFableQuota(next) {
   const namedAccount = next.mode === "otherAccountFirst" && next.accountLabel;
   const note = el("fable-composer-status");
   note.hidden = !period && !stayedOnFable;
-  note.textContent = estimated ? "On Opus while Fable usage is checked"
+  note.textContent = period?.departing ? "On Opus while moving accounts"
+    : estimated ? "On Opus while Fable usage is checked"
     : period ? (namedAccount ? namedAccount + ", on Opus until " : "On Opus until ") + formatFableReset(period.resetsAt)
     : stayedOnFable ? namedAccount + ", on Fable" : "";
   el("fable-setting").hidden = false;
@@ -6207,7 +6208,8 @@ function updateFableQuota(next) {
   el("fable-add-account").hidden = otherAccount;
   const modelLine = el("fable-model-state");
   modelLine.hidden = !period;
-  modelLine.textContent = estimated ? "Rich is on Opus while Fable usage is checked."
+  modelLine.textContent = period?.departing ? "Rich is on Opus while moving accounts."
+    : estimated ? "Rich is on Opus while Fable usage is checked."
     : period ? "Rich is on Opus until " + formatFableReset(period.resetsAt) + ". Your model choice stays saved." : "";
   if (changed) scheduleRender();
 }

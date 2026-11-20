@@ -294,7 +294,7 @@
     }
     const fable = view?.fableSwitch?.active?.[a.id];
     if (fable && a.inUse) {
-      const status = fable.estimateBasedOn != null ? "On Opus for now" : "On Opus until " + when(fable.resetsAt);
+      const status = fable.departing || fable.estimateBasedOn != null ? "On Opus for now" : "On Opus until " + when(fable.resetsAt);
       pill += `<span class="acc-pill is-inuse">${esc(status)}</span>`;
       note = "Rich and the team are working on this account, on Opus for now.";
     }
@@ -401,7 +401,8 @@
     const model = view?.fableSwitch?.active?.[inUse()?.id];
     const sw = recentSwitch();
     if (model) {
-      const detail = model.estimateBasedOn != null ? "The team is on Opus while Fable usage is checked."
+      const detail = model.departing ? "The team can keep working on Opus while the account move finishes."
+        : model.estimateBasedOn != null ? "The team is on Opus while Fable usage is checked."
         : sw?.why === "fableOpus" ? "Fable is almost used up on every account. This account’s Fable limit resets first. Back on Fable " + when(model.resetsAt) + "."
         : "Fable is almost used up and there’s room left in your weekly quota. Back on Fable " + when(model.resetsAt) + ".";
       return `<div class="acc-banner" role="status"><span class="acc-banner-icon">${ICON.swap}</span>

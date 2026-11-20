@@ -1940,7 +1940,7 @@ impl Service {
             let state = self.fable_switch.lock().unwrap();
             (state.enabled, state.mode)
         };
-        let mut moved_for_fable = false;
+        let mut fable_departure = None;
         let mut settled = false;
         if enabled && mode == fable::Mode::OtherAccountFirst && self.accounts.count() >= 2 {
             let selected = self.update_fable(|state| {
@@ -1957,12 +1957,17 @@ impl Service {
                 self.accounts.move_for_fable(&general_capacity, &weeks, pause, now, |to| self.request_account_refresh(to))
             });
             match selected {
-                Ok(moved) => moved_for_fable = moved,
+                Ok(departure) => fable_departure = departure,
                 Err(error) => eprintln!("[richos] quota: could not choose the next Fable account ({error})"),
             }
         }
         let account = self.accounts.in_use();
-        let changed = match self.update_fable(|state| state.observe(&account.id, readings.get(&account.id), now)) {
+        let changed = match self.update_fable(|state| {
+            if let Some(leaving) = &fable_departure {
+                state.observe_departure(leaving, readings.get(leaving), now);
+            }
+            state.observe(&account.id, readings.get(&account.id), now);
+        }) {
             Ok(((), changed)) => changed,
             Err(error) => {
                 eprintln!("[richos] quota: Fable switch state could not be saved ({error})");
@@ -1971,7 +1976,7 @@ impl Service {
         };
         apply_fable_capacity(&mut readings, enabled);
         match self.accounts.evaluate_before_move(&readings, pause, now, |to| self.request_account_refresh(to)) {
-            Ok(moved) if moved || moved_for_fable || settled || changed => {
+            Ok(moved) if moved || fable_departure.is_some() || settled || changed => {
                 if let Err(error) = self.publish() { eprintln!("[richos] quota snapshot: {error}"); }
             }
             Ok(_) => {}
@@ -2575,13 +2580,16 @@ pub(crate) mod tests {
         service.extra.lock().unwrap().insert(work.id.clone(), (
             std::sync::Arc::new(Mutex::new(Box::new(provider))), Snapshot::default()));
         service.before_turn(&work.id, Some((windows(20., work_reset, 30., wall + 3 * hour), wall - 5_000)));
+        service.accounts.back_end_on("chat", Some(one));
         service.before_turn(one, Some((windows(99.95, home_reset, 30., wall + 5 * hour), wall - 4_000)));
         assert_eq!(service.lease_account().id, work.id, "first move spends Work's Fable allowance");
+        assert!(service.using_opus_for_fable(one), "a lease still on Home can use Opus until it can move");
         assert!(!service.using_opus_for_fable(&work.id), "both leases keep their Fable settings");
         assert!(service.view().held_until.is_none());
         assert!(service.fable_view().can_use_other_account);
         service.mark_fable_conversation("chat");
         assert!(service.fable_view().changes.is_empty(), "hold the marker until a lease runs on Work");
+        service.accounts.back_end_on("chat", Some(&work.id));
         service.accounts.ran_on("work-turn", &work.id);
         service.mark_fable_conversation("chat");
         assert!(service.accounts.take_notice().is_none(), "the marker replaces the account message");
@@ -2591,8 +2599,12 @@ pub(crate) mod tests {
         service.before_turn(&work.id, Some((windows(99.95, work_reset, 30., wall + 3 * hour), wall - 3_000)));
         assert_eq!(service.lease_account().id, one, "the Fable reset order wins over the weekly order");
         assert!(service.using_opus_for_fable(one));
+        assert!(service.using_opus_for_fable(&work.id), "the remaining Work lease can finish on Opus");
         assert!(service.view().held_until.is_none(), "only the model changes when the general week has room");
         service.accounts.ran_on("home-turn", one);
+        service.mark_fable_conversation("chat");
+        assert!(service.fable_view().changes.last().unwrap().thread_id.is_none());
+        service.accounts.back_end_on("chat", Some(one));
         service.mark_fable_conversation("chat");
         service.accounts.turn_ended("home-turn");
         let changes = service.fable_view().changes;

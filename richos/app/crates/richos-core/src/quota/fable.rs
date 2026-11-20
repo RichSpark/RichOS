@@ -68,6 +68,9 @@ pub struct Period {
     pub resets_at: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     estimate_based_on: Option<u64>,
+    /// A lease can use Opus on the account it is leaving until its running work is safe to move.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    departing: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -147,7 +150,7 @@ impl State {
         if !enabled {
             self.refused_until.clear();
             for (account, period) in std::mem::take(&mut self.active) {
-                self.record(account, now, false, period.resets_at, None);
+                if !period.departing { self.record(account, now, false, period.resets_at, None); }
             }
         }
     }
@@ -155,10 +158,10 @@ impl State {
     pub fn settle(&mut self, account: &str, reading: Option<&Reading>, now: u64) -> bool {
         self.refused_until.retain(|_, deadline| *deadline > now);
         let ended: Vec<_> = self.active.iter().filter(|(_, p)| p.resets_at <= now)
-            .map(|(id, p)| (id.clone(), p.resets_at)).collect();
-        for (id, at) in ended {
+            .map(|(id, p)| (id.clone(), *p)).collect();
+        for (id, period) in ended {
             self.active.remove(&id);
-            self.record(id, at, false, at, None);
+            if !period.departing { self.record(id, period.resets_at, false, period.resets_at, None); }
         }
         let Some(reading) = reading else { return false };
         let Some(window) = fable_window(reading) else { return false };
@@ -174,8 +177,9 @@ impl State {
                 if observation.at_point {
                     period.estimate_based_on = None;
                 } else {
+                    let visible = !period.departing;
                     self.active.remove(account);
-                    self.record(account.into(), now, false, until, Some(ChangeReason::FableRoomConfirmed));
+                    if visible { self.record(account.into(), now, false, until, Some(ChangeReason::FableRoomConfirmed)); }
                     return true;
                 }
             }
@@ -184,25 +188,32 @@ impl State {
         // number from the same window cannot undo a refusal that named Fable.
         if !at_point(reading, window) && self.period(account, now).is_some_and(|period| {
             until > period.resets_at && !super::same_reset(until, period.resets_at)
-        }) {
-            self.active.remove(account);
+        }) && self.active.remove(account).is_some_and(|period| !period.departing) {
             self.record(account.into(), now, false, now, None);
         }
         false
     }
 
     pub fn observe(&mut self, account: &str, reading: Option<&Reading>, now: u64) {
+        self.observe_for_lease(account, reading, now, false);
+    }
+
+    pub fn observe_departure(&mut self, account: &str, reading: Option<&Reading>, now: u64) {
+        self.observe_for_lease(account, reading, now, true);
+    }
+
+    fn observe_for_lease(&mut self, account: &str, reading: Option<&Reading>, now: u64, departing: bool) {
         if self.settle(account, reading, now) { return; }
         let Some(reading) = reading.filter(|reading| week_has_room(reading, now)) else { return };
         if let Some(until) = self.fable_refusal_until(account, now) {
-            self.activate(account, now, until, None);
+            self.activate(account, now, until, None, departing);
             return;
         }
         let Some(window) = fable_window(reading) else { return };
         let Some(until) = window.resets_at.filter(|until| *until > now) else { return };
-        if at_point(reading, window) {
+        if at_point(reading, window) || self.period(account, now).is_some() {
             let estimate_based_on = reading.fable_observation.filter(|o| !o.at_point).map(|o| o.at);
-            self.activate(account, now, until, estimate_based_on);
+            self.activate(account, now, until, estimate_based_on, departing);
         }
     }
 
@@ -277,7 +288,8 @@ impl State {
                     period.estimate_based_on = None;
                 }
             }
-            self.activate(account, now, until, estimate_based_on);
+            let departing = self.period(account, now).is_some_and(|period| period.departing);
+            self.activate(account, now, until, estimate_based_on, departing);
         }
         self.on_opus(account, now)
     }
@@ -290,13 +302,18 @@ impl State {
         self.period(account, now).is_some()
     }
 
-    fn activate(&mut self, account: &str, now: u64, resets_at: u64, estimate_based_on: Option<u64>) {
-        if !self.enabled || self.active.contains_key(account) {
-            return;
+    fn activate(&mut self, account: &str, now: u64, resets_at: u64, estimate_based_on: Option<u64>, departing: bool) {
+        if !self.enabled { return; }
+        let period = self.active.entry(account.into()).or_insert(Period {
+            since: now, resets_at, estimate_based_on, departing: true,
+        });
+        if !departing && period.departing {
+            period.departing = false;
+            period.since = now;
+            let reason = period.estimate_based_on.map(|_| ChangeReason::EstimatedUsage);
+            let resets_at = period.resets_at;
+            self.record(account.into(), now, true, resets_at, reason);
         }
-        self.active.insert(account.into(), Period { since: now, resets_at, estimate_based_on });
-        let reason = estimate_based_on.map(|_| ChangeReason::EstimatedUsage);
-        self.record(account.into(), now, true, resets_at, reason);
     }
 
     pub fn mark_conversation(&mut self, thread: &str) {
