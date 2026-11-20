@@ -4,6 +4,7 @@ import ServiceManagement
 import SwiftUI
 
 public enum WindowGestureService {
+    private static let registrationLock = NSLock()
     private static var service: SMAppService { .loginItem(identifier: WindowGesturePreferences.helperID) }
 
     /// ServiceManagement uses the calling application's bundle to find its login item.
@@ -17,10 +18,15 @@ public enum WindowGestureService {
     }
 
     private static func update(_ action: String) -> String {
+        registrationLock.lock()
+        defer { registrationLock.unlock() }
+
         let item = service
         do {
             switch action {
-            case "register":
+            case "register", "register-if-desktop-enabled":
+                if action == "register-if-desktop-enabled",
+                   !WindowGesturePreferences.selection.contains(.desktopDelete) { break }
                 if item.status == .notRegistered || item.status == .notFound { try item.register() }
             case "unregister":
                 if item.status == .enabled || item.status == .requiresApproval { try item.unregister() }
@@ -178,9 +184,8 @@ struct WindowGestureSettings: View {
 
     private func toggle(_ gesture: Preferences.Selection) -> Binding<Bool> {
         Binding(get: { selection.contains(gesture) }, set: { enabled in
-            let current = Preferences.selection
-            selection = enabled ? current.union(gesture) : current.subtracting(gesture)
-            Preferences.selection = selection
+            Preferences.setEnabled(enabled, for: gesture)
+            selection = Preferences.selection
             synchronize(selection.isEmpty ? "unregister" : "register")
         })
     }

@@ -188,6 +188,9 @@ public final class FolderOpenDelegate: NSObject, NSApplicationDelegate, Observab
         NSApp.servicesProvider = self
         NSUpdateDynamicServices()
         DispatchQueue.global(qos: .utility).async { RichFilesInstallation.registerGlance() }
+        Task {
+            _ = await WindowGestureService.request("register-if-desktop-enabled", in: Bundle.main.bundleURL)
+        }
     }
 
     @objc(openRichFiles:userData:error:)
