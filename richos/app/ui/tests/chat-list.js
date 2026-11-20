@@ -76,6 +76,9 @@ async function pageFor(browser, theme) {
 }
 
 const railRow = (page, id) => page.locator("#rail-nav [data-thread-id=" + id + "]").first();
+// The row under its company, never the Archived group's copy of it, which is still drawn
+// until the restoring refresh lands.
+const entityRow = (page, id) => page.locator("#rail-nav .nav-group--entity [data-thread-id=" + id + "]");
 const markOf = async (page, id) => {
   const mark = railRow(page, id).locator(".chat-word");
   return (await mark.count()) ? (await mark.textContent()) : null;
@@ -122,7 +125,7 @@ async function run() {
       await page.locator(".chat-undo").waitFor();
       await page.locator("#rail-nav .nav-group--entity [data-thread-id=general]").waitFor({ state: "detached" });
       await page.locator(".chat-undo button").click();
-      await railRow(page, "general").waitFor();
+      await entityRow(page, "general").waitFor();
       await menu(page, "general", "Bring back later…");
       await page.getByRole("button", { name: "Pick a time…" }).click();
       assertEqual(await page.locator(".chat-pick-day").count(), 7, "the picker offers the next seven days");
@@ -137,6 +140,73 @@ async function run() {
       await page.locator(".nav-group--later [data-thread-id=general]").waitFor({ state: "detached" });
       await set(page, "general", { working_since: null, back_at: Date.now() });
       assertEqual(await markOf(page, "general"), "Back", "a returned chat reaches Needs you");
+    });
+
+    // Command-Z as the Mac app delivers it: the page is a child webview, so wry keeps every
+    // Command key from it and the menu's Undo takes the press (src-tauri/src/chat_undo.rs).
+    // `menuUndo()` is that menu item, routed as the shell routes it; no key event is sent.
+    await run.check(theme + " · Command-Z through the menu's Undo: archive, unpin, bring back later and text", async () => {
+      const menuUndo = () => page.evaluate(() => window.__RICHOS_MOCK__.menuUndo());
+      const textUndos = async () => (await page.evaluate(() => window.__RICHOS_MOCK__.menuUndoState())).native;
+      const pinned = async () => (await page.evaluate(() => RichBridge.invoke("nav_state"))).pinned_threads.includes("general");
+      const before = await textUndos();
+      await page.waitForFunction(() => !document.querySelector(".chat-undo"));
+      await page.waitForFunction(() => !window.__RICHOS_MOCK__.menuUndoState().offered);
+
+      await menu(page, "general", "Archive");
+      await page.locator(".chat-undo").waitFor();
+      await page.waitForFunction(() => window.__RICHOS_MOCK__.menuUndoState().offered);
+      await menuUndo();
+      await entityRow(page, "general").waitFor();
+      await page.locator(".chat-undo").waitFor({ state: "detached" });
+
+      await menu(page, "general", "Pin");
+      await page.waitForFunction(async () => (await RichBridge.invoke("nav_state")).pinned_threads.includes("general"));
+      await menu(page, "general", "Unpin");
+      await page.locator(".chat-undo").waitFor();
+      assert(!await pinned(), "Unpin saved before the Undo");
+      await page.waitForFunction(() => window.__RICHOS_MOCK__.menuUndoState().offered);
+      await menuUndo();
+      await page.waitForFunction(async () => (await RichBridge.invoke("nav_state")).pinned_threads.includes("general"));
+      await page.locator(".chat-undo").waitFor({ state: "detached" });
+      await page.evaluate(async () => {
+        await RichBridge.invoke("set_thread_pinned", { threadId: "general", pinned: false });
+        await refreshNavigation();
+      });
+
+      await menu(page, "general", "Bring back later…");
+      await page.getByRole("button", { name: /^Tomorrow morning/ }).click();
+      await page.locator(".nav-group--later [data-thread-id=general]").waitFor();
+      await page.waitForFunction(() => window.__RICHOS_MOCK__.menuUndoState().offered);
+      await menuUndo();
+      await page.locator(".nav-group--later [data-thread-id=general]").waitFor({ state: "detached" });
+      await page.locator(".chat-undo").waitFor({ state: "detached" });
+      assertEqual(await textUndos(), before, "an offered Undo is the chat list's, never text undo");
+      await page.waitForFunction(() => !window.__RICHOS_MOCK__.menuUndoState().offered);
+
+      // Text in the message box owns Command-Z even with an Undo on offer: a draft deleted to
+      // empty after the offer (still WebKit's to undo), then text typed after it.
+      await page.locator("#input").fill("a draft");
+      await menu(page, "general", "Archive");
+      await page.locator(".chat-undo").waitFor();
+      await page.waitForFunction(() => window.__RICHOS_MOCK__.menuUndoState().offered);
+      await page.locator("#input").focus();
+      await page.locator("#input").fill("");
+      await menuUndo();
+      await page.waitForFunction((count) => window.__RICHOS_MOCK__.menuUndoState().native === count, before + 1);
+      assertEqual(await page.locator(".chat-undo").count(), 1, "undoing the deleted draft left the chat-list Undo on offer");
+      assertEqual(await entityRow(page, "general").count(), 0, "the chat stayed archived");
+      await page.locator("#input").fill("a message being typed");
+      await menuUndo();
+      await page.waitForFunction((count) => window.__RICHOS_MOCK__.menuUndoState().native === count, before + 2);
+      assertEqual(await page.locator(".chat-undo").count(), 1, "typing's undo left the chat-list Undo on offer");
+      assertEqual(await entityRow(page, "general").count(), 0, "the chat stayed archived");
+      await page.locator(".chat-undo button").click();
+      await entityRow(page, "general").waitFor();
+      await page.locator("#input").fill("");
+      await page.waitForFunction(() => !window.__RICHOS_MOCK__.menuUndoState().offered);
+      await menuUndo();
+      assertEqual(await textUndos(), before + 3, "with nothing on offer Command-Z is text undo, as before");
     });
 
     await run.check(theme + " · unread persists and opening adds the unread boundary", async () => {

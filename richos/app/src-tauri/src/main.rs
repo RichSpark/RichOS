@@ -106,6 +106,8 @@ mod engine;
 mod nav;
 mod chat_list;
 mod chat_notifications;
+/// Edit > Undo and Command-Z reach the chat list's Undo (round 93). See chat_undo.rs.
+mod chat_undo;
 
 /// Check, download, VERIFY, install, relaunch — the update path. Its own file because it
 /// is the one surface where a mistake ships code to the CEO's machine, and because the
@@ -2805,7 +2807,8 @@ fn main() {
         // `Menu::default` builds, in the same order — copying them is not decoration: an app
         // that sets a menu REPLACES the default entirely, and a webview without the Edit
         // submenu loses Cmd-C and Cmd-V, which would be a far worse regression than the one
-        // being fixed. Only Quit becomes ours, keeping its name and its Cmd-Q accelerator.
+        // being fixed. Only Quit becomes ours, keeping its name and its Cmd-Q accelerator,
+        // and on macOS Edit > Undo, keeping its name and Cmd-Z (`chat_undo.rs`).
         .menu(|handle| {
             use tauri::menu::{AboutMetadata, MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder};
             let name = handle.package_info().name.clone();
@@ -2829,8 +2832,15 @@ fn main() {
                 .separator()
                 .item(&quit)
                 .build()?;
-            let edit = SubmenuBuilder::new(handle, "Edit")
-                .undo()
+            // Undo is OURS on macOS too (chat_undo.rs): the page never sees Command-Z, so the
+            // menu has to ask it about the chat list's Undo. Same title, same accelerator.
+            #[cfg(target_os = "macos")]
+            let edit = SubmenuBuilder::new(handle, "Edit").item(
+                &MenuItemBuilder::with_id(chat_undo::MENU_UNDO, "Undo").accelerator("CmdOrCtrl+Z").build(handle)?,
+            );
+            #[cfg(not(target_os = "macos"))]
+            let edit = SubmenuBuilder::new(handle, "Edit").undo();
+            let edit = edit
                 .redo()
                 .separator()
                 .cut()
@@ -2855,6 +2865,8 @@ fn main() {
                 // and either raises the app's own exit — which re-enters the `ExitRequested`
                 // arm below, the preventable path — or puts the question on his screen.
                 request_quit(app);
+            } else if event.id() == chat_undo::MENU_UNDO {
+                chat_undo::on_menu_undo(app);
             }
         })
         // THE OUTPUT PANEL'S PREVIEW SCHEME (Output side panel PRD §5.3):
@@ -4701,6 +4713,8 @@ fn main() {
             richpass_host::richpass_acknowledge,
             richpass_host::richpass_show,
             richpass_host::richpass_permissions,
+            chat_undo::set_chat_undo,
+            chat_undo::native_undo,
         ])
         .build(context)
         .expect("error while building RichOS")
