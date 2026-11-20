@@ -23,6 +23,9 @@ STEPS (in the guest, never on the host's screen, CEO section 65):
                and the activity square's menu opens on a real right-click and a real click on Readout takes;
                put back to Ink
   home         the Home button and the RichOS wordmark both lead to Home; on Home no rail item is on screen
+  richfiles-hover  (optional) RichFiles open from the rail, the real pointer rests on RichCleaner, RichFinder
+               and Chats in turn: each photographed whole and cropped around its label (#nr-tip), whose
+               readable name beside its button is judged from the pictures, not the DOM
   cleaner-close  (optional) RichCleaner's window, opened from the rail, closes with a real click on its red
                button, and opened again, with a real Escape (CEO 2026-11-15)
 Exit 0 when every step passes.
@@ -45,7 +48,7 @@ StepFailed = folders.StepFailed
 command = folders.command
 
 STEPS = ['identity', 'first-run', 'rail', 'hover', 'items', 'spend', 'scribe', 'home-screen']
-OPTIONAL = ['cleaner-close', 'net-cut', 'net-restore', 'richpass-download', 'first-click', 'richpass-page', 'richpass-links', 'richpass-protect', 'richpass-html']
+OPTIONAL = ['richfiles-hover', 'cleaner-close', 'net-cut', 'net-restore', 'richpass-download', 'first-click', 'richpass-page', 'richpass-links', 'richpass-protect', 'richpass-html']
 ITEMS = ['nr-home', 'nr-chats', 'nr-finder', 'nr-cleaner', 'nr-scribe', 'nr-bug', 'res-square', 'nr-me']
 
 
@@ -118,6 +121,54 @@ class Walk(folders.Walk):
         self.save()
         if not ev['tip_text_on_screen']:
             raise StepFailed('no RichFinder label while the pointer rests on its item: ' + json.dumps(ev))
+        return ev
+
+    def richfiles_hover(self):
+        """With RichFiles open, the real pointer rests on RichCleaner, RichFinder and Chats in turn;
+        each label is photographed whole and cropped where the page draws it. The DOM always holds
+        the label, so whether it is READABLE is read from the pictures (look at the crops)."""
+        self.script('tell application "RichOS" to activate')
+        time.sleep(1)
+        # Run straight after identity, a new user's setup question is up and RichFiles stays hidden
+        # while it is; put it aside the way a user can.
+        end = time.monotonic() + 40
+        while not self.center('nr-richfiles'):  # shown once the app has said RichFiles is there
+            if self.present('Not now'):
+                self.press('Not now')
+            if time.monotonic() > end:
+                self.shot('richfiles-hover-no-item.png')
+                raise StepFailed('#nr-richfiles never came on screen within 40 s')
+            time.sleep(2)
+        self.click_id('nr-richfiles')
+        end = time.monotonic() + 40
+        while not self.text_on_screen('Quick Access'):  # RichFiles' own sidebar, drawn natively
+            if time.monotonic() > end:
+                self.shot('richfiles-hover-not-open.png')
+                raise StepFailed('RichFiles did not open from the rail within 40 s')
+            time.sleep(1)
+        time.sleep(2)
+        ev = {'window': self.script('tell application "System Events" to tell process "RichOS" to '
+                                    'get {position, size} of front window')}
+        for dom_id, name in [('nr-cleaner', 'cleaner'), ('nr-finder', 'finder'), ('nr-chats', 'chats')]:
+            x, y = self.center(dom_id)
+            self.pointer(x, y, 'hover')
+            time.sleep(1.5)
+            tip = self.geometry('nr-tip')
+            self.shot(f'richfiles-hover-{name}.png')
+            ev[name] = {'center': [x, y], 'tip': tip}
+            if tip:
+                # 60 px of margin all round: a hole above or below the label shows in the crop too.
+                frame = f"{tip['x'] - 60},{tip['y'] - 60},{tip['w'] + 120},{tip['h'] + 120}"
+                command([sys.executable, '-c', 'import sys; from PIL import Image; '
+                         'x,y,w,h=map(int,sys.argv[3].split(",")); '
+                         'Image.open(sys.argv[1]).crop((x,y,x+w,y+h)).save(sys.argv[2])',
+                         self.out / f'richfiles-hover-{name}.png', self.out / f'richfiles-hover-{name}-crop.png',
+                         frame], 60)
+        self.facts['richfiles_hover'] = ev
+        self.save()
+        missing = [n for n in ('cleaner', 'finder', 'chats') if not ev[n]['tip']]
+        if missing:
+            raise StepFailed('no hover label in the page for: ' + ', '.join(missing) + ' ' + json.dumps(ev))
         return ev
 
     def items(self):
