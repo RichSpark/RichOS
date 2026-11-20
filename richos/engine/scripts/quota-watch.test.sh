@@ -74,8 +74,8 @@
 #            /, because Claude Code lists every file under its working
 #            directory (from /, the Desktop, Downloads and every volume)
 #   G08      get_usage stays unavailable: one alert after retry, with the reason
-#   R04      91% to 95% in ten minutes, with that pace continued: the shared
-#            provider readings defer the pause until 97% and it lands below 100%
+#   R04      91% to 95% in ten minutes: the five-hour line remains 93% even
+#            when a slow pair would allow a later projection
 #
 #   W12      a fallback approaching its age limit does not ask for a reply
 #   W06      a stale reading with nothing running does NOT wake the lead
@@ -1111,11 +1111,11 @@ if wants "R04"; then
 fake ok 91
 replay r04
 R04="$(tail -1 "$SB/r04.report")"
-check "R04  at a slow pace of two points per check, the pause waits until 97% and lands below 100% $R04" \
+check "R04  two points per check cannot establish a safe later five-hour line, so pause at 93% $R04" \
     "$(printf '%s' "$R04" | python3 -c '
 import json, sys
 d = json.loads(sys.stdin.read())
-ok = d["fired_at"] == 900 and d["value"] == 97 and d["at_hold"] < 100 and not d["lead_woken"] and d["via_get_usage"]
+ok = d["fired_at"] == 300 and d["value"] == 93 and d["at_hold"] < 100 and not d["lead_woken"] and d["via_get_usage"]
 sys.exit(0 if ok else 1)' 2>/dev/null; echo $?)" "report=$(cat "$SB/r04.report") out=$(cat "$SB/r04/transcript.log")"
 
 fi

@@ -289,14 +289,14 @@ mutant fast-poll-clamped-back "R06" "$L" \
     "The window-end clamp would put the 5-minute interval back, and the 1-minute check would never happen."
 
 mutant early-wake-never "R09" "$L" \
-    '        point = five_pause_point(a, r, now, speed, expected)' \
-    '        point = max(a.threshold, five_pause_point(a, r, now, speed, expected))' \
+    '        point = five_pause_point(a, r, now, speed)' \
+    '        point = max(a.threshold, five_pause_point(a, r, now, speed))' \
     "At high speed the pause would wait for 93%, and at some poll phases the window reaches 100% before the hold lands."
 
-mutant pause-point-capped "R04" "$L" \
-    '        return min(a.threshold, point) if expected else point' \
-    '        return min(a.threshold, point)' \
-    "A slow pace would pause workers at 93% with unused headroom."
+mutant five-hour-point-uncapped "R04" "$L" \
+    '        # Five-minute observations cannot bound the next burst when work restarts.{NL}        return min(a.threshold, point)' \
+    '        # Five-minute observations cannot bound the next burst when work restarts.{NL}        return point' \
+    "A slow or flat pair would delay the pause beyond the configured line before a renewed burst."
 
 mutant fast-alert-never "R08" "$L" \
     '            out.wake("FAST", _capture(_emit_fast, a, r, speed, now, w), now)' \

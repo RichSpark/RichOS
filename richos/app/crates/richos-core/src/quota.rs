@@ -784,7 +784,7 @@ impl Snapshot {
         let next = self.shared_next_at?;
         let rise = reading.rises.get(&window.id)?;
         if reset <= now || observed > now || now >= next || now - observed > REFRESH_INTERVAL_MS
-            || rise.ms > 2 * REFRESH_INTERVAL_MS || rise.to < rise.from || self.error.is_some()
+            || rise.ms > 2 * REFRESH_INTERVAL_MS || rise.to <= rise.from || self.error.is_some()
             || self.empty_at.is_some_and(|empty| empty >= observed) {
             return None;
         }
@@ -3257,6 +3257,17 @@ pub(crate) mod tests {
         state.accept(vec![fast(94.)], check + gap);
         assert!(state.reading_with(None, check + gap).leaving(check + gap), "flat while held is still held");
         assert!(!state.reading_with(None, fast_end).leaving(fast_end));
+    }
+
+    #[test]
+    fn flat_weekly_readings_do_not_assume_the_account_will_stay_idle() {
+        let mut state = Snapshot::default();
+        let at = NOW + REFRESH_INTERVAL_MS;
+        state.shared_interval_ms = Some(REFRESH_INTERVAL_MS);
+        state.shared_next_at = Some(at + REFRESH_INTERVAL_MS);
+        state.accept(both_at(20., 99.4), NOW);
+        state.accept(both_at(20., 99.4), at);
+        assert_eq!(state.view(policy(), at).act_at["seven_day"], 99.);
     }
 
     /// **§108: when usage speeds up a lot, the quota is checked every minute instead of 5**

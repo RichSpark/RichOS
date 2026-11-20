@@ -65,19 +65,33 @@ def run_polls(readings,worker_rows,polls,args=None,out_cls=None,reset_answers=No
 class Weekly(unittest.TestCase):
     def test_projection_uses_the_shared_deadline_at_fast_and_slow_paces(self):
         a = watcher.speed_settings(types.SimpleNamespace(threshold=93, poll=300, stale=300))
-        for used, speed, seconds, crosses in [(95.0, 0.001, 300, False), (98.9, 0.003, 300, True),
-                                              (95.0, 0.04, 60, True), (88.0, 0.04, 60, False)]:
+        for used, speed, seconds, five_crosses, week_crosses in [
+            (95.0, 0.001, 300, True, False), (98.9, 0.003, 300, True, True),
+            (95.0, 0.04, 60, True, True), (88.0, 0.04, 60, False, False),
+        ]:
             r = {**reading(used, used), 'source': 'get_usage', 'taken_at': NOW,
                  'provider_next_at': (NOW + seconds) * 1000, 'provider_interval_ms': seconds * 1000,
                  'provider_speeds': {'five_hour': speed, 'seven_day': speed}}
             point = watcher.five_pause_point(a, r, NOW)
             week_point = watcher.provider_pause_point(a, r, r['windows'][0], NOW)
-            self.assertEqual(used >= point, crosses, (used, point))
-            self.assertEqual(used >= week_point, crosses, (used, week_point))
+            self.assertEqual(used >= point, five_crosses, (used, point))
+            self.assertEqual(used >= week_point, week_crosses, (used, week_point))
             self.assertLess(point, 100)
             self.assertLess(week_point, 100)
         r['provider_refused'] = 'stand-in refusal'
         self.assertIsNone(watcher.provider_pause_point(a, r, r['windows'][0], NOW))
+
+    def test_five_hour_pause_leaves_room_for_resumed_or_faster_work(self):
+        for samples in ([90, 92, 94, 96, 96, 96, 100], [90, 92, 94, 96, 100]):
+            readings = []
+            for i, used in enumerate(samples):
+                taken = NOW + i * 300
+                rate = (used - samples[i - 1]) / 300 if i else 0
+                readings.append({**reading(50, used), 'source': 'get_usage', 'taken_at': taken,
+                                 'provider_next_at': (taken + 300) * 1000,
+                                 'provider_speeds': {'five_hour': rate}})
+            out = run_polls(readings, [workers(['first', 'second', 'third'])], len(samples), out_cls=Recorder)
+            self.assertIn(('THRESHOLD', NOW + 600), out.woken)
 
     def test_weekly_hold_waits_for_a_new_cycle_even_after_the_projected_point_recovers(self):
         r = reading(95)

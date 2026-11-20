@@ -1587,11 +1587,12 @@ def provider_pause_point(a, reading, window, now, measured_speed=None):
     return projected_pause_point(max(speed, measured_speed or 0), seconds, resolution)
 
 
-def five_pause_point(a, reading, now, speed=None, expected=False):
+def five_pause_point(a, reading, now, speed=None):
     five = {"id": "five_hour", "used": reading["used"], "resets_at": reading["resets_at"]} if has_five(reading) else None
     point = provider_pause_point(a, reading, five, now, speed)
     if point is not None:
-        return min(a.threshold, point) if expected else point
+        # Five-minute observations cannot bound the next burst when work restarts.
+        return min(a.threshold, point)
     if speed is not None and speed >= fast_speed(a):
         return min(a.threshold, projected_pause_point(speed, a.fast_poll + a.hold, 0))
     return a.threshold
@@ -1600,6 +1601,8 @@ def five_pause_point(a, reading, now, speed=None, expected=False):
 def weekly_pause_point(a, reading, now, expected=False):
     if reading.get("published_weekly_point") is not None:
         return reading["published_weekly_point"]
+    if reading.get("provider_speeds", {}).get("seven_day", 0) <= 0:
+        return quota_weekly.THRESHOLD
     point = provider_pause_point(a, reading, quota_weekly.weekly(reading), now)
     if point is None:
         return quota_weekly.THRESHOLD
@@ -2002,7 +2005,7 @@ def _poll_loop(a, out, alive, health=None):
             # measured in this window, before and apart from any pause message.
             out.wake("FAST", _capture(_emit_fast, a, r, speed, now, w), now)
             fast_alerted = r["resets_at"]
-        point = five_pause_point(a, r, now, speed, expected)
+        point = five_pause_point(a, r, now, speed)
         week_point = weekly_pause_point(a, r, now, expected)
         verdict, why = rule_verdict(r, point, a.stale, now)
         if verdict != "unknown":
@@ -2606,7 +2609,7 @@ def mode_notice(a, now):
         elif verdict == "near-reset":
             now_line += " [AT OR ABOVE THE THRESHOLD, NO PAUSE: %s]" % why
         lines.append("  Now: %s" % now_line)
-        lines.append("  Pause points use the measured pace and next shared check when known. The five-hour line here and 99% weekly apply otherwise.")
+        lines.append("  The five-hour line can move earlier at the measured pace. The weekly pause uses the next shared check when the readings show a rise and 99% otherwise.")
         lines.append("  Weekly: send the standard pause at the current point. An eligible user-approved free reset may be used at 99% overall use.")
         lines.append("  There is no weekly 20-minute exception. Resume only after fresh weekly allowance and the five-hour rule both permit work.")
         lines.append("  Only the user can approve through scripts/quota-reset.sh approve <offer-id>; you may read status or revoke, never approve.")
