@@ -24,18 +24,18 @@ public enum WindowGestureService {
         let item = service
         do {
             switch action {
-            case "register", "register-if-desktop-enabled":
-                if action == "register-if-desktop-enabled",
-                   !WindowGesturePreferences.selection.contains(.desktopDelete) { break }
-                if item.status == .notRegistered || item.status == .notFound { try item.register() }
+            case "register", "register-if-desktop-enabled", "refresh-after-update":
+                let status = item.status
+                let selection = WindowGesturePreferences.selection
+                if action == "refresh-after-update", status == .enabled, !selection.isEmpty {
+                    // Keep the existing approval when the old helper survives an app-bundle swap.
+                    refreshInstalledHelper()
+                } else if status == .notRegistered || status == .notFound,
+                          action == "register" || selection.contains(.desktopDelete) {
+                    try item.register()
+                }
             case "unregister":
                 if item.status == .enabled || item.status == .requiresApproval { try item.unregister() }
-            case "refresh-after-update":
-                // An app-bundle swap leaves the old helper alive. Keep macOS's
-                // approval and ask launchd to start that same job from the new copy.
-                if item.status == .enabled && !WindowGesturePreferences.selection.isEmpty {
-                    refreshInstalledHelper()
-                }
             case "status":
                 break
             default:
