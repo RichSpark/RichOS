@@ -88,6 +88,8 @@ write_config() {
     } >"$ENTITY/orchestration.config"
 }
 write_config 'MODEL_CEILING="opus"'
+export QUOTA_WATCH_STATE_DIR="$SB/quota-watch"
+unset RICHOS_APP_STATE
 
 # payload <subagent> <name> <model-or-empty> <prompt>
 payload() {
@@ -113,6 +115,34 @@ run() {   # <json> -> stdout+stderr, sets RC
 
 ok()  { PASS=$((PASS + 1)); printf '  PASS  %s\n' "$1"; }
 bad() { FAIL=$((FAIL + 1)); printf '  FAIL  %s%s\n' "$1" "${2:+ ($2)}"; }
+
+quota_session="$QUOTA_WATCH_STATE_DIR/mc000000-0000-4000-8000-000000000000"
+mkdir -p "$quota_session"
+quota_until="$(( ($(date +%s) + 300) * 1000 ))"
+quota_line="The Fable week is nearly used up. Take this job's pair from the fallback column in stu.md."
+printf '{"onOpusUntil":%s}\n' "$quota_until" > "$quota_session/fable.json"
+write_config 'MODEL_CEILING="fable"'
+run "$(payload mctop mctop-fable-1 fable 'This task uses the saved handoff.')"
+if [ "$RC" -eq 2 ] && [ "$OUT" = "$quota_line" ]; then
+    ok "the terminal quota switch refuses a Fable spawn with only the fallback instruction"
+else
+    bad "the terminal quota switch refuses a Fable spawn with only the fallback instruction" "rc=$RC: $OUT"
+fi
+run "$(payload mcjudge mcjudge-opus-1 opus 'This task uses the saved handoff.')"
+if [ "$RC" -eq 0 ] && [ -z "$OUT" ]; then
+    ok "the guard allows Opus during the Fable switch"
+else
+    bad "the guard allows Opus during the Fable switch" "rc=$RC: $OUT"
+fi
+printf '{"onOpusUntil":1}\n' > "$quota_session/fable.json"
+run "$(payload mctop mctop-fable-1 fable 'This task uses the saved handoff.')"
+if [ "$RC" -eq 0 ] && [ -z "$OUT" ]; then
+    ok "the guard opens Fable again at the reset"
+else
+    bad "the guard opens Fable again at the reset" "rc=$RC: $OUT"
+fi
+rm "$quota_session/fable.json"
+write_config 'MODEL_CEILING="opus"'
 
 case_rc() {   # <name> <expected-rc> <json>
     run "$3"

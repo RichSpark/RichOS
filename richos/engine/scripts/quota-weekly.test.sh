@@ -593,5 +593,68 @@ class NoFiveHour(unittest.TestCase):
             publish(99)
             self.assertTrue(watcher.gate_admission(state, NOW)['held'])
 
+class TerminalFableWorker(unittest.TestCase):
+    def test_a_refusal_is_read_even_if_the_worker_closed_between_polls(self):
+        import pathlib, tempfile
+        with tempfile.TemporaryDirectory() as folder:
+            path = pathlib.Path(folder) / 'agent.jsonl'
+            rows = [
+                {'type': 'assistant', 'message': {'model': 'claude-fable-5-2'}},
+                {'type': 'rate_limit_event', 'rate_limit_info': {'status': 'rejected',
+                    'rateLimitType': 'seven_day_overage_included', 'resetsAt': NOW + 300}},
+                {'type': 'result', 'is_error': True, 'api_error_status': 429},
+            ]
+            path.write_text(''.join(json.dumps(row) + '\n' for row in rows))
+            rejected = {'key': 'worker-1', 'agent_id': 'a1', 'name': 'northwind-design',
+                        'session_id': 'this-session'}
+            outsider = {**rejected, 'agent_id': 'a2', 'session_id': 'other-session'}
+            def read_workers(include_done=False):
+                self.assertTrue(include_done)
+                return [rejected, outsider]
+            registry = types.SimpleNamespace(all_agents=read_workers, platform_agent_transcript=lambda rec: path)
+            with patch.object(watcher, '_load_registry', return_value=(registry, '')):
+                now = int(watcher.time.time())
+                refused = watcher.terminal_worker_refusals('fixture', 'this-session', set(), now)
+                self.assertEqual([worker['name'] for worker in refused.values()], ['northwind-design'])
+                fact = next(iter(refused.values()))
+                self.assertEqual(fact['frame']['rate_limit_info']['rateLimitType'], 'seven_day_overage_included')
+                self.assertEqual(watcher.terminal_worker_refusals('fixture', 'this-session', set(refused), now), {})
+
+    def test_a_continued_or_landed_job_never_causes_a_new_refusal_wake(self):
+        rows = [{'agent_id': kind, 'session_id': 'fixture', 'disposition': {'kind': kind}}
+                for kind in ('continued', 'landed', 'discarded')]
+        paths = []
+        def transcript(rec):
+            paths.append(rec['agent_id'])
+            return ''
+        registry = types.SimpleNamespace(all_agents=lambda **_: rows, platform_agent_transcript=transcript)
+        with patch.object(watcher, '_load_registry', return_value=(registry, '')):
+            watcher.terminal_worker_refusals('fixture', 'fixture', set(), NOW)
+        self.assertEqual(paths, [])
+
+    def test_the_synthetic_fable_refusal_keeps_its_provider_message(self):
+        import pathlib, tempfile
+        with tempfile.TemporaryDirectory() as folder:
+            path = pathlib.Path(folder) / 'agent.jsonl'
+            statement = "You've hit your Fable limit · resets Nov 27, 10am (Europe/London)."
+            limits = {'status': 'rejected', 'rateLimitType': 'seven_day_overage_included', 'resetsAt': NOW + 300}
+            row = {'type': 'assistant', 'error': 'rate_limit', 'isApiErrorMessage': True,
+                   'apiErrorParams': {'rate_limit_info': limits}, 'quotaLimits': limits,
+                   'message': {'model': '<synthetic>', 'content': [{'type': 'text', 'text': statement}]}}
+            path.write_text(json.dumps(row) + '\n')
+            rec = {'agent_id': 'a1', 'name': 'design', 'session_id': 'fixture'}
+            registry = types.SimpleNamespace(all_agents=lambda **_: [rec], platform_agent_transcript=lambda _: path)
+            now = int(watcher.time.time())
+            with patch.object(watcher, '_load_registry', return_value=(registry, '')):
+                refused = watcher.terminal_worker_refusals('fixture', 'fixture', set(), now)
+                self.assertTrue(refused['a1']['frame']['isApiErrorMessage'])
+                self.assertEqual(refused['a1']['frame']['message']['content'][0]['text'], statement)
+                self.assertEqual(refused['a1']['frame']['apiErrorParams']['rate_limit_info'], limits)
+                self.assertEqual(refused['a1']['frame']['quotaLimits'], limits)
+                # A later write to the file cannot make its old refusal current.
+                row['timestamp'] = now - 2 * watcher.POLL_SECONDS - 1
+                path.write_text(json.dumps(row) + '\n')
+                self.assertEqual(watcher.terminal_worker_refusals('fixture', 'fixture', set(), now), {})
+
 unittest.main()
 PY

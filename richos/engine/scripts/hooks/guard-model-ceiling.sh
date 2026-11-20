@@ -302,6 +302,39 @@ if [ "$STATUS" = "PARSEFAIL" ]; then
     exit 0
 fi
 
+# Resolve before reading the cost ceiling: terminal quota applies even when no ceiling was declared.
+_RM_LIB="$SCRIPT_DIR/../lib/resolve-model.sh"
+RESOLVED=""
+if [ -f "$_RM_LIB" ]; then
+    # shellcheck source=../lib/resolve-model.sh
+    . "$_RM_LIB"
+    RESOLVED="$(resolve_expected_model "$MODEL_OVERRIDE" "$SUBAGENT_TYPE")"
+fi
+
+# The terminal poller has already evaluated the shared core rule. Its deadline also
+# releases this guard when Fable resets between polls.
+if [ "$RESOLVED" = fable ] && [ -z "${RICHOS_APP_STATE:-}" ] &&
+    [[ "$SESSION_ID" =~ ^[a-zA-Z0-9_-]{1,128}$ ]]; then
+    quota_state="${QUOTA_WATCH_STATE_DIR:-$HOME/.claude/state/quota-watch}/$SESSION_ID/fable.json"
+    if [ -r "$quota_state" ] && python3 - "$quota_state" <<'PY_QUOTA'
+import json
+import sys
+import time
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as stream:
+        deadline = json.load(stream).get("onOpusUntil")
+    active = type(deadline) is int and deadline > time.time() * 1000
+except (OSError, ValueError, AttributeError):
+    active = False
+sys.exit(0 if active else 1)
+PY_QUOTA
+    then
+        echo "The Fable week is nearly used up. Take this job's pair from the fallback column in stu.md." >&2
+        exit 2
+    fi
+fi
+
 # --- The ceiling, as data --------------------------------------------------
 CEILING="${MODEL_CEILING:-}"
 if [ -z "$(printf '%s' "$CEILING" | tr -d '[:space:]')" ]; then
@@ -329,16 +362,10 @@ if [ -z "$CEILING_RANK" ]; then
     exit 0
 fi
 
-# --- The model this spawn boots on, from the ONE resolver ------------------
-_RM_LIB="$SCRIPT_DIR/../lib/resolve-model.sh"
 if [ ! -f "$_RM_LIB" ]; then
     announce_off "MODEL COST CEILING IS OFF: scripts/lib/resolve-model.sh is missing at ${_RM_LIB}, so the model this spawn boots on cannot be resolved. Spawns are UNCHECKED. (guard-worktree-isolation.sh refuses outright without the same file — a clean run and an absent gate must never look the same.)"
     exit 0
 fi
-# shellcheck source=../lib/resolve-model.sh
-. "$_RM_LIB"
-
-RESOLVED="$(resolve_expected_model "$MODEL_OVERRIDE" "$SUBAGENT_TYPE")"
 
 if [ "$RESOLVED" = "UNRESOLVABLE" ]; then
     announce_off "MODEL COST CEILING IS OFF for this spawn: subagent_type '${SUBAGENT_TYPE}' is namespaced and no definition for it was found under ${ENTITY_ROOT}/.claude/agents/, the engine's own roster, or AGENT_NAMESPACE_ROOTS — so the model it boots on is unknown and the ceiling could not be applied. Fix: add '<namespace>=<plugin root>' to AGENT_NAMESPACE_ROOTS in orchestration.config."

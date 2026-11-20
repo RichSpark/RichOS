@@ -1850,19 +1850,9 @@ pub fn streamed_windows(frame: &Value) -> Option<Vec<crate::quota::Window>> {
 /// an entry starting `You've hit your`. There is no exit code 4 and no `limit_reached`.
 /// Preserve the named window and the reset time (ms) when the frame gives them.
 pub fn usage_limit_signal(frame: &Value) -> Option<crate::claude_accounts::UsageLimit> {
-    use crate::claude_accounts::{LimitWindow, UsageLimit};
+    use crate::claude_accounts::UsageLimit;
     match frame.get("type").and_then(Value::as_str) {
-        Some("rate_limit_event") => {
-            let info = frame.get("rate_limit_info")?;
-            (info["status"] == "rejected").then(|| UsageLimit {
-                resets_at: info["resetsAt"].as_u64().and_then(|seconds| seconds.checked_mul(1000)),
-                window: match info["rateLimitType"].as_str() {
-                    Some(id) if crate::quota::fable::is_window(id) => LimitWindow::Fable,
-                    Some(_) => LimitWindow::Other,
-                    None => LimitWindow::Unknown,
-                },
-            })
-        }
+        Some("rate_limit_event") => rejected_usage_limit(&frame["rate_limit_info"]),
         Some("result") => {
             let status = frame.get("api_error_status").and_then(Value::as_u64) == Some(429);
             let said = frame.get("errors").and_then(Value::as_array).is_some_and(|errors| errors.iter()
@@ -1873,11 +1863,52 @@ pub fn usage_limit_signal(frame: &Value) -> Option<crate::claude_accounts::Usage
     }
 }
 
+fn rejected_usage_limit(info: &Value) -> Option<crate::claude_accounts::UsageLimit> {
+    use crate::claude_accounts::{LimitWindow, UsageLimit};
+    (info["status"] == "rejected").then(|| UsageLimit {
+        resets_at: info["resetsAt"].as_u64().and_then(|seconds| seconds.checked_mul(1000)),
+        window: match info["rateLimitType"].as_str() {
+            Some(id) if crate::quota::fable::is_window(id) => LimitWindow::Fable,
+            Some(_) => LimitWindow::Other,
+            None => LimitWindow::Unknown,
+        },
+    })
+}
+
 pub(crate) fn worker_usage_limit(frame: &Value) -> Option<crate::claude_accounts::UsageLimit> {
     frame.get("parent_tool_use_id")?.as_str()?;
+    worker_usage_limit_signal(frame)
+}
+
+/// A worker's own transcript does not need the SDK stream's parent tool id.
+pub(crate) fn worker_usage_limit_signal(frame: &Value) -> Option<crate::claude_accounts::UsageLimit> {
+    use crate::claude_accounts::{LimitWindow, UsageLimit};
     usage_limit_signal(frame).or_else(|| {
-        (frame["type"] == "assistant" && frame["error"] == "rate_limit")
-            .then_some(crate::claude_accounts::UsageLimit::default())
+        if frame["type"] != "assistant" || frame["error"] != "rate_limit" {
+            return None;
+        }
+        // On disk Claude Code writes a synthetic assistant error. Prefer the
+        // same window and reset fields the SDK sends when the transcript carries them.
+        if frame["isApiErrorMessage"] != true || frame["message"]["model"] != "<synthetic>" {
+            return Some(UsageLimit::default());
+        }
+        if let Some(limit) = [frame.pointer("/apiErrorParams/rate_limit_info"), frame.get("quotaLimits")]
+            .into_iter().flatten().filter_map(rejected_usage_limit)
+            .find(|limit| limit.window != LimitWindow::Unknown)
+        {
+            return Some(limit);
+        }
+        let names_fable = frame["message"]["content"].as_array().is_some_and(|content| {
+            content.iter().any(|part| part["type"] == "text"
+                && part["text"].as_str().is_some_and(|text| {
+                    let text = text.trim_start();
+                    text.starts_with("You've reached your Fable limit.")
+                        || text.strip_prefix("You've hit your Fable limit").is_some_and(|suffix|
+                            matches!(suffix.chars().next(), None | Some(' ' | '.' | '·')))
+                }))
+        });
+        let window = if names_fable { LimitWindow::Fable } else { LimitWindow::Unknown };
+        Some(UsageLimit { window, resets_at: None })
     })
 }
 

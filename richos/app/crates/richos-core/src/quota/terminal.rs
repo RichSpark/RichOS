@@ -1,11 +1,85 @@
 //! Headless terminal entrypoint. Uses the desktop reset service, including its
 //! record, flock, fresh preflight and durable fence before redemption.
-use super::resets::Service;
+use super::{fable, resets::Service, Reading, Window};
+use serde::Deserialize;
 use serde_json::{json, Value};
-use std::{io::{self, IsTerminal}, path::PathBuf, process::Command};
+use std::{collections::BTreeMap, io::{self, IsTerminal}, path::PathBuf, process::Command};
 
 /// Also emitted in JSON so the installed wrapper can inspect the binary before launch.
 pub const HEADLESS_PROTOCOL: &str = "--richos-quota-v1";
+const FABLE_WATCH_OPERATION: &str = "fable-watch-v1";
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FableTick {
+    now: u64,
+    enabled: bool,
+    #[serde(default)]
+    state: fable::State,
+    reading: Option<FableReading>,
+    #[serde(default)]
+    refusals: Vec<FableWorkerRefusal>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FableReading {
+    windows: Vec<Window>,
+    #[serde(default)]
+    speeds_per_second: BTreeMap<String, f64>,
+    provider_wait_ms: Option<u64>,
+    weekly_pause_point: Option<f64>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FableWorkerRefusal {
+    id: String,
+    frame: Value,
+}
+
+/// Run the app's switch against a terminal's existing reading. The watcher
+/// owns its journal, so evaluating this decision never contacts Claude.
+fn fable_tick(request: Value) -> Result<Value, String> {
+    let FableTick { now, enabled, mut state, reading, refusals } =
+        serde_json::from_value(request).map_err(|error| error.to_string())?;
+    let reading = reading.map(|reading| Reading {
+        provider_wait_ms: reading.windows.iter().filter_map(|window|
+            reading.provider_wait_ms.map(|wait| (window.id.clone(), wait))).collect(),
+        weekly_pause_points: reading.weekly_pause_point
+            .map(|point| ("seven_day".into(), point)).into_iter().collect(),
+        speeds: reading.speeds_per_second.into_iter()
+            .map(|(id, points)| (id, points / 1000.)).collect(),
+        windows: reading.windows,
+        ..Reading::default()
+    });
+    // The terminal monitors one sign-in. The watcher replaces this state if
+    // the shared reader binds to a different account.
+    let account = "terminal";
+    let previous = state.period(account, 0);
+    if state.enabled != enabled {
+        state.set_enabled(enabled, now);
+    }
+    state.observe(account, reading.as_ref(), now);
+    let refused_workers: Vec<_> = refusals.into_iter().filter_map(|worker| {
+        let limit = crate::native::worker_usage_limit_signal(&worker.frame)?;
+        if !enabled || limit.window != crate::claude_accounts::LimitWindow::Fable {
+            return None;
+        }
+        if let Some(reading) = &reading {
+            state.refused(account, reading, limit, now);
+        }
+        Some(worker.id)
+    }).collect();
+    let current = state.period(account, now);
+    let change = match (previous, current) {
+        (None, Some(_)) => Some("opus"),
+        (Some(_), None) if enabled => Some("fable"),
+        _ => None,
+    };
+    Ok(json!({"state": state, "onOpusUntil": current.map(|period| period.resets_at),
+        "change": change, "refusedWorkers": refused_workers}))
+}
 
 /// Reset approval is account-wide, like the macOS keychain. A nightly's HOME
 /// isolates app data but must not create a second approval or redemption ledger.
@@ -64,6 +138,10 @@ exit(allowed ? 0 : 1)
 
 pub fn execute(args: &[String]) -> Result<Value, String> {
     let operation = args.first().map(String::as_str).unwrap_or("status");
+    if operation == FABLE_WATCH_OPERATION && args.len() == 1 {
+        let input = serde_json::from_reader(io::stdin().lock()).map_err(|error| error.to_string())?;
+        return fable_tick(input);
+    }
     if !matches!(operation, "status" | "tick" | "approve" | "revoke")
         || args.len() > if operation == "approve" { 2 } else { 1 } {
         return Err("Usage: quota-reset.sh status | tick | approve <offer-id> | revoke".into());
@@ -126,6 +204,114 @@ pub fn run(args: Vec<String>) -> i32 {
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
     use super::*;
+    #[test]
+    fn a_terminal_watch_switches_at_the_core_point_and_returns_at_reset() {
+        let now = 1_800_000_000_000_u64;
+        let reset = now + 600_000;
+        let mut request = json!({
+            "now": now, "enabled": true, "reading": {
+                "windows": [
+                    {"id": "seven_day", "label": "Weekly", "usedPercent": 41.0,
+                     "resetsAt": now + 900_000, "durationMs": 604_800_000},
+                    {"id": "model:Fable", "label": "Weekly · Fable", "usedPercent": 99.8,
+                     "resetsAt": reset, "durationMs": 604_800_000}
+                ]
+            }
+        });
+        let safe = fable_tick(request.clone()).unwrap();
+        assert_eq!(safe["onOpusUntil"], Value::Null);
+        assert_eq!(safe["change"], Value::Null);
+        request["reading"]["windows"][1]["usedPercent"] = json!(99.9);
+        let switch = fable_tick(request.clone()).unwrap();
+        assert_eq!(switch["onOpusUntil"], reset);
+        assert_eq!(switch["change"], "opus");
+        request["state"] = switch["state"].clone();
+        assert_eq!(fable_tick(request.clone()).unwrap()["change"], Value::Null);
+        request["now"] = json!(reset);
+        request["reading"] = Value::Null;
+        let resumed = fable_tick(request.clone()).unwrap();
+        assert_eq!(resumed["onOpusUntil"], Value::Null);
+        assert_eq!(resumed["change"], "fable");
+        request["state"] = resumed["state"].clone();
+        assert_eq!(fable_tick(request).unwrap()["change"], Value::Null);
+    }
+
+    #[test]
+    fn a_terminal_fable_refusal_is_separate_from_an_ordinary_rate_limit() {
+        let now = 1_800_000_000_000_u64;
+        let reset = now + 600_000;
+        let request = json!({
+            "now": now, "enabled": true, "reading": {
+                "windows": [
+                    {"id": "seven_day", "label": "Weekly", "usedPercent": 41.0,
+                     "resetsAt": now + 900_000, "durationMs": 604_800_000},
+                    {"id": "model:Fable", "label": "Weekly · Fable", "usedPercent": 80.0,
+                     "resetsAt": reset, "durationMs": 604_800_000}
+                ]
+            },
+            "refusals": [
+                {"id": "generic", "frame": {"type": "result", "api_error_status": 429}},
+                {"id": "general", "frame": {"type": "rate_limit_event",
+                    "rate_limit_info": {"status": "rejected", "rateLimitType": "seven_day"}}},
+                {"id": "session", "frame": {"type": "assistant", "error": "rate_limit",
+                    "isApiErrorMessage": true, "message": {"model": "<synthetic>", "content": [
+                        {"type": "text", "text": "You've hit your session limit · resets 10:10am (Europe/London)"}]}}},
+                {"id": "specific", "frame": {"type": "assistant", "error": "rate_limit",
+                    "isApiErrorMessage": true, "message": {"model": "<synthetic>", "content": [
+                        {"type": "text", "text": "You've reached your Fable limit. Run /usage-credits to continue or switch models"}]}}}
+            ]
+        });
+        let changed = fable_tick(request).unwrap();
+        assert_eq!(changed["refusedWorkers"], json!(["specific"]));
+        assert_eq!(changed["onOpusUntil"], reset);
+        assert_eq!(changed["change"], "opus");
+    }
+
+    #[test]
+    fn the_current_provider_worker_record_names_fable_and_its_reset() {
+        let now = 1_800_000_000_000_u64;
+        let window_reset = now + 600_000;
+        let reported_reset = now + 700_000;
+        let mut request = json!({
+            "now": now, "enabled": true, "reading": {
+                "windows": [
+                    {"id": "seven_day", "label": "Weekly", "usedPercent": 41.0,
+                    "resetsAt": now + 900_000, "durationMs": 604_800_000},
+                    {"id": "model:Fable", "label": "Weekly · Fable", "usedPercent": 97.0,
+                    "resetsAt": window_reset, "durationMs": 604_800_000}
+                ]
+            }
+        });
+        let info = json!({"status": "rejected", "rateLimitType": "seven_day_overage_included",
+                          "resetsAt": reported_reset / 1000});
+        let mut frame = json!({"type": "assistant", "error": "rate_limit", "isApiErrorMessage": true,
+            "message": {"model": "<synthetic>", "content": [
+                {"type": "text", "text": "You've hit your Fable limit · resets Nov 27, 10am."}
+            ]}});
+        request["refusals"] = json!([{"id": "worker", "frame": frame}]);
+        let text = fable_tick(request.clone()).unwrap();
+        assert_eq!(text["refusedWorkers"], json!(["worker"]));
+        assert_eq!(text["onOpusUntil"], window_reset);
+
+        // The named provider window gives its actual reset even without the text.
+        frame["message"]["content"] = json!([]);
+        for fields in [json!({"rate_limit_info": info}), info.clone()] {
+            let mut shaped = frame.clone();
+            if fields.get("rate_limit_info").is_some() {
+                shaped["apiErrorParams"] = fields;
+            } else {
+                shaped["quotaLimits"] = fields;
+            }
+            request["refusals"] = json!([{"id": "worker", "frame": shaped}]);
+            let named = fable_tick(request.clone()).unwrap();
+            assert_eq!(named["refusedWorkers"], json!(["worker"]));
+            assert_eq!(named["onOpusUntil"], reported_reset);
+        }
+        frame["quotaLimits"] = json!({"status":"rejected", "rateLimitType":"five_hour"});
+        request["refusals"] = json!([{"id": "worker", "frame": frame}]);
+        assert_eq!(fable_tick(request).unwrap()["refusedWorkers"], json!([]));
+    }
+
     #[test]
     #[ignore = "invoked under the isolated nightly environment by its parent test"]
     fn account_store_peer() { println!("account-reset-store={}", data_dir().unwrap().display()); }

@@ -737,7 +737,7 @@
     },
     "scripts/hooks/guard-model-ceiling.sh": {
       "source": "scripts/hooks/guard-model-ceiling.sh",
-      "sha256": "7a93ee3c3dc8df81d82468bc136e02dce94e4229858b5d57367c3681a6757d22",
+      "sha256": "1ae1f5f74f8bc80502e5333d0d955d4f8978eeb382678fc48d822ccd119830d7",
       "evidence": "Sources the resolved entity config, reads the allowed model set, tier order and ceiling, then resolves a definition and ranks the result. Private entity provenance is supplied by its test callers.",
       "keys": [
         "ALLOWED_MODELS",
@@ -828,7 +828,7 @@
     },
     "scripts/hooks/guard-model-ceiling.test.sh": {
       "source": "scripts/hooks/guard-model-ceiling.test.sh",
-      "sha256": "a64df856756824f33f54185199582604943a4a7b05b11c8b916a75a1399cfed4",
+      "sha256": "5d2ee47aed30cc1dc36aa9f9d0f342bff3a46c2e21a130935df2adab97155337",
       "evidence": "write_config creates constant entity settings and model frontmatter. Every hook and complete/broken mini-engine runs with that entity root; the never-adopted case uses a separate neutral cwd. It never sources the real config. Nested mutation helpers copy the real config only as a transport, then rerun this same private-entity test.",
       "keys": [],
       "edges": [
@@ -1287,7 +1287,7 @@
     },
     "scripts/lib/quota_watch.py#weekly-fixture": {
       "source": "scripts/lib/quota_watch.py",
-      "sha256": "5309f18117da4ee7311818e263acf3271d6c62573505f44d6544174de2bfaee1",
+      "sha256": "9cc9f65c308f5d01ec061a086d490a64042ddc8188a29570fb353f2889711a4a",
       "evidence": "The weekly suite calls _parse_reset, and (renewed 2026-09-28) poll_loop directly with an in-memory Out writer and literal threshold/config arguments; it patches read_source, workers, time.time, weekly.reset_tick and time.sleep, whose first call ends the case. Each reading triggers the weekly event before any sleep or five-hour path. No CLI wrapper, real config, usage API or registry code executes. The added login-alarm subprocess is reachable only through read_source, which none of this declared entry-point closure executes (weekly fixtures replace it). Renewed 2026-10-20 (his team's watchers in the app): the module also imports host_child.py, which reads no configuration at import; only the --monitor --host-json path calls it (the environment RICHOS_WATCH_HOST and RICHOS_WATCH_LEAD and the lead file the latter names). Renewal 2026-10-28 (zero-CPU waits): it also imports quiet_wait.py (standard library kqueue, no input of its own); --watch blocks on polls.log, events.jsonl and the poller's and session's exit, and writes delivered.json only when its offset changes. Renewed 2026-10-28 (echo, follow-ups 7fed0bef): with the environment variable RICHOS_APP_STATE set (the app's leases), read_source and --notice read $RICHOS_APP_STATE/claude-quota.json, the app's own reading of the account in use, a file read with no probe and no status-line fallback; the suites unset RICHOS_APP_STATE unless a case sets it to a private directory. No config key, edge or program added. Renewed 2026-10-29 (echo, rv-20261028T184535Z-d37b1f0d-e0d9, blocking finding): new gate_admission(state, now) reads <state>/claude-quota.json and <state's parent>/claude-quota-policy.json as JSON data (never executed; no subprocess, environment variable or config key); read_app's account naming moved unchanged into app_account. No config key, edge or program added. Renewed 2026-10-29 (echo, rv-20261028T184535Z-d37b1f0d-e0d9, finding 2): the poll loop binds its per-window state to the account the reading names (read_app's account) and clears it on a switch; a hold left on the account switched from is released by _emit_switch_release once the account in use reads below the line. Same reads as before: no config key, edge or program added. Reset retry and recovery cases use the existing controlled clock and transport patches. The app fixture reads the published reset answer from the same private quota snapshot. The shared usage record is JSON under the common quota root or the suite's isolated store. The reader hashes its account identity and checks the same reservation before a provider call.",
       "keys": [],
       "edges": [
@@ -1310,7 +1310,7 @@
     },
     "scripts/quota-weekly.test.sh": {
       "source": "scripts/quota-weekly.test.sh",
-      "sha256": "e5db3994e218b80a5c65019210f321774a95dc452e5b80fad0a60ca70d4eeb66",
+      "sha256": "0bfd688eb08a0892e3e2e268c7953e83a2e00b70ad420198ce8cc15e25280dfa",
       "evidence": "All settings and time originate in the inline Python fixture. Reviewed imports and mocked subprocess/registry boundaries are explicit helper edges. Renewed 2026-10-29 (echo, rv-20261028T184535Z-d37b1f0d-e0d9, blocking finding): GateAdmission writes literal published files and pause settings into a private TemporaryDirectory app folder and calls gate_admission on it at the fixed clock; nothing else is read. Renewed 2026-10-29 (echo, rv-20261028T184535Z-d37b1f0d-e0d9, finding 2): the poll driver moved to a module-level run_polls (same patches: read_source, workers, time.time, time.sleep, reset_tick) returning a Recorder, the real Out keeping each wake's kind and clock; AccountSwitch feeds it literal readings naming Home and Work. Reset retry, recovered notices and the primary account snapshot use a controlled clock, mocked helper or a private snapshot in the same fixture root.",
       "keys": [],
       "edges": [
@@ -1451,7 +1451,7 @@
     },
     "scripts/lib/quota_watch.py#message-fixture": {
       "source": "scripts/lib/quota_watch.py",
-      "sha256": "5309f18117da4ee7311818e263acf3271d6c62573505f44d6544174de2bfaee1",
+      "sha256": "9cc9f65c308f5d01ec061a086d490a64042ddc8188a29570fb353f2889711a4a",
       "evidence": "The fixture calls only pause_message, resume_message and release_message with literal reset timestamps. hhmm uses UTC conversion, pause text uses pause_protocol; no config/source/watch/reset operation runs. The added login-alarm subprocess is reachable only through read_source, which none of this declared entry-point closure executes (weekly fixtures replace it). WAIT branch: resume and release text is pause_protocol.render_resume, also a string render. Renewed 2026-10-20 (his team's watchers in the app): the module also imports host_child.py, which reads no configuration at import; only the --monitor --host-json path calls it (the environment RICHOS_WATCH_HOST and RICHOS_WATCH_LEAD and the lead file the latter names). Renewal 2026-10-28 (zero-CPU waits): it also imports quiet_wait.py (standard library kqueue, no input of its own); --watch blocks on polls.log, events.jsonl and the poller's and session's exit, and writes delivered.json only when its offset changes. Renewed 2026-10-28 (echo, follow-ups 7fed0bef): with the environment variable RICHOS_APP_STATE set (the app's leases), read_source and --notice read $RICHOS_APP_STATE/claude-quota.json, the app's own reading of the account in use, a file read with no probe and no status-line fallback; the suites unset RICHOS_APP_STATE unless a case sets it to a private directory. No config key, edge or program added. Renewed 2026-10-29 (echo, rv-20261028T184535Z-d37b1f0d-e0d9, blocking finding): new gate_admission(state, now) reads <state>/claude-quota.json and <state's parent>/claude-quota-policy.json as JSON data (never executed; no subprocess, environment variable or config key); read_app's account naming moved unchanged into app_account. No config key, edge or program added. Renewed 2026-10-29 (echo, rv-20261028T184535Z-d37b1f0d-e0d9, finding 2): the poll loop clears its per-window state on an account switch; _emit_release's wake lines moved unchanged into _wake_quota_paused, which _emit_switch_release shares. The message functions this fixture calls are unchanged. No config key, edge or program added. The shared usage record is JSON under the common quota root or the suite's isolated store. The reader hashes its account identity and checks the same reservation before a provider call.",
       "keys": [],
       "edges": [
@@ -1867,7 +1867,7 @@
     },
     "scripts/lib/quota_watch.py#notice": {
       "source": "scripts/lib/quota_watch.py",
-      "sha256": "5309f18117da4ee7311818e263acf3271d6c62573505f44d6544174de2bfaee1",
+      "sha256": "9cc9f65c308f5d01ec061a086d490a64042ddc8188a29570fb353f2889711a4a",
       "evidence": "The main --notice path parses arguments and reads the explicitly supplied payload file and timestamp. It never invokes get_usage, reset_tick, workers or the watch loop. Module imports pause_protocol and quota_weekly, neither reading config. The added login-alarm subprocess is reachable only through read_source, which none of this declared entry-point closure executes (weekly fixtures replace it). Renewed 2026-10-20 (his team's watchers in the app): the module also imports host_child.py, which reads no configuration at import; only the --monitor --host-json path calls it (the environment RICHOS_WATCH_HOST and RICHOS_WATCH_LEAD and the lead file the latter names). Renewal 2026-10-28 (zero-CPU waits): it also imports quiet_wait.py (standard library kqueue, no input of its own); --watch blocks on polls.log, events.jsonl and the poller's and session's exit, and writes delivered.json only when its offset changes. Renewed 2026-10-28 (echo, follow-ups 7fed0bef): with the environment variable RICHOS_APP_STATE set (the app's leases), read_source and --notice read $RICHOS_APP_STATE/claude-quota.json, the app's own reading of the account in use, a file read with no probe and no status-line fallback; the suites unset RICHOS_APP_STATE unless a case sets it to a private directory. No config key, edge or program added. Renewed 2026-10-29 (echo, rv-20261028T184535Z-d37b1f0d-e0d9, blocking finding): new gate_admission(state, now) reads <state>/claude-quota.json and <state's parent>/claude-quota-policy.json as JSON data (never executed; no subprocess, environment variable or config key); read_app's account naming moved unchanged into app_account. The --notice path does not reach it. No config key, edge or program added. Renewed 2026-10-29 (echo, rv-20261028T184535Z-d37b1f0d-e0d9, finding 2): poll-loop and release-message changes only; the --notice path does not reach them. No config key, edge or program added. The shared usage record is JSON under the common quota root or the suite's isolated store. The reader hashes its account identity and checks the same reservation before a provider call.",
       "keys": [],
       "edges": [
@@ -8367,7 +8367,7 @@
     },
     "scripts/lib/quota_watch.py#quota-fixture": {
       "source": "scripts/lib/quota_watch.py",
-      "sha256": "5309f18117da4ee7311818e263acf3271d6c62573505f44d6544174de2bfaee1",
+      "sha256": "9cc9f65c308f5d01ec061a086d490a64042ddc8188a29570fb353f2889711a4a",
       "evidence": "Reviewed CLI, all imports, file and subprocess operations, workers and watch loop. The suite supplies a missing or literal fake Claude transport and a false reset helper. It loads only fixed workspace, weekly, pause and login-alarm siblings. Payloads, messages and registry records are data. Real clocks and process identities remain runtime inputs. Renewed 2026-09-28 (ad9da4f8, 5d3621a3): --watch and --monitor now start a detached poller that is this same file (--poll) with its state, lock and event files under QUOTA_WATCH_STATE_DIR (private in the suite), read the session pid's start time with ps and poll until the session ends. The threshold still arrives as --threshold-raw from quota-watch.sh; no new engine program and no orchestration.config read. Renewed 2026-10-20 (his team's watchers in the app): the module also imports host_child.py, which reads no configuration at import; only the --monitor --host-json path calls it (the environment RICHOS_WATCH_HOST and RICHOS_WATCH_LEAD and the lead file the latter names). Renewal 2026-10-28 (zero-CPU waits): it also imports quiet_wait.py (standard library kqueue, no input of its own); --watch blocks on polls.log, events.jsonl and the poller's and session's exit, and writes delivered.json only when its offset changes. Renewed 2026-10-28 (echo, follow-ups 7fed0bef): with the environment variable RICHOS_APP_STATE set (the app's leases), read_source and --notice read $RICHOS_APP_STATE/claude-quota.json, the app's own reading of the account in use, a file read with no probe and no status-line fallback; the suites unset RICHOS_APP_STATE unless a case sets it to a private directory. No config key, edge or program added. Renewed 2026-10-29 (echo, rv-20261028T184535Z-d37b1f0d-e0d9, blocking finding): new gate_admission(state, now) reads <state>/claude-quota.json and <state's parent>/claude-quota-policy.json as JSON data (never executed; no subprocess, environment variable or config key); read_app's account naming moved unchanged into app_account. No config key, edge or program added. Renewed 2026-10-29 (echo, rv-20261028T184535Z-d37b1f0d-e0d9, finding 2): the poll loop binds its per-window state to the account the reading names and clears it on a switch; a hold left on the account switched from is released once the account in use reads below the line. Same reads as before: no config key, edge or program added. The reset retry uses the existing clock, and the app watcher takes the reset answer from its existing snapshot read. The shared usage record is JSON under the common quota root or the suite's isolated store. The reader hashes its account identity and checks the same reservation before a provider call.",
       "keys": [],
       "edges": [
@@ -18207,7 +18207,7 @@
         "scripts/lib/ceo-asks.py": "12901dece778f3fcbafc4049d254176066697f46a3d5930a40a9e700b132a3f3",
         "scripts/hooks/session-start-quota.sh": "67b7b415b1c85b6fd0b33dd832e056133da520b553c6549934c2e23db312d014",
         "scripts/quota-watch.sh": "d9f33508cb706b9bbebd68ab91127f648a0f6322bcd3bfc35dd07d920667a035",
-        "scripts/lib/quota_watch.py": "5309f18117da4ee7311818e263acf3271d6c62573505f44d6544174de2bfaee1",
+        "scripts/lib/quota_watch.py": "9cc9f65c308f5d01ec061a086d490a64042ddc8188a29570fb353f2889711a4a",
         "scripts/lib/pause_protocol.py": "f973108c7744db5e6928657cec1c8e19c7b183bbcb946b97408fbb9ac5a87f1e",
         "scripts/lib/quota_weekly.py": "d1cf0236feab10f422942743453f238a20bc967c7d64d47bb067392d3a0ef724",
         "scripts/hooks/left-off-report.sh": "46adf55634d8479c962443c5995ee99ff2c6a29f18becd6ff09eed96cbb63734",
@@ -18282,7 +18282,7 @@
         "scripts/lib/ceo-asks.py": "12901dece778f3fcbafc4049d254176066697f46a3d5930a40a9e700b132a3f3",
         "scripts/hooks/session-start-quota.sh": "67b7b415b1c85b6fd0b33dd832e056133da520b553c6549934c2e23db312d014",
         "scripts/quota-watch.sh": "d9f33508cb706b9bbebd68ab91127f648a0f6322bcd3bfc35dd07d920667a035",
-        "scripts/lib/quota_watch.py": "5309f18117da4ee7311818e263acf3271d6c62573505f44d6544174de2bfaee1",
+        "scripts/lib/quota_watch.py": "9cc9f65c308f5d01ec061a086d490a64042ddc8188a29570fb353f2889711a4a",
         "scripts/lib/pause_protocol.py": "f973108c7744db5e6928657cec1c8e19c7b183bbcb946b97408fbb9ac5a87f1e",
         "scripts/lib/quota_weekly.py": "d1cf0236feab10f422942743453f238a20bc967c7d64d47bb067392d3a0ef724",
         "scripts/hooks/left-off-report.sh": "46adf55634d8479c962443c5995ee99ff2c6a29f18becd6ff09eed96cbb63734",
@@ -18322,8 +18322,8 @@
         "scripts/hooks/guard-interactive-prompt.test.sh": "47cfd426cfc6d972022d9427aa548d4c859ee28d7d64c0be484fcd59f3d373a0",
         "scripts/hooks/guard-main-checkout-writes.sh": "ed183324a1c39824c4d03e6f66f6fb1dca6349d0d83b3559d74d8dc5a5a6f1ca",
         "scripts/hooks/guard-model-ceiling.mutation.sh": "d818ec3d20dbe6667aed4d67e464061559f8a1efbf47bba5dfbaea9a24c8d3b7",
-        "scripts/hooks/guard-model-ceiling.sh": "7a93ee3c3dc8df81d82468bc136e02dce94e4229858b5d57367c3681a6757d22",
-        "scripts/hooks/guard-model-ceiling.test.sh": "a64df856756824f33f54185199582604943a4a7b05b11c8b916a75a1399cfed4",
+        "scripts/hooks/guard-model-ceiling.sh": "1ae1f5f74f8bc80502e5333d0d955d4f8978eeb382678fc48d822ccd119830d7",
+        "scripts/hooks/guard-model-ceiling.test.sh": "5d2ee47aed30cc1dc36aa9f9d0f342bff3a46c2e21a130935df2adab97155337",
         "scripts/hooks/guard-resume-isolation.mutation.sh": "8b05a2eaf1d192658825845e81c1770a4b5af2cc34addc53980d1181650072d0",
         "scripts/hooks/guard-resume-isolation.sh": "5a86dfd9b446b0444703b787133d1b6914fd4e2c86ededb65067ffc38c3e4250",
         "scripts/hooks/guard-resume-isolation.test.sh": "2fc190fc539a183b423ac8ba7a22a23c56d6f8cd289aa341a67a7d6fd8f39a1d",
@@ -18512,7 +18512,7 @@
         "scripts/hooks/session-start-escalations.sh": "ab5ded2d505e2b61f489b69bcfae85e017c005bfaa06c65e1bc4c4d9d6cea9ea",
         "scripts/hooks/session-start-quota.sh": "67b7b415b1c85b6fd0b33dd832e056133da520b553c6549934c2e23db312d014",
         "scripts/quota-watch.sh": "d9f33508cb706b9bbebd68ab91127f648a0f6322bcd3bfc35dd07d920667a035",
-        "scripts/lib/quota_watch.py": "5309f18117da4ee7311818e263acf3271d6c62573505f44d6544174de2bfaee1",
+        "scripts/lib/quota_watch.py": "9cc9f65c308f5d01ec061a086d490a64042ddc8188a29570fb353f2889711a4a",
         "scripts/lib/quota_weekly.py": "d1cf0236feab10f422942743453f238a20bc967c7d64d47bb067392d3a0ef724",
         "scripts/hooks/session-start-scratch.sh": "ec65aa22fcd926498c154a8a20f7477d4678c4c6aaf586eae341b576d6858598",
         "scripts/hooks/shell-evidence.sh": "3df2704fd0ba1f8788fee3d61a8196e1d3a4aeedff7f92bb3c76fbc91eb2dfd5",
@@ -19130,7 +19130,7 @@
         "scripts/hooks/guard-live-names.sh": "cd65a13a260af7252099d64c55d4f60f4bf81eac2341cb8fd63f2e3cdadb8ca6",
         "scripts/lib/operator-mode.sh": "c9b25dd5eaef11ac02dc34ac11a6997404966ddb0dcd14cf019d83065b71ba6e",
         "scripts/lib/operator_leads.py": "773c451378ac985c2291bfeed7e17cef2ee8f31301de7706d43fc860b2938b10",
-        "scripts/hooks/guard-model-ceiling.sh": "7a93ee3c3dc8df81d82468bc136e02dce94e4229858b5d57367c3681a6757d22",
+        "scripts/hooks/guard-model-ceiling.sh": "1ae1f5f74f8bc80502e5333d0d955d4f8978eeb382678fc48d822ccd119830d7",
         "scripts/lib/resolve-model.sh": "99641cc02487da81c7fb6ecd216b10ddcaff5254c1c734b714aef8de8f81db03",
         "scripts/lib/model-tiers.sh": "4f5e6c367433a717393b6ef2270a9b02b279a6b8122f439bc132350170d8c317",
         "scripts/hooks/guard-no-home-network-phone.sh": "4c0d7394f9e211ed6732c423491a0040614076fb97b339c96d3a2f96b94daae6",
@@ -19263,7 +19263,7 @@
         "scripts/lib/model-tiers.sh": "4f5e6c367433a717393b6ef2270a9b02b279a6b8122f439bc132350170d8c317",
         "scripts/lib/agent-liveness.py": "894648ebca52cedfde34a0161c8c422c1350f79420f7ca12544c4beea80ca8e4",
         "mega-lander/workspaces.py": "46f5c0d31139df4b27d2d66411a5f01a5030305e144a6bde878e6a140e4038bb",
-        "scripts/hooks/guard-model-ceiling.sh": "7a93ee3c3dc8df81d82468bc136e02dce94e4229858b5d57367c3681a6757d22",
+        "scripts/hooks/guard-model-ceiling.sh": "1ae1f5f74f8bc80502e5333d0d955d4f8978eeb382678fc48d822ccd119830d7",
         "scripts/lib/resolve-model.sh": "99641cc02487da81c7fb6ecd216b10ddcaff5254c1c734b714aef8de8f81db03",
         "scripts/lib/unevaluated-notice.sh": "321ce01b7cbb7efc2a96ef3a2355c6c1ede33bbe16678a5a02276cee9eeb5833",
         "scripts/hooks/guard-worktree-isolation.sh": "ef69b1a460d26a38765ac8ec22e12eef2f1e3d3177d16e8cd728c9fcf3710fab",
@@ -19546,7 +19546,7 @@
         "scripts/lib/model-tiers.sh": "4f5e6c367433a717393b6ef2270a9b02b279a6b8122f439bc132350170d8c317",
         "scripts/lib/agent-liveness.py": "894648ebca52cedfde34a0161c8c422c1350f79420f7ca12544c4beea80ca8e4",
         "mega-lander/workspaces.py": "46f5c0d31139df4b27d2d66411a5f01a5030305e144a6bde878e6a140e4038bb",
-        "scripts/hooks/guard-model-ceiling.sh": "7a93ee3c3dc8df81d82468bc136e02dce94e4229858b5d57367c3681a6757d22",
+        "scripts/hooks/guard-model-ceiling.sh": "1ae1f5f74f8bc80502e5333d0d955d4f8978eeb382678fc48d822ccd119830d7",
         "scripts/lib/resolve-model.sh": "99641cc02487da81c7fb6ecd216b10ddcaff5254c1c734b714aef8de8f81db03",
         "scripts/lib/unevaluated-notice.sh": "321ce01b7cbb7efc2a96ef3a2355c6c1ede33bbe16678a5a02276cee9eeb5833",
         "scripts/hooks/guard-worktree-isolation.sh": "ef69b1a460d26a38765ac8ec22e12eef2f1e3d3177d16e8cd728c9fcf3710fab",
@@ -19604,7 +19604,7 @@
         "scripts/lib/model-tiers.sh": "4f5e6c367433a717393b6ef2270a9b02b279a6b8122f439bc132350170d8c317",
         "scripts/lib/agent-liveness.py": "894648ebca52cedfde34a0161c8c422c1350f79420f7ca12544c4beea80ca8e4",
         "mega-lander/workspaces.py": "46f5c0d31139df4b27d2d66411a5f01a5030305e144a6bde878e6a140e4038bb",
-        "scripts/hooks/guard-model-ceiling.sh": "7a93ee3c3dc8df81d82468bc136e02dce94e4229858b5d57367c3681a6757d22",
+        "scripts/hooks/guard-model-ceiling.sh": "1ae1f5f74f8bc80502e5333d0d955d4f8978eeb382678fc48d822ccd119830d7",
         "scripts/lib/resolve-model.sh": "99641cc02487da81c7fb6ecd216b10ddcaff5254c1c734b714aef8de8f81db03",
         "scripts/lib/unevaluated-notice.sh": "321ce01b7cbb7efc2a96ef3a2355c6c1ede33bbe16678a5a02276cee9eeb5833",
         "scripts/hooks/guard-worktree-isolation.sh": "ef69b1a460d26a38765ac8ec22e12eef2f1e3d3177d16e8cd728c9fcf3710fab",
@@ -19662,7 +19662,7 @@
         "scripts/lib/model-tiers.sh": "4f5e6c367433a717393b6ef2270a9b02b279a6b8122f439bc132350170d8c317",
         "scripts/lib/agent-liveness.py": "894648ebca52cedfde34a0161c8c422c1350f79420f7ca12544c4beea80ca8e4",
         "mega-lander/workspaces.py": "46f5c0d31139df4b27d2d66411a5f01a5030305e144a6bde878e6a140e4038bb",
-        "scripts/hooks/guard-model-ceiling.sh": "7a93ee3c3dc8df81d82468bc136e02dce94e4229858b5d57367c3681a6757d22",
+        "scripts/hooks/guard-model-ceiling.sh": "1ae1f5f74f8bc80502e5333d0d955d4f8978eeb382678fc48d822ccd119830d7",
         "scripts/lib/resolve-model.sh": "99641cc02487da81c7fb6ecd216b10ddcaff5254c1c734b714aef8de8f81db03",
         "scripts/lib/unevaluated-notice.sh": "321ce01b7cbb7efc2a96ef3a2355c6c1ede33bbe16678a5a02276cee9eeb5833",
         "scripts/hooks/guard-worktree-isolation.sh": "ef69b1a460d26a38765ac8ec22e12eef2f1e3d3177d16e8cd728c9fcf3710fab",
