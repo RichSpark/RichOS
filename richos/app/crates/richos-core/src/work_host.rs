@@ -692,6 +692,13 @@ impl WorkHost {
             let input_id=input.input_id();
             let scope = host.message_scope(&binding);
             let succeeded=outcome.result.as_ref().is_ok_and(|reason| reason=="end_turn");
+            // A result taken by live input does not reach the between-turn sink. Close
+            // the automatic turn once, after the input actually ran, so a safe move can start.
+            if let Some(session) = session.as_deref()
+                .filter(|_| outcome.report_failure && Self::live_turn_ran(&outcome.result))
+            {
+                host.note_automatic_turn(&backend, session, false);
+            }
             let receipt = match &input {
                 InputReceipt::Peer(through) if succeeded=>crate::session_tools::acknowledge(&scope,"stu",*through),
                 InputReceipt::Peer(through)=>crate::session_tools::accept_live_handoff(&scope,"stu",*through),
@@ -4512,6 +4519,33 @@ mod tests {
             std::fs::remove_dir_all(&self.h.root).unwrap();
         }
     }
+    #[test]
+    fn a_live_input_result_releases_the_account_move_after_an_automatic_turn() {
+        let h = harness(0);
+        let (quota, home) = account_one_and_home_with_room(&h);
+        let stu = native_stu(h, quota);
+        let backend = stu.backend();
+        let sink = stu.sink.lock().unwrap().clone().unwrap();
+        sink(vec![serde_json::json!({"type":"assistant","message":{"content":[
+            {"type":"text","text":"An automatic turn is carrying on."}]}})]);
+        assert!(backend.inner.lock().unwrap().automatic_turn);
+        stu.quota.accounts.use_first(&home.id).unwrap();
+
+        stu.live("An input Claude never ran")(crate::steering::InputOutcome {
+            result: Ok(crate::native::STOP_REASON_DISCARDED.into()), report_failure: true,
+        });
+        assert!(backend.inner.lock().unwrap().automatic_turn, "discarding a queued input ended a running turn");
+        assert_eq!(stu.quota.accounts.running_on().id, "1");
+
+        // A result consumed by live input goes only to its completion, not to the frame sink.
+        stu.live("A live input that ended the turn")(crate::steering::InputOutcome {
+            result: Ok("end_turn".into()), report_failure: true,
+        });
+        assert!(!backend.inner.lock().unwrap().automatic_turn, "the native result left the old lease busy");
+        until("Stu continued on the new account", || stu.accounts("account_moved") == [home.id.clone()]);
+        stu.end();
+    }
+
     fn session_limit(resets_at: u64) -> Result<String, String> {
         Err(crate::claude_accounts::usage_limit_error(Some(resets_at),"[\"You've hit your session limit\"]"))
     }
