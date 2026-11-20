@@ -831,6 +831,10 @@ def _gate_recompute(data, src, percent, now_ms):
     permit, so it waits for the reset, as the gate's admission says."""
     if not all(k in data for k in ("state", "windows", "refreshIntervalMs", "admission")):
         return None
+    def is_fable(i):
+        return i.lower() in ("model:fable", "seven_day_fable", "seven_day_overage_included")
+
+    estimate = src.get("fableEstimatedUsed")
     windows = []
     for w in src.get("windows") if isinstance(src.get("windows"), list) else [None]:
         if not isinstance(w, dict) or not isinstance(w.get("id"), str) or not isinstance(w.get("label"), str):
@@ -842,6 +846,8 @@ def _gate_recompute(data, src, percent, now_ms):
             return None
         if isinstance(duration, bool) or not isinstance(duration, int) or duration < 0:
             return None
+        if is_fable(w["id"]) and not isinstance(estimate, bool) and isinstance(estimate, (int, float)) and 0 <= estimate <= 100:
+            used = max(estimate, used)
         windows.append({"id": w["id"], "used": float(used), "resets": reset})
     number = lambda v: not isinstance(v, bool) and isinstance(v, (int, float))
     speeds, pre_hold = src.get("speeds") or {}, src.get("preHold") or {}
@@ -884,7 +890,7 @@ def _gate_recompute(data, src, percent, now_ms):
         w["id"] == "seven_day" for w in live)
     is_weekly = lambda i: i.startswith("seven_day") or i.startswith("model:")
     weekly = [w for w in live if is_weekly(w["id"]) and w["used"] >= weekly_point(w)
-              and not (separate_fable and w["id"].lower() in ("model:fable", "seven_day_fable", "seven_day_overage_included"))
+              and not (separate_fable and is_fable(w["id"]))
               and w["resets"] is not None and w["resets"] > now_ms]
     if weekly:
         w = max(weekly, key=lambda x: x["resets"])
