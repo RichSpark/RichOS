@@ -378,6 +378,20 @@
               </div>
             </div>
             <p class="md-note" id="md-note" aria-live="polite"></p>
+            <p class="md-note" id="fable-model-state" hidden></p>
+            <section id="fable-setting" class="fable-setting" aria-labelledby="fable-title" hidden>
+              <p class="popover-title" id="fable-title">When Fable is almost used up</p>
+              <div class="fable-toggle-row">
+                <button id="fable-switch" class="quota-switch" type="button" role="switch"
+                        aria-checked="true" aria-labelledby="fable-switch-label"></button>
+                <span id="fable-switch-label">Switch automatically</span>
+              </div>
+              <div id="fable-option" class="fable-option">
+                <b>Switch everyone to Opus</b>
+                <span>Use Opus while there’s room in your weekly quota. Everyone goes back to Fable when it resets.</span>
+              </div>
+              <p id="fable-feedback" class="md-note" role="status" hidden></p>
+            </section>
           </section>
 
           <div data-settings-part="interrupt">
@@ -990,6 +1004,7 @@
                     <div class="composer-status">
                       <div id="drill-chip-zone" hidden></div>
                       <div id="quota-work-status" role="status" hidden></div>
+                      <div id="fable-composer-status" class="fable-composer-status" role="status" hidden></div>
                     </div>
                   </div>
                   <div class="composer-bar-mid">

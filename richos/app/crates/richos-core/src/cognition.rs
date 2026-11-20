@@ -78,6 +78,12 @@ pub trait LeaseFactory: Send + Sync {
         None
     }
 
+    /// Effective model and effort for the next turn on this account.
+    fn model_for_turn(&self, _account: &str, _work: bool)
+        -> Option<(crate::config::ModelChoice, crate::config::EffortLevel)> {
+        None
+    }
+
     /// **The digest of the user's own settings files the next lease would read**
     /// (`user_settings::digest`; build plan 2026-10-21 item 0). A lease that read other
     /// settings is renewed at its next boundary, never mid-turn. `None` — the default — means
@@ -261,6 +267,16 @@ pub struct WorkTurnInput<'a> {
     pub live_meeting_at: Option<u64>,
 }
 
+pub fn apply_model_for_turn(
+    factory: Option<&dyn LeaseFactory>, lease: &mut dyn Cognition, work: bool,
+) -> Result<(), CognitionError> {
+    if let Some((model, effort)) = factory.zip(lease.account())
+        .and_then(|(factory, account)| factory.model_for_turn(account, work)) {
+        lease.apply_model(model, effort)?;
+    }
+    Ok(())
+}
+
 /// `Send` so the durable `Spine` can be held behind a `Mutex` as Tauri managed state.
 pub trait Cognition: Send {
     /// Positive provider EOF, never inferred from silence or an API error.
@@ -274,6 +290,11 @@ pub trait Cognition: Send {
     /// **The model this lease was started on** (§119: `--model` in its argument vector).
     /// `None` for a lease that cannot say, which is never renewed for a model change.
     fn lease_model(&self) -> Option<crate::config::ModelChoice> { None }
+    /// Apply the next turn's effective settings on the same provider session.
+    fn apply_model(&mut self, _model: crate::config::ModelChoice, _effort: crate::config::EffortLevel)
+        -> Result<(), CognitionError> {
+        Ok(())
+    }
     /// **The digest of the user's own settings files as this lease read them**
     /// (`user_settings::digest`). `None` for a lease that cannot say, which is never renewed
     /// for a settings change.

@@ -291,6 +291,13 @@ pub(crate) fn observe_account_switch(scope:&StatusToolScope,facts:&Value)->Resul
     append(scope,"stu",&Message {bridge:None,handoff:false,from:"account-switch".into(),text:facts.to_string(),instruction:None,work:None})
 }
 
+pub(crate) fn observe_fable_switch(scope: &StatusToolScope, facts: &Value) -> Result<(), String> {
+    append(scope, "stu", &Message {
+        bridge: None, handoff: false, from: "fable-quota".into(),
+        text: facts.to_string(), instruction: None, work: None,
+    })
+}
+
 /// The reload after Stu's turn registered a changed team (`work_host.rs` run_message): one
 /// more turn for him, so the work he left for it goes on. A host observation, like the others.
 pub(crate) fn observe_team_reloaded(scope:&StatusToolScope)->Result<(),String> {

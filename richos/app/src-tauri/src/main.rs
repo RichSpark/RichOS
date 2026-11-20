@@ -919,6 +919,12 @@ impl LeaseFactory for EngineLeaseFactory {
         Some(richos_core::config::lease_models_from_config(&self.data_dir))
     }
 
+    fn model_for_turn(&self, account: &str, work: bool)
+        -> Option<(richos_core::config::ModelChoice, richos_core::config::EffortLevel)> {
+        let (models, efforts) = self.effective_model_choices(account);
+        Some(if work { (models.stu, efforts.stu) } else { (models.rich, efforts.rich) })
+    }
+
     /// **The user's own settings files as the next lease would read them** (build plan item 0):
     /// the central folder `EngineProfile::prepare` reads, digested the same way. The spine and
     /// the work host compare it with the lease in the chair at each boundary.
@@ -984,7 +990,9 @@ impl LeaseFactory for EngineLeaseFactory {
         profile.install_git_name_wait(&executable).map_err(|e| CognitionError::Io(e.to_string()))?;
 
         // Fill-first: the work lease runs under the Claude account in use now.
-        profile.claude_account = Some(self.quota.lease_account());
+        let account = self.quota.lease_account();
+        (profile.lease_models, profile.lease_efforts) = self.effective_model_choices(&account.id);
+        profile.claude_account = Some(account);
         profile.token_sink = Some(self.quota.token_sink()); // what the lease spends, counted on that account
         profile.chat_readings = Some(Arc::clone(&self.chat_readings)); // its chat's context size and cache clock
         profile.speech_model = speech_model_for_rich();
@@ -1001,6 +1009,14 @@ impl LeaseFactory for EngineLeaseFactory {
 }
 
 impl EngineLeaseFactory {
+    fn effective_model_choices(&self, account: &str)
+        -> (richos_core::config::LeaseModels, richos_core::config::LeaseEfforts) {
+        let settings = ConfigStore::open(self.data_dir.join("config.json")).ok();
+        let models = settings.as_ref().map(ConfigStore::lease_models).unwrap_or_default();
+        let efforts = settings.as_ref().map(ConfigStore::effort_choices).unwrap_or_default();
+        richos_core::quota::fable::lease_choices(self.quota.using_opus_for_fable(account), models, efforts)
+    }
+
     fn spawn_chat(&self, control: Option<&ConversationControl>, binding: Option<&richos_core::entity::ThreadBinding>) -> Result<Box<dyn Cognition>, CognitionError> {
         let dir = self
             .engine_dir
@@ -1073,7 +1089,9 @@ impl EngineLeaseFactory {
             profile.set_live_meeting_reader(move |binding, at| meetings::live_context(&app, binding, at));
         }
         // Fill-first: the conversation lease runs under the Claude account in use now.
-        profile.claude_account = Some(self.quota.lease_account());
+        let account = self.quota.lease_account();
+        (profile.lease_models, profile.lease_efforts) = self.effective_model_choices(&account.id);
+        profile.claude_account = Some(account);
         profile.token_sink = Some(self.quota.token_sink()); // what the lease spends, counted on that account
         profile.chat_readings = Some(Arc::clone(&self.chat_readings)); // its chat's context size and cache clock
         profile.speech_model = speech_model_for_rich();
@@ -3724,6 +3742,7 @@ fn main() {
             std::thread::spawn(move || {
                 let mut wait = std::time::Duration::ZERO;
                 let mut counted: Option<std::time::Instant> = None;
+                let mut last_fable = None;
                 loop {
                     let Some(quota) = quota_weak.upgrade() else { break };
                     quota.wait_for_refresh(wait);
@@ -3753,6 +3772,11 @@ fn main() {
                         if let Ok(mut spine) = state.spine.try_lock() {
                             spine.raise_quota_notices(None);
                         }
+                    }
+                    let current_fable = quota.fable_view();
+                    if last_fable.as_ref() != Some(&current_fable) {
+                        let _sent = quota_app.emit("rich://fable-quota-switch", &current_fable);
+                        last_fable = Some(current_fable);
                     }
                     wait = std::time::Duration::from_secs(1);
                 }
@@ -4359,6 +4383,7 @@ fn main() {
             richfiles_pane::output_git_open, richfiles_pane::output_git_place, richfiles_pane::richfiles_git_chat,
             question_host::answer_question, question_host::question_shown, question_host::open_question_counts,
             claude_quota,
+            set_fable_quota_switch,
             claude_quota_activity,
             spend_view,
             spend_live,
@@ -5011,7 +5036,7 @@ fn get_lease_models(state: State<AppState>) -> serde_json::Value {
     serde_json::json!({ "rich": models.rich.as_str(), "stu": models.stu.as_str(), "effort": {
         "rich": { "opus": efforts.rich_opus.as_str(), "fable": efforts.rich_fable.as_str() },
         "stu": { "opus": efforts.stu_opus.as_str(), "fable": efforts.stu_fable.as_str() },
-    } })
+    }, "fableSwitch": state.quota.fable_view() })
 }
 
 /// **Both rows at once, as Preferences closes** (the CEO's addendum to §119: *"Closing the
@@ -5024,7 +5049,7 @@ fn get_lease_models(state: State<AppState>) -> serde_json::Value {
 /// An unknown name refuses every choice before any is written.
 #[richos_command::command]
 fn set_lease_models(state: State<AppState>, rich: String, stu: String, effort: Option<serde_json::Value>, chosen: Option<Vec<String>>) -> Result<(), String> {
-    use richos_core::config::{EffortChoices, EffortLevel, LeaseModels, ModelChoice};
+    use richos_core::config::{EffortLevel, LeaseModels, ModelChoice};
     let rich = ModelChoice::parse(&rich).ok_or_else(|| format!("unknown model: {rich}"))?;
     let stu = ModelChoice::parse(&stu).ok_or_else(|| format!("unknown model: {stu}"))?;
     let models = LeaseModels { rich, stu };
@@ -5042,11 +5067,15 @@ fn set_lease_models(state: State<AppState>, rich: String, stu: String, effort: O
         }
         let pressed: Vec<&str> = chosen.iter().flatten().map(String::as_str).collect();
         config.set_lease_choices(models, efforts, &pressed).map_err(|e| e.to_string())?;
-        EffortChoices::on(&efforts, models)
+        efforts
     };
+    let account = state.quota.lease_account();
+    let (effective, efforts) = richos_core::quota::fable::lease_choices(
+        state.quota.using_opus_for_fable(&account.id), models, efforts,
+    );
     let results = [
-        state.control.set_model(rich), state.control.set_effort(efforts.rich),
-        state.work.set_model(stu), state.work.set_effort(efforts.stu),
+        state.control.set_model(effective.rich), state.control.set_effort(efforts.rich),
+        state.work.set_model(effective.stu), state.work.set_effort(efforts.stu),
     ];
     results.into_iter().collect()
 }
@@ -6667,6 +6696,12 @@ fn claude_quota(state: State<AppState>, refresh: bool) -> richos_core::quota::Vi
     let bin = state.claude_bin.lock().unwrap().clone();
     state.quota.refresh(&bin, refresh)
 }
+
+#[richos_command::command]
+fn set_fable_quota_switch(state: State<AppState>, enabled: bool) -> Result<richos_core::quota::View, String> {
+    state.quota.set_fable_switch(enabled).map_err(|error| error.to_string())
+}
+
 
 /// **API-equivalent token spend** (§118, round 22.1): the Token spend screen's snapshot of every
 /// request at or after `from` (Unix ms: the webview's local midnight, Monday or first of the

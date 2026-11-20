@@ -2161,7 +2161,10 @@ function flushRender() {
     }
   }
   // Round 70's note on the five tools, a local note after the turn it followed.
-  if (mainView === "conversation") renderToolsNote();
+  if (mainView === "conversation") {
+    renderToolsNote();
+    renderFableMarkers(turns);
+  }
 
   if (focusId) {
     const again = messagesEl.querySelector('[id="' + focusId.replace(/(["\\])/g, "\\$1") + '"]');
@@ -6168,12 +6171,72 @@ let modelSaving = Promise.resolve();
 function sameChoice(a, b) {
   return JSON.stringify(a) === JSON.stringify(b);
 }
+let fableQuota = null;
+let savingFable = false;
+
+function formatFableReset(at) {
+  return new Intl.DateTimeFormat("en-US", { weekday: "short", hour: "numeric", minute: "2-digit" })
+    .format(new Date(at));
+}
+
+function updateFableQuota(next) {
+  if (!next) return;
+  const changed = JSON.stringify(fableQuota?.changes) !== JSON.stringify(next.changes);
+  fableQuota = next;
+  const period = next.active?.[next.account];
+  const note = el("fable-composer-status");
+  note.hidden = !period;
+  note.textContent = period ? "On Opus until " + formatFableReset(period.resetsAt) : "";
+  el("fable-setting").hidden = false;
+  el("fable-switch").setAttribute("aria-checked", String(next.enabled));
+  el("fable-option").classList.toggle("is-off", !next.enabled);
+  const modelLine = el("fable-model-state");
+  modelLine.hidden = !period;
+  modelLine.textContent = period ? "Rich is on Opus until " + formatFableReset(period.resetsAt) + ". Your model choice stays saved." : "";
+  if (changed) scheduleRender();
+}
+
+function renderFableMarkers(turns) {
+  for (const change of fableQuota?.changes || []) {
+    if (change.threadId !== activeThreadId) continue;
+    const marker = document.createElement("p");
+    marker.className = "fable-conversation-marker";
+    marker.textContent = change.onOpus
+      ? "Now on Opus. Fable is almost used up. Back on Fable " + formatFableReset(change.resetsAt) + "."
+      : change.at >= change.resetsAt ? "Back on Fable. Your Fable quota has reset." : "Automatic model switching is off.";
+    const after = turns.find(turn => (turn.record?.startedAt ?? turn.user?.createdAt ?? turn.stream[0]?.createdAt ?? 0) >= change.at);
+    const anchor = after && messagesEl.querySelector(".tl-turn[data-turn-id=" + CSS.escape(after.turnId) + "]");
+    messagesEl.insertBefore(marker, anchor || null);
+  }
+}
+
+Bridge.listen("rich://fable-quota-switch", ({ payload }) => updateFableQuota(payload));
+el("fable-switch").addEventListener("click", async () => {
+  if (savingFable || !fableQuota) return;
+  savingFable = true;
+  const button = el("fable-switch");
+  const feedback = el("fable-feedback");
+  button.setAttribute("aria-busy", "true");
+  feedback.hidden = true;
+  try {
+    const next = await Bridge.invoke("set_fable_quota_switch", { enabled: !fableQuota.enabled });
+    updateFableQuota(next?.fableSwitch);
+  } catch (_) {
+    feedback.textContent = "Could not save the Fable switch.";
+    feedback.hidden = false;
+  } finally {
+    button.removeAttribute("aria-busy");
+    savingFable = false;
+  }
+});
+
 /// Read the stored choice. Paints it only while nothing has been picked since Preferences
 /// opened, so a slow answer never overwrites a click.
 async function syncModelsFromBackend() {
   try {
     await modelSaving;
     const stored = await Bridge.invoke("get_lease_models");
+    updateFableQuota(stored?.fableSwitch);
     const untouched = sameChoice(modelDraft, modelSaved);
     modelSaved = {
       rich: modelValue(stored && stored.rich, "rich"),

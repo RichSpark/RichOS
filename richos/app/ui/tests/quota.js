@@ -1,7 +1,7 @@
 "use strict";
 const path = require("path");
 const contrast = require("./lib/contrast");
-const { loadPlaywright, createRun, assert, assertEqual, UI_DIR, shot } = require("./lib/harness");
+const { loadPlaywright, createRun, assert, assertEqual, UI_DIR, shot, leaveHome } = require("./lib/harness");
 
 async function main() {
   const run = createRun("Desktop Claude Code quota settings");
@@ -559,6 +559,64 @@ async function main() {
     }
   });
 
+  for (const theme of ["dark", "light"]) await run.check(theme + " Fable fallback, its settings and both conversation markers", async () => {
+    const account = "1";
+    const since = now - 30000;
+    const resetsAt = now + 3600000;
+    const fableSwitch = { enabled: true, account, point: 99.9, active: {}, changes: [] };
+    const windows = quota.windows.map(w => w.id === "model:Fable"
+      ? { ...w, usedPercent: 100, resetsAt } : { ...w, usedPercent: w.id === "five_hour" ? 20 : 35 });
+    const page = await open(theme, { ...quota, windows, fableSwitch, inUse: { id: account, label: "Home" } }, 100, null, false,
+      { viewport: { width: 1440, height: 1000 } });
+    try {
+      await leaveHome(page);
+      if (await page.locator("#set-menu").isHidden()) await page.click("#set-btn");
+      await page.waitForSelector("#fable-switch");
+      await page.locator("#fable-setting").evaluate(panel => panel.scrollIntoView({ block: "center" }));
+      assertEqual(await page.locator("html").getAttribute("data-theme"), theme);
+      assertEqual(await page.locator("#fable-switch").getAttribute("aria-checked"), "true");
+      assert(await page.getByText("Switch everyone to Opus", { exact: true }).isVisible());
+      assertEqual(await page.getByText("Use another Claude account first", { exact: true }).count(), 0);
+      await shot(page, "fable-quota-settings-" + theme);
+      await page.click("#fable-switch");
+      await page.waitForFunction(() => document.getElementById("fable-switch").getAttribute("aria-checked") === "false");
+      await page.click("#fable-switch");
+      await page.waitForFunction(() => document.getElementById("fable-switch").getAttribute("aria-checked") === "true");
+      await page.click("#set-btn");
+      const threadId = await page.evaluate(() => activeThreadId);
+      assert(threadId, "the default conversation has a thread");
+      const active = { ...fableSwitch, active: { [account]: { since, resetsAt } },
+        changes: [{ account, at: since, resetsAt, threadId, onOpus: true }] };
+      await page.evaluate(view => window.RichMockFableQuota(view), active);
+      await page.waitForSelector("#fable-composer-status:not([hidden])");
+      await page.waitForSelector(".fable-conversation-marker");
+      assert((await page.locator(".fable-conversation-marker").innerText()).startsWith("Now on Opus."));
+      await page.locator(".fable-conversation-marker").evaluate(marker => marker.scrollIntoView({ block: "end" }));
+      await shot(page, "fable-quota-conversation-" + theme);
+      await page.click("#set-btn");
+      await page.click("#set-accounts-open");
+      await page.waitForFunction(() => document.getElementById("acc-col").textContent.includes("Rich switched everyone to Opus"));
+      assert(await page.getByText("Fable limit", { exact: true }).isVisible());
+      await shot(page, "fable-quota-account-" + theme);
+      await page.click("#acc-close");
+      await page.click("#set-btn");
+      await enableTechnical(page); await page.click("#set-quota-open");
+      await page.waitForSelector("#quota-fable-card:not([hidden])");
+      assert((await page.locator("#quota-fable-title").innerText()).startsWith("On Opus since"));
+      await shot(page, "fable-quota-sheet-" + theme);
+      await page.click("#quota-close");
+      await page.evaluate(view => window.RichMockFableQuota(view), { ...active, active: {},
+        changes: [...active.changes, { account, threadId, at: resetsAt, resetsAt, onOpus: false }] });
+      await page.waitForFunction(() => document.querySelectorAll(".fable-conversation-marker").length === 2);
+      assert(await page.locator("#fable-composer-status").isHidden());
+      assert((await page.locator(".fable-conversation-marker").last().innerText()).startsWith("Back on Fable."));
+      await page.locator(".fable-conversation-marker").last().evaluate(marker => marker.scrollIntoView({ block: "end" }));
+      await shot(page, "fable-quota-conversation-reset-" + theme);
+    } finally {
+      await page.close();
+    }
+  });
+
   // ---- Round 16 (richos-hq design/mockups/rounds/round-16/, the CEO's chosen design) -------
   const twoAccounts = (extra = {}) => ({ ...quota, atThreshold: "pause", accounts: [
     { id: "1", label: "Home", inUse: true, windows: [{ ...quota.windows[0], usedPercent: 41 }, quota.windows[1]], checkedAt: now, exhaustedUntil: null, message: null },
@@ -868,10 +926,17 @@ async function main() {
       await page.waitForSelector(".quota-status-dot.is-fast");
       await page.evaluate(t => document.documentElement.setAttribute("data-theme", t), theme);
       await page.addScriptTag({ content: contrast.pageScript() });
+      await page.evaluate(() => {
+        const probe = document.createElement("span");
+        probe.className = "quota-lane-pulse";
+        probe.id = "lane-pulse-contrast-probe";
+        document.querySelector(".quota-panel").appendChild(probe);
+      });
+      // WebKit registers the CSS animation after styling the newly mounted probe.
+      await page.waitForFunction(() => document.getElementById("lane-pulse-contrast-probe").getAnimations().length > 0);
       const found = await page.evaluate(() => {
         const C = window.__contrastMath, out = [];
-        const probe = document.createElement("span"); probe.className = "quota-lane-pulse";
-        document.querySelector(".quota-lane-note, .quota-status-card").appendChild(probe);
+        const probe = document.getElementById("lane-pulse-contrast-probe");
         for (const el of [document.querySelector(".quota-status-dot.is-fast"), probe]) {
           const frames = el.getAnimations().flatMap(a => a.effect.getKeyframes());
           const card = C.parseCssColor(getComputedStyle(document.getElementById("quota-status-card")).backgroundColor);

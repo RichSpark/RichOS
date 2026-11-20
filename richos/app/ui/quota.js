@@ -57,6 +57,11 @@
           <p id="quota-validation" role="status" hidden></p>
         </div></div>
       <p id="quota-save-status" role="status" aria-live="polite" hidden></p>
+      <div id="quota-fable-card" class="quota-status-card" hidden>
+        <h4 id="quota-fable-title"></h4>
+        <p id="quota-fable-detail" class="quota-muted"></p>
+        <button id="quota-fable-settings" type="button" class="quota-btn quota-btn-quiet">Change in Settings</button>
+      </div>
       <div id="quota-status-card" class="quota-status-card">
         <h4 id="quota-hold-status">Loading pause status…</h4>
         <div id="quota-hold-detail" class="quota-hold-detail"></div><ul id="quota-held" aria-label="Observed pauses"></ul>
@@ -267,6 +272,12 @@
         const sw = node("span", "quota-row-switch", `switches at ${at}%`);
         if (at !== 99) sw.appendChild(node("span", "quota-was", " · was 99%"));
         heading.appendChild(sw);
+      }
+      const modelPoint = view.fableSwitch?.point;
+      if (isCur && /^(model:fable|seven_day_fable)$/i.test(window.id) && Number.isFinite(modelPoint)) {
+        const on = view.fableSwitch.enabled;
+        line = { at: modelPoint, on, weekly: true };
+        if (on) heading.appendChild(node("span", "quota-row-switch", `Opus at ${Number(modelPoint.toFixed(1))}%`));
       }
       // Round 16: the hero "Resets in <b>3 h 22 min</b> · at Mon 2:57 AM", a row "resets in
       // <b>4 d 2 h</b>", and an ended window "This window <b>ended 4 min ago</b> — the new one
@@ -779,6 +790,17 @@
     accountCall("set_claude_at_threshold", { value: option.dataset.act }, () => say("Saved."));
   });
 
+  function renderFable() {
+    const rule = view.fableSwitch, box = field("quota-fable-card");
+    box.hidden = !rule;
+    if (!rule) return;
+    const period = rule.active?.[rule.account];
+    field("quota-fable-title").textContent = period ? "On Opus since " + clock(period.since) + "."
+      : rule.enabled ? "Fable quota switching is on." : "Fable quota switching is off.";
+    field("quota-fable-detail").textContent = period ? "Fable is almost used up. Back on Fable " + when(period.resetsAt) + "."
+      : rule.enabled ? "Rich switches to Opus when Fable is almost used up and there’s room in your weekly quota." : "";
+  }
+
   function render() {
     paintMenu();
     // Refresh is never locked by a failure's backoff: that wait holds only the automatic check
@@ -829,6 +851,7 @@
     field("quota-account-add").disabled = accountBusy;
     renderLanes();
     renderWindows();
+    renderFable();
     renderResets();
     field("quota-enabled").setAttribute("aria-checked", String(view.policy.enabled));
     field("quota-enabled").disabled = saving || !!view.policyUnavailable;
@@ -896,6 +919,10 @@
     await refresh(false);
   }
   field("quota-close").addEventListener("click", close);
+  field("quota-fable-settings").addEventListener("click", () => {
+    close();
+    window.RichSettings.openMenu({ focus: "#fable-switch" });
+  });
   for (const id of ["quota-refresh", "quota-hold-refresh"]) field(id).addEventListener("click", () => refresh(true));
   field("quota-enabled").addEventListener("click", () => view && save({ ...view.policy, enabled: !view.policy.enabled }));
   field("quota-release").addEventListener("click", () => view && save({ ...view.policy, enabled: false }));

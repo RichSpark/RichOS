@@ -340,20 +340,55 @@ pub enum AfterLimit {
 
 /// A usage-limit lease error, written by the lease and read by the spine and the work host.
 pub fn usage_limit_error(resets_at: Option<u64>, detail: &str) -> String {
-    match resets_at {
-        Some(t) => format!("{USAGE_LIMIT} (resets_at={t}): {detail}"),
-        None => format!("{USAGE_LIMIT}: {detail}"),
-    }
+    UsageLimit { resets_at, ..UsageLimit::default() }.error(detail)
 }
 
-/// `Some(resets_at)` when `error` is a usage-limit refusal; the inner `None` means it did not
-/// say when the limit resets.
 pub fn parse_usage_limit(error: &str) -> Option<Option<u64>> {
-    let at = error.find(USAGE_LIMIT)?;
-    let rest = &error[at + USAGE_LIMIT.len()..];
-    Some(rest.strip_prefix(" (resets_at=")
-        .and_then(|r| r.split(')').next())
-        .and_then(|n| n.parse().ok()))
+    UsageLimit::from_error(error).map(|limit| limit.resets_at)
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum LimitWindow {
+    #[default]
+    Unknown,
+    Fable,
+    Other,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct UsageLimit {
+    pub resets_at: Option<u64>,
+    pub window: LimitWindow,
+}
+
+impl UsageLimit {
+    pub(crate) fn error(self, detail: &str) -> String {
+        let mut fields = Vec::new();
+        if let Some(reset) = self.resets_at { fields.push(format!("resets_at={reset}")); }
+        match self.window {
+            LimitWindow::Fable => fields.push("window=fable".into()),
+            LimitWindow::Other => fields.push("window=other".into()),
+            LimitWindow::Unknown => {}
+        }
+        if fields.is_empty() { format!("{USAGE_LIMIT}: {detail}") }
+        else { format!("{USAGE_LIMIT} ({}): {detail}", fields.join(" ")) }
+    }
+
+    pub(crate) fn from_error(error: &str) -> Option<Self> {
+        let (_, rest) = error.split_once(USAGE_LIMIT)?;
+        let mut limit = Self::default();
+        if let Some((fields, _)) = rest.strip_prefix(" (").and_then(|r| r.split_once("):")) {
+            for field in fields.split_whitespace() {
+                match field.split_once('=') {
+                    Some(("resets_at", reset)) => limit.resets_at = reset.parse().ok(),
+                    Some(("window", "fable")) => limit.window = LimitWindow::Fable,
+                    Some(("window", "other")) => limit.window = LimitWindow::Other,
+                    _ => {}
+                }
+            }
+        }
+        Some(limit)
+    }
 }
 
 /// A Recent changes row, keeping the last [`CHANGES_KEPT`].
@@ -1334,6 +1369,11 @@ pub(crate) mod tests {
         replied(&accounts, "2");
         assert!(accounts.take_notice().is_some_and(|line| line.contains("fresh again in 2 d")),
             "fresh again at the Fable week's reset");
+        let (_dir, accounts) = two_accounts();
+        let mut with_model_switch = readings(fable(99., fresh_in_two_days), reading(5., HOUR, 20., 72 * HOUR));
+        crate::quota::apply_fable_capacity(&mut with_model_switch, true);
+        assert!(!accounts.evaluate(&with_model_switch, Some(93), NOW).unwrap());
+        assert_eq!(accounts.in_use().id, "1", "the same account can keep working on Opus");
     }
 
     /// **Round 16: the one switch is the subject of the sentence.** Switch chosen, Account 1's
