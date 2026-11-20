@@ -5,6 +5,8 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -1042,6 +1044,158 @@ class Pierce(unittest.TestCase):
         self.assertEqual(argv[argv.index("--permission-mode") + 1], "dontAsk")
         self.assertEqual(argv.count("--add-dir"), 1)
         self.assertIn("Judge only changed lines", argv[argv.index("--system-prompt") + 1])
+
+    def handoff_fixture(self):
+        outbox = self.root / "to-codex.md"
+        outbox.write_text("")
+        brief = self.project / "docs/briefs/work.md"
+        brief.parent.mkdir(parents=True)
+        brief.write_text("Remove the API.")
+        env = {**self.fake_provider({"verdict": "PASS", "report": "unused"}),
+               "RICHOS_PIERCE_CODEX_OUTBOX": str(outbox)}
+        fake = self.root / "bin/claude"
+        fake.write_text(f"#!{sys.executable}\n" + """
+import json, os, sys
+from pathlib import Path
+request = json.load(sys.stdin)
+Path(os.environ["CAPTURE"]).write_text(json.dumps(request))
+briefs = request["codex_handoff"]["brief_files"]
+assignment = request["outgoing_assignment"]
+fault = "Remove the API"
+bad = fault in assignment or any(fault in Path(path).read_text() for path in briefs)
+report = '"Remove the API" contradicts the user.' if bad else "The API is retained."
+print(json.dumps({"structured_output": {
+    "verdict": "FINDINGS" if bad else "PASS", "report": report, "notes": [],
+}}))
+""")
+        entry = "\n## 2026-11-20T13:10:00Z Assignment\nUse the brief at `docs/briefs/work.md`.\n"
+        return outbox, brief, env, entry
+
+    def handoff_hook(self, env, tool, data, call):
+        payload = {**self.payload, "tool_name": tool, "tool_input": data, "tool_use_id": call}
+        return subprocess.run(["/bin/bash", str(ENGINE / "scripts/hooks/guard-pierce.sh")],
+            # The registered hook budget bounds a hang. Assertions use the result and file contents.
+            input=json.dumps(payload), env=env, capture_output=True, text=True, timeout=330)
+
+    def test_codex_handoff_refuses_before_append_then_allows_fix_or_dismissal(self):
+        outbox, brief, env, entry = self.handoff_fixture()
+        command = f"cat >> {shlex.quote(str(outbox))} <<'HANDOFF'\n{entry}HANDOFF"
+
+        def attempt(call):
+            result = self.handoff_hook(env, "Bash", {"command": command}, call)
+            if result.returncode == 0:
+                subprocess.run(["/bin/bash", "-c", command], env=env, check=True)
+            return result
+
+        blocked = attempt("handoff-bad")
+        self.assertEqual(blocked.returncode, 2, blocked.stderr)
+        self.assertIn('Pierce FINDINGS:\n"Remove the API" contradicts the user.', blocked.stderr)
+        self.assertIn("The Codex handoff was not written.", blocked.stderr)
+        self.assertEqual(outbox.read_text(), "")
+        captured = json.loads(Path(env["CAPTURE"]).read_text())
+        self.assertIn("Keep the existing API.", captured["user_requests_in_order"])
+        self.assertEqual(captured["outgoing_assignment"].strip(), entry.strip())
+        self.assertEqual(captured["codex_handoff"]["brief_files"],
+                         {str(brief.resolve()): hashlib.sha256(brief.read_bytes()).hexdigest()})
+
+        report_id = re.search(r"--dismiss ([a-f0-9]{64}) ", blocked.stderr)[1]
+        report = json.loads((self.root / "config/state/pierce" / (report_id + ".json")).read_text())
+        self.assertEqual(report["handoff_tool"], "Bash")
+        self.assertGreaterEqual(report["hook_seconds"], 0)
+        subprocess.run([sys.executable, "-B", str(HERE / "pierce.py"), "--dismiss", report_id,
+                        "--reason", "Fixture dismissal"], env=env, capture_output=True, check=True)
+        self.assertEqual(attempt("handoff-dismissed").returncode, 0)
+        self.assertEqual(outbox.read_text(), entry)
+
+        brief.write_text("Remove the API. The brief changed after dismissal.")
+        blocked_again = attempt("handoff-changed")
+        self.assertEqual(blocked_again.returncode, 2, blocked_again.stderr)
+        self.assertNotIn("--dismiss " + report_id, blocked_again.stderr)
+        self.assertEqual(outbox.read_text(), entry)
+        brief.write_text("Keep the API.")
+        fixed = attempt("handoff-fixed")
+        self.assertEqual(fixed.returncode, 0, fixed.stderr)
+        self.assertEqual(outbox.read_text(), entry + entry)
+
+    def test_codex_handoff_direct_edits_status_only_and_other_files(self):
+        outbox, _, env, entry = self.handoff_fixture()
+        status = "\n## 2026-11-20T13:00:00Z STATUS: LANDED\nPushed to main.\n"
+        outbox.write_text(status)
+        for tool, data in [
+            ("Bash", {"command": f"cat >> {shlex.quote(str(outbox))} <<'STATUS'\n{status}STATUS"}),
+            ("Bash", {"command": f"cat {shlex.quote(str(outbox))}"}),
+            ("Write", {"file_path": str(outbox), "content": status + status}),
+            ("Edit", {"file_path": str(outbox), "old_string": status, "new_string": status + status}),
+            ("Write", {"file_path": str(outbox.with_name("other.md")), "content": entry}),
+            ("Bash", {"command": f"echo 'Remove the API' >> {shlex.quote(str(outbox.with_name('other.md')))}"}),
+        ]:
+            with self.subTest(tool=tool, data=data):
+                result = self.handoff_hook(env, tool, data, "no-inspection")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout, "")
+                self.assertFalse(Path(env["CAPTURE"]).exists())
+
+        for tool, data in [
+            ("Write", {"file_path": str(outbox), "content": status + entry}),
+            ("Edit", {"file_path": str(outbox), "old_string": status,
+                      "new_string": status + "\n## 2026-11-20T13:12:00Z LANDED\nRemove the API."}),
+            ("Write", {"file_path": str(outbox), "content": status + entry.replace(" Assignment", " STATUS: Update")}),
+            ("Bash", {"command": f"echo 'Remove the API' | tee -a {shlex.quote(str(outbox))}"}),
+        ]:
+            with self.subTest(tool=tool, data=data):
+                result = self.handoff_hook(env, tool, data, "inspect-" + tool)
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertIn("Pierce FINDINGS", result.stderr)
+
+    def test_codex_handoff_reviewer_outage_refuses_inline_assignment(self):
+        outbox, _, env, _ = self.handoff_fixture()
+        fake = self.root / "bin/claude"
+        fake.write_text("#!/bin/bash\nprintf 'fixture reviewer is unreachable' >&2\nexit 1\n")
+        result = self.handoff_hook(env, "Write",
+            {"file_path": str(outbox), "content": "Implement the requested feature."}, "write-outage")
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("Pierce UNAVAILABLE", result.stderr)
+        self.assertIn("fixture reviewer is unreachable", result.stderr)
+        self.assertEqual(outbox.read_text(), "")
+
+    def test_codex_handoff_extracts_compound_entries_and_resolves_write_targets(self):
+        outbox, _, env, entry = self.handoff_fixture()
+        declared = shlex.quote(str(outbox))
+        status = "\n## 2026-11-20T13:00:00Z STATUS: LANDED\nPushed `abc123`.\n"
+        append = "cat >> \"$out\" <<'ENTRY'\n{body}ENTRY\ntail -2 \"$out\"\n"
+        checkpoint = ("python3 - <<'PY'\n"
+                      f"from pathlib import Path\nPath({str(outbox.with_name('receipt.md'))!r}).write_text('ready')\n"
+                      "PY\n")
+        commands = [
+            (f"out={declared}; " + append.format(body=status) + checkpoint, None),
+            (f"out={declared}; " + append.format(body=entry) + checkpoint, entry.strip()),
+            (f"out={declared}; echo \"$(printf 'Build it' >> \"$out\")\"", "shell"),
+            (f"cd {shlex.quote(str(outbox.parent))} && "
+             f"cat >> {outbox.name} <<'ENTRY'\n{entry}ENTRY", entry.strip()),
+            (f"python3 - <<'PY'\nfrom pathlib import Path\np=Path({str(outbox.parent)!r})/{outbox.name!r}\n"
+             "with p.open('a') as handle: handle.write('Remove the API.')\nPY", "shell"),
+            (f"python3 - <<'PY'\nfrom os import path\np={str(outbox)!r}\n"
+             "with open(p, mode='a') as handle: handle.write('Remove the API.')\nPY", "shell"),
+            (f"python3 - <<'PY'\nfrom pathlib import Path\nPath({str(outbox)!r}).read_text()\nPY", None),
+            (f"out={declared}; tail -2 \"$out\"; " + checkpoint, None),
+        ]
+        with patch.dict(os.environ, env):
+            for command, expected in commands:
+                with self.subTest(command=command):
+                    payload = {**self.payload, "tool_name": "Bash", "tool_input": {"command": command}}
+                    handoff = P.pending_handoff(payload)
+                    actual = None if handoff is None else "shell" if handoff.shell else handoff.text.strip()
+                    self.assertEqual(actual, expected)
+
+    def test_codex_handoff_tools_have_the_same_inspection_budget_as_agent(self):
+        hooks = json.loads((ENGINE / "hooks/hooks.json").read_text())["hooks"]["PreToolUse"]
+        primary_write = next(group for group in hooks if "Write" in group.get("matcher", ""))
+        self.assertIn("dispatch-pretooluse.sh Write", primary_write["hooks"][0]["command"])
+        for tool in ("Agent", "Bash", "Write", "Edit", "MultiEdit"):
+            with self.subTest(tool=tool):
+                budget = [hook["timeout"] for group in hooks if re.fullmatch(group.get("matcher", ".*"), tool)
+                          for hook in group["hooks"] if "guard-pierce.sh" in hook["command"]]
+                self.assertEqual(budget, [330])
 
     def test_real_hook_admits_notes_only_and_records_notes_without_dismissal(self):
         note = "The background list omits a name already covered by the edit list."

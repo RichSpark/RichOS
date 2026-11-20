@@ -183,7 +183,7 @@
     },
     "scripts/hooks/contract-integrity-probe.sh#workspace-copy": {
       "source": "scripts/hooks/contract-integrity-probe.sh",
-      "sha256": "8b874dcbc46ccd3ad3b923a048e0e78aff91dd6537c9b529e48d19eb21527431",
+      "sha256": "56686f9d243f75ff512f0a86991d6402783f298d3ed096964b659fcb9c9646d0",
       "evidence": "Q copies the governed config into Q_ENT before q_env executes the workspace guards. The enclosing Q consumer must follow those executed guards. Later changes add registration inventory literals outside the Q copy region only (guard-record-owner-memory.sh, 2026-09-28). Renewed 2026-09-28 (stall watcher): one BR_EXPECTED row and one R_ROOTLESS_HOOKS name (session-start-stall), registration inventory literals only; no reviewed function changed. Renewed 2026-10-01: the guard-shared-scratchpad.sh basename is added to the registration inventory literals as data (rootless list, oracle, acknowledged list); it is never executed here. Renewed 2026-10-02 (integration of zach-sonnet-rmguard1): the guard-unguarded-rm.sh basename is added beside it in the same literals, as data; it is never executed here. Recovery layer RC is dormant without entity-local .claude/recovery.json. When adopted it invokes the host recovery contract reader with the resolved engine/entity. No orchestration.config key is added.",
       "keys": [],
       "edges": [
@@ -5427,7 +5427,7 @@
     },
     "scripts/hooks/contract-integrity-probe.sh#seated-fixture": {
       "source": "scripts/hooks/contract-integrity-probe.sh",
-      "sha256": "8b874dcbc46ccd3ad3b923a048e0e78aff91dd6537c9b529e48d19eb21527431",
+      "sha256": "56686f9d243f75ff512f0a86991d6402783f298d3ed096964b659fcb9c9646d0",
       "evidence": "Reviewed seated route and its shared R/AL/MT/MC/OF functions. The contract template keeps engine and entity in the same repository, including its linked-worktree case; the by-reference branch is unreachable. Parsed registration commands and sidecar inventories are data except the fixed canonical canary guards listed here. The test only replaces the write guard with literal inert shims or another copy of that same guard. q_hook has four fixed hook names; registry calls are integration/lifecycle. Q transports the fixture config. OF status and EP remain dependencies even when absent or undeclared in the generated fixture. The engine-status edge conservatively retains the literal execute floor outside this seated route. Renewed 2026-09-28 (stall watcher): one BR_EXPECTED row and one R_ROOTLESS_HOOKS name (session-start-stall), registration inventory literals only; no reviewed function changed. Renewed 2026-10-01: the guard-shared-scratchpad.sh basename is added to the registration inventory literals as data (rootless list, oracle, acknowledged list); it is never executed here. Renewed 2026-10-02 (integration of zach-sonnet-rmguard1): the guard-unguarded-rm.sh basename is added beside it in the same literals, as data; it is never executed here. Recovery layer RC is dormant without entity-local .claude/recovery.json. When adopted it invokes the host recovery contract reader with the resolved engine/entity. No orchestration.config key is added.",
       "keys": [
         "PROTECTED_PATHS",
@@ -7305,7 +7305,7 @@
     },
     "hooks/hooks.json#stop-visibility-inventory": {
       "source": "hooks/hooks.json",
-      "sha256": "1900262012a6a6466d162075f65b80d561112021b85ccc7c0ce687fca222db41",
+      "sha256": "fffd1569f5a4262bbd19aa6cdb9c3582d2c800fd70b20832c7929d164b8fa564",
       "evidence": "Binds the dynamically enumerated Stop script inventory for config selection. A new or changed manifest needs requalification before these fixture closures can exclude a config change. Renewed 2026-09-28 (stall watcher): one SessionStart row added (session-start-stall.sh); no PreToolUse or Stop row changed.",
       "keys": [],
       "edges": []
@@ -10501,8 +10501,8 @@
     },
     "scripts/hooks/guard-pierce.sh": {
       "source": "scripts/hooks/guard-pierce.sh",
-      "sha256": "bcb4a7da8126e0eb5be4109f1c88166a0eba99f64956272803088efd0d538d35",
-      "evidence": "Full wrapper reviewed (2026-10-06): fixed Python helper invocation only; the Agent prompt is data.",
+      "sha256": "c0e3ef4b7ca4984f1f87ea58a8b16f922a8d680152a19c6ebc3602d997183250",
+      "evidence": "Full wrapper reviewed: fixed Python helper invocation only. The Agent prompt and terminal handoff input are data.",
       "keys": [],
       "edges": [
         {
@@ -10515,8 +10515,8 @@
     },
     "scripts/lib/pierce.py": {
       "source": "scripts/lib/pierce.py",
-      "sha256": "087340189f3c67bd9a9298c2970c9cdd249bb7953ccd1c0b52469c4b31fbdc03",
-      "evidence": "Full program reviewed 2026-10-07: reads actual assignment, original human transcript and inherited instruction files as data; terminal sessions resolve explicitly cited existing repository/evidence paths using metadata. Desktop sessions use only host-selected RICHOS_APP_READ_ROOTS (connected company folders, current thread workspaces/attachments) and the current session evidence directory; brief paths never grant app access. Reads/writes exact-input review state and diffs revisions; runs one restricted Read/Glob/Grep subprocess, with a single variadic add-dir list, and imports the registered strip-ack-lines transformer. Notes are nonblocking and excluded from the preceding material-findings report. No cited text/command is executed and no configuration keys are read. Renewed 2026-10-10 (zach-opus-pierce3, the Pierce Haiku parallel track): the inspector command is built by claude_command (byte-identical for Opus, asserted by pierce.test.py) and the CLI's cost/time fields ride beside the verdict. In terminal sessions only, it reads PIERCE_SHADOW_MODEL from the GOVERNED repository's orchestration.config (the project directory, never the engine's own config, so no engine key), writes job/pair/revision files under <state>/pierce-shadow/ and starts scripts/lib/pierce_shadow.py detached (own session, standard streams closed, never waited on) beside an initial review; --dismiss appends to that folder's dismissals.jsonl. Every track step is guarded and only logs; the Opus verdict, hook output and exit code are unchanged. Reviewed 2026-10-11: terminal continuation reads only same-project predecessor transcripts located by native successful Read of restart metadata, requiring a native successful Write/Edit of that note in the predecessor before the handoff. Note prose is never authority; only original human rows are collected chronologically, excluding later source activity. Desktop continuation reads original text/Jam PromptReceived events from the durable conversation-ledger.jsonl, filtered by host scope company/thread and native session binding, with optional original-instruction hash verification. Partial ledger appends are excluded. Missing, ambiguous, cyclic or invalid continuation remains unavailable, never a pass. These data reads add no orchestration config key. Recovery-enabled native dispatch reuses the existing inspection to classify job kind and semantic correction relationships against immutable candidate briefs and full original human sources. Declared mode reads entity-local recovery.json. Its fixed imports use recovery state, the workspace metadata reader closure and source freezing; no advisor consultation is run from the dispatch hook. Reviewed 2026-10-20: terminal quoted command arguments are tokenized with shlex only to find explicitly cited existing paths, including paths containing spaces. No command is executed, no missing path grants an ancestor and home/root remain excluded. The desktop host-selected read-root branch returns before terminal discovery and is unchanged. Reviewed 2026-10-20: material-review instructions are consequence-first and shorter, with unchanged schema, model, effort, file tools, subprocess count, revision lane and read restrictions. There are no new file readers or configuration keys. Native private-state records retain the exact initial/revision request, loaded inspector/profile/rules hashes and available provider metrics, including unavailable results, independent of the optional shadow. Missing usage stays absent. The existing state-file permissions and single inspector invocation are unchanged; no new configuration reader or subprocess is added. Reviewed 2026-10-24: optional PIERCE_SHADOW_PERIOD is read only from the governed repository alongside PIERCE_SHADOW_MODEL, never the engine configuration. A validated id selects an independent private periods/<id> root; its atomic manifest pins loaded source, profile, rules, helper, model and effort. Jobs return their frozen path so Opus writes cannot move when configuration changes; native shadow_period metadata routes revision and dismissal records. Detached workers bind all progress, skips, pending judgments and completion to the queued job directory and reject changed loaded inputs before any model call. Invalid ids never fall back to legacy. Opus invocation, classification, report/exit behavior, desktop opt-out and quota/resource controls are unchanged. Reviewed 2026-10-24 follow-up: revision collection uses the preceding native report\u2019s explicit shadow_period rather than current configuration, verifies its loaded inspector/profile/rules and the existing named-period manifest against the shared initial-review fingerprint, and never creates a revision-only manifest. A missing ownership tag cannot append a dismissal into legacy state. These are existing collection metadata/state readers, with no new configuration, environment or provider input. Reviewed 2026-10-24: terminal predecessor discovery also reads the native host instructions/AutoMem MEMORY.md snapshot leading restart pointer and a successful final literal Bash cat of an existing same-project memory note. Shell text is tokenized only, never executed; transformed/redirected reads and source escapes are rejected. The existing native source Write/Edit witness and chronological cutoff remain mandatory. Earlier broken links preserve only witnessed originals, explicitly mark authority incomplete and expose those same-project native transcript directories to the restricted reviewer. Desktop host scopes, model invocation and period isolation are unchanged; no new config or environment input. Reviewed 2026-10-24 handover follow-up: a successful explicit Read/cat receipt outranks the fallback index. Index-note disk reads are deferred until no explicit read was witnessed, preserving receipt-based authority after note deletion. AutoMem index paths are canonicalized before the same-project comparison, including symlinked config prefixes. No new input, config, environment or subprocess reader. Renewed 2026-10-24 (private evidence coverage): terminal project configuration PIERCE_READ_ROOTS is parsed as a literal quoted JSON list without shell evaluation, canonicalized and restricted to existing directories excluding the filesystem and whole home. Desktop roots still come only from the host company registry and its session evidence. The canonical configured grants are access_sha256 in native inspection, pair manifest and queued twin qualification; changing a grant requires a new period. Successful native Bash-cat receipts now carry restart metadata after the disk note is deleted, retaining same-project source-write and cutoff requirements. Review rules interpret whole-brief constraints and narrow worker ownership before alleging a material contradiction. Review follow-up rv-20261024T172059Z-873ec818-6e2b resolved: newly queued legacy jobs also create and enforce the same source/access manifest; only already-queued pre-manifest historical jobs keep their legacy compatibility. Named periods remain independent. No provider command, profile, rules, permissions or live verdict changed in this correction. Native-data correction 2026-10-24: a combined Bash result may contain several note headers; bind the unique restart header to the final literal cat filename, normalizing the memory system project prefix and hyphen/underscore spelling. Ordinary feedback notes cannot claim an earlier cat header. Source write, same-project and time checks remain. Verified complete 14-session authority against actual native transcript; only metadata/report pointers are stored privately. Renewed 2026-11-01 (zach-opus-w4d): desktop_messages' ledger read moved, unchanged, into desktop_turns, which blocking_ask.py also calls; desktop_messages keeps the same messages, order and instruction check. Nothing new is read.",
+      "sha256": "fa190c9ffdd333847735aa8c4435f666b317f7c7fe5230d7373a61a3b261a965",
+      "evidence": "Full program reviewed 2026-10-07: reads actual assignment, original human transcript and inherited instruction files as data; terminal sessions resolve explicitly cited existing repository/evidence paths using metadata. Desktop sessions use only host-selected RICHOS_APP_READ_ROOTS (connected company folders, current thread workspaces/attachments) and the current session evidence directory; brief paths never grant app access. Reads/writes exact-input review state and diffs revisions; runs one restricted Read/Glob/Grep subprocess, with a single variadic add-dir list, and imports the registered strip-ack-lines transformer. Notes are nonblocking and excluded from the preceding material-findings report. No cited text/command is executed and no configuration keys are read. Renewed 2026-10-10 (zach-opus-pierce3, the Pierce Haiku parallel track): the inspector command is built by claude_command (byte-identical for Opus, asserted by pierce.test.py) and the CLI's cost/time fields ride beside the verdict. In terminal sessions only, it reads PIERCE_SHADOW_MODEL from the GOVERNED repository's orchestration.config (the project directory, never the engine's own config, so no engine key), writes job/pair/revision files under <state>/pierce-shadow/ and starts scripts/lib/pierce_shadow.py detached (own session, standard streams closed, never waited on) beside an initial review; --dismiss appends to that folder's dismissals.jsonl. Every track step is guarded and only logs; the Opus verdict, hook output and exit code are unchanged. Reviewed 2026-10-11: terminal continuation reads only same-project predecessor transcripts located by native successful Read of restart metadata, requiring a native successful Write/Edit of that note in the predecessor before the handoff. Note prose is never authority; only original human rows are collected chronologically, excluding later source activity. Desktop continuation reads original text/Jam PromptReceived events from the durable conversation-ledger.jsonl, filtered by host scope company/thread and native session binding, with optional original-instruction hash verification. Partial ledger appends are excluded. Missing, ambiguous, cyclic or invalid continuation remains unavailable, never a pass. These data reads add no orchestration config key. Recovery-enabled native dispatch reuses the existing inspection to classify job kind and semantic correction relationships against immutable candidate briefs and full original human sources. Declared mode reads entity-local recovery.json. Its fixed imports use recovery state, the workspace metadata reader closure and source freezing; no advisor consultation is run from the dispatch hook. Reviewed 2026-10-20: terminal quoted command arguments are tokenized with shlex only to find explicitly cited existing paths, including paths containing spaces. No command is executed, no missing path grants an ancestor and home/root remain excluded. The desktop host-selected read-root branch returns before terminal discovery and is unchanged. Reviewed 2026-10-20: material-review instructions are consequence-first and shorter, with unchanged schema, model, effort, file tools, subprocess count, revision lane and read restrictions. There are no new file readers or configuration keys. Native private-state records retain the exact initial/revision request, loaded inspector/profile/rules hashes and available provider metrics, including unavailable results, independent of the optional shadow. Missing usage stays absent. The existing state-file permissions and single inspector invocation are unchanged; no new configuration reader or subprocess is added. Reviewed 2026-10-24: optional PIERCE_SHADOW_PERIOD is read only from the governed repository alongside PIERCE_SHADOW_MODEL, never the engine configuration. A validated id selects an independent private periods/<id> root; its atomic manifest pins loaded source, profile, rules, helper, model and effort. Jobs return their frozen path so Opus writes cannot move when configuration changes; native shadow_period metadata routes revision and dismissal records. Detached workers bind all progress, skips, pending judgments and completion to the queued job directory and reject changed loaded inputs before any model call. Invalid ids never fall back to legacy. Opus invocation, classification, report/exit behavior, desktop opt-out and quota/resource controls are unchanged. Reviewed 2026-10-24 follow-up: revision collection uses the preceding native report\u2019s explicit shadow_period rather than current configuration, verifies its loaded inspector/profile/rules and the existing named-period manifest against the shared initial-review fingerprint, and never creates a revision-only manifest. A missing ownership tag cannot append a dismissal into legacy state. These are existing collection metadata/state readers, with no new configuration, environment or provider input. Reviewed 2026-10-24: terminal predecessor discovery also reads the native host instructions/AutoMem MEMORY.md snapshot leading restart pointer and a successful final literal Bash cat of an existing same-project memory note. Shell text is tokenized only, never executed; transformed/redirected reads and source escapes are rejected. The existing native source Write/Edit witness and chronological cutoff remain mandatory. Earlier broken links preserve only witnessed originals, explicitly mark authority incomplete and expose those same-project native transcript directories to the restricted reviewer. Desktop host scopes, model invocation and period isolation are unchanged; no new config or environment input. Reviewed 2026-10-24 handover follow-up: a successful explicit Read/cat receipt outranks the fallback index. Index-note disk reads are deferred until no explicit read was witnessed, preserving receipt-based authority after note deletion. AutoMem index paths are canonicalized before the same-project comparison, including symlinked config prefixes. No new input, config, environment or subprocess reader. Renewed 2026-10-24 (private evidence coverage): terminal project configuration PIERCE_READ_ROOTS is parsed as a literal quoted JSON list without shell evaluation, canonicalized and restricted to existing directories excluding the filesystem and whole home. Desktop roots still come only from the host company registry and its session evidence. The canonical configured grants are access_sha256 in native inspection, pair manifest and queued twin qualification; changing a grant requires a new period. Successful native Bash-cat receipts now carry restart metadata after the disk note is deleted, retaining same-project source-write and cutoff requirements. Review rules interpret whole-brief constraints and narrow worker ownership before alleging a material contradiction. Review follow-up rv-20261024T172059Z-873ec818-6e2b resolved: newly queued legacy jobs also create and enforce the same source/access manifest; only already-queued pre-manifest historical jobs keep their legacy compatibility. Named periods remain independent. No provider command, profile, rules, permissions or live verdict changed in this correction. Native-data correction 2026-10-24: a combined Bash result may contain several note headers; bind the unique restart header to the final literal cat filename, normalizing the memory system project prefix and hyphen/underscore spelling. Ordinary feedback notes cannot claim an earlier cat header. Source write, same-project and time checks remain. Verified complete 14-session authority against actual native transcript; only metadata/report pointers are stored privately. Renewed 2026-11-01 (zach-opus-w4d): desktop_messages' ledger read moved, unchanged, into desktop_turns, which blocking_ask.py also calls; desktop_messages keeps the same messages, order and instruction check. Nothing new is read. Reviewed 2026-11-20: terminal Bash, Write and Edit handoffs reuse the same inspector and human transcript. The helper reads the pending entry from the payload and recognizes literal shell writes without executing them. Pierce reads and hashes the named brief files to bind exact-entry dismissals. Reviewed handoffs use the existing restricted provider and private report record, outside the Agent revision and shadow lanes. No new orchestration configuration key is read.",
       "keys": [],
       "edges": [
         {
@@ -10533,6 +10533,26 @@
         },
         {
           "to": "mega-lander/workspaces.py#recovery-model-records"
+        },
+        {
+          "to": "scripts/lib/codex_handoff.py"
+        }
+      ]
+    },
+    "scripts/lib/codex_handoff.py": {
+      "source": "scripts/lib/codex_handoff.py",
+      "sha256": "3a0241f6c874e23621790cde6df75d9a6ebeb5af0964a0df1bb0844a3bfc484e",
+      "evidence": "Statically reads terminal tool input using the shared shell lexer. Uses the literal channel path or the inherited test override and reads the existing channel only to isolate an appended Write. Does not execute shell input or read orchestration configuration.",
+      "keys": [],
+      "edges": [
+        {
+          "to": "scripts/lib/command_reader.py"
+        },
+        {
+          "to": "scripts/lib/host_sleep.py"
+        },
+        {
+          "to": "scripts/lib/unguarded_rm.py"
         }
       ]
     },
@@ -10687,7 +10707,7 @@
     },
     "hooks/hooks.json#pre-stop-fixtures": {
       "source": "hooks/hooks.json",
-      "sha256": "1900262012a6a6466d162075f65b80d561112021b85ccc7c0ce687fca222db41",
+      "sha256": "fffd1569f5a4262bbd19aa6cdb9c3582d2c800fd70b20832c7929d164b8fa564",
       "evidence": "Binds the dynamically enumerated PreToolUse/Stop inventory and matcher selection. New inventory bytes require requalification before excluding a config edit. Renewed 2026-09-28 (stall watcher): one SessionStart row added (session-start-stall.sh); no PreToolUse or Stop row changed.",
       "keys": [],
       "edges": []
@@ -11697,7 +11717,7 @@
     },
     "scripts/hooks/contract-integrity-probe.sh#by-reference-fixtures": {
       "source": "scripts/hooks/contract-integrity-probe.sh",
-      "sha256": "8b874dcbc46ccd3ad3b923a048e0e78aff91dd6537c9b529e48d19eb21527431",
+      "sha256": "56686f9d243f75ff512f0a86991d6402783f298d3ed096964b659fcb9c9646d0",
       "evidence": "Entire by-reference branch and shared R/AL/MT/MC functions reviewed. Plugin/role/marketplace/registration rows are inspected as data. Actual execution is engine-status, the fixed BR9 worktree-isolation canary and the shared model/liveness canaries. Literal fixture shims introduce no additional reader. The shared whole-source contract retains the seated helper floor, but the branch returns before seated runtime checks. Renewed 2026-09-28 (stall watcher): one BR_EXPECTED row and one R_ROOTLESS_HOOKS name (session-start-stall), registration inventory literals only; no reviewed function changed. Renewed 2026-10-01: the guard-shared-scratchpad.sh basename is added to the registration inventory literals as data (rootless list, oracle, acknowledged list); it is never executed here. Renewed 2026-10-02 (integration of zach-sonnet-rmguard1): the guard-unguarded-rm.sh basename is added beside it in the same literals, as data; it is never executed here. Recovery layer RC is dormant without entity-local .claude/recovery.json. When adopted it invokes the host recovery contract reader with the resolved engine/entity. No orchestration.config key is added. Renewed 2026-11-13 (zach-opus-permhook3): guard-unguarded-rm leaves the rootless-hook and registration inventory literals, as data; no reviewed function changed.",
       "keys": [
         "PROTECTED_PATHS",
@@ -18262,7 +18282,7 @@
         "scripts/entrypoint-currency-lint.sh": "af9a1ff354871322e9f9741820c35b8569a052bf635b37b16be34e053cb0e3ae",
         "scripts/hooks/claim-roles.mutation.sh": "a944078a0adb68c9df51d1bc25a76faa2d9f7276d6ba627f03358aeb626406dd",
         "scripts/hooks/contract-integrity-layer-ep.sh": "6e0495fec5001db83cf350e6b2425c9fd86c2b83628a9dd7d24dbae072f877fe",
-        "scripts/hooks/contract-integrity-probe.sh": "8b874dcbc46ccd3ad3b923a048e0e78aff91dd6537c9b529e48d19eb21527431",
+        "scripts/hooks/contract-integrity-probe.sh": "56686f9d243f75ff512f0a86991d6402783f298d3ed096964b659fcb9c9646d0",
         "scripts/hooks/contract-integrity.test.sh": "ba1caac797c84fd8cdf3b0de6a7a4622005b31b85febacf63cab723b897f060f",
         "scripts/hooks/engine-status.sh": "66b0482b79ebf8bb81067ed07f02a7d3f275c42022334e461fe3888cdbf988a6",
         "scripts/hooks/guard-agent-state-claims.sh": "2d07a3110b962c142d97522a9fee1fed62d4dfcedbb7c03c5d2661ffc0a98581",
@@ -18374,7 +18394,7 @@
         "scripts/scratch-sweep.sh": "575e99bf9f8dd9815340f2ca632757f2990df3374c82093ee637f1da3ad1d105",
         "scripts/unstarted-rows-lint.sh": "4b654eefa4fb775ba218fbee15595b415684c7a90e2168eedf864c07f142e58e",
         "scripts/hooks/dispatch-pretooluse.manifest": "5151275bc5a6153a25ab2c28cb9f7820a5af67ba03042fc073cdb48cf3697e38",
-        "hooks/hooks.json": "1900262012a6a6466d162075f65b80d561112021b85ccc7c0ce687fca222db41",
+        "hooks/hooks.json": "fffd1569f5a4262bbd19aa6cdb9c3582d2c800fd70b20832c7929d164b8fa564",
         "scripts/hooks/commit-ceo-inputs.sh": "332b5ec9ce51872486cca4c5aa7dc5e74b6608cd06ebf4c95b830cf9ebd7288a",
         "scripts/hooks/commit-ceo-inputs.py": "6ae8bccc69a5e8d4d9596e947c77591d6470b75e114766e3c33ff453d4ab9d7b",
         "scripts/hooks/guard-publication-writes.sh": "b9a13097f1023f8e1e5ebd2a78ee804c73bc6b1953db37727c3ecddcde7de67e",
@@ -19037,7 +19057,7 @@
       "sources": {
         "scripts/hooks/unevaluated-payload.test.sh": "e296558a8c59d1638445ea475642ceea8c4ba273c80a8b193ee2d7681f6613e8",
         "scripts/lib/registered-hooks.sh": "a6cd8c4a7f0a6b40db2640f799c67d3abdda538cff2b111e80db0c33711d8bd5",
-        "hooks/hooks.json": "1900262012a6a6466d162075f65b80d561112021b85ccc7c0ce687fca222db41",
+        "hooks/hooks.json": "fffd1569f5a4262bbd19aa6cdb9c3582d2c800fd70b20832c7929d164b8fa564",
         "scripts/hooks/dispatch-pretooluse.sh": "a8040d635cb70a1ac4d29c140ea398684e6e8f78b6738ac3acc35063d970b602",
         "scripts/hooks/guard-agent-state-claims.sh": "2d07a3110b962c142d97522a9fee1fed62d4dfcedbb7c03c5d2661ffc0a98581",
         "scripts/lib/resolve-roots.sh": "561e1a7b4bda39de4276822645a75f0235fa08234511a8d367e9cd2b2a5fa614",
@@ -19214,7 +19234,7 @@
         "scripts/lib/global-state-witness.sh": "043848eeb2641037b1e56bce858035e05a80cce775098c7dfa36386f6f048f73",
         "scripts/hooks/install.sh": "0662dc8008ac3c1075808707ec0e39825600cd82e24f1e0715ae24bd57ee7542",
         "scripts/lib/registered-hooks.sh": "a6cd8c4a7f0a6b40db2640f799c67d3abdda538cff2b111e80db0c33711d8bd5",
-        "scripts/hooks/contract-integrity-probe.sh": "8b874dcbc46ccd3ad3b923a048e0e78aff91dd6537c9b529e48d19eb21527431",
+        "scripts/hooks/contract-integrity-probe.sh": "56686f9d243f75ff512f0a86991d6402783f298d3ed096964b659fcb9c9646d0",
         "scripts/lib/resolve-roots.sh": "561e1a7b4bda39de4276822645a75f0235fa08234511a8d367e9cd2b2a5fa614",
         "scripts/lib/resolve-main-checkout.sh": "7b365389e15be1f270adfbe361cff627a424f815d501d33d357054124ca286ca",
         "scripts/lib/model-tiers.sh": "4f5e6c367433a717393b6ef2270a9b02b279a6b8122f439bc132350170d8c317",
@@ -19497,7 +19517,7 @@
         "scripts/lib/global-state-witness.sh": "043848eeb2641037b1e56bce858035e05a80cce775098c7dfa36386f6f048f73",
         "scripts/hooks/install.sh": "0662dc8008ac3c1075808707ec0e39825600cd82e24f1e0715ae24bd57ee7542",
         "scripts/lib/registered-hooks.sh": "a6cd8c4a7f0a6b40db2640f799c67d3abdda538cff2b111e80db0c33711d8bd5",
-        "scripts/hooks/contract-integrity-probe.sh": "8b874dcbc46ccd3ad3b923a048e0e78aff91dd6537c9b529e48d19eb21527431",
+        "scripts/hooks/contract-integrity-probe.sh": "56686f9d243f75ff512f0a86991d6402783f298d3ed096964b659fcb9c9646d0",
         "scripts/lib/resolve-roots.sh": "561e1a7b4bda39de4276822645a75f0235fa08234511a8d367e9cd2b2a5fa614",
         "scripts/lib/resolve-main-checkout.sh": "7b365389e15be1f270adfbe361cff627a424f815d501d33d357054124ca286ca",
         "scripts/lib/model-tiers.sh": "4f5e6c367433a717393b6ef2270a9b02b279a6b8122f439bc132350170d8c317",
@@ -19555,7 +19575,7 @@
         "scripts/lib/global-state-witness.sh": "043848eeb2641037b1e56bce858035e05a80cce775098c7dfa36386f6f048f73",
         "scripts/hooks/install.sh": "0662dc8008ac3c1075808707ec0e39825600cd82e24f1e0715ae24bd57ee7542",
         "scripts/lib/registered-hooks.sh": "a6cd8c4a7f0a6b40db2640f799c67d3abdda538cff2b111e80db0c33711d8bd5",
-        "scripts/hooks/contract-integrity-probe.sh": "8b874dcbc46ccd3ad3b923a048e0e78aff91dd6537c9b529e48d19eb21527431",
+        "scripts/hooks/contract-integrity-probe.sh": "56686f9d243f75ff512f0a86991d6402783f298d3ed096964b659fcb9c9646d0",
         "scripts/lib/resolve-roots.sh": "561e1a7b4bda39de4276822645a75f0235fa08234511a8d367e9cd2b2a5fa614",
         "scripts/lib/resolve-main-checkout.sh": "7b365389e15be1f270adfbe361cff627a424f815d501d33d357054124ca286ca",
         "scripts/lib/model-tiers.sh": "4f5e6c367433a717393b6ef2270a9b02b279a6b8122f439bc132350170d8c317",
@@ -19613,7 +19633,7 @@
         "scripts/lib/global-state-witness.sh": "043848eeb2641037b1e56bce858035e05a80cce775098c7dfa36386f6f048f73",
         "scripts/hooks/install.sh": "0662dc8008ac3c1075808707ec0e39825600cd82e24f1e0715ae24bd57ee7542",
         "scripts/lib/registered-hooks.sh": "a6cd8c4a7f0a6b40db2640f799c67d3abdda538cff2b111e80db0c33711d8bd5",
-        "scripts/hooks/contract-integrity-probe.sh": "8b874dcbc46ccd3ad3b923a048e0e78aff91dd6537c9b529e48d19eb21527431",
+        "scripts/hooks/contract-integrity-probe.sh": "56686f9d243f75ff512f0a86991d6402783f298d3ed096964b659fcb9c9646d0",
         "scripts/lib/resolve-roots.sh": "561e1a7b4bda39de4276822645a75f0235fa08234511a8d367e9cd2b2a5fa614",
         "scripts/lib/resolve-main-checkout.sh": "7b365389e15be1f270adfbe361cff627a424f815d501d33d357054124ca286ca",
         "scripts/lib/model-tiers.sh": "4f5e6c367433a717393b6ef2270a9b02b279a6b8122f439bc132350170d8c317",
