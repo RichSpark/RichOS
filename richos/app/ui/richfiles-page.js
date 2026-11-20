@@ -91,7 +91,7 @@
     button.addEventListener("click", () => settings(button.dataset.rfSetting, !current?.[button.dataset.rfSetting]));
   }
   window.addEventListener("focus", () => { if (!page.hidden) settings(null, null); });
-  window.RichFilesPage = { open, opensStandalone };
+  window.RichFilesPage = { open, opensStandalone, get available() { return available; } };
   bridge.invoke("richfiles_available", {}).then((installed) => {
     if (!installed) return;
     available = true;
