@@ -53,6 +53,104 @@ pub async fn glance_capture_configure(app: AppHandle, enabled: bool, shortcut: S
     }
 }
 
+#[derive(Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowSettings {
+    opens_editor: bool,
+    keeps_history: bool,
+}
+
+#[richos_command::command]
+pub async fn glance_workflow_status() -> Result<WorkflowSettings, String> {
+    #[cfg(target_os = "macos")]
+    return workflow::status().map_err(|error| error.to_string());
+    #[cfg(not(target_os = "macos"))]
+    Ok(WorkflowSettings::default())
+}
+
+#[richos_command::command]
+pub async fn glance_workflow_configure(opens_editor: Option<bool>, keeps_history: Option<bool>) -> Result<WorkflowSettings, String> {
+    #[cfg(target_os = "macos")]
+    return tokio::task::spawn_blocking(move || workflow::configure(opens_editor, keeps_history))
+        .await.map_err(|error| error.to_string())?.map_err(|error| error.to_string());
+    #[cfg(not(target_os = "macos"))]
+    {
+        let (_opens_editor, _keeps_history) = (opens_editor, keeps_history);
+        Err("RichGlance settings are available on macOS.".into())
+    }
+}
+
+#[cfg(target_os = "macos")]
+mod workflow {
+    use super::WorkflowSettings;
+    use std::fs::{self, DirBuilder, OpenOptions};
+    use std::io::{self, Write};
+    use std::os::fd::AsRawFd;
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt};
+    use std::path::{Path, PathBuf};
+
+    fn root() -> io::Result<PathBuf> {
+        let home = std::env::home_dir().ok_or_else(|| io::Error::other("home directory is unavailable"))?;
+        Ok(home.join("Library/Application Support/app.richos.richglance/Screenshots"))
+    }
+
+    pub(super) fn status() -> io::Result<WorkflowSettings> {
+        Ok(read(&root()?))
+    }
+
+    fn read(root: &Path) -> WorkflowSettings {
+        WorkflowSettings {
+            opens_editor: fs::read(root.join("return-action")).is_ok_and(|bytes| bytes == b"editor"),
+            keeps_history: fs::read(root.join("keep-history")).is_ok_and(|bytes| bytes == b"on"),
+        }
+    }
+
+    pub(super) fn configure(opens_editor: Option<bool>, keeps_history: Option<bool>) -> io::Result<WorkflowSettings> {
+        let root = root()?;
+        DirBuilder::new().recursive(true).mode(0o700).create(&root)?;
+        let info = fs::symlink_metadata(&root)?;
+        if !info.is_dir() || info.mode() & 0o077 != 0 || info.uid() != unsafe { libc::getuid() } {
+            return Err(io::Error::new(io::ErrorKind::PermissionDenied, "RichGlance settings folder is inaccessible"));
+        }
+        // The native editor holds the same lock when it stores, updates or purges originals.
+        let lock = OpenOptions::new().create(true).read(true).write(true).mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC).open(root.join(".lock"))?;
+        if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        if let Some(value) = opens_editor {
+            write_setting(&root, "return-action", if value { b"editor" } else { b"copy" })?;
+        }
+        if let Some(value) = keeps_history {
+            if !value {
+                match fs::remove_dir_all(root.join("Recent Captures")) {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(error),
+                }
+            }
+            write_setting(&root, "keep-history", if value { b"on" } else { b"off" })?;
+        }
+        Ok(read(&root))
+    }
+
+    fn write_setting(root: &Path, name: &str, contents: &[u8]) -> io::Result<()> {
+        let pending = root.join(format!(".{name}.pending"));
+        match fs::remove_file(&pending) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+        let result = (|| {
+            let mut output = OpenOptions::new().create_new(true).write(true).mode(0o600).open(&pending)?;
+            output.write_all(contents)?;
+            fs::rename(&pending, root.join(name))
+        })();
+        if result.is_err() { drop(fs::remove_file(pending)); }
+        result
+    }
+}
+
 #[cfg(target_os = "macos")]
 async fn on_main(
     app: AppHandle,

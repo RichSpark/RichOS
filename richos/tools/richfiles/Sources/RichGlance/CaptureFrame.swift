@@ -6,33 +6,91 @@ import ScreenCaptureKit
 
 @MainActor
 enum CaptureFrame {
-    enum Failure: Error { case displayUnavailable }
+    enum Failure: Error { case displayUnavailable, windowUnavailable }
 
-    static func read(displayID: CGDirectDisplayID, size: CGSize,
-                     excluding windows: Set<CGWindowID> = []) async throws -> CGImage {
-        let (filter, config) = try await configuration(displayID: displayID, size: size, excluding: windows)
-        if #available(macOS 14.0, *) {
-            return try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
-        }
-        return try await firstCompleteFrame(filter: filter, config: config)
+    struct WindowTarget {
+        let id: CGWindowID
+        let frame: CGRect
+        let pid: pid_t
     }
 
-    fileprivate static func configuration(displayID: CGDirectDisplayID, size: CGSize,
-                                          excluding windows: Set<CGWindowID>) async throws
+    static func targets() -> [WindowTarget] {
+        let rows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
+            as? [[String: Any]] ?? []
+        return rows.compactMap { row in
+            guard let number = row[kCGWindowNumber as String] as? NSNumber,
+                  let pid = row[kCGWindowOwnerPID as String] as? NSNumber, pid.int32Value != getpid(),
+                  let layer = row[kCGWindowLayer as String] as? NSNumber, layer.intValue == 0,
+                  let bounds = row[kCGWindowBounds as String] as? NSDictionary,
+                  let rect = CGRect(dictionaryRepresentation: bounds as CFDictionary),
+                  rect.width >= 24, rect.height >= 24,
+                  (row[kCGWindowAlpha as String] as? NSNumber)?.doubleValue != 0 else { return nil }
+            return WindowTarget(id: number.uint32Value, frame: rect, pid: pid.int32Value)
+        }
+    }
+
+    static func read(displayID: CGDirectDisplayID, size: CGSize, pointer: Bool = false,
+                     excludingOwnWindows: Bool = false, excluding windows: Set<CGWindowID> = []) async throws -> CGImage {
+        let (filter, config) = try await configuration(displayID: displayID, size: size, excluding: windows,
+                                                       excludingOwnWindows: excludingOwnWindows, pointer: pointer)
+        return try await read(filter: filter, configuration: config)
+    }
+
+    fileprivate static func configuration(displayID: CGDirectDisplayID, size: CGSize, excluding windows: Set<CGWindowID>,
+                                          excludingOwnWindows: Bool = false, pointer: Bool = false) async throws
         -> (SCContentFilter, SCStreamConfiguration) {
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
         guard let display = content.displays.first(where: { $0.displayID == displayID }) else {
             throw Failure.displayUnavailable
         }
-        let filter = SCContentFilter(display: display, excludingWindows: content.windows.filter { windows.contains($0.windowID) })
+        let excluded = content.windows.filter {
+            if windows.contains($0.windowID) { return true }
+            guard excludingOwnWindows, let owner = $0.owningApplication else { return false }
+            // A first-time Screen Recording prompt can float without owning foreground focus.
+            return owner.processID == getpid() || owner.bundleIdentifier == "com.apple.UserNotificationCenter"
+        }
+        return (SCContentFilter(display: display, excludingWindows: excluded), configuration(size: size, pointer: pointer))
+    }
+
+    static func read(windowID: CGWindowID, scale: CGFloat, pointer: Bool) async throws -> (CGImage, CGFloat) {
+        let content = try await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: false)
+        guard let window = content.windows.first(where: { $0.windowID == windowID && $0.isOnScreen }) else {
+            throw Failure.windowUnavailable
+        }
+        let filter = SCContentFilter(desktopIndependentWindow: window)
+        var size = window.frame.size
+        var actualScale = scale
+        if #available(macOS 14.0, *) {
+            size = filter.contentRect.size
+            actualScale = CGFloat(filter.pointPixelScale)
+        }
+        guard size.width > 0, size.height > 0, actualScale > 0 else { throw Failure.windowUnavailable }
+        let pixels = CGSize(width: (size.width * actualScale).rounded(), height: (size.height * actualScale).rounded())
+        let config = configuration(size: pixels, pointer: pointer)
+        if #available(macOS 14.0, *) {
+            config.ignoreShadowsSingleWindow = true
+            config.ignoreGlobalClipSingleWindow = true
+        }
+        if #available(macOS 14.2, *) { config.includeChildWindows = false }
+        return (try await read(filter: filter, configuration: config), actualScale)
+    }
+
+    private static func configuration(size: CGSize, pointer: Bool) -> SCStreamConfiguration {
         let config = SCStreamConfiguration()
         config.width = Int(size.width)
         config.height = Int(size.height)
-        config.showsCursor = false
+        config.showsCursor = pointer
         config.capturesAudio = false
         config.pixelFormat = kCVPixelFormatType_32BGRA
         config.colorSpaceName = CGColorSpace.sRGB
-        return (filter, config)
+        return config
+    }
+
+    private static func read(filter: SCContentFilter, configuration config: SCStreamConfiguration) async throws -> CGImage {
+        if #available(macOS 14.0, *) {
+            return try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
+        }
+        return try await firstCompleteFrame(filter: filter, config: config)
     }
 
     private static func firstCompleteFrame(filter: SCContentFilter, config: SCStreamConfiguration) async throws -> CGImage {

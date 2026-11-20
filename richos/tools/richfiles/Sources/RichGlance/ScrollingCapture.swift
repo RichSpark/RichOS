@@ -47,10 +47,13 @@ final class ScrollingCapture: NSObject, NSWindowDelegate {
     private var lastPreview = 0.0
     private var reported = false
     private var recording = true
+    private var liveKeys: LiveCaptureKeys?
 
     private(set) var result: CGImage?
     var reviewWindow: NSWindow? { result == nil ? nil : panel }
+    var opensEditor = false
     var copy: (() -> Void)?
+    var edit: (() -> Void)?
     var save: (() -> Void)?
     var cancel: (() -> Void)?
     var retry: (() -> Void)?
@@ -88,7 +91,7 @@ final class ScrollingCapture: NSObject, NSWindowDelegate {
         super.init()
 
         panel.delegate = self
-        panel.cancel = { [weak self] in self?.cancel?() }
+        panel.cancel = { [weak self] in self?.cancelPressed() }
         thumbnail.imageScaling = .scaleProportionallyUpOrDown
         thumbnail.setAccessibilityElement(false)
         thumbnail.widthAnchor.constraint(equalToConstant: 58).isActive = true
@@ -124,6 +127,11 @@ final class ScrollingCapture: NSObject, NSWindowDelegate {
     }
 
     func start() {
+        liveKeys = LiveCaptureKeys(escape: { [weak self] in self?.cancelPressed() },
+                                   stop: { [weak self] in
+            guard let self, stopButton.isEnabled else { return }
+            stopPressed()
+        })
         guide.orderFrontRegardless()
         panel.orderFrontRegardless()
         excludedWindows = Set([guide, panel].compactMap { CGWindowID(exactly: $0.windowNumber) })
@@ -169,6 +177,7 @@ final class ScrollingCapture: NSObject, NSWindowDelegate {
     }
 
     func close() {
+        liveKeys = nil
         recording = false
         automatic?.cancel()
         frames?.cancel()
@@ -331,9 +340,23 @@ final class ScrollingCapture: NSObject, NSWindowDelegate {
     private var nextSweep: Int32 = -1
 
     @objc private func stopPressed() { stop(captureLastFrame: true) }
-    @objc private func cancelPressed() { cancel?() }
+    @objc private func cancelPressed() {
+        guard recording || completing != nil else { cancel?(); return }
+        recording = false
+        liveKeys = nil
+        automatic?.cancel()
+        frames?.cancel()
+        deadline?.cancel()
+        completing?.cancel()
+        completing = nil
+        if let stream { Task { await stream.stop() } }
+        stream = nil
+        report(.cancelled)
+        showResult(nil, message: "Scrolling capture canceled.", canceled: true)
+    }
     @objc private func retryPressed() { retry?() }
     @objc private func copyPressed() { copy?() }
+    @objc private func editPressed() { edit?() }
     @objc private func savePressed() { save?() }
 
     private typealias Failure = RichFilesDiagnostics.ScrollCaptureFailure
@@ -341,6 +364,7 @@ final class ScrollingCapture: NSObject, NSWindowDelegate {
     private func stop(_ failure: Failure? = nil, captureLastFrame: Bool = false) {
         guard recording else { return }
         recording = false
+        liveKeys = nil
         automatic?.cancel()
         deadline?.cancel()
         frames?.cancel()
@@ -379,6 +403,7 @@ final class ScrollingCapture: NSObject, NSWindowDelegate {
             let (image, detail) = await assembler.finish(stoppingFor: failure, requireComplete: mode != .manual)
             guard !Task.isCancelled else { return }
             report(detail == nil ? .complete : .issues, failure: detail)
+            completing = nil
             showResult(image, message: detail.map { Self.stopMessage($0, hasImage: image != nil) })
         }
     }
@@ -411,10 +436,11 @@ final class ScrollingCapture: NSObject, NSWindowDelegate {
 
     func showError(_ message: String) { status.stringValue = message }
 
-    private func showResult(_ image: CGImage?, message: String?) {
+    private func showResult(_ image: CGImage?, message: String?, canceled: Bool = false) {
         guide.orderOut(nil)
         result = image
         status.stringValue = message ?? "Scrolling capture ready."
+        var focus: NSView?
         if let image {
             sizeLabel.stringValue = "\(image.width) × \(image.height) px"
             let panelSize = CGSize(width: min(700, visible.width - 28), height: min(610, visible.height - 28))
@@ -434,27 +460,63 @@ final class ScrollingCapture: NSObject, NSWindowDelegate {
             preview.heightAnchor.constraint(equalToConstant: max(80, panelSize.height - 130)).isActive = true
             status.preferredMaxLayoutWidth = panelSize.width - 32
             let copy = NSButton(title: "Copy Image", target: self, action: #selector(copyPressed))
-            copy.keyEquivalent = "\r"
+            let edit = NSButton(title: "Open in Editor", target: self, action: #selector(editPressed))
+            if opensEditor { edit.keyEquivalent = "\r" }
+            else { copy.keyEquivalent = "\r" }
+            panel.performAction = { [weak self] key in
+                if key == "c" { self?.copyPressed(); return true }
+                if key == "e" { self?.editPressed(); return true }
+                return false
+            }
+            focus = opensEditor ? edit : copy
             let save = NSButton(title: "Save PNG…", target: self, action: #selector(savePressed))
             save.keyEquivalent = "s"
             save.keyEquivalentModifierMask = .command
             install(rows: [status, sizeLabel, preview, NSStackView(views: [
-                NSButton(title: "Done", target: self, action: #selector(cancelPressed)), save, copy
+                NSButton(title: "Done", target: self, action: #selector(cancelPressed)), save, edit, copy
             ])])
+        } else if canceled {
+            let done = NSButton(title: "Done", target: self, action: #selector(cancelPressed))
+            done.keyEquivalent = "\r"
+            focus = done
+            install(rows: [status, done])
         } else {
             let retry = NSButton(title: "Try Again…", target: self, action: #selector(retryPressed))
             retry.keyEquivalent = "\r"
+            focus = retry
             install(rows: [status, NSStackView(views: [
                 NSButton(title: "Close", target: self, action: #selector(cancelPressed)), retry
             ])])
         }
-        panel.center()
+        let size = panel.frame.size
+        let x = min(max(visible.minX + 12, region.midX - size.width / 2), visible.maxX - size.width - 12)
+        let y = min(max(visible.minY + 12, region.midY - size.height / 2), visible.maxY - size.height - 12)
+        let choices = [
+            CGPoint(x: x, y: region.minY - size.height - 10),
+            CGPoint(x: x, y: region.maxY + 10),
+            CGPoint(x: region.minX - size.width - 10, y: y),
+            CGPoint(x: region.maxX + 10, y: y),
+        ]
+        let origin = choices.first { visible.contains(CGRect(origin: $0, size: size)) } ??
+            CGPoint(x: visible.midX - size.width / 2, y: visible.midY - size.height / 2)
+        panel.setFrameOrigin(origin)
         panel.makeKeyAndOrderFront(nil)
+        if let focus { panel.makeFirstResponder(focus) }
     }
 
     private func install(rows: [NSView]) {
         // Existing views can move from the live toolbar into the finished preview.
         for row in rows { row.removeFromSuperview() }
+        status.font = .systemFont(ofSize: 16)
+        sizeLabel.font = .monospacedDigitSystemFont(ofSize: 16, weight: .medium)
+        for row in rows {
+            let children = (row as? NSStackView)?.arrangedSubviews ?? [row]
+            for button in children.compactMap({ $0 as? NSButton }) {
+                button.font = .systemFont(ofSize: 16, weight: .medium)
+                button.bezelStyle = .rounded
+                button.controlSize = .large
+            }
+        }
         let stack = NSStackView(views: rows)
         stack.orientation = .vertical
         stack.alignment = .leading
@@ -474,6 +536,16 @@ final class ScrollingCapture: NSObject, NSWindowDelegate {
 
 private final class ScrollPanel: NSPanel {
     var cancel: (() -> Void)?
+    var performAction: ((String) -> Bool)?
+    override func keyDown(with event: NSEvent) {
+        let flags = event.modifierFlags.intersection([.shift, .command, .control, .option])
+        if flags.isEmpty, event.keyCode == 53 {
+            if !event.isARepeat { cancel?() }
+            return
+        }
+        if flags.isEmpty, let key = event.charactersIgnoringModifiers?.lowercased(), performAction?(key) == true { return }
+        super.keyDown(with: event)
+    }
     override var canBecomeKey: Bool { true }
     override func cancelOperation(_ sender: Any?) { cancel?() }
 }

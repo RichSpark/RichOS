@@ -186,30 +186,16 @@ for attempt in 1 2; do
     done
     wait_for 'Crop 576 × 362 px' selection
     shot 01-region
-    probe move 1180 341
-    probe down 1180 341
-    probe up 1180 341
-    sleep 0.4
+    probe glance-press 'Scrolling Capture…'
     shot 02-mode-picker
     case "$mode" in
-        manual) menuY=376; title='Scroll Manually'; instructions='Scroll the selected area, then click Stop.' ;;
-        down) menuY=397; title='Auto Scroll Down'; instructions='Scrolling down…' ;;
-        right) menuY=420; title='Auto Scroll Right'; instructions='Scrolling right…' ;;
-        both) menuY=442; title='Auto Scroll Down and Right'; instructions='Scrolling down and right…' ;;
+        manual) title='Scroll Manually'; instructions='Scroll the selected area, then click Stop.' ;;
+        down) title='Auto Scroll Down'; instructions='Scrolling down…' ;;
+        right) title='Auto Scroll Right'; instructions='Scrolling right…' ;;
+        both) title='Auto Scroll Down and Right'; instructions='Scrolling down and right…' ;;
     esac
-    # Press the menu item by its accessible name; a synthetic click on the open menu is sometimes not
-    # taken, and the menu stays open. Click it when the press is unavailable or the menu is still open.
-    click_mode() {
-        probe move 1160 "$menuY"
-        sleep 0.25
-        probe down 1160 "$menuY"
-        probe up 1160 "$menuY"
-    }
-    if ! probe glance-press "$title" 2>/dev/null; then click_mode; fi
-    sleep 0.4
-    if [ "$(probe glance-has 'Auto Scroll Right' 2>/dev/null || true)" = yes ]; then
-        probe move 1160 "$menuY"; probe down 1160 "$menuY"; probe up 1160 "$menuY"
-    fi
+    wait_for yes glance-has "$title"
+    probe glance-press "$title"
     if [ "$mode" = manual ]; then
         wait_for yes glance-has "$instructions"
         wait_for app.richos.test.capturepattern front
@@ -270,9 +256,9 @@ if [ "$page" = sticky ] || [ "$page" = inset ]; then
     test "$ready" = no
     wait_for no glance-has 'Save PNG…'
     probe glance-press 'Try Again…'
-    wait_for 'Display 1680 × 1050 px' selection
+    wait_for 'Crop 576 × 362 px' selection
     shot 06-retry
-    printf 'PASS retry restored the region selector and the rejected stitch offered no export\n'
+    printf 'PASS retry restored the same selection and the rejected stitch offered no export\n'
 elif [ "$ready" != yes ]; then
     "$T/ax.sh" "$vm" tree --app RichGlance --depth 7 || true
     guest --pull /Users/admin/Library/Logs/RichOS/richfiles-timing.jsonl "$evidence/$vm-incomplete-timing.jsonl" || true

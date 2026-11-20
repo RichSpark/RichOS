@@ -5,7 +5,51 @@
   if (!settings || !bridge) return;
 
   let view, sheet, toggle, record, feedback, saved, keycaps, keyHint, summary, card;
+  let workflow, workflowBusy = false;
   let listening = false, busy = false;
+
+  function paintWorkflow() {
+    if (!sheet) return;
+    const open = sheet.querySelector("#richglance-open-editor");
+    const copy = sheet.querySelector("#richglance-copy");
+    const history = sheet.querySelector("#richglance-history");
+    for (const button of [open, copy, history]) button.disabled = !workflow || workflowBusy;
+    open.setAttribute("aria-pressed", String(workflow?.opensEditor === true));
+    copy.setAttribute("aria-pressed", String(workflow?.opensEditor !== true));
+    history.setAttribute("aria-checked", String(workflow?.keepsHistory === true));
+    history.closest(".dict-card").classList.toggle("is-on", workflow?.keepsHistory === true);
+    sheet.querySelector("#richglance-history-summary").textContent = workflow?.keepsHistory
+      ? "On. Originals and editable marks stay on this Mac for seven days."
+      : "Off. Turn on to keep screenshots and editable marks for seven days.";
+  }
+
+  async function loadWorkflow() {
+    try {
+      workflow = await bridge.invoke("glance_workflow_status");
+      paintWorkflow();
+    } catch (error) {
+      sheet.querySelector("#richglance-workflow-feedback").textContent = String(error);
+    }
+  }
+
+  async function updateWorkflow(opensEditor, keepsHistory) {
+    if (workflowBusy) return;
+    workflowBusy = true;
+    const message = sheet.querySelector("#richglance-workflow-feedback");
+    message.textContent = "";
+    paintWorkflow();
+    try {
+      workflow = await bridge.invoke("glance_workflow_configure", { opensEditor, keepsHistory });
+      message.textContent = "Saved.";
+    } catch (error) {
+      message.textContent = String(error);
+    } finally {
+      workflowBusy = false;
+      paintWorkflow();
+      if (!sheet.hidden) sheet.querySelector(keepsHistory !== null ? "#richglance-history"
+        : opensEditor ? "#richglance-open-editor" : "#richglance-copy").focus();
+    }
+  }
 
   function shortcutLabel(shortcut) {
     return (shortcut.control ? "⌃" : "") + (shortcut.option ? "⌥" : "") +
@@ -22,8 +66,8 @@
     card.classList.toggle("is-on", view.registered);
     toggle.disabled = busy;
     record.disabled = busy;
-    summary.textContent = !view.enabled ? "Off. Capture Region… is always in RichGlance’s File menu."
-      : view.registered ? `On. Press ${shortcutLabel(view.shortcut)} in any app to capture a region.`
+    summary.textContent = !view.enabled ? "Off. Capture… is always in RichGlance’s File menu."
+      : view.registered ? `On. Press ${shortcutLabel(view.shortcut)} in any app to start a capture.`
         : "Shortcut unavailable. Choose another combination.";
     record.textContent = listening ? "Cancel" : "Change";
     record.setAttribute("aria-label", listening ? "Cancel recording a capture shortcut" : "Change capture shortcut");
@@ -72,7 +116,7 @@
           <div>
             <p class="dict-eyebrow">Settings</p>
             <h2 id="richglance-capture-title" class="feature-title"><img class="feature-icon" src="assets/app-icons/richglance-128.png" alt="" />RichGlance</h2>
-            <p class="rf-hint">Look closely at any part of your screen, measure it and capture it as a picture.</p>
+            <p class="rf-hint">Capture, mark up and share screenshots.</p>
           </div>
           <button class="dict-close" type="button" aria-label="Close RichGlance settings">×</button>
         </header>
@@ -95,6 +139,33 @@
             </div>
           </section>
           <p class="dict-key-err" id="richglance-capture-feedback" role="alert"></p>
+          <section class="dict-card" aria-labelledby="richglance-after-title">
+            <span class="dict-spine"></span>
+            <div class="dict-card-main">
+              <h3 class="dict-card-title" id="richglance-after-title">After a capture</h3>
+              <p class="dict-card-sub">Choose what Return does after you select a target.</p>
+              <div class="richglance-workflow-actions">
+                <button class="dict-btn" type="button" id="richglance-copy" aria-pressed="true">Copy Image</button>
+                <button class="dict-btn" type="button" id="richglance-open-editor" aria-pressed="false">Open in Editor</button>
+              </div>
+            </div>
+          </section>
+          <section class="dict-card" aria-labelledby="richglance-history-title">
+            <span class="dict-spine"></span>
+            <div class="dict-card-main">
+              <h3 class="dict-card-title" id="richglance-history-title">Recent Captures</h3>
+              <p class="dict-card-sub" id="richglance-history-summary"></p>
+            </div>
+            <button class="dict-switch" role="switch" type="button" id="richglance-history" aria-label="Show Recent Captures"></button>
+          </section>
+          <section class="dict-sec" id="richglance-history-confirm" hidden>
+            <p class="dict-card-sub">Turning off Recent Captures deletes the originals and editable marks it kept on this Mac.</p>
+            <div class="richglance-workflow-actions">
+              <button class="dict-btn" type="button" id="richglance-keep-history">Cancel</button>
+              <button class="dict-btn" type="button" id="richglance-remove-history">Turn Off and Delete</button>
+            </div>
+          </section>
+          <p class="dict-card-sub" id="richglance-workflow-feedback" role="status"></p>
         </div>
       </section>`;
     document.body.appendChild(sheet);
@@ -121,7 +192,25 @@
       feedback.textContent = "";
       paint();
     });
+    sheet.querySelector("#richglance-copy").addEventListener("click", () => updateWorkflow(false, null));
+    sheet.querySelector("#richglance-open-editor").addEventListener("click", () => updateWorkflow(true, null));
+    const history = sheet.querySelector("#richglance-history");
+    const confirmation = sheet.querySelector("#richglance-history-confirm");
+    const cancel = sheet.querySelector("#richglance-keep-history");
+    history.addEventListener("click", () => {
+      if (!workflow?.keepsHistory) updateWorkflow(null, true);
+      else {
+        confirmation.hidden = false;
+        cancel.focus();
+      }
+    });
+    cancel.addEventListener("click", () => { confirmation.hidden = true; history.focus(); });
+    sheet.querySelector("#richglance-remove-history").addEventListener("click", () => {
+      confirmation.hidden = true;
+      updateWorkflow(null, false);
+    });
     sheet.addEventListener("keydown", handleKey, true);
+    paintWorkflow();
   }
 
   function handleKey(event) {
@@ -132,11 +221,13 @@
         listening = false;
         feedback.textContent = "";
         paint();
+      } else if (!sheet.querySelector("#richglance-history-confirm").hidden) {
+        sheet.querySelector("#richglance-keep-history").click();
       } else close();
       return;
     }
     if (event.key === "Tab") {
-      const buttons = [...sheet.querySelectorAll("button:not(:disabled)")];
+      const buttons = [...sheet.querySelectorAll("button:not(:disabled)")].filter(button => !button.closest("[hidden]"));
       const boundary = event.shiftKey ? buttons[0] : buttons.at(-1);
       if (document.activeElement === boundary) {
         event.preventDefault();
@@ -159,6 +250,7 @@
   function close() {
     listening = false;
     sheet.hidden = true;
+    sheet.querySelector("#richglance-history-confirm").hidden = true;
     document.getElementById("set-btn")?.focus();
   }
 
@@ -170,6 +262,7 @@
     saved.hidden = true;
     paint();
     sheet.querySelector(".dict-close").focus();
+    loadWorkflow();
   }
 
   bridge.invoke("glance_capture_status").then(status => {

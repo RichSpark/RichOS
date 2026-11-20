@@ -19,6 +19,10 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var capture: CaptureController?
     private var permissionProbe: Process?
     private var captureNotice: NSPanel?
+    private var noticeCapture: UUID?
+    private let screenshotStore = ScreenshotStore()
+    private var editors: [UUID: ScreenshotEditor] = [:]
+    private var recents: ScreenshotRecents?
     private var captureLaunch = CommandLine.arguments.contains("--capture-request")
     private var launchOrigin = Application.launchOrigin()
 
@@ -76,11 +80,19 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func applicationOpenUntitledFile(_ sender: NSApplication) -> Bool {
-        if viewer == nil, capture == nil, !captureLaunch { chooseImage() }
+        if viewer == nil, editors.isEmpty, recents == nil, capture == nil, !captureLaunch { openWithoutFile() }
         return true
     }
 
+    func applicationDidBecomeActive(_ notification: Notification) {
+        if capture == nil { recents?.refresh() }
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
+        if screenshotStore.keepsHistory {
+            let store = screenshotStore
+            DispatchQueue.global(qos: .utility).async { _ = try? store.entries() }
+        }
         let arguments = CommandLine.arguments
         guard captureLaunch, arguments.count >= 4, arguments[2] == "--retry-screen-recording",
               let originPID = pid_t(arguments[3]), capture == nil else { return }
@@ -97,12 +109,20 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
             return false
         }
         guard !captureLaunch else { return false }
-        if viewer == nil { chooseImage() }
+        if viewer == nil, editors.isEmpty, recents == nil { openWithoutFile() }
         else if !hasVisibleWindows { viewer?.show() }
         return true
     }
 
-    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { capture == nil }
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        for editor in Array(editors.values) where !editor.allowApplicationQuit() { return .terminateCancel }
+        return .terminateNow
+    }
+
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        // AppKit can report the last regular window closed while the Recents panel is still open.
+        capture == nil && editors.isEmpty && recents == nil
+    }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         // Hand back foreground ownership before the last window disappears.
@@ -162,6 +182,11 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
         return origin
     }
 
+    private func openWithoutFile() {
+        if (try? screenshotStore.entries().isEmpty) == false { showRecents() }
+        else { chooseImage() }
+    }
+
     @objc private func chooseImage() {
         guard openingPanel == nil else { return }
         let panel = NSOpenPanel()
@@ -172,7 +197,7 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
             guard let self else { return }
             openingPanel = nil
             if result == .OK, let file = panel?.url { open(file) }
-            else if viewer == nil, capture == nil { NSApp.terminate(nil) }
+            else if viewer == nil, editors.isEmpty, recents == nil, capture == nil { NSApp.terminate(nil) }
         }
     }
 
@@ -185,20 +210,25 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         captureNotice?.orderOut(nil)
         captureNotice = nil
+        noticeCapture = nil
         let shortcutOrigin = originPID.flatMap(NSRunningApplication.init(processIdentifier:))
         let reliableOrigin = shortcutOrigin.flatMap { app in
             app != .current && !app.isTerminated && app.activationPolicy == .regular ? app : nil
         }
         let origin = reliableOrigin ?? externalFrontmost
         let keyWindow = origin == nil && NSApp.isActive ? NSApp.keyWindow : nil
-        let session = CaptureController(previousWindow: keyWindow === viewer?.window ? keyWindow : nil,
-                                        previousApp: origin ?? previousApplication,
+        let session = CaptureController(previousWindow: keyWindow,
+                                        previousApp: origin ?? previousApplication, store: screenshotStore,
+                                        openEditor: { [weak self] document in
+            self?.showEditor(document, origin: origin ?? self?.previousApplication, previousWindow: keyWindow)
+        },
                                         refreshPermission: { [weak self] session, originPID in
             self?.refreshCapturePermission(for: session, originPID: originPID)
-        }) { [weak self] message, display in
+        }) { [weak self] message, display, retained in
             guard let self else { return }
             capture = nil
-            if let message, let display { showCaptureNotice(message, display: display) }
+            recents?.refresh()
+            if let message, let display { showCaptureNotice(message, display: display, retained: retained) }
             else { endCaptureLaunch() }
         }
         capture = session
@@ -279,17 +309,19 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
         dispatchMain()
     }
 
-    private func showCaptureNotice(_ message: String, display: CGRect) {
+    private func showCaptureNotice(_ message: String, display: CGRect, retained: UUID?) {
+        noticeCapture = retained
+        let width: CGFloat = retained == nil ? 285 : 348
         let dark = NSApp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-        let panel = NSPanel(contentRect: CGRect(x: display.midX - 123, y: display.maxY - 84, width: 246, height: 38),
+        let panel = NSPanel(contentRect: CGRect(x: display.midX - width / 2, y: display.maxY - 84, width: width, height: 38),
                             styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.level = .statusBar
         panel.hasShadow = true
-        panel.ignoresMouseEvents = true
+        panel.ignoresMouseEvents = retained == nil
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
-        let background = NSView(frame: CGRect(x: 0, y: 0, width: 246, height: 38))
+        let background = NSView(frame: CGRect(x: 0, y: 0, width: width, height: 38))
         background.wantsLayer = true
         background.layer?.backgroundColor = (dark ? NSColor(red: 0.094, green: 0.141, blue: 0.251, alpha: 1)
                                                    : NSColor(red: 0.992, green: 0.988, blue: 0.973, alpha: 1)).cgColor
@@ -298,26 +330,106 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
         label.textColor = dark ? .white : .black
         label.font = .systemFont(ofSize: 16, weight: .semibold)
         label.alignment = .center
-        label.frame = CGRect(x: 0, y: 9, width: 246, height: 20)
+        label.frame = CGRect(x: 8, y: 9, width: width - (retained == nil ? 16 : 91), height: 20)
         background.addSubview(label)
+        if retained != nil {
+            let edit = NSButton(title: "Edit…", target: self, action: #selector(editFromNotice))
+            edit.font = .systemFont(ofSize: 16, weight: .semibold)
+            edit.bezelStyle = .rounded
+            edit.frame = CGRect(x: width - 81, y: 4, width: 72, height: 30)
+            background.addSubview(edit)
+        }
         panel.contentView = background
         captureNotice = panel
         panel.orderFrontRegardless()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) { [weak self, weak panel] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self, weak panel] in
             guard let self, let panel, captureNotice === panel else { return }
             panel.orderOut(nil)
             captureNotice = nil
+            noticeCapture = nil
             endCaptureLaunch()
         }
     }
 
     private func endCaptureLaunch() {
-        if captureLaunch, viewer == nil {
+        if captureLaunch, viewer == nil, editors.isEmpty, recents == nil {
             RichFilesDiagnostics.flush()
             NSApp.terminate(nil)
         }
         captureLaunch = false
     }
+
+    @objc private func editFromNotice() {
+        guard let id = noticeCapture else { return }
+        captureNotice?.orderOut(nil)
+        captureNotice = nil
+        noticeCapture = nil
+        editRecent(id: id)
+    }
+
+    @objc private func editLastCapture() { editRecent(id: nil) }
+
+    private func editRecent(id: UUID?) {
+        do {
+            let entries = try screenshotStore.entries()
+            guard let entry = id == nil ? entries.first : entries.first(where: { $0.id == id }) else {
+                showHistoryError("There is no recent capture to edit.")
+                return
+            }
+            guard let document = try screenshotStore.load(entry) else {
+                showHistoryError("This capture could not be opened.")
+                recents?.refresh()
+                return
+            }
+            showEditor(document, origin: externalFrontmost ?? previousApplication, previousWindow: NSApp.keyWindow)
+        } catch {
+            showHistoryError("This capture could not be opened.")
+        }
+    }
+
+    private func showHistoryError(_ message: String) {
+        let alert = NSAlert()
+        alert.messageText = message
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
+    }
+
+    private func showEditor(_ document: ScreenshotDocument, origin: NSRunningApplication?, previousWindow: NSWindow?) {
+        captureLaunch = false
+        if let editor = editors[document.id] { editor.focus(); return }
+        let editor = ScreenshotEditor(document: document)
+        editors[document.id] = editor
+        editor.retainEdits = { [weak self] document in
+            guard let self else { return false }
+            return (try? screenshotStore.retain(document, existingOnly: true)) == true
+        }
+        editor.closed = { [weak self, weak previousWindow] in
+            guard let self else { return }
+            editors.removeValue(forKey: document.id)
+            recents?.refresh()
+            if let previousWindow, previousWindow.isVisible, !previousWindow.isMiniaturized {
+                previousWindow.makeKeyAndOrderFront(nil)
+            } else if let origin, !origin.isTerminated, NSApp.isActive {
+                if #available(macOS 14, *) { _ = origin.activate(from: .current, options: []) }
+                else { _ = origin.activate(options: []) }
+            }
+        }
+        editor.show()
+    }
+
+    @objc private func showRecents() {
+        captureLaunch = false
+        if let recents { recents.show(); return }
+        let panel = ScreenshotRecents(store: screenshotStore)
+        panel.closed = { [weak self] in self?.recents = nil }
+        panel.edit = { [weak self] entry in self?.editRecent(id: entry.id) }
+        recents = panel
+        panel.show()
+    }
+
+    private var keyEditor: ScreenshotEditor? { editors.values.first { $0.window === NSApp.keyWindow } }
+    @objc private func copyScreenshot() { keyEditor?.copyImage() }
+    @objc private func saveScreenshot() { keyEditor?.saveImage() }
 
     @objc private func openInPreview() { viewer?.openInPreview() }
     @objc private func showInfo() { viewer?.info.toggleInfo() }
@@ -341,10 +453,18 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         let file = NSMenuItem()
         let fileMenu = NSMenu(title: "File")
+        fileMenu.delegate = self
         file.submenu = fileMenu
         fileMenu.addItem(withTitle: "Open…", action: #selector(chooseImage), keyEquivalent: "o").target = self
         fileMenu.addItem(withTitle: "Open in Preview", action: #selector(openInPreview), keyEquivalent: "").target = self
-        fileMenu.addItem(withTitle: "Capture Region…", action: #selector(startCapture), keyEquivalent: "").target = self
+        fileMenu.addItem(withTitle: "Capture…", action: #selector(startCapture), keyEquivalent: "").target = self
+        let editLast = fileMenu.addItem(withTitle: "Edit Last Capture", action: #selector(editLastCapture), keyEquivalent: "e")
+        editLast.keyEquivalentModifierMask = [.command, .shift]
+        editLast.target = self
+        fileMenu.addItem(withTitle: "Recent Captures", action: #selector(showRecents), keyEquivalent: "").target = self
+        fileMenu.addItem(.separator())
+        fileMenu.addItem(withTitle: "Copy Image", action: #selector(copyScreenshot), keyEquivalent: "c").target = self
+        fileMenu.addItem(withTitle: "Save PNG…", action: #selector(saveScreenshot), keyEquivalent: "s").target = self
         fileMenu.addItem(.separator())
         fileMenu.addItem(withTitle: "Close", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
         menuBar.addItem(file)
@@ -373,6 +493,12 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
 extension Application: NSMenuItemValidation {
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         if menuItem.action == #selector(startCapture) { return capture?.canRevisitPermission ?? true }
+        if menuItem.action == #selector(editLastCapture) { return (try? screenshotStore.entries().isEmpty) == false }
+        if menuItem.action == #selector(showRecents) { return capture == nil }
+        if menuItem.action == #selector(copyScreenshot) || menuItem.action == #selector(saveScreenshot) {
+            menuItem.isHidden = keyEditor == nil
+            return keyEditor != nil
+        }
         if menuItem.action == #selector(openInPreview) { return viewer?.file != nil }
         if menuItem.action == #selector(showInfo) {
             menuItem.title = viewer?.info.explicitlyShown == true ? "Hide Info" : "Show Info"
@@ -386,5 +512,13 @@ extension Application: NSMenuItemValidation {
             return viewer?.info.isHidden == false && openingPanel == nil
         }
         return true
+    }
+}
+
+extension Application: NSMenuDelegate {
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        for item in menu.items where item.action == #selector(copyScreenshot) || item.action == #selector(saveScreenshot) {
+            item.isHidden = keyEditor == nil
+        }
     }
 }

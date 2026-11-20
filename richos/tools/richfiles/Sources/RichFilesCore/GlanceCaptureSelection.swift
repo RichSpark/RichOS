@@ -84,6 +84,26 @@ public struct GlanceCaptureSelection {
         active = active == .first ? .second : .first
     }
 
+    /// Replace a refined rectangle after a mouse handle drag. Preserve which diagonal is active.
+    public mutating func refine(active point: CGPoint, fixed opposite: CGPoint) {
+        guard phase == .refining else { return }
+        let fixed = Point(x: Self.snap(opposite.x, to: width), y: Self.snap(opposite.y, to: height))
+        if active == .first { second = fixed }
+        else { first = fixed }
+        setTarget(Point(x: Self.snap(point.x, to: width), y: Self.snap(point.y, to: height)))
+    }
+
+    /// Translate the entire crop, stopping at the first display boundary.
+    public mutating func translate(dx: Int, dy: Int) {
+        guard phase == .refining, let crop else { return }
+        let x = max(-Int(crop.minX), min(width - Int(crop.maxX), dx))
+        let y = max(-Int(crop.minY), min(height - Int(crop.maxY), dy))
+        first.x += x
+        first.y += y
+        second.x += x
+        second.y += y
+    }
+
     public mutating func toggleLens() { showsLens.toggle() }
 
     /// Discard a crop or its first corner without leaving the capture session.
@@ -130,6 +150,13 @@ public struct GlanceCaptureGeometry {
     public func viewPoint(_ sourcePoint: GlanceCaptureSelection.Point) -> CGPoint {
         CGPoint(x: CGFloat(sourcePoint.x) * view.width / frame.width,
                 y: CGFloat(sourcePoint.y) * view.height / frame.height)
+    }
+
+    public func sourceRect(_ viewRect: CGRect) -> CGRect {
+        CGRect(x: viewRect.minX * frame.width / view.width,
+               y: viewRect.minY * frame.height / view.height,
+               width: viewRect.width * frame.width / view.width,
+               height: viewRect.height * frame.height / view.height)
     }
 
     public func viewRect(_ sourceRect: CGRect) -> CGRect {

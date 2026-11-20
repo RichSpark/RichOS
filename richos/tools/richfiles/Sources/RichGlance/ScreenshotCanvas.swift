@@ -1,0 +1,475 @@
+import AppKit
+
+@MainActor
+final class ScreenshotCanvas: NSView {
+    enum Zoom { case fit, actual, custom(CGFloat) }
+    private enum Handle: Equatable {
+        case move, start, end, pointer, corner(Int), edge(Int)
+    }
+    private struct Gesture {
+        let anchor: CGPoint
+        let before: ScreenshotEdits
+        var mark: ScreenshotMark?
+        var crop: CGRect?
+        let handle: Handle
+    }
+
+    var document: ScreenshotDocument
+    var selected: UUID?
+    var tool = ScreenshotTool.select {
+        didSet {
+            if tool == .crop, oldValue != .crop { pendingCrop = document.crop }
+            if tool != .crop { pendingCrop = nil }
+            refresh()
+        }
+    }
+    var ink = ScreenshotInk.red
+    var large = false
+    var changed: (() -> Void)?
+    var keys: ((NSEvent) -> Bool)?
+    var editText: (() -> Void)?
+    private let image: NSImage
+    private var gesture: Gesture?
+    private var tracking: NSTrackingArea?
+    private var hover: CGPoint?
+    private var pendingCrop: CGRect?
+    private var undoStack: [ScreenshotEdits] = []
+    private var redoStack: [ScreenshotEdits] = []
+    private let margin: CGFloat = 39
+    private(set) var factor: CGFloat = 1
+    private var imageOrigin = CGPoint.zero
+
+    override var isFlipped: Bool { true }
+    override var acceptsFirstResponder: Bool { true }
+
+    init(document: ScreenshotDocument) {
+        self.document = document
+        image = NSImage(cgImage: document.original, size: document.bounds.size)
+        super.init(frame: .zero)
+        setAccessibilityElement(true)
+        setAccessibilityRole(.image)
+        setAccessibilityLabel("Screenshot canvas")
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    var selectedMark: ScreenshotMark? { document.edits.marks.first { $0.id == selected } }
+    var canUndo: Bool { !undoStack.isEmpty }
+    var canRedo: Bool { !redoStack.isEmpty }
+    var hasChanges: Bool { !document.edits.marks.isEmpty || document.crop != document.bounds }
+    var selectionIsOffscreen: Bool {
+        guard let selectedMark else { return false }
+        return !visibleRect.intersects(viewRect(markBounds(selectedMark)))
+    }
+
+    private var shown: CGRect { tool == .crop ? document.bounds : document.crop }
+    private var actual: CGFloat { 1 / (window?.backingScaleFactor ?? document.scale) }
+
+    func layoutImage(in viewport: CGSize, zoom: Zoom) {
+        let rect = shown
+        guard !rect.isEmpty else { return }
+        let width = max(1, viewport.width - 2 * margin) / rect.width
+        let height = max(1, viewport.height - 2 * margin) / rect.height
+        switch zoom {
+        case .fit: factor = min(actual, width, height)
+        case .actual: factor = actual
+        case .custom(let multiplier): factor = actual * multiplier
+        }
+        let size = CGSize(width: rect.width * factor, height: rect.height * factor)
+        let extent = CGSize(width: max(viewport.width, size.width + 2 * margin),
+                            height: max(viewport.height, size.height + 2 * margin))
+        if frame.size != extent { setFrameSize(extent) }
+        imageOrigin = CGPoint(x: ((extent.width - size.width) / 2).rounded() - rect.minX * factor,
+                              y: ((extent.height - size.height) / 2).rounded() - rect.minY * factor)
+        needsDisplay = true
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let tracking { removeTrackingArea(tracking) }
+        let area = NSTrackingArea(rect: .zero, options: [.inVisibleRect, .activeInKeyWindow, .mouseMoved, .mouseEnteredAndExited],
+                                  owner: self, userInfo: nil)
+        tracking = area
+        addTrackingArea(area)
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        refresh()
+    }
+
+    override func draw(_ dirtyRect: CGRect) {
+        guard let context = NSGraphicsContext.current?.cgContext else { return }
+        ScreenshotChrome.colors(for: self).ground.setFill()
+        dirtyRect.fill()
+        let imageRect = viewRect(shown)
+        context.saveGState()
+        context.clip(to: imageRect)
+        NSGraphicsContext.current?.imageInterpolation = factor >= actual ? .none : .high
+        image.draw(in: viewRect(document.bounds), from: .zero, operation: .sourceOver,
+                   fraction: 1, respectFlipped: true, hints: nil)
+        context.translateBy(x: imageOrigin.x, y: imageOrigin.y)
+        context.scaleBy(x: factor, y: factor)
+        ScreenshotRenderer.drawMarks(document.edits, scale: document.scale, in: context)
+        if tool == .steps, let hover, shown.contains(hover), gesture == nil {
+            context.setAlpha(0.65)
+            ScreenshotRenderer.draw(ScreenshotMark(tool: .steps, start: hover, end: hover, ink: ink, large: large),
+                                    number: document.edits.marks.filter { $0.tool == .steps }.count + 1,
+                                    scale: document.scale, in: context)
+        }
+        context.restoreGState()
+        outline(imageRect, dashed: false, in: context)
+        drawExportLabel(pendingCrop ?? document.crop)
+        if let crop = pendingCrop {
+            let cut = viewRect(crop)
+            let shade = CGMutablePath()
+            shade.addRect(imageRect)
+            shade.addRect(cut)
+            context.addPath(shade)
+            context.setFillColor(NSColor.black.withAlphaComponent(0.56).cgColor)
+            context.drawPath(using: .eoFill)
+            outline(cut, dashed: true, in: context)
+        }
+        if pendingCrop != nil {
+            for (handle, point) in handles() { drawHandle(handle, at: viewPoint(point), in: context) }
+        }
+        if let mark = selectedMark, tool != .crop {
+            outline(viewRect(markBounds(mark)), dashed: true, in: context)
+            for (handle, point) in handles() { drawHandle(handle, at: viewPoint(point), in: context) }
+            if mark.tool == .redact {
+                let rect = viewRect(mark.rect)
+                let label = NSAttributedString(string: "\(Int(mark.rect.integral.width)) × \(Int(mark.rect.integral.height)) px",
+                                               attributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 14, weight: .semibold),
+                                                            .foregroundColor: NSColor.white])
+                let size = label.size()
+                let above = rect.minY - size.height - 10
+                let point = CGPoint(x: max(6, min(rect.minX, bounds.maxX - size.width - 12)),
+                                    y: above >= visibleRect.minY ? above : rect.maxY + 10)
+                ScreenshotRenderer.ink.setFill()
+                NSBezierPath(roundedRect: CGRect(origin: point, size: size).insetBy(dx: -5, dy: -3), xRadius: 4, yRadius: 4).fill()
+                label.draw(at: point)
+            }
+        }
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        hover = source(event)
+        if tool == .steps { needsDisplay = true }
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        hover = nil
+        needsDisplay = true
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        window?.makeFirstResponder(self)
+        let point = source(event)
+        let location = viewPoint(point)
+        if event.clickCount == 2, tool == .select, selectedMark?.tool == .text,
+           let selectedMark, contains(point, in: selectedMark) {
+            editText?()
+            return
+        }
+        let nearest = handles().first { hypot(viewPoint($0.1).x - location.x, viewPoint($0.1).y - location.y) <= 10 }
+        if let nearest {
+            gesture = Gesture(anchor: point, before: document.edits, mark: selectedMark, crop: pendingCrop, handle: nearest.0)
+        } else if tool == .crop {
+            let crop = pendingCrop?.contains(point) == true ? pendingCrop : CGRect(origin: point, size: .zero)
+            gesture = Gesture(anchor: point, before: document.edits, crop: crop,
+                              handle: crop?.isEmpty == false ? .move : .end)
+        } else if tool == .select {
+            let top = document.edits.marks.reversed().filter { $0.tool == .redact } +
+                document.edits.marks.reversed().filter { $0.tool != .redact }
+            selected = top.first { contains(point, in: $0) }?.id
+            if let selectedMark { gesture = Gesture(anchor: point, before: document.edits, mark: selectedMark, handle: .move) }
+        } else if shown.contains(point) {
+            var end = point
+            var pointer: CGPoint?
+            if tool == .text {
+                end = CGPoint(x: min(shown.maxX, point.x + 180 * document.scale),
+                              y: min(shown.maxY, point.y + 52 * document.scale))
+                pointer = CGPoint(x: point.x, y: min(shown.maxY, end.y + 16 * document.scale))
+            }
+            let mark = ScreenshotMark(tool: tool, start: point, end: end, pointer: pointer, ink: ink, large: large)
+            gesture = Gesture(anchor: point, before: document.edits, handle: .end)
+            document.edits.marks.append(mark)
+            selected = mark.id
+        } else {
+            selected = nil
+        }
+        refresh()
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard let gesture else { return }
+        let point = bounded(source(event), within: shown)
+        let dx = point.x - gesture.anchor.x
+        let dy = point.y - gesture.anchor.y
+        if let crop = gesture.crop {
+            pendingCrop = resize(crop, handle: gesture.handle, to: point, dx: dx, dy: dy, within: document.bounds)
+        } else if let index = document.edits.marks.firstIndex(where: { $0.id == selected }) {
+            var mark = gesture.mark ?? document.edits.marks[index]
+            switch gesture.handle {
+            case .move:
+                let available = shown
+                let box = markBounds(mark)
+                let x = box.width <= available.width ? min(available.maxX - box.maxX, max(available.minX - box.minX, dx)) : dx
+                let y = box.height <= available.height ? min(available.maxY - box.maxY, max(available.minY - box.minY, dy)) : dy
+                mark.move(dx: x, dy: y)
+            case .start: mark.start = point
+            case .end:
+                if mark.tool != .steps, mark.tool != .text || gesture.mark != nil { mark.end = point }
+            case .pointer: mark.pointer = point
+            case .corner, .edge:
+                let rect = resize(mark.rect, handle: gesture.handle, to: point, dx: dx, dy: dy, within: shown)
+                mark.start = rect.origin
+                mark.end = CGPoint(x: rect.maxX, y: rect.maxY)
+            }
+            document.edits.marks[index] = mark
+        }
+        refresh()
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        guard let gesture else { return }
+        self.gesture = nil
+        if let mark = selectedMark, gesture.mark == nil, gesture.crop == nil {
+            if mark.tool != .steps, mark.rect.isEmpty, mark.tool != .arrow || mark.start == mark.end {
+                document.edits = gesture.before
+                selected = nil
+            }
+        }
+        commit(gesture.before)
+        if gesture.mark == nil, tool == .text, selectedMark?.tool == .text { editText?() }
+        refresh()
+    }
+
+    override func keyDown(with event: NSEvent) {
+        if keys?(event) != true { super.keyDown(with: event) }
+    }
+
+    func commitCrop() {
+        guard let crop = pendingCrop?.integral.intersection(document.bounds), !crop.isEmpty else { return }
+        modify { $0.crop = crop }
+        tool = .select
+    }
+
+    func cancelCrop() { tool = .select }
+
+    func selectNext(backwards: Bool) {
+        let marks = document.edits.marks
+        guard !marks.isEmpty else { return }
+        let index = marks.firstIndex { $0.id == selected } ?? (backwards ? 0 : -1)
+        selected = marks[(index + (backwards ? -1 : 1) + marks.count) % marks.count].id
+        refresh()
+    }
+
+    func setStyle(ink: ScreenshotInk? = nil, large: Bool? = nil) {
+        if let ink { self.ink = ink }
+        if let large { self.large = large }
+        editSelected { mark in
+            if let ink { mark.ink = ink }
+            if let large { mark.large = large }
+        }
+    }
+
+    func editSelected(_ body: (inout ScreenshotMark) -> Void) {
+        guard let index = document.edits.marks.firstIndex(where: { $0.id == selected }) else { return }
+        modify { body(&$0.marks[index]) }
+    }
+
+    func nudge(dx: CGFloat, dy: CGFloat) {
+        if let crop = pendingCrop {
+            pendingCrop = resize(crop, handle: .move, to: .zero, dx: dx, dy: dy, within: document.bounds)
+            refresh()
+            return
+        }
+        editSelected { $0.move(dx: dx, dy: dy) }
+    }
+
+    func deleteSelected() {
+        guard let selected else { return }
+        self.selected = nil
+        modify { $0.marks.removeAll { $0.id == selected } }
+    }
+
+    func reorderSelected(by amount: Int) {
+        guard let selected else { return }
+        modify { $0.reorderStep(selected, by: amount) }
+    }
+
+    func revealSelection() {
+        if let selectedMark { scrollToVisible(viewRect(markBounds(selectedMark)).insetBy(dx: -18, dy: -18)) }
+    }
+
+    func undo() {
+        guard let edits = undoStack.popLast() else { return }
+        redoStack.append(document.edits)
+        document.edits = edits
+        refresh()
+    }
+
+    func redo() {
+        guard let edits = redoStack.popLast() else { return }
+        undoStack.append(document.edits)
+        document.edits = edits
+        refresh()
+    }
+
+    func refresh() {
+        setAccessibilityValue("\(Int(document.crop.width)) × \(Int(document.crop.height)) px")
+        needsDisplay = true
+        changed?()
+    }
+
+    private func commit(_ before: ScreenshotEdits) {
+        guard before != document.edits else { return }
+        undoStack.append(before)
+        if undoStack.count > 50 { undoStack.removeFirst() }
+        redoStack.removeAll()
+    }
+
+    private func modify(_ body: (inout ScreenshotEdits) -> Void) {
+        let before = document.edits
+        body(&document.edits)
+        commit(before)
+        refresh()
+    }
+
+    private func markBounds(_ mark: ScreenshotMark) -> CGRect {
+        if mark.tool == .steps {
+            let radius = 15 * document.scale * (mark.large ? 1.5 : 1)
+            return CGRect(x: mark.start.x - radius, y: mark.start.y - radius, width: 2 * radius, height: 2 * radius)
+        }
+        if mark.tool == .arrow { return mark.rect.insetBy(dx: -4 * document.scale, dy: -4 * document.scale) }
+        return mark.rect
+    }
+
+    private func contains(_ point: CGPoint, in mark: ScreenshotMark) -> Bool {
+        if mark.tool == .arrow {
+            let dx = mark.end.x - mark.start.x
+            let dy = mark.end.y - mark.start.y
+            let length = dx * dx + dy * dy
+            guard length > 0 else { return false }
+            let progress = min(1, max(0, ((point.x - mark.start.x) * dx + (point.y - mark.start.y) * dy) / length))
+            return hypot(point.x - mark.start.x - progress * dx, point.y - mark.start.y - progress * dy) <= max(7 / factor, 4)
+        }
+        return markBounds(mark).contains(point)
+    }
+
+    private func handles() -> [(Handle, CGPoint)] {
+        if let crop = pendingCrop { return rectHandles(crop, edges: true) }
+        guard let mark = selectedMark else { return [] }
+        switch mark.tool {
+        case .arrow: return [(.start, mark.start), (.end, mark.end)]
+        case .text:
+            return rectHandles(mark.rect, edges: true) + (mark.pointer.map { [(.pointer, $0)] } ?? [])
+        case .box, .redact, .highlight: return rectHandles(mark.rect, edges: false)
+        default: return []
+        }
+    }
+
+    private func rectHandles(_ rect: CGRect, edges: Bool) -> [(Handle, CGPoint)] {
+        let corners = [(rect.minX, rect.minY), (rect.maxX, rect.minY), (rect.maxX, rect.maxY), (rect.minX, rect.maxY)]
+        let sides = [(rect.midX, rect.minY), (rect.maxX, rect.midY), (rect.midX, rect.maxY), (rect.minX, rect.midY)]
+        return corners.enumerated().map { (.corner($0.offset), CGPoint(x: $0.element.0, y: $0.element.1)) } +
+            (edges ? sides.enumerated().map { (.edge($0.offset), CGPoint(x: $0.element.0, y: $0.element.1)) } : [])
+    }
+
+    private func resize(_ rect: CGRect, handle: Handle, to point: CGPoint, dx: CGFloat, dy: CGFloat,
+                        within limits: CGRect) -> CGRect {
+        var a = rect.origin
+        var b = CGPoint(x: rect.maxX, y: rect.maxY)
+        switch handle {
+        case .move:
+            return rect.offsetBy(dx: min(limits.maxX - rect.maxX, max(limits.minX - rect.minX, dx)),
+                                 dy: min(limits.maxY - rect.maxY, max(limits.minY - rect.minY, dy)))
+        case .end: b = point
+        case .corner(let i):
+            if i == 0 || i == 3 { a.x = point.x } else { b.x = point.x }
+            if i == 0 || i == 1 { a.y = point.y } else { b.y = point.y }
+        case .edge(let i):
+            switch i {
+            case 0: a.y = point.y
+            case 1: b.x = point.x
+            case 2: b.y = point.y
+            default: a.x = point.x
+            }
+        default: break
+        }
+        return ScreenshotRenderer.rect(from: a, to: b).intersection(limits)
+    }
+
+    private func drawExportLabel(_ crop: CGRect) {
+        let box = viewRect(crop)
+        let colors = ScreenshotChrome.colors(for: self)
+        let title = NSAttributedString(string: "Exported image · \(Int(crop.integral.width)) × \(Int(crop.integral.height)) px",
+                                       attributes: [.font: NSFont.systemFont(ofSize: 16, weight: .semibold),
+                                                    .foregroundColor: colors.ink])
+        let size = title.size()
+        let label = CGRect(x: box.minX, y: box.minY - size.height - 8, width: size.width + 16, height: size.height + 8)
+        let path = NSBezierPath(roundedRect: label, xRadius: 5, yRadius: 5)
+        colors.surface.setFill()
+        path.fill()
+        colors.gold.setStroke()
+        path.stroke()
+        title.draw(at: CGPoint(x: label.minX + 8, y: label.minY + 4))
+    }
+
+    private func outline(_ rect: CGRect, dashed: Bool, in context: CGContext) {
+        context.saveGState()
+        context.setStrokeColor(NSColor.white.cgColor)
+        context.setLineWidth(2)
+        context.stroke(rect)
+        if dashed { context.setLineDash(phase: 0, lengths: [5, 4]) }
+        context.setStrokeColor(ScreenshotRenderer.ink.cgColor)
+        context.setLineWidth(1)
+        context.stroke(rect)
+        context.restoreGState()
+    }
+
+    private func drawHandle(_ handle: Handle, at point: CGPoint, in context: CGContext) {
+        let side: CGFloat = gesture?.handle == handle ? 18 : 14
+        var rect = CGRect(x: point.x - side / 2, y: point.y - side / 2, width: side, height: side)
+        let path: CGPath
+        switch handle {
+        case .start, .end: path = CGPath(ellipseIn: rect, transform: nil)
+        case .edge(let i):
+            rect = rect.insetBy(dx: i.isMultiple(of: 2) ? 0 : 4, dy: i.isMultiple(of: 2) ? 4 : 0)
+            path = CGPath(rect: rect, transform: nil)
+        case .pointer:
+            let diamond = CGMutablePath()
+            diamond.move(to: CGPoint(x: rect.midX, y: rect.minY))
+            diamond.addLine(to: CGPoint(x: rect.maxX, y: rect.midY))
+            diamond.addLine(to: CGPoint(x: rect.midX, y: rect.maxY))
+            diamond.addLine(to: CGPoint(x: rect.minX, y: rect.midY))
+            diamond.closeSubpath()
+            path = diamond
+        default: path = CGPath(rect: rect, transform: nil)
+        }
+        context.setFillColor((handle == .pointer ? ScreenshotInk.yellow.color : .white).cgColor)
+        context.setStrokeColor(ScreenshotRenderer.ink.cgColor)
+        context.setLineWidth(2)
+        context.addPath(path)
+        context.drawPath(using: .fillStroke)
+    }
+
+    private func source(_ event: NSEvent) -> CGPoint {
+        let point = convert(event.locationInWindow, from: nil)
+        return CGPoint(x: ((point.x - imageOrigin.x) / factor).rounded(),
+                       y: ((point.y - imageOrigin.y) / factor).rounded())
+    }
+
+    private func bounded(_ point: CGPoint, within rect: CGRect) -> CGPoint {
+        CGPoint(x: min(rect.maxX, max(rect.minX, point.x)), y: min(rect.maxY, max(rect.minY, point.y)))
+    }
+
+    private func viewPoint(_ point: CGPoint) -> CGPoint {
+        CGPoint(x: imageOrigin.x + point.x * factor, y: imageOrigin.y + point.y * factor)
+    }
+
+    private func viewRect(_ rect: CGRect) -> CGRect {
+        CGRect(origin: viewPoint(rect.origin), size: CGSize(width: rect.width * factor, height: rect.height * factor))
+    }
+}

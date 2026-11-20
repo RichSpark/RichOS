@@ -34,16 +34,39 @@ final class CaptureCanvas: NSView {
     let image: CGImage
     private(set) var selection: GlanceCaptureSelection
     var copy: (() -> Void)?
+    var edit: (() -> Void)?
     var save: (() -> Void)?
-    var scroll: ((ScrollingCapture.Mode) -> Void)?
+    var scroll: ((Int) -> Void)? { didSet { scrollMenu.isHidden = scroll == nil } }
     var escape: (() -> Void)?
     var cancel: (() -> Void)?
+    var chooseTarget: ((CGPoint?) -> Void)?
+    var nextTarget: (() -> Void)?
+    var aim: ((CGPoint) -> Void)?
+    var changeMode: ((CaptureMode) -> Void)?
+    var changeDelay: ((Int) -> Void)?
+    var changePointer: ((Bool) -> Void)?
+    var changeAction: ((ScreenshotStore.Action) -> Void)?
+    private(set) var mode = CaptureMode.region
+    private(set) var isActiveDisplay = true
+    private(set) var locked = false
+    private var targetRect: CGRect?
+    private var targetDescription = ""
+    private var originTitle = ""
+    private var doesIncludePointer = false
+    private var delay = 0
+    private var returnAction = ScreenshotStore.Action.copy
+    private let controls = CaptureControls()
     private let actions = NSStackView()
-    private let copyButton = NSButton(title: "Copy Image    ↵", target: nil, action: nil)
-    private let saveButton = NSButton(title: "Save PNG…    ⌘S", target: nil, action: nil)
-    private let scrollButton = NSButton(title: "Scrolling Capture…", target: nil, action: nil)
-    private let retryButton = NSButton(title: "Start Over    Esc", target: nil, action: nil)
-    private let cancelButton = NSButton(title: "Cancel Capture", target: nil, action: nil)
+    private let actionButtons = NSStackView()
+    private let hint = NSTextField(labelWithString: "")
+    private let copyButton = NSButton(title: "Copy Image", target: nil, action: nil)
+    private let editButton = NSButton(title: "Open in Editor", target: nil, action: nil)
+    private let saveButton = NSButton(title: "Save PNG…", target: nil, action: nil)
+    private let retryButton = NSButton(title: "Back", target: nil, action: nil)
+    private let scrollMenu = NSPopUpButton(frame: .zero, pullsDown: true)
+    private let actionMenu = NSPopUpButton(frame: .zero, pullsDown: true)
+    private var pointerTracking: NSTrackingArea?
+    private var regionDrag: (anchor: CGPoint, initial: GlanceCaptureSelection, handle: Int)?
     private var failure: String?
     override var isFlipped: Bool { true }
     override var acceptsFirstResponder: Bool { true }
@@ -59,22 +82,52 @@ final class CaptureCanvas: NSView {
         setAccessibilityElement(true)
         setAccessibilityRole(.group)
         setAccessibilityLabel("Region selection")
-        actions.orientation = .horizontal
-        actions.spacing = 6
-        actions.edgeInsets = NSEdgeInsets(top: 6, left: 6, bottom: 6, right: 6)
+        actions.orientation = .vertical
+        actions.alignment = .leading
+        actions.spacing = 5
+        actions.edgeInsets = NSEdgeInsets(top: 7, left: 8, bottom: 7, right: 8)
         actions.wantsLayer = true
         actions.layer?.cornerRadius = 12
         actions.layer?.borderWidth = 1
-        for (button, action) in [(copyButton, #selector(copyPressed)), (saveButton, #selector(savePressed)),
-                                 (scrollButton, #selector(scrollPressed)), (retryButton, #selector(startOver)), (cancelButton, #selector(cancelPressed))] {
+        hint.font = .systemFont(ofSize: 16)
+        hint.lineBreakMode = .byTruncatingTail
+        hint.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        actions.addArrangedSubview(hint)
+        actionButtons.spacing = 6
+        actions.addArrangedSubview(actionButtons)
+        for (button, action) in [(copyButton, #selector(copyPressed)), (editButton, #selector(editPressed)),
+                                 (saveButton, #selector(savePressed)), (retryButton, #selector(startOver))] {
             button.target = self
             button.action = action
             button.bezelStyle = .rounded
             button.font = .systemFont(ofSize: 16, weight: .medium)
             button.controlSize = .large
             button.heightAnchor.constraint(equalToConstant: 36).isActive = true
-            actions.addArrangedSubview(button)
         }
+        copyButton.setAccessibilityLabel("Copy Image")
+        editButton.setAccessibilityLabel("Open in Editor")
+        actionMenu.addItems(withTitles: ["↩", "Return copies the image", "Return opens the editor"])
+        actionMenu.setAccessibilityLabel("Default capture action")
+        actionMenu.target = self
+        actionMenu.action = #selector(pickAction)
+        scrollMenu.addItems(withTitles: ["Scrolling Capture…", "Scroll Manually", "Auto Scroll Down",
+                                         "Auto Scroll Right", "Auto Scroll Down and Right"])
+        scrollMenu.setAccessibilityLabel("Scrolling Capture…")
+        scrollMenu.target = self
+        scrollMenu.action = #selector(pickScroll)
+        scrollMenu.isHidden = true
+        for menu in [actionMenu, scrollMenu] {
+            menu.font = .systemFont(ofSize: 16)
+            menu.controlSize = .large
+        }
+        for view in [copyButton, editButton, actionMenu, saveButton, scrollMenu, retryButton] {
+            actionButtons.addArrangedSubview(view)
+        }
+        controls.modeChanged = { [weak self] in self?.changeMode?($0) }
+        controls.delayChanged = { [weak self] in self?.changeDelay?($0) }
+        controls.pointerChanged = { [weak self] in self?.changePointer?($0) }
+        controls.canceled = { [weak self] in self?.cancel?() }
+        addSubview(controls)
         addSubview(actions)
         applyAppearance()
         refresh()
@@ -82,14 +135,71 @@ final class CaptureCanvas: NSView {
 
     required init?(coder: NSCoder) { nil }
 
-    override func resetCursorRects() {
-        addCursorRect(bounds, cursor: selection.phase == .refining ? .arrow : Self.blankCursor)
+    var ready: Bool { mode == .region ? selection.phase == .refining && selection.canCapture : locked }
+    var visibleCrop: CGRect? { mode == .region ? selection.crop : targetRect.map(geometry.sourceRect) }
+
+    func configure(mode: CaptureMode, active: Bool, delay: Int, pointer: Bool, action: ScreenshotStore.Action, origin: String) {
+        self.mode = mode
+        isActiveDisplay = active
+        self.delay = delay
+        doesIncludePointer = pointer
+        returnAction = action
+        originTitle = origin
+        controls.update(mode: mode, delay: delay, includesPointer: pointer)
+        controls.isHidden = !active
+        copyButton.title = action == .copy ? "Copy Image ↩" : "Copy Image"
+        editButton.title = action == .editor ? "Open in Editor ↩" : "Open in Editor"
+        actionMenu.item(at: 1)?.state = action == .copy ? .on : .off
+        actionMenu.item(at: 2)?.state = action == .editor ? .on : .off
+        applyAppearance()
+        refresh()
     }
 
-    override func mouseMoved(with event: NSEvent) { movePointer(event) }
-    override func mouseDragged(with event: NSEvent) { movePointer(event) }
+    func updateTarget(_ rect: CGRect?, description: String, locked: Bool) {
+        targetRect = rect
+        targetDescription = description
+        self.locked = locked
+        refresh()
+    }
+
+    func focusAction() {
+        let action: NSView = returnAction == .copy ? copyButton : editButton
+        window?.makeFirstResponder(ready ? action : self)
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let pointerTracking { removeTrackingArea(pointerTracking) }
+        let tracking = NSTrackingArea(rect: .zero, options: [.mouseMoved, .inVisibleRect, .activeInActiveApp],
+                                      owner: self, userInfo: nil)
+        addTrackingArea(tracking)
+        pointerTracking = tracking
+    }
+
+    override func resetCursorRects() {
+        let usesGuides = mode == .region && isActiveDisplay && selection.phase != .refining
+        addCursorRect(bounds, cursor: usesGuides ? Self.blankCursor : .arrow)
+        if usesGuides, !controls.isHidden { addCursorRect(controls.frame, cursor: .arrow) }
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        aim?(event.locationInWindow)
+        if isActiveDisplay, mode == .region { movePointer(event) }
+    }
+
     override func mouseDown(with event: NSEvent) {
-        if selection.phase == .placing {
+        aim?(event.locationInWindow)
+        guard isActiveDisplay else { return }
+        if mode != .region { chooseTarget?(event.locationInWindow); return }
+        if selection.phase == .refining, let box = selection.crop {
+            let local = convert(event.locationInWindow, from: nil)
+            let handles = positions(geometry.viewRect(box))
+            if let index = handles.firstIndex(where: { hypot($0.x - local.x, $0.y - local.y) <= 10 }) {
+                regionDrag = (source(event), selection, index)
+            } else if geometry.viewRect(box).contains(local) {
+                regionDrag = (source(event), selection, 8)
+            }
+        } else if selection.phase == .placing {
             selection.movePointer(to: source(event))
             selection.shiftReturn()
         } else {
@@ -97,44 +207,104 @@ final class CaptureCanvas: NSView {
         }
         refresh()
     }
-    override func mouseUp(with event: NSEvent) {
-        selection.mouseUp()
+
+    override func mouseDragged(with event: NSEvent) {
+        guard mode == .region else { return }
+        guard let drag = regionDrag, let box = drag.initial.crop else { movePointer(event); return }
+        let point = source(event)
+        let dx = (point.x - drag.anchor.x).rounded()
+        let dy = (point.y - drag.anchor.y).rounded()
+        selection = drag.initial
+        if drag.handle == 8 {
+            selection.translate(dx: Int(dx), dy: Int(dy))
+        } else {
+            let starting = positions(box)[drag.handle]
+            let movedX = min(CGFloat(image.width), max(0, starting.x + dx))
+            let movedY = min(CGFloat(image.height), max(0, starting.y + dy))
+            let active = drag.initial.target
+            if drag.handle < 4 {
+                let fixed = positions(box)[(drag.handle + 2) % 4]
+                selection.refine(active: CGPoint(x: movedX, y: movedY), fixed: fixed)
+            } else {
+                let fixed = drag.initial.active == .first ? drag.initial.second : drag.initial.first
+                var a = CGPoint(x: active.x, y: active.y)
+                var b = CGPoint(x: fixed.x, y: fixed.y)
+                switch drag.handle {
+                case 4: if a.y <= b.y { a.y = min(movedY, b.y - 1) } else { b.y = min(movedY, a.y - 1) }
+                case 5: if a.x >= b.x { a.x = max(movedX, b.x + 1) } else { b.x = max(movedX, a.x + 1) }
+                case 6: if a.y >= b.y { a.y = max(movedY, b.y + 1) } else { b.y = max(movedY, a.y + 1) }
+                default: if a.x <= b.x { a.x = min(movedX, b.x - 1) } else { b.x = min(movedX, a.x - 1) }
+                }
+                selection.refine(active: a, fixed: b)
+            }
+        }
         refresh()
     }
 
-    override func keyDown(with event: NSEvent) {
-        let modifiers = event.modifierFlags.intersection([.shift, .command, .control, .option])
-        if modifiers == [.shift], event.keyCode == 36 {
-            if !event.isARepeat { selection.shiftReturn() }
-        } else if modifiers == [.command], event.charactersIgnoringModifiers?.lowercased() == "s" {
-            if !event.isARepeat { save?() }
-            return
-        } else if modifiers.isEmpty {
-            switch event.keyCode {
-            case 123: selection.nudge(dx: -1, dy: 0)
-            case 124: selection.nudge(dx: 1, dy: 0)
-            case 125: selection.nudge(dx: 0, dy: 1)
-            case 126: selection.nudge(dx: 0, dy: -1)
-            case 48: if !event.isARepeat { selection.switchCorner() }
-            case 53:
-                if !event.isARepeat { escape?() }
-                return
-            case 36, 76: if !event.isARepeat { copy?() }; return
-            default:
-                guard let character = event.charactersIgnoringModifiers?.lowercased(), ["m", "r", "s"].contains(character) else {
-                    super.keyDown(with: event)
-                    return
-                }
-                guard !event.isARepeat else { return }
-                if character == "r" { startOver(); return }
-                if character == "s" { scrollPressed(); return }
-                selection.toggleLens()
-            }
-        } else {
-            super.keyDown(with: event)
-            return
-        }
+    override func mouseUp(with event: NSEvent) {
+        guard mode == .region else { return }
+        regionDrag = nil
+        selection.mouseUp()
         refresh()
+        focusAction()
+    }
+
+    override func keyDown(with event: NSEvent) {
+        if !handleKey(event) { super.keyDown(with: event) }
+    }
+
+    func handleKey(_ event: NSEvent) -> Bool {
+        let modifiers = event.modifierFlags.intersection([.shift, .command, .control, .option])
+        let key = event.charactersIgnoringModifiers?.lowercased() ?? ""
+        defer { needsDisplay = true }
+        if modifiers == [.shift], event.keyCode == 36, mode == .region {
+            if !event.isARepeat { selection.shiftReturn(); refresh(); focusAction() }
+        } else if modifiers == [.command], key == "s" {
+            if !event.isARepeat { save?() }
+        } else if modifiers.isEmpty || modifiers == .option {
+            let direction: [UInt16: (Int, Int)] = [123: (-1, 0), 124: (1, 0), 125: (0, 1), 126: (0, -1)]
+            if let move = direction[event.keyCode], mode == .region {
+                if modifiers == .option { selection.translate(dx: move.0, dy: move.1) }
+                else { selection.nudge(dx: move.0, dy: move.1) }
+                refresh()
+                return true
+            }
+            guard modifiers.isEmpty else { return false }
+            switch event.keyCode {
+            case 48:
+                if !event.isARepeat {
+                    if mode == .region { selection.switchCorner(); refresh() }
+                    else { nextTarget?() }
+                }
+            case 53: if !event.isARepeat { escape?() }
+            case 36, 76:
+                if !event.isARepeat {
+                    if mode != .region, !ready { chooseTarget?(nil) }
+                    else { performReturn() }
+                }
+            case 49: if !event.isARepeat { changeMode?(mode.next) }
+            default:
+                guard ["m", "r", "t", "p", "c", "e", "s"].contains(key) else { return false }
+                guard !event.isARepeat else { return true }
+                switch key {
+                case "m": if mode == .region { selection.toggleLens(); refresh() }
+                case "r": startOver()
+                case "t":
+                    let values = [0, 3, 5, 10]
+                    changeDelay?(values[((values.firstIndex(of: delay) ?? 0) + 1) % values.count])
+                case "p": changePointer?(!doesIncludePointer)
+                case "c": copy?()
+                case "e": edit?()
+                default: if scroll != nil, ready { scrollMenu.performClick(nil) }
+                }
+            }
+        } else { return false }
+        return true
+    }
+
+    private func performReturn() {
+        if returnAction == .copy { copy?() }
+        else { edit?() }
     }
 
     override func viewDidChangeEffectiveAppearance() {
@@ -145,6 +315,12 @@ final class CaptureCanvas: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         guard let context = NSGraphicsContext.current?.cgContext else { return }
+        guard isActiveDisplay || targetRect != nil else { return }
+        if mode != .region {
+            if let targetRect { drawTarget(targetRect, context: context) }
+            drawFailure()
+            return
+        }
         let target = geometry.viewPoint(selection.target)
         if let crop = selection.crop, !crop.isEmpty {
             let box = geometry.viewRect(crop)
@@ -163,10 +339,17 @@ final class CaptureCanvas: NSView {
             }
         }
         crosshair(at: target, context: context)
-        if selection.phase != .aiming { drawCorners(at: target, context: context) }
+        if selection.phase != .aiming {
+            drawCorners(at: target, context: context)
+            if selection.phase == .refining, let crop = selection.crop { drawHandles(geometry.viewRect(crop), context: context) }
+        }
         let position = lensPlacement(around: target)
-        label(readout, in: position.label, size: 14, compact: true)
+        label(readout, in: position.label, size: 16, compact: true)
         if selection.showsLens { drawLens(in: position.lens, context: context) }
+        drawFailure()
+    }
+
+    private func drawFailure() {
         if let failure {
             let width = min(bounds.width - 2 * Self.margin, 675)
             label(failure, in: CGRect(x: (bounds.width - width) / 2, y: Self.margin, width: width, height: 34), size: 16)
@@ -180,29 +363,15 @@ final class CaptureCanvas: NSView {
     }
 
     @objc private func copyPressed() { copy?() }
+    @objc private func editPressed() { edit?() }
     @objc private func savePressed() { save?() }
-    @objc private func scrollPressed() {
-        guard selection.phase == .refining, selection.canCapture else { return }
-        let menu = NSMenu(title: "Scrolling Capture")
-        for mode in ScrollingCapture.Mode.allCases {
-            let item = menu.addItem(withTitle: mode.title, action: #selector(selectScrollMode(_:)), keyEquivalent: "")
-            item.target = self
-            item.representedObject = mode.rawValue
-        }
-        menu.popUp(positioning: nil, at: CGPoint(x: 0, y: scrollButton.bounds.height + 4), in: scrollButton)
+    @objc private func startOver() { if ready { escape?() } }
+    @objc private func pickAction() {
+        if actionMenu.indexOfSelectedItem > 0 { changeAction?(actionMenu.indexOfSelectedItem == 1 ? .copy : .editor) }
     }
-
-    @objc private func selectScrollMode(_ item: NSMenuItem) {
-        guard let value = item.representedObject as? String,
-              let mode = ScrollingCapture.Mode(rawValue: value) else { return }
-        scroll?(mode)
+    @objc private func pickScroll() {
+        if scrollMenu.indexOfSelectedItem > 0 { scroll?(scrollMenu.indexOfSelectedItem - 1) }
     }
-
-    @objc private func startOver() {
-        guard selection.phase == .refining else { return }
-        _ = resetSelection()
-    }
-    @objc private func cancelPressed() { cancel?() }
 
     func resetSelection() -> Bool {
         guard let window else { return false }
@@ -234,27 +403,101 @@ final class CaptureCanvas: NSView {
 
     private func refresh() {
         failure = nil
-        setAccessibilityValue(dimensions)
+        setAccessibilityValue(mode == .region ? dimensions : targetDescription)
         window?.invalidateCursorRects(for: self)
-        actions.isHidden = selection.phase != .refining
-        copyButton.isHidden = !selection.canCapture
-        saveButton.isHidden = !selection.canCapture
-        scrollButton.isHidden = !selection.canCapture
-        if !actions.isHidden, let crop = selection.crop {
-            let placement = lensPlacement(around: geometry.viewPoint(selection.target))
-            actions.frame = actionPlacement(around: geometry.viewRect(crop), avoiding: placement)
+        actions.isHidden = !isActiveDisplay || !ready
+        let area = mode == .region ? selection.crop.map(geometry.viewRect) : targetRect
+        if !actions.isHidden, let area {
+            let placement = mode == .region ? lensPlacement(around: geometry.viewPoint(selection.target)) : (.zero, .zero)
+            let size = mode == .region ? readout : targetDescription
+            let verb = returnAction == .copy ? "copies" : "opens"
+            let suffix = delay == 0 ? "" : " after \(delay) s"
+            let route = returnAction == .copy && !originTitle.isEmpty ? " and takes you back to \(originTitle)" : ""
+            hint.stringValue = "Return \(verb) \(size)\(suffix)\(route)."
+            actions.frame = actionPlacement(around: area, avoiding: placement)
         }
+        let controlsSize = controls.fittingSize
+        let bottom = CGRect(x: (bounds.width - controlsSize.width) / 2,
+                            y: bounds.maxY - controlsSize.height - 14, width: controlsSize.width, height: controlsSize.height)
+        let point = mode == .region ? geometry.viewPoint(selection.target) : .zero
+        // Keep the bar reachable from above. Move it when aiming below it or when it covers a crop.
+        let aimsBelow = point.y > bottom.maxY && (bottom.minX...bottom.maxX).contains(point.x)
+        let top = CGRect(x: bottom.minX, y: 14, width: bottom.width, height: bottom.height)
+        let pointsAtTopBar = controls.frame == top && top.contains(point)
+        controls.frame = area?.intersects(bottom) == true || aimsBelow || pointsAtTopBar ||
+            (!actions.isHidden && actions.frame.intersects(bottom)) ? top : bottom
         needsDisplay = true
     }
 
     private func applyAppearance() {
         actions.layer?.backgroundColor = surface.cgColor
         actions.layer?.borderColor = border.cgColor
-        styleAction(copyButton, primary: true)
+        hint.textColor = ink
+        styleAction(copyButton, primary: returnAction == .copy)
+        styleAction(editButton, primary: returnAction == .editor)
         styleAction(saveButton, primary: false)
-        styleAction(scrollButton, primary: false)
         styleAction(retryButton, primary: false)
-        styleAction(cancelButton, primary: false)
+    }
+
+    private func positions(_ box: CGRect) -> [CGPoint] {
+        [CGPoint(x: box.minX, y: box.minY), CGPoint(x: box.maxX, y: box.minY),
+         CGPoint(x: box.maxX, y: box.maxY), CGPoint(x: box.minX, y: box.maxY),
+         CGPoint(x: box.midX, y: box.minY), CGPoint(x: box.maxX, y: box.midY),
+         CGPoint(x: box.midX, y: box.maxY), CGPoint(x: box.minX, y: box.midY)]
+    }
+
+    private func drawHandles(_ box: CGRect, context: CGContext) {
+        let a = geometry.viewPoint(selection.first)
+        let b = geometry.viewPoint(selection.second)
+        for (index, point) in positions(box).enumerated() where point != a && point != b {
+            let width: CGFloat = index < 4 ? 12 : index.isMultiple(of: 2) ? 22 : 8
+            let height: CGFloat = index < 4 ? 12 : index.isMultiple(of: 2) ? 8 : 22
+            let handle = CGRect(x: point.x - width / 2, y: point.y - height / 2, width: width, height: height)
+            context.setFillColor(Self.lightStroke.cgColor)
+            context.fill(handle)
+            context.setStrokeColor(Self.darkStroke.cgColor)
+            context.setLineWidth(2)
+            context.stroke(handle)
+        }
+    }
+
+    private func drawTarget(_ rect: CGRect, context: CGContext) {
+        context.saveGState()
+        let box = rect.intersection(bounds).insetBy(dx: 2, dy: 2)
+        defer { context.restoreGState() }
+        guard box.width > 0, box.height > 0 else { return }
+        if locked {
+            let shade = CGMutablePath()
+            shade.addRect(bounds)
+            shade.addRect(box)
+            context.addPath(shade)
+            context.setFillColor(Self.darkStroke.withAlphaComponent(0.50).cgColor)
+            context.drawPath(using: .eoFill)
+        } else {
+            context.setLineDash(phase: 0, lengths: [8, 5])
+        }
+        context.setLineWidth(3)
+        context.setStrokeColor(Self.darkStroke.cgColor)
+        context.stroke(box)
+        context.setLineWidth(1)
+        context.setStrokeColor(Self.lightStroke.cgColor)
+        context.stroke(box)
+        if locked {
+            context.setLineWidth(4)
+            context.setStrokeColor(Self.gold.cgColor)
+            for (i, point) in positions(box).prefix(4).enumerated() {
+                let x: CGFloat = i == 0 || i == 3 ? 14 : -14
+                let y: CGFloat = i < 2 ? 14 : -14
+                context.move(to: CGPoint(x: point.x + x, y: point.y))
+                context.addLine(to: point)
+                context.addLine(to: CGPoint(x: point.x, y: point.y + y))
+                context.strokePath()
+            }
+        }
+        let width = min(450, bounds.width - 16)
+        let labelX = min(bounds.maxX - width - 8, max(8, box.midX - width / 2))
+        label(targetDescription, in: CGRect(x: labelX, y: box.minY > 30 ? box.minY - 30 : box.minY + 8,
+                                           width: width, height: 26), size: 16)
     }
 
     private func styleAction(_ button: NSButton, primary: Bool) {
@@ -274,7 +517,7 @@ final class CaptureCanvas: NSView {
     private func lensPlacement(around center: CGPoint) -> (lens: CGRect, label: CGRect) {
         let size = Self.lensSize
         let outside = size + 2 * Self.rim
-        let labelWidth: CGFloat = selection.showsLens ? outside : 136
+        let labelWidth: CGFloat = selection.showsLens ? outside : 184
         let labelHeight: CGFloat = 26
         let usable = bounds.insetBy(dx: Self.margin, dy: Self.margin)
         let quadrants: [(CGFloat, CGFloat)] = [(-1, 1), (1, 1), (-1, -1), (1, -1)]
@@ -303,7 +546,8 @@ final class CaptureCanvas: NSView {
     }
 
     private func actionPlacement(around box: CGRect, avoiding hud: (lens: CGRect, label: CGRect)) -> CGRect {
-        let size = actions.fittingSize
+        var size = actions.fittingSize
+        size.width = min(bounds.width - 2 * Self.margin, max(size.width, actionButtons.fittingSize.width + 16))
         let usable = bounds.insetBy(dx: Self.margin, dy: Self.margin)
         let x = min(max(usable.minX, box.midX - size.width / 2), usable.maxX - size.width)
         let y = min(max(usable.minY, box.midY - size.height / 2), usable.maxY - size.height)
