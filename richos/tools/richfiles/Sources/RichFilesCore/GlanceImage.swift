@@ -292,7 +292,9 @@ public struct GlanceViewport {
     public private(set) var size: CGSize = .zero
     public private(set) var scale: CGFloat = 1
     public private(set) var origin: CGPoint = .zero
-    public private(set) var isFit = true
+    private var automaticScale = true
+
+    public var isFit: Bool { automaticScale && fit < 1 }
 
     public var imageRect: CGRect {
         CGRect(origin: origin, size: CGSize(width: imageSize.width * scale, height: imageSize.height * scale))
@@ -301,7 +303,7 @@ public struct GlanceViewport {
 
     private var fit: CGFloat {
         guard imageSize.width > 0, imageSize.height > 0, size.width > 0, size.height > 0 else { return 1 }
-        return min(size.width / imageSize.width, size.height / imageSize.height)
+        return min(1, size.width / imageSize.width, size.height / imageSize.height)
     }
 
     public init() {}
@@ -309,7 +311,7 @@ public struct GlanceViewport {
     public mutating func reset(imageSize: CGSize, in size: CGSize) {
         self.imageSize = imageSize
         self.size = size
-        isFit = true
+        automaticScale = true
         clamp()
     }
 
@@ -325,8 +327,12 @@ public struct GlanceViewport {
     }
 
     public mutating func zoom(by factor: CGFloat, at pointer: CGPoint, holding anchor: CGPoint) {
-        scale = min(max(8, fit), max(fit, scale * factor))
-        isFit = scale <= fit * 1.0005
+        guard factor.isFinite, factor > 0, factor != 1 else { return }
+        // Very large images can start fitted below 5%. A request to zoom out
+        // from there should leave that image fitted rather than making it larger.
+        guard scale >= 0.05 || factor > 1 else { return }
+        scale = min(20, max(0.05, scale * factor))
+        automaticScale = false
         origin = CGPoint(x: pointer.x - anchor.x * scale, y: pointer.y - anchor.y * scale)
         clamp()
     }
@@ -339,7 +345,7 @@ public struct GlanceViewport {
     }
 
     private mutating func clamp() {
-        if isFit || scale <= fit { scale = fit; isFit = true }
+        if automaticScale { scale = fit }
         let image = imageRect.size
         func offset(_ old: CGFloat, _ extent: CGFloat, _ window: CGFloat) -> CGFloat {
             extent <= window ? (window - extent) / 2 : min(0, max(window - extent, old))

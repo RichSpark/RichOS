@@ -39,7 +39,6 @@
 
 const fs = require("fs");
 const path = require("path");
-const vm = require("node:vm");
 const {
   loadPlaywright, createRun, assert, assertEqual, UI_DIR, leaveHome, shellSettled, flushFrames,
   captureSettled, publishShot,
@@ -131,261 +130,11 @@ const boxOf = (page, sel) => page.evaluate((s) => {
 }, sel);
 const colorOf = (page, sel, prop) => page.evaluate(([s, p]) => getComputedStyle(document.querySelector(s))[p], [sel, prop || "color"]);
 
-async function verifyRichFilesColdDock(sourcePath) {
-  const trace = [];
-  const frames = [];
-  const page = { hidden: true };
-  const nodes = {
-    "nr-richfiles": { hidden: true },
-    "richfiles-page": page,
-    "richfiles-pane": { getBoundingClientRect: () => ({ left: 52, top: 40, right: 1000, bottom: 700, width: 948, height: 660 }) },
-    "richfiles-pane-error": { hidden: true },
-    "richfiles-loading": { hidden: true },
-  };
-  let hooks;
-  let installListener;
-  let receiveEvent;
-  let pending = false;
-  const window = {
-    addEventListener() {},
-    RichNavRail: {
-      registerPage(_name, registeredHooks) { hooks = registeredHooks; },
-      showPage(name) { trace.push("show " + name); hooks.show(); },
-    },
-    RichBridge: {
-      async invoke(command, args) {
-        switch (command) {
-          case "richfiles_pane_available": return true;
-          case "richfiles_request_pending":
-            trace.push("poll pending=" + pending);
-            return pending;
-          case "richfiles_place_pane":
-            trace.push("place visible=" + args.bounds.visible);
-            return;
-          case "richfiles_accept_request":
-            trace.push("accept pending=" + pending);
-            pending = false;
-            return;
-          default: throw new Error("Unexpected command " + command);
-        }
-      },
-      listen(name, handler) {
-        trace.push("subscribe " + name);
-        return new Promise((resolve) => {
-          installListener = () => {
-            receiveEvent = handler;
-            trace.push("listener installed");
-            resolve(() => {});
-          };
-        });
-      },
-    },
-  };
-  class Observer {
-    observe() {}
-  }
-  vm.runInNewContext(fs.readFileSync(sourcePath, "utf8"), {
-    window, innerWidth: 1000, innerHeight: 700,
-    document: { getElementById: (id) => nodes[id], body: { classList: { add() {} } } },
-    ResizeObserver: Observer,
-    MutationObserver: Observer,
-    requestAnimationFrame(callback) { frames.push(callback); return frames.length; },
-  }, { filename: sourcePath });
-
-  // Drain queued promise callbacks with the subscription still unresolved.
-  await new Promise(setImmediate);
-  assertEqual(typeof installListener, "function", "the native listener is being installed");
-  pending = true;
-  trace.push("dock request arrived");
-  receiveEvent?.({ payload: null });
-  installListener();
-
-  await new Promise(setImmediate);
-  // The pane was not ready: the page draws its loading line (two frames) before it asks the shell.
-  for (let round = 0; round < 4; round++) {
-    for (const frame of frames.splice(0)) frame();
-    await new Promise(setImmediate);
-  }
-  assertEqual(trace, [
-    "subscribe rich://richfiles-show",
-    "dock request arrived",
-    "listener installed",
-    "poll pending=true",
-    "show richfiles",
-    "place visible=true",
-    "accept pending=true",
-  ], "a dock request queued during listener installation opens the pane once");
-  assertEqual(page.hidden, false, "the RichFiles page is visible after the cold dock");
-  assertEqual(pending, false, "the queued dock request was consumed");
-  return "listener installed before polling, queued workspace accepted in the visible pane";
-}
-
-/// `richfiles-page.js` alone, against a shell that records what it is asked and a clock the check
-/// moves: `later(ms)` passes that much time and runs every waiting timer.
-async function loadRichFilesPage(sourcePath, { available, readyFirst }) {
-  const trace = [];
-  const timers = [];
-  const frames = [];
-  const screen = { opening: true };
-  let hooks;
-  const nodes = {
-    "nr-richfiles": { hidden: true },
-    "richfiles-page": { hidden: true },
-    "richfiles-pane": { getBoundingClientRect: () => ({ left: 52, top: 40, right: 1000, bottom: 700, width: 948, height: 660 }) },
-    "richfiles-pane-error": { hidden: true },
-    "richfiles-loading": { hidden: true },
-  };
-  const window = {
-    addEventListener() {},
-    removeEventListener() {},
-    RichSplash: { isUp: () => screen.opening },
-    RichNavRail: { registerPage(_name, registered) { hooks = registered; }, showPage(name) { trace.push("show " + name); } },
-    RichBridge: {
-      async invoke(command, args) {
-        if (command === "richfiles_pane_available") return available;
-        if (command === "richfiles_request_pending") return false;
-        if (command === "richfiles_preload") { trace.push("library"); return; }
-        if (command === "richfiles_place_pane") { trace.push("place visible=" + args.bounds.visible); return; }
-        throw new Error("Unexpected command " + command);
-      },
-      async listen() { return () => {}; },
-    },
-  };
-  if (readyFirst) window.__richosRichFilesReady = true;
-  class Observer { observe() {} disconnect() {} }
-  vm.runInNewContext(fs.readFileSync(sourcePath, "utf8"), {
-    window, innerWidth: 1000, innerHeight: 700,
-    document: { getElementById: (id) => nodes[id], body: { classList: { add() {}, remove() {} } } },
-    ResizeObserver: Observer, MutationObserver: Observer,
-    requestAnimationFrame(callback) { frames.push(callback); return frames.length; },
-    setTimeout(callback) { timers.push(callback); return timers.length; },
-  }, { filename: sourcePath });
-  await new Promise(setImmediate);
-  // Time passes, then every waiting timer runs.
-  const later = async () => {
-    for (const timer of timers.splice(0)) timer();
-    await new Promise(setImmediate);
-  };
-  const prepared = () => trace.filter((t) => t === "library");
-  // One frame is drawn: every waiting animation-frame callback runs.
-  const frame = async () => {
-    for (const callback of frames.splice(0)) callback();
-    await new Promise(setImmediate);
-  };
-  const placed = () => trace.filter((t) => t.startsWith("place"));
-  return { prepared, placed, frame, loading: nodes["richfiles-loading"], screen, later, usable: () => window.RichFilesReady.start(), show: () => hooks.show(), hide: () => hooks.hide() };
-}
-
-async function verifyRichFilesPreload(sourcePath) {
-  const first = await loadRichFilesPage(sourcePath, { available: true, readyFirst: false });
-  assertEqual(first.prepared(), [], "no library load before the app is usable");
-  first.usable();
-  await first.later();
-  assertEqual(first.prepared(), [], "no library load while the opening is up");
-  first.screen.opening = false;
-  await first.later();
-  first.usable();
-  await first.later();
-  assertEqual(first.prepared(), ["library"], "the library loads once after the opening");
-  assertEqual(first.placed(), [], "no native pane is placed without a request");
-
-  const none = await loadRichFilesPage(sourcePath, { available: false, readyFirst: true });
-  none.screen.opening = false;
-  await none.later();
-  assertEqual(none.prepared(), [], "a build without RichFiles preloads nothing");
-  return "one library warmup after the opening and no background pane build";
-}
-
-async function verifyRichFilesEarlyClick(sourcePath) {
-  const early = await loadRichFilesPage(sourcePath, { available: true, readyFirst: false });
-  assertEqual([early.prepared(), early.loading.hidden], [[], true], "nothing is prepared yet and no loading line is up");
-  early.show();
-  assertEqual(early.loading.hidden, false, "the loading line is on screen with the click, before anything else happens");
-  await early.frame();
-  await early.frame();
-  assertEqual(early.placed(), [], "the shell is not asked to load RichFiles before the loading line has been drawn");
-  await early.frame();
-  assertEqual(early.placed(), ["place visible=true"], "then the shell is asked");
-  assertEqual(early.loading.hidden, true, "the loading line leaves when RichFiles is on screen");
-
-  early.hide();
-  await new Promise(setImmediate);
-  early.show();
-  assertEqual(early.loading.hidden, true, "reopening the existing pane needs no loading state");
-  await early.frame();
-  assertEqual(early.placed(), ["place visible=true", "place visible=false", "place visible=true"],
-    "reopening asks for placement without waiting for a loading frame");
-
-  const canceled = await loadRichFilesPage(sourcePath, { available: true, readyFirst: false });
-  canceled.show();
-  await canceled.frame();
-  canceled.hide();
-  for (let i = 0; i < 4; i++) await canceled.frame();
-  assertEqual(canceled.placed().filter((t) => t === "place visible=true"), [],
-    "leaving the page before the loading frame finishes does not build the pane");
-  return "first click paints feedback, closing during that paint cancels placement and reopening is immediate";
-}
-
-/// Verify the startup callback and native command order in the full web UI.
-async function verifyRichFilesPreloadInShell(browser) {
-  const context = await newContext(browser, "dark", {});
-  const page = await context.newPage();
-  try {
-    await page.addInitScript(() => {
-      window.__richFilesAsked = [];
-      Object.defineProperty(window, "RichBridge", {
-        configurable: true,
-        set(bridge) {
-          const invoke = bridge.invoke.bind(bridge);
-          bridge.invoke = async (command, args, options) => {
-            if (command === "richfiles_pane_available") return true;
-            if (command === "richfiles_request_pending") return false;
-            if (command === "richfiles_preload" || command === "richfiles_place_pane") {
-              window.__richFilesAsked.push({
-                command,
-                visible: args && args.bounds ? args.bounds.visible : null,
-                openingUp: !!(window.RichSplash && window.RichSplash.isUp()),
-                homeUp: !!(window.RichHome && window.RichHome.isOpen()),
-                pageHidden: document.getElementById("richfiles-page").hidden,
-              });
-              return;
-            }
-            return invoke(command, args, options);
-          };
-          Object.defineProperty(window, "RichBridge", { value: bridge, writable: true, configurable: true });
-        },
-      });
-    });
-    await page.goto(APP);
-    await shellSettled(page);
-    await page.waitForFunction(() => window.RichHome.isOpen() && window.__richFilesAsked.some((a) => a.command === "richfiles_preload"),
-      null, { timeout: 30000 });
-    const onHome = await page.evaluate(() => window.__richFilesAsked);
-    assertEqual(onHome, [{ command: "richfiles_preload", visible: null, openingUp: false, homeUp: true, pageHidden: true }],
-      "on the home screen the library is asked for once and the pane remains hidden");
-    await leaveHome(page);
-    await page.locator("#nr-richfiles").click();
-    await page.waitForFunction(() => window.__richFilesAsked.some((a) => a.visible === true), null, { timeout: 30000 });
-    const commands = await page.evaluate(() => window.__richFilesAsked.map((a) => a.command));
-    assertEqual(commands, ["richfiles_preload", "richfiles_place_pane"], "only the user click makes the native pane visible");
-    return "the full shell preloads on Home and opens the native pane on request";
-  } finally {
-    await context.close();
-  }
-}
-
 async function main() {
   const run = createRun("The navigation rail (round 58, version A): items, selection, the moved square and initials, contrast");
-  await run.check("RichFiles accepts a cold dock request queued while its listener starts", () =>
-    verifyRichFilesColdDock(path.join(UI_DIR, "richfiles-page.js")));
-  await run.check("RichFiles warms the library once after launch without building the pane", () =>
-    verifyRichFilesPreload(path.join(UI_DIR, "richfiles-page.js")));
-  await run.check("RichFiles: a click before it is ready shows the loading line at once, and the shell is asked after it is drawn", () =>
-    verifyRichFilesEarlyClick(path.join(UI_DIR, "richfiles-page.js")));
   const { webkit } = loadPlaywright();
   const browser = await webkit.launch();
   const report = [];
-  await run.check("The full shell warms RichFiles and opens the pane on request", () => verifyRichFilesPreloadInShell(browser));
 
   for (const theme of ["dark", "light"]) {
     const context = await newContext(browser, theme, { preset: { dictation: true } });
@@ -680,107 +429,68 @@ async function main() {
       return seen.join(" → ");
     });
 
-    await run.check(`RichFiles ${theme}  the heading and native placement error pass contrast`, async () => {
-      const richFiles = await context.newPage();
+    await run.check(`RichFiles ${theme}  opens its information page and remembers opening its own window`, async () => {
+      const files = await newContext(browser, theme, { preset: { richFiles: true } });
       try {
-        const placementError = "RichFiles could not appear in this window.";
-        await richFiles.addInitScript((message) => {
+        await files.addInitScript(() => {
+          window.__richFilesCommands = [];
           Object.defineProperty(window, "RichBridge", {
             configurable: true,
             set(bridge) {
               const invoke = bridge.invoke.bind(bridge);
-              bridge.invoke = async (command, args, options) => {
-                if (command === "richfiles_pane_available") return true;
-                if (command === "richfiles_request_pending") return false;
-                if (command === "richfiles_place_pane") {
-                  if (args.bounds.visible) throw message;
-                  return;
-                }
+              bridge.invoke = (command, args, options) => {
+                if (command.startsWith("richfiles_")) window.__richFilesCommands.push(command);
                 return invoke(command, args, options);
               };
-              Object.defineProperty(window, "RichBridge", { value: bridge, writable: true, configurable: true });
-            },
-          });
-        }, placementError);
-        await richFiles.goto(APP);
-        await leaveHome(richFiles);
-        await shellSettled(richFiles);
-        await richFiles.locator("#nr-richfiles").click();
-        await richFiles.locator("#richfiles-title").waitFor({ state: "visible" });
-        await richFiles.locator("#richfiles-pane-error").waitFor({ state: "visible" });
-        await richFiles.mouse.move(700, 80);
-        await flushFrames(richFiles);
-        assertEqual((await railFacts(richFiles)).selected, ["richfiles"], "the rail selected the RichFiles page");
-        assertEqual(await richFiles.locator("#richfiles-title").innerText(), "RichFiles", "the actual heading is visible");
-        assertEqual(await richFiles.locator("#richfiles-pane-error").innerText(), placementError,
-          "the normal native placement error is visible");
-        assertEqual(await richFiles.evaluate(() => document.documentElement.dataset.theme), theme,
-          "the document is using the requested theme");
-        await richFiles.evaluate(C.pageScript());
-        const walk = await richFiles.evaluate((t) => window.__contrastProbe({ surface: "richfiles-page", theme: t }), theme);
-        for (const target of ["h1#richfiles-title", "p#richfiles-pane-error"]) {
-          assert(walk.measuredPaths.includes(target), "the contrast probe did not measure " + target);
-        }
-        const mine = (pairs) => Object.values(pairs).filter((pair) =>
-          /#richfiles-(page|title|pane-error)/.test(pair.selector || pair.path || ""));
-        assertEqual(mine(walk.failures), [], "the contrast walk found a failing pair on the RichFiles page");
-        assertEqual(mine(walk.unresolvable), [], "the contrast walk could not prove a pair on the RichFiles page");
-        assertEqual(mine(walk.exempt), [], "the RichFiles page needs no contrast exemptions");
-        return "the shipped RichFiles heading and placement error were both measured";
-      } finally {
-        await richFiles.close();
-      }
-    });
-
-    await run.check(`RichFiles ${theme}  a click before it is ready: the loading line is on the page, and it passes contrast`, async () => {
-      const richFiles = await context.newPage();
-      try {
-        await richFiles.addInitScript(() => {
-          window.__richFilesPlaced = [];
-          Object.defineProperty(window, "RichBridge", {
-            configurable: true,
-            set(bridge) {
-              const invoke = bridge.invoke.bind(bridge);
-              bridge.invoke = async (command, args, options) => {
-                if (command === "richfiles_pane_available") return true;
-                if (command === "richfiles_request_pending") return false;
-                // RichFiles is never ready here, and never arrives: the loading line stays to be looked at.
-                if (command === "richfiles_preload") return new Promise(() => {});
-                if (command === "richfiles_place_pane") {
-                  if (!args.bounds.visible) return;
-                  window.__richFilesPlaced.push({ loadingUp: !document.getElementById("richfiles-loading").hidden });
-                  return new Promise(() => {});
-                }
-                return invoke(command, args, options);
-              };
-              Object.defineProperty(window, "RichBridge", { value: bridge, writable: true, configurable: true });
+              Object.defineProperty(window, "RichBridge", { value: bridge, configurable: true });
             },
           });
         });
-        await richFiles.goto(APP);
-        await leaveHome(richFiles);
-        await shellSettled(richFiles);
-        await richFiles.locator("#nr-richfiles").click();
-        await richFiles.locator("#richfiles-loading").waitFor({ state: "visible" });
-        await richFiles.waitForFunction(() => window.__richFilesPlaced.length > 0, null, { timeout: 30000 });
-        await richFiles.mouse.move(700, 80);
-        await flushFrames(richFiles);
-        assertEqual(await richFiles.evaluate(() => window.__richFilesPlaced), [{ loadingUp: true }],
-          "the shell was asked for RichFiles once, with the loading line already up");
-        assertEqual((await railFacts(richFiles)).selected, ["richfiles"], "the rail selected the RichFiles page");
-        assertEqual(await richFiles.locator("#richfiles-loading").innerText(), "Opening RichFiles…", "the loading line says what is happening");
-        assertEqual(await richFiles.evaluate(() => document.documentElement.dataset.theme), theme,
-          "the document is using the requested theme");
-        await richFiles.evaluate(C.pageScript());
-        const walk = await richFiles.evaluate((t) => window.__contrastProbe({ surface: "richfiles-page", theme: t }), theme);
-        assert(walk.measuredPaths.includes("p#richfiles-loading"), "the contrast probe did not measure p#richfiles-loading");
-        const mine = (pairs) => Object.values(pairs).filter((pair) => /#richfiles-loading/.test(pair.selector || pair.path || ""));
-        assertEqual(mine(walk.failures), [], "the contrast walk found a failing pair on the loading line");
-        assertEqual(mine(walk.unresolvable), [], "the contrast walk could not prove a pair on the loading line");
-        assertEqual(mine(walk.exempt), [], "the loading line needs no contrast exemption");
-        return "the loading line was up before the shell was asked, and its text was measured";
+        const app = await openApp(files);
+        const item = app.locator("#nr-richfiles");
+        const info = app.locator("#richfiles-page");
+        const setting = app.locator("#set-richfiles-always");
+        const always = app.locator("#rf-always");
+        const calls = () => app.evaluate(() => window.__richFilesCommands.filter((name) => name === "richfiles_open").length);
+        await item.click();
+        await info.waitFor({ state: "visible" });
+        assertEqual(await calls(), 0, "the first rail press opens the page");
+        assertEqual(await always.getAttribute("aria-checked"), "false", "standalone shortcut defaults to off");
+        const offset = await app.evaluate(() => {
+          const icon = document.querySelector(".rf-title-icon").getBoundingClientRect();
+          const title = document.getElementById("richfiles-title").getBoundingClientRect();
+          return Math.abs(icon.y + icon.height / 2 - title.y - title.height / 2);
+        });
+        assert(offset <= 1, "title and icon centers differ by " + offset + " px");
+        await app.evaluate(C.pageScript());
+        const walk = await app.evaluate((t) => window.__contrastProbe({ surface: "richfiles-page", theme: t }), theme);
+        assert(walk.measuredPaths.includes("h1#richfiles-title"), "the page heading was not measured");
+        const mine = (pairs) => Object.values(pairs).filter((pair) => /#richfiles-page/.test(pair.selector || pair.path || ""));
+        assertEqual(mine(walk.failures), [], "the page has a failing contrast pair");
+        assertEqual(mine(walk.unresolvable), [], "the page has an unmeasurable contrast pair");
+        await app.locator("#rf-open").click();
+        assertEqual(await calls(), 1, "Open RichFiles opens its own window");
+        await always.click();
+        await app.locator("#nr-chats").click();
+        await info.waitFor({ state: "hidden" });
+        await item.click();
+        await item.click();
+        assertEqual(await calls(), 3, "each later rail press opens or activates RichFiles");
+        assertEqual((await railFacts(app)).selected, ["chats"], "a standalone launch leaves the current page in place");
+        await app.locator("#nr-me").click();
+        assert(await setting.isChecked(), "the same switch is on in Settings");
+        await setting.uncheck();
+        await app.keyboard.press("Escape");
+        await item.click();
+        await info.waitFor({ state: "visible" });
+        assertEqual(await always.getAttribute("aria-checked"), "false", "Settings turned the shortcut off");
+        assertEqual(await calls(), 3, "with the shortcut off the rail returns to the information page");
+        assertEqual(await app.locator("#richfiles-pane").count(), 0, "there is no embedded browser surface");
+        const stale = await app.evaluate(() => window.__richFilesCommands.filter((name) => /pane|preload|request/.test(name)));
+        assertEqual(stale, [], "there are no calls to the removed browser host");
+        return "title and icon centers differ by " + offset + " px";
       } finally {
-        await richFiles.close();
+        await files.close();
       }
     });
 

@@ -912,22 +912,23 @@ async function main() {
     await one.close();
   });
   await run.check("quick settings show the WEEKLY window, labeled (the CEO 2026-10-06: the switch is at 99% weekly)", async () => {
-    const atReading = { fixedTime: new Date(now) };
+    // A slow suite must not age these fixtures past the freshness deadline.
+    const fixtureClock = { fixedTime: new Date(now) };
     // One account: the five-hour window is at 94%, the week at 32%.
-    let page = await open("dark", quota, 100, null, false, atReading);
+    let page = await open("dark", quota, 100, null, false, fixtureClock);
     await enableTechnical(page);
     await page.waitForFunction(() => /weekly/.test(document.getElementById("set-quota-state").textContent));
     assertEqual(await page.locator("#set-quota-state").innerText(), "32% weekly used");
     assertEqual(await page.evaluate(() => document.querySelector("#set-quota-open .quota-mini i").style.width), "32%", "the mini bar is the week");
     await page.close();
     // Two accounts: Home in use (week 32%), Work next.
-    page = await open("dark", twoAccounts(), 100, null, false, atReading);
+    page = await open("dark", twoAccounts(), 100, null, false, fixtureClock);
     await enableTechnical(page);
     await page.waitForFunction(() => /weekly/.test(document.getElementById("set-quota-state").textContent));
     assertEqual(await page.locator("#set-quota-state").innerText(), "Home 32% weekly · next Work");
     await page.close();
     // A stale reading keeps its mark.
-    page = await open("dark", { ...quota, state: "stale", checkedAt: now - 3600000 }, 100, null, false, atReading);
+    page = await open("dark", { ...quota, state: "stale", checkedAt: now - 3600000 }, 100, null, false, fixtureClock);
     await enableTechnical(page);
     await page.waitForFunction(() => /weekly/.test(document.getElementById("set-quota-state").textContent));
     assertEqual(await page.locator("#set-quota-state").innerText(), "32% weekly used · stale");

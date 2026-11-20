@@ -72,22 +72,42 @@ enum BrowserViewMode: String, Codable, CaseIterable, Identifiable {
     var title: String { self == .icons ? "Thumbnails" : rawValue }
 }
 
+/// Selection changes update the rows and controls that use them. The rest of
+/// the browser can keep its layout while a click or key changes the selection.
+@MainActor
+final class BrowserSelection: ObservableObject {
+    @Published var urls: Set<URL> = []
+    @Published var cursor: URL?
+    @Published var scrollToItem: URL?
+    var rangeAnchor: URL?
+    var references: [URL: FileReference] = [:]
+
+    func moveCursor(to item: URL?, scrolling: Bool = false) {
+        if cursor != item { cursor = item }
+        let scrollTarget = scrolling ? item : nil
+        if scrollToItem != scrollTarget { scrollToItem = scrollTarget }
+    }
+}
+
 @MainActor
 final class BrowserModel: ObservableObject {
     static let contentSearchCoverageDescription = TextContentQuery.coverageDescription
 
     @Published private(set) var folder: URL
     @Published private(set) var entries: [FileEntry] = []
-    @Published var selected: Set<URL> = [] {
-        didSet {
-            if !settingSelection && selected != oldValue {
-                selectionToRestore.removeAll()
-            }
+    let selection = BrowserSelection()
+    var selected: Set<URL> {
+        get { selection.urls }
+        set {
+            guard selection.urls != newValue else { return }
+            selection.urls = newValue
+            if !settingSelection { selectionToRestore.removeAll() }
         }
     }
-    @Published var scrollAnchor: URL?
+    var scrollAnchor: URL?
     @Published var status = ""
     @Published private(set) var busy = false
+    @Published private(set) var openingFolder = false
     @Published private(set) var scanReport: ScanReport?
     @Published private(set) var currentVolume: VolumeInfo?
     @Published private(set) var isDisconnected = false
@@ -228,13 +248,16 @@ final class BrowserModel: ObservableObject {
     private var volumeChanges: AnyCancellable?
     private var disconnectedMounts: Set<String> = []
     private let defaults: UserDefaults
+    private let resolveFolder: @Sendable (URL) throws -> URL
 
-    init(start: URL, defaults: UserDefaults = RichFilesInstallation.preferences) {
+    init(start: URL, defaults: UserDefaults = RichFilesInstallation.preferences,
+         resolveFolder: @escaping @Sendable (URL) throws -> URL = { try DirectoryReader.directoryURL($0) }) {
         let id = UUID()
         let location = start.standardizedFileURL
         let preferences = BrowserPreferences.load(from: defaults)
         let view = preferences.folders[location.path] ?? preferences.global
         self.defaults = defaults
+        self.resolveFolder = resolveFolder
         folder = location
         currentTabID = id
         tabs = [BrowserTab(id: id, folder: location)]
@@ -268,7 +291,8 @@ final class BrowserModel: ObservableObject {
     }
 
     func openFolder(_ url: URL) {
-        navigate(.open) { try DirectoryReader.directoryURL(url) }
+        let resolve = resolveFolder
+        navigate(.open) { try resolve(url) }
     }
 
     func revealFile(_ location: URL) {
@@ -605,6 +629,7 @@ final class BrowserModel: ObservableObject {
         cancelNavigation()
         let id = UUID()
         navigationID = id
+        openingFolder = true
         navigationTask = Task { [weak self] in
             let worker = Task.detached(priority: .userInitiated) { try resolve() }
             do {
@@ -613,10 +638,12 @@ final class BrowserModel: ObservableObject {
                 } onCancel: { worker.cancel() }
                 guard !Task.isCancelled, let self, self.navigationID == id else { return }
                 self.navigationID = nil
+                self.openingFolder = false
                 self.completeNavigation(direction, to: url)
             } catch {
                 guard !Task.isCancelled, let self, self.navigationID == id else { return }
                 self.navigationID = nil
+                self.openingFolder = false
                 self.status = error.localizedDescription
             }
         }
@@ -661,6 +688,7 @@ final class BrowserModel: ObservableObject {
     private func cancelNavigation() {
         navigationID = nil
         navigationTask?.cancel()
+        openingFolder = false
     }
 
     private func captureVisit() -> Visit {

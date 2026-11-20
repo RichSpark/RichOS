@@ -1,4 +1,5 @@
 import AppKit
+import Darwin
 import RichFilesCore
 import ServiceManagement
 import SwiftUI
@@ -7,7 +8,6 @@ public enum WindowGestureService {
     private static var service: SMAppService { .loginItem(identifier: WindowGesturePreferences.helperID) }
 
     /// ServiceManagement uses the calling application's bundle to find its login item.
-    /// The docked pane asks the bundled RichFiles executable to do its own registration.
     public static func runCommandIfRequested() -> Bool {
         let arguments = CommandLine.arguments
         guard arguments.count == 3, arguments[1] == WindowGesturePreferences.command else { return false }
@@ -24,6 +24,12 @@ public enum WindowGestureService {
                 if item.status == .notRegistered || item.status == .notFound { try item.register() }
             case "unregister":
                 if item.status == .enabled || item.status == .requiresApproval { try item.unregister() }
+            case "refresh-after-update":
+                // An app-bundle swap leaves the old helper alive. Keep macOS's
+                // approval and ask launchd to start that same job from the new copy.
+                if item.status == .enabled && !WindowGesturePreferences.selection.isEmpty {
+                    refreshInstalledHelper()
+                }
             case "status":
                 break
             default:
@@ -40,6 +46,31 @@ public enum WindowGestureService {
         case .notRegistered: return "off"
         case .notFound: return action == "register" ? "unavailable" : "off"
         default: return "unavailable"
+        }
+    }
+
+    private static func refreshInstalledHelper() {
+        let helper = Bundle.main.bundleURL.appendingPathComponent(WindowGesturePreferences.helperPath)
+        guard let installed = Bundle(url: helper)?.executableURL?.resolvingSymlinksInPath() else { return }
+        let running = NSRunningApplication.runningApplications(withBundleIdentifier: WindowGesturePreferences.helperID)
+            .first { !$0.isTerminated }
+        if let running {
+            var path = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))
+            if proc_pidpath(running.processIdentifier, &path, UInt32(path.count)) > 0,
+               URL(fileURLWithPath: String(cString: path)).resolvingSymlinksInPath() == installed {
+                return
+            }
+        }
+        let command = Process()
+        command.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+        command.arguments = ["kickstart"] + (running == nil ? [] : ["-k"])
+            + ["gui/\(getuid())/\(WindowGesturePreferences.helperID)"]
+        do {
+            try command.run()
+            command.waitUntilExit()
+            if command.terminationStatus == 0 { NSLog("RichFiles Window Gestures restarted after update") }
+        } catch {
+            NSLog("RichFiles Window Gestures could not restart after update: %@", error.localizedDescription)
         }
     }
 

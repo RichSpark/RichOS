@@ -20,9 +20,8 @@
 #
 # --richfiles also builds RichFiles from this checkout and puts it where the packaged app has it
 # (package-app.sh's package_richfiles: Contents/Applications/RichFiles.app and
-# Contents/Frameworks/libRichFilesRail.dylib), so a walk of the RichFiles page or its undocked
-# app runs this branch's RichFiles. Without it the page says "This build does not contain
-# RichFiles." (richfiles_pane.rs).
+# Contents/Frameworks/libRichFilesIntegration.dylib), so a walk of the RichFiles page and its standalone app runs this branch's RichFiles. Without it the rail
+# item is hidden (richfiles_integration.rs).
 #
 # --companion also puts the meeting-notes capture companion (prepare-companion.py --binary, the
 # cached build) at Contents/MacOS/richos-companion, ad-hoc signed as package-app.sh signs it, so a
@@ -82,7 +81,7 @@ if [ "$RICHFILES" -eq 1 ]; then
   bash "$APP_DIR/scripts/package-richfiles.sh" --embedded "$STAGE/richfiles"
   mkdir -p "$STAGE/RichOS.app/Contents/Applications" "$STAGE/RichOS.app/Contents/Frameworks"
   ditto "$STAGE/richfiles/RichFiles.app" "$STAGE/RichOS.app/Contents/Applications/RichFiles.app"
-  install -m 755 "$STAGE/richfiles/libRichFilesRail.dylib" "$STAGE/RichOS.app/Contents/Frameworks/libRichFilesRail.dylib"
+  install -m 755 "$STAGE/richfiles/libRichFilesIntegration.dylib" "$STAGE/RichOS.app/Contents/Frameworks/libRichFilesIntegration.dylib"
 fi
 if [ "$COMPANION" -eq 1 ]; then
   COMPANION_BIN="$(python3 "$APP_DIR/scripts/prepare-companion.py" --binary)"
