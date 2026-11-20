@@ -268,6 +268,51 @@ mod tests {
     }
 
     #[test]
+    fn the_current_provider_worker_record_names_fable_and_its_reset() {
+        let now = 1_800_000_000_000_u64;
+        let window_reset = now + 600_000;
+        let reported_reset = now + 700_000;
+        let mut request = json!({
+            "now": now, "enabled": true, "reading": {
+                "windows": [
+                    {"id": "seven_day", "label": "Weekly", "usedPercent": 41.0,
+                    "resetsAt": now + 900_000, "durationMs": 604_800_000},
+                    {"id": "model:Fable", "label": "Weekly · Fable", "usedPercent": 97.0,
+                    "resetsAt": window_reset, "durationMs": 604_800_000}
+                ]
+            }
+        });
+        let info = json!({"status": "rejected", "rateLimitType": "seven_day_overage_included",
+                          "resetsAt": reported_reset / 1000});
+        let mut frame = json!({"type": "assistant", "error": "rate_limit", "isApiErrorMessage": true,
+            "message": {"model": "<synthetic>", "content": [
+                {"type": "text", "text": "You've hit your Fable limit · resets Nov 27, 10am."}
+            ]}});
+        request["refusals"] = json!([{"id": "worker", "frame": frame}]);
+        let text = fable_tick(request.clone()).unwrap();
+        assert_eq!(text["refusedWorkers"], json!(["worker"]));
+        assert_eq!(text["onOpusUntil"], window_reset);
+
+        // The named provider window gives its actual reset even without the text.
+        frame["message"]["content"] = json!([]);
+        for fields in [json!({"rate_limit_info": info}), info.clone()] {
+            let mut shaped = frame.clone();
+            if fields.get("rate_limit_info").is_some() {
+                shaped["apiErrorParams"] = fields;
+            } else {
+                shaped["quotaLimits"] = fields;
+            }
+            request["refusals"] = json!([{"id": "worker", "frame": shaped}]);
+            let named = fable_tick(request.clone()).unwrap();
+            assert_eq!(named["refusedWorkers"], json!(["worker"]));
+            assert_eq!(named["onOpusUntil"], reported_reset);
+        }
+        frame["quotaLimits"] = json!({"status":"rejected", "rateLimitType":"five_hour"});
+        request["refusals"] = json!([{"id": "worker", "frame": frame}]);
+        assert_eq!(fable_tick(request).unwrap()["refusedWorkers"], json!([]));
+    }
+
+    #[test]
     #[ignore = "invoked under the isolated nightly environment by its parent test"]
     fn account_store_peer() { println!("account-reset-store={}", data_dir().unwrap().display()); }
 

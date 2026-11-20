@@ -636,8 +636,10 @@ class TerminalFableWorker(unittest.TestCase):
         import pathlib, tempfile
         with tempfile.TemporaryDirectory() as folder:
             path = pathlib.Path(folder) / 'agent.jsonl'
-            statement = "You've reached your Fable limit. Run /usage-credits to continue or switch models"
+            statement = "You've hit your Fable limit · resets Nov 27, 10am (Europe/London)."
+            limits = {'status': 'rejected', 'rateLimitType': 'seven_day_overage_included', 'resetsAt': NOW + 300}
             row = {'type': 'assistant', 'error': 'rate_limit', 'isApiErrorMessage': True,
+                   'apiErrorParams': {'rate_limit_info': limits}, 'quotaLimits': limits,
                    'message': {'model': '<synthetic>', 'content': [{'type': 'text', 'text': statement}]}}
             path.write_text(json.dumps(row) + '\n')
             rec = {'agent_id': 'a1', 'name': 'design', 'session_id': 'fixture'}
@@ -647,6 +649,8 @@ class TerminalFableWorker(unittest.TestCase):
                 refused = watcher.terminal_worker_refusals('fixture', 'fixture', set(), now)
                 self.assertTrue(refused['a1']['frame']['isApiErrorMessage'])
                 self.assertEqual(refused['a1']['frame']['message']['content'][0]['text'], statement)
+                self.assertEqual(refused['a1']['frame']['apiErrorParams']['rate_limit_info'], limits)
+                self.assertEqual(refused['a1']['frame']['quotaLimits'], limits)
                 # A later write to the file cannot make its old refusal current.
                 row['timestamp'] = now - 2 * watcher.POLL_SECONDS - 1
                 path.write_text(json.dumps(row) + '\n')

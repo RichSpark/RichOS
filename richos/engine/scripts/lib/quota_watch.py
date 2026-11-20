@@ -1762,7 +1762,10 @@ def terminal_worker_refusals(engine_root, session, seen, now):
         if candidate:
             name = "".join(c for c in str(worker.get("name") or agent) if c.isprintable())
             frame = {key: candidate[key] for key in ("type", "rate_limit_info", "api_error_status",
-                     "errors", "error", "isApiErrorMessage") if key in candidate}
+                     "errors", "error", "isApiErrorMessage", "quotaLimits") if key in candidate}
+            api_error = candidate.get("apiErrorParams")
+            if isinstance(api_error, dict) and isinstance(api_error.get("rate_limit_info"), dict):
+                frame["apiErrorParams"] = {"rate_limit_info": api_error["rate_limit_info"]}
             message = candidate.get("message")
             if isinstance(message, dict) and message.get("model") == "<synthetic>" and isinstance(message.get("content"), list):
                 frame["message"] = {"model": "<synthetic>", "content": [
