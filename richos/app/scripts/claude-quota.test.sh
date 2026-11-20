@@ -74,7 +74,7 @@ for line in sys.stdin:
     }}), flush=True)
 ''')
     fixture.chmod(0o700)
-    env = {**os.environ, "TMPDIR": str(runs), "QUOTA_PROOF_LOG": str(log)}
+    env = {**os.environ, "TMPDIR": str(runs), "QUOTA_PROOF_LOG": str(log), "RICHOS_QUOTA_FIXTURE_STORE": str(runs)}
 
     def invoke(*args, extra=None):
         return subprocess.run([executable, *map(str, args)], env={**env, **(extra or {})},

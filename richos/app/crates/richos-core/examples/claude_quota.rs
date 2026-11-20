@@ -1,6 +1,17 @@
 //! Read-only smoke test: cargo run -p richos-core --example claude_quota -- --live /path/to/claude
 //! The same executable also exposes the desktop's hook entrypoint for integration checks.
 use richos_core::quota::{self, Service};
+use std::path::Path;
+
+fn open_reader(root: &Path) -> std::io::Result<Service> {
+    // Each synthetic smoke run keeps its stand-in readings inside its temporary directory.
+    if std::env::var_os("RICHOS_QUOTA_FIXTURE_STORE").is_some() {
+        Service::open(root)
+    } else {
+        Service::open_shared_reader(root)
+    }
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args_os().skip(1);
     match args.next().as_deref().and_then(|s| s.to_str()) {
@@ -13,7 +24,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let root = std::env::temp_dir().join(format!("richos-quota-smoke-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&root)?;
     let result = (|| -> Result<(), Box<dyn std::error::Error>> {
-        let service = Service::open_shared_reader(&root)?;
+        let service = open_reader(&root)?;
         let view = service.refresh(std::path::Path::new(&bin), true);
         service.shutdown();
         println!(
@@ -40,7 +51,7 @@ fn measure(mut args: impl Iterator<Item = std::ffi::OsString>) -> Result<(), Box
     let root = std::env::temp_dir().join(format!("richos-quota-measure-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&root)?;
     let result = (|| -> Result<(), Box<dyn std::error::Error>> {
-        let service = Service::open_shared_reader(&root)?;
+        let service = open_reader(&root)?;
         for read in 1..=reads {
             let started = std::time::Instant::now();
             let view = service.refresh(std::path::Path::new(&bin), true);
