@@ -33,17 +33,16 @@ pub const REFRESH_INTERVAL_MS: u64 = 5 * 60_000;
 /// 2.02-2.22 s; the child's CPU time grew 2.03-2.04 s per read with reads 6 s apart and
 /// 2.29 s per read with reads 30 s apart — so the cost is the READ, not an idle child: about
 /// 2.2 s of one core per read. The resident child is 390-430 MB. At one read a minute that is
-/// about 3.7% of one core per account being read fast (2.2 / 60), only while usage is fast or
-/// a rise is expected, and only for the account in use; at 2 minutes it would be 1.8%. Every
+/// about 3.7% of one core per account being read fast (2.2 / 60); at 2 minutes it would be 1.8%. Every
 /// minute lets the act point sit closer to the normal one at the same speed (4 points a minute
 /// projects 4 points ahead instead of 8), so it is the choice. The cost no measurement here can
-/// show is Anthropic's side (a `get_usage` a minute per account); a failed read backs off
-/// `BACKOFF_MS` as before.
+/// show is Anthropic's side. The shared reader uses this interval only during measured fast
+/// usage above 80%. A failed read uses the regular interval or the provider's retry time.
 pub const FAST_REFRESH_INTERVAL_MS: u64 = 60_000;
 
 /// **An EXPECTED rise** (plan §15 answer 10): this many leases started, or agents dispatched,
-/// within `EXPECTED_RISE_WINDOW_MS` switches checking to the fast interval before any jump is
-/// measured, for `EXPECTED_RISE_MS`. Then it ends by itself unless a measured speed keeps it.
+/// within `EXPECTED_RISE_WINDOW_MS` marks an expected rise for `EXPECTED_RISE_MS`.
+/// The provider interval depends on measured usage.
 pub const EXPECTED_RISE_STARTS: usize = 3;
 pub const EXPECTED_RISE_WINDOW_MS: u64 = 60_000;
 pub const EXPECTED_RISE_MS: u64 = 10 * 60_000;
@@ -75,6 +74,8 @@ pub struct Reading {
     /// §4): it replaces 99 as the weekly point at normal speed. `None` everywhere but the one
     /// account the variable names.
     pub weekly_cutoff: Option<f64>,
+    /// Time from the saved provider reading to the next eligible request.
+    pub provider_wait_ms: Option<u64>,
 }
 
 /// **H, the work the weekly point leaves room for after it: 5 minutes at the measured speed.**
@@ -116,21 +117,23 @@ impl Reading {
     pub fn fast(&self) -> bool {
         self.speeds.values().any(|s| s * REFRESH_INTERVAL_MS as f64 >= FAST_POINTS_PER_CHECK)
     }
-    /// The gap to the next check: one minute when fast or a rise is expected, 5 otherwise.
-    /// When the speed comes back down (and no rise is expected) it is 5 minutes again.
+    /// The local monitoring interval used to describe a fast or expected rise.
     pub fn interval(&self) -> u64 {
         if self.fast() || self.expected { FAST_REFRESH_INTERVAL_MS } else { REFRESH_INTERVAL_MS }
     }
+    fn projection_interval(&self) -> u64 {
+        self.provider_wait_ms.unwrap_or_else(|| self.interval())
+    }
     /// What this window will read at the next check, at its measured speed.
     pub fn projected(&self, window: &Window) -> f64 {
-        window.used_percent + self.speeds.get(&window.id).copied().unwrap_or(0.) * self.interval() as f64
+        window.used_percent + self.speeds.get(&window.id).copied().unwrap_or(0.) * self.projection_interval() as f64
     }
     /// **The check point, recalculated from the measured speed** (plan §15 answer 10): the
     /// normal threshold (93% five-hour, 99% weekly), or lower when the speed would carry the
     /// window to 100% before the next check — `100 - speed x interval`. At normal speed it is
     /// the normal threshold again (answer 11).
     pub fn act_point(&self, window: &Window, threshold: f64) -> f64 {
-        let reach = self.speeds.get(&window.id).copied().unwrap_or(0.) * self.interval() as f64;
+        let reach = self.speeds.get(&window.id).copied().unwrap_or(0.) * self.projection_interval() as f64;
         // Never below 0%: a jump faster than the whole window (20% -> 95% in 30 s) would
         // otherwise print "-36%". At 0 the window is already at the point, so it still acts at once.
         threshold.min(100. - reach).clamp(0., 100.)
@@ -144,7 +147,7 @@ impl Reading {
     /// My "1-2% sooner" was just guesswork."*, "this" being 100% before the switch):
     ///
     /// with `s` the window's measured speed (the larger of the percentage speed and the token
-    /// speed), `I` the time to the next check (`interval`) and `H` the work left room for after
+    /// speed), `I` the time to the next provider check and `H` the work left room for after
     /// the switch ([`HANDOFF_DEFAULT_MS`]): `point = 99 - max(0, ceil(s x (I + H)) - 1)`. If the
     /// wait for the next check and that work would use 1 point or less, it is 99; up to 2
     /// points, 98; up to 5, 95; and so on, as early as the speed requires, with no floor but 0.
@@ -154,7 +157,7 @@ impl Reading {
     pub fn weekly_point(&self, window: &Window) -> f64 {
         let base = self.weekly_cutoff.unwrap_or(resets::WEEKLY_THRESHOLD);
         let speed = self.speeds.get(&window.id).copied().unwrap_or(0.);
-        let points = speed * (self.interval() + HANDOFF_DEFAULT_MS) as f64;
+        let points = speed * self.projection_interval().saturating_add(HANDOFF_DEFAULT_MS) as f64;
         let earlier = (points.ceil() - 1.).max(0.);
         (base - earlier).clamp(0., 100.)
     }
@@ -369,9 +372,7 @@ pub struct View {
     /// The setting for the five-hour threshold: Pause (default) or Switch.
     #[serde(default)]
     pub at_threshold: crate::claude_accounts::AtThreshold,
-    /// Each window's measured speed, percentage points per millisecond (§108). Published so
-    /// the separate-process gate projects exactly as this process does; `refreshIntervalMs`
-    /// above reads 120000 while it is fast.
+    /// Each window's measured speed in percentage points per millisecond (§108).
     #[serde(default)]
     pub speeds: BTreeMap<String, f64>,
     /// The check point of each window, percent used: 93 (five-hour) and 99 (weekly) at
@@ -752,7 +753,15 @@ impl Snapshot {
             }
         }
         Reading { windows, speeds,
-            expected: self.rise_until.is_some_and(|t| t > now), rises: self.rises.clone(), weekly_cutoff }
+            expected: self.rise_until.is_some_and(|t| t > now), rises: self.rises.clone(),
+            weekly_cutoff, provider_wait_ms: self.provider_wait_ms() }
+    }
+    fn provider_wait_ms(&self) -> Option<u64> {
+        let interval = self.shared_interval_ms?;
+        // An idle account uses the active schedule once a move selects it.
+        if interval > REFRESH_INTERVAL_MS { return Some(REFRESH_INTERVAL_MS); }
+        Some(self.shared_next_at.zip(self.shared_checked_at).map_or(interval,
+            |(next, checked)| next.saturating_sub(checked)))
     }
     fn accept(&mut self, mut windows: Vec<Window>, observed: u64) {
         self.measure(&windows, observed);
@@ -883,15 +892,16 @@ impl Snapshot {
     /// starts at or over the point in force when it starts (Stu's own turns, a released
     /// worker) is a rise during that hold, so it never replaces the rise into it. The rises
     /// are read in the order they came (`measure` appends), each moving the point by its
-    /// speed exactly as [`Reading::act_point`] does: `line` at a speed under 1 point a minute
-    /// (5 points or less per five-minute check), `100 - speed x 1 minute` above it.
+    /// speed and provider schedule, as [`Reading::act_point`] does.
     fn pre_hold(&self, id: &str, line: f64) -> f64 {
         let point = |speed: f64| {
-            let interval = if speed * REFRESH_INTERVAL_MS as f64 >= FAST_POINTS_PER_CHECK {
-                FAST_REFRESH_INTERVAL_MS
-            } else {
-                REFRESH_INTERVAL_MS
-            };
+            let interval = self.provider_wait_ms().unwrap_or({
+                if speed * REFRESH_INTERVAL_MS as f64 >= FAST_POINTS_PER_CHECK {
+                    FAST_REFRESH_INTERVAL_MS
+                } else {
+                    REFRESH_INTERVAL_MS
+                }
+            });
             line.min(100. - speed * interval as f64).clamp(0., 100.)
         };
         self.rise_log.get(id).map_or(0., |log| log.iter()
@@ -919,9 +929,10 @@ impl Snapshot {
             .windows
             .iter()
             .any(|w| w.resets_at.is_some_and(|t| t <= now));
-        let fresh = self
-            .checked_at
-            .is_some_and(|t| now >= t && now - t < interval)
+        let provider_refused = self.empty_at.zip(self.shared_checked_at).is_some_and(|(empty, checked)| empty >= checked);
+        let fresh = self.checked_at.is_some_and(|checked|
+            now >= checked && now < self.shared_next_at.unwrap_or(checked.saturating_add(interval)))
+            && !provider_refused
             && self.error.is_none()
             && !expired;
         let state = if self.checked_at.is_none() {
@@ -3063,6 +3074,33 @@ pub(crate) mod tests {
         windows.push(Window { id: "seven_day".into(), label: "Weekly".into(), used_percent: weekly,
             resets_at: Some(NOW + 48 * 3_600_000), duration_ms: 168 * 3_600_000 });
         windows
+    }
+
+    #[test]
+    fn a_fast_rise_below_eighty_uses_the_real_provider_deadline() {
+        let at = NOW + REFRESH_INTERVAL_MS;
+        let windows = |used, weekly| {
+            let mut windows = both_at(used, weekly);
+            windows.push(Window { id: "model:Fable".into(), label: "Weekly · Fable".into(),
+                used_percent: used, resets_at: Some(NOW + 48 * 3_600_000), duration_ms: 168 * 3_600_000 });
+            windows
+        };
+        let mut snapshot = Snapshot::default();
+        snapshot.accept(windows(55., 64.), NOW);
+        snapshot.accept(windows(78., 77.), at);
+        snapshot.shared_checked_at = Some(at);
+        snapshot.shared_interval_ms = Some(REFRESH_INTERVAL_MS);
+        snapshot.shared_next_at = Some(at + REFRESH_INTERVAL_MS);
+        let reading = snapshot.reading_with(None, at + 90_000);
+        assert_eq!(reading.interval(), FAST_REFRESH_INTERVAL_MS);
+        assert!(reading.reaches(&reading.windows[0], 93.), "the five-hour window can fill before the next provider reading");
+        assert!(reading.reaches_weekly(&reading.windows[1]), "the general week uses the same real wait");
+        assert!(reading.reaches(&reading.windows[2], 99.9), "the Fable switch uses the same real wait");
+        assert_eq!(snapshot.view(policy(), at + 90_000).state, State::Fresh);
+        assert_eq!(snapshot.view(policy(), at + REFRESH_INTERVAL_MS).state, State::Stale);
+        snapshot.empty(ReadError::NoReading, at + REFRESH_INTERVAL_MS);
+        snapshot.shared_next_at = Some(at + 2 * REFRESH_INTERVAL_MS);
+        assert_eq!(snapshot.view(policy(), at + REFRESH_INTERVAL_MS).state, State::Stale);
     }
 
     /// **§108: when usage speeds up a lot, the quota is checked every minute instead of 5**

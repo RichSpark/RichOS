@@ -318,6 +318,19 @@ async function main() {
     assert((await page.locator("#quota-freshness").innerText()).includes("5 min"));
     await page.close();
   });
+  await run.check("a locally fast reading stays fresh until the shared provider deadline", async () => {
+    const checkedAt = now - 90_000;
+    for (const [providerIntervalMs, expected] of [[60_000, "stale"], [300_000, "fresh"]]) {
+      const fixture = { ...quota, checkedAt, providerCheckedAt: checkedAt, refreshIntervalMs: 60_000,
+        providerIntervalMs, nextCheckAt: checkedAt + providerIntervalMs };
+      const page = await open("dark", fixture, 100, null, true, { fixedTime: new Date(now) });
+      await enableTechnical(page); await page.click("#set-quota-open");
+      await page.waitForSelector(".quota-window");
+      const freshness = page.locator("#quota-freshness");
+      assertEqual((await freshness.innerText()).includes("(stale)"), expected === "stale");
+      await page.close();
+    }
+  });
   // THE CEO, 2026-10-31: "If no 5-hour-limit data, then don't show/don't handle it." Red on main,
   // where a weekly-only reading drew a "Five-hour window: not reported" row and the status card
   // said "No current reading" and waited for "a reading [that] shows the five-hour window past 93%".
@@ -895,7 +908,7 @@ async function main() {
       assert(await page.locator("#quota-account-start").isVisible(), name + ": + Add account is offered with no reading");
       assert(await page.locator("#quota-refresh").isEnabled(), name + ": Refresh is not locked");
       assertEqual((await page.locator("#quota-freshness").innerText()).trim(), "No usage reading yet.");
-      assertEqual((await page.locator("#quota-refresh").innerText()).trim(), "Ask Claude Code", "round 16's label with no reading");
+      assertEqual((await page.locator("#quota-refresh").innerText()).trim(), "Refresh", "the label with no saved reading");
       if (name === "branch") {
         assert(await page.locator("#quota-message").isHidden(), "nothing is reported as broken");
         assert((await page.locator("#quota-empty").innerText()).includes("Claude Code answered without its usage figures this time"));
