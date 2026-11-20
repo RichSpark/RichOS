@@ -1122,11 +1122,11 @@ impl Accounts {
     /// each one rotates at its own next turn boundary, because rotation never happens inside a
     /// turn (`spine.rs`).
     pub fn evaluate(&self, readings: &BTreeMap<String, Reading>, pause: Option<u8>, now: u64) -> io::Result<bool> {
-        self.evaluate_before_move(readings, pause, now, || {})
+        self.evaluate_before_move(readings, pause, now, |_| {})
     }
 
     pub(crate) fn evaluate_before_move(
-        &self, readings: &BTreeMap<String, Reading>, pause: Option<u8>, now: u64, wake_reader: impl FnOnce(),
+        &self, readings: &BTreeMap<String, Reading>, pause: Option<u8>, now: u64, wake_reader: impl FnOnce(&str),
     ) -> io::Result<bool> {
         let mut state = self.state.lock().unwrap();
         if state.accounts.len() < 2 { return Ok(false); }
@@ -1147,7 +1147,7 @@ impl Accounts {
             Gone::Limit => limit(&current),
             _ => mine.windows.iter().filter_map(|w| w.resets_at).find(|t| *t == until),
         };
-        wake_reader();
+        wake_reader(&next);
         self.switch_to(&mut state, &next, why, fresh_at, now)?;
         Ok(true)
     }
@@ -1156,6 +1156,13 @@ impl Accounts {
     /// account is marked gone until `resets_at` (or, when the refusal did not say, until the
     /// latest reset of its full windows), and the next account with room is put in use.
     pub fn limit_reached(&self, account: &str, resets_at: Option<u64>, readings: &BTreeMap<String, Reading>, pause: Option<u8>, now: u64) -> io::Result<AfterLimit> {
+        self.limit_reached_before_move(account, resets_at, readings, pause, now, |_| {})
+    }
+
+    pub(crate) fn limit_reached_before_move(
+        &self, account: &str, resets_at: Option<u64>, readings: &BTreeMap<String, Reading>,
+        pause: Option<u8>, now: u64, wake_reader: impl FnOnce(&str),
+    ) -> io::Result<AfterLimit> {
         {
             let mut state = self.state.lock().unwrap();
             let until = resets_at.filter(|t| *t > now).or_else(|| readings.get(account).and_then(|r| r.windows.iter()
@@ -1171,7 +1178,7 @@ impl Accounts {
                 return Ok(AfterLimit::Continue);
             }
         }
-        Ok(if self.evaluate(readings, pause, now)? { AfterLimit::Continue } else { AfterLimit::NoRoom })
+        Ok(if self.evaluate_before_move(readings, pause, now, wake_reader)? { AfterLimit::Continue } else { AfterLimit::NoRoom })
     }
 
     /// **A reset was used on `account`** (hunt part 1 v3, finding 49): the usage-limit refusal

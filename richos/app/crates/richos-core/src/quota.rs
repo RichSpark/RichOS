@@ -1062,6 +1062,7 @@ pub struct Service {
     connecting: std::sync::atomic::AtomicBool,
     refresh_requested: Mutex<bool>,
     refresh_wake: std::sync::Condvar,
+    account_refreshes: Mutex<std::collections::BTreeSet<String>>,
     /// The account list and the switch decision (fill-first). `source` and `snapshot` above
     /// are Account 1's, exactly as before; every added account has its own pair here.
     pub accounts: std::sync::Arc<crate::claude_accounts::Accounts>,
@@ -1193,6 +1194,7 @@ impl Service {
             connecting: std::sync::atomic::AtomicBool::new(false),
             refresh_requested: Mutex::new(true),
             refresh_wake: std::sync::Condvar::new(),
+            account_refreshes: Mutex::new(std::collections::BTreeSet::new()),
             accounts: std::sync::Arc::new(crate::claude_accounts::Accounts::open(data_dir)?),
             extra: Mutex::new(BTreeMap::new()),
             notes: Mutex::new(std::collections::VecDeque::new()),
@@ -1268,6 +1270,12 @@ impl Service {
     pub fn request_refresh(&self) {
         *self.refresh_requested.lock().unwrap() = true;
         self.refresh_wake.notify_one();
+    }
+    fn request_account_refresh(&self, id: &str) {
+        if id != crate::claude_accounts::ACCOUNT_ONE {
+            self.account_refreshes.lock().unwrap().insert(id.into());
+        }
+        self.request_refresh();
     }
     /// The desktop monitor consumes this signal before applying the normal TTL.
     /// Startup begins signaled, even when automatic pausing is disabled.
@@ -1775,7 +1783,7 @@ impl Service {
             }
         };
         apply_fable_capacity(&mut readings, self.fable_switch.lock().unwrap().enabled);
-        match self.accounts.evaluate_before_move(&readings, pause, now, || self.request_refresh()) {
+        match self.accounts.evaluate_before_move(&readings, pause, now, |to| self.request_account_refresh(to)) {
             Ok(moved) if moved || changed => {
                 if let Err(error) = self.publish() { eprintln!("[richos] quota snapshot: {error}"); }
             }
@@ -1788,7 +1796,8 @@ impl Service {
     pub fn limit_reached(&self, account: &str, resets_at: Option<u64>) -> crate::claude_accounts::AfterLimit {
         let pause = self.policy.lock().unwrap().line();
         self.request_refresh();
-        let outcome = self.accounts.limit_reached(account, resets_at, &self.readings(), pause, crate::util::now_millis())
+        let outcome = self.accounts.limit_reached_before_move(account, resets_at, &self.readings(), pause,
+            crate::util::now_millis(), |to| self.request_account_refresh(to))
             .unwrap_or(crate::claude_accounts::AfterLimit::NoRoom);
         if let Err(error) = self.publish() { eprintln!("[richos] quota snapshot: {error}"); }
         outcome
@@ -1961,6 +1970,7 @@ impl Service {
         self.accounts.remove(id)?;
         self.extra.lock().unwrap().remove(id);
         self.usage_keys.lock().unwrap().remove(id);
+        self.account_refreshes.lock().unwrap().remove(id);
         let _best_effort = self.publish();
         Ok(self.view())
     }
@@ -1981,7 +1991,7 @@ impl Service {
         if crate::claude_accounts::gone(reading, self.accounts.at_threshold(), pause, self.accounts.limited_until(id), now).is_some() {
             return Err(io::Error::other(format!("{} has no room right now, so Rich would switch away from it at once.", account.label)));
         }
-        self.request_refresh();
+        self.request_account_refresh(id);
         self.accounts.use_first(id)?;
         self.decide();
         let _best_effort = self.publish();
@@ -2033,13 +2043,20 @@ impl Service {
         for account in self.accounts.list() {
             if account.id == crate::claude_accounts::ACCOUNT_ONE || self.is_shutdown() { continue; }
             let Some(folder) = account.folder.clone() else { continue };
-            let interval = if force || account.id == in_use { REFRESH_INTERVAL_MS } else { shared_usage::IDLE_INTERVAL_MS };
             let reader = {
                 let mut extra = self.extra.lock().unwrap();
                 let (reader, _) = extra.entry(account.id.clone()).or_insert_with(|| self.reader(folder.clone()));
                 reader.clone()
             };
             let Ok(mut source) = reader.try_lock() else { continue };
+            // A move can be replaced before the monitor wakes. The selected account
+            // still gets one check without waiting for the decision or skipping its slot.
+            let requested = self.account_refreshes.lock().unwrap().remove(&account.id);
+            let interval = if force || requested || account.id == in_use {
+                REFRESH_INTERVAL_MS
+            } else {
+                shared_usage::IDLE_INTERVAL_MS
+            };
             let saved = self.read_shared_usage(bin, &account.id, Some(&folder), source.as_mut(), interval);
             drop(source);
             let mut extra = self.extra.lock().unwrap();
@@ -4769,6 +4786,38 @@ added = bool(_folder) and os.path.realpath(_folder).startswith(_accounts)"#;
     }
 
     #[test]
+    #[cfg(unix)]
+    fn a_move_requests_the_selected_account_even_before_it_becomes_active() {
+        let root = Scratch::new();
+        let service = Service::open(root.path()).unwrap();
+        let work = service.accounts.add("Work").unwrap();
+        let folder = work.folder.as_deref().unwrap();
+        let bin = fake_claude(root.path());
+        let reset = "2099-01-05T00:00:00Z";
+        usage(&root.path().join("usage-1.json"), 20., 40., reset);
+        usage(&folder.join("usage.json"), 10., 20., reset);
+        service.refresh(&bin, true);
+        let store = service.usage_store(&bin, &work.id, Some(folder));
+        let age_ten_minutes = || store.backdate_request(crate::util::now_millis() + 20 * 60_000);
+        let weekly = || service.observed_readings()[&work.id].windows.iter()
+            .find(|window| window.id == "seven_day").unwrap().used_percent;
+
+        age_ten_minutes();
+        usage(&folder.join("usage.json"), 10., 25., reset);
+        service.refresh_accounts(&bin, false);
+        assert_eq!(weekly(), 20., "an idle account outside its 30-minute slot keeps the saved reading");
+        service.request_account_refresh(&work.id);
+        service.refresh_accounts(&bin, false);
+        assert_eq!(service.accounts.in_use().id, "1");
+        assert_eq!(weekly(), 25., "the chosen account uses its eligible 5-minute slot before it is active");
+
+        age_ten_minutes();
+        usage(&folder.join("usage.json"), 10., 30., reset);
+        service.refresh_accounts(&bin, false);
+        assert_eq!(weekly(), 25., "the move requests just one check");
+    }
+
+    #[test]
     fn cache_failure_backoff_policy_persistence_and_account_invalidation() {
         let dir = Scratch::new();
         let service = Service::open(dir.path()).unwrap();
@@ -4950,6 +4999,7 @@ for line in sys.stdin:
         let reader = service.clone();
         let refreshing = std::thread::spawn(move || reader.refresh(&bin, true));
         wait_until("Account 1's second read is pending", || dir.join("default-pending").exists());
+        assert!(service.snapshot.try_lock().is_ok(), "turn admission can still read quota during the probe");
         let began = std::time::Instant::now();
         service.shutdown();
         let took = began.elapsed();
