@@ -58,6 +58,7 @@ test "$(plutil -extract CFBundleDocumentTypes.0.LSItemContentTypes.1 raw "$glanc
 codesign --verify --deep --strict "$glance"
 cmp "$root/richos/tools/richfiles/Resources/RichFiles.icns" "$app/Contents/Resources/RichFiles.icns"
 test "$(plutil -extract CFBundleIconFile raw "$app/Contents/Info.plist")" = RichFiles.icns
+test "$(plutil -extract CFBundleShortVersionString raw "$app/Contents/Info.plist")" = 1.0.1
 for font in Inter-Variable.ttf Newsreader-Regular.ttf LICENSE-Inter.txt LICENSE-Newsreader.txt; do
   cmp "$root/richos/mobile/native-ios/App/Design/Fonts/$font" "$app/Contents/Resources/$font"
 done
