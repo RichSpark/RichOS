@@ -71,6 +71,7 @@ struct WindowGestureSettings: View {
     private typealias Preferences = WindowGesturePreferences
 
     let appURL: URL
+    var desktopShortcut = false
     @Environment(\.colorScheme) private var colorScheme
     @State private var selection = Preferences.selection
     @State private var runtime: Preferences.Status?
@@ -81,15 +82,27 @@ struct WindowGestureSettings: View {
     private var helper: URL { appURL.appendingPathComponent(Preferences.helperPath) }
     private var guidanceColor: Color { BrowserPalette(colorScheme).hint }
 
+    private var enabled: Bool {
+        let choices: Preferences.Selection = desktopShortcut ? .desktopDelete : [.titleBar, .dock]
+        return !selection.intersection(choices).isEmpty
+    }
+
     var body: some View {
-        Toggle("Double-click a title bar to maximize or restore", isOn: toggle(.titleBar))
-            .disabled(updating)
-        Toggle("Click the active app’s Dock icon to minimize or restore", isOn: toggle(.dock))
-            .disabled(updating)
-        if !selection.isEmpty {
-            Text("These gestures work in other apps and continue after you quit RichOS and RichFiles.")
+        if desktopShortcut {
+            Toggle("Press Delete to move selected desktop items to Trash", isOn: toggle(.desktopDelete))
+                .disabled(updating)
+        } else {
+            Toggle("Double-click a title bar to maximize or restore", isOn: toggle(.titleBar))
+                .disabled(updating)
+            Toggle("Click the active app’s Dock icon to minimize or restore", isOn: toggle(.dock))
+                .disabled(updating)
+        }
+        if enabled {
+            Text(desktopShortcut
+                ? "This shortcut works on the macOS desktop even after you quit RichFiles."
+                : "These gestures work in other apps and continue after you quit RichOS and RichFiles.")
                 .foregroundStyle(guidanceColor)
-            if selection.contains(.titleBar) && !nativeTitleBarIsOff {
+            if !desktopShortcut && selection.contains(.titleBar) && !nativeTitleBarIsOff {
                 Text("In Desktop & Dock, set “Double-click a window’s title bar to” to Do Nothing. Choose your previous action there to restore native behavior.")
                     .foregroundStyle(guidanceColor)
                 Button("Open Desktop & Dock Settings") { open("com.apple.Desktop-Settings.extension") }
@@ -103,7 +116,7 @@ struct WindowGestureSettings: View {
             } else if registration == "unavailable" || registration == "off" {
                 Text("RichFiles Window Gestures could not start. Try again from the installed copy of RichFiles.")
                     .foregroundStyle(guidanceColor)
-                Button("Retry Window Gestures") { synchronize("register") }
+                Button(desktopShortcut ? "Retry Desktop Shortcut" : "Retry Window Gestures") { synchronize("register") }
                     .buttonStyle(BrowserButtonStyle(bordered: true)).disabled(updating)
             } else if let runtime {
                 permissions(runtime)
@@ -113,8 +126,8 @@ struct WindowGestureSettings: View {
                 Button("Open Login Items Settings") { SMAppService.openSystemSettingsLoginItems() }
                     .buttonStyle(BrowserButtonStyle(bordered: true))
             }
-        } else if registration == "unavailable" {
-            Text("Window gestures are off, but macOS could not remove the background item.")
+        } else if selection.isEmpty && registration == "unavailable" {
+            Text("macOS could not remove the RichFiles background item.")
                 .foregroundStyle(guidanceColor)
             Button("Open Login Items Settings") { SMAppService.openSystemSettingsLoginItems() }
                 .buttonStyle(BrowserButtonStyle(bordered: true))
@@ -132,9 +145,7 @@ struct WindowGestureSettings: View {
         switch status {
         case .accessibility, .inputMonitoring:
             let accessibility = status == .accessibility
-            Text(accessibility
-                ? "In Accessibility, add and allow RichFiles Window Gestures to move and minimize other apps’ windows."
-                : "In Input Monitoring, add and allow RichFiles Window Gestures to detect mouse clicks.")
+            Text(permissionGuidance(accessibility: accessibility))
                 .foregroundStyle(guidanceColor)
             HStack {
                 Button(accessibility ? "Open Accessibility Settings" : "Open Input Monitoring Settings") {
@@ -145,13 +156,24 @@ struct WindowGestureSettings: View {
             }
             .buttonStyle(BrowserButtonStyle(bordered: true))
         case .inputUnavailable:
-            Text("macOS is currently blocking mouse monitoring. Check Input Monitoring or sign out and back in.")
+            Text("macOS is currently blocking input monitoring. Check Input Monitoring or sign out and back in.")
                 .foregroundStyle(guidanceColor)
             Button("Open Input Monitoring Settings") { open("com.apple.preference.security?Privacy_ListenEvent") }
                 .buttonStyle(BrowserButtonStyle(bordered: true))
         case .running, .off:
             EmptyView()
         }
+    }
+
+    private func permissionGuidance(accessibility: Bool) -> String {
+        if desktopShortcut {
+            return accessibility
+                ? "In Accessibility, add and allow RichFiles Window Gestures to check whether the desktop is focused."
+                : "In Input Monitoring, add and allow RichFiles Window Gestures to detect the Delete key."
+        }
+        return accessibility
+            ? "In Accessibility, add and allow RichFiles Window Gestures to move and minimize other apps’ windows."
+            : "In Input Monitoring, add and allow RichFiles Window Gestures to detect mouse clicks."
     }
 
     private func toggle(_ gesture: Preferences.Selection) -> Binding<Bool> {

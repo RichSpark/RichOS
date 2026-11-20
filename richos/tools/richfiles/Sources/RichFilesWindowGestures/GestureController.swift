@@ -1,5 +1,6 @@
 import AppKit
 import ApplicationServices
+import Carbon.HIToolbox
 import Darwin
 import RichFilesCore
 
@@ -73,7 +74,10 @@ final class GestureController {
         selection = Preferences.selection
         if !selection.contains(.titleBar) && previous.contains(.titleBar) { maximized.removeAll() }
         if !selection.contains(.dock) && previous.contains(.dock) { dockMinimized.removeAll() }
-        if selection != previous { press = nil; firstTitleClick = nil; pruneObservers() }
+        if selection != previous {
+            stopTap(keepingWindows: true)
+            pruneObservers()
+        }
 
         let status: Preferences.Status
         if selection.isEmpty {
@@ -147,10 +151,14 @@ final class GestureController {
 
     private func startTap() -> Bool {
         if let tap { return CGEvent.tapIsEnabled(tap: tap) }
-        let types: [CGEventType] = [.leftMouseDown, .leftMouseUp, .leftMouseDragged, .rightMouseDown, .otherMouseDown]
+        var types: [CGEventType] = []
+        if !selection.intersection([.titleBar, .dock]).isEmpty {
+            types = [.leftMouseDown, .leftMouseUp, .leftMouseDragged, .rightMouseDown, .otherMouseDown]
+        }
+        if selection.contains(.desktopDelete) { types.append(.keyDown) }
         let mask = types.reduce(CGEventMask(0)) { $0 | (1 << $1.rawValue) }
-        // Observe mouse-down before Dock can change focus. Return every original
-        // event, including those that lead to a window action.
+        // Observe mouse-down before Dock can change focus and pass through
+        // mouse events unchanged. The desktop shortcut may modify a key-down.
         guard let tap = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap,
                                          options: .defaultTap, eventsOfInterest: mask, callback: { _, type, event, context in
             if let context { Unmanaged<GestureController>.fromOpaque(context).takeUnretainedValue().receive(type, event) }
@@ -186,6 +194,10 @@ final class GestureController {
             return
         }
         let modifiers: CGEventFlags = [.maskCommand, .maskAlternate, .maskControl, .maskShift, .maskSecondaryFn]
+        if type == .keyDown {
+            if event.flags.intersection(modifiers).isEmpty { applyDesktopDelete(to: event) }
+            return
+        }
         guard event.flags.intersection(modifiers).isEmpty else {
             pointerRevision &+= 1
             press = nil
@@ -213,6 +225,30 @@ final class GestureController {
         default:
             break
         }
+    }
+
+    private func applyDesktopDelete(to event: CGEvent) {
+        let key = event.getIntegerValueField(.keyboardEventKeycode)
+        guard key == kVK_Delete || key == kVK_ForwardDelete,
+              event.getIntegerValueField(.keyboardEventAutorepeat) == 0,
+              Preferences.selection.contains(.desktopDelete),
+              let app = NSWorkspace.shared.frontmostApplication, app.bundleIdentifier == "com.apple.finder" else { return }
+
+        let started = ProcessInfo.processInfo.systemUptime
+        let finder = AXUIElementCreateApplication(app.processIdentifier)
+        AXUIElementSetMessagingTimeout(finder, 0.08)
+        // Finder exposes the desktop as a focused group inside its scroll area.
+        // Finder windows, Quick Look and the inline rename field have different focus.
+        guard let window = finder.element(kAXFocusedWindowAttribute), window.role == kAXScrollAreaRole,
+              let focused = finder.element(kAXFocusedUIElementAttribute), focused.role == kAXGroupRole,
+              focused.element(kAXParentAttribute) == window,
+              let selected: [AXUIElement] = focused.value(kAXSelectedChildrenAttribute), !selected.isEmpty,
+              NSWorkspace.shared.frontmostApplication == app else { return }
+
+        // Use Finder's regular Move to Trash command, including its Undo support.
+        event.setIntegerValueField(.keyboardEventKeycode, value: Int64(kVK_Delete))
+        event.flags.insert(.maskCommand)
+        record(.desktopDeleteShortcut, .complete, started: started)
     }
 
     private func hit(at point: CGPoint) -> AXUIElement? {

@@ -777,7 +777,7 @@ fn richfiles_timing(scope: &Scope, ctx: &Context, budget: &mut u64, gestures: bo
         let confirmed = record["confirmed"].as_u64()?;
         let known_operation = if gestures {
             matches!(operation, "windowGestureAvailability" | "windowGestureMaximize" | "windowGestureRestore"
-                | "windowGestureDockMinimize" | "windowGestureDockRestore")
+                | "windowGestureDockMinimize" | "windowGestureDockRestore" | "desktopDeleteShortcut")
         } else {
             matches!(operation, "listing" | "copy" | "move" | "recovery" | "gitHistory" | "gitComparison" | "railVideoFrame"
                 | "glanceDisplay" | "glanceDecode" | "glanceFolder" | "glancePreview" | "glanceDefaults" | "glanceMetadata"
@@ -1136,7 +1136,10 @@ mod tests {
         gestures["operation"] = serde_json::json!("windowGestureDockRestore");
         gestures["title"] = serde_json::json!("Private window title");
         write(&scope.logs_root().join("richfiles-timing.jsonl"), &format!("{record}\n{glance}\n{defaults}\n{metadata}\n{captures}"));
-        write(&scope.logs_root().join("richfiles-window-gestures.jsonl"), &format!("{gestures}\n{record}"));
+        let mut desktop_delete = record.clone();
+        desktop_delete["operation"] = serde_json::json!("desktopDeleteShortcut");
+        desktop_delete["path"] = serde_json::json!("/Users/private/Desktop/test.txt");
+        write(&scope.logs_root().join("richfiles-window-gestures.jsonl"), &format!("{gestures}\n{desktop_delete}\n{record}"));
         let items = collect(Category::Configuration, &scope, &Context::default(), 0);
         let timing = items.iter().find(|item| item.source == "RichFiles timing log").unwrap();
         assert_eq!(timing.status, Status::Collected);
@@ -1156,6 +1159,8 @@ mod tests {
         let window_gestures = items.iter().find(|item| item.source == "RichFiles Window Gestures log").unwrap();
         assert_eq!(window_gestures.status, Status::Collected);
         assert!(window_gestures.text.contains("operation=windowGestureDockRestore"));
+        assert!(window_gestures.text.contains("operation=desktopDeleteShortcut"));
+        assert!(!window_gestures.text.contains("/Users/private/Desktop"));
         assert!(!window_gestures.text.contains("operation=listing"));
         assert!(!timing.text.contains("Private screen content"));
         assert!(!window_gestures.text.contains("Private window title"));

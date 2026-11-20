@@ -503,6 +503,8 @@ struct RichFilesSettings: View {
             .pickerStyle(.radioGroup)
             Text("Enter opens, F2 renames, Delete moves to Trash and Space previews.")
                 .foregroundStyle(guidanceColor)
+            heading("Mac desktop")
+            WindowGestureSettings(appURL: appURL, desktopShortcut: true)
             heading("Individual shortcuts")
             Picker("File Action", selection: $shortcutAction) {
                 ForEach(BrowserAction.all + [.init("File Actions", .actionPalette)]) {
