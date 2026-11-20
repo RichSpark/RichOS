@@ -10,10 +10,8 @@ HIS UPDATE, 2026-09-25 (ruling §87, and the boundary cases in
 richos-hq/docs/plans/claude-five-hour-quota-rule-2026-09-25.md). At or above
 the threshold, do NOT pause when the reset is LESS than 20 minutes away;
 exactly 20 minutes still pauses. A hold already in place releases inside that
-window, keeping the same agent. The same day he dropped the adaptive schedule
-he had also given: "Well, I've changed my mind. Let's drop the 30-minute check
-nonsense. Keep it consistent at 5 minutes." So polling is 300 s at every
-usage level, and the stale bound stays one 300 s poll.
+window, keeping the same agent. The regular interval and stale bound are both
+300 s. See HIGH SPEED for local polling and the shared provider interval.
 
 The five-hour policy below is retained. Weekly support is in quota_weekly.py:
 all reported windows are printed; at 99% overall weekly use, the shared reset
@@ -21,11 +19,10 @@ service consumes a prior user approval or the lead receives the standard pause
 message. Weekly holds release only after fresh weekly allowance and an allowing
 five-hour verdict. The twenty-minute exception applies only to five-hour quota.
 
-The original five-hour watcher READS the five-hour window,
-it POLLS every 300 seconds, and it WAKES THE LEAD at the threshold, at the
-hold's release (the reset less than 20 minutes away) and at the reset, with
-the exact messages to send. The lead does the pausing and the resuming; this
-file never messages, stops or spawns anything.
+The five-hour watcher READS the five-hour window and WAKES THE LEAD at the
+threshold, at the hold's release (the reset less than 20 minutes away) and at
+the reset, with the exact messages to send. The lead does the pausing and the
+resuming; this file never messages, stops or spawns anything.
 
 THE LAST 20 MINUTES, and how it matches the desktop app (Codex, branch
 codex/claude-quota-settings, richos-core/src/quota.rs: RESET_EXEMPTION_MS and
@@ -45,7 +42,8 @@ Each wake-up names the command that makes the pause or the resume
 before any message, so a refused or lost message never leaves an agent running
 through a pause or frozen after one (2026-10-11).
 
-THE READING, FIRST: CLAUDE CODE'S OWN `get_usage` (2026-09-25). Each poll starts
+THE READING, FIRST: CLAUDE CODE'S OWN `get_usage` (2026-09-25). The poll uses
+the shared account record. If it claims the next provider slot, it starts
 `claude` as a CONTROL-ONLY connection and asks it for the account's usage,
 exactly as the desktop app does (Codex, codex/claude-quota-settings at
 c53f85c9, richos-core/src/quota/probe.rs; spec: richos-hq
@@ -55,8 +53,8 @@ persistence, no tools, strict and empty MCP config, CLAUDECODE removed, an
 `initialize` then a `get_usage` control request, each bounded at 20 s, frames
 capped at 256 KiB. It never sends a user message, so it is not a model turn.
 One difference, on purpose: the desktop keeps one connection open; this
-watcher is a short-lived script with 5 minutes between polls, so it starts
-the process in its own process group, captured at spawn, and ends that group
+watcher opens a connection for each provider call. It starts the process
+in its own process group, captured at spawn, and ends that group
 on every read. The working directory is `/var/empty` (CONTROL_CWD), which is
 empty and which this user cannot write, so a read can neither leave anything
 behind nor read anything there. Never `/` (it was until 2026-10-07): at start
@@ -72,10 +70,9 @@ directory and no transcript under ~/.claude/projects.
 
 Why it is first: the status-line file below re-renders only when the lead
 speaks, so an idle lead left the reading 10 minutes old at the 91%/95%
-readings of 07:57Z and 08:07Z. get_usage is fresh at every poll. When it
-fails (no `claude`, a timeout, an error, no subscription limits reported, or
-an unreadable answer), the watcher logs why, checks the status-line fallback
-and retries independently of the conversation.
+readings of 07:57Z and 08:07Z. The shared reading refreshes independently of
+the conversation. A failure keeps the last answer and its age. If the shared
+record has no usable answer, the watcher also checks the status-line fallback.
 
 THE FALLBACK READING (design notes: richos-hq/docs/plans/budget-self-management-2026-09-10.md)
   ~/.claude/statusline-payload.json -> rate_limits.five_hour.used_percentage and
@@ -111,7 +108,7 @@ nothing polled until the lead noticed and started it again by hand. Waking the
 lead was right; ending the polling to do it was the defect. So the two are now
 separate processes:
 
-  THE POLLER polls every 300 s for as long as its session lives and never
+  THE POLLER normally polls every 300 s for as long as its session lives and never
   stops on an event. It writes each poll line to polls.log and each wake-up,
   once, to events.jsonl, in ~/.claude/state/quota-watch/<session>/
   (QUOTA_WATCH_STATE_DIR overrides, for tests). One per session: it holds
@@ -139,9 +136,10 @@ separate processes:
                and prints each wake-up as one JSON line, which the host sends
                to that lead (host_child.py).
 
-  A get_usage failure (timeout, refusal) is retried every 60 s instead of
-  every 300 s. Once the live source has been unavailable for one poll
-  interval, the watcher alerts if it has no usable reading. A fallback is
+  During a get_usage outage the watcher can recheck locally every 60 s. The
+  shared provider request waits at least 300 s, or longer if the provider
+  supplies a later retry time. Once the live source has been unavailable for
+  one poll interval, the watcher alerts if it has no usable reading. A fallback is
   checked when its freshness expires, and a new status-line render does not
   end the live-source outage or rearm its alert. For a known five-hour window
   a failed retry can also alert if the measured rise could already have
@@ -181,17 +179,18 @@ alert when such a crazy high token consumption velocity is detected".
 
   AT HIGH SPEED: QUOTA-FAST wakes the lead once per window, the first time it
   is measured, with the speed and the time the window would be used up, so the
-  CEO can be told. Polls come every FAST_POLL_SECONDS (60: his "every 2
-  minutes ... Use every minute instead if that causes no problems", and the
-  measured cost of a read, at the constant). And the pause message
-  (QUOTA-THRESHOLD, marked EARLY) comes as soon as the reading plus the speed
+  CEO can be told. Local polls come every FAST_POLL_SECONDS (60).
+  The shared reader allows one provider call per minute only when the same
+  window is above 80% and has risen at least 5 points per 5 minutes.
+  The pause message (QUOTA-THRESHOLD, marked EARLY) comes as soon as the reading plus the speed
   over the next check and the hold reaches 100% (early_wake), below 93% if it
   must. The 20-minute rule near the reset still applies.
 
   A RISE EXPECTED: when EXPECT_SPAWNS of the session's working teammates were
   registered in the last EXPECT_SECONDS (the workspace registry's
-  registered_at), polls come every FAST_POLL_SECONDS before anything is
-  measured. No alert: nothing has been detected yet.
+  registered_at), local polls come every FAST_POLL_SECONDS before anything is
+  measured. The provider interval stays at 300 s until both conditions hold.
+  No alert: nothing has been detected yet.
 
   BACK TO NORMAL (his fourth addendum): the speed is measured afresh at every
   poll, so once it is under the high-speed line and no rise is expected, polls
@@ -232,6 +231,7 @@ import time
 
 # Shared with the terminal and desktop SendMessage delivery guards.
 import pause_protocol
+import quota_usage_store
 import quota_weekly
 import host_child  # the RichOS app host's child (--monitor --host-json)
 from quiet_wait import Watch  # --watch blocks on its files and processes, never a 0.5 s clock
@@ -614,6 +614,7 @@ def read_get_usage(now, deadline_s=None):
                 pass
     if usage.get("subtype") != "success":
         r["state"], r["why"] = "failed", "get_usage was refused"
+        r["explicit_refusal"] = True
         err = usage.get("error")
         if isinstance(err, str) and any(t in err for t in DEAD_LOGIN):
             # The saved login is dead (2026-09-26): the CEO must run /login.
@@ -624,6 +625,10 @@ def read_get_usage(now, deadline_s=None):
     body = usage.get("response") if isinstance(usage.get("response"), dict) else {}
     if body.get("rate_limits_available") is False:
         r["state"], r["why"] = "failed", "Claude Code did not report subscription limits for this account"
+        return r
+    if body.get("rate_limits_available") is True and body.get("rate_limits") is None:
+        r["state"], r["why"] = "failed", "Claude Code answered without usage figures"
+        r["empty"] = True
         return r
     r["windows"] = quota_weekly.windows(body.get("rate_limits", {}), _parse_reset)
     limits = body.get("rate_limits") if isinstance(body.get("rate_limits"), dict) else {}
@@ -869,10 +874,14 @@ def _gate_recompute(data, src, percent, now_ms):
     answered_empty = empty_at is not None and (checked is None or empty_at >= checked)
     if checked is None:
         return ("noReading" if answered_empty else "unknown"), None, "no reading yet"
-    # Every weekly window, the account's week and each model's own (quota.rs `is_weekly`), as the
-    # gate holds on all of them (review rv-20261031T063327Z-eb4a5248-1bbf).
+    # Match the desktop gate: with Fable fallback enabled and a general weekly reading,
+    # the Fable window changes the model on this account. The other weekly windows still hold.
+    fallback = data.get("fableSwitch")
+    separate_fable = isinstance(fallback, dict) and fallback.get("enabled") is True and any(
+        w["id"] == "seven_day" for w in live)
     is_weekly = lambda i: i.startswith("seven_day") or i.startswith("model:")
     weekly = [w for w in live if is_weekly(w["id"]) and w["used"] >= weekly_point(w)
+              and not (separate_fable and w["id"].lower() in ("model:fable", "seven_day_fable", "seven_day_overage_included"))
               and w["resets"] is not None and w["resets"] > now_ms]
     if weekly:
         w = max(weekly, key=lambda x: x["resets"])
@@ -953,6 +962,11 @@ def read_app(state, now):
         r["state"], r["why"] = "missing", "the app has no reading of account %s yet" % label
         return r
     r["age"] = max(0.0, now - checked / 1000.0)
+    provider_checked = _ms(src.get("providerCheckedAt"))
+    provider_refusal = _ms(src.get("emptyAt"))
+    if provider_checked is not None and provider_refusal is not None and provider_refusal >= provider_checked:
+        r.update(provider_refused="Claude Code did not provide a new quota reading",
+                 provider_refusal_at=provider_refusal, provider_age=max(0, now - provider_checked // 1000))
     five = next((w for w in windows if w["id"] == "five_hour"), None)
     if five is None and windows:
         return no_five_hour(r, now)
@@ -969,20 +983,87 @@ def read_app(state, now):
     return r
 
 
+def shared_get_usage(a, now):
+    binary = claude_binary()
+    folder = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.path.expanduser("~"), ".claude")
+    root = getattr(a, "usage_root", None) or os.environ.get("RICHOS_QUOTA_FIXTURE_STORE") or quota_usage_store.data_dir()
+    store = quota_usage_store.Store.for_account(root, binary, folder)
+    asked = int(time.time() * 1000)
+    live = None
+    try:
+        if binary and store.claim(asked):
+            live = read_get_usage(now)
+            completed = int(time.time() * 1000)
+            if live["state"] == "ok":
+                store.finish(asked, answer=quota_usage_store.answer(completed, live.get("windows", [])))
+            else:
+                store.finish(asked, refusal={"at": completed, "error": "noReading" if live.get("empty") else "failed",
+                                              "explicitRefusal": live.get("explicit_refusal", False)})
+    except OSError:
+        # The last readable answer is still usable. A failed lock grants no read permission.
+        pass
+    record = store.saved()
+    answer = record.get("answer")
+    refusal = record.get("refusal")
+    observed_at = int(time.time() * 1000)
+    schedule = {"provider_next_at": store.next_request_at(record, observed_at),
+                "provider_interval_ms": store.interval(record, observed_at)}
+    reason = "get_usage was refused" if isinstance(refusal, dict) and refusal.get("explicitRefusal") else None
+    if not isinstance(answer, dict):
+        if live is not None:
+            live.update(schedule)
+            return live
+        why = "No saved Claude Code quota reading yet" if store.verified else "Claude account identity is unavailable"
+        return {**schedule, "state": "failed", "why": reason or why}
+    checked_at = answer.get("checkedAt")
+    if not isinstance(checked_at, int) or checked_at > int(time.time() * 1000):
+        return {"state": "failed", "why": "The saved Claude Code quota reading has no valid time"}
+    windows = [{"id": w["id"], "label": w["label"], "used": w["usedPercent"],
+                "resets_at": w["resetsAt"] // 1000 if w.get("resetsAt") else None}
+               for w in answer.get("windows", [])]
+    row = {"path": "get_usage", "source": "get_usage", "state": "ok", "why": "",
+           "windows": windows, "used": None, "resets_at": None, "ended": False,
+           "age": max(0, int(time.time()) - checked_at // 1000), "taken_at": checked_at // 1000,
+           **schedule}
+    if live:
+        row.update({field: live[field] for field in ("auth_failed", "seconds", "timing") if field in live})
+    if refusal:
+        row["provider_refused"] = (live["why"] if live and live["state"] != "ok"
+                                   else reason or "Claude Code did not provide a new quota reading")
+        row["provider_refusal_at"] = refusal.get("at")
+        row["provider_retry_at"] = schedule["provider_next_at"]
+        row["provider_age"] = row["age"]
+    five = next((w for w in windows if w["id"] == "five_hour"), None)
+    if not five:
+        return no_five_hour(row, now)
+    row.update(used=five["used"], resets_at=five["resets_at"],
+               ended=bool(five["resets_at"] and five["resets_at"] <= now))
+    return row
+
+
 def read_source(a, now):
-    """get_usage first; the status-line file when it fails, saying why. For the app
-    (RICHOS_APP_STATE set): the app's own reading of the account in use, and nothing else."""
+    """Use the shared account reading and newer status-line windows when available."""
     state = app_state()
     if state:
         return read_app(state, now)
-    g = read_get_usage(now)
-    if g["state"] == "ok":
-        return g
+    g = shared_get_usage(a, now)
     if g.get("auth_failed"):
         told = report_login_failure(getattr(a, "engine_root", ""), g["auth_failed"])
         g["why"] += " (login alarm %s)" % ("raised" if told else "NOT raised")
     f = read_reading(a.payload, now)
     f["source"] = "the status line"
+    for field in ("provider_refused", "provider_refusal_at", "provider_retry_at", "provider_age",
+                  "provider_interval_ms", "provider_next_at"):
+        if field in g:
+            f[field] = g[field]
+    if g["state"] == "ok":
+        if f["state"] != "ok" or f["age"] >= g["age"]:
+            return g
+        windows = {w["id"]: w for w in g["windows"]}
+        windows.update({w["id"]: w for w in f.get("windows", [])})
+        f["windows"] = list(windows.values())
+        f["observed_from_status"] = True
+        return f
     f["fallback_why"] = g["why"]
     if g.get("windows"):
         f["windows"] = g["windows"]
@@ -1197,8 +1278,13 @@ def mode_status(a, now):
         print("  source    : %s, published at %s (the account in use; no probe in the app)" % (r["source"], r["path"]))
     elif r.get("fallback_why"):
         print("  source    : the status-line file %s, because %s" % (a.payload, r["fallback_why"]))
+    elif r.get("observed_from_status"):
+        print("  source    : the recent status line and the shared Claude Code reading")
     else:
-        print("  source    : Claude Code's get_usage (%s), fresh at this read" % claude_binary())
+        print("  source    : the shared Claude Code get_usage reading")
+    if r.get("provider_refused"):
+        print("  last check: %s; the saved answer is %s old" %
+              (r["provider_refused"], span(r.get("provider_age") or 0)))
     if r["state"] != "ok":
         print("  reading   : UNKNOWN: %s" % r["why"])
     elif not has_five(r):
@@ -1717,6 +1803,7 @@ def _poll_loop(a, out, alive, health=None):
     bound = None                 # {"id", "label"} of that account
     app_window = None            # the five-hour reset of the last app reading in `history`
     left_held = None             # the account just left while its hold may still hold workers
+    previous_reading = None
     first = True
     print("quota-watch: polling every %d s; threshold %s%%%s" % (
         a.poll, fmt_pct(a.threshold), "; waking only at the release and the reset" if a.until_reset else ""),
@@ -1727,14 +1814,28 @@ def _poll_loop(a, out, alive, health=None):
             return 0
         started = time.time()
         now = int(started)
-        r = read_source(a, now)
-        week = quota_weekly.weekly(r)
-        at_limit = (week and r["state"] == "ok" and (r.get("age") or 0) <= a.stale
-                    and week["resets_at"] and week["resets_at"] > now and quota_weekly.held(r, now))
         reset_started = time.time()
-        reset_status = quota_weekly.reset_tick(a.engine_root, r, at_limit)
+        if app_state():
+            r = read_source(a, now)
+            reset_status = quota_weekly.reset_tick(a.engine_root, r)
+        else:
+            # A due four-hour offer check can take the shared slot before get_usage.
+            # The saved weekly reading can also make an approved preflight due.
+            previous = previous_reading or {}
+            week = quota_weekly.weekly(previous)
+            at_limit = (week and previous.get("state") == "ok" and (previous.get("age") or 0) <= a.stale
+                        and week["resets_at"] and week["resets_at"] > now and quota_weekly.held(previous, now))
+            reset_status = quota_weekly.reset_tick(a.engine_root, previous, at_limit)
+            r = read_source(a, now)
+            previous_reading = r
+        cached_notice = None
+        if r.get("provider_refused"):
+            cached_notice = "%s; using the saved quota reading from %s ago." % (
+                r["provider_refused"], span(r.get("provider_age") or 0))
+            print("  " + cached_notice, flush=True)
+        week = quota_weekly.weekly(r)
         w = workers(a.engine_root)
-        retry = False
+        retry = bool(r.get("provider_refused"))
         who = r.get("account") if isinstance(r.get("account"), dict) and r["account"].get("id") else None
         if who is not None and bound is not None and who["id"] != bound["id"]:
             # A SWITCH: every timer and dedupe above was the account left's. They are cleared and
@@ -1753,11 +1854,11 @@ def _poll_loop(a, out, alive, health=None):
         # reading of the account in use is its own get_usage, republished (read_app), so it feeds
         # the speed exactly as get_usage does. Treated as a fallback, every app watcher lost
         # QUOTA-FAST and the early pause during a fast rise (60% -> 92% in 300 s: no wake at all).
-        app_ok = isinstance(r.get("account"), dict) and r["state"] == "ok"
-        if app_ok and not has_five(r):
+        measured = (isinstance(r.get("account"), dict) or r.get("observed_from_status")) and r["state"] == "ok"
+        if measured and not has_five(r):
             # No five-hour window (no_five_hour): no five-hour history or speed to keep.
             history, app_window, outage = [], None, None
-        elif app_ok:
+        elif measured:
             # Measured when the app checked, not when this poll read the file: the same reading
             # read twice is one point of history, never a flat stretch.
             taken = now - int(r["age"] or 0)
@@ -1771,17 +1872,19 @@ def _poll_loop(a, out, alive, health=None):
             # Answered, with no five-hour window: nothing five-hour to measure or keep through an
             # outage. The weekly windows are handled below as with any reading.
             history, last_gu = [], None
-            if outage is not None:
+            if outage is not None and not retry:
                 print("  get_usage answers again (it failed first at %s)" % _hms(outage["at"]), flush=True)
-            outage = None
+                outage = None
         elif r.get("source") == "get_usage":
             if last_gu is not None and not same_window(last_gu["resets_at"], r["resets_at"]):
                 history = []
-            history = (history + [(now, r["used"])])[-24:]
-            last_gu = {"used": r["used"], "resets_at": r["resets_at"], "taken": now, "state": "ok"}
-            if outage is not None:
+            taken = r.get("taken_at", now)
+            if not history or history[-1][0] != taken:
+                history = (history + [(taken, r["used"])])[-24:]
+            last_gu = {"used": r["used"], "resets_at": r["resets_at"], "taken": taken, "state": "ok"}
+            if outage is not None and not retry:
                 print("  get_usage answers again (it failed first at %s)" % _hms(outage["at"]), flush=True)
-            outage = None
+                outage = None
         else:
             retry = True
             if outage is None:
@@ -1799,9 +1902,14 @@ def _poll_loop(a, out, alive, health=None):
                                  "age": float(now - last_gu["taken"]), "ended": False,
                                  "source": "get_usage at %s" % _hms(last_gu["taken"])})
                     r = kept
+        if r.get("provider_refused") and not measured:
+            if outage is None:
+                refused_at = _ms(r.get("provider_refusal_at"))
+                outage = {"at": int(refused_at / 1000) if refused_at is not None else now}
+            outage["fallback_why"] = r["provider_refused"]
         # RULING §108: the speed, measured from this window's get_usage readings.
-        speed = recent_speed(history, a.poll, a.fast_poll) if r.get("source") == "get_usage" or app_ok else None
-        if app_ok and r.get("speed") is not None:
+        speed = recent_speed(history, a.poll, a.fast_poll) if r.get("source") == "get_usage" or measured else None
+        if measured and r.get("speed") is not None:
             speed = max(speed or 0.0, r["speed"])
         fast = speed is not None and has_five(r) and speed >= fast_speed(a)
         # ... and a big rise EXPECTED (many teammates just started) checks
@@ -1809,6 +1917,7 @@ def _poll_loop(a, out, alive, health=None):
         # nothing expected, everything is as before: 5 minutes, and 93%.
         spawned = expected_rise(w, now)
         expected = spawned >= EXPECT_SPAWNS
+        provider_fast = r.get("provider_interval_ms") == quota_usage_store.FAST_INTERVAL_MS
         out.beat(now, a, {"interval": a.fast_poll if fast or expected else a.poll, "fast_from": per5(fast_speed(a)),
                           "spawned_recently": spawned,
                           "speed": None if speed is None else per5(speed),
@@ -1826,7 +1935,8 @@ def _poll_loop(a, out, alive, health=None):
                 blind_woken = False
         weekly_text = io.StringIO()
         with contextlib.redirect_stdout(weekly_text):
-            weekly_blocked, weekly_event = quota_weekly.handle(a, r, now, w, reset_status, lambda: verdict)
+            weekly_blocked, weekly_event = quota_weekly.handle(a, r, now, w, reset_status, lambda: verdict, cached_notice)
+        reset_key = (week["resets_at"], quota_weekly.reset_notice_key(reset_status), bool(cached_notice)) if week else None
         if weekly_event:
             text = weekly_text.getvalue()
             # The key names the weekly WINDOW as well as the headline and the workers
@@ -1842,19 +1952,21 @@ def _poll_loop(a, out, alive, health=None):
                 weekly_seen.add(key)
                 out.wake("WEEKLY-THRESHOLD" if weekly_blocked else "WEEKLY-RELEASE", text, now)
                 if weekly_blocked:
-                    weekly_reset_seen = (key[-1], quota_weekly.reset_notice_key(reset_status))
+                    weekly_reset_seen = reset_key
         if quota_weekly.held(r, now):
-            reset_key = (week["resets_at"], quota_weekly.reset_notice_key(reset_status))
             if weekly_reset_seen is not None and reset_key != weekly_reset_seen:
-                out.wake("WEEKLY-RESET-STATUS", "Reset status: " + quota_weekly.reset_line(reset_status), now)
+                notice = "Reset status: " + quota_weekly.reset_line(reset_status)
+                if cached_notice:
+                    notice += "\n  " + cached_notice + "\n  " + quota_weekly.describe(r, now)
+                out.wake("WEEKLY-RESET-STATUS", notice, now)
             weekly_reset_seen = reset_key
         else:
             weekly_reset_seen = None
         if weekly_blocked:
             print(quota_weekly.describe(r, now), flush=True)
             _poll_completed(health)
-            interval = _retry_seconds(a) if retry else a.poll
-            _sleep_after_poll(started, interval, reset_started, reset_status, alive)
+            interval = _retry_seconds(a) if retry else a.fast_poll if provider_fast else a.poll
+            _sleep_after_poll(started, interval, reset_started, reset_status, r, alive)
             continue
         if window_end is not None and not has_five(r) and classify(r, a.threshold, a.stale)[0] == "below":
             # THE FIVE-HOUR WINDOW WENT AWAY (second review rv-20261031T192316Z-d2322984-98af): a
@@ -1955,7 +2067,7 @@ def _poll_loop(a, out, alive, health=None):
                 if wake and not blind_woken and (not w["known"] or w["working"]):
                     out.wake("STALE" if stale else "UNKNOWN", _capture(_emit_blind, a, r, w, why, outage_detail), now)
                     blind_woken = True
-        sleep_for = a.fast_poll if fast or expected else a.poll
+        sleep_for = a.fast_poll if fast or expected or provider_fast else a.poll
         if window_end is not None:
             sleep_for = max(1, min(sleep_for, window_end - now))
             # Wake at the first second inside the last 20 minutes, where a
@@ -1971,21 +2083,27 @@ def _poll_loop(a, out, alive, health=None):
                 expires_in = math.floor(a.stale - r["age"]) + 1
                 sleep_for = max(1, min(sleep_for, expires_in))
         _poll_completed(health)
-        # Counted from the START of this poll, so the polls are 300 s apart
-        # and not 300 s plus however long get_usage took (20 s on a timeout).
-        _sleep_after_poll(started, sleep_for, reset_started, reset_status, alive)
+        # Count local polls from their start and honor the shared provider deadline.
+        _sleep_after_poll(started, sleep_for, reset_started, reset_status, r, alive)
 
 
-def _sleep_after_poll(started, interval, reset_started, reset_status, alive):
+def _sleep_after_poll(started, interval, reset_started, reset_status, reading, alive):
     deadline = started + interval
+    now = time.time()
+    next_at = _ms(reading.get("provider_next_at"))
+    provider_due = next_at / 1000 if next_at is not None and started < next_at / 1000 <= now + interval else None
+    if provider_due is not None:
+        # A check can finish after its poll started. Align the next poll with
+        # the shared slot so a fractionally early poll doesn't miss it.
+        deadline = provider_due
     retry_at = _ms((reset_status.get("resets") or {}).get("retryAt"))
     if not app_state() and retry_at is not None:
         # Align a poll that would come fractionally early with the core's
         # millisecond deadline. Also honor an earlier retry on a slower poll.
         retry = retry_at / 1000
         if started < retry <= reset_started + interval + 1:
-            deadline = retry
-    _nap(max(1, deadline - time.time()), alive)
+            deadline = min(provider_due, retry) if provider_due is not None else retry
+    _nap(max(1, deadline - now), alive)
 
 
 def _poll_completed(health):

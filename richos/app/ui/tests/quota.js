@@ -1,7 +1,7 @@
 "use strict";
 const path = require("path");
 const contrast = require("./lib/contrast");
-const { loadPlaywright, createRun, assert, assertEqual, UI_DIR, shot } = require("./lib/harness");
+const { loadPlaywright, createRun, assert, assertEqual, UI_DIR, shot, leaveHome } = require("./lib/harness");
 
 async function main() {
   const run = createRun("Desktop Claude Code quota settings");
@@ -211,18 +211,18 @@ async function main() {
     assert((await page.locator("#quota-message").innerText()).includes("unavailable"));
     await page.close();
   });
-  await run.check("stale quota is marked and a failed refresh says round 16's notice with Refresh still offered", async () => {
+  await run.check("stale quota keeps the previous answer and shows the next shared check", async () => {
     const t = Date.now();
     const page = await open("dark", { ...quota, state: "stale", checkedAt: t - 47 * 60000, retryAt: t + 8 * 60000 + 20000, message: "Claude Code did not answer just now." });
     await enableTechnical(page); await page.click("#set-quota-open");
     await page.waitForSelector(".quota-window--stale");
-    // The failure's backoff holds only the automatic check; round 16: "Refresh asks sooner".
+    // Refresh can still read the saved answer while the next provider slot is pending.
     assert(await page.locator("#quota-refresh").isEnabled(), "Refresh is never locked by a backoff");
     // Round 16: "Last reading 47 min ago — stale", in gold.
     assert(/^Last reading .+ ago \(stale\)/.test(await page.locator("#quota-freshness").innerText()));
     assert(await page.locator("#quota-freshness.is-stale").count());
     assertEqual((await page.locator("#quota-message").innerText()).trim(),
-      "Claude Code did not answer just now. The figures below are from 47 min ago and may have moved on. RichOS tries again in 8 min; Refresh asks sooner.");
+      "Claude Code did not answer just now. The figures below are from 47 min ago and may have moved on. RichOS tries again in 8 min.");
     await page.close();
   });
   await run.check("Technical view keeps sign-in separate from missing usage figures", async () => {
@@ -318,6 +318,19 @@ async function main() {
     assert((await page.locator("#quota-freshness").innerText()).includes("5 min"));
     await page.close();
   });
+  await run.check("a locally fast reading stays fresh until the shared provider deadline", async () => {
+    const checkedAt = now - 90_000;
+    for (const [providerIntervalMs, expected] of [[60_000, "stale"], [300_000, "fresh"]]) {
+      const fixture = { ...quota, checkedAt, providerCheckedAt: checkedAt, refreshIntervalMs: 60_000,
+        providerIntervalMs, nextCheckAt: checkedAt + providerIntervalMs };
+      const page = await open("dark", fixture, 100, null, true, { fixedTime: new Date(now) });
+      await enableTechnical(page); await page.click("#set-quota-open");
+      await page.waitForSelector(".quota-window");
+      const freshness = page.locator("#quota-freshness");
+      assertEqual((await freshness.innerText()).includes("(stale)"), expected === "stale");
+      await page.close();
+    }
+  });
   // THE CEO, 2026-10-31: "If no 5-hour-limit data, then don't show/don't handle it." Red on main,
   // where a weekly-only reading drew a "Five-hour window: not reported" row and the status card
   // said "No current reading" and waited for "a reading [that] shows the five-hour window past 93%".
@@ -401,11 +414,11 @@ async function main() {
         assertEqual(await page.locator(".quota-lane.is-inuse .quota-lane-label").allTextContents(), ["Work"], "in use marks the account in use");
         assertEqual(await page.locator(".quota-lane.is-next .quota-lane-label").allTextContents(), ["Account 1"], "next is the read account with room");
         assertEqual(await page.locator("#quota-verb-switch").getAttribute("aria-checked"), "true", "the saved verb is shown");
-        assert((await page.locator("#quota-freshness").innerText()).includes("every minute (usage is fast)"));
+        assert((await page.locator("#quota-freshness").innerText()).includes("checks every 5 min"));
         assertEqual((await page.locator(".quota-hero .quota-pause-line").innerText()).trim(), "switch at 92% · was 93%");
         assertEqual(await page.locator(".quota-pause-ghost").count(), 2, "both moved lines keep a ghost");
         assert((await page.locator(".quota-row-switch").innerText()).includes("switches at 96%"));
-        assertEqual(await page.locator("#quota-hold-status").innerText(), "Usage is fast. Checking every minute.");
+        assertEqual(await page.locator("#quota-hold-status").innerText(), "Usage is fast.");
         // Round 16's fast card: the agents counted and the rise measured, as the alert says them.
         assert((await page.locator("#quota-hold-detail").innerText()).startsWith("15 agents reading at once took Work’s five-hour window from 40% to 71% in 12 minutes."),
           await page.locator("#quota-hold-detail").innerText());
@@ -555,6 +568,64 @@ async function main() {
       assert(shown.includes(status), shown);
       assertEqual(shown.includes("HTTP 429"), refused);
       assertEqual(await page.evaluate(() => window.__richosResetCalls), []);
+      await page.close();
+    }
+  });
+
+  for (const theme of ["dark", "light"]) await run.check(theme + " Fable fallback, its settings and both conversation markers", async () => {
+    const account = "1";
+    const since = now - 30000;
+    const resetsAt = now + 3600000;
+    const fableSwitch = { enabled: true, account, point: 99.9, active: {}, changes: [] };
+    const windows = quota.windows.map(w => w.id === "model:Fable"
+      ? { ...w, usedPercent: 100, resetsAt } : { ...w, usedPercent: w.id === "five_hour" ? 20 : 35 });
+    const page = await open(theme, { ...quota, windows, fableSwitch, inUse: { id: account, label: "Home" } }, 100, null, false,
+      { viewport: { width: 1440, height: 1000 } });
+    try {
+      await leaveHome(page);
+      if (await page.locator("#set-menu").isHidden()) await page.click("#set-btn");
+      await page.waitForSelector("#fable-switch");
+      await page.locator("#fable-setting").evaluate(panel => panel.scrollIntoView({ block: "center" }));
+      assertEqual(await page.locator("html").getAttribute("data-theme"), theme);
+      assertEqual(await page.locator("#fable-switch").getAttribute("aria-checked"), "true");
+      assert(await page.getByText("Switch everyone to Opus", { exact: true }).isVisible());
+      assertEqual(await page.getByText("Use another Claude account first", { exact: true }).count(), 0);
+      await shot(page, "fable-quota-settings-" + theme);
+      await page.click("#fable-switch");
+      await page.waitForFunction(() => document.getElementById("fable-switch").getAttribute("aria-checked") === "false");
+      await page.click("#fable-switch");
+      await page.waitForFunction(() => document.getElementById("fable-switch").getAttribute("aria-checked") === "true");
+      await page.click("#set-btn");
+      const threadId = await page.evaluate(() => activeThreadId);
+      assert(threadId, "the default conversation has a thread");
+      const active = { ...fableSwitch, active: { [account]: { since, resetsAt } },
+        changes: [{ account, at: since, resetsAt, threadId, onOpus: true }] };
+      await page.evaluate(view => window.RichMockFableQuota(view), active);
+      await page.waitForSelector("#fable-composer-status:not([hidden])");
+      await page.waitForSelector(".fable-conversation-marker");
+      assert((await page.locator(".fable-conversation-marker").innerText()).startsWith("Now on Opus."));
+      await page.locator(".fable-conversation-marker").evaluate(marker => marker.scrollIntoView({ block: "end" }));
+      await shot(page, "fable-quota-conversation-" + theme);
+      await page.click("#set-btn");
+      await page.click("#set-accounts-open");
+      await page.waitForFunction(() => document.getElementById("acc-col").textContent.includes("Rich switched everyone to Opus"));
+      assert(await page.getByText("Fable limit", { exact: true }).isVisible());
+      await shot(page, "fable-quota-account-" + theme);
+      await page.click("#acc-close");
+      await page.click("#set-btn");
+      await enableTechnical(page); await page.click("#set-quota-open");
+      await page.waitForSelector("#quota-fable-card:not([hidden])");
+      assert((await page.locator("#quota-fable-title").innerText()).startsWith("On Opus since"));
+      await shot(page, "fable-quota-sheet-" + theme);
+      await page.click("#quota-close");
+      await page.evaluate(view => window.RichMockFableQuota(view), { ...active, active: {},
+        changes: [...active.changes, { account, threadId, at: resetsAt, resetsAt, onOpus: false }] });
+      await page.waitForFunction(() => document.querySelectorAll(".fable-conversation-marker").length === 2);
+      assert(await page.locator("#fable-composer-status").isHidden());
+      assert((await page.locator(".fable-conversation-marker").last().innerText()).startsWith("Back on Fable."));
+      await page.locator(".fable-conversation-marker").last().evaluate(marker => marker.scrollIntoView({ block: "end" }));
+      await shot(page, "fable-quota-conversation-reset-" + theme);
+    } finally {
       await page.close();
     }
   });
@@ -837,7 +908,7 @@ async function main() {
       assert(await page.locator("#quota-account-start").isVisible(), name + ": + Add account is offered with no reading");
       assert(await page.locator("#quota-refresh").isEnabled(), name + ": Refresh is not locked");
       assertEqual((await page.locator("#quota-freshness").innerText()).trim(), "No usage reading yet.");
-      assertEqual((await page.locator("#quota-refresh").innerText()).trim(), "Ask Claude Code", "round 16's label with no reading");
+      assertEqual((await page.locator("#quota-refresh").innerText()).trim(), "Refresh", "the label with no saved reading");
       if (name === "branch") {
         assert(await page.locator("#quota-message").isHidden(), "nothing is reported as broken");
         assert((await page.locator("#quota-empty").innerText()).includes("Claude Code answered without its usage figures this time"));
@@ -868,10 +939,17 @@ async function main() {
       await page.waitForSelector(".quota-status-dot.is-fast");
       await page.evaluate(t => document.documentElement.setAttribute("data-theme", t), theme);
       await page.addScriptTag({ content: contrast.pageScript() });
+      await page.evaluate(() => {
+        const probe = document.createElement("span");
+        probe.className = "quota-lane-pulse";
+        probe.id = "lane-pulse-contrast-probe";
+        document.querySelector(".quota-panel").appendChild(probe);
+      });
+      // WebKit registers the CSS animation after styling the newly mounted probe.
+      await page.waitForFunction(() => document.getElementById("lane-pulse-contrast-probe").getAnimations().length > 0);
       const found = await page.evaluate(() => {
         const C = window.__contrastMath, out = [];
-        const probe = document.createElement("span"); probe.className = "quota-lane-pulse";
-        document.querySelector(".quota-lane-note, .quota-status-card").appendChild(probe);
+        const probe = document.getElementById("lane-pulse-contrast-probe");
         for (const el of [document.querySelector(".quota-status-dot.is-fast"), probe]) {
           const frames = el.getAnimations().flatMap(a => a.effect.getKeyframes());
           const card = C.parseCssColor(getComputedStyle(document.getElementById("quota-status-card")).backgroundColor);

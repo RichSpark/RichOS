@@ -4,9 +4,9 @@ Only quota_watch's clock is replaced. Its poll loop, payload parsing, registry,
 rule decisions and (R04) subprocess control transport execute unchanged. Real
 deadline, polling and registry journeys remain in quota-watch.test.sh.
 
-The simulated lead stays idle. The fixture answers get_usage with the
-interpolated reading at each poll. A pause or the end of the timeline ends
-the replay.
+The simulated lead stays idle. The fixture answers get_usage at the shared
+reader's cadence; newer status-line frames can arrive between those answers.
+A pause or the end of the timeline ends the replay.
 """
 import io
 import json
@@ -89,7 +89,7 @@ def replay(case, payload, work, engine, fake):
     args = SimpleNamespace(threshold=93, threshold_problem="", config="fixture",
                            payload=str(payload), engine_root=str(engine), poll=300,
                            stale=300, until_reset=False, command="quota-watch.sh",
-                           fast_poll=60, hold=60)
+                           fast_poll=60, hold=60, usage_root=work / "usage")
     try:
         rc = watch.poll_loop(args, watch.Out(lines=buf, events=buf))
         raise AssertionError("the poll loop returned (%r) instead of polling on" % (rc,))
@@ -145,7 +145,7 @@ def replay_fallback(payload, work, engine):
     args = SimpleNamespace(threshold=93, threshold_problem="", config="fixture",
                            payload=str(payload), engine_root=str(engine), poll=300,
                            stale=300, until_reset=False, command="quota-watch.sh",
-                           fast_poll=60, hold=60)
+                           fast_poll=60, hold=60, usage_root=work / "usage")
     try:
         rc = watch.poll_loop(args, watch.Out(lines=lines, events=events))
         raise AssertionError("the poll loop returned (%r) instead of polling on" % (rc,))
@@ -218,11 +218,14 @@ def replay_speed(case, payload, work, engine, fake, start=0):
         return min(100.0, v1 + (v1 - v0) * (s - t1) / float(t1 - t0))
 
     def feed():
-        # get_usage reports whole points. The fixture's reset is the REAL clock
-        # plus reset_in, and the real clock hardly moves in a replay, so a
-        # constant reset_in keeps the reset at one simulated instant.
-        (fake / "used").write_text(str(int(truth(elapsed))))
+        # The control request sees the same fixture as Claude's status frames.
+        # The frame between provider requests can be newer without a second probe.
+        used = int(truth(elapsed))
+        (fake / "used").write_text(str(used))
         (fake / "reset_in").write_text(str(spec["reset"]))
+        payload.write_text(json.dumps({"rate_limits": {"five_hour": {
+            "used_percentage": used, "resets_at": origin + spec["reset"]}}}))
+        os.utime(payload, (origin + elapsed, origin + elapsed))
 
     def lead_reads():
         nonlocal done
@@ -256,12 +259,10 @@ def replay_speed(case, payload, work, engine, fake, start=0):
     os.environ["QUOTA_CLAUDE_BIN"] = str(fake / "claude")
     (fake / "mode").write_text("ok")
     feed()
-    payload.write_text(json.dumps({"rate_limits": {"five_hour": {
-        "used_percentage": 7, "resets_at": origin + spec["reset"]}}}))
     args = SimpleNamespace(threshold=93, threshold_problem="", config="fixture",
                            payload=str(payload), engine_root=str(engine), poll=300,
                            stale=300, until_reset=False, command="quota-watch.sh",
-                           fast_poll=60, hold=60)
+                           fast_poll=60, hold=60, usage_root=work / "usage")
     try:
         rc = watch.poll_loop(args, watch.Out(lines=buf, events=buf))
         raise AssertionError("the poll loop returned (%r) instead of polling on" % (rc,))
@@ -276,8 +277,83 @@ def replay_speed(case, payload, work, engine, fake, start=0):
                 early="EARLY, AT HIGH SPEED" in text, via_get_usage="via get_usage" in text)
 
 
+def replay_outage(case, payload, work, engine, fake):
+    work.mkdir(parents=True, exist_ok=True)
+    origin = int(time.time())
+    end = 660 if case in ("n02", "n07") else 1030
+    elapsed = 0
+    polls, wire = [], []
+    lines, events = io.StringIO(), io.StringIO()
+    read_source = watch.read_source
+    read_usage = watch.read_get_usage
+
+    def source(args, now):
+        polls.append(elapsed)
+        return read_source(args, now)
+
+    def usage(now):
+        wire.append(elapsed)
+        return read_usage(now, deadline_s=1)
+
+    def render(used, age=0):
+        payload.write_text(json.dumps({"rate_limits": {"five_hour": {
+            "used_percentage": used, "resets_at": origin + 7200}}}))
+        os.utime(payload, (origin + elapsed - age, origin + elapsed - age))
+
+    def sleep(seconds):
+        nonlocal elapsed
+        previous = elapsed
+        elapsed += seconds
+        if case == "n03" and previous < 360 <= elapsed:
+            render(94)
+        if elapsed >= end:
+            raise EndOfReplay
+
+    render(7, age=1500)
+    watch.time = SimpleNamespace(time=lambda: origin + elapsed, sleep=sleep)
+    watch.read_source = source
+    watch.read_get_usage = usage
+    os.environ["QUOTA_CLAUDE_BIN"] = str(fake / "claude")
+    args = SimpleNamespace(threshold=93, threshold_problem="", config="fixture",
+                           payload=str(payload), engine_root=str(engine), poll=300,
+                           stale=60 if case == "n04" else 300, until_reset=False,
+                           command="quota-watch.sh", fast_poll=60, hold=60,
+                           usage_root=work / "usage")
+    try:
+        rc = watch.poll_loop(args, watch.Out(lines=lines, events=events))
+        raise AssertionError("the poll loop returned (%r) instead of polling on" % (rc,))
+    except EndOfReplay:
+        pass
+
+    log, notices = lines.getvalue(), events.getvalue()
+    (work / "transcript.log").write_text(log + notices)
+    assert len(polls) >= 3 and polls[-1] >= end - 300, polls
+    assert "no answer to get_usage within 1 s (initialize" in log, log
+    if case in ("n02", "n07"):
+        assert wire == [0, 300, 600], wire
+        assert "get_usage answers again" in log and not notices, log + notices
+        if case == "n02":
+            assert 360 in polls and "threshold cannot have been reached before" in log, log
+    elif case == "n03":
+        assert re.search(r"^QUOTA-THRESHOLD 94%", notices, re.M), notices
+        assert polls[-1] >= 660, polls
+    elif case == "n04":
+        assert wire[:3] == [0, 300, 360], wire
+        assert re.findall(r"^QUOTA-(FAST|STALE):", notices, re.M) == ["FAST", "STALE"], notices
+        assert "at the fastest rise measured this window" in notices, notices
+    elif case in ("n05", "n08"):
+        assert wire == [0, 300, 600, 900], wire
+        assert len(re.findall(r"^QUOTA-STALE:", notices, re.M)) == 1, notices
+        if case == "n05":
+            assert "a check the rule orders every 5 minutes has been missed" in notices, notices
+    return {"checks": wire, "lastPoll": polls[-1], "events": re.findall(r"^QUOTA-([A-Z-]+)", notices, re.M)}
+
+
 if __name__ == "__main__":
     case, payload, work, engine, fake = sys.argv[1:]
+    if case in ("n02", "n03", "n04", "n05", "n07", "n08"):
+        print(json.dumps(replay_outage(case, Path(payload), Path(work), Path(engine), Path(fake))))
+        raise SystemExit(0)
     if case in SPEED_CASES:
         out = replay_speed(case, Path(payload), Path(work), Path(engine), Path(fake))
         if case in ("r05", "r09"):  # every 15 s of the 5-minute cycle

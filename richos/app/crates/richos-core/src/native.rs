@@ -677,8 +677,8 @@ fn child_exit_said(done: &AtomicBool, tail: &Mutex<std::collections::VecDeque<St
 
 pub(crate) fn native_result(result: &Value) -> Result<String, NativeError> {
     let reason = stop_reason_of(result);
-    if let Some(reset) = usage_limit_signal(result) {
-        return Err(NativeError::Protocol(crate::claude_accounts::usage_limit_error(reset, &result.to_string())));
+    if let Some(limit) = usage_limit_signal(result) {
+        return Err(NativeError::Protocol(limit.error(&result.to_string())));
     }
     if reason == "child_exited" {
         let said = result.get("child_said").and_then(Value::as_str).unwrap_or("it wrote nothing on stderr");
@@ -847,7 +847,7 @@ enum TurnSink {
     Prompt(Sender<ChunkMsg>),
     Input {
         completed: Box<dyn FnOnce(crate::steering::InputOutcome) + Send>,
-        limit: Option<Option<u64>>,
+        limit: Option<crate::claude_accounts::UsageLimit>,
         /// An overload Claude Code reported only as a message in this turn
         /// ([`overloaded_api_error_message`]), so a turn that still ends `end_turn` reaches
         /// Stu's overload schedule instead of passing the vendor's line off as his reply.
@@ -994,7 +994,7 @@ impl PendingTurn {
             TurnSink::Prompt(sink) => sink.send(chunk).is_ok(),
             TurnSink::Input { limit, overload, .. } => {
                 if frame.get("parent_tool_use_id").is_none_or(Value::is_null) {
-                    if let Some(reset) = usage_limit_signal(frame) { *limit = Some(reset); }
+                    if let Some(refusal) = usage_limit_signal(frame) { *limit = Some(refusal); }
                     if let Some(failure) = overloaded_api_error_message(frame) { *overload = Some(failure.raw); }
                 }
                 false
@@ -1017,8 +1017,8 @@ impl PendingTurn {
         match self.sink {
             TurnSink::Prompt(sink) => { let _ = sink.send(ChunkMsg::Done(frame)); }
             TurnSink::Input { completed, limit, overload } => {
-                let result = if let Some(reset) = limit {
-                    Err(NativeError::Protocol(crate::claude_accounts::usage_limit_error(reset, &frame.to_string())))
+                let result = if let Some(limit) = limit {
+                    Err(NativeError::Protocol(limit.error(&frame.to_string())))
                 } else {
                     // A turn that ended normally after Claude Code said it was overloaded is that
                     // overload, the shape the synchronous path already reads from the turn's text.
@@ -1514,6 +1514,8 @@ struct ReaderState {
     helpers_waiting: std::collections::HashSet<String>,
     /// The last usage reading the child streamed (`rate_limit_event`), and when (fill-first).
     streamed_usage: Option<crate::quota::StreamedReading>,
+    model_override: Option<crate::config::ModelChoice>,
+    effort_override: Option<crate::config::EffortLevel>,
     /// **Where every `assistant` frame's usage goes, and the account this lease runs on**
     /// (`quota::tokens::Sink`): the lease writes no transcript, so this is the only place the
     /// quota service can see what the app's own Rich and teammates spend. `None` without an
@@ -1802,6 +1804,8 @@ impl Default for ReaderState {
             continuation_notice: None,
             held_continuation: None,
             streamed_usage: None,
+            model_override: None,
+            effort_override: None,
             token_sink: None,
             chat_meter: None,
             token_tally: Default::default(),
@@ -1823,13 +1827,17 @@ impl Default for ReaderState {
 /// minimal `{"status":"allowed"}`) says nothing about a window and yields nothing.
 pub fn streamed_windows(frame: &Value) -> Option<Vec<crate::quota::Window>> {
     let windows = frame.get("rate_limit_info")?.get("unifiedWindows")?.as_object()?;
-    let out: Vec<_> = [("five_hour", "Five-hour", 5u64), ("seven_day", "Weekly", 168)].into_iter()
-        .filter_map(|(id, label, hours)| {
-            let w = windows.get(id)?;
+    let out: Vec<_> = [
+        ("five_hour", "five_hour", "Five-hour", 5u64),
+        ("seven_day", "seven_day", "Weekly", 168),
+        (crate::quota::fable::STREAM_ID, "model:Fable", "Weekly · Fable", 168),
+    ].into_iter()
+        .filter_map(|(key, id, label, hours)| {
+            let w = windows.get(key)?;
             let used = w.get("utilization")?.as_f64().filter(|u| u.is_finite() && (0.0..=1.0).contains(u))? * 100.0;
             Some(crate::quota::Window {
                 id: id.into(), label: label.into(), used_percent: used,
-                resets_at: w.get("resetsAt").and_then(Value::as_u64).map(|s| s * 1000),
+                resets_at: w.get("resetsAt").and_then(Value::as_u64).and_then(|s| s.checked_mul(1000)),
                 duration_ms: hours * 3_600_000,
             })
         }).collect();
@@ -1840,22 +1848,37 @@ pub fn streamed_windows(frame: &Value) -> Option<Vec<crate::quota::Window>> {
 /// wire (Frank's review, finding 1): a `rate_limit_event` whose `rate_limit_info.status` is
 /// `"rejected"`; a `result` whose `api_error_status` is 429; a `result` whose `errors[]` holds
 /// an entry starting `You've hit your`. There is no exit code 4 and no `limit_reached`.
-/// Returns the reset time when the frame gives one (ms).
-pub fn usage_limit_signal(frame: &Value) -> Option<Option<u64>> {
+/// Preserve the named window and the reset time (ms) when the frame gives them.
+pub fn usage_limit_signal(frame: &Value) -> Option<crate::claude_accounts::UsageLimit> {
+    use crate::claude_accounts::{LimitWindow, UsageLimit};
     match frame.get("type").and_then(Value::as_str) {
         Some("rate_limit_event") => {
             let info = frame.get("rate_limit_info")?;
-            (info.get("status").and_then(Value::as_str) == Some("rejected"))
-                .then(|| info.get("resetsAt").and_then(Value::as_u64).map(|s| s * 1000))
+            (info["status"] == "rejected").then(|| UsageLimit {
+                resets_at: info["resetsAt"].as_u64().and_then(|seconds| seconds.checked_mul(1000)),
+                window: match info["rateLimitType"].as_str() {
+                    Some(id) if crate::quota::fable::is_window(id) => LimitWindow::Fable,
+                    Some(_) => LimitWindow::Other,
+                    None => LimitWindow::Unknown,
+                },
+            })
         }
         Some("result") => {
             let status = frame.get("api_error_status").and_then(Value::as_u64) == Some(429);
             let said = frame.get("errors").and_then(Value::as_array).is_some_and(|errors| errors.iter()
                 .any(|e| e.as_str().is_some_and(|s| s.trim_start().starts_with("You've hit your"))));
-            (status || said).then_some(None)
+            (status || said).then_some(UsageLimit::default())
         }
         _ => None,
     }
+}
+
+pub(crate) fn worker_usage_limit(frame: &Value) -> Option<crate::claude_accounts::UsageLimit> {
+    frame.get("parent_tool_use_id")?.as_str()?;
+    usage_limit_signal(frame).or_else(|| {
+        (frame["type"] == "assistant" && frame["error"] == "rate_limit")
+            .then_some(crate::claude_accounts::UsageLimit::default())
+    })
 }
 
 /// Prove, BEFORE spawning, which of a launch's two preconditions is not met.
@@ -2745,7 +2768,7 @@ impl NativeClient {
     /// here, everything else -> the active turn's chunk sink or the between-turn lane.
     #[allow(clippy::too_many_arguments)]
     fn dispatch(
-        msg: Value,
+        mut msg: Value,
         stdin: &Arc<Mutex<ChildStdin>>,
         pending: &Arc<Mutex<std::collections::HashMap<String, Sender<Value>>>>,
         current: &Arc<Mutex<Vec<PendingTurn>>>,
@@ -2943,7 +2966,15 @@ impl NativeClient {
             // A worker's whole message also reaches the between-turn sink when a turn took it:
             // Stu's host reads his workers' overloads there (`work_host.rs` observe_worker),
             // whichever turn carried them. A lease with no sink keeps nothing extra.
-            if Self::route(ChunkMsg::Frame(msg.clone()), current, between, &msg) && ty == "assistant" {
+            let refused = worker_usage_limit(&msg).is_some();
+            let worker_result = ty == "assistant" || refused;
+            if refused {
+                let book = state.lock().unwrap();
+                if let Some(model) = msg["parent_tool_use_id"].as_str().and_then(|call| book.agent_tasks.requested_model(call)) {
+                    msg["richos_requested_model"] = json!(model);
+                }
+            }
+            if Self::route(ChunkMsg::Frame(msg.clone()), current, between, &msg) && worker_result {
                 between.lock().unwrap().copy_to_sink(msg);
             }
             return;
@@ -3859,10 +3890,7 @@ impl NativeResponse {
             }
         }
         // A usage-limit refusal seen on this turn (`usage_limit_signal`), with its reset time.
-        let mut limit: Option<Option<u64>> = None;
-        let limit_error = |resets_at: Option<u64>, detail: String| {
-            NativeError::Protocol(crate::claude_accounts::usage_limit_error(resets_at, &detail))
-        };
+        let mut limit = None;
         loop {
             let deadline = cancel_deadline.into_iter().chain(keep_alive_deadline).min();
             let received = match deadline {
@@ -3881,7 +3909,7 @@ impl NativeResponse {
                     if text_open && about_another_input(&frame) {aside.push(frame); continue;}
                     if !is_ping(&frame) {release(&mut seq,on_item,&mut spelling,&mut aside,&session_id); text_open = false;}
                     if frame.get("parent_tool_use_id").is_none_or(Value::is_null) {
-                        if let Some(resets_at) = usage_limit_signal(&frame) { limit = Some(resets_at); }
+                        if let Some(refusal) = usage_limit_signal(&frame) { limit = Some(refusal); }
                     }
                     for record in MachineryRecord::from_native_event(&frame,&session_id,seq) {
                         seq += 1;
@@ -3924,10 +3952,10 @@ impl NativeResponse {
                     // spine and the work host continue on the next account instead of reading an
                     // ordinary failure. Whether the child stays alive afterwards is not known
                     // (Frank's finding 1), so the signal is honored on either ending.
-                    if let Some(resets_at) = limit.or_else(|| usage_limit_signal(&result)) {
+                    if let Some(limit) = limit.or_else(|| usage_limit_signal(&result)) {
                         let detail = result.get("errors").or_else(|| result.get("result"))
                             .map(Value::to_string).unwrap_or_else(|| reason.clone());
-                        return Err(limit_error(resets_at, detail));
+                        return Err(NativeError::Protocol(limit.error(&detail)));
                     }
                     return native_result(&result);
                 }
@@ -3944,8 +3972,8 @@ impl NativeResponse {
                 }
                 Err(RecvTimeoutError::Disconnected) => {
                     release(&mut seq, on_item, &mut spelling, &mut aside, &session_id);
-                    if let Some(resets_at) = limit {
-                        return Err(limit_error(resets_at, "the session ended after the limit".into()));
+                    if let Some(limit) = limit {
+                        return Err(NativeError::Protocol(limit.error("the session ended after the limit")));
                     }
                     return Err(NativeError::Closed);
                 }
@@ -4038,6 +4066,7 @@ impl TurnCancel for NativeCancelHandle {
     fn set_model(&self,model:crate::config::ModelChoice)->Result<bool,String> {
         if self.reader_closed.load(Ordering::SeqCst) {return Ok(false)}
         self.confirmed_control("Model change",json!({"subtype":"set_model","model":model.cli_alias()}))?;
+        self.reader_state.lock().unwrap().model_override = Some(model);
         Ok(true)
     }
     /// The session keeps running, so the level it was started at is replaced on it. Measured
@@ -4047,6 +4076,7 @@ impl TurnCancel for NativeCancelHandle {
     fn set_effort(&self,effort:crate::config::EffortLevel)->Result<bool,String> {
         if self.reader_closed.load(Ordering::SeqCst) {return Ok(false)}
         self.confirmed_control("Effort change",json!({"subtype":"apply_flag_settings","settings":{"effortLevel":effort.as_str()}}))?;
+        self.reader_state.lock().unwrap().effort_override = Some(effort);
         Ok(true)
     }
 
@@ -4985,10 +5015,29 @@ impl Cognition for NativeCognition {
     fn account(&self) -> Option<&str> {
         self.engine_profile.as_ref()?.claude_account.as_ref().map(|a| a.id.as_str())
     }
-    /// The model [`lease_model_args`] gave this child, read off the same profile and role.
     fn lease_model(&self) -> Option<crate::config::ModelChoice> {
+        if let Some(applied) = self.client.reader_state.lock().unwrap().model_override {
+            return Some(applied);
+        }
         let models = self.engine_profile.as_ref()?.lease_models;
         Some(match self.role { LeaseRole::Conversation => models.rich, LeaseRole::Work => models.stu })
+    }
+    fn apply_model(&mut self, model: crate::config::ModelChoice, effort: crate::config::EffortLevel)
+        -> Result<(), CognitionError> {
+        let handle = self.client.cancel_handle();
+        if self.lease_model() != Some(model)
+            && !handle.set_model(model).map_err(CognitionError::Protocol)? {
+            return Err(CognitionError::Io("Claude Code closed before changing the model.".into()));
+        }
+        let applied = self.client.reader_state.lock().unwrap().effort_override.or_else(|| {
+            let efforts = self.engine_profile.as_ref()?.lease_efforts;
+            Some(match self.role { LeaseRole::Conversation => efforts.rich, LeaseRole::Work => efforts.stu })
+        });
+        if applied != Some(effort)
+            && !handle.set_effort(effort).map_err(CognitionError::Protocol)? {
+            return Err(CognitionError::Io("Claude Code closed before changing the effort.".into()));
+        }
+        Ok(())
     }
     fn streamed_usage(&self) -> Option<crate::quota::StreamedReading> {
         self.client.reader_state.lock().unwrap().streamed_usage.clone()
@@ -5530,6 +5579,33 @@ read -r prompt
 printf '%s\n' '{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","resetsAt":1790150400,"rateLimitType":"five_hour"}}'
 printf '%s\n' '{"type":"result","subtype":"error_during_execution","is_error":true,"errors":["request refused"]}'
 "#), Some(1_790_150_400_000));
+    }
+
+    #[test]
+    fn a_fable_refusal_keeps_its_window_through_a_generic_result() {
+        use crate::claude_accounts::{LimitWindow, UsageLimit};
+        let error = one_limited_turn("fable-limit-and-429", r#"
+printf '%s\n' '{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","resetsAt":1790150400,"rateLimitType":"seven_day_overage_included"}}'
+printf '%s\n' '{"type":"result","subtype":"error_during_execution","is_error":true,"api_error_status":429}'
+"#).expect_err("Fable turned the request down");
+        assert_eq!(UsageLimit::from_error(&error.to_string()), Some(UsageLimit {
+            resets_at: Some(1_790_150_400_000), window: LimitWindow::Fable,
+        }));
+    }
+
+    #[test]
+    fn a_streamed_fable_window_is_read_under_its_app_id() {
+        let frame = json!({"type": "rate_limit_event", "rate_limit_info": {
+            "status": "allowed", "rateLimitType": "five_hour", "unifiedWindows": {
+                "seven_day": {"utilization": 0.4, "resetsAt": 1790150400_u64},
+                "seven_day_overage_included": {"utilization": 0.995, "resetsAt": 1790150400_u64}
+            }
+        }});
+        let windows = streamed_windows(&frame).unwrap();
+        assert_eq!(windows.len(), 2, "{windows:?}");
+        let fable = windows.iter().find(|window| window.id == "model:Fable").unwrap();
+        assert_eq!(fable.used_percent, 99.5);
+        assert_eq!(fable.resets_at, Some(1_790_150_400_000));
     }
 
     /// Signal 2 of 3: a `result` whose `api_error_status` is 429.

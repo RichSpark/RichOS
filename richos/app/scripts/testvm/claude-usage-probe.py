@@ -14,6 +14,7 @@ import os
 import selectors
 import signal
 import math
+from pathlib import Path
 import subprocess
 import sys
 import time
@@ -85,6 +86,11 @@ def main(argv):
     seconds = float(argv[argv.index('--seconds') + 1]) if '--seconds' in argv else 40
     env = dict(os.environ, CLAUDE_CONFIG_DIR=folder, HOME=home)
     env.pop('CLAUDECODE', None)
+    library = Path(__file__).resolve().parents[3] / "engine/scripts/lib" if len(Path(__file__).resolve().parents) > 3 else None
+    if library is None or not (library / "quota_usage_store.py").exists():
+        library = Path(home).resolve().parent / "engine/scripts/lib"
+    sys.path.insert(0, str(library))
+    import quota_usage_store
     args = [claude, '--print', '--input-format=stream-json', '--output-format=stream-json', '--verbose',
             '--setting-sources', '', '--no-session-persistence', '--tools', '', '--strict-mcp-config',
             '--mcp-config', '{"mcpServers":{}}']
@@ -95,6 +101,13 @@ def main(argv):
         args += ['--debug-file', debug]
     if not math.isfinite(seconds) or seconds <= 0:
         raise ValueError('--seconds must be finite and positive')
+    os.environ.update(CLAUDE_CONFIG_DIR=folder, HOME=home)
+    store = quota_usage_store.Store.for_account(
+        os.environ.get("RICHOS_QUOTA_FIXTURE_STORE") or quota_usage_store.data_dir(), claude, folder)
+    asked = int(time.time() * 1000)
+    if not store.claim(asked, "guest-diagnostic"):
+        print(json.dumps({'folder': folder, 'answered': False, 'saved': store.saved().get('answer')}))
+        return 1
     began = time.monotonic()
     requests = [{'type': 'control_request', 'request_id': 'probe-%d' % n,
                  'request': {'subtype': sub, 'hooks': {}}}
@@ -109,6 +122,8 @@ def main(argv):
                 rows.append(line)
         except (ValueError, AttributeError):
             pass
+    reply = json.loads(rows[0])["response"] if rows else {}
+    store.finish(asked, **quota_usage_store.control_result(int(time.time() * 1000), reply.get("response")))
     usage_lines = []
     if debug:
         try:

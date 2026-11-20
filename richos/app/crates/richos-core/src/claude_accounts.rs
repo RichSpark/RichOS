@@ -233,6 +233,8 @@ pub struct AccountView {
     pub working: Vec<String>,
     pub windows: Vec<Window>,
     pub checked_at: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_checked_at: Option<u64>,
     /// Set while this account is exhausted, with when it comes back.
     pub exhausted_until: Option<u64>,
     /// Shown instead of the figures when the account could not be read.
@@ -340,20 +342,55 @@ pub enum AfterLimit {
 
 /// A usage-limit lease error, written by the lease and read by the spine and the work host.
 pub fn usage_limit_error(resets_at: Option<u64>, detail: &str) -> String {
-    match resets_at {
-        Some(t) => format!("{USAGE_LIMIT} (resets_at={t}): {detail}"),
-        None => format!("{USAGE_LIMIT}: {detail}"),
-    }
+    UsageLimit { resets_at, ..UsageLimit::default() }.error(detail)
 }
 
-/// `Some(resets_at)` when `error` is a usage-limit refusal; the inner `None` means it did not
-/// say when the limit resets.
 pub fn parse_usage_limit(error: &str) -> Option<Option<u64>> {
-    let at = error.find(USAGE_LIMIT)?;
-    let rest = &error[at + USAGE_LIMIT.len()..];
-    Some(rest.strip_prefix(" (resets_at=")
-        .and_then(|r| r.split(')').next())
-        .and_then(|n| n.parse().ok()))
+    UsageLimit::from_error(error).map(|limit| limit.resets_at)
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum LimitWindow {
+    #[default]
+    Unknown,
+    Fable,
+    Other,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct UsageLimit {
+    pub resets_at: Option<u64>,
+    pub window: LimitWindow,
+}
+
+impl UsageLimit {
+    pub(crate) fn error(self, detail: &str) -> String {
+        let mut fields = Vec::new();
+        if let Some(reset) = self.resets_at { fields.push(format!("resets_at={reset}")); }
+        match self.window {
+            LimitWindow::Fable => fields.push("window=fable".into()),
+            LimitWindow::Other => fields.push("window=other".into()),
+            LimitWindow::Unknown => {}
+        }
+        if fields.is_empty() { format!("{USAGE_LIMIT}: {detail}") }
+        else { format!("{USAGE_LIMIT} ({}): {detail}", fields.join(" ")) }
+    }
+
+    pub(crate) fn from_error(error: &str) -> Option<Self> {
+        let (_, rest) = error.split_once(USAGE_LIMIT)?;
+        let mut limit = Self::default();
+        if let Some((fields, _)) = rest.strip_prefix(" (").and_then(|r| r.split_once("):")) {
+            for field in fields.split_whitespace() {
+                match field.split_once('=') {
+                    Some(("resets_at", reset)) => limit.resets_at = reset.parse().ok(),
+                    Some(("window", "fable")) => limit.window = LimitWindow::Fable,
+                    Some(("window", "other")) => limit.window = LimitWindow::Other,
+                    _ => {}
+                }
+            }
+        }
+        Some(limit)
+    }
 }
 
 /// A Recent changes row, keeping the last [`CHANGES_KEPT`].
@@ -1085,6 +1122,12 @@ impl Accounts {
     /// each one rotates at its own next turn boundary, because rotation never happens inside a
     /// turn (`spine.rs`).
     pub fn evaluate(&self, readings: &BTreeMap<String, Reading>, pause: Option<u8>, now: u64) -> io::Result<bool> {
+        self.evaluate_before_move(readings, pause, now, |_| {})
+    }
+
+    pub(crate) fn evaluate_before_move(
+        &self, readings: &BTreeMap<String, Reading>, pause: Option<u8>, now: u64, wake_reader: impl FnOnce(&str),
+    ) -> io::Result<bool> {
         let mut state = self.state.lock().unwrap();
         if state.accounts.len() < 2 { return Ok(false); }
         let current = state.in_use.clone();
@@ -1104,6 +1147,7 @@ impl Accounts {
             Gone::Limit => limit(&current),
             _ => mine.windows.iter().filter_map(|w| w.resets_at).find(|t| *t == until),
         };
+        wake_reader(&next);
         self.switch_to(&mut state, &next, why, fresh_at, now)?;
         Ok(true)
     }
@@ -1112,6 +1156,13 @@ impl Accounts {
     /// account is marked gone until `resets_at` (or, when the refusal did not say, until the
     /// latest reset of its full windows), and the next account with room is put in use.
     pub fn limit_reached(&self, account: &str, resets_at: Option<u64>, readings: &BTreeMap<String, Reading>, pause: Option<u8>, now: u64) -> io::Result<AfterLimit> {
+        self.limit_reached_before_move(account, resets_at, readings, pause, now, |_| {})
+    }
+
+    pub(crate) fn limit_reached_before_move(
+        &self, account: &str, resets_at: Option<u64>, readings: &BTreeMap<String, Reading>,
+        pause: Option<u8>, now: u64, wake_reader: impl FnOnce(&str),
+    ) -> io::Result<AfterLimit> {
         {
             let mut state = self.state.lock().unwrap();
             let until = resets_at.filter(|t| *t > now).or_else(|| readings.get(account).and_then(|r| r.windows.iter()
@@ -1127,7 +1178,7 @@ impl Accounts {
                 return Ok(AfterLimit::Continue);
             }
         }
-        Ok(if self.evaluate(readings, pause, now)? { AfterLimit::Continue } else { AfterLimit::NoRoom })
+        Ok(if self.evaluate_before_move(readings, pause, now, wake_reader)? { AfterLimit::Continue } else { AfterLimit::NoRoom })
     }
 
     /// **A reset was used on `account`** (hunt part 1 v3, finding 49): the usage-limit refusal
@@ -1191,7 +1242,7 @@ pub(crate) mod tests {
         Reading { windows: vec![
             Window { id: "five_hour".into(), label: "Five-hour".into(), used_percent: five, resets_at: Some(NOW + five_reset), duration_ms: 5 * HOUR },
             Window { id: "seven_day".into(), label: "Weekly".into(), used_percent: weekly, resets_at: Some(NOW + weekly_reset), duration_ms: 168 * HOUR },
-        ], speeds: BTreeMap::new(), expected: false, rises: BTreeMap::new(), weekly_cutoff: None }
+        ], ..Reading::default() }
     }
     fn two_accounts() -> (Scratch, Accounts) {
         let dir = Scratch::new();
@@ -1334,6 +1385,11 @@ pub(crate) mod tests {
         replied(&accounts, "2");
         assert!(accounts.take_notice().is_some_and(|line| line.contains("fresh again in 2 d")),
             "fresh again at the Fable week's reset");
+        let (_dir, accounts) = two_accounts();
+        let mut with_model_switch = readings(fable(99., fresh_in_two_days), reading(5., HOUR, 20., 72 * HOUR));
+        crate::quota::apply_fable_capacity(&mut with_model_switch, true);
+        assert!(!accounts.evaluate(&with_model_switch, Some(93), NOW).unwrap());
+        assert_eq!(accounts.in_use().id, "1", "the same account can keep working on Opus");
     }
 
     /// **Round 16: the one switch is the subject of the sentence.** Switch chosen, Account 1's

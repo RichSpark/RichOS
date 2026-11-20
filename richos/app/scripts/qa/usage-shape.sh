@@ -24,6 +24,7 @@
 # Run it where the `claude` under test runs. In the test VM: push it with a
 # steps-walk `push` step and run it with a `guest` step, for example
 #   sh /Users/admin/usage-shape.sh --home "$(ls -d /Users/admin/testvm/walk-* | head -1)/home"
+# The checkout or the walk's engine supplies the shared five-minute request budget.
 #
 # WHY IT EXISTS: on 2026-10-05 the candidate-36 walk found the quota panel saying
 # "Claude Code returned quota data this version of RichOS could not read" for a
@@ -62,9 +63,15 @@ if [ -n "$HOME_DIR" ]; then
 fi
 [ -z "$CONFIG_DIR" ] || export CLAUDE_CONFIG_DIR="$CONFIG_DIR"
 unset CLAUDECODE
+HERE="$(cd "$(dirname "$0")" && pwd)"
+USAGE_LIB="${RICHOS_ENGINE_DIR:-$HERE/../../../engine}/scripts/lib"
+if [ ! -f "$USAGE_LIB/quota_usage_store.py" ] && [ -n "$HOME_DIR" ]; then
+  USAGE_LIB="$(dirname "$HOME_DIR")/engine/scripts/lib"
+fi
+[ -f "$USAGE_LIB/quota_usage_store.py" ] || { echo "usage-shape.sh: the shared quota reader is unavailable" >&2; exit 2; }
 RAW="$(mktemp "${TMPDIR:-/tmp}/usage-shape.XXXXXX")" || { echo "usage-shape.sh: cannot make a temporary file" >&2; exit 2; }
 trap 'rm -f "$RAW"' EXIT INT TERM
-python3 - "$CLAUDE" "$WAIT" "$RAW" <<'PYTHON' || exit 2
+python3 -B - "$CLAUDE" "$WAIT" "$RAW" "$USAGE_LIB" <<'PYTHON' || exit 2
 import json
 import os
 import sys
@@ -132,7 +139,10 @@ def read_wire(args, env, seconds, requests=(), gap=0, response_id=None, cwd='/va
             pipe.close()
     return buf, err
 
-claude, seconds, raw = sys.argv[1:]
+claude, seconds, raw, library = sys.argv[1:]
+sys.path.insert(0, library)
+import quota_usage_store
+
 seconds = float(seconds)
 end = time.monotonic() + seconds
 version, _ = read_wire([claude, '--version'], os.environ, seconds)
@@ -147,8 +157,26 @@ requests = [{'type': 'control_request', 'request_id': 'quota-%d' % n,
 args = [claude, '--print', '--input-format=stream-json', '--output-format=stream-json',
         '--verbose', '--setting-sources', '', '--no-session-persistence', '--tools', '',
         '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}']
+folder = os.environ.get('CLAUDE_CONFIG_DIR') or os.path.join(os.path.expanduser('~'), '.claude')
+store = quota_usage_store.Store.for_account(
+    os.environ.get('RICHOS_QUOTA_FIXTURE_STORE') or quota_usage_store.data_dir(), claude, folder)
+asked = int(time.time() * 1000)
+if not store.claim(asked, 'usage-shape'):
+    reason = 'the next shared quota check is not due' if store.verified else 'Claude account identity is unavailable'
+    print('usage-shape.sh: ' + reason, file=sys.stderr)
+    sys.exit(2)
 answer, _ = read_wire(args, os.environ, remaining, requests,
                             gap=int(seconds) // 2, response_id='quota-2', cwd=os.environ.get('HOME') or '/')
+payload = {}
+for line in answer.splitlines():
+    try:
+        reply = json.loads(line).get('response', {})
+    except (ValueError, AttributeError):
+        continue
+    if reply.get('request_id') == 'quota-2' and reply.get('subtype') == 'success':
+        payload = reply.get('response') or {}
+        break
+store.finish(asked, **quota_usage_store.control_result(int(time.time() * 1000), payload))
 with open(raw, 'wb') as handle:
     handle.write(answer)
 PYTHON

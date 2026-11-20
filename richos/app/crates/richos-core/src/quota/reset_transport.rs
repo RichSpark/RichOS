@@ -4,6 +4,7 @@ use super::resets::{Account, Transport};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
+    collections::BTreeMap,
     io::{Read, Write},
     path::Path,
     process::{Command, Stdio},
@@ -17,6 +18,8 @@ pub struct System {
     token: String,
     version: String,
     organization: String,
+    usage_windows: Option<Vec<super::Window>>,
+    refusal: Option<super::shared_usage::Refusal>,
 }
 impl System {
     pub fn validate_environment() -> Result<(), String> {
@@ -69,9 +72,20 @@ impl System {
             token,
             version: version.into(),
             organization: String::new(),
+            usage_windows: None,
+            refusal: None,
         })
     }
-    fn request(&self, path: &str, body: Option<Value>) -> Result<Value, String> {
+
+    pub(super) fn take_usage_windows(&mut self) -> Option<Vec<super::Window>> {
+        self.usage_windows.take()
+    }
+
+    pub(super) fn take_refusal(&mut self) -> Option<super::shared_usage::Refusal> {
+        self.refusal.take()
+    }
+
+    fn request(&mut self, path: &str, body: Option<Value>) -> Result<Value, String> {
         // Paths and the host are internal constants or validated UUIDs. No redirects,
         // retries or user curl configuration. Proxy settings follow the environment.
         let mut config = format!("url = \"https://api.anthropic.com{path}\"\nheader = \"Authorization: Bearer {}\"\nheader = \"anthropic-beta: oauth-2025-04-20\"\nheader = \"User-Agent: claude-cli/{} (external, cli)\"\nheader = \"Content-Type: application/json\"\n", self.token, self.version);
@@ -83,6 +97,7 @@ impl System {
         command.args([
             "-q",
             "--silent",
+            "--include",
             "--write-out",
             "\n%{http_code}",
             "--proto",
@@ -100,8 +115,47 @@ impl System {
             else if path == "/api/oauth/profile" { "account check" } else { "eligibility check" };
         let bytes = bounded(&mut command, Some(config.into_bytes()))
             .map_err(|e| format!("Claude reset {stage}: {e}"))?;
-        response(&bytes).map_err(|e| format!("Claude reset {stage}: {e}"))
+        let (headers, body) = response_headers(&bytes);
+        response(body).map_err(|error| {
+            let at = crate::util::now_millis();
+            let retry_at = retry_after(&headers, at);
+            self.refusal = Some(super::shared_usage::Refusal {
+                at, error: super::ReadError::Failed, explicit_refusal: false, headers, retry_at,
+            });
+            format!("Claude reset {stage}: {error}")
+        })
     }
+}
+
+fn response_headers(mut bytes: &[u8]) -> (BTreeMap<String, String>, &[u8]) {
+    let mut headers = BTreeMap::new();
+    while bytes.starts_with(b"HTTP/") {
+        let Some(end) = bytes.windows(4).position(|w| w == b"\r\n\r\n") else { break };
+        headers.clear();
+        if let Ok(block) = std::str::from_utf8(&bytes[..end]) {
+            for (name, value) in block.lines().skip(1).filter_map(|line| line.split_once(':')) {
+                let name = name.to_ascii_lowercase();
+                let value = value.trim();
+                if value.len() <= 256 && value.bytes().all(|b| (b' '..=b'~').contains(&b))
+                    && (name == "retry-after" || name.starts_with("anthropic-ratelimit-")
+                        || name.starts_with("x-ratelimit-"))
+                {
+                    headers.insert(name, value.into());
+                }
+            }
+        }
+        bytes = &bytes[end + 4..];
+    }
+    (headers, bytes)
+}
+
+fn retry_after(headers: &BTreeMap<String, String>, at: u64) -> Option<u64> {
+    let value = headers.get("retry-after")?;
+    if let Ok(seconds) = value.parse::<u64>() {
+        return Some(at.saturating_add(seconds.saturating_mul(1000)));
+    }
+    let date = time::OffsetDateTime::parse(value, &time::format_description::well_known::Rfc2822).ok()?;
+    u64::try_from(date.unix_timestamp()).ok().map(|seconds| seconds.saturating_mul(1000))
 }
 fn body_is_redemption(path: &str) -> bool { path.ends_with("/reset_rate_limits") }
 
@@ -145,7 +199,11 @@ impl Transport for System {
         })
     }
     fn usage(&mut self) -> Result<Value, String> {
-        self.request(READ, None)
+        let value = self.request(READ, None)?;
+        self.usage_windows = super::normalize(&json!({
+            "rate_limits_available": true, "rate_limits": value,
+        })).ok();
+        Ok(value)
     }
     fn redeem(&mut self, grant: &str, request: &str) -> Result<Value, String> {
         if uuid::Uuid::parse_str(&self.organization).is_err()
@@ -276,6 +334,17 @@ fn bounded(command: &mut Command, input: Option<Vec<u8>>) -> Result<Vec<u8>, Str
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn refusal_keeps_rate_headers_and_understands_both_retry_after_formats() {
+        let raw = b"HTTP/1.1 200 Connection established\r\n\r\nHTTP/2 429\r\nRetry-After: 700\r\nAnthropic-RateLimit-Requests-Remaining: 0\r\nSet-Cookie: private\r\n\r\nprivate body\n429";
+        let (mut headers, body) = response_headers(raw);
+        assert_eq!(headers.len(), 2);
+        assert_eq!(headers["anthropic-ratelimit-requests-remaining"], "0");
+        assert_eq!(retry_after(&headers, 1_000), Some(701_000));
+        assert!(response(body).unwrap_err().contains("HTTP 429"));
+        headers.insert("retry-after".into(), "Fri, 20 Nov 2026 13:00:00 GMT".into());
+        assert_eq!(retry_after(&headers, 1_000), Some(1_795_179_600_000));
+    }
     #[test]
     fn http_status_identifies_auth_rate_limit_and_server_errors_without_leaking_bodies() {
         for status in [401, 403, 429, 503] {

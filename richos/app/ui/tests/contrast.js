@@ -351,12 +351,22 @@ const SURFACES = [
   })),
   {
     name: "quota-work-status",
-    what: "a paused agent's conversation status, without technical quota controls",
+    what: "paused work and the Fable fallback in the conversation",
     preset: {quota: quotaReading, quotaActivity: {held: [{kind: "agent", id: "agt_frank_1", name: "Frank", threadId: "general", sinceAt: quotaNow}], released: []}},
     drive: async p => {
       await p.evaluate(() => window.RichBridge.invoke("set_claude_quota_policy", {policy: {enabled: true, pausePercent: 93}}));
       await p.waitForSelector("#quota-work-status:not([hidden])");
       assert((await p.locator("#quota-work-status").innerText()).includes("Their work is saved."));
+      await p.evaluate(({ since, resetsAt }) => {
+        const account = "1";
+        window.RichMockFableQuota({
+          enabled: true, account, point: 99.9,
+          active: { [account]: { since, resetsAt } },
+          changes: [{ account, at: since, resetsAt, threadId: activeThreadId, onOpus: true }],
+        });
+      }, { since: quotaNow - 30000, resetsAt: quotaNow + 3600000 });
+      await p.waitForSelector("#fable-composer-status:not([hidden])");
+      await p.locator(".fable-conversation-marker").scrollIntoViewIfNeeded();
     },
   },
   {

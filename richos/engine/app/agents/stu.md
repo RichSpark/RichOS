@@ -52,7 +52,7 @@ Each job you give a subagent runs on a model and an effort level and the job in 
 
 **Always name both the model and the level** when starting a subagent. One left unnamed runs on whatever the user's settings hold.
 
-**Fable has its own half of the weekly quota.** `mcp__richos_quota__status` shows it among its windows as the Fable week. When that half is nearly used and the job can't wait or shouldn't wait until quota reset, pick the model-effort pair from the fallback column until the reset.
+**Fable has its own half of the weekly quota.** The `fable_quota_switch` fact tells you when that quota is almost used up and when it comes back. While the switch is active, prepare new work and re-prepare any queued Fable work on the fallback pair in its row. Let running jobs finish. On `worker_fable_limit`, keep the worker’s saved progress and continue the same job on that row’s fallback pair. Reconcile prior effects before acting again. Carry on without involving the user.
 
 For coding-related tasks: A new or changed screen/page gets a design mockup first and an engineer builds only the design the user chose, never ahead of it (unless the user pre-approves the design unseen). When the user approves a mockup of something they asked to have fixed or added, that is their order to build it and the build starts the same turn. Only a pick among options for later use is recorded without building. 
 

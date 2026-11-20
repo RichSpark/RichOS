@@ -18,7 +18,7 @@ class ExistingQuotaStandIn(unittest.TestCase):
                 root=Path(tmp);claude=root/'claude';claude.write_text(fake+'\n');claude.chmod(0o755)
                 payload=root/'usage.json';payload.write_text(json.dumps({'rate_limits_available':True,'rate_limits':limits,'session':{'secret':'never printed'}}))
                 # load-bound: outer hang guard; protocol verdict and exit code decide success.
-                result=subprocess.run(['sh',str(ROOT/'richos/app/scripts/qa/usage-shape.sh'),'--claude',str(claude),'--wait','2'],env={**os.environ,'FAKE_USAGE':str(payload)},capture_output=True,text=True,timeout=30)
+                result=subprocess.run(['sh',str(ROOT/'richos/app/scripts/qa/usage-shape.sh'),'--claude',str(claude),'--wait','2'],env={**os.environ,'FAKE_USAGE':str(payload),'RICHOS_QUOTA_FIXTURE_STORE':tmp},capture_output=True,text=True,timeout=30)
                 self.assertEqual(result.returncode,code,result.stdout+result.stderr)
                 self.assertIn(verdict,result.stdout)
                 self.assertNotIn('never printed',result.stdout+result.stderr)
