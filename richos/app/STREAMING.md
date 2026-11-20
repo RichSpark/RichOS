@@ -787,6 +787,21 @@ registered, the last window closing keeps the process alive with no window and n
 the CEO's decision, 2026-09-17: *"OK, window-closed only."* The Dock icon brings the window
 back. With nothing registered, closing the last window still quits exactly as it always has.
 
+## Command-Z and the chat list's Undo: `rich://menu-undo`
+
+Added 2026-11-20 for the round-93 chat list. Source of truth:
+`richos/app/src-tauri/src/chat_undo.rs` — the constant `EVENT_MENU_UNDO`.
+
+| Event name | When | Payload |
+|---|---|---|
+| `rich://menu-undo` | Edit > Undo or Command-Z, with the conversation window in front, while the page has said (`set_chat_undo`) that a chat-list Undo is on offer. | none |
+
+The page never sees Command-Z as a keydown (it is a child webview and wry keeps Command keys
+from a child), so the menu's Undo asks it. The page runs its Undo or, when there is none or a
+text field with something in it has focus, answers with `native_undo`, which is the text undo
+the predefined menu item used to send. Without an offer, the shell sends text undo itself and
+emits nothing.
+
 ## Files dropped on the window: `rich://file-drag` and `rich://file-drop`
 
 The tenth family, added 2026-09-24 for screenshots and files on the Mac composer (CEO ruling
