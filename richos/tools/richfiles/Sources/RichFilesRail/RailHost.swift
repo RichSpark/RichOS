@@ -163,26 +163,17 @@ private final class RailHost {
 
     func setTooltip(beside webView: NSView, frame: CGRect, radius: CGFloat, arrow: CGFloat) {
         guard self.webView === webView, let container, let layer = container.layer else { return }
-        let tip = webView.convert(webRect(frame, in: webView), to: container)
-        let arrow = arrow * webView.bounds.width
-        guard !tip.isEmpty, container.bounds.intersects(tip.insetBy(dx: -arrow, dy: 0)) else {
+        guard let cutout = RailTooltipCutout(label: frame, radius: radius, arrow: arrow, webView: webView,
+                                             container: container) else {
             layer.mask = nil
             return
         }
         // The label belongs to WebKit. Cut its shape out of the native sibling so its
         // existing text, size and shortcut stay visible, with the pane still interactive.
-        let radius = min(radius * webView.bounds.width, tip.width / 2, tip.height / 2)
-        let path = CGMutablePath()
-        path.addRect(container.bounds)
-        path.addRoundedRect(in: tip, cornerWidth: radius, cornerHeight: radius)
-        path.move(to: CGPoint(x: tip.minX, y: tip.midY - arrow))
-        path.addLine(to: CGPoint(x: tip.minX - arrow, y: tip.midY))
-        path.addLine(to: CGPoint(x: tip.minX, y: tip.midY + arrow))
-        path.closeSubpath()
         let mask = CAShapeLayer()
         mask.frame = layer.bounds
         mask.fillRule = .evenOdd
-        mask.path = path
+        mask.path = cutout.path
         layer.mask = mask
     }
 
@@ -307,6 +298,43 @@ private final class RailHost {
                 if let window = hosting?.window { NSAlert(error: error).beginSheetModal(for: window, completionHandler: nil) }
             }
         }
+    }
+}
+
+/// The hole the docked pane leaves for the rail's hover label, which WebKit draws beneath it.
+///
+/// The page reports the label in CSS viewport fractions (window.innerWidth/innerHeight). The
+/// web view reaches up beneath the window's title bar, but the CSS viewport starts below it, at
+/// the window's content layout rect, so the fractions are taken of that visible part: taken of the
+/// whole web view, the hole landed up to a title bar's height above the label.
+struct RailTooltipCutout {
+    /// The label's own rectangle, in the container's coordinates.
+    let hole: CGRect
+    /// The container's bounds with the label and its arrow taken out (even-odd).
+    let path: CGPath
+
+    @MainActor
+    init?(label frame: CGRect, radius: CGFloat, arrow: CGFloat, webView: NSView, container: NSView) {
+        var viewport = webView.bounds
+        if let window = webView.window {
+            let visible = viewport.intersection(webView.convert(window.contentLayoutRect, from: nil))
+            if !visible.isEmpty { viewport = visible }        }
+        let top = webView.isFlipped ? frame.minY : 1 - frame.maxY
+        let local = CGRect(x: viewport.minX + frame.minX * viewport.width, y: viewport.minY + top * viewport.height,
+                           width: frame.width * viewport.width, height: frame.height * viewport.height)
+        let tip = webView.convert(local, to: container)
+        let arrow = arrow * viewport.width
+        guard !tip.isEmpty, container.bounds.intersects(tip.insetBy(dx: -arrow, dy: 0)) else { return nil }
+        let radius = min(radius * viewport.width, tip.width / 2, tip.height / 2)
+        let path = CGMutablePath()
+        path.addRect(container.bounds)
+        path.addRoundedRect(in: tip, cornerWidth: radius, cornerHeight: radius)
+        path.move(to: CGPoint(x: tip.minX, y: tip.midY - arrow))
+        path.addLine(to: CGPoint(x: tip.minX - arrow, y: tip.midY))
+        path.addLine(to: CGPoint(x: tip.minX, y: tip.midY + arrow))
+        path.closeSubpath()
+        hole = tip
+        self.path = path
     }
 }
 

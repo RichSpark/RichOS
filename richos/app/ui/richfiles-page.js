@@ -46,7 +46,10 @@
     const tip = tooltip.getBoundingClientRect();
     if (!tip.width || !tip.height) return null;
     const arrow = parseFloat(getComputedStyle(tooltip, "::before").borderRightWidth) || 0;
-    if (tip.right <= paneBounds.left * innerWidth || tip.bottom <= paneBounds.top * innerHeight) return null;
+    // Only the left edge is decided here. The native pane is placed against the whole web view,
+    // title bar included, so it starts higher than this page's pane box; whether a label near the
+    // top meets it (Chats does) is decided natively, against the pane where it really is.
+    if (tip.right <= paneBounds.left * innerWidth) return null;
     return {
       left: tip.left / innerWidth, top: tip.top / innerHeight,
       width: tip.width / innerWidth, height: tip.height / innerHeight,
