@@ -85,6 +85,8 @@ final class BrowserModel: ObservableObject {
             }
         }
     }
+    // Validation for later file actions is independent of row rendering.
+    var selectionReferences: [URL: FileReference] = [:]
     @Published var scrollAnchor: URL?
     @Published var status = ""
     @Published private(set) var busy = false

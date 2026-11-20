@@ -42,6 +42,7 @@ struct BrowserView: View {
     @State private var feedback = ""
     @State private var rangeAnchor: URL?
     @State private var selectionCursor: URL?
+    @State private var scrollToSelection: URL?
     @State private var prefixText = ""
     @State private var prefixTime: TimeInterval = 0
     @State private var listRows = 12
@@ -50,7 +51,6 @@ struct BrowserView: View {
     @State private var dropOperation: DropOperation?
     @State private var dropDestination: BrowserTransferDestination?
     @State private var destinationRefresh = UUID()
-    @State private var selectedReferences: [URL: FileReference] = [:]
     @State private var preparingAction = false
     @State private var rowFrames: [URL: CGRect] = [:]
     @State private var fileColumnFrame: CGRect = .null
@@ -159,6 +159,7 @@ struct BrowserView: View {
             feedback = ""
             rangeAnchor = nil
             selectionCursor = nil
+            scrollToSelection = nil
             prefixText = ""
             prefixTime = 0
         }
@@ -774,7 +775,7 @@ struct BrowserView: View {
                                         }
                                         .onPreferenceChange(RowFramesKey.self, perform: viewportObserver(viewport, mode: .columns))
                                     }.onAppear { restoreScroll(items, anchor: .top) }
-                                        .onChange(of: selectionCursor) { if let url = $0 { items.scrollTo(url) } }
+                                        .onChange(of: scrollToSelection) { if let url = $0 { items.scrollTo(url) } }
                                         .onChange(of: model.busy) { if !$0 { restoreScroll(items, anchor: .top) } }
                                 }
                             }
@@ -831,7 +832,7 @@ struct BrowserView: View {
                 }.frame(height: (model.searchActive ? 126 : 109) + textSize.adjustment * 2)
                     .accessibilityLabel("Gallery thumbnails")
                     .onAppear { restoreScroll(scroll, anchor: .leading) }
-                    .onChange(of: selectionCursor) { if let url = $0 { scroll.scrollTo(url) } }
+                    .onChange(of: scrollToSelection) { if let url = $0 { scroll.scrollTo(url) } }
                     .onChange(of: model.busy) { if !$0 { restoreScroll(scroll, anchor: .leading) } }
             }
         }.accessibilityIdentifier("file-gallery")
@@ -861,7 +862,7 @@ struct BrowserView: View {
         .onAppear { detailsViewport.show(model.scrollAnchor, alignToTop: true) }
         .onDisappear { detailsViewport.detach() }
         .onChange(of: model.busy) { if !$0 { detailsViewport.show(model.scrollAnchor, alignToTop: true) } }
-        .onChange(of: selectionCursor) { if let item = $0 { detailsViewport.show(item, alignToTop: false) } }
+        .onChange(of: scrollToSelection) { if let item = $0 { detailsViewport.show(item, alignToTop: false) } }
         .contextMenu(forSelectionType: URL.self) { ids in
             selectionMenu(model.entries.filter { ids.contains($0.url) })
         } primaryAction: { ids in
@@ -961,7 +962,7 @@ struct BrowserView: View {
                     listRows = $0
                     scrollList(to: model.scrollAnchor, rows: $0, using: scroll, anchor: .leading)
                 }
-                .onChange(of: selectionCursor) { scrollList(to: $0, rows: rows, using: scroll) }
+                .onChange(of: scrollToSelection) { scrollList(to: $0, rows: rows, using: scroll) }
                 .onChange(of: model.busy) { busy in
                     if !busy { scrollList(to: model.scrollAnchor, rows: rows, using: scroll, anchor: .leading) }
                 }
@@ -997,7 +998,7 @@ struct BrowserView: View {
                 }
                 .onAppear { iconColumns = columns; restoreScroll(scroll, anchor: .top) }
                 .onChange(of: columns) { iconColumns = $0 }
-                .onChange(of: selectionCursor) { value in if let value { scroll.scrollTo(value) } }
+                .onChange(of: scrollToSelection) { value in if let value { scroll.scrollTo(value) } }
                 .onChange(of: model.busy) { busy in if !busy { restoreScroll(scroll, anchor: .top) } }
                 .onPreferenceChange(RowFramesKey.self, perform: viewportObserver(geometry, mode: .icons))
             }
@@ -1343,7 +1344,7 @@ struct BrowserView: View {
         return true
     }
 
-    private func select(_ entry: FileEntry, modifiers: NSEvent.ModifierFlags) {
+    private func select(_ entry: FileEntry, modifiers: NSEvent.ModifierFlags, scroll: Bool = false) {
         if modifiers.contains(.shift), let anchor = rangeAnchor,
            let start = model.entries.firstIndex(where: { $0.url == anchor }),
            let end = model.entries.firstIndex(where: { $0.url == entry.url }) {
@@ -1353,11 +1354,14 @@ struct BrowserView: View {
             else { model.selected.insert(entry.url) }
             rangeAnchor = entry.url
         } else {
-            model.selected = [entry.url]
+            if model.selected != [entry.url] { model.selected = [entry.url] }
             rangeAnchor = entry.url
         }
         selectionCursor = entry.url
-        model.scrollAnchor = entry.url
+        // A clicked row is already visible. Only keys that can move the cursor
+        // outside of the viewport need to ask the list to scroll.
+        scrollToSelection = scroll ? entry.url : nil
+        if model.scrollAnchor != entry.url { model.scrollAnchor = entry.url }
     }
 
     private func moveGrid(dx: Int, dy: Int, extend: Bool) -> Bool {
@@ -1378,7 +1382,7 @@ struct BrowserView: View {
         case .details: return false
         }
         let index = current.map { max(0, min(model.entries.count - 1, $0 + step)) } ?? 0
-        select(model.entries[index], modifiers: extend ? .shift : [])
+        select(model.entries[index], modifiers: extend ? .shift : [], scroll: true)
         return true
     }
 
@@ -1389,7 +1393,7 @@ struct BrowserView: View {
         if let entry = model.entries.first(where: {
             $0.name.range(of: prefixText, options: [.anchored, .caseInsensitive]) != nil
         }) {
-            select(entry, modifiers: [])
+            select(entry, modifiers: [], scroll: true)
             return true
         }
         return false
@@ -1511,6 +1515,7 @@ struct BrowserView: View {
             model.selectCreatedItem(item)
             rangeAnchor = item.url
             selectionCursor = item.url
+            scrollToSelection = item.url
             sheet = .name(NameRequest(source: item, folder: folder, directory: directory,
                                       name: item.url.lastPathComponent))
         }
@@ -1543,13 +1548,13 @@ struct BrowserView: View {
 
     private func captureSelection() async {
         let selected = model.selected
-        selectedReferences = selectedReferences.filter { selected.contains($0.key) }
+        model.selectionReferences = model.selectionReferences.filter { selected.contains($0.key) }
         let entries = model.selectedEntries.filter { cachedReference(for: $0) == nil }
         if entries.isEmpty { return }
         let captured = try? await Self.capture(entries)
         guard !Task.isCancelled, model.selected == selected else { return }
         if let captured {
-            for (entry, reference) in zip(entries, captured) { selectedReferences[entry.url] = reference }
+            for (entry, reference) in zip(entries, captured) { model.selectionReferences[entry.url] = reference }
         }
     }
 
@@ -1567,7 +1572,7 @@ struct BrowserView: View {
     }
 
     private func cachedReference(for entry: FileEntry) -> FileReference? {
-        guard let reference = selectedReferences[entry.url], reference.identity == entry.identity else { return nil }
+        guard let reference = model.selectionReferences[entry.url], reference.identity == entry.identity else { return nil }
         return reference
     }
 

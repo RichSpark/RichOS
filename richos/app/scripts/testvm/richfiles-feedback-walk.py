@@ -59,7 +59,10 @@ class Walk:
         if required and row["visible_upper_ms"] is None:
             self.shot(label + "-missing")
             raise RuntimeError("the cropped region never changed after " + label)
-        return {"action": label, "region": list(region), **row}
+        record = {"app": app, "action": label, "region": list(region), **row}
+        with (self.out / "samples.jsonl").open("a") as evidence:
+            evidence.write(json.dumps(record) + "\n")
+        return record
 
     def launch(self, app):
         self.guest("open", "-a", app, self.folder)
@@ -82,6 +85,9 @@ class Walk:
             self.ax("RichFiles", "click", "--title", "File view", "--first")
             self.ax("RichFiles", "click", "--title", mode, "--role", "AXMenuItem", "--first")
             time.sleep(.35)
+            echo = self.node("RichFiles", "--title", "Echo.txt")
+            self.action("RichFiles", f"{mode}-reset", self.selection_patch(echo),
+                        "click", self.click_point(echo), required=False)
             alpha = self.node("RichFiles", "--title", "Alpha.txt")
             bravo = self.node("RichFiles", "--title", "Bravo Folder")
             delta = self.node("RichFiles", "--title", "Delta.txt")
@@ -93,6 +99,10 @@ class Walk:
             for node, name, input_point, modifiers in targets:
                 results.append(self.action("RichFiles", f"{mode}-{name}", self.selection_patch(node),
                                            "click", input_point, modifiers))
+            self.action("RichFiles", f"{mode}-pre-arrow", self.selection_patch(echo),
+                        "click", self.click_point(echo), required=False)
+            key = "123" if mode == "Gallery" else "126"
+            results.append(self.action("RichFiles", f"{mode}-arrow", self.selection_patch(delta), "key", key))
             self.shot("richfiles-" + mode.lower())
         return results
 
@@ -111,6 +121,8 @@ class Walk:
                                                (94, 134, 114), patches, (0, SHIFT, COMMAND)):
             point = alpha_point if offset == 94 else csv((left + 225, top + offset))
             results.append(self.action("Finder", "List-" + label, patch, "click", point, flags))
+        self.action("Finder", "List-pre-arrow", patches[0], "click", alpha_point, required=False)
+        results.append(self.action("Finder", "List-arrow", patches[2], "key", "125"))
         self.shot("finder-after")
         return results
 
