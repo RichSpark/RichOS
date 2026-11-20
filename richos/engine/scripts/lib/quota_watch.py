@@ -10,10 +10,8 @@ HIS UPDATE, 2026-09-25 (ruling §87, and the boundary cases in
 richos-hq/docs/plans/claude-five-hour-quota-rule-2026-09-25.md). At or above
 the threshold, do NOT pause when the reset is LESS than 20 minutes away;
 exactly 20 minutes still pauses. A hold already in place releases inside that
-window, keeping the same agent. The same day he dropped the adaptive schedule
-he had also given: "Well, I've changed my mind. Let's drop the 30-minute check
-nonsense. Keep it consistent at 5 minutes." So polling is 300 s at every
-usage level, and the stale bound stays one 300 s poll.
+window, keeping the same agent. The regular interval and stale bound are both
+300 s. See HIGH SPEED for local polling and the shared provider interval.
 
 The five-hour policy below is retained. Weekly support is in quota_weekly.py:
 all reported windows are printed; at 99% overall weekly use, the shared reset
@@ -21,11 +19,10 @@ service consumes a prior user approval or the lead receives the standard pause
 message. Weekly holds release only after fresh weekly allowance and an allowing
 five-hour verdict. The twenty-minute exception applies only to five-hour quota.
 
-The original five-hour watcher READS the five-hour window,
-it POLLS every 300 seconds, and it WAKES THE LEAD at the threshold, at the
-hold's release (the reset less than 20 minutes away) and at the reset, with
-the exact messages to send. The lead does the pausing and the resuming; this
-file never messages, stops or spawns anything.
+The five-hour watcher READS the five-hour window and WAKES THE LEAD at the
+threshold, at the hold's release (the reset less than 20 minutes away) and at
+the reset, with the exact messages to send. The lead does the pausing and the
+resuming; this file never messages, stops or spawns anything.
 
 THE LAST 20 MINUTES, and how it matches the desktop app (Codex, branch
 codex/claude-quota-settings, richos-core/src/quota.rs: RESET_EXEMPTION_MS and
@@ -45,7 +42,8 @@ Each wake-up names the command that makes the pause or the resume
 before any message, so a refused or lost message never leaves an agent running
 through a pause or frozen after one (2026-10-11).
 
-THE READING, FIRST: CLAUDE CODE'S OWN `get_usage` (2026-09-25). Each poll starts
+THE READING, FIRST: CLAUDE CODE'S OWN `get_usage` (2026-09-25). The poll uses
+the shared account record. If it claims the next provider slot, it starts
 `claude` as a CONTROL-ONLY connection and asks it for the account's usage,
 exactly as the desktop app does (Codex, codex/claude-quota-settings at
 c53f85c9, richos-core/src/quota/probe.rs; spec: richos-hq
@@ -55,8 +53,8 @@ persistence, no tools, strict and empty MCP config, CLAUDECODE removed, an
 `initialize` then a `get_usage` control request, each bounded at 20 s, frames
 capped at 256 KiB. It never sends a user message, so it is not a model turn.
 One difference, on purpose: the desktop keeps one connection open; this
-watcher is a short-lived script with 5 minutes between polls, so it starts
-the process in its own process group, captured at spawn, and ends that group
+watcher opens a connection for each provider call. It starts the process
+in its own process group, captured at spawn, and ends that group
 on every read. The working directory is `/var/empty` (CONTROL_CWD), which is
 empty and which this user cannot write, so a read can neither leave anything
 behind nor read anything there. Never `/` (it was until 2026-10-07): at start
@@ -72,10 +70,9 @@ directory and no transcript under ~/.claude/projects.
 
 Why it is first: the status-line file below re-renders only when the lead
 speaks, so an idle lead left the reading 10 minutes old at the 91%/95%
-readings of 07:57Z and 08:07Z. get_usage is fresh at every poll. When it
-fails (no `claude`, a timeout, an error, no subscription limits reported, or
-an unreadable answer), the watcher logs why, checks the status-line fallback
-and retries independently of the conversation.
+readings of 07:57Z and 08:07Z. The shared reading refreshes independently of
+the conversation. A failure keeps the last answer and its age. If the shared
+record has no usable answer, the watcher also checks the status-line fallback.
 
 THE FALLBACK READING (design notes: richos-hq/docs/plans/budget-self-management-2026-09-10.md)
   ~/.claude/statusline-payload.json -> rate_limits.five_hour.used_percentage and
@@ -111,7 +108,7 @@ nothing polled until the lead noticed and started it again by hand. Waking the
 lead was right; ending the polling to do it was the defect. So the two are now
 separate processes:
 
-  THE POLLER polls every 300 s for as long as its session lives and never
+  THE POLLER normally polls every 300 s for as long as its session lives and never
   stops on an event. It writes each poll line to polls.log and each wake-up,
   once, to events.jsonl, in ~/.claude/state/quota-watch/<session>/
   (QUOTA_WATCH_STATE_DIR overrides, for tests). One per session: it holds
@@ -139,9 +136,10 @@ separate processes:
                and prints each wake-up as one JSON line, which the host sends
                to that lead (host_child.py).
 
-  A get_usage failure (timeout, refusal) is retried every 60 s instead of
-  every 300 s. Once the live source has been unavailable for one poll
-  interval, the watcher alerts if it has no usable reading. A fallback is
+  During a get_usage outage the watcher can recheck locally every 60 s. The
+  shared provider request waits at least 300 s, or longer if the provider
+  supplies a later retry time. Once the live source has been unavailable for
+  one poll interval, the watcher alerts if it has no usable reading. A fallback is
   checked when its freshness expires, and a new status-line render does not
   end the live-source outage or rearm its alert. For a known five-hour window
   a failed retry can also alert if the measured rise could already have
@@ -181,17 +179,18 @@ alert when such a crazy high token consumption velocity is detected".
 
   AT HIGH SPEED: QUOTA-FAST wakes the lead once per window, the first time it
   is measured, with the speed and the time the window would be used up, so the
-  CEO can be told. Polls come every FAST_POLL_SECONDS (60: his "every 2
-  minutes ... Use every minute instead if that causes no problems", and the
-  measured cost of a read, at the constant). And the pause message
-  (QUOTA-THRESHOLD, marked EARLY) comes as soon as the reading plus the speed
+  CEO can be told. Local polls come every FAST_POLL_SECONDS (60).
+  The shared reader allows one provider call per minute only when the same
+  window is above 80% and has risen at least 5 points per 5 minutes.
+  The pause message (QUOTA-THRESHOLD, marked EARLY) comes as soon as the reading plus the speed
   over the next check and the hold reaches 100% (early_wake), below 93% if it
   must. The 20-minute rule near the reset still applies.
 
   A RISE EXPECTED: when EXPECT_SPAWNS of the session's working teammates were
   registered in the last EXPECT_SECONDS (the workspace registry's
-  registered_at), polls come every FAST_POLL_SECONDS before anything is
-  measured. No alert: nothing has been detected yet.
+  registered_at), local polls come every FAST_POLL_SECONDS before anything is
+  measured. The provider interval stays at 300 s until both conditions hold.
+  No alert: nothing has been detected yet.
 
   BACK TO NORMAL (his fourth addendum): the speed is measured afresh at every
   poll, so once it is under the high-speed line and no rise is expected, polls
@@ -2084,8 +2083,7 @@ def _poll_loop(a, out, alive, health=None):
                 expires_in = math.floor(a.stale - r["age"]) + 1
                 sleep_for = max(1, min(sleep_for, expires_in))
         _poll_completed(health)
-        # Counted from the START of this poll, so the polls are 300 s apart
-        # and not 300 s plus however long get_usage took (20 s on a timeout).
+        # Count local polls from their start and honor the shared provider deadline.
         _sleep_after_poll(started, sleep_for, reset_started, reset_status, r, alive)
 
 
