@@ -51,6 +51,18 @@ function to inspect the assignment the teammate receives. The guards still read
 the original acknowledgment lines. Generated compaction summaries and task
 notifications are excluded from the original user messages.
 
+In terminal plugin sessions, the same hook inspects pending entries to
+`~/.richos-coordination/rich-codex/to-codex.md` before Bash appends or
+Write/Edit deliver them. Pierce reads the entry and the brief files it references.
+Use a timestamped Markdown heading such as
+`## 2026-11-20T14:00:00Z STATUS: LANDED` for a work-free note in a literal
+`cat` heredoc or direct write. Use an ordinary heading when the note gives
+Codex work, including follow-ups after a landing. A brief reference triggers
+review regardless of the heading. Dismissal is tied to the entry and the contents
+of its referenced briefs. The existing local Pierce record includes the verdict
+and `hook_seconds`, with `handoff_tool` identifying the originating write tool.
+Set `RICHOS_PIERCE_CODEX_OUTBOX` in an isolated test session to use a scratch file.
+
 A revised refused brief continues its preceding review: Pierce checks the changed
 lines and unresolved findings, with the original human requests retained. It
 reads unchanged standing instructions from their source files only when needed.
