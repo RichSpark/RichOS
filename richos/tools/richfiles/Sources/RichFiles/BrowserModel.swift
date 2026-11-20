@@ -79,7 +79,14 @@ final class BrowserSelection: ObservableObject {
     @Published var urls: Set<URL> = []
     @Published var cursor: URL?
     @Published var scrollToItem: URL?
+    var rangeAnchor: URL?
     var references: [URL: FileReference] = [:]
+
+    func moveCursor(to item: URL?, scrolling: Bool = false) {
+        if cursor != item { cursor = item }
+        let scrollTarget = scrolling ? item : nil
+        if scrollToItem != scrollTarget { scrollToItem = scrollTarget }
+    }
 }
 
 @MainActor

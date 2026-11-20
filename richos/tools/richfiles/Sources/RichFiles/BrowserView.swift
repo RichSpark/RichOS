@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import RichFilesCore
 import SwiftUI
 import UniformTypeIdentifiers
@@ -40,7 +41,6 @@ struct BrowserView: View {
     @State private var sheet: BrowserSheet?
     @State private var transfersVisible = false
     @State private var feedback = ""
-    @State private var rangeAnchor: URL?
     @State private var prefixText = ""
     @State private var prefixTime: TimeInterval = 0
     @State private var listRows = 12
@@ -154,9 +154,8 @@ struct BrowserView: View {
             focus = nil
             suggestions = []
             feedback = ""
-            rangeAnchor = nil
-            model.selection.cursor = nil
-            model.selection.scrollToItem = nil
+            model.selection.rangeAnchor = nil
+            model.selection.moveCursor(to: nil)
             prefixText = ""
             prefixTime = 0
         }
@@ -1035,7 +1034,10 @@ struct BrowserView: View {
             let cursor = itemsFocused && selection.cursor == entry.url
             row
                 .padding(.horizontal, 8)
-                .background(selected ? (activePane ? palette.selected : palette.inactiveSelection) : .clear, in: outline)
+                .background {
+                    RowHighlight(selection: model.selection, url: entry.url,
+                                 color: NSColor(activePane ? palette.selected : palette.inactiveSelection))
+                }
                 .overlay {
                     if selected || cursor || cut {
                         outline.strokeBorder(marker, style: StrokeStyle(lineWidth: cursor ? 2 : 1, dash: cut ? [4, 3] : []))
@@ -1365,22 +1367,21 @@ struct BrowserView: View {
     }
 
     private func select(_ entry: FileEntry, modifiers: NSEvent.ModifierFlags, scroll: Bool = false) {
-        if modifiers.contains(.shift), let anchor = rangeAnchor,
+        if modifiers.contains(.shift), let anchor = model.selection.rangeAnchor,
            let start = model.entries.firstIndex(where: { $0.url == anchor }),
            let end = model.entries.firstIndex(where: { $0.url == entry.url }) {
             model.selected = Set(model.entries[min(start, end)...max(start, end)].map(\.url))
         } else if modifiers.contains(.command) || (windowsKeys && modifiers.contains(.control)) {
             if model.selected.contains(entry.url) { model.selected.remove(entry.url) }
             else { model.selected.insert(entry.url) }
-            rangeAnchor = entry.url
+            model.selection.rangeAnchor = entry.url
         } else {
             model.selected = [entry.url]
-            rangeAnchor = entry.url
+            model.selection.rangeAnchor = entry.url
         }
-        model.selection.cursor = entry.url
         // A clicked row is already visible. Only keys that can move the cursor
         // outside of the viewport need to ask the list to scroll.
-        model.selection.scrollToItem = scroll ? entry.url : nil
+        model.selection.moveCursor(to: entry.url, scrolling: scroll)
         if model.scrollAnchor != entry.url { model.scrollAnchor = entry.url }
     }
 
@@ -1533,9 +1534,8 @@ struct BrowserView: View {
                        expectedFolder: destination.identity, useAvailableName: true) { item in
             guard model.folder == folder, model.currentTabID == tab, workspace.active == side, sheet == nil else { return }
             model.selectCreatedItem(item)
-            rangeAnchor = item.url
-            model.selection.cursor = item.url
-            model.selection.scrollToItem = item.url
+            model.selection.rangeAnchor = item.url
+            model.selection.moveCursor(to: item.url, scrolling: true)
             sheet = .name(NameRequest(source: item, folder: folder, directory: directory,
                                       name: item.url.lastPathComponent))
         }
@@ -1814,6 +1814,53 @@ struct BrowserView: View {
         case .newFolder: return !actions.busy && writableFolder
         case .switchPane: return workspace.isSplit
         default: return true
+        }
+    }
+}
+
+/// Paint the row fill as soon as selection changes. SwiftUI can update the
+/// toolbar, outline and accessibility traits in its next layout pass.
+private struct RowHighlight: NSViewRepresentable {
+    let selection: BrowserSelection
+    let url: URL
+    let color: NSColor
+
+    func makeNSView(context: Context) -> Highlight { Highlight() }
+
+    func updateNSView(_ view: Highlight, context: Context) {
+        view.configure(selection: selection, url: url, color: color)
+    }
+
+    final class Highlight: NSView {
+        private weak var selection: BrowserSelection?
+        private var url: URL?
+        private var color: NSColor = .clear
+        private var subscription: AnyCancellable?
+
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+        func configure(selection: BrowserSelection, url: URL, color: NSColor) {
+            if !wantsLayer {
+                wantsLayer = true
+                layer?.cornerRadius = 5
+            }
+            self.color = color
+            if self.selection !== selection || self.url != url {
+                self.selection = selection
+                self.url = url
+                subscription = selection.$urls.map { $0.contains(url) }.removeDuplicates().sink { [weak self] in
+                    self?.paint(selected: $0)
+                }
+            } else {
+                paint(selected: selection.urls.contains(url))
+            }
+        }
+
+        private func paint(selected: Bool) {
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            layer?.backgroundColor = selected ? color.cgColor : nil
+            CATransaction.commit()
         }
     }
 }
