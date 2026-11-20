@@ -347,6 +347,16 @@
             "timeout": 10
           }
         ]
+      },
+      {
+        "matcher": "Bash|Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PROJECT_DIR/scripts/hooks/guard-pierce.sh",
+            "timeout": 330
+          }
+        ]
       }
     ],
     "PostToolUse": [
