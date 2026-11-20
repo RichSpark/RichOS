@@ -310,8 +310,16 @@ host_renew() {
   local bin
   bin="$(host_claude_path)"
   [ -n "$bin" ] && [ -x "$bin" ] || return 1
-  python3 - "$bin" <<'PY'
+  python3 -B - "$bin" "$HERE/../../../engine/scripts/lib" <<'PY'
 import json, os, selectors, signal, subprocess, sys, time
+sys.path.insert(0, sys.argv[2])
+import quota_usage_store
+
+folder = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.path.expanduser("~"), ".claude")
+store = quota_usage_store.Store(quota_usage_store.data_dir(), quota_usage_store.account_key(sys.argv[1], folder))
+asked = int(time.time() * 1000)
+if not store.claim(asked, "test-login-renewal"):
+    sys.exit(1)
 args = ["--print", "--input-format=stream-json", "--output-format=stream-json", "--verbose",
         "--setting-sources", "", "--no-session-persistence", "--tools", "",
         "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}']
@@ -319,6 +327,7 @@ env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
 p = subprocess.Popen([sys.argv[1]] + args, cwd="/", env=env, stdin=subprocess.PIPE,
                      stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, start_new_session=True)
 ok = False
+usage = None
 try:
     sel = selectors.DefaultSelector(); sel.register(p.stdout, selectors.EVENT_READ)
     buf = b""
@@ -344,6 +353,8 @@ try:
                 r = v.get("response") if isinstance(v, dict) else None
                 if isinstance(r, dict) and r.get("request_id") == "renew-%d" % n:
                     answered = True
+                    if n == 2 and r.get("subtype") == "success":
+                        usage = r.get("response")
         if not answered:
             break
         ok = n == 2
@@ -358,6 +369,7 @@ finally:
             break
         except subprocess.TimeoutExpired:
             continue
+store.finish(asked, **quota_usage_store.control_result(int(time.time() * 1000), usage))
 sys.exit(0 if ok else 1)
 PY
 }

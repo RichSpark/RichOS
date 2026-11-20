@@ -93,8 +93,26 @@ class Weekly(unittest.TestCase):
         status = {'resets':{'retryAt':int(due * 1000)}}
         with patch.object(watcher.time, 'time', return_value=NOW + .450), \
              patch.object(watcher, '_nap') as nap:
-            watcher._sleep_after_poll(started, 300, started + .250, status, None)
+            watcher._sleep_after_poll(started, 300, started + .250, status, {}, None)
         self.assertAlmostEqual(NOW + .450 + nap.call_args.args[0], due, places=6)
+
+    def test_fractional_poll_waits_until_the_provider_slot_opens(self):
+        started = NOW + .150
+        due = NOW + 300.850
+        with patch.object(watcher.time, 'time', return_value=NOW + 1.100), \
+             patch.object(watcher, '_nap') as nap:
+            watcher._sleep_after_poll(started, 300, started, {},
+                                      {'provider_next_at': int(due * 1000)}, None)
+        self.assertAlmostEqual(NOW + 1.100 + nap.call_args.args[0], due, places=6)
+
+    def test_a_refusal_updates_the_99_percent_notice_with_the_saved_age_once(self):
+        refusal = {**reading(), 'provider_refused': 'Claude Code did not provide a new quota reading',
+                   'provider_age': 300}
+        out = run_polls([reading(), refusal, {**refusal, 'provider_age': 600}],
+                        [workers(['worker'])], 3, out_cls=Recorder)
+        self.assertEqual([kind for kind, _ in out.woken], ['WEEKLY-THRESHOLD', 'WEEKLY-RESET-STATUS'])
+        self.assertIn('using the saved quota reading from 5 min ago.', out.events.getvalue())
+        self.assertIn('Weekly: 99%', out.events.getvalue())
 
     def test_missing_reset_time_holds_without_guessing_a_date(self):
         r=reading();r['windows'][0]['resets_at']=None

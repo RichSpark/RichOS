@@ -211,18 +211,18 @@ async function main() {
     assert((await page.locator("#quota-message").innerText()).includes("unavailable"));
     await page.close();
   });
-  await run.check("stale quota is marked and a failed refresh says round 16's notice with Refresh still offered", async () => {
+  await run.check("stale quota keeps the previous answer and shows the next shared check", async () => {
     const t = Date.now();
     const page = await open("dark", { ...quota, state: "stale", checkedAt: t - 47 * 60000, retryAt: t + 8 * 60000 + 20000, message: "Claude Code did not answer just now." });
     await enableTechnical(page); await page.click("#set-quota-open");
     await page.waitForSelector(".quota-window--stale");
-    // The failure's backoff holds only the automatic check; round 16: "Refresh asks sooner".
+    // Refresh can still read the saved answer while the next provider slot is pending.
     assert(await page.locator("#quota-refresh").isEnabled(), "Refresh is never locked by a backoff");
     // Round 16: "Last reading 47 min ago — stale", in gold.
     assert(/^Last reading .+ ago \(stale\)/.test(await page.locator("#quota-freshness").innerText()));
     assert(await page.locator("#quota-freshness.is-stale").count());
     assertEqual((await page.locator("#quota-message").innerText()).trim(),
-      "Claude Code did not answer just now. The figures below are from 47 min ago and may have moved on. RichOS tries again in 8 min; Refresh asks sooner.");
+      "Claude Code did not answer just now. The figures below are from 47 min ago and may have moved on. RichOS tries again in 8 min.");
     await page.close();
   });
   await run.check("Technical view keeps sign-in separate from missing usage figures", async () => {
@@ -401,11 +401,11 @@ async function main() {
         assertEqual(await page.locator(".quota-lane.is-inuse .quota-lane-label").allTextContents(), ["Work"], "in use marks the account in use");
         assertEqual(await page.locator(".quota-lane.is-next .quota-lane-label").allTextContents(), ["Account 1"], "next is the read account with room");
         assertEqual(await page.locator("#quota-verb-switch").getAttribute("aria-checked"), "true", "the saved verb is shown");
-        assert((await page.locator("#quota-freshness").innerText()).includes("every minute (usage is fast)"));
+        assert((await page.locator("#quota-freshness").innerText()).includes("checks every 5 min"));
         assertEqual((await page.locator(".quota-hero .quota-pause-line").innerText()).trim(), "switch at 92% · was 93%");
         assertEqual(await page.locator(".quota-pause-ghost").count(), 2, "both moved lines keep a ghost");
         assert((await page.locator(".quota-row-switch").innerText()).includes("switches at 96%"));
-        assertEqual(await page.locator("#quota-hold-status").innerText(), "Usage is fast. Checking every minute.");
+        assertEqual(await page.locator("#quota-hold-status").innerText(), "Usage is fast.");
         // Round 16's fast card: the agents counted and the rise measured, as the alert says them.
         assert((await page.locator("#quota-hold-detail").innerText()).startsWith("15 agents reading at once took Work’s five-hour window from 40% to 71% in 12 minutes."),
           await page.locator("#quota-hold-detail").innerText());

@@ -188,7 +188,7 @@ def cmd_sample(args):
         os.environ["CLAUDE_CONFIG_DIR"] = folder
         try:
             now = int(time.time())
-            r = quota_watch.read_get_usage(now)
+            r = quota_watch.shared_get_usage(None, now)
         finally:
             if old is None:
                 os.environ.pop("CLAUDE_CONFIG_DIR", None)

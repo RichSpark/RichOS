@@ -81,14 +81,23 @@ pub fn status_within(bin: &Path, folder: Option<&Path>, within: Duration) -> Aut
 /// account identifier (this file's rule, and the CEO's answer 4: rows show the user's label
 /// only). `None` when either folder does not say who it is, which is never treated as the same.
 pub fn same_account(bin: &Path, a: Option<&Path>, b: Option<&Path>) -> Option<bool> {
-    let who = |folder: Option<&Path>| -> Option<(String, String)> {
-        let value = status_json(bin, folder)?;
-        let email = value.get("email")?.as_str()?.trim().to_lowercase();
-        if email.is_empty() { return None; }
-        let org = value.get("orgId").and_then(serde_json::Value::as_str).unwrap_or("").to_string();
-        Some((email, org))
-    };
-    Some(who(a)? == who(b)?)
+    Some(account_identity(bin, a)? == account_identity(bin, b)?)
+}
+
+fn account_identity(bin: &Path, folder: Option<&Path>) -> Option<(String, String)> {
+    let value = status_json(bin, folder)?;
+    let email = value.get("email")?.as_str()?.trim().to_lowercase();
+    if email.is_empty() { return None; }
+    let org = value.get("orgId").and_then(serde_json::Value::as_str).unwrap_or("").to_string();
+    Some((email, org))
+}
+
+/// The shared quota cache key, including when two configuration folders have the
+/// same sign-in. Raw provider identity stays in this reader and is never saved.
+pub(crate) fn quota_account_key(bin: &Path, folder: Option<&Path>) -> Option<String> {
+    use sha2::{Digest, Sha256};
+    let (email, org) = account_identity(bin, folder)?;
+    Some(format!("{:x}", Sha256::digest(format!("account\0{email}\0{org}"))))
 }
 
 /// **Which email an account is signed in with**, for round 31's "Show email" on its card (the

@@ -33,7 +33,8 @@ sys.exit(0)
                 argv=[sys.executable,str(ROOT/'richos/app/scripts/testvm/claude-usage-probe.py'),tmp,tmp,'--claude',str(binary),'--seconds','10' if answer else '0.2']
             else:
                 argv=['sh',str(ROOT/'richos/app/scripts/qa/usage-shape.sh'),'--claude',str(binary),'--wait','2']
-            p=subprocess.Popen(argv,stdout=subprocess.PIPE,stderr=subprocess.PIPE,start_new_session=True)
+            p=subprocess.Popen(argv,stdout=subprocess.PIPE,stderr=subprocess.PIPE,start_new_session=True,
+                               env={**os.environ,'RICHOS_QUOTA_FIXTURE_STORE':tmp})
             try:
                 # load-bound: outer hang guard; an unanswered probe must terminate, regardless of load.
                 stdout,stderr=p.communicate(timeout=15)

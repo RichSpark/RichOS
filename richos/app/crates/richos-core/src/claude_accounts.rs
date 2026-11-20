@@ -233,6 +233,8 @@ pub struct AccountView {
     pub working: Vec<String>,
     pub windows: Vec<Window>,
     pub checked_at: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_checked_at: Option<u64>,
     /// Set while this account is exhausted, with when it comes back.
     pub exhausted_until: Option<u64>,
     /// Shown instead of the figures when the account could not be read.
@@ -1120,6 +1122,12 @@ impl Accounts {
     /// each one rotates at its own next turn boundary, because rotation never happens inside a
     /// turn (`spine.rs`).
     pub fn evaluate(&self, readings: &BTreeMap<String, Reading>, pause: Option<u8>, now: u64) -> io::Result<bool> {
+        self.evaluate_before_move(readings, pause, now, || {})
+    }
+
+    pub(crate) fn evaluate_before_move(
+        &self, readings: &BTreeMap<String, Reading>, pause: Option<u8>, now: u64, wake_reader: impl FnOnce(),
+    ) -> io::Result<bool> {
         let mut state = self.state.lock().unwrap();
         if state.accounts.len() < 2 { return Ok(false); }
         let current = state.in_use.clone();
@@ -1139,6 +1147,7 @@ impl Accounts {
             Gone::Limit => limit(&current),
             _ => mine.windows.iter().filter_map(|w| w.resets_at).find(|t| *t == until),
         };
+        wake_reader();
         self.switch_to(&mut state, &next, why, fresh_at, now)?;
         Ok(true)
     }

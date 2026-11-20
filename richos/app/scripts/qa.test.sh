@@ -1690,18 +1690,18 @@ FAKE
 chmod 755 "$TMP/fake-usage-claude"
 printf '%s' '{"rate_limits_available":true,"rate_limits":null,"session":{"secret":"never printed"},"subscription_type":"max"}' > "$TMP/usage-null.json"
 printf '%s' '{"rate_limits_available":true,"rate_limits":{"five_hour":{"utilization":41,"resets_at":"2099-01-01T00:00:00Z"},"seven_day":{"utilization":28}},"session":{"secret":"never printed"}}' > "$TMP/usage-ok.json"
-export FAKE_USAGE="$TMP/usage-null.json"; run "$US" --claude "$TMP/fake-usage-claude" --wait 2
+export FAKE_USAGE="$TMP/usage-null.json" RICHOS_QUOTA_FIXTURE_STORE="$TMP/usage-null-store"; run "$US" --claude "$TMP/fake-usage-claude" --wait 2
 expect "US1 rate_limits null is NO READING for the app's reader (NoReading, not an error), exit 1, naming the rule" 1 "verdict: NO READING: rate_limits is null (the reader calls this NoReading"
 if printf '%s' "$OUT" | grep -q "never printed"; then
   bad "US1b the session field is never printed" "the output carried the session value"
 else
   ok "US1b the session field is never printed"
 fi
-export FAKE_USAGE="$TMP/usage-ok.json"; run "$US" --claude "$TMP/fake-usage-claude" --wait 2
+export FAKE_USAGE="$TMP/usage-ok.json" RICHOS_QUOTA_FIXTURE_STORE="$TMP/usage-ok-store"; run "$US" --claude "$TMP/fake-usage-claude" --wait 2
 expect "US2 a five-hour and weekly window with numeric utilization is readable, exit 0" 0 "verdict: readable by RichOS quota reader"
 run "$US" --claude "$TMP/no-such-claude" --wait 2
 expect "US3 no claude binary is refused, exit 2" 2 "no claude to ask"
-export FAKE_SILENT=1; run "$US" --claude "$TMP/fake-usage-claude" --wait 2; unset FAKE_SILENT FAKE_USAGE
+export FAKE_SILENT=1 RICHOS_QUOTA_FIXTURE_STORE="$TMP/usage-silent-store"; run "$US" --claude "$TMP/fake-usage-claude" --wait 2; unset FAKE_SILENT FAKE_USAGE RICHOS_QUOTA_FIXTURE_STORE
 expect "US4 a claude that never answers get_usage is refused, exit 2" 2 "no get_usage response"
 
 echo "=== CF. context-figure-probe: which figure on the stream is a conversation's context size? ==="

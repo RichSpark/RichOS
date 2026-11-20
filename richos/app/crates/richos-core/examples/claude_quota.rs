@@ -13,7 +13,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let root = std::env::temp_dir().join(format!("richos-quota-smoke-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&root)?;
     let result = (|| -> Result<(), Box<dyn std::error::Error>> {
-        let service = Service::open(&root)?;
+        let service = Service::open_shared_reader(&root)?;
         let view = service.refresh(std::path::Path::new(&bin), true);
         service.shutdown();
         println!(
@@ -30,22 +30,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     result
 }
 
-/// **What one quota reading costs** (fill-first, plan §15 answer 10: "check what one reading
-/// costs" before choosing the fast interval). `--measure /path/to/claude N`: N forced reads on
-/// ONE service, 6 s apart (past the 5 s double-click cooldown), each timed; after each, the
-/// resident control-only child's memory and cumulative CPU time from `ps`. The first read is
-/// cold (spawn, initialize, get_usage); the rest reuse the connection, as the app does.
-/// Read-only: the same control-only `get_usage` the app's five-minute probe sends.
+/// Time N attempts to read the shared quota answer and report any resident probe's resources.
+/// An attempt uses the saved answer until the same five-minute slot the app uses is free.
 fn measure(mut args: impl Iterator<Item = std::ffi::OsString>) -> Result<(), Box<dyn std::error::Error>> {
     let bin = args.next().ok_or("Missing Claude Code executable path.")?;
     let reads: usize = args.next().and_then(|n| n.to_str()?.parse().ok()).unwrap_or(3);
-    // The gap between reads, seconds (at least 6, past the 5 s cooldown). Two runs with
-    // different gaps tell a read's own CPU from the idle child's.
+    // The gap between attempts, including attempts served from the saved answer.
     let gap: u64 = args.next().and_then(|n| n.to_str()?.parse().ok()).unwrap_or(6).max(6);
     let root = std::env::temp_dir().join(format!("richos-quota-measure-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&root)?;
     let result = (|| -> Result<(), Box<dyn std::error::Error>> {
-        let service = Service::open(&root)?;
+        let service = Service::open_shared_reader(&root)?;
         for read in 1..=reads {
             let started = std::time::Instant::now();
             let view = service.refresh(std::path::Path::new(&bin), true);
