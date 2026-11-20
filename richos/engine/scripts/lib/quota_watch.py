@@ -1281,7 +1281,7 @@ def _exit_for(verdict):
 
 def mode_once(a, now):
     r = read_source(a, now)
-    now = max(now, int(time.time()))
+    now = max(now, r.get("taken_at") or now)
     if a.threshold is None:
         print("quota: UNKNOWN: %s is %s in %s" % (CONFIG_KEY, a.threshold_problem, a.config or "(no config)"))
         return 2
@@ -1305,7 +1305,7 @@ def mode_once(a, now):
 
 def mode_status(a, now):
     r = read_source(a, now)
-    now = max(now, int(time.time()))
+    now = max(now, r.get("taken_at") or now)
     print("THE 93%% QUOTA RULE (%s)" % RULING)
     print("  his words : %s" % HIS_WORDS)
     print("  update    : %s" % RULE_UPDATE)
