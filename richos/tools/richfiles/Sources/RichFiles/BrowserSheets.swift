@@ -581,6 +581,7 @@ struct WorkspacesSheet: View {
     @ObservedObject var window: WindowWorkspace
     var embedded = false
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.colorScheme) private var scheme
     @State private var workspaces: [NamedWorkspace] = []
     @State private var name = ""
     @State private var problem = ""
@@ -615,7 +616,7 @@ struct WorkspacesSheet: View {
                     else { problem = "RichFiles could not reopen the previous workspace." }
                 }
             }
-            if !problem.isEmpty { Text(problem).font(.callout).foregroundStyle(.secondary) }
+            if !problem.isEmpty { Text(problem).font(.callout).foregroundStyle(BrowserPalette(scheme).hint) }
             if !embedded {
                 HStack {
                     Spacer()
