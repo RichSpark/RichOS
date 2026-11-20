@@ -35,7 +35,6 @@ struct FableReading {
 #[serde(rename_all = "camelCase")]
 struct FableWorkerRefusal {
     id: String,
-    fable_model: bool,
     frame: Value,
 }
 
@@ -64,12 +63,13 @@ fn fable_tick(request: Value) -> Result<Value, String> {
     state.observe(account, reading.as_ref(), now);
     let refused_workers: Vec<_> = refusals.into_iter().filter_map(|worker| {
         let limit = crate::native::worker_usage_limit_signal(&worker.frame)?;
-        let named_fable = limit.window == crate::claude_accounts::LimitWindow::Fable;
-        if !enabled || (!named_fable && !worker.fable_model) {
+        if !enabled || limit.window != crate::claude_accounts::LimitWindow::Fable {
             return None;
         }
-        let attributed = reading.as_ref().is_some_and(|reading| state.refused(account, reading, limit, now));
-        (named_fable || attributed).then_some(worker.id)
+        if let Some(reading) = &reading {
+            state.refused(account, reading, limit, now);
+        }
+        Some(worker.id)
     }).collect();
     let current = state.period(account, now);
     let change = match (previous, current) {
@@ -250,12 +250,15 @@ mod tests {
                 ]
             },
             "refusals": [
-                {"id": "generic", "fableModel": true, "frame": {"type": "result", "api_error_status": 429}},
-                {"id": "general", "fableModel": true, "frame": {"type": "rate_limit_event",
+                {"id": "generic", "frame": {"type": "result", "api_error_status": 429}},
+                {"id": "general", "frame": {"type": "rate_limit_event",
                     "rate_limit_info": {"status": "rejected", "rateLimitType": "seven_day"}}},
-                {"id": "specific", "fableModel": false, "frame": {"type": "rate_limit_event",
-                    "rate_limit_info": {"status": "rejected", "rateLimitType": "seven_day_overage_included",
-                                    "resetsAt": reset / 1000}}}
+                {"id": "session", "frame": {"type": "assistant", "error": "rate_limit",
+                    "isApiErrorMessage": true, "message": {"model": "<synthetic>", "content": [
+                        {"type": "text", "text": "You've hit your session limit · resets 10:10am (Europe/London)"}]}}},
+                {"id": "specific", "frame": {"type": "assistant", "error": "rate_limit",
+                    "isApiErrorMessage": true, "message": {"model": "<synthetic>", "content": [
+                        {"type": "text", "text": "You've reached your Fable limit. Run /usage-credits to continue or switch models"}]}}}
             ]
         });
         let changed = fable_tick(request).unwrap();

@@ -1880,9 +1880,22 @@ pub(crate) fn worker_usage_limit(frame: &Value) -> Option<crate::claude_accounts
 
 /// A worker's own transcript does not need the SDK stream's parent tool id.
 pub(crate) fn worker_usage_limit_signal(frame: &Value) -> Option<crate::claude_accounts::UsageLimit> {
+    use crate::claude_accounts::{LimitWindow, UsageLimit};
     usage_limit_signal(frame).or_else(|| {
-        (frame["type"] == "assistant" && frame["error"] == "rate_limit")
-            .then_some(crate::claude_accounts::UsageLimit::default())
+        if frame["type"] != "assistant" || frame["error"] != "rate_limit" {
+            return None;
+        }
+        // On disk Claude Code writes this synthetic assistant message instead
+        // of the SDK stream's rate_limit_event. Only that provider frame can name Fable.
+        let names_fable = frame["isApiErrorMessage"] == true
+            && frame["message"]["model"] == "<synthetic>"
+            && frame["message"]["content"].as_array().is_some_and(|content| {
+                content.iter().any(|part| part["type"] == "text"
+                    && part["text"].as_str().is_some_and(|text|
+                        text.trim_start().starts_with("You've reached your Fable limit.")))
+            });
+        let window = if names_fable { LimitWindow::Fable } else { LimitWindow::Unknown };
+        Some(UsageLimit { window, resets_at: None })
     })
 }
 

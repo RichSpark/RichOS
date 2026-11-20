@@ -1706,25 +1706,30 @@ def _read_json(path):
         return {}
 
 
-def terminal_worker_refusals(engine_root, session, seen):
-    """Find the last turn's refusal in this session's worker transcripts."""
+def terminal_worker_refusals(engine_root, session, seen, now):
+    """Find recent refusals in this session's worker transcripts."""
     if not session:
         return {}
     registry, _ = _load_registry(engine_root)
     if registry is None:
         return {}
     refused = {}
+    # Allow a missed normal poll while excluding old task failures.
+    earliest = now - 2 * POLL_SECONDS
     for worker in registry.all_agents(include_done=True):
         agent = worker.get("agent_id")
         if not agent or agent in seen or worker.get("session_id") != session:
             continue
-        if worker.get("disposition") in ("merged", "closed"):
+        if worker.get("disposition"):
             continue
         path = registry.platform_agent_transcript(worker)
         if not path:
             continue
         try:
             with open(path, "rb") as stream:
+                modified_at = int(os.fstat(stream.fileno()).st_mtime)
+                if modified_at < earliest:
+                    continue
                 start = max(0, stream.seek(0, os.SEEK_END) - 64 * 1024)
                 stream.seek(start)
                 if start:
@@ -1733,7 +1738,6 @@ def terminal_worker_refusals(engine_root, session, seen):
         except OSError:
             continue
         candidate = None
-        fable_model = False
         for record in records:
             try:
                 row = json.loads(record)
@@ -1741,11 +1745,9 @@ def terminal_worker_refusals(engine_root, session, seen):
                 continue
             if not isinstance(row, dict):
                 continue
+            if (_parse_reset(row.get("timestamp")) or modified_at) < earliest:
+                continue
             kind = row.get("type")
-            message = row.get("message")
-            model = message.get("model") if isinstance(message, dict) else None
-            if kind == "assistant" and isinstance(model, str) and model not in ("", "<synthetic>"):
-                fable_model = model == "fable" or model.startswith("claude-fable-")
             if kind == "rate_limit_event":
                 info = row.get("rate_limit_info")
                 if isinstance(info, dict) and info.get("status") == "rejected":
@@ -1759,9 +1761,16 @@ def terminal_worker_refusals(engine_root, session, seen):
                 candidate = None
         if candidate:
             name = "".join(c for c in str(worker.get("name") or agent) if c.isprintable())
-            frame = {key: candidate[key] for key in ("type", "rate_limit_info", "api_error_status", "errors", "error")
-                     if key in candidate}
-            refused[agent] = {"id": agent, "name": name, "fableModel": fable_model, "frame": frame}
+            frame = {key: candidate[key] for key in ("type", "rate_limit_info", "api_error_status",
+                     "errors", "error", "isApiErrorMessage") if key in candidate}
+            message = candidate.get("message")
+            if isinstance(message, dict) and message.get("model") == "<synthetic>" and isinstance(message.get("content"), list):
+                frame["message"] = {"model": "<synthetic>", "content": [
+                    {"type": "text", "text": part["text"][:256]}
+                    for part in message["content"] if isinstance(part, dict)
+                    and part.get("type") == "text" and isinstance(part.get("text"), str)
+                ]}
+            refused[agent] = {"id": agent, "name": name, "frame": frame}
     return refused
 
 
@@ -1778,7 +1787,7 @@ def terminal_fable(a, reading, week_point, out, now, session):
     if not account:
         return None
     seen = set(previous.get("notifiedWorkers", ()))
-    refused = terminal_worker_refusals(a.engine_root, session, seen)
+    refused = terminal_worker_refusals(a.engine_root, session, seen, now)
     if not (has_fable or previous.get("onOpusUntil") or refused):
         return None
     source = None
