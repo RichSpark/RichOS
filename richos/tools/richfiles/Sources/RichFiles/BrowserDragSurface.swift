@@ -9,6 +9,7 @@ struct BrowserDragSurface: NSViewRepresentable {
     }
 
     let prepare: (CGPoint) -> (() -> Payload?)?
+    let press: (CGPoint, NSEvent) -> Bool
     let click: (CGPoint, CGPoint, NSEvent) -> Bool
     let controlClick: (CGPoint?, NSPoint, NSWindow) -> Bool
 
@@ -20,6 +21,7 @@ struct BrowserDragSurface: NSViewRepresentable {
 
     func updateNSView(_ view: Source, context: Context) {
         view.prepare = prepare
+        view.press = press
         view.click = click
         view.controlClick = controlClick
     }
@@ -27,10 +29,11 @@ struct BrowserDragSurface: NSViewRepresentable {
     final class Source: NSView, NSDraggingSource {
         static let tokenType = NSPasteboard.PasteboardType(BrowserDragSelection.type)
         var prepare: ((CGPoint) -> (() -> Payload?)?)?
+        var press: ((CGPoint, NSEvent) -> Bool)?
         var click: ((CGPoint, CGPoint, NSEvent) -> Bool)?
         var controlClick: ((CGPoint?, NSPoint, NSWindow) -> Bool)?
         private var monitor: Any?
-        private var down: (event: NSEvent, prepare: () -> Payload?)?
+        private var down: (event: NSEvent, prepare: () -> Payload?, selected: Bool)?
         private var consumedClick = false
 
         override var isFlipped: Bool { true }
@@ -67,7 +70,9 @@ struct BrowserDragSurface: NSViewRepresentable {
                     controlClick?(inside ? point : nil, event.locationInWindow, window) == true
                 down = nil
                 if inside && !consumedClick, let start = prepare?(point) {
-                    down = (event, start)
+                    let selected = window.isKeyWindow && event.clickCount == 1 && press?(point, event) == true
+                    down = (event, start, selected)
+                    if selected { return true }
                 }
                 return consumedClick
             }
@@ -78,6 +83,7 @@ struct BrowserDragSurface: NSViewRepresentable {
                 consumedClick = false
                 if handled { return true }
                 guard let pressed else { return false }
+                if pressed.selected { return true }
                 let from = convert(pressed.event.locationInWindow, from: nil)
                 let to = convert(event.locationInWindow, from: nil)
                 guard bounds.contains(to), hypot(to.x - from.x, to.y - from.y) < 5 else { return false }

@@ -650,14 +650,26 @@ struct BrowserView: View {
                   let entry = model.entries.first(where: { $0.url == url }) else { return nil }
             let entries = model.selected.contains(entry.url) ? model.selectedEntries : [entry]
             return { beginDrag(entry, entries: entries) }
+        }, press: { point, event in
+            guard model.viewMode != .details, let url = rowAt(point),
+                  let entry = model.entries.first(where: { $0.url == url }) else { return false }
+            let modifiers = event.modifierFlags.intersection([.control, .command, .option, .shift])
+            guard modifiers.isSubset(of: [.command, .shift]) else { return false }
+            // Keep a plain press on a selected item available for dragging the
+            // existing group. A normal click can narrow it on release.
+            guard !modifiers.isEmpty || !model.selected.contains(url) else { return false }
+            workspace.select(side)
+            if focus != .items { focus = .items }
+            select(entry, modifiers: modifiers)
+            return true
         }, click: { start, end, event in
-            // AppKit has already counted the clicks. The first release selects
-            // immediately, even if a second click arrives to open the item.
+            // AppKit has already counted the clicks. An unhandled first press
+            // still selects on release and the second release opens the item.
             guard model.viewMode != .details,
                   let url = rowAt(start), rowAt(end) == url,
                   let entry = model.entries.first(where: { $0.url == url }) else { return false }
             workspace.select(side)
-            focus = .items
+            if focus != .items { focus = .items }
             if event.clickCount == 2 {
                 select(entry, modifiers: [])
                 activate([entry])
@@ -745,7 +757,8 @@ struct BrowserView: View {
                     LazyHStack(spacing: 0) {
                         ForEach(Array(zip(path.dropLast(), path.dropFirst())), id: \.0) { folder, child in
                             AncestorColumn(folder: folder, child: child, showHidden: model.showHidden,
-                                           revision: actions.mutationRevision, open: model.openFolder)
+                                           revision: actions.mutationRevision, model: model)
+                                .equatable()
                                 .focusedValue(\.browserControl, true)
                                 .frame(width: 185).id(folder)
                             Divider()
@@ -1886,12 +1899,12 @@ private struct BrowserDropTarget: DropDelegate {
 }
 
 @MainActor
-private struct AncestorColumn: View {
+private struct AncestorColumn: View, Equatable {
     let folder: URL
     let child: URL
     let showHidden: Bool
     let revision: UUID
-    let open: (URL) -> Void
+    let model: BrowserModel
 
     @State private var children: [FileEntry] = []
     @State private var loading = true
@@ -1904,9 +1917,14 @@ private struct AncestorColumn: View {
         let revision: UUID
     }
 
+    nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.folder == rhs.folder && lhs.child == rhs.child && lhs.showHidden == rhs.showHidden
+            && lhs.revision == rhs.revision && lhs.model === rhs.model
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Button(folder.path == "/" ? "Computer" : folder.lastPathComponent) { open(folder) }
+            Button(folder.path == "/" ? "Computer" : folder.lastPathComponent) { model.openFolder(folder) }
                 .buttonStyle(.plain).font(.headline).lineLimit(1).padding(8)
                 .accessibilityLabel("Open \(folder.path)")
             Divider()
@@ -1915,7 +1933,7 @@ private struct AncestorColumn: View {
                     LazyVStack(alignment: .leading, spacing: 1) {
                         ForEach(children) { entry in
                             let current = entry.url.path == child.path
-                            Button { open(entry.url) } label: {
+                            Button { model.openFolder(entry.url) } label: {
                                 HStack(spacing: 5) {
                                     Label(entry.name, systemImage: "folder").lineLimit(1).truncationMode(.middle)
                                     Spacer(minLength: 3)
