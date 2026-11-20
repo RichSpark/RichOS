@@ -635,12 +635,8 @@ struct Snapshot {
     shared_checked_at: Option<u64>,
     shared_next_at: Option<u64>,
     shared_interval_ms: Option<u64>,
-    weekly_pauses: BTreeMap<String, WeeklyPause>,
     published_weekly_points: BTreeMap<String, f64>,
 }
-
-#[derive(Clone, Copy)]
-struct WeeklyPause { reset: u64, used: f64, point: f64 }
 
 /// One window's reading as a speed base: used percent, its reset time, when it was first read
 /// (`at`) and last read (`last`) at that value, and whether its rise into that value was seen
@@ -768,10 +764,7 @@ impl Snapshot {
             weekly_cutoff, provider_wait_ms, weekly_pause_points: BTreeMap::new() };
         reading.weekly_pause_points = reading.windows.iter().filter(|window| is_weekly(&window.id))
             .filter_map(|window| {
-                let point = self.weekly_pauses.get(&window.id).filter(|pause| {
-                    window.resets_at.is_some_and(|reset| same_reset(pause.reset, reset))
-                }).map(|pause| pause.point)
-                    .or_else(|| self.published_weekly_points.get(&window.id).copied())
+                let point = self.published_weekly_points.get(&window.id).copied()
                     .or_else(|| self.measured_weekly_point(window, &reading, now))?;
                 Some((window.id.clone(), point))
             }).collect();
@@ -783,7 +776,9 @@ impl Snapshot {
         let observed = *self.window_observed_at.get(&window.id)?;
         let next = self.shared_next_at?;
         let rise = reading.rises.get(&window.id)?;
-        if reset <= now || observed > now || now >= next || now - observed > REFRESH_INTERVAL_MS
+        // A whole tick may be almost no change in use. Retain the existing
+        // weekly rule and its measured fast-use correction for that source.
+        if whole(window.used_percent) || reset <= now || observed > now || now >= next || now - observed > REFRESH_INTERVAL_MS
             || rise.ms > 2 * REFRESH_INTERVAL_MS || rise.to <= rise.from || self.error.is_some()
             || self.empty_at.is_some_and(|empty| empty >= observed) {
             return None;
@@ -792,26 +787,8 @@ impl Snapshot {
             .saturating_add(probe::DEADLINE.as_millis() as u64)
             .saturating_add(HANDOFF_DEFAULT_MS);
         let speed = *reading.speeds.get(&window.id)?;
-        let resolution = if whole(window.used_percent) { 1. } else { 0.1 };
-        let point = projected_pause_point(speed, wait, resolution);
+        let point = projected_pause_point(speed, wait, 0.1);
         Some(if reading.expected { point.min(resets::WEEKLY_THRESHOLD) } else { point })
-    }
-
-    fn update_weekly_pauses(&mut self, now: u64) {
-        self.weekly_pauses.retain(|id, pause| {
-            now < pause.reset && self.windows.iter().find(|window| window.id == *id).is_none_or(|window| {
-                window.resets_at.is_some_and(|reset| same_reset(pause.reset, reset))
-                    && window.used_percent + 1. > pause.used
-            })
-        });
-        let reading = self.reading_with(None, now);
-        for window in reading.windows.iter().filter(|window| is_weekly(&window.id)) {
-            if let (Some(reset), Some(&point)) = (window.resets_at, reading.weekly_pause_points.get(&window.id)) {
-                if window.used_percent >= point {
-                    self.weekly_pauses.entry(window.id.clone()).or_insert(WeeklyPause { reset, used: window.used_percent, point });
-                }
-            }
-        }
     }
     fn provider_wait_ms(&self, observed: Option<u64>) -> Option<u64> {
         let interval = self.shared_interval_ms?;
@@ -827,7 +804,7 @@ impl Snapshot {
         // Missing weekly data is not evidence that a known weekly hold ended.
         let missing_held_weekly = (!windows.iter().any(|w| w.id == "seven_day"))
             .then(|| self.windows.iter().find(|w| w.id == "seven_day"
-                && (w.used_percent >= resets::WEEKLY_THRESHOLD || self.weekly_pauses.contains_key(&w.id))).cloned()).flatten();
+                && w.used_percent >= resets::WEEKLY_THRESHOLD).cloned()).flatten();
         let error = missing_held_weekly.as_ref().map(|_| ReadError::Malformed);
         if let Some(previous) = missing_held_weekly { windows.push(previous); }
         let mut speeds = std::mem::take(&mut self.speeds);
@@ -850,9 +827,7 @@ impl Snapshot {
         *self = Self { windows, checked_at: Some(observed), retry_at: None, error, speeds, bases, rises, rise_until, empty_at: None, token_speed,
             since_reading: 0., signed_in: Some(true), rise_log, window_observed_at,
             shared_checked_at: self.shared_checked_at, shared_next_at: self.shared_next_at,
-            shared_interval_ms: self.shared_interval_ms, weekly_pauses: std::mem::take(&mut self.weekly_pauses),
-            published_weekly_points: BTreeMap::new() };
-        self.update_weekly_pauses(observed);
+            shared_interval_ms: self.shared_interval_ms, published_weekly_points: BTreeMap::new() };
     }
 
     fn apply_shared(&mut self, saved: shared_usage::Saved, interval_ms: u64) -> bool {
@@ -934,7 +909,6 @@ impl Snapshot {
         }
         self.checked_at = Some(observed);
         self.auth_known(true, observed);
-        self.update_weekly_pauses(observed);
     }
     /// An auth answer must update the whole visible fact, not leave a contradictory message.
     fn auth_known(&mut self, signed_in: bool, observed: u64) {
@@ -3255,7 +3229,7 @@ pub(crate) mod tests {
         state.accept(vec![fast(94.)], check);
         assert!(state.reading_with(None, check).leaving(check));
         state.accept(vec![fast(94.)], check + gap);
-        assert!(state.reading_with(None, check + gap).leaving(check + gap), "flat while held is still held");
+        assert!(!state.reading_with(None, check + gap).leaving(check + gap), "a settled pace restores usable headroom");
         assert!(!state.reading_with(None, fast_end).leaving(fast_end));
     }
 
@@ -3268,6 +3242,21 @@ pub(crate) mod tests {
         state.accept(both_at(20., 99.4), NOW);
         state.accept(both_at(20., 99.4), at);
         assert_eq!(state.view(policy(), at).act_at["seven_day"], 99.);
+    }
+
+    #[test]
+    fn whole_weekly_ticks_keep_the_existing_fast_use_and_release_rules() {
+        let mut state = Snapshot::default();
+        let gap = REFRESH_INTERVAL_MS;
+        for (i, used) in [95., 96., 97., 97.].into_iter().enumerate() {
+            let at = NOW + i as u64 * gap;
+            state.shared_interval_ms = Some(gap);
+            state.shared_next_at = Some(at + gap);
+            state.accept(both_at(20., used), at);
+            let view = state.view(policy(), at);
+            assert!(view.weekly_pause_points.is_empty(), "whole ticks use the existing rule");
+            assert_eq!(view.admission, Admission::Ready);
+        }
     }
 
     /// **§108: when usage speeds up a lot, the quota is checked every minute instead of 5**

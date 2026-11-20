@@ -123,22 +123,17 @@ def handle(args, reading, now, workers, reset_status, five_verdict, cached_notic
             return True, True
         return True, False
     if paused:
-        if fresh_below(reading, now, args.stale, point) and five_verdict() in ("below", "near-reset"):
-            reset = weekly(reading)["resets_at"]
-            old_resets = workers.get("weekly_pause_resets", {})
-            resumable = [worker for worker in paused if not old_resets.get(worker)
-                         or abs(old_resets[worker] - reset) >= 60 or reading.get("weekly_allowance_restored")]
-            if not resumable:
-                return True, False
-            print("WEEKLY-QUOTA-RELEASE: fresh weekly allowance and five-hour policy both permit work.")
-            print("  Send to: " + ", ".join(resumable))
-            print("  First, for each agent, run: python3 %s --resume --to <agent> --reason weekly-quota"
-                  % os.path.abspath(pause_protocol.__file__))
-            print("  It releases that agent's hold before any message and prints this same message to send.")
-            # The generated RESUME, unchanged: the workspace message handler releases a
-            # controlled hold on that message and on nothing else.
-            print(pause_protocol.render_resume("weekly-quota"))
-            print("  The watcher keeps polling.")
-            return False, True
-        return True, False
+        if not fresh_below(reading, now, args.stale, point):
+            return True, False
+        if five_verdict() not in ("below", "near-reset"):
+            # Others still need the five-hour warning while these workers wait.
+            return False, False
+        print("WEEKLY-QUOTA-RELEASE: fresh weekly allowance and five-hour policy both permit work.")
+        print("  Send to: " + ", ".join(paused))
+        print("  First, for each agent, run: python3 %s --resume --to <agent> --reason weekly-quota"
+              % os.path.abspath(pause_protocol.__file__))
+        print("  It releases that agent's hold before any message and prints this same message to send.")
+        print(pause_protocol.render_resume("weekly-quota"))
+        print("  The watcher keeps polling.")
+        return False, True
     return False, False

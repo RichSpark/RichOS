@@ -1046,8 +1046,6 @@ def shared_get_usage(a, now):
                     rise = window["used"] - old["usedPercent"]
                     if rise >= 0:
                         row["provider_speeds"][window["id"]] = rise / gap
-                    elif window["id"] == "seven_day" and rise <= -1:
-                        row["weekly_allowance_restored"] = True
     if live:
         row.update({field: live[field] for field in ("auth_failed", "seconds", "timing") if field in live})
     if refusal:
@@ -1184,7 +1182,6 @@ def workers(engine_root):
     ended without a hook (a stopped agent) may still read as working here; the
     registry's own pending() reconciles that, and this watcher never writes."""
     out = {"known": False, "why": "", "session": "", "working": [], "quota_paused": [], "weekly_paused": [], "other_paused": [],
-           "weekly_pause_resets": {},
            "registered": []}
     if HOST["on"] and not host_child.session():
         out["why"] = "his team has no lead running in RichOS yet"
@@ -1210,8 +1207,6 @@ def workers(engine_root):
                 until = ((rec.get("pause") or {}).get("until") or "")
                 (out["quota_paused"] if until.startswith(PAUSE_UNTIL_PREFIX) else
                  out["weekly_paused"] if until.startswith("the weekly quota reset") else out["other_paused"]).append(name)
-                if until.startswith(quota_weekly.PREFIX + " at "):
-                    out["weekly_pause_resets"][name] = _parse_reset(until.removeprefix(quota_weekly.PREFIX + " at "))
             else:
                 out["working"].append(name)
                 at = _parse_reset(rec.get("registered_at"))
@@ -1601,9 +1596,10 @@ def five_pause_point(a, reading, now, speed=None):
 def weekly_pause_point(a, reading, now, expected=False):
     if reading.get("published_weekly_point") is not None:
         return reading["published_weekly_point"]
-    if reading.get("provider_speeds", {}).get("seven_day", 0) <= 0:
+    week = quota_weekly.weekly(reading)
+    if week is None or float(week["used"]).is_integer() or reading.get("provider_speeds", {}).get("seven_day", 0) <= 0:
         return quota_weekly.THRESHOLD
-    point = provider_pause_point(a, reading, quota_weekly.weekly(reading), now)
+    point = provider_pause_point(a, reading, week, now)
     if point is None:
         return quota_weekly.THRESHOLD
     return min(quota_weekly.THRESHOLD, point) if expected else point

@@ -93,16 +93,17 @@ class Weekly(unittest.TestCase):
             out = run_polls(readings, [workers(['first', 'second', 'third'])], len(samples), out_cls=Recorder)
             self.assertIn(('THRESHOLD', NOW + 600), out.woken)
 
-    def test_weekly_hold_waits_for_a_new_cycle_even_after_the_projected_point_recovers(self):
-        r = reading(95)
-        w = workers(held=['worker'])
-        w['weekly_pause_resets'] = {'worker': r['windows'][0]['resets_at']}
-        args = types.SimpleNamespace(stale=300)
-        with contextlib.redirect_stdout(io.StringIO()):
-            self.assertEqual(weekly.handle(args, r, NOW, w, {}, lambda: 'below'), (True, False))
-            r['windows'][0]['resets_at'] += 604800
-            r['windows'][0]['used'] = 1
-            self.assertEqual(weekly.handle(args, r, NOW, w, {}, lambda: 'below'), (False, True))
+    def test_a_whole_weekly_tick_preserves_99_and_weekly_release_allows_five_hour_wakes(self):
+        def provider(i, week, five, speed):
+            taken = NOW + i * 300
+            return {**reading(week, five), 'source': 'get_usage', 'taken_at': taken,
+                    'provider_next_at': (taken + 300) * 1000,
+                    'provider_speeds': {'seven_day': speed}}
+        out = run_polls([provider(0, 98, 60, 1 / 300), provider(1, 98, 95, 0)],
+                        [workers(['first']), workers(['second'], held=['first'])], 2, out_cls=Recorder)
+        self.assertNotIn(('WEEKLY-THRESHOLD', NOW), out.woken)
+        self.assertIn(('THRESHOLD', NOW + 300), out.woken)
+        self.assertNotIn(('WEEKLY-RELEASE', NOW + 300), out.woken)
 
     def test_all_reported_windows_and_provider_names(self):
         windows = weekly.windows({'five_hour':{'utilization':14,'resets_at':'2099-01-01T00:00:00Z'},
@@ -175,9 +176,9 @@ class Weekly(unittest.TestCase):
             r['age']=301
             with contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(weekly.handle(args,r,NOW,workers(held=['worker']),{},lambda:'below'),(True,False))
-    def test_reset_does_not_release_while_five_hour_still_holds(self):
+    def test_reset_defers_weekly_release_to_the_five_hour_hold(self):
         args=types.SimpleNamespace(stale=300,command='watch')
-        self.assertEqual(weekly.handle(args,reading(0),NOW,workers(held=['worker']),{},lambda:'at-or-above'),(True,False))
+        self.assertEqual(weekly.handle(args,reading(0),NOW,workers(held=['worker']),{},lambda:'at-or-above'),(False,False))
         out=io.StringIO()
         with contextlib.redirect_stdout(out):
             self.assertEqual(weekly.handle(args,reading(0),NOW,workers(held=['worker']),{},lambda:'below'),(False,True))
