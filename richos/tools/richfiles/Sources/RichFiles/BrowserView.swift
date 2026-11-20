@@ -41,8 +41,6 @@ struct BrowserView: View {
     @State private var transfersVisible = false
     @State private var feedback = ""
     @State private var rangeAnchor: URL?
-    @State private var selectionCursor: URL?
-    @State private var scrollToSelection: URL?
     @State private var prefixText = ""
     @State private var prefixTime: TimeInterval = 0
     @State private var listRows = 12
@@ -94,7 +92,7 @@ struct BrowserView: View {
                     if editingAddress && !suggestions.isEmpty {
                         addressSuggestions.focusedValue(\.browserControl, true)
                     }
-                    commandBar.focusedValue(\.browserControl, true)
+                    observeSelection { _ in commandBar }.focusedValue(\.browserControl, true)
                     rule
                 }
                 .font(BrowserTypography.reading(16 * textSize.scale))
@@ -110,7 +108,7 @@ struct BrowserView: View {
             if activePane {
                 VStack(spacing: 0) {
                     rule
-                    statusBar.focusedValue(\.browserControl, true)
+                    observeSelection { _ in statusBar }.focusedValue(\.browserControl, true)
                 }
                 .layoutValue(key: BrowserLayoutKey.self, value: .status)
             }
@@ -130,7 +128,7 @@ struct BrowserView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             if inspectorVisible && !workspace.isSplit {
-                inspector.frame(minWidth: 165, idealWidth: 320, maxWidth: 410)
+                observeSelection { _ in inspector }.frame(minWidth: 165, idealWidth: 320, maxWidth: 410)
                     .background(palette.chrome)
                     .focusedValue(\.browserControl, true)
             }
@@ -147,7 +145,6 @@ struct BrowserView: View {
         .onDisappear { workspace.clearCommands(for: side, owner: commandOwner) }
         .onChange(of: model.tabs.map(\.folder)) { _ in sessionChanged() }
         .onChange(of: model.currentTabID) { _ in sessionChanged() }
-        .onChange(of: model.scrollAnchor) { _ in sessionChanged() }
         .onChange(of: actions.mutationRevision) { _ in model.refresh() }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             actions.refreshClipboard()
@@ -158,12 +155,20 @@ struct BrowserView: View {
             suggestions = []
             feedback = ""
             rangeAnchor = nil
-            selectionCursor = nil
-            scrollToSelection = nil
+            model.selection.cursor = nil
+            model.selection.scrollToItem = nil
             prefixText = ""
             prefixTime = 0
         }
-        .task(id: model.selected) { await captureSelection() }
+        .background {
+            observeSelection { selection in
+                Color.clear
+                    .task(id: selection.urls) {
+                        await captureSelection()
+                        if !Task.isCancelled { sessionChanged() }
+                    }
+            }
+        }
         .task(id: DestinationRequest(folder: model.folder, disconnected: model.isDisconnected,
                                      refresh: destinationRefresh)) {
             await captureDropDestination()
@@ -775,7 +780,7 @@ struct BrowserView: View {
                                         }
                                         .onPreferenceChange(RowFramesKey.self, perform: viewportObserver(viewport, mode: .columns))
                                     }.onAppear { restoreScroll(items, anchor: .top) }
-                                        .onChange(of: scrollToSelection) { if let url = $0 { items.scrollTo(url) } }
+                                        .background { selectionScroll { if let url = $0 { items.scrollTo(url) } } }
                                         .onChange(of: model.busy) { if !$0 { restoreScroll(items, anchor: .top) } }
                                 }
                             }
@@ -798,7 +803,7 @@ struct BrowserView: View {
 
     private var gallery: some View {
         VStack(spacing: 0) {
-            Group {
+            observeSelection { _ in
                 if model.selected.count == 1, let entry = model.selectedEntries.first {
                     VStack(spacing: 6) {
                         NativePreview(entry: entry).frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -832,14 +837,14 @@ struct BrowserView: View {
                 }.frame(height: (model.searchActive ? 126 : 109) + textSize.adjustment * 2)
                     .accessibilityLabel("Gallery thumbnails")
                     .onAppear { restoreScroll(scroll, anchor: .leading) }
-                    .onChange(of: scrollToSelection) { if let url = $0 { scroll.scrollTo(url) } }
+                    .background { selectionScroll { if let url = $0 { scroll.scrollTo(url) } } }
                     .onChange(of: model.busy) { if !$0 { restoreScroll(scroll, anchor: .leading) } }
             }
         }.accessibilityIdentifier("file-gallery")
     }
 
     private var details: some View {
-        Group {
+        observeSelection { _ in
             if #available(macOS 14.0, *) {
                 Table(model.entries, selection: $model.selected, columnCustomization: detailsCustomization) {
                     detailsName.customizationID("name").disabledCustomizationBehavior(.visibility)
@@ -862,7 +867,7 @@ struct BrowserView: View {
         .onAppear { detailsViewport.show(model.scrollAnchor, alignToTop: true) }
         .onDisappear { detailsViewport.detach() }
         .onChange(of: model.busy) { if !$0 { detailsViewport.show(model.scrollAnchor, alignToTop: true) } }
-        .onChange(of: scrollToSelection) { if let item = $0 { detailsViewport.show(item, alignToTop: false) } }
+        .background { selectionScroll { if let item = $0 { detailsViewport.show(item, alignToTop: false) } } }
         .contextMenu(forSelectionType: URL.self) { ids in
             selectionMenu(model.entries.filter { ids.contains($0.url) })
         } primaryAction: { ids in
@@ -962,7 +967,7 @@ struct BrowserView: View {
                     listRows = $0
                     scrollList(to: model.scrollAnchor, rows: $0, using: scroll, anchor: .leading)
                 }
-                .onChange(of: scrollToSelection) { scrollList(to: $0, rows: rows, using: scroll) }
+                .background { selectionScroll { scrollList(to: $0, rows: rows, using: scroll) } }
                 .onChange(of: model.busy) { busy in
                     if !busy { scrollList(to: model.scrollAnchor, rows: rows, using: scroll, anchor: .leading) }
                 }
@@ -998,7 +1003,7 @@ struct BrowserView: View {
                 }
                 .onAppear { iconColumns = columns; restoreScroll(scroll, anchor: .top) }
                 .onChange(of: columns) { iconColumns = $0 }
-                .onChange(of: scrollToSelection) { value in if let value { scroll.scrollTo(value) } }
+                .background { selectionScroll { value in if let value { scroll.scrollTo(value) } } }
                 .onChange(of: model.busy) { busy in if !busy { restoreScroll(scroll, anchor: .top) } }
                 .onPreferenceChange(RowFramesKey.self, perform: viewportObserver(geometry, mode: .icons))
             }
@@ -1006,40 +1011,55 @@ struct BrowserView: View {
         .accessibilityIdentifier("file-thumbnails")
     }
 
+    private func observeSelection<Content: View>(
+        @ViewBuilder _ content: @escaping (BrowserSelection) -> Content
+    ) -> some View {
+        SelectionContent(selection: model.selection, content: content)
+    }
+
+    private func selectionScroll(_ action: @escaping (URL?) -> Void) -> some View {
+        observeSelection { selection in
+            Color.clear.onChange(of: selection.scrollToItem, perform: action)
+        }
+    }
+
     private func selectable<Content: View>(_ entry: FileEntry, @ViewBuilder content: () -> Content) -> some View {
-        let selected = model.selected.contains(entry.url)
         let cut = actions.cutURLs.contains { $0.path == entry.url.path }
-        let cursor = focus == .items && selectionCursor == entry.url
+        let itemsFocused = focus == .items
         let location = model.searchActive ? entry.url.deletingLastPathComponent().path : ""
         let outline = RoundedRectangle(cornerRadius: 5)
         let marker = activePane ? palette.signal : palette.muted
-        return content()
-            .padding(.horizontal, 8)
-            .background(selected ? (activePane ? palette.selected : palette.inactiveSelection) : .clear, in: outline)
-            .overlay {
-                if selected || cursor || cut {
-                    outline.strokeBorder(marker, style: StrokeStyle(lineWidth: cursor ? 2 : 1, dash: cut ? [4, 3] : []))
-                        .allowsHitTesting(false)
+        let row = content()
+        return observeSelection { selection in
+            let selected = selection.urls.contains(entry.url)
+            let cursor = itemsFocused && selection.cursor == entry.url
+            row
+                .padding(.horizontal, 8)
+                .background(selected ? (activePane ? palette.selected : palette.inactiveSelection) : .clear, in: outline)
+                .overlay {
+                    if selected || cursor || cut {
+                        outline.strokeBorder(marker, style: StrokeStyle(lineWidth: cursor ? 2 : 1, dash: cut ? [4, 3] : []))
+                            .allowsHitTesting(false)
+                    }
                 }
-            }
-            .overlay(alignment: .leading) {
-                if selected {
-                    Capsule().fill(marker).frame(width: 3).padding(.vertical, 2).allowsHitTesting(false)
+                .overlay(alignment: .leading) {
+                    if selected {
+                        Capsule().fill(marker).frame(width: 3).padding(.vertical, 2).allowsHitTesting(false)
+                    }
                 }
-            }
-            .background(dragFrame(for: entry.url))
-            .contentShape(Rectangle())
-            .contextMenu {
-                selectionMenu(selected ? model.selectedEntries : [entry])
-            }
-            .help(model.searchActive ? entry.url.path : entry.name)
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel(entry.name)
-            .accessibilityValue(location)
-            .accessibilityAddTraits(selected ? [.isSelected, .isButton] : .isButton)
-            .accessibilityAction { select(entry, modifiers: []) }
-            .accessibilityAction(named: "Open") { activate([entry]) }
-            .id(entry.url)
+                .background(dragFrame(for: entry.url))
+                .contentShape(Rectangle())
+                .contextMenu {
+                    selectionMenu(selected ? model.selectedEntries : [entry])
+                }
+                .help(model.searchActive ? entry.url.path : entry.name)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(entry.name)
+                .accessibilityValue(location)
+                .accessibilityAddTraits(selected ? [.isSelected, .isButton] : .isButton)
+                .accessibilityAction { select(entry, modifiers: [], scroll: true) }
+                .accessibilityAction(named: "Open") { activate([entry]) }
+        }.id(entry.url)
     }
 
     private func resultLocation(_ entry: FileEntry, font: Font = .caption) -> some View {
@@ -1354,19 +1374,19 @@ struct BrowserView: View {
             else { model.selected.insert(entry.url) }
             rangeAnchor = entry.url
         } else {
-            if model.selected != [entry.url] { model.selected = [entry.url] }
+            model.selected = [entry.url]
             rangeAnchor = entry.url
         }
-        selectionCursor = entry.url
+        model.selection.cursor = entry.url
         // A clicked row is already visible. Only keys that can move the cursor
         // outside of the viewport need to ask the list to scroll.
-        scrollToSelection = scroll ? entry.url : nil
+        model.selection.scrollToItem = scroll ? entry.url : nil
         if model.scrollAnchor != entry.url { model.scrollAnchor = entry.url }
     }
 
     private func moveGrid(dx: Int, dy: Int, extend: Bool) -> Bool {
         guard model.viewMode != .details, !model.entries.isEmpty else { return false }
-        let current = selectionCursor.flatMap { url in model.entries.firstIndex(where: { $0.url == url }) }
+        let current = model.selection.cursor.flatMap { url in model.entries.firstIndex(where: { $0.url == url }) }
         let step: Int
         switch model.viewMode {
         case .list: step = dx * listRows + dy
@@ -1514,8 +1534,8 @@ struct BrowserView: View {
             guard model.folder == folder, model.currentTabID == tab, workspace.active == side, sheet == nil else { return }
             model.selectCreatedItem(item)
             rangeAnchor = item.url
-            selectionCursor = item.url
-            scrollToSelection = item.url
+            model.selection.cursor = item.url
+            model.selection.scrollToItem = item.url
             sheet = .name(NameRequest(source: item, folder: folder, directory: directory,
                                       name: item.url.lastPathComponent))
         }
@@ -1548,13 +1568,13 @@ struct BrowserView: View {
 
     private func captureSelection() async {
         let selected = model.selected
-        model.selectionReferences = model.selectionReferences.filter { selected.contains($0.key) }
+        model.selection.references = model.selection.references.filter { selected.contains($0.key) }
         let entries = model.selectedEntries.filter { cachedReference(for: $0) == nil }
         if entries.isEmpty { return }
         let captured = try? await Self.capture(entries)
         guard !Task.isCancelled, model.selected == selected else { return }
         if let captured {
-            for (entry, reference) in zip(entries, captured) { model.selectionReferences[entry.url] = reference }
+            for (entry, reference) in zip(entries, captured) { model.selection.references[entry.url] = reference }
         }
     }
 
@@ -1572,7 +1592,7 @@ struct BrowserView: View {
     }
 
     private func cachedReference(for entry: FileEntry) -> FileReference? {
-        guard let reference = model.selectionReferences[entry.url], reference.identity == entry.identity else { return nil }
+        guard let reference = model.selection.references[entry.url], reference.identity == entry.identity else { return nil }
         return reference
     }
 
@@ -1796,6 +1816,13 @@ struct BrowserView: View {
         default: return true
         }
     }
+}
+
+private struct SelectionContent<Content: View>: View {
+    @ObservedObject var selection: BrowserSelection
+    let content: (BrowserSelection) -> Content
+
+    var body: some View { content(selection) }
 }
 
 private struct BrowserDropTarget: DropDelegate {

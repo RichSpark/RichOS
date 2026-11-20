@@ -72,22 +72,32 @@ enum BrowserViewMode: String, Codable, CaseIterable, Identifiable {
     var title: String { self == .icons ? "Thumbnails" : rawValue }
 }
 
+/// Selection changes update the rows and controls that use them. The rest of
+/// the browser can keep its layout while a click or key changes the selection.
+@MainActor
+final class BrowserSelection: ObservableObject {
+    @Published var urls: Set<URL> = []
+    @Published var cursor: URL?
+    @Published var scrollToItem: URL?
+    var references: [URL: FileReference] = [:]
+}
+
 @MainActor
 final class BrowserModel: ObservableObject {
     static let contentSearchCoverageDescription = TextContentQuery.coverageDescription
 
     @Published private(set) var folder: URL
     @Published private(set) var entries: [FileEntry] = []
-    @Published var selected: Set<URL> = [] {
-        didSet {
-            if !settingSelection && selected != oldValue {
-                selectionToRestore.removeAll()
-            }
+    let selection = BrowserSelection()
+    var selected: Set<URL> {
+        get { selection.urls }
+        set {
+            guard selection.urls != newValue else { return }
+            selection.urls = newValue
+            if !settingSelection { selectionToRestore.removeAll() }
         }
     }
-    // Validation for later file actions is independent of row rendering.
-    var selectionReferences: [URL: FileReference] = [:]
-    @Published var scrollAnchor: URL?
+    var scrollAnchor: URL?
     @Published var status = ""
     @Published private(set) var busy = false
     @Published private(set) var openingFolder = false

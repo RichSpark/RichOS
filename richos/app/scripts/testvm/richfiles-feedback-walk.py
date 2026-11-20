@@ -101,7 +101,7 @@ class Walk:
                                            "click", input_point, modifiers))
             self.action("RichFiles", f"{mode}-pre-arrow", self.selection_patch(echo),
                         "click", self.click_point(echo), required=False)
-            key = "123" if mode == "Gallery" else "126"
+            key = "123" if mode in ("Thumbnails", "Gallery") else "126"
             results.append(self.action("RichFiles", f"{mode}-arrow", self.selection_patch(delta), "key", key))
             self.shot("richfiles-" + mode.lower())
         return results

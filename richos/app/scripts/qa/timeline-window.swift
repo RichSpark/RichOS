@@ -52,6 +52,7 @@ final class Patch: NSObject, SCStreamOutput {
     let lock = NSLock()
     var baseline: [UInt8] = []
     var first: UInt64?
+    var displayed: UInt64?
     var recorded: [UInt8] = []
     var action: UInt64?
     var frames = 0
@@ -80,14 +81,17 @@ final class Patch: NSObject, SCStreamOutput {
         }
         lock.lock()
         defer { lock.unlock() }
-        guard action != nil else { baseline = pixels; return }
+        let displayTime = details.first?[.displayTime] as? UInt64
+        guard let action else { baseline = pixels; return }
+        if let displayTime, displayTime < action { return }
         frames += 1
         let changed = zip(baseline, pixels).reduce(0) { total, pair in
             total + (abs(Int(pair.0) - Int(pair.1)) >= 10 ? 1 : 0)
         }
         if changed > pixels.count / 8 {
             if first == nil {
-                first = DispatchTime.now().uptimeNanoseconds
+                first = mach_absolute_time()
+                displayed = displayTime
                 recorded = pixels
             }
             stable += 1
@@ -99,21 +103,28 @@ final class Patch: NSObject, SCStreamOutput {
         defer { lock.unlock() }
         guard !baseline.isEmpty else { fail("no baseline frame with pixels in the target patch") }
         guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { fail("target app is not in front") }
-        let before = DispatchTime.now().uptimeNanoseconds
+        let before = mach_absolute_time()
         action = before
         for (index, event) in events.enumerated() {
             if index == 2 { Thread.sleep(forTimeInterval: 0.045) }
             event.flags = CGEventFlags(rawValue: flags)
             event.post(tap: .cghidEventTap)
         }
-        return (before, DispatchTime.now().uptimeNanoseconds)
+        return (before, mach_absolute_time())
     }
 
     func result(posted: (UInt64, UInt64)) -> [String: Any] {
         lock.lock()
         defer { lock.unlock() }
-        let delta = first.map { Double($0 - posted.0) / 1_000_000 }
-        return ["visible_upper_ms": delta.map { $0 as Any } ?? NSNull(), "post_ms": Double(posted.1 - posted.0) / 1_000_000,
+        var timebase = mach_timebase_info_data_t()
+        mach_timebase_info(&timebase)
+        let scale = Double(timebase.numer) / Double(timebase.denom) / 1_000_000
+        let delta = first.map { Double($0 - posted.0) * scale }
+        let display = displayed.flatMap { stamp in
+            stamp >= posted.0 && stamp <= (first ?? 0) ? Double(stamp - posted.0) * scale : nil
+        }
+        return ["visible_upper_ms": delta.map { $0 as Any } ?? NSNull(),
+                "display_ms": display.map { $0 as Any } ?? NSNull(), "post_ms": Double(posted.1 - posted.0) * scale,
                 "changed_frames": stable, "received_frames": frames,
                 "baseline_bgr": Array(baseline.prefix(3)), "result_bgr": Array(recorded.prefix(3))]
     }
