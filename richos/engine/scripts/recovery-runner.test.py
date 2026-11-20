@@ -110,7 +110,8 @@ with s.execution_claim(sys.argv[2],'a'*40,wait_seconds=10,say=lambda message:pri
             for n in range(5):
                 rows=R.rows(ledger);book=RW.Book(rows,{},RW.read_jsonl(RW._p('attempts.jsonl')))
                 task=R.conflict_task(repo,work,tip)
-                if not task or len(book.losses.get(item.key) or [])>=RW.MAX_LOSSES:continue
+                key=book.attempt_key(item.key,item.work)
+                if not task or len(book.losses.get(key) or [])>=RW.MAX_LOSSES:continue
                 item.recheck=task['prior']
                 info=watcher.start(item,'handover',201+n,1,None,rows)
                 launches.append(info['log'])

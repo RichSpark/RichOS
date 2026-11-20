@@ -178,7 +178,12 @@ import json, os, sys
 # CLAUDE_CONFIG_DIR, which may be any .../claude-accounts/<id> of the developer's own.
 accounts = os.path.join(os.path.dirname(os.path.realpath(__file__)), "claude-accounts") + os.sep
 folder = os.environ.get("CLAUDE_CONFIG_DIR", "")
-five = 5 if folder and os.path.realpath(folder).startswith(accounts) else {one_five}
+work = bool(folder and os.path.realpath(folder).startswith(accounts))
+if sys.argv[1:3] == ["auth", "status"]:
+    email = "work@fixture.invalid" if work else "account-one@fixture.invalid"
+    print(json.dumps({{"loggedIn": True, "email": email}}))
+    sys.exit(0)
+five = 5 if work else {one_five}
 for line in sys.stdin:
     v = json.loads(line)
     payload = {{}} if v["request"]["subtype"] == "initialize" else {{"rate_limits_available": True, "rate_limits": {{
@@ -187,7 +192,9 @@ for line in sys.stdin:
     print(json.dumps({{"type": "control_response", "response": {{"subtype": "success", "request_id": v["request_id"], "response": payload}}}}), flush=True)
 "#)).unwrap();
     std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o700)).unwrap();
-    quota.refresh(&bin, true);
+    let initial = quota.refresh(&bin, true);
+    assert!(initial.accounts.len() == 2 && initial.accounts.iter().all(|a| a.checked_at.is_some()),
+        "the fake replies supply both verified account readings");
     (dir, quota)
 }
 
