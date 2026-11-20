@@ -119,7 +119,10 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
         return .terminateNow
     }
 
-    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { capture == nil }
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        // AppKit can report the last regular window closed while the Recents panel is still open.
+        capture == nil && editors.isEmpty && recents == nil
+    }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         // Hand back foreground ownership before the last window disappears.
