@@ -769,8 +769,10 @@ impl Snapshot {
         let interval = self.shared_interval_ms?;
         // An idle account uses the active schedule once a move selects it.
         if interval > REFRESH_INTERVAL_MS { return Some(REFRESH_INTERVAL_MS); }
-        Some(self.shared_next_at.zip(observed.or(self.shared_checked_at).or(self.checked_at)).map_or(interval,
-            |(next, checked)| next.saturating_sub(checked)))
+        // A due request may still be in flight when a lease streams a reading.
+        Some(self.shared_next_at.zip(observed.or(self.shared_checked_at).or(self.checked_at))
+            .filter(|(next, checked)| next > checked)
+            .map_or(interval, |(next, checked)| next - checked))
     }
     fn accept(&mut self, mut windows: Vec<Window>, observed: u64) {
         self.measure(&windows, observed);
@@ -3151,6 +3153,22 @@ pub(crate) mod tests {
         let reading = snapshot.reading_with(None, recent + minute);
         assert_eq!(reading.windows.iter().find(|w| fable::is_window(&w.id)).unwrap().used_percent, 85.6,
             "the provider cache preserves a newer Fable stream frame");
+    }
+
+    #[test]
+    fn an_overdue_provider_reply_keeps_a_forecast_for_the_next_stream_frame() {
+        let mut snapshot = Snapshot::default();
+        let checked = NOW + 60_000;
+        let due = checked + REFRESH_INTERVAL_MS;
+        snapshot.accept(five_hour_at(70.), NOW);
+        snapshot.accept(five_hour_at(73.1), checked);
+        snapshot.shared_checked_at = Some(checked);
+        snapshot.shared_interval_ms = Some(REFRESH_INTERVAL_MS);
+        snapshot.shared_next_at = Some(due);
+        snapshot.observe(&five_hour_at(90.3), due + 5_000);
+        let view = snapshot.view(policy(), due + 5_000);
+        assert!(matches!(view.admission, Admission::Held { .. }),
+            "an outstanding provider reply must leave room for continued use");
     }
 
     /// **§108: when usage speeds up a lot, the quota is checked every minute instead of 5**
