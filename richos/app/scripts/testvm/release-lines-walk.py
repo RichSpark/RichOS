@@ -333,7 +333,11 @@ class Walk(MeetingWalk):
                    + f' {pid} {x},{y},4,4 right {x},{y} 0')
             self.ax('click', '--title', label, '--role', 'AXMenuItem', '--first', app='RichFiles')
             time.sleep(2)
-            shell_directories = self.g("for p in $(pgrep -x zsh); do lsof -a -p \"$p\" -d cwd -Fn; done")
+            shell_directories = self.g(
+                '''ps -axo pid=,tty=,comm= | awk '$2 ~ /^ttys/ && $3 ~ /(^|\\/)-?(zsh|bash|fish)$/ {print $1}' '''
+                '''| while read -r pid; do /usr/sbin/lsof -a -p "$pid" -d cwd -Fn; done'''
+            )
+            (self.out / (label.replace(' ', '-') + '.cwd.txt')).write_text(shell_directories)
             if 'n' + child not in shell_directories.splitlines():
                 raise StepFailed(label + ' did not open a shell in the selected folder')
             terminal_checks[label] = shell_directories.splitlines().count('n' + child)

@@ -9,12 +9,12 @@ enum TerminalAtFolder {
             throw FileOperationError.sourceChanged(folder.url)
         }
 
-        // Terminal's built-in services take a file path as data and handle
-        // quoting for the user's shell. Leave the general clipboard alone.
+        // Terminal's folder services take a file URL and handle quoting for
+        // the user's shell. Leave the general clipboard alone.
         let pasteboard = NSPasteboard.withUniqueName()
         defer { pasteboard.releaseGlobally() }
         let service = inNewTab ? "New Terminal Tab at Folder" : "New Terminal at Folder"
-        guard pasteboard.setString(folder.url.path, forType: .string),
+        guard pasteboard.writeObjects([current.url as NSURL]),
               NSPerformService(service, pasteboard) else {
             throw ServiceUnavailable()
         }
