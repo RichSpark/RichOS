@@ -77,6 +77,7 @@ import re
 import shlex
 import subprocess
 import sys
+import tempfile
 import time
 
 HERE = Path(__file__).resolve().parent
@@ -272,26 +273,82 @@ class Walk(MeetingWalk):
 
     # --- RichFiles ---------------------------------------------------------------------------------
     def richfiles(self):
+        richos = self.payload + '/RichOS.app'
+        richfiles = richos + '/Contents/Applications/RichFiles.app'
+        folder = self.payload + "/RichFiles fixture"
+        child = folder + "/Bravo Folder ' and &"
+        self.g('mkdir -p ' + shlex.quote(child))
         self.ax('click', '--id', 'nr-richfiles', '--first')
         if not self.nodes('--id', 'richfiles-title'):
-            raise StepFailed('the RichFiles information page did not appear')
-        ev = {'frames': self.both_themes('richfiles')}
+            raise StepFailed('the first rail press did not show the RichFiles information page')
+        if self.g('pgrep -x RichFiles || true').strip():
+            raise StepFailed('the first rail press launched RichFiles while the switch was off')
+        ev = {'page_frames': self.both_themes('richfiles-page')}
         self.ax('click', '--id', 'rf-open', '--first')
-        time.sleep(4)
-        nodes = self.tree_to('richfiles.tree.jsonl', app='RichFiles')
-        if not any(role == 'AXWindow' for role, _ in self.titles(nodes)):
+        time.sleep(2)
+        pid = self.g('pgrep -x RichFiles').strip()
+        ev['version'] = self.g('plutil -extract CFBundleShortVersionString raw '
+                               + shlex.quote(richfiles + '/Contents/Info.plist')).strip()
+        if ev['version'] != '1.0.1':
+            raise StepFailed('the standalone version was ' + ev['version'])
+        if not any(role == 'AXWindow' for role, _ in self.titles(self.tree_to('richfiles.tree.jsonl', app='RichFiles'))):
             raise StepFailed('Open RichFiles did not open a standalone window')
-        self.ax('click', '--title', 'New Tab', '--role', 'AXButton', '--first', app='RichFiles')
-        self.shot('richfiles-new-tab.png')
-        for label in ('Compare Folders', 'Find Duplicate Files', 'Disk Usage'):
-            slug = label.lower().replace(' ', '-')
-            self.ax('click', '--title', 'Tools', '--role', 'AXPopUpButton', '--first', app='RichFiles')
-            self.ax('click', '--title', label, '--role', 'AXMenuItem', '--first', '--contains', app='RichFiles')
-            self.shot('richfiles-%s.png' % slug)
-            self.tree_to('richfiles-%s.tree.jsonl' % slug, app='RichFiles')
-            self.esc()
-        self.g('osascript -e "tell application id \"app.richos.richfiles\" to quit"')
-        self.ax('click', '--title', 'Chats', '--role', 'AXButton', '--first')
+        self.g('open -a ' + shlex.quote(richos))
+        self.ax('click', '--id', 'rf-always', '--first')
+        self.ax('click', '--id', 'nr-chats', '--first')
+        for _ in range(2):
+            self.ax('click', '--id', 'nr-richfiles', '--first')
+            time.sleep(1.5)
+            if self.g('pgrep -x RichFiles').strip() != pid:
+                raise StepFailed('the rail press did not reuse the standalone process')
+            front = self.script('tell application "System Events" to get unix id of first process whose frontmost is true')
+            if front != pid:
+                raise StepFailed('the rail press did not activate RichFiles')
+            self.g('open -a ' + shlex.quote(richos))
+            if self.nodes('--id', 'richfiles-title'):
+                raise StepFailed('the rail press switched the RichOS page')
+        self.ax('click', '--id', 'nr-me', '--first')
+        ev['settings_frames'] = self.both_themes('richfiles-settings')
+        self.ax('click', '--id', 'set-richfiles-always', '--first')
+        self.esc()
+        self.ax('click', '--id', 'nr-richfiles', '--first')
+        if not self.nodes('--id', 'richfiles-title'):
+            raise StepFailed('turning off the switch in Settings did not restore the information page')
+
+        self.g('open -a ' + shlex.quote(richfiles) + ' ' + shlex.quote(folder))
+        time.sleep(1.5)
+        nodes = self.ax('find', '--title', "Bravo Folder ' and &", app='RichFiles')
+        target = next(n for n in nodes if n.get('w') and n.get('h'))
+        x, y = (int(target['x'] + min(16, target['w'] / 2)), int(target['y'] + target['h'] / 2))
+        tool = self.payload + '/timeline-window'
+        with tempfile.TemporaryDirectory(prefix='richfiles-terminal-') as temp:
+            binary = Path(temp) / 'timeline-window'
+            command(['swiftc', HERE.parent / 'qa/timeline-window.swift', '-o', binary], 90)
+            command([HERE / 'guest.sh', self.vm, '--push', binary, tool], 60)
+        terminal_checks = {}
+        for label in ('New Terminal at Folder', 'New Terminal Tab at Folder'):
+            self.g('open -a ' + shlex.quote(richfiles))
+            time.sleep(.4)
+            self.g('env RICHOS_TESTVM_CAPTURE=1 ' + shlex.quote(tool)
+                   + f' {pid} {x},{y},4,4 right {x},{y} 0')
+            self.ax('click', '--title', label, '--role', 'AXMenuItem', '--first', app='RichFiles')
+            time.sleep(2)
+            shell_directories = self.g("for p in $(pgrep -x zsh); do lsof -a -p \"$p\" -d cwd -Fn; done")
+            if 'n' + child not in shell_directories.splitlines():
+                raise StepFailed(label + ' did not open a shell in the selected folder')
+            terminal_checks[label] = shell_directories.splitlines().count('n' + child)
+        if terminal_checks['New Terminal Tab at Folder'] <= terminal_checks['New Terminal at Folder']:
+            raise StepFailed('the second Terminal action did not start another shell')
+        nodes = self.tree_to('richfiles-terminal.tree.jsonl', app='Terminal')
+        ev['terminal_windows'] = sum(n.get('role') == 'AXWindow' and n.get('d') == 0 for n in nodes)
+        if ev['terminal_windows'] != 1:
+            raise StepFailed('the second Terminal action did not use the existing window')
+        ev['terminal'] = terminal_checks
+        self.shot('richfiles-terminal.png')
+        for id_ in ('com.apple.Terminal', 'app.richos.richfiles'):
+            self.g('osascript -e ' + shlex.quote(f'tell application id "{id_}" to quit'))
+        self.g('! pgrep -x RichFiles && ! pgrep -x Terminal')
+        self.ax('click', '--id', 'nr-chats', '--first')
         self.facts['richfiles'] = ev
         self.save()
         return ev

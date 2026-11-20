@@ -620,7 +620,7 @@ struct BrowserView: View {
                     }
                 }
             }
-            if model.busy {
+            if model.openingFolder || model.busy {
                 ProgressView().controlSize(.mini).padding(4)
                     .frame(maxWidth: .infinity, alignment: .trailing)
                     .accessibilityLabel("Reading files")
@@ -645,6 +645,21 @@ struct BrowserView: View {
                   let entry = model.entries.first(where: { $0.url == url }) else { return nil }
             let entries = model.selected.contains(entry.url) ? model.selectedEntries : [entry]
             return { beginDrag(entry, entries: entries) }
+        }, click: { start, end, event in
+            // AppKit has already counted the clicks. The first release selects
+            // immediately, even if a second click arrives to open the item.
+            guard model.viewMode != .details,
+                  let url = rowAt(start), rowAt(end) == url,
+                  let entry = model.entries.first(where: { $0.url == url }) else { return false }
+            workspace.select(side)
+            focus = .items
+            if event.clickCount == 2 {
+                select(entry, modifiers: [])
+                activate([entry])
+            } else {
+                select(entry, modifiers: event.modifierFlags)
+            }
+            return true
         }, controlClick: { point, windowPoint, window in
             guard windowsKeys else { return false }
             let nativeRow = model.viewMode == .details ? detailsViewport.item(at: windowPoint, in: window) : nil
@@ -1013,14 +1028,6 @@ struct BrowserView: View {
             }
             .background(dragFrame(for: entry.url))
             .contentShape(Rectangle())
-            .gesture(TapGesture(count: 2).onEnded {
-                focus = .items
-                select(entry, modifiers: [])
-                activate([entry])
-            }.exclusively(before: TapGesture().onEnded {
-                focus = .items
-                select(entry, modifiers: NSEvent.modifierFlags)
-            }))
             .contextMenu {
                 selectionMenu(selected ? model.selectedEntries : [entry])
             }
@@ -1239,7 +1246,9 @@ struct BrowserView: View {
             }
             if model.busy && model.searchActive { Button("Stop Search") { model.stopSearch() }.buttonStyle(.borderless) }
             let itemCount = "\(model.entries.count) \(model.searchActive ? "results" : "items")"
-            if !model.status.isEmpty && model.status != itemCount {
+            if model.openingFolder {
+                Text("Opening folder…").lineLimit(1)
+            } else if !model.status.isEmpty && model.status != itemCount {
                 Text(model.status).lineLimit(1).help(model.status)
             }
             let status = !feedback.isEmpty ? feedback : actions.status

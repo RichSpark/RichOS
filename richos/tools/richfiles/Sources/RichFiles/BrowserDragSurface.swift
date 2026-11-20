@@ -9,6 +9,7 @@ struct BrowserDragSurface: NSViewRepresentable {
     }
 
     let prepare: (CGPoint) -> (() -> Payload?)?
+    let click: (CGPoint, CGPoint, NSEvent) -> Bool
     let controlClick: (CGPoint?, NSPoint, NSWindow) -> Bool
 
     static var pasteboardToken: UUID? {
@@ -19,12 +20,14 @@ struct BrowserDragSurface: NSViewRepresentable {
 
     func updateNSView(_ view: Source, context: Context) {
         view.prepare = prepare
+        view.click = click
         view.controlClick = controlClick
     }
 
     final class Source: NSView, NSDraggingSource {
         static let tokenType = NSPasteboard.PasteboardType(BrowserDragSelection.type)
         var prepare: ((CGPoint) -> (() -> Payload?)?)?
+        var click: ((CGPoint, CGPoint, NSEvent) -> Bool)?
         var controlClick: ((CGPoint?, NSPoint, NSWindow) -> Bool)?
         private var monitor: Any?
         private var down: (event: NSEvent, prepare: () -> Payload?)?
@@ -69,10 +72,16 @@ struct BrowserDragSurface: NSViewRepresentable {
                 return consumedClick
             }
             if event.type == .leftMouseUp {
+                let pressed = down
                 down = nil
                 let handled = consumedClick
                 consumedClick = false
-                return handled
+                if handled { return true }
+                guard let pressed else { return false }
+                let from = convert(pressed.event.locationInWindow, from: nil)
+                let to = convert(event.locationInWindow, from: nil)
+                guard bounds.contains(to), hypot(to.x - from.x, to.y - from.y) < 5 else { return false }
+                return click?(from, to, pressed.event) == true
             }
             guard let down,
                   hypot(event.locationInWindow.x - down.event.locationInWindow.x,

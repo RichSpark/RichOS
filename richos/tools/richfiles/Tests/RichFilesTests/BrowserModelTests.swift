@@ -5,6 +5,35 @@ import XCTest
 @testable import RichFiles
 
 final class BrowserModelTests: XCTestCase {
+    @MainActor
+    func testOpeningFolderShowsFeedbackBeforeSlowResolutionFinishes() async throws {
+        let folder = FileManager.default.temporaryDirectory.resolvingSymlinksInPath()
+            .appendingPathComponent("RichFilesSlowFolder-\(UUID().uuidString)", isDirectory: true)
+        let child = folder.appendingPathComponent("Child", isDirectory: true)
+        try FileManager.default.createDirectory(at: child, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+
+        let resolving = expectation(description: "folder resolution started")
+        let result = DispatchSemaphore(value: 0)
+        let model = BrowserModel(start: folder, resolveFolder: { url in
+            resolving.fulfill()
+            guard result.wait(timeout: .now() + 5) == .success else { throw ListingTimeout() }
+            return url
+        })
+        defer { result.signal() }
+
+        model.openFolder(child)
+        await fulfillment(of: [resolving], timeout: 3)
+        XCTAssertTrue(model.openingFolder)
+        XCTAssertEqual(model.folder.path, folder.standardizedFileURL.path)
+        model.selected = [child]
+        XCTAssertEqual(model.selected, [child])
+        result.signal()
+        try await waitForListing(model, at: child)
+        XCTAssertEqual(model.folder.path, child.standardizedFileURL.path)
+        XCTAssertFalse(model.openingFolder)
+    }
+
     func testCustomShortcutsKeepSystemKeysAndOtherActionsAvailable() throws {
         XCTAssertEqual(BrowserShortcut("Ctrl+L").flatMap { BrowserShortcut.preset(true)[$0] }, .address)
         XCTAssertEqual(BrowserShortcut("Command+L").flatMap { BrowserShortcut.preset(false)[$0] }, .address)
