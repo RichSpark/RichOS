@@ -273,7 +273,7 @@
 [richos] correction could not be staged: {}
 [richos] correction desk lock is poisoned — the question is dropped, the turn is not
 [richos] correction trigger could not read the record: {}
-[richos] could not check Window Gestures after update: {}
+[richos] could not check Window Gestures: {}
 [richos] could not check owned decoder before cleanup: {}
 [richos] could not collect a RichOS Connect process after stopping it: {}
 [richos] could not finish stopping after the phone rejected the six words: {}

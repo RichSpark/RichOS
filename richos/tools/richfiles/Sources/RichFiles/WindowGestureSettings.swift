@@ -5,6 +5,7 @@ import ServiceManagement
 import SwiftUI
 
 public enum WindowGestureService {
+    private static let registrationLock = NSLock()
     private static var service: SMAppService { .loginItem(identifier: WindowGesturePreferences.helperID) }
 
     /// ServiceManagement uses the calling application's bundle to find its login item.
@@ -17,19 +18,24 @@ public enum WindowGestureService {
     }
 
     private static func update(_ action: String) -> String {
+        registrationLock.lock()
+        defer { registrationLock.unlock() }
+
         let item = service
         do {
             switch action {
-            case "register":
-                if item.status == .notRegistered || item.status == .notFound { try item.register() }
+            case "register", "register-if-desktop-enabled", "refresh-after-update":
+                let status = item.status
+                let selection = WindowGesturePreferences.selection
+                if action == "refresh-after-update", status == .enabled, !selection.isEmpty {
+                    // Keep the existing approval when the old helper survives an app-bundle swap.
+                    refreshInstalledHelper()
+                } else if status == .notRegistered || status == .notFound,
+                          action == "register" || selection.contains(.desktopDelete) {
+                    try item.register()
+                }
             case "unregister":
                 if item.status == .enabled || item.status == .requiresApproval { try item.unregister() }
-            case "refresh-after-update":
-                // An app-bundle swap leaves the old helper alive. Keep macOS's
-                // approval and ask launchd to start that same job from the new copy.
-                if item.status == .enabled && !WindowGesturePreferences.selection.isEmpty {
-                    refreshInstalledHelper()
-                }
             case "status":
                 break
             default:
@@ -102,6 +108,7 @@ struct WindowGestureSettings: View {
     private typealias Preferences = WindowGesturePreferences
 
     let appURL: URL
+    var desktopShortcut = false
     @Environment(\.colorScheme) private var colorScheme
     @State private var selection = Preferences.selection
     @State private var runtime: Preferences.Status?
@@ -112,15 +119,27 @@ struct WindowGestureSettings: View {
     private var helper: URL { appURL.appendingPathComponent(Preferences.helperPath) }
     private var guidanceColor: Color { BrowserPalette(colorScheme).hint }
 
+    private var enabled: Bool {
+        let choices: Preferences.Selection = desktopShortcut ? .desktopDelete : [.titleBar, .dock]
+        return !selection.intersection(choices).isEmpty
+    }
+
     var body: some View {
-        Toggle("Double-click a title bar to maximize or restore", isOn: toggle(.titleBar))
-            .disabled(updating)
-        Toggle("Click the active app’s Dock icon to minimize or restore", isOn: toggle(.dock))
-            .disabled(updating)
-        if !selection.isEmpty {
-            Text("These gestures work in other apps and continue after you quit RichOS and RichFiles.")
+        if desktopShortcut {
+            Toggle("Press Delete to move selected desktop items to Trash", isOn: toggle(.desktopDelete))
+                .disabled(updating)
+        } else {
+            Toggle("Double-click a title bar to maximize or restore", isOn: toggle(.titleBar))
+                .disabled(updating)
+            Toggle("Click the active app’s Dock icon to minimize or restore", isOn: toggle(.dock))
+                .disabled(updating)
+        }
+        if enabled {
+            Text(desktopShortcut
+                ? "This shortcut works on the macOS desktop even after you quit RichFiles."
+                : "These gestures work in other apps and continue after you quit RichOS and RichFiles.")
                 .foregroundStyle(guidanceColor)
-            if selection.contains(.titleBar) && !nativeTitleBarIsOff {
+            if !desktopShortcut && selection.contains(.titleBar) && !nativeTitleBarIsOff {
                 Text("In Desktop & Dock, set “Double-click a window’s title bar to” to Do Nothing. Choose your previous action there to restore native behavior.")
                     .foregroundStyle(guidanceColor)
                 Button("Open Desktop & Dock Settings") { open("com.apple.Desktop-Settings.extension") }
@@ -134,7 +153,7 @@ struct WindowGestureSettings: View {
             } else if registration == "unavailable" || registration == "off" {
                 Text("RichFiles Window Gestures could not start. Try again from the installed copy of RichFiles.")
                     .foregroundStyle(guidanceColor)
-                Button("Retry Window Gestures") { synchronize("register") }
+                Button(desktopShortcut ? "Retry Desktop Shortcut" : "Retry Window Gestures") { synchronize("register") }
                     .buttonStyle(BrowserButtonStyle(bordered: true)).disabled(updating)
             } else if let runtime {
                 permissions(runtime)
@@ -144,8 +163,8 @@ struct WindowGestureSettings: View {
                 Button("Open Login Items Settings") { SMAppService.openSystemSettingsLoginItems() }
                     .buttonStyle(BrowserButtonStyle(bordered: true))
             }
-        } else if registration == "unavailable" {
-            Text("Window gestures are off, but macOS could not remove the background item.")
+        } else if selection.isEmpty && registration == "unavailable" {
+            Text("macOS could not remove the RichFiles background item.")
                 .foregroundStyle(guidanceColor)
             Button("Open Login Items Settings") { SMAppService.openSystemSettingsLoginItems() }
                 .buttonStyle(BrowserButtonStyle(bordered: true))
@@ -163,9 +182,7 @@ struct WindowGestureSettings: View {
         switch status {
         case .accessibility, .inputMonitoring:
             let accessibility = status == .accessibility
-            Text(accessibility
-                ? "In Accessibility, add and allow RichFiles Window Gestures to move and minimize other apps’ windows."
-                : "In Input Monitoring, add and allow RichFiles Window Gestures to detect mouse clicks.")
+            Text(permissionGuidance(accessibility: accessibility))
                 .foregroundStyle(guidanceColor)
             HStack {
                 Button(accessibility ? "Open Accessibility Settings" : "Open Input Monitoring Settings") {
@@ -176,7 +193,7 @@ struct WindowGestureSettings: View {
             }
             .buttonStyle(BrowserButtonStyle(bordered: true))
         case .inputUnavailable:
-            Text("macOS is currently blocking mouse monitoring. Check Input Monitoring or sign out and back in.")
+            Text("macOS is currently blocking input monitoring. Check Input Monitoring or sign out and back in.")
                 .foregroundStyle(guidanceColor)
             Button("Open Input Monitoring Settings") { open("com.apple.preference.security?Privacy_ListenEvent") }
                 .buttonStyle(BrowserButtonStyle(bordered: true))
@@ -185,11 +202,21 @@ struct WindowGestureSettings: View {
         }
     }
 
+    private func permissionGuidance(accessibility: Bool) -> String {
+        if desktopShortcut {
+            return accessibility
+                ? "In Accessibility, add and allow RichFiles Window Gestures to check whether the desktop is focused."
+                : "In Input Monitoring, add and allow RichFiles Window Gestures to detect the Delete key."
+        }
+        return accessibility
+            ? "In Accessibility, add and allow RichFiles Window Gestures to move and minimize other apps’ windows."
+            : "In Input Monitoring, add and allow RichFiles Window Gestures to detect mouse clicks."
+    }
+
     private func toggle(_ gesture: Preferences.Selection) -> Binding<Bool> {
         Binding(get: { selection.contains(gesture) }, set: { enabled in
-            let current = Preferences.selection
-            selection = enabled ? current.union(gesture) : current.subtracting(gesture)
-            Preferences.selection = selection
+            Preferences.setEnabled(enabled, for: gesture)
+            selection = Preferences.selection
             synchronize(selection.isEmpty ? "unregister" : "register")
         })
     }

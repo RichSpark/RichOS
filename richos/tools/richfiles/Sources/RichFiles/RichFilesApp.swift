@@ -139,6 +139,9 @@ public final class FolderOpenDelegate: NSObject, NSApplicationDelegate, Observab
             let recording = WindowRecording()
             DispatchQueue.main.async { [weak self] in self?.windowRecording = recording }
         }
+        Task {
+            _ = await WindowGestureService.request("register-if-desktop-enabled", in: Bundle.main.bundleURL)
+        }
     }
 
     public func applicationWillTerminate(_ notification: Notification) {
@@ -456,8 +459,10 @@ struct RichFilesSettings: View {
                 Text("Mac (Command)").tag(false)
             }
             .pickerStyle(.radioGroup)
-            Text("Enter opens, F2 renames, Delete moves to Trash and Space previews.")
+            Text("Enter opens, F2 renames, Backspace goes back, Delete moves to Trash and Space previews.")
                 .foregroundStyle(guidanceColor)
+            heading("Mac desktop")
+            WindowGestureSettings(appURL: appURL, desktopShortcut: true)
             heading("Individual shortcuts")
             Picker("File Action", selection: $shortcutAction) {
                 ForEach(BrowserAction.all + [.init("File Actions", .actionPalette)]) {

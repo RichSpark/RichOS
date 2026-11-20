@@ -4337,8 +4337,6 @@ fn main() {
             // The line itself is said by `boot_marker`: here, or, when the engine check
             // still owes the first-run setup report, the moment that report has printed.
             boot_marker(|marker| marker.setup_returned = true);
-            #[cfg(target_os = "macos")]
-            richfiles_integration::refresh_gestures_after_update();
             // AND THE FAILURE ALERT STANDS DOWN ON THE SAME LINE, for the reason the marker
             // above exists at all: this is the program stating where "starting up" ends.
             // Past it there is a window, the app owns its own surfaces, and a modal system
@@ -4354,6 +4352,7 @@ fn main() {
             {
                 let capture_app = app.handle().clone();
                 first_frame::after_page(app.handle(), move || glance_capture_shortcut::restore(capture_app));
+                first_frame::after_page(app.handle(), richfiles_integration::start_window_gestures);
             }
             // The first window is up. Optional private starter I/O stays off startup.
             if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
