@@ -30,6 +30,7 @@ if str(LIBRARY) not in sys.path:
 
 ENGINE = LIBRARY.parents[1]
 from agent_roster import roster_dir
+from codex_handoff import BRIEF, pending_handoff
 SOURCE_SHA256 = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 LIMIT = 300
 TTL = 900
@@ -1096,36 +1097,67 @@ def revision_request(request, previous, report):
                        "previous_assignment": old, "changed_lines": delta}}
 
 
+def handoff_briefs(handoff, project):
+    """Bind a dismissal to the contents of the referenced files as well as the entry."""
+    roots = [project, *map(Path, configured_read_roots(project))]
+    briefs = {}
+    for reference in dict.fromkeys(BRIEF.findall(handoff.text)):
+        path = Path(reference).expanduser()
+        if path.is_absolute():
+            candidates = [path]
+        else:
+            candidates = [root / path for root in roots]
+            # A configured repository root also resolves its own repo-prefixed paths.
+            candidates.extend(root.parent / path for root in roots if path.parts[0] == root.name)
+        source = next((candidate.resolve() for candidate in candidates if candidate.is_file()), None)
+        if source is None:
+            raise ValueError("referenced brief is unavailable: " + reference)
+        briefs[str(source)] = hashlib.sha256(source.read_bytes()).hexdigest()
+    return briefs
+
+
 def inspect(payload):
     began = time.monotonic()
     ti = payload.get("tool_input") or {}
-    if payload.get("tool_name") != "Agent" or ti.get("resume"):
-        return None
-    if ti.get("subagent_type", "").split(":")[-1] == "pierce":
-        return None
-    if os.environ.get("RICHOS_SPAWN_CHECK") == "1" and not payload.get("tool_use_id"):
-        return None
-    if not isinstance(ti.get("prompt"), str) or not ti["prompt"].strip():
-        raise ValueError("Pierce requires an actual outgoing assignment")
+    handoff = pending_handoff(payload)
+    if handoff:
+        prompt = handoff.text
+    else:
+        if payload.get("tool_name") != "Agent" or ti.get("resume"):
+            return None
+        if ti.get("subagent_type", "").split(":")[-1] == "pierce":
+            return None
+        if os.environ.get("RICHOS_SPAWN_CHECK") == "1" and not payload.get("tool_use_id"):
+            return None
+        prompt = ti.get("prompt")
+        if not isinstance(prompt, str) or not prompt.strip():
+            raise ValueError("Pierce requires an actual outgoing assignment")
     if not payload.get("session_id") or not payload.get("tool_use_id"):
         raise ValueError("Pierce requires a runtime session and tool-call identity")
     profile = (ENGINE / "agents/pierce.md").read_text().split("---", 2)[-1].strip()
     project = Path(os.environ.get("CLAUDE_PROJECT_DIR") or payload.get("cwd") or os.getcwd()).resolve()
     classification = None
     try:
-        assignment = effective_assignment(payload)
+        assignment = prompt if handoff else effective_assignment(payload)
         authority = {}
         request = {"user_requests_in_order": human_context(payload, authority),
-                   "outgoing_assignment": assignment, "standing_instructions": instruction_text(payload),
+                   "outgoing_assignment": assignment, "standing_instructions": "" if handoff else instruction_text(payload),
                    "project_dir": str(project), "read_roots": read_roots(project, assignment, payload),
                    "access_sha256": access_fingerprint(project)}
+        if handoff:
+            request["codex_handoff"] = {
+                "destination": str(handoff.path),
+                "source": ("Bash tool input. Inspect the entry that the command would write to the destination."
+                           if handoff.shell else "Markdown entry sent to Codex."),
+                "brief_files": handoff_briefs(handoff, project),
+            }
         if authority:
             request["authority_context"] = authority
             native_projects = (Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude") / "projects").resolve()
             request["read_roots"] = list(dict.fromkeys(request["read_roots"] +
                 [str(Path(source).parent) for source in authority["original_transcripts"]
                  if Path(source).parent.parent == native_projects]))
-        classification, recovery_gaps = recovery_context(payload, project)
+        classification, recovery_gaps = (None, []) if handoff else recovery_context(payload, project)
         if recovery_gaps:
             request["recovery_observation_gaps"] = recovery_gaps
         if classification:
@@ -1133,10 +1165,12 @@ def inspect(payload):
             request["read_roots"].append(str(Path(classification["index"]["reference"]).parent.parent))
         missing = None
     except (OSError, ValueError, re.error) as error:
-        request = {"outgoing_assignment": ti["prompt"], "context_error": str(error)}
+        request = {"outgoing_assignment": prompt, "context_error": str(error)}
+        if handoff:
+            request["codex_handoff"] = {"destination": str(handoff.path)}
         missing = str(error)
     identity = hashlib.sha256(json.dumps([payload["session_id"], ti.get("name"),
-        ti.get("subagent_type"), ti.get("model"), ti["prompt"], profile, REVIEW_RULES, request], sort_keys=True).encode()).hexdigest()
+        ti.get("subagent_type"), ti.get("model"), prompt, profile, REVIEW_RULES, request], sort_keys=True).encode()).hexdigest()
     root = state_dir()
     root.mkdir(parents=True, exist_ok=True, mode=0o700)
     path = root / (identity + ".json")
@@ -1158,11 +1192,11 @@ def inspect(payload):
             # never a cached PASS and cannot transfer to a different assignment.
             if old.get("dismissal") or (old.get("tool_use_id") == payload["tool_use_id"]):
                 return old
-        with locked(root / ("revision-" + lane + ".lock")):
+        with (contextlib.nullcontext() if handoff else locked(root / ("revision-" + lane + ".lock"))):
             review = {**request, "review": {"mode": "initial"}}
             started = time.time()
             revises = None
-            if not missing and ti.get("name"):
+            if not handoff and not missing and ti.get("name"):
                 try:
                     previous = json.loads(lane_path.read_text())
                     report = json.loads((root / (previous["id"] + ".json")).read_text())
@@ -1182,13 +1216,14 @@ def inspect(payload):
             if missing:
                 verdict = {"verdict": "UNAVAILABLE", "report": missing}
             else:
-                if review["review"]["mode"] == "initial":
-                    pair = shadow_start(payload, review, profile, identity, project)
-                    if pair:
-                        track_root = Path(pair).parent.parent
-                        selected_period = track_root.name if track_root.parent.name == "periods" else ""
-                else:
-                    selected_period = shadow_revision_period(project, report, profile)
+                if not handoff:
+                    if review["review"]["mode"] == "initial":
+                        pair = shadow_start(payload, review, profile, identity, project)
+                        if pair:
+                            track_root = Path(pair).parent.parent
+                            selected_period = track_root.name if track_root.parent.name == "periods" else ""
+                    else:
+                        selected_period = shadow_revision_period(project, report, profile)
                 try:
                     verdict = invoke(review, profile)
                     checked_classification(request, verdict)
@@ -1205,12 +1240,15 @@ def inspect(payload):
                                      "rules_sha256": hashlib.sha256(REVIEW_RULES.encode()).hexdigest()}}
             if request.get("recovery_observation_gaps"):
                 result["recovery_observation_gaps"] = request["recovery_observation_gaps"]
+            if handoff:
+                result["handoff_tool"] = payload["tool_name"]
             if classification:
                 result["classification_index"] = classification["index"]
             if selected_period is not None:
                 result["shadow_period"] = selected_period
             atomic(path, result)
-            atomic(lane_path, {"id": identity, "started": started, "request": request})
+            if not handoff:
+                atomic(lane_path, {"id": identity, "started": started, "request": request})
             shadow_opus(pair, result, getattr(verdict, "metrics", {}), began)
             if revises:
                 shadow_revision(project, identity, lane, revises, result)
@@ -1228,7 +1266,9 @@ def refusal(result):
         return None
     command = shlex.join([sys.executable, str(Path(__file__).resolve()), "--dismiss", result["id"],
                           "--reason", "<your reason for dismissing these findings>"])
-    return (f"Pierce {result['verdict']}:\n{result['report']}{notes_text(result)}\n\nThe worker has not started. "
+    outcome = ("The Codex handoff was not written." if result.get("handoff_tool")
+               else "The worker has not started.")
+    return (f"Pierce {result['verdict']}:\n{result['report']}{notes_text(result)}\n\n{outcome} "
             f"Revise the assignment and retry, or explicitly dismiss this report before retrying "
             f"the exact input:\n{command}\nPierce offers no fix and has no final veto.")
 
@@ -1246,7 +1286,7 @@ def main():
             path = root / (args.dismiss + ".json")
             value = json.loads(path.read_text())
             if value.get("id") != args.dismiss or not 0 <= time.time() - value["at"] < TTL:
-                raise ValueError("report expired; retry the Agent call for a fresh inspection")
+                raise ValueError("report expired; retry the tool call for a fresh inspection")
             value["dismissal"] = args.reason.strip()
             atomic(path, value)
         # The lead's action on Opus's findings is the track's cross-check on its judge.

@@ -1233,6 +1233,7 @@ guard-stale-staging.sh|PreToolUse
 guard-owned-state.sh|PreToolUse
 guard-brief-scope.sh|PreToolUse
 guard-pierce.sh|PreToolUse
+guard-pierce.sh|PreToolUse
 guard-main-checkout-writes.sh|PreToolUse
 scan-secrets.sh|PreToolUse
 guard-publication-writes.sh|PreToolUse

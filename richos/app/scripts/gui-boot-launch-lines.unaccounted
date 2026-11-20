@@ -168,6 +168,8 @@
 [richos] RichOS Connect's supervisor had already ended when it was asked to stop
 [richos] RichOS Connect's supervisor panicked; its helper is ended by the closed guard pipe
 [richos] SCOPE VIOLATION rejected: turn={} thread={} {}
+[richos] Stu's fallback model could not be applied: {}
+[richos] Stu's model could not be updated: {}
 [richos] Stu's record {} could not be read: {}
 [richos] SwearMeter historical sources unavailable: {}
 [richos] THE SKILLS DID NOT LOAD. `{}` was accepted and `{}` is not in this session's plugin list, so every skill RichOS ships is absent from this lease. The files passed preflight, so this is the binary declining them — check `claude --version` against the last release gate.
@@ -187,6 +189,7 @@
 [richos] a push could not be sent: {}
 [richos] a push subscription that has lapsed ({}) had already been replaced; the new one is kept.
 [richos] a push was refused with {}: {}
+[richos] a recovery fact could not be passed to Stu: {}
 [richos] a removed attachment could not be deleted: {}
 [richos] a reply was too long for one push; its opening was sent
 [richos] a resource monitor thread ended unexpectedly
@@ -195,12 +198,12 @@
 [richos] a voice note's length could not be saved: {}
 [richos] a voice note's length could not be saved; it is still shown: {}
 [richos] a watcher's record: {} was left behind
+[richos] a worker's Fable limit could not be passed to Stu: {}
 [richos] a worker's overload wait could not start: {}
 [richos] an attached file could not be read for the phone: {}
 [richos] an automatic turn's overload wait could not start: {}
 [richos] an automatic turn's usage-limit recovery could not start: {}
 [richos] an emptied attachment folder was left for the sweep: {}
-[richos] an overload could not be passed to Stu: {}
 [richos] an unsupported web push subscription was refused at the edge
 [richos] answer receipt remains unreadable: {}
 [richos] assignments: a record could not be read, so its notices wait: {}
@@ -433,11 +436,15 @@
 [richos] quota reader {}: {}
 [richos] quota reading history: {}
 [richos] quota snapshot: {}
+[richos] quota: Fable switch state could not be saved ({})
+[richos] quota: Fable usage refusal, trying the model fallback
+[richos] quota: could not save the conversation marker ({})
 [richos] quota: the tokens per point could not be kept ({})
 [richos] refusing to open an address that is not one of the screens': {}
 [richos] register: left out {} named repository path(s) not connected to this company
 [richos] resource endpoint cleanup: {}
 [richos] resource endpoint will retry after an I/O error: {}
+[richos] retrying the saved input after {} s
 [richos] richdoctor: RichOS's own signature could not be read ({}); nothing installed
 [richos] richdoctor: the payload has no version; nothing installed
 [richos] richdoctor: {}
@@ -474,6 +481,7 @@
 [richos] stall-watch output: {}
 [richos] team answer remains saved: {}
 [richos] the Connect guard could not read its parent's pipe ({}); stopping the helper
+[richos] the Fable switch could not be passed to Stu: {}
 [richos] the Git name could not be asked ({}); this commit goes ahead with the name RichOS
 [richos] the Git name question cannot be watched: {}
 [richos] the account switch could not be passed to Stu: {}
@@ -528,7 +536,6 @@
 [richos] update relaunch: could not start RichOS again: {}
 [richos] update relaunch: could not start the helper: {}
 [richos] update remains deferred: {}
-[richos] upstream overloaded: retrying in {} s on the same session
 [richos] video tools: the background download could not start: {}
 [richos] voice model: the server ignored the resume request — starting over
 [richos] voice model: {}
