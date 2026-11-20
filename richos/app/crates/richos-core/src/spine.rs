@@ -197,6 +197,7 @@ struct Delivery {
     response:Option<crate::cognition::PendingReply>,
     session_id:Option<String>,
     account:Option<String>,
+    model:Option<crate::config::ModelChoice>,
     reply_linked: bool,
 }
 
@@ -381,6 +382,7 @@ fn prepare_connection(state:&mut impl PreparationState,plan:&ConnectionPlan,slot
             plan.control.set_cancel(lease.cancel_handle());
             plan.control.set_lease_session(Some(lease.session_id().to_string()));
         }
+        crate::cognition::apply_model_for_turn(plan.factory.as_deref(), lease.as_mut(), false)?;
         state.state(|s| {
             if let Some(active)=plan.control.active_turn() {s.ledger.mark_turn_started(&active.turn_id,lease.session_id())?;}
             if let (Some(quota),Some(account))=(s.quota_service(),lease.account()) {quota.accounts.ran_on(turn,account);}
@@ -485,6 +487,7 @@ fn prepare_delivery_io(state: &mut impl PreparationState, delivery: &mut Deliver
     let turn = ActiveTurn { turn_id: delivery.turn_id.clone(), thread_id: delivery.binding.thread_id().into(),
         entity_id: Some(delivery.binding.entity_id().clone()), started_at: None };
     delivery.account=lease.account().map(str::to_string);
+    delivery.model=lease.lease_model();
     delivery.response = Some(lease.enqueue_prompt(&delivery.text, Box::new(move || {
         if control.stop_claim().is_some_and(|claim| claim.covers(&turn.turn_id, intake_id)) { return Err(crate::native::STOP_REASON_CANCELLED.into()); }
         control.begin_turn(turn);
@@ -2453,7 +2456,7 @@ impl Spine {
         self.turn_in_progress=false;
         Ok(Delivery {turn_id:turn_id.into(),binding:binding.clone(),text:text.into(),allow_recovery,
             connection:Some(connection),retry_wait:None,internal_turn,live_turn,persist_err:None,stopped_before_prompt,preparation_failed,
-            preparation_stop,preparation,session_id,lease,usage:None,response:None,account:None,reply_linked:false})
+            preparation_stop,preparation,session_id,lease,usage:None,response:None,account:None,model:None,reply_linked:false})
     }
 
     fn capture_delivery_item(&mut self,delivery:&mut Delivery,item:TurnItem) {
@@ -2740,6 +2743,11 @@ impl Spine {
         if let Err(error)=&stop {
             if let Some(resets_at)=crate::claude_accounts::parse_usage_limit(&error.to_string()) {
                 if let (Some(quota),Some(account))=(self.quota_service(),delivery.account.as_deref()) {
+                    if quota.fable_limit_reached(account, delivery.model, resets_at) {
+                        self.ledger.interrupt_turn(turn_id, &error.to_string())?;
+                        self.emit_live(self.turn_status_event(binding, turn_id, TurnStatus::Recovering, None));
+                        return self.retry_saved_input(turn_id, binding, text, std::time::Duration::ZERO);
+                    }
                     if quota.limit_reached(account,resets_at)==crate::claude_accounts::AfterLimit::Continue {
                         self.ledger.interrupt_turn(turn_id,&error.to_string())?;
                         self.raise_quota_notices(Some(thread_id));
@@ -3613,7 +3621,7 @@ impl Spine {
             entity_id: Some(binding.entity_id().clone()),
             started_at: None,
         });
-        eprintln!("[richos] upstream overloaded: retrying in {} s on the same session", wait.as_secs());
+        eprintln!("[richos] retrying the saved input after {} s", wait.as_secs());
         let mut delivery=self.prepare_delivery(&retry_turn_id,binding,original_text,true)?;
         delivery.retry_wait=Some((wait,self.retry_clock.clone()));
         self.dispatch_delivery(delivery)
@@ -3722,6 +3730,7 @@ impl Spine {
                 None => return,
             },
         };
+        quota.mark_fable_conversation(&thread);
         // The kind, when the line is about accounts (round 18): its turn is recorded, so the
         // conversation draws the buttons round 18 puts under it (See your accounts, Add a
         // second account, Not now).

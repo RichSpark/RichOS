@@ -174,6 +174,11 @@
       line = `${Math.floor(week.usedPercent)}% of this week used`;
       attention = true;
     }
+    if (cur && view?.fableSwitch?.active?.[cur.id]) {
+      line = `Using ${nameOf(cur)}, on Opus for now`;
+      time = "";
+      attention = true;
+    }
     text.textContent = line;
     // The time keeps its AM or PM: "Using Work, switched 2:07" with "PM" alone on the next line
     // in the 2026-10-06 walk.
@@ -208,11 +213,13 @@
   const col = $("acc-col"), how = $("acc-how");
 
   function meter(a, k) {
-    const w = win(a, k === "week" ? "seven_day" : "five_hour"), label = k === "week" ? "Weekly limit" : "5-hour limit";
+    const w = k === "fable" ? a.windows?.find(w => /^(model:fable|seven_day_fable)$/i.test(w.id))
+      : win(a, k === "week" ? "seven_day" : "five_hour");
+    const label = { week: "Weekly limit", five: "5-hour limit", fable: "Fable limit" }[k];
     // An account whose reading has no five-hour window has no five-hour limit (Anthropic removed
     // it for verified accounts, 2026-10-31); the CEO: "If no 5-hour-limit data, then don't
     // show/don't handle it." Only the card of an account with a reading draws meters at all.
-    if (!w && k === "five") return "";
+    if (!w && k !== "week") return "";
     if (!w) {
       return `<div class="acc-meter" data-k="${k}"><span class="acc-meter-label">${label}</span><span class="acc-meter-bar" role="img" aria-label="${label}: not reported yet"><b style="width:0"></b></span>
         <span class="acc-meter-num"></span><span class="acc-meter-when">Not reported yet</span></div>`;
@@ -281,10 +288,15 @@
       confirm = `<div class="acc-confirm"><span>Remove <b>${esc(a.label)}</b> from RichOS? RichOS signs out of it here. Nothing changes on the account itself and you can add it back any time.</span>
         <button class="acc-btn acc-btn-primary" type="button" id="acc-remove-yes" data-act="remove-yes" data-id="${esc(a.id)}">Remove ${esc(a.label)}</button><button class="acc-btn" type="button" id="acc-remove-no" data-act="remove-no">Keep it</button></div>`;
     }
+    const fable = view?.fableSwitch?.active?.[a.id];
+    if (fable) {
+      pill += `<span class="acc-pill is-inuse">On Opus until ${esc(when(fable.resetsAt))}</span>`;
+      if (a.inUse) note = "Rich and the team are working on this account, on Opus for now.";
+    }
     const look = kind === "leaving" ? "inuse" : kind === "arriving" ? "next" : kind;
     return `<article class="acc-card is-${look}" data-id="${esc(a.id)}" aria-label="${esc(nameOf(a))}"><span class="acc-spine"></span>
       <header class="acc-head"><h3 class="acc-name">${esc(nameOf(a))}</h3>${pill}<span class="acc-acts">${acts}</span></header>
-      ${who(a)}<p class="acc-note">${note}</p>${a.signedIn === false || !read(a) ? "" : `<div class="acc-meters">${meter(a, "week")}${meter(a, "five")}</div>`}${confirm}</article>`;
+      ${who(a)}<p class="acc-note">${note}</p>${a.signedIn === false || !read(a) ? "" : `<div class="acc-meters">${meter(a, "week")}${meter(a, "five")}${view.fableSwitch ? meter(a, "fable") : ""}</div>`}${confirm}</article>`;
   }
   // The card's one line under its name: "Show email" at rest, the email while it shows.
   function who(a) {
@@ -379,6 +391,10 @@
   }
   const bannerKey = "richos-accounts-banner-seen";
   function banner() {
+    const model = view?.fableSwitch?.active?.[inUse()?.id];
+    if (model) return `<div class="acc-banner" role="status"><span class="acc-banner-icon">${ICON.swap}</span>
+      <div class="acc-banner-main"><p class="acc-banner-head">Rich switched everyone to Opus</p>
+      <p class="acc-banner-body">Fable is almost used up and there’s room left in your weekly quota. Back on Fable ${esc(when(model.resetsAt))}.</p></div></div>`;
     const sw = recentSwitch();
     if (sw && localStorage.getItem(bannerKey) !== String(sw.at)) {
       return `<div class="acc-banner" role="status"><span class="acc-banner-icon">${ICON.swap}</span><div class="acc-banner-main">
@@ -460,6 +476,8 @@
     }
   }
   function changeText(c) {
+    if (c.kind === "fable") return c.onOpus ? "Rich switched everyone to <b>Opus</b>."
+      : c.at >= c.resetsAt ? "Everyone is back on <b>Fable</b>." : "Automatic model switching was turned off.";
     const name = `<b>${esc(c.label)}</b>`;
     if (c.kind === "added") return `You added ${name}.`;
     if (c.kind === "removed") return `You removed ${name}.`;
@@ -468,20 +486,29 @@
     return `Rich switched to ${name}. ${esc(c.from)} reached ${Math.floor(c.used || 0)}% of its ${c.why === "fiveHour" ? "5-hour limit" : "week"}.`;
   }
   function renderHow() {
+    const fable = view.fableSwitch;
+    const rule = !fable ? "" : `<div class="acc-how-sec"><p class="acc-how-h">When Fable is almost used up</p>
+      <p class="acc-how-p">${fable.enabled ? "Everyone switches to Opus and comes back to Fable when it resets." : "Automatic model switching is off."}</p>
+      <button class="acc-btn acc-btn-quiet" type="button" data-act="fable-settings">Change in Settings</button></div>`;
+    const fableRows = (fable?.changes || []).map(c => ({ ...c, kind: "fable" }));
+    const changes = source => source.slice().sort((a, b) => b.at - a.at).slice(0, 4);
+    const listChanges = rows => `<ul class="acc-log">${rows.map(c => `<li><time>${esc(ago(c.at))}</time><span>${changeText(c)}</span></li>`).join("")}</ul>`;
     if (!multi()) {
       paintHow(`<h3 class="acc-how-title">When your account fills up</h3>
         <p class="acc-how-p">When it is nearly used up, Rich <b>pauses the team</b> until it is fresh again. Nothing is lost: everyone picks up right where they left off.</p>
         <p class="acc-how-p is-soft">Your own conversation with Rich never pauses.</p>
         <div class="acc-promo"><p class="acc-how-h">Keep the team going with a second account</p>
           <p class="acc-how-p">If you have more than one Claude account, add them all. Rich uses one at a time and switches to the next when it is nearly full, so the team does not have to wait.</p>
-          ${add ? "" : `<div><button class="acc-btn acc-btn-primary" type="button" data-act="add-open">${ICON.plus}Add another account</button></div>`}</div>`);
+          ${add ? "" : `<div><button class="acc-btn acc-btn-primary" type="button" data-act="add-open">${ICON.plus}Add another account</button></div>`}</div>
+        ${rule}
+        ${fableRows.length ? `<div class="acc-how-sec"><p class="acc-how-h">Recent changes</p>${listChanges(changes(fableRows))}</div>` : ""}`);
       return;
     }
     const nx = nextAcct(), on = !!view.policy.enabled, choice = on ? view.atThreshold : null;
     // The 5-hour choice only while some account has a five-hour window (or has no reading yet to
     // say): with none, there is no 5-hour limit to choose for (the CEO, 2026-10-31).
     const anyFive = list().some(a => !read(a) || win(a, "five_hour"));
-    const rows = (view.changes || []).slice().sort((a, b) => b.at - a.at).slice(0, 4);
+    const rows = changes([...(view.changes || []), ...fableRows]);
     paintHow(`<h3 class="acc-how-title">How Rich uses your accounts</h3>
       <p class="acc-how-p">Rich uses one account at a time. When its weekly limit is almost used up, he <b>switches to the next one by himself</b>. Nothing stops and nothing is lost.</p>
       <p class="acc-how-p is-soft">Next is always the account whose week is fresh again soonest, so none of your weekly limit goes to waste. To use a different account first, press Use this one now on it.</p>
@@ -490,8 +517,9 @@
           <button class="acc-opt" type="button" role="radio" id="acc-five-pause" data-act="five" data-v="pause" aria-checked="${choice === "pause"}"><span class="acc-radio"></span><span><span class="acc-opt-t">Pause the team until it is fresh again</span><span class="acc-opt-s">The default. Never longer than 5 hours.</span></span></button>
           <button class="acc-opt" type="button" role="radio" id="acc-five-switch" data-act="five" data-v="switch" aria-checked="${choice === "switch"}"><span class="acc-radio"></span><span><span class="acc-opt-t">Switch to ${nx ? esc(nx.label) : "the next account"}</span><span class="acc-opt-s">The team keeps going and uses up the next account's week sooner.</span></span></button>
         </div>${saved ? `<p class="acc-saved" role="status">Saved.</p>` : ""}</div>`}
+      ${rule}
       <div class="acc-how-sec"><p class="acc-how-h">Recent changes</p>
-        ${rows.length ? `<ul class="acc-log">${rows.map(c => `<li><time>${esc(ago(c.at))}</time><span>${changeText(c)}</span></li>`).join("")}</ul>`
+        ${rows.length ? listChanges(rows)
           : `<p class="acc-how-p is-soft">Nothing has changed yet.</p>`}</div>`);
   }
   function paintHow(html) {
@@ -672,6 +700,7 @@
       case "email-show": showEmail(id); break;
       case "email-hide": hideEmail(id, false); break;
       case "five": if (b.getAttribute("aria-checked") !== "true") setFive(b.dataset.v); break;
+      case "fable-settings": close(); window.RichSettings.openMenu({ focus: "#fable-switch" }); break;
       case "banner-ok": localStorage.setItem(bannerKey, b.dataset.at); render(); break;
     }
   });

@@ -84,6 +84,8 @@ pub struct AgentTask {
 pub struct TaskBook {
     /// `Agent` tool_use id → its optional name (empty for an unnamed worker).
     names: HashMap<String, String>,
+    /// Requested Claude model, when the Agent call supplied one.
+    models: HashMap<String, String>,
     /// task id → tool_use id, for tasks whose `task_started` arrived.
     task_tool: HashMap<String, String>,
     /// Status seen for a task id before its name was known.
@@ -109,6 +111,10 @@ pub struct TaskBook {
 }
 
 impl TaskBook {
+    pub(crate) fn requested_model(&self, tool_use_id: &str) -> Option<&str> {
+        self.models.get(tool_use_id).map(String::as_str)
+    }
+
     /// Read one frame. Returns the named agents whose row this frame created or changed.
     pub fn observe(&mut self, frame: &Value) -> Vec<AgentTask> {
         let mut changed = Vec::new();
@@ -131,6 +137,9 @@ impl TaskBook {
                     let id = block.get("id").and_then(Value::as_str).unwrap_or("");
                     if is_agent && !id.is_empty() && !self.names.contains_key(id) {
                         self.names.insert(id.to_string(), name.to_string());
+                        if let Some(model) = block.pointer("/input/model").and_then(Value::as_str) {
+                            self.models.insert(id.to_string(), model.to_string());
+                        }
                         // task_started may have arrived first; bind it now.
                         let bound: Vec<String> = self.task_tool.iter().filter(|(_, tool)| tool.as_str() == id)
                             .map(|(task, _)| task.clone()).collect();

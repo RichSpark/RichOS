@@ -100,7 +100,7 @@ fn decide_call(state: &Path, account: Option<&str>, helper: bool, now: u64) -> (
         rise_log: pre_hold.into_iter().map(|(id, speed)| (id, vec![(0., speed)])).collect(),
         ..Default::default()
     }
-    .view(policy, now));
+    .view_with(policy, None, now, view.fable_switch.enabled));
     // **Every account exhausted** (fill-first, Frank's finding 2): held until the soonest
     // reset among them, whatever the pause switch says, because there is no account left for
     // the work to run on. Never set with one account.
@@ -977,6 +977,7 @@ mod tests {
     #[test]
     fn a_models_own_week_at_its_point_leaves_and_holds_the_account() {
         let (_root, service, state, scope) = setup();
+        service.set_fable_switch(false).unwrap();
         let now = crate::util::now_millis();
         let fable_reset = now + 48 * 3_600_000;
         *service.snapshot.lock().unwrap() = Snapshot {
@@ -998,6 +999,27 @@ mod tests {
         let helper = json!({"agent_id":"helper-a","session_id":"session-1","tool_name":"Bash"});
         let held = refusal(&wait(&helper, &state, &scope, "1", Duration::ZERO, Duration::ZERO).unwrap_err());
         assert!(held.starts_with("RichOS desktop quota: Still waiting"), "one account: held, never ordered: {held}");
+    }
+
+    #[test]
+    fn model_quota_switch_leaves_general_allowance_available_to_workers() {
+        let (_root, service, state, _scope) = setup();
+        let now = crate::util::now_millis();
+        let end = now + 3_600_000;
+        let window = |id: &str, used_percent| Window {
+            id: id.into(), label: id.into(), used_percent, resets_at: Some(end), duration_ms: 604_800_000,
+        };
+        *service.snapshot.lock().unwrap() = Snapshot {
+            checked_at: Some(now), windows: vec![window("seven_day", 40.), window("model:Fable", 100.)],
+            ..Default::default()
+        };
+        service.before_turn("1", None);
+        assert!(service.using_opus_for_fable("1"));
+        assert_eq!(admission(&state, now), Admission::Ready);
+
+        service.snapshot.lock().unwrap().windows[0].used_percent = 100.;
+        service.before_turn("1", None);
+        assert_eq!(admission(&state, now), Admission::Held { resets_at: end });
     }
 
     /// **The switch path gets the staggered release too** (STATUS-2026-10-31 row 7, E1 / G12;

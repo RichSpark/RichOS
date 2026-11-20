@@ -3383,13 +3383,24 @@
     ideasPosted: () => bugMock.filed.filter((f) => f.post === "idea"),
   };
 
+  let fableQuotaMock = preset.quota?.fableSwitch ? structuredClone(preset.quota.fableSwitch) : null;
+  window.RichMockFableQuota = view => {
+    fableQuotaMock = structuredClone(view);
+    emit("rich://fable-quota-switch", fableQuotaMock);
+  };
+
   window.RichBridge = {
     isMock: true,
 
     async invoke(cmd, args, options) {
       args = args || {};
       switch (cmd) {
-        case "claude_quota": return quotaView();
+        case "claude_quota": return {...quotaView(), ...(fableQuotaMock && {fableSwitch: fableQuotaMock})};
+        case "set_fable_quota_switch": {
+          fableQuotaMock = { ...fableQuotaMock, enabled: !!args.enabled, ...(args.enabled ? {} : { active: {} }) };
+          emit("rich://fable-quota-switch", fableQuotaMock);
+          return { fableSwitch: fableQuotaMock };
+        }
         case "approve_claude_reset": {
           window.__richosResetCalls.push({ cmd, offer: args.offer });
           if (preset.resetApprovalFails) throw "A reset check is in progress. Try again shortly.";
@@ -3805,7 +3816,8 @@
 
         // ---- §119: Rich's model, both rows at once (main.rs's get/set_lease_models) ----
         case "get_lease_models":
-          return { rich: mockConfig.rich_model, stu: mockConfig.stu_model, effort: mockConfig.lease_effort };
+          return { rich: mockConfig.rich_model, stu: mockConfig.stu_model, effort: mockConfig.lease_effort,
+            fableSwitch: fableQuotaMock };
         case "set_lease_models": {
           const known = (m) => m === "opus" || m === "fable";
           // An unknown name refuses both and writes neither, as the real command does.

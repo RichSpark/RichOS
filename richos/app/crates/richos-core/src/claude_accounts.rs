@@ -1334,6 +1334,11 @@ pub(crate) mod tests {
         replied(&accounts, "2");
         assert!(accounts.take_notice().is_some_and(|line| line.contains("fresh again in 2 d")),
             "fresh again at the Fable week's reset");
+        let (_dir, accounts) = two_accounts();
+        let mut with_model_switch = readings(fable(99., fresh_in_two_days), reading(5., HOUR, 20., 72 * HOUR));
+        crate::quota::apply_fable_capacity(&mut with_model_switch, true);
+        assert!(!accounts.evaluate(&with_model_switch, Some(93), NOW).unwrap());
+        assert_eq!(accounts.in_use().id, "1", "the same account can keep working on Opus");
     }
 
     /// **Round 16: the one switch is the subject of the sentence.** Switch chosen, Account 1's

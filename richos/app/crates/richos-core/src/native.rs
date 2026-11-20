@@ -1514,6 +1514,8 @@ struct ReaderState {
     helpers_waiting: std::collections::HashSet<String>,
     /// The last usage reading the child streamed (`rate_limit_event`), and when (fill-first).
     streamed_usage: Option<crate::quota::StreamedReading>,
+    model_override: Option<crate::config::ModelChoice>,
+    effort_override: Option<crate::config::EffortLevel>,
     /// **Where every `assistant` frame's usage goes, and the account this lease runs on**
     /// (`quota::tokens::Sink`): the lease writes no transcript, so this is the only place the
     /// quota service can see what the app's own Rich and teammates spend. `None` without an
@@ -1802,6 +1804,8 @@ impl Default for ReaderState {
             continuation_notice: None,
             held_continuation: None,
             streamed_usage: None,
+            model_override: None,
+            effort_override: None,
             token_sink: None,
             chat_meter: None,
             token_tally: Default::default(),
@@ -1856,6 +1860,13 @@ pub fn usage_limit_signal(frame: &Value) -> Option<Option<u64>> {
         }
         _ => None,
     }
+}
+
+pub(crate) fn worker_usage_limit(frame: &Value) -> Option<Option<u64>> {
+    frame.get("parent_tool_use_id")?.as_str()?;
+    usage_limit_signal(frame).or_else(|| {
+        (frame["type"] == "assistant" && frame["error"] == "rate_limit").then_some(None)
+    })
 }
 
 /// Prove, BEFORE spawning, which of a launch's two preconditions is not met.
@@ -2745,7 +2756,7 @@ impl NativeClient {
     /// here, everything else -> the active turn's chunk sink or the between-turn lane.
     #[allow(clippy::too_many_arguments)]
     fn dispatch(
-        msg: Value,
+        mut msg: Value,
         stdin: &Arc<Mutex<ChildStdin>>,
         pending: &Arc<Mutex<std::collections::HashMap<String, Sender<Value>>>>,
         current: &Arc<Mutex<Vec<PendingTurn>>>,
@@ -2943,7 +2954,15 @@ impl NativeClient {
             // A worker's whole message also reaches the between-turn sink when a turn took it:
             // Stu's host reads his workers' overloads there (`work_host.rs` observe_worker),
             // whichever turn carried them. A lease with no sink keeps nothing extra.
-            if Self::route(ChunkMsg::Frame(msg.clone()), current, between, &msg) && ty == "assistant" {
+            let refused = worker_usage_limit(&msg).is_some();
+            let worker_result = ty == "assistant" || refused;
+            if refused {
+                let book = state.lock().unwrap();
+                if let Some(model) = msg["parent_tool_use_id"].as_str().and_then(|call| book.agent_tasks.requested_model(call)) {
+                    msg["richos_requested_model"] = json!(model);
+                }
+            }
+            if Self::route(ChunkMsg::Frame(msg.clone()), current, between, &msg) && worker_result {
                 between.lock().unwrap().copy_to_sink(msg);
             }
             return;
@@ -4038,6 +4057,7 @@ impl TurnCancel for NativeCancelHandle {
     fn set_model(&self,model:crate::config::ModelChoice)->Result<bool,String> {
         if self.reader_closed.load(Ordering::SeqCst) {return Ok(false)}
         self.confirmed_control("Model change",json!({"subtype":"set_model","model":model.cli_alias()}))?;
+        self.reader_state.lock().unwrap().model_override = Some(model);
         Ok(true)
     }
     /// The session keeps running, so the level it was started at is replaced on it. Measured
@@ -4047,6 +4067,7 @@ impl TurnCancel for NativeCancelHandle {
     fn set_effort(&self,effort:crate::config::EffortLevel)->Result<bool,String> {
         if self.reader_closed.load(Ordering::SeqCst) {return Ok(false)}
         self.confirmed_control("Effort change",json!({"subtype":"apply_flag_settings","settings":{"effortLevel":effort.as_str()}}))?;
+        self.reader_state.lock().unwrap().effort_override = Some(effort);
         Ok(true)
     }
 
@@ -4985,10 +5006,29 @@ impl Cognition for NativeCognition {
     fn account(&self) -> Option<&str> {
         self.engine_profile.as_ref()?.claude_account.as_ref().map(|a| a.id.as_str())
     }
-    /// The model [`lease_model_args`] gave this child, read off the same profile and role.
     fn lease_model(&self) -> Option<crate::config::ModelChoice> {
+        if let Some(applied) = self.client.reader_state.lock().unwrap().model_override {
+            return Some(applied);
+        }
         let models = self.engine_profile.as_ref()?.lease_models;
         Some(match self.role { LeaseRole::Conversation => models.rich, LeaseRole::Work => models.stu })
+    }
+    fn apply_model(&mut self, model: crate::config::ModelChoice, effort: crate::config::EffortLevel)
+        -> Result<(), CognitionError> {
+        let handle = self.client.cancel_handle();
+        if self.lease_model() != Some(model)
+            && !handle.set_model(model).map_err(CognitionError::Protocol)? {
+            return Err(CognitionError::Io("Claude Code closed before changing the model.".into()));
+        }
+        let applied = self.client.reader_state.lock().unwrap().effort_override.or_else(|| {
+            let efforts = self.engine_profile.as_ref()?.lease_efforts;
+            Some(match self.role { LeaseRole::Conversation => efforts.rich, LeaseRole::Work => efforts.stu })
+        });
+        if applied != Some(effort)
+            && !handle.set_effort(effort).map_err(CognitionError::Protocol)? {
+            return Err(CognitionError::Io("Claude Code closed before changing the effort.".into()));
+        }
+        Ok(())
     }
     fn streamed_usage(&self) -> Option<crate::quota::StreamedReading> {
         self.client.reader_state.lock().unwrap().streamed_usage.clone()

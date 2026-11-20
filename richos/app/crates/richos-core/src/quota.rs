@@ -9,6 +9,7 @@ use std::{
     sync::Mutex,
 };
 
+pub mod fable;
 pub mod gate;
 pub mod holds;
 pub mod probe;
@@ -169,6 +170,16 @@ impl Reading {
             && w.resets_at.is_none_or(|t| t > now))
     }
 }
+pub(crate) fn apply_fable_capacity(readings: &mut BTreeMap<String, Reading>, enabled: bool) {
+    if enabled {
+        for reading in readings.values_mut() {
+            if fable::has_general_window(&reading.windows) {
+                reading.windows.retain(|w| !fable::is_window(&w.id));
+            }
+        }
+    }
+}
+
 /// **A weekly window**: the account's own week (`seven_day`) or one model's week
 /// (`model:<name>`, and the older `seven_day_opus` and `seven_day_sonnet`). A model's week at its
 /// point leaves the account as its own week does (richos-hq
@@ -321,6 +332,8 @@ impl Admission {
 pub struct View {
     #[serde(default)]
     pub resets: resets::View,
+    #[serde(default)]
+    pub fable_switch: fable::View,
     pub state: State,
     pub windows: Vec<Window>,
     pub checked_at: Option<u64>,
@@ -828,7 +841,7 @@ impl Snapshot {
         }
     }
     fn view(&self, policy: Policy, now: u64) -> View {
-        self.view_with(policy, None, now)
+        self.view_with(policy, None, now, false)
     }
     /// **The speed measured before the hold** (Rich, 2026-10-29: *"a rate of 0 while everyone
     /// is held is no measurement"*): the speed of the last rise of window `id` that started
@@ -862,8 +875,9 @@ impl Snapshot {
         self.signed_in
     }
     /// The view of this account, with its test cut-off (`Reading::weekly_cutoff`).
-    fn view_with(&self, policy: Policy, weekly_cutoff: Option<f64>, now: u64) -> View {
+    fn view_with(&self, policy: Policy, weekly_cutoff: Option<f64>, now: u64, fable_fallback_enabled: bool) -> View {
         let reading = self.reading_with(weekly_cutoff, now);
+        let separate_fable = fable_fallback_enabled && fable::has_general_window(&reading.windows);
         let interval = reading.interval();
         // The two check points, recalculated from the measured speed (answer 10), shown in
         // the panel; the normal 93% and 99% again once the speed is back down (answer 11).
@@ -903,7 +917,7 @@ impl Snapshot {
         } else if self.checked_at.is_none() {
             if answered_empty { Admission::NoReading } else { Admission::Unknown }
         } else if let Some(until) = reading.windows.iter() // moved forward while old (`reading_with`)
-            .filter(|w| is_weekly(&w.id) && reading.reaches_weekly(w))
+            .filter(|w| is_weekly(&w.id) && (!separate_fable || !fable::is_window(&w.id)) && reading.reaches_weekly(w))
             .filter_map(|w| w.resets_at.filter(|t| *t > now)).max() {
             // Weekly exhaustion never inherits the five-hour 20-minute exception.
             // An approval is not allowance: hold until a fresh post-reset reading.
@@ -961,6 +975,7 @@ impl Snapshot {
         };
         View {
             resets: resets::View::default(),
+            fable_switch: fable::View::default(),
             state,
             windows: self.windows.clone(),
             checked_at: self.checked_at,
@@ -1021,6 +1036,7 @@ pub struct Service {
     pub resets: resets::Service,
     last_reset_marker: Mutex<Option<String>>,
     published_reset_view: Mutex<Option<resets::View>>,
+    fable_switch: Mutex<fable::State>,
     source: Mutex<Box<dyn Source>>,
     snapshot: Mutex<Snapshot>,
     policy: Mutex<Policy>,
@@ -1157,6 +1173,7 @@ impl Service {
             resets: resets::Service::new(data_dir),
             last_reset_marker: Mutex::new(None),
             published_reset_view: Mutex::new(None),
+            fable_switch: Mutex::new(gate::read_json(&data_dir.join("claude-fable-switch.json")).unwrap_or_default()),
             source: Mutex::new(Box::new(probe::ClaudeSource::controlled(control.clone()))),
             snapshot: Mutex::new(Snapshot::default()),
             policy: Mutex::new(policy),
@@ -1266,18 +1283,21 @@ impl Service {
         let moving = self.accounts.moving();
         let shown = self.accounts.running_on();
         let cutoff = self.cutoff(&shown.id);
+        let fable_enabled = self.fable_switch.lock().unwrap().enabled;
         // The top-level reading is that account, so every existing reader keeps describing the
         // subscription the work is actually running on. The gate judges each call on its own
         // account's row (`gate::decide`), never on this one alone.
         let mut view = if shown.id == crate::claude_accounts::ACCOUNT_ONE {
-            self.snapshot.lock().unwrap().view_with(policy.clone(), cutoff, now)
+            self.snapshot.lock().unwrap().view_with(policy.clone(), cutoff, now, fable_enabled)
         } else {
             match self.extra.lock().unwrap().get(&shown.id) {
-                Some((_, snapshot)) => snapshot.view_with(policy.clone(), cutoff, now),
+                Some((_, snapshot)) => snapshot.view_with(policy.clone(), cutoff, now, fable_enabled),
                 None => Snapshot::default().view(policy.clone(), now),
             }
         };
-        let readings = self.readings();
+        let mut readings = self.observed_readings();
+        view.fable_switch = self.fable_switch.lock().unwrap().view(Some(shown.id.clone()), readings.get(&shown.id), now);
+        apply_fable_capacity(&mut readings, fable_enabled);
         // Every account being left for its week (plan §1), with one account too, unless that
         // one account has automatic pause off: then nothing acts before 100%, as the fast-use
         // alert says. With two or more the weekly switch acts
@@ -1363,6 +1383,12 @@ impl Service {
     /// Every account's freshest reading (probe and streamed, merged in its snapshot), with
     /// each window's measured speed. Only accounts that have been read appear.
     fn readings(&self) -> BTreeMap<String, Reading> {
+        let mut readings = self.observed_readings();
+        apply_fable_capacity(&mut readings, self.fable_switch.lock().unwrap().enabled);
+        readings
+    }
+
+    fn observed_readings(&self) -> BTreeMap<String, Reading> {
         let mut readings = BTreeMap::new();
         {
             let one = self.snapshot.lock().unwrap();
@@ -1649,13 +1675,87 @@ impl Service {
         self.started(&at);
     }
 
-    fn decide(&self) {
-        let pause = self.policy.lock().unwrap().line();
-        match self.accounts.evaluate(&self.readings(), pause, crate::util::now_millis()) {
-            Ok(true) => {
+    fn update_fable<R>(&self, change: impl FnOnce(&mut fable::State) -> R) -> io::Result<(R, bool)> {
+        let mut saved = self.fable_switch.lock().unwrap();
+        let mut next = saved.clone();
+        let result = change(&mut next);
+        if *saved == next {
+            return Ok((result, false));
+        }
+        atomic_write(&self.cwd.join("claude-fable-switch.json"), &next)?;
+        *saved = next;
+        Ok((result, true))
+    }
+
+    pub fn set_fable_switch(&self, enabled: bool) -> io::Result<View> {
+        self.update_fable(|state| state.set_enabled(enabled, crate::util::now_millis()))?;
+        self.decide();
+        self.publish()?;
+        Ok(self.view())
+    }
+
+    pub fn mark_fable_conversation(&self, thread: &str) {
+        match self.update_fable(|state| state.mark_conversation(thread)) {
+            Ok(((), true)) => {
                 if let Err(error) = self.publish() { eprintln!("[richos] quota snapshot: {error}"); }
             }
-            Ok(false) => {}
+            Ok(_) => {}
+            Err(error) => eprintln!("[richos] quota: could not save the conversation marker ({error})"),
+        }
+    }
+
+    pub fn fable_view(&self) -> fable::View {
+        let account = self.accounts.running_on().id;
+        let readings = self.observed_readings();
+        self.fable_switch.lock().unwrap().view(Some(account.clone()), readings.get(&account), crate::util::now_millis())
+    }
+
+    pub fn fable_period(&self, account: &str) -> Option<fable::Period> {
+        self.fable_switch.lock().unwrap().period(account, crate::util::now_millis())
+    }
+
+    pub fn using_opus_for_fable(&self, account: &str) -> bool {
+        self.fable_switch.lock().unwrap().on_opus(account, crate::util::now_millis())
+    }
+
+    pub fn fable_limit_reached(
+        &self, account: &str, model: Option<crate::config::ModelChoice>, resets_at: Option<u64>,
+    ) -> bool {
+        if model != Some(crate::config::ModelChoice::Fable) {
+            return false;
+        }
+        let now = crate::util::now_millis();
+        let readings = self.observed_readings();
+        let Some(reading) = readings.get(account) else { return false };
+        let Ok((retry, changed)) = self.update_fable(|state| {
+            state.observe(account, Some(reading), now);
+            state.refused(account, reading, resets_at, now)
+        }) else { return false };
+        if changed {
+            eprintln!("[richos] quota: Fable usage refusal, trying the model fallback");
+            if let Err(error) = self.publish() { eprintln!("[richos] quota snapshot: {error}"); }
+        }
+        retry
+    }
+
+    fn decide(&self) {
+        let pause = self.policy.lock().unwrap().line();
+        let now = crate::util::now_millis();
+        let mut readings = self.observed_readings();
+        let account = self.accounts.in_use();
+        let changed = match self.update_fable(|state| state.observe(&account.id, readings.get(&account.id), now)) {
+            Ok(((), changed)) => changed,
+            Err(error) => {
+                eprintln!("[richos] quota: Fable switch state could not be saved ({error})");
+                false
+            }
+        };
+        apply_fable_capacity(&mut readings, self.fable_switch.lock().unwrap().enabled);
+        match self.accounts.evaluate(&readings, pause, now) {
+            Ok(moved) if moved || changed => {
+                if let Err(error) = self.publish() { eprintln!("[richos] quota snapshot: {error}"); }
+            }
+            Ok(_) => {}
             Err(error) => eprintln!("[richos] claude accounts: the switch could not be saved ({error})"),
         }
     }
@@ -1949,10 +2049,8 @@ impl Service {
         let now = crate::util::now_millis();
         let moved = now >= self.scanned_at.load(std::sync::atomic::Ordering::SeqCst) + TOKEN_SCAN_MS
             && self.track_tokens();
-        if self.accounts.count() > 1 {
-            self.decide();
-            if let Err(error) = self.publish() { eprintln!("[richos] quota snapshot: {error}"); }
-        } else if moved {
+        self.decide();
+        if self.accounts.count() > 1 || moved {
             if let Err(error) = self.publish() { eprintln!("[richos] quota snapshot: {error}"); }
         }
         self.note_held();
@@ -4054,8 +4152,8 @@ added = bool(_folder) and os.path.realpath(_folder).startswith(_accounts)"#;
                 let mut windows = Vec::new();
                 if pick(8) != 0 { windows.push(window("five_hour", five_used[pick(five_used.len())], offsets(&five_reset, pick(five_reset.len())))); }
                 if pick(4) != 0 { windows.push(window("seven_day", week_used[pick(week_used.len())], offsets(&week_reset, pick(week_reset.len())))); }
-                // A model's own week decides as the account's week does (`is_weekly`; review
-                // rv-20261031T063327Z-eb4a5248-1bbf: the review reader held on seven_day alone).
+                // The fallback treats Fable separately when a general reading is present.
+                // The other model weeks still take part in account admission.
                 if pick(3) == 0 {
                     let model = ["model:Fable", "seven_day_opus", "seven_day_sonnet"][pick(3)];
                     windows.push(window(model, week_used[pick(week_used.len())], offsets(&week_reset, pick(week_reset.len()))));

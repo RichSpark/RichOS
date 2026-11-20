@@ -85,6 +85,9 @@ struct Inner {
     /// The description each worker run was started under, by the tool call that started it
     /// (Claude Code's `task_started`), told to Stu as the worker's task.
     worker_names: std::collections::HashMap<String, String>,
+    fable_worker_notices: std::collections::HashSet<String>,
+    fable_switch_told: Option<(String, u64)>,
+    lease_account: Option<String>,
     /// Inputs accepted by this live backend. Unfinished handoffs remain durable for restart.
     // Input already delivered to this session stays delivered even when a turn fails.
     peer_active_through: Option<u64>,
@@ -376,9 +379,20 @@ impl WorkHost {
         let resets_at = crate::claude_accounts::parse_usage_limit(error)?;
         let quota = self.quota.lock().unwrap().clone()?;
         let (account, session) = {
-            let lease = backend.lease.lock().unwrap();
-            let lease = lease.as_ref()?;
-            (lease.account()?.to_string(), lease.session_id().to_string())
+            let mut slot = backend.lease.lock().unwrap();
+            let lease = slot.as_mut()?;
+            let account = lease.account()?.to_string();
+            let session = lease.session_id().to_string();
+            if quota.fable_limit_reached(&account, lease.lease_model(), resets_at) {
+                if let Err(error) = crate::cognition::apply_model_for_turn(
+                    Some(self.factory.as_ref()), lease.as_mut(), true,
+                ) {
+                    eprintln!("[richos] Stu's fallback model could not be applied: {error}");
+                    return None;
+                }
+                return Some(UsageLimitHold { wait: std::time::Duration::ZERO, session, account });
+            }
+            (account, session)
         };
         let continued = quota.limit_reached(&account, resets_at) == crate::claude_accounts::AfterLimit::Continue;
         // `Continue` says only that another account is in use, which it already is when another
@@ -744,8 +758,32 @@ impl WorkHost {
             }
             return;
         }
-        if frame["type"] != "assistant" { return; }
         let call = &frame["parent_tool_use_id"];
+        if let Some((reset, call)) = crate::native::worker_usage_limit(frame).zip(call.as_str()) {
+            let (account, task) = {
+                let inner = backend.inner.lock().unwrap();
+                if inner.fable_worker_notices.contains(call) { return; }
+                (inner.lease_account.clone(), inner.worker_names.get(call).cloned())
+            };
+            let requested_fable = frame.pointer("/message/model").and_then(serde_json::Value::as_str)
+                .is_some_and(|model| model == "fable" || model.starts_with("claude-fable-"))
+                || frame["richos_requested_model"] == "fable";
+            if let Some(account) = account.filter(|_| requested_fable) {
+                let quota = self.quota.lock().unwrap().clone();
+                if quota.as_ref().is_some_and(|quota| quota.fable_limit_reached(
+                    &account, Some(crate::config::ModelChoice::Fable), reset,
+                )) {
+                    backend.inner.lock().unwrap().fable_worker_notices.insert(call.to_string());
+                    let told = serde_json::json!({"event":"worker_fable_limit",
+                        "worker":{"tool_use_id":call,"agent_id":frame.get("agent_id"),"task":task}});
+                    if let Err(error) = self.tell_stu_after(backend, binding, session, None, move |_, _| vec![told]) {
+                        eprintln!("[richos] a worker's Fable limit could not be passed to Stu: {error}");
+                    }
+                    return;
+                }
+            }
+        }
+        if frame["type"] != "assistant" { return; }
         let mut inner = backend.inner.lock().unwrap();
         let Some(failure) = crate::native::overloaded_api_error_message(frame) else {
             if frame.get("error").is_none_or(serde_json::Value::is_null) { inner.workers.succeeded(); }
@@ -811,8 +849,14 @@ impl WorkHost {
             let facts = told(&backend, elapsed);
             if facts.is_empty() { return; }
             for fact in &facts {
-                if let Err(error) = crate::session_tools::observe_overload_retry(&host.message_scope(&binding), fact) {
-                    eprintln!("[richos] an overload could not be passed to Stu: {error}");
+                let scope = host.message_scope(&binding);
+                let saved = if fact["event"] == "worker_fable_limit" {
+                    crate::session_tools::observe_fable_switch(&scope, fact)
+                } else {
+                    crate::session_tools::observe_overload_retry(&scope, fact)
+                };
+                if let Err(error) = saved {
+                    eprintln!("[richos] a recovery fact could not be passed to Stu: {error}");
                     return;
                 }
             }
@@ -1269,6 +1313,19 @@ impl WorkHost {
         }))
     }
 
+    fn fable_switch_fact(&self, backend: &Backend, account: &str) -> Option<serde_json::Value> {
+        let quota = self.quota.lock().unwrap().clone()?;
+        let active = quota.fable_period(account);
+        let key = active.map(|p| (account.to_string(), p.since));
+        let mut inner = backend.inner.lock().unwrap();
+        if key == inner.fable_switch_told {
+            return None;
+        }
+        inner.fable_switch_told = key;
+        Some(serde_json::json!({"event": "fable_quota_switch",
+            "active": active.is_some(), "resets_at": active.map(|p| p.resets_at)}))
+    }
+
     fn run_message(
         self: &Arc<Self>,
         backend: &Arc<Backend>,
@@ -1296,7 +1353,6 @@ impl WorkHost {
             )
             .map_err(|e| e.to_string())?;
         }
-        let input = payload.to_string();
         {
             self.ensure_lease(backend, binding)?;
             let mut guard = backend.lease.lock().unwrap();
@@ -1305,6 +1361,12 @@ impl WorkHost {
             if stopped()? {
                 return Ok(session);
             }
+            crate::cognition::apply_model_for_turn(Some(self.factory.as_ref()), lease.as_mut(), true)
+                .map_err(|error| error.to_string())?;
+            if let Some(fact) = lease.account().and_then(|account| self.fable_switch_fact(backend, account)) {
+                payload["fable_quota"] = fact;
+            }
+            let input = payload.to_string();
             self.refresh_peer_team(backend, lease.as_mut())?;
             lease
                 .prepare_agent_message(binding, turn, message)
@@ -1510,6 +1572,12 @@ impl WorkHost {
     }
 
     fn observe_lease(self: &Arc<Self>, backend: &Arc<Backend>, lease: &mut dyn Cognition, binding: &ThreadBinding) {
+        {
+            let mut inner = backend.inner.lock().unwrap();
+            inner.lease_account = lease.account().map(str::to_string);
+            inner.fable_worker_notices.clear();
+            inner.fable_switch_told = None;
+        }
         let host = Arc::downgrade(self);
         let receiving = Arc::downgrade(backend);
         let binding = binding.clone();
@@ -1980,6 +2048,23 @@ impl WorkHost {
                 }
                 Next::Move(binding, at_turn_end) => {
                     self.move_to_account_in_use(&backend, &binding, at_turn_end);
+                    // Idle checks and real turn boundaries may update the live model.
+                    if !backend.inner.lock().unwrap().automatic_turn {
+                        if let Some(lease) = backend.lease.lock().unwrap().as_mut().filter(|lease| !lease.has_pending_input()) {
+                            if let Err(error) = crate::cognition::apply_model_for_turn(
+                                Some(self.factory.as_ref()), lease.as_mut(), true,
+                            ) {
+                                eprintln!("[richos] Stu's model could not be updated: {error}");
+                            }
+                        }
+                    }
+                    let account = backend.inner.lock().unwrap().lease_account.clone();
+                    if let Some(fact) = account.as_deref().and_then(|id| self.fable_switch_fact(&backend, id)) {
+                        if let Err(error) = crate::session_tools::observe_fable_switch(&self.message_scope(&binding), &fact) {
+                            backend.inner.lock().unwrap().fable_switch_told = None;
+                            eprintln!("[richos] the Fable switch could not be passed to Stu: {error}");
+                        }
+                    }
                     // An automatic turn's end (the only `at_turn_end`) is a turn's end too
                     // (nightly 73 walk, check 5: Stu saved norm in one and was never told).
                     if at_turn_end {
@@ -4730,6 +4815,40 @@ mod tests {
     fn worker_overloaded(call: &str) -> serde_json::Value {
         serde_json::json!({"type":"assistant","parent_tool_use_id":call,"error":"overloaded",
             "message":{"content":[{"type":"text","text":"API Error: 529 Overloaded."}]}})
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_refused_fable_worker_is_named_once_for_stu_to_continue_from_saved_work() {
+        let h = harness(0);
+        let (quota, _) = account_one_and_home_with_room(&h);
+        h.host.set_quota(quota.clone());
+        let backend = Backend::new();
+        {
+            let mut inner = backend.inner.lock().unwrap();
+            inner.lease_session = Some("stu-session".into());
+            inner.lease_account = Some("1".into());
+        }
+        let observe = |frame| h.host.observe_worker(&backend, &h.binding, "stu-session", &frame);
+        observe(serde_json::json!({"type":"system","subtype":"task_started","task_type":"local_agent",
+            "tool_use_id":"worker-call","description":"Finish the saved design"}));
+        let refusal = serde_json::json!({"type":"assistant","parent_tool_use_id":"worker-call",
+            "agent_id":"agent-from-first-attempt","error":"rate_limit","richos_requested_model":"fable"});
+        observe(refusal.clone());
+        observe(refusal);
+        assert!(h.host.wait_for_completed(1, std::time::Duration::from_secs(30)));
+        let prompts = h.work_prompts.lock().unwrap();
+        let facts: Vec<serde_json::Value> = prompts.iter().filter_map(|prompt| {
+            let message: serde_json::Value = serde_json::from_str(prompt).ok()?;
+            serde_json::from_str(message["text"].as_str()?).ok()
+        }).filter(|fact: &serde_json::Value| fact["event"] == "worker_fable_limit").collect();
+        assert_eq!(facts, [serde_json::json!({"event":"worker_fable_limit",
+            "worker":{"tool_use_id":"worker-call","agent_id":"agent-from-first-attempt","task":"Finish the saved design"}})]);
+        assert_eq!(quota.accounts.in_use().id, "1");
+        assert!(quota.using_opus_for_fable("1"));
+        drop(prompts);
+        h.host.shutdown();
+        std::fs::remove_dir_all(h.root).unwrap();
     }
 
     /// A retry clock that holds each wait open until the test ends it, so an overload can arrive
