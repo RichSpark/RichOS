@@ -15455,6 +15455,12 @@ body.home-open :is(#nr-tip, .res-card, .res-menu, .swear-card) {
   opacity: .55;
   cursor: wait;
 }
+#set-richfiles {
+  border-block: 1px solid var(--line-soft);
+  margin-block: .5rem;
+  padding-block: .5rem;
+}
 #set-richfiles-heading {
-  margin: .625rem 0 0;
+  color: var(--gold-text);
+  margin: 0;
 }

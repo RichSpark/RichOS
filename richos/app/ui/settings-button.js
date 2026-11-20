@@ -601,6 +601,8 @@ window.RichSettings = (function () {
         searchFolders.open();
       }, "set-search-folders-state"));
     }
+    var richfiles = part("richfiles");
+    if (richfiles) rich.push(richfiles);
     var model = part("model");
     if (model) {
       if (rich.length && !(instructions && searchFolders)) rich.push(divider());
@@ -644,8 +646,6 @@ window.RichSettings = (function () {
     }
     if (doors.length && rich.length) rich.push(divider());
     rich = rich.concat(doors);
-    var richfiles = part("richfiles");
-    if (richfiles) rich.push(richfiles);
     addColumn(cols, "set-group-rich", "Working with Rich", rich);
 
     // ---- COLUMN 3: your company and team --------------------------------------------------
