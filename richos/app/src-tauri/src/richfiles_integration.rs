@@ -257,14 +257,16 @@ fn open_bundle(file: Option<PathBuf>) -> Result<(), String> {
 }
 
 #[cfg(target_os = "macos")]
-pub fn refresh_gestures_after_update() {
+pub fn start_window_gestures() {
     let launch = crate::update_startup::launch_report();
-    if launch.update_arrival.is_none() && launch.handover.is_none() {
-        return;
-    }
-    std::thread::spawn(|| {
+    let action = if launch.update_arrival.is_some() || launch.handover.is_some() {
+        "refresh-after-update"
+    } else {
+        "register-if-desktop-enabled"
+    };
+    std::thread::spawn(move || {
         if let Some(bundle) = richfiles_bundle() {
-            refresh_gesture_helper(bundle);
+            run_gesture_service(bundle, action);
         }
     });
 }
@@ -276,22 +278,22 @@ pub fn refresh_gestures_after_publication(home: &std::path::Path) {
     if let Ok(Some(bundle)) = richos_user_update::with_preferred_at(home, |_, bundle| {
         Ok(bundle.join("Contents/Applications/RichFiles.app"))
     }) {
-        refresh_gesture_helper(bundle);
+        run_gesture_service(bundle, "refresh-after-update");
     }
 }
 
 #[cfg(target_os = "macos")]
-fn refresh_gesture_helper(bundle: PathBuf) {
+fn run_gesture_service(bundle: PathBuf, action: &str) {
     let binary = bundle.join("Contents/MacOS/RichFiles");
     if !binary.is_file() {
         return;
     }
     if let Err(error) = std::process::Command::new(binary)
-        .args(["--window-gesture-service", "refresh-after-update"])
+        .args(["--window-gesture-service", action])
         .stdout(std::process::Stdio::null())
         .status()
     {
-        eprintln!("[richos] could not check Window Gestures after update: {error}");
+        eprintln!("[richos] could not check Window Gestures: {error}");
     }
 }
 
