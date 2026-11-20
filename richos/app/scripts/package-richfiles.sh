@@ -51,9 +51,9 @@ python3 "$machine_lib/native-work.py" -- swift build "${swift_args[@]}" -c "$con
 python3 "$machine_lib/native-work.py" -- swift build "${swift_args[@]}" -c "$configuration" --product RichGlance
 python3 "$machine_lib/native-work.py" -- swift build "${swift_args[@]}" -c "$configuration" --product RichFilesWindowGestures
 if [ "$embedded" -eq 1 ]; then
-  python3 "$machine_lib/native-work.py" -- swift build "${swift_args[@]}" -c "$configuration" --product RichFilesRail
-  install -m 755 "$build/$configuration/libRichFilesRail.dylib" "$output/libRichFilesRail.dylib"
-  drop_build_machine_rpaths "$output/libRichFilesRail.dylib"
+  python3 "$machine_lib/native-work.py" -- swift build "${swift_args[@]}" -c "$configuration" --product RichFilesIntegration
+  install -m 755 "$build/$configuration/libRichFilesIntegration.dylib" "$output/libRichFilesIntegration.dylib"
+  drop_build_machine_rpaths "$output/libRichFilesIntegration.dylib"
 fi
 # shellcheck source=lib/gui-launch.sh
 . "$root/richos/app/scripts/lib/gui-launch.sh"

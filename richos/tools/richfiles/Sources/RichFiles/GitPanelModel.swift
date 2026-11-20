@@ -173,22 +173,14 @@ public final class GitPanelModel: ObservableObject {
         commits = []
     }
 
-    public func startSnapshot(_ value: GitPanelSnapshot, folder: URL, currentChat: String?, docked: Bool = false) {
+    public func startSnapshot(_ value: GitPanelSnapshot, folder: URL) {
         context = nil
         self.folder = folder
         open = true
-        snapshot = !docked || value.threadId == nil || value.threadId == currentChat ? value : nil
+        snapshot = value
         snapshotUnavailable = snapshot == nil || (value.threadId != nil && value.lands == nil)
         scope = value.allOnMain && snapshot != nil ? .all : .chat
         loadHistory(newTip: true, preferredCommit: snapshot?.commit, preferredFile: snapshot?.path)
-    }
-
-    public func chatChanged(to thread: String?) {
-        guard let snapshot, let source = snapshot.threadId, source != thread else { return }
-        self.snapshot = nil
-        snapshotUnavailable = false
-        scope = .all
-        if open { loadHistory(newTip: true) }
     }
 
     public func makeSnapshot() -> GitPanelSnapshot? {

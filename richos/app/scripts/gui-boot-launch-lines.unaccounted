@@ -61,6 +61,7 @@
 [richos] home field: no topic compiled ({}) — the home screen keeps the demonstration
 [richos] home video: could not save to {}: {}
 [richos] home video: saved {} byte(s) to {}
+[richos] video: received a picture of the active RichFiles window
 [richos] hop-trace +{} ms  spine RELEASED at {} after holding {} ms
 [richos] hop-trace +{} ms  spine TAKEN at {} after waiting {} ms
 [richos] idle sessions: could not start the check, every session stays running: {}
@@ -272,9 +273,9 @@
 [richos] correction could not be staged: {}
 [richos] correction desk lock is poisoned — the question is dropped, the turn is not
 [richos] correction trigger could not read the record: {}
+[richos] could not check Window Gestures after update: {}
 [richos] could not check owned decoder before cleanup: {}
 [richos] could not collect a RichOS Connect process after stopping it: {}
-[richos] could not deliver the RichFiles workspace: {}
 [richos] could not finish stopping after the phone rejected the six words: {}
 [richos] could not forget the phone after a rejected fingerprint: {}
 [richos] could not forget the phone after the words were refused on this Mac: {}
@@ -284,8 +285,6 @@
 [richos] could not record the phone reply receipt: {}
 [richos] could not record the phone's fingerprint confirmation: {}
 [richos] could not record the push subscription: {}
-[richos] could not reveal the selected output in RichFiles: {}
-[richos] could not show the RichFiles window: {}
 [richos] could not start the pairing deadline watch; an unconfirmed phone will be forgotten the next time the sheet is open: {}
 [richos] could not start the thread that stops this channel when the phone rejects the six words, so a rejection will drop the phone's credential without closing the port: {}
 [richos] could not stop a RichOS Connect process: {}

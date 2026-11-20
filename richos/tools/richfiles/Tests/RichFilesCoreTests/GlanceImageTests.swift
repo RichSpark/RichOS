@@ -153,4 +153,33 @@ final class GlanceImageTests: XCTestCase {
         viewport.resize(to: CGSize(width: 600, height: 900))
         XCTAssertEqual(viewport.imageRect, CGRect(x: 150, y: 0, width: 300, height: 900))
     }
+
+    func testViewerStartsAtActualSizeOrFitsLargerImagesAndResetsOnReopen() {
+        var viewport = GlanceViewport()
+        let window = CGSize(width: 600, height: 400)
+        let small = CGSize(width: 300, height: 200)
+        let wide = CGSize(width: 1_200, height: 300)
+        viewport.reset(imageSize: small, in: window)
+        XCTAssertEqual(viewport.imageRect, CGRect(x: 150, y: 100, width: 300, height: 200))
+        XCTAssertFalse(viewport.isFit)
+
+        viewport.zoom(by: 100, at: .zero, holding: .zero)
+        XCTAssertEqual(viewport.scale, 20)
+        viewport.zoom(by: 0.001, at: .zero, holding: .zero)
+        XCTAssertEqual(viewport.scale, 0.05)
+        viewport.resize(to: CGSize(width: 400, height: 300))
+        XCTAssertEqual(viewport.scale, 0.05)
+        viewport.reset(imageSize: small, in: window)
+        XCTAssertEqual(viewport.scale, 1)
+
+        viewport.reset(imageSize: wide, in: window)
+        XCTAssertEqual(viewport.scale, 0.5)
+        XCTAssertTrue(viewport.isFit)
+        viewport.zoom(by: 0.5, at: .zero, holding: .zero)
+        XCTAssertEqual(viewport.scale, 0.25)
+        XCTAssertFalse(viewport.isFit)
+        viewport.reset(imageSize: wide, in: window)
+        XCTAssertEqual(viewport.scale, 0.5)
+        XCTAssertTrue(viewport.isFit)
+    }
 }

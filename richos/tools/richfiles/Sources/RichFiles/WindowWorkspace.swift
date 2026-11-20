@@ -14,7 +14,6 @@ final class WindowWorkspace: ObservableObject {
     @Published private(set) var secondary: BrowserModel?
     @Published private(set) var isSplit = false
     @Published private(set) var active = BrowserPaneSide.primary
-    @Published private(set) var previousDockedSession: Data?
     private let defaults: UserDefaults
     private var commands: [BrowserPaneSide: (owner: UUID, run: (BrowserCommand) -> Bool)] = [:]
 
@@ -67,18 +66,18 @@ final class WindowWorkspace: ObservableObject {
         _ = commands[active]?.run(command)
     }
 
-    func sessionData(includeGit: Bool = false) -> Data? {
+    func sessionData() -> Data? {
         guard let first = primary.sessionData() else { return nil }
         let second = secondary?.sessionData()
         guard secondary == nil || second != nil else { return nil }
         let snapshot = Session(primary: first, secondary: second, split: isSplit, active: active,
-                               git: includeGit ? git.makeSnapshot() : nil)
+                               git: nil)
         guard let data = try? JSONEncoder().encode(snapshot), data.count <= Self.maximumSessionBytes else { return nil }
         return data
     }
 
     @discardableResult
-    func restoreSession(_ data: Data, docked: Bool = false, chat: String? = nil) -> Bool {
+    func restoreSession(_ data: Data) -> Bool {
         guard data.count <= Self.maximumSessionBytes else { return false }
         guard let snapshot = try? JSONDecoder().decode(Session.self, from: data) else {
             guard primary.restoreSession(data) else { return false }
@@ -102,23 +101,17 @@ final class WindowWorkspace: ObservableObject {
         isSplit = snapshot.split
         active = isSplit ? snapshot.active : .primary
         if let state = snapshot.git {
-            git.startSnapshot(state, folder: activeModel.folder, currentChat: chat, docked: docked)
+            git.startSnapshot(state, folder: activeModel.folder)
         } else {
             git.close()
         }
         return true
     }
 
-    func acceptDockedSession(_ data: Data, chat: String? = nil) -> Bool {
-        let previous = sessionData()
-        guard restoreSession(data, docked: true, chat: chat) else { return false }
-        previousDockedSession = previous
-        return true
-    }
-
-    func restorePreviousDockedSession() -> Bool {
-        guard let previousDockedSession else { return false }
-        return acceptDockedSession(previousDockedSession)
+    static func gitSession(_ snapshot: GitPanelSnapshot) throws -> Data {
+        let primary = try BrowserModel.sessionData(for: snapshot.repository.url)
+        return try JSONEncoder().encode(Session(primary: primary, secondary: nil, split: false,
+                                                active: .primary, git: snapshot))
     }
 
     private struct Session: Codable {
@@ -147,58 +140,34 @@ struct WindowBrowserView: View {
     @State private var appeared = false
     @State private var nativeWindowNumber: Int?
     @State private var cleanLaunchDeadline: TimeInterval?
-    @State private var switching = false
     @State private var switchError = ""
     @State private var showSwitchError = false
 
     private let start: URL
-    private let hostOpenWindow: ((URL) -> Void)?
-    private let acceptsKeyboard: () -> Bool
-    private let returnKeyboardFocus: @MainActor @Sendable () -> Void
     private let supportsSessionRestore: Bool
     private let remembersWindowFrame: Bool
     private let handoffID: String?
     private let launchHandoffID: String?
-    private let dockTarget: RichFilesDockTarget?
-    private let hostSwitch: HostSwitch?
-
-    struct HostSwitch {
-        let target: WorkspaceHandoff.Target
-        let application: URL
-        var didUndock: (() -> Void)? = nil
-    }
 
     init(start: URL, actions: BrowserActions, openRequests: FolderOpenDelegate,
-         openWindow: ((URL) -> Void)? = nil, acceptsKeyboard: @escaping () -> Bool = { true },
          supportsSessionRestore: Bool = false, remembersWindowFrame: Bool = false,
-         returnKeyboardFocus: @escaping @MainActor @Sendable () -> Void = {},
-         handoffID: String? = nil, launchHandoffID: String? = nil,
-         dockTarget: RichFilesDockTarget? = nil, hostSwitch: HostSwitch? = nil) {
+         handoffID: String? = nil, launchHandoffID: String? = nil) {
         _workspace = StateObject(wrappedValue: WindowWorkspace(start: start))
         self.start = start
         self.actions = actions
         self.openRequests = openRequests
-        hostOpenWindow = openWindow
-        self.acceptsKeyboard = acceptsKeyboard
-        self.returnKeyboardFocus = returnKeyboardFocus
         self.supportsSessionRestore = supportsSessionRestore
         self.remembersWindowFrame = remembersWindowFrame
         self.handoffID = handoffID
         self.launchHandoffID = launchHandoffID
-        self.dockTarget = dockTarget
-        self.hostSwitch = hostSwitch
     }
 
     var body: some View {
         GitBrowserSplit(git: workspace.git) {
             browserLayout
         }
-        .modifier(BrowserAppearance(setsWindowAppearance: hostOpenWindow == nil))
-        .background {
-            if hostOpenWindow == nil {
-                BrowserWindowReference(report: attachWindow)
-            }
-        }
+        .modifier(BrowserAppearance(setsWindowAppearance: true))
+        .background { BrowserWindowReference(report: attachWindow) }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { notice in
             if let window = notice.object as? NSWindow, window.windowNumber == nativeWindowNumber {
                 receiveFolderOpen()
@@ -210,11 +179,10 @@ struct WindowBrowserView: View {
             NotificationCenter.default.publisher(for: NSWindow.didResizeNotification),
             NotificationCenter.default.publisher(for: NSWindow.willCloseNotification)
         ), perform: saveWindowFrame)
-        .disabled(switching)
         .focusedSceneValue(\.browserCommand) { command in
-            if !switching { workspace.perform(command) }
+            workspace.perform(command)
         }
-        .alert("Could not switch RichFiles", isPresented: $showSwitchError) {
+        .alert("Could not open Git in RichFiles", isPresented: $showSwitchError) {
             Button("OK", role: .cancel) {}
         } message: {
             Text(switchError)
@@ -261,35 +229,33 @@ struct WindowBrowserView: View {
     }
 
     private func appear() {
-            if !appeared {
-                appeared = true
-                dockTarget?.attach(workspace: workspace, actions: actions)
-                if let handoffID, let id = UUID(uuidString: handoffID) {
+        if !appeared {
+            appeared = true
+            if let handoffID, let id = UUID(uuidString: handoffID) {
+                openRequests.markHandoffOpened(id)
+                acceptHandoff(id)
+            } else if supportsSessionRestore {
+                let firstWindow = openRequests.claimInitialBrowser()
+                if firstWindow, let launchHandoffID, let id = UUID(uuidString: launchHandoffID) {
                     openRequests.markHandoffOpened(id)
                     acceptHandoff(id)
-                } else if supportsSessionRestore {
-                    let firstWindow = openRequests.claimInitialBrowser()
-                    if firstWindow, let launchHandoffID, let id = UUID(uuidString: launchHandoffID) {
-                        openRequests.markHandoffOpened(id)
-                        acceptHandoff(id)
-                    } else if firstWindow, let id = openRequests.takeFirstHandoff() {
-                        acceptHandoff(id)
-                    } else if restoreSession, let session = savedSession ?? (firstWindow ? lastBrowserSession : nil),
-                              !session.isEmpty {
-                        workspace.restoreSession(session)
-                    } else if firstWindow {
-                        cleanLaunchDeadline = ProcessInfo.processInfo.systemUptime + 3
-                    }
+                } else if firstWindow, let id = openRequests.takeFirstHandoff() {
+                    acceptHandoff(id)
+                } else if restoreSession, let session = savedSession ?? (firstWindow ? lastBrowserSession : nil),
+                          !session.isEmpty {
+                    workspace.restoreSession(session)
+                } else if firstWindow {
+                    cleanLaunchDeadline = ProcessInfo.processInfo.systemUptime + 3
                 }
             }
-            receiveFolderOpen()
+        }
+        receiveFolderOpen()
     }
 
     private func pane(_ model: BrowserModel, side: BrowserPaneSide, size: CGSize) -> some View {
-        BrowserView(model: model, workspace: workspace, side: side, windowSize: size, actions: actions, openWindow: hostOpenWindow,
-                    acceptsKeyboard: { !switching && acceptsKeyboard() && workspace.active == side },
-                    returnKeyboardFocus: returnKeyboardFocus, hostSwitchTitle: hostSwitch?.target.title,
-                    switchHost: switchHost, sessionChanged: { saveSession(rememberWindow: true) })
+        BrowserView(model: model, workspace: workspace, side: side, windowSize: size, actions: actions,
+                    acceptsKeyboard: { workspace.active == side },
+                    sessionChanged: { saveSession(rememberWindow: true) })
     }
 
     private func saveSession(rememberWindow: Bool = false) {
@@ -328,27 +294,8 @@ struct WindowBrowserView: View {
         if notice.name == NSWindow.willCloseNotification { openRequests.releasePrimaryPlacement(for: window) }
     }
 
-    private func switchHost() {
-        guard let hostSwitch, !switching else { return }
-        let sourceWindow = NSApp.keyWindow
-        switching = true
-        Task {
-            defer { switching = false }
-            do {
-                try await actions.settleForHostSwitch()
-                guard let data = workspace.sessionData(includeGit: true) else { throw WorkspaceHandoff.HandoffError.invalid }
-                try await WorkspaceHandoff.send(data, to: hostSwitch.target, application: hostSwitch.application)
-                if hostSwitch.target == .docked { sourceWindow?.performClose(nil) }
-                else { hostSwitch.didUndock?() }
-            } catch {
-                switchError = error.localizedDescription
-                showSwitchError = true
-            }
-        }
-    }
-
     private func acceptHandoff(_ id: UUID) {
-        do { try WorkspaceHandoff.accept(id, for: .standalone, into: workspace) }
+        do { try WorkspaceHandoff.accept(id, into: workspace) }
         catch { switchError = error.localizedDescription; showSwitchError = true }
     }
 
@@ -364,8 +311,12 @@ struct WindowBrowserView: View {
         guard let nativeWindowNumber,
               (NSApp.keyWindow ?? NSApp.mainWindow)?.windowNumber == nativeWindowNumber else { return }
         let folders = openRequests.takePending()
-        if folders.count == 1, let folder = folders.first {
-            workspace.activeModel.openFolder(folder)
+        if folders.count == 1, let location = folders.first {
+            if location.hasDirectoryPath || (try? location.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true {
+                workspace.activeModel.openFolder(location)
+            } else {
+                workspace.activeModel.revealFile(location)
+            }
         } else {
             for folder in folders { workspace.activeModel.newTab(folder) }
         }

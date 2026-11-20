@@ -7,7 +7,7 @@ let package = Package(
     products: [
         .library(name: "RichFilesCore", targets: ["RichFilesCore"]),
         .library(name: "RichFilesBrowser", targets: ["RichFiles"]),
-        .library(name: "RichFilesRail", type: .dynamic, targets: ["RichFilesRail"]),
+        .library(name: "RichFilesIntegration", type: .dynamic, targets: ["RichFilesIntegration"]),
         .executable(name: "RichFiles", targets: ["RichFilesApp"]),
         .executable(name: "RichGlance", targets: ["RichGlance"]),
         .executable(name: "RichFilesWindowGestures", targets: ["RichFilesWindowGestures"])
@@ -18,10 +18,9 @@ let package = Package(
         .executableTarget(name: "RichFilesApp", dependencies: ["RichFiles"]),
         .executableTarget(name: "RichGlance", dependencies: ["RichFilesCore"]),
         .executableTarget(name: "RichFilesWindowGestures", dependencies: ["RichFilesCore"]),
-        .target(name: "RichFilesRail", dependencies: ["RichFiles", "RichFilesCore"]),
+        .target(name: "RichFilesIntegration", dependencies: ["RichFiles", "RichFilesCore"]),
         .testTarget(name: "RichFilesCoreTests", dependencies: ["RichFilesCore"], resources: [.copy("Fixtures/Glance")]),
         .testTarget(name: "RichFilesTests", dependencies: ["RichFiles", "RichFilesCore"]),
-        .testTarget(name: "RichGlanceTests", dependencies: ["RichGlance"]),
-        .testTarget(name: "RichFilesRailTests", dependencies: ["RichFilesRail"])
+        .testTarget(name: "RichGlanceTests", dependencies: ["RichGlance"])
     ]
 )

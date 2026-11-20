@@ -101,6 +101,114 @@ pub async fn cleaner_recording_frame(window: tauri::WebviewWindow, recording: u3
     tauri::ipc::Response::new(Vec::new())
 }
 
+/// RichFiles pictures its own key window, with the same frame format as RichCleaner.
+#[richos_command::command]
+pub async fn richfiles_recording_frame(window: tauri::WebviewWindow) -> tauri::ipc::Response {
+    #[cfg(target_os = "macos")]
+    if window.label() == "main" {
+        let frame = tauri::async_runtime::spawn_blocking(richfiles_frame::take)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        return tauri::ipc::Response::new(frame);
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _window = window;
+    tauri::ipc::Response::new(Vec::new())
+}
+
+#[cfg(target_os = "macos")]
+mod richfiles_frame {
+    use objc2::{
+        msg_send,
+        runtime::{AnyClass, AnyObject},
+    };
+    use std::ffi::{CStr, OsStr};
+    use std::io::Read;
+    use std::os::fd::AsRawFd;
+    use std::os::unix::{ffi::OsStrExt, net::UnixStream};
+    use std::path::Path;
+    use std::time::Duration;
+
+    // Darwin's private-per-user temporary directory, independent of the
+    // caller's environment. This is _CS_DARWIN_USER_TEMP_DIR in unistd.h.
+    const USER_TEMP_DIR: libc::c_int = 65_537;
+
+    pub fn take() -> Option<Vec<u8>> {
+        let pid = frontmost_richfiles()?;
+        let mut path = [0u8; 1024];
+        let size = unsafe { libc::confstr(USER_TEMP_DIR, path.as_mut_ptr().cast(), path.len()) };
+        if !(2..=path.len()).contains(&size) {
+            return None;
+        }
+        let directory = Path::new(OsStr::from_bytes(&path[..size - 1]));
+        let stream = UnixStream::connect(directory.join(format!("richfiles-video.{pid}"))).ok()?;
+        let mut peer: libc::pid_t = 0;
+        let mut size = std::mem::size_of_val(&peer) as libc::socklen_t;
+        // SAFETY: LOCAL_PEERPID writes a pid_t into our initialized buffer.
+        let result = unsafe {
+            libc::getsockopt(
+                stream.as_raw_fd(),
+                libc::SOL_LOCAL,
+                libc::LOCAL_PEERPID,
+                std::ptr::from_mut(&mut peer).cast(),
+                &mut size,
+            )
+        };
+        if result != 0 || size as usize != std::mem::size_of_val(&peer) || peer != pid {
+            return None;
+        }
+        stream
+            .set_read_timeout(Some(Duration::from_millis(400)))
+            .ok()?;
+        let limit = crate::window_picture::MAX_BYTES + 8;
+        let mut frame = Vec::new();
+        stream
+            .take((limit + 1) as u64)
+            .read_to_end(&mut frame)
+            .ok()?;
+        // Recheck focus after we receive the frame, so leaving RichFiles while
+        // it draws a picture does not capture a late frame of that window.
+        if frame.len() > limit
+            || !frame
+                .get(8..)
+                .is_some_and(|jpeg| jpeg.starts_with(&[0xff, 0xd8]))
+            || frontmost_richfiles() != Some(pid)
+        {
+            return None;
+        }
+        static RECEIVED: std::sync::Once = std::sync::Once::new();
+        RECEIVED.call_once(|| eprintln!("[richos] video: received a picture of the active RichFiles window"));
+        Some(frame)
+    }
+
+    fn frontmost_richfiles() -> Option<i32> {
+        objc2::rc::autoreleasepool(|_| {
+            let workspace_class = AnyClass::get(c"NSWorkspace")?;
+            // SAFETY: documented class method and NSRunningApplication/NSString
+            // accessors. The identifier is read inside the owning autorelease pool.
+            unsafe {
+                let workspace: *mut AnyObject = msg_send![workspace_class, sharedWorkspace];
+                let app: *mut AnyObject = msg_send![workspace, frontmostApplication];
+                if app.is_null() {
+                    return None;
+                }
+                let identifier: *mut AnyObject = msg_send![app, bundleIdentifier];
+                if identifier.is_null() {
+                    return None;
+                }
+                let name: *const libc::c_char = msg_send![identifier, UTF8String];
+                if name.is_null() || CStr::from_ptr(name).to_bytes() != b"app.richos.richfiles" {
+                    return None;
+                }
+                let pid: i32 = msg_send![app, processIdentifier];
+                (pid > 0).then_some(pid)
+            }
+        })
+    }
+}
+
 /// Write the video where `choose` points. `choose` is the system save sheet in the app and a
 /// closure in the tests; it is given the file name to suggest. The bytes go to a new hidden file
 /// in the destination folder first and are renamed over the chosen name, so a save that fails

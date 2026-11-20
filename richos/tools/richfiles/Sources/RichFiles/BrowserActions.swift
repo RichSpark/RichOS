@@ -50,7 +50,6 @@ final class BrowserActions: ObservableObject {
     private var localDrag: BrowserDragSelection?
     private var transferTask: Task<Void, Never>?
     private var preparingQueue: [UUID: Task<Void, Never>] = [:]
-    private var settlingTransfer = false
     private var issuesAreFromTransfer = false
     private var retryRequest: BrowserTransferRequest?
     private var settledTransferID: UUID?
@@ -186,7 +185,7 @@ final class BrowserActions: ObservableObject {
         status = cut ? "Cut \(itemCount(sources.count))." : "Copied \(itemCount(sources.count)) to the clipboard."
     }
 
-    var canScheduleTransfer: Bool { !settlingTransfer && !replacingFile && (!busy || transfer?.running == true) }
+    var canScheduleTransfer: Bool { !replacingFile && (!busy || transfer?.running == true) }
 
     func paste(into folder: URL, conflict: BrowserConflictPolicy = .skip, destination: BrowserTransferDestination? = nil) {
         guard canScheduleTransfer else { return }
@@ -271,22 +270,6 @@ final class BrowserActions: ObservableObject {
         transferTask?.cancel()
     }
 
-    func settleForHostSwitch() async throws {
-        guard !busy || transferTask != nil else { throw WorkspaceHandoff.HandoffError.busy }
-        settlingTransfer = true
-        defer { settlingTransfer = false }
-        let pendingCount = queuedTransfers.count
-        for task in preparingQueue.values { task.cancel() }
-        preparingQueue.removeAll()
-        queuedTransfers.removeAll()
-        queuePaused = false
-        if let running = transferTask {
-            cancelTransfer()
-            await running.value
-        }
-        if pendingCount > 0 { status += " Stopped \(itemCount(pendingCount)) in the transfer queue." }
-    }
-
     func removeQueuedTransfer(_ id: UUID) {
         preparingQueue.removeValue(forKey: id)?.cancel()
         queuedTransfers.removeAll { $0.id == id }
@@ -323,7 +306,7 @@ final class BrowserActions: ObservableObject {
     }
 
     private func startNextQueuedTransfer() {
-        guard !busy, !queuePaused, !settlingTransfer, let next = queuedTransfers.first else { return }
+        guard !busy, !queuePaused, let next = queuedTransfers.first else { return }
         switch next.state {
         case .preparing: return
         case .unavailable:
