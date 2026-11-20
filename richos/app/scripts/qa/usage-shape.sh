@@ -158,11 +158,12 @@ args = [claude, '--print', '--input-format=stream-json', '--output-format=stream
         '--verbose', '--setting-sources', '', '--no-session-persistence', '--tools', '',
         '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}']
 folder = os.environ.get('CLAUDE_CONFIG_DIR') or os.path.join(os.path.expanduser('~'), '.claude')
-store = quota_usage_store.Store(os.environ.get('RICHOS_QUOTA_FIXTURE_STORE') or quota_usage_store.data_dir(),
-                                quota_usage_store.account_key(claude, folder))
+store = quota_usage_store.Store.for_account(
+    os.environ.get('RICHOS_QUOTA_FIXTURE_STORE') or quota_usage_store.data_dir(), claude, folder)
 asked = int(time.time() * 1000)
 if not store.claim(asked, 'usage-shape'):
-    print('usage-shape.sh: the shared quota reading is still within its five-minute window', file=sys.stderr)
+    reason = 'the next shared quota check is not due' if store.verified else 'Claude account identity is unavailable'
+    print('usage-shape.sh: ' + reason, file=sys.stderr)
     sys.exit(2)
 answer, _ = read_wire(args, os.environ, remaining, requests,
                             gap=int(seconds) // 2, response_id='quota-2', cwd=os.environ.get('HOME') or '/')

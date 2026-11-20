@@ -49,6 +49,9 @@ with tempfile.TemporaryDirectory(prefix="claude-quota-proof-") as temporary:
                        + shlex.quote(str(fixture_code)) + ' "$@"\n')
     fixture_code.write_text('''import json, os, sys
 from pathlib import Path
+if sys.argv[1:] == ["auth", "status", "--json"]:
+    print(json.dumps({"loggedIn": True, "email": "fixture@example.invalid"}))
+    sys.exit(0)
 if os.environ.get("QUOTA_PROOF_EOF") == "1":
     sys.exit(0)
 assert "--no-session-persistence" in sys.argv

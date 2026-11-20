@@ -17,6 +17,9 @@ class QuotaDeadlines(unittest.TestCase):
             root=Path(tmp); binary=root/'claude'; child_pid=root/'child.pid'
             binary.write_text(f'''#!{sys.executable}
 import json,os,signal,sys,time
+if sys.argv[1:4] == ['auth', 'status', '--json']:
+    print('{{"loggedIn":true,"email":"fixture@example.invalid"}}')
+    sys.exit(0)
 if '--version' in sys.argv:
     {'time.sleep(300)' if version_hangs else "print('fixture'); sys.exit(0)"}
 for _ in range(2): request=json.loads(sys.stdin.readline())

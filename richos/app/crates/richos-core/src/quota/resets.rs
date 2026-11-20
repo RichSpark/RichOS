@@ -399,7 +399,7 @@ impl Service {
             let store = match store {
                 Some(store) => store,
                 None => {
-                    default = super::shared_usage::Store::new(&self.root, super::shared_usage::account_key(bin, None));
+                    default = super::shared_usage::Store::for_account(&self.root, bin, None);
                     &default
                 }
             };

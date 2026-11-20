@@ -102,8 +102,8 @@ def main(argv):
     if not math.isfinite(seconds) or seconds <= 0:
         raise ValueError('--seconds must be finite and positive')
     os.environ.update(CLAUDE_CONFIG_DIR=folder, HOME=home)
-    store = quota_usage_store.Store(os.environ.get("RICHOS_QUOTA_FIXTURE_STORE") or quota_usage_store.data_dir(),
-                                    quota_usage_store.account_key(claude, folder))
+    store = quota_usage_store.Store.for_account(
+        os.environ.get("RICHOS_QUOTA_FIXTURE_STORE") or quota_usage_store.data_dir(), claude, folder)
     asked = int(time.time() * 1000)
     if not store.claim(asked, "guest-diagnostic"):
         print(json.dumps({'folder': folder, 'answered': False, 'saved': store.saved().get('answer')}))

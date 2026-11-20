@@ -12,6 +12,7 @@ import pwd
 import subprocess
 import sys
 import tempfile
+import time
 
 
 INTERVAL_MS = 300_000
@@ -83,7 +84,7 @@ def data_dir():
 
 
 @functools.lru_cache(maxsize=16)
-def account_key(binary, folder):
+def _account_identity(binary, _folder, _period):
     if binary:
         env = {key: value for key, value in os.environ.items() if key != "CLAUDECODE"}
         try:
@@ -92,27 +93,56 @@ def account_key(binary, folder):
             status = json.loads(result.stdout)
             email = status.get("email", "").strip().lower()
             org = status.get("orgId") or ""
-            if email and isinstance(org, str):
+            if not isinstance(org, str):
+                org = ""
+            if email:
                 return hashlib.sha256(f"account\0{email}\0{org}".encode()).hexdigest()
         except (OSError, ValueError, AttributeError, subprocess.SubprocessError):
             pass
-    return hashlib.sha256(f"folder\0{Path(folder).resolve()}".encode()).hexdigest()
+    return None
 
 
 class Store:
     def __init__(self, root, key):
         self.folder = Path(root) / "claude-usage"
         self.key = key
+        self.verified = True
         self.record = self.folder / (key + ".json")
         self.lock = self.folder / (key + ".lock")
 
-    def saved(self):
+    @classmethod
+    def for_account(cls, root, binary, folder):
+        folder = str(Path(folder).resolve())
+        folder_key = hashlib.sha256(f"folder\0{folder}".encode()).hexdigest()
+        identity = _account_identity(binary, folder, int(time.monotonic()) // 60)
+        binding = Path(root) / "claude-usage" / (folder_key + ".identity")
+        previous = cls.read(binding)
+        if identity is not None:
+            if identity != previous:
+                try:
+                    binding.parent.mkdir(parents=True, exist_ok=True)
+                    cls.write(binding, identity)
+                except OSError:
+                    pass
+            return cls(root, identity)
+        valid = isinstance(previous, str) and len(previous) == 64 and all(c in "0123456789abcdef" for c in previous)
+        store = cls(root, previous if valid else folder_key)
+        # Auth status can be temporarily unavailable. A cached answer remains
+        # readable without granting an unverified reader a second budget.
+        store.verified = False
+        return store
+
+    @staticmethod
+    def read(path):
         try:
-            with self.record.open("rb") as stream:
-                record = json.loads(stream.read(262_145))
-            return record if isinstance(record, dict) else {}
+            with path.open("rb") as stream:
+                return json.loads(stream.read(262_145))
         except (OSError, ValueError):
-            return {}
+            return None
+
+    def saved(self):
+        record = self.read(self.record)
+        return record if isinstance(record, dict) else {}
 
     @contextlib.contextmanager
     def locked(self, nonblocking):
@@ -129,14 +159,15 @@ class Store:
         finally:
             os.close(fd)
 
-    def save(self, record):
-        fd, path = tempfile.mkstemp(dir=self.folder, suffix=".tmp")
+    @staticmethod
+    def write(target, value):
+        fd, path = tempfile.mkstemp(dir=target.parent, suffix=".tmp")
         try:
             with os.fdopen(fd, "w") as stream:
-                json.dump(record, stream, separators=(",", ":"))
+                json.dump(value, stream, separators=(",", ":"))
                 stream.flush()
                 os.fsync(stream.fileno())
-            os.replace(path, self.record)
+            os.replace(path, target)
         finally:
             Path(path).unlink(missing_ok=True)
 
@@ -156,6 +187,8 @@ class Store:
                    refused + INTERVAL_MS if isinstance(refused, int) else 0)
 
     def claim(self, now, source="terminal"):
+        if not self.verified:
+            return False
         if now < self.next_request_at(self.saved(), now):
             return False
         with self.locked(nonblocking=True) as locked:
@@ -166,7 +199,7 @@ class Store:
                 return False
             cadence = self.interval(saved, now)
             saved["requestedAt"] = now
-            self.save(saved)
+            self.write(self.record, saved)
         print(f"quota request: account={self.key} at_ms={now} source={source} interval_ms={cadence}", file=sys.stderr)
         return True
 
@@ -181,4 +214,4 @@ class Store:
                 saved["fastUntil"] = fast_until(answer, saved.get("answer"))
                 saved["answer"] = answer
             saved["refusal"] = refusal
-            self.save(saved)
+            self.write(self.record, saved)

@@ -987,8 +987,7 @@ def shared_get_usage(a, now):
     binary = claude_binary()
     folder = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.path.expanduser("~"), ".claude")
     root = getattr(a, "usage_root", None) or os.environ.get("RICHOS_QUOTA_FIXTURE_STORE") or quota_usage_store.data_dir()
-    store = quota_usage_store.Store(root,
-                                   quota_usage_store.account_key(binary, folder))
+    store = quota_usage_store.Store.for_account(root, binary, folder)
     asked = int(time.time() * 1000)
     live = None
     try:
@@ -1014,7 +1013,8 @@ def shared_get_usage(a, now):
         if live is not None:
             live.update(schedule)
             return live
-        return {**schedule, "state": "failed", "why": reason or "No saved Claude Code quota reading yet"}
+        why = "No saved Claude Code quota reading yet" if store.verified else "Claude account identity is unavailable"
+        return {**schedule, "state": "failed", "why": reason or why}
     checked_at = answer.get("checkedAt")
     if not isinstance(checked_at, int) or checked_at > int(time.time() * 1000):
         return {"state": "failed", "why": "The saved Claude Code quota reading has no valid time"}

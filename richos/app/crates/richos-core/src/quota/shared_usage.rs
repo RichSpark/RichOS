@@ -91,6 +91,7 @@ fn fast_until(answer: &Answer, previous: Option<&Answer>) -> Option<u64> {
 pub(super) struct Store {
     root: PathBuf,
     key: String,
+    verified: bool,
 }
 
 struct Lock {
@@ -109,7 +110,37 @@ impl Drop for Lock {
 
 impl Store {
     pub fn new(data_dir: &Path, key: String) -> Self {
-        Self { root: data_dir.join("claude-usage"), key }
+        Self { root: data_dir.join("claude-usage"), key, verified: true }
+    }
+
+    pub fn for_account(data_dir: &Path, bin: &Path, folder: Option<&Path>) -> Self {
+        Self::from_identity(data_dir, folder_key(folder), crate::provider_auth::quota_account_key(bin, folder))
+    }
+
+    fn from_identity(data_dir: &Path, folder: String, identity: Option<String>) -> Self {
+        let binding = data_dir.join("claude-usage").join(&folder).with_extension("identity");
+        let previous = super::gate::read_json::<String>(&binding).ok().filter(|key| {
+            key.len() == 64 && key.bytes().all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+        });
+        if let Some(key) = identity {
+            if previous.as_ref() != Some(&key) {
+                let _saved = atomic_write(&binding, &key);
+            }
+            return Self::new(data_dir, key);
+        }
+        // A transient auth-status failure can't select a second budget. Retain
+        // the last bound reading and leave requests to a verified reader.
+        Self { root: data_dir.join("claude-usage"), key: previous.unwrap_or(folder), verified: false }
+    }
+
+    pub fn verified(&self) -> bool {
+        self.verified
+    }
+
+    #[cfg(test)]
+    pub fn fixture(mut self) -> Self {
+        self.verified = true;
+        self
     }
 
     fn record(&self) -> PathBuf {
@@ -123,6 +154,7 @@ impl Store {
     /// Publish the reservation before the request. A process killed anywhere after this
     /// point still used its slot. Readers can use the last answer throughout the request.
     pub fn claim(&self, now: u64, interval_ms: u64, source: &str) -> io::Result<bool> {
+        if !self.verified { return Ok(false); }
         if now < self.saved().next_request_at(now, interval_ms) { return Ok(false); }
         let Some(_lock) = self.lock(false)? else { return Ok(false) };
         let mut saved = self.saved();
@@ -203,10 +235,7 @@ impl Store {
     }
 }
 
-pub(super) fn account_key(bin: &Path, folder: Option<&Path>) -> String {
-    if let Some(key) = crate::provider_auth::quota_account_key(bin, folder) {
-        return key;
-    }
+fn folder_key(folder: Option<&Path>) -> String {
     let configured = std::env::var_os("CLAUDE_CONFIG_DIR").filter(|s| !s.is_empty());
     let folder = folder.map(Path::to_path_buf).or_else(|| configured.map(PathBuf::from))
         .unwrap_or_else(|| std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default().join(".claude"));
@@ -254,6 +283,34 @@ mod tests {
         assert!(account.claim(start, IDLE_INTERVAL_MS, "fixture").unwrap());
         assert!(!account.claim(start + IDLE_INTERVAL_MS - 1, IDLE_INTERVAL_MS, "fixture").unwrap());
         assert!(account.claim(start + REFRESH_INTERVAL_MS, REFRESH_INTERVAL_MS, "fixture").unwrap());
+    }
+
+    #[test]
+    fn an_unverified_reader_can_reuse_the_bound_answer_without_taking_a_slot() {
+        let dir = Scratch::new();
+        let folder = folder_key(Some(dir.path()));
+        let before = Store::from_identity(dir.path(), folder.clone(), None);
+        assert!(!before.claim(1_000, 0, "fixture").unwrap());
+        let verified = Store::from_identity(dir.path(), folder.clone(), Some("a".repeat(64)));
+        assert!(verified.claim(1_000, 0, "fixture").unwrap());
+        verified.finish(1_000, 1_001, Ok(Some(vec![]))).unwrap();
+        let after = Store::from_identity(dir.path(), folder, None);
+        assert_eq!(after.saved().answer.unwrap().checked_at, 1_001);
+        let then = 1_001 + REFRESH_INTERVAL_MS;
+        assert!(!after.claim(then, 0, "fixture").unwrap());
+        let library = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../engine/scripts/lib");
+        let program = r#"
+import sys
+sys.path.insert(0, sys.argv[1])
+from quota_usage_store import Store
+store = Store.for_account(sys.argv[2], None, sys.argv[2])
+assert store.saved()["answer"]["checkedAt"] == 1001
+assert not store.claim(301001)
+"#;
+        let status = std::process::Command::new("python3").args(["-B", "-c", program])
+            .arg(library).arg(dir.path()).status().unwrap();
+        assert!(status.success());
+        assert!(verified.claim(then, 0, "fixture").unwrap());
     }
 
     #[test]

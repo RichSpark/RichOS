@@ -316,7 +316,7 @@ sys.path.insert(0, sys.argv[2])
 import quota_usage_store
 
 folder = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.path.expanduser("~"), ".claude")
-store = quota_usage_store.Store(quota_usage_store.data_dir(), quota_usage_store.account_key(sys.argv[1], folder))
+store = quota_usage_store.Store.for_account(quota_usage_store.data_dir(), sys.argv[1], folder)
 asked = int(time.time() * 1000)
 if not store.claim(asked, "test-login-renewal"):
     sys.exit(1)

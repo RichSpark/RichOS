@@ -1678,6 +1678,7 @@ US="$QA/usage-shape.sh"
 cat > "$TMP/fake-usage-claude" <<'FAKE'
 #!/bin/sh
 [ "${1:-}" = "--version" ] && { echo "9.9.9 (scripted)"; exit 0; }
+[ "${1:-} ${2:-} ${3:-}" = "auth status --json" ] && { echo '{"loggedIn":true,"email":"fixture@example.invalid"}'; exit 0; }
 [ -n "${FAKE_SILENT:-}" ] && { cat >/dev/null; exit 0; }
 while IFS= read -r line; do
   id=$(printf '%s' "$line" | sed -n 's/.*"request_id":"\([^"]*\)".*/\1/p')

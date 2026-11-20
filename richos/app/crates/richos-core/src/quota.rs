@@ -1053,7 +1053,7 @@ pub struct Service {
     source: Mutex<Box<dyn Source>>,
     snapshot: Mutex<Snapshot>,
     usage_root: PathBuf,
-    usage_keys: Mutex<BTreeMap<String, (PathBuf, String)>>,
+    usage_stores: Mutex<BTreeMap<String, (PathBuf, shared_usage::Store, u64)>>,
     policy: Mutex<Policy>,
     policy_path: PathBuf,
     cwd: PathBuf,
@@ -1185,7 +1185,7 @@ impl Service {
             source: Mutex::new(Box::new(probe::ClaudeSource::controlled(control.clone()))),
             snapshot: Mutex::new(Snapshot::default()),
             usage_root: data_dir.to_path_buf(),
-            usage_keys: Mutex::new(BTreeMap::new()),
+            usage_stores: Mutex::new(BTreeMap::new()),
             policy: Mutex::new(policy),
             policy_path,
             cwd: data_dir.to_path_buf(),
@@ -1951,7 +1951,7 @@ impl Service {
         Ok(answer)
     }
     pub fn added_account_connection_changed(&self, id: &str) {
-        self.usage_keys.lock().unwrap().remove(id);
+        self.usage_stores.lock().unwrap().remove(id);
         self.extra.lock().unwrap().remove(id);
     }
     /// A used weekly reset ends Account 1's READING (`refresh`), not its sign-in: the account
@@ -1969,7 +1969,7 @@ impl Service {
     pub fn remove_account(&self, id: &str) -> io::Result<View> {
         self.accounts.remove(id)?;
         self.extra.lock().unwrap().remove(id);
-        self.usage_keys.lock().unwrap().remove(id);
+        self.usage_stores.lock().unwrap().remove(id);
         self.account_refreshes.lock().unwrap().remove(id);
         let _best_effort = self.publish();
         Ok(self.view())
@@ -2006,12 +2006,18 @@ impl Service {
     }
 
     fn usage_store(&self, bin: &Path, id: &str, folder: Option<&Path>) -> shared_usage::Store {
-        if let Some((_, key)) = self.usage_keys.lock().unwrap().get(id).filter(|(path, _)| path == bin) {
-            return shared_usage::Store::new(&self.usage_root, key.clone());
+        let now = crate::util::now_millis();
+        if let Some((_, store, _)) = self.usage_stores.lock().unwrap().get(id)
+            .filter(|(path, _, expires)| path == bin && now < *expires) {
+            return store.clone();
         }
-        let key = shared_usage::account_key(bin, folder);
-        self.usage_keys.lock().unwrap().insert(id.to_string(), (bin.to_path_buf(), key.clone()));
-        shared_usage::Store::new(&self.usage_root, key)
+        let store = shared_usage::Store::for_account(&self.usage_root, bin, folder);
+        let expires = if store.verified() { u64::MAX } else { now.saturating_add(FAST_REFRESH_INTERVAL_MS) };
+        #[cfg(test)]
+        let store = store.fixture();
+        self.usage_stores.lock().unwrap().insert(id.to_string(),
+            (bin.to_path_buf(), store.clone(), expires));
+        store
     }
 
     fn read_shared_usage(
@@ -2179,7 +2185,7 @@ impl Service {
     }
     fn clear_connection(&self, keep_sign_in: bool) {
         self.source.lock().unwrap().disconnect();
-        self.usage_keys.lock().unwrap().remove(crate::claude_accounts::ACCOUNT_ONE);
+        self.usage_stores.lock().unwrap().remove(crate::claude_accounts::ACCOUNT_ONE);
         self.resets.clear_connection();
         let mut snapshot = self.snapshot.lock().unwrap();
         let signed_in = if keep_sign_in { snapshot.signed_in } else { None };
