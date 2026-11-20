@@ -118,6 +118,7 @@
   function show() {
     page.hidden = false;
     document.body.classList.add("page-open");
+    $("page-crumb").textContent = "RichPass";
     $("page-crumb").hidden = false;
     read();
     const t = $("rp-title");

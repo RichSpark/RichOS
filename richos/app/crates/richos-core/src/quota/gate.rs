@@ -80,12 +80,19 @@ fn decide_call(state: &Path, account: Option<&str>, helper: bool, now: u64) -> (
     }
     let row = account.and_then(|id| view.accounts.iter().find(|a| a.id == id));
     let exhausted_until = row.and_then(|a| a.exhausted_until);
-    let (windows, checked_at, message, speeds, pre_hold, empty_at) = match row {
+    let weekly_points = row.map(|a| &a.weekly_pause_points).unwrap_or(&view.weekly_pause_points).clone();
+    let estimate = row.map(|a| a.fable_estimated_used).unwrap_or(view.fable_estimated_used);
+    let (mut windows, checked_at, message, speeds, pre_hold, empty_at) = match row {
         Some(a) => (a.windows.clone(), a.checked_at, a.message.clone(), a.speeds.clone(), a.pre_hold.clone(), a.empty_at),
         None => (view.windows, view.checked_at, view.message, view.speeds, view.pre_hold, view.empty_at),
     };
     if carries_on && held.is_none() {
         return (Admission::Ready, None);
+    }
+    if let Some(estimate) = estimate.filter(|used| (0. ..=100.).contains(used)) {
+        if let Some(window) = windows.iter_mut().find(|w| super::fable::is_window(&w.id)) {
+            window.used_percent = window.used_percent.max(estimate);
+        }
     }
     let judged = (policy.enabled && policy.validate().is_ok() && checked_at.is_none_or(|t| t <= now)).then(|| Snapshot {
         windows,
@@ -93,6 +100,7 @@ fn decide_call(state: &Path, account: Option<&str>, helper: bool, now: u64) -> (
         retry_at: view.retry_at,
         error: message.map(|_| ReadError::Failed),
         speeds,
+        published_weekly_points: weekly_points,
         // A check that came back with no figures lets work run (`Admission::NoReading`); the
         // gate decides from the same fact the service does.
         empty_at,

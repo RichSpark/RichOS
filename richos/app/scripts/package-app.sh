@@ -1616,7 +1616,7 @@ package_richfiles() (
   bash "$here/package-richfiles.sh" --embedded "$richfiles_stage/payload" &&
     mkdir -p "$app_bundle/Contents/Applications" "$app_bundle/Contents/Frameworks" &&
     ditto "$richfiles_stage/payload/RichFiles.app" "$app_bundle/Contents/Applications/RichFiles.app" &&
-    install -m 755 "$richfiles_stage/payload/libRichFilesRail.dylib" "$app_bundle/Contents/Frameworks/libRichFilesRail.dylib"
+    install -m 755 "$richfiles_stage/payload/libRichFilesIntegration.dylib" "$app_bundle/Contents/Frameworks/libRichFilesIntegration.dylib"
 )
 if ! package_richfiles; then
   warn "The RichFiles app or its docked pane could not be packaged."
@@ -1766,7 +1766,7 @@ richfiles_sign=(--sign - --timestamp=none)
 if [ "$sign_mode" = "developer-id" ]; then
   richfiles_sign=(--sign "$wanted" --options runtime --timestamp)
 fi
-codesign --force "${richfiles_sign[@]}" "$app_bundle/Contents/Frameworks/libRichFilesRail.dylib" || exit 1
+codesign --force "${richfiles_sign[@]}" "$app_bundle/Contents/Frameworks/libRichFilesIntegration.dylib" || exit 1
 codesign --force "${richfiles_sign[@]}" "$richfiles_app/Contents/MacOS/richfiles-archive" || exit 1
 codesign --force "${richfiles_sign[@]}" "$richfiles_app/Contents/Applications/RichGlance.app" || exit 1
 codesign --force "${richfiles_sign[@]}" "$richfiles_app/Contents/Library/LoginItems/RichFiles Window Gestures.app" || exit 1

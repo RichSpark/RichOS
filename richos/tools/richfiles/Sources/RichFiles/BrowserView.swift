@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import RichFilesCore
 import SwiftUI
 import UniformTypeIdentifiers
@@ -24,12 +25,8 @@ struct BrowserView: View {
     @Environment(\.colorScheme) private var scheme
     private let side: BrowserPaneSide
     private let windowSize: CGSize
-    private let hostOpenWindow: ((URL) -> Void)?
     private let acceptsKeyboard: () -> Bool
-    private let returnKeyboardFocus: @MainActor @Sendable () -> Void
     private let sessionChanged: () -> Void
-    private let hostSwitchTitle: String?
-    private let switchHost: () -> Void
     @AppStorage("richfiles.windowsKeys") private var windowsKeys = true
     @AppStorage("richfiles.textSize") private var textSize = BrowserTextSize.standard
     @AppStorage("richfiles.shortcuts.v1") private var shortcutData = Data()
@@ -44,8 +41,6 @@ struct BrowserView: View {
     @State private var sheet: BrowserSheet?
     @State private var transfersVisible = false
     @State private var feedback = ""
-    @State private var rangeAnchor: URL?
-    @State private var selectionCursor: URL?
     @State private var prefixText = ""
     @State private var prefixTime: TimeInterval = 0
     @State private var listRows = 12
@@ -54,7 +49,6 @@ struct BrowserView: View {
     @State private var dropOperation: DropOperation?
     @State private var dropDestination: BrowserTransferDestination?
     @State private var destinationRefresh = UUID()
-    @State private var selectedReferences: [URL: FileReference] = [:]
     @State private var preparingAction = false
     @State private var rowFrames: [URL: CGRect] = [:]
     @State private var fileColumnFrame: CGRect = .null
@@ -77,21 +71,15 @@ struct BrowserView: View {
     }
 
     init(model: BrowserModel, workspace: WindowWorkspace, side: BrowserPaneSide, windowSize: CGSize,
-         actions: BrowserActions, openWindow: ((URL) -> Void)? = nil,
-         acceptsKeyboard: @escaping () -> Bool, returnKeyboardFocus: @escaping @MainActor @Sendable () -> Void,
-         hostSwitchTitle: String?, switchHost: @escaping () -> Void, sessionChanged: @escaping () -> Void) {
+         actions: BrowserActions, acceptsKeyboard: @escaping () -> Bool, sessionChanged: @escaping () -> Void) {
         self.model = model
         self.workspace = workspace
         git = workspace.git
         self.side = side
         self.windowSize = windowSize
         self.actions = actions
-        hostOpenWindow = openWindow
         self.acceptsKeyboard = acceptsKeyboard
-        self.returnKeyboardFocus = returnKeyboardFocus
         self.sessionChanged = sessionChanged
-        self.hostSwitchTitle = hostSwitchTitle
-        self.switchHost = switchHost
     }
 
     var body: some View {
@@ -104,7 +92,7 @@ struct BrowserView: View {
                     if editingAddress && !suggestions.isEmpty {
                         addressSuggestions.focusedValue(\.browserControl, true)
                     }
-                    commandBar.focusedValue(\.browserControl, true)
+                    observeSelection { _ in commandBar }.focusedValue(\.browserControl, true)
                     rule
                 }
                 .font(BrowserTypography.reading(16 * textSize.scale))
@@ -120,7 +108,7 @@ struct BrowserView: View {
             if activePane {
                 VStack(spacing: 0) {
                     rule
-                    statusBar.focusedValue(\.browserControl, true)
+                    observeSelection { _ in statusBar }.focusedValue(\.browserControl, true)
                 }
                 .layoutValue(key: BrowserLayoutKey.self, value: .status)
             }
@@ -140,7 +128,7 @@ struct BrowserView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             if inspectorVisible && !workspace.isSplit {
-                inspector.frame(minWidth: 165, idealWidth: 320, maxWidth: 410)
+                observeSelection { _ in inspector }.frame(minWidth: 165, idealWidth: 320, maxWidth: 410)
                     .background(palette.chrome)
                     .focusedValue(\.browserControl, true)
             }
@@ -157,24 +145,29 @@ struct BrowserView: View {
         .onDisappear { workspace.clearCommands(for: side, owner: commandOwner) }
         .onChange(of: model.tabs.map(\.folder)) { _ in sessionChanged() }
         .onChange(of: model.currentTabID) { _ in sessionChanged() }
-        .onChange(of: model.scrollAnchor) { _ in sessionChanged() }
         .onChange(of: actions.mutationRevision) { _ in model.refresh() }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             actions.refreshClipboard()
         }
         .onChange(of: model.folder) { _ in
-            let returnFocus = editingAddress
             editingAddress = false
             focus = nil
-            if returnFocus { DispatchQueue.main.async(execute: returnKeyboardFocus) }
             suggestions = []
             feedback = ""
-            rangeAnchor = nil
-            selectionCursor = nil
+            model.selection.rangeAnchor = nil
+            model.selection.moveCursor(to: nil)
             prefixText = ""
             prefixTime = 0
         }
-        .task(id: model.selected) { await captureSelection() }
+        .background {
+            observeSelection { selection in
+                Color.clear
+                    .task(id: selection.urls) {
+                        await captureSelection()
+                        if !Task.isCancelled { sessionChanged() }
+                    }
+            }
+        }
         .task(id: DestinationRequest(folder: model.folder, disconnected: model.isDisconnected,
                                      refresh: destinationRefresh)) {
             await captureDropDestination()
@@ -455,10 +448,6 @@ struct BrowserView: View {
                 }
             }
             barButton("Workspaces", "rectangle.on.rectangle", showTitle: true) { sheet = .workspaces }
-            if let hostSwitchTitle {
-                barButton(hostSwitchTitle, hostOpenWindow == nil ? "rectangle.portrait.and.arrow.forward" :
-                            "arrow.up.right.square", showTitle: true, bordered: true, action: switchHost)
-            }
             barButton("Find a Command", "chevron.right.square") { _ = perform(.actionPalette) }
             barButton("Settings", "gearshape") { sheet = .settings }
         }
@@ -482,8 +471,7 @@ struct BrowserView: View {
     }
 
     private func openFolderWindow(_ folder: URL) {
-        if let hostOpenWindow { hostOpenWindow(folder) }
-        else { openWindow(id: "richfiles-folder", value: FolderWindowRequest(folder: folder)) }
+        openWindow(id: "richfiles-folder", value: FolderWindowRequest(folder: folder))
     }
 
     private var commandBar: some View {
@@ -637,7 +625,7 @@ struct BrowserView: View {
                     }
                 }
             }
-            if model.busy {
+            if model.openingFolder || model.busy {
                 ProgressView().controlSize(.mini).padding(4)
                     .frame(maxWidth: .infinity, alignment: .trailing)
                     .accessibilityLabel("Reading files")
@@ -662,6 +650,33 @@ struct BrowserView: View {
                   let entry = model.entries.first(where: { $0.url == url }) else { return nil }
             let entries = model.selected.contains(entry.url) ? model.selectedEntries : [entry]
             return { beginDrag(entry, entries: entries) }
+        }, press: { point, event in
+            guard model.viewMode != .details, let url = rowAt(point),
+                  let entry = model.entries.first(where: { $0.url == url }) else { return false }
+            let modifiers = event.modifierFlags.intersection([.control, .command, .option, .shift])
+            guard modifiers.isSubset(of: [.command, .shift]) else { return false }
+            // Keep a plain press on a selected item available for dragging the
+            // existing group. A normal click can narrow it on release.
+            guard !modifiers.isEmpty || !model.selected.contains(url) else { return false }
+            workspace.select(side)
+            if focus != .items { focus = .items }
+            select(entry, modifiers: modifiers)
+            return true
+        }, click: { start, end, event in
+            // AppKit has already counted the clicks. An unhandled first press
+            // still selects on release and the second release opens the item.
+            guard model.viewMode != .details,
+                  let url = rowAt(start), rowAt(end) == url,
+                  let entry = model.entries.first(where: { $0.url == url }) else { return false }
+            workspace.select(side)
+            if focus != .items { focus = .items }
+            if event.clickCount == 2 {
+                select(entry, modifiers: [])
+                activate([entry])
+            } else {
+                select(entry, modifiers: event.modifierFlags)
+            }
+            return true
         }, controlClick: { point, windowPoint, window in
             guard windowsKeys else { return false }
             let nativeRow = model.viewMode == .details ? detailsViewport.item(at: windowPoint, in: window) : nil
@@ -742,7 +757,8 @@ struct BrowserView: View {
                     LazyHStack(spacing: 0) {
                         ForEach(Array(zip(path.dropLast(), path.dropFirst())), id: \.0) { folder, child in
                             AncestorColumn(folder: folder, child: child, showHidden: model.showHidden,
-                                           revision: actions.mutationRevision, open: model.openFolder)
+                                           revision: actions.mutationRevision, model: model)
+                                .equatable()
                                 .focusedValue(\.browserControl, true)
                                 .frame(width: 185).id(folder)
                             Divider()
@@ -776,7 +792,7 @@ struct BrowserView: View {
                                         }
                                         .onPreferenceChange(RowFramesKey.self, perform: viewportObserver(viewport, mode: .columns))
                                     }.onAppear { restoreScroll(items, anchor: .top) }
-                                        .onChange(of: selectionCursor) { if let url = $0 { items.scrollTo(url) } }
+                                        .background { selectionScroll { if let url = $0 { items.scrollTo(url) } } }
                                         .onChange(of: model.busy) { if !$0 { restoreScroll(items, anchor: .top) } }
                                 }
                             }
@@ -799,7 +815,7 @@ struct BrowserView: View {
 
     private var gallery: some View {
         VStack(spacing: 0) {
-            Group {
+            observeSelection { _ in
                 if model.selected.count == 1, let entry = model.selectedEntries.first {
                     VStack(spacing: 6) {
                         NativePreview(entry: entry).frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -833,14 +849,14 @@ struct BrowserView: View {
                 }.frame(height: (model.searchActive ? 126 : 109) + textSize.adjustment * 2)
                     .accessibilityLabel("Gallery thumbnails")
                     .onAppear { restoreScroll(scroll, anchor: .leading) }
-                    .onChange(of: selectionCursor) { if let url = $0 { scroll.scrollTo(url) } }
+                    .background { selectionScroll { if let url = $0 { scroll.scrollTo(url) } } }
                     .onChange(of: model.busy) { if !$0 { restoreScroll(scroll, anchor: .leading) } }
             }
         }.accessibilityIdentifier("file-gallery")
     }
 
     private var details: some View {
-        Group {
+        observeSelection { _ in
             if #available(macOS 14.0, *) {
                 Table(model.entries, selection: $model.selected, columnCustomization: detailsCustomization) {
                     detailsName.customizationID("name").disabledCustomizationBehavior(.visibility)
@@ -863,7 +879,7 @@ struct BrowserView: View {
         .onAppear { detailsViewport.show(model.scrollAnchor, alignToTop: true) }
         .onDisappear { detailsViewport.detach() }
         .onChange(of: model.busy) { if !$0 { detailsViewport.show(model.scrollAnchor, alignToTop: true) } }
-        .onChange(of: selectionCursor) { if let item = $0 { detailsViewport.show(item, alignToTop: false) } }
+        .background { selectionScroll { if let item = $0 { detailsViewport.show(item, alignToTop: false) } } }
         .contextMenu(forSelectionType: URL.self) { ids in
             selectionMenu(model.entries.filter { ids.contains($0.url) })
         } primaryAction: { ids in
@@ -963,7 +979,7 @@ struct BrowserView: View {
                     listRows = $0
                     scrollList(to: model.scrollAnchor, rows: $0, using: scroll, anchor: .leading)
                 }
-                .onChange(of: selectionCursor) { scrollList(to: $0, rows: rows, using: scroll) }
+                .background { selectionScroll { scrollList(to: $0, rows: rows, using: scroll) } }
                 .onChange(of: model.busy) { busy in
                     if !busy { scrollList(to: model.scrollAnchor, rows: rows, using: scroll, anchor: .leading) }
                 }
@@ -999,7 +1015,7 @@ struct BrowserView: View {
                 }
                 .onAppear { iconColumns = columns; restoreScroll(scroll, anchor: .top) }
                 .onChange(of: columns) { iconColumns = $0 }
-                .onChange(of: selectionCursor) { value in if let value { scroll.scrollTo(value) } }
+                .background { selectionScroll { value in if let value { scroll.scrollTo(value) } } }
                 .onChange(of: model.busy) { busy in if !busy { restoreScroll(scroll, anchor: .top) } }
                 .onPreferenceChange(RowFramesKey.self, perform: viewportObserver(geometry, mode: .icons))
             }
@@ -1007,48 +1023,58 @@ struct BrowserView: View {
         .accessibilityIdentifier("file-thumbnails")
     }
 
+    private func observeSelection<Content: View>(
+        @ViewBuilder _ content: @escaping (BrowserSelection) -> Content
+    ) -> some View {
+        SelectionContent(selection: model.selection, content: content)
+    }
+
+    private func selectionScroll(_ action: @escaping (URL?) -> Void) -> some View {
+        observeSelection { selection in
+            Color.clear.onChange(of: selection.scrollToItem, perform: action)
+        }
+    }
+
     private func selectable<Content: View>(_ entry: FileEntry, @ViewBuilder content: () -> Content) -> some View {
-        let selected = model.selected.contains(entry.url)
         let cut = actions.cutURLs.contains { $0.path == entry.url.path }
-        let cursor = focus == .items && selectionCursor == entry.url
+        let itemsFocused = focus == .items
         let location = model.searchActive ? entry.url.deletingLastPathComponent().path : ""
         let outline = RoundedRectangle(cornerRadius: 5)
         let marker = activePane ? palette.signal : palette.muted
-        return content()
-            .padding(.horizontal, 8)
-            .background(selected ? (activePane ? palette.selected : palette.inactiveSelection) : .clear, in: outline)
-            .overlay {
-                if selected || cursor || cut {
-                    outline.strokeBorder(marker, style: StrokeStyle(lineWidth: cursor ? 2 : 1, dash: cut ? [4, 3] : []))
-                        .allowsHitTesting(false)
+        let row = content()
+        return observeSelection { selection in
+            let selected = selection.urls.contains(entry.url)
+            let cursor = itemsFocused && selection.cursor == entry.url
+            row
+                .padding(.horizontal, 8)
+                .background {
+                    RowHighlight(selection: model.selection, url: entry.url,
+                                 color: NSColor(activePane ? palette.selected : palette.inactiveSelection))
                 }
-            }
-            .overlay(alignment: .leading) {
-                if selected {
-                    Capsule().fill(marker).frame(width: 3).padding(.vertical, 2).allowsHitTesting(false)
+                .overlay {
+                    if selected || cursor || cut {
+                        outline.strokeBorder(marker, style: StrokeStyle(lineWidth: cursor ? 2 : 1, dash: cut ? [4, 3] : []))
+                            .allowsHitTesting(false)
+                    }
                 }
-            }
-            .background(dragFrame(for: entry.url))
-            .contentShape(Rectangle())
-            .gesture(TapGesture(count: 2).onEnded {
-                focus = .items
-                select(entry, modifiers: [])
-                activate([entry])
-            }.exclusively(before: TapGesture().onEnded {
-                focus = .items
-                select(entry, modifiers: NSEvent.modifierFlags)
-            }))
-            .contextMenu {
-                selectionMenu(selected ? model.selectedEntries : [entry])
-            }
-            .help(model.searchActive ? entry.url.path : entry.name)
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel(entry.name)
-            .accessibilityValue(location)
-            .accessibilityAddTraits(selected ? [.isSelected, .isButton] : .isButton)
-            .accessibilityAction { select(entry, modifiers: []) }
-            .accessibilityAction(named: "Open") { activate([entry]) }
-            .id(entry.url)
+                .overlay(alignment: .leading) {
+                    if selected {
+                        Capsule().fill(marker).frame(width: 3).padding(.vertical, 2).allowsHitTesting(false)
+                    }
+                }
+                .background(dragFrame(for: entry.url))
+                .contentShape(Rectangle())
+                .contextMenu {
+                    selectionMenu(selected ? model.selectedEntries : [entry])
+                }
+                .help(model.searchActive ? entry.url.path : entry.name)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(entry.name)
+                .accessibilityValue(location)
+                .accessibilityAddTraits(selected ? [.isSelected, .isButton] : .isButton)
+                .accessibilityAction { select(entry, modifiers: [], scroll: true) }
+                .accessibilityAction(named: "Open") { activate([entry]) }
+        }.id(entry.url)
     }
 
     private func resultLocation(_ entry: FileEntry, font: Font = .caption) -> some View {
@@ -1089,6 +1115,8 @@ struct BrowserView: View {
                     Button("Open in New Tab") { model.newTab(first.url) }
                     Button("Open in New Window") { openFolderWindow(first.url) }
                     Button("Pin to Quick Access") { model.addFavorite(first.url) }
+                    Button("New Terminal at Folder") { openTerminal(at: first, inNewTab: false) }
+                    Button("New Terminal Tab at Folder") { openTerminal(at: first, inNewTab: true) }
                 } else {
                     Button("Open With…") { chooseApplication(first) }
                     Button("Quick Look") { sheet = .preview(first) }
@@ -1143,6 +1171,11 @@ struct BrowserView: View {
         }
     }
 
+    private func openTerminal(at entry: FileEntry, inNewTab: Bool) {
+        do { try TerminalAtFolder.open(entry, inNewTab: inNewTab) }
+        catch { feedback = error.localizedDescription }
+    }
+
     private func canSendToRichCleaner(_ entries: [FileEntry]) -> Bool {
         guard let desktop = FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask).first?.path else {
             return false
@@ -1189,9 +1222,6 @@ struct BrowserView: View {
         Button("Disk Usage…") { sheet = .diskUsage(model.folder) }
         Button("Find Duplicate Files…") { sheet = .duplicates(model.folder) }
         Button("Compare Folders…") { sheet = .compare(model.folder) }
-        if hostOpenWindow != nil {
-            Button("RichFiles Settings…") { sheet = .settings }
-        }
         Button("Refresh") { _ = perform(.refresh) }
     }
 
@@ -1252,7 +1282,9 @@ struct BrowserView: View {
             }
             if model.busy && model.searchActive { Button("Stop Search") { model.stopSearch() }.buttonStyle(.borderless) }
             let itemCount = "\(model.entries.count) \(model.searchActive ? "results" : "items")"
-            if !model.status.isEmpty && model.status != itemCount {
+            if model.openingFolder {
+                Text("Opening folder…").lineLimit(1)
+            } else if !model.status.isEmpty && model.status != itemCount {
                 Text(model.status).lineLimit(1).help(model.status)
             }
             let status = !feedback.isEmpty ? feedback : actions.status
@@ -1299,7 +1331,7 @@ struct BrowserView: View {
         case .newTab: model.newTab()
         case .closeTab:
             if model.tabs.count > 1 { model.closeTab(model.currentTabID) }
-            else if hostOpenWindow == nil { NSApp.keyWindow?.performClose(nil) }
+            else { NSApp.keyWindow?.performClose(nil) }
         case .selectAll: model.selectAll()
         case .back:
             guard model.canGoBack else { return false }
@@ -1322,7 +1354,6 @@ struct BrowserView: View {
             guard workspace.isSplit else { return false }
             workspace.select(side == .primary ? .secondary : .primary)
             focus = nil
-            returnKeyboardFocus()
         case .addToShelf:
             guard !entries.isEmpty else { return false }
             withReferences(entries) { actions.addToShelf($0) }
@@ -1348,26 +1379,28 @@ struct BrowserView: View {
         return true
     }
 
-    private func select(_ entry: FileEntry, modifiers: NSEvent.ModifierFlags) {
-        if modifiers.contains(.shift), let anchor = rangeAnchor,
+    private func select(_ entry: FileEntry, modifiers: NSEvent.ModifierFlags, scroll: Bool = false) {
+        if modifiers.contains(.shift), let anchor = model.selection.rangeAnchor,
            let start = model.entries.firstIndex(where: { $0.url == anchor }),
            let end = model.entries.firstIndex(where: { $0.url == entry.url }) {
             model.selected = Set(model.entries[min(start, end)...max(start, end)].map(\.url))
         } else if modifiers.contains(.command) || (windowsKeys && modifiers.contains(.control)) {
             if model.selected.contains(entry.url) { model.selected.remove(entry.url) }
             else { model.selected.insert(entry.url) }
-            rangeAnchor = entry.url
+            model.selection.rangeAnchor = entry.url
         } else {
             model.selected = [entry.url]
-            rangeAnchor = entry.url
+            model.selection.rangeAnchor = entry.url
         }
-        selectionCursor = entry.url
-        model.scrollAnchor = entry.url
+        // A clicked row is already visible. Only keys that can move the cursor
+        // outside of the viewport need to ask the list to scroll.
+        model.selection.moveCursor(to: entry.url, scrolling: scroll)
+        if model.scrollAnchor != entry.url { model.scrollAnchor = entry.url }
     }
 
     private func moveGrid(dx: Int, dy: Int, extend: Bool) -> Bool {
         guard model.viewMode != .details, !model.entries.isEmpty else { return false }
-        let current = selectionCursor.flatMap { url in model.entries.firstIndex(where: { $0.url == url }) }
+        let current = model.selection.cursor.flatMap { url in model.entries.firstIndex(where: { $0.url == url }) }
         let step: Int
         switch model.viewMode {
         case .list: step = dx * listRows + dy
@@ -1383,7 +1416,7 @@ struct BrowserView: View {
         case .details: return false
         }
         let index = current.map { max(0, min(model.entries.count - 1, $0 + step)) } ?? 0
-        select(model.entries[index], modifiers: extend ? .shift : [])
+        select(model.entries[index], modifiers: extend ? .shift : [], scroll: true)
         return true
     }
 
@@ -1394,7 +1427,7 @@ struct BrowserView: View {
         if let entry = model.entries.first(where: {
             $0.name.range(of: prefixText, options: [.anchored, .caseInsensitive]) != nil
         }) {
-            select(entry, modifiers: [])
+            select(entry, modifiers: [], scroll: true)
             return true
         }
         return false
@@ -1514,8 +1547,8 @@ struct BrowserView: View {
                        expectedFolder: destination.identity, useAvailableName: true) { item in
             guard model.folder == folder, model.currentTabID == tab, workspace.active == side, sheet == nil else { return }
             model.selectCreatedItem(item)
-            rangeAnchor = item.url
-            selectionCursor = item.url
+            model.selection.rangeAnchor = item.url
+            model.selection.moveCursor(to: item.url, scrolling: true)
             sheet = .name(NameRequest(source: item, folder: folder, directory: directory,
                                       name: item.url.lastPathComponent))
         }
@@ -1548,13 +1581,13 @@ struct BrowserView: View {
 
     private func captureSelection() async {
         let selected = model.selected
-        selectedReferences = selectedReferences.filter { selected.contains($0.key) }
+        model.selection.references = model.selection.references.filter { selected.contains($0.key) }
         let entries = model.selectedEntries.filter { cachedReference(for: $0) == nil }
         if entries.isEmpty { return }
         let captured = try? await Self.capture(entries)
         guard !Task.isCancelled, model.selected == selected else { return }
         if let captured {
-            for (entry, reference) in zip(entries, captured) { selectedReferences[entry.url] = reference }
+            for (entry, reference) in zip(entries, captured) { model.selection.references[entry.url] = reference }
         }
     }
 
@@ -1572,7 +1605,7 @@ struct BrowserView: View {
     }
 
     private func cachedReference(for entry: FileEntry) -> FileReference? {
-        guard let reference = selectedReferences[entry.url], reference.identity == entry.identity else { return nil }
+        guard let reference = model.selection.references[entry.url], reference.identity == entry.identity else { return nil }
         return reference
     }
 
@@ -1792,11 +1825,64 @@ struct BrowserView: View {
         case .redo: return actions.redoName != nil && !actions.busy
         case .paste: return actions.canScheduleTransfer && writableFolder
         case .newFolder: return !actions.busy && writableFolder
-        case .closeTab: return model.tabs.count > 1 || hostOpenWindow == nil
         case .switchPane: return workspace.isSplit
         default: return true
         }
     }
+}
+
+/// Paint the row fill as soon as selection changes. SwiftUI can update the
+/// toolbar, outline and accessibility traits in its next layout pass.
+private struct RowHighlight: NSViewRepresentable {
+    let selection: BrowserSelection
+    let url: URL
+    let color: NSColor
+
+    func makeNSView(context: Context) -> Highlight { Highlight() }
+
+    func updateNSView(_ view: Highlight, context: Context) {
+        view.configure(selection: selection, url: url, color: color)
+    }
+
+    final class Highlight: NSView {
+        private weak var selection: BrowserSelection?
+        private var url: URL?
+        private var color: NSColor = .clear
+        private var subscription: AnyCancellable?
+
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+        func configure(selection: BrowserSelection, url: URL, color: NSColor) {
+            if !wantsLayer {
+                wantsLayer = true
+                layer?.cornerRadius = 5
+            }
+            self.color = color
+            if self.selection !== selection || self.url != url {
+                self.selection = selection
+                self.url = url
+                subscription = selection.$urls.map { $0.contains(url) }.removeDuplicates().sink { [weak self] in
+                    self?.paint(selected: $0)
+                }
+            } else {
+                paint(selected: selection.urls.contains(url))
+            }
+        }
+
+        private func paint(selected: Bool) {
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            layer?.backgroundColor = selected ? color.cgColor : nil
+            CATransaction.commit()
+        }
+    }
+}
+
+private struct SelectionContent<Content: View>: View {
+    @ObservedObject var selection: BrowserSelection
+    let content: (BrowserSelection) -> Content
+
+    var body: some View { content(selection) }
 }
 
 private struct BrowserDropTarget: DropDelegate {
@@ -1813,12 +1899,12 @@ private struct BrowserDropTarget: DropDelegate {
 }
 
 @MainActor
-private struct AncestorColumn: View {
+private struct AncestorColumn: View, Equatable {
     let folder: URL
     let child: URL
     let showHidden: Bool
     let revision: UUID
-    let open: (URL) -> Void
+    let model: BrowserModel
 
     @State private var children: [FileEntry] = []
     @State private var loading = true
@@ -1831,9 +1917,14 @@ private struct AncestorColumn: View {
         let revision: UUID
     }
 
+    nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.folder == rhs.folder && lhs.child == rhs.child && lhs.showHidden == rhs.showHidden
+            && lhs.revision == rhs.revision && lhs.model === rhs.model
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Button(folder.path == "/" ? "Computer" : folder.lastPathComponent) { open(folder) }
+            Button(folder.path == "/" ? "Computer" : folder.lastPathComponent) { model.openFolder(folder) }
                 .buttonStyle(.plain).font(.headline).lineLimit(1).padding(8)
                 .accessibilityLabel("Open \(folder.path)")
             Divider()
@@ -1842,7 +1933,7 @@ private struct AncestorColumn: View {
                     LazyVStack(alignment: .leading, spacing: 1) {
                         ForEach(children) { entry in
                             let current = entry.url.path == child.path
-                            Button { open(entry.url) } label: {
+                            Button { model.openFolder(entry.url) } label: {
                                 HStack(spacing: 5) {
                                     Label(entry.name, systemImage: "folder").lineLimit(1).truncationMode(.middle)
                                     Spacer(minLength: 3)

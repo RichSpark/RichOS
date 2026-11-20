@@ -610,12 +610,6 @@ struct WorkspacesSheet: View {
                 Button("Save Current Workspace") { save() }
                     .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
-            if window.previousDockedSession != nil {
-                Button("Restore Previous Docked Workspace") {
-                    if window.restorePreviousDockedSession() { dismiss() }
-                    else { problem = "RichFiles could not reopen the previous workspace." }
-                }
-            }
             if !problem.isEmpty { Text(problem).font(.callout).foregroundStyle(BrowserPalette(scheme).hint) }
             if !embedded {
                 HStack {

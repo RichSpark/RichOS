@@ -133,6 +133,11 @@
     if (!b || !nav.contains(b)) return;
     hideTip();
     if (b.getAttribute("aria-disabled") === "true") return;
+    // Opening the standalone app leaves the current RichOS surface in place.
+    if (b.dataset.item === "richfiles" && window.RichFilesPage?.opensStandalone()) {
+      window.RichFilesPage.open();
+      return;
+    }
     const closed = clearForRail(b.dataset.item);
     if (closed === null) return;
     const go = OPEN[b.dataset.item] || (pages.has(b.dataset.item) ? () => showPage(b.dataset.item) : null);

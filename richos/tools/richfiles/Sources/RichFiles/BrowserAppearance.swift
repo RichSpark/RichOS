@@ -120,7 +120,7 @@ enum BrowserTypography {
     }
 
     private static func register(_ file: String, face: String) -> Bool {
-        let bundles = [Bundle.main, Bundle(url: RichFilesInstallation.embeddedApplication)].compactMap { $0 }
+        let bundles = [Bundle.main, Bundle(url: RichFilesInstallation.bundledApplication)].compactMap { $0 }
         guard let url = bundles.lazy.compactMap({ $0.url(forResource: file, withExtension: "ttf") }).first else {
             return false
         }

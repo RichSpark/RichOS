@@ -253,6 +253,10 @@ pub struct AccountView {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub speeds: BTreeMap<String, f64>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub weekly_pause_points: BTreeMap<String, f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fable_estimated_used: Option<f64>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub pre_hold: BTreeMap<String, f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub empty_at: Option<u64>,

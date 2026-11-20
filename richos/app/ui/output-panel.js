@@ -1521,7 +1521,7 @@
       state.filenameFilter = filter.value;
       if (state.view === "list" && !git.active) render();
     });
-    bridge.invoke("richfiles_pane_available", {}).then((available) => {
+    bridge.invoke("output_git_available", {}).then((available) => {
       git.available = available === true;
       paintGitTabs();
     }).catch(() => {});

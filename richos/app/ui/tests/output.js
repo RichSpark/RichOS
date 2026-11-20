@@ -1306,14 +1306,6 @@ async function main() {
     await openRowMenu("brief.md");
     await pick("Show in Finder");
     await say("Finder opens acme/counter/ with brief.md selected.");
-    await ap.evaluate(() => { window.RichFilesPage = { available: true }; });
-    try {
-      await openRowMenu("brief.md");
-      await pick("Show in RichFiles");
-      await say("Showing brief.md in RichFiles.");
-    } finally {
-      await ap.evaluate(() => { delete window.RichFilesPage; });
-    }
     await openRowMenu("brief.md");
     await pick("Save a copy…");
     await say("Saved a copy of brief.md to you/Desktop/.");
@@ -1353,6 +1345,37 @@ async function main() {
     assertEqual(sent[1], { cmd: "output_open", args: { outputId: byName("brief.md").id, appIndex: 1 } }, "Open with… did not send the app's place");
     await ap.keyboard.press("Escape");
     return lines.join(" | ");
+  });
+
+  await run.check("the Output row and file Open menu can both reveal a file in installed RichFiles", async () => {
+    const page = await openApp(browser, { preset: { output: "round-17", richFiles: true } });
+    try {
+      await page.waitForSelector("#nr-richfiles:not([hidden])");
+      await openThread(page, "acme", 9);
+      await page.click("#out-top");
+      const row = rowOf("brief.md");
+      const revealed = page.getByRole("menuitem", { name: "Show in RichFiles", exact: true });
+      const notice = page.getByText("Showing brief.md in RichFiles.", { exact: true });
+      await page.hover(row);
+      await page.click(row + ' + .oacts [data-act="menu"]');
+      await page.waitForSelector("#op-menu");
+      assertEqual(await revealed.count(), 1, "the Output row menu is missing Show in RichFiles");
+      await revealed.click();
+      await notice.waitFor();
+      await page.click(row);
+      await page.click('[data-act="open-menu"]');
+      await page.waitForSelector("#op-menu");
+      assertEqual(await revealed.count(), 1, "the Output file Open menu is missing Show in RichFiles");
+      await revealed.click();
+      await notice.waitFor();
+      const sent = await page.evaluate(() => window.__RICHOS_MOCK__.outputCalls()
+        .filter((call) => call.cmd === "output_reveal_in_richfiles").map((call) => call.args));
+      assertEqual(sent, [{ outputId: byName("brief.md").id }, { outputId: byName("brief.md").id }],
+        "both menu paths hand only the recorded output ID to the native reveal command");
+      return "the installed-app fixture exercises the real RichFiles page and both Output menu actions";
+    } finally {
+      await page.context().close();
+    }
   });
 
   await run.check("open-menu — the file view's gold Open in <app>, its ▾ (the others, Finder, Save), its ⋯ and Copy the full path", async () => {

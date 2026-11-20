@@ -32,7 +32,7 @@ def replay(case, payload, work, engine, fake):
                (73, 71), (98, 81), (113, 89), (138, 100)]
     reset_min = 220 if case == "r01" else 140
     elapsed = 28 * 60 if historical else 0
-    end = 140 * 60 if historical else 900
+    end = 140 * 60 if historical else 1200
     reset = origin + (reset_min * 60 if historical else 7200)
     buf = io.StringIO()
     seen = [0]
@@ -102,6 +102,7 @@ def replay(case, payload, work, engine, fake):
         return dict(done=done, lead_woken=lead_woken,
                     said_no_pause="less than 20 minutes: no pause" in text)
     return dict(fired_at=done[1] if done else None, value=done[2] if done else None,
+                at_hold=truth(done[1] + args.hold) if done else None,
                 lead_woken=lead_woken, via_get_usage="via get_usage" in text)
 
 

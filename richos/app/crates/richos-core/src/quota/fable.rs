@@ -33,11 +33,34 @@ fn switch_point(reading: &Reading, window: &Window) -> f64 {
     reading.act_point(window, 99.9)
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Observation {
+    at: u64,
+    at_point: bool,
+}
+
+pub(super) fn observation(reading: &Reading, observed_at: &BTreeMap<String, u64>) -> Option<Observation> {
+    let window = fable_window(reading)?;
+    Some(Observation {
+        at: *observed_at.get(&window.id)?,
+        at_point: window.used_percent >= switch_point(reading, window),
+    })
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Period {
     pub since: u64,
     pub resets_at: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    estimate_based_on: Option<u64>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ChangeReason {
+    EstimatedUsage,
+    FableRoomConfirmed,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -49,6 +72,8 @@ pub struct Change {
     pub at: u64,
     pub on_opus: bool,
     pub resets_at: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<ChangeReason>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -91,7 +116,7 @@ impl State {
         self.enabled = enabled;
         if !enabled {
             for (account, period) in std::mem::take(&mut self.active) {
-                self.record(account, now, false, period.resets_at);
+                self.record(account, now, false, period.resets_at, None);
             }
         }
     }
@@ -101,22 +126,37 @@ impl State {
             .map(|(id, p)| (id.clone(), p.resets_at)).collect();
         for (id, at) in ended {
             self.active.remove(&id);
-            self.record(id, at, false, at);
+            self.record(id, at, false, at, None);
         }
         let Some(reading) = reading else { return };
         let Some(window) = fable_window(reading) else { return };
         let Some(until) = window.resets_at.filter(|until| *until > now) else { return };
-        let at_point = window.used_percent >= switch_point(reading, window);
+        let actual = reading.fable_observation;
+        let at_point = actual.is_some_and(|observation| observation.at_point)
+            || window.used_percent >= switch_point(reading, window);
+        if let Some(period) = self.active.get_mut(account) {
+            // Only a later Fable observation can confirm or overturn the estimate.
+            if let Some(observation) = actual.filter(|o| period.estimate_based_on.is_some_and(|at| o.at > at)) {
+                if observation.at_point {
+                    period.estimate_based_on = None;
+                } else {
+                    self.active.remove(account);
+                    self.record(account.into(), now, false, until, Some(ChangeReason::FableRoomConfirmed));
+                    return;
+                }
+            }
+        }
         // An early reset has a fresh window and a new deadline. Re-reading a low
         // number from the same window cannot undo a refusal that named Fable.
         if !at_point && self.period(account, now).is_some_and(|period| {
             until > period.resets_at && !super::same_reset(until, period.resets_at)
         }) {
             self.active.remove(account);
-            self.record(account.into(), now, false, now);
+            self.record(account.into(), now, false, now, None);
         }
         if at_point && week_has_room(reading, now) {
-            self.activate(account, now, until);
+            let estimate_based_on = actual.filter(|o| !o.at_point).map(|o| o.at);
+            self.activate(account, now, until, estimate_based_on);
         }
     }
 
@@ -133,8 +173,8 @@ impl State {
         }
         let fable = fable_window(reading);
         let fable_reset = fable.and_then(|window| window.resets_at);
-        let until = match limit.window {
-            LimitWindow::Fable => reset.or(fable_reset),
+        let (until, estimate_based_on) = match limit.window {
+            LimitWindow::Fable => (reset.or(fable_reset), None),
             LimitWindow::Unknown => {
                 let Some(window) = fable else { return false };
                 // A refusal with no named window needs either measured pressure on
@@ -145,12 +185,18 @@ impl State {
                     || (reset.is_some() && !matches_reset(window))) {
                     return false;
                 }
-                fable_reset
+                let estimate_based_on = reading.fable_observation.filter(|o| !o.at_point && !distinct_reset).map(|o| o.at);
+                (fable_reset, estimate_based_on)
             }
             LimitWindow::Other => return false,
         };
         if let Some(until) = until.filter(|t| *t > now) {
-            self.activate(account, now, until);
+            if estimate_based_on.is_none() {
+                if let Some(period) = self.active.get_mut(account) {
+                    period.estimate_based_on = None;
+                }
+            }
+            self.activate(account, now, until, estimate_based_on);
         }
         self.on_opus(account, now)
     }
@@ -163,12 +209,13 @@ impl State {
         self.period(account, now).is_some()
     }
 
-    fn activate(&mut self, account: &str, now: u64, resets_at: u64) {
+    fn activate(&mut self, account: &str, now: u64, resets_at: u64, estimate_based_on: Option<u64>) {
         if !self.enabled || self.active.contains_key(account) {
             return;
         }
-        self.active.insert(account.into(), Period { since: now, resets_at });
-        self.record(account.into(), now, true, resets_at);
+        self.active.insert(account.into(), Period { since: now, resets_at, estimate_based_on });
+        let reason = estimate_based_on.map(|_| ChangeReason::EstimatedUsage);
+        self.record(account.into(), now, true, resets_at, reason);
     }
 
     pub fn mark_conversation(&mut self, thread: &str) {
@@ -179,8 +226,8 @@ impl State {
         }
     }
 
-    fn record(&mut self, account: String, at: u64, on_opus: bool, resets_at: u64) {
-        self.changes.push(Change { account, thread_id: None, at, on_opus, resets_at });
+    fn record(&mut self, account: String, at: u64, on_opus: bool, resets_at: u64, reason: Option<ChangeReason>) {
+        self.changes.push(Change { account, thread_id: None, at, on_opus, resets_at, reason });
         if self.changes.len() > 12 {
             self.changes.remove(0);
         }
@@ -223,6 +270,38 @@ mod tests {
         assert!(!state.on_opus("1", END));
         let changes = state.view(None, None, END).changes;
         assert_eq!(changes.iter().map(|c| (c.at, c.on_opus)).collect::<Vec<_>>(), [(NOW, true), (END, false)]);
+    }
+
+    #[test]
+    fn an_estimated_switch_stays_after_the_provider_confirms_fable_has_run_out() {
+        let mut estimate = reading(40., 99.95);
+        estimate.fable_observation = Some(Observation { at: NOW - 1, at_point: false });
+        let mut full = reading(40., 100.);
+        full.fable_observation = Some(Observation { at: NOW + 2, at_point: true });
+        let mut low = reading(40., 95.);
+        low.fable_observation = Some(Observation { at: NOW + 3, at_point: false });
+
+        for named_refusal in [false, true] {
+            let mut state = State::default();
+            state.observe("1", Some(&estimate), NOW);
+            assert_eq!(state.period("1", NOW).unwrap().estimate_based_on, Some(NOW - 1));
+            let persisted = serde_json::to_string(&state).unwrap();
+            let mut state: State = serde_json::from_str(&persisted).unwrap();
+            let mut reused = low.clone();
+            reused.fable_observation = estimate.fable_observation;
+            state.observe("1", Some(&reused), NOW + 1);
+            assert!(state.on_opus("1", NOW + 1), "the prior observation has not changed");
+            if named_refusal {
+                assert!(state.refused("1", &estimate, UsageLimit {
+                    window: LimitWindow::Fable, resets_at: Some(END),
+                }, NOW + 2));
+            } else {
+                state.observe("1", Some(&full), NOW + 2);
+            }
+            state.observe("1", Some(&low), NOW + 3);
+            assert!(state.on_opus("1", NOW + 3), "confirmed switches keep the original period");
+            assert_eq!(state.period("1", NOW + 3).unwrap().estimate_based_on, None);
+        }
     }
 
     #[test]

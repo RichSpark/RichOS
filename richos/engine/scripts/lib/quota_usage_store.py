@@ -212,6 +212,7 @@ class Store:
             saved["finishedAt"] = max(requested_at, outcome_at)
             if answer is not None:
                 saved["fastUntil"] = fast_until(answer, saved.get("answer"))
+                saved["previousAnswer"] = saved.get("answer")
                 saved["answer"] = answer
             saved["refusal"] = refusal
             self.write(self.record, saved)

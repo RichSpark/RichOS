@@ -214,6 +214,7 @@ pub fn at_quit_main(compiled_version: &str) -> Option<i32> {
                     done.left.as_deref().unwrap_or("(nothing installed)"),
                     done.entered.version
                 );
+                crate::richfiles_integration::refresh_gestures_after_publication(&home);
             }
             Ok(None) => {
                 if repairing && !richos_user_update::needs_install_migration(&home, &bundle) {

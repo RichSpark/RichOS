@@ -107,9 +107,9 @@ final class GlanceDefaults: ObservableObject {
         }
     }
 
-    func setEnabled(_ enabled: Bool, only: GlanceFormat? = nil) {
+    func setEnabled(_ enabled: Bool, only: GlanceFormat? = nil, completion: ((String?) -> Void)? = nil) {
         let formats = only.map { [$0] } ?? GlanceFormat.allCases
-        changeDefaults { saved in
+        changeDefaults(completion: completion) { saved in
             saved.enabled = enabled
             try self.writeState(saved)
             for format in formats {
@@ -147,12 +147,19 @@ final class GlanceDefaults: ObservableObject {
         }
     }
 
-    private func changeDefaults(_ operation: @escaping (inout State) async throws -> Void) {
-        guard !busy else { return }
+    private func changeDefaults(completion: ((String?) -> Void)? = nil,
+                                _ operation: @escaping (inout State) async throws -> Void) {
+        guard !busy else {
+            completion?("RichFiles is already updating its image viewer choices.")
+            return
+        }
         busy = true
         problem = nil
         Task {
-            defer { busy = false }
+            defer {
+                busy = false
+                completion?(problem)
+            }
             let start = ProcessInfo.processInfo.systemUptime
             let request = UUID()
             var outcome = RichFilesDiagnostics.Outcome.issues
@@ -176,6 +183,9 @@ final class GlanceDefaults: ObservableObject {
                     ? GlanceFormat.allCases.contains { current[$0]?.isGlance != true }
                     : GlanceFormat.allCases.contains(where: owns)
                 outcome = incomplete ? .issues : .complete
+                if incomplete, completion != nil {
+                    problem = "Some picture formats kept their previous app. Check the image viewer choices in RichFiles Settings."
+                }
             } catch {
                 readCurrent()
                 if let saved = try? readState() { state = saved }

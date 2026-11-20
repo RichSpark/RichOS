@@ -63,6 +63,48 @@ def run_polls(readings,worker_rows,polls,args=None,out_cls=None,reset_answers=No
     raise AssertionError('the poll loop returned before its polls were done')
 
 class Weekly(unittest.TestCase):
+    def test_projection_uses_the_shared_deadline_at_fast_and_slow_paces(self):
+        a = watcher.speed_settings(types.SimpleNamespace(threshold=93, poll=300, stale=300))
+        for used, speed, seconds, five_crosses, week_crosses in [
+            (95.0, 0.001, 300, True, False), (98.9, 0.003, 300, True, True),
+            (95.0, 0.04, 60, True, True), (88.0, 0.04, 60, False, False),
+        ]:
+            r = {**reading(used, used), 'source': 'get_usage', 'taken_at': NOW,
+                 'provider_next_at': (NOW + seconds) * 1000, 'provider_interval_ms': seconds * 1000,
+                 'provider_speeds': {'five_hour': speed, 'seven_day': speed}}
+            point = watcher.five_pause_point(a, r, NOW)
+            week_point = watcher.provider_pause_point(a, r, r['windows'][0], NOW)
+            self.assertEqual(used >= point, five_crosses, (used, point))
+            self.assertEqual(used >= week_point, week_crosses, (used, week_point))
+            self.assertLess(point, 100)
+            self.assertLess(week_point, 100)
+        r['provider_refused'] = 'stand-in refusal'
+        self.assertIsNone(watcher.provider_pause_point(a, r, r['windows'][0], NOW))
+
+    def test_five_hour_pause_leaves_room_for_resumed_or_faster_work(self):
+        for samples in ([90, 92, 94, 96, 96, 96, 100], [90, 92, 94, 96, 100]):
+            readings = []
+            for i, used in enumerate(samples):
+                taken = NOW + i * 300
+                rate = (used - samples[i - 1]) / 300 if i else 0
+                readings.append({**reading(50, used), 'source': 'get_usage', 'taken_at': taken,
+                                 'provider_next_at': (taken + 300) * 1000,
+                                 'provider_speeds': {'five_hour': rate}})
+            out = run_polls(readings, [workers(['first', 'second', 'third'])], len(samples), out_cls=Recorder)
+            self.assertIn(('THRESHOLD', NOW + 600), out.woken)
+
+    def test_a_whole_weekly_tick_preserves_99_and_weekly_release_allows_five_hour_wakes(self):
+        def provider(i, week, five, speed):
+            taken = NOW + i * 300
+            return {**reading(week, five), 'source': 'get_usage', 'taken_at': taken,
+                    'provider_next_at': (taken + 300) * 1000,
+                    'provider_speeds': {'seven_day': speed}}
+        out = run_polls([provider(0, 98, 60, 1 / 300), provider(1, 98, 95, 0)],
+                        [workers(['first']), workers(['second'], held=['first'])], 2, out_cls=Recorder)
+        self.assertNotIn(('WEEKLY-THRESHOLD', NOW), out.woken)
+        self.assertIn(('THRESHOLD', NOW + 300), out.woken)
+        self.assertNotIn(('WEEKLY-RELEASE', NOW + 300), out.woken)
+
     def test_all_reported_windows_and_provider_names(self):
         windows = weekly.windows({'five_hour':{'utilization':14,'resets_at':'2099-01-01T00:00:00Z'},
             'seven_day':{'utilization':92,'resets_at':'2099-01-02T00:00:00Z'},
@@ -134,9 +176,9 @@ class Weekly(unittest.TestCase):
             r['age']=301
             with contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(weekly.handle(args,r,NOW,workers(held=['worker']),{},lambda:'below'),(True,False))
-    def test_reset_does_not_release_while_five_hour_still_holds(self):
+    def test_reset_defers_weekly_release_to_the_five_hour_hold(self):
         args=types.SimpleNamespace(stale=300,command='watch')
-        self.assertEqual(weekly.handle(args,reading(0),NOW,workers(held=['worker']),{},lambda:'at-or-above'),(True,False))
+        self.assertEqual(weekly.handle(args,reading(0),NOW,workers(held=['worker']),{},lambda:'at-or-above'),(False,False))
         out=io.StringIO()
         with contextlib.redirect_stdout(out):
             self.assertEqual(weekly.handle(args,reading(0),NOW,workers(held=['worker']),{},lambda:'below'),(False,True))

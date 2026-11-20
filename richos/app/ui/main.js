@@ -6184,15 +6184,18 @@ function updateFableQuota(next) {
   const changed = JSON.stringify(fableQuota?.changes) !== JSON.stringify(next.changes);
   fableQuota = next;
   const period = next.active?.[next.account];
+  const estimated = period?.estimateBasedOn != null;
   const note = el("fable-composer-status");
   note.hidden = !period;
-  note.textContent = period ? "On Opus until " + formatFableReset(period.resetsAt) : "";
+  note.textContent = estimated ? "On Opus while Fable usage is checked"
+    : period ? "On Opus until " + formatFableReset(period.resetsAt) : "";
   el("fable-setting").hidden = false;
   el("fable-switch").setAttribute("aria-checked", String(next.enabled));
   el("fable-option").classList.toggle("is-off", !next.enabled);
   const modelLine = el("fable-model-state");
   modelLine.hidden = !period;
-  modelLine.textContent = period ? "Rich is on Opus until " + formatFableReset(period.resetsAt) + ". Your model choice stays saved." : "";
+  modelLine.textContent = estimated ? "Rich is on Opus while Fable usage is checked."
+    : period ? "Rich is on Opus until " + formatFableReset(period.resetsAt) + ". Your model choice stays saved." : "";
   if (changed) scheduleRender();
 }
 
@@ -6201,9 +6204,15 @@ function renderFableMarkers(turns) {
     if (change.threadId !== activeThreadId) continue;
     const marker = document.createElement("p");
     marker.className = "fable-conversation-marker";
-    marker.textContent = change.onOpus
-      ? "Now on Opus. Fable is almost used up. Back on Fable " + formatFableReset(change.resetsAt) + "."
-      : change.at >= change.resetsAt ? "Back on Fable. Your Fable quota has reset." : "Automatic model switching is off.";
+    if (change.reason === "estimatedUsage") {
+      marker.textContent = "On Opus while Fable usage is checked.";
+    } else if (change.reason === "fableRoomConfirmed") {
+      marker.textContent = "Back on Fable. There’s still quota left.";
+    } else if (change.onOpus) {
+      marker.textContent = "Now on Opus. Fable is almost used up. Back on Fable " + formatFableReset(change.resetsAt) + ".";
+    } else {
+      marker.textContent = change.at >= change.resetsAt ? "Back on Fable. Your Fable quota has reset." : "Automatic model switching is off.";
+    }
     const after = turns.find(turn => (turn.record?.startedAt ?? turn.user?.createdAt ?? turn.stream[0]?.createdAt ?? 0) >= change.at);
     const anchor = after && messagesEl.querySelector(".tl-turn[data-turn-id=" + CSS.escape(after.turnId) + "]");
     messagesEl.insertBefore(marker, anchor || null);
@@ -11837,9 +11846,6 @@ async function init() {
   // itself when it does.
   if (window.RichResources) window.RichResources.start();
   else window.__richosResourcesReady = true;
-  // Warm the RichFiles library after the app is usable. Its native view opens only on request.
-  if (window.RichFilesReady) window.RichFilesReady.start();
-  else window.__richosRichFilesReady = true;
   // The correction badge, read at launch and LAST. A proposal the CEO has not answered
   // survives a crash, a rotation and a relaunch by design (`correction.rs`'s fsync'd log),
   // so the count is re-read on the way up rather than inferred from this session's events —

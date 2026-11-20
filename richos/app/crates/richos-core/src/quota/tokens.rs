@@ -73,6 +73,69 @@ pub struct Episode {
     pub tokens: BTreeMap<String, u64>,
 }
 
+type Events = HashMap<String, (u64, String, u64, u64, u64)>;
+type EpisodeModel = fn(&str) -> Option<&str>;
+const FABLE_WINDOW: &str = "model:Fable";
+
+fn fable_model(model: &str) -> Option<&str> {
+    (model == "fable" || crate::spend::base_model(model).starts_with("claude-fable-")).then_some(FABLE_WINDOW)
+}
+
+#[derive(Debug, Default)]
+pub(super) struct Episodes {
+    // The value, its start when the rise was seen and the current reset time.
+    current: Option<(f64, Option<u64>, Option<u64>)>,
+    last_reading: Option<u64>,
+    pub entries: Vec<Episode>,
+}
+
+impl Episodes {
+    fn observe(&mut self, window: &Window, at: u64, events: &Events, model: EpisodeModel) -> bool {
+        if self.last_reading == Some(at) { return false; }
+        self.last_reading = Some(at);
+        let used = window.used_percent;
+        let same = |a: Option<u64>, b: Option<u64>| match (a, b) {
+            (Some(a), Some(b)) => super::same_reset(a, b),
+            (a, b) => a == b,
+        };
+        let mut closed = false;
+        self.current = match self.current {
+            Some((value, start, resets)) if same(resets, window.resets_at) => {
+                if used > value {
+                    if let Some(start) = start {
+                        let mut tokens = BTreeMap::new();
+                        for (_, name, count, ..) in events.values().filter(|event| start < event.0 && event.0 <= at) {
+                            if let Some(name) = model(name) { *tokens.entry(name.to_string()).or_insert(0) += count; }
+                        }
+                        self.entries.push(Episode { points: used - value, tokens });
+                        let extra = self.entries.len().saturating_sub(KEEP_EPISODES);
+                        self.entries.drain(..extra);
+                        closed = true;
+                    }
+                    Some((used, Some(at), window.resets_at))
+                } else if used < value {
+                    Some((used, None, window.resets_at))
+                } else {
+                    Some((value, start, resets))
+                }
+            }
+            _ => Some((used, None, window.resets_at)),
+        };
+        closed
+    }
+
+    fn keep_from(&self) -> Option<u64> {
+        self.current.and_then(|c| c.1).or(self.last_reading)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct Estimate {
+    pub observed_at: u64,
+    pub points: f64,
+    pub speed: f64,
+}
+
 /// One account's token reader and what it has learned.
 #[derive(Debug, Default)]
 pub struct Track {
@@ -81,11 +144,9 @@ pub struct Track {
     scanned: bool,
     /// Message id -> (stamped at, model, tokens, output tokens, late tokens). The largest copy
     /// wins. Late tokens: those only a `result` frame showed ([`Use::late`]).
-    events: HashMap<String, (u64, String, u64, u64, u64)>,
-    /// The weekly value being watched: (used, its start if its rise was seen, its reset time).
-    current: Option<(f64, Option<u64>, Option<u64>)>,
-    last_reading: Option<u64>,
-    pub episodes: Vec<Episode>,
+    events: Events,
+    pub(super) weekly: Episodes,
+    pub(super) fable: Episodes,
 }
 
 fn stamp(text: &str) -> Option<u64> {
@@ -109,18 +170,26 @@ fn transcripts(dir: &Path, out: &mut Vec<PathBuf>) {
 impl Track {
     /// A track that starts from episodes learned before (kept across launches).
     pub fn with_episodes(episodes: Vec<Episode>) -> Self {
-        Self { episodes, ..Self::default() }
+        Self { weekly: Episodes { entries: episodes, ..Episodes::default() }, ..Self::default() }
+    }
+
+    pub(super) fn clear_fable_observation(&mut self) {
+        self.fable.current = None;
+        self.fable.last_reading = None;
     }
 
     /// Read what the account's transcripts gained since the last scan. The first scan skips
     /// every transcript untouched for the live window: nothing older is needed yet.
     pub fn scan(&mut self, folder: &Path, now: u64) {
-        self.scan_except(folder, now, &std::collections::HashSet::new());
+        self.scan_except(folder, now, None, &std::collections::HashSet::new());
     }
 
     /// [`Track::scan`], leaving out the messages in `skip` (another account's track holds them:
     /// a lease on that account streamed them, and its transcript is in the shared records folder).
-    pub fn scan_except(&mut self, folder: &Path, now: u64, skip: &std::collections::HashSet<String>) {
+    pub fn scan_except(&mut self, folder: &Path, now: u64, last_fable_reading: Option<u64>, skip: &std::collections::HashSet<String>) {
+        let live_from = now.saturating_sub(LIVE_MS);
+        let keep_from = last_fable_reading.filter(|_| self.fable.entries.iter().any(|e| e.tokens.contains_key(FABLE_WINDOW)))
+            .map_or(live_from, |at| live_from.min(at));
         let mut files = Vec::new();
         transcripts(&folder.join("projects"), &mut files);
         for path in files {
@@ -130,7 +199,7 @@ impl Track {
                 let modified = meta.modified().ok()
                     .and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok())
                     .map_or(0, |d| d.as_millis() as u64);
-                if modified + LIVE_MS < now {
+                if modified < keep_from {
                     self.offsets.insert(path, len);
                     continue;
                 }
@@ -184,41 +253,14 @@ impl Track {
     /// A reading of the weekly window, taken at `at`. Returns true when it closed an episode
     /// (the caller keeps the episodes across launches).
     pub fn reading(&mut self, window: &Window, at: u64, now: u64) -> bool {
-        let mut closed = false;
-        if self.last_reading != Some(at) {
-            self.last_reading = Some(at);
-            let used = window.used_percent;
-            // The SAME window when the reset times agree within a minute (`Snapshot::measure`).
-            let same = |a: Option<u64>, b: Option<u64>| match (a, b) {
-                (Some(a), Some(b)) => a.abs_diff(b) < 60_000,
-                (a, b) => a == b,
-            };
-            self.current = match self.current {
-                Some((value, start, resets)) if same(resets, window.resets_at) => {
-                    if used > value {
-                        if let Some(start) = start {
-                            let mut tokens = BTreeMap::new();
-                            for (stamped, model, count, ..) in self.events.values() {
-                                if start < *stamped && *stamped <= at { *tokens.entry(model.clone()).or_insert(0) += count; }
-                            }
-                            self.episodes.push(Episode { points: used - value, tokens });
-                            let extra = self.episodes.len().saturating_sub(KEEP_EPISODES);
-                            self.episodes.drain(..extra);
-                            closed = true;
-                        }
-                        Some((used, Some(at), window.resets_at))
-                    } else if used < value {
-                        Some((used, None, window.resets_at))
-                    } else {
-                        Some((value, start, resets))
-                    }
-                }
-                _ => Some((used, None, window.resets_at)),
-            };
-        }
+        let closed = if super::fable::is_window(&window.id) {
+            self.fable.observe(window, at, &self.events, fable_model)
+        } else {
+            self.weekly.observe(window, at, &self.events, |name| Some(name))
+        };
         // Keep only what an episode still open, the live window, the tokens since the last good
         // reading (`points_since`) can use.
-        let keep = [self.current.and_then(|c| c.1), Some(now.saturating_sub(LIVE_MS)), self.last_reading]
+        let keep = [self.weekly.keep_from(), self.fable.keep_from(), Some(now.saturating_sub(LIVE_MS))]
             .into_iter().flatten().min().unwrap_or(0);
         self.events.retain(|_, e| e.0 > keep);
         closed
@@ -228,10 +270,13 @@ impl Track {
     /// tokens divided by its tokens per point. A model with no figure adds nothing: its tokens
     /// cannot be turned into points honestly.
     pub fn points_since(&self, since: u64, now: u64) -> f64 {
-        let per_point = figures(&self.episodes);
+        self.points_since_at(since, now, &figures(&self.weekly.entries), |name| Some(name))
+    }
+
+    fn points_since_at(&self, since: u64, now: u64, per_point: &BTreeMap<String, f64>, model: EpisodeModel) -> f64 {
         self.events.values()
             .filter(|e| e.0 > since && e.0 <= now)
-            .filter_map(|e| per_point.get(&e.1).map(|p| e.2 as f64 / p))
+            .filter_map(|e| per_point.get(model(&e.1)?).map(|p| e.2 as f64 / p))
             .sum()
     }
 
@@ -239,12 +284,25 @@ impl Track {
     /// tokens divided by its tokens per point. A model with no figure adds nothing. What only a
     /// `result` frame showed adds at most [`LATE_POINTS_MAX`] per message.
     pub fn speed(&self, now: u64) -> f64 {
-        let per_point = figures(&self.episodes);
+        self.speed_at(now, None, &figures(&self.weekly.entries), |name| Some(name))
+    }
+
+    fn speed_at(&self, now: u64, since: Option<u64>, per_point: &BTreeMap<String, f64>, model: EpisodeModel) -> f64 {
         let points: f64 = self.events.values()
-            .filter(|e| e.0 + LIVE_MS > now && e.0 <= now)
-            .filter_map(|e| per_point.get(&e.1).map(|p| (e.2 - e.4) as f64 / p + (e.4 as f64 / p).min(LATE_POINTS_MAX)))
+            .filter(|e| e.0 + LIVE_MS > now && e.0 <= now && since.is_none_or(|since| e.0 > since))
+            .filter_map(|e| per_point.get(model(&e.1)?).map(|p| (e.2 - e.4) as f64 / p + (e.4 as f64 / p).min(LATE_POINTS_MAX)))
             .sum();
         points / LIVE_MS as f64
+    }
+
+    pub(super) fn fable_estimate(&self, since: u64, now: u64) -> Option<Estimate> {
+        // All Fable model IDs contribute to one limit. The canonical window
+        // ID has no price card, so a rate exists only after a measured episode.
+        let per_point = figures(&self.fable.entries);
+        per_point.get(FABLE_WINDOW)?;
+        Some(Estimate { observed_at: since,
+            points: self.points_since_at(since, now, &per_point, fable_model),
+            speed: self.speed_at(now, Some(since), &per_point, fable_model) })
     }
 }
 
