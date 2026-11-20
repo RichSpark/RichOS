@@ -1,3 +1,4 @@
+import AppKit
 import Combine
 import Foundation
 import RichFilesCore
@@ -5,6 +6,24 @@ import XCTest
 @testable import RichFiles
 
 final class BrowserModelTests: XCTestCase {
+    func testBackspaceAndDeleteUseDifferentCommandsInBothPresets() throws {
+        func chord(_ code: UInt16, flags: NSEvent.ModifierFlags = []) throws -> BrowserShortcut {
+            let characters = code == 51 ? "\u{7f}" : "\u{f728}"
+            let event = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags,
+                timestamp: 0, windowNumber: 0, context: nil, characters: characters,
+                charactersIgnoringModifiers: characters, isARepeat: false, keyCode: code))
+            return BrowserShortcut(event: event, modifiers: flags)
+        }
+
+        for windows in [true, false] {
+            let preset = BrowserShortcut.preset(windows)
+            XCTAssertEqual(preset[try chord(51)], .back)
+            XCTAssertEqual(preset[try chord(117)], .trash)
+            XCTAssertEqual(preset[try chord(51, flags: .command)], .trash)
+            XCTAssertEqual(try chord(51, flags: .control), BrowserShortcut("Control+Delete"))
+        }
+    }
+
     func testCustomShortcutsKeepSystemKeysAndOtherActionsAvailable() throws {
         XCTAssertEqual(BrowserShortcut("Ctrl+L").flatMap { BrowserShortcut.preset(true)[$0] }, .address)
         XCTAssertEqual(BrowserShortcut("Command+L").flatMap { BrowserShortcut.preset(false)[$0] }, .address)

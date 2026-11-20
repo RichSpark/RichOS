@@ -501,7 +501,7 @@ struct RichFilesSettings: View {
                 Text("Mac (Command)").tag(false)
             }
             .pickerStyle(.radioGroup)
-            Text("Enter opens, F2 renames, Delete moves to Trash and Space previews.")
+            Text("Enter opens, F2 renames, Backspace goes back, Delete moves to Trash and Space previews.")
                 .foregroundStyle(guidanceColor)
             heading("Mac desktop")
             WindowGestureSettings(appURL: appURL, desktopShortcut: true)
