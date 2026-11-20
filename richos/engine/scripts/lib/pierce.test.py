@@ -1160,6 +1160,8 @@ print(json.dumps({"structured_output": {
 
     def test_codex_handoff_tools_have_the_same_inspection_budget_as_agent(self):
         hooks = json.loads((ENGINE / "hooks/hooks.json").read_text())["hooks"]["PreToolUse"]
+        primary_write = next(group for group in hooks if "Write" in group.get("matcher", ""))
+        self.assertIn("dispatch-pretooluse.sh Write", primary_write["hooks"][0]["command"])
         for tool in ("Agent", "Bash", "Write", "Edit", "MultiEdit"):
             with self.subTest(tool=tool):
                 budget = [hook["timeout"] for group in hooks if re.fullmatch(group.get("matcher", ".*"), tool)
