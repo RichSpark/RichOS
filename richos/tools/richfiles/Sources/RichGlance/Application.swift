@@ -441,6 +441,19 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
         infoMenuItem?.keyEquivalentModifierMask = infoPreferences.shortcut.flags
     }
 
+    static func makeEditMenu() -> NSMenu {
+        let menu = NSMenu(title: "Edit")
+        menu.addItem(withTitle: "Undo", action: NSSelectorFromString("undo:"), keyEquivalent: "z")
+        let redo = menu.addItem(withTitle: "Redo", action: NSSelectorFromString("redo:"), keyEquivalent: "z")
+        redo.keyEquivalentModifierMask = [.command, .shift]
+        menu.addItem(.separator())
+        menu.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        menu.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        menu.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        menu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        return menu
+    }
+
     private func installMenu() {
         let menuBar = NSMenu()
         let app = NSMenuItem()
@@ -468,6 +481,10 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
         fileMenu.addItem(.separator())
         fileMenu.addItem(withTitle: "Close", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
         menuBar.addItem(file)
+
+        let edit = NSMenuItem()
+        edit.submenu = Self.makeEditMenu()
+        menuBar.addItem(edit)
 
         let view = NSMenuItem()
         let viewMenu = NSMenu(title: "View")

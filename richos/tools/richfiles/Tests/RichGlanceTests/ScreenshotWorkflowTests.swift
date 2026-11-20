@@ -5,6 +5,25 @@ import XCTest
 
 @MainActor
 final class ScreenshotWorkflowTests: XCTestCase {
+    func testEditMenuLetsTheFocusedResponderHandleTextShortcuts() async throws {
+        let menu = Application.makeEditMenu()
+        let commands: [(String, String, String, NSEvent.ModifierFlags)] = [
+            ("Undo", "undo:", "z", .command),
+            ("Redo", "redo:", "z", [.command, .shift]),
+            ("Cut", "cut:", "x", .command),
+            ("Copy", "copy:", "c", .command),
+            ("Paste", "paste:", "v", .command),
+            ("Select All", "selectAll:", "a", .command),
+        ]
+        for (title, action, key, modifiers) in commands {
+            let item = try XCTUnwrap(menu.item(withTitle: title))
+            XCTAssertNil(item.target, title)
+            XCTAssertEqual(item.action, NSSelectorFromString(action), title)
+            XCTAssertEqual(item.keyEquivalent, key, title)
+            XCTAssertEqual(item.keyEquivalentModifierMask, modifiers, title)
+        }
+    }
+
     func testFlattenedRedactionReplacesPixelsAfterCropAndOverlappingMarks() async throws {
         let original = try fixture()
         var document = ScreenshotDocument(original: original, scale: 2)
