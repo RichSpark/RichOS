@@ -40,6 +40,9 @@ WHAT IT DOES, in the guest, never on the host's screen (CEO ruling 65):
   still   (not run unless named) a recording of 32 s in a chat in which nothing is pressed, saved
           and read back: how long the file is against how long the recording was
           (home-video-walk.py's `whole`: failed for its length only with --expect-picture).
+  richfiles (not run unless named) start a short recording, switch to the standalone RichFiles
+          window, prove its frame reaches RichOS and an untrusted process cannot request one,
+          then return to RichOS and save the recording.
   meter   (not run unless named) round 95: in a chat, Microphone On, one frame of the choices in
           the light theme and one in the dark (meter-light, meter-dark); the colors beside
           Microphone are read from each frame's pixels and must be the unlit and the lit bar's.
@@ -94,7 +97,7 @@ home_video = load('home_video_walk', 'home-video-walk.py')
 standard = home_video.standard
 StepFailed = home_video.StepFailed
 
-STEPS = ['seed', 'button', 'record', 'still', 'meter']
+STEPS = ['seed', 'button', 'record', 'still', 'meter', 'richfiles']
 NAME = r'RichOS-\d{4}-\d\d-\d\d-at-\d\d\.\d\d\.\d\d\.mp4'
 
 
@@ -249,6 +252,57 @@ class Walk(home_video.Walk):
             self.escape()
         if not (result['light']['unlit_and_lit'] and result['dark']['unlit_and_lit']):
             raise StepFailed('the bars are not the colors of round 95: ' + json.dumps(result))
+        return result
+
+    def richfiles(self):
+        self.launch_with_tone('for the RichFiles recording')
+        self.to_the_conversation()
+        app = self.payload + '/RichOS.app'
+        richfiles = app + '/Contents/Applications/RichFiles.app'
+        folder = self.payload + '/RichFiles Recording Proof'
+        guest(self.vm, 'mkdir -p ' + shlex.quote(folder) + ' && touch ' +
+              shlex.quote(folder + '/StandaloneCaptureProof.txt'))
+        self.choose('On', 'Shown')
+        self.press('--title', 'Start recording', '--role', 'AXButton')
+        self.until(self.recording, 20, 'Make a video never started')
+        guest(self.vm, 'open -a ' + shlex.quote(richfiles) + ' ' + shlex.quote(folder))
+        receipt = '[richos] video: received a picture of the active RichFiles window'
+        logs = shlex.quote(self.payload) + '/*.log'
+        try:
+            self.until(lambda: guest(self.vm, 'grep -F -h ' + shlex.quote(receipt)
+                       + ' ' + logs + ' 2>/dev/null || true').strip(), 20,
+                       'no picture arrived from the active RichFiles window')
+            shown = self.shot('richfiles-window-during-recording')
+            code, detail = standard.run([HERE / 'ax.sh', self.vm, 'click', '--app', 'RichFiles',
+                                         '--title', 'StandaloneCaptureProof.txt', '--first'], 30)
+            if code:
+                raise StepFailed('could not select the file during recording: ' + detail)
+            # Even with the browser in front, a different local process
+            # cannot request a frame over the native socket.
+            probe = (
+                'import os,socket,sys\n'
+                's=socket.socket(socket.AF_UNIX); s.settimeout(1)\n'
+                's.connect(os.path.join(sys.argv[1], "richfiles-video."+sys.argv[2]))\n'
+                'sys.exit(1 if s.recv(1) else 0)\n'
+            )
+            command = ('python3 -c ' + shlex.quote(probe)
+                       + ' "$(getconf DARWIN_USER_TEMP_DIR)" "$(pgrep -x RichFiles)"')
+            guest(self.vm, command)
+            time.sleep(2)
+        finally:
+            guest(self.vm, 'open -a ' + shlex.quote(app))
+        self.until(self.recording, 15, 'the recording stopped while RichFiles was in front')
+        self.press('--id', 'video-anywhere-stop')
+        if not self.to_the_sheet(30):
+            raise StepFailed('the recording sheet had no video to save')
+        result = self.save('richfiles-recording')
+        result.update({'native_frame_received': receipt, 'unauthorized_peer_received_bytes': False,
+                       'window_while_recording': shown})
+        self.press('--title', 'Done', '--role', 'AXButton')
+        guest(self.vm, 'osascript -e ' + shlex.quote('tell application id "app.richos.richfiles" to quit'))
+        guest(self.vm, '! pgrep -x RichFiles')
+        if self.expect_picture and not result['read_back']['video']:
+            raise StepFailed("the guest's MP4 has no video stream")
         return result
 
     def record(self):

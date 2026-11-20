@@ -46,6 +46,7 @@ final class Viewer {
         window.autorecalculatesKeyViewLoop = false
         window.contentView = canvas
         window.center()
+        _ = window.setFrameAutosaveName("RichGlance Viewer")
     }
 
     func handleKey(_ event: NSEvent) -> Bool {

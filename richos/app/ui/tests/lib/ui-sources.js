@@ -129,7 +129,7 @@ const ROLES = {
   "updates.js": { role: "ui", why: "the update surface — CEO ruling §26" },
   "quota.js": { role: "ui", why: "Claude Code quota and weekly reset controls in Technical Settings" },
   "resources.js": { role: "ui", why: "the live Mac resources square on the navigation rail (round 47, moved there by round 58), its card and its Ink/Readout view menu" },
-  "richfiles-page.js": { role: "ui", why: "the RichFiles rail page and its native browser placement feedback" },
+  "richfiles-page.js": { role: "ui", why: "the RichFiles information page and its standalone launch preference" },
   "richpass-page.js": { role: "ui", why: "the RichPass page (round 58): the download, the facts and Keep your copy safe, reached from the navigation rail" },
   "nav-rail.js": { role: "ui", why: "the navigation rail (round 58): what each item opens, what is selected, its tooltips, the initials circle and RichScribe's dot" },
   "suite-tools.js": { role: "ui", why: "the five tools that come with Rich (round 70): the setup sheet's strip, the tools card under Rich's note and the line above the message box" },

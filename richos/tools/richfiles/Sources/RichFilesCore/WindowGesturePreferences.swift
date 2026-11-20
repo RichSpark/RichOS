@@ -7,6 +7,7 @@ public enum WindowGesturePreferences {
 
     private static let defaults = UserDefaults(suiteName: "app.richos.richfiles") ?? .standard
     private static let selectionKey = "windowGestures.selection"
+    private static let desktopDeleteKey = "desktopDelete.enabled"
     private static let statusKey = "windowGestures.status"
     private static let processKey = "windowGestures.process"
 
@@ -15,6 +16,7 @@ public enum WindowGesturePreferences {
         public init(rawValue: Int) { self.rawValue = rawValue }
         public static let titleBar = Self(rawValue: 1)
         public static let dock = Self(rawValue: 2)
+        public static let desktopDelete = Self(rawValue: 4)
     }
 
     public enum Status: String {
@@ -22,8 +24,17 @@ public enum WindowGesturePreferences {
     }
 
     public static var selection: Selection {
-        get { Selection(rawValue: defaults.integer(forKey: selectionKey)) }
-        set { defaults.set(newValue.rawValue, forKey: selectionKey) }
+        let gestures = Selection(rawValue: defaults.integer(forKey: selectionKey)).subtracting(.desktopDelete)
+        return defaults.object(forKey: desktopDeleteKey) as? Bool == false ? gestures : gestures.union(.desktopDelete)
+    }
+
+    public static func setEnabled(_ enabled: Bool, for gesture: Selection) {
+        if gesture == .desktopDelete {
+            defaults.set(enabled, forKey: desktopDeleteKey)
+            return
+        }
+        let gestures = selection.subtracting(.desktopDelete)
+        defaults.set((enabled ? gestures.union(gesture) : gestures.subtracting(gesture)).rawValue, forKey: selectionKey)
     }
 
     public static func status(process: pid_t) -> Status? {

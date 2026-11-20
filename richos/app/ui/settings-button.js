@@ -601,6 +601,8 @@ window.RichSettings = (function () {
         searchFolders.open();
       }, "set-search-folders-state"));
     }
+    var richfiles = part("richfiles");
+    if (richfiles) rich.push(richfiles);
     var model = part("model");
     if (model) {
       if (rich.length && !(instructions && searchFolders)) rich.push(divider());

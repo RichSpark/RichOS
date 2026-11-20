@@ -11873,9 +11873,6 @@ async function init() {
   // itself when it does.
   if (window.RichResources) window.RichResources.start();
   else window.__richosResourcesReady = true;
-  // Warm the RichFiles library after the app is usable. Its native view opens only on request.
-  if (window.RichFilesReady) window.RichFilesReady.start();
-  else window.__richosRichFilesReady = true;
   // The correction badge, read at launch and LAST. A proposal the CEO has not answered
   // survives a crash, a rotation and a relaunch by design (`correction.rs`'s fsync'd log),
   // so the count is re-read on the way up rather than inferred from this session's events —

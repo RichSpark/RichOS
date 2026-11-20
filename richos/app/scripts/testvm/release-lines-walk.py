@@ -27,11 +27,9 @@ STEPS (in the guest, never on the host's screen, CEO section 65; nothing is play
   welcome         the onboarding card ("Let's get me up to speed.", Start onboarding); Not now pressed:
                   Rich's note that five tools came with him and the tools card with Turn on RichScribe;
                   Turn on RichScribe pressed: the card asks for the key, the microphone and Accessibility
-  richfiles       the rail's RichFiles item opens the RichFiles page with the native browser in it (its
-                  accessibility tree kept), light and dark frames; Compare Folders, Find Duplicate Files
-                  and Disk Usage each opened and framed in both themes; Undock RichFiles opens RichFiles as its own app, which is then docked again
-  output-file     Rich writes a file; in the Output panel, the file's menu has Show in RichFiles, and
-                  pressing it opens the RichFiles page on that file
+  richfiles       the rail opens the information page in both themes and Open RichFiles launches
+                  the standalone app; New Tab and the browser tools open in that window
+  output-file     Rich writes a file; Show in RichFiles reveals that file in the standalone app
   moments-local   a recording in ~/Downloads (the meeting fixture) and a question about where in it a
                   topic comes up: a card lists moments with times and words; pressing one plays the
                   recording in the Output panel
@@ -79,6 +77,7 @@ import re
 import shlex
 import subprocess
 import sys
+import tempfile
 import time
 
 HERE = Path(__file__).resolve().parent
@@ -169,7 +168,9 @@ class Walk(MeetingWalk):
         record['turn'] = tid
         return record
 
-    def tree_to(self, name, *scope):
+    def tree_to(self, name, *scope, app=None):
+        if app is not None:
+            scope = (*scope, '--app', app)
         nodes = [n for n in self.ax('tree', *scope) if not n.get('meta')]
         (self.out / name).write_text(''.join(json.dumps(n) + '\n' for n in nodes))
         return nodes
@@ -271,84 +272,89 @@ class Walk(MeetingWalk):
         return ev
 
     # --- RichFiles ---------------------------------------------------------------------------------
-    def richfiles_open(self):
-        self.ax('click', '--id', 'nr-richfiles', '--first')
-        time.sleep(4)
-
     def richfiles(self):
-        self.g('mkdir -p ~/Acme/Docs ~/Acme/Docs-copy && printf "one\\n" > ~/Acme/Docs/a.txt && cp ~/Acme/Docs/a.txt '
-               '~/Acme/Docs-copy/a.txt && printf "two\\n" > ~/Acme/Docs-copy/b-only-here.txt')
-        rail = self.nodes('--id', 'nr-richfiles')
-        ev = {'rail_item': [{k: n.get(k) for k in ('title', 'desc', 'x', 'y', 'w', 'h')} for n in rail[:1]]}
-        if not rail:
-            self.tree_to('richfiles-no-rail.tree.jsonl')
-            raise StepFailed('no RichFiles item on the rail')
-        self.richfiles_open()
-        nodes = self.tree_to('richfiles.tree.jsonl')
-        ev['frames'] = self.both_themes('richfiles')
-        names = self.titles(nodes)
-        ev['page_title'] = self.text_on_screen('RichFiles')
-        ev['buttons'] = sorted({v for r, v in names if r in ('AXButton', 'AXMenuButton', 'AXPopUpButton') and v})[:80]
-        ev['error'] = [n.get('value') for n in self.nodes('--id', 'richfiles-pane-error')]
-        tools = {}
-        tab = self.ax('click', '--title', 'New Tab', '--role', 'AXButton', '--first')
+        richos = self.payload + '/RichOS.app'
+        richfiles = richos + '/Contents/Applications/RichFiles.app'
+        folder = self.payload + "/RichFiles fixture"
+        child = folder + "/Bravo Folder ' and &"
+        self.g('mkdir -p ' + shlex.quote(child))
+        self.ax('click', '--id', 'nr-richfiles', '--first')
+        if not self.nodes('--id', 'richfiles-title'):
+            raise StepFailed('the first rail press did not show the RichFiles information page')
+        if self.g('pgrep -x RichFiles || true').strip():
+            raise StepFailed('the first rail press launched RichFiles while the switch was off')
+        ev = {'page_frames': self.both_themes('richfiles-page')}
+        self.ax('click', '--id', 'rf-open', '--first')
         time.sleep(2)
-        tools['New Tab'] = {'pressed': bool(tab), 'tabs': [v for r, v in self.titles(self.tree_to('richfiles-new-tab.tree.jsonl'))
-                                                           if r == 'AXButton' and v in ('admin', 'Home')]}
-        self.shot('richfiles-new-tab.png')
-        for label in ('Compare Folders', 'Find Duplicate Files', 'Disk Usage'):
-            slug = label.lower().replace(' ', '-')
-            try:
-                self.ax('click', '--title', 'Tools', '--role', 'AXPopUpButton', '--first')
-                time.sleep(1.5)
-                self.tree_to('richfiles-tools-menu.tree.jsonl')
-                self.ax('click', '--title', label, '--role', 'AXMenuItem', '--first', '--contains')
-                time.sleep(4)
-                # Each sheet in both themes: its hints (Disk Usage's footnote) are measured in both.
-                frames = self.both_themes('richfiles-%s' % slug)
-                after = self.tree_to('richfiles-%s.tree.jsonl' % slug)
-                tools[label] = {'pressed': True, 'frames': frames,
-                                'windows': [v for r, v in self.titles(after) if r in ('AXWindow', 'AXSheet')],
-                                'texts': [v for r, v in self.titles(after) if r == 'AXStaticText' and v][:25]}
-                self.esc()
-                self.esc()
-            except StepFailed as exc:
-                tools[label] = {'pressed': False, 'why': str(exc)[-300:]}
-                self.esc()
-        ev['tools'] = tools
-        # Undock, then back in the rail
-        try:
-            self.richfiles_open()
-            self.ax('click', '--title', 'Undock', '--role', 'AXButton', '--first')
-            time.sleep(6)
-            procs = self.g("pgrep -fl 'RichFiles.app/Contents/MacOS' || true")
-            self.shot('richfiles-undocked.png')
-            windows = self.g('osascript -e \'tell application "System Events" to get name of every window of '
-                             '(every process whose name contains "RichFiles")\' 2>&1 || true')
-            ev['undock'] = {'process': procs.strip(), 'windows': windows.strip()}
-            try:
-                self.ax('click', '--title', 'Dock in RichOS', '--first', '--contains', app='RichFiles')
-                time.sleep(5)
-                ev['undock']['docked_again'] = True
-            except StepFailed as exc:
-                ev['undock']['docked_again'] = 'no Dock in RichOS: ' + str(exc)[-200:]
-            self.shot('richfiles-docked-again.png')
-        except StepFailed as exc:
-            ev['undock'] = {'error': str(exc)[-400:]}
+        pid = self.g('pgrep -x RichFiles').strip()
+        ev['version'] = self.g('plutil -extract CFBundleShortVersionString raw '
+                               + shlex.quote(richfiles + '/Contents/Info.plist')).strip()
+        if ev['version'] != '1.0.1':
+            raise StepFailed('the standalone version was ' + ev['version'])
+        if not any(role == 'AXWindow' for role, _ in self.titles(self.tree_to('richfiles.tree.jsonl', app='RichFiles'))):
+            raise StepFailed('Open RichFiles did not open a standalone window')
+        self.g('open -a ' + shlex.quote(richos))
+        self.ax('click', '--id', 'rf-always', '--first')
+        self.ax('click', '--id', 'nr-chats', '--first')
+        for _ in range(2):
+            self.ax('click', '--id', 'nr-richfiles', '--first')
+            time.sleep(1.5)
+            if self.g('pgrep -x RichFiles').strip() != pid:
+                raise StepFailed('the rail press did not reuse the standalone process')
+            front = self.script('tell application "System Events" to get unix id of first process whose frontmost is true')
+            if front != pid:
+                raise StepFailed('the rail press did not activate RichFiles')
+            self.g('open -a ' + shlex.quote(richos))
+            if self.nodes('--id', 'richfiles-title'):
+                raise StepFailed('the rail press switched the RichOS page')
+        self.ax('click', '--id', 'nr-me', '--first')
+        ev['settings_frames'] = self.both_themes('richfiles-settings')
+        self.ax('click', '--id', 'set-richfiles-always', '--first')
+        self.esc()
+        self.ax('click', '--id', 'nr-richfiles', '--first')
+        if not self.nodes('--id', 'richfiles-title'):
+            raise StepFailed('turning off the switch in Settings did not restore the information page')
+
+        self.g('open -a ' + shlex.quote(richfiles) + ' ' + shlex.quote(folder))
+        time.sleep(1.5)
+        nodes = self.ax('find', '--title', "Bravo Folder ' and &", app='RichFiles')
+        target = next(n for n in nodes if n.get('w') and n.get('h'))
+        x, y = (int(target['x'] + min(16, target['w'] / 2)), int(target['y'] + target['h'] / 2))
+        tool = self.payload + '/timeline-window'
+        with tempfile.TemporaryDirectory(prefix='richfiles-terminal-') as temp:
+            binary = Path(temp) / 'timeline-window'
+            command(['swiftc', HERE.parent / 'qa/timeline-window.swift', '-o', binary], 90)
+            command([HERE / 'guest.sh', self.vm, '--push', binary, tool], 60)
+        terminal_checks = {}
+        for label in ('New Terminal at Folder', 'New Terminal Tab at Folder'):
+            self.g('open -a ' + shlex.quote(richfiles))
+            time.sleep(.4)
+            self.g('env RICHOS_TESTVM_CAPTURE=1 ' + shlex.quote(tool)
+                   + f' {pid} {x},{y},4,4 right {x},{y} 0')
+            self.ax('click', '--title', label, '--role', 'AXMenuItem', '--first', app='RichFiles')
+            time.sleep(2)
+            shell_directories = self.g(
+                '''ps -axo pid=,tty=,comm= | awk '$2 ~ /^ttys/ && $3 ~ /(^|\\/)-?(zsh|bash|fish)$/ {print $1}' '''
+                '''| while read -r pid; do /usr/sbin/lsof -a -p "$pid" -d cwd -Fn; done'''
+            )
+            (self.out / (label.replace(' ', '-') + '.cwd.txt')).write_text(shell_directories)
+            if 'n' + child not in shell_directories.splitlines():
+                raise StepFailed(label + ' did not open a shell in the selected folder')
+            terminal_checks[label] = shell_directories.splitlines().count('n' + child)
+        if terminal_checks['New Terminal Tab at Folder'] <= terminal_checks['New Terminal at Folder']:
+            raise StepFailed('the second Terminal action did not start another shell')
+        nodes = self.tree_to('richfiles-terminal.tree.jsonl', app='Terminal')
+        ev['terminal_windows'] = sum(n.get('role') == 'AXWindow' and n.get('d') == 0 for n in nodes)
+        if ev['terminal_windows'] != 1:
+            raise StepFailed('the second Terminal action did not use the existing window')
+        ev['terminal'] = terminal_checks
+        self.shot('richfiles-terminal.png')
+        for id_ in ('com.apple.Terminal', 'app.richos.richfiles'):
+            self.g('osascript -e ' + shlex.quote(f'tell application id "{id_}" to quit'))
+        self.g('! pgrep -x RichFiles && ! pgrep -x Terminal')
+        self.ax('click', '--id', 'nr-chats', '--first')
         self.facts['richfiles'] = ev
         self.save()
-        self.ax('click', '--title', 'Chats', '--role', 'AXButton', '--first')
-        time.sleep(2)
-        problems = []
-        if ev['error'] and any(ev['error']):
-            problems.append('the page shows an error: %s' % ev['error'])
-        unopened = [k for k, v in tools.items() if not v['pressed']]
-        if unopened:
-            problems.append('could not open: %s' % ', '.join(unopened))
-        if not (ev['undock'].get('process')):
-            problems.append('Undock RichFiles started no RichFiles app')
-        if problems:
-            raise StepFailed('; '.join(problems) + ' | ' + json.dumps(ev)[:2500])
         return ev
 
     def output_file(self):
@@ -378,10 +384,9 @@ class Walk(MeetingWalk):
         if ev['menu_has_show_in_richfiles']:
             self.ax('click', '--title', 'Show in RichFiles', '--first', '--contains')
             time.sleep(5)
-            page = self.tree_to('show-in-richfiles.tree.jsonl')
+            page = self.tree_to('show-in-richfiles.tree.jsonl', app='RichFiles')
             self.shot('show-in-richfiles.png')
             ev['richfiles_page_shows_file'] = any('price-notes.md' in v for _, v in self.titles(page))
-            ev['page_open'] = not any(n.get('hidden') for n in self.nodes('--id', 'richfiles-page'))
         self.facts['output_file'] = ev
         self.save()
         if not ev['menu_has_show_in_richfiles'] or not ev.get('richfiles_page_shows_file'):

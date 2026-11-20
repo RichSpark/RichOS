@@ -2025,8 +2025,6 @@ t "lease model walk: the level a reopened effort control marks chosen, and a wro
   PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/lease-model-walk.test.py" >"$TMP/lease-model-walk.log" 2>&1; ok $? "$(cat "$TMP/lease-model-walk.log")"
 t_done
 
-t "richfiles open walk: click-to-visible bounds from the frames either side of RichFiles, and the captures that cannot answer"
-  PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/richfiles-open-walk.test.py" >"$TMP/richfiles-open-walk.log" 2>&1; ok $? "$(cat "$TMP/richfiles-open-walk.log")"
 t_done
 
 t "browser reader walk: the driver against a stand-in tool server, the local site, and a release executable pushed with its bundle"

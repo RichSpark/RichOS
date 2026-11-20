@@ -1,3 +1,4 @@
+import AppKit
 import Combine
 import Foundation
 import RichFilesCore
@@ -5,6 +6,53 @@ import XCTest
 @testable import RichFiles
 
 final class BrowserModelTests: XCTestCase {
+    func testBackspaceAndDeleteUseDifferentCommandsInBothPresets() throws {
+        func chord(_ code: UInt16, flags: NSEvent.ModifierFlags = []) throws -> BrowserShortcut {
+            let characters = code == 51 ? "\u{7f}" : "\u{f728}"
+            let event = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags,
+                timestamp: 0, windowNumber: 0, context: nil, characters: characters,
+                charactersIgnoringModifiers: characters, isARepeat: false, keyCode: code))
+            return BrowserShortcut(event: event, modifiers: flags)
+        }
+
+        for windows in [true, false] {
+            let preset = BrowserShortcut.preset(windows)
+            XCTAssertEqual(preset[try chord(51)], .back)
+            XCTAssertEqual(preset[try chord(117)], .trash)
+            XCTAssertEqual(preset[try chord(51, flags: .command)], .trash)
+            XCTAssertEqual(try chord(51, flags: .control), BrowserShortcut("Control+Delete"))
+        }
+    }
+
+    @MainActor
+    func testOpeningFolderShowsFeedbackBeforeSlowResolutionFinishes() async throws {
+        let folder = FileManager.default.temporaryDirectory.resolvingSymlinksInPath()
+            .appendingPathComponent("RichFilesSlowFolder-\(UUID().uuidString)", isDirectory: true)
+        let child = folder.appendingPathComponent("Child", isDirectory: true)
+        try FileManager.default.createDirectory(at: child, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+
+        let resolving = expectation(description: "folder resolution started")
+        let result = DispatchSemaphore(value: 0)
+        let model = BrowserModel(start: folder, resolveFolder: { url in
+            resolving.fulfill()
+            guard result.wait(timeout: .now() + 5) == .success else { throw ListingTimeout() }
+            return url
+        })
+        defer { result.signal() }
+
+        model.openFolder(child)
+        await fulfillment(of: [resolving], timeout: 3)
+        XCTAssertTrue(model.openingFolder)
+        XCTAssertEqual(model.folder.path, folder.standardizedFileURL.path)
+        model.selected = [child]
+        XCTAssertEqual(model.selected, [child])
+        result.signal()
+        try await waitForListing(model, at: child)
+        XCTAssertEqual(model.folder.path, child.standardizedFileURL.path)
+        XCTAssertFalse(model.openingFolder)
+    }
+
     func testCustomShortcutsKeepSystemKeysAndOtherActionsAvailable() throws {
         XCTAssertEqual(BrowserShortcut("Ctrl+L").flatMap { BrowserShortcut.preset(true)[$0] }, .address)
         XCTAssertEqual(BrowserShortcut("Command+L").flatMap { BrowserShortcut.preset(false)[$0] }, .address)
@@ -48,10 +96,9 @@ final class BrowserModelTests: XCTestCase {
     func testHandoffRecognizesOnlyTheExpectedAppAndTicketURL() throws {
         let id = UUID()
         let url = try XCTUnwrap(URL(string: "richfiles-workspace://receive/\(id.uuidString)"))
-        XCTAssertEqual(WorkspaceHandoff.ticketID(from: url, for: .standalone), id)
-        XCTAssertNil(WorkspaceHandoff.ticketID(from: url, for: .docked))
+        XCTAssertEqual(WorkspaceHandoff.ticketID(from: url), id)
         let extra = try XCTUnwrap(URL(string: url.absoluteString + "?extra=true"))
-        XCTAssertNil(WorkspaceHandoff.ticketID(from: extra, for: .standalone))
+        XCTAssertNil(WorkspaceHandoff.ticketID(from: extra))
     }
 
     @MainActor
@@ -71,13 +118,13 @@ final class BrowserModelTests: XCTestCase {
                                         administration: try FileReference(url: administration),
                                         lands: [], allOnMain: false, commit: nil, path: nil)
         let startingFolder = directory.deletingLastPathComponent()
-        git.startSnapshot(snapshot, folder: startingFolder, currentChat: "source", docked: true)
+        git.startSnapshot(snapshot, folder: startingFolder)
         git.follow(startingFolder)
         git.follow(directory)
         XCTAssertEqual(git.snapshot, snapshot)
         XCTAssertEqual(git.scope, .chat)
 
-        git.startSnapshot(snapshot, folder: child, currentChat: nil)
+        git.startSnapshot(snapshot, folder: child)
         git.follow(directory)
         XCTAssertEqual(git.snapshot, snapshot)
         XCTAssertEqual(git.scope, .chat)
@@ -136,7 +183,7 @@ final class BrowserModelTests: XCTestCase {
                 await fulfillment(of: [finished], timeout: 10)
             }
 
-            model.startSnapshot(snapshot, folder: root, currentChat: nil)
+            model.startSnapshot(snapshot, folder: root)
             await waitForHistory()
             XCTAssertEqual(model.unavailableComparisonPath, missingPath)
 

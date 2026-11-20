@@ -199,7 +199,7 @@ mod search_rerank;
 /// **A file Rich puts in front of the user** (§138, item 12): the cards' items, open and Show in
 /// Finder through `opener.rs`, and the watch that shows a file as soon as it is attached.
 mod rich_files_host;
-mod richfiles_pane;
+mod richfiles_integration;
 mod glance_capture_shortcut;
 #[cfg(target_os = "macos")]
 mod cleaner_native;
@@ -1484,7 +1484,7 @@ fn tell_the_phone_the_threads(app: &AppHandle) {
 #[richos_command::command]
 fn switch_thread(app: tauri::AppHandle, state: State<AppState>, thread_id: String) -> Result<(), String> {
     switch_thread_in(&state.spine, &state.reader, &state.control, &thread_id)?;
-    richfiles_pane::active_git_chat_changed(&app);
+    richfiles_integration::active_git_chat_changed(&app);
     Ok(())
 }
 
@@ -2943,7 +2943,6 @@ fn main() {
             // but the variable in use would be a second copy that can disagree.
             // The resource sampler starts once the page has taken over (rule 3); until then the
             // square reads "not yet" exactly as it does when the sampler is unavailable.
-            app.manage(richfiles_pane::PaneRequests::default());
             app.manage(ResourceMonitor(Mutex::new(None)));
             let activation = activation::decide(&activation::gather(&data_dir, &app.config().identifier));
             eprintln!("[richos] {}", activation.log_message());
@@ -4353,6 +4352,7 @@ fn main() {
             {
                 let capture_app = app.handle().clone();
                 first_frame::after_page(app.handle(), move || glance_capture_shortcut::restore(capture_app));
+                first_frame::after_page(app.handle(), richfiles_integration::start_window_gestures);
             }
             // The first window is up. Optional private starter I/O stays off startup.
             if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
@@ -4374,13 +4374,12 @@ fn main() {
             splash_native_dismiss,
             splash_did_finish,
             system_resources,
-            richfiles_pane::richfiles_pane_available, richfiles_pane::richfiles_place_pane,
-            richfiles_pane::richfiles_recording_frame,
+            richfiles_integration::richfiles_available, richfiles_integration::richfiles_open,
+            richfiles_integration::richfiles_settings,
+            richfiles_integration::output_git_available,
             glance_capture_shortcut::glance_capture_status, glance_capture_shortcut::glance_capture_configure,
             glance_capture_shortcut::glance_workflow_status, glance_capture_shortcut::glance_workflow_configure,
-            richfiles_pane::richfiles_preload,
-            richfiles_pane::richfiles_request_pending, richfiles_pane::richfiles_accept_request,
-            richfiles_pane::output_git_open, richfiles_pane::output_git_place, richfiles_pane::richfiles_git_chat,
+            richfiles_integration::output_git_open, richfiles_integration::output_git_place, richfiles_integration::richfiles_git_chat,
             question_host::answer_question, question_host::question_shown, question_host::open_question_counts,
             claude_quota,
             set_fable_quota_switch,
@@ -4578,7 +4577,7 @@ fn main() {
             output_files::media_moment_playback,
             output_files::output_open,
             output_files::output_reveal,
-            richfiles_pane::output_reveal_in_richfiles,
+            richfiles_integration::output_reveal_in_richfiles,
             output_files::output_save_copy,
             // --- Rich's one offer of dictation (dictation plan slice 4) — appended ---
             dictation_offer,
@@ -4663,6 +4662,7 @@ fn main() {
             home_video::home_video_input,
             home_video::home_video_save,
             home_video::cleaner_recording_frame,
+            home_video::richfiles_recording_frame,
             // --- a job's result said on its own (2026-10-15) — appended ---
             // --- the Oxford comma in what Claude writes (CEO 2026-10-19) — appended ---
             set_oxford_comma,
@@ -4755,10 +4755,6 @@ fn main() {
         // launch is read as a crash-restart — an undercount by one, no splash once — which
         // is not worth refusing to close the app over.
         .run(|handle, event| {
-            #[cfg(target_os = "macos")]
-            if let tauri::RunEvent::Opened { urls, .. } = &event {
-                richfiles_pane::opened(handle, urls);
-            }
             if matches!(&event, tauri::RunEvent::Exit) {richpass_host::shutdown(handle);}
             // =========================================================================
             // ROW 5 — "You close the window. The work keeps going. Quit ends it."

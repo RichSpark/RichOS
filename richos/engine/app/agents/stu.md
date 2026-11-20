@@ -28,23 +28,26 @@ Each job you give a subagent runs on a model and an effort level and the job in 
 | 2 | **A substantial deliverable built from many files**: a long report, a financial model, a presentation from a pile of material | **Opus, high** | Opus, xhigh | n/a |
 | 3 | **A hard question a decision rests on**: analysis, deep research, a plan, product direction for a feature (what it should do, for whom and why) | **Fable, medium** | Fable, high | Opus, xhigh |
 | | **Design** | | | |
-| 4 | **An original design**: a new look, a mockup of something not designed before, a logo, a design system | **Fable, medium** | Fable, high | Opus, xhigh |
-| 5 | **Design work from a chosen design**: a variation of it, carrying it to another screen, a correction | **Opus, high** | Fable, medium | Opus, high |
+| 4 | **Routine or minor design change/adjustment within existing design**: changing colors, adjusting alignment of different elements, a minor correction and any other design work that doesn't need any significant creativity | **Opus, medium** | Opus, high | n/a |
+| 5 | **Design work from a chosen design**: a variation of it or carrying it to another screen, other design work that any junior designer could do because the work is within the confines of the established design system | **Opus, high** | Fable, medium | Opus, high |
+| 6 | **An original design**: a new look, a mockup of something not designed before, a logo, a design system, any design work that calls for significant levels of creativity or substantial amounts of original design | **Fable, medium** | Fable, high | Opus, xhigh |
 | | **Marketing/copywriting** | | | |
-| 6 | **The message everything else inherits**: positioning, the value proposition, a name, a tagline, the main headline, a launch message | **Fable, medium** | Fable, high | Opus, xhigh |
 | 7 | **Everyday copy from a set message and voice**: a page section, an email, an ad variation, an edit of existing copy | **Opus, high** | Fable, medium | Opus, high |
+| 8 | **The message everything else inherits**: positioning, the value proposition, a name, a tagline, the main headline, a launch message | **Fable, medium** | Fable, high | Opus, xhigh |
 | | **Strategy** | | | |
-| 8 | **A strategy the company acts on**: which market, which product, pricing, a go-to-market plan, a response to a competitor | **Fable, medium** | Fable, high | Opus, xhigh |
-| 9 | **The groundwork for a strategy**: a competitor profile, market sizing, the facts gathered and laid out for a decision | **Opus, high** | Opus, xhigh | n/a |
+| 9 | **The groundwork or prep work for a strategy**: a competitor profile, market sizing, the facts gathered and laid out for a decision | **Opus, high** | Opus, xhigh | n/a |
+| 10 | **Any strategy work that is expected to influence significant long-term decisions**: which market, which product, pricing, a go-to-market plan, a response to a competitor | **Fable, medium** | Fable, high | Opus, xhigh |
 | | **Social media** | | | |
-| 10 | **Posts, replies, a content calendar, turning a longer piece into posts**, all in a set voice. The voice itself and a campaign idea are row 6. | **Opus, high** | Fable, medium | Opus, high |
+| 11 | **Posts, replies, a content calendar, turning a longer piece into posts**, all in a set voice. The voice itself and a campaign idea are row 8. | **Opus, high** | Fable, medium | Opus, high |
 | | **Coding-related** | | | |
-| 11 | **Everyday building**: a routine code change, an ordinary bug, a screen built from a chosen design | **Opus, high** | Fable, medium | Opus, high |
-| 12 | **Checking finished code**: a code review, verification, an audit, an adversarial review | **Opus, high** | Opus, xhigh | n/a |
-| 13 | **Hard or open-ended**: a hard bug with an unknown cause, architecture, a large rework | **Fable, medium** | Fable, high | Opus, xhigh |
+| 12 | **Everyday building and routine bug fixing**: a routine code change, an ordinary bug, a screen built from a chosen design | **Opus, high** | Fable, medium | Opus, high |
+| 13 | **Checking finished code**: a code review, verification, an audit, an adversarial review | **Opus, high** | Opus, xhigh | n/a |
+| 14 | **Routine and basic architecture work**: adding a field or table to an existing schema, a new endpoint or module that follows patterns already in the code, splitting a module along lines it already has | **Opus, high** | Opus, xhigh | n/a |
+| 15 | **Software architecture work that goes beyond routine and basic**: a new subsystem or service boundary, a data-model change that reaches many parts of the app, a sync, concurrency or offline design, choosing between technical approaches with a long-term cost | **Fable, medium** | Fable, high | Opus, xhigh |
+| 16 | **Hard or open-ended**: a hard bug with an unknown cause, planning a large rework, reviewing PRDs | **Fable, medium** | Fable, high | Opus, xhigh |
 | | **Either kind** | | | |
-| 14 | **Sorting or pattern-matching a very large pile, where speed is the point** | **Haiku, medium, only if** a side-by-side test on that same job showed its quality is sufficient and it really finished sooner. Otherwise Sonnet, high. | Sonnet, high | n/a |
-| 15 | **A stress test of an answer from rows 3, 6, 8 or 13**: a devil's advocate, a hunt for its blind spots | **The same pair that answer ran on** | Fable, high | Opus, xhigh |
+| 17 | **Sorting or pattern-matching a very large pile, where speed is the point** | **Haiku, medium, only if** a side-by-side test on that same job showed its quality is sufficient and it really finished sooner. Otherwise Sonnet, high. | Sonnet, high | n/a |
+| 18 | **A stress test of an answer from rows 3, 8, 10, 15 or 16**: a devil's advocate, a hunt for its blind spots | **The same pair that answer ran on** | Fable, high | Opus, xhigh |
 
 **Not sure which row: Opus, high.**
 

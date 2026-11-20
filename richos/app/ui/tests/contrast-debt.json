@@ -23,7 +23,7 @@
     },
     {
       "id": "richfiles-page",
-      "why": "The RichFiles page is covered by the two-theme RichFiles check in tests/nav-rail.js. It opens the shipped page from the navigation rail, makes native placement return the standard error and requires window.__contrastProbe to measure the heading and error without a failing or unprovable pair. The file browser itself uses AppKit and is outside WebKit's DOM contrast walk."
+      "why": "The RichFiles page is covered by the two-theme RichFiles check in tests/nav-rail.js. It opens the shipped page from the navigation rail and requires window.__contrastProbe to measure the heading and page without a failing or unprovable pair. The file browser itself uses AppKit and is outside WebKit's DOM contrast walk."
     },
     {
       "id": "richpass-page",

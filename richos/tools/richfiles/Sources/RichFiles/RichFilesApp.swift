@@ -9,12 +9,12 @@ public enum RichFilesInstallation {
 
     public static var gitPreferences: UserDefaults { preferences }
 
-    public static var embeddedApplication: URL {
+    public static var bundledApplication: URL {
         Bundle.main.bundleURL.appendingPathComponent("Contents/Applications/RichFiles.app", isDirectory: true)
     }
 
     static var glanceApplication: URL? {
-        let richFiles = Bundle.main.bundleIdentifier == "app.richos.richfiles" ? Bundle.main.bundleURL : embeddedApplication
+        let richFiles = Bundle.main.bundleIdentifier == "app.richos.richfiles" ? Bundle.main.bundleURL : bundledApplication
         let app = richFiles.appendingPathComponent("Contents/Applications/RichGlance.app", isDirectory: true)
         return Bundle(url: app)?.bundleIdentifier == "app.richos.richglance" ? app : nil
     }
@@ -27,23 +27,13 @@ public enum RichFilesInstallation {
         if status != noErr { NSLog("RichGlance registration failed (%d)", status) }
     }
 
-    @MainActor static var richOSApplication: URL? {
-        let contents = Bundle.main.bundleURL.deletingLastPathComponent().deletingLastPathComponent()
-        let candidates = [contents.lastPathComponent == "Contents" ? contents.deletingLastPathComponent() : nil,
-                          NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.richos.app")]
-        return candidates.compactMap { $0 }.first {
-            Bundle(url: $0)?.bundleIdentifier == "com.richos.app"
-                && FileManager.default.fileExists(atPath: $0.appendingPathComponent("Contents/Frameworks/libRichFilesRail.dylib").path)
-        }
-    }
-
-    @MainActor public static var dockedRecoveryStore: URL? {
+    @MainActor static var legacyRecoveryStore: URL? {
         BrowserActions.recoveryLocation?.deletingLastPathComponent().appendingPathComponent("DockedRecovery.json")
     }
 
-    @MainActor public static func openStandaloneWindow(at folder: URL) async throws {
-        let session = try BrowserModel.sessionData(for: folder)
-        try await WorkspaceHandoff.send(session, to: .standalone, application: embeddedApplication)
+    @MainActor public static func showGitInRichFiles(_ snapshot: GitPanelSnapshot) async throws {
+        let session = try WindowWorkspace.gitSession(snapshot)
+        try await WorkspaceHandoff.send(session, application: bundledApplication)
     }
 }
 
@@ -57,7 +47,7 @@ public struct RichFilesScenes: Scene {
     private static let browserEvents: Set<String> = ["file://", "richfiles-workspace://"]
     private let delegate: FolderOpenDelegate
     @StateObject private var actions = BrowserActions(recoveryURL: BrowserActions.recoveryLocation,
-                                                      peerRecoveryURL: RichFilesInstallation.dockedRecoveryStore)
+                                                      peerRecoveryURL: RichFilesInstallation.legacyRecoveryStore)
 
     public init(delegate: FolderOpenDelegate) {
         self.delegate = delegate
@@ -69,7 +59,7 @@ public struct RichFilesScenes: Scene {
                         actions: actions, openRequests: delegate,
                         supportsSessionRestore: Self.requestedFolder == nil,
                         remembersWindowFrame: true,
-                        launchHandoffID: Self.requestedHandoff, hostSwitch: Self.dockSwitch)
+                        launchHandoffID: Self.requestedHandoff)
                 .frame(minWidth: 720, minHeight: 420)
                 .defaultAppStorage(RichFilesInstallation.preferences)
                 .handlesExternalEvents(preferring: Self.browserEvents, allowing: Self.browserEvents)
@@ -81,7 +71,7 @@ public struct RichFilesScenes: Scene {
 
         WindowGroup("RichFiles", id: "richfiles-folder", for: FolderWindowRequest.self) { $request in
             WindowBrowserView(start: request?.folder ?? FileManager.default.homeDirectoryForCurrentUser,
-                              actions: actions, openRequests: delegate, hostSwitch: Self.dockSwitch)
+                              actions: actions, openRequests: delegate)
                 .frame(minWidth: 720, minHeight: 420)
                 .defaultAppStorage(RichFilesInstallation.preferences)
                 .handlesExternalEvents(preferring: Self.browserEvents, allowing: Self.browserEvents)
@@ -91,17 +81,13 @@ public struct RichFilesScenes: Scene {
         WindowGroup("RichFiles", id: "richfiles-handoff", for: String.self) { $ticket in
             WindowBrowserView(start: FileManager.default.homeDirectoryForCurrentUser, actions: actions,
                               openRequests: delegate, supportsSessionRestore: true,
-                              handoffID: ticket, hostSwitch: Self.dockSwitch)
+                              handoffID: ticket)
                 .frame(minWidth: 720, minHeight: 420)
                 .defaultAppStorage(RichFilesInstallation.preferences)
                 .handlesExternalEvents(preferring: Self.browserEvents, allowing: Self.browserEvents)
         }
         .defaultSize(width: 1120, height: 700)
 
-    }
-
-    private static var dockSwitch: WindowBrowserView.HostSwitch? {
-        RichFilesInstallation.richOSApplication.map { .init(target: .docked, application: $0) }
     }
 
     private static var requestedHandoff: String? {
@@ -122,46 +108,6 @@ public struct RichFilesScenes: Scene {
     }
 }
 
-/// The complete browser for a host that already owns its application window.
-@MainActor
-public struct RichFilesPane: View {
-    @StateObject private var actions: BrowserActions
-    @StateObject private var openRequests = FolderOpenDelegate()
-    private let folder: URL
-    private let openWindow: (URL) -> Void
-    private let acceptsKeyboard: () -> Bool
-    private let returnKeyboardFocus: @MainActor @Sendable () -> Void
-    private let dockTarget: RichFilesDockTarget?
-    private let didUndock: (() -> Void)?
-
-    public init(
-        folder: URL,
-        recoveryStore: URL?,
-        openWindow: @escaping (URL) -> Void,
-        acceptsKeyboard: @escaping () -> Bool,
-        returnKeyboardFocus: @escaping @MainActor @Sendable () -> Void = {},
-        dockTarget: RichFilesDockTarget? = nil, didUndock: (() -> Void)? = nil
-    ) {
-        self.folder = folder
-        self.openWindow = openWindow
-        self.acceptsKeyboard = acceptsKeyboard
-        self.returnKeyboardFocus = returnKeyboardFocus
-        self.dockTarget = dockTarget
-        self.didUndock = didUndock
-        let peerStore = recoveryStore == RichFilesInstallation.dockedRecoveryStore ? BrowserActions.recoveryLocation : nil
-        _actions = StateObject(wrappedValue: BrowserActions(recoveryURL: recoveryStore, peerRecoveryURL: peerStore))
-    }
-
-    public var body: some View {
-        WindowBrowserView(start: folder, actions: actions, openRequests: openRequests,
-                    openWindow: openWindow, acceptsKeyboard: acceptsKeyboard, returnKeyboardFocus: returnKeyboardFocus,
-                    dockTarget: dockTarget, hostSwitch: dockTarget.map { _ in
-                        .init(target: .standalone, application: RichFilesInstallation.embeddedApplication, didUndock: didUndock)
-                    })
-            .defaultAppStorage(RichFilesInstallation.preferences)
-    }
-}
-
 @MainActor
 public final class FolderOpenDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     @Published private(set) var requestID = UUID()
@@ -170,6 +116,7 @@ public final class FolderOpenDelegate: NSObject, NSApplicationDelegate, Observab
     private var openedHandoffs: Set<UUID> = []
     private var openedInitialBrowser = false
     private weak var primaryPlacementWindow: NSWindow?
+    private var windowRecording: WindowRecording?
 
     func claimPrimaryPlacement(for window: NSWindow) -> Bool {
         if primaryPlacementWindow == nil { primaryPlacementWindow = window }
@@ -187,7 +134,18 @@ public final class FolderOpenDelegate: NSObject, NSApplicationDelegate, Observab
     public func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.servicesProvider = self
         NSUpdateDynamicServices()
-        DispatchQueue.global(qos: .utility).async { RichFilesInstallation.registerGlance() }
+        DispatchQueue.global(qos: .utility).async {
+            RichFilesInstallation.registerGlance()
+            let recording = WindowRecording()
+            DispatchQueue.main.async { [weak self] in self?.windowRecording = recording }
+        }
+        Task {
+            _ = await WindowGestureService.request("register-if-desktop-enabled", in: Bundle.main.bundleURL)
+        }
+    }
+
+    public func applicationWillTerminate(_ notification: Notification) {
+        windowRecording = nil
     }
 
     @objc(openRichFiles:userData:error:)
@@ -201,7 +159,7 @@ public final class FolderOpenDelegate: NSObject, NSApplicationDelegate, Observab
     public func application(_ application: NSApplication, open urls: [URL]) {
         pending.append(contentsOf: urls.filter(\.isFileURL))
         for url in urls {
-            if let id = WorkspaceHandoff.ticketID(from: url, for: .standalone),
+            if let id = WorkspaceHandoff.ticketID(from: url),
                !openedHandoffs.contains(id), !handoffs.contains(id), WorkspaceHandoff.hasPendingTicket(id) {
                 handoffs.append(id)
             }
@@ -378,7 +336,7 @@ struct RichFilesSettings: View {
 
     private var appURL: URL {
         let bundle = Bundle.main
-        let app = bundle.bundleIdentifier == "app.richos.richfiles" ? bundle.bundleURL : RichFilesInstallation.embeddedApplication
+        let app = bundle.bundleIdentifier == "app.richos.richfiles" ? bundle.bundleURL : RichFilesInstallation.bundledApplication
         return app.resolvingSymlinksInPath()
     }
     private var installedBundle: Bool { Bundle(url: appURL)?.bundleIdentifier == "app.richos.richfiles" }
@@ -501,8 +459,10 @@ struct RichFilesSettings: View {
                 Text("Mac (Command)").tag(false)
             }
             .pickerStyle(.radioGroup)
-            Text("Enter opens, F2 renames, Delete moves to Trash and Space previews.")
+            Text("Enter opens, F2 renames, Backspace goes back, Delete moves to Trash and Space previews.")
                 .foregroundStyle(guidanceColor)
+            heading("Mac desktop")
+            WindowGestureSettings(appURL: appURL, desktopShortcut: true)
             heading("Individual shortcuts")
             Picker("File Action", selection: $shortcutAction) {
                 ForEach(BrowserAction.all + [.init("File Actions", .actionPalette)]) {
@@ -633,32 +593,21 @@ struct RichFilesSettings: View {
     }
 
     private func readHandler() {
-        currentHandler = NSWorkspace.shared.urlForApplication(toOpen: UTType.folder)
+        currentHandler = FolderAssociation.current
     }
 
     private func change(to url: URL, remember: Bool) {
         readHandler()
-        guard remember ? currentHandler != nil && !isCurrent : isCurrent else {
+        guard let prior = currentHandler, remember != isCurrent else {
             status = "The folder association changed. Check the current app and try again."
             return
         }
-        guard FileManager.default.fileExists(atPath: url.path) else {
-            status = "The previous app is unavailable."
-            return
-        }
-        let prior = currentHandler?.path
         updating = true
         Task { @MainActor in
             defer { updating = false }
             do {
-                try await NSWorkspace.shared.setDefaultApplication(at: url, toOpen: UTType.folder)
+                try await FolderAssociation.change(to: url, replacing: prior, remember: remember)
                 readHandler()
-                guard currentHandler?.resolvingSymlinksInPath() == url.resolvingSymlinksInPath() else {
-                    status = "macOS did not confirm the folder association."
-                    return
-                }
-                if remember, let prior { previousHandler = prior }
-                if !remember { previousHandler = "" }
                 status = "Folder association updated."
             } catch {
                 readHandler()
