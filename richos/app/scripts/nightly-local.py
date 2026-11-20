@@ -1254,6 +1254,25 @@ def exclusive(state):
         yield
 
 
+def bound_git_config(listing):
+    """The `git config --null --list --show-origin` output a gate can depend on.
+
+    A BRANCH'S UPSTREAM ENTRY IS BOOKKEEPING, NOT A SETTING. The build's checkout is a
+    worktree of the developer's repository and shares its .git/config, and git itself writes
+    `branch.<name>.remote` and `.merge` there whenever anyone starts a branch from a remote
+    one. A build was refused with every check passing because another session ran
+    `git worktree add -b ... origin/main` while a gate was running. The build runs detached at
+    its source commit and fetches by explicit ref, so no gate reads a `branch.*` entry; every
+    other setting (hooks, filters, merge drivers, identity, remotes) stays bound, with its origin.
+    """
+    fields = listing.split(b"\0")
+    kept = []
+    for origin, entry in zip(fields[0::2], fields[1::2]):
+        if not entry.partition(b"\n")[0].startswith(b"branch."):
+            kept += [origin, entry]
+    return b"\0".join(kept)
+
+
 class Runner:
     def __init__(self, repo, state, env, log, credentials=None, gates_at_once=1,
                  simulated_phones=1, chosen_by=None, gui_host=None, vm_settings=None):
@@ -2436,9 +2455,9 @@ class Runner:
         inputs["environment"] = {k: proof_evidence.digest(v) for k, v in env.items()}
         inputs["settings"] = [checks_done_at_land, bool(no_host_screen), self.gates_at_once,
                               self.simulated_phones, GATE_BUDGETS, GATE_AFTER]
-        inputs["git_config"] = proof_evidence.digest(subprocess.run(
+        inputs["git_config"] = proof_evidence.digest(bound_git_config(subprocess.run(
             ["git", "config", "--null", "--list", "--show-origin"], cwd=self.source,
-            env=env, capture_output=True, timeout=15, check=True).stdout.hex())
+            env=env, capture_output=True, timeout=15, check=True).stdout).hex())
         sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=self.source, env=env,
                              capture_output=True, text=True, timeout=15, check=True).stdout.strip()
         return {"source_commit": sha, "inputs_sha256": proof_evidence.digest(inputs)}
