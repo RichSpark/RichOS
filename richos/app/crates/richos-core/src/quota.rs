@@ -78,6 +78,7 @@ pub struct Reading {
     pub provider_wait_ms: BTreeMap<String, u64>,
     pub(crate) weekly_pause_points: BTreeMap<String, f64>,
     pub(crate) fable_estimated_used: Option<f64>,
+    pub(crate) fable_observation: Option<fable::Observation>,
 }
 
 /// **H, the work the weekly point leaves room for after it: 5 minutes at the measured speed.**
@@ -759,35 +760,41 @@ impl Snapshot {
                 window.used_percent = (window.used_percent + self.since_reading).min(100.);
             }
         }
-        let mut fable_estimated_used = None;
-        for window in windows.iter_mut().filter(|w| fable::is_window(&w.id)) {
+        for window in windows.iter().filter(|w| fable::is_window(&w.id)) {
             let observed = self.window_observed_at.get(&window.id).copied();
             if observed.is_some_and(|at| now.saturating_sub(at) > REFRESH_INTERVAL_MS
                 || self.empty_at.is_some_and(|empty| empty >= at)) {
                 // A refused or overdue reader cannot justify projecting its old pace for hours.
                 speeds.remove(&window.id);
             }
-            if let Some(estimate) = self.fable_estimate.filter(|estimate| Some(estimate.observed_at) == observed) {
-                if estimate.points > 0. {
-                    window.used_percent = (window.used_percent + estimate.points).min(100.);
-                    fable_estimated_used = Some(window.used_percent);
-                }
-                if estimate.speed > 0. {
-                    let speed = speeds.entry(window.id.clone()).or_insert(0.);
-                    *speed = speed.max(estimate.speed);
-                }
-            }
         }
         let provider_wait_ms = windows.iter().filter_map(|window| {
-            let at_now = week_estimated && window.id == "seven_day"
-                || fable_estimated_used.is_some() && fable::is_window(&window.id);
+            let at_now = week_estimated && window.id == "seven_day";
             let observed = if at_now { Some(now) }
                 else { self.window_observed_at.get(&window.id).copied() };
             self.provider_wait_ms(observed).map(|wait| (window.id.clone(), wait))
         }).collect();
         let mut reading = Reading { windows, speeds,
             expected: self.rise_until.is_some_and(|t| t > now), rises: self.rises.clone(),
-            weekly_cutoff, provider_wait_ms, weekly_pause_points: BTreeMap::new(), fable_estimated_used };
+            weekly_cutoff, provider_wait_ms, ..Reading::default() };
+        reading.fable_observation = fable::observation(&reading, &self.window_observed_at);
+        for window in reading.windows.iter_mut().filter(|window| fable::is_window(&window.id)) {
+            let observed = self.window_observed_at.get(&window.id).copied();
+            let Some(estimate) = self.fable_estimate.filter(|estimate| Some(estimate.observed_at) == observed) else {
+                continue;
+            };
+            if estimate.points > 0. {
+                window.used_percent = (window.used_percent + estimate.points).min(100.);
+                reading.fable_estimated_used = Some(window.used_percent);
+                if let Some(wait) = self.provider_wait_ms(Some(now)) {
+                    reading.provider_wait_ms.insert(window.id.clone(), wait);
+                }
+            }
+            if estimate.speed > 0. {
+                let speed = reading.speeds.entry(window.id.clone()).or_insert(0.);
+                *speed = speed.max(estimate.speed);
+            }
+        }
         reading.weekly_pause_points = reading.windows.iter().filter(|window| is_weekly(&window.id))
             .filter_map(|window| {
                 let point = self.published_weekly_points.get(&window.id).copied()
@@ -2461,6 +2468,10 @@ pub(crate) mod tests {
         service.before_turn(one, Some((windows(64.), now - 1_000)));
         assert_eq!(fable_used(), 64., "an actual answer replaces the estimate");
         assert!(service.view().fable_estimated_used.is_none());
+        assert!(!service.using_opus_for_fable(one), "return to Fable in the same week when an actual answer shows room");
+        assert_eq!(service.fable_view().changes.iter().map(|change| change.on_opus).collect::<Vec<_>>(),
+            [true, false], "publish both model changes");
+        assert_eq!(service.fable_view().changes[1].reason, Some(fable::ChangeReason::FableRoomConfirmed));
 
         let reopened = Service::open(root.path()).unwrap();
         let tracks = reopened.tokens.lock().unwrap();

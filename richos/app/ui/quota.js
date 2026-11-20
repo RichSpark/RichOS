@@ -800,7 +800,8 @@
     const period = rule.active?.[rule.account];
     field("quota-fable-title").textContent = period ? "On Opus since " + clock(period.since) + "."
       : rule.enabled ? "Fable quota switching is on." : "Fable quota switching is off.";
-    field("quota-fable-detail").textContent = period ? "Fable is almost used up. Back on Fable " + when(period.resetsAt) + "."
+    field("quota-fable-detail").textContent = period?.estimateBasedOn != null ? "The team is on Opus while Fable usage is checked."
+      : period ? "Fable is almost used up. Back on Fable " + when(period.resetsAt) + "."
       : rule.enabled ? "Rich switches to Opus when Fable is almost used up and there’s room in your weekly quota." : "";
   }
 

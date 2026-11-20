@@ -625,6 +625,15 @@ async function main() {
       assert((await page.locator(".fable-conversation-marker").last().innerText()).startsWith("Back on Fable."));
       await page.locator(".fable-conversation-marker").last().evaluate(marker => marker.scrollIntoView({ block: "end" }));
       await shot(page, "fable-quota-conversation-reset-" + theme);
+      const estimated = { ...active, active: { [account]: { since, resetsAt, estimateBasedOn: since - 1000 } },
+        changes: [{ ...active.changes[0], reason: "estimatedUsage" }] };
+      await page.evaluate(view => window.RichMockFableQuota(view), estimated);
+      await page.waitForFunction(() => document.querySelector("#fable-composer-status").textContent === "On Opus while Fable usage is checked");
+      await page.evaluate(view => window.RichMockFableQuota(view), { ...estimated, active: {},
+        changes: [...estimated.changes, { account, threadId, at: now, resetsAt, onOpus: false, reason: "fableRoomConfirmed" }] });
+      await page.waitForFunction(() => [...document.querySelectorAll(".fable-conversation-marker")]
+        .some(marker => marker.textContent === "Back on Fable. There’s still quota left."));
+      assert(await page.locator("#fable-composer-status").isHidden());
     } finally {
       await page.close();
     }
