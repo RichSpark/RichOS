@@ -79,22 +79,25 @@ pub fn execute(args: &[String]) -> Result<Value, String> {
     let bin = std::env::var_os("QUOTA_CLAUDE_BIN").map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("claude"));
     if operation == "tick" {
-        let view = service.tick(&bin, || true);
-        return Ok(json!({"actionError": if view.state == "unknown" { view.message.clone() } else { None }, "resets":printed(&view)}));
+        let at_limit = std::env::var("RICHOS_QUOTA_WEEKLY_LIMIT").as_deref() == Ok("1")
+            || service.prepared_action_due(crate::util::now_millis());
+        let view = service.tick_at_limit(&bin, at_limit, || true);
+        return Ok(json!({"actionError": if view.state == "unknown" { view.message.clone() } else { None },
+            "status": view.status, "resets":printed(&view)}));
     }
-    let mut view = service.refresh(&bin, false);
+    let mut view = service.tick_at_limit(&bin, false, || false);
     if operation == "approve" {
         let id = args.get(1).ok_or("Choose an offer id from quota-reset.sh status.")?;
         let offer = view.offers.iter().find(|o| &o.id == id)
             .ok_or("That offer is not available. Refresh status.")?.clone();
         eprintln!("Approve one use of {} ({}) at 99% overall weekly usage. No reset is used by approval.", offer.label, offer.id);
         user_approval()?;
-        // Authentication can take time. Refresh before binding approval to the offer.
-        let _fresh = service.refresh(&bin, true);
+        // Authentication can take time. Bind against the current persisted offer.
         view = service.approve(&offer)?;
     }
     let action_error: Option<String> = None;
-    Ok(json!({"resets":printed(&view),"actionError":action_error}))
+    Ok(json!({"resets":printed(&view),"actionError":action_error,
+        "status": view.status}))
 }
 
 /// **The reset record as printed, without its weekly figure** (richos-hq follow-ups.md,
