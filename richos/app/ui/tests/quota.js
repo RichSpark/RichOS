@@ -589,8 +589,16 @@ async function main() {
       assertEqual(await page.locator("html").getAttribute("data-theme"), theme);
       assertEqual(await page.locator("#fable-switch").getAttribute("aria-checked"), "true");
       assert(await page.getByText("Switch everyone to Opus", { exact: true }).isVisible());
-      assertEqual(await page.getByText("Use another Claude account first", { exact: true }).count(), 0);
+      assert(await page.getByText("Use another Claude account first", { exact: true }).isVisible());
+      assert(await page.locator("#fable-mode-account").isDisabled());
+      assert(await page.locator("#fable-one-account").isVisible());
       await shot(page, "fable-quota-settings-" + theme);
+      await page.click("#fable-add-account");
+      await page.waitForSelector("#acc-add");
+      assert(await page.locator("#acc-add").getByRole("heading", { name: "Add a second Claude account" }).isVisible());
+      await shot(page, "fable-quota-add-account-" + theme);
+      await page.click("#acc-close");
+      if (await page.locator("#set-menu").isHidden()) await page.click("#set-btn");
       await page.click("#fable-switch");
       await page.waitForFunction(() => document.getElementById("fable-switch").getAttribute("aria-checked") === "false");
       await page.click("#fable-switch");
@@ -644,6 +652,79 @@ async function main() {
     { id: "1", label: "Home", inUse: true, windows: [{ ...quota.windows[0], usedPercent: 41 }, quota.windows[1]], checkedAt: now, exhaustedUntil: null, message: null },
     { id: "2", label: "Work", inUse: false, windows: [{ ...quota.windows[0], usedPercent: 10 }, { ...quota.windows[1], usedPercent: 20, resetsAt: now + 86400000 }], checkedAt: now, exhaustedUntil: null, message: null }],
     windows: [{ ...quota.windows[0], usedPercent: 41 }, quota.windows[1]], ...extra });
+  for (const theme of ["dark", "light"]) await run.check(theme + " Fable account choice and both moves", async () => {
+    const since = now - 12000, resetsAt = now + 3600000;
+    const home = "1", work = "2";
+    const rule = { enabled: true, mode: "opus", canUseOtherAccount: true, account: home, accountLabel: "Home", active: {}, changes: [] };
+    const viewport = { viewport: { width: 1440, height: 1000 } };
+    const settings = await open(theme, twoAccounts({ fableSwitch: rule }), 100, null, false, viewport);
+    try {
+      await leaveHome(settings);
+      if (await settings.locator("#set-menu").isHidden()) await settings.click("#set-btn");
+      await settings.waitForSelector("#fable-mode-account:enabled");
+      await settings.locator("#fable-setting").evaluate(panel => panel.scrollIntoView({ block: "center" }));
+      await settings.locator("#fable-mode-account").check();
+      await settings.waitForFunction(() => document.querySelector("#fable-mode-account").checked
+        && !document.querySelector("#fable-switch").hasAttribute("aria-busy"));
+      assert(await settings.locator("#fable-add-account").isHidden());
+      await shot(settings, "fable-quota-settings-two-" + theme);
+    } finally {
+      await settings.close();
+    }
+    for (const stage of ["work", "home"]) {
+      const onOpus = stage === "home";
+      const account = onOpus ? home : work;
+      const accountLabel = onOpus ? "Home" : "Work";
+      const phase = { ...rule, mode: "otherAccountFirst", account, accountLabel,
+        active: onOpus ? { [home]: { since, resetsAt } } : {} };
+      const lastSwitch = { from: onOpus ? work : home, to: account, at: since, why: onOpus ? "fableOpus" : "fable", used: 99.95 };
+      const fixture = twoAccounts({ fableSwitch: phase, inUse: { id: account, label: accountLabel }, lastSwitch,
+        changes: [{ ...lastSwitch, from: onOpus ? "Work" : "Home", id: account, label: accountLabel, kind: "switched" }] });
+      fixture.accounts = fixture.accounts.map(a => ({ ...a, inUse: a.id === account, signedIn: true,
+        windows: [...a.windows, { id: "model:Fable", label: "Weekly · Fable",
+          usedPercent: onOpus || a.id === home ? 99.95 : 23, resetsAt: a.id === home ? resetsAt : resetsAt + 86400000 }] }));
+      const page = await open(theme, fixture, 100, null, false, viewport);
+      try {
+        await leaveHome(page);
+        if (!(await page.locator("#set-menu").isHidden())) await page.click("#set-btn");
+        const threadId = await page.evaluate(() => activeThreadId);
+        const change = { account, accountLabel, threadId, at: since, resetsAt, onOpus,
+          reason: onOpus ? "otherAccountWithOpus" : "otherAccountWithFable" };
+        await page.evaluate(view => window.RichMockFableQuota(view), { ...phase, changes: [change] });
+        const marker = page.locator(".fable-conversation-marker");
+        await marker.waitFor();
+        assert((await marker.innerText()).startsWith(onOpus ? "Now on Home, on Opus." : "Now on Work. Still on Fable."));
+        assert((await page.locator("#fable-composer-status").innerText()).startsWith(onOpus ? "Home, on Opus until " : "Work, on Fable"));
+        await marker.evaluate(node => node.scrollIntoView({ block: "end" }));
+        await shot(page, "fable-quota-conversation-" + stage + "-" + theme);
+        await page.click("#set-btn");
+        await page.click("#set-accounts-open");
+        await page.waitForSelector("#acc-col .acc-banner");
+        const banner = await page.locator("#acc-col .acc-banner").innerText();
+        assert(banner.includes(onOpus ? "This account’s Fable limit resets first." : "still on Fable on Work"));
+        assert((await page.locator("#acc-how").innerText()).includes(onOpus ? "Rich switched to Home, on Opus" : "Rich switched to Work and stayed on Fable."));
+        await shot(page, "fable-quota-account-" + stage + "-" + theme);
+        await page.click("#acc-close");
+        await page.click("#set-btn");
+        await enableTechnical(page);
+        await page.click("#set-quota-open");
+        await page.waitForSelector("#quota-fable-card:not([hidden])");
+        assert((await page.locator("#quota-fable-title").innerText()).startsWith(onOpus ? "On Opus since " : "On Fable on Work"));
+        await shot(page, "fable-quota-sheet-" + stage + "-" + theme);
+        if (onOpus) {
+          await page.click("#quota-close");
+          await page.evaluate(view => window.RichMockFableQuota(view), { ...phase, active: {},
+            changes: [change, { account, threadId, at: resetsAt, resetsAt, onOpus: false }] });
+          await page.waitForFunction(() => document.querySelectorAll(".fable-conversation-marker").length === 2);
+          assert((await marker.last().innerText()).startsWith("Back on Fable."));
+          await marker.last().evaluate(node => node.scrollIntoView({ block: "end" }));
+          await shot(page, "fable-quota-home-reset-" + theme);
+        }
+      } finally {
+        await page.close();
+      }
+    }
+  });
   await run.check("round 16, one account: + Add account beside Refresh and the five-minute reading line", async () => {
     const page = await open("dark", quota);
     await enableTechnical(page); await page.click("#set-quota-open");
@@ -824,21 +905,22 @@ async function main() {
     await one.close();
   });
   await run.check("quick settings show the WEEKLY window, labeled (the CEO 2026-10-06: the switch is at 99% weekly)", async () => {
+    const atReading = { fixedTime: new Date(now) };
     // One account: the five-hour window is at 94%, the week at 32%.
-    let page = await open("dark", quota);
+    let page = await open("dark", quota, 100, null, false, atReading);
     await enableTechnical(page);
     await page.waitForFunction(() => /weekly/.test(document.getElementById("set-quota-state").textContent));
     assertEqual(await page.locator("#set-quota-state").innerText(), "32% weekly used");
     assertEqual(await page.evaluate(() => document.querySelector("#set-quota-open .quota-mini i").style.width), "32%", "the mini bar is the week");
     await page.close();
     // Two accounts: Home in use (week 32%), Work next.
-    page = await open("dark", twoAccounts());
+    page = await open("dark", twoAccounts(), 100, null, false, atReading);
     await enableTechnical(page);
     await page.waitForFunction(() => /weekly/.test(document.getElementById("set-quota-state").textContent));
     assertEqual(await page.locator("#set-quota-state").innerText(), "Home 32% weekly · next Work");
     await page.close();
     // A stale reading keeps its mark.
-    page = await open("dark", { ...quota, state: "stale", checkedAt: now - 3600000 });
+    page = await open("dark", { ...quota, state: "stale", checkedAt: now - 3600000 }, 100, null, false, atReading);
     await enableTechnical(page);
     await page.waitForFunction(() => /weekly/.test(document.getElementById("set-quota-state").textContent));
     assertEqual(await page.locator("#set-quota-state").innerText(), "32% weekly used · stale");

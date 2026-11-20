@@ -99,7 +99,7 @@ pub struct LastSwitch {
     pub to: String,
     /// Epoch ms.
     pub at: u64,
-    /// `fiveHour`, `weekly` or `limit`.
+    /// `fiveHour`, `weekly`, `limit`, `fable` or `fableOpus`.
     pub why: String,
     /// The figure it was read at; `None` for a usage-limit refusal.
     pub used: Option<f64>,
@@ -279,6 +279,7 @@ pub struct Moving {
 pub enum Gone {
     Weekly(f64),
     FiveHour(f64),
+    Fable { used: f64, on_opus: bool },
     Limit,
 }
 
@@ -647,7 +648,7 @@ struct PendingSwitch {
     /// nothing ran under).
     from: String,
     to: String,
-    text: String,
+    text: Option<String>,
     /// A conversation turn has run under `to` ([`Accounts::ran_on`]).
     ran: bool,
 }
@@ -948,6 +949,7 @@ impl Accounts {
         let (kind, used) = match why {
             Gone::Weekly(used) => ("weekly", Some(used)),
             Gone::FiveHour(used) => ("fiveHour", Some(used)),
+            Gone::Fable { used, on_opus } => (if on_opus { "fableOpus" } else { "fable" }, Some(used)),
             Gone::Limit => ("limit", None),
         };
         let leaving = state.in_use.clone();
@@ -969,9 +971,10 @@ impl Accounts {
         let lead = format!("I switched the team to {}.", account_phrase(&to_label));
         let carried = "Nothing stopped. The team carried on right where it was.";
         let text = match why {
-            Gone::FiveHour(used) => format!("{lead} {from} had used {}% of its 5-hour limit{fresh}.\n\n{carried}", used.floor()),
-            Gone::Weekly(used) => format!("{lead} {from} had used {}% of its weekly limit{fresh}.\n\n{carried}", used.floor()),
-            Gone::Limit => format!("{lead} {from} reached a Claude usage limit, so the step it turned away runs again on {to_label}."),
+            Gone::FiveHour(used) => Some(format!("{lead} {from} had used {}% of its 5-hour limit{fresh}.\n\n{carried}", used.floor())),
+            Gone::Weekly(used) => Some(format!("{lead} {from} had used {}% of its weekly limit{fresh}.\n\n{carried}", used.floor())),
+            Gone::Limit => Some(format!("{lead} {from} reached a Claude usage limit, so the step it turned away runs again on {to_label}.")),
+            Gone::Fable { .. } => None, // the conversation marks this move without a message
         };
         // Deciding is not switching: running leases move at their next turn boundary, and one
         // with a command running waits longer (`spine.rs` / `work_host.rs`,
@@ -991,6 +994,13 @@ impl Accounts {
     /// **Has the decided switch not happened yet for every session?** While it has not, the
     /// view leaves out the record of it, so nothing says the team moved before it did.
     pub fn switch_pending(&self) -> bool { self.pending.lock().unwrap().is_some() }
+
+    pub(crate) fn last_fable_switch(&self) -> Option<(LastSwitch, bool)> {
+        let state = self.state.lock().unwrap();
+        state.last_switch.as_ref().filter(|last| last.to == state.in_use
+            && matches!(last.why.as_str(), "fable" | "fableOpus"))
+            .map(|last| (last.clone(), self.switch_pending()))
+    }
 
     /// **The back end of conversation `thread` runs on `account` now** (`None`: it has no live
     /// lease). Reported by the work host whenever it opens or ends Stu's lease.
@@ -1060,7 +1070,7 @@ impl Accounts {
             && self.replies.lock().unwrap().values().all(|account| *account == p.to)
             && self.back_ends.lock().unwrap().values().all(|account| *account == p.to));
         if moved {
-            *self.notice.lock().unwrap() = pending.take().map(|p| p.text);
+            *self.notice.lock().unwrap() = pending.take().and_then(|p| p.text);
         }
     }
 
@@ -1153,6 +1163,27 @@ impl Accounts {
         };
         wake_reader(&next);
         self.switch_to(&mut state, &next, why, fresh_at, now)?;
+        Ok(true)
+    }
+
+    pub(crate) fn move_for_fable(
+        &self, readings: &BTreeMap<String, Reading>, weeks: &BTreeMap<String, crate::quota::fable::Week>,
+        pause: Option<u8>, now: u64, wake_reader: impl FnOnce(&str),
+    ) -> io::Result<bool> {
+        let mut state = self.state.lock().unwrap();
+        let Some(current) = weeks.get(&state.in_use).filter(|week| !week.has_room) else { return Ok(false) };
+        let next = state.accounts.iter().filter_map(|account| {
+            let reading = readings.get(&account.id)?;
+            let week = weeks.get(&account.id)?;
+            let limited = state.limited_until.get(&account.id).copied();
+            (crate::quota::fable::week_has_room(reading, now)
+                && gone(reading, state.at_threshold, pause, limited, now).is_none())
+                .then_some((account.id.clone(), week))
+        }).min_by_key(|(_, week)| (!week.has_room, week.resets_at));
+        let Some((to, week)) = next.filter(|(id, _)| *id != state.in_use) else { return Ok(false) };
+        wake_reader(&to);
+        self.switch_to(&mut state, &to, Gone::Fable { used: current.used, on_opus: !week.has_room },
+            Some(current.resets_at), now)?;
         Ok(true)
     }
 

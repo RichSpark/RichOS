@@ -552,7 +552,8 @@
       const from = accounts().find(a => a.id === view.lastSwitch?.from);
       if (many && from && cur && view.lastSwitch.to === cur.id) {
         // After a switch the card says who switched, from where, when, and what is next.
-        const why = { fiveHour: `at ${Math.floor(view.lastSwitch.used)}% of its five-hour window`, weekly: `at ${Math.floor(view.lastSwitch.used)}% of its week`, limit: "when it reached a usage limit" }[view.lastSwitch.why] || "";
+        const why = { fiveHour: `at ${Math.floor(view.lastSwitch.used)}% of its five-hour window`, weekly: `at ${Math.floor(view.lastSwitch.used)}% of its week`, limit: "when it reached a usage limit",
+          fable: "when its Fable limit was almost used up", fableOpus: "when Fable was almost used up on every account" }[view.lastSwitch.why] || "";
         head = `In use: ${cur.label}, since ${clock(view.lastSwitch.at)}.`;
         body = `Rich switched from <b>${esc(from.label)}</b> ${esc(duration(now - view.lastSwitch.at))} ago ${why}. Every agent’s next step ran on ${esc(cur.label)}; nothing restarted. `
           + (nx ? `When ${esc(cur.label)} reaches its line, the next is <b>${esc(nx.label)}</b>.` : "No other account has room right now, so at the line Rich pauses.");
@@ -798,10 +799,14 @@
     box.hidden = !rule;
     if (!rule) return;
     const period = rule.active?.[rule.account];
+    const accountFirst = rule.enabled && rule.canUseOtherAccount && rule.mode === "otherAccountFirst";
+    const sameModel = accountFirst && view.lastSwitch?.why === "fable" && view.lastSwitch?.to === rule.account;
     field("quota-fable-title").textContent = period ? "On Opus since " + clock(period.since) + "."
+      : sameModel ? "On Fable on " + rule.accountLabel + "."
       : rule.enabled ? "Fable quota switching is on." : "Fable quota switching is off.";
     field("quota-fable-detail").textContent = period?.estimateBasedOn != null ? "The team is on Opus while Fable usage is checked."
       : period ? "Fable is almost used up. Back on Fable " + when(period.resetsAt) + "."
+      : accountFirst ? "Rich uses another Claude account on Fable first. Once Fable is almost used up everywhere, the team uses Opus on the account whose Fable resets soonest."
       : rule.enabled ? "Rich switches to Opus when Fable is almost used up and there’s room in your weekly quota." : "";
   }
 

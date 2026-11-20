@@ -6185,13 +6185,26 @@ function updateFableQuota(next) {
   fableQuota = next;
   const period = next.active?.[next.account];
   const estimated = period?.estimateBasedOn != null;
+  const stayedOnFable = next.enabled && next.mode === "otherAccountFirst"
+    && next.changes?.at(-1)?.reason === "otherAccountWithFable"
+    && next.changes.at(-1).account === next.account;
+  const namedAccount = next.mode === "otherAccountFirst" && next.accountLabel;
   const note = el("fable-composer-status");
-  note.hidden = !period;
+  note.hidden = !period && !stayedOnFable;
   note.textContent = estimated ? "On Opus while Fable usage is checked"
-    : period ? "On Opus until " + formatFableReset(period.resetsAt) : "";
+    : period ? (namedAccount ? namedAccount + ", on Opus until " : "On Opus until ") + formatFableReset(period.resetsAt)
+    : stayedOnFable ? namedAccount + ", on Fable" : "";
   el("fable-setting").hidden = false;
   el("fable-switch").setAttribute("aria-checked", String(next.enabled));
-  el("fable-option").classList.toggle("is-off", !next.enabled);
+  const otherAccount = next.canUseOtherAccount === true;
+  const accountFirst = otherAccount && next.mode === "otherAccountFirst";
+  el("fable-mode-opus").checked = !accountFirst;
+  el("fable-mode-opus").disabled = !next.enabled;
+  el("fable-mode-account").checked = accountFirst;
+  el("fable-mode-account").disabled = !next.enabled || !otherAccount;
+  el("fable-mode-account-detail").hidden = !otherAccount;
+  el("fable-one-account").hidden = otherAccount;
+  el("fable-add-account").hidden = otherAccount;
   const modelLine = el("fable-model-state");
   modelLine.hidden = !period;
   modelLine.textContent = estimated ? "Rich is on Opus while Fable usage is checked."
@@ -6204,7 +6217,11 @@ function renderFableMarkers(turns) {
     if (change.threadId !== activeThreadId) continue;
     const marker = document.createElement("p");
     marker.className = "fable-conversation-marker";
-    if (change.reason === "estimatedUsage") {
+    if (change.reason === "otherAccountWithFable") {
+      marker.textContent = "Now on " + change.accountLabel + ". Still on Fable.";
+    } else if (change.reason === "otherAccountWithOpus") {
+      marker.textContent = "Now on " + change.accountLabel + ", on Opus. Back on Fable " + formatFableReset(change.resetsAt) + ".";
+    } else if (change.reason === "estimatedUsage") {
       marker.textContent = "On Opus while Fable usage is checked.";
     } else if (change.reason === "fableRoomConfirmed") {
       marker.textContent = "Back on Fable. There’s still quota left.";
@@ -6220,7 +6237,7 @@ function renderFableMarkers(turns) {
 }
 
 Bridge.listen("rich://fable-quota-switch", ({ payload }) => updateFableQuota(payload));
-el("fable-switch").addEventListener("click", async () => {
+async function saveFableSettings(enabled, mode) {
   if (savingFable || !fableQuota) return;
   savingFable = true;
   const button = el("fable-switch");
@@ -6228,16 +6245,24 @@ el("fable-switch").addEventListener("click", async () => {
   button.setAttribute("aria-busy", "true");
   feedback.hidden = true;
   try {
-    const next = await Bridge.invoke("set_fable_quota_switch", { enabled: !fableQuota.enabled });
+    const next = await Bridge.invoke("set_fable_quota_switch", { enabled, ...(mode && { mode }) });
     updateFableQuota(next?.fableSwitch);
   } catch (_) {
+    updateFableQuota(fableQuota);
     feedback.textContent = "Could not save the Fable switch.";
     feedback.hidden = false;
   } finally {
     button.removeAttribute("aria-busy");
     savingFable = false;
   }
+}
+el("fable-switch").addEventListener("click", () => {
+  if (fableQuota) saveFableSettings(!fableQuota.enabled);
 });
+el("fable-option").addEventListener("change", event => {
+  if (fableQuota && event.target.name === "fable-mode") saveFableSettings(fableQuota.enabled, event.target.value);
+});
+el("fable-add-account").addEventListener("click", () => window.RichAccounts.open({ add: true }));
 
 /// Read the stored choice. Paints it only while nothing has been picked since Preferences
 /// opened, so a slow answer never overwrites a click.

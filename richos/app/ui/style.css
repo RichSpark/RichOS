@@ -15472,9 +15472,14 @@ body.home-open :is(#nr-tip, .res-card, .res-menu, .swear-card) {
 .fable-setting { display: grid; gap: 10px; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line); }
 .fable-setting[hidden], .fable-composer-status[hidden] { display: none; }
 .fable-toggle-row { display: flex; gap: 10px; align-items: center; color: var(--ink); }
-.fable-option { display: grid; gap: 3px; padding: 9px 11px; border: 1px solid var(--line-control); border-radius: 8px; color: var(--ink); }
-.fable-option.is-off { color: var(--ink-faint); }
-.fable-option span { font-size: 0.875rem; }
+.fable-options { display: grid; gap: 8px; }
+.fable-option { display: grid; grid-template-columns: auto 1fr; align-items: start; gap: 10px; padding: 9px 11px; border: 1px solid var(--line-control); border-radius: 8px; color: var(--ink); cursor: pointer; }
+.fable-option:has(:checked) { border-color: var(--ink-faint); }
+.fable-option:has(:disabled) { cursor: default; }
+.fable-option input { accent-color: var(--gold-text); }
+.fable-option > span { display: grid; gap: 3px; }
+.fable-option span span { font-size: 0.875rem; }
+#fable-add-account { justify-self: start; }
 .fable-composer-status { order: -1; flex: none; max-width: 100%; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .fable-conversation-marker { display: flex; align-items: center; gap: 12px; margin: 14px 0; color: var(--ink); font-size: 0.875rem; }
 .fable-conversation-marker::before, .fable-conversation-marker::after { content: ""; flex: 1 1 24px; border-top: 1px solid var(--line-control); }

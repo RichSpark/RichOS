@@ -12,7 +12,7 @@ pub fn is_window(id: &str) -> bool {
     id.eq_ignore_ascii_case("model:Fable") || matches!(id, STREAM_ID | "seven_day_fable")
 }
 
-pub(super) fn week_has_room(reading: &Reading, now: u64) -> bool {
+pub(crate) fn week_has_room(reading: &Reading, now: u64) -> bool {
     reading.windows.iter().any(|window| {
         window.id == "seven_day" && window.resets_at.is_none_or(|until| until > now)
             && !reading.reaches_weekly(window)
@@ -31,6 +31,20 @@ fn fable_window(reading: &Reading) -> Option<&Window> {
 /// the final target to stay near the end even before there is a measured rate.
 fn switch_point(reading: &Reading, window: &Window) -> f64 {
     reading.act_point(window, 99.9)
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Mode {
+    #[default]
+    Opus,
+    OtherAccountFirst,
+}
+
+pub(crate) struct Week {
+    pub(crate) used: f64,
+    pub(crate) resets_at: u64,
+    pub(crate) has_room: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -61,6 +75,8 @@ pub struct Period {
 pub enum ChangeReason {
     EstimatedUsage,
     FableRoomConfirmed,
+    OtherAccountWithFable,
+    OtherAccountWithOpus,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -74,13 +90,18 @@ pub struct Change {
     pub resets_at: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<ChangeReason>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account_label: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct View {
     pub enabled: bool,
+    pub mode: Mode,
+    pub can_use_other_account: bool,
     pub account: Option<String>,
+    pub account_label: Option<String>,
     pub point: Option<f64>,
     pub active: BTreeMap<String, Period>,
     pub changes: Vec<Change>,
@@ -90,13 +111,19 @@ pub struct View {
 #[serde(rename_all = "camelCase", default)]
 pub(super) struct State {
     pub enabled: bool,
+    pub mode: Mode,
     active: BTreeMap<String, Period>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    refused_until: BTreeMap<String, u64>,
     changes: Vec<Change>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_account_move: Option<u64>,
 }
 
 impl Default for State {
     fn default() -> Self {
-        Self { enabled: true, active: BTreeMap::new(), changes: Vec::new() }
+        Self { enabled: true, mode: Mode::Opus, active: BTreeMap::new(),
+            refused_until: BTreeMap::new(), changes: Vec::new(), last_account_move: None }
     }
 }
 
@@ -104,7 +131,10 @@ impl State {
     pub fn view(&self, account: Option<String>, reading: Option<&Reading>, now: u64) -> View {
         View {
             enabled: self.enabled,
+            mode: self.mode,
+            can_use_other_account: false,
             account,
+            account_label: None,
             point: reading.and_then(|r| fable_window(r).map(|w| switch_point(r, w))),
             active: self.active.iter().filter(|(_, period)| self.enabled && period.resets_at > now)
                 .map(|(account, period)| (account.clone(), *period)).collect(),
@@ -115,25 +145,29 @@ impl State {
     pub fn set_enabled(&mut self, enabled: bool, now: u64) {
         self.enabled = enabled;
         if !enabled {
+            self.refused_until.clear();
             for (account, period) in std::mem::take(&mut self.active) {
                 self.record(account, now, false, period.resets_at, None);
             }
         }
     }
 
-    pub fn observe(&mut self, account: &str, reading: Option<&Reading>, now: u64) {
+    pub fn settle(&mut self, account: &str, reading: Option<&Reading>, now: u64) -> bool {
+        self.refused_until.retain(|_, deadline| *deadline > now);
         let ended: Vec<_> = self.active.iter().filter(|(_, p)| p.resets_at <= now)
             .map(|(id, p)| (id.clone(), p.resets_at)).collect();
         for (id, at) in ended {
             self.active.remove(&id);
             self.record(id, at, false, at, None);
         }
-        let Some(reading) = reading else { return };
-        let Some(window) = fable_window(reading) else { return };
-        let Some(until) = window.resets_at.filter(|until| *until > now) else { return };
+        let Some(reading) = reading else { return false };
+        let Some(window) = fable_window(reading) else { return false };
+        let Some(until) = window.resets_at.filter(|until| *until > now) else { return false };
         let actual = reading.fable_observation;
-        let at_point = actual.is_some_and(|observation| observation.at_point)
-            || window.used_percent >= switch_point(reading, window);
+        if !at_point(reading, window) && self.fable_refusal_until(account, now)
+            .is_some_and(|deadline| until > deadline && !super::same_reset(until, deadline)) {
+            self.refused_until.remove(account);
+        }
         if let Some(period) = self.active.get_mut(account) {
             // Only a later Fable observation can confirm or overturn the estimate.
             if let Some(observation) = actual.filter(|o| period.estimate_based_on.is_some_and(|at| o.at > at)) {
@@ -142,55 +176,102 @@ impl State {
                 } else {
                     self.active.remove(account);
                     self.record(account.into(), now, false, until, Some(ChangeReason::FableRoomConfirmed));
-                    return;
+                    return true;
                 }
             }
         }
         // An early reset has a fresh window and a new deadline. Re-reading a low
         // number from the same window cannot undo a refusal that named Fable.
-        if !at_point && self.period(account, now).is_some_and(|period| {
+        if !at_point(reading, window) && self.period(account, now).is_some_and(|period| {
             until > period.resets_at && !super::same_reset(until, period.resets_at)
         }) {
             self.active.remove(account);
             self.record(account.into(), now, false, now, None);
         }
-        if at_point && week_has_room(reading, now) {
-            let estimate_based_on = actual.filter(|o| !o.at_point).map(|o| o.at);
+        false
+    }
+
+    pub fn observe(&mut self, account: &str, reading: Option<&Reading>, now: u64) {
+        if self.settle(account, reading, now) { return; }
+        let Some(reading) = reading.filter(|reading| week_has_room(reading, now)) else { return };
+        if let Some(until) = self.fable_refusal_until(account, now) {
+            self.activate(account, now, until, None);
+            return;
+        }
+        let Some(window) = fable_window(reading) else { return };
+        let Some(until) = window.resets_at.filter(|until| *until > now) else { return };
+        if at_point(reading, window) {
+            let estimate_based_on = reading.fable_observation.filter(|o| !o.at_point).map(|o| o.at);
             self.activate(account, now, until, estimate_based_on);
         }
     }
 
-    pub fn refused(&mut self, account: &str, reading: &Reading, limit: UsageLimit, now: u64) -> bool {
+    pub fn week(&self, account: &str, reading: &Reading, now: u64) -> Option<Week> {
+        let window = fable_window(reading);
+        if let Some(resets_at) = self.fable_refusal_until(account, now) {
+            return Some(Week { used: 100., resets_at, has_room: false });
+        }
+        if let Some(Period { resets_at, .. }) = self.period(account, now) {
+            return Some(Week { used: window.map_or(100., |w| w.used_percent),
+                resets_at, has_room: false });
+        }
+        let window = window?;
+        Some(Week {
+            used: window.used_percent,
+            resets_at: window.resets_at.filter(|until| *until > now)?,
+            has_room: !at_point(reading, window),
+        })
+    }
+
+    pub fn fable_refusal_until(&self, account: &str, now: u64) -> Option<u64> {
+        self.refused_until.get(account).copied().filter(|deadline| *deadline > now)
+    }
+
+    pub fn refuse_before_account_choice(&mut self, account: &str, reading: &Reading, limit: UsageLimit, now: u64) -> bool {
+        let Some((Some(until), None)) = self.refusal_period(reading, limit, now) else { return false };
+        self.refused_until.insert(account.into(), until);
+        if let Some(period) = self.active.get_mut(account) {
+            period.estimate_based_on = None;
+        }
+        true
+    }
+
+    fn refusal_period(&self, reading: &Reading, limit: UsageLimit, now: u64) -> Option<(Option<u64>, Option<u64>)> {
         if !self.enabled || limit.window == LimitWindow::Other || !week_has_room(reading, now) {
-            return false;
+            return None;
         }
         let reset = limit.resets_at;
         let matches_reset = |window: &Window| reset.zip(window.resets_at).is_some_and(|(a, b)| super::same_reset(a, b));
         if reading.windows.iter().any(|w| w.id == "five_hour" && w.resets_at.is_none_or(|t| t > now)
             && (w.used_percent >= 100. || (limit.window == LimitWindow::Unknown && matches_reset(w))))
         {
-            return false;
+            return None;
         }
         let fable = fable_window(reading);
         let fable_reset = fable.and_then(|window| window.resets_at);
         let (until, estimate_based_on) = match limit.window {
             LimitWindow::Fable => (reset.or(fable_reset), None),
             LimitWindow::Unknown => {
-                let Some(window) = fable else { return false };
+                let window = fable?;
                 // A refusal with no named window needs either measured pressure on
                 // Fable or a reset that uniquely identifies Fable's own window.
                 let distinct_reset = matches_reset(window) && !reading.windows.iter()
                     .any(|other| !is_window(&other.id) && matches_reset(other));
                 if !distinct_reset && (window.used_percent < switch_point(reading, window)
                     || (reset.is_some() && !matches_reset(window))) {
-                    return false;
+                    return None;
                 }
                 let estimate_based_on = reading.fable_observation.filter(|o| !o.at_point && !distinct_reset).map(|o| o.at);
                 (fable_reset, estimate_based_on)
             }
-            LimitWindow::Other => return false,
+            LimitWindow::Other => return None,
         };
-        if let Some(until) = until.filter(|t| *t > now) {
+        Some((until.filter(|t| *t > now), estimate_based_on))
+    }
+
+    pub fn refused(&mut self, account: &str, reading: &Reading, limit: UsageLimit, now: u64) -> bool {
+        let Some((until, estimate_based_on)) = self.refusal_period(reading, limit, now) else { return false };
+        if let Some(until) = until {
             if estimate_based_on.is_none() {
                 if let Some(period) = self.active.get_mut(account) {
                     period.estimate_based_on = None;
@@ -226,12 +307,36 @@ impl State {
         }
     }
 
+    pub fn mark_account_move(&mut self, moved: &crate::claude_accounts::LastSwitch, label: &str, now: u64) {
+        if self.last_account_move.is_some_and(|last| last >= moved.at) { return; }
+        self.last_account_move = Some(moved.at);
+        if let Some(period) = self.period(&moved.to, now).filter(|_| moved.why == "fableOpus") {
+            if let Some(change) = self.changes.iter_mut().rev().find(|c| c.account == moved.to
+                && c.at == period.since && c.at >= moved.at && c.on_opus && c.thread_id.is_none()) {
+                change.reason = Some(ChangeReason::OtherAccountWithOpus);
+                change.account_label = Some(label.into());
+                return;
+            }
+            self.record(moved.to.clone(), now, true, period.resets_at, Some(ChangeReason::OtherAccountWithOpus));
+        } else {
+            self.record(moved.to.clone(), now, false, now, Some(ChangeReason::OtherAccountWithFable));
+        }
+        if let Some(change) = self.changes.last_mut() {
+            change.account_label = Some(label.into());
+        }
+    }
+
     fn record(&mut self, account: String, at: u64, on_opus: bool, resets_at: u64, reason: Option<ChangeReason>) {
-        self.changes.push(Change { account, thread_id: None, at, on_opus, resets_at, reason });
+        self.changes.push(Change { account, thread_id: None, at, on_opus, resets_at, reason, account_label: None });
         if self.changes.len() > 12 {
             self.changes.remove(0);
         }
     }
+}
+
+fn at_point(reading: &Reading, window: &Window) -> bool {
+    reading.fable_observation.is_some_and(|observation| observation.at_point)
+        || window.used_percent >= switch_point(reading, window)
 }
 
 pub fn lease_choices(

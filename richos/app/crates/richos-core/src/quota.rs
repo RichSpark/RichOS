@@ -1409,7 +1409,7 @@ impl Service {
             }
         };
         let mut readings = self.observed_readings();
-        view.fable_switch = self.fable_switch.lock().unwrap().view(Some(shown.id.clone()), readings.get(&shown.id), now);
+        view.fable_switch = self.fable_view_for(shown.id.clone(), readings.get(&shown.id), now);
         apply_fable_capacity(&mut readings, fable_enabled);
         // Every account being left for its week (plan §1), with one account too, unless that
         // one account has automatic pause off: then nothing acts before 100%, as the fast-use
@@ -1664,7 +1664,8 @@ impl Service {
         // before it has said one, the span is said instead.
         let back = match why {
             crate::claude_accounts::Gone::Limit => "usage limit lifts",
-            crate::claude_accounts::Gone::Weekly(_) | crate::claude_accounts::Gone::FiveHour(_) => "window resets",
+            crate::claude_accounts::Gone::Weekly(_) | crate::claude_accounts::Gone::FiveHour(_)
+            | crate::claude_accounts::Gone::Fable { .. } => "window resets",
         };
         let who = match self.agents_working.load(std::sync::atomic::Ordering::SeqCst) {
             0 => "Agents hold their place".to_string(),
@@ -1836,14 +1837,34 @@ impl Service {
     }
 
     pub fn set_fable_switch(&self, enabled: bool) -> io::Result<View> {
-        self.update_fable(|state| state.set_enabled(enabled, crate::util::now_millis()))?;
+        self.set_fable_settings(enabled, None)
+    }
+
+    pub fn set_fable_settings(&self, enabled: bool, mode: Option<fable::Mode>) -> io::Result<View> {
+        self.update_fable(|state| {
+            if let Some(mode) = mode { state.mode = mode; }
+            state.set_enabled(enabled, crate::util::now_millis());
+        })?;
         self.decide();
         self.publish()?;
         Ok(self.view())
     }
 
     pub fn mark_fable_conversation(&self, thread: &str) {
-        match self.update_fable(|state| state.mark_conversation(thread)) {
+        let moved = match self.accounts.last_fable_switch() {
+            Some((_, true)) => return,
+            Some((moved, false)) => {
+                let label = self.accounts.in_use().label;
+                Some((moved, label))
+            }
+            None => None,
+        };
+        match self.update_fable(|state| {
+            if let Some((moved, label)) = moved {
+                state.mark_account_move(&moved, &label, crate::util::now_millis());
+            }
+            state.mark_conversation(thread);
+        }) {
             Ok(((), true)) => {
                 if let Err(error) = self.publish() { eprintln!("[richos] quota snapshot: {error}"); }
             }
@@ -1855,7 +1876,20 @@ impl Service {
     pub fn fable_view(&self) -> fable::View {
         let account = self.accounts.running_on().id;
         let readings = self.observed_readings();
-        self.fable_switch.lock().unwrap().view(Some(account.clone()), readings.get(&account), crate::util::now_millis())
+        self.fable_view_for(account.clone(), readings.get(&account), crate::util::now_millis())
+    }
+
+    fn fable_view_for(&self, account: String, reading: Option<&Reading>, now: u64) -> fable::View {
+        let mut view = self.fable_switch.lock().unwrap().view(Some(account), reading, now);
+        if self.accounts.count() >= 2 {
+            let first = self.snapshot.lock().unwrap().signed_in == Some(true);
+            let others = self.extra.lock().unwrap().values()
+                .filter(|(_, snapshot)| snapshot.signed_in == Some(true)).count();
+            view.can_use_other_account = usize::from(first) + others >= 2;
+            view.account_label = self.accounts.list().into_iter()
+                .find(|account| Some(&account.id) == view.account.as_ref()).map(|account| account.label);
+        }
+        view
     }
 
     pub fn fable_period(&self, account: &str) -> Option<fable::Period> {
@@ -1864,6 +1898,10 @@ impl Service {
 
     pub fn using_opus_for_fable(&self, account: &str) -> bool {
         self.fable_switch.lock().unwrap().on_opus(account, crate::util::now_millis())
+    }
+
+    pub(crate) fn fable_refusal_until(&self, account: &str, now: u64) -> Option<u64> {
+        self.fable_switch.lock().unwrap().fable_refusal_until(account, now)
     }
 
     pub fn fable_limit_reached(
@@ -1875,6 +1913,14 @@ impl Service {
         let now = crate::util::now_millis();
         let readings = self.observed_readings();
         let Some(reading) = readings.get(account) else { return false };
+        if self.accounts.count() >= 2 && self.update_fable(|state| {
+            state.mode == fable::Mode::OtherAccountFirst
+                && state.refuse_before_account_choice(account, reading, limit, now)
+        }).is_ok_and(|(refused, _)| refused) {
+            self.decide();
+            if let Err(error) = self.publish() { eprintln!("[richos] quota snapshot: {error}"); }
+            return self.accounts.in_use().id != account || self.using_opus_for_fable(account);
+        }
         let Ok((retry, changed)) = self.update_fable(|state| {
             state.observe(account, Some(reading), now);
             state.refused(account, reading, limit, now)
@@ -1890,6 +1936,31 @@ impl Service {
         let pause = self.policy.lock().unwrap().line();
         let now = crate::util::now_millis();
         let mut readings = self.observed_readings();
+        let (enabled, mode) = {
+            let state = self.fable_switch.lock().unwrap();
+            (state.enabled, state.mode)
+        };
+        let mut moved_for_fable = false;
+        let mut settled = false;
+        if enabled && mode == fable::Mode::OtherAccountFirst && self.accounts.count() >= 2 {
+            let selected = self.update_fable(|state| {
+                readings.iter().filter_map(|(id, reading)| {
+                    let corrected = state.settle(id, Some(reading), now);
+                    let mut week = state.week(id, reading, now)?;
+                    week.has_room |= corrected;
+                    Some((id.clone(), week))
+                }).collect()
+            }).and_then(|(weeks, changed)| {
+                settled = changed;
+                let mut general_capacity = readings.clone();
+                apply_fable_capacity(&mut general_capacity, enabled);
+                self.accounts.move_for_fable(&general_capacity, &weeks, pause, now, |to| self.request_account_refresh(to))
+            });
+            match selected {
+                Ok(moved) => moved_for_fable = moved,
+                Err(error) => eprintln!("[richos] quota: could not choose the next Fable account ({error})"),
+            }
+        }
         let account = self.accounts.in_use();
         let changed = match self.update_fable(|state| state.observe(&account.id, readings.get(&account.id), now)) {
             Ok(((), changed)) => changed,
@@ -1898,9 +1969,9 @@ impl Service {
                 false
             }
         };
-        apply_fable_capacity(&mut readings, self.fable_switch.lock().unwrap().enabled);
+        apply_fable_capacity(&mut readings, enabled);
         match self.accounts.evaluate_before_move(&readings, pause, now, |to| self.request_account_refresh(to)) {
-            Ok(moved) if moved || changed => {
+            Ok(moved) if moved || moved_for_fable || settled || changed => {
                 if let Err(error) = self.publish() { eprintln!("[richos] quota snapshot: {error}"); }
             }
             Ok(_) => {}
@@ -2479,6 +2550,97 @@ pub(crate) mod tests {
         assert_eq!(original.weekly.entries[0].tokens["claude-fable-5-2"], 100_000_000);
         assert_eq!(original.fable.entries[0].tokens["model:Fable"], 2_000_000);
     }
+
+    #[test]
+    fn other_account_first_uses_fable_on_both_then_opus_where_fable_resets_first() {
+        let root = Scratch::new();
+        fs::write(root.path().join("claude-fable-switch.json"), r#"{"mode":"otherAccountFirst"}"#).unwrap();
+        let service = Service::open(root.path()).unwrap();
+        let work = service.accounts.add("Work").unwrap();
+        let wall = crate::util::now_millis();
+        let hour = 3_600_000;
+        let home_reset = wall + hour;
+        let work_reset = wall + 2 * hour;
+        let one = crate::claude_accounts::ACCOUNT_ONE;
+        let windows = |fable_pc, fable_reset, week_pc, week_reset| vec![
+            Window { id: "seven_day".into(), label: "Weekly".into(), used_percent: week_pc,
+                resets_at: Some(week_reset), duration_ms: 168 * hour },
+            Window { id: "model:Fable".into(), label: "Weekly · Fable".into(), used_percent: fable_pc,
+                resets_at: Some(fable_reset), duration_ms: 168 * hour },
+        ];
+        service.accounts.signed_in(&work.id, wall - hour).unwrap();
+        let provider = FakeSource {
+            calls: Default::default(), result: Err(ReadError::NoReading),
+        };
+        service.extra.lock().unwrap().insert(work.id.clone(), (
+            std::sync::Arc::new(Mutex::new(Box::new(provider))), Snapshot::default()));
+        service.before_turn(&work.id, Some((windows(20., work_reset, 30., wall + 3 * hour), wall - 5_000)));
+        service.before_turn(one, Some((windows(99.95, home_reset, 30., wall + 5 * hour), wall - 4_000)));
+        assert_eq!(service.lease_account().id, work.id, "first move spends Work's Fable allowance");
+        assert!(!service.using_opus_for_fable(&work.id), "both leases keep their Fable settings");
+        assert!(service.view().held_until.is_none());
+        assert!(service.fable_view().can_use_other_account);
+        service.mark_fable_conversation("chat");
+        assert!(service.fable_view().changes.is_empty(), "hold the marker until a lease runs on Work");
+        service.accounts.ran_on("work-turn", &work.id);
+        service.mark_fable_conversation("chat");
+        assert!(service.accounts.take_notice().is_none(), "the marker replaces the account message");
+        assert_eq!(service.fable_view().changes[0].reason, Some(fable::ChangeReason::OtherAccountWithFable));
+        service.accounts.turn_ended("work-turn");
+
+        service.before_turn(&work.id, Some((windows(99.95, work_reset, 30., wall + 3 * hour), wall - 3_000)));
+        assert_eq!(service.lease_account().id, one, "the Fable reset order wins over the weekly order");
+        assert!(service.using_opus_for_fable(one));
+        assert!(service.view().held_until.is_none(), "only the model changes when the general week has room");
+        service.accounts.ran_on("home-turn", one);
+        service.mark_fable_conversation("chat");
+        service.accounts.turn_ended("home-turn");
+        let changes = service.fable_view().changes;
+        assert_eq!(changes.len(), 2, "one marker for the move and Opus together");
+        assert_eq!(changes[1].reason, Some(fable::ChangeReason::OtherAccountWithOpus));
+        assert_eq!(changes[1].resets_at, home_reset);
+
+        service.before_turn(one, Some((windows(2., home_reset + 168 * hour, 30., wall + 5 * hour), wall - 2_000)));
+        assert_eq!(service.lease_account().id, one);
+        assert!(!service.using_opus_for_fable(one), "the new Fable week recovers on the same account");
+
+        service.before_turn(&work.id, Some((windows(99.95, work_reset, 100., wall + 3 * hour), wall - 1_000)));
+        service.before_turn(one, Some((windows(99.95, home_reset + 168 * hour, 100., wall + 5 * hour), wall)));
+        assert!(!service.using_opus_for_fable(one));
+        assert!(service.view().held_until.is_some(), "the existing hold applies when both general weeks are gone");
+    }
+
+    #[test]
+    fn other_account_first_recovers_a_named_fable_refusal_without_holding_the_general_week() {
+        let root = Scratch::new();
+        fs::write(root.path().join("claude-fable-switch.json"), r#"{"mode":"otherAccountFirst"}"#).unwrap();
+        let service = Service::open(root.path()).unwrap();
+        let work = service.accounts.add("Work").unwrap();
+        let now = crate::util::now_millis();
+        let home_reset = now + 3_600_000;
+        let one = crate::claude_accounts::ACCOUNT_ONE;
+        let windows = |fable_reset| vec![
+            Window { id: "seven_day".into(), label: "Weekly".into(), used_percent: 42.,
+                resets_at: Some(now + 12_000_000), duration_ms: 604_800_000 },
+            Window { id: "model:Fable".into(), label: "Weekly · Fable".into(), used_percent: 80.,
+                resets_at: Some(fable_reset), duration_ms: 604_800_000 },
+        ];
+        let provider = FakeSource { calls: Default::default(), result: Err(ReadError::NoReading) };
+        service.extra.lock().unwrap().insert(work.id.clone(), (
+            std::sync::Arc::new(Mutex::new(Box::new(provider))), Snapshot::default()));
+        service.before_turn(one, Some((windows(home_reset), now - 1_000)));
+        service.before_turn(&work.id, Some((windows(home_reset + 3_600_000), now - 1_000)));
+        let refusal = crate::claude_accounts::UsageLimit {
+            window: crate::claude_accounts::LimitWindow::Fable, resets_at: Some(home_reset),
+        };
+        assert!(service.fable_limit_reached(one, Some(crate::config::ModelChoice::Fable), refusal));
+        assert_eq!(service.lease_account().id, work.id);
+        assert!(!service.using_opus_for_fable(&work.id));
+        assert_eq!(service.fable_refusal_until(one, now), Some(home_reset));
+        assert!(service.accounts.limited_until(one).is_none());
+        assert!(service.view().held_until.is_none());
+    }
+
     /// **The CEO, 2026-10-07**: the weekly switch point reacts to live token use before the
     /// weekly percentage moves. The app learns Opus's tokens per point from its own readings
     /// (51% to 52% took 1,000,000 Opus tokens), then 2,000,000 Opus tokens in the last minute
