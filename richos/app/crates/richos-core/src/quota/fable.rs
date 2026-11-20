@@ -5,8 +5,11 @@ use crate::config::{EffortChoices, LeaseEfforts, LeaseModels, ModelChoice};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+/// Claude Code's rate-limit event schema calls this window "Fable limit".
+pub(crate) const STREAM_ID: &str = "seven_day_overage_included";
+
 pub fn is_window(id: &str) -> bool {
-    id.eq_ignore_ascii_case("model:Fable") || id == "seven_day_fable"
+    id.eq_ignore_ascii_case("model:Fable") || matches!(id, STREAM_ID | "seven_day_fable")
 }
 
 pub(super) fn week_has_room(reading: &Reading, now: u64) -> bool {

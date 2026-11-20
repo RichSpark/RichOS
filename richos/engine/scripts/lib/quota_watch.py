@@ -876,7 +876,7 @@ def _gate_recompute(data, src, percent, now_ms):
         w["id"] == "seven_day" for w in live)
     is_weekly = lambda i: i.startswith("seven_day") or i.startswith("model:")
     weekly = [w for w in live if is_weekly(w["id"]) and w["used"] >= weekly_point(w)
-              and not (separate_fable and w["id"].lower() in ("model:fable", "seven_day_fable"))
+              and not (separate_fable and w["id"].lower() in ("model:fable", "seven_day_fable", "seven_day_overage_included"))
               and w["resets"] is not None and w["resets"] > now_ms]
     if weekly:
         w = max(weekly, key=lambda x: x["resets"])

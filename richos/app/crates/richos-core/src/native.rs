@@ -1830,7 +1830,7 @@ pub fn streamed_windows(frame: &Value) -> Option<Vec<crate::quota::Window>> {
     let out: Vec<_> = [
         ("five_hour", "five_hour", "Five-hour", 5u64),
         ("seven_day", "seven_day", "Weekly", 168),
-        ("seven_day_fable", "model:Fable", "Fable", 168),
+        (crate::quota::fable::STREAM_ID, "model:Fable", "Weekly · Fable", 168),
     ].into_iter()
         .filter_map(|(key, id, label, hours)| {
             let w = windows.get(key)?;
@@ -5585,12 +5585,27 @@ printf '%s\n' '{"type":"result","subtype":"error_during_execution","is_error":tr
     fn a_fable_refusal_keeps_its_window_through_a_generic_result() {
         use crate::claude_accounts::{LimitWindow, UsageLimit};
         let error = one_limited_turn("fable-limit-and-429", r#"
-printf '%s\n' '{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","resetsAt":1790150400,"rateLimitType":"seven_day_fable"}}'
+printf '%s\n' '{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","resetsAt":1790150400,"rateLimitType":"seven_day_overage_included"}}'
 printf '%s\n' '{"type":"result","subtype":"error_during_execution","is_error":true,"api_error_status":429}'
 "#).expect_err("Fable turned the request down");
         assert_eq!(UsageLimit::from_error(&error.to_string()), Some(UsageLimit {
             resets_at: Some(1_790_150_400_000), window: LimitWindow::Fable,
         }));
+    }
+
+    #[test]
+    fn a_streamed_fable_window_is_read_under_its_app_id() {
+        let frame = json!({"type": "rate_limit_event", "rate_limit_info": {
+            "status": "allowed", "rateLimitType": "five_hour", "unifiedWindows": {
+                "seven_day": {"utilization": 0.4, "resetsAt": 1790150400_u64},
+                "seven_day_overage_included": {"utilization": 0.995, "resetsAt": 1790150400_u64}
+            }
+        }});
+        let windows = streamed_windows(&frame).unwrap();
+        assert_eq!(windows.len(), 2, "{windows:?}");
+        let fable = windows.iter().find(|window| window.id == "model:Fable").unwrap();
+        assert_eq!(fable.used_percent, 99.5);
+        assert_eq!(fable.resets_at, Some(1_790_150_400_000));
     }
 
     /// Signal 2 of 3: a `result` whose `api_error_status` is 429.

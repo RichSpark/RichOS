@@ -4155,7 +4155,7 @@ added = bool(_folder) and os.path.realpath(_folder).startswith(_accounts)"#;
                 // The fallback treats Fable separately when a general reading is present.
                 // The other model weeks still take part in account admission.
                 if pick(3) == 0 {
-                    let model = ["model:Fable", "seven_day_opus", "seven_day_sonnet"][pick(3)];
+                    let model = ["model:Fable", fable::STREAM_ID, "seven_day_opus", "seven_day_sonnet"][pick(4)];
                     windows.push(window(model, week_used[pick(week_used.len())], offsets(&week_reset, pick(week_reset.len()))));
                 }
                 into["windows"] = json!(windows);

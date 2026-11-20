@@ -4838,7 +4838,7 @@ mod tests {
         assert!(backend.inner.lock().unwrap().fable_worker_notices.is_empty());
         let refusal = serde_json::json!({"type":"rate_limit_event","parent_tool_use_id":"worker-call",
             "agent_id":"agent-from-first-attempt","richos_requested_model":"fable","rate_limit_info":
-            {"status":"rejected","rateLimitType":"seven_day_fable","resetsAt":crate::util::now_millis()/1000+3600}});
+            {"status":"rejected","rateLimitType":"seven_day_overage_included","resetsAt":crate::util::now_millis()/1000+3600}});
         observe(refusal.clone());
         observe(refusal);
         assert!(h.host.wait_for_completed(1, std::time::Duration::from_secs(30)));
