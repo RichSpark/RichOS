@@ -602,32 +602,37 @@
   const resetLimitName = id => ({ five_hour: "five-hour quota", seven_day: "weekly quota", seven_day_overage_included: "weekly allowance including overage" }[id] || id.replaceAll("_", " "));
   function renderResets() {
     const r = view?.resets || { state: "unknown", offers: [] }, now = Date.now();
-    // 65 minutes: the core's own window (resets.rs FRESH_MS); it asks Anthropic hourly, not every five minutes.
-    const fresh = r.state === "fresh" && r.checkedAt <= now && now - r.checkedAt < 3900000;
+    const fresh = r.state === "fresh" && r.checkedAt <= now && (r.freshUntil == null || now < r.freshUntil);
     const offers = (r.offers || []).filter(o => o.remaining > 0 && o.expiresAt > now);
-    const key = JSON.stringify([r, fresh, offers.map(o => o.id), resetDraft, resetSaving]);
+    const weekly = view?.windows?.find(w => w.id === "seven_day");
+    const atLimit = weekly?.usedPercent >= r.weeklyThreshold && (!view?.inUse || view.inUse.id === "1");
+    const key = JSON.stringify([r, fresh, atLimit, offers.map(o => o.id), resetDraft, resetSaving]);
     if (key === resetPaint) return;
     resetPaint = key;
     const container = field("quota-reset-offers"), focus = document.activeElement?.id;
     container.replaceChildren();
     const keepUsage = () => container.appendChild(usageOpen);
-    // Nothing to approve, revoke or check: round 16 draws nothing below the ruler key, so
-    // neither does this (no "No reset offer is available." line, no Open Claude Usage).
-    const compact = !offers.length && !r.approval && !r.lastAttempt;
+    // Outside a weekly hold or a refused check, keep the section compact
+    // unless there is an offer, approval or attempt to show.
+    const compact = !offers.length && !r.approval && !r.lastAttempt && !atLimit && !r.retryAt;
     container.hidden = compact;
     if (compact) return;
     container.appendChild(node("h3", "", "Weekly quota reset"));
-    container.appendChild(node("p", "quota-muted", "Approve in advance. Rich will use one reset automatically at 99% weekly usage while the desktop app or terminal watcher is running. They share one approval and attempt record. Checks every 5 minutes. Five-hour usage never triggers it."));
+    if (offers.length || r.approval) {
+      container.appendChild(node("p", "quota-muted", "Approve in advance to let Rich use one reset at 99% weekly usage. RichOS checks for offers every four hours."));
+    }
     if (r.lastAttempt) {
       const text = { used: "Your approved reset was used. Checking the new allowance…", alreadyUsed: "Anthropic reports this reset was already used.", notUsed: "Anthropic did not use the reset. The approval has ended.", uncertain: "The reset outcome is unconfirmed. Automatic retry is blocked. Check Claude’s Usage page before taking further action." }[r.lastAttempt.outcome] || "Reset outcome unavailable. Check Claude’s Usage page.";
       container.appendChild(node("p", "quota-reset-result", text));
     }
-    if (!fresh) container.appendChild(node("p", "quota-muted", r.message || "Weekly reset availability is unknown. Refresh to check again."));
-    if (fresh && !offers.length) container.appendChild(node("p", "quota-muted", "No reset offer is available."));
+    const status = r.state === "unknown" ? r.message || r.status : r.status;
+    if (status || !fresh || !offers.length) {
+      container.appendChild(node("p", "quota-muted", status || r.message || "Weekly reset availability is unknown."));
+    }
     for (const offer of offers) {
       const card = node("div", "quota-reset-offer");
       card.appendChild(node("h4", "", offer.label || "Claude usage-limit reset"));
-      card.appendChild(node("p", "", `${offer.remaining} ${offer.remaining === 1 ? "reset" : "resets"} ${fresh ? "available" : "last reported"} · Expires ${new Date(offer.expiresAt).toLocaleString(undefined, { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" })}`));
+      card.appendChild(node("p", "", `${offer.remaining} ${offer.remaining === 1 ? "reset" : "resets"} last reported · Expires ${new Date(offer.expiresAt).toLocaleString(undefined, { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" })}`));
       card.appendChild(node("p", "quota-muted", "Resets " + offer.clears.map(resetLimitName).join(", ") + "."));
       const approved = r.approval?.offer.id === offer.id && r.approval.offer.expiresAt > now;
       const weekly = offer.clears.includes("seven_day");

@@ -541,6 +541,24 @@ async function main() {
     }
   });
 
+  await run.check("the weekly limit and a refused check show the last answer with its age", async () => {
+    const status = "No weekly reset is on offer, checked 4 h 5 min ago.";
+    const windows = quota.windows.map(w => w.id === "seven_day" ? { ...w, usedPercent: 99 } : w);
+    for (const refused of [false, true]) {
+      const resets = { ...resetFixture, offers: [], status, state: refused ? "unknown" : "fresh",
+        retryAt: refused ? now + 300000 : null,
+        message: refused ? "HTTP 429. Last answer: " + status : null };
+      const page = await open("dark", { ...quota, windows, resets, inUse: { id: "1", label: "Account 1" } });
+      await enableTechnical(page); await page.click("#set-quota-open");
+      await page.waitForSelector("#quota-reset-offers p");
+      const shown = await page.locator("#quota-reset-offers").innerText();
+      assert(shown.includes(status), shown);
+      assertEqual(shown.includes("HTTP 429"), refused);
+      assertEqual(await page.evaluate(() => window.__richosResetCalls), []);
+      await page.close();
+    }
+  });
+
   // ---- Round 16 (richos-hq design/mockups/rounds/round-16/, the CEO's chosen design) -------
   const twoAccounts = (extra = {}) => ({ ...quota, atThreshold: "pause", accounts: [
     { id: "1", label: "Home", inUse: true, windows: [{ ...quota.windows[0], usedPercent: 41 }, quota.windows[1]], checkedAt: now, exhaustedUntil: null, message: null },

@@ -1020,6 +1020,7 @@ impl Snapshot {
 pub struct Service {
     pub resets: resets::Service,
     last_reset_marker: Mutex<Option<String>>,
+    published_reset_view: Mutex<Option<resets::View>>,
     source: Mutex<Box<dyn Source>>,
     snapshot: Mutex<Snapshot>,
     policy: Mutex<Policy>,
@@ -1155,6 +1156,7 @@ impl Service {
         let service = Self {
             resets: resets::Service::new(data_dir),
             last_reset_marker: Mutex::new(None),
+            published_reset_view: Mutex::new(None),
             source: Mutex::new(Box::new(probe::ClaudeSource::controlled(control.clone()))),
             snapshot: Mutex::new(Snapshot::default()),
             policy: Mutex::new(policy),
@@ -1185,10 +1187,21 @@ impl Service {
     }
     fn publish(&self) -> io::Result<()> {
         let _serial = self.publication.lock().unwrap();
-        atomic_write(
-            &self.cwd.join("engine-state/claude-quota.json"),
-            &self.view(),
-        )
+        let view = self.view();
+        atomic_write(&self.cwd.join("engine-state/claude-quota.json"), &view)?;
+        *self.published_reset_view.lock().unwrap() = Some(view.resets);
+        Ok(())
+    }
+    fn publish_reset_view(&self) {
+        let mut view = self.resets.view();
+        view.weekly_used = None;
+        view.weekly_resets_at = None;
+        let changed = self.published_reset_view.lock().unwrap().as_ref() != Some(&view);
+        if changed {
+            if let Err(error) = self.publish() {
+                eprintln!("[richos] quota snapshot: {error}");
+            }
+        }
     }
     /// **Every reading, kept** (Otto's trace of 2026-10-29 09:50Z): `claude-quota.json` holds
     /// only the latest reading, so the readings of 09:30-09:48Z could not be recovered. Each
@@ -1274,7 +1287,7 @@ impl Service {
                 .filter(|account| readings.get(&account.id).is_some_and(|r| r.leaving(now)))
                 .map(|account| account.id).collect()
         };
-        view.resets = self.resets.view();
+        view.resets = self.resets.view_at(now);
         // **The reset record's weekly figure is not the account in use's** (richos-hq
         // follow-ups.md, 7fed0bef). The record is shared by every app and terminal on this Mac
         // and refreshed under Account 1's sign-in (`resets.rs` `update`), so on 2026-10-28 this
@@ -1944,17 +1957,25 @@ impl Service {
         }
         self.note_held();
         self.note_accounts();
-        self.resets.refresh(bin, force || changed);
         self.view()
     }
-    /// Run the user's prepared weekly action without depending on another model turn.
-    /// Only the desktop monitor calls this; settings reads and approval never redeem.
-    pub fn run_approved_weekly_reset(&self, bin: &Path) {
+    /// A startup or lease wake runs the same cached background path as a timer tick.
+    pub fn refresh_in_background(&self, bin: &Path) {
         if self.is_shutdown() || self.connecting.load(std::sync::atomic::Ordering::SeqCst) { return; }
+        // Only Account 1 owns the reset record. A confirmed limit on another account
+        // must never initiate a preflight against Account 1.
         #[cfg(not(test))]
-        self.resets.tick(bin, || !self.is_shutdown()
-            && !self.connecting.load(std::sync::atomic::Ordering::SeqCst));
-        #[cfg(test)] let _unused = bin;
+        {
+            let now = crate::util::now_millis();
+            let at_limit = self.snapshot.lock().unwrap().windows.iter().any(|w|
+                w.id == "seven_day" && w.used_percent >= resets::WEEKLY_THRESHOLD
+                && w.resets_at.is_some_and(|until| until > now));
+            let at_limit = at_limit || self.resets.prepared_action_due(now);
+            self.resets.tick_at_limit(bin, at_limit, || !self.is_shutdown()
+                && !self.connecting.load(std::sync::atomic::Ordering::SeqCst));
+        }
+        self.publish_reset_view();
+        self.refresh(bin, false);
     }
     fn refresh_windows(&self, bin: &Path, force: bool) -> View {
         if self.is_shutdown() {
@@ -4500,7 +4521,7 @@ added = bool(_folder) and os.path.realpath(_folder).startswith(_accounts)"#;
     }
 
     #[test]
-    fn startup_and_session_signals_refresh_without_waiting_for_the_interval() {
+    fn startup_and_session_signals_wake_without_bypassing_the_cache() {
         use std::time::Duration;
         use std::sync::atomic::Ordering;
         let dir = Scratch::new();
@@ -4512,7 +4533,7 @@ added = bool(_folder) and os.path.realpath(_folder).startswith(_accounts)"#;
         service.set_policy(Policy::default()).unwrap();
         assert!(!service.view().policy.enabled);
         assert!(service.wait_for_refresh(Duration::ZERO), "startup requests a read even with pause off");
-        service.refresh(Path::new("unused"), true);
+        service.refresh_in_background(Path::new("unused"));
         assert_eq!(calls.load(Ordering::SeqCst), 1);
 
         // The reading is fresh but outside the short duplicate-request cooldown.
@@ -4523,7 +4544,7 @@ added = bool(_folder) and os.path.realpath(_folder).startswith(_accounts)"#;
         let reader = service.clone();
         let thread = std::thread::spawn(move || {
             let force = reader.wait_for_refresh(Duration::from_secs(30));
-            reader.refresh(Path::new("unused"), force);
+            reader.refresh_in_background(Path::new("unused"));
             tx.send(force).unwrap();
         });
         service.request_refresh();
@@ -4534,7 +4555,7 @@ added = bool(_folder) and os.path.realpath(_folder).startswith(_accounts)"#;
         assert!(rx.recv_timeout(Duration::from_secs(120)).expect("the monitor never answered"),
             "session start wakes the sleeping monitor");
         thread.join().unwrap();
-        assert_eq!(calls.load(Ordering::SeqCst), 2, "session start bypasses the five-minute cache");
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "session start respects the five-minute cache");
         // "Just completed" is the product's 5 s duplicate-request cooldown, measured on the wall
         // clock from the read above. A test thread descheduled for 5 s between that read and
         // the next line saw the cooldown over and a third read, and failed while the service
@@ -4547,15 +4568,15 @@ added = bool(_folder) and os.path.realpath(_folder).startswith(_accounts)"#;
         service.request_refresh(); service.request_refresh();
         let force = service.wait_for_refresh(Duration::ZERO);
         assert!(force);
-        service.refresh(Path::new("unused"), force);
-        assert_eq!(calls.load(Ordering::SeqCst), 2, "simultaneous sessions share the just-completed read");
+        service.refresh_in_background(Path::new("unused"));
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "simultaneous sessions share the last reading");
         assert!(!service.wait_for_refresh(Duration::ZERO));
         service.set_connecting(true);
         service.wait_for_refresh(Duration::ZERO);
         service.set_connecting(false);
         assert!(service.wait_for_refresh(Duration::ZERO), "sign-in completion wakes the reader");
-        service.refresh(Path::new("unused"), true);
-        assert_eq!(calls.load(Ordering::SeqCst), 3);
+        service.refresh_in_background(Path::new("unused"));
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
     /// Hunt part 1 finding 23: a manual refresh is owed a real check even inside the automatic
     /// ten-minute failure backoff, while the automatic one still waits and a double-click
