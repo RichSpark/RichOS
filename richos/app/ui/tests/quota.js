@@ -926,10 +926,17 @@ async function main() {
       await page.waitForSelector(".quota-status-dot.is-fast");
       await page.evaluate(t => document.documentElement.setAttribute("data-theme", t), theme);
       await page.addScriptTag({ content: contrast.pageScript() });
+      await page.evaluate(() => {
+        const probe = document.createElement("span");
+        probe.className = "quota-lane-pulse";
+        probe.id = "lane-pulse-contrast-probe";
+        document.querySelector(".quota-panel").appendChild(probe);
+      });
+      // WebKit registers the CSS animation after styling the newly mounted probe.
+      await page.waitForFunction(() => document.getElementById("lane-pulse-contrast-probe").getAnimations().length > 0);
       const found = await page.evaluate(() => {
         const C = window.__contrastMath, out = [];
-        const probe = document.createElement("span"); probe.className = "quota-lane-pulse";
-        document.querySelector(".quota-lane-note, .quota-status-card").appendChild(probe);
+        const probe = document.getElementById("lane-pulse-contrast-probe");
         for (const el of [document.querySelector(".quota-status-dot.is-fast"), probe]) {
           const frames = el.getAnimations().flatMap(a => a.effect.getKeyframes());
           const card = C.parseCssColor(getComputedStyle(document.getElementById("quota-status-card")).backgroundColor);
