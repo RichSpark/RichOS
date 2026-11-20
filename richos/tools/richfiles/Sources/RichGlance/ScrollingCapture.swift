@@ -215,7 +215,11 @@ final class ScrollingCapture: NSObject, NSWindowDelegate {
             status.stringValue = instructions
         case .unchanged:
             status.stringValue = instructions
-        case .unmatched, .conflict:
+        case .unmatched:
+            if mode == .manual {
+                status.stringValue = "Scroll back until the views overlap, then scroll slowly."
+            }
+        case .conflict:
             if mode == .manual {
                 status.stringValue = "Return to the last captured view or click Stop to try again."
             }
@@ -391,21 +395,20 @@ final class ScrollingCapture: NSObject, NSWindowDelegate {
                     let progress = await assembler.append(final, final: true)
                     received += 1
                     if case .moved = progress.update { accepted += 1 }
+                    if progress.update == .limit { failure = .sizeLimit }
                 } else {
                     failure = .finalFrameUnavailable
                 }
             }
-            let (image, verificationFailure) = await assembler.finish(
-                mayExport: failure == nil, requireComplete: mode != .manual)
+            let (image, detail) = await assembler.finish(stoppingFor: failure, requireComplete: mode != .manual)
             guard !Task.isCancelled else { return }
-            let detail = failure ?? verificationFailure
             report(detail == nil ? .complete : .issues, failure: detail)
             completing = nil
-            showResult(image, message: detail.map(Self.failureMessage))
+            showResult(image, message: detail.map { Self.stopMessage($0, hasImage: image != nil) })
         }
     }
 
-    private static func failureMessage(_ failure: Failure) -> String {
+    private static func stopMessage(_ failure: Failure, hasImage: Bool) -> String {
         switch failure {
         case .conflictingPixels:
             "The selected area changed while scrolling and could not be stitched. Select just the scrolling content and try again."
@@ -416,11 +419,16 @@ final class ScrollingCapture: NSObject, NSWindowDelegate {
         case .noMotion:
             "The selected area did not scroll. Try selecting an area that can scroll."
         case .sourceChanged:
-            "The source app changed during capture. Try again with the source app active."
+            hasImage ? "The source app changed. Review the area captured so far."
+                : "The source app changed during capture. Try again with the source app active."
         case .streamInterrupted, .noFrame, .finalFrameUnavailable:
             "RichGlance could not verify the screen capture. Try selecting the area again."
-        case .sizeLimit, .timeLimit:
-            "The capture reached its limit. Try a smaller capture or click Stop sooner."
+        case .sizeLimit:
+            hasImage ? "The capture reached the image size limit. Review the area captured so far."
+                : "The capture reached the image size limit. Try selecting a smaller area."
+        case .timeLimit:
+            hasImage ? "Automatic scrolling reached its time limit. Review the area captured so far."
+                : "Automatic scrolling reached its time limit. Try selecting a smaller area."
         case .accessibility:
             "Automatic scrolling needs Accessibility access. Try scrolling manually."
         }
@@ -558,7 +566,7 @@ private final class ScrollPreview: NSView {
     override var isFlipped: Bool { true }
 }
 
-private actor ScrollAssembly {
+actor ScrollAssembly {
     struct Progress: Sendable {
         let update: ScrollStitcher.Update
         let size: CGSize
@@ -575,17 +583,22 @@ private actor ScrollAssembly {
 
     func preview() -> CGImage? { stitcher.image(previewLimit: 136) }
 
-    func finish(mayExport: Bool, requireComplete: Bool) -> (CGImage?, RichFilesDiagnostics.ScrollCaptureFailure?) {
+    func finish(stoppingFor stop: RichFilesDiagnostics.ScrollCaptureFailure?, requireComplete: Bool)
+        -> (CGImage?, RichFilesDiagnostics.ScrollCaptureFailure?) {
         defer { stitcher = ScrollStitcher() }
-        guard mayExport else { return (nil, nil) }
+        switch stop {
+        case nil, .sizeLimit, .timeLimit, .sourceChanged: break
+        default: return (nil, stop)
+        }
         switch stitcher.issue {
         case .conflict: return (nil, .conflictingPixels)
         case .unmatched: return (nil, .lostOverlap)
-        case .limit: return (nil, .sizeLimit)
         default: break
         }
-        guard stitcher.movingShare != nil else { return (nil, .noMotion) }
-        guard let image = stitcher.image(requireComplete: requireComplete) else { return (nil, .incompleteCoverage) }
-        return (image, nil)
+        guard stitcher.movingShare != nil else { return (nil, stop ?? .noMotion) }
+        guard let image = stitcher.image(requireComplete: requireComplete) else {
+            return (nil, stop ?? .incompleteCoverage)
+        }
+        return (image, stop)
     }
 }

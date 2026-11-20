@@ -79,9 +79,9 @@ struct ScrollStitcher {
     }
 
     mutating func append(_ image: CGImage, final: Bool = false, resampling: Bool = false) -> Update {
-        guard image.width >= 24, image.height >= 24,
-              Self.fits(CGRect(x: 0, y: 0, width: image.width, height: image.height)),
-              let next = Raster(image) else { return refuse(.limit) }
+        guard image.width >= 24, image.height >= 24 else { return refuse(.conflict) }
+        guard Self.fits(CGRect(x: 0, y: 0, width: image.width, height: image.height)) else { return .limit }
+        guard let next = Raster(image) else { return refuse(.conflict) }
         guard let last else {
             let first = Frame(raster: next, origin: .zero)
             keep(first)
@@ -92,10 +92,10 @@ struct ScrollStitcher {
             issue = nil
             return .unchanged
         }
-        // Revisit the last verified viewport to recover. Later agreement elsewhere cannot
-        // establish what an unresolved view showed in portions that are now offscreen.
-        if let issue { return issue }
-        if final, let fixed, fixed.hasEdges, origins.count >= 3 {
+        // An unplaced frame adds no pixels. A later view can rejoin the verified page
+        // through exact overlap. A known conflict requires returning to the last view.
+        if issue == .conflict { return .conflict }
+        if issue == nil, final, let fixed, fixed.hasEdges, origins.count >= 3 {
             let settled = Frame(raster: next, origin: last.origin)
             if finalRepaintAgrees(last, settled, fixed: fixed) {
                 keep(settled)
@@ -107,7 +107,7 @@ struct ScrollStitcher {
         }
         guard offset != .zero else { return refuse(.conflict) }
         let frame = Frame(raster: next, origin: Offset(x: last.origin.x + offset.x, y: last.origin.y + offset.y))
-        guard Self.fits(bounds.union(frame.viewport)) else { return refuse(.limit) }
+        let fits = Self.fits(bounds.union(frame.viewport))
 
         let layout: Fixed
         if let fixed {
@@ -137,6 +137,7 @@ struct ScrollStitcher {
                       trial.agrees(frame, in: narrower.body(next, at: frame.origin)) else {
                     return refuse(.conflict)
                 }
+                guard fits else { return .limit }
                 self = trial
             } else if !agrees(frame, in: fixed.body(next, at: frame.origin)) {
                 return refuse(.conflict)
@@ -145,8 +146,11 @@ struct ScrollStitcher {
         } else {
             guard let verified = Self.verifyFirstMove(from: last, to: frame) else { return refuse(.conflict) }
             layout = verified
-            keepBody(last, in: layout.body(last.raster, at: last.origin))
         }
+        // Check the incoming overlap first. Hitting the output cap must never hide a conflict
+        // in pixels we would keep.
+        guard fits else { return .limit }
+        if fixed == nil { keepBody(last, in: layout.body(last.raster, at: last.origin)) }
         fixed = layout
         keepBody(frame, in: layout.body(next, at: frame.origin))
         keep(frame)

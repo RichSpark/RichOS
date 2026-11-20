@@ -40,7 +40,6 @@
 [richos] claude accounts: the adding could not be recorded ({})
 [richos] companies: adopting {} added during the turn
 [richos] company registry: added {} ("{}"), {} root(s) -> {}
-[richos] conversation preparation finished in {} ms{}
 [richos] corpus company {}: not created — {}
 [richos] corpus compiler: NOT installed — looked in: {}. The corpus exists and is his; what is missing is the program that reads it.
 [richos] corpus git: NOT a git repository — {}. The record is on disk and is his; what is missing is the history under it.
@@ -60,8 +59,6 @@
 [richos] his Send is durable (intake {}) and is on his phone before the spine has been asked for anything
 [richos] home field: could not read the corpus census ({}) — the home screen keeps the demonstration
 [richos] home field: no topic compiled ({}) — the home screen keeps the demonstration
-[richos] home field: {} object(s) in {} companies from their repositories ({}), {} link(s), {} source(s); unread folders: {}
-[richos] home field: {} object(s) of {} record(s) at {}, {} link(s), {} source(s), {} question(s) asked. Whether that replaces the demonstration is home.js's HOME_FIELD_MIN_OBJECTS, not this line.
 [richos] home video: could not save to {}: {}
 [richos] home video: saved {} byte(s) to {}
 [richos] hop-trace +{} ms  spine RELEASED at {} after holding {} ms
@@ -82,7 +79,6 @@
 [richos] loro correction desk: still closed after provisioning — the corpus exists and the desk's own log could not be opened. Confirming a correction will refuse and say so rather than appearing to write.
 [richos] machine settings starter could not be created: {}
 [richos] machinery: evicted {} raw shard(s) past the retention window
-[richos] next conversation ready for {}: preparation took {} ms
 [richos] no spare front desk was made ready for {}: {}
 [richos] no window could be reopened: this build declares none
 [richos] onboarding answer migration failed: {}
@@ -135,8 +131,6 @@
 [richos] window: geometry not recorded: {}
 [richos] yt-dlp: check failed ({}): {}
 [richos] yt-dlp: could not start its check: {}
-[richos] yt-dlp: installed nightly {}{}
-[richos] yt-dlp: nightly {} is the newest
 [richos] yt-dlp: no HOME, so no tools folder; not checking
 [richos] writing permission could not be saved after the account change
 [richos] numeric checkpoint could not be saved: {}

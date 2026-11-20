@@ -561,6 +561,48 @@ fn start_app_codex_watch(
     }
 }
 
+/// WHEN `boot complete` MAY BE SAID. The marker claims every line above it is what this launch
+/// resolved, and `gui-boot.test.sh` stops reading at it. Since the engine check left the
+/// window thread (2026-11-18) the first-run setup report can come from the check's own thread,
+/// after `setup` has returned: nightly candidate 108 said `boot complete` first and its boot
+/// proof never saw a setup line. So the marker waits for both facts and is said on whichever
+/// thread states the second one. Nothing waits on the marker: the window, the failure alert
+/// and the launch timing keep their own moments.
+struct BootMarker {
+    setup_returned: bool,
+    setup_report_owed: bool,
+    said: bool,
+}
+
+static BOOT_MARKER: Mutex<BootMarker> =
+    Mutex::new(BootMarker { setup_returned: false, setup_report_owed: false, said: false });
+
+fn boot_marker(change: impl FnOnce(&mut BootMarker)) {
+    let mut marker = BOOT_MARKER.lock().unwrap_or_else(|error| error.into_inner());
+    change(&mut marker);
+    if marker.setup_returned && !marker.setup_report_owed && !marker.said {
+        marker.said = true;
+        eprintln!("[richos] boot complete — every line above is what this launch resolved");
+    }
+}
+
+/// The setup report the engine check owes. Dropped when the report has printed, and also when
+/// the check never started or unwound, so a launch whose check failed still ends its boot log.
+struct OwedSetupReport;
+
+impl OwedSetupReport {
+    fn owe() -> Self {
+        boot_marker(|marker| marker.setup_report_owed = true);
+        Self
+    }
+}
+
+impl Drop for OwedSetupReport {
+    fn drop(&mut self) {
+        boot_marker(|marker| marker.setup_report_owed = false);
+    }
+}
+
 fn check_boot_engine(
     app: AppHandle,
     engine: PathBuf,
@@ -570,6 +612,7 @@ fn check_boot_engine(
     start_cleanup: impl FnOnce(bool) + Send + 'static,
 ) {
     launch_timing::mark_engine_check_started();
+    let owed_report = report_setup.then(OwedSetupReport::owe);
     let verify_engine = engine.clone();
     let started = richos_voice::stt::check_delivered_runtime_bin(move || {
         let started = std::time::Instant::now();
@@ -581,8 +624,12 @@ fn check_boot_engine(
         let bin = verdict.as_ref().ok().map(|runtime| runtime.root.join("bin"));
         (bin, verdict)
     }, move |verdict| {
+        // The report first: the start sweep and the disk monitor's first query after it took
+        // most of a minute in the test guest (2026-11-19), and neither decides what is missing.
+        let engine_update_now = report_setup && report_startup_setup(&app, Some(&engine));
+        drop(owed_report);
         start_cleanup(verdict.is_ok());
-        if report_setup && report_startup_setup(&app, Some(&engine)) {
+        if engine_update_now {
             let install_app = app.clone();
             if let Err(error) = app.run_on_main_thread(move || update_engine_by_itself(install_app)) {
                 setup_view::end_engine_update();
@@ -4252,7 +4299,10 @@ fn main() {
             // It is also the honest answer to an operator reading a terminal: the lines
             // above are all of it, so nothing further is coming and a missing line is
             // missing rather than late.
-            eprintln!("[richos] boot complete — every line above is what this launch resolved");
+            //
+            // The line itself is said by `boot_marker`: here, or, when the engine check
+            // still owes the first-run setup report, the moment that report has printed.
+            boot_marker(|marker| marker.setup_returned = true);
             // AND THE FAILURE ALERT STANDS DOWN ON THE SAME LINE, for the reason the marker
             // above exists at all: this is the program stating where "starting up" ends.
             // Past it there is a window, the app owns its own surfaces, and a modal system
