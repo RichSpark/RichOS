@@ -80,7 +80,8 @@ pub fn execute(args: &[String]) -> Result<Value, String> {
         .unwrap_or_else(|| PathBuf::from("claude"));
     if operation == "tick" {
         let view = service.tick(&bin, || true);
-        return Ok(json!({"actionError": if view.state == "unknown" { view.message.clone() } else { None }, "resets":printed(&view)}));
+        return Ok(json!({"actionError": if view.state == "unknown" { view.message.clone() } else { None },
+            "status": Service::said(&view, crate::util::now_millis()), "resets":printed(&view)}));
     }
     let mut view = service.refresh(&bin, false);
     if operation == "approve" {
@@ -94,7 +95,8 @@ pub fn execute(args: &[String]) -> Result<Value, String> {
         view = service.approve(&offer)?;
     }
     let action_error: Option<String> = None;
-    Ok(json!({"resets":printed(&view),"actionError":action_error}))
+    Ok(json!({"resets":printed(&view),"actionError":action_error,
+        "status": Service::said(&view, crate::util::now_millis())}))
 }
 
 /// **The reset record as printed, without its weekly figure** (richos-hq follow-ups.md,

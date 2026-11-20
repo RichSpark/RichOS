@@ -602,7 +602,8 @@
   const resetLimitName = id => ({ five_hour: "five-hour quota", seven_day: "weekly quota", seven_day_overage_included: "weekly allowance including overage" }[id] || id.replaceAll("_", " "));
   function renderResets() {
     const r = view?.resets || { state: "unknown", offers: [] }, now = Date.now();
-    const fresh = r.state === "fresh" && r.checkedAt <= now && now - r.checkedAt < 300000;
+    // 65 minutes: the core's own window (resets.rs FRESH_MS); it asks Anthropic hourly, not every five minutes.
+    const fresh = r.state === "fresh" && r.checkedAt <= now && now - r.checkedAt < 3900000;
     const offers = (r.offers || []).filter(o => o.remaining > 0 && o.expiresAt > now);
     const key = JSON.stringify([r, fresh, offers.map(o => o.id), resetDraft, resetSaving]);
     if (key === resetPaint) return;

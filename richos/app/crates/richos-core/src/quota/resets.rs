@@ -9,6 +9,14 @@ use std::{
 };
 
 pub const WEEKLY_THRESHOLD: f64 = 99.;
+/// How long an answer stands before the automatic check asks Anthropic again. The check reads
+/// `/api/oauth/usage`, whose undocumented limit is shared with every Claude Code session on the
+/// account; on 2026-11-18 it answered HTTP 429 at the moment weekly usage reached 99%. Offers
+/// change about monthly, so an hour is often enough. Only an approved reset needs the
+/// five-minute check, to see 99% in time.
+pub const OFFER_INTERVAL_MS: u64 = 60 * 60_000;
+/// An answer reads as fresh until the next check has had one watcher poll to replace it.
+const FRESH_MS: u64 = OFFER_INTERVAL_MS + super::REFRESH_INTERVAL_MS;
 const FILE: &str = "claude-reset-offers.json";
 const MAX_ATTEMPTS: usize = 128;
 
@@ -381,11 +389,8 @@ impl Service {
         let approved = {
             let Ok(_lock) = self.lock() else { return self.view(); };
             let Ok(mut record) = self.read() else { return self.view(); };
-            let v = &record.view;
-            if record.poll_after.is_some_and(|t| t > now)
-                || v.retry_at.is_some_and(|t| t > now)
-                || (v.state == "fresh" && !self.prepared_action_due(now) && v.checked_at.is_some_and(|t|
-                    t <= now && now - t < super::REFRESH_INTERVAL_MS)) {
+            // An approved reset whose moment has come is not kept waiting for the answer to age.
+            if Self::held(&record, now) || !(Self::aged(&record, now) || self.prepared_action_due(now)) {
                 return Self::visible(record.view, now);
             }
             record.poll_after = Some(now + super::REFRESH_INTERVAL_MS);
@@ -395,17 +400,58 @@ impl Service {
         match read(approved) {
             Ok(view) => view,
             Err(error) => {
-                self.record_failure(error);
+                // Counted from the start of the refused check, so the watcher's next
+                // five-minute poll is the retry, not the one after it.
+                self.record_failure(error, now);
                 self.view()
             }
         }
     }
-    fn record_failure(&self, error: String) {
+    /// The automatic check never asks Anthropic inside another poller's reservation or a
+    /// refused check's wait.
+    fn held(record: &Record, now: u64) -> bool {
+        record.poll_after.is_some_and(|t| t > now) || record.view.retry_at.is_some_and(|t| t > now)
+    }
+    /// Whether the answer needs replacing: at once when refused or missing, otherwise when it
+    /// is an hour old, or five minutes with a reset approved.
+    fn aged(record: &Record, now: u64) -> bool {
+        let v = &record.view;
+        let every = if v.approval.as_ref().is_some_and(|a| a.offer.expires_at > now) {
+            super::REFRESH_INTERVAL_MS
+        } else {
+            OFFER_INTERVAL_MS
+        };
+        !matches!(v.state.as_str(), "fresh" | "ineligible")
+            || v.checked_at.is_none_or(|t| t > now || now - t >= every)
+    }
+    /// The answer in one sentence, with its age: what the 99% notice says about a reset.
+    pub fn said(v: &View, now: u64) -> Option<String> {
+        let minutes = now.checked_sub(v.checked_at?)? / 60_000;
+        let age = match (minutes / 60, minutes % 60) {
+            (0, 0) => "under a minute".to_string(),
+            (0, m) => format!("{m} min"),
+            (h, 0) => format!("{h} h"),
+            (h, m) => format!("{h} h {m} min"),
+        };
+        let offers: Vec<&Offer> = v.offers.iter().filter(|o| o.weekly(now)).collect();
+        let count: u32 = offers.iter().map(|o| o.remaining).sum();
+        Some(match count {
+            0 => format!("No weekly reset is on offer, checked {age} ago."),
+            _ => format!(
+                "{count} weekly {} on offer ({}), checked {age} ago.",
+                if count == 1 { "reset is" } else { "resets are" },
+                offers.iter().map(|o| o.label.as_str()).collect::<Vec<_>>().join("; ")
+            ),
+        })
+    }
+    /// A refused check keeps the last answer (offers and `checked_at`); only the state,
+    /// the message and the retry time change.
+    fn record_failure(&self, error: String, at: u64) {
         if let Ok(_lock) = self.lock() {
             if let Ok(mut record) = self.read() {
                 record.view.state = "unknown".into();
                 record.view.message = Some(error);
-                record.view.retry_at = Some(crate::util::now_millis() + super::REFRESH_INTERVAL_MS);
+                record.view.retry_at = Some(at + super::REFRESH_INTERVAL_MS);
                 let _saved = self.save(&record);
             }
         }
@@ -433,12 +479,19 @@ impl Service {
     fn visible(mut v: View, now: u64) -> View {
         if v.state == "fresh"
             && v.checked_at
-                .is_none_or(|t| t > now || now - t >= super::REFRESH_INTERVAL_MS)
+                .is_none_or(|t| t > now || now - t >= FRESH_MS)
         {
             v.state = "stale".into();
             v.message = Some("Reset offers need a fresh check.".into());
         }
         v.offers.retain(|o| o.remaining > 0 && o.expires_at > now);
+        // A refused check says what the last answer was and how old it is.
+        if v.state == "unknown" {
+            if let (Some(last), Some(error)) = (Self::said(&v, now), v.message.as_mut()) {
+                error.push_str(" Last answer: ");
+                error.push_str(&last);
+            }
+        }
         if v.approval
             .as_ref()
             .is_some_and(|a| a.offer.expires_at <= now)
@@ -507,9 +560,7 @@ impl Service {
             .max();
             last_attempt.is_some_and(|t| now - t < 5000)
         } else {
-            record.poll_after.is_some_and(|t| t > now)
-                || v.retry_at.is_some_and(|t| t > now)
-                || v.checked_at.is_some_and(|t| t <= now && now - t < super::REFRESH_INTERVAL_MS)
+            Self::held(&record, now) || !Self::aged(&record, now)
         };
         if waiting {
             return Self::visible(record.view, now);
@@ -627,7 +678,7 @@ impl Service {
             return Err("This work session is no longer authorized.".into());
         }
         let (account, reading) = Self::read_transport(t).inspect_err(|error| {
-            self.record_failure(error.clone());
+            self.record_failure(error.clone(), crate::util::now_millis());
         })?;
         let _lock = self.lock()?;
         let mut record = self.read()?;
@@ -845,6 +896,61 @@ mod tests {
         assert!(app.view().approval.is_none());
         assert!(app.use_approved(&mut t, || true).is_err());
         assert_eq!(t.posts, 1);
+    }
+
+    /// 2026-11-18: the check answered HTTP 429 as weekly usage reached 99%, and the notice
+    /// carried only the refusal. The last answer stays, is said with its age, and the next
+    /// five-minute poll is the retry.
+    #[test]
+    fn a_refused_check_keeps_the_last_answer_with_its_age_and_retries_at_retry_at() {
+        let root = Scratch::new();
+        let mut t = Fake::new(99.);
+        let service = Service::new(root.path());
+        let now = crate::util::now_millis();
+        let checked = now - 2 * 3_600_000 - 5 * 60_000;
+        let mut record = Record::default();
+        let (account, reading) = Service::read_transport(&mut t).unwrap();
+        Service::update(&mut record, account, reading, checked);
+        service.save(&record).unwrap();
+        let refused = service.tick_using(now, |_| {
+            Err("Claude reset eligibility check: HTTP 429: Anthropic rate-limited the check.".into())
+        });
+        assert_eq!(refused.state, "unknown");
+        assert_eq!(refused.offers.len(), 1, "the last answer's offer is kept");
+        assert_eq!(refused.checked_at, Some(checked));
+        let said = refused.message.unwrap();
+        assert!(said.contains("HTTP 429"), "{said}");
+        assert!(said.ends_with("Last answer: 1 weekly reset is on offer (One weekly reset), checked 2 h 5 min ago."), "{said}");
+        let retry = now + super::super::REFRESH_INTERVAL_MS;
+        assert_eq!(refused.retry_at, Some(retry));
+        service.tick_using(retry - 1, |_| panic!("no call before retryAt"));
+        let mut calls = 0;
+        service.tick_using(retry, |_| { calls += 1; service.refresh_transport(&mut t) });
+        assert_eq!(calls, 1, "the poll at retryAt is the retry");
+        assert_eq!(service.view().state, "fresh");
+    }
+
+    /// What was found: nothing but an armed approval needs the answer more often than hourly.
+    /// A day of the watcher's five-minute polls is 288 ticks, and was 288 checks before this.
+    #[test]
+    fn a_day_of_watcher_polls_asks_anthropic_once_an_hour() {
+        let root = Scratch::new();
+        let mut t = Fake::new(50.);
+        let service = Service::new(root.path());
+        let start = crate::util::now_millis();
+        let mut calls = 0;
+        for poll in 0..288 {
+            let now = start + poll * super::super::REFRESH_INTERVAL_MS;
+            service.tick_using(now, |_| {
+                calls += 1;
+                let (account, reading) = Service::read_transport(&mut t)?;
+                let mut record = service.read()?;
+                Service::update(&mut record, account, reading, now);
+                service.save(&record)?;
+                Ok(Service::visible(record.view, now))
+            });
+        }
+        assert_eq!(calls, 24);
     }
 
     #[test]
