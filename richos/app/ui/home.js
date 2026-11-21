@@ -2150,6 +2150,7 @@ window.RichHome = (function () {
     // idempotent, so the launch that measured correctly measures the same answer again.
     reserveTopInset();
     reserveNoteInset();
+    if (window.RichSwearMeter) window.RichSwearMeter.paintHome();
     reserveDoorTop();
     measureChips();
 
@@ -2602,6 +2603,7 @@ window.RichHome = (function () {
       loadEntities();
       reserveTopInset();
       refreshNote();
+      if (window.RichSwearMeter) window.RichSwearMeter.paintHome();
       reserveDoorTop();
       // The sentence re-wraps when the window changes width, and the aside sits on its
       // measured height. Nothing else in this file listens for resize, so this is scoped to

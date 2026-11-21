@@ -174,6 +174,8 @@ module.exports = [
   {"s": "If RichOS ever won't open, RichDoctor in your menu bar files the same report.", "c": "INFORMATIONAL", "why": "The RichDoctor line at the foot of the Bust a bug panel (Urban's rail recommendation): it tells a user where reporting lives when RichOS cannot open. Nothing to do now; the panel above it is the report."},
   // SwearMeter scope, historical qualifiers and actual recovery affordances.
   {"s": "No verified matches", "c": "INFORMATIONAL", "why": "An empty month in a partial subtotal does not establish a verified zero."},
+  {"s": "Saved provider history is over an hour old.", "c": "INFORMATIONAL", "why": "Settings and the SwearMeter card qualify an overdue saved aggregate while the background scan catches up."},
+  {"s": "in the last 30 days · saved history", "c": "INFORMATIONAL", "why": "Home keeps the saved 30-day count visible when the provider aggregate is overdue."},
   {"s": "Partial history: some provider records could not be verified.", "c": "INFORMATIONAL", "why": "The subtotal is qualified when provider records are unavailable or cannot be attributed."},
   {"s": "SwearMeter is preparing your history", "c": "INFORMATIONAL", "why": "The app is performing the initial historical read automatically."},
   {"s": "possible duplicate matches withheld.", "c": "FRAGMENT", "why": "Completes the numerical disclosure about ambiguous provider copies."},
