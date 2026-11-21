@@ -1275,12 +1275,17 @@ function setSignals(v, flashIt) {
   $('#home-brand-line').innerHTML = `loro · <span class="v" data-k="months"></span> months · <b><span class="v" data-k="memories"></span> memories</b>`;
   const Vv = (k) => `<span class="v" data-k="${k}"></span>`;
   const sig = (n, small, l) => `<div class="sig"><div class="n">${n}${small ? `<small>${small}</small>` : ''}</div><div class="l">${l}</div></div>`;
-  $('#home-signals').innerHTML =
+  const signals = $('#home-signals');
+  const swearmeter = signals.querySelector('#home-swearmeter');
+  const rows = document.createElement('template');
+  rows.innerHTML =
     sig(Vv('specialists'), `· ${Vv('active')} working now`, 'AI specialists') +
     sig(Vv('tasks'), '', 'tasks handled without you') +
     sig(Vv('sources'), '', 'sources understood') +
     sig(Vv('decisions'), `· ${Vv('lessons')} lessons`, 'decisions remembered') +
     sig(`${Vv('hours')} h`, '', 'of your attention saved');
+  // The saved count has its own source and can already be visible when the picture starts.
+  signals.replaceChildren(rows.content, ...(swearmeter ? [swearmeter] : []));
   ROOT.querySelectorAll('.v[data-k]').forEach(el => { vEl[el.dataset.k] = el; });
   setSignals(signalsNow(), false);
   $('#home-working').innerHTML = activeSpecialists.map((sp, i) => `<li id="home-spc-${i}">${sp.codename} <span class="fn">${sp.function}</span><span class="dot"></span></li>`).join('');

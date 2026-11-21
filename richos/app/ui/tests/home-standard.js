@@ -198,6 +198,8 @@ async function main() {
     // The SwearMeter answer comes before the picture; the picture then writes the column's
     // signals, and the SwearMeter signal must still be the last of them.
     const on = await openApp(browser, { swear: { show: true, last30: 1299 } });
+    await on.waitForSelector("#home-swearmeter");
+    await on.evaluate(() => { window.__firstSwearMeter = document.getElementById("home-swearmeter"); });
     await withField(on);
     await on.waitForSelector("#home-swearmeter");
     const r = await on.evaluate(() => {
@@ -205,12 +207,14 @@ async function main() {
       const signals = document.getElementById("home-signals");
       return {
         n: node.querySelector(".n").textContent, l: node.querySelector(".l").textContent,
+        same: window.__firstSwearMeter === node,
         last: signals.lastElementChild === node, others: signals.children.length - 1,
         bottom: node.getBoundingClientRect().bottom, door: document.getElementById("home-switch").getBoundingClientRect().top,
       };
     });
     assertEqual([r.n, r.l], ["1,299swear words", "in the last 30 days"], "the signal is not the number with 'swear words', then 'in the last 30 days'");
     assert(r.last && r.others > 0, "the signal is not the last of the column's signals");
+    assert(r.same, "initializing the picture replaced the cached SwearMeter signal");
     assert(r.bottom <= r.door, `the signal (bottom ${r.bottom}) is not above Talk to Rich (top ${r.door})`);
     assertEqual(on.__errors, [], "renderer errors");
     await on.close();
@@ -252,6 +256,11 @@ async function main() {
     });
     assertEqual(order.next, "nr-bug", "the SwearMeter button is not directly above Bust a bug");
     assert(order.above, "the SwearMeter button is not above Bust a bug on screen");
+    const firstCount = await page.evaluate(() => {
+      document.getElementById("nr-swear").dispatchEvent(new Event("pointerenter"));
+      return document.querySelector('#swear-card [data-k="big"]').textContent;
+    });
+    assertEqual(firstCount, "1,299", "opening the card paints the full saved number synchronously");
     await page.hover("#nr-swear");
     await page.waitForSelector("#swear-card.is-open");
     const card = await page.evaluate(() => {

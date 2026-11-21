@@ -20,6 +20,7 @@
   function coverage() {
     if (!result || !result.available) return "The recorded result could not be read. Retry in settings.";
     const lines = [];
+    if (result.provider_history_stale) lines.push("Saved provider history is over an hour old.");
     if (result.provider_history_incomplete) lines.push("Partial history: some provider records could not be verified.");
     if (result.ambiguous_matches) lines.push(result.ambiguous_matches.toLocaleString() + " possible duplicate matches withheld.");
     if (result.periods?.undated) lines.push(result.periods.undated.toLocaleString() + " undated matches are included in All history only.");
@@ -74,6 +75,8 @@
     if (signals.lastElementChild !== node) signals.appendChild(node);
     node.querySelector(".v").textContent = count.toLocaleString("en-US");
     node.querySelector("small").textContent = count === 1 ? "swear word" : "swear words";
+    node.querySelector(".l").textContent = result.provider_history_stale
+      ? "in the last 30 days · saved history" : "in the last 30 days";
   }
 
   // ROUND 73: THE RAIL BUTTON AND ITS CARD. The button sits above Bust a bug while SwearMeter is on.
@@ -85,7 +88,6 @@
   const railBtn = document.getElementById("nr-swear");
   let card = null, pinned = false, hovering = false, hideTimer = 0, shown = GLANCE, wasOpen = false;
   const fmt = (n) => Number(n).toLocaleString("en-US");
-  const reduced = () => window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   const $ = (k) => card.querySelector('[data-k="' + k + '"]');
   function monthRows() {
     const rows = (result && result.periods && result.periods.months) || [];
@@ -175,16 +177,6 @@
     card.style.bottom = Math.round(window.innerHeight - foot) + "px";
     card.style.setProperty("--swear-arrow", Math.round(Math.max(10, foot - (r.top + r.height / 2) - 6)) + "px");
   }
-  function countUp() {
-    const el = $("big"), to = result.periods.last_30_days;
-    if (reduced() || to < 2) return;
-    const t0 = performance.now(), dur = 520;
-    (function step(t) {
-      const k = Math.min(1, Math.max(0, (t - t0) / dur)), e = 1 - Math.pow(1 - k, 3);
-      el.textContent = fmt(Math.round(to * e));
-      if (k < 1) requestAnimationFrame(step);
-    })(t0);
-  }
   function sync() {
     if (!railBtn) return;
     // The home screen has no rail: a card pinned from the keyboard (no pointer press follows to
@@ -198,7 +190,6 @@
       shown = GLANCE;
       paintCard();
       place();
-      if (ready()) countUp();
     } else if (open) place();
     card.classList.toggle("is-open", open);
     railBtn.setAttribute("aria-expanded", String(pinned && open));
