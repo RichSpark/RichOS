@@ -338,6 +338,31 @@ const SURFACES = [
     what: "the shell as it opens: rail, scope line, first turn, composer",
     drive: async () => {},
   },
+  {
+    name: "richbrief",
+    what: "RichBrief's meeting controls and calendar settings",
+    drive: async p => {
+      await p.click("#nr-brief");
+      await p.waitForSelector("#brief-page");
+    },
+  },
+  {
+    name: "richglance",
+    what: "RichGlance's capture, global shortcut and image viewer settings",
+    nativeReplies: {
+      glance_capture_status: {
+        available: true, enabled: false, registered: false,
+        shortcut: { code: "KeyC", control: true, shift: true, option: false, command: false },
+      },
+      glance_workflow_status: { opensEditor: false, keepsHistory: false },
+    },
+    drive: async p => {
+      await p.click("#nr-glance");
+      await p.waitForSelector("#glance-page");
+      await p.waitForSelector("#gp-after-copy[aria-pressed=true]:enabled");
+      await p.waitForSelector("#gp-viewer:enabled");
+    },
+  },
   ...["offer", "approved", "uncertain"].map(state => ({
     name: "quota-" + state,
     what: "desktop quota windows and the " + state + " weekly reset state",
@@ -1869,7 +1894,7 @@ async function onPlainGround(page, shoot, tally) {
   }
 }
 
-async function openApp(browser, theme, holdSplash, preset) {
+async function openApp(browser, theme, holdSplash, preset, nativeReplies) {
   const page = await browser.newPage({ viewport: { width: 1400, height: 950 }, colorScheme: theme });
   // The occlusion check joins node paths across independent pages. The preview
   // gives seeded turns random IDs, so use one repeatable stream in this suite:
@@ -1957,7 +1982,27 @@ async function openApp(browser, theme, holdSplash, preset) {
   // `SLOW_BRIDGE`, byte-identical in behavior, so `updates.js` can ask the same question of
   // itself. One copy, because two copies of a diagnostic drift and then disagree about what
   // was reproduced.
-  if (LAG_MS > 0) await page.addInitScript(SLOW_BRIDGE, LAG_MS);
+  if (nativeReplies) {
+    // Supply the installed native tool's state before the renderer asks for it at boot.
+    await page.addInitScript(({ replies, lag }) => {
+      let bridge;
+      Object.defineProperty(window, "RichBridge", {
+        configurable: true,
+        get: () => bridge,
+        set(value) {
+          bridge = value;
+          const invoke = value.invoke.bind(value);
+          value.invoke = async (command, args) => {
+            if (lag > 0) await new Promise(resolve => setTimeout(resolve, lag));
+            if (Object.hasOwn(replies, command)) return structuredClone(replies[command]);
+            return invoke(command, args);
+          };
+        },
+      });
+    }, { replies: nativeReplies, lag: LAG_MS });
+  } else if (LAG_MS > 0) {
+    await page.addInitScript(SLOW_BRIDGE, LAG_MS);
+  }
   // A PRE-BOOT MOCK PRESET, for the one state a setter cannot reach: "no company has ever
   // been chosen" is decided before `init()` branches on whether a thread is active, so it
   // has to be in place before any of the page's own scripts run (mock.js's own comment on
@@ -2529,7 +2574,7 @@ async function main() {
       // For a surface that holds the curtain: the proof that it was still held, in the log.
       let curtain = null;
       for (const theme of THEMES) {
-        const page = await openApp(browser, theme, surface.holdSplash, surface.preset);
+        const page = await openApp(browser, theme, surface.holdSplash, surface.preset, surface.nativeReplies);
         if (page.__curtain) curtain = page.__curtain;
         await surface.drive(page);
         // WHICH DECLARED PANELS THIS DRIVER PUT ON SCREEN, recorded before the walk so that
@@ -3917,7 +3962,7 @@ async function main() {
     for (const surface of SURFACES) {
       if (surface.holdSplash) continue; // §15's always-dark clamp: there is no switch to measure
       for (const [from, to] of [["light", "dark"], ["dark", "light"]]) {
-        const page = await openApp(browser, from, surface.holdSplash, surface.preset);
+        const page = await openApp(browser, from, surface.holdSplash, surface.preset, surface.nativeReplies);
         await surface.drive(page);
         await page.evaluate(C.pageScript());
         const instant = await page.evaluate((o) => {
