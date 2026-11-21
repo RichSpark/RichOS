@@ -81,6 +81,7 @@ module.exports = [
   { s: "Pick a time…", c: "CONTROL", why: "Discloses the custom date and time choices." },
   { s: "Play a sound for notifications and question answers", c: "INFORMATIONAL", why: "Describes which sounds the neighboring Settings switch controls." },
   { s: "Since you were last here", c: "INFORMATIONAL", why: "Marks the first unread activity in the conversation." },
+  { s: "Team · running", c: "INFORMATIONAL", why: "Reports confirmed assignment activity in the chat list." },
   { s: "This chat could not be found", c: "INFORMATIONAL", why: "Reports that the requested chat ceased to exist while its menu was open." },
   { s: "This setting could not be saved.", c: "ACTIONABLE", control: ".chat-notification-switch", fixture: null, why: "The switch restores its saved state and remains available beside the message." },
   { s: "This time could not be saved.", c: "ACTIONABLE", control: ".chat-later-item", fixture: null, why: "The menu remains open and the time choices can be used again." },
