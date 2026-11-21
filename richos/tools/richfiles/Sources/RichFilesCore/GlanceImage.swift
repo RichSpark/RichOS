@@ -115,6 +115,8 @@ public struct GlanceImage {
     public let bitmap: CGImage
     /// Oriented source dimensions in pixels, even when the decoded bitmap is smaller.
     public let size: CGSize
+    /// Oriented size at 100% in AppKit points, derived from the file's resolution.
+    public let pointSize: CGSize
     public let animation: GlanceAnimation?
 
     public static func decode(_ url: URL) throws -> Self {
@@ -134,7 +136,7 @@ public struct GlanceImage {
         }
         let animation = GlanceAnimation(source: source, format: format)
         let first = try decodeFrame(in: source, at: index, pixelLimit: animation == nil ? 32_000_000 : GlanceAnimation.pixelLimit)
-        return Self(bitmap: first.bitmap, size: first.size, animation: animation)
+        return Self(bitmap: first.bitmap, size: first.size, pointSize: first.pointSize, animation: animation)
     }
 
     private static func imageSource(_ url: URL) -> CGImageSource? {
@@ -202,15 +204,25 @@ public struct GlanceImage {
     }
 
     fileprivate static func decodeFrame(in source: CGImageSource, at index: Int,
-                                        pixelLimit: Double) throws -> (bitmap: CGImage, size: CGSize) {
+                                        pixelLimit: Double) throws -> (bitmap: CGImage, size: CGSize, pointSize: CGSize) {
         guard let props = CGImageSourceCopyPropertiesAtIndex(source, index, nil) as? [CFString: Any],
               let width = props[kCGImagePropertyPixelWidth] as? Double,
               let height = props[kCGImagePropertyPixelHeight] as? Double,
               width.isFinite, height.isFinite, width >= 1, height >= 1 else {
             throw Failure.unreadable
         }
-        let orientation = props[kCGImagePropertyOrientation] as? Int ?? 1
-        let size = (5...8).contains(orientation) ? CGSize(width: height, height: width) : CGSize(width: width, height: height)
+        let swapsAxes = (5...8).contains(props[kCGImagePropertyOrientation] as? Int ?? 1)
+        func orientedSize(_ width: Double, _ height: Double) -> CGSize {
+            swapsAxes ? CGSize(width: height, height: width) : CGSize(width: width, height: height)
+        }
+        func points(_ pixels: Double, dpiKey: CFString) -> Double {
+            guard let dpi = props[dpiKey] as? Double, dpi.isFinite, dpi > 0 else { return pixels }
+            let length = pixels * (72 / dpi)
+            return length.isFinite && length > 0 ? length : pixels
+        }
+        let size = orientedSize(width, height)
+        let pointSize = orientedSize(points(width, dpiKey: kCGImagePropertyDPIWidth),
+                                     points(height, dpiKey: kCGImagePropertyDPIHeight))
         // Preserve normal screenshots at full resolution. Bound the decoded surface for very large files.
         let longest = max(width, height)
         let reduction = min(1, 8192 / longest, sqrt(pixelLimit / width / height))
@@ -222,7 +234,7 @@ public struct GlanceImage {
         ]
         guard let bitmap = CGImageSourceCreateThumbnailAtIndex(source, index, options as CFDictionary),
               CGImageSourceGetStatusAtIndex(source, index) == .statusComplete else { throw Failure.unreadable }
-        return (bitmap, size)
+        return (bitmap, size, pointSize)
     }
 }
 
@@ -289,45 +301,31 @@ public struct GlanceAnimation: @unchecked Sendable {
 }
 
 public struct GlanceViewport {
+    /// The image's size in points at 100%, independent of the display scale.
     public private(set) var imageSize: CGSize = .zero
     public private(set) var size: CGSize = .zero
     public private(set) var scale: CGFloat = 1
     public private(set) var origin: CGPoint = .zero
     private var automaticScale = true
-    private var backingScale: CGFloat = 1
-
-    // At 100%, one source pixel occupies one pixel of the window's backing store.
-    private var drawingScale: CGFloat { scale / backingScale }
 
     public var isFit: Bool { automaticScale && fit < 1 }
 
     public var imageRect: CGRect {
-        CGRect(origin: origin, size: CGSize(width: imageSize.width * drawingScale, height: imageSize.height * drawingScale))
+        CGRect(origin: origin, size: CGSize(width: imageSize.width * scale, height: imageSize.height * scale))
     }
     public var canPan: Bool { imageRect.width > size.width + 0.5 || imageRect.height > size.height + 0.5 }
 
     private var fit: CGFloat {
         guard imageSize.width > 0, imageSize.height > 0, size.width > 0, size.height > 0 else { return 1 }
-        return min(1, size.width * backingScale / imageSize.width, size.height * backingScale / imageSize.height)
+        return min(1, size.width / imageSize.width, size.height / imageSize.height)
     }
 
     public init() {}
 
-    public mutating func reset(imageSize: CGSize, in size: CGSize, backingScale: CGFloat = 1) {
+    public mutating func reset(imageSize: CGSize, in size: CGSize) {
         self.imageSize = imageSize
         self.size = size
-        self.backingScale = backingScale.isFinite && backingScale > 0 ? backingScale : 1
         automaticScale = true
-        clamp()
-    }
-
-    public mutating func changeBackingScale(to backingScale: CGFloat) {
-        guard backingScale.isFinite, backingScale > 0, backingScale != self.backingScale else { return }
-        let center = CGPoint(x: size.width / 2, y: size.height / 2)
-        let ratio = self.backingScale / backingScale
-        origin = CGPoint(x: center.x + (origin.x - center.x) * ratio,
-                         y: center.y + (origin.y - center.y) * ratio)
-        self.backingScale = backingScale
         clamp()
     }
 
@@ -339,7 +337,7 @@ public struct GlanceViewport {
     }
 
     public func imagePoint(at point: CGPoint) -> CGPoint {
-        CGPoint(x: (point.x - origin.x) / drawingScale, y: (point.y - origin.y) / drawingScale)
+        CGPoint(x: (point.x - origin.x) / scale, y: (point.y - origin.y) / scale)
     }
 
     public mutating func zoom(by factor: CGFloat, at pointer: CGPoint, holding anchor: CGPoint) {
@@ -349,7 +347,7 @@ public struct GlanceViewport {
         guard scale >= 0.05 || factor > 1 else { return }
         scale = min(20, max(0.05, scale * factor))
         automaticScale = false
-        origin = CGPoint(x: pointer.x - anchor.x * drawingScale, y: pointer.y - anchor.y * drawingScale)
+        origin = CGPoint(x: pointer.x - anchor.x * scale, y: pointer.y - anchor.y * scale)
         clamp()
     }
 
