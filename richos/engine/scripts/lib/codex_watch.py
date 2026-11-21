@@ -226,11 +226,11 @@ def tick(sd, now=None, out=None, json_lines=False, config="", sid=""):
     with _one_whole_look():
         with codex_channels.locked(codex_channels.root() / "coordinator.lock"):
             printed = _legacy_tick(sd, now, out, json_lines, config)
-        if sid and not json_lines:
-            owner = codex_channels.terminal_scope(Path(config).parent if config else None, sid)
-            lock = Path(state_root()) / "terminal" / (codex_channels.component(owner) + ".lock")
-            with codex_channels.locked(lock):
-                printed += _terminal_tick(owner, out or sys.stdout)
+        if not json_lines:
+            for owner in codex_channels.terminal_scopes(Path(config).parent if config else None, sid):
+                lock = Path(state_root()) / "terminal" / (codex_channels.component(owner) + ".lock")
+                with codex_channels.locked(lock):
+                    printed += _terminal_tick(owner, out or sys.stdout)
         return printed
 
 
@@ -328,13 +328,18 @@ def prune_state(keep):
             shutil.rmtree(d, ignore_errors=True)
 
 
-def session(engine_root):
-    """(session id, claude pid) of the session this runs in, or ('', None)."""
+def session(engine_root, with_project=False):
+    """Return the current session ID and its PID, or its launch cwd if requested."""
     ws = stall_watch._load("codex_watch_workspaces", os.path.join(engine_root, "mega-lander", "workspaces.py"))
     if ws is None:
         return "", None
     try:
         sid = ws.current_session() or ""
+        if with_project:
+            # A Bash tool can cd away. The platform record captures the lead's
+            # original cwd and the lifecycle registry provides the older-host fallback.
+            platform = ws.platform_session(sid) or {}
+            return sid, platform.get("cwd") or (ws.load_session(sid) or {}).get("cwd")
         pid = ws.session_pid(sid) if sid else ws.session_pid()
     except Exception:  # noqa: BLE001: no session is "watch with no end", never a crash
         return "", None

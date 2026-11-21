@@ -9,13 +9,4 @@ elif [ -x "$SCRIPT_DIR/../runtime/bin/python3" ]; then
 else
     interpreter=python3  # source checkout / existing terminal engine environment
 fi
-for argument in "$@"; do
-    if [ "$argument" = "--terminal" ]; then
-        . "$SCRIPT_DIR/lib/resolve-roots.sh"
-        if resolve_entity_root "" && [ -f "$RICHOS_ENTITY_ROOT_RESOLVED/orchestration.config" ]; then
-            set -- "$@" --terminal-root "$RICHOS_ENTITY_ROOT_RESOLVED"
-        fi
-        break
-    fi
-done
 exec "$interpreter" -B "$SCRIPT_DIR/lib/codex_channels.py" "$@"

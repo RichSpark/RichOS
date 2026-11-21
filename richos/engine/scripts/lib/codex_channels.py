@@ -35,6 +35,7 @@ TEXT_LIMIT = 128 * 1024
 FRAME_LIMIT = 256 * 1024
 AUTOMATIC = "_automatic"
 TERMINAL = "_terminal"
+DISPATCH_LOCATOR = "RICHOS_CODEX_DISPATCH_LOCATOR"
 
 
 def root():
@@ -278,6 +279,29 @@ def terminal_scope(project, session=""):
     return session
 
 
+def terminal_scopes(project, session):
+    # A terminal can also have pairs from before it had a project identity.
+    if session:
+        if project:
+            yield terminal_scope(project)
+        yield session
+
+
+def terminal_project(directory):
+    directory = directory or os.environ.get("CLAUDE_PROJECT_DIR") or os.environ.get("RICHOS_ENTITY_ROOT")
+    if not directory or not Path(directory).is_dir():
+        return None
+    resolver = str(Path(__file__).with_name("resolve-roots.sh"))
+    result = subprocess.run(
+        ["bash", "-c", '. "$1" && resolve_entity_root "" && '
+         '[ -f "$RICHOS_ENTITY_ROOT_RESOLVED/orchestration.config" ] && '
+         'printf "%s" "$RICHOS_ENTITY_ROOT_RESOLVED"', "terminal-project", resolver],
+        cwd=directory, env=dict(os.environ, CLAUDE_PROJECT_DIR=directory),
+        capture_output=True, text=True,
+    )
+    return result.stdout if result.returncode == 0 else None
+
+
 def terminal_connections(session):
     if session:
         yield from registered(TERMINAL, component(session))
@@ -345,7 +369,8 @@ def run_codex(binary, path, marker, state, prompt):
     with tempfile.TemporaryFile(mode="w+b") as source:
         source.write(prompt.encode())
         source.seek(0)
-        with subprocess.Popen([*command, "-"], stdin=source, stdout=subprocess.PIPE, text=True) as child:
+        env = dict(os.environ, **{DISPATCH_LOCATOR: str(path)})
+        with subprocess.Popen([*command, "-"], stdin=source, stdout=subprocess.PIPE, text=True, env=env) as child:
             for line in child.stdout:
                 try:
                     event = json.loads(line)
@@ -368,6 +393,7 @@ def dispatch(locator, resume=False):
     """Start one Codex chat or deliver queued Rich messages to that exact chat."""
     path, context = rich_task(locator)
     marker = path / "dispatch.json"
+    receipt = path / "dispatch-read.json"
     journal = path / "to-codex.jsonl"
     with locked(path / "dispatch.lock"):
         if resume:
@@ -375,6 +401,8 @@ def dispatch(locator, resume=False):
             if not state.get("session_id"):
                 raise ValueError("The initial Codex launch did not report a session ID")
             offset = position(journal, state)
+            if receipt.exists():
+                offset = max(offset, position(journal, load(receipt)))
             pending = []
             through = offset
             size = 0
@@ -524,8 +552,9 @@ def read(locator, direction="to-codex", offset=0, scope=None):
     p, _ = connection(locator, scope)
     if direction not in ("to-rich", "to-codex"):
         raise ValueError("Unknown channel direction")
+    source = p / (direction + ".jsonl")
     out, through, size = [], offset, 2
-    for _, end, record in records(p / (direction + ".jsonl"), offset):
+    for _, end, record in records(source, offset):
         encoded_size = len(json.dumps(record, ensure_ascii=False).encode()) + (2 if out else 0)
         if out and size + encoded_size > FRAME_LIMIT:
             break
@@ -533,6 +562,21 @@ def read(locator, direction="to-codex", offset=0, scope=None):
         size += encoded_size
         through = end
     return dict(records=out, through=through, locator=str(p), instructions=handoff(p))
+
+
+def acknowledge_dispatch_read(path, offset, through):
+    # The running Codex turn inherits its locator. Rich and other readers
+    # can inspect the journal without consuming messages for that turn.
+    if os.environ.get(DISPATCH_LOCATOR) != path or through <= offset:
+        return
+    p = Path(path)
+    source = p / "to-codex.jsonl"
+    with locked(p / "dispatch-read.lock"):
+        receipt = p / "dispatch-read.json"
+        seen = position(source, load(receipt)) if receipt.exists() else 0
+        delivered = position(source, load(p / "dispatch.json"))
+        if offset <= max(seen, delivered) and through > seen:
+            save(receipt, dict(source_identity=identity(source), through=through))
 
 
 def associate_legacy(scope, legacy_folders, *, designate=False):
@@ -733,7 +777,6 @@ def main(argv=None):
     ap.add_argument("--offset", type=int, default=0)
     ap.add_argument("--scope")
     ap.add_argument("--terminal", action="store_true")
-    ap.add_argument("--terminal-root")
     ap.add_argument("--request", action="store_true")
     ap.add_argument("--legacy", action="append", default=[])
     a = ap.parse_args(argv)
@@ -759,12 +802,16 @@ def main(argv=None):
             if s or a.action not in ("connect", "send", "read"):
                 raise ValueError("--terminal applies to terminal connect, send or read")
             from codex_watch import session
-            sid, _ = session(str(Path(__file__).resolve().parents[2]))
-            terminal_session = terminal_scope(a.terminal_root, sid)
-            if not terminal_session:
+            sid, directory = session(str(Path(__file__).resolve().parents[2]), with_project=True)
+            if not sid:
                 raise ValueError("No owning Rich terminal session")
+            terminal_session = terminal_scope(terminal_project(directory), sid)
             if a.action != "connect":
                 s = dict(entity_id=TERMINAL, thread_id=terminal_session)
+                if a.locator:
+                    _, target = connection(a.locator)
+                    if target["entity_id"] == TERMINAL and target["thread_id"] == sid:
+                        s["thread_id"] = sid
         if a.action == "connect":
             result = connect(a.text or "", a.provenance or "", a.locator, s, terminal_session)
         elif a.action in ("dispatch", "resume"):
@@ -783,7 +830,9 @@ def main(argv=None):
             if not a.locator or a.offset < 0:
                 raise ValueError("read requires --locator and a nonnegative offset")
             result = read(a.locator, a.direction, a.offset, s)
-        print(json.dumps(result, ensure_ascii=False))
+        print(json.dumps(result, ensure_ascii=False), flush=True)
+        if a.action == "read" and not s and a.direction == "to-codex":
+            acknowledge_dispatch_read(result["locator"], a.offset, result["through"])
         return 0
     except (OSError, ValueError, KeyError) as e:
         print(json.dumps(dict(error=str(e))), file=sys.stderr)

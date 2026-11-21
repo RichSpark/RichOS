@@ -616,8 +616,10 @@ class World(object):
         # Each terminal scans only its own dedicated pairs. The shared review
         # state still fences verdicts by work and commit across terminal looks.
         sid = MONITOR["session"]
-        owner = channels.terminal_scope(os.path.dirname(os.path.abspath(self.config)) if self.config else None, sid)
-        dedicated, problems = self.channel_items(now, codex_state, channels.terminal_connections(owner))
+        project = os.path.dirname(os.path.abspath(self.config)) if self.config else None
+        pairs = (pair for owner in channels.terminal_scopes(project, sid)
+                 for pair in channels.terminal_connections(owner))
+        dedicated, problems = self.channel_items(now, codex_state, pairs)
         folder = os.path.dirname(to_rich)
         if channels.legacy_associated(folder) and not channels.legacy_live(folder):
             return dedicated, problems

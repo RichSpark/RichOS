@@ -161,6 +161,78 @@ class Channels(unittest.TestCase):
             items, _ = world.codex_items(10, {})
         self.assertEqual([str(path) for path, _ in items], [pair])
 
+    def test_terminal_shell_uses_lead_project_from_work_folder(self):
+        scripts = Path(c.__file__).resolve().parents[1]
+        project = self.root / "lead project"
+        work = self.root / "work checkout"
+        other = self.root / "other project"
+        for directory in (project, work, other):
+            directory.mkdir()
+        for adopted in (project, other):
+            (adopted / "orchestration.config").touch()
+        sessions = self.root / "sessions"
+        sessions.mkdir()
+        platform_session = sessions / (str(os.getpid()) + ".json")
+        env = dict(os.environ, RICHOS_SESSION_PID=str(os.getpid()),
+                   RICHOS_SESSIONS_DIR=str(sessions), RICHOS_WORKSPACES_DIR=str(self.root / "registry"),
+                   CODEX_WATCH_STATE_DIR=str(self.root / "watch"), CODEX_WATCH_CHANNELS="")
+        for key in ("RICHOS_ENTITY_ROOT", "CLAUDE_PROJECT_DIR", "RICHOS_SESSION_ID", "RICHOS_APP_STATE"):
+            env.pop(key, None)
+
+        def seat(sid, cwd):
+            platform_session.write_text(json.dumps(dict(sessionId=sid, cwd=str(cwd))))
+
+        def channel(cwd, *args, check=True):
+            return subprocess.run(["bash", str(scripts / "codex-channel.sh"), *args],
+                                  cwd=cwd, env=env, check=check, text=True, capture_output=True)
+
+        seat("original", project)
+        local = json.loads(channel(project, "connect", "--terminal", "--text", "Local task",
+                                   "--provenance", "Transcript").stdout)["locator"]
+        pair = json.loads(channel(work, "connect", "--terminal", "--text", "Out-of-folder task",
+                                  "--provenance", "Transcript").stdout)["locator"]
+        self.assertEqual(Path(pair).parent, Path(local).parent)
+        channel(other, "send", "--terminal", "--locator", local, "--id", "follow-up", "--text", "Proceed")
+        c.send(pair, "result", "Dedicated reply from the task.")
+        seat("replacement", project)
+        for expected in (1, 0):
+            result = subprocess.run(["bash", str(scripts / "codex-watch.sh"), "--tick"],
+                                    cwd=project, env=env, check=True, text=True, capture_output=True)
+            self.assertEqual(result.stdout.count("Dedicated reply from the task."), expected)
+        seat("unrelated", other)
+        refused = channel(work, "send", "--terminal", "--locator", local, "--id", "wrong", "--text", "No",
+                          check=False)
+        self.assertEqual(refused.returncode, 1)
+        self.assertIn("Connection belongs to another company or conversation", refused.stderr)
+
+    def test_resume_skips_followup_already_read_by_running_chat(self):
+        pair = self.connect(self.a)
+        before = "Read by the initial Codex turn"
+        after = "Sent after that read"
+        prompts = []
+
+        def run(binary, path, marker, state, prompt):
+            prompts.append(prompt)
+            if len(prompts) == 1:
+                state["session_id"] = "initial-chat"
+                c.save(marker, state)
+                c.send(pair, "already-read", before, scope=self.a)
+                child = dict(os.environ, RICHOS_CODEX_DISPATCH_LOCATOR=pair)
+                cli = [sys.executable, "-B", c.__file__, "read", "--locator", pair]
+                rows = json.loads(subprocess.check_output(cli, env=child))["records"]
+                self.assertEqual(rows[-1]["text"], before)
+                c.send(pair, "unread", after, scope=self.a)
+                self.assertEqual(json.loads(subprocess.check_output(cli))["records"][-1]["text"], after)
+            return 0
+
+        with mock.patch.object(c, "codex_binary", return_value="codex"), mock.patch.object(c, "run_codex", run):
+            self.assertEqual(c.dispatch(pair), 0)
+            self.assertEqual(c.dispatch(pair, resume=True), 0)
+            self.assertEqual(c.dispatch(pair, resume=True), 0)
+        self.assertEqual(len(prompts), 2)
+        self.assertNotIn(before, prompts[1])
+        self.assertIn(after, prompts[1])
+
     def test_automatic_association_keeps_legacy_replies_live(self):
         old = self.root / "legacy-live"
         old.mkdir()
