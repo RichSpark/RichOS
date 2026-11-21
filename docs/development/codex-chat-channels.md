@@ -2,7 +2,7 @@
 
 Each task gets a fresh pair of journals. A RichOS app handoff belongs to the
 conversation where Rich or Stu created it. A terminal handoff belongs to the
-Rich session that ran it. Codex starts one persisted chat for that handoff and
+terminal project's lead, across session restarts. Codex starts one persisted chat for that handoff and
 gets the original task, source and connection in its initial prompt. Follow-ups
 use that same connection.
 
@@ -14,25 +14,30 @@ disk until the app has a destination. Opening a different conversation does
 not change a connection's owner.
 
 The CLI is `richos/engine/scripts/codex-channel.sh`. The app hands Rich and
-Stu the packaged runtime command. The terminal plugin loads the
-`codex-connection` instructions.
+Stu the packaged runtime command. Terminal Rich receives the
+`codex-connection` instructions at SessionStart. RichOS adds a managed
+reference to the user's Codex instructions on launch so new Codex chats can
+find the installed helper.
 
 ```sh
 connect --text 'Original user request' --provenance 'Transcript/source reference'
 connect --terminal --text 'Original user request' --provenance 'Transcript/source reference'
 dispatch --locator CONNECTION
+resume --locator CONNECTION
 send --locator CONNECTION --id RECORDED_UNIQUE_ID --text 'Message'
 send --terminal --locator CONNECTION --id RECORDED_UNIQUE_ID --text 'Reply'
 read --locator CONNECTION
 read --locator CONNECTION --direction to-rich
 ```
 
-On a Rich-started connection, only dispatch launches the chat. If the launch
-outcome is uncertain, recover the existing chat by its locator in the
-transcript. Messages require a recorded ID. Read sent history and retry an
+Dispatch records the Codex session as it starts. For follow-ups, send saves
+the message and returns a resume command for that same chat. Resume drains
+pending messages and records the position after a successful turn. If the
+initial launch outcome is uncertain, recover the existing chat by its
+locator in the transcript. Messages require a recorded ID. Read sent history and retry an
 uncertain send with the same ID, text and reply-to. A different message needs
 a new ID. Saved replies wait for Codex's next read. The terminal watch prints
-framed replies only for its owning session.
+framed replies once for their owning project, including after a restart.
 
 ```
 automatic.json                          # installed app's automatic destination
@@ -55,7 +60,8 @@ on the originating pair. Existing work, review and landing authorization still
 apply.
 
 An upgrade preserves the old Markdown files and any prior frozen legacy
-association. The saved incoming spool imports into its owning conversation
+association. The app and terminal keep reading the old incoming files for
+Codex chats that still use them. The saved incoming spool imports into its owning conversation
 with deterministic receipt IDs, checking archived inboxes for existing
 deliveries. The old outgoing file remains accessible with a migration handoff
 and a reference in the app. It has no per-task delivery receipts. Reconcile an

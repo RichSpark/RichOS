@@ -33,7 +33,7 @@ def load(name, filename):
 stu = load('codex_walk_stu', 'stu-reminder-walk.py')
 multi = load('codex_walk_multi', 'multico-walk.py')
 StepFailed = stu.StepFailed
-STEPS = ['identity', 'first-run', 'pair', 'parallel', 'rename-restart', 'blocked', 'reconcile', 'idle']
+STEPS = ['identity', 'first-run', 'pair', 'legacy', 'parallel', 'rename-restart', 'blocked', 'reconcile', 'idle']
 DEFAULT_STEPS = STEPS
 
 
@@ -151,6 +151,11 @@ class CodexWatchWalk(stu.StuReminderWalk):
         acme = self.facts['thread']
         if self.coordinator() or self.connections():
             raise StepFailed('fresh user already has Codex coordination state')
+        guide = self.coordination + '/codex-instructions.md'
+        instructions = self.run_python('import json,sys;print(json.dumps(open(sys.argv[1]).read()))',
+                                       self.home + '/.codex/AGENTS.md')
+        if guide not in instructions:
+            raise StepFailed('a standalone Codex chat did not receive the installed guide reference')
         second = self.helper_call('connect', text='Harmless independent Codex transport test',
                                   provenance='Guest Codex-first source')['locator']
         marker = 'automatic-' + uuid.uuid4().hex[:12]
@@ -187,7 +192,8 @@ helper, home, recipient, first, other = sys.argv[1:]
 stub = pathlib.Path(home) / 'codex-fixture'
 stub.mkdir(exist_ok=True)
 binary = stub / 'codex'
-binary.write_text('#!/bin/sh\ncat >> ' + shlex.quote(recipient) + '\n')
+event = json.dumps({'type': 'thread.started', 'thread_id': 'guest-fixture-codex'})
+binary.write_text('#!/bin/sh\nprintf "%s\\n" ' + shlex.quote(event) + '\ncat >> ' + shlex.quote(recipient) + '\n')
 binary.chmod(0o700)
 env = dict(__import__('os').environ, HOME=home, CODEX_COORDINATION_ROOT=home+'/.richos-coordination')
 env['PATH'] = str(stub) + ':' + env['PATH']
@@ -219,6 +225,22 @@ print(json.dumps({'first_exit': one.returncode, 'retry_exit': two.returncode,
         self.shot('automatic-codex-conversation.png')
         return dict(automatic_destination=target, incoming_receipts=receipts, rich_dispatch=dispatch,
                     distinct_connections=len(set(paths)), codex_cli='isolated receiver fixture')
+
+    def legacy(self):
+        raw = self.coordination + '/rich-codex/to-rich.md'
+        program = 'from pathlib import Path;import sys;p=Path(sys.argv[1]);p.parent.mkdir(parents=True,exist_ok=True);p.touch();print("true")'
+        self.run_python(program, raw)
+        self.wait_fact('automatic legacy association', self.connections,
+            lambda rows: any(row.get('legacy_folder') for row in rows))
+        marker = 'legacy-live-' + uuid.uuid4().hex[:12]
+        program = 'import json,sys;open(sys.argv[1],"a").write("## Legacy Codex update\\n"+sys.argv[2]+"\\n");print("true")'
+        self.run_python(program, raw, marker)
+        records = self.wait_fact('legacy reply after association', self.inboxes,
+            lambda rows: any(marker in row['text'] for row in rows))
+        matches = [row for row in records if marker in row['text']]
+        if len(matches) != 1 or matches[0]['thread'] != self.coordinator()['thread_id']:
+            raise StepFailed('legacy reply after association reached the wrong conversation or duplicated')
+        return dict(receipt=matches[0], still_reading_original=True)
 
     def inboxes(self):
         return self.run_python('import glob,json,sys;out=[]\nfor p in glob.glob(sys.argv[1]+"/engine-state/messages/*/*/stu.jsonl"):\n for l in open(p):\n  r=json.loads(l)\n  if r.get("bridge"):out.append(dict(r,file=p,thread=p.split("/")[-2]))\nprint(json.dumps(out))', self.data)

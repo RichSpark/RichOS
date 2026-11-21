@@ -227,9 +227,10 @@ def tick(sd, now=None, out=None, json_lines=False, config="", sid=""):
         with codex_channels.locked(codex_channels.root() / "coordinator.lock"):
             printed = _legacy_tick(sd, now, out, json_lines, config)
         if sid and not json_lines:
-            lock = Path(state_root()) / "terminal" / (codex_channels.component(sid) + ".lock")
+            owner = codex_channels.terminal_scope(Path(config).parent if config else None, sid)
+            lock = Path(state_root()) / "terminal" / (codex_channels.component(owner) + ".lock")
             with codex_channels.locked(lock):
-                printed += _terminal_tick(sid, out or sys.stdout)
+                printed += _terminal_tick(owner, out or sys.stdout)
         return printed
 
 
@@ -287,7 +288,8 @@ def _legacy_tick(sd, now=None, out=None, json_lines=False, config=""):
     told = stall_watch._read_json(told_path)
     printed = 0
     for ch in channels(config):
-        if codex_channels.legacy_associated(os.path.dirname(ch)):
+        folder = os.path.dirname(ch)
+        if codex_channels.legacy_associated(folder) and not codex_channels.legacy_live(folder):
             continue
         blocks, new, told_to = look_one(ch, state.get(ch), told, now)
         for b in blocks:
@@ -405,12 +407,19 @@ def run_host_loop():
         if receiver is None:
             os.close(fd)
             return 0
+    codex_home = os.environ.get("CODEX_HOME") if state else None
     prune_state(sd)
     poll = stall_watch._env_float("CODEX_WATCH_POLL_SECONDS", POLL_SECONDS)
     reported = set()
     previous_health = None
     try:
         while alive():
+            if codex_home:
+                try:
+                    codex_channels.install_codex_instructions(codex_home)
+                    codex_home = None
+                except (OSError, ValueError) as error:
+                    codex_channels.diagnostic(codex_home, error)
             tick(sd, json_lines=True)
             if state:
                 errors = []

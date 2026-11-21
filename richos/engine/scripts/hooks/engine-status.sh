@@ -138,6 +138,9 @@ ENGINE_ROOT="$(resolve_engine_root "$SCRIPT_DIR")"
 emit_context() { # <model-summary> <operator-line>
     local summary="$1"
     local sysmsg="$2"
+    if [ -n "${RICHOS_ENTITY_ROOT_RESOLVED:-}" ] && [ -r "$ENGINE_ROOT/skills/codex-connection/SKILL.md" ]; then
+        summary="$(printf '%s\n\nInstalled engine directory: %s\n\n' "$summary" "$ENGINE_ROOT"; cat "$ENGINE_ROOT/skills/codex-connection/SKILL.md")"
+    fi
     if command -v python3 >/dev/null 2>&1; then
         SUMMARY="$summary" SYSMSG="$sysmsg" python3 - <<'PY' 2>/dev/null || true
 import json, os

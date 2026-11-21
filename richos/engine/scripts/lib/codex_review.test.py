@@ -119,6 +119,7 @@ class Reviews(unittest.TestCase):
 
     def test_world_uses_same_handler_but_managed_terminal_does_not_compete(self):
         world = rw.World.__new__(rw.World)
+        world.config = ""
         world.repos = ["work"]
         world._merge_bases = {}
         world.repo_named = lambda name: str(self.repo) if name == "work" else ""

@@ -569,7 +569,15 @@ fn start_app_codex_watch(
         python: runtime.python.clone(),
         engine: engine.to_path_buf(),
         state: data_dir.join("engine-state"),
-        environment: richos_core::review_watch::environment(&runtime.path()),
+        environment: {
+            let mut environment = richos_core::review_watch::environment(&runtime.path());
+            if let Some(home) = std::env::var_os("CODEX_HOME").filter(|p| !p.is_empty()).map(PathBuf::from)
+                .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".codex")))
+            {
+                environment.insert("CODEX_HOME".into(), home.to_string_lossy().into_owned());
+            }
+            environment
+        },
         channels: richos_core::codex_watch::installed_channel_folders(),
         sink: Arc::clone(sink),
     };

@@ -29,6 +29,9 @@ class Channels(unittest.TestCase):
         self.old = os.environ.get("CODEX_COORDINATION_ROOT")
         os.environ["CODEX_COORDINATION_ROOT"] = str(self.root / "coord with space")
         self.addCleanup(self.restore)
+        codex_home = mock.patch.dict(os.environ, {"CODEX_HOME": str(self.root / "codex-home")})
+        codex_home.start()
+        self.addCleanup(codex_home.stop)
         self.a = dict(version=1, state_root=str(self.root / "state"), entity_id="company-a", thread_id="chat-a")
         self.b = dict(self.a, entity_id="company-b", thread_id="chat-b")
 
@@ -97,7 +100,9 @@ class Channels(unittest.TestCase):
         second = c.connect("Private second task", "Second transcript", scope=self.a)["locator"]
         binary = self.root / "codex"
         transcript = self.root / "codex-transcript"
-        binary.write_text("#!/bin/sh\ncat >> " + shlex.quote(str(transcript)) + "\n")
+        event = json.dumps({"type": "thread.started", "thread_id": "codex-fixture"})
+        binary.write_text("#!/bin/sh\nprintf '%s\\n' " + shlex.quote(event) + "\ncat >> " +
+                          shlex.quote(str(transcript)) + "\n")
         binary.chmod(0o700)
         with mock.patch.dict(os.environ, {"PATH": str(self.root) + os.pathsep + os.environ["PATH"]}):
             request = c.read(first)["instructions"]
@@ -110,6 +115,90 @@ class Channels(unittest.TestCase):
         self.assertIn(first, prompt)
         self.assertNotIn(second, prompt)
         self.assertNotIn("Private second task", prompt)
+
+    def test_followup_resumes_same_id_and_reconciles_after_restart(self):
+        p = self.connect(self.a)
+        binary = self.root / "codex"
+        calls = self.root / "calls"
+        prompt = self.root / "prompt"
+        binary.write_text(
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> " + shlex.quote(str(calls)) +
+            "\nprintf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"first-session\"}'" +
+            "\ncat >> " + shlex.quote(str(prompt)) + "\n")
+        binary.chmod(0o700)
+        env = dict(os.environ, PATH=str(self.root) + os.pathsep + os.environ["PATH"])
+        cli = [sys.executable, "-B", c.__file__]
+        subprocess.run(cli + ["dispatch", "--locator", p], env=env, check=True, capture_output=True)
+        reply = c.send(p, "follow-up", "Apply only this correction", scope=self.a)
+        self.assertIn("resume", reply["resume_command"])
+        for _ in range(2):
+            subprocess.run(cli + ["resume", "--locator", p], env=env, check=True, capture_output=True)
+        rows = calls.read_text().splitlines()
+        self.assertEqual(len(rows), 2)
+        self.assertNotIn(" resume ", rows[0])
+        self.assertIn(" resume first-session ", rows[1])
+        self.assertEqual(prompt.read_text().count("Apply only this correction"), 1)
+
+    def test_terminal_restart_hears_and_reviews_its_project_pairs(self):
+        import review_watch
+        config = self.root / "project/orchestration.config"
+        config.parent.mkdir()
+        config.touch()
+        owner = c.terminal_scope(config.parent, "first-session")
+        pair = c.connect("Task", "Transcript", terminal_session=owner)["locator"]
+        c.send(pair, "outlived-terminal", "READY TO LAND: codex/fixture")
+        with mock.patch.dict(os.environ, {"CODEX_WATCH_STATE_DIR": str(self.root / "watch"),
+                                         "CODEX_WATCH_CHANNELS": ""}):
+            output = io.StringIO()
+            watcher.tick(watcher.session_dir("new-session"), config=str(config), sid="new-session", out=output)
+            self.assertIn("READY TO LAND: codex/fixture", output.getvalue())
+            self.assertEqual(watcher.tick(watcher.session_dir("later-session"), config=str(config),
+                                          sid="later-session", out=io.StringIO()), 0)
+        world = object.__new__(review_watch.World)
+        world.config = str(config)
+        with mock.patch.dict(review_watch.MONITOR, {"session": "new-session"}), \
+             mock.patch.object(world, "channel_items", side_effect=lambda _, __, rows: (list(rows), [])):
+            items, _ = world.codex_items(10, {})
+        self.assertEqual([str(path) for path, _ in items], [pair])
+
+    def test_automatic_association_keeps_legacy_replies_live(self):
+        old = self.root / "legacy-live"
+        old.mkdir()
+        raw = old / "to-rich.md"
+        raw.touch()
+        state = Path(self.a["state_root"])
+        c.save(c.root() / "automatic.json", self.a)
+        with mock.patch.dict(os.environ, {"CODEX_WATCH_CHANNELS": str(raw),
+                                         "CODEX_WATCH_STATE_DIR": str(self.root / "terminal-watch")}):
+            terminal = io.StringIO()
+            watcher.tick(watcher.session_dir("terminal"), out=terminal)
+            self.assertFalse(watcher.prepare_app_connections(str(state)))
+            with mock.patch.dict(os.environ, {"CODEX_WATCH_STATE_DIR": str(state / "codex-watch/watch")}):
+                app = io.StringIO()
+                sd = watcher.session_dir("app-host")
+                watcher.tick(sd, out=app, json_lines=True)
+                raw.write_text("## Later Codex reply\nThis still reaches Rich.\n")
+                watcher.tick(sd, out=app, json_lines=True)
+                watcher.tick(sd, out=app, json_lines=True)
+                self.assertIn("This still reaches Rich.", json.loads(app.getvalue())["text"])
+            watcher.tick(watcher.session_dir("terminal"), out=terminal)
+            watcher.tick(watcher.session_dir("terminal"), out=terminal)
+            self.assertEqual(terminal.getvalue().count("This still reaches Rich."), 1)
+
+    def test_codex_startup_guide_keeps_existing_user_instructions(self):
+        home = Path(os.environ["CODEX_HOME"])
+        home.mkdir()
+        instructions = home / "AGENTS.md"
+        instructions.write_text("Existing personal instructions.\n")
+        c.install_codex_instructions(home)
+        c.install_codex_instructions(home)
+        contents = instructions.read_text()
+        self.assertTrue(contents.startswith("Existing personal instructions.\n"))
+        self.assertEqual(contents.count("<!-- RichOS Codex coordination -->"), 1)
+        guide = c.root() / "codex-instructions.md"
+        self.assertIn(str(guide), contents)
+        self.assertIn(str(Path(c.__file__).resolve()), guide.read_text())
+        self.assertIn("connect --text", guide.read_text())
 
     def test_lost_response_retry_and_intentional_identical_messages(self):
         p = self.connect(self.a)
