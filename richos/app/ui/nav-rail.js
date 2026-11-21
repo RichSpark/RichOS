@@ -344,6 +344,26 @@
     setScribeTools,
     setIdentity,
     showPage,
+    registerToolPage(name, title, surface, { onShow, onHide } = {}) {
+      const crumb = document.getElementById("page-crumb");
+      pages.set(name, {
+        show() {
+          window.RichHome?.hide?.(name);
+          surface.hidden = false;
+          document.body.classList.add("page-open");
+          crumb.textContent = title;
+          crumb.hidden = false;
+          surface.querySelector("h1").focus({ preventScroll: true });
+          onShow?.();
+        },
+        hide() {
+          surface.hidden = true;
+          document.body.classList.remove("page-open");
+          crumb.hidden = true;
+          onHide?.();
+        },
+      });
+    },
     get page() {
       return page;
     },

@@ -184,6 +184,11 @@
 		L453.3,237.6z"/><path d="M530.4,206.9c-19-47.6-53.2-89.2-96.3-117.1l25-38.6c51.9,33.6,91.3,81.5,114.1,138.7
 		L530.4,206.9z"/></g></g></svg><span class="nr-dot" aria-hidden="true" hidden></span>
           </button>
+          <button type="button" class="nr-item" id="nr-brief" data-item="brief" data-tip="RichBrief" hidden aria-label="RichBrief"><svg viewBox="0 0 20 20" class="nr-glyph" aria-hidden="true" focusable="false"><g transform="translate(10 10.4) scale(0.0766) translate(-462 -163.5)"><path fill="currentColor" fill-rule="evenodd" d="M462,46c-60.8,0-110,36.9-110,82.5c0,40.1,38.2,73.6,88.9,81c6.2,2.3,19.8,9.7,14.7,23.8
+	c-6.6,18-6.2,17.6-12.6,35.6c-1.4,4.1-2.8,8.2-4.5,12.8c1.1-0.6,1.6-0.8,2-1.1c6.5-3.7,12.7-8.1,18.6-12.6
+	c16.3-12.4,45.5-36.9,58.6-52.8l32-37c13.9-13.8,22.2-31,22.2-49.7C572,82.9,522.8,46,462,46z M397,151c-12.2,0-22-9.8-22-22
+	s9.8-22,22-22s22,9.8,22,22S409.2,151,397,151z M462,151c-12.2,0-22-9.8-22-22s9.8-22,22-22s22,9.8,22,22S474.2,151,462,151z
+	 M527,151c-12.2,0-22-9.8-22-22s9.8-22,22-22s22,9.8,22,22S539.2,151,527,151z"/></g></svg><span class="nr-dot" id="nr-brief-dot" aria-hidden="true" hidden></span></button>
           <button type="button" class="nr-item" id="nr-pass" data-item="pass" data-tip="RichPass" aria-label="RichPass">
             <svg viewBox="0 0 20 20" class="nr-glyph" aria-hidden="true" focusable="false"><g transform="translate(10 10) scale(0.06862) translate(595.56 -93.30)"><g transform="rotate(135)" fill="currentColor"><path d="M487,198c0,0-1.5,1.5-3.2,3.2c-1.8,1.8-3.8,3.8-5,4.9L472,213l-6.8,6.8l-6.8,6.8l-6.8,6.8
 	c-0.5,0.5-1,1.1-1.5,1.8c-0.4,0.6-0.8,1.3-1.1,2c-0.3,0.7-0.5,1.4-0.7,2.2s-0.2,1.5-0.2,2.3v27.5v27.5v27.5v27.5
@@ -712,6 +717,44 @@
                 <button type="button" class="rp-sw" role="switch" aria-checked="false" aria-labelledby="rf-windowsKeys-label" aria-describedby="rf-windowsKeys-hint" data-rf-setting="windowsKeys" disabled></button>
               </div>
               <p id="rf-settings-status" class="rp-prot-p" role="status" hidden></p>
+            </section>
+          </div>
+        </section>
+
+        <section id="brief-page" class="rp-page" hidden aria-labelledby="bp-title">
+          <div class="bp-col">
+            <div class="bp-ttl"><img src="assets/app-icons/richbrief-128.png" alt=""><h1 id="bp-title" tabindex="-1">RichBrief</h1></div>
+            <p class="bp-lede">Meeting notes, written for you after every call</p>
+            <p class="bp-body">RichBrief listens to your call on this Mac and, when it ends, Rich hands you the notes: <b>what was decided, what you owe and what everyone else promised.</b> No bot joins the meeting.</p>
+
+            <div class="bp-act" id="bp-act">
+              <button type="button" class="bp-btn bp-btn-gold" id="bp-start"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M19 10v1a7 7 0 0 1-14 0v-1"/><path d="M12 18v4"/></svg>Start meeting notes</button>
+              <button type="button" class="bp-btn bp-btn-stop" id="bp-stop" hidden><span class="bp-sq" aria-hidden="true"></span>Stop meeting notes</button>
+              <span class="bp-cap" id="bp-cap">Or do nothing. RichBrief asks when a call starts.</span>
+              <span class="bp-live" id="bp-live" hidden><span class="bp-dot" aria-hidden="true"></span><span id="bp-live-t">Starting…</span></span>
+            </div>
+
+            <div class="bp-state" id="bp-ready" hidden>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/></svg>
+              <div><b role="status">Your notes are ready</b><span>Rich put them in the meeting’s chat.</span></div>
+              <button type="button" class="bp-btn" id="bp-open">Open the notes</button>
+            </div>
+
+            <p id="bp-status" class="bp-status" role="status" hidden></p>
+            <div id="bp-cal" hidden></div>
+
+            <div class="bp-facts">
+              <div class="bp-fact"><span class="bp-fi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.268 21a2 2 0 0 0 3.464 0"/><path d="M3.262 15.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.673C19.41 13.956 18 12.499 18 8A6 6 0 0 0 6 8c0 4.499-1.411 5.956-2.738 7.326"/></svg></span>
+                <div><b>It notices the call</b><span>When a call starts on this Mac or a meeting on your calendar is about to, RichBrief asks once: Take Notes or Not this one.</span></div></div>
+              <div class="bp-fact"><span class="bp-fi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M2 20h20"/></svg></span>
+                <div><b>Recorded and transcribed on this Mac</b><span>The recording is turned into a transcript right here and both are saved on this Mac.</span></div></div>
+              <div class="bp-fact"><span class="bp-fi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v5h6"/><path d="M8 13h8M8 17h5"/></svg></span>
+                <div><b>The notes arrive as a message from Rich</b><span>A short summary, the decisions, your actions, what others committed to and what is still open, in a chat of its own. Ask Rich to change them like anything else.</span></div></div>
+            </div>
+
+            <section class="bp-set" aria-label="RichBrief settings">
+              <div class="bp-row"><div><b id="bp-pause-l">Pause meeting prompts</b><span>RichBrief stops asking when a call starts. A recording that is already running keeps going.</span></div>
+                <button type="button" class="rp-sw" id="bp-pause" role="switch" aria-checked="false" aria-labelledby="bp-pause-l"></button></div>
             </section>
           </div>
         </section>

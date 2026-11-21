@@ -234,6 +234,61 @@ async function main() {
     });
   }
 
+  await run.check("RichBrief sits below RichScribe and controls the same recording and pause", async () => {
+    const page = await open("dark", {});
+    assertEqual(await page.locator("#nr-brief").count(), 1);
+    assertEqual(await page.locator("#nr-scribe + #nr-brief + #nr-pass").count(), 1);
+    await page.click("#nr-brief");
+    assertEqual(await page.getAttribute("#nr-brief", "aria-current"), "page");
+    await page.click("#bp-start");
+    await page.locator("#bp-stop").waitFor();
+    await page.locator("#nr-brief-dot").waitFor();
+    assert((await text(page, "#bp-live")).startsWith("Recording · "), "the page shows the recording clock");
+    await page.click("#bp-pause");
+    await page.locator("#mn-paused-chip").waitFor();
+    await page.click("#nr-chats");
+    assert(await page.locator("#nr-brief-dot").isVisible(), "recording stays visible outside the page");
+    await page.click("#nr-brief");
+    await page.click("#bp-stop");
+    await page.locator("#nr-brief-dot").waitFor({ state: "hidden" });
+    await page.click("#mn-paused-chip");
+    await page.locator("#bp-pause[aria-checked=false]").waitFor();
+    assertEqual((await calls(page)).filter(c => c.cmd !== "meeting_state"), [
+      { cmd: "meeting_start_or_stop" },
+      { cmd: "meeting_set_paused", paused: true },
+      { cmd: "meeting_start_or_stop" },
+      { cmd: "meeting_set_paused", paused: false },
+    ]);
+    await page.close();
+  });
+
+  await run.check("RichBrief shows preparation, opens the delivered chat and reconnects a calendar", async () => {
+    const notice = { vendor: "google", account: "calendar@example.com" };
+    const page = await open("light", { calendarRecovery: [notice] });
+    assertEqual(await page.locator("#nr-brief").count(), 1);
+    await page.click("#nr-brief");
+    await page.locator("#bp-cal button").click();
+    await page.locator("#bp-cal").getByText("Finish signing in in your browser…").waitFor();
+    await page.evaluate(() => window.__RICHOS_MOCK__.meetingSet({ processing: "preparing" }));
+    assertEqual(await text(page, "#bp-status"), "Preparing your meeting notes…");
+    assert(await page.locator("#bp-ready").isHidden(), "preparation alone does not prove delivery");
+    await page.evaluate(() => {
+      const mock = window.__RICHOS_MOCK__;
+      const turn = mock.simulateAccountNote("other", "Here are your meeting notes.", "acme");
+      mock.meetingSet({ processing: null, notesReady: { thread: "acme", turn } });
+    });
+    await page.click("#bp-open");
+    await page.getByText("Here are your meeting notes.", { exact: true }).waitFor();
+    assertEqual(await page.getAttribute("#nr-chats", "aria-current"), "page");
+    await page.close();
+  });
+
+  await run.check("RichBrief is absent when meeting notes are unavailable", async () => {
+    const page = await open("light", { available: false });
+    assertEqual(await page.locator("#nr-brief[hidden]").count(), 1);
+    await page.close();
+  });
+
   await run.check("no renderer errors", async () => assertEqual(errors, []));
   await browser.close();
   process.exitCode = run.report() ? 1 : 0;

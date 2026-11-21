@@ -37,6 +37,32 @@
   let registered = false;
   let ticker = null;
   const retrying = new Set();
+  const $ = id => document.getElementById(id);
+  const page = $("brief-page");
+  const icon = $("nr-brief");
+  let pending = null;
+
+  function pageStatus(text) {
+    const status = $("bp-status");
+    status.textContent = text;
+    status.hidden = !text;
+  }
+
+  async function runPageAction(command, args, progress) {
+    if (pending) return;
+    pending = progress;
+    paint();
+    try {
+      const state = await bridge.invoke(command, args);
+      if (state) apply(state);
+      pending = null;
+      paint();
+    } catch (error) {
+      pending = null;
+      paint();
+      pageStatus(String(error));
+    }
+  }
 
   async function call(cmd, args) {
     try { return await bridge.invoke(cmd, args || {}); }
@@ -86,6 +112,49 @@
     root.querySelector("#mn-pause").setAttribute("aria-checked", String(!!(st && st.paused)));
   }
 
+  function paintClock() {
+    paintRows();
+    if (page && st?.recording) {
+      $("bp-live-t").textContent = st.startedAt
+        ? "Recording · " + clock((Date.now() - st.startedAt) / 1000)
+        : "Starting…";
+    }
+  }
+
+  function paintPage() {
+    if (!page) return;
+    const recording = !!st?.recording;
+    icon.hidden = !st?.available;
+    $("nr-brief-dot").hidden = !recording;
+    icon.setAttribute("aria-label", recording ? "RichBrief, recording a meeting" : "RichBrief");
+    icon.dataset.tip = recording ? "RichBrief · recording" : "RichBrief";
+
+    const action = $(recording ? "bp-stop" : "bp-start");
+    const other = $(recording ? "bp-start" : "bp-stop");
+    const movingFocus = document.activeElement === other;
+    action.hidden = false;
+    other.hidden = true;
+    $("bp-cap").hidden = recording || !!st?.paused;
+    $("bp-live").hidden = !recording;
+    $("bp-pause").setAttribute("aria-checked", String(!!st?.paused));
+    $("bp-ready").hidden = !st?.notesReady || recording;
+    for (const control of [action, $("bp-pause"), $("bp-open")]) {
+      if (pending) control.setAttribute("aria-disabled", "true");
+      else control.removeAttribute("aria-disabled");
+    }
+    if (movingFocus && !page.hidden) action.focus({ preventScroll: true });
+    pageStatus(pending || processingText() || "");
+  }
+
+  function processingText() {
+    if (st?.processing === "waiting-model") return "Recording saved. Finishing setup for your notes…";
+    if (st?.processing === "preparing") return "Preparing your meeting notes…";
+    if (st?.processing === "transcript-failed" || st?.processing === "notes-failed") {
+      return "RichBrief couldn’t prepare your meeting notes.";
+    }
+    return "";
+  }
+
   function fillRetry(slot) {
     const id = slot.dataset.meetingRetry;
     const pending = retrying.has(id);
@@ -127,33 +196,35 @@
     return slot;
   }
 
-  let lastCalendarRecovery = "";
-  function paintCalendarRecovery() {
-    const host = document.getElementById("mn-calendar-recovery");
+  const calendarSnapshots = new WeakMap();
+  function paintCalendarRecovery(host, onPage = false) {
     if (!host) return;
     const notices = st?.calendarRecovery || [];
     const key = JSON.stringify(notices);
-    if (lastCalendarRecovery === key) return;
-    lastCalendarRecovery = key;
+    if (calendarSnapshots.get(host) === key) return;
+    calendarSnapshots.set(host, key);
     host.replaceChildren();
     host.hidden = !notices.length;
     const signingIn = notices.some(notice => notice.reconnecting);
     for (const notice of notices) {
       const name = notice.vendor === "google" ? "Google Calendar" : "Microsoft Calendar";
       const card = document.createElement("div");
-      card.className = "tl-notice";
-      const text = document.createElement("p");
+      card.className = onPage ? "bp-notice" : "tl-notice";
+      const text = document.createElement(onPage ? "b" : "p");
       text.className = "tl-notice-body";
       text.setAttribute("role", "status");
-      text.textContent = name + " is disconnected, so meetings on this account won’t prompt from the calendar.";
+      text.textContent = onPage ? name + " is disconnected"
+        : name + " is disconnected, so meetings on this account won’t prompt from the calendar.";
       const why = document.createElement("p");
       why.className = "tl-notice-body";
-      why.textContent = "Calls are still detected from the microphone and Start meeting notes is in Settings.";
+      why.textContent = onPage
+        ? "Meetings on this account won’t prompt from the calendar. Calls are still detected from the microphone and Start meeting notes is right here."
+        : "Calls are still detected from the microphone and Start meeting notes is in Settings.";
       const actions = document.createElement("div");
       actions.className = "desk-card-actions";
       const button = document.createElement("button");
       button.type = "button";
-      button.className = "desk-btn desk-btn--primary";
+      button.className = onPage ? "bp-btn bp-btn-gold" : "desk-btn desk-btn--primary";
       // Its disabled label carries the current sign-in status.
       button.style.opacity = notice.reconnecting ? "1" : "";
       button.textContent = notice.reconnecting ? "Finish signing in in your browser…" : "Reconnect " + name;
@@ -206,8 +277,10 @@
   }
 
   function paint() {
-    paintRows();
-    paintCalendarRecovery();
+    paintClock();
+    paintPage();
+    paintCalendarRecovery($("mn-calendar-recovery"));
+    paintCalendarRecovery($("bp-cal"), true);
     for (const slot of document.querySelectorAll("[data-meeting-retry]")) fillRetry(slot);
     const chip = document.getElementById("mn-paused-chip");
     if (chip) chip.hidden = !(st && st.available && st.paused);
@@ -220,12 +293,34 @@
         : "Preparing your meeting notes…";
     }
     // The row's time moves only while a recording runs.
-    if (st && st.recording && !ticker) ticker = setInterval(paintRows, 1000);
+    if (st && st.recording && !ticker) ticker = setInterval(paintClock, 1000);
     if (!(st && st.recording) && ticker) { clearInterval(ticker); ticker = null; }
   }
 
   const chip = document.getElementById("mn-paused-chip");
   if (chip) chip.addEventListener("click", async () => apply(await call("meeting_set_paused", { paused: false })));
+  if (page) {
+    window.RichNavRail.registerToolPage("brief", "RichBrief", page, { onShow: read });
+    $("bp-start").addEventListener("click", () => runPageAction("meeting_start_or_stop", {}, "Starting…"));
+    $("bp-stop").addEventListener("click", () => runPageAction("meeting_start_or_stop", {}, "Stopping…"));
+    $("bp-pause").addEventListener("click", () => runPageAction("meeting_set_paused", { paused: !st?.paused }, "Saving…"));
+    $("bp-open").addEventListener("click", async () => {
+      if (pending || !st?.notesReady) return;
+      const target = st.notesReady;
+      pending = "Opening the notes…";
+      paint();
+      try {
+        await window.RichOpenMeetingNotes(target);
+      } catch (error) {
+        pending = null;
+        paint();
+        pageStatus(String(error));
+        return;
+      }
+      pending = null;
+      paint();
+    });
+  }
   if (bridge.listen) bridge.listen("meeting-state", event => apply(event && event.payload !== undefined ? event.payload : event));
   read();
 

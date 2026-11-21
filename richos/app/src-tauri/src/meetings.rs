@@ -110,6 +110,8 @@ pub struct MeetingState {
     pub started_at: Option<u64>,
     /// "preparing", "transcript-failed", "notes-failed", or none.
     pub processing: Option<String>,
+    #[serde(rename = "notesReady")]
+    pub notes_ready: Option<SavedRetry>,
     #[serde(rename = "retryTurns")]
     pub retry_turns: Vec<String>,
     #[serde(rename = "calendarRecovery")]
@@ -350,6 +352,7 @@ struct Inner {
     /// Recorders told to stop that are still finishing their files ([`take_run`]).
     draining: Vec<CaptureRun>,
     processing: Option<String>,
+    notes_ready: Option<SavedRetry>,
     retry_turns: BTreeMap<String, PathBuf>,
     /// Holding this keeps the watcher's stdin open; dropping it ends the watcher.
     watcher_stdin: Option<ChildStdin>,
@@ -427,6 +430,7 @@ pub fn start(app: &AppHandle) {
             capture: None,
             draining: Vec::new(),
             processing: None,
+            notes_ready: None,
             retry_turns: BTreeMap::new(),
             watcher_stdin: None,
             watcher_pid: None,
@@ -725,6 +729,7 @@ impl Meetings {
             recording: inner.capture.is_some(),
             started_at: inner.capture.as_ref().filter(|c| c.recording).map(|c| c.started_at),
             processing: inner.processing.clone(),
+            notes_ready: inner.notes_ready.clone(),
             retry_turns: inner.retry_turns.keys().cloned().collect(),
             calendar_recovery: inner.calendar_recovery.iter().flat_map(|(vendor, accounts)| {
                 accounts.iter().map(|account| {
@@ -928,6 +933,7 @@ impl Meetings {
         {
             let mut inner = self.inner.lock().unwrap();
             inner.monitor.exclude_pid(pid as i32);
+            inner.notes_ready = None;
             inner.capture = Some(CaptureRun {
                 pid,
                 started_at: now_millis(),
@@ -1274,7 +1280,13 @@ impl Meetings {
     }
 
     fn set_processing(&self, what: Option<&str>) {
-        self.inner.lock().unwrap().processing = what.map(str::to_string);
+        {
+            let mut inner = self.inner.lock().unwrap();
+            inner.processing = what.map(str::to_string);
+            if what.is_some() {
+                inner.notes_ready = None;
+            }
+        }
         self.publish_state();
     }
 
@@ -1364,11 +1376,16 @@ impl Meetings {
                 let brief = std::fs::read_to_string(brief_dir.join(meeting_notes::BRIEF_FILE)).unwrap_or_default();
                 let files: Vec<PathBuf> = std::iter::once(brief_dir.join(meeting_notes::BRIEF_FILE)).chain(transcripts.iter().cloned()).collect();
                 match self.say(facts, &meeting_notes::message_text(&brief, facts), &files) {
-                    Ok(_) => {
+                    Ok(delivery) => {
                         state.delivered = true;
                         eprintln!("[richos] meeting notes: Rich said the notes in the conversation ({})", session.display());
                         logged("recording the delivery", meeting_notes::write_state(session, &state));
-                        self.set_processing(None);
+                        {
+                            let mut inner = self.inner.lock().unwrap();
+                            inner.notes_ready = Some(delivery);
+                            inner.processing = None;
+                        }
+                        self.publish_state();
                     }
                     Err(why) => {
                         eprintln!("[richos] meeting notes: the brief is written but Rich could not say it: {why}");
@@ -1941,7 +1958,7 @@ pub fn meeting_reconnect_calendar(app: AppHandle, vendor: String, account: Strin
 pub fn meeting_state(app: AppHandle) -> MeetingState {
     match meetings(&app) {
         Ok(m) => m.state(),
-        Err(_) => MeetingState { available: false, paused: false, recording: false, started_at: None, processing: None, retry_turns: Vec::new(), calendar_recovery: Vec::new() },
+        Err(_) => MeetingState { available: false, paused: false, recording: false, started_at: None, processing: None, notes_ready: None, retry_turns: Vec::new(), calendar_recovery: Vec::new() },
     }
 }
 
