@@ -752,6 +752,10 @@ impl richos_core::work_host::WorkNotifier for WorkNotice {
     }
 
 
+    fn assignment_activity_changed(&self) {
+        drop(self.app.emit("rich://assignment-activity-changed", ()));
+    }
+
     /// **§2.4a — the settle-while-closed end state.** The last registered assignment has
     /// ended and no window is open, so the app quits itself.
     ///
@@ -5147,8 +5151,12 @@ fn get_assignments(state: State<AppState>, thread_id: String) -> Result<serde_js
         &thread_id,
     )
     .map_err(|e| e.to_string())?;
+    let states = state.work.assignment_activity(&rows);
     Ok(serde_json::json!({
-        "assignments": rows.iter().map(|row| {
+        "assignments": rows.iter().zip(states).map(|(row, activity)| {
+            use richos_core::assignment::AssignmentState;
+            let status = activity.state;
+            let current_detail = status.filter(|state| *state != AssignmentState::Unknown);
             serde_json::json!({
                 "id": row.id,
                 "title": row.title,
@@ -5167,8 +5175,8 @@ fn get_assignments(state: State<AppState>, thread_id: String) -> Result<serde_js
                 // It is not an identifier he is ever shown — it never reaches a sentence,
                 // the same way `id` above never does.
                 "turnRef": row.instruction_ledger_ref,
-                "state": row.reported_state().unwrap_or(richos_core::assignment::AssignmentState::Interrupted).as_str(),
-                "detail": row.reported_state().map(|_|row.detail.as_str()),
+                "state": status.unwrap_or(AssignmentState::Interrupted).as_str(),
+                "detail": current_detail.map(|_|row.detail.as_str()),
                 // **THE DETAIL TELLS HIM WHAT TO DO** (sign in, a helper he may stop, an answer
                 // he owes), so Under the hood shows it without Technical view (hunt 57, finding 11).
                 // So does Rich's waiting sentence while a teammate works (review of 3b91f1223).

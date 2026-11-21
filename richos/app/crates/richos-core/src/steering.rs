@@ -856,6 +856,12 @@ pub trait TurnCancel: Send + Sync {
         Ok(false)
     }
 
+    /// Deliver live input and observe the provider's acknowledgement that it began running.
+    fn send_observed_input(&self, id: &str, text: &str, _started: Option<Box<dyn FnOnce() + Send>>,
+        completed: Box<dyn FnOnce(InputOutcome) + Send>) -> Result<bool, String> {
+        self.send_input(id, text, completed)
+    }
+
     /// Scope cancellation across preparation and the gaps between wire prompts.
     fn begin_operation(&self) {}
     fn end_operation(&self) {}

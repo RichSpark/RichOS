@@ -261,6 +261,7 @@ pub mod work_status;
 ///                    back end.
 pub mod app_workers;
 pub mod assignment;
+pub mod assignment_activity;
 pub mod assignment_tools;
 pub mod status_tools;
 pub mod search_tools;
