@@ -617,6 +617,14 @@ class SettingsButtonToggles(unittest.TestCase):
         self.assertTrue(walk.settings_open(merged))
         self.assertFalse(walk.settings_open('how it looks to me, working with Rich'))
 
+    def test_one_stray_ocr_character_before_the_grouped_headings(self):
+        heading = 'HOW IT LOOKS WORKING WITH RICH YOUR COMPANY AND TEAM'
+        # Both stable 1.3.6 first-install frames read the icon beside the headings as Q.
+        frame = f'Q {heading}\nUpdates\nRichOS 1.3.6 is up to date.\n'
+        self.assertTrue(walk.settings_open(frame))
+        self.assertFalse(walk.settings_open(f'QR {heading}'))
+        self.assertFalse(walk.settings_open('Q how it looks to me, working with Rich'))
+
 
 class UpdateVerdict(unittest.TestCase):
     FAILED = 'RichOS could not prepare this update.'
