@@ -14,6 +14,82 @@ static const int VideoPlaying = 1;
 static const int VideoEnded = 2;
 typedef void (*RichSplashPhase)(int, double);
 typedef void (*RichSplashMetrics)(uint64_t, uint64_t, uint64_t);
+typedef void (*RichSplashAudio)(int);
+typedef enum {
+    SoundDisabled,
+    SoundScheduled,
+    SoundPrepareFailed,
+    SoundDeadlineMissed,
+    SoundScheduleRefused,
+    SoundFinished,
+    SoundInterrupted,
+    SoundCompletionTimedOut,
+} SoundOutcome;
+
+// Sound is owned by the launch cue even after the native window is removed.
+@interface RichSplashCue : NSObject <AVAudioPlayerDelegate>
+@property(nonatomic, strong) AVAudioPlayer *audio;
+@property(nonatomic, strong) dispatch_queue_t queue;
+@property(nonatomic) RichSplashAudio report;
+@end
+
+@implementation RichSplashCue
+- (void)finish:(SoundOutcome)outcome {
+    if (!self.audio) return;
+    self.audio.delegate = nil;
+    [self.audio stop];
+    self.audio = nil;
+    if (self.report) self.report(outcome);
+}
+
+- (void)audioPlayerDidFinishPlaying:(AVAudioPlayer *)audio successfully:(BOOL)success {
+    dispatch_async(self.queue, ^{ [self finish:success ? SoundFinished : SoundInterrupted]; });
+}
+
+- (void)audioPlayerDecodeErrorDidOccur:(AVAudioPlayer *)audio error:(NSError *)error {
+    dispatch_async(self.queue, ^{ [self finish:SoundInterrupted]; });
+}
+@end
+
+static void scheduleCue(NSString *path, double length, CMTime anchor, RichSplashAudio report) {
+    dispatch_queue_t queue = dispatch_queue_create("com.richos.splash.sound",
+        dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INITIATED, 0));
+    dispatch_async(queue, ^{
+        if (!path) {
+            if (report) report(SoundDisabled);
+            return;
+        }
+        AVAudioPlayer *audio = [[AVAudioPlayer alloc] initWithContentsOfURL:[NSURL fileURLWithPath:path] error:nil];
+        if (![audio prepareToPlay]) {
+            if (report) report(SoundPrepareFailed);
+            return;
+        }
+
+        // Start the cue 130 ms before the bar lands, 800 ms from the end.
+        NSTimeInterval deviceTime = audio.deviceCurrentTime;
+        double elapsed = CMTimeGetSeconds(CMTimeSubtract(CMClockGetTime(CMClockGetHostTimeClock()), anchor));
+        double lead = length - 0.930 - elapsed;
+        if (lead <= 0) {
+            if (report) report(SoundDeadlineMissed);
+            return;
+        }
+        RichSplashCue *cue = [RichSplashCue new];
+        cue.audio = audio;
+        cue.queue = queue;
+        cue.report = report;
+        audio.delegate = cue;
+        if (![audio playAtTime:deviceTime + lead]) {
+            if (report) report(SoundScheduleRefused);
+            return;
+        }
+
+        // Keep the cue alive until the delegate completes it. The guard also
+        // releases the device if a detached output never sends a callback.
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)((lead + audio.duration + 2.0) * NSEC_PER_SEC)),
+                       queue, ^{ [cue finish:SoundCompletionTimedOut]; });
+        if (report) report(SoundScheduled);
+    });
+}
 
 @interface RichSplashCover : NSView
 @property(nonatomic, copy) dispatch_block_t lostWindow;
@@ -55,8 +131,9 @@ static NSRect contentOnScreen(NSView *view) {
     AVAssetReader *_reader;
     AVAssetReaderTrackOutput *_frames;
     CMSampleBufferRef _preroll[PrerollFrames];
-    int _frameIndex;
+    int _frameIndex;                 // preparation, then media queue
     int _frameCount;
+    atomic_int _queuedFrames;
     id _endObserver;
     id _readyObserver;
     id _failedObserver;
@@ -71,12 +148,13 @@ static NSRect contentOnScreen(NSView *view) {
 @property(nonatomic, strong) AVSampleBufferDisplayLayer *video;
 @property(nonatomic, strong) id<AVQueuedSampleBufferRendering> renderer;
 @property(nonatomic, strong) dispatch_queue_t timeline;
+@property(nonatomic, strong) dispatch_queue_t media;
 @property(nonatomic, strong) AVSampleBufferRenderSynchronizer *clock;
-@property(nonatomic, strong) AVAudioPlayer *sound;
 @property(nonatomic, copy) NSString *soundPath;
 @property(nonatomic) double anchorMs;
 @property(nonatomic) RichSplashPhase phase;
 @property(nonatomic) RichSplashMetrics metrics;
+@property(nonatomic) RichSplashAudio audioOutcome;
 - (instancetype)initWithPack:(NSString *)path frames:(int)count;
 - (BOOL)prepare;
 - (void)attach:(NSView *)view;
@@ -108,6 +186,9 @@ static NSRect contentOnScreen(NSView *view) {
     if (![_reader startReading]) return nil;
     _frameCount = count;
     atomic_init(&_status, VideoPreroll);
+    atomic_init(&_queuedFrames, 0);
+    _media = dispatch_queue_create("com.richos.splash.media",
+        dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INITIATED, 0));
     return self;
 }
 
@@ -163,30 +244,37 @@ static NSRect contentOnScreen(NSView *view) {
     }
 }
 
+- (void)stopFeeding {
+    dispatch_async(self.media, ^{ [self.renderer stopRequestingMediaData]; });
+}
+
 // Called on the timeline queue.
 - (void)fail:(int)reason {
     int status = self.status;
     if (status != VideoPreroll && status != VideoPlaying) return;
     atomic_store(&_status, VideoFailed);
-    [self.renderer stopRequestingMediaData];
+    [self stopFeeding];
     [self.clock setRate:0 time:self.clock.currentTime];
-    [self.sound stop];
     self.phase(reason, self.anchorMs);
 }
 
 - (void)feed {
     __weak RichSplashPlayer *weak = self;
-    [self.renderer requestMediaDataWhenReadyOnQueue:self.timeline usingBlock:^{
+    [self.renderer requestMediaDataWhenReadyOnQueue:self.media usingBlock:^{
         RichSplashPlayer *player = weak;
         if (!player) return;
         while (player.renderer.readyForMoreMediaData && player->_frameIndex < player->_frameCount && player.status != VideoFailed) {
             @autoreleasepool {
                 CMSampleBufferRef sample = [player nextSample];
                 if (!sample) {
-                    [player fail:VideoFailed];
-                    break;
+                    dispatch_async(player.timeline, ^{ [player fail:VideoFailed]; });
+                    [player.renderer stopRequestingMediaData];
+                    return;
                 }
-                [player.renderer enqueueSampleBuffer:sample];
+                if (player.status != VideoFailed) {
+                    [player.renderer enqueueSampleBuffer:sample];
+                    atomic_fetch_add(&player->_queuedFrames, 1);
+                }
                 CFRelease(sample);
             }
         }
@@ -194,10 +282,12 @@ static NSRect contentOnScreen(NSView *view) {
     }];
 }
 
-// Everything that advances playback runs on the timeline queue. The initial
-// window layout must reach AppKit before this clock consumes any frames.
+// The window must reach AppKit before the clock consumes video frames. Audio
+// takes the same clock anchor, with its own queue so the video feed cannot delay it.
 - (void)start {
-    if (!_visible || !_ready || self.status != VideoPreroll) return;
+    if (!_visible || !_ready) return;
+    int expected = VideoPreroll;
+    if (!atomic_compare_exchange_strong(&_status, &expected, VideoPlaying)) return;
     CMTime time = CMClockGetTime(CMClockGetHostTimeClock());
     self.anchorMs = NSDate.date.timeIntervalSince1970 * 1000;
     __weak RichSplashPlayer *weak = self;
@@ -205,9 +295,10 @@ static NSRect contentOnScreen(NSView *view) {
                                                     queue:self.timeline usingBlock:^{
         RichSplashPlayer *player = weak;
         if (player && player.status == VideoPlaying) {
-            if (player->_frameIndex != player->_frameCount) {
+            int queuedFrames = atomic_load(&player->_queuedFrames);
+            if (queuedFrames != player->_frameCount) {
                 fprintf(stderr, "[richos] native splash: renderer accepted %d of %d frames at the endpoint\n",
-                        player->_frameIndex, player->_frameCount);
+                        queuedFrames, player->_frameCount);
                 [player fail:VideoLateFrames];
                 return;
             }
@@ -225,10 +316,9 @@ static NSRect contentOnScreen(NSView *view) {
             }
         }
     }];
-    atomic_store(&_status, VideoPlaying);
     [self.clock setRate:1 time:kCMTimeZero atHostTime:time];
+    scheduleCue(self.soundPath, (double)_frameCount / FPS, time, self.audioOutcome);
     self.phase(VideoPlaying, self.anchorMs);
-    [self feed];
 
     // If the page never painted, the final frame may stay briefly while it loads.
     // A failed WebView cannot leave the native cover permanently in the window.
@@ -237,26 +327,6 @@ static NSRect contentOnScreen(NSView *view) {
         RichSplashPlayer *player = weak;
         if (player && !player->_removing) [player removeAnimated:NO completion:^{}];
     });
-
-    // Prepare the existing WAV cue after the first frames. It uses the same clock as the
-    // authored bar landing, 800 ms before the end with the sound starting 130 ms earlier.
-    if (self.soundPath) {
-        NSString *path = self.soundPath;
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(NSEC_PER_SEC / 2)),
-                       dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-            AVAudioPlayer *audio = [[AVAudioPlayer alloc] initWithContentsOfURL:[NSURL fileURLWithPath:path] error:nil];
-            if (![audio prepareToPlay]) return;
-            RichSplashPlayer *owner = weak;
-            if (!owner) return;
-            dispatch_async(owner.timeline, ^{
-                RichSplashPlayer *player = weak;
-                if (!player || player.status != VideoPlaying) return;
-                double left = CMTimeGetSeconds(CMTimeSubtract(time, CMClockGetTime(CMClockGetHostTimeClock())))
-                    + (double)player->_frameCount / FPS - 0.930;
-                if (left > 0 && [audio playAtTime:audio.deviceCurrentTime + left]) player.sound = audio;
-            });
-        });
-    }
 }
 
 - (void)rendererReady {
@@ -344,6 +414,7 @@ static NSRect contentOnScreen(NSView *view) {
         }];
     for (int i = 0; i < PrerollFrames; i++) {
         [self.renderer enqueueSampleBuffer:_preroll[i]];
+        atomic_fetch_add(&_queuedFrames, 1);
         CFRelease(_preroll[i]);
         _preroll[i] = NULL;
     }
@@ -371,6 +442,9 @@ static NSRect contentOnScreen(NSView *view) {
         RichSplashPlayer *player = weak;
         if (player) dispatch_async(player.timeline, ^{ [player fail:VideoSurfaceLost]; });
     };
+    // Read ahead while the first frame becomes ready. The renderer controls its
+    // own backpressure and its reader never occupies the clock's queue.
+    [self feed];
 }
 
 - (void)closeSurface {
@@ -386,6 +460,8 @@ static NSRect contentOnScreen(NSView *view) {
         return;
     }
     _removing = YES;
+    int expected = VideoPreroll;
+    atomic_compare_exchange_strong(&_status, &expected, VideoFailed);
     self.cover.lostWindow = nil;
     [self unwatch];
     dispatch_async(self.timeline, ^{
@@ -393,7 +469,7 @@ static NSRect contentOnScreen(NSView *view) {
             [self.clock removeTimeObserver:self->_endObserver];
             self->_endObserver = nil;
         }
-        [self.renderer stopRequestingMediaData];
+        [self stopFeeding];
         [self.clock setRate:0 time:self.clock.currentTime];
     });
     if (!animated) {
@@ -420,12 +496,13 @@ bool richos_splash_reduce_motion(void) {
 
 // Read the first video samples while the main thread builds the window.
 void *richos_splash_prepare(const char *file, int frames, const char *sound,
-                            RichSplashPhase phase, RichSplashMetrics metrics) {
+                            RichSplashPhase phase, RichSplashMetrics metrics, RichSplashAudio audioOutcome) {
     @autoreleasepool {
         NSString *path = [NSFileManager.defaultManager stringWithFileSystemRepresentation:file length:strlen(file)];
         RichSplashPlayer *player = [[RichSplashPlayer alloc] initWithPack:path frames:frames];
         player.phase = phase;
         player.metrics = metrics;
+        player.audioOutcome = audioOutcome;
         if (sound) player.soundPath = [NSFileManager.defaultManager stringWithFileSystemRepresentation:sound length:strlen(sound)];
         if (![player prepare]) return NULL;
         return (__bridge_retained void *)player;

@@ -49,13 +49,15 @@ if [ "$(uname -s)" = Darwin ]; then
     xcrun clang -fobjc-arc -mmacosx-version-min=13.0 -Wno-deprecated-declarations \
         -framework AppKit -framework AVFoundation -framework CoreMedia -framework CoreVideo -framework QuartzCore \
         -x objective-c "$app/native/splash/player.m" -o "$scratch/prepare" - <<'C'
+#include <stdint.h>
 #include <stdio.h>
-void *richos_splash_prepare(const char *, int, const char *, void (*)(int, double));
+void *richos_splash_prepare(const char *, int, const char *, void (*)(int, double),
+                            void (*)(uint64_t, uint64_t, uint64_t), void (*)(int));
 void richos_splash_discard_prepared(void *);
 
 int main(int argc, char **argv) {
     for (int i = 1; i < argc; i++) {
-        void *player = richos_splash_prepare(argv[i], 180, NULL, NULL);
+        void *player = richos_splash_prepare(argv[i], 180, NULL, NULL, NULL, NULL);
         if (!player) {
             fprintf(stderr, "Cannot prepare the first video samples in %s\n", argv[i]);
             return 1;
