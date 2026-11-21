@@ -3457,11 +3457,16 @@
     return String(s).replace(/(["\\])/g, "\\$1");
   }
 
+  function turnAnchor(container, turnId) {
+    if (typeof turnId !== "string" || !turnId) return null;
+    return container.querySelector('.tl-turn[data-turn-id="' + cssEscape(turnId) + '"]');
+  }
+
   // A RichFinder result names one rendered message inside its verified turn.
   // Require both identifiers so a removed message never jumps to another one.
   function searchMessageAnchor(container, turnId, messageId) {
     if (typeof turnId !== "string" || typeof messageId !== "string" || !turnId || !messageId) return null;
-    const turn = container.querySelector('.tl-turn[data-turn-id="' + cssEscape(turnId) + '"]');
+    const turn = turnAnchor(container, turnId);
     return turn && turn.querySelector('[data-message-id="' + cssEscape(messageId) + '"]');
   }
 
@@ -3473,6 +3478,7 @@
     setQuestionsInFlight,
     setScreenWaits,
     hasLiveRow,
+    turnAnchor,
     searchMessageAnchor,
     createModel,
     bind,
