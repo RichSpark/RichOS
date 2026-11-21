@@ -152,7 +152,7 @@ async function main() {
     const current = { vendor: "google", account: "first@example.com", reconnecting: true };
     const other = { vendor: "microsoft", account: "second@example.com" };
     const page = await open("dark", { calendarRecovery: [current, other] });
-    const otherButton = page.getByRole("button", { name: "Reconnect Microsoft Calendar (second@example.com)", exact: true, includeHidden: true });
+    const otherButton = page.locator("#mn-calendar-recovery").getByRole("button", { name: "Reconnect Microsoft Calendar (second@example.com)", exact: true, includeHidden: true });
     assert(await otherButton.isHidden());
     assert((await text(page, "#mn-calendar-recovery")).includes("Finish signing in to the other calendar first."));
     assertEqual(await page.locator("#mn-calendar-recovery button:visible").count(), 1);
