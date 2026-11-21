@@ -56,9 +56,15 @@
       copy.setAttribute("aria-pressed", String(workflow?.opensEditor !== true));
       history.setAttribute("aria-checked", String(workflow?.keepsHistory === true));
       history.closest(".dict-card")?.classList.toggle("is-on", workflow?.keepsHistory === true);
-      historySummary.textContent = workflow?.keepsHistory
-        ? "On. Originals and editable marks stay on this Mac for seven days."
-        : "Off. Turn on to keep screenshots and editable marks for seven days.";
+      if (workflow?.keepsHistory) {
+        historySummary.textContent = workflow.keepsForever
+          ? "On. Originals and editable marks stay on this Mac until you delete them."
+          : "On. Originals and editable marks stay on this Mac for seven days.";
+      } else {
+        historySummary.textContent = workflow?.keepsForever
+          ? "Off. Turn on to keep screenshots and editable marks until you delete them."
+          : "Off. Turn on to keep screenshots and editable marks for seven days.";
+      }
       toggle.disabled = record.disabled = !view || shortcutBusy;
       if (!view) return;
       toggle.setAttribute("aria-checked", String(view.enabled));

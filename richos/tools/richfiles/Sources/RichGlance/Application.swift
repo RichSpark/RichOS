@@ -21,8 +21,7 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var captureNotice: NSPanel?
     private var noticeCapture: UUID?
     private let screenshotStore = ScreenshotStore()
-    private var editors: [UUID: ScreenshotEditor] = [:]
-    private var recents: ScreenshotRecents?
+    private var editor: ScreenshotEditor?
     private var captureLaunch = CommandLine.arguments.contains("--capture-request")
     private var launchOrigin = Application.launchOrigin()
 
@@ -80,12 +79,12 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func applicationOpenUntitledFile(_ sender: NSApplication) -> Bool {
-        if viewer == nil, editors.isEmpty, recents == nil, capture == nil, !captureLaunch { openWithoutFile() }
+        if viewer == nil, editor == nil, capture == nil, !captureLaunch { openWithoutFile() }
         return true
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {
-        if capture == nil { recents?.refresh() }
+        if capture == nil { editor?.refreshShelf() }
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -109,19 +108,18 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
             return false
         }
         guard !captureLaunch else { return false }
-        if viewer == nil, editors.isEmpty, recents == nil { openWithoutFile() }
-        else if !hasVisibleWindows { viewer?.show() }
+        if viewer == nil, editor == nil { openWithoutFile() }
+        else if !hasVisibleWindows { if let editor { editor.show() } else { viewer?.show() } }
         return true
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        for editor in Array(editors.values) where !editor.allowApplicationQuit() { return .terminateCancel }
+        if let editor, !editor.allowApplicationQuit() { return .terminateCancel }
         return .terminateNow
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
-        // AppKit can report the last regular window closed while the Recents panel is still open.
-        capture == nil && editors.isEmpty && recents == nil
+        capture == nil && editor == nil
     }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
@@ -183,8 +181,8 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     private func openWithoutFile() {
-        if (try? screenshotStore.entries().isEmpty) == false { showRecents() }
-        else { chooseImage() }
+        if (try? screenshotStore.entries().isEmpty) == false { editLastCapture() }
+        else { showEditor(nil, origin: externalFrontmost ?? previousApplication, previousWindow: nil) }
     }
 
     @objc private func chooseImage() {
@@ -197,13 +195,13 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
             guard let self else { return }
             openingPanel = nil
             if result == .OK, let file = panel?.url { open(file) }
-            else if viewer == nil, editors.isEmpty, recents == nil, capture == nil { NSApp.terminate(nil) }
+            else if viewer == nil, editor == nil, capture == nil { NSApp.terminate(nil) }
         }
     }
 
     @objc private func startCapture() { beginCapture(originPID: nil) }
 
-    private func beginCapture(originPID: pid_t?) {
+    private func beginCapture(originPID: pid_t?, fromEditor: Bool = false) {
         if let capture {
             capture.revisitPermission()
             return
@@ -219,15 +217,16 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let keyWindow = origin == nil && NSApp.isActive ? NSApp.keyWindow : nil
         let session = CaptureController(previousWindow: keyWindow,
                                         previousApp: origin ?? previousApplication, store: screenshotStore,
-                                        openEditor: { [weak self] document in
-            self?.showEditor(document, origin: origin ?? self?.previousApplication, previousWindow: keyWindow)
+                                        preferredAction: fromEditor ? .editor : nil, openEditor: { [weak self] document in
+            self?.showEditor(document, origin: origin ?? self?.previousApplication, previousWindow: keyWindow,
+                             newCapture: true)
         },
                                         refreshPermission: { [weak self] session, originPID in
             self?.refreshCapturePermission(for: session, originPID: originPID)
         }) { [weak self] message, display, retained in
             guard let self else { return }
             capture = nil
-            recents?.refresh()
+            editor?.refreshShelf()
             if let message, let display { showCaptureNotice(message, display: display, retained: retained) }
             else { endCaptureLaunch() }
         }
@@ -352,7 +351,7 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     private func endCaptureLaunch() {
-        if captureLaunch, viewer == nil, editors.isEmpty, recents == nil {
+        if captureLaunch, viewer == nil, editor == nil {
             RichFilesDiagnostics.flush()
             NSApp.terminate(nil)
         }
@@ -378,7 +377,7 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
             }
             guard let document = try screenshotStore.load(entry) else {
                 showHistoryError("This capture could not be opened.")
-                recents?.refresh()
+                editor?.refreshShelf()
                 return
             }
             showEditor(document, origin: externalFrontmost ?? previousApplication, previousWindow: NSApp.keyWindow)
@@ -394,19 +393,20 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
         alert.runModal()
     }
 
-    private func showEditor(_ document: ScreenshotDocument, origin: NSRunningApplication?, previousWindow: NSWindow?) {
+    private func showEditor(_ document: ScreenshotDocument?, origin: NSRunningApplication?, previousWindow: NSWindow?,
+                            newCapture: Bool = false) {
         captureLaunch = false
-        if let editor = editors[document.id] { editor.focus(); return }
-        let editor = ScreenshotEditor(document: document)
-        editors[document.id] = editor
-        editor.retainEdits = { [weak self] document in
-            guard let self else { return false }
-            return (try? screenshotStore.retain(document, existingOnly: true)) == true
+        if let editor {
+            if let document { editor.changeDocument(document, newCapture: newCapture) }
+            editor.show()
+            return
         }
+        let editor = ScreenshotEditor(store: screenshotStore)
+        self.editor = editor
+        editor.capture = { [weak self] in self?.beginCapture(originPID: nil, fromEditor: true) }
         editor.closed = { [weak self, weak previousWindow] in
             guard let self else { return }
-            editors.removeValue(forKey: document.id)
-            recents?.refresh()
+            self.editor = nil
             if let previousWindow, previousWindow.isVisible, !previousWindow.isMiniaturized {
                 previousWindow.makeKeyAndOrderFront(nil)
             } else if let origin, !origin.isTerminated, NSApp.isActive {
@@ -414,20 +414,20 @@ final class Application: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 else { _ = origin.activate(options: []) }
             }
         }
+        if let document { editor.changeDocument(document, newCapture: newCapture) }
         editor.show()
     }
 
     @objc private func showRecents() {
-        captureLaunch = false
-        if let recents { recents.show(); return }
-        let panel = ScreenshotRecents(store: screenshotStore)
-        panel.closed = { [weak self] in self?.recents = nil }
-        panel.edit = { [weak self] entry in self?.editRecent(id: entry.id) }
-        recents = panel
-        panel.show()
+        if editor == nil, (try? screenshotStore.entries().isEmpty) == false { editLastCapture() }
+        else { showEditor(nil, origin: externalFrontmost ?? previousApplication, previousWindow: NSApp.keyWindow) }
+        editor?.showShelf()
     }
 
-    private var keyEditor: ScreenshotEditor? { editors.values.first { $0.window === NSApp.keyWindow } }
+    private var keyEditor: ScreenshotEditor? {
+        guard let editor, NSApp.keyWindow === editor.window else { return nil }
+        return editor
+    }
     @objc private func copyScreenshot() { keyEditor?.copyImage() }
     @objc private func saveScreenshot() { keyEditor?.saveImage() }
 
@@ -513,8 +513,8 @@ extension Application: NSMenuItemValidation {
         if menuItem.action == #selector(editLastCapture) { return (try? screenshotStore.entries().isEmpty) == false }
         if menuItem.action == #selector(showRecents) { return capture == nil }
         if menuItem.action == #selector(copyScreenshot) || menuItem.action == #selector(saveScreenshot) {
-            menuItem.isHidden = keyEditor == nil
-            return keyEditor != nil
+            menuItem.isHidden = keyEditor?.hasDocument != true
+            return keyEditor?.hasDocument == true && keyEditor?.canvas?.isTyping == false
         }
         if menuItem.action == #selector(openInPreview) { return viewer?.file != nil }
         if menuItem.action == #selector(showInfo) {

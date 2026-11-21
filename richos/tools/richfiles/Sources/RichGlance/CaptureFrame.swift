@@ -12,6 +12,7 @@ enum CaptureFrame {
         let id: CGWindowID
         let frame: CGRect
         let pid: pid_t
+        let name: String?
     }
 
     static func targets() -> [WindowTarget] {
@@ -25,7 +26,10 @@ enum CaptureFrame {
                   let rect = CGRect(dictionaryRepresentation: bounds as CFDictionary),
                   rect.width >= 24, rect.height >= 24,
                   (row[kCGWindowAlpha as String] as? NSNumber)?.doubleValue != 0 else { return nil }
-            return WindowTarget(id: number.uint32Value, frame: rect, pid: pid.int32Value)
+            let name = (row[kCGWindowName as String] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let owner = row[kCGWindowOwnerName as String] as? String
+            return WindowTarget(id: number.uint32Value, frame: rect, pid: pid.int32Value,
+                                name: name?.isEmpty == false ? name : owner)
         }
     }
 

@@ -85,7 +85,15 @@ struct ScreenshotEdits: Codable, Equatable {
 
 enum ScreenshotKind: String, Codable {
     case region, window, display, scrolling
-    var title: String { rawValue.capitalized }
+    var title: String { self == .scrolling ? "Scrolling capture" : rawValue.capitalized }
+    var symbol: String {
+        switch self {
+        case .region: "viewfinder"
+        case .window: "macwindow"
+        case .display: "display"
+        case .scrolling: "arrow.up.and.down.square"
+        }
+    }
 }
 
 struct ScreenshotDocument {
@@ -94,20 +102,23 @@ struct ScreenshotDocument {
     let original: CGImage
     let scale: CGFloat
     let kind: ScreenshotKind
+    let name: String?
     var edits: ScreenshotEdits
 
     init(original: CGImage, scale: CGFloat, kind: ScreenshotKind = .region,
-         id: UUID = UUID(), created: Date = Date(), edits: ScreenshotEdits? = nil) {
+         id: UUID = UUID(), created: Date = Date(), name: String? = nil, edits: ScreenshotEdits? = nil) {
         self.id = id
         self.created = created
         self.original = original
         self.scale = max(1, scale)
         self.kind = kind
+        self.name = name
         self.edits = edits ?? ScreenshotEdits(crop: CGRect(x: 0, y: 0, width: original.width, height: original.height))
     }
 
     var bounds: CGRect { CGRect(x: 0, y: 0, width: original.width, height: original.height) }
     var crop: CGRect { edits.crop.integral.intersection(bounds) }
+    var title: String { name ?? (kind == .scrolling ? "Scrolling screenshot" : "\(kind.title) screenshot") }
     var hasRedactions: Bool { edits.marks.contains { $0.tool == .redact } }
 }
 
@@ -125,10 +136,18 @@ enum ScreenshotRenderer {
     static func thumbnail(_ document: ScreenshotDocument) -> CGImage? {
         let crop = document.crop
         guard !crop.isEmpty else { return nil }
-        let scale = min(1, 320 / crop.width)
-        let sample = CGRect(x: crop.minX, y: crop.minY, width: crop.width,
-                            height: min(crop.height, ceil(192 / scale)))
-        return render(document, crop: sample, scale: scale)
+        let width = thumbnailWidth(for: crop)
+        let scale = max(width / crop.width, 78 / crop.height)
+        let sampleWidth = min(crop.width, width / scale)
+        let sampleHeight = min(crop.height, 78 / scale)
+        let sample = CGRect(x: crop.midX - sampleWidth / 2, y: crop.minY,
+                            width: sampleWidth, height: sampleHeight).integral.intersection(crop)
+        return render(document, crop: sample, scale: 2 * scale)
+    }
+
+    static func thumbnailWidth(for crop: CGRect) -> CGFloat {
+        guard crop.height > 0 else { return 56 }
+        return min(150, max(56, (78 * crop.width / crop.height).rounded()))
     }
 
     private static func render(_ document: ScreenshotDocument, crop: CGRect, scale: CGFloat) -> CGImage? {
@@ -200,6 +219,19 @@ enum ScreenshotRenderer {
                 path.move(to: mark.end)
                 path.addLine(to: mark.end.offset(dx: -length * cos(angle + wing), dy: -length * sin(angle + wing)))
             }
+            context.saveGState()
+            // Shadow offsets are expressed in captured pixels and follow the rendered zoom.
+            let transform = context.ctm
+            let dx = hypot(transform.a, transform.b)
+            let dy = hypot(transform.c, transform.d)
+            let shadowScale: CGFloat = mark.large ? 1.5 : 1
+            context.setShadow(offset: CGSize(width: 2 * dx * shadowScale, height: -2 * dy * shadowScale),
+                              blur: 2.5 * dx * shadowScale, color: ink.withAlphaComponent(0.45).cgColor)
+            context.setStrokeColor(outline.cgColor)
+            context.setLineWidth(5 * unit + 2)
+            context.addPath(path)
+            context.strokePath()
+            context.restoreGState()
             stroke(path, color: color, outline: outline, width: 5 * unit, in: context)
         case .box:
             stroke(CGPath(rect: rect, transform: nil), color: color, outline: outline, width: 4 * unit, in: context)
@@ -225,11 +257,26 @@ enum ScreenshotRenderer {
             let labelSize = label.size()
             label.draw(at: CGPoint(x: bubble.midX - labelSize.width / 2, y: bubble.midY - labelSize.height / 2))
         case .text:
-            if let pointer = mark.pointer {
+            var pointerPath: CGPath?
+            if let pointer = mark.pointer, !rect.contains(pointer) {
+                let dx = pointer.x - rect.midX
+                let dy = pointer.y - rect.midY
+                let ratio = max(abs(dx) / max(1, rect.width / 2), abs(dy) / max(1, rect.height / 2))
+                let base = CGPoint(x: rect.midX + 0.68 * dx / ratio, y: rect.midY + 0.68 * dy / ratio)
+                let length = hypot(dx, dy)
+                let width = min(9 * unit, 0.3 * min(rect.width, rect.height))
+                let side = CGPoint(x: dy / length * width, y: -dx / length * width)
                 let tail = CGMutablePath()
-                tail.move(to: CGPoint(x: rect.midX, y: rect.midY))
+                tail.move(to: base.offset(dx: side.x, dy: side.y))
                 tail.addLine(to: pointer)
-                stroke(tail, color: color, outline: outline, width: 6 * unit, in: context)
+                tail.addLine(to: base.offset(dx: -side.x, dy: -side.y))
+                tail.closeSubpath()
+                pointerPath = tail
+                context.setFillColor(color.cgColor)
+                context.setStrokeColor(outline.cgColor)
+                context.setLineWidth(2 * scale)
+                context.addPath(tail)
+                context.drawPath(using: .fillStroke)
             }
             let path = CGPath(roundedRect: rect, cornerWidth: 6 * unit, cornerHeight: 6 * unit, transform: nil)
             context.setFillColor(color.cgColor)
@@ -239,6 +286,11 @@ enum ScreenshotRenderer {
             context.setLineWidth(2 * scale)
             context.addPath(path)
             context.strokePath()
+            if let pointerPath {
+                // Carry the callout fill through the join without a line across its pointer.
+                context.addPath(pointerPath)
+                context.fillPath()
+            }
             let paragraph = NSMutableParagraphStyle()
             paragraph.lineBreakMode = .byWordWrapping
             NSAttributedString(string: mark.text, attributes: [
