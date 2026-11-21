@@ -4149,7 +4149,9 @@ fn main() {
             };
 
             app.manage(AppState {
-                swearmeter: swearmeter_host::Service::new(app.handle().clone(), spine.reader(), control.clone(), card_counts, card_source_seen),
+                swearmeter: swearmeter_host::Service::new(
+                    app.handle().clone(), spine.reader(), control.clone(), card_counts, card_source_seen, &data_dir,
+                ),
                 quota: quota.clone(),
                 chat_readings,
 

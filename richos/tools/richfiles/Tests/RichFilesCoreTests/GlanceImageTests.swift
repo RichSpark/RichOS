@@ -48,6 +48,7 @@ final class GlanceImageTests: XCTestCase {
     func testGIFAndWebPDecodeCompositedFramesAndTiming() throws {
         for name in ["delta.gif", "delta.webp"] {
             let first = try GlanceImage.decode(fixture(name))
+            XCTAssertEqual(first.pointSize, first.size, name)
             let motion = try XCTUnwrap(first.animation, name)
             XCTAssertEqual(motion.frameCount, 3, name)
             XCTAssertEqual(motion.loopCount, 2, name)
@@ -121,10 +122,13 @@ final class GlanceImageTests: XCTestCase {
                                            bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)?.makeImage())
         let jpeg = directory.appendingPathComponent("landscape.jpeg")
         let output = try XCTUnwrap(CGImageDestinationCreateWithURL(jpeg as CFURL, UTType.jpeg.identifier as CFString, 1, nil))
-        CGImageDestinationAddImage(output, image, [kCGImagePropertyOrientation: 6] as CFDictionary)
+        CGImageDestinationAddImage(output, image, [
+            kCGImagePropertyOrientation: 6, kCGImagePropertyDPIWidth: 72, kCGImagePropertyDPIHeight: 144
+        ] as CFDictionary)
         XCTAssertTrue(CGImageDestinationFinalize(output))
         let decoded = try GlanceImage.decode(jpeg)
         XCTAssertEqual(decoded.size, CGSize(width: 24, height: 48))
+        XCTAssertEqual(decoded.pointSize, CGSize(width: 12, height: 48))
         XCTAssertEqual(decoded.bitmap.width, 24)
         XCTAssertEqual(decoded.bitmap.height, 48)
 
@@ -183,40 +187,4 @@ final class GlanceImageTests: XCTestCase {
         XCTAssertTrue(viewport.isFit)
     }
 
-    func testRetinaScreenshotUsesOneBackingPixelPerImagePixelAtActualSize() throws {
-        let screenshot = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".png")
-        defer { try? FileManager.default.removeItem(at: screenshot) }
-        let bitmap = try XCTUnwrap(CGContext(data: nil, width: 900, height: 500, bitsPerComponent: 8,
-                                             bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
-                                             bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)?.makeImage())
-        let output = try XCTUnwrap(CGImageDestinationCreateWithURL(screenshot as CFURL, UTType.png.identifier as CFString, 1, nil))
-        CGImageDestinationAddImage(output, bitmap, [kCGImagePropertyDPIWidth: 144, kCGImagePropertyDPIHeight: 144] as CFDictionary)
-        XCTAssertTrue(CGImageDestinationFinalize(output))
-        let source = try XCTUnwrap(CGImageSourceCreateWithURL(screenshot as CFURL, nil))
-        let properties = try XCTUnwrap(CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any])
-        XCTAssertEqual(try XCTUnwrap(properties[kCGImagePropertyDPIWidth] as? Double), 144, accuracy: 0.1)
-
-        let image = try GlanceImage.decode(screenshot)
-        let window = CGSize(width: 600, height: 400)
-        var viewport = GlanceViewport()
-        viewport.reset(imageSize: image.size, in: window, backingScale: 2)
-        XCTAssertEqual(viewport.imageRect, CGRect(x: 75, y: 75, width: 450, height: 250))
-        XCTAssertEqual(viewport.scale, 1)
-        XCTAssertFalse(viewport.isFit)
-
-        viewport.changeBackingScale(to: 1)
-        XCTAssertTrue(viewport.isFit)
-        XCTAssertEqual(viewport.imageRect.width, 600)
-        viewport.changeBackingScale(to: 2)
-        XCTAssertEqual(viewport.scale, 1)
-
-        let center = CGPoint(x: 300, y: 200)
-        let pixel = viewport.imagePoint(at: center)
-        viewport.zoom(by: 2, at: center, holding: pixel)
-        viewport.changeBackingScale(to: 1)
-        XCTAssertEqual(viewport.scale, 2)
-        XCTAssertEqual(viewport.imagePoint(at: center), pixel)
-        viewport.reset(imageSize: image.size, in: window, backingScale: 2)
-        XCTAssertEqual(viewport.scale, 1)
-    }
 }

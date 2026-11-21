@@ -78,14 +78,28 @@ impl Dates {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 pub struct Periods {
     pub last_30_days: u64,
     pub months: Vec<Month>,
     pub undated: u64,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+impl Periods {
+    /// Add the hourly provider report to the live local counts without visiting
+    /// the provider records or changing the saved report's cutoff.
+    pub fn include_saved(&mut self, saved: &Self) {
+        self.last_30_days += saved.last_30_days;
+        self.undated += saved.undated;
+        let mut months = BTreeMap::new();
+        for row in self.months.iter().chain(&saved.months) {
+            *months.entry(row.month).or_default() += row.count;
+        }
+        self.months = months.into_iter().rev().map(|(month, count)| Month { month, count }).collect();
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub struct Month {
     /// YYYYMM in the user's local calendar.
     pub month: u32,
