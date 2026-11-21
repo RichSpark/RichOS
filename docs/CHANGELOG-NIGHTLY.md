@@ -2,6 +2,26 @@
 
 What changed in each RichOS nightly build from 1.2.1-nightly.20261019.67 on, newest first; stable versions are in the [changelog](CHANGELOG.md).
 
+## 1.3.7-nightly.20261121.112
+
+[GitHub release](https://github.com/RichSpark/RichOS/releases/tag/v1.3.7-nightly.20261121.112)
+
+- Added RichBrief to the bar on the left: one page to start or stop meeting notes, see how long a recording has run, open the notes once Rich has written them, reconnect a disconnected calendar and pause meeting prompts; its button shows a dot while a meeting is being recorded
+- Added RichGlance to the bar on the left: a page with Capture… and RichGlance's settings, including the capture shortcut, what Return does after a capture, Recent Captures and using RichGlance as your default image viewer
+- Changed the RichGlance screenshot editor to one window with your Recent Captures in a shelf beside the picture that you can hide: click a capture to switch to it with its marks and Undo kept, start a new capture from the editor and zoom in and out, while each marking tool keeps its own color and size
+- Changed Recent Captures in RichGlance to be on unless you turned it off, with a new choice to keep captures on this Mac for 7 days or until you delete them
+- Changed handing work between Rich and Codex to need no setup: Rich starts a separate Codex chat for each task he hands over; messages to Rich from a Codex task you started yourself arrive in a chat called Codex in your company
+- Improved Talk to Rich after you interrupt him while he is speaking: he knows which sentences you actually heard, so if you ask him to go on he picks up at the first one you missed; if you only say okay, he answers briefly and waits
+- Improved SwearMeter to show your count as soon as RichOS opens, from the last saved count, while it reads your Claude and Codex history again in the background once an hour
+- Improved the splash screen to play while RichOS is still getting ready and to give way only once Home is ready
+- Improved the RichOS window to disappear the moment you click its red close button
+- Fixed chats showing Working and Rich saying work was still running when nothing was running anymore, for example after RichOS restarted; when RichOS cannot confirm a job's status it now says so
+- Fixed the splash screen's sound sometimes starting late or being cut off before its end
+- Fixed RichGlance showing Retina screenshots and other high-resolution pictures twice as large as Preview does at their real size
+- Fixed the names that appear when you point at a button looking wrong in Make a video recordings: the screen showed through them, their arrow was missing and the one for Settings was blank
+- [technical] Added to RichDoctor's reports when Talk to Rich was cut off while speaking (never the words themselves), how the splash sound played and whether messages from Codex are waiting to be routed; Bust a bug reports now also carry recent timings of closing the window
+- [technical] Added a short note to Codex's own instructions on this Mac that points Codex to the RichOS guide, so a Codex task reaches Rich over one connection
+
 ## 1.3.6-nightly.20261121.111
 
 [GitHub release](https://github.com/RichSpark/RichOS/releases/tag/v1.3.6-nightly.20261121.111)
