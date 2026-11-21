@@ -112,7 +112,11 @@ function recording(theme, mic) {
     let drawn = null;
     const fillText = CanvasRenderingContext2D.prototype.fillText;
     CanvasRenderingContext2D.prototype.fillText = function (text, x, y) {
-      if (drawn && this.canvas.classList.contains("rv-canvas")) drawn.push({ text: String(text), x: Math.round(x * 10) / 10, y: Math.round(y * 10) / 10, alpha: this.globalAlpha });
+      if (drawn && this.canvas.classList.contains("rv-canvas")) {
+        const { a, b, c, d, e, f } = this.getTransform();
+        const scale = this.canvas.width / innerWidth;
+        drawn.push({ text: String(text), x: (a * x + c * y + e) / scale, y: (b * x + d * y + f) / scale, alpha: this.globalAlpha });
+      }
       return fillText.apply(this, arguments);
     };
     const R = window.RichVideoAnywhere;
@@ -192,6 +196,24 @@ function recording(theme, mic) {
       await T.until("a frame after the tooltip closes", () => R.state().frames > after);
       out.tip.closed = tip.hidden && pixel(tipRect.left + 8, tipRect.top + 3).some((color, i) => color !== ink[i]);
 
+      // Settings draws its label with CSS-generated content, without a DOM text node.
+      const settings = document.querySelector("#set-btn");
+      // The offscreen window cannot receive a real hover. Apply the same state to the actual chip.
+      const hover = document.createElement("style");
+      hover.textContent = '.settings:not(.open) .setbtn[data-proof-hover]::after { opacity: 1; transform: translateY(0); }';
+      document.head.appendChild(hover);
+      settings.setAttribute("data-proof-hover", "");
+      await T.until("the Settings tooltip to be visible", () => getComputedStyle(settings, "::after").opacity === "1");
+      const buttonRect = settings.getBoundingClientRect();
+      out.settingsTip = {
+        left: buttonRect.right - 100,
+        top: buttonRect.bottom,
+        bottom: buttonRect.bottom + 50,
+        ...(await look(from)),
+      };
+      hover.remove();
+      settings.removeAttribute("data-proof-hover");
+
       // A MESSAGE OF SEVERAL LINES
       box.value = lines.join("\n");
       box.dispatchEvent(new Event("input", { bubbles: true }));
@@ -239,7 +261,7 @@ async function asShown(theme, mic) {
     if (mic) assertEqual(d.muted, true, "the sheet's player is not muted in a test run");
     fs.mkdirSync(KEEP, { recursive: true });
     fs.copyFileSync(file, path.join(KEEP, tag + ".mp4"));
-    for (const [name, place] of [["1-empty-box", d.blank], ["2-settings-list-closed", d.closed], ["3-nav-tooltip", d.tip], ["4-several-lines", d.typed]]) {
+    for (const [name, place] of [["1-empty-box", d.blank], ["2-settings-list-closed", d.closed], ["3-nav-tooltip", d.tip], ["4-settings-tooltip", d.settingsTip], ["5-several-lines", d.typed]]) {
       execFileSync("ffmpeg", ["-v", "error", "-y", "-ss", place.at.toFixed(2), "-i", file, "-frames:v", "1", path.join(KEEP, tag + "-" + name + ".png")]);
     }
 
@@ -283,6 +305,10 @@ async function asShown(theme, mic) {
     hold(gaps.length === 0, "THE SIDEBAR SHOWS THROUGH THE HOME TOOLTIP: " + gaps.length + " pixels differ from its solid fill");
     hold(isTipInk(d.tip.arrow), "THE HOME TOOLTIP'S ARROW IS MISSING: " + d.tip.arrow.join(", "));
     hold(d.tip.closed, "THE HOME TOOLTIP STAYED IN THE RECORDING AFTER IT CLOSED");
+    hold(d.settingsTip.words.some((w) => w.text === "Settings" &&
+      w.x >= d.settingsTip.left && w.y > d.settingsTip.top && w.y < d.settingsTip.bottom && w.alpha === 1),
+      "THE SETTINGS TOOLTIP'S LABEL IS MISSING");
+
     assertEqual(faults, [], "THE VIDEO DOES NOT SHOW WHAT THE WINDOW SHOWS");
     return `${tag}: the hint alone in the empty box (${d.blank.at.toFixed(1)} s in); "By month" closed with none of its ${MONTHS.length} counts (${d.closed.at.toFixed(1)} s), opened with all, closed again with none; ${LINES.length} lines whole and each starting where the box puts it (${d.typed.at.toFixed(1)} s); the file is ${Number(probe.format.duration).toFixed(1)} s long`;
   } finally {

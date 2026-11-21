@@ -395,7 +395,7 @@ window.RichVideoAnywhere = (function () {
     pseudoSeen.set(e, { t: now, k: k });
     return k;
   }
-  function paintPseudo(cx, e, s, r, alpha, which) {
+  function paintPseudo(cx, e, s, r, alpha, which, R) {
     var ps = getComputedStyle(e, which);
     if (ps.position !== "absolute" || s.position === "static" || ps.visibility !== "visible") return;
     var w = parseFloat(ps.width);
@@ -405,9 +405,11 @@ window.RichVideoAnywhere = (function () {
     if (a < 0.012) return;
     var borders = SIDES.map(function (side) { return parseFloat(ps["border" + side + "Width"]) || 0; });
     var [bt, br, bb, bl] = borders;
-    var content = ps.boxSizing !== "border-box";
-    var W = w + (content ? bl + br + (parseFloat(ps.paddingLeft) || 0) + (parseFloat(ps.paddingRight) || 0) : 0);
-    var Hh = h + (content ? bt + bb + (parseFloat(ps.paddingTop) || 0) + (parseFloat(ps.paddingBottom) || 0) : 0);
+    var padding = SIDES.map(function (side) { return parseFloat(ps["padding" + side]) || 0; });
+    var [pt, pr, pb, pl] = padding;
+    var contentBox = ps.boxSizing !== "border-box";
+    var W = w + (contentBox ? bl + br + pl + pr : 0);
+    var Hh = h + (contentBox ? bt + bb + pt + pb : 0);
     if (W <= 0 || Hh <= 0) return;
     var ox = r.left + (parseFloat(s.borderLeftWidth) || 0);
     var oy = r.top + (parseFloat(s.borderTopWidth) || 0);
@@ -426,8 +428,21 @@ window.RichVideoAnywhere = (function () {
       cx.transform(...tm[1].split(",").map(Number));
       cx.translate(-tx, -ty);
     }
+    // A pseudo-element can carry the tooltip's label as CSS text, as Settings does.
+    var text = /^"([^"\\]+)"$/.exec(ps.content);
+    var target = cx;
+    var layer, k;
+    if (text && a < 1) {
+      // The chip and its label share one opacity during the CSS transition.
+      layer = R.pseudoCanvas || (R.pseudoCanvas = document.createElement("canvas"));
+      k = R.cv.width / R.W;
+      layer.width = Math.ceil(k * W);
+      layer.height = Math.ceil(k * Hh);
+      cx = layer.getContext("2d");
+      cx.setTransform(k, 0, 0, k, 0, 0);
+    }
     var rad = radius(ps, W, Hh);
-    cx.globalAlpha = a;
+    cx.globalAlpha = layer ? 1 : a;
     if (!CLEAR.test(ps.backgroundColor)) {
       plate(cx, 0, 0, W, Hh, rad);
       cx.fillStyle = ps.backgroundColor;
@@ -457,7 +472,21 @@ window.RichVideoAnywhere = (function () {
         cx.fill();
       }
     }
-    cx.restore();
+    if (text) {
+      setFont(cx, ps);
+      if ("letterSpacing" in cx) cx.letterSpacing = ps.letterSpacing === "normal" ? "0px" : ps.letterSpacing;
+      var mt = cx.measureText(text[1]);
+      var fa = mt.fontBoundingBoxAscent || parseFloat(ps.fontSize) * 0.8;
+      var fd = mt.fontBoundingBoxDescent || parseFloat(ps.fontSize) * 0.2;
+      var height = Hh - bt - bb - pt - pb;
+      cx.fillStyle = ps.color;
+      cx.fillText(text[1], bl + pl, bt + pt + (height - fa - fd) / 2 + fa);
+    }
+    if (layer) {
+      target.globalAlpha = a;
+      target.drawImage(layer, 0, 0, layer.width / k, layer.height / k);
+    }
+    target.restore();
   }
 
   // A PICTURE THE CANVAS MAY READ is drawn as it is: every picture of the app's own is (its files
@@ -656,7 +685,7 @@ window.RichVideoAnywhere = (function () {
       cx.shadowColor = "transparent";
     }
     var kinds = R.inHome ? [] : pseudoKinds(e, R.now);
-    if (seen && kinds.indexOf("::before") >= 0) paintPseudo(cx, e, s, r, a, "::before");
+    if (seen && kinds.indexOf("::before") >= 0) paintPseudo(cx, e, s, r, a, "::before", R);
     var clip = (s.overflowX !== "visible" || s.overflowY !== "visible") && r.width > 0 && r.height > 0 && e !== document.body;
     if (clip) {
       cx.save();
@@ -675,7 +704,7 @@ window.RichVideoAnywhere = (function () {
         } else if (c.nodeType === 1 && (!shut || c.tagName === "SUMMARY")) paintDom(cx, c, a, R);
       }
     }
-    if (seen && kinds.indexOf("::after") >= 0 && !clip) paintPseudo(cx, e, s, r, a, "::after");
+    if (seen && kinds.indexOf("::after") >= 0 && !clip) paintPseudo(cx, e, s, r, a, "::after", R);
     var tips = R.tips.byOwner.get(e);
     if (tips && !shut) {
       tips.sort(paintOrder);
@@ -683,7 +712,7 @@ window.RichVideoAnywhere = (function () {
     }
     if (clip) {
       cx.restore();
-      if (seen && kinds.indexOf("::after") >= 0) paintPseudo(cx, e, s, r, a, "::after");
+      if (seen && kinds.indexOf("::after") >= 0) paintPseudo(cx, e, s, r, a, "::after", R);
     }
     R.inHome = wasHome;
   }
