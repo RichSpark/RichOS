@@ -795,10 +795,10 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate {
         }
         let left = newCapture.frame.maxX + 10
         let total = max(0, right - left)
-        let editedWidth: CGFloat = edited.isHidden ? 0 : 52
+        let editedWidth: CGFloat = edited.isHidden ? 0 : labelWidth(edited)
         meta.isHidden = narrow
-        let metaWidth = narrow ? 0 : min(meta.intrinsicContentSize.width + 10, total * 0.43)
-        let nameWidth = min(name.intrinsicContentSize.width + 8, max(0, total - editedWidth - metaWidth))
+        let metaWidth = narrow ? 0 : min(labelWidth(meta), total * 0.43)
+        let nameWidth = min(labelWidth(name), max(0, total - editedWidth - metaWidth))
         let x = narrow ? left : left + max(0, (total - nameWidth - metaWidth - editedWidth) / 2)
         name.frame = CGRect(x: x, y: 19, width: nameWidth, height: 22)
         name.toolTip = name.stringValue
@@ -809,13 +809,18 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate {
     private func layoutBottom(width: CGFloat) {
         shelfToggle.frame = CGRect(x: 10, y: 6, width: shelfToggle.naturalWidth(), height: 34)
         zoomInButton.frame = CGRect(x: width - 42, y: 7, width: 32, height: 32)
-        zoomReadout.frame = CGRect(x: width - 101, y: 13, width: 54, height: 22)
+        zoomReadout.frame = CGRect(x: width - 111, y: 13, width: 64, height: 22)
         zoomReadout.alignment = .center
-        zoomOutButton.frame = CGRect(x: width - 137, y: 7, width: 32, height: 32)
-        zoomModes.frame = CGRect(x: width - 253, y: 5, width: 110, height: 36)
+        zoomOutButton.frame = CGRect(x: width - 147, y: 7, width: 32, height: 32)
+        zoomModes.frame = CGRect(x: width - 263, y: 5, width: 110, height: 36)
         privacy.isHidden = width <= 900
         privacy.frame = CGRect(x: shelfToggle.frame.maxX + 14, y: 13,
-                               width: max(0, width - 275 - shelfToggle.frame.maxX), height: 22)
+                               width: max(0, width - 285 - shelfToggle.frame.maxX), height: 22)
+    }
+
+    private func labelWidth(_ field: NSTextField) -> CGFloat {
+        let font = field.font ?? .systemFont(ofSize: 16)
+        return ceil((field.stringValue as NSString).size(withAttributes: [.font: font]).width) + 12
     }
 
     private func layoutInspector() {
@@ -829,8 +834,8 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate {
             edit.keyHint = "↩"; delete.keyHint = "⌫"; cancelCrop.keyHint = "esc"; acceptCrop.keyHint = "↩"
         }
 
-        var groups: [[(NSView, CGFloat)]] = [[(inspection, inspection.intrinsicContentSize.width + 3)]]
-        if !hint.isHidden { groups[0].append((hint, hint.intrinsicContentSize.width + 3)) }
+        var groups: [[(NSView, CGFloat)]] = [[(inspection, labelWidth(inspection))]]
+        if !hint.isHidden { groups[0].append((hint, labelWidth(hint))) }
         let colors = swatches.filter { !$0.isHidden }.map { ($0 as NSView, CGFloat(34)) }
         if !colors.isEmpty { groups.append(colors) }
         if !size.isHidden { groups.append([(size, size.naturalWidth)]) }
@@ -886,10 +891,15 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate {
             zoomReadout.stringValue = ""
             return
         }
-        if autoZoom, canvas.document.kind == .scrolling {
-            let width = max(1, scroll.contentSize.width - 78)
-            let ratio = width * window.backingScaleFactor / canvas.document.crop.width
-            zoom = ratio >= 1 ? .actual : .custom(ratio)
+        if autoZoom {
+            let area = canvas.tool == .crop ? canvas.document.bounds : canvas.document.crop
+            if area.height > 2.2 * area.width {
+                let width = max(1, scroll.contentSize.width - 78)
+                let ratio = width * window.backingScaleFactor / area.width
+                zoom = ratio >= 1 ? .actual : .custom(ratio)
+            } else {
+                zoom = .fit
+            }
         }
         canvas.layoutImage(in: scroll.contentSize, zoom: zoom)
         if case .fit = zoom { zoomModes.selection = 0 }

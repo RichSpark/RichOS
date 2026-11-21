@@ -118,6 +118,12 @@ final class ScreenshotCanvas: NSView, NSTextViewDelegate {
         dirtyRect.fill()
         let imageRect = viewRect(shown)
         context.saveGState()
+        context.setShadow(offset: CGSize(width: 0, height: -10), blur: 22,
+                          color: NSColor.black.withAlphaComponent(0.29).cgColor)
+        context.setFillColor(ScreenshotEditorPalette(self).ground.cgColor)
+        context.fill(imageRect)
+        context.restoreGState()
+        context.saveGState()
         context.clip(to: imageRect)
         NSGraphicsContext.current?.imageInterpolation = factor >= actual ? .none : .high
         image.draw(in: viewRect(document.bounds), from: .zero, operation: .sourceOver,

@@ -261,7 +261,7 @@ enum ScreenshotRenderer {
                 let dx = pointer.x - rect.midX
                 let dy = pointer.y - rect.midY
                 let ratio = max(abs(dx) / max(1, rect.width / 2), abs(dy) / max(1, rect.height / 2))
-                let base = CGPoint(x: rect.midX + 0.9 * dx / ratio, y: rect.midY + 0.9 * dy / ratio)
+                let base = CGPoint(x: rect.midX + 0.68 * dx / ratio, y: rect.midY + 0.68 * dy / ratio)
                 let length = hypot(dx, dy)
                 let width = min(9 * unit, 0.3 * min(rect.width, rect.height))
                 let side = CGPoint(x: dy / length * width, y: -dx / length * width)
