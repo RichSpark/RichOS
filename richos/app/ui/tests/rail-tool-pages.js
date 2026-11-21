@@ -136,6 +136,12 @@ async function main() {
           await page.click("#nr-" + name);
           await page.locator("#" + section).waitFor();
           assertEqual(await page.getAttribute("#nr-" + name, "aria-current"), "page");
+          const primary = page.locator(name === "brief" ? "#bp-start" : "#gp-capture");
+          await primary.hover();
+          assertEqual(await primary.evaluate(node => getComputedStyle(node).filter), "none",
+            "the gold hover keeps the measured fill and edge colors");
+          records.push(section + " at rest " + await checkContrast(page, "#" + section));
+          await page.mouse.move(370, 65);
           if (name === "brief") {
             await page.evaluate(() => window.__RICHOS_MOCK__.meetingSet({
               recording: true, startedAt: Date.now() - 42000,
