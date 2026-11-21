@@ -1480,11 +1480,17 @@
         holdAt(holdMs);
         yieldNow("native-finished");
       } else {
-        recover(Math.max(0, result.elapsedMs), result.nativeCue === true);
+        recover(Math.max(0, result.elapsedMs), result.nativeCue === true, result.startedAtMs);
       }
     }, function () { recover(0); });
 
-    function recover(elapsed, nativeCue) {
+    function recover(elapsed, nativeCue, startedAtMs) {
+      function nativeMoment() {
+        if (!Number.isFinite(startedAtMs) || startedAtMs <= 0) return elapsed;
+        var wallTime = window.performance && Number.isFinite(window.performance.timeOrigin)
+          ? window.performance.timeOrigin + now() : Date.now();
+        return Math.min(holdMs, Math.max(elapsed, wallTime - startedAtMs));
+      }
       // Paint the fallback at the same point while the native view still covers it.
       // If the native clock started, it owns the cue through a video failure.
       if (!node || yielded) return;
@@ -1497,16 +1503,20 @@
       node = build(entry, nativeCue);
       document.body.insertBefore(node, document.body.firstChild);
       shownAt = clock();
-      holdAt(elapsed);
+      holdAt(nativeMoment());
       Promise.resolve(invoke("splash_native_dismiss", { animated: false })).then(resume, resume);
 
       function resume() {
         if (!node || yielded) return;
+        // Native sound continues while the page builds and the cover is removed.
+        // Seek to its clock so the live bar does not land late.
+        var resumedAt = nativeMoment();
+        if (heldMoment !== resumedAt) holdAt(resumedAt);
         nativeRecovering = false;
         heldMoment = null;
         state.heldAt = null;
-        shownAt = clock() - elapsed;
-        if (bar && barRun(elapsed) === 1) {
+        shownAt = now() - resumedAt;
+        if (bar && barRun(resumedAt) === 1) {
           bar.landed = true;
           bar.landedAt = shownAt + BAR_START_MS + barSpan();
         }

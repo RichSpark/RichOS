@@ -3452,6 +3452,47 @@ async function main() {
     return "Both durations recover from a failed start, continue from an interruption and fade at the endpoint";
   });
 
+  await run.check("29c  a slow native handoff does not leave the fallback behind its cue", async () => {
+    const page = await launch(browser, {
+      virtualTime: true,
+      init: () => {
+        window.__RICHOS_LAUNCH__ = { kind: "fresh", splash: { id: "opening/edition-year", native: true } };
+        window.__RICHOS_OPENINGS__ = { sound: true };
+        window.__native = { sounds: 0 };
+        window.Audio = class {
+          load() {}
+          play() { window.__native.sounds++; return Promise.resolve(); }
+        };
+        window.__TAURI_INTERNALS__ = {
+          invoke(cmd) {
+            if (cmd === "splash_native_finished") return new Promise(resolve => { window.__native.fail = resolve; });
+            if (cmd === "splash_native_dismiss") return new Promise(resolve => { window.__native.dismissed = resolve; });
+            return Promise.resolve(null);
+          },
+        };
+      },
+    });
+    await page.clock.runFor(2000);
+    const held = await page.evaluate(async () => {
+      window.__native.fail({
+        state: "fallback", elapsedMs: 1250, nativeCue: true,
+        startedAtMs: performance.timeOrigin + performance.now() - 1250,
+      });
+      await Promise.resolve();
+      return window.RichSplash.moment();
+    });
+    assertEqual(Math.round(held), 1250, "the fallback starts at the same point as the native movie");
+    await page.clock.runFor(500);
+    const resumed = await page.evaluate(async () => {
+      window.__native.dismissed();
+      await Promise.resolve();
+      return { moment: Math.round(window.RichSplash.moment()), sounds: window.__native.sounds };
+    });
+    assertEqual(resumed, { moment: 1750, sounds: 0 }, "fallback artwork must catch up to the uninterrupted native cue");
+    await page.__ctx.close();
+    return "A 500 ms cover-removal delay does not move the cue or replay it";
+  });
+
   await run.check("30  a saved opening without a local video plays through before preparing its pack", async () => {
     for (const [id, seconds] of [["opening/material-leather", 3], ["opening/edition-year", 5]]) {
       const page = await launch(browser, {
