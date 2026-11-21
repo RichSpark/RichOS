@@ -141,6 +141,8 @@
   // cut a five-second screen off at four. One second of grace over whatever this launch's
   // hold is; 4000 at the default, unchanged.
   var CEILING_GRACE_MS = 1000;
+  // The native cover has a matching last-resort release in player.m.
+  var NATIVE_HOME_GRACE_MS = 3000;
 
   // =====================================================================================
   //                          THE ONE NUMBER: THREE SECONDS
@@ -1178,6 +1180,8 @@
   var node = null;
   var yielded = false;
   var nativeRecovering = false;
+  var nativeFinished = false;
+  var homeReady = false;
   var ceiling = null;
   var holdTimer = null;
   var state = {
@@ -1288,7 +1292,21 @@
   /// Get out of the way. Called by `main.js` when the app is usable and by the ceiling -
   /// whichever happens first, and only once. ROUND 85: never by the user's hand.
   function yieldNow(reason) {
-    if (yielded || nativeRecovering || (state.native && reason !== "native-finished")) return;
+    if (yielded || nativeRecovering) return;
+
+    if (state.native) {
+      if (reason === "app-ready") homeReady = true;
+      if (reason === "native-finished") {
+        nativeFinished = true;
+        if (!homeReady && ceiling === null) {
+          ceiling = setTimeout(function () { yieldNow("ceiling"); }, NATIVE_HOME_GRACE_MS);
+        }
+      }
+      // Both sides can finish first. Reveal the painted Home or restored view
+      // only after the movie reaches its authored end and app startup is ready.
+      if (!nativeFinished || (!homeReady && reason !== "ceiling")) return;
+      if (reason !== "ceiling") reason = "native-finished";
+    }
 
     // THE HOLD, AND THE ONE CALLER IT APPLIES TO.
     //

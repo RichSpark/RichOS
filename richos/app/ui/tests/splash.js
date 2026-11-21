@@ -3334,6 +3334,16 @@ async function main() {
       init: () => {
         window.__RICHOS_LAUNCH__ = { kind: "fresh", splash: { id: "round-11/v1", native: true, bar: [371, 712.75, 658, 2] } };
         window.__native = { calls: [] };
+        let splash;
+        Object.defineProperty(window, "RichSplash", {
+          get: () => splash,
+          set(value) {
+            splash = value;
+            const yieldNow = value.yieldNow;
+            window.__native.ready = () => yieldNow("app-ready");
+            value.yieldNow = reason => { if (reason !== "app-ready") yieldNow(reason); };
+          },
+        });
         window.__TAURI_INTERNALS__ = {
           invoke(cmd, args) {
             window.__native.calls.push(cmd);
@@ -3352,13 +3362,17 @@ async function main() {
     await page.clock.runFor(7000);
     const playing = await page.evaluate(() => {
       const splash = document.getElementById("splash");
-      window.RichSplash.yieldNow("app-ready");
       return { hidden: getComputedStyle(splash).visibility, children: splash.childElementCount, held: window.RichSplash.state.heldAt, reason: window.RichSplash.state.reason, covered: window.loroCovered() };
     });
     assertEqual(playing, { hidden: "hidden", children: 0, held: 0, reason: null, covered: true }, "native playback keeps Home covered without building the HTML splash");
-    const fading = await page.evaluate(async () => {
+    const atEndpoint = await page.evaluate(async () => {
       window.__native.finish({ state: "finished" });
       await Promise.resolve();
+      return { dismissing: window.__native.calls.includes("splash_native_dismiss"), covered: window.loroCovered() };
+    });
+    assertEqual(atEndpoint, { dismissing: false, covered: true }, "a finished movie must not fade into a loading view");
+    const fading = await page.evaluate(() => {
+      window.__native.ready();
       const style = document.querySelector(".ro-handover")?.style;
       return {
         animated: window.__native.animated,
@@ -3413,6 +3427,7 @@ async function main() {
           },
         });
         const recovered = await page.evaluate(async ({ elapsedMs, nativeCue }) => {
+          window.RichSplash.yieldNow("app-ready");
           window.__native.fail({ state: "fallback", elapsedMs, nativeCue });
           await Promise.resolve();
           await Promise.resolve();
