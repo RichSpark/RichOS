@@ -46,7 +46,8 @@ final class Canvas: NSView {
         self.message = message
         setAccessibilityLabel(filename)
         setAccessibilityValue(message)
-        viewport.reset(imageSize: decoded?.size ?? .zero, in: bounds.size)
+        viewport.reset(imageSize: decoded?.size ?? .zero, in: bounds.size,
+                       backingScale: window?.backingScaleFactor ?? 1)
         anchor = nil
         dragPoint = nil
         refresh()
@@ -90,7 +91,19 @@ final class Canvas: NSView {
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+        refreshBackingScale()
         updatePalette()
+    }
+
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        refreshBackingScale()
+    }
+
+    private func refreshBackingScale() {
+        viewport.changeBackingScale(to: window?.backingScaleFactor ?? 1)
+        anchor = nil
+        refresh()
     }
 
     private func updatePalette() {
@@ -104,7 +117,10 @@ final class Canvas: NSView {
         colors.ground.setFill()
         dirtyRect.fill()
         NSGraphicsContext.current?.imageInterpolation = .high
-        image?.draw(in: viewport.imageRect, from: .zero, operation: .sourceOver,
+        let imageRect = viewport.scale == 1
+            ? backingAlignedRect(viewport.imageRect, options: .alignAllEdgesNearest)
+            : viewport.imageRect
+        image?.draw(in: imageRect, from: .zero, operation: .sourceOver,
                     fraction: 1, respectFlipped: true, hints: nil)
         if let message {
             let label = NSAttributedString(string: message, attributes: [
