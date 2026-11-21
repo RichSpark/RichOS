@@ -257,6 +257,7 @@ enum ScreenshotRenderer {
             let labelSize = label.size()
             label.draw(at: CGPoint(x: bubble.midX - labelSize.width / 2, y: bubble.midY - labelSize.height / 2))
         case .text:
+            var pointerPath: CGPath?
             if let pointer = mark.pointer, !rect.contains(pointer) {
                 let dx = pointer.x - rect.midX
                 let dy = pointer.y - rect.midY
@@ -270,6 +271,7 @@ enum ScreenshotRenderer {
                 tail.addLine(to: pointer)
                 tail.addLine(to: base.offset(dx: -side.x, dy: -side.y))
                 tail.closeSubpath()
+                pointerPath = tail
                 context.setFillColor(color.cgColor)
                 context.setStrokeColor(outline.cgColor)
                 context.setLineWidth(2 * scale)
@@ -284,6 +286,11 @@ enum ScreenshotRenderer {
             context.setLineWidth(2 * scale)
             context.addPath(path)
             context.strokePath()
+            if let pointerPath {
+                // Carry the callout fill through the join without a line across its pointer.
+                context.addPath(pointerPath)
+                context.fillPath()
+            }
             let paragraph = NSMutableParagraphStyle()
             paragraph.lineBreakMode = .byWordWrapping
             NSAttributedString(string: mark.text, attributes: [

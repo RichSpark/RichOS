@@ -162,8 +162,10 @@ final class ScreenshotButton: NSButton {
             path.fill()
         }
         if style == .outline || window?.firstResponder === self || (style == .swatch && isSelected) {
-            (window?.firstResponder === self ? p.gold : style == .swatch ? p.ink : p.control).setStroke()
-            path.lineWidth = window?.firstResponder === self ? 2 : 1
+            let focused = window?.firstResponder === self
+            let ring = selected && style != .swatch ? p.onGold : p.gold
+            (focused ? ring : style == .swatch ? p.ink : p.control).setStroke()
+            path.lineWidth = focused ? 2 : 1
             path.stroke()
         }
         if let swatch {

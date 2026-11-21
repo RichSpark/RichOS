@@ -107,6 +107,12 @@ final class ScreenshotRecents: NSView {
             row.scrollToVisible(card.frame)
             if newCapture && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
                 card.alphaValue = 0
+                let slide = CABasicAnimation(keyPath: "transform.translation.y")
+                slide.fromValue = 24
+                slide.toValue = 0
+                slide.duration = 0.25
+                slide.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                card.layer?.add(slide, forKey: "new-capture")
                 NSAnimationContext.runAnimationGroup { context in
                     context.duration = 0.25
                     card.animator().alphaValue = 1
@@ -261,6 +267,7 @@ private final class ScreenshotShelfCard: NSView {
     init(_ entry: ScreenshotStore.Entry) {
         self.entry = entry
         super.init(frame: .zero)
+        wantsLayer = true
         addSubview(button)
         addSubview(delete)
         button.isBordered = false
