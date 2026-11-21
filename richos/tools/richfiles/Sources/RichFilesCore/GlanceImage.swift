@@ -113,6 +113,7 @@ public struct GlanceImage {
     public enum Failure: Error { case unavailable, unreadable }
 
     public let bitmap: CGImage
+    /// Oriented source dimensions in pixels, even when the decoded bitmap is smaller.
     public let size: CGSize
     public let animation: GlanceAnimation?
 
@@ -293,25 +294,40 @@ public struct GlanceViewport {
     public private(set) var scale: CGFloat = 1
     public private(set) var origin: CGPoint = .zero
     private var automaticScale = true
+    private var backingScale: CGFloat = 1
+
+    // At 100%, one source pixel occupies one pixel of the window's backing store.
+    private var drawingScale: CGFloat { scale / backingScale }
 
     public var isFit: Bool { automaticScale && fit < 1 }
 
     public var imageRect: CGRect {
-        CGRect(origin: origin, size: CGSize(width: imageSize.width * scale, height: imageSize.height * scale))
+        CGRect(origin: origin, size: CGSize(width: imageSize.width * drawingScale, height: imageSize.height * drawingScale))
     }
     public var canPan: Bool { imageRect.width > size.width + 0.5 || imageRect.height > size.height + 0.5 }
 
     private var fit: CGFloat {
         guard imageSize.width > 0, imageSize.height > 0, size.width > 0, size.height > 0 else { return 1 }
-        return min(1, size.width / imageSize.width, size.height / imageSize.height)
+        return min(1, size.width * backingScale / imageSize.width, size.height * backingScale / imageSize.height)
     }
 
     public init() {}
 
-    public mutating func reset(imageSize: CGSize, in size: CGSize) {
+    public mutating func reset(imageSize: CGSize, in size: CGSize, backingScale: CGFloat = 1) {
         self.imageSize = imageSize
         self.size = size
+        self.backingScale = backingScale.isFinite && backingScale > 0 ? backingScale : 1
         automaticScale = true
+        clamp()
+    }
+
+    public mutating func changeBackingScale(to backingScale: CGFloat) {
+        guard backingScale.isFinite, backingScale > 0, backingScale != self.backingScale else { return }
+        let center = CGPoint(x: size.width / 2, y: size.height / 2)
+        let ratio = self.backingScale / backingScale
+        origin = CGPoint(x: center.x + (origin.x - center.x) * ratio,
+                         y: center.y + (origin.y - center.y) * ratio)
+        self.backingScale = backingScale
         clamp()
     }
 
@@ -323,7 +339,7 @@ public struct GlanceViewport {
     }
 
     public func imagePoint(at point: CGPoint) -> CGPoint {
-        CGPoint(x: (point.x - origin.x) / scale, y: (point.y - origin.y) / scale)
+        CGPoint(x: (point.x - origin.x) / drawingScale, y: (point.y - origin.y) / drawingScale)
     }
 
     public mutating func zoom(by factor: CGFloat, at pointer: CGPoint, holding anchor: CGPoint) {
@@ -333,7 +349,7 @@ public struct GlanceViewport {
         guard scale >= 0.05 || factor > 1 else { return }
         scale = min(20, max(0.05, scale * factor))
         automaticScale = false
-        origin = CGPoint(x: pointer.x - anchor.x * scale, y: pointer.y - anchor.y * scale)
+        origin = CGPoint(x: pointer.x - anchor.x * drawingScale, y: pointer.y - anchor.y * drawingScale)
         clamp()
     }
 
