@@ -2805,6 +2805,16 @@ fn main() {
     // (`first_frame::after_page`, in the hook), never before the first frame: its thread competes
     // for the processor in the same fraction of a second (Sage's plan 2026-11-14, rule 3).
     tauri::Builder::default()
+        .on_window_event(|window, event| {
+            #[cfg(target_os = "macos")]
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if window.app_handle().config().app.windows.first().is_some_and(|main| main.label == window.label()) {
+                    lifecycle::hide_main_window(window, api);
+                }
+            }
+            #[cfg(not(target_os = "macos"))]
+            let _ = (window, event);
+        })
         // =================================================================================
         // THE MENU, AND THE ONE ITEM IN IT THIS APP HAS TO OWN — background-work spec §2.5
         // =================================================================================
@@ -3202,8 +3212,6 @@ fn main() {
                 if let Some(pick) = window_splash {
                     launch_timing::note_splash(&pick.id, false);
                 }
-                #[cfg(target_os="macos")]
-                cleaner_host::watch_main(&window);
                 // WHERE HE LEFT IT, FOR NEXT TIME — and only if it is still reachable then.
                 //
                 // ONLY AN INSTALLED LAUNCH RECORDS ANYTHING, and that is the same rule the
@@ -10827,7 +10835,6 @@ fn start_native_window(
                     .auto_resize();
                 window.add_child(webview, tauri::LogicalPosition::new(0.0, 0.0), window.inner_size()?)?;
                 let page = main.get_webview_window(window.label()).ok_or(tauri::Error::WindowNotFound)?;
-                cleaner_host::watch_main(&page);
                 remember_window_geometry(&page, geometry_path);
                 mac_attachments::listen_for_drops(&page);
                 Ok(())
@@ -11436,8 +11443,6 @@ fn reopen_window(app: &AppHandle) {
     }
     match builder.build() {
         Ok(window) => {
-            #[cfg(target_os="macos")]
-            {cleaner_host::watch_main(&window);}
             remember_window_geometry(&window, geometry_path);
             // A window rebuilt from the Dock takes drops too (CEO §86).
             mac_attachments::listen_for_drops(&window);

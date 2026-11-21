@@ -385,35 +385,30 @@ fn build_panel(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 /// Hidden feature panels must not keep the application alive after its main window closes.
-/// Ordinary registered-work policy remains the application's own ExitRequested decision.
-pub fn watch_main(window: &tauri::WebviewWindow) {
-    let app = window.app_handle().clone();
-    window.on_window_event(move |event| {
-        if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
-            if let Some(h) = app.try_state::<Arc<Host>>() {
-                if let Ok(active) = h.active.lock() {
-                    if let Some(a) = active.as_ref() {
-                        if a.stage != "filing" {
-                            a.cancel.store(true, Ordering::Release);
-                            if let Some(chooser) = &a.chooser {
-                                chooser.cancel();
-                            }
-                            if let Err(e) = link(&app, &a.id, "cancel", json!({})) {
-                                eprintln!("[richos] RichCleaner close: {e}");
-                            }
-                        }
+/// Called once the main window has been ordered off screen.
+pub fn main_window_closing(app: &AppHandle) {
+    if let Some(h) = app.try_state::<Arc<Host>>() {
+        if let Ok(active) = h.active.lock() {
+            if let Some(a) = active.as_ref() {
+                if a.stage != "filing" {
+                    a.cancel.store(true, Ordering::Release);
+                    if let Some(chooser) = &a.chooser {
+                        chooser.cancel();
                     }
-                }
-            }
-            for label in [PANEL, "cleaner"] {
-                if let Some(feature) = app.get_webview_window(label) {
-                    if let Err(e) = feature.destroy() {
-                        eprintln!("[richos] RichCleaner window close: {e}");
+                    if let Err(e) = link(app, &a.id, "cancel", json!({})) {
+                        eprintln!("[richos] RichCleaner close: {e}");
                     }
                 }
             }
         }
-    });
+    }
+    for label in [PANEL, "cleaner"] {
+        if let Some(feature) = app.get_webview_window(label) {
+            if let Err(e) = feature.destroy() {
+                eprintln!("[richos] RichCleaner window close: {e}");
+            }
+        }
+    }
 }
 pub fn on_message(app: &AppHandle, message: Option<&ToolMessage>) {
     let Some(message) = message else { return };

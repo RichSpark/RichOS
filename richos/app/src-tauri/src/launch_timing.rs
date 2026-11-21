@@ -214,7 +214,7 @@ fn log_entry(millis: u64, version: &str, pid: u32, line: &str) -> String {
 }
 
 /// Append one entry, creating the folder and the file, and keeping one earlier generation.
-fn append(path: &std::path::Path, entry: &str) -> std::io::Result<()> {
+pub(crate) fn append(path: &std::path::Path, entry: &str) -> std::io::Result<()> {
     use std::io::Write;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
