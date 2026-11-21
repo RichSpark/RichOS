@@ -14,6 +14,7 @@ What changed in each RichOS nightly build from 1.2.1-nightly.20261019.67 on, new
 - Changed Backspace in RichFiles to go back to the previous folder; to move files to the Trash, press Delete with Fn or Command or use a separate Forward Delete key
 - Changed RichGlance to open a picture smaller than its window at its real size instead of stretching it, to zoom from 5% up to 20 times and to remember its window's size and place
 - Improved RichFiles to select a file the moment you press on it and to show Opening folder… while a folder opens
+- Fixed Dock gestures and the other RichFiles Window Gestures stopping after an update: the helper you already allowed now starts again by itself, so nothing has to be turned on or allowed again
 - Fixed the line in RichFiles Workspaces that says saving or opening a workspace failed being too faint to read easily in light and dark mode
 - [technical] Added the Delete shortcut on the Mac desktop to RichDoctor's reports, without any file names
 - [technical] Changed the weekly point where Rich moves your team to your next Claude account or pauses it to follow the measured pace when Claude reports a precise reading, up to 99.9% instead of 99%
