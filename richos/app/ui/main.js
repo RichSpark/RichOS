@@ -2191,7 +2191,9 @@ function flushRender() {
   if (pendingSearchAnchor && pendingSearchAnchor.thread_id === timelineModel.threadId) {
     const { turn_id, message_id } = pendingSearchAnchor;
     pendingSearchAnchor = null;
-    const target = window.RichTimeline.searchMessageAnchor(messagesEl, turn_id, message_id);
+    const target = message_id === null
+      ? window.RichTimeline.turnAnchor(messagesEl, turn_id)
+      : window.RichTimeline.searchMessageAnchor(messagesEl, turn_id, message_id);
     if (target) {
       followBottom = false;
       target.scrollIntoView({ block: "center" });
@@ -9453,13 +9455,7 @@ async function activateSearchHit(index) {
       return;
     }
     closeSearch();
-    const opening = openThread(anchor.thread_id);
-    const ticket = navTicket;
-    await opening;
-    if (ticket === navTicket && activeThreadId === anchor.thread_id) {
-      pendingSearchAnchor = { ...anchor, ticket };
-      scheduleRender();
-    }
+    await openMessageAnchor(anchor);
     return;
   }
   const hit = it.hit;
@@ -9470,6 +9466,24 @@ async function activateSearchHit(index) {
   }
   if (hit.thread_id) await openThread(hit.thread_id);
 }
+
+async function openMessageAnchor(anchor) {
+  const opening = openThread(anchor.thread_id);
+  const ticket = navTicket;
+  await opening;
+  if (ticket === navTicket && activeThreadId === anchor.thread_id) {
+    pendingSearchAnchor = { ...anchor, ticket };
+    scheduleRender();
+  }
+}
+
+window.RichOpenMeetingNotes = async ({ thread, turn }) => {
+  const ticket = navTicket;
+  if (!threadRow(thread)) await refreshNavigation();
+  if (ticket !== navTicket || window.RichNavRail.page !== "brief") return;
+  if (!threadRow(thread)) throw new Error("The meeting’s chat is unavailable.");
+  await openMessageAnchor({ thread_id: thread, turn_id: turn, message_id: null });
+};
 
 function invalidateSearch() {
   const generation = ++searchState.gen;

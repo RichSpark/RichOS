@@ -1349,6 +1349,7 @@ struct BrowserView: View {
         case .revealFolder: expandToCurrentFolder()
         case .workspaces: sheet = .workspaces
         case .settings: sheet = .settings
+        case .imageViewerSettings: sheet = .imageViewerSettings
         case .splitView: workspace.toggleSplit()
         case .switchPane:
             guard workspace.isSplit else { return false }
@@ -1790,6 +1791,9 @@ struct BrowserView: View {
             }
         case .settings:
             RichFilesSettings(workspace: workspace, windowSize: windowSize) { sheet = nil }
+                .modifier(BrowserAppearance())
+        case .imageViewerSettings:
+            RichFilesSettings(workspace: workspace, windowSize: windowSize, initialPage: .imageViewer) { sheet = nil }
                 .modifier(BrowserAppearance())
         case .searchOptions: SearchOptionsSheet(model: model)
         case .batch(let references): BatchRenameSheet(sources: references, folder: model.folder, actions: actions)

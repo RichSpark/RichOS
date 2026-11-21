@@ -62,8 +62,9 @@ final class WindowWorkspace: ObservableObject {
         if commands[pane]?.owner == owner { commands.removeValue(forKey: pane) }
     }
 
-    func perform(_ command: BrowserCommand) {
-        _ = commands[active]?.run(command)
+    @discardableResult
+    func perform(_ command: BrowserCommand) -> Bool {
+        commands[active]?.run(command) ?? false
     }
 
     func sessionData() -> Data? {
@@ -202,6 +203,11 @@ struct WindowBrowserView: View {
         .onChange(of: scenePhase) { if $0 != .active { saveSession() } }
         .onChange(of: restoreSession) { _ in saveSession(rememberWindow: true) }
         .onChange(of: openRequests.requestID) { _ in receiveFolderOpen() }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { notice in
+            if (notice.object as? NSWindow)?.windowNumber == nativeWindowNumber {
+                receiveFolderOpen()
+            }
+        }
         .onDisappear { saveSession() }
     }
 
@@ -310,6 +316,16 @@ struct WindowBrowserView: View {
         for id in openRequests.takeHandoffs() { openWindow(id: "richfiles-handoff", value: id.uuidString) }
         guard let nativeWindowNumber,
               (NSApp.keyWindow ?? NSApp.mainWindow)?.windowNumber == nativeWindowNumber else { return }
+        if openRequests.imageViewerSettingsRequested {
+            // On cold launch the pane registers its handler in onAppear.
+            Task { @MainActor in
+                if openRequests.imageViewerSettingsRequested,
+                   (NSApp.keyWindow ?? NSApp.mainWindow)?.windowNumber == nativeWindowNumber,
+                   workspace.perform(.imageViewerSettings) {
+                    openRequests.imageViewerSettingsOpened()
+                }
+            }
+        }
         let folders = openRequests.takePending()
         if folders.count == 1, let location = folders.first {
             if location.hasDirectoryPath || (try? location.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true {
