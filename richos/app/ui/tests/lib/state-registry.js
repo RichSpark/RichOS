@@ -3175,6 +3175,23 @@ module.exports = [
     why: "`prepare()` at update_startup.rs:107, when `remember_installation` cannot finish an interrupted move into Applications or record where the app is installed. Same single call site as the rows above: main.rs hands it to `startup_alert::cannot_start` (stderr and startup.log) and exits 1 before any webview exists.",
   },
 
+  {
+    s: "app setup after opening the native splash: {error}",
+    c: "NOT-RENDERED",
+    why:
+      "The diagnostic first argument to `startup_alert::cannot_start` in the native startup " +
+      "worker. It records the error in stderr and startup.log. The alert uses the separate " +
+      "plain-language sentence passed alongside it.",
+  },
+
+  {
+    s: "Window services require the main thread",
+    c: "NOT-RENDERED",
+    why:
+      "The AppKit service dispatch checks its thread before touching a window. If the " +
+      "dispatch fails that check, startup_alert records this detail in the startup log.",
+  },
+
   // ---- startup_alert.rs — the surface the nine rows above did not have -----------------
   //
   // WHAT CHANGED UNDER THE NINE ROWS ABOVE, said here because their line numbers and their
