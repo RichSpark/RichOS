@@ -6,7 +6,9 @@
 #   an added account: <its CLAUDE_CONFIG_DIR>/usage.json
 # A usage file is {"five": N, "weekly": N}, optionally with "five_at" and "week_at" (epoch
 # seconds) for when each window resets; without them a window resets 3 h / 4 d after this
-# process started. A usage file {"null": true} answers get_usage as Claude Code 2.1.289 does
+# process started. "fable": N (with "fable_at", else the week's reset) adds the Fable limit as
+# Claude Code's get_usage gives it, a `model_scoped` row named Fable (a quota walk on stand-in
+# readings). A usage file {"null": true} answers get_usage as Claude Code 2.1.289 does
 # some of the time: rate_limits_available true and rate_limits null (walk of nightly 36, D1,
 # qa/usage-shape.sh), and a turn then streams no rate_limit_event. While /Users/admin/fill-first/slow exists, a turn is held open before it # machine-path-exempt: isolated guest fixture documentation; no customer default
 # answers (at most 10 minutes), so a walk can photograph a turn in progress. Only the user's
@@ -394,7 +396,9 @@ while (defined(my $line = next_line())) {
       $answer = $u->{null} ? { rate_limits_available => JSON::PP::true, rate_limits => undef }
         : { rate_limits_available => JSON::PP::true, rate_limits => {
         (defined $u->{five} ? (five_hour => { utilization => $u->{five} + 0, resets_at => iso($u->{five_at} // $five_reset) }) : ()),
-        seven_day => { utilization => $u->{weekly} + 0, resets_at => iso($u->{week_at} // $week_reset) } } };
+        seven_day => { utilization => $u->{weekly} + 0, resets_at => iso($u->{week_at} // $week_reset) },
+        (defined $u->{fable} ? (model_scoped => [{ display_name => 'Fable', utilization => $u->{fable} + 0,
+          resets_at => iso($u->{fable_at} // $u->{week_at} // $week_reset) }]) : ()) } };
     }
     print $json->encode({ type => 'control_response', response => { subtype => 'success', request_id => $msg->{request_id}, response => $answer } }), "\n";
   } elsif ($type eq 'user') {
