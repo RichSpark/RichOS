@@ -2566,6 +2566,30 @@ fn install_correction_desk(
     Some(desk)
 }
 
+#[cfg(target_os = "macos")]
+fn start_window_services(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
+    fn start(app: &AppHandle, main: objc2::MainThreadMarker) -> Result<(), String> {
+        cleaner_host::start(app, main)?;
+        cleaner_service::register(app, main)
+    }
+
+    // The usual setup hook is already on AppKit's thread. With a native opening,
+    // setup runs on a worker. Only the worker waits for this piece of setup.
+    if let Some(main) = objc2::MainThreadMarker::new() {
+        return Ok(start(app, main)?);
+    }
+
+    let handle = app.clone();
+    let (finished, ready) = std::sync::mpsc::channel();
+    app.run_on_main_thread(move || {
+        let result = objc2::MainThreadMarker::new()
+            .ok_or_else(|| "Window services require the main thread".to_string())
+            .and_then(|main| start(&handle, main));
+        drop(finished.send(result));
+    })?;
+    Ok(ready.recv()??)
+}
+
 fn main() {
     if std::env::args().nth(1).as_deref() == Some(richos_core::quota::terminal::HEADLESS_PROTOCOL) {
         std::process::exit(richos_core::quota::terminal::run(std::env::args().skip(2).collect()));
@@ -4223,7 +4247,10 @@ fn main() {
                 swearmeter_host::start(app.clone());
                 rich_files_host::start(app.clone());
                 #[cfg(target_os = "macos")]
-                {app.manage(Arc::new(writing_host::Host::default()));cleaner_host::start(app)?;cleaner_service::register(app)?;}
+                {
+                    app.manage(Arc::new(writing_host::Host::default()));
+                    start_window_services(app)?;
+                }
                 let intake_app = app.clone();
                 first_frame::after_page(app, move || start_incoming_drain(intake_app));
                 git_name_host::start(app.clone());
