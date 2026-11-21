@@ -42,12 +42,11 @@ final class Canvas: NSView {
 
     func show(_ decoded: GlanceImage?, filename: String, message: String? = nil) {
         info.reset(showIcon: decoded != nil)
-        image = decoded.map { NSImage(cgImage: $0.bitmap, size: $0.size) }
+        image = decoded.map { NSImage(cgImage: $0.bitmap, size: $0.pointSize) }
         self.message = message
         setAccessibilityLabel(filename)
         setAccessibilityValue(message)
-        viewport.reset(imageSize: decoded?.size ?? .zero, in: bounds.size,
-                       backingScale: window?.backingScaleFactor ?? 1)
+        viewport.reset(imageSize: decoded?.pointSize ?? .zero, in: bounds.size)
         anchor = nil
         dragPoint = nil
         refresh()
@@ -91,19 +90,12 @@ final class Canvas: NSView {
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        refreshBackingScale()
         updatePalette()
     }
 
     override func viewDidChangeBackingProperties() {
         super.viewDidChangeBackingProperties()
-        refreshBackingScale()
-    }
-
-    private func refreshBackingScale() {
-        viewport.changeBackingScale(to: window?.backingScaleFactor ?? 1)
-        anchor = nil
-        refresh()
+        needsDisplay = true
     }
 
     private func updatePalette() {
