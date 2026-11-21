@@ -5,8 +5,6 @@ const { loadPlaywright, createRun, assert, assertEqual, UI_DIR,
   leaveHome, shellSettled, flushFrames, captureSettled, publishShot, SHOT_DIR } = require("./lib/harness");
 const contrast = require("./lib/contrast");
 
-const screenshots = process.env.RICHOS_RAIL_PAGE_SHOTS || SHOT_DIR;
-
 async function open(browser, theme, available = true, delayTools = false) {
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, reducedMotion: "reduce" });
   await page.addInitScript(({ theme, available, delayTools }) => {
@@ -160,7 +158,7 @@ async function main() {
           }
           records.push(section + " " + await checkContrast(page, "#" + section));
           const shot = await captureSettled(page, { animations: "disabled" });
-          publishShot(shot, path.join(screenshots, theme + "-" + name + ".png"));
+          publishShot(shot, path.join(SHOT_DIR, theme + "-" + name + ".png"));
         }
         return records.join(", ");
       } finally {
