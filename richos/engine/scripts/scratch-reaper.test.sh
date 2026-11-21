@@ -786,6 +786,32 @@ else
     bad "S8b the reaper reached into the nightly source or runtime"
 fi
 
+mkdir -p "$W_NIGHTLY/runs" "$W_NIGHTLY/promoted-nightlies"
+printf '{"out":"%s/releases/v1.3.6-nightly.20261121.111"}\n' "$W_NIGHTLY" >"$W_NIGHTLY/runs/awaiting.json"
+printf '{"out":"%s/releases/v1.3.5-nightly.20261120.110"}\n' "$W_NIGHTLY" >"$W_NIGHTLY/runs/promoted.json"
+touch "$W_NIGHTLY/promoted-nightlies/v1.3.5-nightly.20261120.110"
+for name in awaiting promoted recent1 recent2 recent3; do
+    printf '%s\n' 'completed build' >"$W_NIGHTLY/logs/$name.log"
+done
+touch -t 202609010000 "$W_NIGHTLY/logs/awaiting.log" "$W_NIGHTLY/logs/promoted.log"
+touch -t 202609020000 "$W_NIGHTLY/logs/recent1.log" "$W_NIGHTLY/logs/recent2.log" "$W_NIGHTLY/logs/recent3.log"
+touch -t 202609030000 "$W_NIGHTLY/logs/empty1.log" "$W_NIGHTLY/logs/empty2.log"
+OUT="$(run --apply)"
+if [ -f "$W_NIGHTLY/logs/awaiting.log" ] && [ ! -e "$W_NIGHTLY/logs/promoted.log" ]; then
+    ok "S8c an unpromoted nightly retains its builder log even after its archive is gone"
+else
+    bad "S8c nightly log retention ignored the stable publication record"
+    printf '%s\n' "$OUT" | sed 's/^/        /'
+fi
+if [ -f "$W_NIGHTLY/logs/recent1.log" ] && [ -f "$W_NIGHTLY/logs/recent2.log" ] \
+        && [ -f "$W_NIGHTLY/logs/recent3.log" ] && [ ! -e "$W_NIGHTLY/logs/empty1.log" ] \
+        && [ ! -e "$W_NIGHTLY/logs/empty2.log" ]; then
+    ok "S8d newer empty logs never displace a nonempty log"
+else
+    bad "S8d empty logs used the retention quota"
+    printf '%s\n' "$OUT" | sed 's/^/        /'
+fi
+
 # ===========================================================================
 # S9 — an undeclared threshold refuses
 # ===========================================================================

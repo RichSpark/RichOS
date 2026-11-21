@@ -1,10 +1,11 @@
 """Immutable evidence for completed nightly gates, including interrupted builds.
 
-Only build candidates reconcile gates. Release/stable and the release-path smoke
-check retain their fresh-run requirements. A reuse is never a new passing run.
+Only build candidates reconcile arbitrary prior gates. Stable can recover the
+specific receipts sealed by its published nightly. A reuse is never a new pass.
 """
 import json
 from pathlib import Path
+import re
 import time
 import subprocess
 
@@ -45,16 +46,20 @@ class GateEvidence:
             return None
         return self.intact(*latest)
 
-    def proven_pass(self, name, path):
+    def proven_pass(self, name, path, *, record_sha256=None):
         """The record at `path` when it is an intact actual pass of `name`, else None.
 
         What a later reader (`stable --from-nightly`) calls to check a `REUSED` line a build
         wrote: the same integrity checks as `reusable`, with the identity left to the caller
-        because the line names the record, not the inputs.
+        because the line names the record, not the inputs. A published build
+        can also seal the expected record digest.
         """
         path = Path(path)
         try:
-            if evidence.file_digest(path) != path.with_suffix(".sha256").read_text().strip():
+            digest = evidence.file_digest(path)
+            if digest != path.with_suffix(".sha256").read_text().strip():
+                return None
+            if record_sha256 is not None and digest != record_sha256:
                 return None
             record = json.loads(path.read_text())
             if record["gate"] != name or record["schema"] != 1 or record.get("status") != "passed":
@@ -73,6 +78,37 @@ class GateEvidence:
         except (OSError, ValueError, KeyError, TypeError):
             return None
         return path, record
+
+    def sealed_passes(self, seals, names, source_commit):
+        """Resolve only the passing records named by a published nightly's provenance."""
+        if (not isinstance(seals, dict) or not isinstance(self.run_id, str)
+                or not re.fullmatch(r"\d{8}T\d{6}Z-[0-9a-f]{8}", self.run_id)):
+            raise ValueError("the published nightly has no sealed gate evidence")
+        records = {}
+        common_identity = None
+        for name in names:
+            seal = seals.get(name)
+            if not isinstance(seal, dict) or seal.get("status") not in ("passed", "reused"):
+                raise ValueError(f"the published nightly has no passing seal for {name}")
+            identity = seal.get("identity")
+            run = seal.get("run_id")
+            digest = seal.get("record_sha256")
+            if (not isinstance(identity, dict) or identity.get("source_commit") != source_commit
+                    or not isinstance(identity.get("inputs_sha256"), str)
+                    or not re.fullmatch(r"[0-9a-f]{64}", identity["inputs_sha256"])
+                    or (common_identity is not None and identity != common_identity)
+                    or not isinstance(run, str) or not re.fullmatch(r"\d{8}T\d{6}Z-[0-9a-f]{8}", run)
+                    or (seal["status"] == "passed" and run != self.run_id)
+                    or not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest)):
+                raise ValueError(f"the published nightly has an invalid seal for {name}")
+            common_identity = identity
+            # The archived path is diagnostic. Use this machine's own evidence store.
+            path = self.root / run / (name.replace("/", "-") + ".json")
+            record = self.proven_pass(name, path, record_sha256=digest)
+            if not record or record.get("identity") != identity or record.get("run_id") != run:
+                raise ValueError(f"{name} does not match its published seal at {path}")
+            records[name] = record
+        return records
 
     def unresolved(self, name, identity):
         latest = self.latest(name, identity)
