@@ -119,6 +119,7 @@ pub mod wav;
 pub mod capture;
 pub mod controller;
 pub mod playout;
+pub mod playback;
 // Rich's voice: Pocket TTS (ONNX Runtime, statically linked) with the Peter Yearsley preset.
 pub mod pocket;
 pub mod stt;

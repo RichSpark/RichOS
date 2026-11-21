@@ -7,7 +7,7 @@
 //! |---|---|
 //! | installation | RichDoctor's version; RichOS's Info.plist in `/Applications` and `~/Applications`; macOS version (`SystemVersion.plist`), CPU kind, memory class |
 //! | startup_crash | `startup.log` and `launch.log` with their previous generations under `~/Library/Logs/RichOS/`; `launches.json` under `~/Library/Application Support/com.richos.app/`; matching `.ips` reports under `~/Library/Logs/DiagnosticReports/` |
-//! | conversation_failure | `conversation-ledger.jsonl` under the app data root: allowlisted fields of `UpstreamFailure`, `TurnInterruptionCause` and `TurnInterrupted` only |
+//! | conversation_failure | `conversation-ledger.jsonl` under the app data root: allowlisted failure, interruption and voice playback fields |
 //! | configuration | `config.json` current settings; bounded RichPass, RichFiles and update diagnostics |
 //! | richscribe | `dictation.log`'s lines in the window (model, timing, errors; it never holds words) |
 //! | claude_availability | whether the CLI is found, its version, and whether the default sign-in answers |
@@ -642,6 +642,18 @@ pub fn ledger_line(line: &str) -> Option<(u64, String)> {
             format!("interruption cause: {}{}", r["cause"].as_str().unwrap_or("unknown"), if r["offers_retry"].as_bool() == Some(true) { " (retry offered)" } else { "" })
         }
         "TurnInterrupted" => format!("turn interrupted: {}{}", bounded(v["reason"].as_str().unwrap_or(""), 300), if v["recovered_after_restart"].as_bool() == Some(true) { " (found after a restart)" } else { "" }),
+        "VoiceReplyObserved" => {
+            let observation = &v["observation"];
+            match observation["kind"].as_str()? {
+                "cutoff" => format!(
+                    "voice playback stopped, confirmed chunk: {}, unconfirmed chunk: {}",
+                    observation["last_confirmed"].is_string(),
+                    observation["first_unconfirmed"].is_string()
+                ),
+                "withdrawn" => "voice reply withdrawn".to_string(),
+                _ => return None,
+            }
+        }
         _ => return None,
     };
     Some((at, format!("{} {shown}", crate::util::utc_stamp(at))))
@@ -660,14 +672,14 @@ fn conversation_failure(scope: &Scope, ctx: &Context, budget: &mut u64) -> Item 
     item.input_bytes = r.bytes;
     item.coverage = coverage;
     item.observed_at = picked.last().map(|x| x.0);
-    item.label = "the conversation's failure records".into();
+    item.label = "conversation failures, interruptions and voice playback".into();
     item.summary = match (picked.len(), coverage) {
-        (0, _) => "No failure or interruption is recorded in the conversation record.".into(),
-        (n, Coverage::InWindow) => format!("{n} failure or interruption record(s) in the incident window."),
-        (n, _) => format!("None in the incident window; the {n} most recent failure or interruption records are shown."),
+        (0, _) => "No failure, interruption or voice playback is recorded in the conversation record.".into(),
+        (n, Coverage::InWindow) => format!("{n} failure, interruption or voice playback record(s) in the incident window."),
+        (n, _) => format!("None in the incident window; the {n} most recent failure, interruption or voice playback records are shown."),
     };
     if picked.is_empty() {
-        item.note = "The conversation record was read: it holds no failure or interruption record in what was read.".into();
+        item.note = "The conversation record was read: it holds no failure, interruption or voice playback record in what was read.".into();
     }
     let text: Vec<String> = picked.into_iter().map(|x| x.1).collect();
     finish(item, &text.join("\n"), ctx, r.truncated)
@@ -1235,6 +1247,8 @@ mod tests {
             format!(r#"{{"event":"PromptSubmitted","turn_id":"t1","text":"my private plan for Acme","at":{T}}}"#),
             format!(r#"{{"event":"UpstreamFailure","turn_id":"t1","record":{{"fault":"overloaded","status":529,"request_id":"req_123","model":"x","ceo_message":"Anthropic is overloaded.","loss_message":"Your words are saved."}},"at":{T}}}"#),
             format!(r#"{{"event":"TurnInterruptionCause","turn_id":"t1","record":{{"cause":"upstream","ceo_message":"m","offers_retry":true}},"at":{T}}}"#),
+            format!(r#"{{"event":"VoiceReplyObserved","turn_id":"t1","observation":{{"kind":"cutoff","confirmed_chunks":1,"last_confirmed":"Heard private text","first_unconfirmed":"Unheard private text"}},"at":{T}}}"#),
+            format!(r#"{{"event":"VoiceReplyObserved","turn_id":"t1","observation":{{"kind":"withdrawn"}},"at":{T}}}"#),
             "not json at all".to_string(),
         ];
         write(&h.0.join("Library/Application Support/com.richos.app/conversation-ledger.jsonl"), &lines.join("\n"));
@@ -1242,7 +1256,9 @@ mod tests {
         let item = &collect(Category::ConversationFailure, &scope(&h.0, Window::around(T)), &Context::default(), 0)[0];
         assert_eq!(item.status, Status::Collected);
         assert!(item.text.contains("upstream failure: overloaded, status 529") && item.text.contains("interruption cause: upstream (retry offered)"), "{}", item.text);
-        for leaked in ["private plan", "Acme", "req_123", "t1", "Your words are saved"] {
+        assert!(item.text.contains("voice playback stopped, confirmed chunk: true, unconfirmed chunk: true"), "{}", item.text);
+        assert!(item.text.contains("voice reply withdrawn"), "{}", item.text);
+        for leaked in ["private plan", "Acme", "req_123", "t1", "Your words are saved", "Heard private text", "Unheard private text"] {
             assert!(!item.text.contains(leaked), "{leaked} leaked: {}", item.text);
         }
         assert_eq!(std::fs::read(h.0.join("Library/Application Support/com.richos.app/conversation-ledger.jsonl")).unwrap(), before, "the ledger is byte-identical");

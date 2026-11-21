@@ -1,0 +1,1 @@
+{"event":"VoiceReplyObserved","turn_id":"turn_00000000000000000000000000000003","observation":{"kind":"cutoff","confirmed_chunks":1,"last_confirmed":"First point.","first_unconfirmed":"Second point."},"at":1787975161005}

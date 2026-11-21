@@ -194,6 +194,7 @@ fn tag_of(e: &Event) -> &'static str {
         Event::PromptReceived { .. } => "PromptReceived",
         Event::TurnStarted { .. } => "TurnStarted",
         Event::AssistantDelta { .. } => "AssistantDelta",
+        Event::VoiceReplyObserved { .. } => "VoiceReplyObserved",
         Event::TurnCompleted { .. } => "TurnCompleted",
         Event::TurnInterrupted { .. } => "TurnInterrupted",
         Event::UpstreamFailure { .. } => "UpstreamFailure",
@@ -214,7 +215,7 @@ fn tag_of(e: &Event) -> &'static str {
 #[test]
 fn the_known_tag_table_matches_the_event_type_exactly() {
     let mut seen: Vec<String> = Vec::new();
-    for stem in ["v1-current", "v1-legacy", "v1-replay"] {
+    for stem in ["v1-current", "v1-legacy", "v1-replay", "voice-playback"] {
         let raw = std::fs::read_to_string(fixtures().join(format!("{stem}.jsonl"))).unwrap();
         for line in raw.lines().filter(|l| !l.trim().is_empty()) {
             let event: Event = serde_json::from_str(line).expect("fixture record parses");

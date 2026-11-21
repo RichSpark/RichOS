@@ -628,3 +628,64 @@ fn a_lost_history_is_marked_told_only_when_the_message_is_on_record() {
 fn uuid_like() -> String {
     format!("{}-{:?}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos())
 }
+
+#[test]
+fn a_cut_published_before_submit_is_durable_and_reaches_the_same_visible_request() {
+    use richos_core::voice_playback::{Observation, ReplyObservation};
+
+    struct CapturedRequest {
+        prompt: String,
+        playback: Option<String>,
+    }
+    struct CaptureRequest {
+        context: Option<String>,
+        sent: Arc<Mutex<Vec<CapturedRequest>>>,
+    }
+    impl Cognition for CaptureRequest {
+        fn session_id(&self) -> &str { "playback-fixture" }
+        fn set_voice_playback(&mut self, context: Option<String>) { self.context = context; }
+        fn prompt(&mut self, text: &str, on: &mut dyn FnMut(TurnItem)) -> Result<String, CognitionError> {
+            self.sent.lock().unwrap().push(CapturedRequest {
+                prompt: text.into(),
+                playback: self.context.take(),
+            });
+            on(TurnItem::Text { seq: 0, text: "First point. Second point." });
+            Ok("end_turn".into())
+        }
+    }
+
+    let (mut spine, _, _, root) = fixture();
+    let thread = spine.active_thread().unwrap().to_string();
+    let sent = Arc::new(Mutex::new(Vec::new()));
+    spine.attach_lease(Box::new(CaptureRequest { context: None, sent: sent.clone() }));
+    let answer = spine.submit_prompt("Say two points", Source::Text).unwrap();
+    let pending = spine.pending_voice_playback();
+    pending.record(|| vec![ReplyObservation {
+        thread_id: thread,
+        turn_id: answer.clone(),
+        observation: Observation::Cutoff {
+            confirmed_chunks: 1,
+            last_confirmed: Some("First point.".into()),
+            first_unconfirmed: Some("Second point.".into()),
+        },
+    }]);
+
+    // No explicit flush in the caller. Preparing the next visible request
+    // reads the pending observation even if the native writer did not get there first.
+    let request = spine.submit_prompt("Please continue", Source::Jam).unwrap();
+    let captured = sent.lock().unwrap();
+    assert_eq!(captured.len(), 2);
+    assert_eq!(captured[0].prompt, "Say two points");
+    assert!(captured[0].playback.is_none());
+    assert_eq!(captured[1].prompt, "Please continue");
+    let context: serde_json::Value =
+        serde_json::from_str(captured[1].playback.as_deref().unwrap()).unwrap();
+    assert_eq!(context["richos_reply_playback"]["reply_turn_id"], answer);
+    assert_eq!(context["richos_reply_playback"]["first_unconfirmed_spoken_chunk"], "Second point.");
+    let persisted = Ledger::open(root.join("ledger.jsonl")).unwrap();
+    assert!(persisted.turn(&answer).unwrap().voice_playback.is_some());
+    assert_eq!(persisted.turn(&request).unwrap().user_text, "Please continue");
+    drop(persisted);
+    drop(spine);
+    std::fs::remove_dir_all(root).unwrap();
+}
