@@ -1803,6 +1803,16 @@ class Runner:
         # scripts. A candidate built with older tooling must not bypass today's gate.
         self.command(sys.executable, ROOT / SCRIPTS / "nightly.py", "finish",
                      "--source", self.source, "--out", out)
+        tag = info.get("promoted_from")
+        if info.get("channel") == "stable" and tag:
+            try:
+                marker = self.state / "promoted-nightlies" / tag
+                marker.parent.mkdir(parents=True, exist_ok=True)
+                marker.touch()
+            except OSError as error:
+                # Publishing succeeded. Retaining the builder's log is safe if recording
+                # the promotion failed, so leave it protected and report the failure.
+                self.announce(f"Could not record the promotion of {tag} for log cleanup: {error}")
 
     def report_published(self, tag, stable=False):
         """Notes were a precondition. Only stable's next-version bump remains."""

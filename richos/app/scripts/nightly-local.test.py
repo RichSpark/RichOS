@@ -1461,6 +1461,18 @@ while True: time.sleep(.02)
                       dry_run=True)
         self.assertNotIn("published_reported", r.__dict__)
 
+    def test_only_successfully_publishing_stable_releases_the_nightly_log(self):
+        r = self.runner()
+        marker = r.state / "promoted-nightlies" / self.NIGHTLY
+        info = {"channel": "stable", "promoted_from": self.NIGHTLY}
+        r.command.side_effect = subprocess.CalledProcessError(1, "finish")
+        with self.assertRaises(subprocess.CalledProcessError):
+            r.finish_candidate(info, self.root / "out")
+        self.assertFalse(marker.exists())
+        r.command.side_effect = None
+        r.finish_candidate(info, self.root / "out")
+        self.assertTrue(marker.is_file())
+
     def test_stable_reuses_the_gates_of_the_run_that_built_the_promoted_nightly(self):
         # CEO, 2026-10-19: "what fucking checks are there needed if ALL OF THE FUCKING CHECKS
         # HAD BEEN ALREADY PREVIOUSLY DONE FOR THAT NIGHTLY VERSION?" Nightly 65's run passed
