@@ -2,7 +2,7 @@
 """Real packaged-app dedicated Codex channel walk, on guest fixture data only.
 
 Run through run-walk.py with --bundle, --home, --engine and --report. The walk
-uses real Rich scoped tools for designation/Rich-first setup, the packaged helper
+uses real Rich scoped tools for Rich-first setup, the packaged helper
 for independent Codex callers and the actual background Stu actors for replies.
 Two companies, same chat titles and three connections exercise isolation before
 and after rename, archive and restart. No live operator channels are touched.
@@ -107,7 +107,7 @@ class CodexWatchWalk(stu.StuReminderWalk):
         return self.run_python('import glob,json,sys;print(json.dumps([dict(json.load(open(p)),locator=p.rsplit("/",1)[0]) for p in glob.glob(sys.argv[1]+"/connections/*/*/*/connection.json")]))', self.coordination)
 
     def coordinator(self):
-        return self.run_python('import json,os,sys;p=sys.argv[1];print(json.dumps(json.load(open(p)) if os.path.exists(p) else {}))', self.coordination + '/coordinator.json')
+        return self.run_python('import json,os,sys;p=sys.argv[1];print(json.dumps(json.load(open(p)) if os.path.exists(p) else {}))', self.coordination + '/automatic.json')
 
     def chat_menu(self, thread):
         entity = next(r['entity_id'] for r in self.threads() if r['thread_id'] == thread)
@@ -149,33 +149,76 @@ class CodexWatchWalk(stu.StuReminderWalk):
 
     def pair(self):
         acme = self.facts['thread']
-        if any(row.get('bridge', {}).get('connection_id') == 'setup' for row in self.inboxes()):
-            raise StepFailed('fresh user without legacy Codex input received a setup observation')
-        self.send('Perform this harmless transport test yourself here. Explicitly designate THIS chat as the future Codex coordinator using codex_channel designate. Then use codex_channel connect with text "Harmless parallel roundtrip test: acknowledge marked transport observations on their own bridge locator only" and provenance "Guest user transport test". Return the handoff. Do not delegate or start repository work.')
-        first = self.wait_fact('Rich-first connection', self.connections, lambda rows: len(rows) == 1)[0]
-        if first['thread_id'] != acme:
-            raise StepFailed('Rich-first connection has the wrong owner')
-        rich_context = self.helper_call('read', locator=first['locator'])['records']
-        if not any(r.get('kind') == 'task_context' and r.get('provenance') == 'Guest user transport test' for r in rich_context):
-            raise StepFailed('Rich-first setup omitted the original context/source')
-        self.rename(acme, 'Parallel transport test')
-        second = self.helper_call('connect', text='Harmless parallel roundtrip test: acknowledge marked observations on their own connection', provenance='Guest Codex-first source')['locator']
+        if self.coordinator() or self.connections():
+            raise StepFailed('fresh user already has Codex coordination state')
+        second = self.helper_call('connect', text='Harmless independent Codex transport test',
+                                  provenance='Guest Codex-first source')['locator']
+        marker = 'automatic-' + uuid.uuid4().hex[:12]
+        self.helper_call('send', locator=second, message_id=marker,
+                         text='Harmless Codex transport check ' + marker + '. No work is requested.')
+        target = self.wait_fact('automatic Codex destination', self.coordinator, bool)
+        codex = target['thread_id']
+        owning_thread = next((r for r in self.threads() if r['thread_id'] == codex), {})
+        if codex == acme or owning_thread.get('title') != 'Codex' or target['entity_id'] != 'acme':
+            raise StepFailed('automatic destination is not the dedicated company Codex conversation')
+        arrived = self.wait_fact('independent message accepted in Codex', self.inboxes,
+            lambda rows: any(r['bridge']['message_id'] == marker for r in rows))
+        receipts = [row for row in arrived if row['bridge']['message_id'] == marker]
+        if len(receipts) != 1 or receipts[0]['thread'] != codex:
+            raise StepFailed('independent message reached the wrong conversation or reached it twice')
+        if any(row['bridge']['connection_id'] == 'setup' for row in arrived):
+            raise StepFailed('a fresh user received a Codex setup observation')
+
+        source = 'Guest Rich-first transport source'
+        self.send('This is a harmless transport test. Please use codex_channel connect once here with '
+                  'text "Acknowledge the marked transport observations on their own connection" '
+                  f'and provenance "{source}". Return the saved handoff, without launching repository work.')
+        first = self.wait_fact('Rich-first connection',
+            lambda: next((r for r in self.connections() if r['thread_id'] == acme), None), bool)
+        context = self.helper_call('read', locator=first['locator'])['records']
+        if [record.get('provenance') for record in context] != [source]:
+            raise StepFailed('Rich-first handoff omitted its original source')
+
+        # The isolated VM has no Codex account. Make one observable receiver
+        # for the CLI launch, then exercise the actual claim and dispatch path.
+        program = r"""
+import json, pathlib, shlex, subprocess, sys
+helper, home, recipient, first, other = sys.argv[1:]
+stub = pathlib.Path(home) / 'codex-fixture'
+stub.mkdir(exist_ok=True)
+binary = stub / 'codex'
+binary.write_text('#!/bin/sh\ncat >> ' + shlex.quote(recipient) + '\n')
+binary.chmod(0o700)
+env = dict(__import__('os').environ, HOME=home, CODEX_COORDINATION_ROOT=home+'/.richos-coordination')
+env['PATH'] = str(stub) + ':' + env['PATH']
+command = [sys.executable, '-B', helper, 'dispatch', '--locator', first]
+one = subprocess.run(command, env=env, capture_output=True, text=True)
+two = subprocess.run(command, env=env, capture_output=True, text=True)
+prompt = pathlib.Path(recipient).read_text()
+print(json.dumps({'first_exit': one.returncode, 'retry_exit': two.returncode,
+                  'task_count': prompt.count('Acknowledge the marked transport observations'),
+                  'own_locator': first in prompt, 'other_locator': other in prompt}))
+"""
+        dispatch = self.run_python(program, self.helper, self.home, self.payload + '/codex-fixture-received',
+                                   first['locator'], second)
+        if dispatch != dict(first_exit=0, retry_exit=1, task_count=1, own_locator=True, other_locator=False):
+            raise StepFailed('the Rich handoff did not reach exactly its own Codex receiver: ' + str(dispatch))
+
         multi.Walk.second_company(self)
-        self.send('Perform this harmless transport test yourself here. Explicitly designate THIS chat as the future Codex coordinator using codex_channel designate. This authorizes harmless transport acknowledgments through the scoped channel tool. Do not delegate or start repository work.')
-        target = self.wait_fact('Beta default', self.coordinator, lambda v: v.get('entity_id') == 'beta')
-        beta = target['thread_id']
-        self.rename(beta, 'Parallel transport test')
-        third = self.helper_call('connect', text='Harmless Beta roundtrip: acknowledge marked observations on their own connection', provenance='Guest Codex-first source')['locator']
-        rows = self.connections()
-        by_path = {r['locator']: r for r in rows}
-        paths = [first['locator'], second, third]
-        if len(set(paths)) != 3 or [by_path[p]['thread_id'] for p in paths] != [acme, acme, beta]:
-            raise StepFailed('three fresh pairs were not bound to their intended immutable owners')
-        if self.title(acme) != self.title(beta):
-            raise StepFailed('two companies did not have the same chat title')
-        self.facts.update(connections=paths, owners=[acme, acme, beta], beta_thread=beta)
+        self.send('This is a harmless transport test. Use codex_channel connect once in this chat with '
+                  'text "Acknowledge the marked Beta transport observation on its own connection" '
+                  'and provenance "Guest Beta source". Return the saved handoff without starting repository work.')
+        third = self.wait_fact('Beta Rich-first connection',
+            lambda: next((r for r in self.connections() if r['entity_id'] == 'beta'), None), bool)
+        beta = third['thread_id']
+        paths = [first['locator'], second, third['locator']]
+        if len(set(paths)) != 3:
+            raise StepFailed('separate tasks shared a locator')
+        self.facts.update(connections=paths, owners=[acme, codex, beta], beta_thread=beta)
         self.save()
-        return dict(connections=rows, original_context=rich_context, default=target, unsolicited_setup_observations=0)
+        self.shot('automatic-codex-conversation.png')
+        return dict(automatic_destination=target, incoming_receipts=receipts, rich_dispatch=dispatch,
+                    distinct_connections=len(set(paths)), codex_cli='isolated receiver fixture')
 
     def inboxes(self):
         return self.run_python('import glob,json,sys;out=[]\nfor p in glob.glob(sys.argv[1]+"/engine-state/messages/*/*/stu.jsonl"):\n for l in open(p):\n  r=json.loads(l)\n  if r.get("bridge"):out.append(dict(r,file=p,thread=p.split("/")[-2]))\nprint(json.dumps(out))', self.data)
@@ -377,7 +420,7 @@ def main():
             name = step.replace('-', '_')
             row['evidence'] = getattr(walk, name)()
             row['outcome'] = 'PASS'
-        except (StepFailed, RuntimeError, ValueError, KeyError, subprocess.TimeoutExpired) as exc:
+        except (StepFailed, RuntimeError, ValueError, KeyError, TypeError, subprocess.TimeoutExpired) as exc:
             row['outcome'] = 'FAIL'
             row['detail'] = str(exc)
             ok = False

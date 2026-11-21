@@ -42,7 +42,7 @@ class Channels(unittest.TestCase):
         return c.connect("Exact user task", "fixture transcript", locator, scope)["locator"]
 
     def test_pairing_default_and_three_independent_reply_paths(self):
-        c.designate(self.a, [])
+        c.save(c.root() / "automatic.json", self.a)
         x, y = self.connect(), self.connect()
         z = self.connect(self.b)
         for p in (x, y, z):
@@ -57,6 +57,59 @@ class Channels(unittest.TestCase):
         sibling = self.connect(locator=x)
         self.assertNotEqual(sibling, x)
         self.assertEqual(c.connection(sibling)[1]["thread_id"], "chat-a")
+
+    def test_fresh_connection_saves_before_app_has_a_company(self):
+        first = self.connect()
+        c.send(first, "hello", "First automatic message")
+        self.assertEqual(c.scan(self.a["state_root"]), ([], []))
+        c.save(c.root() / "automatic.json", self.a)
+        c.bind_automatic(self.a)
+        second = self.connect()
+        self.assertNotEqual(first, second)
+        self.assertEqual(c.connection(first)[1]["thread_id"], "chat-a")
+        self.assertEqual(c.connection(second)[1]["thread_id"], "chat-a")
+        events, errors = c.scan(self.a["state_root"])
+        self.assertFalse(errors)
+        self.assertEqual(events[0]["locator"], first)
+        self.assertEqual(events[0]["connection"]["thread_id"], "chat-a")
+        c.send(first, "ack", "First only", scope=self.a)
+        self.assertEqual(c.read(second)["records"], [])
+
+    def test_terminal_replies_only_reach_the_owning_session_and_pair(self):
+        first = c.connect("First task", "User transcript", terminal_session="rich-session-a")["locator"]
+        second = c.connect("Second task", "User transcript", terminal_session="rich-session-b")["locator"]
+        c.send(first, "reply-a", "Result A")
+        c.send(second, "reply-b", "Result B")
+        self.assertEqual(c.scan(self.a["state_root"]), ([], []))
+        self.assertEqual(c.read(first)["records"][0]["text"], "First task")
+        with mock.patch.dict(os.environ, {"CODEX_WATCH_STATE_DIR": str(self.root / "watch"),
+                                         "CODEX_WATCH_CHANNELS": str(self.root / "old" / "to-rich.md")}):
+            output = io.StringIO()
+            state = watcher.session_dir("rich-session-a")
+            watcher.tick(state, out=output, sid="rich-session-a")
+            self.assertIn("Result A", output.getvalue())
+            self.assertNotIn("Result B", output.getvalue())
+            self.assertIn(first, output.getvalue())
+            self.assertEqual(watcher.tick(state, out=io.StringIO(), sid="rich-session-a"), 0)
+
+    def test_dispatch_starts_one_chat_with_its_own_original_task(self):
+        first = self.connect(self.a)
+        second = c.connect("Private second task", "Second transcript", scope=self.a)["locator"]
+        binary = self.root / "codex"
+        transcript = self.root / "codex-transcript"
+        binary.write_text("#!/bin/sh\ncat >> " + shlex.quote(str(transcript)) + "\n")
+        binary.chmod(0o700)
+        with mock.patch.dict(os.environ, {"PATH": str(self.root) + os.pathsep + os.environ["PATH"]}):
+            request = c.read(first)["instructions"]
+            self.assertIn(first, request)
+            self.assertEqual(c.dispatch(first), 0)
+            with self.assertRaisesRegex(ValueError, "already dispatched"):
+                c.dispatch(first)
+        prompt = transcript.read_text()
+        self.assertEqual(prompt.count("Exact user task"), 1)
+        self.assertIn(first, prompt)
+        self.assertNotIn(second, prompt)
+        self.assertNotIn("Private second task", prompt)
 
     def test_lost_response_retry_and_intentional_identical_messages(self):
         p = self.connect(self.a)
@@ -310,7 +363,7 @@ c.send(locator, ident, 'recover original request')
             f.write("a second newline fragment\n")
         self.assertEqual(c.scan(self.a["state_root"])[0][0]["record"], events[0]["record"])
 
-    def test_setup_notice_requires_existing_legacy_input_or_a_saved_spool(self):
+    def test_legacy_spool_is_automatically_bound_and_retained(self):
         old = self.root / "legacy"
         state = Path(self.a["state_root"])
         environment = dict(RICHOS_CODEX_CHANNEL_STATE=str(state),
@@ -327,23 +380,32 @@ c.send(locator, ident, 'recover original request')
                 self.assertEqual(watcher.run_host_loop(), 0)
                 self.assertEqual(tick.call_count, 2, "the real host loop must have polled")
             return output.getvalue()
-        self.assertEqual(monitor_output(), "", "a user without Codex must get no setup input")
+        self.assertEqual(monitor_output(), "", "nothing to migrate")
         old.mkdir()
-        (old / "to-rich.md").write_text("preserved old request\n")
+        outgoing = old / "to-codex.md"
+        outgoing.write_text("Old Rich handoff, preserved in place.\n")
+        spool = state / "codex-watch/pending.jsonl"
+        spool.parent.mkdir(parents=True, exist_ok=True)
+        entry = json.dumps("Saved before cutover") + "\n"
+        spool.write_text(entry)
         events = [json.loads(line) for line in monitor_output().splitlines()]
-        self.assertEqual([event for event in events if event.get("type") == "setup"],
-                         [dict(type="setup"), dict(type="setup")])
-        with mock.patch.dict(os.environ, environment):
-            c.designate(self.a, [old])
-            self.assertFalse(watcher.legacy_setup_pending(str(state)))
-            (c.root() / "coordinator.json").unlink()
-            self.assertFalse(watcher.legacy_setup_pending(str(state)), "associated files are not new migration input")
-            spool = state / "codex-watch/pending.jsonl"
-            spool.parent.mkdir(parents=True, exist_ok=True)
-            spool.write_text("")
-            self.assertFalse(watcher.legacy_setup_pending(str(state)))
-            spool.write_text(json.dumps("saved before cutover") + "\n")
-            self.assertTrue(watcher.legacy_setup_pending(str(state)))
+        self.assertEqual(events, [dict(type="automatic"), dict(type="automatic")])
+        health = state / "codex-watch/health.json"
+        self.assertTrue(c.load(health)["waiting"])
+        c.save(c.root() / "automatic.json", self.a)
+        events = [json.loads(line) for line in monitor_output().splitlines()]
+        imports = [event for event in events if event["record"]["kind"] == "legacy_import"]
+        self.assertTrue(imports)
+        self.assertEqual({event["connection"]["thread_id"] for event in imports}, {"chat-a"})
+        self.assertEqual({event["record"]["text"] for event in imports}, {"Saved before cutover"})
+        notices = [event for event in events if event["record"]["message_id"] == "legacy-outbox"]
+        self.assertTrue(notices)
+        self.assertEqual({event["source"] for event in notices}, {str(outgoing)})
+        self.assertTrue(outgoing.read_text().startswith("Old Rich handoff, preserved in place.\n"))
+        self.assertEqual(spool.read_text(), entry)
+        self.assertEqual(outgoing.read_text().count("## RICHOS CHANNEL MIGRATION"), 1)
+        self.assertEqual(set(c.load(health)), {"at_ms", "waiting", "held"})
+        self.assertFalse(c.load(health)["waiting"])
 
     def test_one_managed_receiver_is_fenced_and_process_death_releases_ownership(self):
         p = self.connect(self.a)

@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 import shlex
 
+from codex_channels import rich_task
 from command_reader import ASSIGNMENT, SHELLS, _redirect_parts, _unwrap, _words
 from host_sleep import heredocs
 from unguarded_rm import tokenize
@@ -136,7 +137,7 @@ def documents_by_command(command):
 
 def shell_handoff(command, cwd, outbox, depth=0, inherited=None):
     inherited = inherited or {}
-    if depth > 8 or (outbox.name not in command and
+    if depth > 8 or (outbox.name not in command and "dispatch" not in command and
                      not any(outbox.name in value for value in inherited.values())):
         return None
     rows, nested = tokenize(command)
@@ -156,6 +157,17 @@ def shell_handoff(command, cwd, outbox, depth=0, inherited=None):
                 variables[name] = resolved
         argv = _unwrap(words)
         program = Path(argv[0]).name if argv else ""
+        if program in SHELLS and len(argv) > 1 and Path(argv[1]).name == "codex-channel.sh":
+            argv, program = argv[1:], "codex-channel.sh"
+        if program == "codex-channel.sh" and argv[1:3] == ["dispatch", "--locator"] and len(argv) == 4:
+            locator = shell_path(argv[3], cwd, variables)
+            if locator is not None:
+                try:
+                    path, task = rich_task(locator)
+                except (OSError, ValueError):
+                    pass  # The channel helper itself refuses a missing or invalid task.
+                else:
+                    return Handoff(path, task["text"])
         group = documents.get(tuple(row))
         body, literal = group.popleft() if group else ("", False)
         if outbox in shell_targets(row, cwd, variables):

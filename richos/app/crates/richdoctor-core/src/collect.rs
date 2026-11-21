@@ -227,6 +227,7 @@ pub fn collect(category: Category, scope: &Scope, ctx: &Context, used: u64) -> V
             richfiles_timing(scope, ctx, &mut budget, false),
             update_timing(scope, ctx, &mut budget),
             richfiles_timing(scope, ctx, &mut budget, true),
+            codex_channel_health(scope, ctx, &mut budget),
         ],
         Category::Richscribe => vec![richscribe(scope, ctx, &mut budget)],
         Category::RichFinder => vec![richfinder_timing(scope, ctx, &mut budget)],
@@ -719,6 +720,33 @@ fn configuration(scope: &Scope, ctx: &Context, budget: &mut u64) -> Item {
     finish(item, &lines.join("\n"), ctx, false)
 }
 
+fn codex_channel_health(scope: &Scope, ctx: &Context, budget: &mut u64) -> Item {
+    let source = "Codex connection watcher";
+    let category = Category::Configuration;
+    let root = scope.data_root();
+    let path = root.join("engine-state/codex-watch/health.json");
+    let read = match read_source(&root, &path, scope, budget, false) {
+        Ok(read) => read,
+        Err(status) => return unread(category, source, status),
+    };
+    let Some((at, waiting, held)) = codex_channel_health_fields(&read.text) else {
+        return unread(category, source, Status::Unreadable);
+    };
+    let mut item = Item::new(category, source).expect("random source");
+    item.input_bytes = read.bytes;
+    item.observed_at = Some(at);
+    item.coverage = Coverage::Current;
+    item.label = source.into();
+    item.summary = format!("The last recorded scan deferred automatic routing: {waiting}. Held sources: {held}.");
+    let summary = item.summary.clone();
+    finish(item, &summary, ctx, read.truncated)
+}
+
+fn codex_channel_health_fields(text: &str) -> Option<(u64, bool, u64)> {
+    let record: serde_json::Value = serde_json::from_str(text).ok()?;
+    Some((record["at_ms"].as_u64()?, record["waiting"].as_bool()?, record["held"].as_u64()?))
+}
+
 pub const SEARCH_TIMING_LOG: &str = "richfinder-timing.jsonl";
 
 /// Read only the fixed timing fields. Unknown text in the file is discarded.
@@ -1003,6 +1031,25 @@ fn claude_availability(scope: &Scope) -> Item {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn codex_health_uses_only_the_watcher_fields() {
+        let h = home();
+        let scope = scope(&h.0, Window::around(T));
+        let path = scope.data_root().join("engine-state/codex-watch/health.json");
+        let collect_health = || collect(Category::Configuration, &scope, &Context::default(), 0)
+            .pop().unwrap();
+        assert_eq!(collect_health().status, Status::Absent);
+        write(&path, r#"{"at_ms":15,"waiting":true,"held":2,"text":"private task"}"#);
+        let result = collect_health();
+        assert_eq!(result.status, Status::Collected);
+        assert_eq!(result.observed_at, Some(15));
+        assert!(result.text.contains("deferred automatic routing: true"));
+        assert!(result.text.contains("Held sources: 2"));
+        assert!(!result.text.contains("private task"));
+        write(&path, r#"{"at_ms":15,"waiting":"unknown","held":2}"#);
+        assert_eq!(collect_health().status, Status::Unreadable);
+    }
 
     struct Home(PathBuf);
     impl Drop for Home {

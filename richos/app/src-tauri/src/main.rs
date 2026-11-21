@@ -502,17 +502,35 @@ fn start_app_review_watch(
 /// Where the Codex watcher's entries go: set once at launch, before the watcher first starts.
 static CODEX_SINK: std::sync::OnceLock<richos_core::codex_watch::Sink> = std::sync::OnceLock::new();
 
-/// Dedicated input is resolved against its permanent ledger owner. Only the setup-only
-/// observation uses the visible chat; it carries no task text or work authority.
+/// Dedicated input is resolved against its permanent ledger owner.
 fn codex_sink(app: AppHandle) -> richos_core::codex_watch::Sink {
     Arc::new(move |line:&str| {
         let state=app.try_state::<AppState>().ok_or("the app is still starting")?;
         let event:serde_json::Value=serde_json::from_str(line).map_err(|e|e.to_string())?;
         let view=state.reader.snapshot();
         let state_root=state.data_dir.join("engine-state");
-        if event["type"]=="setup" {
-            let binding=view.active_binding().ok_or("no conversation is open yet")?;
-            return richos_core::codex_bridge::setup_notice(&state_root,binding)
+        if event["type"] == "automatic" {
+            let coordination = richos_core::codex_bridge::root();
+            if coordination.join("automatic.json").try_exists().map_err(|e| e.to_string())? {
+                return Ok(());
+            }
+            let configured = state.entity.lock().unwrap().clone();
+            let company = configured.or_else(|| match view.entity_registry().entities() {
+                [only] => Some(only.id.clone()),
+                _ => None,
+            }).ok_or("independent Codex work is saved until a company is available")?;
+            // Keep servicing already addressed channels while a turn owns the spine.
+            let mut spine = state.spine.try_lock().map_err(|_| "the conversation ledger is busy")?;
+            let (binding, created) = spine.codex_conversation(&company).map_err(|e| e.to_string())?;
+            drop(spine);
+            if created {
+                drop(app.emit("rich://chat-list-changed", ()));
+                tell_the_phone_the_threads(&app);
+            }
+            richos_core::codex_bridge::publish_automatic_target(&coordination, &binding)
+                .map_err(|e| e.to_string())?;
+            eprintln!("[richos] Codex watch: automatic destination ready");
+            return Ok(());
         }
         let thread=event["connection"]["thread_id"].as_str().ok_or("no channel conversation")?;
         let binding=view.ledger().thread_binding(thread).map_err(|e|e.to_string())?;
@@ -556,8 +574,10 @@ fn start_app_codex_watch(
         sink: Arc::clone(sink),
     };
     match richos_core::codex_watch::ensure(&launch) {
-        Ok(Some(pid)) if at_launch => eprintln!("[richos] Codex watch: watching {} channel(s) (process {pid})", launch.channels.len()),
-        Ok(None) if at_launch => eprintln!("[richos] Codex watch: no Codex channel is set"),
+        Ok(pid) if at_launch && !launch.channels.is_empty() => {
+            eprintln!("[richos] Codex watch: watching {} channel(s) (process {pid})", launch.channels.len())
+        }
+        Ok(pid) if at_launch => eprintln!("[richos] Codex watch: started (process {pid})"),
         Ok(_) => {}
         Err(e) => eprintln!("[richos] Codex watch: the watcher could not start ({e})"),
     }
@@ -8822,6 +8842,27 @@ mod entity_choice_tests {
     }
 
     // ---- a launch opens in no conversation (the CEO, 2026-11-01) ---------------------------
+
+    #[test]
+    fn an_independent_codex_task_creates_one_conversation_in_its_company() {
+        let (mut spine, path) = spine_for("codex-conversation");
+        let company = id("richos");
+        let other = id("deeply");
+        let desk = spine.create_thread("Planning", &company).unwrap();
+        spine.switch_thread(&desk).unwrap();
+        let foreign = spine.create_thread("Codex", &other).unwrap();
+        let before = spine.ledger().threads().len();
+        let (binding, created) = spine.codex_conversation(&company).unwrap();
+        assert!(created);
+        assert_eq!(binding.entity_id(), &company);
+        assert_ne!(binding.thread_id(), foreign);
+        assert_eq!(spine.active_thread(), Some(desk.as_str()));
+        let (reused, created) = spine.codex_conversation(&company).unwrap();
+        assert!(!created);
+        assert_eq!(reused.thread_id(), binding.thread_id());
+        assert_eq!(spine.ledger().threads().len(), before + 1);
+        std::fs::remove_file(path).unwrap();
+    }
 
     #[test]
     fn a_launch_selects_no_conversation_when_the_company_already_has_some() {

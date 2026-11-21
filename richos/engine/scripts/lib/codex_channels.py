@@ -13,7 +13,9 @@ import os
 from pathlib import Path
 import re
 import shlex
+import shutil
 import stat
+import subprocess
 import sys
 import uuid
 
@@ -30,8 +32,8 @@ def diagnostic(path, error):
 VERSION = 1
 TEXT_LIMIT = 128 * 1024
 FRAME_LIMIT = 256 * 1024
-SETUP_TEXT = ("Codex coordination is waiting. In the chat you coordinate from, "
-              "tell Rich to take over the Codex channel.")
+AUTOMATIC = "_automatic"
+TERMINAL = "_terminal"
 
 
 def root():
@@ -158,13 +160,21 @@ def connection(locator, scope=None):
     want = endpoint(record.get("entity_id"), record.get("thread_id"), record.get("connection_id"))
     if path != want or path.resolve() != want:
         raise ValueError("Connection is outside its registered location")
+    if record["entity_id"] == AUTOMATIC:
+        if record["thread_id"] != "codex" or record.get("legacy_folder"):
+            raise ValueError("Invalid automatic channel endpoint")
+        if "binding" in record:
+            target = record["binding"]
+            if not isinstance(target, dict) or component(target.get("entity_id")) in (AUTOMATIC, TERMINAL):
+                raise ValueError("Invalid automatic channel binding")
+            record = dict(record, entity_id=target["entity_id"], thread_id=component(target.get("thread_id")))
     if scope and (record["entity_id"], record["thread_id"]) != (scope["entity_id"], scope["thread_id"]):
         raise ValueError("Connection belongs to another company or conversation")
     return path, record
 
 
-def registered():
-    for p in sorted((root() / "connections").glob("*/*/*/connection.json")):
+def registered(entity="*", thread="*"):
+    for p in sorted((root() / "connections").glob(f"{entity}/{thread}/*/connection.json")):
         try:
             value = connection(p)
             _diagnostics.pop(str(p), None)
@@ -182,8 +192,12 @@ def scope_read(path):
     return s
 
 
+def helper_command():
+    return ["env", "CODEX_COORDINATION_ROOT=" + str(root()), sys.executable, "-B", str(Path(__file__).resolve())]
+
+
 def handoff(path):
-    helper = shlex.join(["env", "CODEX_COORDINATION_ROOT=" + str(root()), sys.executable, "-B", str(Path(__file__).resolve())])
+    helper = shlex.join(helper_command())
     return ("Use this dedicated RichOS connection: %s\n"
             "Helper: %s. Use send/read with this locator; connect creates a NEW pair. "
             "Keep the locator in your working notes. After compaction recover it from "
@@ -196,20 +210,49 @@ def handoff(path):
             % (path, helper))
 
 
-def connect(text, provenance, locator=None, scope=None):
+def automatic_target():
+    try:
+        target = load(root() / "automatic.json")
+    except FileNotFoundError:
+        return None
+    if type(target.get("version")) is not int or target["version"] != VERSION:
+        raise ValueError("Invalid automatic Codex destination version")
+    if component(target.get("entity_id")) in (AUTOMATIC, TERMINAL):
+        raise ValueError("Invalid automatic Codex company")
+    component(target.get("thread_id"))
+    return target
+
+
+def bind_automatic(target):
+    # Only the app receiver calls this. Its receiver lock fences other hosts.
+    for path, record in registered(AUTOMATIC, "codex"):
+        if record["entity_id"] == AUTOMATIC:
+            save(path / "connection.json", dict(record, binding={
+                "entity_id": target["entity_id"], "thread_id": target["thread_id"]}))
+
+
+def automatic_waiting():
+    return any(record["entity_id"] == AUTOMATIC for _, record in registered(AUTOMATIC, "codex"))
+
+
+def terminal_connections(session):
+    if session:
+        yield from registered(TERMINAL, component(session))
+
+
+def connect(text, provenance, locator=None, scope=None, terminal_session=None):
     if not text.strip() or not provenance.strip():
         raise ValueError("Supply the original task text and its provenance")
     if locator:
+        if terminal_session is not None:
+            raise ValueError("A terminal handoff uses its own session as destination")
         _, target = connection(locator, scope)
     elif scope:
         target = scope
+    elif terminal_session is not None:
+        target = dict(entity_id=TERMINAL, thread_id=component(terminal_session))
     else:
-        try:
-            target = load(root() / "coordinator.json")
-        except FileNotFoundError:
-            raise ValueError(SETUP_TEXT) from None
-    if type(target.get("version")) is not int or target["version"] != VERSION:
-        raise ValueError("Unsupported coordinator version")
+        target = automatic_target() or dict(entity_id=AUTOMATIC, thread_id="codex")
     ident = uuid.uuid4().hex
     p = endpoint(target["entity_id"], target["thread_id"], ident)
     mkdir(p)
@@ -220,11 +263,56 @@ def connect(text, provenance, locator=None, scope=None):
             f.flush()
             os.fsync(f.fileno())
     record = dict(version=VERSION, entity_id=target["entity_id"], thread_id=target["thread_id"], connection_id=ident)
-    direction = "to-codex" if scope else "to-rich"
+    direction = "to-codex" if scope or terminal_session is not None else "to-rich"
     append(p / (direction + ".jsonl"), dict(version=VERSION, message_id="task-context", kind="task_context",
            text=text, provenance=provenance))
     save(p / "connection.json", record)
-    return dict(locator=str(p), connection=record, instructions=handoff(p))
+    result = dict(locator=str(p), connection=record, instructions=handoff(p))
+    if direction == "to-codex":
+        result["dispatch_command"] = shlex.join(helper_command() + ["dispatch", "--locator", str(p)])
+    return result
+
+
+def rich_task(locator):
+    path, _ = connection(locator)
+    with contextlib.closing(records(path / "to-codex.jsonl")) as journal:
+        _, _, context = next(journal, (None, None, {}))
+    if context.get("kind") != "task_context":
+        raise ValueError("This connection has no Rich task handoff")
+    return path, context
+
+
+def dispatch(locator):
+    """Give a Rich-created task to one fresh, persisted Codex session."""
+    path, context = rich_task(locator)
+    search_path = os.pathsep.join(filter(None, (os.environ.get("PATH"), "/opt/homebrew/bin",
+        "/usr/local/bin", str(Path.home() / ".local/bin"))))
+    binary = shutil.which("codex", path=search_path) or shutil.which(
+        "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex")
+    if not binary:
+        raise ValueError("Codex CLI is unavailable")
+    prompt = (context["text"] + "\n\nOriginal source: " + context["provenance"] +
+              "\n\n" + handoff(path) +
+              "\nSend updates and results to Rich via this connection.")
+    # Keep concurrent launches on the same task from producing a second chat.
+    # An interruption can leave an uncertain launch. Its transcript contains
+    # the unique locator, so recover that chat before trying again.
+    marker = path / "dispatch.json"
+    with locked(path / "dispatch.lock"):
+        if marker.exists():
+            raise ValueError("This handoff was already dispatched; resume its existing Codex chat")
+        save(marker, {"state": "starting"})
+        try:
+            child = subprocess.Popen(
+                [binary, "exec", "--skip-git-repo-check", "--sandbox", "workspace-write", "--add-dir", str(path), "-"],
+                stdin=subprocess.PIPE, text=True)
+        except OSError:
+            marker.unlink()
+            sync_dir(path)
+            raise
+    child.communicate(prompt)
+    save(marker, {"state": "exited", "exit_code": child.returncode})
+    return child.returncode
 
 
 def records(path, offset=0, writer_locked=False):
@@ -346,8 +434,8 @@ def read(locator, direction="to-codex", offset=0, scope=None):
     return dict(records=out, through=through, locator=str(p), instructions=handoff(p))
 
 
-def designate(scope, legacy_folders):
-    """An explicit host-scoped choice. Existing endpoint records never change."""
+def associate_legacy(scope, legacy_folders, *, designate=False):
+    """Freeze each old source once. Existing endpoint records never change."""
     target = dict(version=VERSION, entity_id=component(scope["entity_id"]), thread_id=component(scope["thread_id"]))
     with locked(root() / "coordinator.lock"):
         # The old spool had no per-channel address. Its first explicit frozen
@@ -356,8 +444,6 @@ def designate(scope, legacy_folders):
         has_legacy = any((root() / "connections").glob("*/*/legacy-*/connection.json"))
         for folder in legacy_folders:
             folder = Path(folder).absolute()
-            if not (folder / "to-rich.md").exists():
-                continue
             ident = "legacy-" + hashlib.sha256(str(folder).encode()).hexdigest()[:24]
             found = list((root() / "connections").glob("*/*/%s/connection.json" % ident))
             if found:
@@ -376,8 +462,11 @@ def designate(scope, legacy_folders):
                         boundary = 0
                 except (FileNotFoundError, ValueError):
                     boundary = 0
+                outbox = folder / "to-codex.md"
+                has_outbox = not designate and outbox.is_file() and outbox.stat().st_size > 0
                 save(p / "connection.json", dict(target, connection_id=ident, legacy_folder=str(folder),
-                                                 legacy_boundary=boundary, imports_legacy_spool=not has_legacy))
+                                                 legacy_boundary=boundary, imports_legacy_spool=not has_legacy,
+                                                 preserves_legacy_outbox=has_outbox))
                 has_legacy = True
             instruction = ("\n## RICHOS CHANNEL MIGRATION %s\n"
                            "Create your own dedicated pair with the helper connect --locator %s "
@@ -393,8 +482,14 @@ def designate(scope, legacy_folders):
                         write_all(fd, instruction.encode())
                     os.fsync(fd)
             sync_dir(folder)
-        save(root() / "coordinator.json", target)
+        if designate:
+            save(root() / "coordinator.json", target)
     return dict(coordinator=target)
+
+
+def designate(scope, legacy_folders):
+    return associate_legacy(scope, (p for p in legacy_folders if (Path(p) / "to-rich.md").exists()),
+                            designate=True)
 
 
 def legacy_associated(folder):
@@ -457,10 +552,21 @@ def scan(state):
     except (OSError, ValueError) as e:
         return [], [str(e)]
     for p, c in channels:
+        if c["entity_id"] in (TERMINAL, AUTOMATIC):
+            continue
         try:
             source = p / "to-rich.jsonl"
             legacy = c.get("legacy_folder")
             if legacy:
+                if c.get("preserves_legacy_outbox"):
+                    outbox = Path(legacy) / "to-codex.md"
+                    if outbox.is_file():
+                        e = event(p, c, outbox, 0, 0)
+                        e["record"] = dict(version=VERSION, message_id="legacy-outbox", kind="legacy_notice",
+                            text="Rich's previous shared Codex handoffs are preserved at %s. "
+                                 "Use the original record to reconcile unfinished handoffs with their current owners. "
+                                 "Do not redispatch historical tasks automatically." % outbox)
+                        events.append(e)
                 raw = Path(legacy) / "to-rich.md"
                 boundary = c.get("legacy_boundary", 0)
                 if raw.exists() and raw.stat().st_size > boundary:
@@ -506,7 +612,7 @@ def scan(state):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("action", choices=("connect", "send", "read", "designate"))
+    ap.add_argument("action", choices=("connect", "send", "read", "dispatch", "designate"))
     ap.add_argument("--locator")
     ap.add_argument("--id", dest="message_id")
     ap.add_argument("--text")
@@ -515,6 +621,7 @@ def main(argv=None):
     ap.add_argument("--direction", default="to-codex", choices=("to-rich", "to-codex"))
     ap.add_argument("--offset", type=int, default=0)
     ap.add_argument("--scope")
+    ap.add_argument("--terminal", action="store_true")
     ap.add_argument("--request", action="store_true")
     ap.add_argument("--legacy", action="append", default=[])
     a = ap.parse_args(argv)
@@ -535,8 +642,22 @@ def main(argv=None):
                     raise ValueError(key + " must be text")
                 setattr(a, key, value)
         s = scope_read(a.scope) if a.scope else None
+        terminal_session = None
+        if a.terminal:
+            if s or a.action not in ("connect", "send", "read"):
+                raise ValueError("--terminal applies to terminal connect, send or read")
+            from codex_watch import session
+            terminal_session, _ = session(str(Path(__file__).resolve().parents[2]))
+            if not terminal_session:
+                raise ValueError("No owning Rich terminal session")
+            if a.action != "connect":
+                s = dict(entity_id=TERMINAL, thread_id=terminal_session)
         if a.action == "connect":
-            result = connect(a.text or "", a.provenance or "", a.locator, s)
+            result = connect(a.text or "", a.provenance or "", a.locator, s, terminal_session)
+        elif a.action == "dispatch":
+            if not a.locator or s or a.terminal:
+                raise ValueError("dispatch requires an existing Rich handoff locator")
+            return dispatch(a.locator)
         elif a.action == "designate":
             if not s:
                 raise ValueError("Coordinator designation requires a host scope")

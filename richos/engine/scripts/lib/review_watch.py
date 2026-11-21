@@ -613,11 +613,12 @@ class World(object):
         (offset in to-rich.md and the pending handovers), updated in place."""
         to_rich = os.path.expanduser(os.environ.get("REVIEW_WATCH_TO_RICH") or DEFAULT_TO_RICH)
         to_codex = os.path.expanduser(os.environ.get("REVIEW_WATCH_TO_CODEX") or DEFAULT_TO_CODEX)
-        # App-associated input has one review host. Terminal monitors retain only
-        # unmigrated Markdown; their separate review state cannot fence the app's.
+        # Each terminal scans only its own dedicated pairs. The shared review
+        # state still fences verdicts by work and commit across terminal looks.
+        sid = MONITOR["session"]
+        dedicated, problems = self.channel_items(now, codex_state, channels.terminal_connections(sid))
         if channels.legacy_associated(os.path.dirname(to_rich)):
-            return [], []
-        problems = []
+            return dedicated, problems
         pending = codex_state.setdefault("pending", [])
         awaiting = codex_state.setdefault("awaiting_words", [])
         try:
@@ -683,7 +684,7 @@ class World(object):
                               source="codex", words=p.get("words") or [], claims=p.get("claims") or [],
                               title=p.get("title") or ""))
         pending[:] = keep
-        return items, problems
+        return dedicated + items, problems
 
     @staticmethod
     def _add_pending(pending, got):
@@ -775,14 +776,16 @@ class World(object):
     def channel_items(self, now, codex_state, connections):
         """The shared READY handler, with its own advisory reading position.
 
-        Only the app enumerates app-owned connections. Terminal callers may use
-        the same handler explicitly, but do not run a competing managed receiver.
+        Only the app enumerates app-owned connections. A terminal enumerates
+        its own pairs and shares the terminal review state with other sessions.
         """
         pending = codex_state.setdefault("channel_pending", [])
         positions = codex_state.setdefault("channels", {})
+        owned = set()
         for path, endpoint in connections:
-            if endpoint.get("legacy_folder"):
+            if endpoint.get("legacy_folder") or endpoint["entity_id"] == channels.AUTOMATIC:
                 continue
+            owned.add(str(path))
             try:
                 repos = self.channel_repositories(endpoint)
                 source = path / "to-rich.jsonl"
@@ -819,6 +822,8 @@ class World(object):
         # Replaying a lost position cannot add a second due review for the tip.
         pending[:] = [p for p in pending if now - float(p.get("at") or now) <= KEEP_SECONDS]
         for p in pending:
+            if p["channel"]["locator"] not in owned:
+                continue
             base = self.merge_base_for(p["repo"], p["tip"])
             if not base or base == p["tip"]:
                 continue
@@ -937,7 +942,10 @@ class AppWorld(World):
         return items, problems
 
     def codex_items(self, now, codex_state):
-        return self.channel_items(now, codex_state, channels.registered())
+        return self.channel_items(now, codex_state, (
+            (path, endpoint) for path, endpoint in channels.registered()
+            if endpoint["entity_id"] != channels.TERMINAL
+        ))
 
     def channel_repositories(self, endpoint):
         app = stall_watch._load("review_watch_app", os.path.join(self.engine_root, "mega-lander", "app.py"))
@@ -1635,17 +1643,16 @@ class Watcher(object):
                 del seen[w]
         stall_watch._write_json(_p("shared.json"), shared)
         attempts = read_jsonl(_p("attempts.jsonl"))
-        if app:
-            owners = list(codex_state.get("channel_pending", [])) + attempts + list(book.running.values())
-            publish_channel_results(rows, owners)
-            def channel_owned(row):
-                return any(o.get("channel") and all(row.get(k) == o.get(k) for k in ("repo", "work", "tip")) for o in owners)
-            # These results travel through their dedicated journals. An empty
-            # native lead-session lookup cannot deliver them and must not guess.
-            rows = [r for r in rows if not channel_owned(r)]
-            attempts = [a for a in attempts if not a.get("channel")]
-            items = [it for it in items if not getattr(it, "channel", None)]
-            book.running = {k: v for k, v in book.running.items() if not v.get("channel")}
+        owners = list(codex_state.get("channel_pending", [])) + attempts + list(book.running.values())
+        publish_channel_results(rows, owners)
+        def channel_owned(row):
+            return any(o.get("channel") and all(row.get(k) == o.get(k) for k in ("repo", "work", "tip")) for o in owners)
+        # These results travel through their dedicated journals. An empty
+        # native lead-session lookup cannot deliver them and must not guess.
+        rows = [r for r in rows if not channel_owned(r)]
+        attempts = [a for a in attempts if not a.get("channel")]
+        items = [it for it in items if not getattr(it, "channel", None)]
+        book.running = {k: v for k, v in book.running.items() if not v.get("channel")}
         return tell(now, session_state, rows, Book(rows, book.running, attempts, app=app), items, problems, attempts)
 
 
