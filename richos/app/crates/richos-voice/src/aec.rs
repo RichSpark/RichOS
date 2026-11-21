@@ -1624,7 +1624,7 @@ mod tests {
         // Before `confident()`, the barge-in monitor is still running the 313-frame /
         // 5.008 s consecutive rule, so a scattered near-end verdict there costs nothing at
         // all: it cannot complete that debounce. AFTER `confident()` the monitor switches to
-        // the 15-of-25 window, and a false positive genuinely is Rich interrupting himself.
+        // the near-end window, and a false positive genuinely is Rich interrupting himself.
         // So that is where the assertion belongs.
         let at = confident_at.expect("should reach confidence");
         // Measured 6.22 s here. The floor is deliberate and structural: 2.000 s of

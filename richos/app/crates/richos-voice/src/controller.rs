@@ -3551,8 +3551,8 @@ fn supervise(
                         // told the CEO he needed 5.008 s of talking over Rich; he tried, five
                         // separate times at -18.1 dBFS against a -46.7 dBFS echo, and was
                         // discarded every time, because nobody produces 5 s of UNBROKEN speech
-                        // (his longest run was 66 frames = 1.056 s). Barge-in now needs 15 of any
-                        // 25 frames of NEAR-END speech — 0.240 s of evidence inside 0.400 s — and
+                        // (his longest run was 66 frames = 1.056 s). Barge-in now needs 10 of any
+                        // 25 frames of NEAR-END speech (0.160 s of evidence inside 0.400 s) and
                         // that is what the line says. The confidence figures before the semicolon
                         // stay, because the TAINT rule still rests on `confident()`: this notice
                         // is printed on a discard, and a discard is the taint rule's decision.
@@ -6274,8 +6274,8 @@ mod tests {
         // 5.008 s figure was the permanent behavior dressed as a start-up condition. Barge-in no
         // longer depends on confidence (`BargeInMonitor::set_near_end_gated`), so the line no
         // longer says it does.
-        assert!(s.contains("15 of 25 frames"), "{s}");
-        assert!(s.contains("0.240 s"), "{s}");
+        assert!(s.contains("10 of 25 frames"), "{s}");
+        assert!(s.contains("0.160 s"), "{s}");
         assert!(s.contains("0.400 s"), "{s}");
         assert!(s.contains("near-end"), "{s}");
         assert!(
@@ -6297,7 +6297,7 @@ mod tests {
         assert!(sn.contains("313 consecutive frames"), "{sn}");
         assert!(sn.contains("5.008 s"), "{sn}");
         assert!(sn.contains("NO canceller"), "{sn}");
-        assert!(!sn.contains("15 of 25"), "{sn}");
+        assert!(!sn.contains("10 of 25"), "{sn}");
 
         assert!(
             d.echo_cancellation,
@@ -6325,7 +6325,7 @@ mod tests {
         assert_eq!(crate::bargein::AEC_BARGE_IN_WINDOW_FRAMES, 25);
         assert!((frames_to_secs(25) - 0.400).abs() < 1e-6);
         assert!(
-            (frames_to_secs(crate::bargein::AEC_BARGE_IN_REQUIRED_FRAMES) - 0.240).abs() < 1e-6
+            (frames_to_secs(crate::bargein::AEC_BARGE_IN_REQUIRED_FRAMES) - 0.160).abs() < 1e-6
         );
 
         // The filter, and the price of confidence: 2.000 s of warm-up, then 2.000 s held.

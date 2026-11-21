@@ -590,9 +590,9 @@ fn every_duration_in_this_file_is_the_frame_math() {
     // 25 x 256 / 16000 = 0.400 s exactly.
     assert_eq!(AEC_BARGE_IN_WINDOW_FRAMES, 25);
     assert!((frames_to_secs(AEC_BARGE_IN_WINDOW_FRAMES) - 0.400).abs() < 1e-6);
-    // 15 x 256 / 16000 = 0.240 s exactly.
-    assert_eq!(AEC_BARGE_IN_REQUIRED_FRAMES, 15);
-    assert!((frames_to_secs(AEC_BARGE_IN_REQUIRED_FRAMES) - 0.240).abs() < 1e-6);
+    // 10 x 256 / 16000 = 0.160 s exactly.
+    assert_eq!(AEC_BARGE_IN_REQUIRED_FRAMES, 10);
+    assert!((frames_to_secs(AEC_BARGE_IN_REQUIRED_FRAMES) - 0.160).abs() < 1e-6);
     // 313 x 256 / 16000 = 5.008 s exactly — the rule that ignored the CEO, now reached only
     // when there is no canceller at all.
     assert_eq!(BARGE_IN_DEBOUNCE_FRAMES, 313);
@@ -719,7 +719,7 @@ fn a_short_word_of_his_over_rich_is_lost_and_the_line_tells_him_to_say_it_again(
     let _one = one_replay_at_a_time();
     use richos_voice::controller::VoiceNotice;
     let his_mic = read_his_mic();
-    // 12 frames from the middle of his first marked interval: under the 15 a barge-in needs.
+    // 12 frames from the middle of his first marked interval.
     let (open, close) = HIS_INTERVALS[0];
     let mid = (((open + close) / 2.0) * SAMPLE_RATE as f32) as usize;
     let word: Vec<f32> = his_mic[mid..mid + 12 * VAD_FRAME_SAMPLES].to_vec();
@@ -736,7 +736,7 @@ fn a_short_word_of_his_over_rich_is_lost_and_the_line_tells_him_to_say_it_again(
     let at = (4.0 * SAMPLE_RATE as f32 / VAD_FRAME_SAMPLES as f32) as usize;
     let o = replay(&mic, &reference, Some(&word), at);
     println!("[measured] his word over Rich at 4.0 s: {o:?}");
-    assert_eq!(o.barge_ins, 0, "a 12-frame word stopped Rich; the premise moved: {o:?}");
+    assert_eq!(o.barge_ins, 0, "the short recorded excerpt now stopped Rich; the recovery premise moved: {o:?}");
     assert!(o.tainted_discards >= 1, "his word was not discarded, so it is not the lost-word case: {o:?}");
     let said = RefusalNotices::new().half_duplex().expect("the first tainted discard of a session says the line");
     assert_eq!(said, VoiceNotice::CouldNotListenWhileSpeaking);
