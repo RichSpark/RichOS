@@ -191,7 +191,7 @@ GUI_BOOT_SUITE = SCRIPTS / "gui-boot.test.sh"
 # not compiled into the release app. Product, companion source and packaging changes
 # remain outside this exception: an old candidate cannot borrow their verdict.
 GUI_PROOF_HARNESS = frozenset(str(SCRIPTS / name) for name in (
-    "gui-boot.test.sh", "gui-boot-launch-lines.unaccounted",
+    "front-door.test.sh", "gui-boot.test.sh", "gui-boot-launch-lines.unaccounted",
     "lib/gui-launch.sh", "prepare-companion.py",
     "gui-launch-env.test.sh", "companion-macos.test.sh", "run-tests.test.sh",
 ))

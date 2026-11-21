@@ -480,14 +480,16 @@ APPLESCRIPT
 
 ax() {
   osascript "$AXDUMP" "$PID" > "$TMP/ax-$1.txt" 2>&1
-  # Setup can cover the initial tree. Calibrate when the desk first becomes
-  # observable, using the same three closed sheets as C5, not a fixed height.
-  local a b c
-  a="$(size_of "$1" 'Quit while work is running?')"
-  b="$(size_of "$1" 'Allow this action?')"
-  c="$(size_of "$1" 'Connected repositories')"
-  if [ -n "$a" ] && [ "$a" = "$b" ] && [ "$a" = "$c" ]; then
-    CLOSED_BOX="$a"
+  # The opening tree may contain only setup. Calibrate in the first dump
+  # that includes three Settings sheets this walk never opens.
+  if [ -z "$CLOSED_BOX" ]; then
+    local quota accounts folders
+    quota="$(size_of "$1" 'Claude Code quota' AXGroup)"
+    accounts="$(size_of "$1" 'Claude accounts' AXGroup)"
+    folders="$(size_of "$1" 'Connected project folders (repositories)' AXGroup)"
+    if [ -n "$quota" ] && [ "$quota" = "$accounts" ] && [ "$quota" = "$folders" ]; then
+      CLOSED_BOX="$quota"
+    fi
   fi
 }
 windows_in() { head -1 "$TMP/ax-$1.txt" | sed 's/^windows://'; }
@@ -499,9 +501,11 @@ windows_in() { head -1 "$TMP/ax-$1.txt" | sed 's/^windows://'; }
 #   $ awk -F' \| ' 'NR==69 {for(i=1;i<=NF;i++) printf "$%d=[%s]\n", i, $i}' ax-0-rest.txt
 #     $1=[AXButton]  $2=[294,679 174x52]  $3=[name=Talk to Rich]  $4=[value=missing value]
 #
-# The node named $2 in dump $1, as "WxH". Empty when there is no such node at all.
+# The node named $2 in dump $1, as "WxH", optionally restricted to role $3.
 size_of() {
-  awk -F' \\| ' -v want="$2" '$3 == "name=" want { split($2, a, " "); print a[2]; exit }' "$TMP/ax-$1.txt"
+  awk -F' \\| ' -v want="$2" -v role="${3:-}" '
+    $3 == "name=" want && (role == "" || $1 == role) { split($2, a, " "); print a[2]; exit }
+  ' "$TMP/ax-$1.txt"
 }
 # Does dump $1 carry a node named $2 with a REAL box? THIS is "on screen".
 #
@@ -516,13 +520,13 @@ size_of() {
 # (260,130) and a degenerate full-width 10pt strip — never 0x0. A rule that only rejected
 # zero would have called every closed sheet in this app OPEN.
 #
-# So the degenerate box is not a constant typed here; it is CALIBRATED from a sheet known to
-# be closed in the same run (`$CLOSED_BOX`, set beside C5 below) and rejected by value. On a
+# So the degenerate box is not a constant typed here; `ax` measures it from three sheets
+# that stay closed in the same run and `on_screen` rejects that size. On a
 # build where that calibration cannot be taken the rule falls back to rejecting only zero,
 # which is stricter about nothing and is said out loud at C5 rather than assumed.
 CLOSED_BOX=""
 on_screen() {
-  local s; s="$(size_of "$1" "$2")"
+  local s; s="$(size_of "$@")"
   [ -n "$CLOSED_BOX" ] && [ "$s" = "$CLOSED_BOX" ] && return 1
   case "$s" in ""|0x0|0x*|*x0) return 1 ;; *) return 0 ;; esac
 }
@@ -661,24 +665,7 @@ send_key() {
 # ---------------------------------------------------------------------------------------
 # C5 — the calibration, re-proved on THIS run rather than quoted from the header
 # ---------------------------------------------------------------------------------------
-# Three sheets are `display: none` at rest. They must all report the SAME degenerate box, and
-# that agreement is what makes the box a calibration rather than one node's quirk.
-PHANTOM="$(size_of 0-rest 'Quit while work is running?')"
-PHANTOM2="$(size_of 0-rest 'Allow this action?')"
-PHANTOM3="$(size_of 0-rest 'Connected repositories')"
-WINDOW_BOX="$(size_of 0-rest 'RichOS')"
-if [ -z "$PHANTOM" ]; then
-  note "C5  this build's tree does not carry the quit dialog at rest; the closed-sheet box could"
-  note "    not be calibrated on this run, so on_screen falls back to rejecting only a zero box."
-elif [ "$PHANTOM" = "$PHANTOM2" ] && [ "$PHANTOM" = "$PHANTOM3" ]; then
-  CLOSED_BOX="$PHANTOM"
-  ok "C5  three display:none sheets are in the tree and all three measure ${PHANTOM} — presence"
-  note "    is not evidence, and ${PHANTOM} is this run's closed-sheet box (the title 'RichOS'"
-  note "    measures ${WINDOW_BOX} on the same window, so the strip is not a real control)"
-else
-  note "C5  the three closed sheets disagree — $PHANTOM / $PHANTOM2 / $PHANTOM3 — so no"
-  note "    closed-sheet box is calibrated and on_screen rejects only a zero box on this run."
-fi
+# C5 is reported at the desk, after the first-run overlays have been cleared.
 
 # ---------------------------------------------------------------------------------------
 # C5b — THE WORD `Enter` IS A PROMISE. DOES THE KEY KEEP IT, ON A REAL WINDOW? — audit-10 row 2
@@ -756,20 +743,14 @@ if [ "$(size_of 0c-after-return 'Talk to Rich')" = "$DOOR_BOX" ] && [ -n "$DOOR_
 fi
 
 # ---------------------------------------------------------------------------------------
-# THE DESK CHROME IS THIS RUN'S "NOTHING IS COVERING THE WINDOW" SIGNAL, and it was found by
-# measurement rather than chosen. Across every dump of the 16:35:36Z run, the `Settings`
-# popup button is in the tree with a 40x40 box exactly when no modal is up, and absent
-# exactly when one is:
-#
-#   0-rest 40x40   1-desk 40x40   2-typed 40x40   3-cmdk (search up) ABSENT
-#   4-esc ABSENT (the first-run question had surfaced)   4b (it was dismissed) 40x40
-#
-# That is a far better signal than the search overlay's own nodes, which on this build stay
-# in the tree at their full `260,130 1400x853` box AFTER the overlay closes — byte-identical
-# to the open state. (That is the row-1 residue class, fixed on this branch and not in the
-# .9 bundle.) So nothing below asks "is the overlay gone"; it asks "is the desk back".
+# WebKit can expose the background Settings button while Search is open.
+# The overlay's Search combobox is distinct from the rail's search button.
+search_open() { on_screen "$1" 'Search' AXComboBox; }
 desk_open() {
-  [ -n "$(size_of "$1" 'Settings')" ] && ! on_screen "$1" "$FIRST_RUN"
+  on_screen "$1" 'Settings' AXPopUpButton &&
+    ! search_open "$1" && ! on_screen "$1" "$FIRST_RUN" AXGroup &&
+    ! on_screen "$1" "There's a bit of setting up to do first." AXGroup &&
+    ! on_screen "$1" 'Where should I keep what you tell me?' AXGroup
 }
 
 # ---------------------------------------------------------------------------------------
@@ -853,6 +834,11 @@ else
   note "the first-run questions could not be cleared within the deadline; a check below that"
   note "finds one on screen will say so rather than blame the key."
 fi
+if [ -n "$CLOSED_BOX" ]; then
+  ok "C5  the three closed Settings sheets agree on the ${CLOSED_BOX} box"
+else
+  note "C5  the three closed Settings sheets could not be measured in the same dump."
+fi
 
 # ---------------------------------------------------------------------------------------
 # C1 — a native keystroke reaches the web content AT ALL
@@ -891,9 +877,9 @@ drain_first_run 2a || note "a first-run question is still up after C1; the check
 send kd:cmd t:k ku:cmd
 sleep 1.5
 ax 3-cmdk
-if on_screen 3-cmdk 'Search' && ! desk_open 3-cmdk; then
-  ok "C2  positive control — Cmd-K reached main.js's document keydown listener  (the Search"
-  note "    overlay measures $(size_of 3-cmdk 'Search') and the desk chrome is gone behind it)"
+if search_open 3-cmdk; then
+  ok "C2  positive control — Cmd-K opened the Search overlay"
+  note "    Search input measures $(size_of 3-cmdk 'Search' AXComboBox)"
 else
   bad "C2  positive control FAILED — Cmd-K opened nothing, so that listener is not running on"
   note "native keys. Escape is three lines below Cmd-K in the SAME listener, so C4 cannot"
@@ -908,25 +894,9 @@ fi
 send_key 53 Escape
 sleep 1.5
 ax 4-esc
-# "IS THE DESK BACK" IS TOO STRONG, AND IT WAS WRONG THREE RUNS RUNNING. The search overlay
-# is modal, so while it is up NOTHING else is in the tree — including the first-run company
-# question, which on this build is raised while the overlay covers it and is REVEALED the
-# moment the overlay closes. Measured at 16:45:10Z: the desk was clean at `2a-settle-0b`
-# (66 nodes, Settings 40x40), `3-cmdk` was 17 nodes of search and nothing else, and `4-esc`
-# was 52 nodes with the company question in it and no search overlay at all. Escape plainly
-# acted; what it uncovered was not the desk.
-#
-# So the assertion is the one the state actually supports: the search overlay was the WHOLE
-# tree before the key and it is not there after it.
-search_only() { on_screen "$1" 'Search' && ! desk_open "$1"; }
-if search_only 3-cmdk && ! on_screen 4-esc 'Search'; then
-  if desk_open 4-esc; then
-    ok "C3  positive control — Escape closed the search overlay and the desk is back"
-  else
-    ok "C3  positive control — Escape closed the search overlay (it was the whole tree at"
-    note "    $(wc -l < "$TMP/ax-3-cmdk.txt" | tr -d ' ') nodes and is absent from the $(wc -l < "$TMP/ax-4-esc.txt" | tr -d ' ') it left behind); what it uncovered is the"
-    note "    first-run company question, not the desk, which is a queue and not a failure"
-  fi
+# Closing Search can uncover a setup prompt. Measure the Search input itself.
+if search_open 3-cmdk && ! search_open 4-esc; then
+  ok "C3  positive control — Escape closed the Search overlay"
 else
   bad "C3  Escape did not close the search overlay — the key did not arrive, or the handler"
   note "did not act. Either way C4 below cannot tell a product defect from a dead key, so"
@@ -945,8 +915,10 @@ drain_first_run 3a || note "a first-run question is still up; C4 below will say 
 # used to be. At 16:30:15Z that put the click under a search overlay that was still up, and
 # C4 reported "the settings menu did not open" about a click that never reached it.
 ax 4b-before-settings
-SET="$(middle_of 4b-before-settings 'Settings')"
-if [ -z "$SET" ]; then
+SET="$(middle_of 4b-before-settings 'Settings' AXPopUpButton)"
+if ! desk_open 4b-before-settings; then
+  bad "C4  Settings was unavailable after leaving Search and clearing setup"
+elif [ -z "$SET" ]; then
   bad "C4  the settings control has no box in the tree, so the menu could not be opened"
   note "the tree carries $(wc -l < "$TMP/ax-4b-before-settings.txt" | tr -d ' ') nodes; the first-run question is $(on_screen 4b-before-settings "$FIRST_RUN" && echo 'ON SCREEN' || echo 'not up')"
 else
