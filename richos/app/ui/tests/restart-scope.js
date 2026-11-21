@@ -60,6 +60,13 @@ async function settle(page) {
   await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
 }
 
+async function loadShell(page) {
+  // The shell can be interactive while WebKit is still waiting for a font preload.
+  await page.goto(APP, { waitUntil: "domcontentloaded" });
+  await leaveHome(page);
+  await page.waitForSelector(".nav-thread", { state: "attached" });
+}
+
 async function openApp(browser, viewport) {
   const page = await browser.newPage({ viewport: viewport || { width: 1400, height: 900 } });
   const errors = [];
@@ -67,11 +74,8 @@ async function openApp(browser, viewport) {
   page.on("console", (m) => {
     if (m.type() === "error") errors.push("console: " + m.text());
   });
-  await page.goto(APP);
-  // The home screen is the landing surface now; this suite is about the app UI behind it.
-  await leaveHome(page);
+  await loadShell(page);
   await page.waitForFunction("typeof window.RichTimeline === 'object'");
-  await page.waitForSelector(".nav-thread", { state: "attached" });
   page.__errors = errors;
   return page;
 }
@@ -343,9 +347,7 @@ async function main() {
     // wrong for this one.
     const ctx = await browser.newContext({ viewport: { width: 1200, height: 420 } });
     const before = await ctx.newPage();
-    await before.goto(APP);
-    await leaveHome(before);
-    await before.waitForSelector(".nav-thread", { state: "attached" });
+    await loadShell(before);
     await open(before, "acme");
     // THE SCROLL FIRST, THE TYPING LAST, and that order is the check rather than a detail.
     // Written the other way round, the scroll handler's own park wrote the composer text
@@ -379,9 +381,7 @@ async function main() {
     assertEqual(onDisk.scroll.acme, parked.top, "the scroll position never reached the store");
 
     const after = await ctx.newPage();
-    await after.goto(APP);
-    await leaveHome(after);
-    await after.waitForSelector(".nav-thread", { state: "attached" });
+    await loadShell(after);
     await open(after, "acme");
     await settle(after);
     const restored = await after.evaluate(() => ({
@@ -447,9 +447,7 @@ async function main() {
     // already sent must not be handed back to him by a crash as though unsent.
     const ctx = await browser.newContext({ viewport: { width: 1200, height: 420 } });
     const before = await ctx.newPage();
-    await before.goto(APP);
-    await leaveHome(before);
-    await before.waitForSelector(".nav-thread", { state: "attached" });
+    await loadShell(before);
     await open(before, "acme");
     await before.fill("#input", "send this one");
     // PARKED BEFORE THE SEND, AND PROVEN PARKED. Without this wait the debounce had not yet
@@ -488,9 +486,7 @@ async function main() {
     assertEqual(boxAfterSend, "", "the composer kept the sent words");
 
     const after = await ctx.newPage();
-    await after.goto(APP);
-    await leaveHome(after);
-    await after.waitForSelector(".nav-thread", { state: "attached" });
+    await loadShell(after);
     await open(after, "acme");
     const restored = await after.inputValue("#input");
     assertEqual(restored, "", "a sentence he had already sent came back into his composer");
