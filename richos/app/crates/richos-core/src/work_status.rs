@@ -554,8 +554,9 @@ pub struct Launches {
     pub dispatched: bool,
     /// The provider sessions of receipts that may still have a run in flight (`dispatching`,
     /// `running`, `unknown`: the same statuses as [`WorkTrail::stop_targets`]). A receipt with
-    /// no session is recorded as `""`, which no worker reading can clear.
-    pub unresolved: std::collections::BTreeSet<String>,
+    /// no session is recorded as `""`, which no worker reading can clear. Keep the agent
+    /// identity alongside it so the app can attribute a live worker to the right assignment.
+    pub unresolved: std::collections::BTreeSet<(String, Option<String>)>,
     /// One of this assignment's receipts could not be read. What it says is unknown, so the
     /// assignment counts as live (fail toward waiting); no other assignment is affected.
     pub damaged: bool,
@@ -593,7 +594,7 @@ impl Stamp {
 /// What one receipt said when it was last read.
 #[derive(Clone)]
 enum Seen {
-    Receipt { obligation: Option<String>, dispatched: bool, unresolved: Option<String> },
+    Receipt { obligation: Option<String>, dispatched: bool, unresolved: Option<(String, Option<String>)> },
     Damaged { obligation: Option<String> },
 }
 impl Seen {
@@ -725,7 +726,10 @@ fn parse_launch(bytes: &[u8], entity: &str, thread: &str, earlier: Option<String
         obligation,
         dispatched: named("tool_use_id") || named("agent_id"),
         unresolved: matches!(row["status"].as_str(), Some("dispatching" | "running" | "unknown"))
-            .then(|| row["binding"]["session_id"].as_str().unwrap_or("").to_string()),
+            .then(|| (
+                row["binding"]["session_id"].as_str().unwrap_or("").to_string(),
+                row["agent_id"].as_str().filter(|id| !id.is_empty()).map(str::to_string),
+            )),
     }
 }
 

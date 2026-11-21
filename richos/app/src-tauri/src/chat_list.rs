@@ -39,6 +39,8 @@ pub(crate) struct Facts {
     pub paused: bool,
     pub team_working: bool,
     pub recovering: bool,
+    #[serde(skip)]
+    unconfirmed_assignments: bool,
     pub resume_at: Option<u64>,
     pub result_at: Option<u64>,
     pub long_finish_at: Option<u64>,
@@ -68,6 +70,7 @@ fn earliest(slot: &mut Option<u64>, at: u64) {
 fn facts(
     view: &dyn SpineView,
     state_root: &std::path::Path,
+    work: &richos_core::work_host::WorkHost,
     row: &ThreadRow,
     questions: &[Question],
     holds: &[Hold],
@@ -144,10 +147,10 @@ fn facts(
         }
     }
     if let Ok(scan) = assignment::scan_all(state_root, entity, &row.id) {
-        for job in scan.rows {
-            let Some(status) = job.reported_state() else {
-                continue;
-            };
+        let states = work.assignment_states(&scan.rows);
+        for (job, status) in scan.rows.into_iter().zip(states) {
+            let Some(status) = status else { continue };
+            result.unconfirmed_assignments |= status == AssignmentState::Unknown;
             newest_progress = newest_progress.max(job.registered_at_ms);
             match status {
                 AssignmentState::Blocked => {
@@ -155,7 +158,7 @@ fn facts(
                     latest(&mut result.question_at, job.updated_at_ms);
                 }
                 AssignmentState::WaitingForQuota => result.paused = true,
-                status if status.is_open() => {
+                AssignmentState::Running | AssignmentState::Preparing => {
                     earliest(&mut result.working_since, job.registered_at_ms);
                     result.team_working = true;
                     work_detail = Some(format!("Team · {}", status.as_str()));
@@ -284,6 +287,7 @@ pub(crate) fn snapshot(state: &AppState, view: &dyn SpineView, tree: &mut Naviga
             facts(
                 view,
                 &state_root,
+                &state.work,
                 row,
                 questions.get(&row.id).map_or(&[], Vec::as_slice),
                 holds.get(&row.id).map_or(&[], Vec::as_slice),
@@ -291,6 +295,7 @@ pub(crate) fn snapshot(state: &AppState, view: &dyn SpineView, tree: &mut Naviga
             )
         })
         .collect();
+    let unconfirmed_assignments = facts.iter().any(|f| f.unconfirmed_assignments);
     let config = state.config.lock().unwrap();
     let mut nav = state.nav.lock().unwrap();
     let since = nav.state().chat_list_since.unwrap_or(now);
@@ -375,6 +380,8 @@ pub(crate) fn snapshot(state: &AppState, view: &dyn SpineView, tree: &mut Naviga
         "local snapshot",
         if question_unavailable || quota_unavailable {
             "partial"
+        } else if unconfirmed_assignments {
+            "assignment-activity-unconfirmed"
         } else {
             "read"
         },
@@ -508,6 +515,7 @@ pub(crate) fn watch(app: AppHandle) {
         "rich://turn-error",
         "rich://turn-completed",
         "rich://work-notice",
+        "rich://assignment-activity-changed",
         "rich://question-upserted",
         "rich://chat-list-clock-changed",
     ] {
@@ -530,7 +538,7 @@ pub(crate) fn watch(app: AppHandle) {
                                 p.components().any(|part| {
                                     matches!(
                                         part.as_os_str().to_str(),
-                                        Some("assignments" | "quota-waits" | "questions")
+                                        Some("assignments" | "work-receipts" | "sessions" | "quota-waits" | "questions")
                                     )
                                 })
                             })

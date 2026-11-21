@@ -11,6 +11,7 @@ use std::sync::{Arc, Condvar, Mutex};
 pub trait WorkNotifier: Send + Sync {
     fn raised(&self, thread_id: &str, notice: &PendingNotice);
     fn nothing_left_to_do(&self) {}
+    fn assignment_activity_changed(&self) {}
     /// Stu's work met an overload and waits out the CEO's schedule: `sentence` is
     /// `RetryBudget::ceo_message`, the same "RichOS will try again in N minutes" line his
     /// conversation shows for Rich, for the conversation `thread_id`. A turn of his that a usage
@@ -92,6 +93,8 @@ struct Inner {
     /// Inputs accepted by this live backend. Unfinished handoffs remain durable for restart.
     // Input already delivered to this session stays delivered even when a turn fails.
     peer_active_through: Option<u64>,
+    /// The assignment being delivered in the current scheduled handoff turn.
+    active_assignment: Option<String>,
     peer_stopper: Option<(String, Arc<dyn TurnCancel>)>,
     processing: bool,
     cancel: Option<Arc<dyn TurnCancel>>,
@@ -1360,6 +1363,8 @@ impl WorkHost {
         // after a usage limit (below), so it is never a retry loop.
         // The session a delivery's turn ran to a result on (its input is in that transcript).
         let ran: std::cell::RefCell<Option<String>> = Default::default();
+        let assignment = crate::session_tools::work_reference(&self.message_scope(binding), message)
+            .ok().flatten().map(|work| work.assignment_id);
         let deliver=|| {
         // This is queue cancellation, not per-tool authority on Stu's session.
         let stopped = || self.handoff_stopped(binding, message);
@@ -1420,6 +1425,10 @@ impl WorkHost {
             let result = loop {
                 let mut said = String::new();
                 let mut sent=lease.enqueue_prompt(&input,Box::new(||Ok(()))).and_then(|reply| {
+                    if let Some(id) = &assignment {
+                        backend.inner.lock().unwrap().active_assignment = Some(id.clone());
+                        self.notifier.assignment_activity_changed();
+                    }
                     if !published {
                         published=true;
                         self.publish_peer_input(backend,binding);
@@ -1430,6 +1439,9 @@ impl WorkHost {
                         }
                     })
                 });
+                if backend.inner.lock().unwrap().active_assignment.take().is_some() {
+                    self.notifier.assignment_activity_changed();
+                }
                 if let Some(failure) = crate::upstream::UpstreamFailure::classify_lines(&said)
                     .filter(|failure|failure.fault == crate::upstream::UpstreamFault::Overloaded) {
                     sent = Err(CognitionError::Protocol(failure.raw));
@@ -2194,6 +2206,66 @@ impl WorkHost {
         Ok(format!("work-input:{}", delivery.id))
     }
 
+    /// Current display states for one conversation's assignments, in input order.
+    /// Historical reports remain intact for recovery. Only a current, attributed handoff,
+    /// command or helper can confirm a report of work in progress.
+    pub fn assignment_states(&self, rows: &[Assignment]) -> Vec<Option<AssignmentState>> {
+        use std::collections::{HashMap, HashSet};
+        let mut states: Vec<_> = rows.iter().map(Assignment::reported_state).collect();
+        let in_progress = |state| matches!(state, Some(AssignmentState::Preparing | AssignmentState::Running));
+        let Some(first) = rows.iter().zip(&states).find_map(|(row, &state)| in_progress(state).then_some(row)) else {
+            return states;
+        };
+        let (entity, thread) = (first.entity_id.as_str(), first.thread_id.as_str());
+        let (active, stopper) = self.backend(thread).map_or((None, None), |backend| {
+            let inner = backend.inner.lock().unwrap();
+            (inner.active_assignment.clone(), inner.peer_stopper.clone())
+        });
+        let hosted = self.lease_sessions();
+        let commands = stopper
+            .filter(|(session, _)| hosted.contains(session))
+            .map(|(_, handle)| handle.own_commands())
+            .unwrap_or_default();
+        let command_jobs: HashSet<_> = commands.iter()
+            .filter_map(|command| owner(command, rows).map(|record| record.id.as_str()))
+            .collect();
+        let receipts = self.receipts.lock().unwrap().launches(&self.state, entity, thread).ok();
+        let mut active_agents: HashMap<&str, HashSet<String>> = HashMap::new();
+        for (row, state) in rows.iter().zip(&mut states).filter(|(_, state)| in_progress(**state)) {
+            if active.as_deref() == Some(row.id.as_str()) || command_jobs.contains(row.id.as_str()) {
+                continue;
+            }
+            let active_helper = receipts.as_ref().and_then(|r| r.by_obligation.get(&row.obligation_id))
+                .is_some_and(|launches| launches.unresolved.iter().any(|(session, agent)| {
+                    let Some(agent) = agent else { return false };
+                    active_agents.entry(session).or_insert_with(|| {
+                        if !hosted.contains(session) && !self.recorded_provider_running(entity, thread, session) {
+                            return HashSet::new();
+                        }
+                        crate::app_workers::status(&self.state, Some(session)).items.into_iter()
+                            .filter(|item| item.state == "active")
+                            .filter_map(|item| item.agent_id)
+                            .collect()
+                    }).contains(agent)
+                }));
+            if !active_helper {
+                *state = Some(AssignmentState::Unknown);
+            }
+        }
+        states
+    }
+
+    fn recorded_provider_running(&self, entity: &str, thread: &str, session: &str) -> bool {
+        crate::work_status::session_record(&self.state, entity, thread, session)
+            .ok().flatten()
+            .filter(|record| !record.ended)
+            .and_then(|record| record.process)
+            .is_some_and(|(pid, start)| matches!(
+                crate::app_cleanup::process_start(pid),
+                crate::app_cleanup::ProcessStart::Running(now) if now == start
+            ))
+    }
+
     /// **Is there background work, and is any of it running NOW?** The one answer the update
     /// gate, the quit question and the settled sweep all read (`lifecycle.rs`: "is there work"
     /// must not have two answers in one process).
@@ -2285,7 +2357,7 @@ impl WorkHost {
                 if !given && !launched.dispatched {
                     return true;
                 }
-                launched.unresolved.iter().any(|session| session_live(session))
+                launched.unresolved.iter().any(|(session, _)| session_live(session))
             }).count();
             live += own.max(usize::from(self.stu_busy(&scope)));
         }
@@ -6871,6 +6943,66 @@ done
             Some("1 assignment is still running in the background."));
         restarted.shutdown();
         std::fs::remove_dir_all(&h.root).unwrap();
+    }
+
+    #[test]
+    fn desktop_assignment_state_drops_historical_running_reports() {
+        let h = harness(0);
+        let (record, _, _) = handed_job(&h);
+        assignment::advance(
+            &h.state, "depot", "thread-one", &record.id, AssignmentState::Running, "Worker start observed",
+        ).unwrap();
+        helper_receipt(&h, "run-ended");
+        let read = || assignment::read_all(&h.state, "depot", "thread-one").unwrap();
+        assert_eq!(h.host.assignment_states(&read()), [Some(AssignmentState::Unknown)]);
+        assert_eq!(read()[0].reported_state(), Some(AssignmentState::Running));
+        // A stale running receipt is insufficient even if the provider journal still shows
+        // the worker open. The provider that owns it also has to be running.
+        helper_receipt(&h, "running");
+        let folder = h.state.join("evidence/work-session-one");
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join(".lock"), "").unwrap();
+        let callback = |event: serde_json::Value| serde_json::json!({
+            "schema": 1, "callback": {"session_id":"work-session-one",
+                "hook_event_name":event["name"], "agent_id":event["agent_id"],
+                "tool_name":event["tool_name"], "tool_response":event["tool_response"]}
+        }).to_string() + "\n";
+        let running = callback(serde_json::json!({"name":"SubagentStart","agent_id":"agent-one"}))
+            + &callback(serde_json::json!({"name":"PostToolUse","tool_name":"Agent",
+                "tool_response":{"status":"async_launched","agentId":"agent-one"}}));
+        let journal = folder.join("callbacks.jsonl");
+        std::fs::write(&journal, &running).unwrap();
+        assert_eq!(h.host.assignment_states(&read()), [Some(AssignmentState::Unknown)]);
+        // The same receipt and active worker on a process whose identity can be verified.
+        use sha2::Digest;
+        let partition = format!("{:x}", sha2::Sha256::digest(b"[\"depot\",\"thread-one\"]"));
+        let sessions = h.state.join("workspaces").join(partition).join("sessions");
+        std::fs::create_dir_all(&sessions).unwrap();
+        let pid = std::process::id();
+        let crate::app_cleanup::ProcessStart::Running(start) = crate::app_cleanup::process_start(pid) else {
+            panic!("could not read the test process identity");
+        };
+        std::fs::write(sessions.join("work-session-one.json"), serde_json::json!({
+            "session_id":"work-session-one","pid":pid,"pid_start":start
+        }).to_string()).unwrap();
+        let other = assignment::register(&h.state, &Registration {
+            obligation_id: "other-obligation".into(), ..registration(&h)
+        }).unwrap();
+        assignment::advance(
+            &h.state, "depot", "thread-one", &other.id, AssignmentState::Running, "Older worker",
+        ).unwrap();
+        let states = || {
+            let rows = read();
+            let activity = h.host.assignment_states(&rows);
+            rows.into_iter().map(|row| row.id).zip(activity).collect::<std::collections::HashMap<_, _>>()
+        };
+        let live = states();
+        assert_eq!(live[&record.id], Some(AssignmentState::Running));
+        assert_eq!(live[&other.id], Some(AssignmentState::Unknown));
+        std::fs::write(journal, running + &callback(serde_json::json!({
+            "name":"SubagentStop","agent_id":"agent-one"
+        }))).unwrap();
+        assert_eq!(states()[&record.id], Some(AssignmentState::Unknown));
     }
 
     /// **(b) Between its registration and its first worker it still blocks** (`work_gate.rs`,

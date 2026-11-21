@@ -86,7 +86,8 @@ module.exports = [
   { s: "This time could not be saved.", c: "ACTIONABLE", control: ".chat-later-item", fixture: null, why: "The menu remains open and the time choices can be used again." },
   { s: "Unknown chat-list action", c: "UNREACHABLE", why: "The desktop sends only the named read, unread and reminder actions." },
   { s: "When RichOS is in the background", c: "INFORMATIONAL", why: "Describes when the neighboring Mac notifications switch applies." },
-  { s: "Your team is working on this", c: "INFORMATIONAL", why: "Reports a saved open assignment and shows how long it has been open." },
+  { s: "Your team is working on this", c: "INFORMATIONAL", why: "Shows current team activity and the age of its assignment." },
+  { s: "RichOS can't confirm its current status.", c: "INFORMATIONAL", why: "A saved assignment has no confirmed current activity or outcome." },
   // Optional RichGlance global capture shortcut.
   {"s":"Off. Turn on to keep screenshots and editable marks for seven days.","c":"ACTIONABLE","why":"The switch in the same card enables local capture history.","control":"#richglance-history"},
   {"s":"On. Originals and editable marks stay on this Mac for seven days.","c":"ACTIONABLE","why":"The switch in the same card offers to turn history off and delete it.","control":"#richglance-history","fixture":"richglance-shortcut-collision"},
