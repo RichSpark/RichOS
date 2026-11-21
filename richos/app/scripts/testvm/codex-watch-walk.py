@@ -152,10 +152,17 @@ class CodexWatchWalk(stu.StuReminderWalk):
         if self.coordinator() or self.connections():
             raise StepFailed('fresh user already has Codex coordination state')
         guide = self.coordination + '/codex-instructions.md'
-        instructions = self.run_python('import json,sys;print(json.dumps(open(sys.argv[1]).read()))',
-                                       self.home + '/.codex/AGENTS.md')
-        if guide not in instructions:
-            raise StepFailed('a standalone Codex chat did not receive the installed guide reference')
+        read = 'import json,sys;from pathlib import Path;p=Path(sys.argv[1]);print(json.dumps(p.read_text() if p.is_file() else ""))'
+        try:
+            self.wait_fact('installed guide for standalone Codex',
+                lambda: self.run_python(read, self.home + '/.codex/AGENTS.md'),
+                lambda instructions: guide in instructions)
+        except StepFailed:
+            log = self.data + '/engine-state/codex-watch/host-child.log'
+            for label, path in [('host-child', log), ('app', self.payload + '/app.log')]:
+                capture = guest(self.vm, 'tail -n 60 ' + shlex.quote(path) + ' 2>/dev/null || true')
+                (self.out / (label + '-provisioning.log')).write_text(capture)
+            raise
         second = self.helper_call('connect', text='Harmless independent Codex transport test',
                                   provenance='Guest Codex-first source')['locator']
         marker = 'automatic-' + uuid.uuid4().hex[:12]
