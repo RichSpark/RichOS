@@ -58,6 +58,7 @@ pub async fn glance_capture_configure(app: AppHandle, enabled: bool, shortcut: S
 pub struct WorkflowSettings {
     opens_editor: bool,
     keeps_history: bool,
+    keeps_forever: bool,
 }
 
 #[richos_command::command]
@@ -101,7 +102,11 @@ mod workflow {
     fn read(root: &Path) -> WorkflowSettings {
         WorkflowSettings {
             opens_editor: fs::read(root.join("return-action")).is_ok_and(|bytes| bytes == b"editor"),
-            keeps_history: fs::read(root.join("keep-history")).is_ok_and(|bytes| bytes == b"on"),
+            keeps_history: match fs::read(root.join("keep-history")) {
+                Ok(bytes) => bytes == b"on",
+                Err(error) => error.kind() == io::ErrorKind::NotFound,
+            },
+            keeps_forever: fs::read(root.join("retention")).is_ok_and(|bytes| bytes == b"forever"),
         }
     }
 
@@ -148,6 +153,25 @@ mod workflow {
         })();
         if result.is_err() { drop(fs::remove_file(pending)); }
         result
+    }
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn history_defaults_on_and_respects_explicit_off() {
+            let dir = tempfile::tempdir().unwrap();
+            let root = dir.path();
+            assert!(read(root).keeps_history);
+            assert!(!read(root).keeps_forever);
+            write_setting(root, "retention", b"forever").unwrap();
+            assert!(read(root).keeps_forever);
+            write_setting(root, "keep-history", b"off").unwrap();
+            assert!(!read(root).keeps_history);
+            assert!(read(root).keeps_forever);
+            write_setting(root, "keep-history", b"on").unwrap();
+            assert!(read(root).keeps_history);
+        }
     }
 }
 
