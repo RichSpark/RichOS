@@ -5141,10 +5141,11 @@ fn get_assignments(state: State<AppState>, thread_id: String) -> Result<serde_js
         &thread_id,
     )
     .map_err(|e| e.to_string())?;
-    let states = state.work.assignment_states(&rows);
+    let states = state.work.assignment_activity(&rows);
     Ok(serde_json::json!({
-        "assignments": rows.iter().zip(states).map(|(row, status)| {
+        "assignments": rows.iter().zip(states).map(|(row, activity)| {
             use richos_core::assignment::AssignmentState;
+            let status = activity.state;
             let current_detail = status.filter(|state| *state != AssignmentState::Unknown);
             serde_json::json!({
                 "id": row.id,

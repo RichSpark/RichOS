@@ -147,9 +147,9 @@ fn facts(
         }
     }
     if let Ok(scan) = assignment::scan_all(state_root, entity, &row.id) {
-        let states = work.assignment_states(&scan.rows);
-        for (job, status) in scan.rows.into_iter().zip(states) {
-            let Some(status) = status else { continue };
+        let activities = work.assignment_activity(&scan.rows);
+        for (job, activity) in scan.rows.into_iter().zip(activities) {
+            let Some(status) = activity.state else { continue };
             result.unconfirmed_assignments |= status == AssignmentState::Unknown;
             newest_progress = newest_progress.max(job.registered_at_ms);
             match status {
@@ -158,10 +158,12 @@ fn facts(
                     latest(&mut result.question_at, job.updated_at_ms);
                 }
                 AssignmentState::WaitingForQuota => result.paused = true,
-                AssignmentState::Running | AssignmentState::Preparing => {
-                    earliest(&mut result.working_since, job.registered_at_ms);
-                    result.team_working = true;
-                    work_detail = Some(format!("Team · {}", status.as_str()));
+                AssignmentState::Running => {
+                    if let Some(started) = activity.working_since {
+                        earliest(&mut result.working_since, started);
+                        result.team_working = true;
+                        work_detail = Some("Team · running".into());
+                    }
                 }
                 AssignmentState::Failed | AssignmentState::Interrupted
                     if result.stopped_at.is_none_or(|old| job.updated_at_ms >= old) =>
@@ -501,6 +503,12 @@ fn rows(tree: &NavigationTree) -> impl Iterator<Item = &ThreadRow> {
         .chain(&tree.unbound)
 }
 
+/// A killed provider need not leave a final callback or receipt change. Recheck only
+/// while the sidebar has current team activity to withdraw.
+fn activity_recheck<'a>(mut facts: impl Iterator<Item = &'a Facts>, now: u64) -> Option<u64> {
+    facts.any(|fact| fact.team_working).then_some(now.saturating_add(3_000))
+}
+
 pub(crate) fn watch(app: AppHandle) {
     use crate::chat_notifications::{self, Kind};
     use notify::Watcher;
@@ -558,7 +566,7 @@ pub(crate) fn watch(app: AppHandle) {
             loop {
                 let view = state.reader.snapshot();
                 let tree = crate::navigation_snapshot(&state, &*view);
-                let mut next_due = None;
+                let mut next_due = activity_recheck(rows(&tree).map(|row| &row.chat.facts), now_millis());
                 for row in rows(&tree) {
                     let chat = &row.chat;
                     let f = &chat.facts;
@@ -582,8 +590,8 @@ pub(crate) fn watch(app: AppHandle) {
                     }
                 }
                 drop(app.emit("rich://chat-list-changed", ()));
-                // Only the next reminder owns a timer; question, turn and assignment changes wake
-                // the observer. Re-evaluate the wall clock after the Mac sleeps.
+                // Questions, turns and receipt changes also wake the observer. Re-evaluate the
+                // next reminder and the current activity after the Mac sleeps.
                 let pause = next_due
                     .map(|at| Duration::from_millis(at.saturating_sub(now_millis()).max(1)));
                 match pause {
@@ -681,6 +689,14 @@ mod tests {
             assert!(next.later.is_none());
             assert!(next.back_at.is_none());
         }
+    }
+
+    #[test]
+    fn current_team_activity_keeps_the_sidebar_refreshing_until_it_clears() {
+        let working = Facts { team_working: true, ..Facts::default() };
+        let quiet = Facts::default();
+        assert_eq!(activity_recheck([&quiet, &working].into_iter(), 10_000), Some(13_000));
+        assert_eq!(activity_recheck([&quiet].into_iter(), 13_000), None);
     }
 
     #[test]

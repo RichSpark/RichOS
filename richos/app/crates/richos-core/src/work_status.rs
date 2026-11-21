@@ -557,6 +557,8 @@ pub struct Launches {
     /// no session is recorded as `""`, which no worker reading can clear. Keep the agent
     /// identity alongside it so the app can attribute a live worker to the right assignment.
     pub unresolved: std::collections::BTreeSet<(String, Option<String>)>,
+    /// Provider task identities kept after the helper hands its result back to Stu.
+    pub tasks: std::collections::BTreeSet<(String, String)>,
     /// One of this assignment's receipts could not be read. What it says is unknown, so the
     /// assignment counts as live (fail toward waiting); no other assignment is affected.
     pub damaged: bool,
@@ -594,7 +596,12 @@ impl Stamp {
 /// What one receipt said when it was last read.
 #[derive(Clone)]
 enum Seen {
-    Receipt { obligation: Option<String>, dispatched: bool, unresolved: Option<(String, Option<String>)> },
+    Receipt {
+        obligation: Option<String>,
+        dispatched: bool,
+        unresolved: Option<(String, Option<String>)>,
+        tasks: Vec<(String, String)>,
+    },
     Damaged { obligation: Option<String> },
 }
 impl Seen {
@@ -668,10 +675,11 @@ impl ReceiptIndex {
             match seen {
                 // A receipt naming no obligation belongs to no assignment, as in [`trail`].
                 Seen::Receipt { obligation: None, .. } => {}
-                Seen::Receipt { obligation: Some(obligation), dispatched, unresolved } => {
+                Seen::Receipt { obligation: Some(obligation), dispatched, unresolved, tasks } => {
                     let launched = out.by_obligation.entry(obligation).or_default();
                     launched.dispatched |= dispatched;
                     launched.unresolved.extend(unresolved);
+                    launched.tasks.extend(tasks);
                 }
                 Seen::Damaged { obligation: Some(obligation) } => out.by_obligation.entry(obligation).or_default().damaged = true,
                 Seen::Damaged { obligation: None } => out.unattributed_damage = true,
@@ -721,15 +729,16 @@ fn parse_launch(bytes: &[u8], entity: &str, thread: &str, earlier: Option<String
     if row["schema"] != 1 || row["binding"]["entity_id"] != entity || row["binding"]["thread_id"] != thread {
         return Seen::Damaged { obligation: obligation.or(earlier) };
     }
-    let named = |key: &str| row[key].as_str().is_some_and(|s| !s.is_empty());
+    let identity = |key: &str| row[key].as_str().filter(|id| !id.is_empty());
+    let session = row["binding"]["session_id"].as_str().unwrap_or("");
+    let tasks: Vec<_> = ["tool_use_id", "agent_id"].into_iter().filter_map(identity)
+        .map(|id| (session.to_owned(), id.to_owned())).collect();
     Seen::Receipt {
         obligation,
-        dispatched: named("tool_use_id") || named("agent_id"),
+        dispatched: !tasks.is_empty(),
         unresolved: matches!(row["status"].as_str(), Some("dispatching" | "running" | "unknown"))
-            .then(|| (
-                row["binding"]["session_id"].as_str().unwrap_or("").to_string(),
-                row["agent_id"].as_str().filter(|id| !id.is_empty()).map(str::to_string),
-            )),
+            .then(|| (session.to_owned(), identity("agent_id").map(str::to_owned))),
+        tasks,
     }
 }
 

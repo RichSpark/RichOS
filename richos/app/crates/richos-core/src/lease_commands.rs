@@ -157,6 +157,10 @@ impl LiveLeases {
             std::fs::remove_file(state).ok();
         }
     }
+    pub(crate) fn contains(&self, session: &str) -> bool {
+        self.0.lock().unwrap().contains_key(session)
+    }
+
     pub fn reading(&self) -> CommandsReading {
         let states: Vec<PathBuf> = self.0.lock().unwrap().values().cloned().collect();
         CommandsReading::of(states.iter().map(|state| read(state)))

@@ -2,6 +2,7 @@
 //! Job reports belong to Stu and the existing engine work tools. This host manages
 //! provider connections and transports facts; process lifecycle never changes job state.
 use crate::assignment::{self, Assignment, AssignmentState, PendingNotice};
+use crate::assignment_activity::{self, Cause, Display, Turn as AssignmentTurn};
 use crate::cognition::{Cognition, CognitionError, LeaseFactory, TurnItem};
 use crate::entity::ThreadBinding;
 use crate::steering::{CommandStop, TurnCancel};
@@ -93,8 +94,8 @@ struct Inner {
     /// Inputs accepted by this live backend. Unfinished handoffs remain durable for restart.
     // Input already delivered to this session stays delivered even when a turn fails.
     peer_active_through: Option<u64>,
-    /// The assignment being delivered in the current scheduled handoff turn.
-    active_assignment: Option<String>,
+    /// The assignment being worked in the current provider turn.
+    assignment_turn: Option<AssignmentTurn>,
     peer_stopper: Option<(String, Arc<dyn TurnCancel>)>,
     processing: bool,
     cancel: Option<Arc<dyn TurnCancel>>,
@@ -1352,6 +1353,20 @@ impl WorkHost {
             "active": active.is_some(), "resets_at": active.map(|p| p.resets_at)}))
     }
 
+    /// Returning accepted work to a resumed provider is reconciliation. It can discover
+    /// real work through a new worker or command, but exchanging the old handoff is not a start.
+    fn first_handoff(&self, scope: &crate::status_tools::StatusToolScope,
+        message: &crate::session_tools::Message, turn: &str) -> Option<String> {
+        let instruction = message.instruction.as_ref()?;
+        if !message.handoff
+            || self.handoffs.lock().unwrap().given(scope, instruction) != Ok(false)
+            || !matches!(crate::session_tools::previous_attempt(scope, "stu", turn), Ok(None))
+        {
+            return None;
+        }
+        crate::session_tools::work_reference(scope, message).ok().flatten().map(|work| work.assignment_id)
+    }
+
     fn run_message(
         self: &Arc<Self>,
         backend: &Arc<Backend>,
@@ -1363,8 +1378,7 @@ impl WorkHost {
         // after a usage limit (below), so it is never a retry loop.
         // The session a delivery's turn ran to a result on (its input is in that transcript).
         let ran: std::cell::RefCell<Option<String>> = Default::default();
-        let assignment = crate::session_tools::work_reference(&self.message_scope(binding), message)
-            .ok().flatten().map(|work| work.assignment_id);
+        let assignment = self.first_handoff(&self.message_scope(binding), message, turn);
         let deliver=|| {
         // This is queue cancellation, not per-tool authority on Stu's session.
         let stopped = || self.handoff_stopped(binding, message);
@@ -1426,8 +1440,11 @@ impl WorkHost {
                 let mut said = String::new();
                 let mut sent=lease.enqueue_prompt(&input,Box::new(||Ok(()))).and_then(|reply| {
                     if let Some(id) = &assignment {
-                        backend.inner.lock().unwrap().active_assignment = Some(id.clone());
-                        self.notifier.assignment_activity_changed();
+                        self.set_assignment_turn(binding, &mut backend.inner.lock().unwrap(), Some(AssignmentTurn {
+                            session: session.clone(),
+                            started_at: crate::util::now_millis(),
+                            cause: Cause::Handoff(id.clone()),
+                        }));
                     }
                     if !published {
                         published=true;
@@ -1439,8 +1456,8 @@ impl WorkHost {
                         }
                     })
                 });
-                if backend.inner.lock().unwrap().active_assignment.take().is_some() {
-                    self.notifier.assignment_activity_changed();
+                if assignment.is_some() {
+                    self.set_assignment_turn(binding, &mut backend.inner.lock().unwrap(), None);
                 }
                 if let Some(failure) = crate::upstream::UpstreamFailure::classify_lines(&said)
                     .filter(|failure|failure.fault == crate::upstream::UpstreamFault::Overloaded) {
@@ -1634,11 +1651,17 @@ impl WorkHost {
                 // A worker's start names its task, told to Stu with its overload.
                 if frame["type"] == "system" && frame["subtype"] == "task_started" {
                     if let Some(backend) = receiving.upgrade() { host.observe_worker(&backend, &binding, &session, &frame); }
+                    host.notifier.assignment_activity_changed();
                     continue;
                 }
                 if frame["type"] == "rate_limit_event" {
                     if let Some(limit) = crate::native::usage_limit_signal(&frame) { *limited.lock().unwrap() = Some(limit); }
                     continue;
+                }
+                if frame["type"] == "system" && frame["subtype"] == "task_notification" {
+                    if let Some(backend) = receiving.upgrade() {
+                        host.note_worker_result(&backend, &binding, &session, &frame);
+                    }
                 }
                 // Stu's own frames between turns of ours are an automatic turn under way; a task
                 // notification starts one.
@@ -1665,6 +1688,10 @@ impl WorkHost {
                     Some(backend) => {
                         host.observe_automatic_turn(&backend, &binding, &session, &result);
                         host.note_automatic_turn(&backend, &session, false);
+                        let mut inner = backend.inner.lock().unwrap();
+                        if inner.assignment_turn.as_ref().is_some_and(|turn| turn.session == session) {
+                            host.set_assignment_turn(&binding, &mut inner, None);
+                        }
                     }
                     None => if let Err(error) = host.observe_turn_result(&binding,None,None,&session,&result) {
                         eprintln!("[richos] native turn status: {error}");
@@ -1718,6 +1745,12 @@ impl WorkHost {
     /// switch line: "I switched the team" is said only once Stu is on the new account too
     /// (`claude_accounts::Accounts::back_end_on`).
     fn note_back_end(&self, binding: &ThreadBinding, account: Option<&str>) {
+        if account.is_none() {
+            if let Some(backend) = self.backend(binding.thread_id()) {
+                self.set_assignment_turn(binding, &mut backend.inner.lock().unwrap(), None);
+            }
+            self.notifier.assignment_activity_changed();
+        }
         if let Some(quota) = self.quota.lock().unwrap().clone() {
             quota.accounts.back_end_on(binding.thread_id(), account);
         }
@@ -1738,6 +1771,27 @@ impl WorkHost {
         } else if began {
             inner.move_check.get_or_insert(false);
             backend.wake.notify_all();
+        }
+    }
+
+    fn note_worker_result(&self, backend: &Backend, binding: &ThreadBinding, session: &str, frame: &serde_json::Value) {
+        let tasks: Vec<_> = ["tool_use_id", "task_id"].into_iter()
+            .filter_map(|key| frame[key].as_str().filter(|value| !value.is_empty() && value.len() <= 128))
+            .map(str::to_owned).collect();
+        if tasks.is_empty() { return; }
+        let mut inner = backend.inner.lock().unwrap();
+        if inner.lease_session.as_deref() != Some(session) { return; }
+        let mut turn = inner.assignment_turn.clone().filter(|turn| turn.session == session)
+            .unwrap_or_else(|| AssignmentTurn {
+                session: session.into(),
+                started_at: crate::util::now_millis(),
+                cause: Cause::WorkerResult(Vec::new()),
+            });
+        if let Cause::WorkerResult(ids) = &mut turn.cause {
+            for id in tasks {
+                if ids.len() < 256 && !ids.contains(&id) { ids.push(id); }
+            }
+            self.set_assignment_turn(binding, &mut inner, Some(turn));
         }
     }
 
@@ -2206,64 +2260,42 @@ impl WorkHost {
         Ok(format!("work-input:{}", delivery.id))
     }
 
-    /// Current display states for one conversation's assignments, in input order.
-    /// Historical reports remain intact for recovery. Only a current, attributed handoff,
-    /// command or helper can confirm a report of work in progress.
-    pub fn assignment_states(&self, rows: &[Assignment]) -> Vec<Option<AssignmentState>> {
-        use std::collections::{HashMap, HashSet};
-        let mut states: Vec<_> = rows.iter().map(Assignment::reported_state).collect();
-        let in_progress = |state| matches!(state, Some(AssignmentState::Preparing | AssignmentState::Running));
-        let Some(first) = rows.iter().zip(&states).find_map(|(row, &state)| in_progress(state).then_some(row)) else {
-            return states;
+    /// Current display state for one conversation's assignments, in input order.
+    pub fn assignment_activity(&self, rows: &[Assignment]) -> Vec<Display> {
+        use std::collections::HashSet;
+        let Some(first) = rows.first() else { return Vec::new() };
+        let scope = crate::status_tools::StatusToolScope {
+            version: 1, state_root: self.state.clone(),
+            entity_id: first.entity_id.clone(), thread_id: first.thread_id.clone(),
         };
-        let (entity, thread) = (first.entity_id.as_str(), first.thread_id.as_str());
-        let (active, stopper) = self.backend(thread).map_or((None, None), |backend| {
+        if !rows.iter().any(|row| matches!(row.reported_state(),
+            Some(AssignmentState::Registered | AssignmentState::Preparing | AssignmentState::Running))) {
+            return assignment_activity::project(&scope, rows, None, &[], None, &HashSet::new());
+        }
+        let (turn, stopper) = self.backend(&scope.thread_id).map_or((None, None), |backend| {
             let inner = backend.inner.lock().unwrap();
-            (inner.active_assignment.clone(), inner.peer_stopper.clone())
+            (inner.assignment_turn.clone(), inner.peer_stopper.clone())
         });
         let hosted = self.lease_sessions();
-        let commands = stopper
-            .filter(|(session, _)| hosted.contains(session))
-            .map(|(_, handle)| handle.own_commands())
-            .unwrap_or_default();
-        let command_jobs: HashSet<_> = commands.iter()
+        let turn = turn.filter(|turn| hosted.contains(&turn.session));
+        let commands = stopper.filter(|(session, _)| hosted.contains(session))
+            .map(|(_, handle)| handle.own_commands()).unwrap_or_default();
+        let command_jobs = commands.iter()
             .filter_map(|command| owner(command, rows).map(|record| record.id.as_str()))
             .collect();
-        let receipts = self.receipts.lock().unwrap().launches(&self.state, entity, thread).ok();
-        let mut active_agents: HashMap<&str, HashSet<String>> = HashMap::new();
-        for (row, state) in rows.iter().zip(&mut states).filter(|(_, state)| in_progress(**state)) {
-            if active.as_deref() == Some(row.id.as_str()) || command_jobs.contains(row.id.as_str()) {
-                continue;
-            }
-            let active_helper = receipts.as_ref().and_then(|r| r.by_obligation.get(&row.obligation_id))
-                .is_some_and(|launches| launches.unresolved.iter().any(|(session, agent)| {
-                    let Some(agent) = agent else { return false };
-                    active_agents.entry(session).or_insert_with(|| {
-                        if !hosted.contains(session) && !self.recorded_provider_running(entity, thread, session) {
-                            return HashSet::new();
-                        }
-                        crate::app_workers::status(&self.state, Some(session)).items.into_iter()
-                            .filter(|item| item.state == "active")
-                            .filter_map(|item| item.agent_id)
-                            .collect()
-                    }).contains(agent)
-                }));
-            if !active_helper {
-                *state = Some(AssignmentState::Unknown);
-            }
-        }
-        states
+        let receipts = self.receipts.lock().unwrap().launches(
+            &self.state, &scope.entity_id, &scope.thread_id,
+        ).ok();
+        assignment_activity::project(&scope, rows, receipts.as_ref(), &hosted, turn.as_ref(), &command_jobs)
     }
 
-    fn recorded_provider_running(&self, entity: &str, thread: &str, session: &str) -> bool {
-        crate::work_status::session_record(&self.state, entity, thread, session)
-            .ok().flatten()
-            .filter(|record| !record.ended)
-            .and_then(|record| record.process)
-            .is_some_and(|(pid, start)| matches!(
-                crate::app_cleanup::process_start(pid),
-                crate::app_cleanup::ProcessStart::Running(now) if now == start
-            ))
+    fn set_assignment_turn(&self, binding: &ThreadBinding, inner: &mut Inner, turn: Option<AssignmentTurn>) {
+        if inner.assignment_turn == turn { return; }
+        if let Err(error) = assignment_activity::publish(&self.message_scope(binding), turn.as_ref()) {
+            eprintln!("[richos] assignment activity could not be published: {error}");
+        }
+        inner.assignment_turn = turn;
+        self.notifier.assignment_activity_changed();
     }
 
     /// **Is there background work, and is any of it running NOW?** The one answer the update
@@ -6954,7 +6986,7 @@ done
         ).unwrap();
         helper_receipt(&h, "run-ended");
         let read = || assignment::read_all(&h.state, "depot", "thread-one").unwrap();
-        assert_eq!(h.host.assignment_states(&read()), [Some(AssignmentState::Unknown)]);
+        assert_eq!(h.host.assignment_activity(&read()).into_iter().map(|row| row.state).collect::<Vec<_>>(), [Some(AssignmentState::Unknown)]);
         assert_eq!(read()[0].reported_state(), Some(AssignmentState::Running));
         // A stale running receipt is insufficient even if the provider journal still shows
         // the worker open. The provider that owns it also has to be running.
@@ -6972,7 +7004,7 @@ done
                 "tool_response":{"status":"async_launched","agentId":"agent-one"}}));
         let journal = folder.join("callbacks.jsonl");
         std::fs::write(&journal, &running).unwrap();
-        assert_eq!(h.host.assignment_states(&read()), [Some(AssignmentState::Unknown)]);
+        assert_eq!(h.host.assignment_activity(&read()).into_iter().map(|row| row.state).collect::<Vec<_>>(), [Some(AssignmentState::Unknown)]);
         // The same receipt and active worker on a process whose identity can be verified.
         use sha2::Digest;
         let partition = format!("{:x}", sha2::Sha256::digest(b"[\"depot\",\"thread-one\"]"));
@@ -6993,7 +7025,7 @@ done
         ).unwrap();
         let states = || {
             let rows = read();
-            let activity = h.host.assignment_states(&rows);
+            let activity = h.host.assignment_activity(&rows).into_iter().map(|row| row.state);
             rows.into_iter().map(|row| row.id).zip(activity).collect::<std::collections::HashMap<_, _>>()
         };
         let live = states();
@@ -7003,6 +7035,68 @@ done
             "name":"SubagentStop","agent_id":"agent-one"
         }))).unwrap();
         assert_eq!(states()[&record.id], Some(AssignmentState::Unknown));
+    }
+
+    #[test]
+    fn startup_reconciliation_does_not_reannounce_an_old_assignment() {
+        let h = harness(0);
+        let (record, scope, _) = handed_job(&h);
+        let (message, through) = crate::session_tools::pending(&scope, "stu").unwrap().unwrap();
+        let input = format!("peer:{through}");
+        assert_eq!(h.host.first_handoff(&scope, &message, &input), Some(record.id.clone()));
+        // The first delivered turn left the record open with an old start. Restart may hand
+        // the same input back, but the projection must await new work for that assignment.
+        crate::session_tools::begin_attempt(&scope, "stu", &input, "work-session-one").unwrap();
+        crate::session_tools::accept_live_handoff(&scope, "stu", through).unwrap();
+        assignment::advance(&h.state, "depot", "thread-one", &record.id,
+            AssignmentState::Running, "Previous provider start").unwrap();
+        let (recovered, same) = crate::session_tools::pending(&scope, "stu").unwrap().unwrap();
+        assert_eq!(same, through);
+        let reopened = WorkHost::new(&h.state, Box::new(crate::cognition::MockLeaseFactory::new(vec![])), Arc::new(SilentNotifier));
+        assert_eq!(reopened.first_handoff(&scope, &recovered, &input), None);
+        let rows = assignment::read_all(&h.state, "depot", "thread-one").unwrap();
+        assert_eq!(reopened.assignment_activity(&rows)[0], Display {
+            state: Some(AssignmentState::Unknown), working_since: None,
+        });
+    }
+
+    #[test]
+    fn provider_activity_covers_first_handoff_and_follow_through_then_clears_on_exit() {
+        let h = harness(0);
+        let (record, scope, _) = handed_job(&h);
+        let backend = h.host.backend_for(scope.thread_id.as_str()).unwrap();
+        h.host.ensure_lease(&backend, &h.binding).unwrap();
+        let session = backend.inner.lock().unwrap().lease_session.clone().unwrap();
+        assert_eq!(session, "work-session-one");
+        let read = || assignment::read_all(&h.state, "depot", "thread-one").unwrap();
+        let initial = AssignmentTurn { session: session.clone(), started_at: 42,
+            cause: Cause::Handoff(record.id.clone()) };
+        h.host.set_assignment_turn(&h.binding, &mut backend.inner.lock().unwrap(), Some(initial));
+        // Registered work done by Stu himself is visible from the first turn.
+        assert_eq!(h.host.assignment_activity(&read())[0], Display {
+            state: Some(AssignmentState::Running), working_since: Some(42),
+        });
+        assert_eq!(assignment_activity::read(&scope, &read())[0].state, Some(AssignmentState::Running));
+        h.host.set_assignment_turn(&h.binding, &mut backend.inner.lock().unwrap(), None);
+        // A helper's completed receipt names the task whose result opens the automatic turn.
+        assignment::advance(&h.state, "depot", "thread-one", &record.id,
+            AssignmentState::Running, "A helper had started").unwrap();
+        helper_receipt(&h, "run-ended");
+        h.host.note_worker_result(&backend, &h.binding, &session, &serde_json::json!({
+            "type":"system","subtype":"task_notification","status":"completed","tool_use_id":"call-one",
+        }));
+        h.host.note_automatic_turn(&backend, &session, true);
+        let integrating = h.host.assignment_activity(&read())[0];
+        assert_eq!(integrating.state, Some(AssignmentState::Running));
+        assert!(integrating.working_since.is_some());
+        assert_eq!(assignment_activity::read(&scope, &read())[0], integrating);
+        h.team.lock().unwrap().closed = true;
+        assert_eq!(h.host.assignment_activity(&read())[0], Display {
+            state: Some(AssignmentState::Unknown), working_since: None,
+        });
+        h.host.note_back_end(&h.binding, None);
+        assert!(assignment_activity::read_turn(&scope).is_none());
+        assert_eq!(assignment_activity::read(&scope, &read())[0].state, Some(AssignmentState::Unknown));
     }
 
     /// **(b) Between its registration and its first worker it still blocks** (`work_gate.rs`,
