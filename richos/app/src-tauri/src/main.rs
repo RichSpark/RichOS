@@ -1846,10 +1846,7 @@ fn take_the_spine(spine: &std::sync::Mutex<Spine>) -> SpineHold<'_> {
     hold_the_spine(guard, site, asked)
 }
 
-/// **The same door for the one hop that must not `unwrap`** — the spoken-submit callback,
-/// which runs on the voice thread and walks away from a poisoned spine rather than panicking
-/// inside it. His spoken sentence is a hop on the same clock as his typed one, so it is
-/// measured by the same function; only the failure is different.
+/// The same measured lock for voice callbacks that can give up if the spine is poisoned.
 #[track_caller]
 fn take_the_spine_or_give_up(spine: &std::sync::Mutex<Spine>) -> Option<SpineHold<'_>> {
     let site = spine_site(std::panic::Location::caller());
@@ -5427,7 +5424,7 @@ impl VoiceObserver for TauriVoiceEmitter {
             },
         }).collect()) {
             if let Some(state) = self.app.try_state::<AppState>() {
-                if let Ok(mut spine) = state.spine.lock() {
+                if let Some(mut spine) = take_the_spine_or_give_up(&state.spine) {
                     spine.flush_voice_playback();
                 }
             }
@@ -5635,8 +5632,9 @@ fn start_voice_capture(app: AppHandle, thread_id: Option<String>) -> Result<serd
         return Ok(serde_json::json!({ "already": true }));
     }
 
-    let pending = app.state::<AppState>().spine.lock()
-        .map_err(|_| "conversation state poisoned")?.pending_voice_playback();
+    let state = app.state::<AppState>();
+    let pending = take_the_spine_or_give_up(&state.spine)
+        .ok_or("conversation state poisoned")?.pending_voice_playback();
     let observer: Arc<dyn VoiceObserver> = Arc::new(TauriVoiceEmitter {
         app: app.clone(), pending: Some(pending.clone()),
     });
@@ -5755,7 +5753,7 @@ fn start_voice_capture(app: AppHandle, thread_id: Option<String>) -> Result<serd
                     observation: Observation::Withdrawn,
                 }]);
                 let outcome = state.control.for_thread(&reply.thread_id).request_stop_for(&reply.turn_id);
-                if let Ok(mut spine) = state.spine.lock() {
+                if let Some(mut spine) = take_the_spine_or_give_up(&state.spine) {
                     spine.flush_voice_playback();
                 }
                 match outcome {
