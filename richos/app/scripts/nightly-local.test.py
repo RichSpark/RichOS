@@ -1924,9 +1924,9 @@ while True: time.sleep(.02)
                 slow = getattr(self, "launch_is_slow", False)
                 p95 = 900 if slow else 300
                 (walk / "report.json").write_text(json.dumps({
-                    "sentence": "Launch speed, Dock click to the splash showing, against a p95 of 380 ms: "
+                    "sentence": "Launch speed, Dock click to the splash showing, against a p95 of 506 ms (500 ms on his Mac x 1.013): "
                                 "p95 %d ms over 43 launches." % p95,
-                    "summary": {"p95_ms": p95, "limit_ms": 385, "guest_ratio": 1.013, "refused": slow,
+                    "summary": {"p95_ms": p95, "limit_ms": 506, "guest_ratio": 1.013, "refused": slow,
                                 "incomplete": False},
                     "facts": {"version": self.CANDIDATE_INFO["version"], "older": "1.2.6-nightly.20261102.86"},
                     "checks": [{"id": "install-path", "pass": True}]}))
@@ -1979,7 +1979,7 @@ while True: time.sleep(.02)
             publisher.perform("publish", run_id="fixture-run-id")
         self.assertEqual(publisher.command.call_args.args[2], "finish")
 
-    # ---- 2026-11-14: the launch-speed gate, a p95 against 380 ms ----------------------------
+    # ---- The launch-speed gate, a p95 against 500 ms ----------------------------
     def test_publish_requires_launch_speed_after_an_earlier_proof_is_repaired(self):
         passed = [{"step": s, "outcome": "PASS"} for s in m.NEW_USER_WALK_STEPS]
         failed = [{"step": "identity", "outcome": "FAIL", "detail": "wrong app version"}]
@@ -2039,9 +2039,10 @@ while True: time.sleep(.02)
         self.assertIn("--no-app", gate[0])
         self.assertEqual(Path(gate[0][gate[0].index("--candidate") + 1]).name,
                          f"RichOS-{self.CANDIDATE_INFO['version']}-macos-aarch64.zip")
+        self.assertIn("a p95 against 500 ms", buf.getvalue())
         self.assertIn("p95 300 ms over 43 launches", buf.getvalue(), "the nightly does not state the p95")
 
-    def test_a_launch_over_380_ms_p95_refuses_the_build_after_one_more_try(self):
+    def test_a_launch_over_500_ms_p95_refuses_the_build_after_one_more_try(self):
         passed = [{"step": s, "outcome": "PASS"} for s in m.NEW_USER_WALK_STEPS]
         r, calls = self.build_that_walks_as_a_new_user(passed)
         self.launch_is_slow = True
@@ -2057,15 +2058,15 @@ while True: time.sleep(.02)
         (self.root / "state" / "source").mkdir(parents=True, exist_ok=True)
         publisher = self.runner()
         publisher.command = Mock()
-        with contextlib.redirect_stdout(io.StringIO()), self.assertRaisesRegex(ValueError, "p95 at or under 380 ms"):
+        with contextlib.redirect_stdout(io.StringIO()), self.assertRaisesRegex(ValueError, "p95 at or under 500 ms"):
             publisher.perform("publish", run_id="fixture-run-id")
         self.assertFalse(any(len(c.args) > 2 and c.args[2] == "finish" for c in publisher.command.call_args_list),
-                         "a candidate over 380 ms was published")
+                         "a candidate over the launch limit was published")
 
-    def test_publish_takes_380_ms_scaled_by_the_fixed_ratio_on_record_and_nothing_else(self):
+    def test_publish_takes_500_ms_scaled_by_the_fixed_ratio_on_record_and_nothing_else(self):
         # The CEO, 2026-11-14: "if the VM is slower, then the measurements need to be adjusted
         # accordingly", and "Stop all that retarded "launch-speed walk beside Dictionary"
-        # fuckshit!". The walk scales 380 ms by the FIXED ratio on record (1.013, 385 ms) and launches
+        # fuckshit!". The walk scales 500 ms by the FIXED ratio on record (1.013, 506 ms) and launches
         # no Dictionary; publish holds the limit to exactly that, and refuses a ratio a guest measured.
         r = self.runner()
         info = {**self.CANDIDATE_INFO, "launch_speed_required": True}
@@ -2077,12 +2078,12 @@ while True: time.sleep(.02)
                 "summary": {"p95_ms": p95, "limit_ms": limit, "guest_ratio": ratio, "refused": p95 > limit,
                             "incomplete": False}, "facts": {"version": info["version"]}}))
 
-        walked(380, 385, 1.013)
-        self.assertEqual(r.require_launch_speed(info, "fixture-run-id"), "p95 380 ms against 385 ms")
-        for what, p95, limit, ratio in (("over the fixed limit", 400, 385, 1.013),
-                                        ("a limit that is not 380 ms times the fixed ratio", 400, 450, 1.013),
-                                        ("a ratio a guest measured with Dictionary, not the fixed one", 700, 760, 2.0),
-                                        ("no ratio, at 380 ms", 300, 380, None)):
+        walked(506, 506, 1.013)
+        self.assertEqual(r.require_launch_speed(info, "fixture-run-id"), "p95 506 ms against 506 ms")
+        for what, p95, limit, ratio in (("over the fixed limit", 507, 506, 1.013),
+                                        ("the previous limit in an old report", 380, 385, 1.013),
+                                        ("a ratio a guest measured with Dictionary, not the fixed one", 700, 1000, 2.0),
+                                        ("no ratio, at 500 ms", 300, 500, None)):
             with self.subTest(what):
                 walked(p95, limit, ratio)
                 report.write_text(report.read_text().replace('"refused": true', '"refused": false'))
@@ -2095,8 +2096,8 @@ while True: time.sleep(.02)
         report = r.state / "launch-speed" / "fixture-run-id.2" / "report.json"
         report.parent.mkdir(parents=True, exist_ok=True)
         result = {
-            "sentence": "p95 300 ms against 385 ms",
-            "summary": {"p95_ms": 300, "limit_ms": 385, "guest_ratio": 1.013, "refused": False, "incomplete": False},
+            "sentence": "p95 300 ms against 506 ms",
+            "summary": {"p95_ms": 300, "limit_ms": 506, "guest_ratio": 1.013, "refused": False, "incomplete": False},
             "facts": {"version": info["version"], "older": "1.2.6-nightly.20261102.86"},
         }
         for checks in ([], [{"id": "install-path", "pass": False}]):
@@ -2109,8 +2110,8 @@ while True: time.sleep(.02)
         self.assertEqual(r.require_launch_speed(info, "fixture-run-id"), result["sentence"])
 
     def test_publish_holds_the_cold_route_to_its_own_fixed_limit(self):
-        # The cold route is judged against 380 ms scaled by the FIXED ratio on record after a purge
-        # (7.84, 2979 ms), recorded in `route_limits`; publish holds it to exactly that, its own p95
+        # The cold route is judged against 500 ms scaled by the FIXED ratio on record after a purge
+        # (7.84, 3920 ms), recorded in `route_limits`; publish holds it to exactly that, its own p95
         # under it.
         r = self.runner()
         info = {**self.CANDIDATE_INFO, "launch_speed_required": True}
@@ -2119,26 +2120,27 @@ while True: time.sleep(.02)
 
         def walked(cold_p95, cold_limit, cold_ratio):
             report.write_text(json.dumps({"sentence": "cold p95 %d ms against %d ms" % (cold_p95, cold_limit),
-                "summary": {"p95_ms": 300, "limit_ms": 385, "guest_ratio": 1.013, "refused": False, "incomplete": False,
+                "summary": {"p95_ms": 300, "limit_ms": 506, "guest_ratio": 1.013, "refused": False, "incomplete": False,
                             "routes": {"cold": {"p95_ms": cold_p95}},
                             "route_limits": {"cold": {"limit_ms": cold_limit, "ratio": cold_ratio}}},
                 "facts": {"version": info["version"]}}))
 
-        walked(2500, 2979, 7.84)
-        self.assertEqual(r.require_launch_speed(info, "fixture-run-id"), "cold p95 2500 ms against 2979 ms")
-        for what, cold_p95, cold_limit, cold_ratio in (("over its own limit", 3000, 2979, 7.84),
-                                                       ("a limit that is not 380 ms times its ratio", 3000, 3100, 7.84),
-                                                       ("a ratio a guest measured, not the fixed one", 1800, 1900, 5.0)):
+        walked(3920, 3920, 7.84)
+        self.assertEqual(r.require_launch_speed(info, "fixture-run-id"), "cold p95 3920 ms against 3920 ms")
+        for what, cold_p95, cold_limit, cold_ratio in (("over its own limit", 3921, 3920, 7.84),
+                                                       ("the previous limit in an old report", 2500, 2979, 7.84),
+                                                       ("a ratio a guest measured, not the fixed one", 1800, 2500, 5.0)):
             with self.subTest(what):
                 walked(cold_p95, cold_limit, cold_ratio)
                 with self.assertRaisesRegex(ValueError, "p95 at or under"):
                     r.require_launch_speed(info, "fixture-run-id")
 
-    def test_the_gates_fixed_ratios_are_the_walks(self):
+    def test_the_gates_limit_and_fixed_ratios_are_the_walks(self):
         spec = importlib.util.spec_from_file_location(
             "launch_speed_walk", Path(__file__).with_name("testvm") / "launch-speed-walk.py")
         walk = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(walk)
+        self.assertEqual(m.LAUNCH_SPEED_LIMIT_MS, walk.LIMIT_MS)
         self.assertEqual((m.LAUNCH_SPEED_WARM_RATIO, m.LAUNCH_SPEED_COLD_RATIO), (walk.WARM_RATIO, walk.COLD_RATIO))
 
     def test_a_walk_that_stopped_before_its_end_is_refused_however_its_steps_went(self):

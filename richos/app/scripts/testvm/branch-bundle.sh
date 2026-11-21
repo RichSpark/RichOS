@@ -29,7 +29,7 @@
 # meeting notes (meetings.rs looks for that file).
 #
 # --release builds the executable with `cargo build --release`, so a launch-time measurement in the
-# guest (testvm/launch-speed-walk.py) times optimized code: the CEO's 380 ms is a release-build
+# guest (testvm/launch-speed-walk.py) times optimized code: the opening limit is a release-build
 # number, and a debug build's Rust before the window is slower (the splash trials of 2026-11-14,
 # whose throwaway release-bundle.sh this replaces). Run it through reserve.py with
 # CARGO_BUILD_JOBS=2 on a host whose CPU breaker stops a release rustc above three cores.

@@ -1,16 +1,11 @@
 #!/usr/bin/env python3
-"""launch-speed-walk.py: from the Dock click to the splash screen showing, p95 against 380 ms.
+"""launch-speed-walk.py: from the Dock click to the splash screen showing, p95 against 500 ms.
 
-THE CEO, 2026-11-14: "THE JOB AT HAND IS TO START SHOWING OUR ALREADY WELL-DESIGNED AND
-FULLY-BUILT SPLASH SCREEN IN WELL UNDER 500 MS AFTER BUTTON CLICK." And his rule: "380 ms as the
-maximum allowed p95 time for the RichOS app to start showing the splash screen. That's all there is
-to it." (380 ms was Dictionary's slowest measured Dock launch on his Mac, Echo's audit: 287, 305,
-318, 318, 328 and 380 ms; Dictionary is not launched beside the app.)
+The CEO set the opening limit to 500 ms on 2026-11-21.
 Every launch is timed from the launch request to the splash playing, plus ALLOWANCE_MS for the
 Dock's own part of a click and the screen's next refresh: the native splash's authored frame zero (the
-player's clock), or the earlier launch line for older builds (Sage's plan 2026-11-14 "the splash the
-rules picked is playing within 380 ms of the click", section 6), or, when the opening was not used,
-the page's own splash painted and playing ("page took over").
+player's clock), or the earlier launch line for older builds (Sage's plan 2026-11-14, section 6),
+or the page's own splash painted and playing when the opening was unused ("page took over").
 
 Run by run-walk.py with --no-app, so the walk installs what it launches and the first launch after
 the boot is its own; never on the host's screen (CEO ruling §65):
@@ -52,8 +47,7 @@ TIMES COME FROM LOG LINES, never from frames (Sage's review, piece 4, item 1): t
 line, and for builds older than it, the guest's system log (WebKit's document loaded, the page's
 splash). One untimed frame per route shows what was on screen.
 
-THE RULE, the CEO's (2026-11-14): "380 ms as the maximum allowed p95 time for the RichOS app to
-start showing the splash screen." And (2026-11-15): "Reduce to 5. Only if one of the 5 is outside
+THE RULE, the CEO's (2026-11-15): "Reduce to 5. Only if one of the 5 is outside
 what's required, only then do you need to extend to 20. Otherwise i.e. if the first 5 are fine,
 it's a PASS." Every judged route runs --runs (5) starts; a route all of whose starts are at or under
 the limit passes; a route with one over goes on to --full-runs (20) starts and is refused when its
@@ -83,9 +77,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-# The CEO's rule (2026-11-14): at most 380 ms p95 from the click to the splash showing (his
-# benchmark was Dictionary's measured Dock launch on his Mac, at most 380 ms).
-LIMIT_MS = 380
+# The CEO's opening limit (2026-11-21), measured from the click to the splash showing.
+LIMIT_MS = 500
 # THE GUEST IS SLOWER THAN HIS MAC, SO THE LIMIT IS SCALED (the CEO, 2026-11-14: "if the VM is
 # slower, then the measurements need to be adjusted accordingly. This is NOT about some 100 or 200
 # ms."), BY A FIXED RATIO, AND DICTIONARY IS NEVER LAUNCHED (the CEO, 2026-11-14: "Stop all that
@@ -98,10 +91,10 @@ LIMIT_MS = 380
 #     audit, `richos-hq/docs/research/2026-11-14-app-launch-speed-audit.md`), median 318 ms; the
 #     Dock's own part before the launch request 44, 41, 43 and 54 ms, median 43.5 ms;
 #   the guest, warm: 10 launches, launch request to window (264..709), median 278.5 ms;
-#     (278.5 + 43.5) / 318 = 1.013, limit round(380 x 1.013) = 385 ms;
+#     (278.5 + 43.5) / 318 = 1.013, limit round(500 x 1.013) = 506 ms;
 #   the guest, after a `sudo purge` (the cold route's own, the lead's decision on
 #     esc-20261114T164747Z-54632204): 10 launches (1596..2524), median 2449.5 ms;
-#     (2449.5 + 43.5) / 318 = 7.84, limit round(380 x 7.84) = 2979 ms.
+#     (2449.5 + 43.5) / 318 = 7.84, limit round(500 x 7.84) = 3920 ms.
 MAC_DICTIONARY_MS = (287, 305, 318, 318, 328, 380)
 MAC_DICTIONARY_MEDIAN_MS = statistics.median(MAC_DICTIONARY_MS)
 DOCK_PART_INPUTS_MS = (44, 41, 43, 54)
@@ -125,7 +118,7 @@ def recorded_ratio(guest_ms):
 
 WARM_RATIO, WARM_INPUTS = recorded_ratio(GUEST_DICTIONARY_WARM_MS)
 COLD_RATIO, COLD_INPUTS = recorded_ratio(GUEST_DICTIONARY_COLD_MS)
-# Made from the rounded ratio, so publication (nightly-local.py) re-derives round(380 x ratio) exactly.
+# Made from the rounded ratio, so publication (nightly-local.py) re-derives the limit from the same base and ratio.
 WARM_LIMIT_MS = round(LIMIT_MS * WARM_RATIO)
 COLD_LIMIT_MS = round(LIMIT_MS * COLD_RATIO)
 # The splash today's rule picks for each start (richos-core `launch::pick_splash`): start 2 shows the
@@ -236,9 +229,8 @@ def measure(run, events):
     # THE CEO, 2026-11-14: "THE JOB IS TO START SHOWING OUR EXISTING SPLASH SCREEN ... IN WELL UNDER
     # 500 MS AFTER BUTTON CLICK." So the judged moment is the splash playing: its opening's first
     # picture pushed to the glass, already playing (`first frame` with `its opening used`, Sage's plan
-    # 2026-11-14 "the splash the rules picked is playing within 380 ms of the click"); without the
-    # opening, the page's own splash painted and playing ("page took over"). The window's ground
-    # color alone does not count.
+    # 2026-11-14, section 6). Without the opening, it is the page's own splash painted and playing
+    # ("page took over"). The window's ground color alone does not count.
     if 'native_frame_zero' in row:
         row['splash'] = row['native_frame_zero'] + ALLOWANCE_MS
         row['splash_from'] = "the native splash's authored frame zero"
@@ -280,10 +272,9 @@ def needing_more(rows, limit_ms=LIMIT_MS, route_limits=None):
 
 
 def verdict(rows, planned=None, limit_ms=LIMIT_MS, ratio=None, inputs=None, route_limits=None, full=FULL_STARTS):
-    """The CEO's rules: "380 ms as the maximum allowed p95 time for the RichOS app to start showing
-    the splash screen" (2026-11-14), and "Reduce to 5. Only if one of the 5 is outside what's
-    required, only then do you need to extend to 20. Otherwise i.e. if the first 5 are fine, it's a
-    PASS." (2026-11-15). Each judged route on its own: every one of its starts at or under its limit
+    """Check the opening limit on each judged route. The CEO's rule (2026-11-15):
+    "Reduce to 5. Only if one of the 5 is outside what's required, only then do you need to extend
+    to 20. Otherwise i.e. if the first 5 are fine, it's a PASS." Every start at or under its limit
     passes; with one over, it passes only when it was taken to `full` starts and its p95 is at or
     under the limit. A route in `route_limits` ({route: {'limit_ms', 'ratio', 'inputs'}}) is judged
     against its own limit (the cold route, scaled by Dictionary after a purge on record) and is not
@@ -339,7 +330,7 @@ def verdict(rows, planned=None, limit_ms=LIMIT_MS, ratio=None, inputs=None, rout
 
 
 def sentence(summary):
-    """What the nightly prints: the p95 against 380 ms, and every route's own numbers."""
+    """Report the p95 against the opening limit and every route's own numbers."""
     parts = ['%s p95 %d ms, median %d ms (%d launches%s)' % (
         route, r['p95_ms'], r['median_ms'], r['launches'],
         ', %d over its limit' % r['over'] if r.get('over') else ', every one within its limit')
@@ -358,8 +349,8 @@ def sentence(summary):
     parts += ['%s p95 %d ms (%d launches)' % (sid, s['p95_ms'], s['launches'])
               for sid, s in sorted(summary.get('splashes', {}).items())]
     for route, own in sorted((summary.get('route_limits') or {}).items()):
-        parts.append('%s judged on its own against %d ms (380 x %s, the test VM\'s slowness after a purge on record, '
-                     'fixed)' % (route, own['limit_ms'], own.get('ratio')))
+        parts.append('%s judged on its own against %d ms (%d x %s, the test VM\'s slowness after a purge on record, '
+                     'fixed)' % (route, own['limit_ms'], LIMIT_MS, own.get('ratio')))
     return 'Launch speed, Dock click to the splash showing, against a p95 of %d ms%s: %s. %s.' % (
         summary['limit_ms'], scaled, head, '; '.join(parts))
 

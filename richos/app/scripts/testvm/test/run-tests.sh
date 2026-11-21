@@ -1993,7 +1993,7 @@ t "reserve: stopping a command ends its whole group, a descendant that ignores S
   PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/reserve-stop-descendant.test.py" >"$TMP/reserve-stop-descendant.log" 2>&1; ok $? "$(cat "$TMP/reserve-stop-descendant.log")"
 t_done
 
-t "launch speed: click to the splash showing from log lines, the p95 against 380 ms, the updater receipt digest, the start-up checks"
+t "launch speed: click to the splash showing from log lines, the p95 against the opening limit, the updater receipt digest, the start-up checks"
   PYTHONDONTWRITEBYTECODE=1 python3 "$HERE/launch-speed-walk.test.py" >"$TMP/launch-speed-walk.log" 2>&1; ok $? "$(cat "$TMP/launch-speed-walk.log")"
 t_done
 
