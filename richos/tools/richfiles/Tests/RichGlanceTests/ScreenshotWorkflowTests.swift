@@ -192,6 +192,47 @@ final class ScreenshotWorkflowTests: XCTestCase {
         XCTAssertEqual(persisted.edits.marks.first?.start.x, 4)
     }
 
+    func testCancelingSwitchWithHistoryOffKeepsTheNewCaptureAvailable() async throws {
+        _ = NSApplication.shared
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("glance-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = ScreenshotStore(root: root)
+        try store.setHistory(false)
+        var reply: ((NSApplication.ModalResponse) -> Void)?
+        let editor = ScreenshotEditor(store: store) { _, _, completion in reply = completion }
+        let first = ScreenshotDocument(original: try fixture(), scale: 1)
+        let incoming = ScreenshotDocument(original: try fixture(), scale: 1)
+        let another = ScreenshotDocument(original: try fixture(), scale: 1)
+        let mark = ScreenshotMark(tool: .steps, start: CGPoint(x: 4, y: 4), end: CGPoint(x: 4, y: 4))
+        editor.changeDocument(first, newCapture: true)
+        editor.canvas?.document.edits.marks = [mark]
+
+        editor.changeDocument(incoming, newCapture: true)
+        let cancel = try XCTUnwrap(reply)
+        editor.changeDocument(another, newCapture: true)
+        reply = nil
+        cancel(.alertFirstButtonReturn)
+
+        XCTAssertEqual(editor.canvas?.document.id, first.id)
+        XCTAssertEqual(editor.canvas?.document.edits.marks, [mark])
+        func findPendingButton(in view: NSView) -> NSButton? {
+            if let button = view as? NSButton, button.title == "Open New Capture" { return button }
+            return view.subviews.lazy.compactMap { findPendingButton(in: $0) }.first
+        }
+        let content = try XCTUnwrap(editor.window.contentView)
+        let pending = try XCTUnwrap(findPendingButton(in: content))
+        XCTAssertFalse(pending.isHidden)
+        pending.performClick(nil)
+        try XCTUnwrap(reply)(.alertSecondButtonReturn)
+        XCTAssertEqual(editor.canvas?.document.id, incoming.id)
+        XCTAssertFalse(pending.isHidden)
+        pending.performClick(nil)
+        XCTAssertEqual(editor.canvas?.document.id, another.id)
+        XCTAssertTrue(pending.isHidden)
+        XCTAssertFalse(store.keepsHistory)
+        XCTAssertTrue(try store.entries().isEmpty)
+    }
+
     private func fixture() throws -> CGImage {
         let space = try XCTUnwrap(CGColorSpace(name: CGColorSpace.sRGB))
         let bitmap = try XCTUnwrap(CGContext(data: nil, width: 14, height: 12, bitsPerComponent: 8,

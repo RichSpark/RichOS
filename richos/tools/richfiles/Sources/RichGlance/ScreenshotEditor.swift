@@ -19,6 +19,7 @@ enum ScreenshotChrome {
 
 @MainActor
 final class ScreenshotEditor: NSObject, NSWindowDelegate {
+    typealias LeaveSheetPresenter = @MainActor (NSAlert, NSWindow, @escaping (NSApplication.ModalResponse) -> Void) -> Void
     let window: ScreenshotEditorWindow
     var closed: (() -> Void)?
     var capture: (() -> Void)?
@@ -26,6 +27,7 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate {
     var hasDocument: Bool { canvas != nil }
 
     private let store: ScreenshotStore
+    private let presentLeaveSheet: LeaveSheetPresenter
     private let root = ScreenshotSurface(.chrome)
     private let titleBar = ScreenshotSurface(.bar)
     private let bottom = ScreenshotSurface(.bar)
@@ -60,6 +62,7 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate {
     private let redoButton = ScreenshotButton("Redo", symbol: "arrow.uturn.forward", style: .plain)
     private let saveButton = ScreenshotButton("Save PNG…", hint: "⌘S")
     private let copyButton = ScreenshotButton("Copy Image", hint: "⌘C", style: .primary)
+    private let openNewCapture = ScreenshotButton("Open New Capture", style: .primary)
     private let shelfToggle = ScreenshotButton("Recent Captures", symbol: "clock", style: .plain)
     private let zoomModes = ScreenshotChoice(["Fit", "100%"], label: "Zoom mode")
     private let zoomOutButton = ScreenshotButton("Zoom out", symbol: "minus")
@@ -75,6 +78,8 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate {
     private var toolButtons: [ScreenshotTool: ScreenshotButton] = [:]
     private var swatches: [ScreenshotButton] = []
     private var entries: [ScreenshotStore.Entry] = []
+    // Keep incoming captures in the editor session until the user can switch to them.
+    private var pendingCaptures: [ScreenshotDocument] = []
     private var zoom = ScreenshotCanvas.Zoom.fit
     private var autoZoom = true
     private var persisted: ScreenshotEdits?
@@ -95,8 +100,11 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate {
         let scrollPosition: CGPoint
     }
 
-    init(store: ScreenshotStore) {
+    init(store: ScreenshotStore, presentLeaveSheet: @escaping LeaveSheetPresenter = { alert, window, completion in
+        alert.beginSheetModal(for: window, completionHandler: completion)
+    }) {
         self.store = store
+        self.presentLeaveSheet = presentLeaveSheet
         shelfOpen = store.showsShelf
         shelf = ScreenshotRecents(store: store)
         window = ScreenshotEditorWindow(contentRect: CGRect(x: 0, y: 0, width: 1360, height: 810),
@@ -201,7 +209,7 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate {
         emptyMessage.maximumNumberOfLines = 3
         toast.addSubview(toastText)
         toast.isHidden = true
-        for view in [shelfToggle, privacy, zoomModes, zoomOutButton, zoomReadout, zoomInButton] { bottom.addSubview(view) }
+        for view in [shelfToggle, openNewCapture, privacy, zoomModes, zoomOutButton, zoomReadout, zoomInButton] { bottom.addSubview(view) }
 
         newCapture.onPress = { [weak self] in self?.startCapture() }
         emptyCapture.onPress = newCapture.onPress
@@ -210,6 +218,7 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate {
         copyButton.onPress = { [weak self] in self?.copyImage() }
         saveButton.onPress = { [weak self] in self?.saveImage() }
         shelfToggle.onPress = { [weak self] in self?.toggleShelf() }
+        openNewCapture.onPress = { [weak self] in self?.openNextCapture() }
         zoomModes.changed = { [weak self] in self?.setZoom($0 == 0 ? .fit : .actual) }
         zoomOutButton.onPress = { [weak self] in self?.changeZoom(direction: -1) }
         zoomInButton.onPress = { [weak self] in self?.changeZoom(direction: 1) }
@@ -241,10 +250,22 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate {
 
     func changeDocument(_ document: ScreenshotDocument, newCapture: Bool = false) {
         if canvas?.document.id == document.id { focusPicture(); return }
-        leaveCurrent { [weak self] in self?.install(document, newCapture: newCapture) }
+        if newCapture {
+            pendingCaptures.append(document)
+            if pendingCaptures.count == 1 { openNextCapture() }
+            layoutBottom(width: bottom.bounds.width)
+        } else {
+            leaveCurrent { [weak self] in self?.install(document) }
+        }
+    }
+
+    private func openNextCapture() {
+        guard let document = pendingCaptures.first else { return }
+        leaveCurrent { [weak self] in self?.install(document, newCapture: true) }
     }
 
     private func install(_ document: ScreenshotDocument?, newCapture: Bool = false) {
+        if let document { pendingCaptures.removeAll { $0.id == document.id } }
         changingDocument = true
         persistSoon?.cancel()
         let previous = canvas
@@ -459,7 +480,7 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate {
         alert.addButton(withTitle: closing ? "Close" : "Discard Changes").hasDestructiveAction = true
         alert.addButton(withTitle: closing ? "Copy Image and Close" : "Copy Image and Continue")
         sheetOpen = true
-        alert.beginSheetModal(for: window) { [weak self] response in
+        presentLeaveSheet(alert, window) { [weak self] response in
             guard let self else { return }
             sheetOpen = false
             if response == .alertThirdButtonReturn, copyFlattened() { completion() }
@@ -813,9 +834,13 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate {
         zoomReadout.alignment = .center
         zoomOutButton.frame = CGRect(x: width - 147, y: 7, width: 32, height: 32)
         zoomModes.frame = CGRect(x: width - 263, y: 5, width: 110, height: 36)
+        openNewCapture.isHidden = pendingCaptures.isEmpty
+        let nextX = shelfToggle.frame.maxX + 8
+        let nextWidth = min(openNewCapture.naturalWidth(), max(0, zoomModes.frame.minX - nextX - 6))
+        openNewCapture.frame = CGRect(x: nextX, y: 6, width: nextWidth, height: 34)
+        let privacyX = (openNewCapture.isHidden ? shelfToggle.frame.maxX : openNewCapture.frame.maxX) + 14
         privacy.isHidden = width <= 900
-        privacy.frame = CGRect(x: shelfToggle.frame.maxX + 14, y: 13,
-                               width: max(0, width - 285 - shelfToggle.frame.maxX), height: 22)
+        privacy.frame = CGRect(x: privacyX, y: 13, width: max(0, width - 271 - privacyX), height: 22)
     }
 
     private func labelWidth(_ field: NSTextField) -> CGFloat {
