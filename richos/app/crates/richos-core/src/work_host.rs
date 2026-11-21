@@ -96,6 +96,8 @@ struct Inner {
     peer_active_through: Option<u64>,
     /// The assignment being worked in the current provider turn.
     assignment_turn: Option<AssignmentTurn>,
+    /// Each independently admitted live input lasts until its own native result.
+    live_assignment_inputs: std::collections::HashMap<String, AssignmentTurn>,
     peer_stopper: Option<(String, Arc<dyn TurnCancel>)>,
     processing: bool,
     cancel: Option<Arc<dyn TurnCancel>>,
@@ -153,6 +155,10 @@ struct Inner {
     cut: std::collections::HashMap<String, Vec<InputReceipt>>,
 }
 impl Inner {
+    fn assignment_turns(&self) -> Vec<AssignmentTurn> {
+        self.assignment_turn.iter().chain(self.live_assignment_inputs.values()).cloned().collect()
+    }
+
     /// What `session` was already given in this process, for [`WorkHost::next_for_stu`].
     fn given_to(&self, session: Option<&str>) -> std::collections::HashSet<u64> {
         match session {
@@ -1155,7 +1161,7 @@ impl WorkHost {
                     let input_id=format!("answer:{}",answer.id);
                     if crate::session_tools::previous_attempt(&scope,"stu",&input_id)?.as_ref()
                         .and_then(|attempt|attempt["session_id"].as_str())==Some(session) {continue}
-                    let instruction=self.question_answer_instruction(&answer)?;
+                    let (instruction, assignment) = self.question_answer_input(&answer)?;
                     let message=crate::session_tools::Message {bridge:None,handoff:false,from:"user".into(),text:answer.text.clone(),instruction,work:None};
                     let text=serde_json::to_string(&message).map_err(|e|e.to_string())?;
                     use sha2::Digest;
@@ -1164,7 +1170,7 @@ impl WorkHost {
                     crate::session_tools::begin_attempt(&scope,"stu",&input_id,session)?;
                     let completed=self.live_completion(&backend,binding,message.clone(),
                         (InputReceipt::Answer(answer.id.clone()),Some(session.to_string())),text.clone());
-                    match input.send_input(&id,&text,completed) {
+                    match self.send_live_input(binding, input.as_ref(), &id, &text, assignment.map(|id| (session, id)), completed) {
                         Ok(true)=>{},
                         Ok(false)=>{crate::session_tools::complete_attempt(&scope,"stu",&input_id)?;return Ok(())},
                         Err(error)=>{
@@ -1198,6 +1204,8 @@ impl WorkHost {
                 after = after.max(through);
             };
             let delivered = (|| -> Result<bool, String> {
+            let input_id = format!("peer:{through}");
+            let assignment = self.first_handoff(&scope, &message, &input_id);
             if message.handoff {
                 message.work = crate::session_tools::work_reference(&scope, &message)?;
             }
@@ -1209,19 +1217,19 @@ impl WorkHost {
             let id = uuid::Uuid::from_slice(&digest[..16]).unwrap().to_string();
             let mut payload = serde_json::to_value(&message).map_err(|e| e.to_string())?;
             payload["previous_delivery_attempt"] = serde_json::to_value(
-                crate::session_tools::previous_attempt(&scope, "stu", &format!("peer:{through}"))?,
+                crate::session_tools::previous_attempt(&scope, "stu", &input_id)?,
             )
             .map_err(|e| e.to_string())?;
             let text = payload.to_string();
             if let Some(session) = &session {
-                crate::session_tools::begin_attempt(&scope,"stu",&format!("peer:{through}"),session)?;
+                crate::session_tools::begin_attempt(&scope,"stu",&input_id,session)?;
             }
             let completed = self.live_completion_with(&backend, binding, message.clone(),
                 (InputReceipt::Peer(through), session.clone()), text.clone(), !Self::usage_limit_retry_spent(&message));
-            match input.send_input(&id, &text, completed) {
+            match self.send_live_input(binding, input.as_ref(), &id, &text, session.as_deref().zip(assignment), completed) {
                 Ok(delivered)=>Ok(delivered),
                 Err(error)=>{
-                    self.observe_turn_result(binding,Some(&message),Some(&format!("peer:{through}")),
+                    self.observe_turn_result(binding,Some(&message),Some(&input_id),
                         session.as_deref().unwrap_or(""),&Err(error.clone()))?;
                     Err(error)
                 }
@@ -1280,6 +1288,41 @@ impl WorkHost {
             inner.peer_input = inner.cancel.clone();
         }
         self.wake_messages(binding);
+    }
+
+    fn send_live_input(self: &Arc<Self>, binding: &ThreadBinding, input: &dyn TurnCancel, id: &str, text: &str,
+        work: Option<(&str, String)>, completed: Box<dyn FnOnce(crate::steering::InputOutcome) + Send>)
+        -> Result<bool, String>
+    {
+        let Some(((session, assignment), backend)) = work.zip(self.backend(binding.thread_id())) else {
+            return input.send_input(id, text, completed);
+        };
+        let session = session.to_owned();
+        let binding = binding.clone();
+        let host = Arc::downgrade(self);
+        let backend = Arc::downgrade(&backend);
+        let key = uuid::Uuid::new_v4().to_string();
+        let started = {
+            let (host, backend, binding, key) = (host.clone(), backend.clone(), binding.clone(), key.clone());
+            Box::new(move || {
+                let (Some(host), Some(backend)) = (host.upgrade(), backend.upgrade()) else { return };
+                let mut inner = backend.inner.lock().unwrap();
+                if inner.lease_session.as_deref() != Some(session.as_str()) { return; }
+                inner.live_assignment_inputs.insert(key, AssignmentTurn {
+                    session, started_at: crate::util::now_millis(), cause: Cause::Input(assignment),
+                });
+                host.publish_assignment_activity(&binding, &inner);
+            })
+        };
+        input.send_observed_input(id, text, Some(started), Box::new(move |outcome| {
+            if let (Some(host), Some(backend)) = (host.upgrade(), backend.upgrade()) {
+                let mut inner = backend.inner.lock().unwrap();
+                if inner.live_assignment_inputs.remove(&key).is_some() {
+                    host.publish_assignment_activity(&binding, &inner);
+                }
+            }
+            completed(outcome);
+        }))
     }
 
     fn message_scope(&self, binding: &ThreadBinding) -> crate::status_tools::StatusToolScope {
@@ -1374,11 +1417,22 @@ impl WorkHost {
         message: &crate::session_tools::Message,
         turn: &str,
     ) -> Result<String, String> {
+        let assignment = self.first_handoff(&self.message_scope(binding), message, turn);
+        self.run_assignment_message(backend, binding, message, turn, assignment)
+    }
+
+    fn run_assignment_message(
+        self: &Arc<Self>,
+        backend: &Arc<Backend>,
+        binding: &ThreadBinding,
+        message: &crate::session_tools::Message,
+        turn: &str,
+        assignment: Option<String>,
+    ) -> Result<String, String> {
         // One delivery of `message` as a turn of Stu's. Called once, and a second time only
         // after a usage limit (below), so it is never a retry loop.
         // The session a delivery's turn ran to a result on (its input is in that transcript).
         let ran: std::cell::RefCell<Option<String>> = Default::default();
-        let assignment = self.first_handoff(&self.message_scope(binding), message, turn);
         let deliver=|| {
         // This is queue cancellation, not per-tool authority on Stu's session.
         let stopped = || self.handoff_stopped(binding, message);
@@ -1443,7 +1497,7 @@ impl WorkHost {
                         self.set_assignment_turn(binding, &mut backend.inner.lock().unwrap(), Some(AssignmentTurn {
                             session: session.clone(),
                             started_at: crate::util::now_millis(),
-                            cause: Cause::Handoff(id.clone()),
+                            cause: Cause::Input(id.clone()),
                         }));
                     }
                     if !published {
@@ -1586,12 +1640,12 @@ impl WorkHost {
         }
     }
 
-    fn question_answer_instruction(
+    fn question_answer_input(
         &self,
         delivery: &crate::questions::Delivery,
-    ) -> Result<Option<crate::ecs::UserInstruction>, String> {
+    ) -> Result<(Option<crate::ecs::UserInstruction>, Option<String>), String> {
         let Some(owner) = delivery.obligation_id.as_deref() else {
-            return Ok(None);
+            return Ok((None, None));
         };
         let record = assignment::read_all(&self.state, &delivery.entity_id, &delivery.thread_id)
             .map_err(|e| e.to_string())?
@@ -1616,11 +1670,11 @@ impl WorkHost {
         )
         .ok()
         .filter(|text| text.len() <= crate::ecs::INSTRUCTION_TEXT_LIMIT);
-        Ok(Some(crate::ecs::UserInstruction {
+        Ok((Some(crate::ecs::UserInstruction {
             ledger_ref: record.instruction_ledger_ref,
             sha256: record.instruction_sha256,
             text,
-        }))
+        }), Some(record.id)))
     }
 
     fn observe_lease(self: &Arc<Self>, backend: &Arc<Backend>, lease: &mut dyn Cognition, binding: &ThreadBinding) {
@@ -1747,7 +1801,10 @@ impl WorkHost {
     fn note_back_end(&self, binding: &ThreadBinding, account: Option<&str>) {
         if account.is_none() {
             if let Some(backend) = self.backend(binding.thread_id()) {
-                self.set_assignment_turn(binding, &mut backend.inner.lock().unwrap(), None);
+                let mut inner = backend.inner.lock().unwrap();
+                inner.live_assignment_inputs.clear();
+                inner.assignment_turn = None;
+                self.publish_assignment_activity(binding, &inner);
             }
             self.notifier.assignment_activity_changed();
         }
@@ -2185,8 +2242,8 @@ impl WorkHost {
                         )
                     }),
                 Next::Answer(binding, delivery) => self
-                    .question_answer_instruction(&delivery)
-                    .and_then(|instruction| {
+                    .question_answer_input(&delivery)
+                    .and_then(|(instruction, assignment)| {
                         let message = crate::session_tools::Message {bridge:None,
                             handoff: false,
                             from: "user".into(),
@@ -2194,11 +2251,12 @@ impl WorkHost {
                             instruction,
                             work: None,
                         };
-                        self.run_message(
+                        self.run_assignment_message(
                             &backend,
                             &binding,
                             &message,
                             &format!("answer:{}", delivery.id),
+                            assignment,
                         )
                     })
                     .and_then(|session| {
@@ -2247,7 +2305,7 @@ impl WorkHost {
         {
             return Err("The answer belongs to another conversation".into());
         }
-        self.question_answer_instruction(delivery)?;
+        self.question_answer_input(delivery)?;
         crate::question_work::enqueue(&self.state, delivery)?;
         if crate::session_tools::terminal_handover_active(&self.message_scope(binding)) {
             return Ok(format!("work-input:{}", delivery.id));
@@ -2269,15 +2327,15 @@ impl WorkHost {
             entity_id: first.entity_id.clone(), thread_id: first.thread_id.clone(),
         };
         if !rows.iter().any(|row| matches!(row.reported_state(),
-            Some(AssignmentState::Registered | AssignmentState::Preparing | AssignmentState::Running))) {
-            return assignment_activity::project(&scope, rows, None, &[], None, &HashSet::new());
+            Some(AssignmentState::Registered | AssignmentState::Preparing | AssignmentState::Running | AssignmentState::Blocked))) {
+            return assignment_activity::project(&scope, rows, None, &[], &[], &HashSet::new());
         }
-        let (turn, stopper) = self.backend(&scope.thread_id).map_or((None, None), |backend| {
+        let (mut turns, stopper) = self.backend(&scope.thread_id).map_or((Vec::new(), None), |backend| {
             let inner = backend.inner.lock().unwrap();
-            (inner.assignment_turn.clone(), inner.peer_stopper.clone())
+            (inner.assignment_turns(), inner.peer_stopper.clone())
         });
         let hosted = self.lease_sessions();
-        let turn = turn.filter(|turn| hosted.contains(&turn.session));
+        turns.retain(|turn| hosted.contains(&turn.session));
         let commands = stopper.filter(|(session, _)| hosted.contains(session))
             .map(|(_, handle)| handle.own_commands()).unwrap_or_default();
         let command_jobs = commands.iter()
@@ -2286,15 +2344,19 @@ impl WorkHost {
         let receipts = self.receipts.lock().unwrap().launches(
             &self.state, &scope.entity_id, &scope.thread_id,
         ).ok();
-        assignment_activity::project(&scope, rows, receipts.as_ref(), &hosted, turn.as_ref(), &command_jobs)
+        assignment_activity::project(&scope, rows, receipts.as_ref(), &hosted, &turns, &command_jobs)
     }
 
     fn set_assignment_turn(&self, binding: &ThreadBinding, inner: &mut Inner, turn: Option<AssignmentTurn>) {
         if inner.assignment_turn == turn { return; }
-        if let Err(error) = assignment_activity::publish(&self.message_scope(binding), turn.as_ref()) {
+        inner.assignment_turn = turn;
+        self.publish_assignment_activity(binding, inner);
+    }
+
+    fn publish_assignment_activity(&self, binding: &ThreadBinding, inner: &Inner) {
+        if let Err(error) = assignment_activity::publish(&self.message_scope(binding), &inner.assignment_turns()) {
             eprintln!("[richos] assignment activity could not be published: {error}");
         }
-        inner.assignment_turn = turn;
         self.notifier.assignment_activity_changed();
     }
 
@@ -5873,8 +5935,9 @@ mod tests {
         };
         assert_eq!(
             h.host
-                .question_answer_instruction(&selected)
+                .question_answer_input(&selected)
                 .unwrap()
+                .0
                 .unwrap()
                 .ledger_ref,
             record.instruction_ledger_ref
@@ -5945,7 +6008,7 @@ mod tests {
         );
         assignment::record_user_stop(&h.state, "depot", "thread-one", &a.id).unwrap();
         assert!(
-            h.host.question_answer_instruction(&selected).is_err(),
+            h.host.question_answer_input(&selected).is_err(),
             "stale answer reauthorized a stopped job"
         );
         std::fs::remove_dir_all(h.root).unwrap();
@@ -7070,7 +7133,7 @@ done
         assert_eq!(session, "work-session-one");
         let read = || assignment::read_all(&h.state, "depot", "thread-one").unwrap();
         let initial = AssignmentTurn { session: session.clone(), started_at: 42,
-            cause: Cause::Handoff(record.id.clone()) };
+            cause: Cause::Input(record.id.clone()) };
         h.host.set_assignment_turn(&h.binding, &mut backend.inner.lock().unwrap(), Some(initial));
         // Registered work done by Stu himself is visible from the first turn.
         assert_eq!(h.host.assignment_activity(&read())[0], Display {
@@ -7095,8 +7158,124 @@ done
             state: Some(AssignmentState::Unknown), working_since: None,
         });
         h.host.note_back_end(&h.binding, None);
-        assert!(assignment_activity::read_turn(&scope).is_none());
+        assert!(assignment_activity::current_turns(&scope).is_none());
         assert_eq!(assignment_activity::read(&scope, &read())[0].state, Some(AssignmentState::Unknown));
+    }
+
+    #[test]
+    fn answering_a_team_question_shows_only_its_assignment_while_stu_works() {
+        use std::sync::mpsc::{self, Receiver, Sender};
+        use std::time::Duration;
+
+        struct AnswerLease(Sender<String>, Option<Receiver<()>>);
+        impl Cognition for AnswerLease {
+            fn session_id(&self) -> &str { "answer-provider" }
+            fn prompt(&mut self, _: &str, _: &mut dyn FnMut(TurnItem)) -> Result<String, CognitionError> { unreachable!() }
+            fn enqueue_prompt(&mut self, prompt: &str, _: Box<dyn FnOnce() -> Result<(), String> + Send>)
+                -> Result<crate::cognition::PendingReply, CognitionError>
+            {
+                let ready = self.0.clone();
+                let release = self.1.take().unwrap();
+                let prompt = prompt.to_owned();
+                Ok(crate::cognition::PendingReply::new(move |_| {
+                    ready.send(prompt).unwrap();
+                    // load-bound: the test holds the answer turn until the display has been read.
+                    release.recv_timeout(Duration::from_secs(30)).unwrap();
+                    Ok("end_turn".into())
+                }))
+            }
+        }
+        struct AnswerFactory(Mutex<Option<AnswerLease>>);
+        impl LeaseFactory for AnswerFactory {
+            fn spawn(&self) -> Result<Box<dyn Cognition>, CognitionError> { unreachable!() }
+            fn spawn_work(&self, _: &ThreadBinding) -> Result<Box<dyn Cognition>, CognitionError> {
+                Ok(Box::new(self.0.lock().unwrap().take().unwrap()))
+            }
+        }
+
+        let h = harness(0);
+        let (entered, ready) = mpsc::channel();
+        let (release, wait) = mpsc::channel();
+        let host = WorkHost::new(&h.state, Box::new(AnswerFactory(Mutex::new(Some(AnswerLease(entered, Some(wait)))))),
+            Arc::new(SilentNotifier));
+        let asking = assignment::register(&h.state, &registration(&h)).unwrap();
+        let other = assignment::register(&h.state, &Registration {
+            obligation_id: "other-work".into(), instruction_ledger_ref: "ledger:thread-one:turn-B".into(),
+            instruction_sha256: "b".repeat(64), ..registration(&h)
+        }).unwrap();
+        for id in [&asking.id, &other.id] {
+            assignment::advance(&h.state, "depot", "thread-one", id, AssignmentState::Running, "Earlier helper").unwrap();
+        }
+        let read = || [&asking.id, &other.id].map(|id| assignment::read(&h.state, "depot", "thread-one", id).unwrap());
+        let idle = Display { state: Some(AssignmentState::Unknown), working_since: None };
+        assert_eq!(host.assignment_activity(&read()), [idle, idle]);
+        host.queue_question_answer(&h.binding, &crate::questions::Delivery {
+            id: "owned-answer".into(), entity_id: "depot".into(), thread_id: "thread-one".into(), asker: "stu".into(),
+            obligation_id: Some(registration(&h).obligation_id), set_id: None, text: "Use Thursday".into(),
+            receipt: None, order: None,
+        }).unwrap();
+        // load-bound: wait for the provider to enter the held turn, not for a wall-clock delay.
+        assert!(ready.recv_timeout(Duration::from_secs(30)).unwrap().contains("Use Thursday"));
+        let active = host.assignment_activity(&read());
+        let published = assignment_activity::read(&host.message_scope(&h.binding), &read());
+        release.send(()).unwrap();
+        assert!(host.wait_for_completed(1, Duration::from_secs(30)));
+        assert_eq!(host.assignment_activity(&read()), [idle, idle]);
+        host.shutdown();
+        assert_eq!(active[0].state, Some(AssignmentState::Running));
+        assert!(active[0].working_since.is_some());
+        assert_eq!(active[1], idle);
+        assert_eq!(published, active);
+        std::fs::remove_dir_all(h.root).unwrap();
+    }
+
+    #[test]
+    fn a_second_handoff_counts_only_after_the_provider_starts_it() {
+        use crate::steering::InputOutcome;
+        type Observation = (Box<dyn FnOnce() + Send>, Box<dyn FnOnce(InputOutcome) + Send>);
+        struct Live(std::sync::mpsc::Sender<Observation>);
+        impl TurnCancel for Live {
+            fn cancel(&self) -> bool { false }
+            fn send_observed_input(&self, _: &str, _: &str, started: Option<Box<dyn FnOnce() + Send>>,
+                completed: Box<dyn FnOnce(InputOutcome) + Send>) -> Result<bool, String> {
+                self.0.send((started.expect("a fresh handoff is attributable"), completed)).unwrap();
+                Ok(true)
+            }
+        }
+
+        let h = harness(0);
+        let (first, scope, _) = handed_job(&h);
+        let (_, through) = crate::session_tools::pending(&scope, "stu").unwrap().unwrap();
+        crate::session_tools::acknowledge(&scope, "stu", through).unwrap();
+        let (second, _) = screen_job(&h, "turn-B", "A second assignment", false);
+        let backend = h.host.backend_for(&scope.thread_id).unwrap();
+        h.host.ensure_lease(&backend, &h.binding).unwrap();
+        let lease = backend.lease.lock().unwrap();
+        let (sent, observed) = std::sync::mpsc::channel();
+        {
+            let mut inner = backend.inner.lock().unwrap();
+            let session = inner.lease_session.clone().unwrap();
+            inner.peer_active_through = Some(through);
+            inner.peer_input = Some(Arc::new(Live(sent)));
+            inner.note_given(&session, through);
+            h.host.set_assignment_turn(&h.binding, &mut inner, Some(AssignmentTurn {
+                session, started_at: 42, cause: Cause::Input(first.id.clone()),
+            }));
+        }
+        h.host.wake_messages(&h.binding);
+        let (started, finished) = observed.try_recv().unwrap();
+        let rows = [&first.id, &second.id].map(|id| assignment::read(&h.state, "depot", "thread-one", id).unwrap());
+        let states = || assignment_activity::read(&scope, &rows).iter().map(|item| item.state).collect::<Vec<_>>();
+        let first_only = [Some(AssignmentState::Running), Some(AssignmentState::Registered)];
+        assert_eq!(states(), first_only);
+        started();
+        assert_eq!(states(), [Some(AssignmentState::Running); 2]);
+        assert_eq!(h.host.assignment_activity(&rows)[1].state, Some(AssignmentState::Running));
+        finished(InputOutcome {result: Ok("end_turn".into()), report_failure: false});
+        assert_eq!(states(), first_only);
+        drop(lease);
+        h.host.shutdown();
+        std::fs::remove_dir_all(h.root).unwrap();
     }
 
     /// **(b) Between its registration and its first worker it still blocks** (`work_gate.rs`,

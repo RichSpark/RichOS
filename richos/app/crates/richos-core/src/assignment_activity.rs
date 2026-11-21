@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) enum Cause {
-    Handoff(String),
+    Input(String),
     WorkerResult(Vec<String>),
 }
 
@@ -21,9 +21,14 @@ pub(crate) struct Turn {
 }
 
 #[derive(Serialize, Deserialize)]
-struct PublishedTurn {
+struct PublishedTurns {
     owner: u32,
     owner_start: String,
+    turns: Vec<PublishedTurn>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct PublishedTurn {
     supervised: bool,
     turn: Turn,
 }
@@ -38,19 +43,22 @@ fn path(scope: &StatusToolScope) -> Result<PathBuf, String> {
     Ok(crate::session_tools::inbox(scope, "stu")?.with_file_name("assignment-activity.observation"))
 }
 
-pub(crate) fn publish(scope: &StatusToolScope, turn: Option<&Turn>) -> Result<(), String> {
+pub(crate) fn publish(scope: &StatusToolScope, turns: &[Turn]) -> Result<(), String> {
     let path = path(scope)?;
-    let Some(turn) = turn else {
+    if turns.is_empty() {
         return std::fs::remove_file(path).or_else(|error| {
             if error.kind() == std::io::ErrorKind::NotFound { Ok(()) } else { Err(error) }
         }).map_err(|error| error.to_string());
-    };
+    }
     let owner = std::process::id();
     let ProcessStart::Running(owner_start) = process_start(owner) else {
         return Err("Could not verify the work host process.".into());
     };
-    let supervised = crate::lease_commands::LiveLeases::process().contains(&turn.session);
-    crate::quota::atomic_write(&path, &PublishedTurn { owner, owner_start, supervised, turn: turn.clone() })
+    let turns = turns.iter().map(|turn| PublishedTurn {
+        supervised: crate::lease_commands::LiveLeases::process().contains(&turn.session),
+        turn: turn.clone(),
+    }).collect();
+    crate::quota::atomic_write(&path, &PublishedTurns { owner, owner_start, turns })
         .map_err(|error| error.to_string())
 }
 
@@ -79,15 +87,14 @@ fn bounded_json<T: serde::de::DeserializeOwned>(path: &Path) -> Option<T> {
     serde_json::from_slice(&std::fs::read(path).ok()?).ok()
 }
 
-pub(crate) fn read_turn(scope: &StatusToolScope) -> Option<Turn> {
-    let saved: PublishedTurn = bounded_json(&path(scope).ok()?)?;
+pub(crate) fn current_turns(scope: &StatusToolScope) -> Option<Vec<Turn>> {
+    let saved: PublishedTurns = bounded_json(&path(scope).ok()?)?;
     if !matches!(process_start(saved.owner), ProcessStart::Running(now) if now == saved.owner_start) {
         return None;
     }
-    if saved.supervised && !verified_lease(&scope.state_root, &saved.turn.session, saved.owner) {
-        return None;
-    }
-    Some(saved.turn)
+    Some(saved.turns.into_iter()
+        .filter(|entry| !entry.supervised || verified_lease(&scope.state_root, &entry.turn.session, saved.owner))
+        .map(|entry| entry.turn).collect())
 }
 
 fn provider_running(scope: &StatusToolScope, session: &str, hosted: &[String]) -> bool {
@@ -111,10 +118,10 @@ fn provider_running(scope: &StatusToolScope, session: &str, hosted: &[String]) -
 /// using the host's process-checked turn observation.
 pub(crate) fn read(scope: &StatusToolScope, rows: &[Assignment]) -> Vec<Display> {
     static INDEX: std::sync::Mutex<Option<work_status::ReceiptIndex>> = std::sync::Mutex::new(None);
-    let turn = read_turn(scope);
+    let turns = current_turns(scope).unwrap_or_default();
     let receipts = INDEX.lock().unwrap().get_or_insert_with(Default::default)
         .launches(&scope.state_root, &scope.entity_id, &scope.thread_id).ok();
-    project(scope, rows, receipts.as_ref(), &[], turn.as_ref(), &HashSet::new())
+    project(scope, rows, receipts.as_ref(), &[], &turns, &HashSet::new())
 }
 
 /// Current activity is attributed to the assignment whose handoff, command or worker result
@@ -125,22 +132,26 @@ pub(crate) fn project(
     rows: &[Assignment],
     receipts: Option<&Receipts>,
     hosted: &[String],
-    turn: Option<&Turn>,
+    turns: &[Turn],
     command_jobs: &HashSet<&str>,
 ) -> Vec<Display> {
     let mut agents: HashMap<&str, HashSet<String>> = HashMap::new();
     rows.iter().map(|row| {
         let state = row.reported_state();
         let inactive = Display { state, working_since: None };
-        if !matches!(state, Some(AssignmentState::Registered | AssignmentState::Preparing | AssignmentState::Running)) {
+        if !matches!(state, Some(AssignmentState::Registered | AssignmentState::Preparing | AssignmentState::Running | AssignmentState::Blocked)) {
             return inactive;
         }
         let launches = receipts.and_then(|r| r.by_obligation.get(&row.obligation_id));
-        let turn_start = turn.filter(|turn| match &turn.cause {
-            Cause::Handoff(id) => id == &row.id,
-            Cause::WorkerResult(tasks) => launches.is_some_and(|launches| launches.tasks.iter()
-                .any(|(session, id)| session == &turn.session && tasks.contains(id))),
-        }).map(|turn| turn.started_at);
+        let turn_start = turns.iter().filter(|turn| match &turn.cause {
+            Cause::Input(id) => id == &row.id,
+            Cause::WorkerResult(tasks) => state != Some(AssignmentState::Blocked)
+                && launches.is_some_and(|launches| launches.tasks.iter()
+                    .any(|(session, id)| session == &turn.session && tasks.contains(id))),
+        }).map(|turn| turn.started_at).min();
+        if state == Some(AssignmentState::Blocked) && turn_start.is_none() {
+            return inactive;
+        }
         let mut worker_running = || launches.is_some_and(|launches| launches.unresolved.iter()
             .any(|(session, agent)| {
                 let Some(agent) = agent else { return false };
@@ -175,17 +186,17 @@ mod tests {
         let ProcessStart::Running(owner_start) = process_start(owner) else {
             panic!("could not identify the test process");
         };
-        let turn = Turn { session: "stu".into(), started_at: 42, cause: Cause::Handoff("job".into()) };
-        crate::quota::atomic_write(&path(&scope).unwrap(), &PublishedTurn {
-            owner, owner_start, supervised: true, turn: turn.clone(),
+        let turn = Turn { session: "stu".into(), started_at: 42, cause: Cause::Input("job".into()) };
+        crate::quota::atomic_write(&path(&scope).unwrap(), &PublishedTurns {
+            owner, owner_start, turns: vec![PublishedTurn { supervised: true, turn: turn.clone() }],
         }).unwrap();
         let lease = crate::lease_commands::state_path(&root, "stu");
         let record = |ended| serde_json::json!({"owner":owner,"provider":owner,"ended":ended});
-        assert!(read_turn(&scope).is_none());
+        assert_eq!(current_turns(&scope), Some(vec![]));
         crate::quota::atomic_write(&lease, &record(false)).unwrap();
-        assert_eq!(read_turn(&scope), Some(turn));
+        assert_eq!(current_turns(&scope), Some(vec![turn]));
         crate::quota::atomic_write(&lease, &record(true)).unwrap();
-        assert!(read_turn(&scope).is_none());
+        assert_eq!(current_turns(&scope), Some(vec![]));
         std::fs::remove_dir_all(root).unwrap();
     }
 }

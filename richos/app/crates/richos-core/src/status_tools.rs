@@ -513,10 +513,10 @@ mod tests {
 
     fn show_live(scope: &Path, id: &str) {
         let scope = read_scope(scope).unwrap();
-        crate::assignment_activity::publish(&scope, Some(&crate::assignment_activity::Turn {
+        crate::assignment_activity::publish(&scope, &[crate::assignment_activity::Turn {
             session: "test-provider".into(), started_at: 42,
-            cause: crate::assignment_activity::Cause::Handoff(id.into()),
-        })).unwrap();
+            cause: crate::assignment_activity::Cause::Input(id.into()),
+        }]).unwrap();
     }
 
     /// The whole of finding 6, in one assertion: the front desk can answer "what is
