@@ -6444,7 +6444,7 @@ module.exports = [
   {"s":"Use RichGlance as my default image viewer","c":"CONTROL","why":"The rail page names its existing action, setting or group of controls."},
   {"s":"When a call starts on this Mac or a meeting on your calendar is about to, RichBrief asks once: Take Notes or Not this one.","c":"INFORMATIONAL","why":"The approved page copy describes the tool, its settings or how it is used."},
   {"s":"Your notes are ready","c":"ACTIONABLE","why":"Open the notes takes the user to the delivered message in its chat.","control":"#bp-open","fixture":"richbrief-rail-notes"},
-  {"s":"press its shortcut, pick what you want on the screen and the picture is on your clipboard or open in the editor, ready to mark up.","c":"INFORMATIONAL","why":"The approved page copy describes the tool, its settings or how it is used."},
+  {"s":"press its shortcut, pick what you want on the screen and the picture is on your clipboard or open in the editor, ready to mark up.","c":"ACTIONABLE","why":"Capture starts the same operation on this page and the switch enables the shortcut in other apps.","control":"#gp-capture, #gp-shortcut","fixture":"richglance-rail-page"},
   {"s":"what was decided, what you owe and what everyone else promised.","c":"INFORMATIONAL","why":"The approved page copy describes the tool, its settings or how it is used."},
   // Meeting and search states brought into the current source inventory by the v1.3.0 sync.
   {"s": "Recording saved. Finishing setup for your notes…", "c": "INFORMATIONAL", "why": "The saved recording waits for an in-progress setup download. The meeting-notes suite exercises this status."},
