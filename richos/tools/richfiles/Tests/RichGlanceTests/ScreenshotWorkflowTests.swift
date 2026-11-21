@@ -85,16 +85,14 @@ final class ScreenshotWorkflowTests: XCTestCase {
         XCTAssertNil(edits.number(for: arrow))
     }
 
-    func testHistoryIsOptInExpiresAndCannotRecreateDeletedEdits() async throws {
+    func testHistoryDefaultsOnExpiresAndCannotRecreateDeletedEdits() async throws {
         let home = FileManager.default.temporaryDirectory.appendingPathComponent("glance-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: home) }
         let store = ScreenshotStore(root: home)
         let now = Date()
         var document = ScreenshotDocument(original: try fixture(), scale: 2, kind: .scrolling, created: now)
-        XCTAssertFalse(store.keepsHistory)
-        XCTAssertFalse(try store.retain(document))
+        XCTAssertTrue(store.keepsHistory)
         XCTAssertFalse(FileManager.default.fileExists(atPath: home.path))
-        try store.setHistory(true)
         XCTAssertTrue(try store.retain(document))
         let mark = ScreenshotMark(tool: .redact, start: CGPoint(x: 1, y: 2), end: CGPoint(x: 7, y: 5))
         document.edits.marks = [mark]
@@ -115,6 +113,83 @@ final class ScreenshotWorkflowTests: XCTestCase {
         XCTAssertFalse(store.keepsHistory)
         let directory = home.appendingPathComponent("Recent Captures")
         XCTAssertFalse(FileManager.default.fileExists(atPath: directory.path))
+    }
+
+    func testShelfVisibilityAndRetentionAreIndependentAcrossReopen() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent("glance-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: home) }
+        let store = ScreenshotStore(root: home)
+        let now = Date()
+        let document = ScreenshotDocument(original: try fixture(), scale: 1, created: now, name: "A capture")
+        XCTAssertTrue(store.showsShelf)
+        XCTAssertEqual(store.retention, .week)
+        try store.setShelfVisible(false)
+        try store.setRetention(.forever)
+        XCTAssertTrue(try store.retain(document))
+        let reopened = ScreenshotStore(root: home)
+        XCTAssertFalse(reopened.showsShelf)
+        XCTAssertTrue(reopened.keepsHistory)
+        XCTAssertEqual(reopened.retention, .forever)
+        let future = now.addingTimeInterval(10 * 86_400)
+        XCTAssertEqual(try reopened.entries(now: future).first?.name, "A capture")
+        try reopened.setShelfVisible(true)
+        try reopened.setRetention(.week, now: future)
+        XCTAssertTrue(reopened.showsShelf)
+        XCTAssertTrue(try reopened.entries(now: future).isEmpty)
+        try reopened.setHistory(false)
+        XCTAssertFalse(ScreenshotStore(root: home).keepsHistory)
+        XCTAssertTrue(ScreenshotStore(root: home).showsShelf)
+        XCTAssertFalse(try reopened.retain(document))
+    }
+
+    func testRound100ToolDefaultsAndIndependentStyles() async throws {
+        let canvas = ScreenshotCanvas(document: ScreenshotDocument(original: try fixture(), scale: 1))
+        canvas.tool = .arrow
+        XCTAssertTrue(canvas.large)
+        XCTAssertEqual(canvas.ink, .red)
+        canvas.setStyle(ink: .blue, large: false)
+        canvas.tool = .highlight
+        XCTAssertEqual(canvas.ink, .yellow)
+        canvas.setStyle(ink: .black)
+        canvas.tool = .box
+        XCTAssertFalse(canvas.large)
+        XCTAssertEqual(canvas.ink, .blue)
+        canvas.setStyle(large: true)
+        canvas.tool = .arrow
+        XCTAssertFalse(canvas.large)
+        canvas.tool = .highlight
+        XCTAssertEqual(canvas.ink, .black)
+        canvas.tool = .steps
+        XCTAssertFalse(canvas.large)
+    }
+
+    func testSameEditorKeepsWorkingMarksAndUndoAsCapturesChange() async throws {
+        _ = NSApplication.shared
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent("glance-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: home) }
+        let store = ScreenshotStore(root: home)
+        var first = ScreenshotDocument(original: try fixture(), scale: 1)
+        let second = ScreenshotDocument(original: try fixture(), scale: 1, kind: .scrolling)
+        let mark = ScreenshotMark(tool: .steps, start: CGPoint(x: 4, y: 4), end: CGPoint(x: 4, y: 4))
+        first.edits.marks = [mark]
+        XCTAssertTrue(try store.retain(first))
+        XCTAssertTrue(try store.retain(second))
+        let editor = ScreenshotEditor(store: store)
+        let window = editor.window
+        editor.changeDocument(first)
+        editor.canvas?.selected = mark.id
+        editor.canvas?.nudge(dx: 1, dy: 0)
+        editor.changeDocument(second)
+        let saved = try XCTUnwrap(store.entries().first { $0.id == first.id })
+        editor.changeDocument(try XCTUnwrap(store.load(saved)))
+        XCTAssertTrue(editor.window === window)
+        XCTAssertEqual(editor.canvas?.document.edits.marks.first?.start.x, 5)
+        XCTAssertEqual(editor.canvas?.canUndo, true)
+        editor.canvas?.undo()
+        XCTAssertEqual(editor.canvas?.document.edits.marks.first?.start.x, 4)
+        XCTAssertTrue(editor.allowApplicationQuit())
+        let persisted = try XCTUnwrap(store.entries().first { $0.id == first.id })
+        XCTAssertEqual(persisted.edits.marks.first?.start.x, 4)
     }
 
     private func fixture() throws -> CGImage {

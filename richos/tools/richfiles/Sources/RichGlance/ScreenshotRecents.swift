@@ -1,267 +1,379 @@
 import AppKit
 
 @MainActor
-final class ScreenshotRecents: NSObject, NSWindowDelegate {
-    let window: NSPanel
-    var edit: ((ScreenshotStore.Entry) -> Void)?
-    var closed: (() -> Void)?
+final class ScreenshotRecents: NSView {
+    var open: ((ScreenshotStore.Entry) -> Void)?
+    var remove: ((ScreenshotStore.Entry) -> Void)?
+    var hide: (() -> Void)?
+    var clearAll: (() -> Void)?
+    var turnOff: (() -> Void)?
+    var turnOn: (() -> Void)?
+    var changeRetention: ((ScreenshotStore.Retention) -> Void)?
+    var focusCanvas: (() -> Void)?
+
     private let store: ScreenshotStore
-    private let title = NSTextField(wrappingLabelWithString: "")
-    private let empty = NSTextField(labelWithString: "")
-    private let toggle = NSSwitch()
-    private let clear = NSButton(title: "Clear All…", target: nil, action: nil)
-    private let scroll = NSScrollView()
-    private let cards = RecentStrip()
-    private var entries: [ScreenshotStore.Entry] = []
-    private var selected = 0
+    private let background = ScreenshotSurface(.shelf)
+    private let rule = ScreenshotRule()
+    private let divider = ScreenshotRule()
+    private let scroller = NSScrollView()
+    private let row = ScreenshotSurface(.shelf)
+    private let descriptionLabel = NSTextField(wrappingLabelWithString: "")
+    private let retentionLabel = screenshotLabel("Keep on this Mac for")
+    private let inlineRetention = ScreenshotChoice(["7 days", "Forever"], label: "Keep captures for")
+    private let menuRetention = ScreenshotChoice(["7 days", "Forever"], label: "Keep captures for")
+    private let clear = ScreenshotButton("Clear All…")
+    private let more = ScreenshotButton("Recent Captures options", symbol: "ellipsis")
+    private let enable = ScreenshotButton("Turn On", style: .primary)
+    private let popover = NSPopover()
+    private let menuDescription = NSTextField(wrappingLabelWithString: "")
+    private var cards: [ScreenshotShelfCard] = []
+    private var selected: UUID?
+    private var keepsHistory = true
+    private var policy = ScreenshotStore.Retention.week
+    private var observer: NSObjectProtocol?
 
     init(store: ScreenshotStore) {
         self.store = store
-        window = RecentPanel(contentRect: CGRect(x: 0, y: 0, width: 840, height: 445),
-                             styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
-        super.init()
-        window.title = "Recent Captures"
-        window.minSize = CGSize(width: 520, height: 360)
-        window.isReleasedWhenClosed = false
-        window.delegate = self
-        (window as? RecentPanel)?.handle = { [weak self] event in self?.handle(event) ?? false }
-
-        let root = NSStackView()
-        root.orientation = .vertical
-        root.alignment = .width
-        root.spacing = 15
-        title.font = .systemFont(ofSize: 16)
-        title.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        toggle.target = self
-        toggle.action = #selector(toggleHistory)
-        toggle.setAccessibilityLabel("Show Recent Captures")
-        style(clear, for: #selector(clearAll))
-        let header = NSStackView(views: [toggle, title, clear])
-        header.spacing = 14
-        header.alignment = .top
-        root.addArrangedSubview(header)
-
-        cards.spacing = 12
-        cards.alignment = .top
-        cards.edgeInsets = NSEdgeInsets(top: 6, left: 4, bottom: 6, right: 4)
-        scroll.documentView = cards
-        scroll.hasHorizontalScroller = true
-        scroll.autohidesScrollers = true
-        scroll.scrollerStyle = .overlay
-        scroll.drawsBackground = false
-        scroll.setAccessibilityLabel("Recent capture cards")
-        scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 255).isActive = true
-        scroll.setContentHuggingPriority(.defaultLow, for: .vertical)
-        root.addArrangedSubview(scroll)
-
-        empty.font = .systemFont(ofSize: 16)
-        empty.alignment = .center
-        empty.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        root.addArrangedSubview(empty)
-        let content = NSView()
-        content.addSubview(root)
-        root.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            root.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 18),
-            root.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -18),
-            root.topAnchor.constraint(equalTo: content.topAnchor, constant: 18),
-            root.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -18),
-        ])
-        window.contentView = content
-    }
-
-    func show() {
-        refresh()
-        if !window.isVisible { window.center() }
-        window.makeKeyAndOrderFront(nil)
-        if entries.isEmpty { window.makeFirstResponder(toggle) }
-        else { focusSelected() }
-    }
-
-    func refresh() {
-        let selectedID = entries.indices.contains(selected) ? entries[selected].id : nil
-        let enabled = store.keepsHistory
-        toggle.state = enabled ? .on : .off
-        title.stringValue = enabled
-            ? "On. Captures are kept on this Mac for 7 days. Each capture holds the original and your marks, including pixels under any redaction."
-            : "Off. Turn on Recent Captures to keep screenshots and editable marks on this Mac for 7 days."
-        do {
-            entries = try store.entries()
-            empty.stringValue = enabled ? "No recent captures yet." : "Recent Captures is off."
-        } catch {
-            entries = []
-            empty.stringValue = "Could not read Recent Captures. Reopen this window to try again."
+        super.init(frame: .zero)
+        setAccessibilityElement(false)
+        setAccessibilityLabel("Recent Captures")
+        addSubview(background)
+        for view in [scroller, rule, divider, descriptionLabel, retentionLabel, inlineRetention, clear, more, enable] {
+            background.addSubview(view)
         }
-        scroll.isHidden = entries.isEmpty
-        empty.isHidden = !entries.isEmpty
+        scroller.documentView = row
+        scroller.hasHorizontalScroller = true
+        scroller.autohidesScrollers = true
+        scroller.scrollerStyle = .overlay
+        scroller.drawsBackground = false
+        scroller.setAccessibilityLabel("Recent Captures, newest first")
+        scroller.contentView.postsBoundsChangedNotifications = true
+        descriptionLabel.font = .systemFont(ofSize: 16)
+        descriptionLabel.maximumNumberOfLines = 3
+        menuDescription.font = .systemFont(ofSize: 16)
+        more.iconOnly = true
+        more.onPress = { [weak self] in self?.showOptions() }
+        clear.onPress = { [weak self] in self?.clearAll?() }
+        enable.onPress = { [weak self] in self?.turnOn?() }
+        inlineRetention.changed = { [weak self] in self?.changeRetention?(ScreenshotStore.Retention.allCases[$0]) }
+        menuRetention.changed = inlineRetention.changed
+        observer = NotificationCenter.default.addObserver(forName: NSView.boundsDidChangeNotification,
+                                                          object: scroller.contentView, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.loadVisibleThumbnails() }
+        }
+        background.changedAppearance = { [weak self] in self?.updateWords() }
+        buildOptions()
+        updateWords()
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    deinit {
+        if let observer { NotificationCenter.default.removeObserver(observer) }
+    }
+
+    override var isFlipped: Bool { true }
+
+    func update(entries: [ScreenshotStore.Entry], selected: UUID?, enabled: Bool, retention: ScreenshotStore.Retention,
+                unavailable: Bool = false, newCapture: Bool = false) {
+        let previousSelection = self.selected
+        self.selected = selected
+        keepsHistory = enabled
+        policy = retention
+        let existing = Dictionary(uniqueKeysWithValues: cards.map { ($0.entry.id, $0) })
+        let focused = cards.firstIndex { $0.button === window?.firstResponder }
+        let nextCards = entries.map { entry -> ScreenshotShelfCard in
+            if let card = existing[entry.id], card.entry == entry { return card }
+            let card = ScreenshotShelfCard(entry)
+            card.button.onPress = { [weak self] in self?.open?(entry) }
+            card.delete.onPress = { [weak self] in self?.remove?(entry) }
+            row.addSubview(card)
+            return card
+        }
+        for card in cards where !nextCards.contains(where: { $0 === card }) { card.removeFromSuperview() }
+        cards = nextCards
+        for card in cards { card.selected = card.entry.id == selected }
         clear.isEnabled = !entries.isEmpty
-        selected = entries.firstIndex { $0.id == selectedID } ?? min(selected, max(0, entries.count - 1))
-        for card in cards.arrangedSubviews { card.removeFromSuperview() }
-        for (index, entry) in entries.enumerated() { cards.addArrangedSubview(card(for: entry, index: index)) }
-        if !entries.isEmpty { cards.frame.size = cards.fittingSize }
+        descriptionLabel.isHidden = !entries.isEmpty
+        scroller.isHidden = entries.isEmpty
+        if unavailable {
+            descriptionLabel.stringValue = "Could not read Recent Captures. Reopen the editor to try again."
+        } else {
+            updateWords()
+        }
+        needsLayout = true
+        layoutSubtreeIfNeeded()
+        if previousSelection != selected, let card = cards.first(where: { $0.entry.id == selected }) {
+            row.scrollToVisible(card.frame)
+            if newCapture && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+                card.alphaValue = 0
+                NSAnimationContext.runAnimationGroup { context in
+                    context.duration = 0.25
+                    card.animator().alphaValue = 1
+                }
+            }
+        } else if let focused, !cards.contains(where: { $0.button === window?.firstResponder }) {
+            if cards.isEmpty { focusCanvas?() }
+            else { focusCard(min(cards.count - 1, focused)) }
+        }
     }
 
-    func windowWillClose(_ notification: Notification) { closed?() }
+    private func updateWords() {
+        let palette = ScreenshotEditorPalette(self)
+        retentionLabel.textColor = palette.muted
+        descriptionLabel.textColor = palette.muted
+        menuDescription.textColor = palette.muted
+        let words = keepsHistory
+            ? "Your captures appear here, newest first. Each one keeps its original and your marks on this Mac \(policy.duration), so you can change them later."
+            : "Recent Captures is off. Turn on to keep each capture and its editable marks on this Mac \(policy.duration)."
+        let bold = keepsHistory ? "Your captures appear here, newest first." : "Recent Captures is off."
+        descriptionLabel.attributedStringValue = {
+            let text = NSMutableAttributedString(string: words, attributes: [.font: NSFont.systemFont(ofSize: 16),
+                                                                             .foregroundColor: palette.muted])
+            text.addAttributes([.font: NSFont.systemFont(ofSize: 16, weight: .semibold), .foregroundColor: palette.ink],
+                               range: NSRange(location: 0, length: (bold as NSString).length))
+            return text
+        }()
+        menuDescription.stringValue = "On: each capture keeps its original and your marks on this Mac \(policy.duration), so a redaction can be taken off again here. Delete a capture to remove it for good."
+        inlineRetention.selection = policy == .week ? 0 : 1
+        menuRetention.selection = inlineRetention.selection
+    }
 
-    private func handle(_ event: NSEvent) -> Bool {
-        guard event.modifierFlags.intersection([.shift, .command, .option, .control]).isEmpty else { return false }
-        if event.keyCode == 53 {
-            if !event.isARepeat { window.performClose(nil) }
-            return true
+    override func layout() {
+        super.layout()
+        let narrow = bounds.width <= 900
+        let side: CGFloat = keepsHistory ? (narrow ? 125 : 236) : 0
+        let listWidth = max(0, bounds.width - side)
+        background.frame = bounds
+        rule.frame = CGRect(x: 0, y: 0, width: bounds.width, height: 1)
+        divider.isHidden = side == 0
+        divider.frame = CGRect(x: listWidth, y: 0, width: 1, height: bounds.height)
+        scroller.frame = CGRect(x: 0, y: 1, width: listWidth, height: bounds.height - 1)
+        let start: CGFloat = keepsHistory ? 22 : 140
+        descriptionLabel.frame = CGRect(x: start, y: 34, width: max(0, listWidth - start - 22), height: 74)
+        enable.frame = CGRect(x: 22, y: 54, width: 101, height: 34)
+        enable.isHidden = keepsHistory
+        retentionLabel.isHidden = !keepsHistory || narrow
+        inlineRetention.isHidden = retentionLabel.isHidden
+        clear.isHidden = !keepsHistory
+        more.isHidden = !keepsHistory
+        retentionLabel.frame = CGRect(x: listWidth + 16, y: 10, width: 205, height: 21)
+        inlineRetention.frame = CGRect(x: listWidth + 16, y: 36, width: 205, height: 36)
+        clear.frame = CGRect(x: listWidth + 12, y: narrow ? 14 : 82, width: narrow ? 101 : 100, height: 34)
+        more.frame = CGRect(x: listWidth + (narrow ? 12 : 120), y: narrow ? 55 : 82,
+                            width: narrow ? 101 : 42, height: 34)
+        var x: CGFloat = 14
+        for card in cards {
+            card.frame = CGRect(x: x, y: 10, width: card.requiredWidth, height: 115)
+            x = card.frame.maxX + 6
         }
-        guard entries.indices.contains(selected) else { return false }
+        row.frame = CGRect(x: 0, y: 0, width: max(listWidth, x + 8), height: bounds.height - 1)
+        loadVisibleThumbnails()
+    }
+
+    private func loadVisibleThumbnails() {
+        guard !isHidden, scroller.frame.width > 0, !scroller.isHidden else { return }
+        let region = scroller.documentVisibleRect.insetBy(dx: -120, dy: 0)
+        for card in cards where card.frame.intersects(region) && !card.requested {
+            card.requested = true
+            let store = self.store
+            let entry = card.entry
+            DispatchQueue.global(qos: .utility).async { [weak card] in
+                let bitmap = store.thumbnail(entry)
+                DispatchQueue.main.async { [weak card] in
+                    guard let card else { return }
+                    card.image = bitmap.map { NSImage(cgImage: $0, size: .zero) }
+                }
+            }
+        }
+    }
+
+    func handle(_ event: NSEvent) -> Bool {
+        guard let window, let index = cards.firstIndex(where: {
+            $0.button === window.firstResponder || $0.delete === window.firstResponder
+        }), event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty else { return false }
         switch event.keyCode {
-        case 123, 124:
-            selected = min(entries.count - 1, max(0, selected + (event.keyCode == 123 ? -1 : 1)))
-            focusSelected()
-        case 36, 76:
-            if let button = window.firstResponder as? NSButton, button.action != #selector(editRow(_:)) { return false }
-            if window.firstResponder is NSSwitch { return false }
-            if !event.isARepeat { edit?(entries[selected]) }
+        case 123: focusCard(max(0, index - 1))
+        case 124: focusCard(min(cards.count - 1, index + 1))
         case 51, 117:
-            if !event.isARepeat { delete(entries[selected].id) }
+            let selected = cards[index].entry
+            remove?(selected)
+            if !cards.isEmpty { focusCard(min(index, cards.count - 1)) }
+        case 53: focusCanvas?()
         default: return false
         }
         return true
     }
 
-    private func focusSelected() {
-        guard cards.arrangedSubviews.indices.contains(selected),
-              let card = cards.arrangedSubviews[selected] as? NSStackView,
-              let actions = card.arrangedSubviews.last as? NSStackView,
-              let button = actions.arrangedSubviews.first as? NSButton else { return }
-        cards.scrollToVisible(card.frame)
-        window.makeFirstResponder(button)
+    private func focusCard(_ index: Int) {
+        let card = cards[index]
+        row.scrollToVisible(card.frame)
+        window?.makeFirstResponder(card.button)
     }
 
-    private func delete(_ id: UUID) {
-        do {
-            try store.remove(id)
-            refresh()
-            if entries.isEmpty { window.makeFirstResponder(toggle) }
-            else { focusSelected() }
-        } catch { showError("Could not delete this capture.") }
+    private func buildOptions() {
+        let controller = NSViewController()
+        let content = ScreenshotSurface(.floating)
+        let hide = ScreenshotButton("Hide Recent Captures", style: .plain)
+        let off = ScreenshotButton("Turn Off Recent Captures…", style: .plain)
+        let keep = screenshotLabel("Keep captures for")
+        for view in [hide, off, keep, menuRetention, menuDescription] { content.addSubview(view) }
+        hide.frame = CGRect(x: 8, y: 8, width: 218, height: 36)
+        off.frame = CGRect(x: 8, y: 46, width: 252, height: 36)
+        keep.frame = CGRect(x: 17, y: 96, width: 143, height: 21)
+        menuRetention.frame = CGRect(x: 159, y: 88, width: 183, height: 36)
+        menuDescription.frame = CGRect(x: 17, y: 134, width: 326, height: 91)
+        hide.onPress = { [weak self] in self?.popover.performClose(nil); self?.hide?() }
+        off.onPress = { [weak self] in self?.popover.performClose(nil); self?.turnOff?() }
+        controller.view = content
+        popover.contentSize = CGSize(width: 360, height: 228)
+        popover.contentViewController = controller
+        popover.behavior = .transient
     }
 
-    @objc private func deleteRow(_ sender: NSButton) {
-        if entries.indices.contains(sender.tag) { delete(entries[sender.tag].id) }
+    private func showOptions() {
+        if popover.isShown { popover.performClose(nil) }
+        else { popover.show(relativeTo: more.bounds, of: more, preferredEdge: .minY) }
     }
 
-    @objc private func editRow(_ sender: NSButton) {
-        if entries.indices.contains(sender.tag) {
-            selected = sender.tag
-            edit?(entries[selected])
-        }
-    }
-
-    @objc private func clearAll() {
-        confirm("Clear all recent captures?", details: "Deletes the local originals and saved marks in Recent Captures.", accept: "Clear All") { [weak self] in
-            guard let self else { return }
-            do { try store.clear(); refresh(); window.makeFirstResponder(toggle) }
-            catch { showError("Could not clear Recent Captures.") }
-        }
-    }
-
-    @objc private func toggleHistory() {
-        if toggle.state == .on {
-            do { try store.setHistory(true); refresh() }
-            catch { refresh(); showError("Could not turn on Recent Captures.") }
-        } else {
-            toggle.state = .on
-            confirm("Turn off Recent Captures?", details: "Turning this off deletes the local originals and saved marks in Recent Captures.", accept: "Turn Off and Delete") { [weak self] in
-                guard let self else { return }
-                do { try store.setHistory(false); refresh() }
-                catch { refresh(); showError("Could not turn off Recent Captures.") }
-            }
-        }
-    }
-
-    private func confirm(_ title: String, details: String, accept: String, action: @escaping () -> Void) {
-        let alert = NSAlert()
-        alert.messageText = title
-        alert.informativeText = details
-        alert.addButton(withTitle: "Cancel")
-        alert.addButton(withTitle: accept)
-        alert.beginSheetModal(for: window) { if $0 == .alertSecondButtonReturn { action() } }
-    }
-
-    private func showError(_ text: String) {
-        let alert = NSAlert()
-        alert.messageText = text
-        alert.addButton(withTitle: "OK")
-        alert.beginSheetModal(for: window)
-    }
-
-    private func style(_ button: NSButton, for action: Selector) {
-        button.font = .systemFont(ofSize: 16, weight: .medium)
-        button.controlSize = .large
-        button.bezelStyle = .rounded
-        button.target = self
-        button.action = action
-    }
-
-    private func card(for entry: ScreenshotStore.Entry, index: Int) -> NSView {
-        let picture = NSImageView(image: store.thumbnail(entry) ?? NSImage())
-        picture.imageScaling = .scaleProportionallyUpOrDown
-        picture.imageAlignment = .alignTop
-        picture.setAccessibilityElement(false)
-        picture.widthAnchor.constraint(equalToConstant: 170).isActive = true
-        picture.heightAnchor.constraint(equalToConstant: 100).isActive = true
-        let origin = NSTextField(labelWithString: entry.kind.title + " · " + entry.created.formatted(date: .omitted, time: .shortened))
-        origin.font = .systemFont(ofSize: 16, weight: .semibold)
-        let crop = entry.edits.crop.integral
-        let dimensions = NSTextField(labelWithString: "\(Int(crop.width)) × \(Int(crop.height)) px" + (index == 0 ? " · last" : ""))
-        dimensions.font = .monospacedDigitSystemFont(ofSize: 16, weight: .regular)
-        let detail = NSTextField(wrappingLabelWithString: entry.redactions > 0
-            ? "Holds the original under \(entry.redactions) \(entry.redactions == 1 ? "redaction" : "redactions")"
-            : entry.edits.marks.isEmpty ? "Holds the original" : "Holds the original and your marks")
-        detail.font = .systemFont(ofSize: 16)
-        detail.preferredMaxLayoutWidth = 170
-        detail.widthAnchor.constraint(equalToConstant: 170).isActive = true
-        let open = NSButton(title: "Edit", target: nil, action: nil)
-        let delete = NSButton(image: NSImage(systemSymbolName: "trash", accessibilityDescription: nil) ?? NSImage(),
-                              target: nil, action: nil)
-        style(open, for: #selector(editRow(_:)))
-        style(delete, for: #selector(deleteRow(_:)))
-        open.tag = index
-        delete.tag = index
-        delete.setAccessibilityLabel("Delete capture")
-        let actions = NSStackView(views: [open, delete])
-        actions.spacing = 8
-        let card = RecentCard(views: [picture, origin, dimensions, detail, actions])
-        card.orientation = .vertical
-        card.alignment = .leading
-        card.edgeInsets = NSEdgeInsets(top: 9, left: 10, bottom: 9, right: 10)
-        card.spacing = 6
-        card.wantsLayer = true
-        card.style()
-        return card
-    }
+    func focusOptions() { window?.makeFirstResponder(more) }
+    func focusClear() { window?.makeFirstResponder(clear) }
 }
 
-private final class RecentPanel: NSPanel {
-    var handle: ((NSEvent) -> Bool)?
-    override func sendEvent(_ event: NSEvent) {
-        if event.type == .keyDown, attachedSheet == nil, handle?(event) == true { return }
-        super.sendEvent(event)
+@MainActor
+private final class ScreenshotShelfCard: NSView {
+    let entry: ScreenshotStore.Entry
+    let button = ScreenshotShelfEntryButton()
+    let delete = ScreenshotButton("Delete capture", symbol: "xmark", style: .deleteCapture)
+    var requested = false
+    var image: NSImage? { didSet { needsDisplay = true } }
+    var selected = false {
+        didSet {
+            button.setAccessibilityValue(selected ? "Selected" : "")
+            needsDisplay = true
+        }
     }
-}
+    var requiredWidth: CGFloat { max(112, ScreenshotRenderer.thumbnailWidth(for: entry.edits.crop) + 12) }
+    private var hovering = false
+    private var tracker: NSTrackingArea?
+    private var edited: Bool { entry.edited || !entry.edits.marks.isEmpty }
 
-private final class RecentStrip: NSStackView {
+    init(_ entry: ScreenshotStore.Entry) {
+        self.entry = entry
+        super.init(frame: .zero)
+        addSubview(button)
+        addSubview(delete)
+        button.isBordered = false
+        button.focusRingType = .none
+        button.target = button
+        button.action = #selector(ScreenshotShelfEntryButton.pressed)
+        let name = entry.name ?? (entry.kind == .scrolling ? "Scrolling screenshot" : "\(entry.kind.title) screenshot")
+        let crop = entry.edits.crop
+        let held = entry.redactions > 0 ? "Holds the original under \(entry.redactions) \(entry.redactions == 1 ? "redaction" : "redactions")"
+            : edited ? "Holds the original and your marks" : "Holds the original"
+        let tooltip = "\(name)\n\(entry.kind.title) · \(Int(crop.width)) × \(Int(crop.height)) px · \(entry.created.formatted(date: .abbreviated, time: .shortened))\n\(held)"
+        button.toolTip = tooltip
+        button.setAccessibilityLabel(tooltip.replacingOccurrences(of: "\n", with: ", "))
+        button.focusChanged = { [weak self] in self?.updateDelete() }
+        delete.toolTip = "Delete capture"
+        delete.iconOnly = true
+        delete.isHidden = true
+    }
+
+    required init?(coder: NSCoder) { nil }
     override var isFlipped: Bool { true }
-}
+    override func viewDidChangeEffectiveAppearance() { super.viewDidChangeEffectiveAppearance(); needsDisplay = true }
 
-private final class RecentCard: NSStackView {
-    override func viewDidChangeEffectiveAppearance() {
-        super.viewDidChangeEffectiveAppearance()
-        style()
+    override func layout() {
+        super.layout()
+        button.frame = bounds
+        delete.frame = CGRect(x: bounds.maxX - 29, y: 1, width: 28, height: 28)
     }
 
-    func style() {
-        let colors = ScreenshotChrome.colors(for: self)
-        layer?.backgroundColor = colors.surface.cgColor
-        layer?.borderColor = colors.gold.cgColor
-        layer?.borderWidth = 1
-        layer?.cornerRadius = 9
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let tracker { removeTrackingArea(tracker) }
+        let area = NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+                                  owner: self, userInfo: nil)
+        tracker = area
+        addTrackingArea(area)
+    }
+
+    override func mouseEntered(with event: NSEvent) { hovering = true; updateDelete() }
+    override func mouseExited(with event: NSEvent) { hovering = false; updateDelete() }
+
+    private func updateDelete() {
+        delete.isHidden = !(hovering || window?.firstResponder === button || window?.firstResponder === delete)
+        needsDisplay = true
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let p = ScreenshotEditorPalette(self)
+        let frame = NSBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 1), xRadius: 11, yRadius: 11)
+        if selected || hovering {
+            (selected ? p.floating : p.hover).setFill()
+            frame.fill()
+        }
+        if selected || window?.firstResponder === button {
+            (window?.firstResponder === button ? p.gold : p.control).setStroke()
+            frame.stroke()
+        }
+        let width = ScreenshotRenderer.thumbnailWidth(for: entry.edits.crop)
+        let thumbnail = CGRect(x: (bounds.width - width) / 2, y: 7, width: width, height: 78)
+        if selected {
+            p.gold.setStroke()
+            let ring = NSBezierPath(roundedRect: thumbnail.insetBy(dx: -3, dy: -3), xRadius: 6, yRadius: 6)
+            ring.lineWidth = 3
+            ring.stroke()
+        }
+        let picture = NSBezierPath(roundedRect: thumbnail, xRadius: 4, yRadius: 4)
+        p.ground.setFill()
+        picture.fill()
+        NSGraphicsContext.saveGraphicsState()
+        picture.addClip()
+        image?.draw(in: thumbnail, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+        NSGraphicsContext.restoreGraphicsState()
+        p.control.setStroke()
+        picture.lineWidth = 0.5
+        picture.stroke()
+        let clock = Calendar.current.isDateInToday(entry.created)
+            ? entry.created.formatted(date: .omitted, time: .shortened)
+            : entry.created.formatted(.dateTime.weekday(.abbreviated).hour().minute())
+        let ink = selected ? p.ink : p.muted
+        let label = NSAttributedString(string: clock, attributes: [
+            .font: NSFont.monospacedDigitSystemFont(ofSize: 16, weight: selected ? .semibold : .regular),
+            .foregroundColor: ink
+        ])
+        let available = bounds.width - (edited ? 32 : 20)
+        let textWidth = min(label.size().width, available)
+        let left = max(4, bounds.midX - (textWidth + (edited ? 30 : 20)) / 2)
+        screenshotSymbol(entry.kind.symbol, color: ink)?.draw(in: CGRect(x: left, y: 94, width: 16, height: 16))
+        label.draw(with: CGRect(x: left + 19, y: 92, width: textWidth, height: 21),
+                   options: [.truncatesLastVisibleLine, .usesLineFragmentOrigin])
+        if edited {
+            p.gold.setFill()
+            NSBezierPath(ovalIn: CGRect(x: left + 23 + textWidth, y: 99, width: 7, height: 7)).fill()
+        }
+    }
+}
+
+@MainActor
+private final class ScreenshotShelfEntryButton: NSButton {
+    var onPress: (() -> Void)?
+    var focusChanged: (() -> Void)?
+    @objc func pressed() { onPress?() }
+    override func draw(_ dirtyRect: NSRect) {}
+    override var acceptsFirstResponder: Bool { isEnabled }
+    override func becomeFirstResponder() -> Bool {
+        defer { DispatchQueue.main.async { [weak self] in self?.focusChanged?() } }
+        return super.becomeFirstResponder()
+    }
+    override func resignFirstResponder() -> Bool {
+        defer { DispatchQueue.main.async { [weak self] in self?.focusChanged?() } }
+        return super.resignFirstResponder()
+    }
+    override func keyDown(with event: NSEvent) {
+        if [36, 76].contains(event.keyCode) { performClick(nil) }
+        else { super.keyDown(with: event) }
     }
 }
