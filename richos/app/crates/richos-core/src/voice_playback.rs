@@ -66,7 +66,7 @@ pub(crate) fn context(turns: &[&crate::ledger::Turn], before: &str) -> Option<St
             "confirmed_spoken_chunks": confirmed_chunks,
             "last_confirmed_spoken_chunk": last_confirmed,
             "first_unconfirmed_spoken_chunk": first_unconfirmed,
-            "status": "Playback stopped. The written reply is in the chat. This describes audio delivery only. Use it if asked to continue or about the interrupted reply. Answer corrections, new questions and quick answers normally.",
+            "status": "Playback stopped. The written reply is in the chat. These chunks describe audio delivery. Resume the prior answer only if the user asks to continue. When the user only acknowledges, acknowledge briefly and wait. Answer corrections, new questions and quick answers normally.",
         }
     }).to_string())
 }
