@@ -446,8 +446,8 @@ declare_rules() {
     'the authored splash clock began'
   routine '^\[richos\] native splash: (reached authored endpoint at ([0-9]+ ms|unknown) after process start|fade complete)$' \
     'the authored timeline and the Home reveal completed'
-  routine '^\[richos\] native splash: audio cue (disabled|scheduled) at ([0-9]+ ms|unknown) after process start$' \
-    'the opening sound was disabled or accepted for scheduled playback'
+  routine '^\[richos\] native splash: audio cue (disabled|scheduled|completed) at ([0-9]+ ms|unknown) after process start$' \
+    'the opening sound was disabled, accepted for scheduled playback or completed'
   routine '^\[richos\] native splash: renderer counted [0-9]+ frames, [0-9]+ dropped, [0-9]+ corrupted at ([0-9]+ ms|unknown) after process start$' \
     'the native renderer reported frame counts for the completed splash'
   routine '^\[richos\] launch engine check completed: (none \(trusted as verified when it was written\)|full, once for this runtime \([0-9]+ files read\)|refused the engine), [0-9]+ ms$' \

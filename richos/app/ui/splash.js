@@ -1462,13 +1462,13 @@
         holdAt(holdMs);
         yieldNow("native-finished");
       } else {
-        recover(Math.max(0, result.elapsedMs));
+        recover(Math.max(0, result.elapsedMs), result.nativeCue === true);
       }
     }, function () { recover(0); });
 
-    function recover(elapsed) {
+    function recover(elapsed, nativeCue) {
       // Paint the fallback at the same point while the native view still covers it.
-      // The native cue may already have sounded. Only a fallback from zero owns it.
+      // If the native clock started, it owns the cue through a video failure.
       if (!node || yielded) return;
       nativeRecovering = true;
       removeSelf();
@@ -1476,7 +1476,7 @@
       shownAt = null;
       heldMoment = null;
       state.heldAt = null;
-      node = build(entry, elapsed > 0);
+      node = build(entry, nativeCue);
       document.body.insertBefore(node, document.body.firstChild);
       shownAt = clock();
       holdAt(elapsed);

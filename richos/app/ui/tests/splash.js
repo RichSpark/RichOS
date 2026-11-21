@@ -3388,13 +3388,18 @@ async function main() {
       { id: "round-11/v1", duration: 3000 },
       { id: "opening/edition-year", duration: 5000 },
     ]) {
-      for (const elapsed of [0, 1250, duration]) {
+      for (const [elapsed, nativeCue] of [[0, false], [0, true], [1250, true], [duration, true]]) {
         const page = await launch(browser, {
           virtualTime: true,
           initArg: id,
           init: (openingId) => {
             window.__RICHOS_LAUNCH__ = { kind: "fresh", splash: { id: openingId, native: true } };
-            window.__native = { dismissals: [] };
+            window.__RICHOS_OPENINGS__ = { sound: true };
+            window.__native = { dismissals: [], sounds: 0 };
+            window.Audio = class {
+              load() {}
+              play() { window.__native.sounds++; return Promise.resolve(); }
+            };
             window.__TAURI_INTERNALS__ = {
               invoke(cmd, args) {
                 if (cmd === "splash_native_finished") return new Promise(resolve => { window.__native.fail = resolve; });
@@ -3407,14 +3412,14 @@ async function main() {
             };
           },
         });
-        const recovered = await page.evaluate(async (elapsedMs) => {
-          window.__native.fail({ state: "fallback", elapsedMs });
+        const recovered = await page.evaluate(async ({ elapsedMs, nativeCue }) => {
+          window.__native.fail({ state: "fallback", elapsedMs, nativeCue });
           await Promise.resolve();
           await Promise.resolve();
           const splash = window.RichSplash;
           const node = document.getElementById("splash");
           return [splash.moment(), node ? getComputedStyle(node).visibility : "removed", window.__native.dismissals];
-        }, elapsed);
+        }, { elapsedMs: elapsed, nativeCue });
         if (elapsed === duration) {
           assertEqual(recovered, [duration, "removed", [true]], "a failure at the endpoint fades directly to Home");
         } else {
@@ -3424,6 +3429,8 @@ async function main() {
           await page.clock.runFor(REMOVE_AFTER_YIELD_MS + 1);
         }
         assertEqual(await page.evaluate(() => window.loroCovered()), false, "the remainder and fade reveal Home");
+        assertEqual(await page.evaluate(() => window.__native.sounds), nativeCue ? 0 : 1,
+          "only a native player that started owns the cue, even when elapsed time rounds down to zero");
         await page.__ctx.close();
       }
     }
