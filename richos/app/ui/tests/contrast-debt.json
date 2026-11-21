@@ -87,6 +87,14 @@
       "checked": 98,
       "considered": 680
     },
+    "richbrief": {
+      "checkedOverShell": 30,
+      "consideredOverShell": 2
+    },
+    "richglance": {
+      "checkedOverShell": 66,
+      "consideredOverShell": 20
+    },
     "settings-tooltip": {
       "//": "The DOM node counts equal the shell. The separate pseudo-element opacity and generated-content checks prove that the tooltip was reached and measured.",
       "checkedOverShell": 0,

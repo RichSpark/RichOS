@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use tauri::AppHandle;
+use tauri::{AppHandle, WebviewWindow};
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -51,6 +51,25 @@ pub async fn glance_capture_configure(app: AppHandle, enabled: bool, shortcut: S
         drop((app, enabled, shortcut));
         Err("The RichGlance shortcut is available on macOS.".into())
     }
+}
+
+/// The rail button starts the same capture as the global shortcut.
+#[richos_command::command]
+pub async fn glance_capture_open(window: WebviewWindow) -> Result<(), String> {
+    if window.label() != "main" {
+        return Err("RichGlance could not reach the window.".into());
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let result = tauri::async_runtime::spawn_blocking(|| {
+            mac::open_capture(std::process::id() as libc::pid_t)
+        }).await;
+        if matches!(result, Ok(Ok(()))) {
+            return Ok(());
+        }
+        eprintln!("[RichGlance] capture button could not launch");
+    }
+    Err("RichGlance could not start a capture.".into())
 }
 
 #[derive(Clone, Default, Serialize)]
@@ -381,7 +400,7 @@ mod mac {
         result
     }
 
-    fn open_capture(origin: libc::pid_t) -> std::io::Result<()> {
+    pub(super) fn open_capture(origin: libc::pid_t) -> std::io::Result<()> {
         let app = application().ok_or_else(|| std::io::Error::other("RichGlance is unavailable"))?;
         let home = std::env::home_dir().ok_or_else(|| std::io::Error::other("home directory is unavailable"))?;
         let directory = home.join("Library/Application Support/app.richos.richglance/Capture Requests");

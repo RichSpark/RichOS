@@ -603,6 +603,35 @@ async function openSwearMeterFailure(browser, mode) {
 }
 
 const FIXTURES = {
+  async "richglance-rail-page"(browser) {
+    const page = await openApp(browser, undefined, undefined, {
+      glance_capture_status: { value: { available: true, enabled: false, registered: false,
+        shortcut: { code: "KeyC", control: true, option: false, shift: true, command: false } } },
+      glance_workflow_status: { value: { opensEditor: false, keepsHistory: false } },
+      glance_capture_open: { reject: true, value: "RichGlance could not start a capture." },
+    });
+    await page.click("#nr-glance");
+    await page.click("#gp-capture");
+    await page.waitForSelector("#gp-workflow-status:not([hidden])");
+    return page;
+  },
+  async "richglance-rail-delete"(browser) {
+    const page = await openApp(browser, undefined, undefined, {
+      glance_capture_status: { value: { available: true, enabled: false, registered: false,
+        shortcut: { code: "KeyC", control: true, option: false, shift: true, command: false } } },
+      glance_workflow_status: { value: { opensEditor: false, keepsHistory: true } },
+    });
+    await page.click("#nr-glance");
+    await page.click("#gp-history");
+    await page.waitForSelector("#gp-history-confirm:not([hidden])");
+    return page;
+  },
+  async "richbrief-rail-notes"(browser) {
+    const page = await openApp(browser, undefined, { meetingNotes: { notesReady: { thread: "acme", turn: "brief-fixture" } } });
+    await page.click("#nr-brief");
+    await page.waitForSelector("#bp-ready:not([hidden])");
+    return page;
+  },
   async "richglance-shortcut-collision"(browser) {
     const page = await openApp(browser, undefined, undefined, {
       glance_capture_status: {value: {available: true, enabled: false, registered: false,
@@ -1594,6 +1623,7 @@ const FIXTURES = {
 /// names is present and usable on the screen the sentence appears on. Said here rather than
 /// left as an unexplained asymmetry.
 const TEXT_RENDERING_FIXTURES = new Set([
+  "richglance-rail-page", "richglance-rail-delete", "richbrief-rail-notes",
   "richglance-shortcut-collision",
   "swearmeter-preference-refused", "swearmeter-retry-refused", "swearmeter-card-unavailable",
   "context-meter-refused", "keep-alive-refused",
