@@ -1815,6 +1815,21 @@ impl Spine {
         Ok(id)
     }
 
+    /// Resolve the destination for independent Codex work in the configured company.
+    /// The ledger's original title survives navigation renames. Creation leaves the desk alone.
+    pub fn codex_conversation(&mut self, entity: &EntityId) -> Result<(ThreadBinding, bool), SpineError> {
+        if !self.registry.contains(entity) {
+            return Err(SpineError::UnknownEntity(entity.to_string()));
+        }
+        if let Some(thread) = self.ledger.threads().iter()
+            .find(|thread| thread.entity_id() == Some(entity) && thread.title == "Codex")
+        {
+            return Ok((self.ledger.thread_binding(&thread.id)?, false));
+        }
+        let id = self.ledger.create_thread("Codex", entity)?;
+        Ok((self.ledger.thread_binding(&id)?, true))
+    }
+
     /// The ACTIVE-CONTEXT TRANSACTION (ECS §11.3: *"Active-context switching is a
     /// transaction, so entity and thread cannot disagree"*).
     ///

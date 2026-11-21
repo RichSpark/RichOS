@@ -65,6 +65,8 @@ cp -R "$SRC_ENGINE/scripts" "$ENGINE/scripts"
 cp -R "$SRC_ENGINE/mega-lander" "$ENGINE/mega-lander"
 cp -R "$SRC_ENGINE/ass-kicker" "$ENGINE/ass-kicker"
 cp -R "$SRC_ENGINE/hooks"   "$ENGINE/hooks"
+mkdir -p "$ENGINE/skills"
+cp -R "$SRC_ENGINE/skills/codex-connection" "$ENGINE/skills/codex-connection"
 cp "$SRC_ENGINE/orchestration.config" "$ENGINE/orchestration.config"
 cp "$SRC_ENGINE/VERSION" "$ENGINE/VERSION" 2>/dev/null || printf '0.0.0-test\n' >"$ENGINE/VERSION"
 
@@ -1048,6 +1050,11 @@ fi
 case "$OUT" in
     *ENFORCEMENT\ ACTIVE*) ok "1c  the adopted entity still gets ENFORCEMENT ACTIVE" ;;
     *) bad "1c  ENFORCEMENT ACTIVE" "not reported: ${OUT:0:200}" ;;
+esac
+
+case "${OUT#*\"hookSpecificOutput\"}" in
+    *"codex-channel.sh"*'connect --terminal'*) ok "1d  terminal Rich receives dedicated Codex handoff instructions" ;;
+    *) bad "1d  Codex handoff instructions" "SessionStart did not deliver the packaged terminal workflow" ;;
 esac
 
 # ===========================================================================

@@ -2955,6 +2955,7 @@ branches = ["codex/shared_tip", "codex/shared/tip"]
 
 
 class World(rw.World):
+    config = ""
     repos = ["richos"]
     repos_error = ""
 
@@ -3054,6 +3055,7 @@ now = 1800000000
 
 
 class World(rw.World):
+    config = ""
     repos = ["richos"]
 
     def __init__(self):

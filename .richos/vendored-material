@@ -213,6 +213,7 @@ richos/engine/skills/use-railway	third-party	MIT	2026 Railway Corporation	railwa
 richos/engine/skills/android-native-dev	richos	AGPL-3.0-only	RichOS	-	-	2026-04-11 femcboost ba305f55b	high	ship-scrubbed at export: product-name literals mapped to ${APP_ROOT} and orchestration.config	docs/legal/SKILL-PROVENANCE-2026-09-04.md
 richos/engine/skills/appium-vision-mobile-testing	richos	AGPL-3.0-only	RichOS	-	-	2026-04-11 femcboost ba305f55b	high	ship-scrubbed at export	docs/legal/SKILL-PROVENANCE-2026-09-04.md
 richos/engine/skills/bootstrap-interview	richos	AGPL-3.0-only	RichOS	-	-	2026-07-14 orchestration-kit 172f8ee	high	verbatim — written in the kit repository, never in the product repository	docs/legal/SKILL-PROVENANCE-2026-09-04.md
+richos/engine/skills/codex-connection	richos	AGPL-3.0-only	RichOS	-	-	2026-11-21 richos 584bbc164	certain	written in this repository for dedicated terminal Codex handoffs	docs/development/codex-chat-channels.md
 richos/engine/skills/health-data-sync-contracts	richos	AGPL-3.0-only	RichOS	-	-	2026-04-11 femcboost ba305f55b	high	genericized at export — carried source-product role vocabulary	docs/legal/SKILL-PROVENANCE-2026-09-04.md
 richos/engine/skills/ios-native-dev	richos	AGPL-3.0-only	RichOS	-	-	2026-04-11 femcboost ba305f55b	high	ship-scrubbed at export	docs/legal/SKILL-PROVENANCE-2026-09-04.md
 richos/engine/skills/live-app-assessment	richos	AGPL-3.0-only	RichOS	-	-	2026-03-31 femcboost 0e400875d	high	genericized at export — carried source-product role vocabulary	docs/legal/SKILL-PROVENANCE-2026-09-04.md

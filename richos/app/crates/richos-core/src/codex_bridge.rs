@@ -8,7 +8,7 @@ use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 pub const TOOL: &str = "codex_channel";
-pub const SETUP: &str = "Codex coordination is waiting. In the chat you coordinate from, tell Rich to take over the Codex channel.";
+const AUTOMATIC: &str = "_automatic";
 
 pub fn root() -> PathBuf {
     let path = std::env::var_os("CODEX_COORDINATION_ROOT")
@@ -36,25 +36,15 @@ fn digest(value: &Value) -> String {
     format!("{:x}", Sha256::digest(value.to_string().as_bytes()))
 }
 
-pub fn setup_notice(state: &Path, binding: &crate::entity::ThreadBinding) -> Result<(), String> {
-    let scope = StatusToolScope {
-        version: 1,
-        state_root: state.into(),
-        entity_id: binding.entity_id().to_string(),
-        thread_id: binding.thread_id().into(),
-    };
-    session_tools::observe_channel(
-        &scope,
-        SETUP,
-        session_tools::BridgeReference {
-            connection_id: "setup".into(),
-            message_id: "coordinator-required".into(),
-            payload_digest: digest(&json!(SETUP)),
-            locator: String::new(),
-            reply_to: None,
-        },
-    )
-    .map(|_| ())
+/// The app-owned receiver publishes this once the company and ledger thread exist.
+pub fn publish_automatic_target(
+    coordination: &Path,
+    binding: &crate::entity::ThreadBinding,
+) -> std::io::Result<()> {
+    crate::review_watch::write_record(&coordination.join("automatic.json"), &json!({
+        "version": 1, "entity_id": binding.entity_id(), "thread_id": binding.thread_id(),
+    }))?;
+    std::fs::File::open(coordination)?.sync_all()
 }
 
 /// `binding` was re-resolved from the ledger for this attempt, never the visible chat.
@@ -77,14 +67,25 @@ pub fn accept(
     {
         return Err("Channel endpoint disagrees with its ledger binding".into());
     }
-    let locator = coordination
-        .join("connections")
-        .join(entity)
-        .join(thread)
-        .join(id);
-    if event["locator"].as_str() != locator.to_str()
-        || locator.canonicalize().map_err(|e| e.to_string())? != locator
-    {
+    let base = coordination.join("connections");
+    let direct = base.join(entity).join(thread).join(id);
+    let queued = base.join(AUTOMATIC).join("codex").join(id);
+    let locator = match event["locator"].as_str() {
+        path if path == direct.to_str() => direct,
+        path if path == queued.to_str() => {
+            let file = std::fs::File::open(queued.join("connection.json")).map_err(|e| e.to_string())?;
+            let saved: Value = serde_json::from_reader(file.take(256 * 1024)).map_err(|e| e.to_string())?;
+            if saved["version"] != 1 || saved["entity_id"] != AUTOMATIC
+                || saved["thread_id"] != "codex" || saved["connection_id"] != id
+                || saved["binding"]["entity_id"] != entity || saved["binding"]["thread_id"] != thread
+            {
+                return Err("Queued Codex connection disagrees with its permanent binding".into());
+            }
+            queued
+        }
+        _ => return Err("Channel is outside its registered location".into()),
+    };
+    if locator.canonicalize().map_err(|e| e.to_string())? != locator {
         return Err("Channel is outside its registered location".into());
     }
     let through = event["through"]
@@ -215,13 +216,8 @@ pub fn call(scope_path: &Path, scope: &StatusToolScope, arguments: Value) -> Res
     let action = arguments["action"]
         .as_str()
         .ok_or("A channel action is required")?;
-    if !matches!(action, "designate" | "connect" | "send" | "read") {
+    if !matches!(action, "connect" | "send" | "read") {
         return Err("Unknown channel action".into());
-    }
-    if action == "designate" && (sender.role != "rich" || sender.instruction.is_none()) {
-        return Err(
-            "Ask Rich to designate the coordinator in the user's requested conversation".into(),
-        );
     }
     let engine = PathBuf::from(
         std::env::var_os("RICHOS_CHANNEL_ENGINE").ok_or("No host engine for channel helper")?,
@@ -234,14 +230,6 @@ pub fn call(scope_path: &Path, scope: &StatusToolScope, arguments: Value) -> Res
         .ok_or("Expected channel arguments")?
         .clone();
     request.remove("action");
-    if action == "designate" {
-        request.insert(
-            "legacy".into(),
-            serde_json::to_value(crate::codex_watch::installed_channel_folders())
-                .map_err(|e| e.to_string())?,
-        );
-    }
-
     let mut command = crate::runtime::interpreter_command(&python);
     command
         .arg(engine.join("scripts/lib/codex_channels.py"))
@@ -409,16 +397,13 @@ mod tests {
     }
 
     #[test]
-    fn codex_setup_and_legacy_notices_deduplicate_without_advancing_spool() {
+    fn codex_legacy_notices_deduplicate_without_advancing_spool() {
         let f = Fixture::new();
-        setup_notice(&f.state, &f.binding).unwrap();
-        setup_notice(&f.state, &f.binding).unwrap();
-        assert_eq!(f.rows().len(), 1);
         let mut notice = f.event.clone();
         notice["record"]["kind"] = json!("legacy_notice");
         accept(&f.state, &f.binding, &notice, &f.coord).unwrap();
         accept(&f.state, &f.binding, &notice, &f.coord).unwrap();
-        assert_eq!(f.rows().len(), 2);
+        assert_eq!(f.rows().len(), 1);
         assert!(!f.state.join("codex-watch/accepted/pair.json").exists());
         let mut imported = f.event.clone();
         imported["record"]["kind"] = json!("legacy_import");
@@ -430,7 +415,7 @@ mod tests {
         };
         session_tools::observe_codex(&old, "Original request").unwrap();
         accept(&f.state, &f.binding, &imported, &f.coord).unwrap();
-        assert_eq!(f.rows().len(), 2);
+        assert_eq!(f.rows().len(), 1);
         assert!(f.state.join("codex-watch/accepted/pair.json").exists());
     }
 
