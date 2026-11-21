@@ -410,6 +410,14 @@ async function main() {
     await page.waitForFunction(() => window.RichVideoAnywhere.state().mic === "on", null, { timeout: 60000 });
     assertEqual(await page.evaluate(() => window.__micAsked), 0, "a test run's made-up microphone asked for the real one");
     assert(await shown(page, "#video-anywhere-choices .rv-row .rv-level"), "the bars that move with his voice are not beside Microphone");
+    await page.evaluate(() => {
+      const start = MediaRecorder.prototype.start;
+      MediaRecorder.prototype.start = function (...args) {
+        const result = start.apply(this, args);
+        window.__mediaRecorderStartedAt = performance.now();
+        return result;
+      };
+    });
     await page.click("#video-anywhere-choices .rv-go");
     await until(page, "count");
     // Settings closes, so the video starts on the app; the count; Cancel beside the settings button
@@ -422,10 +430,10 @@ async function main() {
     // WHERE IN THE FILE EACH SCREEN IS. A mark is taken after the recorder has painted the screen
     // twelve times or more, with the window's own picture; the file's frame is read a quarter of a
     // second before it.
-    const began = Date.now();
+    const fileTime = () => page.evaluate(() => (performance.now() - window.__mediaRecorderStartedAt) / 1000);
     const marks = [];
     const mark = async (tag) => {
-      const at = (Date.now() - began) / 1000 - 0.25;
+      const at = await fileTime() - 0.25;
       marks.push({ tag, at, window: await windowOf(page) });
     };
     await page.mouse.move(620, 300, { steps: 12 });
@@ -446,7 +454,8 @@ async function main() {
     await mark("a chat");
     // TEXT HE HIGHLIGHTS IS IN THE FILE (CEO 2026-11-15: "I would expect the screen recording to
     // record the text highlighting as well"): a line of the conversation is selected, as a drag
-    // of the mouse over it selects it, and stands selected for longer than a second
+    // of the mouse over it selects it. Keep it selected until the actual recording canvas
+    // contains the highlight, then leave enough captured frames for the file's timestamp sample.
     const lit = await page.evaluate(() => {
       const walker = document.createTreeWalker(document.querySelector("#app"), NodeFilter.SHOW_TEXT);
       for (let n = walker.nextNode(); n; n = walker.nextNode()) {
@@ -481,8 +490,25 @@ async function main() {
       return null;
     });
     assert(lit, "the conversation has no line of text to highlight");
+    await page.waitForFunction(({ box, color }) => {
+      const canvas = document.querySelector(".rv-canvas");
+      if (!canvas) return false;
+      const width = box.right - box.left;
+      const height = box.bottom - box.top;
+      const pixels = canvas.getContext("2d").getImageData(box.left, box.top, width, height).data;
+      let tinted = 0;
+      for (let i = 0; i < pixels.length; i += 4) {
+        if (Math.abs(pixels[i] - color[0]) < 40 &&
+            Math.abs(pixels[i + 1] - color[1]) < 40 &&
+            Math.abs(pixels[i + 2] - color[2]) < 40) tinted++;
+      }
+      return tinted > width * height * 0.3;
+    }, lit, { timeout: 60000 }).catch((error) => {
+      if (error.name !== "TimeoutError") throw error;
+      throw new Error(`The recorder never painted the selection on "${lit.text}"`, { cause: error });
+    });
     await painted(page, 12);
-    lit.at = (Date.now() - began) / 1000 - 0.25;
+    lit.at = await fileTime() - 0.25;
     await page.evaluate(() => window.getSelection().removeAllRanges());
     // Settings, while it records: the button in its heading is the same red Stop
     await page.click("#set-btn");
