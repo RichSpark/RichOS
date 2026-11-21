@@ -281,7 +281,7 @@ LAND_RECEIPTS = Path("richos-autocheck") / "land"
 # Both now prepare notes before the lead resumes publication; this does not change
 # which screen suites either command must prove. The normal path is build -> walk ->
 # notes review -> publish --gui-proof.
-NO_HOST_SCREEN_COMMANDS = ("build",)
+NO_HOST_SCREEN_COMMANDS = ("build", "stable")
 
 # AND IT IS THE DEFAULT FOR `build`, WITH THE PROOF TAKEN BY THE BUILD ITSELF (2026-09-29).
 # The CEO: *"how much retarded fuckery is needed to get a build done THE FIRST FUCKING TIME if
@@ -3628,7 +3628,11 @@ class Runner:
                         "gate_evidence": {name: {**nightly_proof["gates"][name], "status": "reused"}
                                           for name in records}}
             else:
-                self.gates(no_host_screen=no_host_screen)
+                suites = self.gates(no_host_screen=no_host_screen)
+                if no_host_screen:
+                    info = {**info, "no_host_screen": True, "screen_suites_required": True}
+                    if isinstance(suites, dict):
+                        info["script_suites"] = suites
             # The stable bundle is the one a new user downloads first (the dead ends of
             # 2026-10-21 were on stable 1.2.1), so it carries the walk's requirement too.
             info = {**info, "new_user_walk_required": True}
@@ -3926,7 +3930,8 @@ def main():
                              "when a coverage proof for SHA is on this machine); refused "
                              "unless SHA is the sha this run fetches")
     parser.add_argument("--no-host-screen", action="store_true",
-                        help="the DEFAULT for build: hold back every suite that boots the app "
+                        help="the default for build, also available for stable --rerun-gates: "
+                             "hold back every suite that boots the app "
                              "on this Mac's screen; the build then boots the signed candidate "
                              "in the test VM itself, and publish uses that proof")
     parser.add_argument("--host-screen", action="store_true",
@@ -3992,8 +3997,10 @@ def main():
     if args.checks_done_at_land and args.command not in ("build", "release"):
         parser.error("--checks-done-at-land only means anything for build or release")
     if args.no_host_screen and args.command not in NO_HOST_SCREEN_COMMANDS:
-        parser.error("--no-host-screen is for `build`. `release` runs the whole gate; "
+        parser.error("--no-host-screen is for build and stable --rerun-gates. `release` runs the whole gate; "
                      "the screenless path is build -> walk -> publish --gui-proof.")
+    if args.no_host_screen and args.command == "stable" and not args.rerun_gates:
+        parser.error("stable --no-host-screen requires --rerun-gates; reused gates do not open the host screen")
     if args.host_screen and (args.command != "build" or args.no_host_screen):
         parser.error("--host-screen is for `build` alone, and it contradicts --no-host-screen: "
                      "say which screen the suites may use")

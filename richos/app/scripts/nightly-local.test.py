@@ -1473,6 +1473,28 @@ while True: time.sleep(.02)
         r.finish_candidate(info, self.root / "out")
         self.assertTrue(marker.is_file())
 
+    def test_cli_stable_can_rerun_gates_screenlessly_then_boot_the_signed_bundle(self):
+        r = self.stable_runner()
+        r.state.mkdir(parents=True, exist_ok=True)
+        receipt = {"commit": self.SOURCE, "suites": [{"name": "gui-boot.test.sh", "state": "gap"}]}
+        r.gates.return_value = receipt
+        argv = ["nightly-local.py", "stable", "--from-nightly", self.NIGHTLY, "--state-dir", str(r.state),
+                "--no-host-screen", "--rerun-gates", "--gates-at-once", "1"]
+        with patch.object(sys, "argv", argv), patch.dict(os.environ, {}, clear=True), \
+                patch.object(m.platform, "system", return_value="Darwin"), \
+                patch.object(m.platform, "machine", return_value="arm64"), \
+                patch.object(m, "local_environment", return_value=(r.env, {})), \
+                patch.object(m, "exclusive", return_value=contextlib.nullcontext()), \
+                patch.object(m, "TimestampedLog", return_value=contextlib.nullcontext(io.StringIO())), \
+                patch.object(m, "Runner", return_value=r), contextlib.redirect_stdout(io.StringIO()):
+            m.main()
+        r.gates.assert_called_once_with(no_host_screen=True)
+        r.vm_boot_proof.assert_called_once_with(r.env["RICHOS_NIGHTLY_RUN_ID"])
+        plan = json.loads(r.stable_plan.return_value[0].read_text())
+        self.assertEqual(plan["script_suites"], receipt)
+        self.assertTrue(plan["no_host_screen"])
+        self.assertTrue(plan["screen_suites_required"])
+
     def test_stable_recovers_the_published_nightly_gate_seals_without_a_log(self):
         from nightly_gate_evidence import GateEvidence
 
