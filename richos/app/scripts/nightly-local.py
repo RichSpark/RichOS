@@ -175,6 +175,10 @@ class GateNotAdmitted(RuntimeError):
     pass
 
 
+class MissingNightlyBuildLog(ValueError):
+    """No completed coordinator log identifies the published nightly's builder."""
+
+
 def owned_run(args, **kwargs):
     # Keep nightly's cleanup/group ownership while sharing its admission clock with commits.
     library = Path(__file__).resolve().parents[2] / "engine/scripts/lib"
@@ -2286,6 +2290,13 @@ class Runner:
                 f"run's log under the {UI_SUITE_GATE} phase; the receipts are in {receipts}.")
         return True
 
+    def release_smoke(self):
+        # Exercise the release path afresh even when the other gates are reused.
+        with self.phase("gates/release-smoke"):
+            self.command(sys.executable, self.source / SCRIPTS / "nightly.py",
+                         "release-smoke", "--out", self.state / "release-smoke",
+                         timeout=GATE_BUDGETS["gates/release-smoke"])
+
     def gates(self, checks_done_at_land=None, no_host_screen=False, skip_unchanged=False):
         # Deliberately without `credentials=True`: a gate that can see the operator's
         # notary key answers questions the suites ask precisely because the answer
@@ -2301,12 +2312,6 @@ class Runner:
         # in it and what is deliberately not. It is NEVER skipped for a candidate: skipping
         # is for work whose inputs are unchanged, and this gate's input is the release path
         # itself. With gates side by side it starts with the rest and still refuses first.
-        def release_smoke():
-            with self.phase("gates/release-smoke"):
-                self.command(sys.executable, self.source / SCRIPTS / "nightly.py",
-                             "release-smoke", "--out", self.state / "release-smoke",
-                             timeout=GATE_BUDGETS["gates/release-smoke"])
-
         def core_tests():
             if checks_done_at_land:
                 receipt = self.accept_core_proof(checks_done_at_land)
@@ -2386,7 +2391,7 @@ class Runner:
         # WebKit to learn that `cargo test` was going to fail anyway. What waits for what is
         # GATE_AFTER, and nothing else.
         gates = [
-            ("gates/release-smoke", release_smoke),
+            ("gates/release-smoke", self.release_smoke),
             (LAND_PROVEN_GATE, core_tests),
             ("gates/updater-tests", updater_tests),
             ("gates/script-suites", script_suites),
@@ -2908,7 +2913,36 @@ class Runner:
             self.announce("The VM phase after the build ends at once unless this Mac is restarted "
                           "before then; the gates go on.")
 
-    def vm_boot_proof(self, run_id):
+    @contextmanager
+    def stable_proof_checkout(self, source_commit, nightly):
+        """Reuse a corrected checker only when that nightly passed using only harness changes."""
+        run = nightly.get("run_id") if isinstance(nightly, dict) else None
+        if not isinstance(run, str) or not re.fullmatch(r"\d{8}T\d{6}Z-[0-9a-f]{8}", run):
+            yield self.source
+            return
+        try:
+            proof = self.read_gui_proof(self.gui_proof_path(run))
+        except ValueError:
+            yield self.source
+            return
+        checker = proof.get("gui-boot_commit")
+        if (proof.get("suite") != "shipped-bundle-boot" or proof.get("result") != "pass"
+                or proof.get("commit") != nightly.get("build_commit")
+                or proof.get("front-door_exit") != "0" or proof.get("gui-boot_exit") != "0"
+                or checker == source_commit or not self.only_the_checker_changed(checker, [source_commit])):
+            yield self.source
+            return
+        self.announce(f"Stable boot proof uses the verified nightly checker {checker}.")
+        with tempfile.TemporaryDirectory(prefix="richos-stable-gui-") as tmp:
+            checkout = Path(tmp) / "checker"
+            self.command("git", "worktree", "add", "--detach", checkout, checker, cwd=self.repo)
+            try:
+                yield checkout
+            finally:
+                self.command("git", "worktree", "remove", "--force", checkout,
+                             cwd=self.repo, cleanup=True)
+
+    def vm_boot_proof(self, run_id, checker=None):
         """Boot the candidate's own signed bundle in a test-VM guest. None on a pass, else
         the sentence that says what did not happen and how to take it again.
 
@@ -2916,7 +2950,8 @@ class Runner:
         a guest on the guest's own display, inside one of the two guest slots.
         """
         proof = self.gui_proof_path(run_id)
-        args = ["bash", self.source / SCRIPTS / "gui-proof-in-vm.sh", "--run", run_id, "--out", proof]
+        args = ["bash", (checker or self.source) / SCRIPTS / "gui-proof-in-vm.sh",
+                "--run", run_id, "--out", proof]
         if self.gui_host:
             args += ["--vm", self.gui_host]
         short = self.guest_memory_check("on entering the VM boot proof")
@@ -3368,14 +3403,14 @@ class Runner:
                        for line in outer[at:]):
                     finished.append(path.stem)
         if not found:
-            raise ValueError(f"no run log in {logs} says it built {tag}, so there are no passed "
+            raise MissingNightlyBuildLog(f"no run log in {logs} says it built {tag}, so there are no passed "
                              "gates to reuse, and `stable` never reruns them without being told. "
                              f"Name the run with {PASSED_GATES_FLAG} RUN, or run every gate again "
                              f"with {RERUN_GATES_FLAG} {GATES_AT_ONCE_FLAG} N|all. Nothing was built.")
         if len(finished) == 1:
             return finished[0]
         if not finished:
-            raise ValueError(f"{len(found)} run(s) announced {tag} ({', '.join(found)}) and none of "
+            raise MissingNightlyBuildLog(f"{len(found)} run(s) announced {tag} ({', '.join(found)}) and none of "
                              "them finished building it (no `phase timings for run` after the "
                              "announcement): a failed, stopped or unfinished attempt built nothing, so "
                              f"its gates are not reused. Name the run with {PASSED_GATES_FLAG} RUN, or "
@@ -3476,9 +3511,33 @@ class Runner:
         return {"run_id": run_id, "source_commit": source, "script_suites": suites,
                 "stale_dependencies": stale}
 
+    def recover_stable_gates(self, nightly, source_commit):
+        from nightly_gate_evidence import GateEvidence
+
+        if not isinstance(nightly, dict):
+            raise ValueError("the published nightly has no sealed gate evidence")
+        names = [name for name in GATE_NAMES if name != "gates/release-smoke"]
+        store = GateEvidence(self.state / "gate-evidence", nightly.get("run_id"),
+                             lambda: None, self.announce)
+        records = store.sealed_passes(nightly.get("gates"), names, source_commit)
+        expected_dependencies = nightly.get("dependencies_sha256")
+        if expected_dependencies is not None and self.installed_dependencies_digest() != expected_dependencies:
+            raise ValueError("the installed dependencies differ from the nightly's sealed dependency identity")
+        # Older candidates only sealed the full execution-input hash in each record.
+        # This recovery verifies that exact historical proof. It never substitutes for
+        # the rebuilt stable bundle's own VM boot and first-install checks.
+        record = records["gates/script-suites"]
+        artifacts = record.get("artifacts")
+        suites = artifacts.get("script_suites") if isinstance(artifacts, dict) else None
+        if (not isinstance(suites, dict) or suites.get("commit") != source_commit
+                or suites.get("run_id") != record["run_id"] or suites.get("build") != "desktop"):
+            raise ValueError("the sealed script-suites gate does not carry its matching desktop receipt")
+        return records, suites
+
     def perform(self, command, force=False, runtime=None, run_id=None,
                 checks_done_at_land=None, no_host_screen=False, gui_proof=None,
-                from_nightly=None, dry_run=False, gates_passed_in=None, ceo_words=None):
+                from_nightly=None, dry_run=False, gates_passed_in=None, ceo_words=None,
+                missing_nightly_log=None):
         passed = None
         if gates_passed_in:
             if command not in ("build", "release", "stable") or checks_done_at_land or no_host_screen:
@@ -3500,7 +3559,8 @@ class Runner:
                 self.announce(f"Gates: none run. Every gate passed on {passed['source_commit']} in run "
                               f"{gates_passed_in} ({PASSED_GATES_FLAG}); this run builds that commit, "
                               "and the installed dependencies are the ones they ran against.")
-        if not gates_passed_in and command in GATE_COMMANDS and not (command == "stable" and dry_run):
+        if not gates_passed_in and not missing_nightly_log and command in GATE_COMMANDS \
+                and not (command == "stable" and dry_run):
             # The run log's first lines: what runs at once, and who chose it.
             self.record_settings()
             if command == "build":
@@ -3526,6 +3586,7 @@ class Runner:
                 self.checkout()
             with self.phase("stable-plan"):
                 plan_path, info = self.stable_plan(from_nightly, ceo_words)
+            nightly_proof = info.pop("promoted_nightly_proof", None)
             if passed and passed["source_commit"] != info["source_commit"]:
                 raise ValueError(f"run {passed['run_id']} ran its gates on {passed['source_commit'][:12]}, "
                                  f"but {from_nightly} was built from {info['source_commit'][:12]}; "
@@ -3538,6 +3599,12 @@ class Runner:
                 return
             with self.phase("source"):
                 self.checkout(info["source_commit"])
+            recovered = None
+            if missing_nightly_log:
+                try:
+                    recovered = self.recover_stable_gates(nightly_proof, info["source_commit"])
+                except ValueError as error:
+                    raise ValueError(f"{missing_nightly_log}\nSealed evidence cannot restore it: {error}.") from error
             with self.phase("preflight"):
                 self.preflight()
             with self.phase("runtime-verify"):
@@ -3551,6 +3618,15 @@ class Runner:
             if passed:
                 for name in GATE_NAMES:
                     self.skip(name, f"passed in run {passed['run_id']} on {passed['source_commit']}")
+            elif recovered:
+                records, suites = recovered
+                for name, record in records.items():
+                    self.skip(name, f"sealed pass in run {record['run_id']} on {info['source_commit']}")
+                self.release_smoke()
+                info = {**info, "script_suites": suites, "no_host_screen": True,
+                        "screen_suites_required": True,
+                        "gate_evidence": {name: {**nightly_proof["gates"][name], "status": "reused"}
+                                          for name in records}}
             else:
                 self.gates(no_host_screen=no_host_screen)
             # The stable bundle is the one a new user downloads first (the dead ends of
@@ -3570,7 +3646,9 @@ class Runner:
             info = self.completed_build(out)
             self.prepare_changelog(info, out)
             run = info["run_id"]
-            proof_error = self.vm_boot_proof(run)
+            with self.stable_proof_checkout(info["source_commit"], nightly_proof) as checker:
+                proof_error = (self.vm_boot_proof(run) if checker == self.source else
+                               self.vm_boot_proof(run, checker=checker))
             if not proof_error and info.get("new_user_walk_required"):
                 proof_error = self.new_user_walk(run, out, info)
             if proof_error:
@@ -3648,6 +3726,7 @@ class Runner:
         self.guest_memory_before_gates()
         # SKIPPING IS FOR CANDIDATES, NEVER FOR THE COMMAND THAT PUBLISHES. `release` runs
         # every suite every time, whatever a proof file on this host remembers.
+        digest = None
         if passed:
             for name in GATE_NAMES:
                 self.skip(name, f"passed in run {passed['run_id']} on {passed['source_commit']}")
@@ -3668,6 +3747,8 @@ class Runner:
             return
         if command == "build":
             info = {**info, "screen_suites_required": True}
+            if digest:
+                info["gate_dependencies_sha256"] = digest
             plan_path.write_text(json.dumps(info, indent=2) + "\n")
         # A NEW USER'S FIRST RUN GATES EVERY NEW CANDIDATE, whichever command made it: `release`
         # builds and is published by the same `publish` (review rv-20261021T173525Z-f1f16a31-356b:
@@ -4002,16 +4083,21 @@ def main():
                             gates_at_once=args.gates_at_once, simulated_phones=args.simulated_phones,
                             chosen_by=chosen_by(), gui_host=gui_host, vm_settings=vm_settings)
             gates_passed_in = args.gates_passed_in
+            recovery = {}
             if args.command == "stable" and not gates_passed_in and not args.rerun_gates:
                 # Nobody digs the run id out of the logs by hand: the run that built the
                 # nightly is found here, and refused or reused exactly as if it were named.
-                gates_passed_in = runner.run_that_built(args.from_nightly)
-                runner.announce(f"{args.from_nightly} was built by run {gates_passed_in} on "
-                                f"this Mac; its gates are the ones reused.")
+                try:
+                    gates_passed_in = runner.run_that_built(args.from_nightly)
+                except MissingNightlyBuildLog as error:
+                    recovery["missing_nightly_log"] = str(error)
+                else:
+                    runner.announce(f"{args.from_nightly} was built by run {gates_passed_in} on "
+                                    f"this Mac; its gates are the ones reused.")
             runner.perform(
                 args.command, args.force, args.runtime_dir.resolve() if args.runtime_dir else None,
                 args.run, args.checks_done_at_land, no_host_screen, args.gui_proof,
-                args.from_nightly, args.dry_run, gates_passed_in, args.ceo_words)
+                args.from_nightly, args.dry_run, gates_passed_in, args.ceo_words, **recovery)
 
 
 if __name__ == "__main__":

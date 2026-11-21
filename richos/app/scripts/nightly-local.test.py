@@ -1473,6 +1473,58 @@ while True: time.sleep(.02)
         r.finish_candidate(info, self.root / "out")
         self.assertTrue(marker.is_file())
 
+    def test_stable_recovers_the_published_nightly_gate_seals_without_a_log(self):
+        from nightly_gate_evidence import GateEvidence
+
+        r = self.stable_runner()
+        identity = {"source_commit": self.SOURCE, "inputs_sha256": "e" * 64}
+        store = GateEvidence(r.state / "gate-evidence", self.RESUMED,
+                             lambda: identity, lambda _: None)
+        suites = {"commit": self.SOURCE, "run_id": self.RESUMED, "build": "desktop", "suites": []}
+        for name in m.GATE_NAMES:
+            if name != "gates/release-smoke":
+                artifacts = {"script_suites": suites} if name == "gates/script-suites" else None
+                store.record(name, identity, "passed", f"{name} passed\n", artifacts)
+        nightly = {"run_id": self.RESUMED, "build_commit": "a" * 40, "gates": store.selected}
+        checker_sha = "b" * 40
+        proof = r.gui_proof_path(self.RESUMED)
+        proof.parent.mkdir(parents=True)
+        proof.write_text("richos-gui-proof 1\nsuite=shipped-bundle-boot\nresult=pass\n"
+                         f"commit={nightly['build_commit']}\ngui-boot_commit={checker_sha}\n"
+                         "front-door_exit=0\ngui-boot_exit=0\n")
+        r.only_the_checker_changed = Mock(return_value=True)
+        r.stable_plan.return_value[1]["promoted_nightly_proof"] = nightly
+        with self.assertRaises(m.MissingNightlyBuildLog) as missing:
+            r.run_that_built(self.NIGHTLY)
+        with contextlib.redirect_stdout(io.StringIO()):
+            r.perform("stable", from_nightly=self.NIGHTLY, missing_nightly_log=str(missing.exception))
+        r.gates.assert_not_called()
+        self.assertEqual(set(r.skipped), set(m.GATE_NAMES) - {"gates/release-smoke"})
+        self.assertEqual(sum(call.args[2] == "release-smoke" for call in r.command.call_args_list), 1)
+        r.only_the_checker_changed.assert_called_once_with(checker_sha, [self.SOURCE])
+        self.assertEqual(r.vm_boot_proof.call_args.args, (r.env["RICHOS_NIGHTLY_RUN_ID"],))
+        self.assertEqual(r.vm_boot_proof.call_args.kwargs["checker"].name, "checker")
+        self.assertTrue(any(c.args[:4] == ("git", "worktree", "add", "--detach")
+                            for c in r.command.call_args_list))
+        self.assertTrue(any(c.args[:4] == ("git", "worktree", "remove", "--force")
+                            for c in r.command.call_args_list))
+        r.new_user_walk.assert_called_once()
+        plan = json.loads(r.stable_plan.return_value[0].read_text())
+        self.assertTrue(plan["screen_suites_required"])
+        self.assertEqual(plan["script_suites"], suites)
+        self.assertEqual(set(plan["gate_evidence"]), set(store.selected))
+        self.assertTrue(all(entry["status"] == "reused" for entry in plan["gate_evidence"].values()))
+
+        # A syntactically valid pass with a new sidecar digest is still not the
+        # pass the released nightly sealed.
+        receipt = Path(store.selected["gates/core-tests"]["record"])
+        altered = json.loads(receipt.read_text())
+        altered["created_ns"] += 1
+        receipt.write_text(json.dumps(altered))
+        receipt.with_suffix(".sha256").write_text(m.hashlib.sha256(receipt.read_bytes()).hexdigest() + "\n")
+        with self.assertRaisesRegex(ValueError, "does not match its published seal"):
+            r.recover_stable_gates(nightly, self.SOURCE)
+
     def test_stable_reuses_the_gates_of_the_run_that_built_the_promoted_nightly(self):
         # CEO, 2026-10-19: "what fucking checks are there needed if ALL OF THE FUCKING CHECKS
         # HAD BEEN ALREADY PREVIOUSLY DONE FOR THAT NIGHTLY VERSION?" Nightly 65's run passed
@@ -3795,6 +3847,12 @@ class GatesAtOnceTests(unittest.TestCase):
         runner.return_value.run_that_built.assert_called_once_with("v1.2.0-nightly.20261018.65")
         self.assertEqual(args[self.GATES_PASSED_IN_ARG], "20261018T154953Z-c752908c")
         self.assertEqual(args[self.CEO_WORDS_ARG], "go ahead and promote this nightly to stable")
+        runner = Mock()
+        runner.return_value.run_that_built.side_effect = m.MissingNightlyBuildLog("builder log is gone")
+        _, args = self.main_with(*one, runner=runner)
+        self.assertIsNone(args[self.GATES_PASSED_IN_ARG])
+        self.assertEqual(runner.return_value.perform.call_args.kwargs,
+                         {"missing_nightly_log": "builder log is gone"})
         # Asked to run every gate again, it looks for no run.
         runner = Mock()
         _, args = self.main_with(*one, "--rerun-gates", *self.NUMBERS, runner=runner)

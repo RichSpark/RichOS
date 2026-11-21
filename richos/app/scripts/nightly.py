@@ -628,6 +628,7 @@ def stable_plan(nightly_tag, record_text, now=None, words=None):
     decision = promotion_decision(nightly_tag, record_text, words,
                                   now.astimezone().strftime("%Y-%m-%d"))
     git("fetch", "--no-tags", "origin", f"refs/tags/{nightly_tag}")
+    nightly_build_commit = git("rev-parse", "FETCH_HEAD")
     try:
         built = json.loads(git("show", f"FETCH_HEAD:{PROVENANCE}"))
     except subprocess.CalledProcessError as error:
@@ -707,6 +708,12 @@ def stable_plan(nightly_tag, record_text, now=None, words=None):
             # `nightly-build.json` and its committed provenance: which nightly this is a
             # rebuild of, and the record of the decision that allowed it.
             "promoted_from": nightly_tag, "promoted_from_version": built["version"],
+            "promoted_nightly_proof": {
+                "build_commit": nightly_build_commit,
+                "run_id": built.get("run_id"),
+                "gates": built.get("gate_evidence"),
+                "dependencies_sha256": built.get("gate_dependencies_sha256"),
+            },
             "promotion_decided_on": decision["decided_on"],
             "promotion_words": decision["words"],
             # The hidden reservation and the exact value this plan saw it hold, which is
