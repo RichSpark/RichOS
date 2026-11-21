@@ -131,8 +131,9 @@ static NSRect contentOnScreen(NSView *view) {
     AVAssetReader *_reader;
     AVAssetReaderTrackOutput *_frames;
     CMSampleBufferRef _preroll[PrerollFrames];
-    int _frameIndex;
+    int _frameIndex;                 // preparation, then media queue
     int _frameCount;
+    atomic_int _queuedFrames;
     id _endObserver;
     id _readyObserver;
     id _failedObserver;
@@ -147,6 +148,7 @@ static NSRect contentOnScreen(NSView *view) {
 @property(nonatomic, strong) AVSampleBufferDisplayLayer *video;
 @property(nonatomic, strong) id<AVQueuedSampleBufferRendering> renderer;
 @property(nonatomic, strong) dispatch_queue_t timeline;
+@property(nonatomic, strong) dispatch_queue_t media;
 @property(nonatomic, strong) AVSampleBufferRenderSynchronizer *clock;
 @property(nonatomic, copy) NSString *soundPath;
 @property(nonatomic) double anchorMs;
@@ -184,6 +186,9 @@ static NSRect contentOnScreen(NSView *view) {
     if (![_reader startReading]) return nil;
     _frameCount = count;
     atomic_init(&_status, VideoPreroll);
+    atomic_init(&_queuedFrames, 0);
+    _media = dispatch_queue_create("com.richos.splash.media",
+        dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INITIATED, 0));
     return self;
 }
 
@@ -239,29 +244,37 @@ static NSRect contentOnScreen(NSView *view) {
     }
 }
 
+- (void)stopFeeding {
+    dispatch_async(self.media, ^{ [self.renderer stopRequestingMediaData]; });
+}
+
 // Called on the timeline queue.
 - (void)fail:(int)reason {
     int status = self.status;
     if (status != VideoPreroll && status != VideoPlaying) return;
     atomic_store(&_status, VideoFailed);
-    [self.renderer stopRequestingMediaData];
+    [self stopFeeding];
     [self.clock setRate:0 time:self.clock.currentTime];
     self.phase(reason, self.anchorMs);
 }
 
 - (void)feed {
     __weak RichSplashPlayer *weak = self;
-    [self.renderer requestMediaDataWhenReadyOnQueue:self.timeline usingBlock:^{
+    [self.renderer requestMediaDataWhenReadyOnQueue:self.media usingBlock:^{
         RichSplashPlayer *player = weak;
         if (!player) return;
         while (player.renderer.readyForMoreMediaData && player->_frameIndex < player->_frameCount && player.status != VideoFailed) {
             @autoreleasepool {
                 CMSampleBufferRef sample = [player nextSample];
                 if (!sample) {
-                    [player fail:VideoFailed];
-                    break;
+                    dispatch_async(player.timeline, ^{ [player fail:VideoFailed]; });
+                    [player.renderer stopRequestingMediaData];
+                    return;
                 }
-                [player.renderer enqueueSampleBuffer:sample];
+                if (player.status != VideoFailed) {
+                    [player.renderer enqueueSampleBuffer:sample];
+                    atomic_fetch_add(&player->_queuedFrames, 1);
+                }
                 CFRelease(sample);
             }
         }
@@ -282,9 +295,10 @@ static NSRect contentOnScreen(NSView *view) {
                                                     queue:self.timeline usingBlock:^{
         RichSplashPlayer *player = weak;
         if (player && player.status == VideoPlaying) {
-            if (player->_frameIndex != player->_frameCount) {
+            int queuedFrames = atomic_load(&player->_queuedFrames);
+            if (queuedFrames != player->_frameCount) {
                 fprintf(stderr, "[richos] native splash: renderer accepted %d of %d frames at the endpoint\n",
-                        player->_frameIndex, player->_frameCount);
+                        queuedFrames, player->_frameCount);
                 [player fail:VideoLateFrames];
                 return;
             }
@@ -303,9 +317,8 @@ static NSRect contentOnScreen(NSView *view) {
         }
     }];
     [self.clock setRate:1 time:kCMTimeZero atHostTime:time];
-    self.phase(VideoPlaying, self.anchorMs);
     scheduleCue(self.soundPath, (double)_frameCount / FPS, time, self.audioOutcome);
-    [self feed];
+    self.phase(VideoPlaying, self.anchorMs);
 
     // If the page never painted, the final frame may stay briefly while it loads.
     // A failed WebView cannot leave the native cover permanently in the window.
@@ -401,6 +414,7 @@ static NSRect contentOnScreen(NSView *view) {
         }];
     for (int i = 0; i < PrerollFrames; i++) {
         [self.renderer enqueueSampleBuffer:_preroll[i]];
+        atomic_fetch_add(&_queuedFrames, 1);
         CFRelease(_preroll[i]);
         _preroll[i] = NULL;
     }
@@ -428,6 +442,9 @@ static NSRect contentOnScreen(NSView *view) {
         RichSplashPlayer *player = weak;
         if (player) dispatch_async(player.timeline, ^{ [player fail:VideoSurfaceLost]; });
     };
+    // Read ahead while the first frame becomes ready. The renderer controls its
+    // own backpressure and its reader never occupies the clock's queue.
+    [self feed];
 }
 
 - (void)closeSurface {
@@ -452,7 +469,7 @@ static NSRect contentOnScreen(NSView *view) {
             [self.clock removeTimeObserver:self->_endObserver];
             self->_endObserver = nil;
         }
-        [self.renderer stopRequestingMediaData];
+        [self stopFeeding];
         [self.clock setRate:0 time:self.clock.currentTime];
     });
     if (!animated) {
