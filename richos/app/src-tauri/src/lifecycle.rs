@@ -55,6 +55,46 @@
 //! (`muda-0.19.3/src/platform_impl/macos/mod.rs:994`) — a selector no handler can refuse. So
 //! the app must own that one item, which is what `main.rs` now does.
 
+#[cfg(target_os = "macos")]
+fn window_close_log() -> std::path::PathBuf {
+    crate::startup_alert::log_path().with_file_name("window-close.log")
+}
+
+/// Measure only from receipt of the close event through AppKit's hide call.
+#[cfg(target_os = "macos")]
+pub(crate) fn record_window_close(outcome: &str, hide_time: std::time::Duration) {
+    let now = crate::startup_alert::utc_stamp(richos_core::util::now_millis());
+    let version = crate::startup_alert::version();
+    let pid = std::process::id();
+    let micros = hide_time.as_micros();
+    let line = format!(
+        "{now} RichOS {version} pid {pid} main window close: {outcome}, event to hide return {micros} us"
+    );
+    eprintln!("[richos] {line}");
+    if let Err(error) = crate::launch_timing::append(&window_close_log(), &(line + "\n")) {
+        eprintln!("[richos] main window close: could not keep the diagnostic ({error})");
+    }
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn recent_window_closes() -> Option<String> {
+    window_close_excerpt(std::fs::File::open(window_close_log()).ok()?)
+}
+
+#[cfg(target_os = "macos")]
+fn window_close_excerpt(mut log: std::fs::File) -> Option<String> {
+    use std::io::{Read, Seek, SeekFrom};
+
+    const MAX_BYTES: u64 = 4096;
+    let start = log.metadata().ok()?.len().saturating_sub(MAX_BYTES);
+    log.seek(SeekFrom::Start(start)).ok()?;
+    let mut bytes = Vec::new();
+    log.take(MAX_BYTES).read_to_end(&mut bytes).ok()?;
+    let excerpt = String::from_utf8_lossy(&bytes);
+    let complete = if start == 0 { &excerpt } else { excerpt.split_once('\n')?.1 };
+    (!complete.trim().is_empty()).then(|| complete.trim_end().to_owned())
+}
+
 /// What the assignment register says is registered right now — the same three numbers the
 /// update gate reads (`richos_core::work_gate::BackgroundWork`), because "is there work"
 /// must not have two answers in one process.
@@ -273,6 +313,19 @@ pub const KEEP_WORKING: &str = "Keep working";
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn support_gets_complete_recent_close_outcomes() {
+        use std::io::Write;
+
+        let mut log = tempfile::tempfile().unwrap();
+        assert!(window_close_excerpt(log.try_clone().unwrap()).is_none());
+        let entry = "2026-11-21T09:00:00Z RichOS 1.3.7 pid 100 main window close: hidden, event to hide return 190 us";
+        writeln!(log, "old data {}", "x".repeat(4096)).unwrap();
+        writeln!(log, "{entry}").unwrap();
+        assert_eq!(window_close_excerpt(log).as_deref(), Some(entry));
+    }
 
     fn request(programmatic: bool, registered: Registered) -> ExitRequest {
         ExitRequest { questions_pending: false, programmatic, confirmed: false, registered, can_come_back: true }
