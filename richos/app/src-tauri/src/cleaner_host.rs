@@ -295,11 +295,12 @@ fn folder_request_context(id: &str, wire_labels: usize, wire_complete: bool) {
     let record = json!({"id":id,"wire_labels":wire_labels,"wire_complete":wire_complete});
     crate::dictation::log::line(&format!("RichCleaner folder request context {record}"));
 }
-pub fn start(app: &AppHandle) -> Result<(), String> {
+pub fn start(app: &AppHandle, _main: objc2::MainThreadMarker) -> Result<(), String> {
     crate::dictation::log::init(&app.state::<AppState>().data_dir);
     app.manage(Arc::new(Host::default()));
     if settings(app)?.0 {
         build_panel(app)?;
+        eprintln!("[richos] RichCleaner: startup panel ready");
         let app = app.clone();
         std::thread::spawn(move || {
             if let Err(e) = Native::bundled().and_then(|native| {

@@ -35,22 +35,36 @@ extern "C" {
 }
 
 #[derive(Clone, Copy, PartialEq)]
+struct InterruptedPlayback {
+    started_at_ms: u64,
+    elapsed_ms: u64,
+}
+
+#[derive(Clone, Copy, PartialEq)]
 enum Phase {
     Preparing,
-    Playing(Instant),
+    Playing { start: Instant, started_at_ms: u64 },
     Finished,
-    Failed(Option<u64>),
+    Failed(Option<InterruptedPlayback>),
 }
 
 impl Phase {
     fn owns_cue(self) -> bool {
-        matches!(self, Self::Playing(_) | Self::Finished | Self::Failed(Some(_)))
+        matches!(self, Self::Playing { .. } | Self::Finished | Self::Failed(Some(_)))
+    }
+
+    fn started_at_ms(self) -> Option<u64> {
+        match self {
+            Self::Playing { started_at_ms, .. } => Some(started_at_ms),
+            Self::Failed(Some(playback)) => Some(playback.started_at_ms),
+            _ => None,
+        }
     }
 
     fn elapsed_ms(self) -> u64 {
         match self {
-            Self::Playing(start) => start.elapsed().as_millis() as u64,
-            Self::Failed(Some(ms)) => ms,
+            Self::Playing { start, .. } => start.elapsed().as_millis() as u64,
+            Self::Failed(Some(playback)) => playback.elapsed_ms,
             _ => 0,
         }
     }
@@ -70,7 +84,7 @@ extern "C" fn on_phase(code: i32, anchor: f64) {
         1 => {
             let start = Instant::now();
             crate::launch_timing::note_native_splash_started(anchor);
-            phase().send_replace(Phase::Playing(start));
+            phase().send_replace(Phase::Playing { start, started_at_ms: anchor as u64 });
         }
         2 => {
             crate::launch_timing::note_native_splash_outcome("reached authored endpoint");
@@ -113,7 +127,8 @@ fn fail(reason: &'static str) {
     crate::launch_timing::note_native_splash_outcome(
         &format!("{reason}, falling back at {elapsed_ms} ms of playback"),
     );
-    phase().send_replace(Phase::Failed(previous.owns_cue().then_some(elapsed_ms)));
+    let playback = previous.started_at_ms().map(|started_at_ms| InterruptedPlayback { started_at_ms, elapsed_ms });
+    phase().send_replace(Phase::Failed(playback));
 }
 
 pub fn reduce_motion() -> bool {
@@ -228,7 +243,11 @@ async fn wait_for_end(mut receiver: watch::Receiver<Phase>) -> SplashPlayback {
     });
     match phase {
         Phase::Finished => SplashPlayback::Finished,
-        phase => SplashPlayback::Fallback { elapsed_ms: phase.elapsed_ms(), native_cue: phase.owns_cue() },
+        phase => SplashPlayback::Fallback {
+            elapsed_ms: phase.elapsed_ms(),
+            native_cue: phase.owns_cue(),
+            started_at_ms: phase.started_at_ms(),
+        },
     }
 }
 
@@ -265,15 +284,24 @@ mod tests {
         rt.block_on(async {
             let (sender, receiver) = watch::channel(Phase::Preparing);
             let done = tokio::spawn(wait_for_end(receiver));
-            sender.send_replace(Phase::Playing(Instant::now()));
+            let started_at_ms = 1795262400000;
+            sender.send_replace(Phase::Playing { start: Instant::now(), started_at_ms });
             tokio::task::yield_now().await;
             assert!(!done.is_finished());
             sender.send_replace(Phase::Finished);
             assert_eq!(done.await.unwrap(), SplashPlayback::Finished);
 
-            for (failure, elapsed_ms, native_cue) in [(None, 0, false), (Some(0), 0, true), (Some(1350), 1350, true)] {
+            for (elapsed, native_cue) in [(None, false), (Some(0), true), (Some(1350), true)] {
+                let failure = elapsed.map(|elapsed_ms| InterruptedPlayback { started_at_ms, elapsed_ms });
                 let (_, receiver) = watch::channel(Phase::Failed(failure));
-                assert_eq!(wait_for_end(receiver).await, SplashPlayback::Fallback { elapsed_ms, native_cue });
+                assert_eq!(
+                    wait_for_end(receiver).await,
+                    SplashPlayback::Fallback {
+                        elapsed_ms: elapsed.unwrap_or_default(),
+                        native_cue,
+                        started_at_ms: elapsed.map(|_| started_at_ms),
+                    },
+                );
             }
         });
     }
