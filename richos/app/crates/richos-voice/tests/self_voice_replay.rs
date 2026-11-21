@@ -1161,7 +1161,7 @@ fn a_near_end_voice_over_richs_answer_barges_in_and_is_admitted() {
     //
     // Barge-in is now gated on the canceller's per-frame NEAR-END VERDICT rather than on
     // `confident()` (`bargein::BargeInMonitor::set_near_end_gated`), so 2.841 s of near-field
-    // speech reaches the near-end threshold and fires. A barge-in is a positive signal that the CEO
+    // speech reaches the 15-of-25 window and fires. A barge-in is a positive signal that the CEO
     // is the one talking, so `CaptureBrain` clears the taint and the words become his next turn —
     // that clause is not new, it has simply never been reachable on this path before.
     //

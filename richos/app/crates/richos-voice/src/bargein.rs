@@ -51,12 +51,11 @@
 //!     VAD speech AND near-end          longest run 66 frames · 25 of 25 — saturated
 //! ```
 //!
-//! The September rule used 15 of 25 frames. In November, 10 of 25 recovered all ten staged
-//! short Stops, including the five missed at 15. Neither threshold fired on the recorded
-//! echo-only controls. The original human interruption still cut and supplied an utterance.
-//! The ten staged acknowledgments still cut, earlier by five or six frames. A 192 ms
-//! excerpt from the original human recording remained below the effective evidence count.
-//! The near-end gate remains essential: a bare VAD verdict reaches 23 of 25 on Rich's echo.
+//! So `AEC_BARGE_IN_REQUIRED_FRAMES` of 15 in 25 clears the worst echo ever measured here by
+//! 15/6 = 2.50x on the conjunction, while the same window on a bare VAD verdict would fire on
+//! Rich at 23 of 25. **The rule did not change. The signal did, and the confidence
+//! precondition on it came off.** [`BargeInMonitor::set_near_end_gated`] carries the numbers;
+//! `examples/bargein_score.rs` reproduces them with no device and no sound.
 //!
 //! [`BargeInMode::Consecutive`] is still the rule when there is **no canceller at all**, and
 //! that is now the only case it covers.
@@ -83,7 +82,7 @@ pub fn barge_in_debounce_secs() -> f32 {
 
 /// **The near-end-gated debounce window.** Whenever a canceller is present, the interruption
 /// test changes shape entirely: instead of racing echo for 5.008 s of unbroken speech, it asks
-/// for near-end speech in at least ten of the last 25 frames (0.400 s).
+/// whether the CEO has been talking for most of the last 0.400 s.
 ///
 /// **The name still says AEC and that is correct — what changed on 2026-09-18 is WHICH property
 /// of the canceller it rests on.** It used to require [`crate::aec::EchoCanceller::confident`],
@@ -101,8 +100,8 @@ pub const AEC_BARGE_IN_WINDOW_FRAMES: u32 = 25;
 /// How many of those 25 frames must be near-end speech.
 ///
 /// ```text
-///   AEC_BARGE_IN_REQUIRED_FRAMES = 10
-///   10 x 256 / 16000 = 0.160 s of evidence inside a 0.400 s window (40 %)
+///   AEC_BARGE_IN_REQUIRED_FRAMES = 15
+///   15 x 256 / 16000 = 0.240 s of evidence inside a 0.400 s window (60 %)
 /// ```
 ///
 /// **Why a window and not a consecutive run.** The consecutive rule is not a stricter version
@@ -116,7 +115,7 @@ pub const AEC_BARGE_IN_WINDOW_FRAMES: u32 = 25;
 /// The window counts evidence instead of demanding perfection, which is the right primitive
 /// once the false-positive source (echo) has been removed by measurement rather than dodged
 /// by a continuity race.
-pub const AEC_BARGE_IN_REQUIRED_FRAMES: u32 = 10;
+pub const AEC_BARGE_IN_REQUIRED_FRAMES: u32 = 15;
 
 /// The converged window in seconds, derived: 25 x 256 / 16000 = 0.400 s.
 pub fn aec_barge_in_window_secs() -> f32 {
@@ -558,16 +557,16 @@ mod tests {
     }
 
     /// INVARIANT: the converged window is 25 frames = 0.400 s and the evidence threshold is
-    /// 10 frames = 0.160 s, both re-derived from the frame math rather than quoted.
+    /// 15 frames = 0.240 s, both re-derived from the frame math rather than quoted.
     #[test]
     fn the_converged_window_is_25_frames_which_is_400_milliseconds_exactly() {
         assert_eq!(AEC_BARGE_IN_WINDOW_FRAMES, 25);
         assert_eq!(AEC_BARGE_IN_WINDOW_FRAMES, frames_for_secs(0.400));
         assert!((aec_barge_in_window_secs() - 0.400).abs() < 1e-6, "{}", aec_barge_in_window_secs());
-        assert_eq!(AEC_BARGE_IN_REQUIRED_FRAMES, 10);
-        assert!((frames_to_secs(AEC_BARGE_IN_REQUIRED_FRAMES) - 0.160).abs() < 1e-6);
-        // 10 of 25 is 40 % of the window.
-        assert_eq!(AEC_BARGE_IN_REQUIRED_FRAMES * 100 / AEC_BARGE_IN_WINDOW_FRAMES, 40);
+        assert_eq!(AEC_BARGE_IN_REQUIRED_FRAMES, 15);
+        assert!((frames_to_secs(AEC_BARGE_IN_REQUIRED_FRAMES) - 0.240).abs() < 1e-6);
+        // 15 of 25 is 60 % of the window.
+        assert_eq!(AEC_BARGE_IN_REQUIRED_FRAMES * 100 / AEC_BARGE_IN_WINDOW_FRAMES, 60);
         // And the window must fit in the u32 bitmask the monitor slides.
         assert!(AEC_BARGE_IN_WINDOW_FRAMES < 32);
         // 5.008 / 0.400 = 12.52x shorter than the fallback.
@@ -597,9 +596,10 @@ mod tests {
         assert!((m.effective_debounce_secs() - 5.008).abs() < 1e-6);
     }
 
-    /// INVARIANT: the current near-end evidence threshold is the first frame count that fires.
+    /// INVARIANT: under the windowed rule, 15 near-end frames fire it — on the 15th, not the
+    /// 14th.
     #[test]
-    fn the_windowed_rule_fires_when_the_evidence_reaches_its_threshold() {
+    fn the_windowed_rule_fires_on_the_fifteenth_frame_not_the_fourteenth() {
         let mut m = BargeInMonitor::default();
         m.set_near_end_gated(true);
         m.arm();
@@ -683,28 +683,28 @@ mod tests {
         assert_eq!(BargeInMonitor::default().mode(), BargeInMode::Consecutive);
     }
 
-    /// INVARIANT: subthreshold groups of speech separated by 25 frames of silence cannot
-    /// combine to fire. Evidence older than 0.400 s leaves the window.
+    /// INVARIANT: the window slides. 14 frames of speech, then 25 frames of silence, then 14
+    /// more must NOT fire — evidence older than 0.400 s has left the window.
     #[test]
     fn evidence_older_than_the_window_stops_counting() {
         let mut m = BargeInMonitor::default();
         m.set_near_end_gated(true);
         m.arm();
-        for _ in 1..AEC_BARGE_IN_REQUIRED_FRAMES {
+        for _ in 0..14 {
             assert!(!m.push(true));
         }
-        assert_eq!(m.window_hits(), AEC_BARGE_IN_REQUIRED_FRAMES - 1);
+        assert_eq!(m.window_hits(), 14);
         for _ in 0..AEC_BARGE_IN_WINDOW_FRAMES {
             assert!(!m.push(false));
         }
         assert_eq!(m.window_hits(), 0, "the window did not slide");
-        for i in 1..AEC_BARGE_IN_REQUIRED_FRAMES {
+        for i in 0..14 {
             assert!(!m.push(true), "stale evidence resurrected at {i}");
         }
     }
 
     /// INVARIANT: switching modes discards evidence gathered under the old rule. A 300-frame
-    /// consecutive run must not instantly satisfy the near-end threshold, and vice versa.
+    /// consecutive run must not instantly satisfy the 15-frame window, and vice versa.
     #[test]
     fn changing_mode_discards_evidence_gathered_under_the_old_rule() {
         let mut m = BargeInMonitor::default();
@@ -728,10 +728,10 @@ mod tests {
         let mut m = BargeInMonitor::default();
         m.set_near_end_gated(true);
         m.arm();
-        for _ in 1..AEC_BARGE_IN_REQUIRED_FRAMES {
-            assert!(!m.push(true));
+        for _ in 0..14 {
+            m.push(true);
         }
-        assert_eq!(m.window_hits(), AEC_BARGE_IN_REQUIRED_FRAMES - 1);
+        assert_eq!(m.window_hits(), 14);
         m.arm();
         assert_eq!(m.window_hits(), 0);
         m.push(true);
