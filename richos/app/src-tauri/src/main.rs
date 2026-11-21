@@ -4966,6 +4966,8 @@ enum SplashPlayback {
     Fallback {
         #[serde(rename = "elapsedMs")]
         elapsed_ms: u64,
+        #[serde(rename = "nativeCue")]
+        native_cue: bool,
     },
 }
 
@@ -4974,7 +4976,7 @@ async fn splash_native_finished() -> SplashPlayback {
     #[cfg(target_os = "macos")]
     { splash_player::finished().await }
     #[cfg(not(target_os = "macos"))]
-    { SplashPlayback::Fallback { elapsed_ms: 0 } }
+    { SplashPlayback::Fallback { elapsed_ms: 0, native_cue: false } }
 }
 
 #[richos_command::command]

@@ -21,6 +21,7 @@ extern "C" {
         sound: *const c_char,
         phase: extern "C" fn(i32, f64),
         metrics: extern "C" fn(u64, u64, u64),
+        audio_outcome: extern "C" fn(i32),
     ) -> *mut c_void;
     fn richos_splash_discard_prepared(player: *mut c_void);
     fn richos_splash_attach(window: *mut c_void, player: *mut c_void) -> bool;
@@ -38,14 +39,18 @@ enum Phase {
     Preparing,
     Playing(Instant),
     Finished,
-    Failed(u64),
+    Failed(Option<u64>),
 }
 
 impl Phase {
+    fn owns_cue(self) -> bool {
+        matches!(self, Self::Playing(_) | Self::Finished | Self::Failed(Some(_)))
+    }
+
     fn elapsed_ms(self) -> u64 {
         match self {
             Self::Playing(start) => start.elapsed().as_millis() as u64,
-            Self::Failed(ms) => ms,
+            Self::Failed(Some(ms)) => ms,
             _ => 0,
         }
     }
@@ -87,12 +92,28 @@ extern "C" fn on_metrics(total: u64, dropped: u64, corrupted: u64) {
     );
 }
 
+extern "C" fn on_audio_outcome(code: i32) {
+    let outcome = match code {
+        0 => "audio cue disabled",
+        1 => "audio cue scheduled",
+        2 => "audio cue preparation failed",
+        3 => "audio cue deadline missed",
+        4 => "audio cue scheduling refused",
+        5 => "audio cue completed",
+        6 => "audio cue interrupted",
+        7 => "audio cue completion timed out",
+        _ => return,
+    };
+    crate::launch_timing::note_native_splash_outcome(outcome);
+}
+
 fn fail(reason: &'static str) {
-    let elapsed_ms = phase().borrow().elapsed_ms();
+    let previous = *phase().borrow();
+    let elapsed_ms = previous.elapsed_ms();
     crate::launch_timing::note_native_splash_outcome(
         &format!("{reason}, falling back at {elapsed_ms} ms of playback"),
     );
-    phase().send_replace(Phase::Failed(elapsed_ms));
+    phase().send_replace(Phase::Failed(previous.owns_cue().then_some(elapsed_ms)));
 }
 
 pub fn reduce_motion() -> bool {
@@ -147,6 +168,7 @@ pub fn prepare(pack: Pack) -> Option<JoinHandle<Option<Prepared>>> {
                 sound.as_ref().map_or(std::ptr::null(), |s| s.as_ptr()),
                 on_phase,
                 on_metrics,
+                on_audio_outcome,
             )
         };
         NonNull::new(player).map(Prepared)
@@ -206,7 +228,7 @@ async fn wait_for_end(mut receiver: watch::Receiver<Phase>) -> SplashPlayback {
     });
     match phase {
         Phase::Finished => SplashPlayback::Finished,
-        phase => SplashPlayback::Fallback { elapsed_ms: phase.elapsed_ms() },
+        phase => SplashPlayback::Fallback { elapsed_ms: phase.elapsed_ms(), native_cue: phase.owns_cue() },
     }
 }
 
@@ -249,8 +271,10 @@ mod tests {
             sender.send_replace(Phase::Finished);
             assert_eq!(done.await.unwrap(), SplashPlayback::Finished);
 
-            let (_, receiver) = watch::channel(Phase::Failed(1350));
-            assert_eq!(wait_for_end(receiver).await, SplashPlayback::Fallback { elapsed_ms: 1350 });
+            for (failure, elapsed_ms, native_cue) in [(None, 0, false), (Some(0), 0, true), (Some(1350), 1350, true)] {
+                let (_, receiver) = watch::channel(Phase::Failed(failure));
+                assert_eq!(wait_for_end(receiver).await, SplashPlayback::Fallback { elapsed_ms, native_cue });
+            }
         });
     }
 }
