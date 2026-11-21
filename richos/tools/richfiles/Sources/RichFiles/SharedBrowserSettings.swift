@@ -1,4 +1,5 @@
 import AppKit
+import RichFilesCore
 
 /// The controls on the RichOS information page share the standalone app's
 /// settings and use the same macOS folder and picture association operations.
@@ -10,6 +11,8 @@ public enum SharedBrowserSettings {
     private struct State: Encodable {
         let folders: Bool
         let pictures: Bool
+        let picturesOpened: Int
+        let pictureFormats: Int
         let windowsKeys: Bool
         let message: String?
     }
@@ -53,9 +56,12 @@ public enum SharedBrowserSettings {
             }
         }
         glance.refresh()
+        let opened = GlanceFormat.allCases.filter { glance.current[$0]?.isGlance == true }.count
         return try? JSONEncoder().encode(State(
             folders: isRichFiles(FolderAssociation.current),
             pictures: glance.state.enabled,
+            picturesOpened: opened,
+            pictureFormats: GlanceFormat.allCases.count,
             windowsKeys: preferences.object(forKey: keysPreference) as? Bool ?? true,
             message: message ?? glance.problem
         ))

@@ -33,7 +33,7 @@ enum BrowserSheet: Identifiable {
     case trashFailures([FileReference])
     case operationIssues([String])
     case interruptedTransfer
-    case trash, searchOptions, batch([FileReference]), connect, workspaces, actionPalette, settings
+    case trash, searchOptions, batch([FileReference]), connect, workspaces, actionPalette, settings, imageViewerSettings
 
     var id: String {
         switch self {
@@ -58,6 +58,7 @@ enum BrowserSheet: Identifiable {
         case .workspaces: return "workspaces"
         case .actionPalette: return "actionPalette"
         case .settings: return "settings"
+        case .imageViewerSettings: return "imageViewerSettings"
         }
     }
 }
