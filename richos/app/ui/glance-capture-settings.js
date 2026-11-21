@@ -18,10 +18,16 @@
     copy.setAttribute("aria-pressed", String(workflow?.opensEditor !== true));
     history.setAttribute("aria-checked", String(workflow?.keepsHistory === true));
     history.closest(".dict-card").classList.toggle("is-on", workflow?.keepsHistory === true);
-    const duration = workflow?.keepsForever ? "until you delete them" : "for seven days";
-    sheet.querySelector("#richglance-history-summary").textContent = workflow?.keepsHistory
-      ? `On. Originals and editable marks stay on this Mac ${duration}.`
-      : `Off. Turn on to keep screenshots and editable marks ${duration}.`;
+    const historySummary = sheet.querySelector("#richglance-history-summary");
+    if (workflow?.keepsHistory) {
+      historySummary.textContent = workflow.keepsForever
+        ? "On. Originals and editable marks stay on this Mac until you delete them."
+        : "On. Originals and editable marks stay on this Mac for seven days.";
+    } else {
+      historySummary.textContent = workflow?.keepsForever
+        ? "Off. Turn on to keep screenshots and editable marks until you delete them."
+        : "Off. Turn on to keep screenshots and editable marks for seven days.";
+    }
   }
 
   async function loadWorkflow() {
