@@ -180,13 +180,14 @@ async function cards(page) {
 
 async function main() {
   const run = createRun("A file from Rich — round 36 screen 3 (real shell, WebKit)");
-  const check = (name, work) => run.check(name, () => withWebKitDeadline(name, work));
+  const runCheck = run.check.bind(run);
+  run.check = (name, work) => runCheck(name, () => withWebKitDeadline(name, work));
   const { webkit } = loadPlaywright();
   const browser = await withWebKitDeadline("launch browser", () => webkit.launch());
 
   const page = await withWebKitDeadline("open initial file cards", () => openApp(browser));
 
-  await check("a library card tries the bookmark even when its recorded path is stale", async () => {
+  await run.check("a library card tries the bookmark even when its recorded path is stale", async () => {
     await page.evaluate(() => {
       const original = window.__libraryTestBridge = window.RichBridge;
       window.RichBridge = {
@@ -240,7 +241,7 @@ async function main() {
     });
   });
 
-  await check("the files sit under Rich's words in his reply, one card each, built like the attachment chip", async () => {
+  await run.check("the files sit under Rich's words in his reply, one card each, built like the attachment chip", async () => {
     const got = await cards(page);
     assertEqual(got.length, 2, "cards in the conversation");
     assertEqual(got[0].name, "Acme-counteroffer.pdf");
@@ -278,7 +279,7 @@ async function main() {
     return got.map((c) => c.name + " · " + c.open).join(" | ");
   });
 
-  await check("a click anywhere on the card opens it through the opener; Show in Finder shows it", async () => {
+  await run.check("a click anywhere on the card opens it through the opener; Show in Finder shows it", async () => {
     await page.click('.tl-rfile[data-file-id="rf_0a1b2c3d4e5f6071"] .tl-rfile-name');
     await page.click('.tl-rfile[data-file-id="rf_8192a3b4c5d6e7f8"] .tl-rfile-open');
     await page.click('.tl-rfile[data-file-id="rf_0a1b2c3d4e5f6071"] .tl-rfile-finder');
@@ -303,7 +304,7 @@ async function main() {
     assertEqual(page.__errors, [], "the page reported errors");
   });
 
-  await check("a file attached between turns shows at once, without a reload", async () => {
+  await run.check("a file attached between turns shows at once, without a reload", async () => {
     const turn = await page.evaluate(() => document.querySelectorAll(".tl-turn")[document.querySelectorAll(".tl-turn").length - 1].dataset.turnId);
     const id = await page.evaluate((t) => window.__RICHOS_MOCK__.richFileArrive("acme", t, "Acme-signature-page.pdf"), turn);
     await page.waitForSelector('.tl-rfile[data-file-id="' + id + '"]');
@@ -342,7 +343,7 @@ async function main() {
     await page.context().close();
   });
 
-  await check("a file that is gone says so and offers Ask Rich again, which asks Rich in his words", async () => {
+  await run.check("a file that is gone says so and offers Ask Rich again, which asks Rich in his words", async () => {
     const p = await openApp(browser, { missing: true });
     const got = await cards(p);
     assertEqual(got[0].state, "missing");
@@ -371,7 +372,7 @@ async function main() {
     await p.context().close();
   });
 
-  await check("with Techy Mode on the cards stay through a turn's end and through reopening the conversation", async () => {
+  await run.check("with Techy Mode on the cards stay through a turn's end and through reopening the conversation", async () => {
     // Review rv-20261021T083350Z-8ca9bacf-e592: Techy Mode reloads from `get_machinery`, which
     // carried no cards, so the reload at every turn's end took them away.
     const p = await openApp(browser);
@@ -410,7 +411,7 @@ async function main() {
     await p.context().close();
   });
 
-  await check("media moments play and pause in Output or open the selected online moment", async () => {
+  await run.check("media moments play and pause in Output or open the selected online moment", async () => {
     const p = await openApp(browser, { prepare: mediaMomentsFixture });
     try {
       const local = p.getByRole("button", { name: /^0?0:53 Customer focus$/ });
@@ -478,7 +479,7 @@ async function main() {
     }
   });
 
-  await check("a changed recording offers Ask Rich again beside the refused moments", async () => {
+  await run.check("a changed recording offers Ask Rich again beside the refused moments", async () => {
     const p = await openApp(browser, { prepare: mediaMomentsFixture });
     try {
       await p.evaluate(() => {
@@ -510,7 +511,7 @@ async function main() {
     }
   });
 
-  await check("a recording scope refusal reopens the conversation that owns the card", async () => {
+  await run.check("a recording scope refusal reopens the conversation that owns the card", async () => {
     const p = await openApp(browser, { prepare: mediaMomentsFixture });
     try {
       await p.evaluate(() => {
@@ -586,7 +587,7 @@ async function main() {
   });
 
   for (const theme of ["dark", "light"]) {
-    await check(theme + " — the card's text and edges clear WCAG AA", async () => {
+    await run.check(theme + " — the card's text and edges clear WCAG AA", async () => {
       const p = await openApp(browser, { theme });
       const read = await p.evaluate(() => {
         const card = document.querySelector(".tl-rfile");
@@ -634,7 +635,7 @@ async function main() {
       return lines.join(" | ");
     });
 
-    await check(theme + " — the committed pictures: the cards, and a file that is gone", async () => {
+    await run.check(theme + " — the committed pictures: the cards, and a file that is gone", async () => {
       const p = await openApp(browser, { theme });
       await p.locator(".tl-rfiles").scrollIntoViewIfNeeded();
       const ready = await shot(p, "files-ready-" + theme, { fullPage: false, parkPointer: true });
