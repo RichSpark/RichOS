@@ -400,12 +400,15 @@ window.RichVideoAnywhere = (function () {
     if (ps.position !== "absolute" || s.position === "static" || ps.visibility !== "visible") return;
     var w = parseFloat(ps.width);
     var h = parseFloat(ps.height);
-    if (!(w > 0) || !(h > 0)) return;
+    if (!(w >= 0) || !(h >= 0)) return;
     var a = alpha * (parseFloat(ps.opacity) || 0);
     if (a < 0.012) return;
-    var bw = parseFloat(ps.borderTopWidth) || 0;
-    var W = w + (ps.boxSizing === "border-box" ? 0 : 2 * bw + (parseFloat(ps.paddingLeft) || 0) + (parseFloat(ps.paddingRight) || 0));
-    var Hh = h + (ps.boxSizing === "border-box" ? 0 : 2 * bw + (parseFloat(ps.paddingTop) || 0) + (parseFloat(ps.paddingBottom) || 0));
+    var borders = SIDES.map(function (side) { return parseFloat(ps["border" + side + "Width"]) || 0; });
+    var [bt, br, bb, bl] = borders;
+    var content = ps.boxSizing !== "border-box";
+    var W = w + (content ? bl + br + (parseFloat(ps.paddingLeft) || 0) + (parseFloat(ps.paddingRight) || 0) : 0);
+    var Hh = h + (content ? bt + bb + (parseFloat(ps.paddingTop) || 0) + (parseFloat(ps.paddingBottom) || 0) : 0);
+    if (W <= 0 || Hh <= 0) return;
     var ox = r.left + (parseFloat(s.borderLeftWidth) || 0);
     var oy = r.top + (parseFloat(s.borderTopWidth) || 0);
     var iw = r.width - (parseFloat(s.borderLeftWidth) || 0) - (parseFloat(s.borderRightWidth) || 0);
@@ -414,33 +417,49 @@ window.RichVideoAnywhere = (function () {
     var y = ps.top !== "auto" ? oy + parseFloat(ps.top) : ps.bottom !== "auto" ? oy + ih - parseFloat(ps.bottom) - Hh : oy;
     x += parseFloat(ps.marginLeft) || 0;
     y += parseFloat(ps.marginTop) || 0;
+    cx.save();
+    cx.translate(x, y);
     var tm = /^matrix\(([^)]+)\)$/.exec(ps.transform || "");
-    var sx = 1;
     if (tm) {
-      var v = tm[1].split(",").map(Number);
-      // a move and an even scale about the middle; a turned piece is left as it stands
-      if (Math.abs(v[1]) > 0.01 || Math.abs(v[2]) > 0.01) return;
-      sx = v[0];
-      x += v[4] + (W - W * v[0]) / 2;
-      y += v[5] + (Hh - Hh * v[3]) / 2;
-      W *= v[0];
-      Hh *= v[3];
+      var [tx, ty] = ps.transformOrigin.split(" ").map(parseFloat);
+      cx.translate(tx, ty);
+      cx.transform(...tm[1].split(",").map(Number));
+      cx.translate(-tx, -ty);
     }
-    if (W <= 0 || Hh <= 0) return;
-    var rad = radius(ps, W, Hh) * (sx || 1);
+    var rad = radius(ps, W, Hh);
     cx.globalAlpha = a;
     if (!CLEAR.test(ps.backgroundColor)) {
-      plate(cx, x, y, W, Hh, rad);
+      plate(cx, 0, 0, W, Hh, rad);
       cx.fillStyle = ps.backgroundColor;
       cx.fill();
     }
-    if (bw > 0 && ps.borderTopStyle !== "none" && !CLEAR.test(ps.borderTopColor)) {
-      plate(cx, x + bw / 2, y + bw / 2, W - bw, Hh - bw, Math.max(0, rad - bw / 2));
-      cx.strokeStyle = ps.borderTopColor;
-      cx.lineWidth = bw;
+    var colors = SIDES.map(function (side) { return ps["border" + side + "Color"]; });
+    if (bt > 0 && borders.every(function (width) { return width === bt; }) && colors.every(function (color) { return color === colors[0]; })) {
+      plate(cx, bt / 2, bt / 2, W - bt, Hh - bt, Math.max(0, rad - bt / 2));
+      cx.strokeStyle = colors[0];
+      cx.lineWidth = bt;
       cx.stroke();
+    } else if (borders.some(Boolean)) {
+      // The edges meet at the corners of the padding box. A zero-sized box with
+      // three borders (the nav tooltip's arrow) gives each edge a triangular face.
+      var outer = [[0, 0], [W, 0], [W, Hh], [0, Hh]];
+      var inner = [[bl, bt], [W - br, bt], [W - br, Hh - bb], [bl, Hh - bb]];
+      for (var i = 0; i < borders.length; i++) {
+        if (!borders[i] || CLEAR.test(colors[i])) continue;
+        var next = (i + 1) % borders.length;
+        cx.beginPath();
+        cx.moveTo(...outer[i]);
+        cx.lineTo(...outer[next]);
+        cx.lineTo(...inner[next]);
+        cx.lineTo(...inner[i]);
+        cx.closePath();
+        cx.fillStyle = colors[i];
+        cx.fill();
+      }
     }
+    cx.restore();
   }
+
   // A PICTURE THE CANVAS MAY READ is drawn as it is: every picture of the app's own is (its files
   // come from where the window itself comes from), and one carried in the page (`data:`, `blob:`).
   // One that would close the canvas to the recorder (a picture from another place; any picture
@@ -458,12 +477,69 @@ window.RichVideoAnywhere = (function () {
   var RING = /^(rgba?\([^)]+\)) 0px 0px 0px (\d+(?:\.\d+)?)px inset$/;
   var SHADOW = /^(rgba?\([^)]+\)) (-?[\d.]+)px (-?[\d.]+)px ([\d.]+)px (-?[\d.]+)px/;
   var SIDES = ["Top", "Right", "Bottom", "Left"];
-  function paintDom(cx, e, alpha, R) {
-    if (NOT[e.tagName] || NEVER[e.id] || e.classList.contains("rv-skip")) return;
+  // A tooltip can paint over later DOM siblings or escape the app's clipping box.
+  // Queue it in its enclosing paint layer, using the computed CSS z-index.
+  function tooltipLayers() {
+    var byOwner = new Map();
+    var lifted = new Set();
+    for (var e of document.querySelectorAll('[role="tooltip"], .swear-card')) {
+      if (!e.getClientRects().length || e.closest(".rv-skip")) continue;
+      var s = getComputedStyle(e);
+      var z = Number(s.zIndex);
+      if (!(z > 0) || (s.position !== "fixed" && s.position !== "absolute") ||
+          s.visibility !== "visible" || Number(s.opacity) === 0) continue;
+      var owner = e.parentElement;
+      while (owner !== document.body) {
+        var parent = getComputedStyle(owner);
+        var clips = s.position === "absolute" && (parent.overflowX !== "visible" || parent.overflowY !== "visible");
+        var stacks = (parent.position !== "static" && parent.zIndex !== "auto") ||
+          parent.position === "fixed" || parent.position === "sticky" || Number(parent.opacity) < 1 ||
+          parent.transform !== "none" || parent.filter !== "none" || parent.isolation === "isolate";
+        if (clips || stacks) break;
+        owner = owner.parentElement;
+      }
+      if (!byOwner.has(owner)) byOwner.set(owner, []);
+      byOwner.get(owner).push({ e: e, z: z });
+      lifted.add(e);
+    }
+    return { byOwner: byOwner, lifted: lifted };
+  }
+
+  function paintOrder(p, q) {
+    if (p.z !== q.z) return p.z - q.z;
+    if (p.e === q.e) return 0;
+    return p.e.compareDocumentPosition(q.e) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1;
+  }
+
+  function paintTooltip(cx, e, alpha, R) {
+    var opacity = Number(getComputedStyle(e).opacity);
+    if (opacity === 1) {
+      paintDom(cx, e, alpha, R, true);
+      return;
+    }
+    // CSS fades the whole tooltip together. Fade the finished plate, text and
+    // arrow as one image so the background cannot bleed through the text twice.
+    var layer = R.tipCanvas;
+    if (!layer) {
+      layer = R.tipCanvas = document.createElement("canvas");
+      layer.width = R.cv.width;
+      layer.height = R.cv.height;
+    }
+    var lc = layer.getContext("2d");
+    lc.resetTransform();
+    lc.clearRect(0, 0, layer.width, layer.height);
+    var k = R.cv.width / R.W;
+    lc.setTransform(k, 0, 0, k, 0, 0);
+    paintDom(lc, e, 1, R, true);
+    cx.globalAlpha = alpha * opacity;
+    cx.drawImage(layer, 0, 0, R.W, layer.height / k);
+  }
+
+  function paintDom(cx, e, alpha, R, tooltip) {
+    if ((!tooltip && R.tips.lifted.has(e)) || NOT[e.tagName] || NEVER[e.id] || e.classList.contains("rv-skip")) return;
     var s = getComputedStyle(e);
     if (s.display === "none") return;
-    var op = parseFloat(s.opacity);
-    var a = alpha * (isNaN(op) ? 1 : op);
+    var a = alpha * (tooltip ? 1 : Number(s.opacity));
     if (a < 0.012) return;
     var seen = s.visibility === "visible";
     var r = e.getBoundingClientRect();
@@ -599,8 +675,16 @@ window.RichVideoAnywhere = (function () {
         } else if (c.nodeType === 1 && (!shut || c.tagName === "SUMMARY")) paintDom(cx, c, a, R);
       }
     }
-    if (clip) cx.restore();
-    if (seen && kinds.indexOf("::after") >= 0) paintPseudo(cx, e, s, r, a, "::after");
+    if (seen && kinds.indexOf("::after") >= 0 && !clip) paintPseudo(cx, e, s, r, a, "::after");
+    var tips = R.tips.byOwner.get(e);
+    if (tips && !shut) {
+      tips.sort(paintOrder);
+      for (var tip of tips) paintTooltip(cx, tip.e, a, R);
+    }
+    if (clip) {
+      cx.restore();
+      if (seen && kinds.indexOf("::after") >= 0) paintPseudo(cx, e, s, r, a, "::after");
+    }
     R.inHome = wasHome;
   }
 
@@ -708,25 +792,26 @@ window.RichVideoAnywhere = (function () {
     R.nodes = 0;
     R.inHome = false;
     R.sel = selected();
+    R.tips = tooltipLayers();
     sampleCleaner(R);
     sampleFiles(R);
     // what stands on the page itself, lowest first (the order the window stacks it in)
-    var tops = [];
-    for (var c = document.body.firstElementChild, i = 0; c; c = c.nextElementSibling, i++) {
-      var z = parseInt(getComputedStyle(c).zIndex, 10);
-      tops.push({ e: c, z: isNaN(z) ? 0 : z, i: i });
-    }
-    tops.sort(function (p, q) {
-      return p.z - q.z || p.i - q.i;
+    var tops = (R.tips.byOwner.get(document.body) || []).map(function (tip) {
+      return { e: tip.e, z: tip.z, tooltip: true };
     });
+    for (var c = document.body.firstElementChild; c; c = c.nextElementSibling) {
+      if (!R.tips.lifted.has(c)) tops.push({ e: c, z: Number(getComputedStyle(c).zIndex) || 0 });
+    }
+    tops.sort(paintOrder);
     var bs = getComputedStyle(document.body);
     if (!CLEAR.test(bs.backgroundColor)) {
       cx.fillStyle = bs.backgroundColor;
       cx.fillRect(0, 0, R.W, R.H);
     }
     for (var j = 0; j < tops.length; j++) {
-      var node = tops[j].e;
-      paintDom(cx, node, 1, R);
+      var layer = tops[j];
+      if (layer.tooltip) paintTooltip(cx, layer.e, 1, R);
+      else paintDom(cx, layer.e, 1, R);
     }
     cx.globalAlpha = 1;
     if (cleanerFocused) paintWindowPicture(cx, R, R.cleanerImage);

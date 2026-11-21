@@ -34,7 +34,7 @@
 // IT IS NOT ON THE SCREEN, TAKES NO KEYBOARD, PLAYS NO SOUND AND OPENS NO MICROPHONE
 // (`lib/mac-webview.swift`, its header).
 //
-// Each recording and a frame of each of the three places are kept in `ui/tests/.shots/video-as-shown/`
+// Each recording and frames of the checked places are kept in `ui/tests/.shots/video-as-shown/`
 // (the checkout's own scratch, never committed), for a person to look at.
 //
 // Run: node video-as-shown.js   (or `npm test` for every suite in this directory)
@@ -168,7 +168,31 @@ function recording(theme, mic) {
       window.RichSettings.close();
       await T.until("Settings to close", () => !T.seen("#set-menu"));
 
-      // 3. A MESSAGE OF SEVERAL LINES
+      // The tooltip sits above the sidebar wordmark, which is later in DOM order.
+      const home = document.querySelector("#nr-home");
+      const tip = document.querySelector("#nr-tip");
+      const canvas = document.querySelector(".rv-canvas");
+      const cx = canvas.getContext("2d");
+      const pixel = (x, y) => {
+        const scale = canvas.width / innerWidth;
+        return Array.from(cx.getImageData(Math.floor(x * scale), Math.floor(y * scale), 1, 1).data).slice(0, 3);
+      };
+      home.dispatchEvent(new PointerEvent("pointerover", { bubbles: true }));
+      await T.until("the fully visible Home tooltip", () => !tip.hidden && getComputedStyle(tip).opacity === "1");
+      const mark = R.state().frames;
+      await T.until("the Home tooltip to be recorded", () => R.state().frames > mark);
+      const tipRect = tip.getBoundingClientRect();
+      const ink = getComputedStyle(tip).backgroundColor.match(/\d+/g).map(Number);
+      const strip = Array.from({ length: Math.floor(tipRect.width) - 16 }, (_, i) => pixel(tipRect.left + 8 + i, tipRect.top + 3));
+      const arrow = pixel(tipRect.left - 2, tipRect.top + tipRect.height / 2);
+      out.tip = { ink, strip, arrow, at: (performance.now() - from) / 1000 };
+      await T.sleep(550); // keep a stable tooltip frame in the saved video
+      home.dispatchEvent(new PointerEvent("pointerout", { bubbles: true }));
+      const after = R.state().frames;
+      await T.until("a frame after the tooltip closes", () => R.state().frames > after);
+      out.tip.closed = tip.hidden && pixel(tipRect.left + 8, tipRect.top + 3).some((color, i) => color !== ink[i]);
+
+      // A MESSAGE OF SEVERAL LINES
       box.value = lines.join("\n");
       box.dispatchEvent(new Event("input", { bubbles: true }));
       const s = getComputedStyle(box);
@@ -215,11 +239,11 @@ async function asShown(theme, mic) {
     if (mic) assertEqual(d.muted, true, "the sheet's player is not muted in a test run");
     fs.mkdirSync(KEEP, { recursive: true });
     fs.copyFileSync(file, path.join(KEEP, tag + ".mp4"));
-    for (const [name, place] of [["1-empty-box", d.blank], ["2-settings-list-closed", d.closed], ["3-several-lines", d.typed]]) {
+    for (const [name, place] of [["1-empty-box", d.blank], ["2-settings-list-closed", d.closed], ["3-nav-tooltip", d.tip], ["4-several-lines", d.typed]]) {
       execFileSync("ffmpeg", ["-v", "error", "-y", "-ss", place.at.toFixed(2), "-i", file, "-frames:v", "1", path.join(KEEP, tag + "-" + name + ".png")]);
     }
 
-    // each of the three is looked at, whatever the one before it showed
+    // Check every recorded state, even when one fails.
     const faults = [];
     const hold = (ok, fault) => {
       if (!ok) faults.push(fault);
@@ -253,6 +277,12 @@ async function asShown(theme, mic) {
     }
     hold(lost.length === 0, "A LINE IS NOT WHOLE: " + JSON.stringify(lost) + " are not in the video; drawn in the box: " + JSON.stringify(Array.from(new Set(inBox))));
     hold(starts.every((off) => off <= 0.5), "A LINE STARTS IN THE WRONG PLACE: the lines start " + starts.map((o) => o.toFixed(1)).join(", ") + " px from where the box puts them (" + d.typed.left.toFixed(1) + ")");
+    // The opaque plate must cover the content underneath and include its CSS border triangle.
+    const isTipInk = (pixel) => pixel.every((value, channel) => Math.abs(value - d.tip.ink[channel]) <= 2);
+    const gaps = d.tip.strip.filter((pixel) => !isTipInk(pixel));
+    hold(gaps.length === 0, "THE SIDEBAR SHOWS THROUGH THE HOME TOOLTIP: " + gaps.length + " pixels differ from its solid fill");
+    hold(isTipInk(d.tip.arrow), "THE HOME TOOLTIP'S ARROW IS MISSING: " + d.tip.arrow.join(", "));
+    hold(d.tip.closed, "THE HOME TOOLTIP STAYED IN THE RECORDING AFTER IT CLOSED");
     assertEqual(faults, [], "THE VIDEO DOES NOT SHOW WHAT THE WINDOW SHOWS");
     return `${tag}: the hint alone in the empty box (${d.blank.at.toFixed(1)} s in); "By month" closed with none of its ${MONTHS.length} counts (${d.closed.at.toFixed(1)} s), opened with all, closed again with none; ${LINES.length} lines whole and each starting where the box puts it (${d.typed.at.toFixed(1)} s); the file is ${Number(probe.format.duration).toFixed(1)} s long`;
   } finally {
@@ -397,11 +427,11 @@ function asking() {
 }
 
 async function main() {
-  const run = createRun("a video shows the app as the window shows it, in the Mac's own webview: the empty message box, a closed list in Settings, a message of several lines, and a microphone that is not tied to the speakers");
+  const run = createRun("a video shows the app as the window shows it, in the Mac's own webview: the empty message box, Settings, the nav tooltip, multiline text and the microphone");
 
-  await run.check("dark, with the microphone: the empty message box has its hint and no placeholder under it, Settings' closed list is not drawn until it is opened, and every line of a message starts where the box puts it", async () => asShown("dark", true));
+  await run.check("dark, with the microphone: the empty message box has its hint and no placeholder under it, Settings' closed list is not drawn until it is opened, the nav tooltip is opaque, and every line of a message starts where the box puts it", async () => asShown("dark", true));
 
-  await run.check("light, without the microphone: the same three", async () => asShown("light", false));
+  await run.check("light, without the microphone: the same recorded states", async () => asShown("light", false));
 
   for (const files of [false, true]) {
     const tool = files ? "RichFiles" : "RichCleaner";
