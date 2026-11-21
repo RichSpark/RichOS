@@ -207,6 +207,7 @@
 [richos] an emptied attachment folder was left for the sweep: {}
 [richos] an unsupported web push subscription was refused at the edge
 [richos] answer receipt remains unreadable: {}
+[richos] assignment activity could not be published: {}
 [richos] assignments: a record could not be read, so its notices wait: {}
 [richos] assignments: a record on this conversation could not be read, so its notices wait: {}
 [richos] attached files could not be moved into the conversation: {}
