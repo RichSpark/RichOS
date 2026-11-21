@@ -73,6 +73,10 @@
 [richos] chat-list recovery=queued attempt={}
 [richos] launch record: could not mark a clean exit: {}
 [richos] launch record: {}
+# The close handler emits these only after a native window close request.
+[richos] main window close: completion could not reach the main thread ({})
+[richos] main window close: could not keep the diagnostic ({})
+[richos] main window close: destruction could not be queued ({})
 [richos] loro correction desk is open but no context compiler is configured — nothing was ever put in front of Rich, so no correction can name a record and the trigger will stay silent
 [richos] loro correction desk unavailable, corrections will refuse rather than pretend: {}
 [richos] loro correction desk: CLOSED — {}. Confirming a correction will refuse and say so rather than appearing to write.
