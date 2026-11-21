@@ -78,7 +78,7 @@ async function launchGuardedWebKit(webkit, run) {
     guardCalls(page, "page", ["addInitScript", "addStyleTag", "close", "emulateMedia", "evaluate", "setViewportSize"]);
     guardCalls(page.clock, "page.clock", ["setFixedTime"]);
     guardCalls(page.keyboard, "page.keyboard", ["press", "type"]);
-    guardCalls(page.mouse, "page.mouse", ["click", "move"]);
+    guardCalls(page.mouse, "page.mouse", ["click", "dblclick", "down", "move", "up", "wheel"]);
     guardLocatorFactories(page, LOCATOR_FACTORIES);
     return page;
   }
