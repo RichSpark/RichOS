@@ -5634,7 +5634,8 @@ fn start_voice_capture(app: AppHandle, thread_id: Option<String>) -> Result<serd
 
     let state = app.state::<AppState>();
     let pending = take_the_spine_or_give_up(&state.spine)
-        .ok_or("conversation state poisoned")?.pending_voice_playback();
+        .ok_or("Quit RichOS and open it again to use Talk to Rich.")?
+        .pending_voice_playback();
     let observer: Arc<dyn VoiceObserver> = Arc::new(TauriVoiceEmitter {
         app: app.clone(), pending: Some(pending.clone()),
     });
