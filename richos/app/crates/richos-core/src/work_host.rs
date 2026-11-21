@@ -4691,6 +4691,9 @@ mod tests {
         let (quota, home) = account_one_and_home_with_room(&h);
         let stu = native_stu(h, quota);
         let backend = stu.backend();
+        // Keep the account mover from sending its own input while the fixture injects
+        // the two outcomes. Only the receipt under test can end the automatic turn here.
+        let account_move = backend.moving.lock().unwrap();
         let sink = stu.sink.lock().unwrap().clone().unwrap();
         sink(vec![serde_json::json!({"type":"assistant","message":{"content":[
             {"type":"text","text":"An automatic turn is carrying on."}]}})]);
@@ -4708,6 +4711,7 @@ mod tests {
             result: Ok("end_turn".into()), report_failure: true,
         });
         assert!(!backend.inner.lock().unwrap().automatic_turn, "the native result left the old lease busy");
+        drop(account_move);
         until("Stu continued on the new account", || stu.accounts("account_moved") == [home.id.clone()]);
         stu.end();
     }
