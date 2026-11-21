@@ -148,7 +148,7 @@ pub fn finder_take_service_query(window: tauri::WebviewWindow) -> Result<Option<
     Ok(SEARCH_QUERY.lock().map_err(|_| "RichFinder is unavailable")?.take())
 }
 
-pub fn register(app: &AppHandle) -> Result<(), String> {
+pub fn register(app: &AppHandle, _main: objc2::MainThreadMarker) -> Result<(), String> {
     APP.set(app.clone())
         .map_err(|_| "RichCleaner Service is already registered")?;
     let superclass = AnyClass::get(c"NSObject").ok_or("macOS services are unavailable")?;

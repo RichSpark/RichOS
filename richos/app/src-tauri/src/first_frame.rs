@@ -201,8 +201,10 @@ mod tests {
         let native = &main[native..];
         let overlay = native.find("splash_player::show_on_window").expect("the native layer attaches");
         let visible = native.find("splash_player::window_visible").expect("the native window starts playback");
+        let ready = native.find("startup_ready.await").expect("Home waits for application state");
         let webview = native.find(".add_child(").expect("the page joins the window later");
-        assert!(overlay < visible && visible < webview, "the native layer starts before WebKit is created");
+        assert!(overlay < visible && visible < ready && ready < webview,
+            "start the native layer before waiting for application state and creating WebKit");
         assert!(!window_setup.contains("displayIfNeeded") && !native[..webview].contains("displayIfNeeded"),
             "a synchronous AppKit redraw can reenter Tao setup");
     }

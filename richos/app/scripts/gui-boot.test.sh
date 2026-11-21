@@ -442,6 +442,8 @@ declare_rules() {
   # The late full read of the bundle and the engine, 60 s after the page (late_check.rs).
   routine '^\[richos\] late check: the (updated bundle|engine runtime).s every byte matches its (receipt|delivery) \([0-9]+ ms\)$' \
     'the late background check confirming what was written; a confirmation, not a finding'
+  routine '^\[richos\] RichCleaner: startup panel ready$' \
+    'RichCleaner is enabled and AppKit has built its startup panel'
   routine '^\[richos\] native splash: frame zero scheduled [0-9]+ ms after process start$' \
     'the authored splash clock began'
   routine '^\[richos\] native splash: (reached authored endpoint at ([0-9]+ ms|unknown) after process start|fade complete)$' \
