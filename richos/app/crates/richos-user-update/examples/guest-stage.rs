@@ -30,6 +30,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let home = Path::new(home);
     let staged = richos_user_update::stage_verified(home, &fs::read(archive)?, version)?;
     if prepare_only {
+        // The same archive staged again after it was put in place returns the published
+        // receipt and prepares nothing: say so instead of claiming a queued update.
+        if !richos_user_update::has_prepared(home) {
+            return Err(format!("nothing prepared: {} is already in place", staged.version).into());
+        }
         println!("prepared {}", staged.version);
         return Ok(());
     }
