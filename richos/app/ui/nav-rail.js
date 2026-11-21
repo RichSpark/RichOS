@@ -210,14 +210,13 @@
       paint();
     });
   }
-  // The surfaces the rail selects (the palette, the RichScribe sheet, the bug panel) show and
-  // hide by their `hidden` attribute, so that one attribute on those three is what the rail
-  // watches. Every other `hidden` in the app is ignored without a layout read, so a streaming
-  // conversation never pays for the rail.
+  // The selected overlays and the rail items show and hide through `hidden`.
+  // When an optional tool arrives, it can move the selected item without resizing the rail.
+  // Ignore hidden attributes elsewhere so the conversation never pays for a rail layout read.
   const WATCHED = new Set(["bugdock", "search-overlay", "dictation-sheet"]);
   new MutationObserver((records) => {
-    for (const r of records) {
-      if (WATCHED.has(r.target.id)) return schedule();
+    for (const { target } of records) {
+      if (WATCHED.has(target.id) || (nav.contains(target) && target.matches(".nr-item"))) return schedule();
     }
   }).observe(document.body, {
     subtree: true,

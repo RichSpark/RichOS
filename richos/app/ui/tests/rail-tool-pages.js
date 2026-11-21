@@ -2,18 +2,18 @@
 
 const path = require("path");
 const { loadPlaywright, createRun, assert, assertEqual, UI_DIR,
-  leaveHome, shellSettled, captureSettled, publishShot, SHOT_DIR } = require("./lib/harness");
+  leaveHome, shellSettled, flushFrames, captureSettled, publishShot, SHOT_DIR } = require("./lib/harness");
 const contrast = require("./lib/contrast");
 
 const screenshots = process.env.RICHOS_RAIL_PAGE_SHOTS || SHOT_DIR;
 
-async function open(browser, theme, available = true) {
+async function open(browser, theme, available = true, delayTools = false) {
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, reducedMotion: "reduce" });
-  await page.addInitScript(({ theme, available }) => {
+  await page.addInitScript(({ theme, available, delayTools }) => {
     localStorage.setItem("richos-theme", theme);
     localStorage.setItem("richos-font-scale", "100");
     localStorage.setItem("richos-mock-config", JSON.stringify({ theme, font_scale: 100, user_name: "Alex Booster" }));
-    window.__RICHOS_MOCK_PRESET__ = { richFiles: true };
+    window.__RICHOS_MOCK_PRESET__ = { richFiles: true, meetingNotes: { available: !delayTools } };
     const state = {
       shortcut: { available, enabled: false, registered: false,
         shortcut: { code: "KeyC", control: true, shift: true, option: false, command: false } },
@@ -33,7 +33,9 @@ async function open(browser, theme, available = true) {
             calls.push({ command, args });
           }
           switch (command) {
-            case "glance_capture_status": return structuredClone(state.shortcut);
+            case "glance_capture_status":
+              if (delayTools) await new Promise(resolve => { window.releaseGlanceStatus = resolve; });
+              return structuredClone(state.shortcut);
             case "glance_capture_configure":
               if (args.shortcut.code === "KeyX") throw new Error("That shortcut is unavailable.");
               Object.assign(state.shortcut, args, { registered: args.enabled });
@@ -52,7 +54,7 @@ async function open(browser, theme, available = true) {
         } };
       },
     });
-  }, { theme, available });
+  }, { theme, available, delayTools });
   await page.clock.setFixedTime(new Date("2026-11-21T09:00:00Z"));
   await page.goto("file://" + path.join(UI_DIR, "index.html"));
   await leaveHome(page);
@@ -166,6 +168,42 @@ async function main() {
       }
     });
   }
+
+  await run.check("late rail items move the selection bar without another press", async () => {
+    const page = await open(browser, "dark", true, true);
+    try {
+      await page.click("#nr-pass");
+      const centers = async () => {
+        await flushFrames(page);
+        return page.locator("#nav-rail").evaluate(nav => {
+          const y = element => {
+            const rect = element.getBoundingClientRect();
+            return rect.top + rect.height / 2;
+          };
+          return { selected: y(nav.querySelector("[aria-current=page]")), bar: y(nav.querySelector(".nr-ind")) };
+        });
+      };
+      const first = await centers();
+      assert(Math.abs(first.selected - first.bar) <= 1, "the bar starts beside RichPass");
+      await page.evaluate(() => window.releaseGlanceStatus());
+      await page.locator("#nr-glance").waitFor();
+      const withGlance = await centers();
+      assert(withGlance.selected > first.selected, "RichGlance moves RichPass down");
+      assert(Math.abs(withGlance.selected - withGlance.bar) <= 1, "the bar follows when RichGlance appears");
+      await page.evaluate(() => window.__RICHOS_MOCK__.meetingSet({ available: true }));
+      await page.locator("#nr-brief").waitFor();
+      const withBrief = await centers();
+      assert(withBrief.selected > withGlance.selected, "RichBrief moves RichPass down");
+      assert(Math.abs(withBrief.selected - withBrief.bar) <= 1, "the bar follows when RichBrief appears");
+      await page.evaluate(() => window.__RICHOS_MOCK__.meetingSet({ available: false }));
+      await page.locator("#nr-brief").waitFor({ state: "hidden" });
+      const withoutBrief = await centers();
+      assertEqual(withoutBrief.selected, withGlance.selected);
+      assert(Math.abs(withoutBrief.selected - withoutBrief.bar) <= 1, "the bar follows when RichBrief disappears");
+    } finally {
+      await page.close();
+    }
+  });
 
   await run.check("RichGlance controls use the native capture, shortcut, workflow and image viewer commands", async () => {
     const page = await open(browser, "light");
