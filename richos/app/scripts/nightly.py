@@ -628,6 +628,7 @@ def stable_plan(nightly_tag, record_text, now=None, words=None):
     decision = promotion_decision(nightly_tag, record_text, words,
                                   now.astimezone().strftime("%Y-%m-%d"))
     git("fetch", "--no-tags", "origin", f"refs/tags/{nightly_tag}")
+    nightly_build_commit = git("rev-parse", "FETCH_HEAD")
     try:
         built = json.loads(git("show", f"FETCH_HEAD:{PROVENANCE}"))
     except subprocess.CalledProcessError as error:
@@ -707,6 +708,12 @@ def stable_plan(nightly_tag, record_text, now=None, words=None):
             # `nightly-build.json` and its committed provenance: which nightly this is a
             # rebuild of, and the record of the decision that allowed it.
             "promoted_from": nightly_tag, "promoted_from_version": built["version"],
+            "promoted_nightly_proof": {
+                "build_commit": nightly_build_commit,
+                "run_id": built.get("run_id"),
+                "gates": built.get("gate_evidence"),
+                "dependencies_sha256": built.get("gate_dependencies_sha256"),
+            },
             "promotion_decided_on": decision["decided_on"],
             "promotion_words": decision["words"],
             # The hidden reservation and the exact value this plan saw it hold, which is
@@ -914,7 +921,16 @@ def record_served_nightly(info, manifest):
     with tempfile.TemporaryDirectory(prefix="richos-nightly-served-") as tmp:
         marker = Path(tmp) / "published.json"
         marker.write_text(json_text(manifest))
-        verify_served_asset(ENDPOINT, marker)
+        # GitHub can briefly serve the previous manifest after accepting the upload.
+        # Keep checking the same public URL for at most 55 seconds of waits and reads.
+        for wait in (2, 4, 8, 16, None):
+            try:
+                verify_served_asset(ENDPOINT, marker, max_time=5)
+                break
+            except (ValueError, subprocess.CalledProcessError):
+                if wait is None:
+                    raise
+                time.sleep(wait)
         try:
             execute("gh", "release", "upload", info["tag"], "--repo", REPO, str(marker))
         except subprocess.CalledProcessError:
@@ -1034,11 +1050,11 @@ def release_assets(release_id):
     return [asset for page in pages for asset in page]
 
 
-def verify_served_asset(url, source):
+def verify_served_asset(url, source, *, max_time=600):
     with tempfile.TemporaryDirectory(prefix="richos-asset-verify-") as tmp:
         downloaded = Path(tmp) / "asset"
         execute("curl", "--fail", "--location", "--silent", "--show-error",
-                "--max-time", "600", "--output", str(downloaded), url)
+                "--max-time", str(max_time), "--output", str(downloaded), url)
         if sha256_file(downloaded) != sha256_file(source):
             raise ValueError(f"published asset differs from the candidate: {url}; never overwrite it")
 
