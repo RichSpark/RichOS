@@ -56,19 +56,111 @@
 //! the app must own that one item, which is what `main.rs` now does.
 
 #[cfg(target_os = "macos")]
+pub(crate) fn hide_main_window(window: &tauri::Window, api: &tauri::CloseRequestApi) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::Instant;
+    use tauri::Manager;
+
+    static CLOSING: AtomicBool = AtomicBool::new(false);
+
+    let received = Instant::now();
+    // AppKit submits the order-out to WindowServer when we give the event loop back.
+    // Keep even diagnostic writes off this event, and destroy the window after cleanup.
+    let hide_requested = window.hide().is_ok();
+    let hide_time = received.elapsed();
+    api.prevent_close();
+    if CLOSING.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    let number = window.ns_window().ok().and_then(|ptr| {
+        // SAFETY: Tauri supplied the live NSWindow on its main thread.
+        let number: isize = unsafe { objc2::msg_send![ptr.cast::<objc2::runtime::AnyObject>(), windowNumber] };
+        u32::try_from(number).ok().filter(|number| *number != 0)
+    });
+    let window = window.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let outcome = if hide_requested {
+            wait_for_window_server(number)
+        } else {
+            "hide failed"
+        };
+        record_window_close(outcome, hide_time, received.elapsed());
+        crate::cleaner_host::main_window_closing(window.app_handle());
+        let closing = window.clone();
+        if let Err(error) = window.run_on_main_thread(move || {
+            CLOSING.store(false, Ordering::Relaxed);
+            // A Dock activation can show the window again while cleanup runs.
+            if !hide_requested || !closing.is_visible().unwrap_or(false) {
+                if let Err(error) = closing.destroy() {
+                    eprintln!("[richos] main window close: destruction could not be queued ({error})");
+                }
+            }
+        }) {
+            CLOSING.store(false, Ordering::Relaxed);
+            eprintln!("[richos] main window close: completion could not reach the main thread ({error})");
+        }
+    });
+}
+
+#[cfg(target_os = "macos")]
+fn wait_for_window_server(number: Option<u32>) -> &'static str {
+    use core_foundation::{
+        array::{CFArray, CFArrayRef}, base::TCFType, boolean::CFBoolean,
+        dictionary::CFDictionary, string::CFString,
+    };
+    use std::time::{Duration, Instant};
+
+    #[link(name = "CoreGraphics", kind = "framework")]
+    extern "C" {
+        fn CGWindowListCopyWindowInfo(option: u32, window: u32) -> *const std::ffi::c_void;
+    }
+
+    let Some(number) = number else { return "window number unavailable" };
+    let key = CFString::from_static_string("kCGWindowIsOnscreen");
+    let bound = Instant::now() + Duration::from_millis(250);
+    loop {
+        const INCLUDING_WINDOW: u32 = 1 << 3;
+        // SAFETY: This asks WindowServer only for metadata about our own window.
+        // The returned CFArray owns its dictionaries and the documented visibility is CFBoolean.
+        let info = unsafe { CGWindowListCopyWindowInfo(INCLUDING_WINDOW, number) };
+        if info.is_null() {
+            return "WindowServer visibility unavailable";
+        }
+        let rows = unsafe {
+            CFArray::<CFDictionary<CFString, CFBoolean>>::wrap_under_create_rule(info as CFArrayRef)
+        };
+        let on_screen = rows.get(0).is_some_and(|row| {
+            row.find(&key).is_some_and(|value| *value == CFBoolean::true_value())
+        });
+        if !on_screen {
+            return "hidden";
+        }
+        if Instant::now() >= bound {
+            return "WindowServer still reports visible";
+        }
+        std::thread::sleep(Duration::from_millis(8));
+    }
+}
+
+#[cfg(target_os = "macos")]
 fn window_close_log() -> std::path::PathBuf {
     crate::startup_alert::log_path().with_file_name("window-close.log")
 }
 
-/// Measure only from receipt of the close event through AppKit's hide call.
+/// Keep the AppKit call and the subsequent WindowServer observation separate.
 #[cfg(target_os = "macos")]
-pub(crate) fn record_window_close(outcome: &str, hide_time: std::time::Duration) {
+fn record_window_close(
+    outcome: &str,
+    hide_time: std::time::Duration,
+    observation_time: std::time::Duration,
+) {
     let now = crate::startup_alert::utc_stamp(richos_core::util::now_millis());
     let version = crate::startup_alert::version();
     let pid = std::process::id();
-    let micros = hide_time.as_micros();
+    let hide_us = hide_time.as_micros();
+    let observation_us = observation_time.as_micros();
     let line = format!(
-        "{now} RichOS {version} pid {pid} main window close: {outcome}, event to hide return {micros} us"
+        "{now} RichOS {version} pid {pid} main window close: {outcome}, event to hide return {hide_us} us, event to WindowServer result {observation_us} us"
     );
     eprintln!("[richos] {line}");
     if let Err(error) = crate::launch_timing::append(&window_close_log(), &(line + "\n")) {

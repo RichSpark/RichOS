@@ -2807,24 +2807,10 @@ fn main() {
     tauri::Builder::default()
         .on_window_event(|window, event| {
             #[cfg(target_os = "macos")]
-            if matches!(event, tauri::WindowEvent::CloseRequested { .. })
-                && window.app_handle().config().app.windows.first().is_some_and(|main| main.label == window.label())
-            {
-                let received = std::time::Instant::now();
-                // On this thread, hide calls AppKit's orderOut synchronously. Put it ahead of
-                // feature cleanup and Tauri's last-window exit decision, both of which can wait.
-                let hidden = window.hide();
-                let hide_time = received.elapsed();
-                let outcome = match hidden {
-                    Ok(()) => match window.is_visible() {
-                        Ok(false) => "hidden",
-                        Ok(true) => "still visible",
-                        Err(_) => "visibility unavailable",
-                    },
-                    Err(_) => "hide failed",
-                };
-                lifecycle::record_window_close(outcome, hide_time);
-                cleaner_host::main_window_closing(window.app_handle());
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if window.app_handle().config().app.windows.first().is_some_and(|main| main.label == window.label()) {
+                    lifecycle::hide_main_window(window, api);
+                }
             }
             #[cfg(not(target_os = "macos"))]
             let _ = (window, event);
