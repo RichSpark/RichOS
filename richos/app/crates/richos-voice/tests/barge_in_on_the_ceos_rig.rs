@@ -246,6 +246,16 @@ struct Outcome {
 /// INSIDE the window. That is the `AudibleWindow` property `self_voice_replay.rs` established, and
 /// getting it wrong in the lenient direction would hand this test an easier problem.
 fn replay(mic: &[f32], reference: &[f32], extra: Option<&[f32]>, at_frame: usize) -> Outcome {
+    replay_with_fragments(mic, reference, extra, at_frame, |_| {})
+}
+
+fn replay_with_fragments(
+    mic: &[f32],
+    reference: &[f32],
+    extra: Option<&[f32]>,
+    at_frame: usize,
+    mut admitted: impl FnMut(&AdmittedUtterance),
+) -> Outcome {
     let mut mic = mic.to_vec();
     if let Some(sig) = extra {
         let lo = at_frame * VAD_FRAME_SAMPLES;
@@ -286,7 +296,10 @@ fn replay(mic: &[f32], reference: &[f32], extra: Option<&[f32]>, at_frame: usize
                         out.first_barge_frame = Some(b);
                     }
                 }
-                CapMsg::Utterance(_) => out.admitted += 1,
+                CapMsg::Utterance(utterance) => {
+                    out.admitted += 1;
+                    admitted(&utterance);
+                }
                 CapMsg::Discarded { tainted } => {
                     if tainted {
                         out.tainted_discards += 1
@@ -980,4 +993,50 @@ fn his_own_reply_to_the_half_duplex_line_is_heard() {
         dbfs(&word)
     );
     every_reply_to_the_line_is_kept(&[("1.904 s reply", long, false), ("0.192 s reply", word, true)], "his");
+}
+
+/// Bounded, offline measurement on labeled near-end clips supplied by the
+/// verification run. The fixture's onset is the insertion frame, independent
+/// of the detector's speech or interruption verdict.
+#[test]
+#[ignore = "Requires RICHOS_NEAR_END_PROBE: label, insertion frame and 16 kHz mono WAV, tab separated"]
+fn cut_detection_on_labeled_near_end_recordings() {
+    let _one = one_replay_at_a_time();
+    let list = std::env::var_os("RICHOS_NEAR_END_PROBE").expect("supply the offline fixture list");
+    let decoder = std::env::var_os("RICHOS_NEAR_END_PROBE_RUNTIME_BIN").map(|bin| {
+        use richos_voice::stt::{self, Recognizer};
+        stt::set_delivered_runtime_bin(Some(bin.into()));
+        Recognizer::for_model(stt::FALLBACK_MODEL_ID).expect("open the verified Talk to Rich decoder")
+    });
+    let scratch = std::env::temp_dir().join(format!("richos-near-end-probe-{}", std::process::id()));
+    let reference = read(ECHO_ONLY_MORNING, "-reference.wav");
+    let mic = read(ECHO_ONLY_MORNING, "-mic.wav");
+    let gain = mic_gain_for_residual(&mic, &reference, VOLUMES[3]);
+    let mic: Vec<_> = mic.into_iter().map(|sample| sample * gain).collect();
+    for line in std::fs::read_to_string(list).unwrap().lines().filter(|line| !line.is_empty()) {
+        let mut row = line.splitn(3, '\t');
+        let label = row.next().unwrap();
+        let at: usize = row.next().unwrap().parse().unwrap();
+        let wav = wav::read_pcm16(&std::fs::read(row.next().unwrap()).unwrap()).unwrap();
+        assert_eq!((wav.sample_rate, wav.channels), (SAMPLE_RATE, 1));
+        let mut desk = RecognizerDesk::new();
+        let notices = Lines::default();
+        let mut recognized = Vec::new();
+        let result = replay_with_fragments(&mic, &reference, Some(&wav.samples), at, |admitted| {
+            if let Some(decoder) = &decoder {
+                desk.handle(admitted, &notices, |samples| {
+                    decoder.transcribe(samples, &scratch)
+                }, |text, _| recognized.push(text));
+            }
+        });
+        let elapsed_ms = result.first_barge_frame.map(|frame| (frame as i64 - at as i64) * 16);
+        println!("{label}: detection_ms={elapsed_ms:?} admitted={} tainted={} other_discard={}",
+            result.admitted, result.tainted_discards, result.other_discards);
+        if decoder.is_some() {
+            println!("{label}: recognized={}", serde_json::to_string(&recognized).unwrap());
+        }
+    }
+    if scratch.exists() {
+        std::fs::remove_dir_all(scratch).unwrap();
+    }
 }
