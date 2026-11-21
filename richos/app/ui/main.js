@@ -5637,15 +5637,19 @@ Bridge.listen("rich://work-notice", ({ payload }) => {
 
 // Relay the reply stream to the speaker. Separate listeners so the render path above is
 // untouched; each is a no-op unless voice mode is on.
-Bridge.listen("rich://turn-started", () => {
-  if (voiceMode) Bridge.invoke("voice_turn_started").catch(() => {});
+function voiceReply(payload) {
+  if (!payload?.threadId || !payload?.turnId) return null;
+  return { threadId: payload.threadId, turnId: payload.turnId };
+}
+Bridge.listen("rich://turn-started", ({ payload }) => {
+  if (voiceMode) Bridge.invoke("voice_turn_started", { reply: voiceReply(payload) }).catch(() => {});
 });
 Bridge.listen("rich://chunk", ({ payload }) => {
-  if (voiceMode) Bridge.invoke("voice_speak_delta", { text: payload.textDelta }).catch(() => {});
+  if (voiceMode) Bridge.invoke("voice_speak_delta", { text: payload.textDelta, reply: voiceReply(payload) }).catch(() => {});
 });
-Bridge.listen("rich://turn-completed", () => {
+Bridge.listen("rich://turn-completed", ({ payload }) => {
   if (!voiceMode) return;
-  Bridge.invoke("voice_speak_end").catch(() => {});
+  Bridge.invoke("voice_speak_end", { reply: voiceReply(payload) }).catch(() => {});
   Bridge.invoke("voice_turn_ended").catch(() => {});
 });
 // A TURN THAT DIED SAYS SO OUT LOUD (open-items row 3.30, answer 1).
@@ -5668,7 +5672,7 @@ Bridge.listen("rich://turn-completed", () => {
 // Nothing here parses it — one classifier owns that decision and it is not this file.
 Bridge.listen("rich://turn-error", ({ payload }) => {
   if (!voiceMode) return;
-  Bridge.invoke("voice_turn_cut_off", { reason: (payload && payload.reason) || null }).catch(() => {});
+  Bridge.invoke("voice_turn_cut_off", { reason: (payload && payload.reason) || null, reply: voiceReply(payload) }).catch(() => {});
 });
 
 // ---------------------------------------------------------------------------------------

@@ -340,6 +340,9 @@ pub trait Cognition: Send {
     /// App-authored conversation facts, identified by their existing ledger IDs.
     fn set_app_messages(&mut self, _messages: Vec<(String,String)>) {}
 
+    /// The latest applicable playback fact belongs on each request, including retries.
+    fn set_voice_playback(&mut self, _context: Option<String>) {}
+
     /// **Haiku, ready to name this conversation from its first message** (`thread_title.rs`).
     /// `None` — the default — for a lease that has no Haiku beside it; the conversation then
     /// keeps its provisional title.

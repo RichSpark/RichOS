@@ -310,14 +310,13 @@ struct Outcome {
     tainted_discards: usize,
     other_discards: usize,
     barge_ins: usize,
+    mid_utterance_barge_ins: usize,
     /// **`utterance START` lines — the artifact Ray's walk found MISSING.** Counted separately
     /// from admission on purpose: a start that is later discarded as echo is still the app
     /// noticing a sound, and it is the only thing the notice layer can hang a card on. Zero
     /// starts is a different defect from zero admissions and the record conflated them.
     starts: usize,
-    /// Of those, the ones born `tainted=true` — Rich was audible, so nothing of his is
-    /// submitted. This is the count that must be non-zero for a real interruption during an
-    /// answer: heard, acknowledged, not submitted.
+    /// Of those, the ones that started with echo present before the caller's barge-in.
     tainted_starts: usize,
 }
 
@@ -336,7 +335,12 @@ fn tally(msgs: &[CapMsg], out: &mut Outcome) {
             }
             CapMsg::Discarded { tainted: true } => out.tainted_discards += 1,
             CapMsg::Discarded { tainted: false } => out.other_discards += 1,
-            CapMsg::BargeIn { .. } => out.barge_ins += 1,
+            CapMsg::BargeIn { mid_utterance, .. } => {
+                out.barge_ins += 1;
+                if *mid_utterance {
+                    out.mid_utterance_barge_ins += 1;
+                }
+            }
             _ => {}
         }
     }
@@ -1094,7 +1098,7 @@ fn the_level_at_which_a_talker_over_rich_starts_an_utterance() {
 /// defect Ray looked for will genuinely exist. If a future change makes (1) start an utterance,
 /// Rich is about to start transcribing himself again.
 #[test]
-fn a_near_end_voice_over_richs_answer_starts_a_tainted_utterance_and_is_never_submitted() {
+fn a_near_end_voice_over_richs_answer_barges_in_and_is_admitted() {
     let ray = say_offline("Samantha", "Excuse me Rich, you can stop counting now.");
     let talker_secs = ray.len() as f32 / SAMPLE_RATE as f32;
 
@@ -1129,6 +1133,7 @@ fn a_near_end_voice_over_richs_answer_starts_a_tainted_utterance_and_is_never_su
     alone.quiet(frames_for(2.0), "the answer is over");
     let bare = replay(&alone, &alone.audible_speaking(), None);
     assert_eq!(bare.admitted, 0, "Rich's own answer became a message: {bare:?}");
+    assert_eq!(bare.barge_ins, 0, "Rich's own answer interrupted itself: {bare:?}");
 
     // (2) The harness's own talk-over level. Nothing starts, and nothing should: it is the echo.
     let (s, at) = scene_with(HARNESS_THROUGH_THE_SPEAKERS_DBFS);
@@ -1141,8 +1146,10 @@ fn a_near_end_voice_over_richs_answer_starts_a_tainted_utterance_and_is_never_su
     );
     assert_eq!(harness.admitted, 0, "{harness:?}");
 
-    // (3) A near-end voice. It MUST be heard, it MUST be born tainted, and it MUST now BARGE IN
-    //     and be submitted — which is the opposite of what this step asserted until 2026-09-18.
+    assert_eq!(harness.barge_ins, 0, "audio at the echo level caused an interruption: {harness:?}");
+
+    // (3) A near-end voice must interrupt Rich and be admitted. If the recording opens
+    //     before the barge-in, it must be tainted until that event.
     //
     // **THE ASSERTIONS HERE USED TO READ `admitted == 0` AND `barge_ins == 0`, AND THEY WERE A
     // FAITHFUL DESCRIPTION OF THE DEFECT.** They said: a person at a near-field level talking
@@ -1174,14 +1181,14 @@ fn a_near_end_voice_over_richs_answer_starts_a_tainted_utterance_and_is_never_su
          the defect the .6 walk was read as showing, and it is now real: {near:?}"
     );
     assert_eq!(
-        near.tainted_starts,
-        bare.tainted_starts + 1,
-        "the utterance was not born tainted, so Rich's own voice could be submitted: {near:?}"
-    );
-    assert_eq!(
         near.barge_ins, 1,
         "a person talking over Rich for {talker_secs:.3} s at {near_field_dbfs:.1} dBFS did NOT \
          interrupt him — this is the CEO's 2026-09-18 report, reproduced: {near:?}"
+    );
+    assert_eq!(
+        near.tainted_starts,
+        near.mid_utterance_barge_ins,
+        "only an utterance that starts before the barge-in should start tainted: {near:?}"
     );
     assert_eq!(
         near.admitted,

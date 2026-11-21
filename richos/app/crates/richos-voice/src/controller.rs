@@ -40,6 +40,7 @@ use crate::chunk::SentenceChunker;
 use crate::endpoint::{UtteranceRecorder, Utterance};
 use crate::event::{VoiceEvent, VoiceObserver};
 use crate::noaudio::{no_audio_window_secs, NoAudioDetector};
+use crate::playback::{ChunkId, Playback, ReplyId};
 use crate::playout::Playout;
 use crate::state::{VoiceState, VoiceStateMachine};
 use crate::stt::{self, Recognizer};
@@ -381,7 +382,12 @@ pub enum CapMsg {
     /// barge-in always is (that is what fired it); a "tap to stop" often is NOT — he can hit
     /// the button in silence. Without this the state machine would be told "he is talking"
     /// and, with no utterance to end, would sit in `Hearing` forever.
-    BargeIn { mid_utterance: bool },
+    BargeIn {
+        mid_utterance: bool,
+        /// Detection time, not microphone onset.
+        detected_at: Instant,
+        window_secs: f32,
+    },
     /// **His turn is over**: [`crate::turn::END_OF_TURN_FRAMES`] consecutive frames the VAD did
     /// not call speech (125 x 256 / 16000 = 2.000 s), after an utterance has ended. Sent once per
     /// silence, never once per frame. Counted here, on the frames themselves, so the window is
@@ -823,7 +829,11 @@ impl CaptureBrain {
         if forced || self.monitor.push(interrupting) {
             self.barged = true;
             self.tainted = false;
-            out.push(CapMsg::BargeIn { mid_utterance: self.recorder.is_recording() });
+            out.push(CapMsg::BargeIn {
+                mid_utterance: self.recorder.is_recording(),
+                detected_at: Instant::now(),
+                window_secs: if forced { 0.0 } else { self.monitor.effective_debounce_secs() },
+            });
         }
 
         let finished = self.recorder.push_frame(frame, is_speech);
@@ -957,6 +967,7 @@ impl CaptureBrain {
 struct SpeakMsg {
     generation: u64,
     text: String,
+    reply_chunk: Option<ChunkId>,
     /// `Some` for an announcement (a job's result, [`VoiceController::speak_result`]), which
     /// belongs to no answer: its id in [`Shared::unheard`], given at [`dispatch`]. An
     /// interruption that ends its generation does not end IT; it is said again until heard
@@ -1013,6 +1024,7 @@ trait SpeechQueue {
     fn stop_now(&self) -> usize;
     /// Samples handed to the device so far.
     fn played(&self) -> u64;
+    fn confirmed(&self, _lookback_secs: f32) -> u64 { self.played() }
 }
 
 impl SpeechQueue for Playout {
@@ -1024,6 +1036,9 @@ impl SpeechQueue for Playout {
     }
     fn played(&self) -> u64 {
         self.played_samples()
+    }
+    fn confirmed(&self, lookback_secs: f32) -> u64 {
+        self.confirmed_samples(lookback_secs)
     }
 }
 
@@ -1050,6 +1065,7 @@ fn speak_one(shared: &Arc<Shared>, msg: &SpeakMsg, out: &dyn SpeechQueue, synthe
     }
     let mut held = false;
     let mut cut = false;
+    let mut last_sample = None;
     let result = synthesize(&msg.text, &mut |samples| {
         // Every PCM block must still belong to this answer and wait for his floor.
         while !may_sound(shared.his_floor.load(Ordering::Relaxed), shared.his_onset.load(Ordering::Relaxed))
@@ -1062,17 +1078,43 @@ fn speak_one(shared: &Arc<Shared>, msg: &SpeakMsg, out: &dyn SpeechQueue, synthe
             }
             std::thread::sleep(FLOOR_POLL);
         }
+        // Queueing and clearing are serialized with the reply observation, so
+        // there is no gap for stale PCM to arrive after the cutoff.
+        let playback = shared.playback.lock().unwrap_or_else(|p| p.into_inner());
         if !shared.running.load(Ordering::Relaxed) || msg.generation != shared.generation.load(Ordering::Relaxed) {
             cut = true;
             return false;
         }
         shared.answer_sounded.store(true, Ordering::Relaxed);
         let end = out.queue(samples);
+        if !samples.is_empty() {
+            last_sample = Some(end);
+        }
+        drop(playback);
         if let (Some(id), Ok(mut u)) = (msg.notice, shared.unheard.lock()) {
             u.queued(id, end.saturating_sub(samples.len() as u64), end);
         }
         true
     });
+    if let Some(chunk) = &msg.reply_chunk {
+        match (&result, cut, last_sample) {
+            (Ok(()), false, Some(end)) => {
+                let mut playback = shared.playback.lock().unwrap_or_else(|p| p.into_inner());
+                if msg.generation == shared.generation.load(Ordering::Relaxed) {
+                    playback.complete_chunk(chunk, end);
+                }
+            }
+            (Err(_), false, _) | (Ok(()), false, None) => {
+                if let Some(observer) = &shared.playback_observer {
+                    observer.record_reply_cut(&mut || {
+                        let mut playback = shared.playback.lock().unwrap_or_else(|p| p.into_inner());
+                        playback.failed_chunk(chunk, out.confirmed(0.0)).into_iter().collect()
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
     if let (Some(id), Ok(mut u)) = (msg.notice, shared.unheard.lock()) {
         match &result {
             Ok(()) if !cut => u.complete(id),
@@ -1116,6 +1158,8 @@ impl Drop for PendingSpeech {
 }
 
 struct Shared {
+    playback: Mutex<Playback>,
+    playback_observer: Option<Arc<dyn VoiceObserver>>,
     /// Live input level 0..1, f32 bits. Written per frame by the audio thread.
     level: AtomicU32,
     /// **TRUE FOR THE WHOLE OF RICH'S ANSWER**, not merely while the playout queue is
@@ -1916,6 +1960,8 @@ impl VoiceController {
             Arc::new(Playout::start(Some(reference_ring)).map_err(VoiceStartError::Playout)?);
 
         let shared = Arc::new(Shared {
+            playback: Mutex::default(),
+            playback_observer: Some(observer.clone()),
             level: AtomicU32::new(0),
             speaking: AtomicBool::new(false),
             his_floor: AtomicBool::new(false),
@@ -2280,6 +2326,27 @@ impl VoiceController {
         }
     }
 
+    pub fn speak_reply_delta(&self, reply: &ReplyId, delta: &str) {
+        let generation = self.shared.generation.load(Ordering::Relaxed);
+        let chunks = self.shared.playback.lock().unwrap_or_else(|p| p.into_inner()).delta(reply, generation, delta);
+        self.send_reply_chunks(chunks);
+    }
+
+    pub fn end_reply_speech(&self, reply: &ReplyId, flush: bool) {
+        let chunks = self.shared.playback.lock().unwrap_or_else(|p| p.into_inner()).end(reply, flush);
+        self.send_reply_chunks(chunks);
+    }
+
+    fn send_reply_chunks(&self, chunks: Vec<(u64, ChunkId, String)>) {
+        if let Some(tx) = &self.speak_tx {
+            for (generation, chunk, text) in chunks {
+                offer_to_speaker(&self.shared, &self.gate, tx, SpeakMsg {
+                    generation, text, reply_chunk: Some(chunk), notice: None, result: 0,
+                });
+            }
+        }
+    }
+
     /// The turn's terminal event arrived: speak whatever is left.
     pub fn speak_end(&self) {
         let generation = self.shared.generation.load(Ordering::Relaxed);
@@ -2346,7 +2413,18 @@ impl VoiceController {
 
     /// `rich://turn-started` — Rich has the turn.
     pub fn turn_started(&self) {
-        self.turns_started.fetch_add(1, Ordering::SeqCst);
+        self.start_turn(None);
+    }
+
+    fn start_turn(&self, reply: Option<&ReplyId>) {
+        {
+            let mut playback = self.shared.playback.lock().unwrap_or_else(|p| p.into_inner());
+            let sequence = self.turns_started.fetch_add(1, Ordering::SeqCst) + 1;
+            playback.last_started = reply.map(|id| (sequence, id.clone()));
+            if let Some(id) = reply {
+                playback.start(id, self.shared.generation.load(Ordering::Relaxed));
+            }
+        }
         if let Ok(mut m) = self.machine.lock() {
             m.turn_started();
         }
@@ -2357,6 +2435,10 @@ impl VoiceController {
         if let Ok(mut c) = self.chunker.lock() {
             c.reset();
         }
+    }
+
+    pub fn reply_started(&self, reply: Option<&ReplyId>) {
+        self.start_turn(reply);
     }
 
     /// A terminal turn event. Rich may still be speaking the tail.
@@ -2384,10 +2466,23 @@ impl VoiceController {
     /// turn he had not finished (review rv-20261013T184256Z, finding 4): the same stop as the
     /// Stop button. Without one installed, the partial turn runs on and only its answer is
     /// silenced; his whole thought still follows as one turn.
-    pub fn on_withdraw(&self, stop_running_turn: Arc<dyn Fn() + Send + Sync>) {
+    pub fn on_withdraw(&self, stop_running_turn: impl Fn(ReplyId) + Send + Sync + 'static) {
+        let shared = Arc::downgrade(&self.shared);
         if let Ok(mut hook) = self.withdraw.lock() {
-            *hook = Some(stop_running_turn);
+            *hook = Some(Arc::new(move |sequence| {
+                let Some(shared) = shared.upgrade() else { return };
+                let reply = shared.playback.lock().unwrap_or_else(|p| p.into_inner())
+                    .last_started.as_ref().filter(|(started, _)| *started == sequence)
+                    .map(|(_, id)| id.clone());
+                if let Some(reply) = reply {
+                    stop_running_turn(reply);
+                }
+            }));
         }
+    }
+
+    pub fn silence_before_quit(&self) {
+        stop_pressed(&self.shared, &self.gate, &*self.playout);
     }
 
     /// Worst-case delay between an interruption and silence: one device callback period.
@@ -2410,7 +2505,7 @@ fn send_to_speaker(
     announcement: bool,
 ) {
     let result = if announcement { next_result() } else { 0 };
-    offer_to_speaker(shared, gate, tx, SpeakMsg { generation, text, notice: announcement.then_some(0), result });
+    offer_to_speaker(shared, gate, tx, SpeakMsg { generation, text, reply_chunk: None, notice: announcement.then_some(0), result });
 }
 
 /// [`send_to_speaker`] for a message already built.
@@ -2436,7 +2531,7 @@ fn send_result(shared: &Shared, gate: &Mutex<AnswerGate<SpeakMsg>>, tx: &Sender<
     sentences.extend(chunker.flush());
     let result = next_result();
     for text in sentences {
-        offer_to_speaker(shared, gate, tx, SpeakMsg { generation, text, notice: Some(0), result });
+        offer_to_speaker(shared, gate, tx, SpeakMsg { generation, text, reply_chunk: None, notice: Some(0), result });
     }
 }
 
@@ -2445,14 +2540,32 @@ fn send_result(shared: &Shared, gate: &Mutex<AnswerGate<SpeakMsg>>, tx: &Sender<
 /// behind it and he never heard is held again and said next; the one sounding as he pressed is
 /// what he stopped. Returns the samples dropped.
 fn stop_pressed(shared: &Shared, gate: &Mutex<AnswerGate<SpeakMsg>>, out: &dyn SpeechQueue) -> usize {
-    shared.generation.fetch_add(1, Ordering::Relaxed);
+    let dropped = cut_audio(shared, out, None);
     // He stopped this answer: nothing more of it is said, including sentences the model is
     // still writing.
     if let Ok(mut gate) = gate.lock() {
         gate.supersede();
     }
-    let dropped = out.stop_now();
     reclaim_unheard(shared, gate, out.played(), true);
+    dropped
+}
+
+fn cut_audio(shared: &Shared, out: &dyn SpeechQueue, overlap: Option<(Instant, f32)>) -> usize {
+    let mut dropped = 0;
+    let mut cut = || {
+        let mut playback = shared.playback.lock().unwrap_or_else(|p| p.into_inner());
+        let generation = shared.generation.fetch_add(1, Ordering::Relaxed);
+        dropped = out.stop_now();
+        let lookback_secs = overlap.map_or(0.0, |(detected, allowance)| {
+            allowance + detected.elapsed().as_secs_f32()
+        });
+        playback.cut(generation, out.confirmed(lookback_secs))
+    };
+    if let Some(observer) = &shared.playback_observer {
+        observer.record_reply_cut(&mut cut);
+    } else {
+        cut();
+    }
     dropped
 }
 
@@ -2499,6 +2612,7 @@ const FINISH_WAIT: Duration = Duration::from_millis(500);
 
 impl Drop for VoiceController {
     fn drop(&mut self) {
+        stop_pressed(&self.shared, &self.gate, &*self.playout);
         // **HIS LAST WORDS FIRST** (review rv-20261013T183507Z). What he said in the last 0.800 s
         // is still an open recording inside the capture callback, and destroying the stream
         // destroyed it. Ask the callback to close it, wait until the supervisor has handed it to
@@ -2510,9 +2624,7 @@ impl Drop for VoiceController {
             std::thread::sleep(Duration::from_millis(5));
         }
         self.shared.running.store(false, Ordering::SeqCst);
-        // Silence Rich immediately, then let the channels close and the threads finish.
-        self.playout.stop_now();
-        self.shared.generation.fetch_add(1, Ordering::SeqCst);
+        cut_audio(&self.shared, &*self.playout, None);
         if let Ok(mut m) = self.machine.lock() {
             m.stop();
         }
@@ -2867,17 +2979,17 @@ impl TurnDesk {
     /// **His new words superseded an answer to a turn he had not finished** (review
     /// rv-20261013T184256Z, finding 4). That turn's words are carried into the one he is saying
     /// now, so the request that stands is his whole thought, and the partial one is withdrawn:
-    /// the submit thread skips it if it has not reached it. Returns `Some(true)` when the partial
-    /// turn is the one RUNNING right now and must be stopped, `Some(false)` when there is nothing
-    /// to stop, `None` when no unanswered turn of his was waiting.
-    fn withdraw_unanswered(&mut self, turn_active: bool) -> Option<bool> {
+    /// the submit thread skips it if it has not reached it. Returns the started turn sequence
+    /// when a running turn must stop, or an empty inner option when there is nothing to stop.
+    /// The outer option is empty when there was no unanswered thought.
+    fn withdraw_unanswered(&mut self, turn_active: bool) -> Option<Option<u64>> {
         let u = self.unanswered.take()?;
         self.assembler.carry(u.turn);
         if let Ok(mut w) = self.withdrawn.lock() {
             w.insert(u.seq);
         }
         let started = self.turns_started.load(Ordering::SeqCst);
-        Some(turn_active && started == u.turns_started_at_send + 1)
+        Some((turn_active && started == u.turns_started_at_send + 1).then_some(started))
     }
 
     /// **His new words started a turn: does the partial one he had not finished join it?** Yes
@@ -2888,7 +3000,7 @@ impl TurnDesk {
     /// of its own (review rv-20261013T210558Z, finding 2). A turn the shell already finished
     /// with without starting it (the bug report took the words) is not waiting and does not
     /// join. Returns what [`Self::withdraw_unanswered`] returns, or `None` when nothing joins.
-    fn continue_thought(&mut self, outstanding: bool, turn_active: bool) -> Option<bool> {
+    fn continue_thought(&mut self, outstanding: bool, turn_active: bool) -> Option<Option<u64>> {
         let started = self.turns_started.load(Ordering::SeqCst);
         let done = self.submits_done.load(Ordering::SeqCst);
         let waiting = self
@@ -2999,9 +3111,9 @@ impl Drop for TurnDesk {
                     "[richos-voice] {} voice is going off; his earlier turn joins his last words",
                     wall_clock_utc()
                 );
-                if stop_it {
+                if let Some(sequence) = stop_it {
                     if let Some(stop) = self.stop.lock().ok().and_then(|h| h.clone()) {
-                        stop();
+                        stop(sequence);
                     }
                 }
             }
@@ -3158,7 +3270,7 @@ pub fn spoken_turn_withdrawn() -> bool {
 }
 
 /// The shell's stop for the running turn, installed by [`VoiceController::on_withdraw`].
-type WithdrawHook = Arc<Mutex<Option<Arc<dyn Fn() + Send + Sync>>>>;
+type WithdrawHook = Arc<Mutex<Option<Arc<dyn Fn(u64) + Send + Sync>>>>;
 
 /// What the supervisor needs to withdraw a turn he had not finished (finding 4).
 struct Withdrawal {
@@ -3236,9 +3348,8 @@ impl Floor {
             || held_answer > 0
             || shared.pending_answer.load(Ordering::Relaxed) > 0;
         if outstanding {
-            shared.generation.fetch_add(1, Ordering::Relaxed);
+            let cut = cut_audio(shared, out, None);
             self.supersede("he went on talking before Rich had said it");
-            let cut = out.stop_now();
             reclaim_unheard(shared, &self.gate, out.played(), false);
             return (true, cut);
         }
@@ -3249,9 +3360,13 @@ impl Floor {
     /// supersede the answer. An announcement he had not heard yet, even one sounding as he
     /// started, is held again and said after him: his voice is not a request to drop it. Returns
     /// the samples dropped.
+    #[cfg(test)]
     fn barge_in(&mut self, shared: &Shared, out: &dyn SpeechQueue) -> usize {
-        let dropped = out.stop_now();
-        shared.generation.fetch_add(1, Ordering::Relaxed);
+        self.barge_in_with_lookback(shared, out, None)
+    }
+
+    fn barge_in_with_lookback(&mut self, shared: &Shared, out: &dyn SpeechQueue, overlap: Option<(Instant, f32)>) -> usize {
+        let dropped = cut_audio(shared, out, overlap);
         // He took the floor back from this answer: nothing more of it is said, including the
         // sentences the model is still writing. Ends when the next turn starts.
         self.supersede("he interrupted it");
@@ -3486,8 +3601,17 @@ fn supervise(
                         eprintln!("[richos-voice] input is live again");
                     }
                 }
-                Ok(CapMsg::BargeIn { mid_utterance }) => {
-                    let dropped = floor.barge_in(&shared, &*playout);
+                Ok(CapMsg::BargeIn { mid_utterance, detected_at, window_secs }) => {
+                    // The button already cleared the audio. Its capture notification only
+                    // changes listening state, even if another reply has since started.
+                    if window_secs > 0.0 {
+                        let overlap = (detected_at, window_secs + input_latency.secs());
+                        let dropped = floor.barge_in_with_lookback(&shared, &*playout, Some(overlap));
+                        eprintln!(
+                            "[richos-voice] barge-in: cut Rich, dropped {dropped} samples ({:.3} s of queued speech)",
+                            dropped as f32 / playout.device_rate.max(1) as f32
+                        );
+                    }
                     shared.speaking.store(false, Ordering::Relaxed);
                     if let Ok(mut m) = machine.lock() {
                         m.barge_in();
@@ -3497,10 +3621,6 @@ fn supervise(
                             m.utterance_ended();
                         }
                     }
-                    eprintln!(
-                        "[richos-voice] barge-in: cut Rich, dropped {dropped} samples ({:.3} s of queued speech)",
-                        dropped as f32 / playout.device_rate.max(1) as f32
-                    );
                 }
                 Ok(CapMsg::TurnQuiet) => {
                     eprintln!(
@@ -3555,12 +3675,12 @@ fn supervise(
                 eprintln!(
                     "[richos-voice] {} his earlier turn joins the one he is saying now; {}",
                     wall_clock_utc(),
-                    if stop_it { "it is running, so it is stopped" } else { "it is not running" }
+                    if stop_it.is_some() { "it is running, so it is stopped" } else { "it is not running" }
                 );
-                if stop_it {
+                if let Some(sequence) = stop_it {
                     let hook = withdrawal.hook.lock().ok().and_then(|h| h.clone());
                     match hook {
-                        Some(stop) => stop(),
+                        Some(stop) => stop(sequence),
                         None => eprintln!("[richos-voice] no stop is installed; the partial turn runs on, silenced"),
                     }
                 }
@@ -3581,6 +3701,12 @@ fn supervise(
         //    the device is still emitting the last one. See `AudibleWindow`.
         let queued = playout.is_playing();
         let owed = shared.pending_speech.load(Ordering::Relaxed);
+        if !queued && owed == 0 {
+            if let Ok(mut playback) = shared.playback.try_lock() {
+                let lookback = crate::bargein::barge_in_debounce_secs() + input_latency.secs() + TICK.as_secs_f32();
+                playback.retire(playout.confirmed_samples(lookback));
+            }
+        }
         let hold = audible_hold_secs(playout.audible_tail_secs(), input_latency.secs());
         let now_ms = started_at.elapsed().as_millis() as u64;
         let (answer_edge, chunk_edge) = audible.observe(queued, owed > 0, hold, now_ms);
@@ -3971,7 +4097,7 @@ mod tests {
         desk.assembler.utterance_admitted(1200);
         words_tx.send(Some(("after I approve it.".to_string(), false))).unwrap();
         assert!(desk.collect(), "his continuation did not start a new turn");
-        assert_eq!(desk.withdraw_unanswered(true), Some(true), "the running partial turn was not stopped");
+        assert_eq!(desk.withdraw_unanswered(true), Some(Some(1)), "the running partial turn was not stopped");
         assert!(desk.withdrawn.lock().unwrap().contains(&1));
         desk.assembler.quiet();
         desk.release();
@@ -3981,7 +4107,7 @@ mod tests {
             "the request that stands is not his whole thought"
         );
         // Nothing to withdraw twice, and a turn not yet started is skipped rather than stopped.
-        assert_eq!(desk.withdraw_unanswered(true), Some(false), "a turn that never started was stopped");
+        assert_eq!(desk.withdraw_unanswered(true), Some(None), "a turn that never started was stopped");
     }
 
     /// INVARIANT — review rv-20261013T210558Z, finding 2. He switches Talk to Rich on while
@@ -4042,7 +4168,7 @@ mod tests {
         assert!(desk.collect(), "his continuation did not start a new turn");
         assert_eq!(
             desk.continue_thought(false, false),
-            Some(false),
+            Some(None),
             "the partial turn waiting for the spine was not withdrawn"
         );
         desk.assembler.quiet();
@@ -4223,7 +4349,7 @@ mod tests {
         let (mut desk, words_tx, ran, worker) = resumed_while_waiting();
         words_tx.send(Some(("after I approve it.".to_string(), false))).unwrap();
         assert!(desk.collect());
-        assert_eq!(desk.continue_thought(false, false), Some(false), "the waiting turn was not withdrawn");
+        assert_eq!(desk.continue_thought(false, false), Some(None), "the waiting turn was not withdrawn");
         desk.assembler.quiet();
         desk.release();
         desk.publish_floor();
@@ -4296,7 +4422,7 @@ mod tests {
         let withdrawn: Arc<Mutex<HashSet<u64>>> = Default::default();
         let stops = Arc::new(AtomicU32::new(0));
         let counted = stops.clone();
-        let stop: WithdrawHook = Arc::new(Mutex::new(Some(Arc::new(move || {
+        let stop: WithdrawHook = Arc::new(Mutex::new(Some(Arc::new(move |_| {
             counted.fetch_add(1, Ordering::SeqCst);
         }))));
         {
@@ -4478,6 +4604,8 @@ mod tests {
     /// `Shared` as the controller builds it, with nothing running yet.
     fn test_shared() -> Arc<Shared> {
         Arc::new(Shared {
+            playback: Mutex::default(),
+            playback_observer: None,
             level: AtomicU32::new(0),
             speaking: AtomicBool::new(false),
             his_floor: AtomicBool::new(false),
@@ -4524,6 +4652,52 @@ mod tests {
         fn played(&self) -> u64 {
             self.played.load(Ordering::SeqCst)
         }
+    }
+
+    #[derive(Default)]
+    struct Cutoffs(Mutex<Vec<crate::playback::ReplyCutoff>>);
+
+    impl VoiceObserver for Cutoffs {
+        fn on_voice_event(&self, _: &VoiceEvent) {}
+        fn record_reply_cut(&self, cut: &mut dyn FnMut() -> Vec<crate::playback::ReplyCutoff>) {
+            self.0.lock().unwrap().extend(cut());
+        }
+    }
+
+    #[test]
+    fn voice_stop_keeps_the_confirmed_prefix_and_rejects_late_pcm() {
+        let observer = Arc::new(Cutoffs::default());
+        let mut shared = test_shared();
+        Arc::get_mut(&mut shared).unwrap().playback_observer = Some(observer.clone());
+        let reply = ReplyId { thread_id: "origin".into(), turn_id: "reply".into() };
+        let gate = Mutex::new(AnswerGate::new());
+        let (tx, rx) = channel();
+        let out = TestDevice::default();
+        let chunks = shared.playback.lock().unwrap().delta(&reply, 0, "The build passed. The release is pending. ");
+        for (generation, chunk, text) in chunks {
+            dispatch(&shared, &tx, SpeakMsg { generation, text, reply_chunk: Some(chunk), notice: None, result: 0 });
+        }
+        let first = rx.recv().unwrap();
+        speak_one(&shared, &first, &out, &mut |_, queue| {
+            assert!(queue(&[0.0; 10]));
+            Ok(())
+        }).unwrap();
+        out.play(10);
+        let second = rx.recv().unwrap();
+        speak_one(&shared, &second, &out, &mut |_, queue| {
+            assert!(queue(&[0.0; 10]));
+            assert_eq!(stop_pressed(&shared, &gate, &out), 10);
+            assert!(!queue(&[0.0; 10]));
+            Ok(())
+        }).unwrap();
+        stop_pressed(&shared, &gate, &out);
+        assert_eq!(out.queued.load(Ordering::SeqCst), 0);
+        assert_eq!(*observer.0.lock().unwrap(), [crate::playback::ReplyCutoff {
+            reply,
+            confirmed_chunks: 1,
+            last_confirmed: Some("The build passed.".into()),
+            first_unconfirmed: Some("The release is pending.".into()),
+        }]);
     }
 
     /// Samples per sentence the test synthesizer makes, in two blocks of half each.
@@ -4815,6 +4989,7 @@ mod tests {
             // `send_to_speaker`: the generation at the send, the floor as published.
             let offer = |text: &str, announcement: bool| {
                 let msg = SpeakMsg {
+                    reply_chunk: None,
                     generation: shared.generation.load(Ordering::Relaxed),
                     text: text.into(),
                     notice: announcement.then_some(0),
@@ -5458,7 +5633,7 @@ mod tests {
             "premise: the utterance must be born clean, in a quiet room"
         );
         assert!(
-            out.iter().any(|m| matches!(m, CapMsg::BargeIn { mid_utterance: true })),
+            out.iter().any(|m| matches!(m, CapMsg::BargeIn { mid_utterance: true, .. })),
             "premise: the tap-to-stop must have registered WHILE recording, or `barged` is \
              cleared again and taint comes back"
         );

@@ -440,7 +440,8 @@ fn prepare_delivery_io(state: &mut impl PreparationState, delivery: &mut Deliver
     }
     let prepared=prepare_connection(state,plan,&delivery.lease,&delivery.turn_id).and_then(|_| {
         if stopped() {return Ok(())}
-        let (original,source,conversation,channel,app_messages,first_words,live_meeting_at)=state.state(|s| {
+        let (original,source,conversation,channel,app_messages,first_words,live_meeting_at,voice_playback)=state.state(|s| {
+            s.flush_voice_playback();
             let (original, restart_attempt) = s.continuation_origin(&plan.binding, &delivery.turn_id);
             let turn=s.ledger.turn(&delivery.turn_id).ok_or(SpineError::NoLease)?;
             let channel=s.input_channels.get(&delivery.turn_id).cloned().or_else(||turn.channel.clone());
@@ -466,7 +467,8 @@ fn prepare_delivery_io(state: &mut impl PreparationState, delivery: &mut Deliver
                 app_messages.push((format!("restart:{}", turn.id), report.to_string()));
             }
             let live_meeting_at = (original == turn.id && his(turn)).then_some(turn.created_at);
-            Ok::<_,SpineError>((original,turn.source,conversation[from..].to_string(),channel,app_messages,first_words,live_meeting_at))
+            let voice_playback = crate::voice_playback::context(&scoped, &delivery.turn_id);
+            Ok::<_,SpineError>((original,turn.source,conversation[from..].to_string(),channel,app_messages,first_words,live_meeting_at,voice_playback))
         })?;
         let mut slot=delivery.lease.lock().unwrap();
         let lease=slot.as_mut().ok_or(SpineError::NoLease)?;
@@ -482,6 +484,7 @@ fn prepare_delivery_io(state: &mut impl PreparationState, delivery: &mut Deliver
             crate::cognition::WorkTurnInput { source, text: &delivery.text, live_meeting_at }, &mut |item|retain_preparation_item(state,&plan.binding,Some(&delivery.turn_id),item))?;
         lease.set_conversation_context(&conversation);
         lease.set_app_messages(app_messages);
+        lease.set_voice_playback(voice_playback);
         lease.set_input_channel(channel.as_deref())?;
     let control = plan.control.clone();
     let turn = ActiveTurn { turn_id: delivery.turn_id.clone(), thread_id: delivery.binding.thread_id().into(),
@@ -596,6 +599,7 @@ pub fn keep_front_desk_alive_without_the_spine(
 
 pub struct Spine {
     ledger: Ledger,
+    voice_playback: crate::voice_playback::Pending,
     reader: Option<crate::read_view::SpineReader>,
     /// **The other front desks** — every thread that has spoken, keyed by thread id, minus
     /// whichever one currently holds [`Spine::lease`]. See [`Resident`].
@@ -827,6 +831,29 @@ impl Spine {
         }
     }
 
+    pub fn pending_voice_playback(&self) -> crate::voice_playback::Pending {
+        self.voice_playback.clone()
+    }
+
+    pub fn flush_voice_playback(&mut self) {
+        for fact in self.voice_playback.take() {
+            match self.ledger.record_voice_reply(&fact) {
+                Ok(true) => {
+                    let (kind, confirmed) = match &fact.observation {
+                        crate::voice_playback::Observation::Cutoff { last_confirmed, .. } => ("cutoff", last_confirmed.is_some()),
+                        crate::voice_playback::Observation::Withdrawn => ("withdrawn", false),
+                    };
+                    eprintln!("[richos-voice] playback record status=saved kind={kind} confirmed_chunk={confirmed}");
+                }
+                Ok(false) => {}
+                Err(_) => {
+                    eprintln!("[richos-voice] playback record status=write_failed");
+                    self.voice_playback.record(|| vec![fact]);
+                }
+            }
+        }
+    }
+
     pub fn new(ledger: Ledger) -> Self {
         Spine {
             ledger,
@@ -847,6 +874,7 @@ impl Spine {
             onboarding_record: None,
             ended_turns: Vec::new(),
             input_channels: std::collections::HashMap::new(),
+            voice_playback: Default::default(),
             observer: None,
             lease_factory: None,
             loro_compiler: None,

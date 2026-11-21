@@ -457,6 +457,7 @@ pub enum Event {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         seq: Option<u64>,
     },
+    VoiceReplyObserved { turn_id: String, observation: crate::voice_playback::Observation, at: u64 },
     TurnCompleted { turn_id: String, stop_reason: String, at: u64 },
     TurnInterrupted {
         turn_id: String,
@@ -621,6 +622,9 @@ pub struct Turn {
     pub started_sessions: Vec<String>,
     /// Accumulated assistant reply (concatenated deltas). May be partial if interrupted.
     pub assistant_text: String,
+    /// Audio delivery only. Never projected as conversation text.
+    #[serde(skip)]
+    pub voice_playback: Option<crate::voice_playback::Observation>,
     /// The SAME reply, split into contiguous RUNS of the shared per-turn sequence.
     ///
     /// `assistant_text` answers *"what did Rich say?"*. This answers *"where in the turn
@@ -786,6 +790,7 @@ pub const KNOWN_EVENT_TAGS: &[&str] = &[
     "PromptReceived",
     "TurnStarted",
     "AssistantDelta",
+    "VoiceReplyObserved",
     "TurnCompleted",
     "TurnInterrupted",
     "UpstreamFailure",
@@ -1169,6 +1174,7 @@ impl Ledger {
                     session_id: None,
                     started_sessions: Vec::new(),
                     assistant_text: String::new(),
+                    voice_playback: None,
                     text_runs: Vec::new(),
                     stop_reason: None,
                     created_at: at,
@@ -1208,6 +1214,13 @@ impl Ledger {
                 if let Some(t) = self.turn_mut(&turn_id) {
                     t.assistant_text.push_str(&text);
                     Self::push_text_run(&mut t.text_runs, seq, &text, at);
+                }
+            }
+            Event::VoiceReplyObserved { turn_id, observation, .. } => {
+                if let Some(turn) = self.turn_mut(&turn_id) {
+                    if turn.voice_playback.is_none() || observation == crate::voice_playback::Observation::Withdrawn {
+                        turn.voice_playback = Some(observation);
+                    }
                 }
             }
             Event::TurnCompleted { turn_id, stop_reason, at } => {
@@ -1290,6 +1303,7 @@ impl Ledger {
                     started_sessions: Vec::new(),
                     text_runs: vec![TextRun { start_seq: None, end_seq: None, text: text.clone(), at }],
                     assistant_text: text,
+                    voice_playback: None,
                     stop_reason: Some("proactive".to_string()),
                     created_at: at,
                     // NO delivery span: this turn was written atomically, never streamed
@@ -2040,6 +2054,22 @@ impl Ledger {
         Ok(at)
     }
 
+    pub(crate) fn record_voice_reply(&mut self, fact: &crate::voice_playback::ReplyObservation) -> Result<bool, LedgerError> {
+        use crate::voice_playback::Observation;
+        let Some(turn) = self.turn(&fact.turn_id) else { return Ok(false) };
+        if turn.thread_id != fact.thread_id || turn.quarantined || !matches!(turn.source, Source::Text | Source::Jam) {
+            return Ok(false);
+        }
+        match (&turn.voice_playback, &fact.observation) {
+            (None, _) | (Some(Observation::Cutoff { .. }), Observation::Withdrawn) => {}
+            _ => return Ok(false),
+        }
+        self.append(Event::VoiceReplyObserved {
+            turn_id: fact.turn_id.clone(), observation: fact.observation.clone(), at: now_millis(),
+        }, true)?;
+        Ok(true)
+    }
+
     pub fn complete_turn(&mut self, turn_id: &str, stop_reason: &str) -> Result<(), LedgerError> {
         self.append(
             Event::TurnCompleted { turn_id: turn_id.to_string(), stop_reason: stop_reason.to_string(), at: now_millis() },
@@ -2648,6 +2678,7 @@ mod tests {
             session_id: None,
             started_sessions: Vec::new(),
             assistant_text: String::new(),
+            voice_playback: None,
             text_runs: Vec::new(),
             stop_reason: None,
             created_at: 1_000,

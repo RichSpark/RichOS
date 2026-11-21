@@ -99,6 +99,12 @@ pub trait VoiceObserver: Send + Sync {
     /// MUST be non-blocking. The audio callback thread is on the other end of this: a sink
     /// that blocks here drops frames and clicks the CEO's audio.
     fn on_voice_event(&self, event: &VoiceEvent);
+
+    /// On a controller thread. Run the cut while excluding native request
+    /// preparation, then record its results. The audio callback never calls this.
+    fn record_reply_cut(&self, cut: &mut dyn FnMut() -> Vec<crate::playback::ReplyCutoff>) {
+        cut();
+    }
 }
 
 #[cfg(test)]

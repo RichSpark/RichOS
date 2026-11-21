@@ -169,6 +169,7 @@ pub mod stream;
 pub mod thread;
 pub mod timeline;
 pub mod upstream;
+pub mod voice_playback;
 pub mod util;
 pub mod work_gate;
 pub mod worker_events;

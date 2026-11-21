@@ -1846,10 +1846,7 @@ fn take_the_spine(spine: &std::sync::Mutex<Spine>) -> SpineHold<'_> {
     hold_the_spine(guard, site, asked)
 }
 
-/// **The same door for the one hop that must not `unwrap`** — the spoken-submit callback,
-/// which runs on the voice thread and walks away from a poisoned spine rather than panicking
-/// inside it. His spoken sentence is a hop on the same clock as his typed one, so it is
-/// measured by the same function; only the failure is different.
+/// The same measured lock for voice callbacks that can give up if the spine is poisoned.
 #[track_caller]
 fn take_the_spine_or_give_up(spine: &std::sync::Mutex<Spine>) -> Option<SpineHold<'_>> {
     let site = spine_site(std::panic::Location::caller());
@@ -4831,6 +4828,13 @@ fn main() {
                 });
             }
             if let tauri::RunEvent::Exit = event {
+                if let Some(voice) = handle.try_state::<VoiceHandle>() {
+                    if let Ok(slot) = voice.controller.lock() {
+                        if let Some(controller) = slot.as_ref() {
+                            controller.silence_before_quit();
+                        }
+                    }
+                }
                 // AN UPDATE IS PUT IN PLACE NOW, NOT AT THE NEXT CLICK (Sage's plan 2026-11-14,
                 // rule 4): with one prepared, leave the helper that waits for this process to end,
                 // swaps it in and reclaims old copies, so the next launch starts the new copy
@@ -5255,6 +5259,8 @@ fn raise_proactive_message(
 use richos_voice::capture::AudioSource;
 use richos_voice::controller::{VoiceController, VoiceOptions};
 use richos_voice::event::{VoiceEvent, VoiceObserver};
+use richos_voice::playback::{ReplyCutoff, ReplyId};
+use richos_core::voice_playback::{Observation, Pending, ReplyObservation};
 // (`Arc` is imported at the top of this file.)
 
 /// Live voice mode, or `None` when the `◉` toggle is off. Managed lazily (see
@@ -5398,11 +5404,31 @@ const DICTATION_SETTINGS_CHANGED: &str = "dictation-settings-changed";
 /// crate is UI-agnostic and names its own events; this just relays them verbatim.
 struct TauriVoiceEmitter {
     app: AppHandle,
+    pending: Option<Pending>,
 }
 
 impl VoiceObserver for TauriVoiceEmitter {
     fn on_voice_event(&self, event: &VoiceEvent) {
         let _ = self.app.emit(event.event_name(), event.payload());
+    }
+
+    fn record_reply_cut(&self, cut: &mut dyn FnMut() -> Vec<ReplyCutoff>) {
+        let Some(pending) = &self.pending else { cut(); return };
+        if pending.record(|| cut().into_iter().map(|event| ReplyObservation {
+            thread_id: event.reply.thread_id,
+            turn_id: event.reply.turn_id,
+            observation: Observation::Cutoff {
+                confirmed_chunks: event.confirmed_chunks,
+                last_confirmed: event.last_confirmed,
+                first_unconfirmed: event.first_unconfirmed,
+            },
+        }).collect()) {
+            if let Some(state) = self.app.try_state::<AppState>() {
+                if let Some(mut spine) = take_the_spine_or_give_up(&state.spine) {
+                    spine.flush_voice_playback();
+                }
+            }
+        }
     }
 }
 
@@ -5606,7 +5632,13 @@ fn start_voice_capture(app: AppHandle, thread_id: Option<String>) -> Result<serd
         return Ok(serde_json::json!({ "already": true }));
     }
 
-    let observer: Arc<dyn VoiceObserver> = Arc::new(TauriVoiceEmitter { app: app.clone() });
+    let state = app.state::<AppState>();
+    let pending = take_the_spine_or_give_up(&state.spine)
+        .ok_or("Quit RichOS and open it again to use Talk to Rich.")?
+        .pending_voice_playback();
+    let observer: Arc<dyn VoiceObserver> = Arc::new(TauriVoiceEmitter {
+        app: app.clone(), pending: Some(pending.clone()),
+    });
 
     // The submit callback: a recognized utterance takes the SAME path typed text takes.
     let submit_app = app.clone();
@@ -5714,11 +5746,17 @@ fn start_voice_capture(app: AppHandle, thread_id: Option<String>) -> Result<serd
             // voice carries the earlier words into his next turn and asks for the partial turn to
             // be stopped: the same stop as his Esc (`stop_turn`), so it is recorded the same way.
             let stop_app = app.clone();
-            ctl.on_withdraw(Arc::new(move || {
+            ctl.on_withdraw(move |reply| {
                 let state = stop_app.state::<AppState>();
-                let view=state.reader.snapshot();
-                let outcome=view.active_thread().map(|thread|state.control.for_thread(thread).request_stop())
-                    .unwrap_or(Ok(StopOutcome::NothingRunning));
+                pending.record(|| vec![ReplyObservation {
+                    thread_id: reply.thread_id.clone(),
+                    turn_id: reply.turn_id.clone(),
+                    observation: Observation::Withdrawn,
+                }]);
+                let outcome = state.control.for_thread(&reply.thread_id).request_stop_for(&reply.turn_id);
+                if let Some(mut spine) = take_the_spine_or_give_up(&state.spine) {
+                    spine.flush_voice_playback();
+                }
                 match outcome {
                     Ok(StopOutcome::Requested { turn_id, .. }) => eprintln!(
                         "[richos] voice: he went on before Rich answered; stopped {turn_id} so his whole thought is one request"
@@ -5728,7 +5766,7 @@ fn start_voice_capture(app: AppHandle, thread_id: Option<String>) -> Result<serd
                     }
                     Err(e) => eprintln!("[richos] voice: the partial turn could not be stopped: {e}"),
                 }
-            }));
+            });
             let d = ctl.diagnostics().clone();
             *slot = Some(ctl);
             Ok(serde_json::json!({
@@ -5764,11 +5802,15 @@ fn stop_voice_capture(app: AppHandle, thread_id: Option<String>) -> Result<(), S
 /// One `rich://chunk` delta, relayed by the UI while voice mode is on. Completed sentences
 /// are synthesized and queued immediately — this is the gapless pipelining.
 #[richos_command::command]
-fn voice_speak_delta(app: AppHandle, text: String) {
+fn voice_speak_delta(app: AppHandle, text: String, reply: Option<ReplyId>) {
     if let Some(handle) = app.try_state::<VoiceHandle>() {
         if let Ok(slot) = handle.controller.lock() {
             if let Some(ctl) = slot.as_ref() {
-                ctl.speak_delta(&text);
+                if let Some(reply) = &reply {
+                    ctl.speak_reply_delta(reply, &text);
+                } else {
+                    ctl.speak_delta(&text);
+                }
             }
         }
     }
@@ -5777,11 +5819,15 @@ fn voice_speak_delta(app: AppHandle, text: String) {
 /// The turn's terminal event: speak the unterminated tail so Rich never swallows his last
 /// words.
 #[richos_command::command]
-fn voice_speak_end(app: AppHandle) {
+fn voice_speak_end(app: AppHandle, reply: Option<ReplyId>) {
     if let Some(handle) = app.try_state::<VoiceHandle>() {
         if let Ok(slot) = handle.controller.lock() {
             if let Some(ctl) = slot.as_ref() {
-                ctl.speak_end();
+                if let Some(reply) = &reply {
+                    ctl.end_reply_speech(reply, true);
+                } else {
+                    ctl.speak_end();
+                }
             }
         }
     }
@@ -5791,11 +5837,11 @@ fn voice_speak_end(app: AppHandle) {
 
 /// `rich://turn-started`, relayed from the UI.
 #[richos_command::command]
-fn voice_turn_started(app: AppHandle) {
+fn voice_turn_started(app: AppHandle, reply: Option<ReplyId>) {
     if let Some(handle) = app.try_state::<VoiceHandle>() {
         if let Ok(slot) = handle.controller.lock() {
             if let Some(ctl) = slot.as_ref() {
-                ctl.turn_started();
+                ctl.reply_started(reply.as_ref());
             }
         }
     }
@@ -5832,11 +5878,14 @@ fn voice_turn_ended(app: AppHandle) {
 /// Nothing queued is silenced. Sentences Rich already completed are real answer and they
 /// finish; the notice follows them. See `richos_voice::controller::CutOffDesk`.
 #[richos_command::command]
-fn voice_turn_cut_off(app: AppHandle, reason: Option<String>) {
+fn voice_turn_cut_off(app: AppHandle, reason: Option<String>, reply: Option<ReplyId>) {
     if let Some(handle) = app.try_state::<VoiceHandle>() {
         if let Ok(slot) = handle.controller.lock() {
             if let Some(ctl) = slot.as_ref() {
-                let observer = TauriVoiceEmitter { app: app.clone() };
+                if let Some(reply) = &reply {
+                    ctl.end_reply_speech(reply, false);
+                }
+                let observer = TauriVoiceEmitter { app: app.clone(), pending: None };
                 ctl.turn_cut_off(reason.as_deref(), &observer);
             }
         }

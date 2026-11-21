@@ -35,6 +35,7 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 #[derive(Debug)]
 pub enum PlayoutError {
@@ -104,6 +105,8 @@ struct Shared {
     /// last sample is at position `p` in this count has played once it reaches `p`
     /// ([`crate::turn::Unheard`]).
     played: AtomicU64,
+    clock: Instant,
+    last_audio_us: AtomicU64,
     /// Callback size actually observed, in mono frames. This is the stop latency.
     callback_frames: AtomicUsize,
     /// **THE DEVICE'S OWN REPORTED OUTPUT LATENCY, in microseconds.** Not a guess and not a
@@ -156,6 +159,8 @@ impl Playout {
             queue: Mutex::new(VecDeque::new()),
             queued: AtomicUsize::new(0),
             played: AtomicU64::new(0),
+            clock: Instant::now(),
+            last_audio_us: AtomicU64::new(0),
             callback_frames: AtomicUsize::new(0),
             device_latency_us: AtomicUsize::new(0),
         });
@@ -186,7 +191,10 @@ impl Playout {
                     let remaining = match cb_shared.queue.try_lock() {
                         Ok(mut q) => {
                             let consumed = fill_output(&mut q, out, channels);
-                            cb_shared.played.fetch_add(consumed as u64, Ordering::Relaxed);
+                            if consumed > 0 {
+                                cb_shared.last_audio_us.store(cb_shared.clock.elapsed().as_micros() as u64, Ordering::Relaxed);
+                                cb_shared.played.fetch_add(consumed as u64, Ordering::Release);
+                            }
                             q.len()
                         }
                         Err(_) => {
@@ -229,6 +237,16 @@ impl Playout {
     /// Mono samples handed to the device since the stream opened. Cut samples are not counted.
     pub fn played_samples(&self) -> u64 {
         self.shared.played.load(Ordering::Relaxed)
+    }
+
+    /// A conservative lower bound on the samples audible before the cutoff.
+    pub(crate) fn confirmed_samples(&self, lookback_secs: f32) -> u64 {
+        let played = self.shared.played.load(Ordering::Acquire);
+        let last_audio_us = self.shared.last_audio_us.load(Ordering::Relaxed);
+        let idle_secs = self.shared.clock.elapsed().as_micros().saturating_sub(last_audio_us as u128) as f32 / 1_000_000.0;
+        // The timestamp is for the start of the callback buffer's playout.
+        let allowance = lookback_secs + self.device_latency_secs() + self.stop_latency_secs();
+        confirmed_position(played, self.device_rate, idle_secs, allowance)
     }
 
     /// Mono samples still waiting to be heard.
@@ -286,9 +304,25 @@ impl Playout {
     }
 }
 
+fn confirmed_position(played: u64, rate: u32, idle_secs: f32, allowance_secs: f32) -> u64 {
+    // An idle device has drained its tail even though the counter stopped.
+    if idle_secs >= allowance_secs {
+        played
+    } else {
+        played.saturating_sub((allowance_secs * rate as f32).ceil() as u64)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cutoff_excludes_the_device_tail_and_the_mode_window_until_both_have_elapsed() {
+        assert_eq!(confirmed_position(48_000, 48_000, 0.0, 0.5), 24_000);
+        assert_eq!(confirmed_position(48_000, 48_000, 0.0, 5.125), 0);
+        assert_eq!(confirmed_position(48_000, 48_000, 0.5, 0.5), 48_000);
+    }
 
     /// INVARIANT: mono goes to every channel — Rich comes out of both speakers, not one.
     #[test]
