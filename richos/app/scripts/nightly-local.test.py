@@ -3080,9 +3080,9 @@ while True: time.sleep(.02)
     def test_a_gui_boot_commit_that_only_fixes_the_suite_is_accepted_and_nothing_wider(self):
         """Nightly 58: a stale A2 self-test failed a candidate that passed everything else.
 
-        A descendant of the candidate's commit that changes only gui-boot.test.sh boots the
-        same product source, so its proof stands. A descendant that also changes product
-        code, and a commit that does not descend from the candidate, are both refused.
+        A descendant of the candidate's commit that changes only gui-boot.test.sh or
+        front-door.test.sh boots the same product source, so its proof stands. A descendant
+        that also changes product code, or does not descend from the candidate, is refused.
         """
         repo = self.root / "repo"
         repo.mkdir()
@@ -3095,8 +3095,9 @@ while True: time.sleep(.02)
         git("config", "user.email", "fixture@example.invalid")
         git("config", "core.hooksPath", "/dev/null")
         suite = repo / m.GUI_BOOT_SUITE
+        front_door = repo / "richos/app/scripts/front-door.test.sh"
         product = repo / "richos/app/src-tauri/src/main.rs"
-        for path in (suite, product):
+        for path in (suite, front_door, product):
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text("one\n")
         git("add", ".")
@@ -3123,6 +3124,14 @@ while True: time.sleep(.02)
         git("commit", "-q", "-m", "unrelated")
         unrelated = git("rev-parse", "HEAD")
 
+        git("checkout", "-q", "--detach", candidate)
+        front_door.write_text("two\n")
+        git("commit", "-q", "-am", "fix the front-door check only")
+        front_door_only = git("rev-parse", "HEAD")
+        product.write_text("two\n")
+        git("commit", "-q", "-am", "also change the app")
+        front_door_and_product = git("rev-parse", "HEAD")
+
         r, info = self.gui_candidate(gui_state="not-run", no_host_screen=True)
         r.repo = repo
         info["screen_suites_required"] = True
@@ -3139,6 +3148,8 @@ while True: time.sleep(.02)
                          checker_only)
         self.assertEqual(r.require_gui_proof(info, proof_at(harness_only))["gui-boot_commit"],
                          harness_only)
+        self.assertEqual(r.require_gui_proof(info, proof_at(front_door_only))["gui-boot_commit"],
+                         front_door_only)
         # The tooltip fix must still prevent an old candidate borrowing a newer UI's proof.
         git("checkout", "-q", "--detach", harness_only)
         ui = repo / "richos/app/ui/main.js"
@@ -3147,7 +3158,7 @@ while True: time.sleep(.02)
         git("add", ".")
         git("commit", "-q", "-m", "change shipped UI")
         with_ui = git("rev-parse", "HEAD")
-        for refused in (with_product, with_ui, unrelated, checker_only[:12]):
+        for refused in (with_product, front_door_and_product, with_ui, unrelated, checker_only[:12]):
             with self.subTest(gui_commit=refused):
                 with self.assertRaisesRegex(ValueError, "gui-boot source"):
                     r.require_gui_proof(info, proof_at(refused))
