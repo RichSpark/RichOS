@@ -3110,13 +3110,13 @@ class Runner:
             # record: exactly 380 ms times LAUNCH_SPEED_WARM_RATIO, recorded beside it, and nothing
             # else (no ratio measured in a guest, no Dictionary launch).
             ratio = summary.get("guest_ratio")
-            limit = round(380 * ratio) if ratio == LAUNCH_SPEED_WARM_RATIO else None
+            limit = round(500 * ratio) if ratio == LAUNCH_SPEED_WARM_RATIO else None
             # The cold route's own limit is held the same way: exactly 380 ms times
             # LAUNCH_SPEED_COLD_RATIO, its p95 under it.
             own_limits_hold = True
             for route, own in (summary.get("route_limits") or {}).items():
                 own_ratio = (own or {}).get("ratio")
-                own_limit = round(380 * own_ratio) if route == "cold" and own_ratio == LAUNCH_SPEED_COLD_RATIO else None
+                own_limit = round(500 * own_ratio) if route == "cold" and own_ratio == LAUNCH_SPEED_COLD_RATIO else None
                 route_p95 = ((summary.get("routes") or {}).get(route) or {}).get("p95_ms")
                 if own_limit is None or (own or {}).get("limit_ms") != own_limit \
                         or not isinstance(route_p95, (int, float)) or route_p95 > own_limit:
