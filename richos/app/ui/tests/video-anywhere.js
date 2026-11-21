@@ -25,6 +25,8 @@
 
 "use strict";
 
+const { launchGuardedWebKit } = require("./lib/browser-watchdog");
+
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
@@ -296,7 +298,7 @@ function colorIn(img, box, rgb) {
 async function main() {
   const run = createRun("Make a video, anywhere in the app: round 79, the button in the heading of Settings that records RichOS on every screen until he stops it");
   const { webkit } = loadPlaywright();
-  const browser = await webkit.launch();
+  const browser = await launchGuardedWebKit(webkit, run);
 
   await run.check("the button stands in the heading of Settings, at its right end, on every screen that is not the home screen; nothing of the recorder is on a screen until Settings is open", async () => {
     const page = await open(browser, "dark");

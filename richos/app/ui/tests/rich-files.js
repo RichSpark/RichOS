@@ -19,7 +19,8 @@
 
 "use strict";
 
-const fs = require("fs");
+const { launchGuardedWebKit } = require("./lib/browser-watchdog");
+
 const path = require("path");
 const {
   loadPlaywright,
@@ -38,20 +39,6 @@ const { parseCssColor, compositeOver, contrastRatio, hex } = require("./lib/cont
 const APP = "file://" + path.join(UI_DIR, "index.html");
 const SHOTS = path.join(__dirname, "shots-36");
 const FIXED = new Date("2026-10-21T09:05:00-04:00");
-
-// Playwright's action timeouts do not cover all protocol calls, including context.close().
-// Use Node's clock as a backstop so a wedged browser cannot block its own failure or cleanup.
-async function withWebKitDeadline(stage, work) {
-  const deadline = setTimeout(() => {
-    fs.writeSync(2, `WebKit did not finish "${stage}" within 60s. Ending the suite so its browser reaper can clean up.\n`);
-    process.exit(1);
-  }, 60_000);
-  try {
-    return await work();
-  } finally {
-    clearTimeout(deadline);
-  }
-}
 
 async function openApp(browser, opts) {
   opts = opts || {};
@@ -180,12 +167,10 @@ async function cards(page) {
 
 async function main() {
   const run = createRun("A file from Rich — round 36 screen 3 (real shell, WebKit)");
-  const runCheck = run.check.bind(run);
-  run.check = (name, work) => runCheck(name, () => withWebKitDeadline(name, work));
   const { webkit } = loadPlaywright();
-  const browser = await withWebKitDeadline("launch browser", () => webkit.launch());
+  const browser = await launchGuardedWebKit(webkit, run);
 
-  const page = await withWebKitDeadline("open initial file cards", () => openApp(browser));
+  const page = await openApp(browser);
 
   await run.check("a library card tries the bookmark even when its recorded path is stale", async () => {
     await page.evaluate(() => {
@@ -652,7 +637,7 @@ async function main() {
     });
   }
 
-  await withWebKitDeadline("close browser", () => browser.close());
+  await browser.close();
   process.exitCode = run.report() > 0 ? 1 : 0;
 }
 

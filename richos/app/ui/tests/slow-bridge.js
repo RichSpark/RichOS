@@ -66,6 +66,8 @@
 
 "use strict";
 
+const { launchGuardedWebKit } = require("./lib/browser-watchdog");
+
 const path = require("path");
 const { loadPlaywright, leaveHome, leaveSplash, createRun, assert, assertEqual, UI_DIR } = require("./lib/harness");
 
@@ -251,7 +253,7 @@ async function withUpdateWaiting(browser, lag) {
 async function main() {
   const run = createRun("slow-bridge — the interactions that were correct only at zero latency");
   const { webkit } = loadPlaywright();
-  const browser = await webkit.launch();
+  const browser = await launchGuardedWebKit(webkit, run);
 
   // ---- 1. a thread pressed during boot is the thread that opens -------------------------
   for (const lag of LATENCIES) {

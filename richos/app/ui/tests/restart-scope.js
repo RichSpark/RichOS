@@ -48,6 +48,8 @@
 
 "use strict";
 
+const { launchGuardedWebKit } = require("./lib/browser-watchdog");
+
 const fs = require("fs");
 const path = require("path");
 const { leaveHome, loadPlaywright, shot, createRun, assert, assertEqual, UI_DIR } = require("./lib/harness");
@@ -190,9 +192,9 @@ function turns(page) {
 }
 
 async function main() {
-  const { webkit } = loadPlaywright();
-  const browser = await webkit.launch();
   const run = createRun("§25 restart / multi-thread / scope — real shell, WebKit");
+  const { webkit } = loadPlaywright();
+  const browser = await launchGuardedWebKit(webkit, run);
 
   // =====================================================================================
   // 1. MULTI-THREAD — §25 Navigation, §2, §3.1

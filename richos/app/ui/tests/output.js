@@ -38,6 +38,8 @@
 
 "use strict";
 
+const { launchGuardedWebKit } = require("./lib/browser-watchdog");
+
 const path = require("path");
 const {
   loadPlaywright,
@@ -189,7 +191,7 @@ async function panelState(page) {
 async function main() {
   const run = createRun("Output panel S4 — the buttons, the list, empty, the links (real shell, WebKit)");
   const { webkit } = loadPlaywright();
-  const browser = await webkit.launch();
+  const browser = await launchGuardedWebKit(webkit, run);
   const page = await openApp(browser);
   const record = await page.evaluate(() => window.__RICHOS_MOCK__.outputList("acme"));
   const byName = (name) => record.files.find((f) => f.name === name);
