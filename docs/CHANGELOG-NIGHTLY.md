@@ -2,6 +2,25 @@
 
 What changed in each RichOS nightly build from 1.2.1-nightly.20261019.67 on, newest first; stable versions are in the [changelog](CHANGELOG.md).
 
+## 1.3.6-nightly.20261121.111
+
+[GitHub release](https://github.com/RichSpark/RichOS/releases/tag/v1.3.6-nightly.20261121.111)
+
+- Added When Fable is almost used up in Settings, under Rich's model and effort, on by default: instead of pausing, Rich and your team switch to Opus while your weekly quota has room and go back to Fable when it resets or, if you choose and have a second Claude account, move to an account that still has Fable first; a reply stopped by the Fable limit is tried again on Opus by itself and a note above the message box and in the chat says when the model changed
+- Added a Fable limit bar to each account in Claude accounts; the Usage panel also marks where Rich switches to Opus
+- Added New Terminal at Folder and New Terminal Tab at Folder when you right-click a folder in RichFiles
+- Added pressing Delete on the Mac desktop to move the selected items to the Trash, on by default in RichFiles Settings, Keyboard, once you allow RichFiles Window Gestures in macOS
+- Changed RichFiles to open as its own app in its own window instead of inside RichOS: the RichFiles icon on the left shows a page with Open RichFiles and three of its settings or, once you turn on Always open RichFiles in its own window there or in Settings, opens the app right away; Show in RichFiles in the Output panel and Make a video work with that window too
+- Changed Backspace in RichFiles to go back to the previous folder; to move files to the Trash, press Delete with Fn or Command or use a separate Forward Delete key
+- Changed RichGlance to open a picture smaller than its window at its real size instead of stretching it, to zoom from 5% up to 20 times and to remember its window's size and place
+- Improved RichFiles to select a file the moment you press on it and to show Opening folder… while a folder opens
+- Fixed Dock gestures and the other RichFiles Window Gestures stopping after an update: the helper you already allowed now starts again by itself, so nothing has to be turned on or allowed again
+- Fixed the line in RichFiles Workspaces that says saving or opening a workspace failed being too faint to read easily in light and dark mode
+- [technical] Added the Delete shortcut on the Mac desktop to RichDoctor's reports, without any file names
+- [technical] Changed the weekly point where Rich moves your team to your next Claude account or pauses it to follow the measured pace when Claude reports a precise reading, up to 99.9% instead of 99%
+- [technical] Changed how often RichOS asks Claude for your usage: every 5 minutes for the account in use, every minute only while an account is past 80% and filling fast, every 30 minutes for an added account not in use and every four hours for a free weekly reset offer; Refresh in the Usage panel now shows the latest saved reading
+- [technical] Changed Rich's team to use Opus at medium for small design changes such as colors or alignment and Opus at high for routine architecture work such as adding a field or an endpoint, keeping Fable for original design, big strategy and deeper architecture; while Fable is almost used up, new jobs start on the fallback model and a job stopped by the Fable limit carries on from its saved progress
+
 ## 1.3.5-nightly.20261120.110
 
 [GitHub release](https://github.com/RichSpark/RichOS/releases/tag/v1.3.5-nightly.20261120.110)
