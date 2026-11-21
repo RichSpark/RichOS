@@ -38,6 +38,8 @@
 
 "use strict";
 
+const { launchGuardedWebKit } = require("./lib/browser-watchdog");
+
 const path = require("path");
 const {
   loadPlaywright,
@@ -56,6 +58,38 @@ const { parseCssColor, compositeOver, contrastRatio, hex } = require("./lib/cont
 const APP = "file://" + path.join(UI_DIR, "index.html");
 const SHOTS = path.join(__dirname, "shots-output");
 const FIXED = new Date("2026-10-05T09:45:00-04:00");
+
+function meetingPassageLayout({ text, wait }) {
+  const panel = document.getElementById("outpanel");
+  const passage = document.querySelector("#op-viewer [data-source-passage]");
+  if (!passage) return null;
+  const body = document.getElementById("op-body").getBoundingClientRect();
+  const line = passage.getBoundingClientRect();
+  const layout = {
+    text: passage.innerText,
+    body: [Math.round(body.top), Math.round(body.bottom)],
+    line: [Math.round(line.top), Math.round(line.bottom)],
+    focused: document.activeElement.id === "of-back",
+  };
+  if (wait && (panel.getAnimations().some((a) => a.pending || a.playState === "running") ||
+      !layout.focused || !layout.text.includes(text) ||
+      layout.line[0] < layout.body[0] || layout.line[1] > layout.body[1])) return null;
+  return layout;
+}
+
+async function waitForMeetingPassage(page, text) {
+  // A passage can be in the DOM while opening, focus transfer and scrolling are still pending.
+  // Read their joint outcome, with the last layout in the error if the target never lands.
+  try {
+    const landed = await page.waitForFunction(meetingPassageLayout, { text, wait: true });
+    await landed.dispose();
+  } catch (error) {
+    if (error.name !== "TimeoutError") throw error;
+    const last = await page.evaluate(meetingPassageLayout, { text, wait: false });
+    throw new Error(`Passage "${text}" did not land inside Output with focus on All output. Last layout: ${JSON.stringify(last)}`, { cause: error });
+  }
+  return page.evaluate(meetingPassageLayout, { text, wait: false });
+}
 
 async function openApp(browser, opts) {
   opts = opts || {};
@@ -157,7 +191,7 @@ async function panelState(page) {
 async function main() {
   const run = createRun("Output panel S4 — the buttons, the list, empty, the links (real shell, WebKit)");
   const { webkit } = loadPlaywright();
-  const browser = await webkit.launch();
+  const browser = await launchGuardedWebKit(webkit, run);
   const page = await openApp(browser);
   const record = await page.evaluate(() => window.__RICHOS_MOCK__.outputList("acme"));
   const byName = (name) => record.files.find((f) => f.name === name);
@@ -400,18 +434,7 @@ async function main() {
     await passage.waitFor();
     assert((await passage.innerText()).includes("Approve the pilot."));
     assertEqual((await panelState(sourcePage)).title, "transcript.md");
-    // THE PASSAGE IS IN VIEW ONCE THE PANEL HAS OPENED (a walk of the packaged app found the
-    // transcript left at its top or its end). The panel grows from no width to its own over `op-open`; a landing measured inside
-    // that growth left the transcript at its top or its end. Read after the opening has finished
-    // and two frames have painted, the cited line sits inside the panel's visible area.
-    const landed = await sourcePage.evaluate(async () => {
-      const panel = document.getElementById("outpanel");
-      await Promise.all(panel.getAnimations().map((a) => a.finished.catch(() => null)));
-      await new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)));
-      const body = document.getElementById("op-body").getBoundingClientRect();
-      const line = document.querySelector('#op-viewer [data-source-passage="123"]').getBoundingClientRect();
-      return { body: [Math.round(body.top), Math.round(body.bottom)], line: [Math.round(line.top), Math.round(line.bottom)] };
-    });
+    const landed = await waitForMeetingPassage(sourcePage, "Approve the pilot.");
     assert(landed.line[0] >= landed.body[0] && landed.line[1] <= landed.body[1],
       "the cited line is not in view after the panel opened: line " + landed.line.join("–") + " px, panel body " + landed.body.join("–") + " px");
     await note.getByRole("button", { name: "Source 02:05" }).click();
@@ -479,22 +502,6 @@ async function main() {
     });
     const note = sourcePage.locator("#fixture-meeting-notes");
     assertEqual(await note.getByRole("button").allTextContents(), ["Source 00:29", "Source 00:44"]);
-    // Where a cited line sits against the panel body's visible box, once the panel is still and
-    // two frames have painted.
-    const where = (stamp) => sourcePage.evaluate(async (s) => {
-      const panel = document.getElementById("outpanel");
-      await Promise.all(panel.getAnimations().map((a) => a.finished.catch(() => null)));
-      await new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)));
-      const passage = document.querySelector("#op-viewer [data-source-passage]");
-      const body = document.getElementById("op-body").getBoundingClientRect();
-      const line = passage.getBoundingClientRect();
-      return {
-        text: passage.innerText,
-        stamp: s,
-        body: [Math.round(body.top), Math.round(body.bottom)],
-        line: [Math.round(line.top), Math.round(line.bottom)],
-      };
-    }, stamp);
     const inView = (w) => w.line[0] >= w.body[0] && w.line[1] <= w.body[1];
     const pressLikeAccessibility = (label) => note.getByRole("button", { name: label }).evaluate((b) => {
       b.focus();
@@ -502,21 +509,18 @@ async function main() {
     });
     assert(!(await panelState(sourcePage)).open, "the first Source press must come from a closed panel");
     await pressLikeAccessibility("Source 00:29");
-    await sourcePage.locator('#op-viewer [data-source-passage]').filter({ hasText: "Raise wholesale prices" }).waitFor();
-    const first = await where("00:29");
+    const first = await waitForMeetingPassage(sourcePage, "Raise wholesale prices");
     assert(inView(first), "first press: line " + first.line.join("–") + " px, panel body " + first.body.join("–") + " px");
     assert((await panelState(sourcePage)).open, "the second Source press must come from an open panel");
     await pressLikeAccessibility("Source 00:44");
-    await sourcePage.locator('#op-viewer [data-source-passage]').filter({ hasText: "No grace period" }).waitFor();
-    const second = await where("00:44");
+    const second = await waitForMeetingPassage(sourcePage, "No grace period");
     assert(inView(second),
       "second press, panel open: the cited line is not in view: line " + second.line.join("–") + " px, panel body " + second.body.join("–") + " px");
     // Focus still goes where a file view puts it (§6.8): the way back to the list.
     assert(await sourcePage.evaluate(() => document.activeElement.classList.contains("of-back")), "focus is not on the way back to the list");
     // And back up the transcript: the press after that, to an earlier passage, lands too.
     await pressLikeAccessibility("Source 00:29");
-    await sourcePage.locator('#op-viewer [data-source-passage]').filter({ hasText: "Raise wholesale prices" }).waitFor();
-    const third = await where("00:29");
+    const third = await waitForMeetingPassage(sourcePage, "Raise wholesale prices");
     assert(inView(third), "third press, back up: line " + third.line.join("–") + " px, panel body " + third.body.join("–") + " px");
     assertEqual(sourcePage.__errors, [], "no page errors");
     await sourcePage.close();

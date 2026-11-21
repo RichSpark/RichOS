@@ -19,6 +19,8 @@
 
 "use strict";
 
+const { launchGuardedWebKit } = require("./lib/browser-watchdog");
+
 const path = require("path");
 const {
   loadPlaywright,
@@ -75,7 +77,7 @@ async function openApp(browser, opts) {
   await page.addInitScript((v) => {
     window.__RICHOS_MOCK_PRESET__ = v;
   }, { richFiles: opts.missing ? "round-36-missing" : "round-36" });
-  await page.goto(APP);
+  await page.goto(APP, { waitUntil: "domcontentloaded" });
   if (opts.prepare) await page.evaluate(opts.prepare);
   await leaveHome(page);
   await page.waitForSelector(".nav-thread", { state: "attached" });
@@ -166,7 +168,7 @@ async function cards(page) {
 async function main() {
   const run = createRun("A file from Rich — round 36 screen 3 (real shell, WebKit)");
   const { webkit } = loadPlaywright();
-  const browser = await webkit.launch();
+  const browser = await launchGuardedWebKit(webkit, run);
 
   const page = await openApp(browser);
 
@@ -519,6 +521,16 @@ async function main() {
       const timestamp = card.getByRole("button", { name: /^0?0:53 Customer focus$/ });
       const reopen = card.getByRole("button", { name: "Reopen conversation", exact: true });
       const scopeStatus = card.locator(".tl-media-scope-status");
+      const waitForReopen = async (count) => {
+        await p.waitForFunction((expected) =>
+          window.mediaScopeSwitches.length === expected &&
+          window.RichOutput.snapshot().thread === "acme" &&
+          document.getElementById("composer-row").dataset.mode !== "opening",
+        count).catch((error) => {
+          throw new Error(`Reopen ${count} did not finish restoring Acme to Output: ${error.message}`, { cause: error });
+        });
+        await reopen.waitFor({ state: "hidden" });
+      };
       assert(await scopeStatus.evaluate((node) => node.getAttribute("role") === "status" &&
         !node.hidden && getComputedStyle(node).display !== "none" && !node.textContent),
         "the empty live region is exposed before playback is refused");
@@ -532,9 +544,7 @@ async function main() {
       await timestamp.click();
       await reopen.waitFor();
       await reopen.click();
-      await p.waitForFunction(() => window.mediaScopeSwitches.length === 1 &&
-        document.getElementById("composer-row").dataset.mode !== "opening");
-      await reopen.waitFor({ state: "hidden" });
+      await waitForReopen(1);
       assertEqual(await scopeStatus.textContent(), "", "reopening clears the native refusal");
 
       await p.evaluate(() => {
@@ -545,15 +555,15 @@ async function main() {
       await reopen.waitFor();
       assertEqual(await p.evaluate(() => window.mediaScopePreviews), 1, "the wrong thread issues no preview request");
       await reopen.click();
-      await p.waitForFunction(() => window.mediaScopeSwitches.length === 2 &&
-        document.getElementById("composer-row").dataset.mode !== "opening");
-      await reopen.waitFor({ state: "hidden" });
+      await waitForReopen(2);
       assertEqual(await scopeStatus.textContent(), "", "reopening clears the local scope mismatch");
       assertEqual(await p.evaluate(() => window.mediaScopeSwitches), ["acme", "acme"], "both paths reopen the card's thread");
       await timestamp.click();
       await p.waitForFunction(() => {
         const audio = document.querySelector("#op-viewer audio");
         return audio && !audio.paused && !audio.seeking && audio.currentTime >= 53.28;
+      }).catch((error) => {
+        throw new Error(`The reopened recording did not play from Customer focus: ${error.message}`, { cause: error });
       });
       assertEqual(p.__errors, [], "the page reported errors");
     } finally {

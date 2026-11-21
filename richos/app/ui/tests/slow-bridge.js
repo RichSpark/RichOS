@@ -66,6 +66,8 @@
 
 "use strict";
 
+const { launchGuardedWebKit } = require("./lib/browser-watchdog");
+
 const path = require("path");
 const { loadPlaywright, leaveHome, leaveSplash, createRun, assert, assertEqual, UI_DIR } = require("./lib/harness");
 
@@ -90,7 +92,15 @@ const LATENCIES = [0, 120, 400];
 /// `lib/harness.js` on his branch as `SLOW_BRIDGE`. It is spelled out here rather than imported
 /// because that branch is not landed; when it lands, the latency half should become
 /// `require("./lib/harness").SLOW_BRIDGE` and the two must not be allowed to drift.
-const INSTRUMENTED_BRIDGE = (ms) => {
+const INSTRUMENTED_BRIDGE = ({ ms, heldCalls }) => {
+  // Hold the real replies until the keystrokes for that launch phase have been delivered.
+  const gates = new Map();
+  for (const name of heldCalls) {
+    let release;
+    const reply = new Promise((resolve) => { release = resolve; });
+    gates.set(name, { reply, release });
+  }
+  window.__releaseBridgeReply = (name) => gates.get(name).release();
   window.__bridgeIssued = [];
   window.__bridgeReturned = [];
   // The words of every `send_message`, in the order the page issued them (check 9).
@@ -115,6 +125,7 @@ const INSTRUMENTED_BRIDGE = (ms) => {
           if (window.__sendLags.length) lag = window.__sendLags.shift();
         }
         if (lag > 0) await new Promise((r) => setTimeout(r, lag));
+        if (gates.has(name)) await gates.get(name).reply;
         if (name === "send_message") window.__sentArrived.push(args && args.text);
         try {
           return await invoke(name, args);
@@ -135,14 +146,14 @@ async function observe(page, ms, why) {
   await page.waitForTimeout(ms);
 }
 
-async function open(browser, lag) {
+async function open(browser, lag, heldCalls = []) {
   const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
   const errors = [];
   page.on("pageerror", (e) => errors.push("pageerror: " + e.message));
   page.on("console", (m) => {
     if (m.type() === "error") errors.push("console: " + m.text());
   });
-  await page.addInitScript(INSTRUMENTED_BRIDGE, lag);
+  await page.addInitScript(INSTRUMENTED_BRIDGE, { ms: lag, heldCalls });
   await page.goto(APP);
   await leaveHome(page);
   page.__errors = errors;
@@ -180,25 +191,31 @@ async function onScreen(page) {
   });
 }
 
-/// Press a thread row `after` ms after it first exists, and report where the app ends up.
-///
-/// The offsets the callers use are not decoration. `init()` reaches the rail on its 7th bridge
-/// call and its landing branch 5 calls later, so a press was overwritten when its own two-call
-/// chain (`switch_thread`, `active_context`) could not land before that branch — between 3 and 5
-/// call-times after the row appears. Sampling at 3, 3.5 and 4 call-times covers that window with
-/// room for the jitter a real machine adds, rather than pinning one number measured on one Mac.
-async function pressDuringBoot(browser, lag, after) {
-  const page = await open(browser, lag);
+// The rail is usable while startup reads these answers, before it chooses what to restore.
+const BOOT_PRESS_PHASES = ["entity_choice", "memory_status", "setup_status"];
+
+async function pressDuringBoot(browser, lag, phase) {
+  const page = await open(browser, lag, [phase]);
   await page.waitForSelector('.nav-thread[data-thread-id="hiring"]', { state: "attached" });
-  if (after > 0) await page.waitForTimeout(after);
-  await page.evaluate(() => document.querySelector('.nav-thread[data-thread-id="hiring"]').click());
+  await page.waitForFunction((name) => window.__bridgeIssued.includes(name), phase, { timeout: 60000 });
+  const pressedDuringBoot = await page.evaluate((name) => {
+    const pending = !window.__bridgeReturned.includes(name) && !window.__bridgeIssued.includes("switch_thread");
+    document.querySelector('.nav-thread[data-thread-id="hiring"]').click();
+    window.__releaseBridgeReply(name);
+    return pending;
+  }, phase);
+  assert(pressedDuringBoot, `the restore had already started when hiring was pressed during ${phase}`);
   await bootDone(page);
-  await observe(
-    page,
-    6 * lag + 400,
-    "the override this check is about was issued before `raw_retention` and needs about four " +
-      "more call-times to paint, so the window is six of them plus a floor for a 0ms run"
-  );
+  await page.waitForFunction(() =>
+    window.__bridgeReturned.includes("switch_thread") &&
+    window.__RICHOS_TIMELINE__().threadId === "hiring" &&
+    document.querySelector('.nav-thread-row.is-active .nav-thread[data-thread-id="hiring"]') &&
+    document.getElementById("composer-row").dataset.mode !== "opening" &&
+    document.querySelector("#messages .tl-turn"),
+  null, { timeout: 60000 }).catch((error) => {
+    // Let the caller report the actual screen or durable selection when the requested one never lands.
+    if (error.name !== "TimeoutError") throw error;
+  });
   const on = await onScreen(page);
   const remembered = await page.evaluate(() => window.RichBridge.invoke("active_thread"));
   const errors = page.__errors.slice();
@@ -236,32 +253,27 @@ async function withUpdateWaiting(browser, lag) {
 async function main() {
   const run = createRun("slow-bridge — the interactions that were correct only at zero latency");
   const { webkit } = loadPlaywright();
-  const browser = await webkit.launch();
+  const browser = await launchGuardedWebKit(webkit, run);
 
   // ---- 1. a thread pressed during boot is the thread that opens -------------------------
   for (const lag of LATENCIES) {
     await run.check(`a thread pressed during boot is the thread that opens (${lag}ms bridge)`, async () => {
-      // Three presses across the window `init()` used to own: 3, 3.5 and 4 call-times after the
-      // row appears. At 0 ms they are all "immediately", which is the control case.
-      const offsets = [3 * lag, 3.5 * lag, 4 * lag].map(Math.round);
-      const seen = [];
-      for (const after of offsets) {
-        const r = await pressDuringBoot(browser, lag, after);
-        assertEqual(r.errors, [], `the shell logged errors on the press at +${after}ms`);
+      for (const phase of BOOT_PRESS_PHASES) {
+        const r = await pressDuringBoot(browser, lag, phase);
+        assertEqual(r.errors, [], `the shell logged errors on the press during ${phase}`);
         assertEqual(
           r.on.bound,
           "hiring",
-          `pressed "hiring" at +${after}ms and the conversation on screen is ` +
+          `pressed "hiring" during ${phase} and the conversation on screen is ` +
             JSON.stringify(r.on.entity + " / " + r.on.crumb) +
             ` — the rail marks ${JSON.stringify(r.on.active)}, the model is bound to ` +
             `${JSON.stringify(r.on.bound)}, ${r.on.turns} turn(s) painted. A press that opens a ` +
             `different conversation than the one pressed is the defect, not a slow machine`
         );
-        assertEqual(r.on.active, "hiring", `the rail marks the thread he pressed at +${after}ms`);
+        assertEqual(r.on.active, "hiring", `the rail marks the thread he pressed during ${phase}`);
         assert(r.on.turns > 0, `and its turns are painted, not the previous thread's: ${r.on.turns}`);
-        seen.push("+" + after + "ms");
       }
-      return `pressed at ${seen.join(", ")} — every one landed on Northwind Traders / "Q4 hiring" with its own turn`;
+      return `pressed during ${BOOT_PRESS_PHASES.join(", ")} — every one landed on Northwind Traders / "Q4 hiring" with its own turn`;
     });
   }
 
@@ -272,7 +284,7 @@ async function main() {
     // durably active even on a launch where the screen happened to end up right.
     const out = [];
     for (const lag of LATENCIES.filter((l) => l > 0)) {
-      const r = await pressDuringBoot(browser, lag, Math.round(3.5 * lag));
+      const r = await pressDuringBoot(browser, lag, "memory_status");
       assertEqual(
         r.remembered,
         "hiring",
@@ -605,10 +617,17 @@ async function main() {
         requestAnimationFrame(sample);
       }, SENTENCE);
 
-      // Long enough to cover the whole chain the old code blanked across: create_thread_in,
-      // refreshNavigation, openThread (switch_thread + active_context + get_timeline), plus
-      // renderFirstRunNotice and the send itself — ten bridge round trips and a floor for 0 ms.
-      await observe(page, 10 * lag + 2500, "the whole create-thread-and-send chain");
+      // Keep sampling through the created thread's send and terminal turn. The optimistic
+      // bubble alone can appear before the model is replaced and the real send reaches Rich.
+      const settled = await page.waitForFunction((sentence) =>
+        window.__bridgeReturned.includes("send_message") &&
+        [...window.__RICHOS_TIMELINE__().turns.values()].some((turn) => turn.status === "completed") &&
+        window.__frames.length > 10 &&
+        [...document.querySelectorAll(".tl-user-text")].some((row) => row.textContent.trim() === sentence),
+      SENTENCE, { timeout: 60000 }).then(() => true).catch((error) => {
+        if (error.name !== "TimeoutError") throw error;
+        return false;
+      });
       const out = await page.evaluate((sentence) => {
         window.__sampling = false;
         return {
@@ -653,6 +672,7 @@ async function main() {
       assertEqual(out.greetingNow, false, "the first-run greeting is on screen after his send landed");
       const doubled = frames.filter((f) => f.mine > 1).length;
       assertEqual(doubled, 0, `his sentence was drawn twice on ${doubled} sampled frames`);
+      assert(settled, "the turn never finished with his message visible in the created conversation");
 
       await page.close();
       return (
@@ -675,10 +695,11 @@ async function main() {
   // in that window saw it vanish, or pressed Send on an empty box and nothing reached Rich.
   //
   // TYPED WITH REAL KEY EVENTS and sent with the Return key, the way a person does it. 0 ms is
-  // left out for the same reason as check 3: the window is the length of the awaits.
+  // left out here: these checks use the slow bridge, with the first startup reply gated
+  // until typing finishes. Check 9 also gates the switch reply until the second Send.
   for (const lag of LATENCIES.filter((l) => l > 0)) {
     await run.check(`words typed while the launch is still opening his thread are kept and sent (${lag}ms bridge)`, async () => {
-      const page = await open(browser, lag);
+      const page = await open(browser, lag, ["get_company_name"]);
       await page.waitForSelector("#input", { state: "visible" });
       const SENTENCE = "Please ask my team to read the first line of CLAUDE.md";
       await page.click("#input");
@@ -692,8 +713,8 @@ async function main() {
       assertEqual(during.restoring, false, "the launch had already started opening the thread, so nothing was tested");
       assertEqual(during.box, SENTENCE, "the keystrokes did not reach the composer");
 
+      await page.evaluate(() => window.__releaseBridgeReply("get_company_name"));
       await bootDone(page);
-      await observe(page, 6 * lag + 400, "the restore's openThread paints within a few call-times of the boot's end");
       const settled = await page.evaluate(() => ({
         box: document.getElementById("input").value,
         thread: window.__RICHOS_TIMELINE__ ? window.__RICHOS_TIMELINE__().threadId : null,
@@ -738,7 +759,7 @@ async function main() {
   // back in. The mock used to accept a send with no thread, which is why no check here saw it.
   for (const lag of LATENCIES.filter((l) => l > 0)) {
     await run.check(`Return pressed while the launch is still opening his thread sends his words once (${lag}ms bridge)`, async () => {
-      const page = await open(browser, lag);
+      const page = await open(browser, lag, ["get_company_name"]);
       await page.waitForSelector("#input", { state: "visible" });
       const SENTENCE = "First send after a relaunch, sent with the Return key";
       await page.click("#input");
@@ -751,6 +772,7 @@ async function main() {
       }), SENTENCE);
       assertEqual(during.restoring, false, "the launch had already started opening the thread, so nothing was tested");
 
+      await page.evaluate(() => window.__releaseBridgeReply("get_company_name"));
       await bootDone(page);
       const arrived = await page
         .waitForFunction(
@@ -793,7 +815,7 @@ async function main() {
   // today." then "Correction: do not send it until I approve." reached Rich reversed.
   for (const lag of LATENCIES.filter((l) => l > 0)) {
     await run.check(`a Send pressed while the launch opens his thread goes after the held one (${lag}ms bridge)`, async () => {
-      const page = await open(browser, lag);
+      const page = await open(browser, lag, ["get_company_name", "switch_thread"]);
       await page.waitForSelector("#input", { state: "visible" });
       const FIRST = "Please send the proposal today.";
       const SECOND = "Correction: do not send it until I approve.";
@@ -802,6 +824,7 @@ async function main() {
       await page.keyboard.press("Enter");
       const held = await page.evaluate(() => (window.__bridgeIssued || []).indexOf("switch_thread") < 0);
       assert(held, "the launch had already started opening the thread, so nothing was held");
+      await page.evaluate(() => window.__releaseBridgeReply("get_company_name"));
       // The restore has started opening the thread: the opening window, where a Send goes out at once.
       await page.waitForFunction(() => document.getElementById("composer-row").dataset.mode === "opening", null, {
         timeout: 60000, // a hang guard: the restore opens the thread or the boot is broken
@@ -810,6 +833,7 @@ async function main() {
       const mode = await page.evaluate(() => document.getElementById("composer-row").dataset.mode);
       assertEqual(mode, "opening", "the thread finished opening before the second Send, so the overtaking window was not tested");
       await page.keyboard.press("Enter");
+      await page.evaluate(() => window.__releaseBridgeReply("switch_thread"));
       await bootDone(page);
       await page.waitForFunction(() => window.__sentTexts.length >= 2, null, {
         timeout: 60000, // a hang guard: both sends are issued or one was lost
@@ -831,7 +855,7 @@ async function main() {
   // waits for the opening before the second Send, so it never pressed one in this window.
   for (const lag of LATENCIES.filter((l) => l > 0)) {
     await run.check(`two Sends pressed before the launch opens his thread both reach it, in order (${lag}ms bridge)`, async () => {
-      const page = await open(browser, lag);
+      const page = await open(browser, lag, ["get_company_name"]);
       await page.waitForSelector("#input", { state: "visible" });
       const FIRST = "Please send the proposal today.";
       const SECOND = "Correction: do not send it until I approve.";
@@ -863,6 +887,7 @@ async function main() {
       assertEqual(during.sent, [], "a send went out before there was a thread to send it to");
       assertEqual(during.shown, [FIRST, SECOND], "his two messages were not both on screen at once, in his order");
 
+      await page.evaluate(() => window.__releaseBridgeReply("get_company_name"));
       await bootDone(page);
       await page.waitForFunction(() => window.__sentTexts.length >= 2, null, {
         timeout: 60000, // a hang guard: both sends are issued or one was lost
@@ -895,7 +920,7 @@ async function main() {
   // second, which is that race lost on demand.
   for (const lag of LATENCIES.filter((l) => l > 0)) {
     await run.check(`two held Sends reach Rich in his order when the first call is slower (${lag}ms bridge)`, async () => {
-      const page = await open(browser, lag);
+      const page = await open(browser, lag, ["get_company_name"]);
       await page.waitForSelector("#input", { state: "visible" });
       const FIRST = "Please send the proposal today.";
       const SECOND = "Correction: do not send it until I approve.";
@@ -907,6 +932,7 @@ async function main() {
       await page.keyboard.press("Enter");
       const held = await page.evaluate(() => (window.__bridgeIssued || []).indexOf("switch_thread") < 0);
       assert(held, "the launch had already started opening the thread, so nothing was held");
+      await page.evaluate(() => window.__releaseBridgeReply("get_company_name"));
       await bootDone(page);
       await page.waitForFunction(() => window.__sentArrived.length >= 2, null, {
         timeout: 60000, // a hang guard: both sends arrive or one was lost
