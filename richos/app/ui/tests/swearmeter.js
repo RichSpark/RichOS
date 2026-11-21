@@ -86,11 +86,14 @@ async function main() {
       assert((await rowText(view)).includes("preparing your history"), "startup does not label a ledger subtotal as all history");
       await view.evaluate(() => {
         deliverSwearMeter({ ...fixture.result, count: 25, revision: 3, provider_history_incomplete: true,
-          ambiguous_matches: 2, periods: { last_30_days: 8, months: [{ month: 202611, count: 8 }, { month: 202610, count: 0 }, { month: 202609, count: 17 }], undated: 0 } });
+          provider_history_stale: true, ambiguous_matches: 2, periods: { last_30_days: 8, months: [{ month: 202611, count: 8 }, { month: 202610, count: 0 }, { month: 202609, count: 17 }], undated: 0 } });
       });
       const counts = await rowText(view);
       assert(counts.includes("All history: 25") && counts.includes("Last 30 days: 8"), "shows both counts");
       assert(counts.includes("2 possible duplicate matches withheld"), "coverage qualification follows counts");
+      assert(counts.includes("Saved provider history is over an hour old."), "an overdue cached total stays visible with its age qualification");
+      assertEqual(await view.locator("#home-swearmeter .v").textContent(), "8", "Home keeps the overdue 30-day count");
+      assertEqual(await view.locator("#home-swearmeter .l").textContent(), "in the last 30 days · saved history", "Home labels the saved count");
       await view.click("#set-swearmeter-block .swearmeter-months summary");
       assertEqual(await view.locator("#set-swearmeter-block .swearmeter-months li").allTextContents(),
         ["November 2026: 8", "October 2026: No verified matches", "September 2026: 17"], "month counts and qualified zero");

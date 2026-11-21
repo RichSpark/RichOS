@@ -186,6 +186,7 @@ pub struct Snapshot {
     pub periods: crate::swearmeter_periods::Periods,
     pub history_loading: bool,
     pub provider_history_incomplete: bool,
+    pub provider_history_stale: bool,
     pub ambiguous_matches: u64,
     pub unknown_card_inputs: u64,
     pub unknown_message_inputs: u64,
