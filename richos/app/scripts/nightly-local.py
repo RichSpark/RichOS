@@ -322,31 +322,29 @@ NEW_USER_WALK_STEPS = ("identity", "setup", "signed-out", "accounts", "update", 
 NEW_USER_WALK_WAIT = 3600
 NEW_USER_WALK_BUDGET = NEW_USER_WALK_WAIT + 2400
 
-# THE LAUNCH-SPEED GATE (Sage's plan 2026-11-14, rule 5, with the CEO's measure and number of the
-# same day: "THE JOB AT HAND IS TO START SHOWING OUR ALREADY WELL-DESIGNED AND FULLY-BUILT SPLASH
-# SCREEN IN WELL UNDER 500 MS AFTER BUTTON CLICK", and Dictionary's measured Dock launch on his Mac,
-# at most 380 ms, as the benchmark). Every candidate that takes the new-user walk is also timed, in
-# its own guest, from the launch request to its splash playing (testvm/launch-speed-walk.py, the
-# routes of Sage's plan 2026-11-14 "the splash the rules picked is playing within 380 ms of the
-# click", section 6: a returning user's launch, the first launch after the guest starts (each after
+# THE LAUNCH-SPEED GATE (Sage's plan 2026-11-14, section 6). Every candidate that takes the
+# new-user walk is also timed, in its own guest, from the launch request to its splash playing
+# (testvm/launch-speed-walk.py). The CEO set the opening limit to 500 ms on 2026-11-21.
+# The routes cover a returning user's launch, the first launch after the guest starts (each after
 # its own purge, with its own limit), the first launch after an update put in place at quit, and a
 # quit at which the rules pick another splash; no route of an older copy in /Applications handing
-# over, which no real user has). Each route runs 5 starts, the rule switch too (the CEO, 2026-11-15:
+# over. Each route runs 5 starts, the rule switch too (the CEO, 2026-11-15:
 # "Reduce to 5. Only if one of the 5 is outside what's required, only then do you need to extend to
 # 20. Otherwise i.e. if the first 5 are fine, it's a PASS."): a route all of whose starts are within
 # the limit passes, and only a route with one over goes on to 20 starts and is refused when its p95
-# is over the limit (the CEO: "380 ms as the maximum allowed p95 time"), scaled by how much slower the test VM is than his Mac (the
-# CEO: "if the VM is slower, then the measurements need to be adjusted accordingly"): a FIXED ratio,
+# is over the limit, scaled by how much slower the test VM is than his Mac (the CEO: "if the VM
+# is slower, then the measurements need to be adjusted accordingly"): a FIXED ratio,
 # taken once from the Dictionary measurements on record, and Dictionary is never launched (the CEO,
 # 2026-11-14: "Stop all that retarded "launch-speed walk beside Dictionary" fuckshit!"; 2026-11-15:
 # "What the fuck did I say about that????"). The nightly states the p95 and every route's and every
 # splash's own numbers either way. A refusal, or a walk that could not run, is taken once more
 # before the candidate is refused (verification-retries.md).
 LAUNCH_SPEED_PHASE = "launch-speed"
+LAUNCH_SPEED_LIMIT_MS = 500
 # The fixed ratios (testvm/launch-speed-walk.py WARM_RATIO and COLD_RATIO, from the newest
 # launch-speed record in the nightly's guest image, run 20261115T061911Z-109b9887.1; nightly-local.test.py asserts the two are
-# the same): publish holds a report's limits to exactly round(380 x these), 385 ms and, for the
-# cold route, 2979 ms.
+# the same): publish holds a report's limits to exactly round(LAUNCH_SPEED_LIMIT_MS x ratio),
+# 506 ms for warm routes and 3920 ms for the cold route.
 LAUNCH_SPEED_WARM_RATIO = 1.013
 LAUNCH_SPEED_COLD_RATIO = 7.84
 LAUNCH_SPEED_WAIT = 3600
@@ -3031,9 +3029,9 @@ class Runner:
         return None
 
     def launch_speed_check(self, run_id, out, info):
-        """Time the candidate from the launch request to its splash showing, a p95 against 380 ms, in
-        its own guest (LAUNCH_SPEED_PHASE). None on a pass, else the sentence that says why it is
-        refused, where the evidence is and how to take it again without a rebuild."""
+        """Time the candidate from the launch request to its splash showing, in its own guest
+        (LAUNCH_SPEED_PHASE). Return None on a pass or the refusal, evidence location and how to
+        take the measurement again without a rebuild."""
         bundle = Path(out) / f"RichOS-{info['version']}-macos-aarch64.zip"
         testvm = self.source / SCRIPTS / "testvm"
         # The older copy an updated user still has in /Applications: the newest earlier release
@@ -3061,7 +3059,7 @@ class Runner:
                 args += ["--previous-bundle", older]
             args += ["--", testvm / "launch-speed-walk.py", "--candidate", bundle, "--out", walk]
             self.announce("Timing the candidate from the launch request to its splash showing, a p95 against "
-                          f"380 ms, in a fresh guest on the test VM (attempt {attempt})...")
+                          f"{LAUNCH_SPEED_LIMIT_MS} ms, in a fresh guest on the test VM (attempt {attempt})...")
             failed = None
             try:
                 with self.phase(LAUNCH_SPEED_PHASE):
@@ -3089,7 +3087,7 @@ class Runner:
 
     def require_launch_speed(self, info, run_id):
         """Refuse to publish a candidate without a complete, matching launch-speed measurement
-        whose p95 is at or under 380 ms (review rv-20261114T115101Z-10e7c6ac-7689, finding 2).
+        whose p95 is at or under the opening limit (review rv-20261114T115101Z-10e7c6ac-7689, finding 2).
         A candidate built before the gate carries no `launch_speed_required` and keeps the
         contract it was built under. Returns the accepted sentence, or None when not required."""
         if not info.get("launch_speed_required"):
@@ -3105,18 +3103,16 @@ class Runner:
                 continue
             summary, facts = walked.get("summary") or {}, walked.get("facts") or {}
             p95 = summary.get("p95_ms")
-            # The limit is 380 ms scaled by the test VM's slowness (the CEO, 2026-11-14: "if the VM is
-            # slower, then the measurements need to be adjusted accordingly"), by the FIXED ratio on
-            # record: exactly 380 ms times LAUNCH_SPEED_WARM_RATIO, recorded beside it, and nothing
-            # else (no ratio measured in a guest, no Dictionary launch).
+            # Scale the opening limit by the fixed warm ratio on record. The test VM does not
+            # measure its own ratio during the walk.
             ratio = summary.get("guest_ratio")
-            limit = round(500 * ratio) if ratio == LAUNCH_SPEED_WARM_RATIO else None
-            # The cold route's own limit is held the same way: exactly 380 ms times
-            # LAUNCH_SPEED_COLD_RATIO, its p95 under it.
+            limit = round(LAUNCH_SPEED_LIMIT_MS * ratio) if ratio == LAUNCH_SPEED_WARM_RATIO else None
+            # The cold route must meet its own limit, scaled by the fixed cold ratio.
             own_limits_hold = True
             for route, own in (summary.get("route_limits") or {}).items():
                 own_ratio = (own or {}).get("ratio")
-                own_limit = round(500 * own_ratio) if route == "cold" and own_ratio == LAUNCH_SPEED_COLD_RATIO else None
+                own_limit = (round(LAUNCH_SPEED_LIMIT_MS * own_ratio)
+                             if route == "cold" and own_ratio == LAUNCH_SPEED_COLD_RATIO else None)
                 route_p95 = ((summary.get("routes") or {}).get(route) or {}).get("p95_ms")
                 if own_limit is None or (own or {}).get("limit_ms") != own_limit \
                         or not isinstance(route_p95, (int, float)) or route_p95 > own_limit:
@@ -3136,7 +3132,8 @@ class Runner:
                 problems.append(f"{report}: {walked.get('sentence') or 'no passing verdict'}")
             else:
                 return walked.get("sentence")
-        raise ValueError("no complete launch-speed measurement of this candidate shows a p95 at or under 380 ms "
+        raise ValueError("no complete launch-speed measurement of this candidate shows a p95 at or under "
+                         f"{LAUNCH_SPEED_LIMIT_MS} ms "
                          "(scaled by the test VM's fixed ratio on record) "
                          "from the click to the splash showing: " + "; ".join(problems)
                          + ". Take the check again without a rebuild (nightly-local.py's launch-speed phase).")
@@ -3828,7 +3825,7 @@ class Runner:
         # Then a new user's first run of the same archive, in its own guest (NEW_USER_WALK_PHASE).
         if not proof_error and candidate_info.get("new_user_walk_required"):
             proof_error = self.new_user_walk(self.env["RICHOS_NIGHTLY_RUN_ID"], out, candidate_info)
-        # Then its launch speed: the p95 from the click to the splash showing, against 380 ms
+        # Then its launch speed: the p95 from the click to the splash showing, against the opening limit
         # (LAUNCH_SPEED_PHASE), with its install-path check.
         if not proof_error and candidate_info.get("launch_speed_required"):
             proof_error = self.launch_speed_check(self.env["RICHOS_NIGHTLY_RUN_ID"], out, candidate_info)
