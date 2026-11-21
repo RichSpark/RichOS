@@ -172,13 +172,19 @@ impl SavedHistory {
         Ok(())
     }
 
-    fn refresh_after(&self, now: u64) -> u64 {
-        now.checked_sub(self.through).map_or(0, |age| REFRESH_MS.saturating_sub(age))
+    fn refresh_due(&self, now: u64) -> bool {
+        refresh_after(self.through, now) == 0
     }
 
-    fn refresh_due(&self, now: u64) -> bool {
-        self.refresh_after(now) == 0
+    fn supersedes(&self, prior: &Self) -> bool {
+        // An incomplete read that found nothing cannot establish that the
+        // previously counted history is gone. A new scope or verified zero can.
+        self.scope != prior.scope || !self.incomplete || self.count != 0 || prior.count == 0
     }
+}
+
+fn refresh_after(through: u64, now: u64) -> u64 {
+    now.checked_sub(through).map_or(0, |age| REFRESH_MS.saturating_sub(age))
 }
 
 pub fn start(app: AppHandle) {
@@ -187,10 +193,11 @@ pub fn start(app: AppHandle) {
         let state = handle.state::<crate::AppState>();
         let service = &state.swearmeter;
         let mut reader = Reader::default();
+        let mut last_attempt = service.history.lock().unwrap_or_else(|poison| poison.into_inner())
+            .as_ref().map(|saved| saved.through);
         loop {
             let now = richos_core::util::now_millis();
-            let delay = service.history.lock().unwrap_or_else(|poison| poison.into_inner())
-                .as_ref().map_or(0, |saved| saved.refresh_after(now));
+            let delay = last_attempt.map_or(0, |through| refresh_after(through, now));
             if delay > 0 {
                 // Recheck the wall clock after sleep or a clock change. Only the
                 // deadline check wakes here. Provider files are read once per hour.
@@ -211,7 +218,15 @@ pub fn start(app: AppHandle) {
                 std::thread::sleep(Duration::from_secs(1));
                 continue;
             }
+            last_attempt = Some(now);
             let saved = SavedHistory::new(current_scope, now, history);
+            let keep_prior = service.history.lock().unwrap_or_else(|poison| poison.into_inner())
+                .as_ref().is_some_and(|prior| !saved.supersedes(prior));
+            if keep_prior {
+                eprintln!("[richos] SwearMeter provider refresh incomplete; keeping saved counts");
+                service.publish_current();
+                continue;
+            }
             if let Err(error) = saved.save(&service.cache_path) {
                 eprintln!("[richos] SwearMeter provider cache could not be saved: {error}");
             }
@@ -306,7 +321,7 @@ mod tests {
         SavedHistory::new(scope, through, history).save(&path).unwrap();
 
         let saved = SavedHistory::load(&path, scope).unwrap();
-        assert_eq!(saved.refresh_after(through + 10_000), REFRESH_MS - 10_000);
+        assert_eq!(refresh_after(saved.through, through + 10_000), REFRESH_MS - 10_000);
         assert!(!saved.refresh_due(through + REFRESH_MS - 1));
         assert!(saved.refresh_due(through + REFRESH_MS));
         assert!(saved.refresh_due(through - 1));
@@ -322,7 +337,13 @@ mod tests {
         assert!(saved.incomplete);
         assert_eq!(saved.ambiguous_matches, 1);
 
+        let empty_incomplete = SavedHistory::new(scope, now, History { incomplete: true, ..History::default() });
+        assert!(!empty_incomplete.supersedes(&saved));
+        assert!(saved.refresh_due(now));
+        assert_eq!(refresh_after(empty_incomplete.through, now), REFRESH_MS);
+
         let mut refreshed = SavedHistory::new(scope, now, History::default());
+        assert!(refreshed.supersedes(&saved));
         refreshed.save(&path).unwrap();
         assert_eq!(SavedHistory::load(&path, scope).unwrap().count, 0);
         refreshed.detector_version += 1;
