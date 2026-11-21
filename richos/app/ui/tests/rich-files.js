@@ -19,6 +19,7 @@
 
 "use strict";
 
+const fs = require("fs");
 const path = require("path");
 const {
   loadPlaywright,
@@ -37,6 +38,20 @@ const { parseCssColor, compositeOver, contrastRatio, hex } = require("./lib/cont
 const APP = "file://" + path.join(UI_DIR, "index.html");
 const SHOTS = path.join(__dirname, "shots-36");
 const FIXED = new Date("2026-10-21T09:05:00-04:00");
+
+// Playwright's action timeouts do not cover all protocol calls, including context.close().
+// Use Node's clock as a backstop so a wedged browser cannot block its own failure or cleanup.
+async function withWebKitDeadline(stage, work) {
+  const deadline = setTimeout(() => {
+    fs.writeSync(2, `WebKit did not finish "${stage}" within 60s. Ending the suite so its browser reaper can clean up.\n`);
+    process.exit(1);
+  }, 60_000);
+  try {
+    return await work();
+  } finally {
+    clearTimeout(deadline);
+  }
+}
 
 async function openApp(browser, opts) {
   opts = opts || {};
@@ -75,7 +90,7 @@ async function openApp(browser, opts) {
   await page.addInitScript((v) => {
     window.__RICHOS_MOCK_PRESET__ = v;
   }, { richFiles: opts.missing ? "round-36-missing" : "round-36" });
-  await page.goto(APP);
+  await page.goto(APP, { waitUntil: "domcontentloaded" });
   if (opts.prepare) await page.evaluate(opts.prepare);
   await leaveHome(page);
   await page.waitForSelector(".nav-thread", { state: "attached" });
@@ -165,12 +180,13 @@ async function cards(page) {
 
 async function main() {
   const run = createRun("A file from Rich — round 36 screen 3 (real shell, WebKit)");
+  const check = (name, work) => run.check(name, () => withWebKitDeadline(name, work));
   const { webkit } = loadPlaywright();
-  const browser = await webkit.launch();
+  const browser = await withWebKitDeadline("launch browser", () => webkit.launch());
 
-  const page = await openApp(browser);
+  const page = await withWebKitDeadline("open initial file cards", () => openApp(browser));
 
-  await run.check("a library card tries the bookmark even when its recorded path is stale", async () => {
+  await check("a library card tries the bookmark even when its recorded path is stale", async () => {
     await page.evaluate(() => {
       const original = window.__libraryTestBridge = window.RichBridge;
       window.RichBridge = {
@@ -224,7 +240,7 @@ async function main() {
     });
   });
 
-  await run.check("the files sit under Rich's words in his reply, one card each, built like the attachment chip", async () => {
+  await check("the files sit under Rich's words in his reply, one card each, built like the attachment chip", async () => {
     const got = await cards(page);
     assertEqual(got.length, 2, "cards in the conversation");
     assertEqual(got[0].name, "Acme-counteroffer.pdf");
@@ -262,7 +278,7 @@ async function main() {
     return got.map((c) => c.name + " · " + c.open).join(" | ");
   });
 
-  await run.check("a click anywhere on the card opens it through the opener; Show in Finder shows it", async () => {
+  await check("a click anywhere on the card opens it through the opener; Show in Finder shows it", async () => {
     await page.click('.tl-rfile[data-file-id="rf_0a1b2c3d4e5f6071"] .tl-rfile-name');
     await page.click('.tl-rfile[data-file-id="rf_8192a3b4c5d6e7f8"] .tl-rfile-open');
     await page.click('.tl-rfile[data-file-id="rf_0a1b2c3d4e5f6071"] .tl-rfile-finder');
@@ -287,7 +303,7 @@ async function main() {
     assertEqual(page.__errors, [], "the page reported errors");
   });
 
-  await run.check("a file attached between turns shows at once, without a reload", async () => {
+  await check("a file attached between turns shows at once, without a reload", async () => {
     const turn = await page.evaluate(() => document.querySelectorAll(".tl-turn")[document.querySelectorAll(".tl-turn").length - 1].dataset.turnId);
     const id = await page.evaluate((t) => window.__RICHOS_MOCK__.richFileArrive("acme", t, "Acme-signature-page.pdf"), turn);
     await page.waitForSelector('.tl-rfile[data-file-id="' + id + '"]');
@@ -326,7 +342,7 @@ async function main() {
     await page.context().close();
   });
 
-  await run.check("a file that is gone says so and offers Ask Rich again, which asks Rich in his words", async () => {
+  await check("a file that is gone says so and offers Ask Rich again, which asks Rich in his words", async () => {
     const p = await openApp(browser, { missing: true });
     const got = await cards(p);
     assertEqual(got[0].state, "missing");
@@ -355,7 +371,7 @@ async function main() {
     await p.context().close();
   });
 
-  await run.check("with Techy Mode on the cards stay through a turn's end and through reopening the conversation", async () => {
+  await check("with Techy Mode on the cards stay through a turn's end and through reopening the conversation", async () => {
     // Review rv-20261021T083350Z-8ca9bacf-e592: Techy Mode reloads from `get_machinery`, which
     // carried no cards, so the reload at every turn's end took them away.
     const p = await openApp(browser);
@@ -394,7 +410,7 @@ async function main() {
     await p.context().close();
   });
 
-  await run.check("media moments play and pause in Output or open the selected online moment", async () => {
+  await check("media moments play and pause in Output or open the selected online moment", async () => {
     const p = await openApp(browser, { prepare: mediaMomentsFixture });
     try {
       const local = p.getByRole("button", { name: /^0?0:53 Customer focus$/ });
@@ -462,7 +478,7 @@ async function main() {
     }
   });
 
-  await run.check("a changed recording offers Ask Rich again beside the refused moments", async () => {
+  await check("a changed recording offers Ask Rich again beside the refused moments", async () => {
     const p = await openApp(browser, { prepare: mediaMomentsFixture });
     try {
       await p.evaluate(() => {
@@ -494,7 +510,7 @@ async function main() {
     }
   });
 
-  await run.check("a recording scope refusal reopens the conversation that owns the card", async () => {
+  await check("a recording scope refusal reopens the conversation that owns the card", async () => {
     const p = await openApp(browser, { prepare: mediaMomentsFixture });
     try {
       await p.evaluate(() => {
@@ -519,6 +535,16 @@ async function main() {
       const timestamp = card.getByRole("button", { name: /^0?0:53 Customer focus$/ });
       const reopen = card.getByRole("button", { name: "Reopen conversation", exact: true });
       const scopeStatus = card.locator(".tl-media-scope-status");
+      const waitForReopen = async (count) => {
+        await p.waitForFunction((expected) =>
+          window.mediaScopeSwitches.length === expected &&
+          window.RichOutput.snapshot().thread === "acme" &&
+          document.getElementById("composer-row").dataset.mode !== "opening",
+        count).catch((error) => {
+          throw new Error(`Reopen ${count} did not finish restoring Acme to Output: ${error.message}`, { cause: error });
+        });
+        await reopen.waitFor({ state: "hidden" });
+      };
       assert(await scopeStatus.evaluate((node) => node.getAttribute("role") === "status" &&
         !node.hidden && getComputedStyle(node).display !== "none" && !node.textContent),
         "the empty live region is exposed before playback is refused");
@@ -532,9 +558,7 @@ async function main() {
       await timestamp.click();
       await reopen.waitFor();
       await reopen.click();
-      await p.waitForFunction(() => window.mediaScopeSwitches.length === 1 &&
-        document.getElementById("composer-row").dataset.mode !== "opening");
-      await reopen.waitFor({ state: "hidden" });
+      await waitForReopen(1);
       assertEqual(await scopeStatus.textContent(), "", "reopening clears the native refusal");
 
       await p.evaluate(() => {
@@ -545,15 +569,15 @@ async function main() {
       await reopen.waitFor();
       assertEqual(await p.evaluate(() => window.mediaScopePreviews), 1, "the wrong thread issues no preview request");
       await reopen.click();
-      await p.waitForFunction(() => window.mediaScopeSwitches.length === 2 &&
-        document.getElementById("composer-row").dataset.mode !== "opening");
-      await reopen.waitFor({ state: "hidden" });
+      await waitForReopen(2);
       assertEqual(await scopeStatus.textContent(), "", "reopening clears the local scope mismatch");
       assertEqual(await p.evaluate(() => window.mediaScopeSwitches), ["acme", "acme"], "both paths reopen the card's thread");
       await timestamp.click();
       await p.waitForFunction(() => {
         const audio = document.querySelector("#op-viewer audio");
         return audio && !audio.paused && !audio.seeking && audio.currentTime >= 53.28;
+      }).catch((error) => {
+        throw new Error(`The reopened recording did not play from Customer focus: ${error.message}`, { cause: error });
       });
       assertEqual(p.__errors, [], "the page reported errors");
     } finally {
@@ -562,7 +586,7 @@ async function main() {
   });
 
   for (const theme of ["dark", "light"]) {
-    await run.check(theme + " — the card's text and edges clear WCAG AA", async () => {
+    await check(theme + " — the card's text and edges clear WCAG AA", async () => {
       const p = await openApp(browser, { theme });
       const read = await p.evaluate(() => {
         const card = document.querySelector(".tl-rfile");
@@ -610,7 +634,7 @@ async function main() {
       return lines.join(" | ");
     });
 
-    await run.check(theme + " — the committed pictures: the cards, and a file that is gone", async () => {
+    await check(theme + " — the committed pictures: the cards, and a file that is gone", async () => {
       const p = await openApp(browser, { theme });
       await p.locator(".tl-rfiles").scrollIntoViewIfNeeded();
       const ready = await shot(p, "files-ready-" + theme, { fullPage: false, parkPointer: true });
@@ -627,7 +651,7 @@ async function main() {
     });
   }
 
-  await browser.close();
+  await withWebKitDeadline("close browser", () => browser.close());
   process.exitCode = run.report() > 0 ? 1 : 0;
 }
 
